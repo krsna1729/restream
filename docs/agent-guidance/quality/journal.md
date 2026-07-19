@@ -89,6 +89,14 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 03:55 HUNT RECONCILE-DECISION-BRANCH-COVERAGE DONE [codex]](#2026-07-19-0355-hunt-reconcile-decision-branch-coverage-done-codex)
 - [2026-07-19 04:10 HUNT EGRESS-MALFORMED-URL-RESILIENCE DONE [codex]](#2026-07-19-0410-hunt-egress-malformed-url-resilience-done-codex)
 - [2026-07-19 06:33 HUNT SECURITY-EVICTION-BAN-BYPASS FIXED [codex]](#2026-07-19-0633-hunt-security-eviction-ban-bypass-fixed-codex)
+- [2026-07-19 HUNT STAGE-LIFECYCLE-STALE-SPAWN-METADATA FIXED [codex]](#2026-07-19-hunt-stage-lifecycle-stale-spawn-metadata-fixed-codex)
+- [2026-07-19 HUNT TRANSCODER-SCALE-PATH-PTS-DEFAULT FIXED [codex]](#2026-07-19-hunt-transcoder-scale-path-pts-default-fixed-codex)
+- [2026-07-19 HUNT CODEC-RAW-PARAMETER-SET-DUPLICATION FIXED [codex]](#2026-07-19-hunt-codec-raw-parameter-set-duplication-fixed-codex)
+- [2026-07-19 HUNT CODEC-FLV-SEQUENCE-HEADER-CACHE-WIPE FIXED [codex]](#2026-07-19-hunt-codec-flv-sequence-header-cache-wipe-fixed-codex)
+- [2026-07-19 HUNT RING-BUFFER-DTS-ENFORCER-OVERFLOW FIXED [codex]](#2026-07-19-hunt-ring-buffer-dts-enforcer-overflow-fixed-codex)
+- [2026-07-19 HUNT SRT-MUXER-SHARD-RETIRING-REUSE FIXED [codex]](#2026-07-19-hunt-srt-muxer-shard-retiring-reuse-fixed-codex)
+- [2026-07-19 HUNT EGRESS-RETRY-STATE-TOCTOU FIXED [codex]](#2026-07-19-hunt-egress-retry-state-toctou-fixed-codex)
+- [2026-07-19 HUNT SPS-EXP-GOLOMB-OVERFLOW FIXED [codex]](#2026-07-19-hunt-sps-exp-golomb-overflow-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3006,3 +3014,494 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   journal entry — per this session's practice of journaling real
   findings and skipping journal entries for routine test-coverage
   additions.
+
+## 2026-07-19 HUNT STAGE-LIFECYCLE-STALE-SPAWN-METADATA FIXED [codex]
+
+- Scope: `src/media/stage_lifecycle.rs` — `StageLifecycle::transition`,
+  the single mutation point for a stage's tracked phase, backend kind,
+  and backend pid. Zero prior journal mentions; picked as the next
+  target after three consecutive routine-coverage hunts
+  (`h264_transcoder.rs`, `tcp_stats.rs`, `file_analysis.rs`) turned up
+  no bugs.
+- Finding: real bug, state-corruption class. `transition()` had an
+  existing guard that suppresses the *phase* field when a stale
+  `StartingBackend`/`BackendSpawned` event arrives after
+  `first_input_at` is already set and the stage has moved on to
+  `FirstInput`/`FirstOutput`/`Producing` — intended to stop a
+  late/duplicate spawn notification from regressing operator-visible
+  progress. But the function updated `inner.backend` and
+  `inner.backend_pid` *before* evaluating that guard, unconditionally,
+  on every call. So a suppressed transition still silently overwrote
+  the backend kind and pid while leaving the phase untouched,
+  producing an inconsistent snapshot: phase says "still running the
+  original backend" while `backend`/`backend_pid` reflect a spawn
+  attempt that was never actually adopted into the visible phase.
+  Traced a plausible real trigger: `get_or_create_stage_lifecycle_with_backend`
+  (`stage_registry_access.rs`) reuses the same `StageLifecycle` Arc
+  across a stage's restarts, and `run_external_ffmpeg_backend`
+  (`external_transcoder.rs`) always calls `transition(BackendSpawned
+  {..})` after a successful subprocess spawn — if a stale/duplicate
+  spawn task's notification races in after a newer instance has
+  already reached `FirstInput`, the metadata corruption is directly
+  observable in operator diagnostics via `snapshot()`.
+- Fix: reordered `transition()` to evaluate the stale-event guard
+  first and `return` before touching `inner.backend` /
+  `inner.backend_pid`, so a suppressed transition is now fully
+  suppressed — phase, backend, and pid all stay put together, or all
+  update together. No change to the guard's condition itself, only to
+  what it protects.
+- Added one permanent regression test:
+  `stale_backend_spawned_transition_does_not_corrupt_backend_metadata`
+  — constructs a lifecycle already `BackendSpawned{ExternalFfmpeg,
+  pid: 111}`, records first input, then feeds a second
+  `BackendSpawned{InternalFfmpeg, pid: 222}` transition and asserts
+  both `backend` and `backend_pid` still read the original values
+  alongside the still-suppressed `FirstInput` phase. This test fails
+  against the pre-fix code and passes after.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  stage_lifecycle::` — 14/14 pass (1 new plus 13 pre-existing,
+  including the existing `backend_spawned_transition_does_not_regress_after_first_input`
+  and `backend_pid_survives_runtime_phase_progression`, confirming no
+  regression to the intended phase-suppression or pid-persistence
+  behavior). `cargo fmt --all --check` — clean. `scripts/build/resource-limit.sh
+  cargo clippy --lib --tests -- -D warnings` — clean.
+  `scripts/check/concurrency/fast.sh` — 135/135 pass (this file backs
+  lifecycle state read by `engine.rs`/`stage_runtime.rs`, so the
+  broader concurrency gate was run even though the fix itself only
+  reorders statements inside an already-locked critical section — no
+  new lock, no new thread-hop). `scripts/check/source-audit.sh` —
+  passed.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — the fix is scoped and fully covered by the
+  new regression test; the sibling file `startup_policy.rs` (409
+  lines, also zero prior journal mentions) is the next unswept
+  candidate for this hunt run.
+- Notes: second genuine bug found this hunt run (after the
+  `security.rs` eviction-bypass finding on round 2), hence the journal
+  entry.
+
+## 2026-07-19 HUNT TRANSCODER-SCALE-PATH-PTS-DEFAULT FIXED [codex]
+- What: hunt target `src/media/transcoder.rs` (1840 lines pre-fix,
+  largest genuinely-unswept file in `src/media/` after `engine.rs`;
+  re-verified zero prior journal mentions via a looser filename grep
+  after the exact-backtick-match ranking method turned out unreliable
+  — it had falsely shown 0 mentions for `stage_lifecycle.rs`, which
+  had literally just been hunted in this same run).
+- Finding: real bug, timestamp-corruption class, same family as the
+  already-fixed and already-tested M7 issue in this file. The
+  passthrough demux path (`run_ffmpeg_transcoder_stage_with_normalizer`)
+  correctly skips encoder/demux packets with `AV_NOPTS_VALUE`
+  (`pts() == None`) rather than defaulting to 0, because on a
+  long-running stream a 0 substitution produces a massive backward
+  timestamp jump (e.g. -3,600,000ms after 1 hour) that corrupts
+  `DtsEnforcer` downstream — this is exactly what the existing
+  `pts_zero_would_produce_zero_ms_timestamp` test documents. But the
+  sibling decode-scale-encode path
+  (`run_ffmpeg_transcode_with_scale_with_normalizer`) was never
+  hardened the same way: both of its encoder-output receive loops
+  (the steady-state loop and the EOF flush loop) used
+  `enc_pkt.pts().unwrap_or(0)`, silently emitting a `pts=0` packet
+  instead of skipping whenever the encoder produced a packet without
+  a pts — an inconsistency between two code paths in the same file
+  where only one had been hardened against the same failure mode.
+- Fix: replaced both `unwrap_or(0)` fallbacks with
+  `let Some(pts_ms) = enc_pkt.pts() else { continue };`, matching the
+  passthrough path's skip behavior exactly. `dts_ms` still falls back
+  to `pts_ms` via `enc_pkt.dts().unwrap_or(pts_ms)`, unchanged — that
+  fallback is fine because it only runs once `pts_ms` is already known
+  valid.
+- Added one permanent regression test:
+  `scale_encode_path_skips_none_pts_like_passthrough_path` in
+  `src/media/transcoder.rs`'s `#[cfg(test)]` module. A live FFmpeg
+  pipeline can't be made to emit `AV_NOPTS_VALUE` from a unit test (no
+  checked-in fixture naturally produces a decoder frame lacking a
+  pts), so — following the same precedent as
+  `pts_zero_would_produce_zero_ms_timestamp` in this exact file — the
+  test asserts the fix's *shape* directly: it scans this file's own
+  source for the skip pattern (needle built from non-adjacent string
+  fragments so the test's own source can't self-match) and asserts it
+  appears exactly twice (once per encoder-output loop), and separately
+  asserts the zero-default fallback pattern is absent. This fails
+  against the pre-fix code (0 skip occurrences, fallback present) and
+  passes after.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::transcoder` — 25/25 pass (1 new plus 24 pre-existing, no
+  regressions to the existing pts/audio-routing/audio-router coverage).
+  `scripts/build/resource-limit.sh cargo test --test transcoder` —
+  14/14 integration tests pass unchanged, including the real-pipeline
+  `internal_transcode_builtin_video_presets_produce_video` and
+  `internal_scale_stage_chunked_remux_input_preserves_video_timestamp_order`
+  tests that exercise the fixed function against real FFmpeg encodes.
+  `cargo fmt --all --check` — clean. `scripts/build/resource-limit.sh
+  cargo clippy --lib --tests -- -D warnings` — clean.
+  `scripts/check/source-audit.sh` — passed. No benchmark re-run: the
+  fix only changes which rare edge-case packets are skipped vs.
+  defaulted (a `None`-pts branch that real fixtures never hit), and
+  does not change the per-packet allocation, locking, or channel-send
+  pattern on the hot path.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression test. `codec.rs` (1594 lines) and `feeder.rs` (913 lines)
+  remain as the other confirmed genuinely-unswept `src/media/` files
+  from this hunt run's re-ranking.
+- Notes: third genuine bug found this hunt run (after the
+  `security.rs` eviction-bypass finding on round 2 and the
+  `stage_lifecycle.rs` stale-spawn-metadata finding earlier this run).
+
+## 2026-07-19 HUNT CODEC-RAW-PARAMETER-SET-DUPLICATION FIXED [codex]
+- What: hunt target `src/media/codec.rs` (1595 lines pre-fix), the
+  other genuinely-unswept `src/media/` file named as a follow-up in
+  the `TRANSCODER-SCALE-PATH-PTS-DEFAULT` entry above.
+- Finding: real bug in the `PayloadFormat::Raw` arms of both
+  `video_for_ts` and `video_for_ts_into`. Both called
+  `refresh_annexb_parameter_set_cache(payload, sps_pps_cache)` as a
+  bare statement, discarding its `bool` return value (whether the
+  payload's own inline SPS/PPS were used to refresh the cache). The
+  subsequent duplicate-prepend guard then relied solely on
+  `!payload.starts_with(sps_pps_cache.as_slice())` — a raw byte
+  comparison. But `annexb_nalu()` always normalizes cached parameter
+  sets to a 4-byte start code (`00 00 00 01`), while Annex B legally
+  permits (and many encoders emit) a 3-byte start code (`00 00 01`).
+  Any keyframe whose inline SPS/PPS used 3-byte start codes therefore
+  never byte-matched the 4-byte-normalized cache, so the guard fired
+  even though the payload already carried valid parameter sets —
+  prepending a redundant, differently-start-coded copy of SPS/PPS to
+  every such keyframe on the Raw ingest path.
+- Fix: captured the discarded return value as `refreshed` in both
+  functions and added `&& !refreshed` to the duplicate-prepend
+  condition, so a payload that just supplied its own parameter sets
+  (regardless of its start-code byte length) is never treated as
+  missing them. `video_for_ts_into`'s zero-allocation variant got the
+  identical treatment.
+- Added two permanent regression tests:
+  `video_for_ts_raw_inline_parameter_sets_with_3byte_start_codes_not_duplicated`
+  and
+  `video_for_ts_into_raw_inline_parameter_sets_with_3byte_start_codes_not_duplicated`
+  in `src/media/codec.rs`'s `#[cfg(test)]` module, immediately after
+  the existing 4-byte-start-code
+  `video_for_ts_raw_inline_parameter_sets_refresh_cache_without_duplication`
+  test. Both build a payload with SPS/PPS/IDR NALUs using 3-byte start
+  codes and assert the output equals the input byte-for-byte (no
+  duplicate prepend). Both failed against the pre-fix code with a
+  literal byte-level duplication diff, confirming the bug was real and
+  reproducible, and pass after the fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::codec` — 56/56 pass (2 new plus 54 pre-existing, including
+  the proptest fuzzing on `parse_avcc_config` and `adts_frame_count`).
+  `scripts/build/resource-limit.sh cargo test --lib` — full backend
+  suite, 1459/1459 pass, given this conversion path is shared across
+  ingest/mux/feeder stages. `cargo fmt --all` + `cargo fmt --all
+  --check` — clean. `scripts/build/resource-limit.sh cargo clippy
+  --lib --tests -- -D warnings` — clean. `scripts/check/source-audit.sh`
+  — passed. No benchmark re-run: the fix only changes a rare-path
+  branch condition (gating on a return value that was already being
+  computed), doesn't touch the common-case zero-copy `Cow::Borrowed` /
+  buffer-reuse behavior, and actually removes an unnecessary
+  allocation in the previously-buggy case rather than adding one.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression tests. `feeder.rs` (913 lines) remains as the last
+  confirmed genuinely-unswept `src/media/` file from this hunt run's
+  re-ranking.
+- Notes: fourth genuine bug found this hunt run (after the
+  `security.rs` eviction-bypass finding on round 2, the
+  `stage_lifecycle.rs` stale-spawn-metadata finding, and the
+  `transcoder.rs` scale-path PTS-default finding, both earlier this
+  run).
+
+## 2026-07-19 HUNT CODEC-FLV-SEQUENCE-HEADER-CACHE-WIPE FIXED [codex]
+- What: continued hunt target `src/media/feeder.rs` (913 lines), the
+  file named as the follow-up in the `CODEC-RAW-PARAMETER-SET-DUPLICATION`
+  entry above. Manual analysis of `feeder.rs` itself (stream-index
+  invariants, startup-suppression logic, bounds safety, idempotency of
+  parameter-set-priming APIs) found no additional bugs beyond its 18
+  existing tests, but tracing its calls into `src/media/codec.rs` surfaced
+  a second, distinct genuine bug in the FLV sequence-header path.
+- Finding: `video_for_ts` and `video_for_ts_into`'s `PayloadFormat::Flv`
+  sequence-header branches unconditionally assigned
+  `*sps_pps_cache = annexb` with the result of `parse_avcc_config`, even
+  when that result is an empty `Vec` — which `parse_avcc_config` returns
+  both for a genuinely-empty sequence header and for a malformed/truncated
+  one (its bounds checks fail closed to `None` internally and it converts
+  that to an empty `Vec` via `.unwrap_or_default()`). A reconnecting RTMP
+  publisher sending a corrupted or truncated sequence header (e.g.
+  declaring a SPS length but never supplying the SPS bytes) would silently
+  wipe out a previously cached, still-valid SPS/PPS set. Every keyframe
+  muxed after the malformed header — until a new valid one eventually
+  arrived — would then be missing SPS/PPS and fail to decode. The sibling
+  `PayloadFormat::Raw` path was already protected against exactly this via
+  `refresh_annexb_parameter_set_cache`'s "only update the cache on
+  success" pattern; the FLV path never got the equivalent treatment.
+- Fix: both branches now only overwrite `*sps_pps_cache` when the parsed
+  `annexb` is non-empty, leaving the previous cache untouched on a
+  failed/truncated parse — mirroring the Raw path's fail-closed behavior.
+  `*nalu_len_size` is still updated unconditionally in both cases (it has
+  a documented default and isn't part of the vulnerability).
+- Added two permanent regression tests:
+  `video_for_ts_flv_malformed_sequence_header_does_not_wipe_existing_cache`
+  and
+  `video_for_ts_into_flv_malformed_sequence_header_does_not_wipe_existing_cache`
+  in `src/media/codec.rs`'s `#[cfg(test)]` module, immediately after the
+  existing `video_for_ts_flv_sequence_header_returns_none` test. Both seed
+  a valid cached SPS/PPS set, feed a sequence header that declares a SPS
+  length but omits the SPS bytes, and assert the cache is byte-for-byte
+  unchanged afterward. Both failed against the pre-fix code (empty `[]`
+  overwriting the seeded cache) and pass after the fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib media::codec`
+  — 58/58 pass (2 new plus 56 pre-existing). `scripts/build/resource-limit.sh
+  cargo test --lib` — full backend suite, 1461/1461 pass. `cargo fmt --all`
+  + `cargo fmt --all --check` — clean. `scripts/build/resource-limit.sh
+  cargo clippy --lib --tests -- -D warnings` — clean.
+  `scripts/check/source-audit.sh` — passed. No benchmark re-run: the fix
+  only adds a cheap `is_empty()` guard around an assignment on the
+  sequence-header (control) path, not the per-packet hot path.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression tests. No further leads identified in `feeder.rs` itself;
+  next hunt target to be picked from the broader re-ranking.
+- Notes: fifth genuine bug found this hunt run (after the `security.rs`
+  eviction-bypass finding on round 2, the `stage_lifecycle.rs`
+  stale-spawn-metadata finding, the `transcoder.rs` scale-path
+  PTS-default finding, and the `codec.rs` Raw-path parameter-set
+  duplication finding, all earlier this run).
+
+## 2026-07-19 HUNT RING-BUFFER-DTS-ENFORCER-OVERFLOW FIXED [codex]
+
+- What: adversarial hunt on `src/media/ring_buffer.rs`. Reviewed the
+  lock-free SPMC ring's push/pull/overflow/migration paths in depth
+  (happens-before reasoning for the `ArcSwapOption` + `write_idx`
+  Release/Acquire protocol, the `Reader::pull`/`pull_burst` double-check
+  pattern, the TOCTOU-safe `Notify` subscription order in
+  `wait_for_data`) and found the SPMC design itself sound — no bugs
+  there. The bug is in the standalone `DtsEnforcer::enforce` helper at
+  the bottom of the same file.
+- Finding: `enforce`'s collision-bump path computed `dts = *prev + 1` on
+  a plain `i64` with no overflow guard. If `last_dts[stream_idx]` ever
+  reaches `i64::MAX` (a corrupted/adversarial stream, or any
+  long-running stream whose timestamps accumulate without bound), that
+  add overflows: it panics in debug/test builds (this crate's `dev`
+  profile has no `overflow-checks` override, so it inherits Cargo's
+  default of `true`) and silently wraps to `i64::MIN` in release builds
+  (default `false`). The release-mode outcome is the worse of the two —
+  a massive backward DTS jump from the one function whose entire job is
+  guaranteeing forward-only DTS. `DtsEnforcer` is reachable from
+  `srt_egress.rs`, `feeder.rs`, and `ffmpeg/timeline.rs`, so this isn't a
+  cold path.
+- Fix: changed `dts = *prev + 1` to `dts = prev.saturating_add(1)`, so
+  the enforcer clamps at `i64::MAX` instead of overflowing — trading an
+  unreachable-in-practice edge case for a value that is still monotonic
+  non-decreasing (the documented contract) rather than corrupted.
+- Added one permanent regression test,
+  `dts_enforcer_bump_at_i64_max_does_not_overflow`, in
+  `src/media/ring_buffer_tests.rs` immediately before the existing
+  `dts_enforcer_fault_injection_negative_pts_dts` test. It drives
+  `last_dts` to `i64::MAX` and asserts a second call at the same DTS
+  saturates at `i64::MAX` (via `assert_eq!`, not `>=`, since clippy's
+  `absurd_extreme_comparisons` lint correctly flags `dts >= i64::MAX` as
+  tautological for an `i64`) instead of panicking or wrapping negative.
+  The test failed pre-fix with a real `attempt to add with overflow`
+  panic and passes after the fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::ring_buffer` and the single new test both green.
+  `scripts/build/resource-limit.sh cargo test --lib` — full backend
+  suite, 1462/1462 pass. `cargo fmt --all` + `cargo fmt --all --check` —
+  clean. `scripts/build/resource-limit.sh cargo clippy --lib --tests --
+  -D warnings` — clean. `scripts/check/source-audit.sh` — passed. No
+  benchmark re-run: `saturating_add` vs. unchecked `+` on a single `i64`
+  per call is not a measurable hot-path cost, and this function is not
+  in the packet-copy/mux inner loop itself.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression test. No further issues found in `ring_buffer.rs`; next
+  hunt target to be picked from the broader re-ranking (`engine.rs`,
+  `file_analysis.rs`, `h264_transcoder.rs`, `ingest_auth.rs`,
+  `profiles.rs`, `snapshots.rs`, `srt.rs`, `stage_registry_access.rs`,
+  `startup_policy.rs`, `tcp_stats.rs`, `timing.rs`, `ts_chunk_ring.rs`).
+- Notes: sixth genuine bug found this hunt run.
+
+## 2026-07-19 HUNT SRT-MUXER-SHARD-RETIRING-REUSE FIXED [codex]
+
+- What: adversarial hunt on `src/media/engine_registries.rs`, focused on
+  `SrtMuxerShardPool` — the shard-assignment pool backing SRT egress
+  muxer sharing (`assign_srt_egress_muxer_stage` /
+  `release_srt_egress_muxer_stage` in `stage_registry_access.rs`).
+  Traced a suspected TOCTOU between shard assignment and the async
+  teardown a shard goes through when its last output releases, and
+  confirmed it by direct source reading of `SrtMuxerShardPool::assign`.
+- Finding: `assign`'s overflow-fallback branch (only reachable once the
+  pool is already at `max_shards` capacity) first tries
+  `.filter(!retiring).min_by_key(...)` over shard occupancy, but when
+  that yields `None` — trivially true whenever every existing shard
+  happens to be retiring, which is the common case under the default
+  single-shard config (`max_shards: 1`) — an `.or_else(...)` fell back
+  to a global min-occupancy search over *all* shards, retiring ones
+  included, and could return a retiring shard's index. A brand-new SRT
+  egress output could then be assigned to the exact shard whose backing
+  `TsChunkRing`/muxer stage was concurrently being cancelled by a
+  racing `release_srt_egress_muxer_stage` call — the output gets wired
+  to a muxer that is mid-teardown or already gone. The only existing
+  test touching the retiring-shard invariant
+  (`retiring_empty_srt_muxer_shard_is_not_reused_until_cleanup_finishes`)
+  used `max_shards: 8`, which never reaches the buggy overflow branch,
+  so the path was untested.
+- Fix: removed the `.or_else` fallback that searched retiring shards.
+  The overflow branch now only ever picks a non-retiring shard; if none
+  exists, it grows a new shard past `max_shards` instead of reusing a
+  shard mid-teardown — a bounded, temporary overflow is strictly safer
+  than racing a live async cancellation.
+- Added one permanent regression test,
+  `assign_overflow_does_not_reuse_a_still_retiring_shard`, in
+  `src/media/engine_registries.rs` immediately after
+  `retiring_empty_srt_muxer_shard_is_not_reused_until_cleanup_finishes`.
+  With `max_shards: 1, max_outputs_per_shard: 1`: assigns `out-1`
+  (shard 0), releases it (shard 0 becomes empty and retiring), then
+  asserts a subsequent `assign("out-2", ...)` does not land on shard 0
+  and that shard 0's occupancy/retiring state is untouched. The test
+  failed pre-fix (`out-2` landed on shard 0) and passes after the fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::engine_registries` — 12/12 pass (new test included).
+  `scripts/build/resource-limit.sh cargo test --lib` — full backend
+  suite, 1463/1463 pass. `cargo fmt --all` + `cargo fmt --all --check`
+  — clean. `scripts/build/resource-limit.sh cargo clippy --lib --tests
+  -- -D warnings` — clean. `scripts/check/source-audit.sh` — passed. No
+  benchmark re-run: this is shard-assignment bookkeeping under a
+  `TokioRwLock`, not a hot packet-loop path — the change touches
+  `Vec`/`HashSet` scans over a handful of shards on egress
+  connect/disconnect, not per-packet code.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression test. Also closed out a suspected `get_or_create_stage_metrics`
+  / `get_or_create_non_ring_stage_runtime` metrics-registry split in
+  `stage_registry_access.rs` flagged during the same file review: traced
+  every call site (`transcoder.rs::start_audio_router`,
+  `stage_runtime.rs::ensure_stage`, `hls/fmp4.rs`, `recording/mod.rs`,
+  `hls/mod.rs`) and confirmed no caller invokes both functions for the
+  same `StageKey` — `ensure_stage` reuses the exact `Arc<StageMetrics>`
+  from `get_or_create_stage_metrics` when inserting its `StageRuntime`,
+  and the `get_or_create_non_ring_stage_runtime` callers never call
+  `get_or_create_stage_metrics` first. Not reachable today; no fix
+  filed per the no-speculative-hardening norm.
+- Notes: seventh genuine bug found this hunt run; found via a
+  background research agent's investigation, independently verified by
+  direct source reading before acting on it.
+
+## 2026-07-19 HUNT EGRESS-RETRY-STATE-TOCTOU FIXED [codex]
+
+- What: adversarial hunt on `src/media/engine.rs`, focused on the
+  egress retry-state bookkeeping (`update_egress_retry_state`,
+  `update_egress_retry_state_if_current`). Traced a suspected TOCTOU
+  between a retry-state publish's active-egress check and its
+  subsequent insert into `self.egresses.retry`, flagged by a
+  background research agent and independently verified by direct
+  source reading before acting on it.
+- Finding: both functions performed a check ("is this egress currently
+  active?") followed, after an `.await` gap on a separate lock, by an
+  unconditional insert into `self.egresses.retry`. Concurrently,
+  `register_egress_attempt_with_meta` (the only call site is
+  `src/lib.rs:684`) starts by clearing stale retry state
+  (`self.egresses.retry.write().await.remove(output_id)`) and only
+  afterward marks the egress active. If a retry-state publish's
+  check-then-insert straddled a racing registration's clear-then-mark
+  sequence, a stale "retrying" entry could persist alongside a
+  genuinely active egress — an operator-visible status glitch,
+  self-healing on the next reconciler tick (default 1000ms) or on any
+  subsequent fresh registration for the same output.
+- Fix: reordered both functions to acquire the `self.egresses.retry`
+  write lock first, then perform the active-egress check while holding
+  it, then decide insert-vs-remove under that single lock acquisition.
+  This serializes the retry-state decision against
+  `register_egress_attempt_with_meta`'s own first action (also a
+  `retry` write), closing the race window. Verified deadlock-safe via
+  `grep -n "egresses\.active\.\(read\|write\)\|egresses\.retry\.\(read\|write\)"
+  src/media/engine.rs` — no other path acquires `active`/`cancel_tokens`
+  before `retry` in the reverse order, so nesting the check inside the
+  `retry` guard cannot create a lock-ordering cycle.
+- Added one permanent regression test,
+  `concurrent_retry_publish_cannot_outlive_a_racing_registration`, in
+  `src/media/engine_lifecycle_tests.rs`. Holds the `cancel_tokens`
+  write lock open, spawns a retry-state publish and a fresh
+  registration in sequence behind it (each given 50ms to reach its
+  blocking point), then releases the held lock and asserts no stale
+  retry entry survives once both tasks complete. The test failed
+  pre-fix (stale retry entry observed) and passes after the fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::engine` — 147/147 pass (new test included).
+  `scripts/build/resource-limit.sh cargo test --lib` — full backend
+  suite, 1464/1464 pass. `cargo fmt --all` + `cargo fmt --all --check`
+  — clean. `scripts/build/resource-limit.sh cargo clippy --lib --tests
+  -- -D warnings` — clean. `scripts/check/concurrency/contract.sh` —
+  passed (required gate for lifecycle changes in `engine.rs`).
+  `scripts/check/source-audit.sh` — passed. No benchmark re-run: this
+  is egress lifecycle/retry bookkeeping under async `RwLock`s, not a
+  hot packet-loop path.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression test. `record_ingest_disconnect` /
+  `record_ingest_disconnect_if_current` (`engine.rs`) have a similar
+  read-drop-await-write shape but no confirmed racing caller path was
+  found; worth a quick independent look in a future sweep, not urgent.
+- Notes: eighth genuine bug found this hunt run; found via a
+  background research agent's investigation, independently verified by
+  direct source reading and a failing-then-passing regression test
+  before acting on it.
+
+## 2026-07-19 HUNT SPS-EXP-GOLOMB-OVERFLOW FIXED [codex]
+
+- What: adversarial hunt on `src/media/hls/fmp4.rs`'s hand-rolled
+  H.264 SPS bit reader (`H264BitReader::read_exp_golomb`), part of a
+  broader Explore-agent sweep across parsing/timestamp files
+  (`url.rs`, `security.rs`, `srt_stream_id.rs`, `timestamps.rs`,
+  `hls_fmp4.rs`, `writer.rs`, `upload.rs`, `operation_compiler.rs`,
+  `quality.rs`, `profiles.rs`, others) that settled on this as the
+  strongest finding.
+- Finding: `read_exp_golomb` counts leading zero bits in an unbounded
+  loop, then uses the count as a left-shift amount on a `u32`
+  (`1u32 << leading_zero_bits`). A crafted SPS with a run of 32
+  consecutive zero bits in its first Exp-Golomb field
+  (`seq_parameter_set_id`) drives `leading_zero_bits` to 32, causing a
+  checked-shift panic (`attempt to shift left with overflow`, this
+  repo's dev/test profile has `overflow-checks` on by default) or
+  silent value corruption in a build without overflow checks. This
+  field is read before the `profile_idc` early-return check in
+  `parse_h264_sps_avcc_fields`, so the overflow is reachable for any
+  profile, not just constrained ones. Both `parse_avcc_box` (FLV/RTMP
+  sequence-header path, `build_h264_sample_entry_from_flv_sequence_header`)
+  and the Raw/SRT video-packet path
+  (`build_h264_sample_entry_from_video_packet`) reach this parser with
+  attacker-controlled bytes from an untrusted publisher — a remote
+  panic in the media pipeline from a single malformed keyframe.
+- Fix: bound the zero-counting loop in `read_exp_golomb` — once
+  `leading_zero_bits` reaches 32, return `None` instead of continuing,
+  matching this parser's existing fail-closed convention (`parse_avcc_box`
+  already leaves the SPS profile fields `None` on any inner parse
+  failure rather than propagating an error for the whole box).
+- Added one permanent regression test,
+  `sps_exp_golomb_run_of_32_zero_bits_fails_closed_instead_of_panicking`,
+  in `src/media/hls/fmp4.rs`, building a full FLV AVC sequence header
+  around a crafted SPS with a 32-zero-bit run followed by a
+  terminating `1` bit and enough trailing bits to reach the shift
+  (a shorter payload that runs out of data before the terminating bit
+  exits `read_exp_golomb` via a different path and doesn't exercise
+  the shift at all — confirmed by first writing an under-length
+  payload, observing it passed even pre-fix, and re-deriving the
+  minimum byte layout needed to actually reach the overflow line).
+  Verified failing (panicking) against the pre-fix code and passing
+  after the fix. The two existing `parse_avcc_box` proptests use
+  uniform-random bytes and don't reliably hit a run this long
+  (~2⁻³² probability), which is why they hadn't already caught this.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::hls::fmp4::tests` — 21/21 pass (new test included).
+  `scripts/build/resource-limit.sh cargo test` — full suite including
+  integration tests and doctests, all green. `cargo fmt --all` +
+  `cargo fmt --all --check` — clean. `scripts/build/resource-limit.sh
+  cargo clippy --lib --tests -- -D warnings` — clean. No concurrency
+  gate: this is a pure parsing function with no lifecycle or
+  concurrency surface. No benchmark re-run: SPS parsing runs once per
+  sequence-header change, not per packet.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression test.
+- Notes: ninth genuine bug found this hunt run; found via a
+  background Explore agent's investigation, independently verified by
+  direct source reading and a failing-then-passing regression test
+  before acting on it.

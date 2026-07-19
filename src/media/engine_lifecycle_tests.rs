@@ -608,6 +608,46 @@ async fn repeated_late_retry_updates_cannot_poison_newest_output_attempt() {
 }
 
 #[tokio::test]
+async fn concurrent_retry_publish_cannot_outlive_a_racing_registration() {
+    let engine = Arc::new(MediaEngine::new());
+
+    // Hold cancel_tokens open so a concurrent retry-state publish can
+    // observe "not active" and a fresh registration can clear+block right
+    // behind it, then release in a controlled order. This reproduces the
+    // exact interleaving a slow WaitRetry publish can race against a
+    // reconciler-driven StartNow for the same output.
+    let cancel_tokens_write = engine.egresses.cancel_tokens.write().await;
+
+    let retry_engine = engine.clone();
+    let retry_task = tokio::spawn(async move {
+        retry_engine
+            .update_egress_retry_state("out-1", 1, 10_000, 8_000)
+            .await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let register_engine = engine.clone();
+    let register_task = tokio::spawn(async move {
+        register_engine
+            .register_egress_attempt("out-1", "pipe-1", "rtmp://example.com/live/key", None)
+            .await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    drop(cancel_tokens_write);
+    retry_task
+        .await
+        .expect("retry publish task should not panic");
+    register_task.await.expect("register task should not panic");
+
+    assert!(
+        engine.egress_retry_state("out-1").await.is_none(),
+        "a retry publish racing a fresh registration must not leave stale retry state \
+         behind once the registration has completed"
+    );
+}
+
+#[tokio::test]
 async fn build_recent_egress_outcome_resets_flap_streak_outside_window() {
     let engine = MediaEngine::new();
     engine

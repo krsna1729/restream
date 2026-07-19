@@ -368,12 +368,20 @@ impl MediaEngine {
         backoff_ms: u64,
         remaining_ms: u64,
     ) {
+        // Hold the retry write lock across the active-egress check instead of
+        // re-acquiring it after: register_egress_attempt_with_meta's first
+        // action is also a `retry` write (it clears stale retry state before
+        // marking the egress active), so serializing on this lock closes the
+        // window where a late retry publish could land after a racing
+        // registration already cleared it, leaving a stale "retrying" entry
+        // next to an active egress.
+        let mut retry = self.egresses.retry.write().await;
         if self.has_active_egress(output_id).await {
-            self.egresses.retry.write().await.remove(output_id);
+            retry.remove(output_id);
             return;
         }
         let next_retry_at_ms = Self::now_epoch_ms().saturating_add(remaining_ms);
-        self.egresses.retry.write().await.insert(
+        retry.insert(
             output_id.to_string(),
             EgressRetryState {
                 attempts,
@@ -391,6 +399,11 @@ impl MediaEngine {
         backoff_ms: u64,
         remaining_ms: u64,
     ) -> bool {
+        // Same reasoning as update_egress_retry_state: hold the retry write
+        // lock across the current-attempt check so a racing registration
+        // (which clears `retry` as its own first action) cannot slip in
+        // between the check and this insert and leave a stale entry behind.
+        let mut retry = self.egresses.retry.write().await;
         if self
             .with_current_egress(output_id, registration, |_| {})
             .await
@@ -399,7 +412,7 @@ impl MediaEngine {
             return false;
         }
         let next_retry_at_ms = Self::now_epoch_ms().saturating_add(remaining_ms);
-        self.egresses.retry.write().await.insert(
+        retry.insert(
             output_id.to_string(),
             EgressRetryState {
                 attempts,

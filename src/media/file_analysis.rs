@@ -30,6 +30,28 @@ fn is_sparse_gop_interval(max_interval_sec: f64) -> bool {
     max_interval_sec > LIVE_GOP_WARNING_THRESHOLD_SECS + LIVE_GOP_WARNING_TOLERANCE_SECS
 }
 
+/// Reduces a sequence of keyframe timestamps (seconds) into (average
+/// interval, max interval, sparse-for-live). Fewer than two keyframes yields
+/// no interval data. Non-monotonic timestamps (a corrupt or reordered
+/// stream) clamp negative intervals to zero rather than skewing the average
+/// or max downward with a negative contribution.
+fn gop_stats_from_keyframe_times(keyframe_times: &[f64]) -> (Option<f64>, Option<f64>, bool) {
+    if keyframe_times.len() < 2 {
+        return (None, None, false);
+    }
+    let intervals: Vec<f64> = keyframe_times
+        .windows(2)
+        .map(|window| (window[1] - window[0]).max(0.0))
+        .collect();
+    let avg = intervals.iter().sum::<f64>() / intervals.len() as f64;
+    let max = intervals.iter().copied().fold(0.0f64, f64::max);
+    (
+        Some(round_metric(avg)),
+        Some(round_metric(max)),
+        is_sparse_gop_interval(max),
+    )
+}
+
 fn codec_name(id: ffmpeg_next::codec::Id) -> String {
     match id {
         ffmpeg_next::codec::Id::H264 => "h264",
@@ -96,21 +118,7 @@ pub fn analyze_media_file(path: &Path) -> Result<MediaFileAnalysis, String> {
     }
 
     let (average_keyframe_interval_sec, max_keyframe_interval_sec, sparse_for_live) =
-        if keyframe_times.len() >= 2 {
-            let intervals: Vec<f64> = keyframe_times
-                .windows(2)
-                .map(|window| (window[1] - window[0]).max(0.0))
-                .collect();
-            let avg = intervals.iter().sum::<f64>() / intervals.len() as f64;
-            let max = intervals.iter().copied().fold(0.0f64, f64::max);
-            (
-                Some(round_metric(avg)),
-                Some(round_metric(max)),
-                is_sparse_gop_interval(max),
-            )
-        } else {
-            (None, None, false)
-        };
+        gop_stats_from_keyframe_times(&keyframe_times);
 
     Ok(MediaFileAnalysis {
         video_codec,
@@ -167,6 +175,55 @@ mod tests {
         let result = analyze_media_file(missing);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Failed to open media file"));
+    }
+
+    #[test]
+    fn analyze_media_file_returns_err_for_unparseable_content() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "restream-file-analysis-garbage-{}.ts",
+            std::process::id()
+        ));
+        std::fs::write(&path, [0xFFu8; 4096]).expect("write garbage fixture");
+
+        let result = analyze_media_file(&path);
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            result.is_err(),
+            "a file that exists but isn't parseable media must surface an error, not panic"
+        );
+    }
+
+    #[test]
+    fn gop_stats_yields_no_interval_data_below_two_keyframes() {
+        assert_eq!(gop_stats_from_keyframe_times(&[]), (None, None, false));
+        assert_eq!(gop_stats_from_keyframe_times(&[3.0]), (None, None, false));
+    }
+
+    #[test]
+    fn gop_stats_clamps_non_monotonic_intervals_to_zero() {
+        // A corrupt or reordered stream can report keyframe timestamps out
+        // of order; the resulting negative interval must be clamped to 0
+        // rather than dragging the average or max below the true spacing.
+        let (avg, max, sparse) = gop_stats_from_keyframe_times(&[0.0, 2.0, 1.0, 3.0]);
+        // intervals: 2.0, -1.0 -> 0.0, 2.0 => avg = (2.0 + 0.0 + 2.0) / 3
+        assert_eq!(avg, Some(round_metric(4.0 / 3.0)));
+        assert_eq!(max, Some(2.0));
+        assert!(!sparse);
+    }
+
+    #[test]
+    fn gop_stats_sparse_boundary_is_strictly_greater_than_tolerance() {
+        let boundary = LIVE_GOP_WARNING_THRESHOLD_SECS + LIVE_GOP_WARNING_TOLERANCE_SECS;
+        let (_, _, at_boundary) = gop_stats_from_keyframe_times(&[0.0, boundary]);
+        assert!(
+            !at_boundary,
+            "exactly at the tolerance boundary is not sparse"
+        );
+
+        let (_, _, just_over) = gop_stats_from_keyframe_times(&[0.0, boundary + 0.001]);
+        assert!(just_over, "just past the tolerance boundary is sparse");
     }
 
     #[test]

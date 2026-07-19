@@ -792,6 +792,26 @@ fn dts_enforcer_fault_injection_extreme_backwards_jump() {
     assert!(pts >= dts, "PTS must be >= DTS");
 }
 
+// Adversarial hunt: `enforce`'s collision-bump path does `*prev + 1` on a
+// plain i64. If a corrupted/adversarial stream (or a long-running one that
+// accumulates timestamps unboundedly) drives `last_dts` up to `i64::MAX`,
+// that add overflows — panicking in debug/test builds (overflow-checks are
+// on by default there) and silently wrapping to `i64::MIN` in release
+// builds, which defeats the entire purpose of this monotonicity enforcer by
+// producing a massive backward DTS jump instead of a forward bump.
+#[test]
+fn dts_enforcer_bump_at_i64_max_does_not_overflow() {
+    let mut e = DtsEnforcer::new(1);
+    assert_eq!(e.enforce(0, i64::MAX, i64::MAX), (i64::MAX, i64::MAX));
+    let (pts, dts) = e.enforce(0, i64::MAX, i64::MAX);
+    assert_eq!(
+        dts,
+        i64::MAX,
+        "DTS must saturate at i64::MAX rather than wrap below the previous value on overflow"
+    );
+    assert!(pts >= dts, "PTS must be >= DTS");
+}
+
 #[test]
 fn dts_enforcer_fault_injection_negative_pts_dts() {
     let mut e = DtsEnforcer::new(1);

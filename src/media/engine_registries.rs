@@ -280,22 +280,27 @@ impl SrtMuxerShardPool {
             self.shard_occupancy.len() - 1
         } else {
             overflowed = true;
-            self.shard_occupancy
+            // Every existing shard is at (or over) max_outputs_per_shard, so
+            // this is already an over-capacity fallback. Still exclude
+            // retiring shards here: a retiring shard's backing muxer stage
+            // may be concurrently torn down by a racing release, and handing
+            // a new output that index would assign it a dead stage. If no
+            // non-retiring shard exists, grow past max_shards rather than
+            // reuse one.
+            match self
+                .shard_occupancy
                 .iter()
                 .enumerate()
                 .filter(|(index, _)| !self.retiring_shards.contains(index))
                 .min_by_key(|(_, occupancy)| **occupancy)
-                .or_else(|| {
-                    self.shard_occupancy
-                        .iter()
-                        .enumerate()
-                        .min_by_key(|(_, occupancy)| **occupancy)
-                })
                 .map(|(index, _)| index)
-                .unwrap_or_else(|| {
+            {
+                Some(index) => index,
+                None => {
                     self.shard_occupancy.push(0);
-                    0
-                })
+                    self.shard_occupancy.len() - 1
+                }
+            }
         };
 
         self.shard_occupancy[shard_index] += 1;
@@ -420,6 +425,33 @@ mod tests {
         pool.finish_retiring(0);
         let after_cleanup = pool.assign("out-3", 1, 1, 8);
         assert_eq!(after_cleanup.shard_index, 0);
+    }
+
+    #[test]
+    fn assign_overflow_does_not_reuse_a_still_retiring_shard() {
+        // At max_shards capacity with the sole shard mid-teardown (retiring),
+        // a new output must not land on that shard's index: its backing
+        // muxer may be concurrently torn down by a racing release, so
+        // reusing the index would hand the output a dead stage. The pool
+        // must grow past max_shards instead of falling back to a retiring
+        // shard.
+        let mut pool = SrtMuxerShardPool::default();
+        let first = pool.assign("out-1", 1, 1, 1);
+        assert_eq!(first.shard_index, 0);
+
+        let release = pool.release("out-1", 1).expect("assignment released");
+        assert_eq!(release.shard_index, 0);
+        assert!(release.shard_empty);
+
+        let second = pool.assign("out-2", 1, 1, 1);
+        assert_ne!(
+            second.shard_index, 0,
+            "out-2 must not be assigned to shard 0 while it is still retiring"
+        );
+
+        let (_, occupancy, retiring) = pool.test_snapshot();
+        assert!(retiring.contains(&0));
+        assert_eq!(occupancy[0], 0);
     }
 
     #[test]
