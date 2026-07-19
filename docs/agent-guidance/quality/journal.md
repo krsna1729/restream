@@ -88,6 +88,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 03:30 HUNT INGEST-AUTH-ASYMMETRY-AND-FILE-INGEST-GAPS DONE [codex]](#2026-07-19-0330-hunt-ingest-auth-asymmetry-and-file-ingest-gaps-done-codex)
 - [2026-07-19 03:55 HUNT RECONCILE-DECISION-BRANCH-COVERAGE DONE [codex]](#2026-07-19-0355-hunt-reconcile-decision-branch-coverage-done-codex)
 - [2026-07-19 04:10 HUNT EGRESS-MALFORMED-URL-RESILIENCE DONE [codex]](#2026-07-19-0410-hunt-egress-malformed-url-resilience-done-codex)
+- [2026-07-19 06:33 HUNT SECURITY-EVICTION-BAN-BYPASS FIXED [codex]](#2026-07-19-0633-hunt-security-eviction-ban-bypass-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2927,3 +2928,81 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   hunted or ruled out this session. Next: pick the next-largest
   unswept directory (`src/media/` or `src/domain/`) for the following
   hunt.
+
+## 2026-07-19 06:33 HUNT SECURITY-EVICTION-BAN-BYPASS FIXED [codex]
+
+- Scope: `src/media/security.rs` — the ingest rate-limit/ban service
+  (`IngestSecurityService`). Adversarial focus: the hard-cap eviction
+  path in `evict_oldest_if_needed`, which runs whenever `state.len()`
+  exceeds `tracked_ip_limit` after the normal expired-ban/idle-record
+  retain pass.
+- Finding: real bug, security-relevant. The hard-cap fallback sorted
+  candidate entries by `r.failures.iter().copied().min()` (each
+  record's *earliest* failure) and never consulted `banned_until` at
+  all, then evicted the lowest-ranked `excess` entries outright. Two
+  compounding defects: (1) ignoring ban status meant a currently-banned
+  record was exactly as evictable as any other; (2) ranking by the
+  earliest failure instead of the most recent one inverted the
+  intended "evict the stalest/least-active entry" policy — a
+  long-running attacker's first failure is always older than a
+  fresh one-off flood IP's only failure, so the sort preferentially
+  targeted active attackers over disposable ones. Combined, an
+  attacker with an active ban could clear that ban well before
+  `ban_ms` elapsed by flooding `record_failure` from enough disposable,
+  unrelated IPs to push `tracked_ip_limit` and force their own banned
+  record out. This directly contradicted the function's own inline
+  comment, which claimed the logic existed specifically to prevent an
+  attacker clearing their own record by flooding from many IPs.
+  Confirmed empirically before fixing: three successive throwaway
+  probe tests using `panic!` to print real eviction order under a
+  crafted flood, narrowing from "sort order looks backwards" to a
+  decisive repro where an active ban was evicted by an unrelated
+  flood.
+- Fix: replaced the sort key with a tuple `(currently_banned: bool,
+  most_recent_failure: Instant)`. Tuple `Ord` gives banned status a
+  hard priority tier — a banned entry is never evicted ahead of a
+  non-banned one, regardless of individual recency — and within each
+  tier, entries are ranked by their *most recent* failure (`max()`,
+  not `min()`), so genuinely stale/inactive entries are evicted first
+  within a tier. Updated the surrounding comment to explain both the
+  ban-priority and min-vs-max reasoning so the next reader doesn't
+  reintroduce either defect independently.
+- Added two permanent regression tests:
+  `flood_of_other_ips_does_not_evict_an_active_ban` (bans one IP, then
+  floods 16 disposable IPs past `tracked_ip_limit`, asserts the ban
+  survives) and
+  `eviction_prefers_non_banned_entries_over_banned_ones_regardless_of_recency`
+  (proves banned status is a hard tier, not just a recency tiebreaker,
+  at a tighter `tracked_ip_limit`). Also closed two smaller coverage
+  gaps found while reading the file: `rate_limit_scope_from_key_round_trips_and_rejects_unknown_keys`
+  (no prior direct test of the `RateLimitScope::from_key` reverse
+  mapping) and `embedded_null_byte_in_ip_does_not_forge_a_different_scope_key`
+  (proves an attacker-controlled IP string containing the same NUL
+  delimiter `scoped_key`/`parse_scoped_key` use internally can't
+  masquerade as a different scope's ban record — `split_once` only
+  ever splits at the first NUL, so it can't be exploited, but this was
+  previously unverified).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::security::` — 17/17 pass (4 new plus 13 pre-existing,
+  including the pre-existing `tracked_ip_limit_is_enforced` and
+  `concurrent_is_ip_banned_no_deadlock_or_wrong_result`, confirming the
+  cap is still enforced and concurrent access is still race-free).
+  `cargo fmt --all` / `--check` — clean. `scripts/build/resource-limit.sh
+  cargo clippy --lib --benches -- -D warnings` — clean (clippy first
+  caught an ambiguous `\0198...` octal-looking escape in the embedded-
+  NUL test literal; fixed with an explicit `\x01` hex escape).
+  `security.rs` is not on the AGENTS.md lifecycle-file list and the
+  fix only changes the sort key evaluated inside an already-locked
+  critical section — no new lock, no new thread-hop, no change to what
+  the `RwLock` protects — so the heavier `fast.sh`/`contract.sh`
+  concurrency gates were judged unnecessary; the existing
+  `concurrent_is_ip_banned_no_deadlock_or_wrong_result` test already
+  covers concurrent-access correctness and still passes unchanged.
+- Commit: (this commit) on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — the fix is scoped and fully covered by the
+  two new regression tests.
+- Notes: this is the first genuine bug (as opposed to a routine
+  coverage-gap addition) found so far in this hunt run, hence the
+  journal entry — per this session's practice of journaling real
+  findings and skipping journal entries for routine test-coverage
+  additions.

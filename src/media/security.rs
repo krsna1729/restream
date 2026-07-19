@@ -178,16 +178,24 @@ impl IngestSecurityService {
             let has_failures = !r.failures.is_empty();
             !expired_ban || has_failures
         });
-        // Hard cap: if still over limit, evict by oldest most-recent-failure so
-        // actively-attacking IPs (with recent failures) are retained, not dropped.
-        // HashMap's arbitrary iteration order would otherwise evict random entries,
-        // potentially letting an attacker clear their own record by flooding from
-        // many IPs.
+        // Hard cap: if still over limit, evict non-banned entries before banned
+        // ones, and within each group evict the stalest (least recently failed)
+        // first. HashMap's arbitrary iteration order would otherwise evict
+        // random entries, potentially letting an attacker clear their own
+        // active ban early by flooding from many disposable IPs. Ranking by
+        // the *most recent* failure (not the earliest) matters too: an
+        // earliest-failure ranking would preferentially evict a long-running,
+        // still-active attacker over a single-shot flood IP, since a
+        // sustained attacker's first failure is older than a flood IP's only
+        // failure even though the attacker is still currently active.
         if state.len() > limit {
             let excess = state.len() - limit;
-            // Sort by the oldest failure in the record (earliest = least active)
             let mut entries: Vec<(&String, &FailureRecord)> = state.iter().collect();
-            entries.sort_by_key(|(_, r)| r.failures.iter().copied().min().unwrap_or(now));
+            entries.sort_by_key(|(_, r)| {
+                let currently_banned = r.banned_until.is_some_and(|t| t > now);
+                let most_recent_failure = r.failures.iter().copied().max().unwrap_or(now);
+                (currently_banned, most_recent_failure)
+            });
             let keys_to_remove: Vec<String> = entries
                 .iter()
                 .take(excess)
@@ -278,6 +286,61 @@ impl IngestSecurityService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rate_limit_scope_from_key_round_trips_and_rejects_unknown_keys() {
+        for scope in [
+            RateLimitScope::DashboardLogin,
+            RateLimitScope::RtmpPublish,
+            RateLimitScope::SrtPublish,
+            RateLimitScope::SrtRead,
+        ] {
+            assert_eq!(
+                RateLimitScope::from_key(scope.key()).map(|s| s.key()),
+                Some(scope.key())
+            );
+        }
+        for bogus in ["", "unknown", "Rtmp-Publish", "rtmp-publish "] {
+            assert!(
+                RateLimitScope::from_key(bogus).is_none(),
+                "key={bogus:?} must not resolve to a scope"
+            );
+        }
+    }
+
+    // scoped_key joins "{scope}\0{ip}" and parse_scoped_key splits on the
+    // first NUL. An ip string that itself contains a NUL (fully attacker
+    // controlled input from e.g. a spoofed header) must not be able to
+    // forge a different scope's key or otherwise get misparsed, since
+    // split_once only ever separates at the *first* NUL.
+    #[test]
+    fn embedded_null_byte_in_ip_does_not_forge_a_different_scope_key() {
+        let cfg = IngestSecurityConfig {
+            failure_limit: 1,
+            failure_window_ms: 60_000,
+            ban_ms: 60_000,
+            tracked_ip_limit: 1000,
+        };
+        let svc = IngestSecurityService::new(cfg);
+        let hostile_ip = "srt-publish\x0198.51.100.9";
+
+        assert!(svc.record_failure_for(RateLimitScope::DashboardLogin, hostile_ip));
+        assert!(
+            svc.is_ip_banned_for(RateLimitScope::DashboardLogin, hostile_ip)
+                .is_some(),
+            "the hostile ip must be banned under its real scope"
+        );
+        assert!(
+            svc.is_ip_banned_for(RateLimitScope::SrtPublish, "198.51.100.9")
+                .is_none(),
+            "an embedded NUL in the ip must not let it masquerade as an srt-publish ban"
+        );
+
+        let snapshots = svc.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].scope, "dashboard-login");
+        assert_eq!(snapshots[0].ip, hostile_ip);
+    }
 
     #[test]
     fn update_config_changes_take_effect_for_subsequent_calls() {
@@ -524,6 +587,75 @@ mod tests {
             state.len() <= 5,
             "tracked IP map must not exceed limit, got {}",
             state.len()
+        );
+    }
+
+    // Regression for a real bug: the tracked-IP eviction hard cap sorted by
+    // each record's *earliest* failure and ignored ban status entirely, so
+    // an attacker could clear their own active ban well before ban_ms
+    // elapsed by flooding the table with disposable throwaway IPs from
+    // other addresses. An active ban must survive an unrelated flood.
+    #[test]
+    fn flood_of_other_ips_does_not_evict_an_active_ban() {
+        let cfg = IngestSecurityConfig {
+            failure_limit: 2,
+            failure_window_ms: 60_000,
+            ban_ms: 5 * 60_000,
+            tracked_ip_limit: 3,
+        };
+        let svc = IngestSecurityService::new(cfg);
+        // Attacker gets banned on 10.0.0.1.
+        svc.record_failure("10.0.0.1");
+        svc.record_failure("10.0.0.1");
+        assert!(svc.is_ip_banned("10.0.0.1").is_some(), "must be banned");
+
+        // Two more IPs fill the table to tracked_ip_limit.
+        svc.record_failure("10.0.0.2");
+        svc.record_failure("10.0.0.3");
+
+        // Flood of throwaway single-failure IPs from other addresses, far
+        // beyond the tracked-IP limit.
+        for i in 4..20u8 {
+            svc.record_failure(&format!("10.0.0.{i}"));
+        }
+
+        assert!(
+            svc.is_ip_banned("10.0.0.1").is_some(),
+            "an active ban must survive a flood of unrelated throwaway IPs"
+        );
+    }
+
+    // Companion case: a currently-banned entry must be evicted before it is
+    // allowed to displace a *non-banned* record with more recent activity —
+    // i.e. banned status is a hard priority tier, not just a tiebreaker.
+    #[test]
+    fn eviction_prefers_non_banned_entries_over_banned_ones_regardless_of_recency() {
+        let cfg = IngestSecurityConfig {
+            failure_limit: 2,
+            failure_window_ms: 60_000,
+            ban_ms: 5 * 60_000,
+            tracked_ip_limit: 2,
+        };
+        let svc = IngestSecurityService::new(cfg);
+
+        // 10.0.0.1 gets banned first (its failures are therefore older).
+        svc.record_failure("10.0.0.1");
+        svc.record_failure("10.0.0.1");
+        assert!(svc.is_ip_banned("10.0.0.1").is_some());
+
+        // 10.0.0.2 fails once, more recently than the ban above, but is not
+        // itself banned yet.
+        svc.record_failure("10.0.0.2");
+
+        // A third IP forces eviction down to the limit of 2. Despite
+        // 10.0.0.2's failure being more recent than nothing (there is no
+        // older non-banned competitor here), the still-banned 10.0.0.1 must
+        // not be the one dropped merely for having an older timestamp.
+        svc.record_failure("10.0.0.3");
+
+        assert!(
+            svc.is_ip_banned("10.0.0.1").is_some(),
+            "banned entry must not be evicted ahead of a non-banned one"
         );
     }
 
