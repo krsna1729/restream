@@ -160,4 +160,32 @@ mod tests {
         assert!(is_sparse_gop_interval(2.25));
         assert!(is_sparse_gop_interval(5.0));
     }
+
+    #[test]
+    fn analyze_media_file_returns_err_for_nonexistent_path() {
+        let missing = Path::new("/nonexistent/does-not-exist-analysis-fixture.ts");
+        let result = analyze_media_file(missing);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Failed to open media file"));
+    }
+
+    #[test]
+    fn codec_name_maps_known_codecs_and_falls_back_for_unknown() {
+        assert_eq!(codec_name(ffmpeg_next::codec::Id::H264), "h264");
+        assert_eq!(codec_name(ffmpeg_next::codec::Id::HEVC), "hevc");
+        assert_eq!(codec_name(ffmpeg_next::codec::Id::AAC), "aac");
+        // Any codec outside the explicit match falls back to the
+        // lowercased Debug representation rather than panicking.
+        assert_eq!(codec_name(ffmpeg_next::codec::Id::VP8), "vp8");
+        assert_eq!(codec_name(ffmpeg_next::codec::Id::None), "none");
+    }
+
+    #[test]
+    fn round_metric_rounds_to_three_decimal_places() {
+        assert_eq!(round_metric(1.0004), 1.0);
+        assert_eq!(round_metric(1.0005), 1.001);
+        assert_eq!(round_metric(1.0006), 1.001);
+        assert_eq!(round_metric(-1.0006), -1.001);
+        assert_eq!(round_metric(0.0), 0.0);
+    }
 }
