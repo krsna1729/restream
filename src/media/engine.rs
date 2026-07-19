@@ -939,13 +939,12 @@ impl MediaEngine {
         Some(new_rb_clone)
     }
 
-    /// Get or create a shared transcoder stage for a pipeline + encoding combo.
-    /// Keyed by the full encoding string — callers are responsible for splitting
-    /// video and audio into separate stages when sharing is needed.
+    /// Get or create a shared transcoder stage for a typed pipeline stage.
+    /// Callers are responsible for splitting video and audio into separate stages
+    /// when sharing is needed.
     ///
-    /// Used for both video transcoding (keyed on video preset) and audio-only
-    /// filtering (keyed on full compound encoding). Multiple egresses wanting
-    /// the same encoding share the same output RingBuffer.
+    /// Used for both video transcoding and audio-only filtering. Multiple
+    /// egresses wanting the same stage share the same output RingBuffer.
     pub async fn get_or_create_transcoder(
         self: &Arc<Self>,
         pipeline_id: &str,

@@ -9,6 +9,7 @@ pub(crate) struct MixedGroupSpec<'a> {
     pub(crate) group: &'a str,
     pub(crate) count: usize,
     pub(crate) encoding: &'a str,
+    pub(crate) rtmp_mode: RtmpOutputMode,
     pub(crate) selected_audio_track: Option<usize>,
     pub(crate) expected_dimensions: Option<&'a str>,
     pub(crate) expected_audio_tracks: Option<usize>,
@@ -27,18 +28,22 @@ where
 {
     let started = Instant::now();
     let encoding = spec.encoding;
+    let rtmp_mode = spec.rtmp_mode;
     let mut pending = FuturesUnordered::new();
     for index in 1..=spec.count {
         let name = format!("{}-{index}", spec.group);
         let url = url_for(index);
         pending.push(async move {
-            let output_id = create_output(api, pipeline_id, &name, &url, encoding).await?;
+            let output_id =
+                create_output_with_rtmp_mode(api, pipeline_id, &name, &url, encoding, rtmp_mode)
+                    .await?;
             start_output(api, pipeline_id, &output_id).await?;
             Ok::<_, String>((index, name, url, output_id))
         });
     }
     while let Some(result) = pending.next().await {
         let (index, name, url, output_id) = result?;
+        let protocol = infer_output_protocol(&url);
         output_ids.push(output_id.clone());
         env.register_output_cell(HarnessOutputCell {
             scenario_id: spec.cfg.to_string(),
@@ -49,8 +54,9 @@ where
             output_name: name,
             cell_id: spec.group.to_string(),
             duplicate_index: index,
-            protocol: infer_output_protocol(&url),
+            protocol: protocol.clone(),
             encoding: spec.encoding.to_string(),
+            rtmp_mode: (protocol == "rtmp").then(|| spec.rtmp_mode.as_str().to_string()),
             selected_audio_track: spec.selected_audio_track,
             publish_url: url,
             read_url: None,
@@ -73,6 +79,7 @@ where
             "group": spec.group,
             "count": spec.count,
             "encoding": spec.encoding,
+            "rtmpMode": spec.rtmp_mode.as_str(),
         })),
     )?;
     Ok(())
@@ -118,7 +125,26 @@ pub(crate) fn mixed_output_matrix_json(cases: &[MixedOutputCase]) -> Vec<Value> 
                 "id": case.id(),
                 "protocol": mixed_output_protocol_name(case.protocol()),
                 "encoding": case.encoding(),
+                "rtmpMode": case.rtmp_mode_name(),
                 "expectedDimensions": case.expected_dimensions(),
+                "expectedVideoCodecByInput": {
+                    "h264": case.expected_video_codec_for_input(MixedInputCase::new(
+                        "mixed.asset.file.h264.a1.bf0",
+                        MixedInputProtocol::File,
+                        MixedVideoCodec::H264,
+                        MixedInputAudioLayout::A1,
+                        MixedInputReorder::Bf0,
+                        false,
+                    )),
+                    "h265": case.expected_video_codec_for_input(MixedInputCase::new(
+                        "mixed.asset.file.h265.a1.bf0",
+                        MixedInputProtocol::File,
+                        MixedVideoCodec::H265,
+                        MixedInputAudioLayout::A1,
+                        MixedInputReorder::Bf0,
+                        false,
+                    )),
+                },
                 "expectedAudioTracks": case.expected_audio_tracks(),
             });
             if let Some(track) = case.selected_audio_track() {
@@ -148,6 +174,7 @@ pub(crate) async fn add_mixed_output_matrix_rows(
                 group: case.id(),
                 count: env.n_per_group,
                 encoding: case.encoding(),
+                rtmp_mode: case.rtmp_mode(),
                 selected_audio_track: case.selected_audio_track(),
                 expected_dimensions: Some(case.expected_dimensions()),
                 expected_audio_tracks: Some(case.expected_audio_tracks()),

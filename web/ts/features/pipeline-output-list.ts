@@ -244,10 +244,10 @@ function buildOutputMetricSpecs(
   }
 
   metrics.push({
-    key: "enc",
-    label: "enc",
+    key: "cfg",
+    label: "cfg",
     text: outputViewEncodingLabel(output),
-    title: "Selected encoding",
+    title: "Video and audio config",
   });
   if (outputIssue) {
     metrics.push({

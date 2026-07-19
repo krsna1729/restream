@@ -6,7 +6,7 @@ usage() {
 Usage: scripts/check/staged-gate-router.sh [options]
 
 Route changed files to the narrowest repo checks from AGENTS.md.
-Run only fast pre-commit gates automatically; print heavier follow-up gates.
+Run pre-commit gates automatically; print broader follow-up gates.
 
 Options:
   --staged          inspect staged changes (default)
@@ -229,6 +229,17 @@ is_mcp_feature_surface_file() {
     esac
 }
 
+is_rust_lint_scope_file() {
+    case "$1" in
+        *.rs | Cargo.toml | Cargo.lock | rust-toolchain.toml | .cargo/config.toml)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 is_source_audit_scope_file() {
     case "$1" in
         test/fixtures/*)
@@ -269,6 +280,12 @@ for file in "${changed_files[@]}"; do
         add_auto_gate "cargo fmt --all --check"
     fi
 
+    if is_rust_lint_scope_file "$file"; then
+        add_auto_gate "scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings"
+        add_auto_gate "scripts/build/resource-limit.sh cargo clippy --workspace --all-targets -- -D warnings"
+        add_auto_gate "scripts/build/resource-limit.sh cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings"
+    fi
+
     if [[ "$file" == *.sh ]] || [[ "$file" == .githooks/* ]]; then
         shell_files+=("$file")
         add_auto_gate "bash -n staged shell files"
@@ -300,7 +317,7 @@ for file in "${changed_files[@]}"; do
         add_manual_recommendation "scripts/build/resource-limit.sh target/debug/test_harness correctness*"
     fi
 
-    if is_mcp_feature_surface_file "$file"; then
+    if is_mcp_feature_surface_file "$file" && ! is_rust_lint_scope_file "$file"; then
         add_follow_up_gate "scripts/build/resource-limit.sh cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings"
     fi
 
@@ -333,7 +350,7 @@ for file in "${changed_files[@]}"; do
 done
 
 echo
-echo "staged-gate-router: fast pre-commit gates"
+echo "staged-gate-router: pre-commit gates"
 if ((${#auto_gates[@]} == 0)); then
     echo "  (none)"
 else
@@ -378,6 +395,18 @@ run_gate() {
 
 if [[ -n "${auto_gates["cargo fmt --all --check"]+x}" ]]; then
     run_gate cargo fmt --all --check
+fi
+
+if [[ -n "${auto_gates["scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings"]+x}" ]]; then
+    run_gate scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings
+fi
+
+if [[ -n "${auto_gates["scripts/build/resource-limit.sh cargo clippy --workspace --all-targets -- -D warnings"]+x}" ]]; then
+    run_gate scripts/build/resource-limit.sh cargo clippy --workspace --all-targets -- -D warnings
+fi
+
+if [[ -n "${auto_gates["scripts/build/resource-limit.sh cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings"]+x}" ]]; then
+    run_gate scripts/build/resource-limit.sh cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings
 fi
 
 if [[ -n "${auto_gates["bash -n staged shell files"]+x}" ]]; then

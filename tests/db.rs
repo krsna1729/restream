@@ -143,13 +143,13 @@ async fn output_crud() {
         "Twitch",
         "rtmp://tw/live",
         None,
-        &OutputConfig::parse("720p"),
+        &OutputConfig::preset("720p"),
     )
     .await
     .unwrap()
     .unwrap();
     assert_eq!(updated.name, "Twitch");
-    assert_eq!(updated.encoding_string(), "720p");
+    assert_eq!(updated.stage_encoding_label(), "720p");
 
     let started = db::set_output_desired_state(&pool, "p1", "o1", DesiredOutputState::Running)
         .await
@@ -1070,40 +1070,3 @@ async fn pool_connections_have_busy_timeout_set() {
 
 // M5: NULL legacy encoding in DB must not cause a decode failure. A row with
 // encoding=NULL falls back to the `config` column's default (source).
-#[tokio::test]
-async fn output_with_null_encoding_decodes_as_source_default() {
-    let pool = db::create_pool("sqlite::memory:").await.unwrap();
-    db::setup_database_schema(&pool).await.unwrap();
-
-    db::create_pipeline(&pool, "p1", "P", "key-null-enc", None, None)
-        .await
-        .unwrap();
-
-    // Insert a row with NULL encoding directly — bypasses the Rust layer to
-    // simulate a legacy row that predates the encoding column. `config` is
-    // left unspecified, so it takes the column's NOT NULL DEFAULT (source).
-    sqlx::query(
-        "INSERT INTO outputs (id, pipeline_id, name, url, desired_state, encoding) \
-         VALUES ('o-null', 'p1', 'Legacy', 'rtmp://x', 'stopped', NULL)",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let outputs = db::list_outputs(&pool).await.unwrap();
-    assert_eq!(outputs.len(), 1);
-    assert_eq!(
-        outputs[0].encoding_string(),
-        "source",
-        "NULL legacy encoding must decode to the source default, not fail"
-    );
-
-    let fetched = db::get_output(&pool, "p1", "o-null")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(fetched.encoding_string(), "source");
-
-    let by_pipeline = db::list_outputs_for_pipeline(&pool, "p1").await.unwrap();
-    assert_eq!(by_pipeline[0].encoding_string(), "source");
-}

@@ -807,7 +807,7 @@ fn planned_candidate_stage_kinds(pipeline_id: &str, change: &ProposedChange) -> 
             .output_id
             .clone()
             .unwrap_or_else(|| "agent-preview-output".to_string()),
-        config.to_encoding_string(),
+        config.clone(),
         change.url.clone().unwrap_or_default(),
     );
     let policy = BackendPolicy::default();
@@ -915,6 +915,7 @@ fn now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::audio_routing::AudioRouting;
 
     #[test]
     fn plan_rejects_unknown_pipeline_and_bad_url() {
@@ -928,7 +929,7 @@ mod tests {
                 name: Some("CDN".to_string()),
                 url: Some("ftp://example".to_string()),
                 monitoring_url: None,
-                config: Some(OutputConfig::parse("720p")),
+                config: Some(OutputConfig::preset("720p")),
                 desired_state: None,
             }],
         };
@@ -961,7 +962,10 @@ mod tests {
                 name: None,
                 url: Some("rtmp://example/live/key".to_string()),
                 monitoring_url: None,
-                config: Some(OutputConfig::parse("720p+atrack:0")),
+                config: Some(
+                    OutputConfig::preset("720p")
+                        .with_audio(AudioRouting::SelectTracks { tracks: vec![0] }),
+                ),
                 desired_state: None,
             }],
         };
@@ -993,7 +997,7 @@ mod tests {
                 name: None,
                 url: Some("rtmp://example/live/key".to_string()),
                 monitoring_url: None,
-                config: Some(OutputConfig::parse("720p")),
+                config: Some(OutputConfig::preset("720p")),
                 desired_state: Some("running".to_string()),
             }],
         };

@@ -339,13 +339,22 @@ function getStatusColor(status: string): string {
 export interface OutputServerPreset {
   label: string;
   value: string;
+  rtmpMode?: "legacy" | "enhanced";
 }
 
 export const OUTPUT_SERVER_PRESETS: Record<string, OutputServerPreset[]> = {
   rtmp: [
     { label: "Custom", value: "" },
-    { label: "YouTube", value: "rtmp://a.rtmp.youtube.com/live2/" },
-    { label: "YT Backup", value: "rtmp://b.rtmp.youtube.com/live2?backup=1/" },
+    {
+      label: "YouTube",
+      value: "rtmp://a.rtmp.youtube.com/live2/",
+      rtmpMode: "enhanced",
+    },
+    {
+      label: "YT Backup",
+      value: "rtmp://b.rtmp.youtube.com/live2?backup=1/",
+      rtmpMode: "enhanced",
+    },
     { label: "Facebook", value: "rtmps://live-api-s.facebook.com:443/rtmp/" },
     {
       label: "VDO Cipher",
@@ -407,6 +416,7 @@ function resolvePresetOutputUrl(serverUrl: string, rawInput: string): string {
 export interface MatchedPreset {
   value: string;
   inputValue: string;
+  rtmpMode?: "legacy" | "enhanced";
 }
 
 function matchOutputServerPreset(
@@ -425,18 +435,22 @@ function matchOutputServerPreset(
           prefix.length,
           candidateUrl.length - suffix.length,
         );
-        return {
+        const matched: MatchedPreset = {
           value: preset.value,
           inputValue: safeDecodeUrlComponent(captured),
         };
+        if (preset.rtmpMode) matched.rtmpMode = preset.rtmpMode;
+        return matched;
       }
       continue;
     }
     if (candidateUrl.startsWith(preset.value)) {
-      return {
+      const matched: MatchedPreset = {
         value: preset.value,
         inputValue: candidateUrl.slice(preset.value.length),
       };
+      if (preset.rtmpMode) matched.rtmpMode = preset.rtmpMode;
+      return matched;
     }
   }
   return null;

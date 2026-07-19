@@ -28,6 +28,13 @@ impl MsrProtocol {
             Self::Srt => "srt",
         }
     }
+
+    const fn default_rtmp_mode(self) -> RtmpOutputMode {
+        match self {
+            Self::Rtmp => RtmpOutputMode::Enhanced,
+            Self::Srt => RtmpOutputMode::Legacy,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,8 +121,15 @@ struct MsrOutputSpec {
     language_code: &'static str,
     language_name: &'static str,
     protocol: MsrProtocol,
+    rtmp_mode: RtmpOutputMode,
     encoding: String,
     name: String,
+}
+
+impl MsrOutputSpec {
+    fn rtmp_mode_name(&self) -> Option<&'static str> {
+        matches!(self.protocol, MsrProtocol::Rtmp).then(|| self.rtmp_mode.as_str())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -283,6 +297,7 @@ fn msr_output_plan_for_mix_and_profile(
                 language_code: MSR_LANGUAGE_CODES[rank_index],
                 language_name: MSR_LANGUAGE_NAMES[rank_index],
                 protocol,
+                rtmp_mode: protocol.default_rtmp_mode(),
                 encoding: profile.output_encoding(rank_index),
                 name: format!(
                     "{}-rank{:02}-{}-{:04}",
@@ -341,6 +356,11 @@ fn msr_plan_json(
         .iter()
         .filter(|output| output.protocol == MsrProtocol::Rtmp)
         .count();
+    let enhanced_rtmp = plan
+        .iter()
+        .filter(|output| output.protocol == MsrProtocol::Rtmp)
+        .filter(|output| output.rtmp_mode == RtmpOutputMode::Enhanced)
+        .count();
     let srt = plan.len().saturating_sub(rtmp);
     json!({
         "mode": MSR_MODE,
@@ -362,6 +382,7 @@ fn msr_plan_json(
         "outputs": {
             "total": plan.len(),
             "rtmp": rtmp,
+            "enhancedRtmp": enhanced_rtmp,
             "srt": srt,
             "protocolMix": mix.label(),
             "rtmpPercent": (rtmp * 100) / plan.len().max(1),
@@ -487,12 +508,14 @@ fn format_msr_report(
     executed_outputs: usize,
     audio_tracks: usize,
     rtmp_outputs: usize,
+    enhanced_rtmp_outputs: usize,
     srt_outputs: usize,
     aggregates: &[MsrCheckpointAggregate],
 ) -> String {
     let mut report = format!(
         "Status: PASS at every checkpoint including {executed_outputs} outputs \
-         (1 SRT ingest, {audio_tracks} audio tracks, Zipf fan-out, {rtmp_outputs} RTMP / {srt_outputs} SRT, \
+         (1 SRT ingest, {audio_tracks} audio tracks, Zipf fan-out, {rtmp_outputs} RTMP \
+         with {enhanced_rtmp_outputs} Enhanced RTMP / {srt_outputs} SRT, \
          1080p30 H.264 passthrough, loopback MediaMTX path API byte-growth proof).\n\n"
     );
     report.push_str("| Outputs | Egress mix | MediaMTX ready | MediaMTX bytes delta | CPU avg % | CPU peak % | RSS peak | AVIO HWM peak | Samples |\n");
@@ -681,8 +704,15 @@ async fn seed_msr_dashboard_hero_outputs(
     let mut output_ids = Vec::with_capacity(output_count);
     for output in plan.iter().take(output_count) {
         let url = msr_output_url(env, output);
-        let output_id =
-            create_output(stack, pipeline_id, &output.name, &url, &output.encoding).await?;
+        let output_id = create_output_with_rtmp_mode(
+            stack,
+            pipeline_id,
+            &output.name,
+            &url,
+            &output.encoding,
+            output.rtmp_mode,
+        )
+        .await?;
         start_output(stack, pipeline_id, &output_id).await?;
         output_ids.push(output_id);
     }
@@ -944,6 +974,7 @@ async fn run_msr_ffprobe_checkpoint(
                 "ordinal": output.ordinal,
                 "rank": output.rank,
                 "protocol": output.protocol.label(),
+                "rtmpMode": output.rtmp_mode_name(),
                 "encoding": output.encoding,
             },
             "url": url,
@@ -1119,6 +1150,7 @@ async fn run_msr_signal_check(
             "ordinal": output.ordinal,
             "rank": output.rank,
             "protocol": output.protocol.label(),
+            "rtmpMode": output.rtmp_mode_name(),
             "encoding": output.encoding,
         },
         "quality": signal_report_json(
@@ -1199,12 +1231,13 @@ async fn run_msr_phase(
 
     for output in plan.iter().take(max_outputs) {
         let url = msr_output_url(&env, output);
-        let output_id = create_output(
+        let output_id = create_output_with_rtmp_mode(
             &stack.api,
             &pipeline_id,
             &output.name,
             &url,
             &output.encoding,
+            output.rtmp_mode,
         )
         .await?;
         start_output(&stack.api, &pipeline_id, &output_id).await?;
@@ -1308,6 +1341,12 @@ async fn run_msr_phase(
         .take(output_ids.len())
         .filter(|output| output.protocol == MsrProtocol::Rtmp)
         .count();
+    let enhanced_rtmp_outputs = plan
+        .iter()
+        .take(output_ids.len())
+        .filter(|output| output.protocol == MsrProtocol::Rtmp)
+        .filter(|output| output.rtmp_mode == RtmpOutputMode::Enhanced)
+        .count();
     let srt_outputs = output_ids.len().saturating_sub(rtmp_outputs);
     std::fs::write(
         &report_md,
@@ -1315,6 +1354,7 @@ async fn run_msr_phase(
             output_ids.len(),
             profile.audio_tracks(),
             rtmp_outputs,
+            enhanced_rtmp_outputs,
             srt_outputs,
             &aggregates,
         ),
@@ -1499,6 +1539,23 @@ mod tests {
         );
         assert_eq!(
             plan.iter()
+                .filter(|output| output.protocol == MsrProtocol::Rtmp)
+                .filter(|output| output.rtmp_mode == RtmpOutputMode::Enhanced)
+                .count(),
+            MSR_RTMP_OUTPUTS
+        );
+        assert_eq!(
+            msr_plan_json(
+                &plan,
+                &[30],
+                MsrProtocolMix::Canonical,
+                MsrRunProfile::Canonical
+            )["outputs"]["enhancedRtmp"]
+                .as_u64(),
+            Some(MSR_RTMP_OUTPUTS as u64)
+        );
+        assert_eq!(
+            plan.iter()
                 .filter(|output| output.protocol == MsrProtocol::Srt)
                 .count(),
             MSR_SRT_OUTPUTS
@@ -1514,6 +1571,11 @@ mod tests {
                 .filter(|output| output.protocol == MsrProtocol::Rtmp)
                 .count(),
             MSR_TOTAL_OUTPUTS
+        );
+        assert!(
+            rtmp_plan
+                .iter()
+                .all(|output| output.rtmp_mode == RtmpOutputMode::Enhanced)
         );
         assert_eq!(
             rtmp_plan
@@ -1654,6 +1716,7 @@ mod tests {
             language_code: "eng",
             language_name: "English",
             protocol: MsrProtocol::Srt,
+            rtmp_mode: RtmpOutputMode::Legacy,
             encoding: "source+atrack:0".to_string(),
             name: "msr-rank01-srt-0001".to_string(),
         };
@@ -1751,9 +1814,10 @@ mod tests {
             ffprobe_checks: Vec::new(),
         };
 
-        let report = format_msr_report(30, 30, 29, 1, &[aggregate]);
+        let report = format_msr_report(30, 30, 29, 29, 1, &[aggregate]);
 
         assert!(report.contains("MediaMTX ready"));
+        assert!(report.contains("29 Enhanced RTMP"));
         assert!(report.contains("MediaMTX bytes delta"));
         assert!(report.contains("| 30 | rtmp:29,srt:1 | 30/30 |"));
     }

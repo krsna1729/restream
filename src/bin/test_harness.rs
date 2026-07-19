@@ -7,7 +7,10 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, put};
 use bytes::Bytes;
 use chrono::Utc;
-use restream::domain::output_spec::OutputConfig;
+use restream::domain::audio_routing::{AudioRouting, is_audio_operation, parse_audio_operation};
+use restream::domain::output_spec::{
+    OutputConfig, OutputUrlScheme, OutputVideoConfig, RtmpOutputMode,
+};
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
@@ -127,7 +130,7 @@ fn planned_mixed_stage_count(
                 };
                 PlannedOutput::new(
                     format!("{}-{duplicate}", output_case.id()),
-                    output_case.encoding(),
+                    output_case.output_config(),
                     url,
                 )
             })

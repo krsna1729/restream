@@ -4,63 +4,15 @@ function defaultOutputConfig(): OutputConfig {
   return {
     video: { mode: "source" },
     audio: { mode: "all" },
+    protocol: { type: "auto" },
   };
 }
 
-export function parseOutputConfig(
-  encoding: string | null | undefined,
-): OutputConfig {
-  const rawEncoding = String(encoding || "source").trim();
-  const rawAudioEncoding = rawEncoding.toLowerCase();
-  const compoundMatch = /^([^+]+)\+(.+)$/.exec(rawEncoding);
-  let videoEncodingPart = rawEncoding;
-  let audioEncodingPart = "";
-  if (compoundMatch) {
-    videoEncodingPart = compoundMatch[1].trim();
-    audioEncodingPart = compoundMatch[2].trim().toLowerCase();
-  }
-
-  const audioSource = audioEncodingPart || rawAudioEncoding;
-  let audio: OutputConfig["audio"] = { mode: "all" };
-  const atrackMatch = /^atrack:(\d+(?:,\d+)*)$/.exec(audioSource);
-  const downmixMatch = /^downmix:(\d+)$/.exec(audioSource);
-  const remapMatch = /^remap:(\d+):(\d+)(?::(\d+))?$/.exec(audioSource);
-  if (atrackMatch) {
-    audio = {
-      mode: "selectTracks",
-      tracks: atrackMatch[1].split(",").map((track) => parseInt(track, 10)),
-    };
-  } else if (downmixMatch) {
-    audio = {
-      mode: "downmix",
-      track: parseInt(downmixMatch[1], 10),
-    };
-  } else if (remapMatch) {
-    audio = {
-      mode: "remap",
-      leftChannel: parseInt(remapMatch[1], 10),
-      rightChannel: parseInt(remapMatch[2], 10),
-      track:
-        remapMatch[3] !== undefined ? parseInt(remapMatch[3], 10) : undefined,
-    };
-  }
-
-  const video =
-    compoundMatch || atrackMatch || downmixMatch || remapMatch
-      ? videoConfigForEncoding(videoEncodingPart || "source")
-      : videoConfigForEncoding(rawEncoding || "source");
-
-  return { video, audio };
+export function outputConfigRtmpMode(config: OutputConfig): "legacy" | "enhanced" {
+  return config.protocol?.type === "rtmp" ? config.protocol.mode : "legacy";
 }
 
-function videoConfigForEncoding(encoding: string): OutputConfig["video"] {
-  const normalized = encoding.trim();
-  if (!normalized || normalized === "source") return { mode: "source" };
-  if (normalized === "custom") return { mode: "custom" };
-  return { mode: "preset", preset: normalized };
-}
-
-export function outputConfigToEncoding(config: OutputConfig): string {
+export function outputConfigStageLabel(config: OutputConfig): string {
   const video = outputConfigVideoLabel(config);
   const audio = outputConfigAudioOperation(config);
   if (!audio) return video;
@@ -101,11 +53,11 @@ export function outputConfigAudioOperation(
 export function normalizeOutputConfig(output: {
   config?: OutputConfig | null;
 }): OutputConfig {
-  return output.config || defaultOutputConfig();
+  return { ...defaultOutputConfig(), ...(output.config || {}) };
 }
 
 export function outputViewEncodingLabel(
   output: Pick<OutputView, "config">,
 ): string {
-  return outputConfigToEncoding(normalizeOutputConfig(output));
+  return outputConfigStageLabel(normalizeOutputConfig(output));
 }

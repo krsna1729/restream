@@ -48,7 +48,10 @@ import {
 } from "../core/audio-caps.js";
 import type { AudioCaps, AudioProtocol } from "../core/audio-caps.js";
 import { isOutputManagedActive } from "../core/output-status.js";
-import { normalizeOutputConfig } from "../core/output-config.js";
+import {
+  normalizeOutputConfig,
+  outputConfigRtmpMode,
+} from "../core/output-config.js";
 import { state } from "../core/state.js";
 import {
   awaitDashboardRuntimeMutationConvergence,
@@ -69,6 +72,7 @@ import type {
   OutputConfig,
   PipelineView,
   OutputView,
+  RtmpOutputMode,
   SrtPipelineIngestConfig,
   StreamKey,
 } from "../types.js";
@@ -186,6 +190,37 @@ function isCustomOutputServerSelected(protocol = "rtmp"): boolean {
   return !serverSelect || !serverSelect.value;
 }
 
+function selectedCustomRtmpMode(): RtmpOutputMode {
+  const value =
+    (
+      document.getElementById("out-rtmp-mode-input") as HTMLSelectElement | null
+    )?.value || "legacy";
+  return value === "enhanced" ? "enhanced" : "legacy";
+}
+
+function resolveModalRtmpMode(
+  protocol: string,
+  serverUrl: string,
+): RtmpOutputMode {
+  if (protocol !== "rtmp") return "legacy";
+  const preset = (OUTPUT_SERVER_PRESETS.rtmp || []).find(
+    (candidate) => candidate.value === serverUrl,
+  );
+  return preset?.rtmpMode || selectedCustomRtmpMode();
+}
+
+function refreshRtmpModeUi(protocol: string): void {
+  const field = document.getElementById("out-rtmp-mode-field");
+  const input = document.getElementById(
+    "out-rtmp-mode-input",
+  ) as HTMLSelectElement | null;
+  const show = protocol === "rtmp" && isCustomOutputServerSelected(protocol);
+  field?.classList.toggle("hidden", !show);
+  if (input) {
+    input.disabled = !show;
+  }
+}
+
 function applyOutputProtocolUi(protocol: string): void {
   const urlLabel = document.getElementById("out-url-input-label");
   const urlField = document.getElementById("out-url-field");
@@ -216,6 +251,7 @@ function applyOutputProtocolUi(protocol: string): void {
   if (serverSelect) {
     serverSelect.disabled = !showPresetFields;
   }
+  refreshRtmpModeUi(protocol);
 }
 
 function getEffectiveOutputUrlFromModal(): string {
@@ -1597,6 +1633,15 @@ async function openOutModal(
   if (serverSelect) {
     serverSelect.value = matchedPreset?.value || "";
   }
+  const rtmpModeInput = document.getElementById(
+    "out-rtmp-mode-input",
+  ) as HTMLSelectElement | null;
+  if (rtmpModeInput) {
+    rtmpModeInput.value =
+      outputConfig.protocol?.type === "rtmp"
+        ? outputConfigRtmpMode(outputConfig)
+        : matchedPreset?.rtmpMode || "legacy";
+  }
 
   const outUrlInput = document.getElementById(
     "out-rtmp-key-input",
@@ -1689,7 +1734,11 @@ export async function editOutFormBtn(event: Event): Promise<void> {
   const selectedEncoding =
     (document.getElementById("out-encoding-input") as HTMLSelectElement | null)
       ?.value || "source";
+  const outputProtocol =
+    (document.getElementById("out-protocol-input") as HTMLSelectElement | null)
+      ?.value || "rtmp";
 
+  const rtmpMode = resolveModalRtmpMode(outputProtocol, serverUrl);
   const config: OutputConfig = {
     video:
       selectedEncoding === "source"
@@ -1730,8 +1779,12 @@ export async function editOutFormBtn(event: Event): Promise<void> {
                   )?.value || "1",
                   10,
                 ),
-              }
+            }
             : { mode: "all" },
+    protocol:
+      outputProtocol === "rtmp"
+        ? { type: "rtmp", mode: rtmpMode }
+        : { type: "auto" },
   };
   const data: {
     name: string;
@@ -1759,9 +1812,6 @@ export async function editOutFormBtn(event: Event): Promise<void> {
   }
 
   const isOutputUrlValid = isValidOutput(data.url);
-  const outputProtocol =
-    (document.getElementById("out-protocol-input") as HTMLSelectElement | null)
-      ?.value || "rtmp";
   const outputErrorField =
     outputProtocol === "srt"
       ? document.getElementById("out-srt-host-input")

@@ -3,6 +3,7 @@
 
 use crate::application::models::Output;
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
+use crate::domain::output_spec::OutputConfig;
 use crate::domain::stage::StageKey;
 use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
@@ -149,7 +150,7 @@ pub async fn load_output_runtime_snapshot(
 #[derive(Debug, Clone)]
 pub struct OutputStageSweepInput<'a> {
     pub pipeline_id: &'a str,
-    pub encoding: String,
+    pub config: OutputConfig,
     pub url: &'a str,
     pub desired_state: DesiredOutputState,
     pub is_active: bool,
@@ -167,7 +168,7 @@ pub fn collect_needed_stage_keys<'a>(
             && (output.is_active || output.desired_state == DesiredOutputState::Running)
         {
             let planned_output =
-                crate::planner::graph_plan::PlannedOutput::new("", output.encoding, output.url);
+                crate::planner::graph_plan::PlannedOutput::new("", output.config, output.url);
             let plan = crate::planner::graph_plan::plan_pipeline_graph(
                 output.pipeline_id,
                 output.ingest_video_codec.as_deref(),
@@ -191,7 +192,7 @@ pub fn output_stage_sweep_input<'a>(
 ) -> OutputStageSweepInput<'a> {
     OutputStageSweepInput {
         pipeline_id: output.pipeline_id.as_str(),
-        encoding: output.encoding_string(),
+        config: output.config.clone(),
         url: &output.url,
         desired_state: output.desired_state,
         is_active: snapshot.is_active,
@@ -252,6 +253,7 @@ mod tests {
     use super::*;
     use crate::application::models::Pipeline;
     use crate::application::ports::{MetaLookupFuture, PipelineListFuture};
+    use crate::domain::audio_routing::AudioRouting;
     use crate::domain::output_spec::OutputConfig;
     use crate::domain::stage::StageKind;
     use crate::media::engine::VideoMeta;
@@ -435,7 +437,8 @@ mod tests {
             [
                 OutputStageSweepInput {
                     pipeline_id: "pipe",
-                    encoding: "720p+atrack:0".to_string(),
+                    config: OutputConfig::preset("720p")
+                        .with_audio(AudioRouting::SelectTracks { tracks: vec![0] }),
                     url: "rtmp://example/live",
                     desired_state: DesiredOutputState::Running,
                     is_active: false,
@@ -444,7 +447,7 @@ mod tests {
                 },
                 OutputStageSweepInput {
                     pipeline_id: "pipe",
-                    encoding: "source".to_string(),
+                    config: OutputConfig::source(),
                     url: "srt://example:9000",
                     desired_state: DesiredOutputState::Stopped,
                     is_active: false,
@@ -493,7 +496,7 @@ mod tests {
             url: "rtmp://example/live/test".to_string(),
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
-            config: OutputConfig::parse("source"),
+            config: OutputConfig::source(),
         };
 
         let snapshot = load_output_runtime_snapshot(&engine, &output, 0).await;
@@ -518,7 +521,7 @@ mod tests {
             url: "srt://example:9000".to_string(),
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
-            config: OutputConfig::parse("source"),
+            config: OutputConfig::source(),
         };
 
         let snapshot = load_output_runtime_snapshot(&engine, &output, 1_000).await;
@@ -537,7 +540,7 @@ mod tests {
             url: "rtmp://example/live".to_string(),
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
-            config: OutputConfig::parse("720p"),
+            config: OutputConfig::preset("720p"),
         };
         let snapshot = OutputRuntimeSnapshot {
             is_active: true,
@@ -548,7 +551,7 @@ mod tests {
         let input = output_stage_sweep_input(&output, &snapshot);
 
         assert_eq!(input.pipeline_id, "pipe");
-        assert_eq!(input.encoding, "720p");
+        assert_eq!(input.config.stage_encoding_label(), "720p");
         assert!(input.is_active);
         assert!(!input.effective_has_ingest);
         assert_eq!(input.ingest_video_codec.as_deref(), Some("hevc"));

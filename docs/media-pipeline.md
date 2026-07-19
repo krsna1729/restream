@@ -18,7 +18,7 @@ For the performance optimization plan and benchmark results, see
 - [Current protocol matrix](#current-protocol-matrix)
 - [Minimum work per consumer](#minimum-work-per-consumer)
 - [Harness coverage](#harness-coverage)
-- [What is shared when outputs use the same encoding](#what-is-shared-when-outputs-use-the-same-encoding)
+- [What is shared when outputs use the same video and audio config](#what-is-shared-when-outputs-use-the-same-video-and-audio-config)
 - [Audio stage cache](#audio-stage-cache)
 - [Buffer sizing for 4K 60fps](#buffer-sizing-for-4k-60fps)
 - [SRT bonding](#srt-bonding)
@@ -265,14 +265,15 @@ Standard RTMP (non-Enhanced) does not carry H.265. The reconciler enforces:
 | SRT | H.265 + video preset | `video:preset` with libx265 → H.265 720p output; same ring shared with RTMP — **working** |
 | HLS preview | H.265 source | Preview-only `hevc_preview_h264` stage converts to H.264 720p before served fMP4 HLS — **current path** |
 
-Enhanced RTMP/HEVC packetization is not implemented.
+Enhanced RTMP egress packetizes HEVC as Enhanced FLV `hvc1` and skips this
+bridge. Enhanced RTMP ingest remains out of scope.
 
 ## Current protocol matrix
 
 | Ingest | RTMP egress | SRT egress | HLS preview | Recording |
 |---|---|---|---|---|
 | RTMP H.264 | Basic interop; B-frame timestamp gate | Implemented; full matrix gate | fMP4 HLS preview with alternate-audio renditions | Input-scoped mixed gate validates final MP4 |
-| RTMP H.265 | Not supported without Enhanced RTMP | Not assumed | Not assumed | Not assumed |
+| RTMP H.265 | Enhanced RTMP egress supported; legacy RTMP uses H.265→H.264 bridge | Not assumed | Not assumed | Not assumed |
 | SRT H.264 | Packetization implemented; live matrix gate | Locally validated | fMP4 HLS preview with alternate-audio renditions | Input-scoped mixed gate validates final MP4 |
 | SRT H.265 | RTMP: `hevc_to_h264` conversion working; SRT: passthrough working | Passthrough implemented; E2E gate | HEVC preview converts to H.264 720p before served fMP4 HLS | Input-scoped mixed gate validates final MP4 |
 | File | RTMP-shaped via child FFmpeg | Implemented for compatible FLV codecs | Native fMP4 preview packager; HEVC uses preview transcode | Input-scoped mixed gate validates final MP4 |
@@ -318,7 +319,7 @@ count: identical `(pipeline_id, stage_key)` values reuse expensive work, while
 each destination keeps its own sender. Current scenario composition and
 resource measurements belong to the catalog and dated evidence.
 
-## What is shared when outputs use the same encoding
+## What is shared when outputs use the same video and audio config
 
 Stage sharing is keyed by `(pipeline_id, stage_key)`:
 

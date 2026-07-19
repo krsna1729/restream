@@ -293,6 +293,12 @@ scripts/harness/run.sh <mode>
 scripts/harness/run.sh <mode> -- --no-netns
 ```
 
+Use `MIXED_OUTPUT_GROUPS` only for focused live proofs that need a subset of a
+mixed output matrix, for example a codec-edge smoke that should exercise
+`rtmp.720p.a0,rtmp.720p.a1` without paying for every SRT and RTMP row. The value
+is a comma-separated list of mixed output row ids; broad coverage still belongs
+to the catalog matrix, fast-breadth, and signal modes.
+
 Integration tests use a private loopback namespace by default. Use
 `--no-netns` only when the host cannot create the namespace or the test must
 interact with a host service. Never build while Restream, MediaMTX, or FFmpeg

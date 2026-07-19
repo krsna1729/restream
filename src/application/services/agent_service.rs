@@ -163,7 +163,7 @@ mod tests {
             "rtmp://example/live",
             None,
             DesiredOutputState::Running,
-            &OutputConfig::parse("source"),
+            &OutputConfig::source(),
         )
         .await
         .unwrap();
@@ -226,7 +226,7 @@ mod tests {
             "rtmp://example/live",
             None,
             DesiredOutputState::Running,
-            &OutputConfig::parse("source"),
+            &OutputConfig::source(),
         )
         .await
         .unwrap();

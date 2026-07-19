@@ -5,6 +5,9 @@ use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
 use crate::media::ingest_auth::{AuthenticatedPipeline, PipelineAccessFuture};
 use crate::media::ring_buffer::{MediaType, RingBuffer};
 use proptest::prelude::*;
+use rml_rtmp::chunk_io::ChunkDeserializer;
+use rml_rtmp::messages::RtmpMessage;
+use rml_rtmp::rml_amf0::Amf0Value;
 
 #[tokio::test]
 async fn client_handshake_can_be_bounded_when_peer_is_silent() {
@@ -338,8 +341,9 @@ fn startup_video_sequence_header_prefers_ring_parameter_sets() {
     let ingest_sequence_header =
         Bytes::from_static(&[0x17, 0x00, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x1F]);
 
-    let selected = startup_video_sequence_header(&ring, Some(ingest_sequence_header.clone()))
-        .expect("ring parameter sets should synthesize a startup header");
+    let selected =
+        startup_video_sequence_header(&ring, Some(ingest_sequence_header.clone()), false)
+            .expect("ring parameter sets should synthesize a startup header");
 
     assert_ne!(
         selected, ingest_sequence_header,
@@ -350,13 +354,102 @@ fn startup_video_sequence_header_prefers_ring_parameter_sets() {
 }
 
 #[test]
+fn startup_video_sequence_header_builds_enhanced_hevc_header() {
+    let ring = Arc::new(RingBuffer::new(1024));
+    ring.set_codec_hint("hevc");
+    let fixture = crate::test_fixtures::av_marker_transport_fixture_for_bframes(
+        "h265",
+        false,
+        crate::test_fixtures::AvMarkerBframeMode::Bf0,
+    )
+    .expect("checked-in HEVC BF0 fixture");
+    let bytes = std::fs::read(fixture).expect("read HEVC BF0 fixture");
+    let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+    let mut packets = Vec::new();
+    for chunk in bytes.chunks(1316) {
+        demuxer.feed(chunk);
+    }
+    demuxer.flush();
+    demuxer.drain_into(&mut packets);
+    let parameter_sets = packets
+        .iter()
+        .find_map(|packet| {
+            (packet.media_type == crate::media::ring_buffer::MediaType::Video)
+                .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+                .flatten()
+        })
+        .expect("fixture should carry HEVC parameter sets");
+    ring.set_video_parameter_sets(parameter_sets);
+
+    let selected = startup_video_sequence_header(&ring, None, true)
+        .expect("HEVC parameter sets should synthesize an enhanced startup header");
+
+    assert_eq!(&selected[..5], &[0x80, b'h', b'v', b'c', b'1']);
+}
+
+#[test]
+fn raw_hevc_guard_does_not_flag_h264_non_idr_slice() {
+    let h264_non_idr = [0, 0, 0, 1, 0x41, 0x9a, 0x22, 0x11];
+
+    assert!(!raw_packet_starts_with_hevc_parameter_set(&h264_non_idr));
+}
+
+#[test]
+fn enhanced_rtmp_connect_packet_advertises_hevc_fourcc_support() {
+    let mut config = ClientSessionConfig::new();
+    config.tc_url = Some("rtmp://example/live".to_string());
+
+    let packet = enhanced_rtmp_connect_packet(&config, "live").unwrap();
+    let mut deserializer = ChunkDeserializer::new();
+    let payload = deserializer
+        .get_next_message(&packet)
+        .unwrap()
+        .expect("connect packet should contain one RTMP message");
+    let message = payload.to_rtmp_message().unwrap();
+
+    let RtmpMessage::Amf0Command {
+        command_name,
+        transaction_id,
+        command_object,
+        ..
+    } = message
+    else {
+        panic!("enhanced connect should be an AMF0 command");
+    };
+    assert_eq!(command_name, "connect");
+    assert_eq!(transaction_id, 1.0);
+    let Amf0Value::Object(properties) = command_object else {
+        panic!("enhanced connect should use an object command payload");
+    };
+    assert_eq!(
+        properties.get("fourCcList"),
+        Some(&Amf0Value::StrictArray(vec![
+            Amf0Value::Utf8String("hvc1".to_string()),
+            Amf0Value::Utf8String("avc1".to_string()),
+            Amf0Value::Utf8String("mp4a".to_string()),
+        ]))
+    );
+    let Some(Amf0Value::Object(video_fourcc_info)) = properties.get("videoFourCcInfoMap") else {
+        panic!("enhanced connect should advertise video FourCC capability info");
+    };
+    assert_eq!(
+        video_fourcc_info.get("hvc1"),
+        Some(&Amf0Value::Number(0x06 as f64))
+    );
+    assert_eq!(
+        video_fourcc_info.get("avc1"),
+        Some(&Amf0Value::Number(0x06 as f64))
+    );
+}
+
+#[test]
 fn startup_video_sequence_header_skips_ingest_header_for_empty_raw_ring() {
     let ring = Arc::new(RingBuffer::new(1024));
     ring.set_codec_hint("h264");
     let ingest_sequence_header =
         Bytes::from_static(&[0x17, 0x00, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x1F]);
 
-    let selected = startup_video_sequence_header(&ring, Some(ingest_sequence_header));
+    let selected = startup_video_sequence_header(&ring, Some(ingest_sequence_header), false);
 
     assert!(
         selected.is_none(),
@@ -547,7 +640,7 @@ async fn rtmp_metadata_uses_terminal_ring_codec_for_hevc_codec_edge() {
 }
 
 #[tokio::test]
-async fn rtmp_metadata_does_not_advertise_unconverted_hevc_as_avc() {
+async fn rtmp_metadata_advertises_unconverted_hevc_as_hvc1_fourcc() {
     let engine = MediaEngine::new();
     engine
         .try_register_ingest("p-hevc-source", "key", "srt")
@@ -582,9 +675,12 @@ async fn rtmp_metadata_does_not_advertise_unconverted_hevc_as_avc() {
         .expect("audio metadata should still be present");
 
     assert_eq!(
-        metadata.video_codec_id, None,
-        "without a terminal H.264 ring, HEVC must not be mislabeled as AVC"
+        metadata.video_codec_id,
+        Some(RTMP_METADATA_VIDEO_CODEC_ID_HEVC),
+        "without a terminal H.264 ring, HEVC must be advertised as hvc1, not AVC"
     );
+    assert_eq!(metadata.video_width, Some(1920));
+    assert_eq!(metadata.video_height, Some(1080));
     assert_eq!(metadata.audio_codec_id, Some(10));
 }
 
@@ -612,6 +708,7 @@ async fn start_rtmp_egress_waits_for_ring_data_before_connecting() {
             ring_c,
             engine_c,
             registration_c,
+            crate::domain::output_spec::RtmpOutputMode::Legacy,
         )
         .await;
     });

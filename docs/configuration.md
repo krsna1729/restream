@@ -101,7 +101,7 @@ updates any supplied field.
 | `ingestSecurity` | In-memory failed-publish tracking and temporary IP bans; changes are persisted |
 | `recordingSettings.retainSourceTs` | Deployment-wide recording retention policy. Default `false`: after a successful `.mp4` remux, the source recording `.ts` is deleted. Failed remuxes always keep the source `.ts`. |
 | Dashboard password | Scrypt hash stored in SQLite. On first startup, `RESTREAM_INITIAL_ADMIN_PASSWORD` is used when set; otherwise a high-entropy password is generated and written next to the SQLite database as `restream-initial-admin-password.txt` with owner-only permissions. |
-| Custom encoding | Stored through `/api/v1/encodings/custom` for future use; not offered as an output encoding and rejected by output create/update |
+| Custom output video mode | Stored through `/api/v1/encodings/custom` for future use; not offered as an output video mode and rejected by output create/update |
 | Recording enabled | Stored per pipeline as `recording_enabled:<pipelineId>` |
 
 Sessions are persisted in SQLite and reloaded at startup. Expired sessions are
@@ -182,7 +182,8 @@ Each output stores:
   "url": "rtmp://destination.example/live/key",
   "config": {
     "video": { "mode": "source" },
-    "audio": { "mode": "all" }
+    "audio": { "mode": "all" },
+    "protocol": { "type": "rtmp", "mode": "legacy" }
   }
 }
 ```
@@ -204,20 +205,13 @@ segment upload URLs are derived from the playlist target: a `file=` query
 parameter is replaced with `seg<N>.ts`, otherwise the playlist path filename is
 replaced with the segment filename.
 
-Encoding strings are compound values:
+Output config describes video and audio separately:
 
-```text
-<video-preset>[+<audio-routing>]
-```
-
-Examples:
-
-```text
-source
-720p
-1080p+atrack:0
-720p+remap:0:1
-source+downmix:1
+```json
+{
+  "video": { "mode": "preset", "preset": "720p" },
+  "audio": { "mode": "selectTracks", "tracks": [0] }
+}
 ```
 
 Built-in video profiles are `source`, `720p`, `1080p`, and the internal `h264`
@@ -233,13 +227,22 @@ These environment variables are startup defaults. Operators can override the
 same four backend-family choices from Admin -> Backend or by patching
 `backendPolicy` through `/api/v1/settings`; persisted settings take precedence
 on restart and apply to newly started or reconciled stages.
-`custom` remains stored configuration only. It is rejected by output
-create/update so operators do not accidentally select a passthrough path that
-looks like custom FFmpeg execution.
+`custom` remains stored configuration only. It is rejected by output create/update
+so operators do not accidentally select a passthrough path that looks like custom
+FFmpeg execution.
 
-Audio routing accepts `atrack`, `remap`, and `downmix`. `atrack` stays on the
-packet-only selector path; channel-level `remap` and `downmix` routes run
-through an external FFmpeg audio stage and re-encode stereo AAC.
+RTMP and RTMPS outputs also accept
+`protocol: { "type": "rtmp", "mode": "legacy" | "enhanced" }` inside
+`config`. Omitting protocol settings keeps legacy behavior. Enhanced RTMP
+advertises `avc1`, `hvc1`, and `mp4a` capabilities during connect; H.264
+outputs keep normal AVC payloads, while HEVC outputs use the Enhanced FLV
+`hvc1` packet format. With HEVC ingest, legacy RTMP adds the shared
+`hevc_to_h264` conversion edge before publish and Enhanced RTMP skips it.
+
+Typed audio routing accepts `all`, `selectTracks`, `remap`, and `downmix`.
+Track selection stays on the packet-only selector path; channel-level `remap`
+and `downmix` routes run through an external FFmpeg audio stage and re-encode
+stereo AAC.
 
 ## File Ingest Configuration
 

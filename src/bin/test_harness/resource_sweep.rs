@@ -249,6 +249,16 @@ impl SweepOutputKind {
             (Self::Rtmp1080p | Self::Srt1080p, false) => "1080p",
         }
     }
+
+    pub(crate) const fn rtmp_mode(self) -> RtmpOutputMode {
+        match self {
+            Self::RtmpSource | Self::RtmpSourceDownmix => RtmpOutputMode::Enhanced,
+            Self::Rtmp720p | Self::Rtmp1080p => RtmpOutputMode::Legacy,
+            Self::SrtSource | Self::SrtSourceDownmix | Self::Srt720p | Self::Srt1080p => {
+                RtmpOutputMode::Legacy
+            }
+        }
+    }
 }
 
 /// Declarative resource-sweep egress scenario row.
@@ -1274,8 +1284,15 @@ async fn run_resource_egress_growth(
         for kind in output_kinds {
             let name = format!("{scenario_name}-{}-{index}", kind.label());
             let (url, encoding) = resource_output_url(env, config, *kind, &name);
-            let output_id =
-                create_output(&active.api, &pipeline_id, &name, &url, &encoding).await?;
+            let output_id = create_output_with_rtmp_mode(
+                &active.api,
+                &pipeline_id,
+                &name,
+                &url,
+                &encoding,
+                kind.rtmp_mode(),
+            )
+            .await?;
             start_output(&active.api, &pipeline_id, &output_id).await?;
             output_ids.push(output_id);
         }

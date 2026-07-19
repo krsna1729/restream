@@ -106,7 +106,7 @@ pub(super) use mixed_telemetry::{
     record_mixed_rss_delta, snapshot_mixed, verify_mixed_graph_stage_sharing,
     verify_optional_mixed_adaptive_ring,
 };
-pub(super) use output_helpers::{create_output, start_output};
+pub(super) use output_helpers::{create_output, create_output_with_rtmp_mode, start_output};
 
 /// Runtime configuration and artifact paths for one mixed-matrix scenario.
 #[derive(Clone)]
@@ -124,6 +124,7 @@ pub(super) struct MixedEnv {
     pub(super) restream_db_path: PathBuf,
     pub(super) assertion_log: Option<PathBuf>,
     pub(super) only_checks: Option<Vec<String>>,
+    pub(super) output_groups: Option<Vec<String>>,
     pub(super) resume_from: Option<String>,
     pub(super) skip_load: bool,
     pub(super) restream_http: u16,
@@ -194,13 +195,11 @@ impl MixedEnv {
             only_checks: std::env::var("ONLY_CHECKS")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
-                .map(|value| {
-                    value
-                        .split(',')
-                        .map(|item| item.trim().replace('_', "-"))
-                        .filter(|item| !item.is_empty())
-                        .collect()
-                }),
+                .map(|value| parse_csv_env_values(&value)),
+            output_groups: std::env::var("MIXED_OUTPUT_GROUPS")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| parse_csv_env_values(&value)),
             resume_from: std::env::var("RESUME_FROM")
                 .ok()
                 .filter(|value| !value.trim().is_empty()),
@@ -315,6 +314,54 @@ impl MixedEnv {
                 })
             })
     }
+}
+
+fn parse_csv_env_values(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|item| item.trim().replace('_', "-"))
+        .filter(|item| !item.is_empty())
+        .fold(Vec::new(), |mut values, item| {
+            if !values.contains(&item) {
+                values.push(item);
+            }
+            values
+        })
+}
+
+fn selected_mixed_output_cases(
+    cases: &[MixedOutputCase],
+    requested: Option<&[String]>,
+) -> Result<Vec<MixedOutputCase>, String> {
+    let Some(requested) = requested else {
+        return Ok(cases.to_vec());
+    };
+
+    let selected = cases
+        .iter()
+        .filter(|case| requested.iter().any(|item| item == case.id()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let unknown = requested
+        .iter()
+        .filter(|item| cases.iter().all(|case| case.id() != item.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        let expected = cases
+            .iter()
+            .map(MixedOutputCase::id)
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "MIXED_OUTPUT_GROUPS contains unknown output group(s): {}; expected one of: {expected}",
+            unknown.join(", ")
+        ));
+    }
+    if selected.is_empty() {
+        return Err("MIXED_OUTPUT_GROUPS must select at least one output group".to_string());
+    }
+    Ok(selected)
 }
 
 pub(super) async fn mixed_input_case_correctness(case: MixedInputCase) -> Result<Value, String> {
@@ -579,6 +626,7 @@ pub(super) async fn run_mixed_anchor_config(
         duplicate_index: 1,
         protocol: "hls".to_string(),
         encoding: "source".to_string(),
+        rtmp_mode: None,
         selected_audio_track: None,
         publish_url: format!("hls://{cfg}-preview"),
         read_url: None,
@@ -655,7 +703,8 @@ pub(super) async fn run_mixed_anchor_config(
         )
         .await?;
     }
-    verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, resume).await?;
+    verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, output_cases, resume)
+        .await?;
     if env.needs_live_output_progress_gate() {
         // The live-anchor matrix adds an HLS helper output ahead of the probe
         // rows. Gate the external reads on the actual RTMP/SRT egress rows so
@@ -701,6 +750,8 @@ pub(super) async fn run_mixed_anchor_config(
                     env.mtx_hls
                 ),
                 expected: "1920x1080",
+                expected_video_codec: None,
+                mediamtx_api: None,
                 cookie: None,
                 cell: None,
             },
@@ -719,6 +770,8 @@ pub(super) async fn run_mixed_anchor_config(
                     env.restream_http
                 ),
                 expected: "1920x1080",
+                expected_video_codec: None,
+                mediamtx_api: None,
                 cookie: api.cookie.as_deref(),
                 cell: None,
             },
@@ -776,6 +829,7 @@ pub(super) async fn run_mixed_anchor_config(
                     duplicate_index: 1,
                     protocol: "http".to_string(),
                     encoding: "source".to_string(),
+                    rtmp_mode: None,
                     selected_audio_track: None,
                     publish_url: format!(
                         "http://127.0.0.1:{put_port}/upload?cid=probe-{cfg}&copy=0&file=out.m3u8"
@@ -937,7 +991,10 @@ pub(super) async fn run_mixed_live_config(
 ) -> Result<Value, String> {
     let cfg = case.scenario_id();
     let n = env.n_per_group;
-    let output_cases = mixed_output_cases_for_input(case);
+    let output_cases = selected_mixed_output_cases(
+        mixed_output_cases_for_input(case),
+        env.output_groups.as_deref(),
+    )?;
     let total = n * output_cases.len();
     let (pipeline_id, stream_key) = create_mixed_pipeline(api, cfg).await?;
 
@@ -985,7 +1042,7 @@ pub(super) async fn run_mixed_live_config(
             &pipeline_id,
             restream_pid,
             cfg,
-            output_cases,
+            &output_cases,
             &mut ffmpeg_srt_sinks,
             &mut next_ffmpeg_srt_sink,
             &mut ffmpeg_signal_sinks,
@@ -1000,14 +1057,15 @@ pub(super) async fn run_mixed_live_config(
             &pipeline_id,
             restream_pid,
             cfg,
-            output_cases,
+            &output_cases,
             &mut ffmpeg_signal_sinks,
             &mut next_ffmpeg_signal_sink,
             &mut output_ids,
         )
         .await?;
     }
-    verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, resume).await?;
+    verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, &output_cases, resume)
+        .await?;
     if !ffmpeg_signal_sinks.is_empty() {
         finish_ffmpeg_signal_sinks(env, &mut ffmpeg_signal_sinks, resume).await?;
     }
@@ -1045,7 +1103,7 @@ pub(super) async fn run_mixed_live_config(
         env,
         api,
         cfg,
-        output_cases,
+        &output_cases,
         resume,
         case.is_multi_track(),
         case.is_multi_track(),
@@ -1119,7 +1177,7 @@ pub(super) async fn run_mixed_live_config(
             "forwardingState": "standby",
         })),
         "recording": recording,
-        "outputMatrix": mixed_output_matrix_json(output_cases),
+        "outputMatrix": mixed_output_matrix_json(&output_cases),
         "artifacts": {
             "outputsJson": env.outputs_json_path(),
             "artifactIndexJson": env.artifact_index_path(),
@@ -1157,7 +1215,10 @@ pub(super) async fn run_mixed_file_config(
 ) -> Result<Value, String> {
     let cfg = case.scenario_id();
     let n = env.n_per_group;
-    let output_cases = mixed_output_cases_for_input(case);
+    let output_cases = selected_mixed_output_cases(
+        mixed_output_cases_for_input(case),
+        env.output_groups.as_deref(),
+    )?;
     let total = n * output_cases.len();
 
     let fixture = mixed_input_fixture(case)?;
@@ -1216,7 +1277,7 @@ pub(super) async fn run_mixed_file_config(
             &pipeline_id,
             restream_pid,
             cfg,
-            output_cases,
+            &output_cases,
             &mut ffmpeg_srt_sinks,
             &mut next_ffmpeg_srt_sink,
             &mut ffmpeg_signal_sinks,
@@ -1231,14 +1292,15 @@ pub(super) async fn run_mixed_file_config(
             &pipeline_id,
             restream_pid,
             cfg,
-            output_cases,
+            &output_cases,
             &mut ffmpeg_signal_sinks,
             &mut next_ffmpeg_signal_sink,
             &mut output_ids,
         )
         .await?;
     }
-    verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, resume).await?;
+    verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, &output_cases, resume)
+        .await?;
     if !ffmpeg_signal_sinks.is_empty() {
         finish_ffmpeg_signal_sinks(env, &mut ffmpeg_signal_sinks, resume).await?;
     }
@@ -1265,7 +1327,7 @@ pub(super) async fn run_mixed_file_config(
         env,
         api,
         cfg,
-        output_cases,
+        &output_cases,
         resume,
         case.is_multi_track(),
         true,
@@ -1318,7 +1380,7 @@ pub(super) async fn run_mixed_file_config(
         "codec": case.codec_name(),
         "trackLayout": case.track_layout_name(),
         "outputCount": total,
-        "outputMatrix": mixed_output_matrix_json(output_cases),
+        "outputMatrix": mixed_output_matrix_json(&output_cases),
         "recording": recording,
         "artifacts": {
             "outputsJson": env.outputs_json_path(),
@@ -1356,6 +1418,31 @@ mod tests {
     }
 
     #[test]
+    fn mixed_output_group_selector_preserves_matrix_order_and_deduplicates() {
+        let requested = parse_csv_env_values("rtmp.720p.a1, rtmp.720p.a0,rtmp.720p.a1");
+
+        let selected =
+            selected_mixed_output_cases(multi_track_mixed_output_cases(), Some(&requested))
+                .expect("known output groups should select rows");
+
+        assert_eq!(
+            selected.iter().map(MixedOutputCase::id).collect::<Vec<_>>(),
+            vec!["rtmp.720p.a0", "rtmp.720p.a1"]
+        );
+    }
+
+    #[test]
+    fn mixed_output_group_selector_rejects_unknown_rows() {
+        let requested = vec!["rtmp.missing".to_string()];
+
+        let error = selected_mixed_output_cases(multi_track_mixed_output_cases(), Some(&requested))
+            .expect_err("unknown output groups should fail before live setup");
+
+        assert!(error.contains("MIXED_OUTPUT_GROUPS contains unknown output group"));
+        assert!(error.contains("rtmp.720p.a0"));
+    }
+
+    #[test]
     fn mixed_env_register_output_cell_writes_outputs_json() {
         let temp = std::env::temp_dir().join(format!(
             "restream-mixed-output-registry-{}-{}",
@@ -1379,6 +1466,7 @@ mod tests {
             duplicate_index: 1,
             protocol: "rtmp".to_string(),
             encoding: "source".to_string(),
+            rtmp_mode: Some(RtmpOutputMode::Legacy.as_str().to_string()),
             selected_audio_track: None,
             publish_url: "rtmp://127.0.0.1:1935/live/out".to_string(),
             read_url: None,
