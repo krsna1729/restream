@@ -45,7 +45,7 @@ fn sanitize_name_empty_string() {
 
 #[test]
 fn build_filename_has_ts_extension() {
-    let name = build_filename("test-pipe");
+    let name = build_filename("test-pipe", "recording_0000000000000001");
     assert!(name.ends_with(".ts"));
     assert!(name.starts_with("recording_"));
     assert!(!name.contains(' '));
@@ -53,11 +53,22 @@ fn build_filename_has_ts_extension() {
 
 #[test]
 fn build_filename_contains_sanitized_name() {
-    let name = build_filename("My Pipe?");
+    let name = build_filename("My Pipe?", "recording_0000000000000001");
     assert!(
         name.contains("My_Pipe"),
         "expected sanitized name in: {name}"
     );
+}
+
+#[test]
+fn build_filename_differs_across_recordings_with_same_pipeline_name() {
+    // Two pipelines can share a display name and start recording in the
+    // same wall-clock second; without a per-recording token in the
+    // filename they'd resolve to the same path and race on a
+    // truncating File::create, corrupting/losing one recording.
+    let a = build_filename("Same Name", "recording_aaaaaaaaaaaaaaaa");
+    let b = build_filename("Same Name", "recording_bbbbbbbbbbbbbbbb");
+    assert_ne!(a, b);
 }
 
 #[test]

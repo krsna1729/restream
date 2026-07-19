@@ -103,7 +103,7 @@ fn sanitize_name(name: &str) -> String {
     sanitized.trim_matches('_').to_string()
 }
 
-fn build_filename(pipe_name: &str) -> String {
+fn build_filename(pipe_name: &str, recording_id: &str) -> String {
     let now = chrono::Local::now();
     let safe_name = sanitize_name(pipe_name);
     let safe_name = if safe_name.is_empty() {
@@ -111,7 +111,19 @@ fn build_filename(pipe_name: &str) -> String {
     } else {
         safe_name.as_str()
     };
-    format!("recording_{}_{}.ts", now.format("%Y%m%dT%H%M%S"), safe_name)
+    // Two pipelines can share a display name (names aren't unique) and start
+    // recording within the same second, which would otherwise make this
+    // filename collide across pipelines and race on a single truncating
+    // File::create. recording_id is a fresh random token per recording, so
+    // appending it keeps the filename unique even when the name and
+    // timestamp match.
+    let id_suffix = recording_id.rsplit('_').next().unwrap_or(recording_id);
+    format!(
+        "recording_{}_{}_{}.ts",
+        now.format("%Y%m%dT%H%M%S"),
+        safe_name,
+        id_suffix
+    )
 }
 
 fn build_mp4_temp_path(mp4_path: &Path) -> PathBuf {
@@ -396,7 +408,7 @@ pub async fn start_recording(
     } = start;
 
     let _ = fs::create_dir_all(&media_dir);
-    let filename = build_filename(&pipeline_name);
+    let filename = build_filename(&pipeline_name, &recording_id);
     let file_path = format!("{}/{}", media_dir, filename);
     let recorded_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     if let Some(metadata) = &metadata {
