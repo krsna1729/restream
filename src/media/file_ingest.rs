@@ -1070,6 +1070,50 @@ mod tests {
     }
 
     #[test]
+    fn pace_packet_ignores_negative_timestamps_without_arming_the_anchor() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut anchor = None;
+        super::pace_packet(&cancel, &mut anchor, -1);
+        assert!(
+            anchor.is_none(),
+            "a negative timestamp must not arm the pacing anchor"
+        );
+
+        super::pace_packet(&cancel, &mut anchor, 1_000);
+        assert!(
+            anchor.is_some(),
+            "the next non-negative packet must still arm the anchor normally"
+        );
+    }
+
+    #[test]
+    fn pace_packet_sleeps_toward_the_target_then_cancellation_cuts_it_short() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut anchor = None;
+        super::pace_packet(&cancel, &mut anchor, 0);
+
+        let cancel_for_thread = cancel.clone();
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            cancel_for_thread.cancel();
+        });
+
+        let start = std::time::Instant::now();
+        super::pace_packet(&cancel, &mut anchor, 2_000);
+        let elapsed = start.elapsed();
+        canceller.join().unwrap();
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(2_000),
+            "cancellation must cut a long pacing sleep short, elapsed={elapsed:?}"
+        );
+        assert!(
+            elapsed >= std::time::Duration::from_millis(40),
+            "cancellation should not fire before the sleep even begins, elapsed={elapsed:?}"
+        );
+    }
+
+    #[test]
     fn loop_timestamp_state_keeps_replayed_packets_monotonic() {
         let mut timestamps = LoopTimestampState::default();
 
@@ -1225,6 +1269,23 @@ mod tests {
         assert!(
             gate.filter_packet(&audio, &ring),
             "once a loop starts on a keyframe, audio may flow again"
+        );
+    }
+
+    #[test]
+    fn loop_startup_gate_without_video_never_gates_packets() {
+        let ring = Arc::new(RingBuffer::new(64));
+        let mut gate = LoopStartupGate::new(false);
+        let audio = test_packet(MediaType::Audio, 0, 10, 10);
+        let delta_video = test_packet(MediaType::Video, 0, 0, 0);
+
+        assert!(
+            gate.filter_packet(&audio, &ring),
+            "audio-only ingest must never wait on a video keyframe that will never arrive"
+        );
+        assert!(
+            gate.filter_packet(&delta_video, &ring),
+            "a stream with no video startup gate must pass delta frames through immediately"
         );
     }
 
