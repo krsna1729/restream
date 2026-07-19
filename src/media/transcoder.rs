@@ -6,7 +6,7 @@
 //! are parsed to select/remap audio streams.
 
 use crate::domain::output_spec::StagePresetSpec;
-use crate::domain::stage::StageKey;
+use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::AudioMeta;
 use crate::media::ffmpeg::backend::{BackendError, StageRunContext};
 use crate::media::ffmpeg::stage_input::StageInputPump;
@@ -333,10 +333,9 @@ async fn run_internal_video_stage(
     let handle = std::thread::spawn(move || {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if needs_scale {
-                let video_preset = preset_clone.strip_prefix("video:").unwrap_or(&preset_clone);
                 run_ffmpeg_transcode_with_scale_with_normalizer(
                     input_queue_clone,
-                    video_preset,
+                    &preset_clone,
                     output_codec_clone,
                     cancel_token_clone,
                     StageOutputSink::Existing(Box::new(output_normalizer)),
@@ -423,9 +422,10 @@ pub async fn run_internal_ffmpeg_backend(
             plan.video,
             crate::media::ffmpeg::stage_plan::VideoStageOp::ScalePreset { .. }
         );
+        let preset = internal_video_stage_preset_name(&plan, &ctx.stage_key.kind);
         run_internal_video_stage(
             ctx.pipeline_id,
-            ctx.stage_key.kind.to_string(),
+            preset,
             ctx.engine,
             ctx.cancel,
             ctx.stage_key,
@@ -439,18 +439,55 @@ pub async fn run_internal_ffmpeg_backend(
     Ok(())
 }
 
+fn internal_video_stage_preset_name(plan: &FfmpegStagePlan, stage_kind: &StageKind) -> String {
+    match &plan.video {
+        crate::media::ffmpeg::stage_plan::VideoStageOp::ScalePreset { preset } => preset.clone(),
+        _ => stage_kind.to_string(),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
+    use crate::domain::stage::StageKind;
     use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
     use crate::media::engine::AudioMeta;
+    use crate::media::ffmpeg::stage_plan::{StageInputSpec, VideoStageOp};
     use crate::media::ring_buffer::PayloadFormat;
     use proptest::prelude::*;
     use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
     // --- apply_audio_routing tests ---
+
+    #[test]
+    fn internal_video_stage_uses_plan_preset_for_codec_qualified_stage() {
+        let stage_key = StageKey::new("pipe", StageKind::video_preset_with_codec("720p", "h264"));
+        let plan = FfmpegStagePlan {
+            stage_key: stage_key.clone(),
+            pipeline_id: "pipe".to_string(),
+            input: StageInputSpec {
+                codec_hint: VideoCodecKind::H264,
+                video_meta: None,
+                audio_tracks: Vec::new(),
+            },
+            video: VideoStageOp::ScalePreset {
+                preset: "720p".to_string(),
+            },
+            audio: crate::media::ffmpeg::stage_plan::AudioStageOp::Passthrough,
+            output_codec: VideoCodecKind::H264,
+            output_profile: None,
+            include_audio: true,
+            startup: Default::default(),
+            timeline: Default::default(),
+        };
+
+        assert_eq!(
+            internal_video_stage_preset_name(&plan, &stage_key.kind),
+            "720p"
+        );
+    }
 
     #[test]
     fn apply_routing_passthrough_preserves_all_tracks() {

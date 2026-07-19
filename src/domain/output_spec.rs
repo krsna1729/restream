@@ -105,6 +105,43 @@ impl VideoCodecKind {
     pub fn is_hevc(self) -> bool {
         matches!(self, Self::Hevc)
     }
+
+    pub const fn as_stage_codec(self) -> Option<&'static str> {
+        match self {
+            Self::H264 => Some("h264"),
+            Self::Hevc => Some("hevc"),
+            Self::Unknown => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OutputVideoCodec {
+    #[default]
+    Auto,
+    #[serde(rename = "h264")]
+    H264,
+    #[serde(rename = "h265", alias = "hevc")]
+    Hevc,
+}
+
+impl OutputVideoCodec {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::H264 => "h264",
+            Self::Hevc => "h265",
+        }
+    }
+
+    pub const fn explicit_kind(self) -> Option<VideoCodecKind> {
+        match self {
+            Self::Auto => None,
+            Self::H264 => Some(VideoCodecKind::H264),
+            Self::Hevc => Some(VideoCodecKind::Hevc),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -227,6 +264,7 @@ impl OutputEncodingSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "camelCase")]
 pub struct OutputConfig {
     pub video: OutputVideoConfig,
@@ -238,7 +276,9 @@ pub struct OutputConfig {
 impl Default for OutputConfig {
     fn default() -> Self {
         Self {
-            video: OutputVideoConfig::Source,
+            video: OutputVideoConfig::Source {
+                codec: OutputVideoCodec::Auto,
+            },
             audio: AudioRouting::Passthrough,
             protocol: OutputProtocolConfig::Auto,
         }
@@ -254,9 +294,15 @@ impl OutputConfig {
         Self {
             video: OutputVideoConfig::Preset {
                 preset: preset.into(),
+                codec: OutputVideoCodec::Auto,
             },
             ..Self::default()
         }
+    }
+
+    pub fn with_video_codec(mut self, codec: OutputVideoCodec) -> Self {
+        self.video.set_codec(codec);
+        self
     }
 
     pub fn with_audio(mut self, audio: AudioRouting) -> Self {
@@ -276,7 +322,7 @@ impl OutputConfig {
     pub fn stage_encoding_label(&self) -> String {
         let video = self.video.encoding_label();
         match self.audio.operation_string() {
-            Some(audio) if matches!(self.video, OutputVideoConfig::Source) => audio,
+            Some(audio) if matches!(self.video, OutputVideoConfig::Source { .. }) => audio,
             Some(audio) => format!("{video}+{audio}"),
             None => video.to_string(),
         }
@@ -288,24 +334,183 @@ impl OutputConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(tag = "mode", rename_all = "camelCase")]
 pub enum OutputVideoConfig {
-    Source,
-    Preset { preset: String },
+    Source {
+        #[serde(default, skip_serializing_if = "OutputVideoCodec::is_auto")]
+        codec: OutputVideoCodec,
+    },
+    Preset {
+        preset: String,
+        #[serde(default, skip_serializing_if = "OutputVideoCodec::is_auto")]
+        codec: OutputVideoCodec,
+    },
     Custom,
 }
 
 impl OutputVideoConfig {
     pub fn encoding_label(&self) -> &str {
         match self {
-            Self::Source => "source",
-            Self::Preset { preset } => preset.as_str(),
+            Self::Source { .. } => "source",
+            Self::Preset { preset, .. } => preset.as_str(),
             Self::Custom => "custom",
         }
     }
 
     pub fn is_custom(&self) -> bool {
         matches!(self, Self::Custom)
+    }
+
+    pub fn codec(&self) -> OutputVideoCodec {
+        match self {
+            Self::Source { codec } | Self::Preset { codec, .. } => *codec,
+            Self::Custom => OutputVideoCodec::Auto,
+        }
+    }
+
+    fn set_codec(&mut self, codec: OutputVideoCodec) {
+        match self {
+            Self::Source { codec: current } | Self::Preset { codec: current, .. } => {
+                *current = codec;
+            }
+            Self::Custom => {}
+        }
+    }
+}
+
+impl OutputVideoCodec {
+    pub const fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProtocolCapabilities {
+    pub protocol: EgressProtocol,
+    pub rtmp_mode: Option<RtmpOutputMode>,
+}
+
+impl ProtocolCapabilities {
+    pub fn from_output(url: &str, config: &OutputConfig) -> Self {
+        let protocol = EgressProtocol::from_url(url);
+        Self {
+            protocol,
+            rtmp_mode: protocol.is_rtmp().then(|| config.rtmp_mode()),
+        }
+    }
+
+    pub const fn supports(self, codec: VideoCodecKind) -> bool {
+        matches!(
+            (self.protocol, self.rtmp_mode, codec),
+            (
+                EgressProtocol::Rtmp,
+                Some(RtmpOutputMode::Legacy),
+                VideoCodecKind::H264
+            ) | (
+                EgressProtocol::Rtmp,
+                Some(RtmpOutputMode::Enhanced),
+                VideoCodecKind::H264 | VideoCodecKind::Hevc,
+            ) | (
+                EgressProtocol::Srt,
+                _,
+                VideoCodecKind::H264 | VideoCodecKind::Hevc
+            ) | (EgressProtocol::Hls, _, VideoCodecKind::H264)
+        )
+    }
+
+    pub const fn default_codec(self) -> VideoCodecKind {
+        match (self.protocol, self.rtmp_mode) {
+            (EgressProtocol::Rtmp, Some(RtmpOutputMode::Legacy)) | (EgressProtocol::Hls, _) => {
+                VideoCodecKind::H264
+            }
+            _ => VideoCodecKind::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputConfigError {
+    UnsupportedCodecForProtocol,
+}
+
+impl OutputConfigError {
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::UnsupportedCodecForProtocol => {
+                "Output video codec is not supported by the selected protocol mode"
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedOutputVideo {
+    Source {
+        codec: VideoCodecKind,
+    },
+    Preset {
+        preset: String,
+        codec: VideoCodecKind,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedOutputConfig {
+    pub video: ResolvedOutputVideo,
+    pub audio: AudioRouting,
+    pub protocol: EgressProtocol,
+}
+
+impl OutputConfig {
+    pub fn validate_capabilities(
+        &self,
+        capabilities: ProtocolCapabilities,
+    ) -> Result<(), OutputConfigError> {
+        let Some(codec) = self.video.codec().explicit_kind() else {
+            return Ok(());
+        };
+        if capabilities.supports(codec) {
+            Ok(())
+        } else {
+            Err(OutputConfigError::UnsupportedCodecForProtocol)
+        }
+    }
+
+    pub fn resolve_for_input_codec(
+        &self,
+        capabilities: ProtocolCapabilities,
+        input_codec: VideoCodecKind,
+    ) -> Result<ResolvedOutputConfig, OutputConfigError> {
+        self.validate_capabilities(capabilities)?;
+        let codec = self
+            .video
+            .codec()
+            .explicit_kind()
+            .or_else(|| {
+                capabilities
+                    .supports(input_codec)
+                    .then_some(input_codec)
+                    .filter(|codec| !matches!(codec, VideoCodecKind::Unknown))
+            })
+            .unwrap_or_else(|| capabilities.default_codec());
+        if !capabilities.supports(codec) {
+            return Err(OutputConfigError::UnsupportedCodecForProtocol);
+        }
+        let video = match &self.video {
+            OutputVideoConfig::Source { .. } | OutputVideoConfig::Custom => {
+                ResolvedOutputVideo::Source { codec }
+            }
+            OutputVideoConfig::Preset { preset, .. } => ResolvedOutputVideo::Preset {
+                preset: preset.clone(),
+                codec,
+            },
+        };
+        Ok(ResolvedOutputConfig {
+            video,
+            audio: self.audio.clone(),
+            protocol: capabilities.protocol,
+        })
     }
 }
 
@@ -631,14 +836,18 @@ mod tests {
 
     #[test]
     fn output_video_config_is_custom_and_encoding_label() {
-        assert_eq!(OutputVideoConfig::Source.encoding_label(), "source");
-        assert!(!OutputVideoConfig::Source.is_custom());
+        let source = OutputVideoConfig::Source {
+            codec: OutputVideoCodec::Auto,
+        };
+        assert_eq!(source.encoding_label(), "source");
+        assert!(!source.is_custom());
 
         assert_eq!(OutputVideoConfig::Custom.encoding_label(), "custom");
         assert!(OutputVideoConfig::Custom.is_custom());
 
         let preset = OutputVideoConfig::Preset {
             preset: "480p".to_string(),
+            codec: OutputVideoCodec::Auto,
         };
         assert_eq!(preset.encoding_label(), "480p");
         assert!(!preset.is_custom());
@@ -668,6 +877,7 @@ mod tests {
 
         assert_eq!(config.protocol, OutputProtocolConfig::Auto);
         assert_eq!(config.rtmp_mode(), RtmpOutputMode::Legacy);
+        assert_eq!(config.video.codec(), OutputVideoCodec::Auto);
     }
 
     #[test]
@@ -679,6 +889,71 @@ mod tests {
             value["protocol"],
             serde_json::json!({"type": "rtmp", "mode": "enhanced"})
         );
+    }
+
+    #[test]
+    fn output_video_config_serializes_explicit_h265_codec() {
+        let config = OutputConfig::preset("720p").with_video_codec(OutputVideoCodec::Hevc);
+        let value = serde_json::to_value(&config).unwrap();
+
+        assert_eq!(
+            value["video"],
+            serde_json::json!({"mode": "preset", "preset": "720p", "codec": "h265"})
+        );
+    }
+
+    #[test]
+    fn capability_resolution_keeps_enhanced_rtmp_hevc_auto() {
+        let config = OutputConfig::preset("720p").with_rtmp_mode(RtmpOutputMode::Enhanced);
+        let capabilities = ProtocolCapabilities {
+            protocol: EgressProtocol::Rtmp,
+            rtmp_mode: Some(RtmpOutputMode::Enhanced),
+        };
+
+        let resolved = config
+            .resolve_for_input_codec(capabilities, VideoCodecKind::Hevc)
+            .unwrap();
+
+        assert_eq!(
+            resolved.video,
+            ResolvedOutputVideo::Preset {
+                preset: "720p".to_string(),
+                codec: VideoCodecKind::Hevc
+            }
+        );
+    }
+
+    #[test]
+    fn capability_resolution_downgrades_legacy_rtmp_auto_to_h264() {
+        let capabilities = ProtocolCapabilities {
+            protocol: EgressProtocol::Rtmp,
+            rtmp_mode: Some(RtmpOutputMode::Legacy),
+        };
+
+        let resolved = OutputConfig::preset("720p")
+            .resolve_for_input_codec(capabilities, VideoCodecKind::Hevc)
+            .unwrap();
+
+        assert_eq!(
+            resolved.video,
+            ResolvedOutputVideo::Preset {
+                preset: "720p".to_string(),
+                codec: VideoCodecKind::H264
+            }
+        );
+    }
+
+    #[test]
+    fn capability_validation_rejects_explicit_h265_for_legacy_rtmp() {
+        let capabilities = ProtocolCapabilities {
+            protocol: EgressProtocol::Rtmp,
+            rtmp_mode: Some(RtmpOutputMode::Legacy),
+        };
+        let config = OutputConfig::preset("720p").with_video_codec(OutputVideoCodec::Hevc);
+
+        let error = config.validate_capabilities(capabilities).unwrap_err();
+
+        assert_eq!(error, OutputConfigError::UnsupportedCodecForProtocol);
     }
 
     #[test]

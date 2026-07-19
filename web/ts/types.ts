@@ -166,6 +166,7 @@ export interface ConfigOutput {
 }
 
 export type RtmpOutputMode = "legacy" | "enhanced";
+export type OutputVideoCodec = "auto" | "h264" | "h265";
 
 export type OutputProtocolConfig =
   | { type: "auto" }
@@ -173,9 +174,9 @@ export type OutputProtocolConfig =
 
 export type OutputConfig = {
   video:
-    | { mode: "source" }
+    | { mode: "source"; codec?: OutputVideoCodec }
     | { mode: "custom" }
-    | { mode: "preset"; preset: string };
+    | { mode: "preset"; preset: string; codec?: OutputVideoCodec };
   audio:
     | { mode: "all" }
     | { mode: "selectTracks"; tracks: number[] }

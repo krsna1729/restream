@@ -1,7 +1,10 @@
 //! Application-layer output path planning that interprets output encoding and
 //! target protocol choices into stage-aware routing decisions.
 
-use crate::domain::output_spec::{EgressProtocol, OutputConfig, VideoCodecKind};
+use crate::domain::output_spec::{
+    EgressProtocol, OutputConfig, OutputConfigError, OutputVideoConfig, ProtocolCapabilities,
+    ResolvedOutputVideo, VideoCodecKind,
+};
 use crate::domain::stage::{EncodingStagePlan, PipelineId, StageKey, StageKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,28 +28,25 @@ impl OutputPath {
     }
 
     pub fn video_stage(&self, ingest_video_codec: Option<&str>) -> Option<StageKey> {
-        if ingest_video_codec
-            .map(VideoCodecKind::from_codec_name)
-            .is_some_and(VideoCodecKind::is_hevc)
-            && let StageKind::VideoPreset { preset, .. } = self.stage_plan.video_terminal_kind()
+        let input_codec = normalized_input_codec(ingest_video_codec);
+        if let Ok(resolved) = self.resolved_config(input_codec)
+            && let ResolvedOutputVideo::Preset { preset, codec } = resolved.video
         {
             return Some(StageKey::new(
                 self.stage_plan.pipeline().clone(),
-                StageKind::video_preset_with_codec(preset.clone(), "hevc"),
+                match codec.as_stage_codec() {
+                    Some(codec) => StageKind::video_preset_with_codec(preset, codec),
+                    None => StageKind::video_preset(preset),
+                },
             ));
         }
         self.stage_plan.video_stage()
     }
 
     fn codec_edge_upstream_stage_kind(&self, ingest_video_codec: Option<&str>) -> StageKind {
-        if ingest_video_codec
-            .map(VideoCodecKind::from_codec_name)
-            .is_some_and(VideoCodecKind::is_hevc)
-            && let StageKind::VideoPreset { preset, .. } = self.stage_plan.video_terminal_kind()
-        {
-            return StageKind::video_preset_with_codec(preset.clone(), "hevc");
-        }
-        self.stage_plan.video_terminal_kind().clone()
+        self.video_stage(ingest_video_codec)
+            .map(|stage| stage.kind)
+            .unwrap_or_else(|| self.stage_plan.video_terminal_kind().clone())
     }
 
     pub fn audio_stage(&self) -> Option<StageKey> {
@@ -54,11 +54,7 @@ impl OutputPath {
     }
 
     pub fn codec_edge_candidate_stage(&self) -> Option<StageKey> {
-        // Legacy RTMP cannot carry HEVC in our current contract. Key the expensive
-        // HEVC->H.264 edge by video shape only, then apply selected-audio
-        // routing after it. That trades a few cheap audio-route stages for
-        // sharing one codec edge across atrack:0/atrack:1 outputs.
-        (self.protocol.is_rtmp() && self.config.rtmp_mode().is_legacy()).then(|| {
+        self.codec_edge_may_be_needed_without_input().then(|| {
             StageKey::new(
                 self.stage_plan.pipeline().clone(),
                 StageKind::codec_edge("hevc_to_h264", self.codec_edge_upstream_stage_kind(None)),
@@ -67,11 +63,7 @@ impl OutputPath {
     }
 
     pub fn needs_rtmp_h264_conv(&self, ingest_video_codec: Option<&str>) -> bool {
-        self.protocol.is_rtmp()
-            && self.config.rtmp_mode().is_legacy()
-            && ingest_video_codec
-                .map(VideoCodecKind::from_codec_name)
-                .is_some_and(VideoCodecKind::is_hevc)
+        self.needs_h264_codec_edge(ingest_video_codec)
     }
 
     pub fn ingest_codec_override(&self, ingest_video_codec: Option<&str>) -> Option<&'static str> {
@@ -82,7 +74,7 @@ impl OutputPath {
     }
 
     pub fn codec_edge_stage(&self, ingest_video_codec: Option<&str>) -> Option<StageKey> {
-        self.needs_rtmp_h264_conv(ingest_video_codec).then(|| {
+        self.needs_h264_codec_edge(ingest_video_codec).then(|| {
             StageKey::new(
                 self.stage_plan.pipeline().clone(),
                 StageKind::codec_edge(
@@ -139,6 +131,54 @@ impl OutputPath {
         }
         stages
     }
+
+    fn capabilities(&self) -> ProtocolCapabilities {
+        ProtocolCapabilities {
+            protocol: self.protocol,
+            rtmp_mode: self.protocol.is_rtmp().then(|| self.config.rtmp_mode()),
+        }
+    }
+
+    pub fn resolved_config(
+        &self,
+        input_codec: VideoCodecKind,
+    ) -> Result<crate::domain::output_spec::ResolvedOutputConfig, OutputConfigError> {
+        self.config
+            .resolve_for_input_codec(self.capabilities(), input_codec)
+    }
+
+    fn codec_edge_may_be_needed_without_input(&self) -> bool {
+        matches!(self.config.video, OutputVideoConfig::Source { .. })
+            && self
+                .resolved_config(VideoCodecKind::Hevc)
+                .is_ok_and(|resolved| {
+                    matches!(
+                        resolved.video,
+                        ResolvedOutputVideo::Source {
+                            codec: VideoCodecKind::H264
+                        }
+                    )
+                })
+    }
+
+    fn needs_h264_codec_edge(&self, ingest_video_codec: Option<&str>) -> bool {
+        let input_codec = normalized_input_codec(ingest_video_codec);
+        input_codec.is_hevc()
+            && self.resolved_config(input_codec).is_ok_and(|resolved| {
+                matches!(
+                    resolved.video,
+                    ResolvedOutputVideo::Source {
+                        codec: VideoCodecKind::H264
+                    }
+                )
+            })
+    }
+}
+
+fn normalized_input_codec(ingest_video_codec: Option<&str>) -> VideoCodecKind {
+    ingest_video_codec
+        .map(VideoCodecKind::from_codec_name)
+        .unwrap_or(VideoCodecKind::Unknown)
 }
 
 #[cfg(test)]
@@ -152,23 +192,20 @@ mod tests {
     }
 
     #[test]
-    fn rtmp_hevc_output_adds_codec_edge_to_terminal_stage() {
+    fn legacy_rtmp_hevc_preset_resolves_to_h264_video_stage() {
         let path = OutputPath::resolve(
             "pipe",
             preset_with_audio("720p", AudioRouting::SelectTracks { tracks: vec![0] }),
             "rtmp://example/live",
         );
 
-        assert!(path.needs_rtmp_h264_conv(Some("hevc")));
+        assert!(!path.needs_rtmp_h264_conv(Some("hevc")));
         assert_eq!(path.ingest_codec_override(Some("h265")), Some("hevc"));
         assert_eq!(
             path.terminal_stage_kind(Some("hevc")),
             StageKind::audio_route(
                 "atrack:0",
-                StageKind::codec_edge(
-                    "hevc_to_h264",
-                    StageKind::video_preset_with_codec("720p", "hevc")
-                ),
+                StageKind::video_preset_with_codec("720p", "h264"),
             )
         );
     }
@@ -244,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn needed_stage_keys_include_video_audio_and_optional_codec_edge() {
+    fn needed_stage_keys_include_resolved_video_and_audio() {
         let path = OutputPath::resolve(
             "pipe",
             preset_with_audio(
@@ -259,26 +296,16 @@ mod tests {
         );
         let stages = path.needed_stage_keys(Some("hevc"));
 
-        assert_eq!(stages.len(), 3);
+        assert_eq!(stages.len(), 2);
         assert_eq!(
             stages[0].kind,
-            StageKind::video_preset_with_codec("720p", "hevc")
+            StageKind::video_preset_with_codec("720p", "h264")
         );
         assert_eq!(
             stages[1].kind,
-            StageKind::codec_edge(
-                "hevc_to_h264",
-                StageKind::video_preset_with_codec("720p", "hevc")
-            )
-        );
-        assert_eq!(
-            stages[2].kind,
             StageKind::audio_route(
                 "remap:0:1",
-                StageKind::codec_edge(
-                    "hevc_to_h264",
-                    StageKind::video_preset_with_codec("720p", "hevc")
-                ),
+                StageKind::video_preset_with_codec("720p", "h264"),
             )
         );
     }
@@ -322,28 +349,18 @@ mod tests {
         )));
         assert!(unique.contains(&StageKey::new(
             "pipe",
-            StageKind::video_preset_with_codec("720p", "hevc")
-        )));
-        assert!(unique.contains(&StageKey::new(
-            "pipe",
-            StageKind::codec_edge(
-                "hevc_to_h264",
-                StageKind::video_preset_with_codec("720p", "hevc")
-            )
+            StageKind::video_preset_with_codec("720p", "h264")
         )));
         assert!(unique.contains(&StageKey::new(
             "pipe",
             StageKind::audio_route(
                 "atrack:0",
-                StageKind::codec_edge(
-                    "hevc_to_h264",
-                    StageKind::video_preset_with_codec("720p", "hevc")
-                )
+                StageKind::video_preset_with_codec("720p", "h264")
             )
         )));
         assert_eq!(
             unique.len(),
-            4,
+            3,
             "duplicate outputs must reuse stage keys instead of planning per-output stages"
         );
     }

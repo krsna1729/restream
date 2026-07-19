@@ -320,10 +320,7 @@ mod tests {
                 "pipe_1",
                 StageKind::audio_route(
                     "atrack:0",
-                    StageKind::codec_edge(
-                        "hevc_to_h264",
-                        StageKind::video_preset_with_codec("720p", "hevc")
-                    ),
+                    StageKind::video_preset_with_codec("720p", "h264"),
                 )
             )
         );
@@ -405,20 +402,20 @@ mod tests {
                 output_id: OutputId::new("out_1")
             }
         );
-        let hevc_720p = StageKind::video_preset_with_codec("720p", "hevc");
+        let h264_720p = StageKind::video_preset_with_codec("720p", "h264");
         assert_eq!(
             plan.terminal_stage,
-            StageKey::new("pipe_1", StageKind::hls_segmenter(hevc_720p.clone()))
+            StageKey::new("pipe_1", StageKind::hls_segmenter(h264_720p.clone()))
         );
         assert!(plan.stages.iter().any(|stage| {
-            stage.kind == StageKind::hls_segmenter(hevc_720p.clone())
+            stage.kind == StageKind::hls_segmenter(h264_720p.clone())
                 && stage.backend == StageBackendKind::HlsSegmenter
         }));
         assert!(
             plan.edges.iter().any(|edge| {
-                edge.from == StageKey::new("pipe_1", hevc_720p.clone())
+                edge.from == StageKey::new("pipe_1", h264_720p.clone())
                     && edge.to
-                        == StageKey::new("pipe_1", StageKind::hls_segmenter(hevc_720p.clone()))
+                        == StageKey::new("pipe_1", StageKind::hls_segmenter(h264_720p.clone()))
             }),
             "HLS output graph should show media stage feeding protocol segmenter"
         );

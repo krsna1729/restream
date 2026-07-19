@@ -565,24 +565,33 @@ pub fn build_ffmpeg_stage_plan(
             },
             timeline: TimelinePolicy::default(),
         }),
-        StageKind::VideoPreset { preset, .. } => Some(FfmpegStagePlan {
-            stage_key: key.clone(),
-            pipeline_id: key.pipeline.to_string(),
-            input,
-            video: VideoStageOp::ScalePreset {
-                preset: preset.clone(),
-            },
-            audio: AudioStageOp::Passthrough,
-            output_codec: input_codec,
-            output_profile: None,
-            include_audio,
-            startup: StageStartupPolicy {
-                keyframe_preroll_packets: 64,
-                require_video_parameter_sets: true,
-                wait_for_first_keyframe: true,
-            },
-            timeline: TimelinePolicy::default(),
-        }),
+        StageKind::VideoPreset {
+            preset,
+            output_codec,
+        } => {
+            let output_codec = output_codec
+                .as_deref()
+                .map(VideoCodecKind::from_codec_name)
+                .unwrap_or_else(|| input_codec.clone());
+            Some(FfmpegStagePlan {
+                stage_key: key.clone(),
+                pipeline_id: key.pipeline.to_string(),
+                input,
+                video: VideoStageOp::ScalePreset {
+                    preset: preset.clone(),
+                },
+                audio: AudioStageOp::Passthrough,
+                output_codec,
+                output_profile: None,
+                include_audio,
+                startup: StageStartupPolicy {
+                    keyframe_preroll_packets: 64,
+                    require_video_parameter_sets: true,
+                    wait_for_first_keyframe: true,
+                },
+                timeline: TimelinePolicy::default(),
+            })
+        }
         StageKind::CodecEdge { operation, .. } if operation == "hevc_to_h264" => {
             Some(FfmpegStagePlan {
                 stage_key: key.clone(),
@@ -862,6 +871,33 @@ mod tests {
             plan.startup.wait_for_first_keyframe,
             "shared FFmpeg plan should carry startup policy for both backends"
         );
+    }
+
+    #[test]
+    fn video_preset_plan_separates_input_and_output_codec() {
+        let key = StageKey::new(
+            "pipe-cross-codec",
+            StageKind::video_preset_with_codec("720p", "h264"),
+        );
+        let video = VideoMeta {
+            codec: "hevc".to_string(),
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            bw: None,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+            level: None,
+            pixel_format: None,
+        };
+
+        let plan = build_ffmpeg_stage_plan(&key, Some(video), Vec::new(), Some("hevc"), true)
+            .expect("video preset plan");
+
+        assert_eq!(plan.input.codec_hint, VideoCodecKind::Hevc);
+        assert_eq!(plan.output_codec, VideoCodecKind::H264);
     }
 
     #[tokio::test]

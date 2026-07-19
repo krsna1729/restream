@@ -458,17 +458,13 @@ mod tests {
             &crate::planner::backend_policy::BackendPolicy::default(),
         );
 
-        let hevc_720p = StageKind::video_preset_with_codec("720p", "hevc");
-        assert!(stages.contains(&StageKey::new("pipe", hevc_720p.clone())));
+        let h264_720p = StageKind::video_preset_with_codec("720p", "h264");
+        assert!(stages.contains(&StageKey::new("pipe", h264_720p.clone())));
         assert!(stages.contains(&StageKey::new(
             "pipe",
-            StageKind::codec_edge("hevc_to_h264", hevc_720p.clone())
+            StageKind::audio_route("atrack:0", h264_720p)
         )));
-        assert!(stages.contains(&StageKey::new(
-            "pipe",
-            StageKind::audio_route("atrack:0", StageKind::codec_edge("hevc_to_h264", hevc_720p))
-        )));
-        assert_eq!(stages.len(), 3);
+        assert_eq!(stages.len(), 2);
     }
 
     #[tokio::test]

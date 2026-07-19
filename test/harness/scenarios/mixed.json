@@ -629,6 +629,13 @@
         "expectedAudioTracks": 1
       },
       {
+        "id": "rtmp.src-legacy.a0",
+        "protocol": "rtmp",
+        "encoding": "source",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1
+      },
+      {
         "id": "rtmp.720p.a0",
         "protocol": "rtmp",
         "encoding": "720p",
@@ -1398,10 +1405,10 @@
           "rtmpSource"
         ],
         "outputRows": [
-          "rtmp.src.a0"
+          "rtmp.src-legacy.a0"
         ],
         "configIndex": 2,
-        "rationale": "HEVC bridge resource case maps to mixed SRT/HEVC source with RTMP source output",
+        "rationale": "HEVC bridge resource case maps to mixed SRT/HEVC source with legacy RTMP source output",
         "checkBundle": "resource.branch",
         "checks": [
           "ffprobe",
@@ -1705,10 +1712,10 @@
           "rtmpSource"
         ],
         "outputRows": [
-          "rtmp.src.a0"
+          "rtmp.src-legacy.a0"
         ],
         "configIndex": 2,
-        "rationale": "branch matrix HEVC bridge resource attribution using mixed HEVC source and RTMP source output",
+        "rationale": "branch matrix HEVC bridge resource attribution using mixed HEVC source and legacy RTMP source output",
         "branchAxis": "@axes.branchBackend",
         "egressCount": {
           "env": "BRANCH_MATRIX_EGRESS_COUNT",

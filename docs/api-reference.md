@@ -260,15 +260,16 @@ Create/update body:
   "name": "Primary CDN",
   "url": "rtmp://destination.example/live/key",
   "config": {
-    "video": { "mode": "preset", "preset": "1080p" },
+    "video": { "mode": "preset", "preset": "1080p", "codec": "auto" },
     "audio": { "mode": "selectTracks", "tracks": [0] },
     "protocol": { "type": "rtmp", "mode": "enhanced" }
   }
 }
 ```
 
-`config` is the output contract. Output responses return the same typed object,
-and the runtime derives any internal stage labels from it server-side.
+`config` is the output contract. Legacy top-level `encoding` is not accepted on
+create/update. Output responses return the same typed object, and the runtime
+derives any internal stage labels from it server-side.
 
 The one-second reconciler starts and stops native egress tasks from
 `desiredState`.
@@ -277,17 +278,20 @@ Create, update, start, and stop responses include a normalized `output` object
 plus the mutation message so clients can patch local output config state without
 an immediate follow-up settings fetch.
 
-Output config accepts `source`, built-in video presets, and typed audio-routing
-shapes (`all`, `selectTracks`, `downmix`, `remap`). `custom` output video mode
-is rejected with `400 Bad Request` because custom FFmpeg arguments are persisted
-for future use but are not applied by the runtime yet.
+Output config accepts `source`, built-in video presets, `video.codec`
+(`auto`, `h264`, `h265`), and typed audio-routing shapes (`all`,
+`selectTracks`, `downmix`, `remap`). `custom` output video mode is rejected
+with `400 Bad Request` because custom FFmpeg arguments are persisted for future
+use but are not applied by the runtime yet.
 
 For RTMP and RTMPS outputs, `config.protocol` may be
 `{ "type": "rtmp", "mode": "legacy" | "enhanced" }` and defaults to legacy
 RTMP when omitted. Enhanced RTMP advertises `avc1`, `hvc1`, and `mp4a`
 capabilities during connect; H.264 outputs continue using AVC payloads, while
 HEVC outputs use the Enhanced FLV `hvc1` packet format. Legacy RTMP converts
-HEVC terminal video to H.264 before publish.
+HEVC source video to H.264 before publish and resolves preset `codec:auto` to
+H.264. Explicit H.265 is rejected for legacy RTMP and HLS outputs; Enhanced
+RTMP and SRT support H.264 and H.265.
 
 Deleting a running output cancels and unregisters its active egress before the
 database row is removed.
