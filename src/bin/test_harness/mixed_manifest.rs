@@ -1205,7 +1205,7 @@ mod tests {
             MixedStageCount {
                 video: 1,
                 audio: 2,
-                codec_edge: 1,
+                codec_edge: 0,
             }
         );
     }

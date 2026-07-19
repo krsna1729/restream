@@ -105,37 +105,38 @@ the compressed-GOP cache applies to continuously connected RTMP/SRT publishers.
 ## Transcoder stages
 
 Every non-passthrough encoding creates a **shared stage**: one process per
-`(pipeline_id, preset)` pair regardless of how many outputs use that preset.
+`(pipeline_id, preset, output_codec)` tuple regardless of how many outputs use
+that resolved video shape.
 
 ### Stage graph
 
 ```mermaid
 flowchart TD
     Source["source_ring"]
+    Codec{"legacy RTMP source needs H.264?"}
+    CodecStage["shared hevc_to_h264 stage"]
     Video{"video preset?"}
-    VideoStage["shared video preset stage"]
+    VideoStage["shared codec-keyed video preset stage"]
     Audio{"audio routing suffix?"}
     AudioStage["shared audio filter stage"]
-    Hevc{"RTMP with H.265 upstream?"}
-    HevcStage["shared hevc_to_h264 stage"]
     Output["final ring_buf"]
     Egresses["all matching egress readers"]
 
-    Source --> Video
+    Source --> Codec
+    Codec -->|yes| CodecStage --> Output
+    Codec -->|no| Video
     Video -->|yes| VideoStage --> Audio
     Video -->|source passthrough| Audio
-    Audio -->|yes| AudioStage --> Hevc
-    Audio -->|no| Hevc
-    Hevc -->|yes| HevcStage --> Output
-    Hevc -->|no| Output
+    Audio -->|yes| AudioStage --> Output
+    Audio -->|no| Output
     Output --> Egresses
 ```
 
-The `hevc_to_h264` stage is the **last** stage in the chain, applied only for
-RTMP outputs when the ingest is H.265. SRT outputs receive native H.265 from the
-preset ring without any additional conversion. RTMP and SRT outputs sharing the
-same preset (e.g. both 720p) share the `video:720p` stage — only the final RTMP
-edge gets a `hevc_to_h264` stage appended.
+The `hevc_to_h264` stage is used only for source passthrough into legacy RTMP
+when the ingest is H.265. Preset outputs resolve the codec first: legacy RTMP
+`codec:auto` creates an H.264 preset stage (for example
+`video:720p:codec:h264`), while Enhanced RTMP and SRT can create or share an
+H.265 preset stage (for example `video:720p:codec:hevc`).
 
 ### Passthrough rule
 
@@ -149,22 +150,18 @@ for future implementation but not applied by the runtime.
 
 | Stage | Key format | Example |
 |---|---|---|
-| Video preset | `video:<preset>` | `video:720p` |
-| H.265→H.264 | `hevc_to_h264:from:<upstream_key>` | `hevc_to_h264:from:source`, `hevc_to_h264:from:720p` |
-| Audio filter | `audio:<op>:from:<video_key>` | `audio:atrack:0:from:720p` |
+| Video preset | `video:<preset>:codec:<codec>` | `video:720p:codec:h264`, `video:720p:codec:hevc` |
+| H.265→H.264 | `hevc_to_h264:from:<upstream_key>` | `hevc_to_h264:from:source` |
+| Audio filter | `audio:<op>:from:<video_key>` | `audio:atrack:0:from:video:720p:codec:h264` |
 
 The `upstream_key` in the `hevc_to_h264` key encodes what ring feeds the
-converter: `source` for passthrough RTMP, the preset name (e.g. `720p`) for
-transcoded RTMP without audio routing, or the full audio key (e.g.
-`audio:atrack:0:from:720p`) for transcoded RTMP with audio routing. This allows
-RTMP-passthrough and RTMP-720p converters to be **independent stages** (each
-runs its own libavcodec thread) while all RTMP egresses on the same encoding
-**share** one converter.
+converter. Today that converter is reserved for source passthrough RTMP, so the
+normal upstream key is `source`.
 
 The video-preset key is shared across all compound encodings with the same
-video part (e.g. `720p`, `720p+atrack:0`, `720p+remap:0:1` all use key
-`video:720p`). The audio key embeds the upstream video key to prevent
-cross-contamination between presets.
+resolved video part (for example `720p+atrack:0` and `720p+remap:0:1` can both
+use `video:720p:codec:h264`). The audio key embeds the upstream video key to
+prevent cross-contamination between presets and output codecs.
 
 ### External transcoder (default)
 
@@ -259,14 +256,18 @@ Standard RTMP (non-Enhanced) does not carry H.265. The reconciler enforces:
 
 | Egress protocol | H.265 input | Behavior |
 |---|---|---|
-| RTMP | H.265 source | `hevc_to_h264:from:source` stage inserted; full libavcodec H.265→H.264 — **working** |
-| RTMP | H.265 + video preset | `video:preset` runs first (H.265 output, shared); `hevc_to_h264:from:<preset>` converts after — H.264 to RTMP — **working** |
+| Legacy RTMP | H.265 source | `hevc_to_h264:from:source` stage inserted; full libavcodec H.265→H.264 — **working** |
+| Legacy RTMP | H.265 + video preset | typed `codec:auto` resolves to H.264, so the preset stage is keyed as `video:<preset>:codec:h264` and no HEVC bridge is needed |
+| Enhanced RTMP | H.265 source/preset | HEVC is packetized as Enhanced FLV `hvc1`; encoded presets are keyed as `video:<preset>:codec:hevc` |
 | SRT | H.265 source | Passthrough (MPEG-TS carries HEVC natively) — **working** |
-| SRT | H.265 + video preset | `video:preset` with libx265 → H.265 720p output; same ring shared with RTMP — **working** |
+| SRT | H.265 + video preset | `video:<preset>:codec:hevc` with libx265; same ring can be shared with Enhanced RTMP — **working** |
 | HLS preview | H.265 source | Preview-only `hevc_preview_h264` stage converts to H.264 720p before served fMP4 HLS — **current path** |
 
-Enhanced RTMP egress packetizes HEVC as Enhanced FLV `hvc1` and skips this
-bridge. Enhanced RTMP ingest remains out of scope.
+Output configuration is symmetric at the model boundary: video mode, video
+codec, audio routing, and protocol mode are typed fields. Protocol capability
+validation remains asymmetric: legacy RTMP and HLS resolve `codec:auto` to
+H.264, Enhanced RTMP and SRT can preserve H.265, and explicit unsupported
+codec/protocol combinations are rejected before persistence.
 
 ## Current protocol matrix
 
@@ -349,8 +350,8 @@ the sharing invariant, not a copied performance snapshot.
 
 Output reconciliation splits compound encodings into a video stage and an audio
 stage. Audio stages are keyed by the upstream stage identity as well as the
-audio operation (e.g. `audio:atrack:0:from:video:720p`), preventing outputs
-using different presets from cross-contaminating.
+audio operation (e.g. `audio:atrack:0:from:video:720p:codec:h264`), preventing
+outputs using different presets or codecs from cross-contaminating.
 
 `atrack` stages run in the lightweight packet router and only select/reindex
 audio tracks. `remap` and `downmix` stages run through the external FFmpeg

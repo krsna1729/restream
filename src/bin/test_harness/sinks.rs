@@ -535,13 +535,21 @@ pub(crate) fn output_config_from_harness_label(label: &str) -> OutputConfig {
     let first = parts.next().unwrap_or("source");
     let second = parts.next().filter(|value| !value.is_empty());
     let (video, audio_operation) = if is_audio_operation(first) {
-        (OutputVideoConfig::Source, Some(first))
+        (
+            OutputVideoConfig::Source {
+                codec: OutputVideoCodec::Auto,
+            },
+            Some(first),
+        )
     } else {
         let video = match first {
-            "" | "source" => OutputVideoConfig::Source,
+            "" | "source" => OutputVideoConfig::Source {
+                codec: OutputVideoCodec::Auto,
+            },
             "custom" => OutputVideoConfig::Custom,
             preset => OutputVideoConfig::Preset {
                 preset: preset.to_string(),
+                codec: OutputVideoCodec::Auto,
             },
         };
         (video, second)

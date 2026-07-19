@@ -16,7 +16,9 @@ use std::{sync::Arc, time::Duration};
 use crate::api_view_models;
 use crate::application::services::ApiError;
 
-use crate::domain::output_spec::{OutputConfig, OutputProtocolConfig, OutputUrlScheme};
+use crate::domain::output_spec::{
+    OutputConfig, OutputProtocolConfig, OutputUrlScheme, ProtocolCapabilities,
+};
 
 use crate::domain::state::DesiredOutputState;
 
@@ -26,6 +28,7 @@ use super::state::{
 };
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "camelCase")]
 pub struct OutputPayload {
     pub name: String,
@@ -336,6 +339,11 @@ fn validate_output_payload(
     {
         return Err(Box::new(bad_request(OUTPUT_PROTOCOL_CONFIG_ERROR)));
     }
+    if let Err(error) =
+        output_config.validate_capabilities(ProtocolCapabilities::from_output(&url, &output_config))
+    {
+        return Err(Box::new(bad_request(error.message())));
+    }
     let monitoring_url = normalize_monitoring_url(payload.monitoring_url.as_deref())
         .map_err(|error| Box::new(bad_request(error)))?;
 
@@ -552,7 +560,7 @@ pub async fn output_status_handler(
 mod tests {
     use super::*;
     use crate::domain::audio_routing::AudioRouting;
-    use crate::domain::output_spec::{OutputVideoConfig, RtmpOutputMode};
+    use crate::domain::output_spec::{OutputVideoCodec, OutputVideoConfig, RtmpOutputMode};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -630,6 +638,51 @@ mod tests {
             validate_output_payload(&payload).expect_err("custom outputs should be rejected");
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn output_payload_rejects_legacy_encoding_field() {
+        let value = serde_json::json!({
+            "name": "Primary Output",
+            "url": "rtmp://example.com/live",
+            "encoding": "720p",
+            "config": {
+                "video": {"mode": "source"},
+                "audio": {"mode": "all"}
+            }
+        });
+
+        let parsed = serde_json::from_value::<OutputPayload>(value);
+
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn validate_output_payload_rejects_h265_for_legacy_rtmp() {
+        let payload = OutputPayload {
+            config: OutputConfig::preset("720p").with_video_codec(OutputVideoCodec::Hevc),
+            ..test_output_payload("rtmp://example.com/live")
+        };
+
+        let response =
+            validate_output_payload(&payload).expect_err("legacy RTMP cannot carry H.265");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_output_payload_allows_h265_for_enhanced_rtmp() {
+        let payload = OutputPayload {
+            config: OutputConfig::preset("720p")
+                .with_video_codec(OutputVideoCodec::Hevc)
+                .with_rtmp_mode(RtmpOutputMode::Enhanced),
+            ..test_output_payload("rtmp://example.com/live")
+        };
+
+        let validated =
+            validate_output_payload(&payload).expect("enhanced RTMP should allow H.265");
+
+        assert_eq!(validated.output_config, payload.config);
     }
 
     #[test]

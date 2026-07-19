@@ -482,7 +482,8 @@ test("output config mutations reuse returned output payloads instead of refetchi
     "out-rtmp-key-input",
     "rtmp://example.com/live/updated-secret",
   );
-  appendField("select", "out-encoding-input", "source");
+  appendField("select", "out-encoding-input", "720p");
+  appendField("select", "out-video-codec-input", "h265");
   appendField("input", "out-name-input", "Renamed Output");
   appendField(
     "input",
@@ -496,7 +497,9 @@ test("output config mutations reuse returned output payloads instead of refetchi
   globalThis.fetch = async (url, options = {}) => {
     const href = String(url);
     const method = String(options.method || "GET").toUpperCase();
-    requests.push([method, href]);
+    const body =
+      typeof options.body === "string" ? JSON.parse(options.body) : null;
+    requests.push([method, href, body]);
 
     if (href === settingsUrl) {
       return new Response(
@@ -622,7 +625,15 @@ test("output config mutations reuse returned output payloads instead of refetchi
   await editor.editOutFormBtn({ preventDefault() {} });
   await flushAsyncWork();
 
-  assert.deepEqual(requests, [["PATCH", updateUrl]]);
+  assert.deepEqual(
+    requests.map(([method, href]) => [method, href]),
+    [["PATCH", updateUrl]],
+  );
+  assert.deepEqual(requests[0][2].config.video, {
+    mode: "preset",
+    preset: "720p",
+    codec: "h265",
+  });
   assert.equal(
     requests.some(([, href]) => href === settingsUrl),
     false,
@@ -638,6 +649,8 @@ test("output config mutations reuse returned output payloads instead of refetchi
   document.getElementById("out-mode-input").value = "create";
   document.getElementById("out-id-input").value = "";
   document.getElementById("out-name-input").value = "Backup Output";
+  document.getElementById("out-encoding-input").value = "source";
+  document.getElementById("out-video-codec-input").value = "h264";
   document.getElementById("out-rtmp-key-input").value =
     "rtmp://backup.example.com/live/backup-secret";
   document.getElementById("out-monitoring-url-input").value = "";
@@ -645,7 +658,14 @@ test("output config mutations reuse returned output payloads instead of refetchi
   await editor.editOutFormBtn({ preventDefault() {} });
   await flushAsyncWork();
 
-  assert.deepEqual(requests, [["POST", createUrl]]);
+  assert.deepEqual(
+    requests.map(([method, href]) => [method, href]),
+    [["POST", createUrl]],
+  );
+  assert.deepEqual(requests[0][2].config.video, {
+    mode: "source",
+    codec: "h264",
+  });
   assert.equal(
     requests.some(([, href]) => href === settingsUrl),
     false,
@@ -874,4 +894,3 @@ test("pipeline and output deletes patch dashboard state locally instead of refet
     undefined,
   );
 });
-

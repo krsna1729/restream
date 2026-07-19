@@ -369,7 +369,7 @@ use super::state::MAX_OUTPUT_CONFIG_LEN;
 #[cfg(feature = "agent-execution")]
 use super::state::MAX_URL_LEN;
 #[cfg(feature = "agent-execution")]
-use crate::domain::output_spec::OutputConfig;
+use crate::domain::output_spec::{OutputConfig, ProtocolCapabilities};
 
 #[cfg(feature = "agent-execution")]
 /// Creates or reuses an execution record for one requested agent operation.
@@ -997,6 +997,9 @@ fn validate_output_fields(
     if !is_supported_output_url(url) {
         return Err(OUTPUT_URL_SCHEME_ERROR.to_string());
     }
+    config
+        .validate_capabilities(ProtocolCapabilities::from_output(url, config))
+        .map_err(|error| error.message().to_string())?;
     if let Some(monitoring_url) = monitoring_url
         && !is_supported_monitoring_url(monitoring_url)
     {
@@ -1679,11 +1682,15 @@ fn agent_operation_store_error(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "agent-execution")]
+    use super::validate_output_fields;
     #[cfg(feature = "agent-plane")]
     use super::{
         agent_plan_graph_preview_json, agent_plan_validation_json, desired_output_reason,
         pipeline_input_is_on,
     };
+    #[cfg(feature = "agent-execution")]
+    use crate::domain::output_spec::{OutputConfig, OutputVideoCodec};
     #[cfg(feature = "agent-plane")]
     use crate::domain::state::DesiredOutputState;
 
@@ -1777,6 +1784,26 @@ mod tests {
         assert_eq!(
             desired_output_reason(DesiredOutputState::Stopped, "running", true),
             "desiredActualMismatch"
+        );
+    }
+
+    #[cfg(feature = "agent-execution")]
+    #[test]
+    fn agent_execution_rejects_unsupported_output_codec_for_legacy_rtmp() {
+        let config = OutputConfig::preset("720p").with_video_codec(OutputVideoCodec::Hevc);
+
+        let error = validate_output_fields(
+            "Legacy RTMP",
+            "rtmp://example/live/key",
+            None,
+            &config,
+            "running",
+        )
+        .expect_err("legacy RTMP must reject explicit H.265");
+
+        assert_eq!(
+            error,
+            "Output video codec is not supported by the selected protocol mode"
         );
     }
 }

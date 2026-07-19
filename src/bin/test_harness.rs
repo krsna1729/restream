@@ -9,7 +9,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use restream::domain::audio_routing::{AudioRouting, is_audio_operation, parse_audio_operation};
 use restream::domain::output_spec::{
-    OutputConfig, OutputUrlScheme, OutputVideoConfig, RtmpOutputMode,
+    OutputConfig, OutputUrlScheme, OutputVideoCodec, OutputVideoConfig, RtmpOutputMode,
 };
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{

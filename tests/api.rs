@@ -2502,7 +2502,10 @@ async fn pipeline_graph_stage_nodes_include_lifecycle_details() {
         .try_register_ingest("pipe-graph-life", "graph-life-key", "rtmp")
         .await
         .unwrap();
-    let stage_key = StageKey::new("pipe-graph-life", StageKind::video_preset("720p"));
+    let stage_key = StageKey::new(
+        "pipe-graph-life",
+        StageKind::video_preset_with_codec("720p", "h264"),
+    );
     let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine);
     let (handle, _) = manager
         .ensure_stage(

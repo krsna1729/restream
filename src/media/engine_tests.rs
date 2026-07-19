@@ -1882,6 +1882,17 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
         )
         .await;
 
+    let stale_source_output = crate::application::models::Output {
+        id: "out-graph-stale-codec".to_string(),
+        pipeline_id: pipeline_id.to_string(),
+        name: "Graph RTMP".to_string(),
+        url: "rtmp://example/live/test".to_string(),
+        monitoring_url: None,
+        desired_state: DesiredOutputState::Running,
+        config: crate::domain::output_spec::OutputConfig::source(),
+    };
+    let _ = crate::application::egress::prepare_output_ring(&engine, &stale_source_output).await;
+
     let output = crate::application::models::Output {
         id: "out-graph-stale-codec".to_string(),
         pipeline_id: pipeline_id.to_string(),
@@ -1894,7 +1905,6 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
         ),
     };
 
-    let _ = crate::application::egress::prepare_output_ring(&engine, &output).await;
     engine
         .update_ingest_meta(
             pipeline_id,
@@ -1911,15 +1921,11 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
     let _ = crate::application::egress::prepare_output_ring(&engine, &output).await;
 
     let stages = engine.active_transcoder_stages(pipeline_id).await;
-    let stale_plain = StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("h264"));
-    let stale_qualified = StageKind::codec_edge(
-        "hevc_to_h264",
-        StageKind::video_preset_with_codec("h264", "hevc"),
-    );
+    let stale_source = StageKind::codec_edge("hevc_to_h264", StageKind::source());
     assert!(
         stages
             .iter()
-            .any(|(stage, live)| *live && (*stage == stale_plain || *stage == stale_qualified)),
+            .any(|(stage, live)| *live && *stage == stale_source),
         "test precondition: stale codec-edge stage should still exist in the engine registry"
     );
 
@@ -1927,25 +1933,21 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
     let nodes = graph["nodes"].as_array().unwrap();
 
     assert!(
-        nodes.iter().any(|node| node["stageKey"] == "video:h264"),
+        nodes
+            .iter()
+            .any(|node| node["stageKey"] == "video:h264:codec:h264"),
         "current output path should still render its video stage"
     );
     assert!(
         nodes
             .iter()
-            .any(|node| node["stageKey"] == "audio:atrack:1:from:video:h264"),
+            .any(|node| node["stageKey"] == "audio:atrack:1:from:video:h264:codec:h264"),
         "current output path should still render its audio routing stage"
     );
     assert!(
         !nodes
             .iter()
-            .any(|node| node["stageKey"] == "hevc_to_h264:from:video:h264"),
+            .any(|node| node["stageKey"] == "hevc_to_h264:from:source"),
         "graph should omit stale codec-edge stages that no longer belong to the output path"
-    );
-    assert!(
-        !nodes
-            .iter()
-            .any(|node| node["stageKey"] == "audio:atrack:1:from:hevc_to_h264:from:video:h264"),
-        "graph should omit the stale audio route that was keyed off the codec edge"
     );
 }

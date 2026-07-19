@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
 use crate::application::models::{Ingest, Output, Pipeline};
-use crate::domain::output_spec::{OutputConfig, OutputUrlScheme};
+use crate::domain::output_spec::{OutputConfig, OutputUrlScheme, ProtocolCapabilities};
 use crate::planner::backend_policy::BackendPolicy;
 use crate::planner::graph_plan::{PlannedOutput, plan_pipeline_graph};
 
@@ -377,6 +377,40 @@ fn change_output_config(change: &ProposedChange) -> Option<&OutputConfig> {
     change.config.as_ref()
 }
 
+fn existing_output_for_change<'a>(
+    outputs: &'a [Output],
+    pipeline_id: Option<&str>,
+    output_id: Option<&str>,
+) -> Option<&'a Output> {
+    let pipeline_id = pipeline_id?;
+    let output_id = output_id?;
+    outputs
+        .iter()
+        .find(|output| output.pipeline_id == pipeline_id && output.id == output_id)
+}
+
+fn effective_output_capability_input<'a>(
+    change: &'a ProposedChange,
+    pipeline_id: Option<&str>,
+    outputs: &'a [Output],
+) -> Option<(&'a str, &'a OutputConfig)> {
+    match change.kind.as_str() {
+        "addOutput" => Some((change.url.as_deref()?.trim(), change.config.as_ref()?)),
+        "updateOutput" => {
+            let existing =
+                existing_output_for_change(outputs, pipeline_id, change.output_id.as_deref())?;
+            let url = change
+                .url
+                .as_deref()
+                .unwrap_or(existing.url.as_str())
+                .trim();
+            let config = change.config.as_ref().unwrap_or(&existing.config);
+            Some((url, config))
+        }
+        _ => None,
+    }
+}
+
 fn redacted_ingest(ingest: &Ingest) -> Value {
     serde_json::json!({
         "id": ingest.id,
@@ -716,6 +750,19 @@ pub fn validate_plan(
             ));
         }
 
+        if let Some((url, config)) = effective_output_capability_input(change, pipeline_id, outputs)
+            && is_supported_output_url(url)
+            && let Err(error) =
+                config.validate_capabilities(ProtocolCapabilities::from_output(url, config))
+        {
+            errors.push(issue(
+                "error",
+                "unsupportedOutputCodec",
+                error.message(),
+                Some("config.video.codec"),
+            ));
+        }
+
         if let Some(desired_state) = change.desired_state.as_deref()
             && !matches!(desired_state, "running" | "stopped")
         {
@@ -976,13 +1023,13 @@ mod tests {
             .iter()
             .filter_map(|node| node["stageKey"].as_str())
             .collect();
-        assert!(stages.contains(&"video:720p:codec:hevc"));
+        assert!(stages.contains(&"video:720p:codec:h264"));
         assert!(
             stages
                 .iter()
                 .any(|stage| stage.starts_with("audio:atrack:0"))
         );
-        assert!(stages.iter().any(|stage| stage.starts_with("hevc_to_h264")));
+        assert!(!stages.iter().any(|stage| stage.starts_with("hevc_to_h264")));
     }
 
     #[test]
@@ -1003,7 +1050,7 @@ mod tests {
         };
         let current_graph = serde_json::json!({
             "nodes": [
-                {"stageKey": "pipe-a:video:720p:codec:hevc"}
+                {"stageKey": "pipe-a:video:720p:codec:h264"}
             ]
         });
 
@@ -1014,7 +1061,42 @@ mod tests {
             .filter_map(|node| node["stageKey"].as_str())
             .collect::<Vec<_>>();
 
-        assert!(!stages.contains(&"video:720p:codec:hevc"));
-        assert!(stages.iter().any(|stage| stage.starts_with("hevc_to_h264")));
+        assert!(!stages.contains(&"video:720p:codec:h264"));
+        assert!(!stages.iter().any(|stage| stage.starts_with("hevc_to_h264")));
+    }
+
+    #[test]
+    fn plan_rejects_unsupported_output_codec_for_legacy_rtmp() {
+        let req = PlanRequest {
+            intent: "add h265 legacy rtmp output".to_string(),
+            pipeline_id: Some("pipe-a".to_string()),
+            proposed_changes: vec![ProposedChange {
+                kind: "addOutput".to_string(),
+                pipeline_id: None,
+                output_id: None,
+                name: Some("Legacy RTMP".to_string()),
+                url: Some("rtmp://example/live/key".to_string()),
+                monitoring_url: None,
+                config: Some(
+                    OutputConfig::preset("720p")
+                        .with_video_codec(crate::domain::output_spec::OutputVideoCodec::Hevc),
+                ),
+                desired_state: Some("running".to_string()),
+            }],
+        };
+        let pipelines = [Pipeline {
+            id: "pipe-a".to_string(),
+            name: "Pipeline A".to_string(),
+            stream_key: "stream-key".to_string(),
+            input_source: None,
+            srt_ingest_policy: None,
+        }];
+
+        let validation = validate_plan(&req, &pipelines, &[]);
+
+        assert!(!validation.valid);
+        assert!(validation.errors.iter().any(|issue| {
+            issue.code == "unsupportedOutputCodec" && issue.field == Some("config.video.codec")
+        }));
     }
 }

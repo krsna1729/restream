@@ -82,14 +82,12 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
 
         let stage_buf = match &stage.kind {
             StageKind::VideoPreset { .. } => {
-                let stage_codec_override =
-                    stage.kind.video_output_codec().or(ingest_codec_override);
                 engine
                     .get_or_create_transcoder(
                         &output.pipeline_id,
                         stage.kind.clone(),
                         input_buf,
-                        stage_codec_override,
+                        ingest_codec_override,
                     )
                     .await
             }
@@ -258,7 +256,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_output_ring_shares_hevc_codec_edge_before_audio_selection() {
+    async fn prepare_output_ring_shares_legacy_rtmp_h264_preset_before_audio_selection() {
         let engine = Arc::new(MediaEngine::new());
         engine
             .try_register_ingest("pipe-hevc-audio", "stream-key", "srt")
@@ -300,16 +298,11 @@ mod tests {
                 .iter()
                 .filter(|(kind, active)| { *active && matches!(kind, StageKind::CodecEdge { .. }) })
                 .count(),
-            1,
-            "selected-audio RTMP outputs should share one HEVC->H.264 stage per video shape"
+            0,
+            "legacy RTMP preset auto resolves to an H.264 preset stage without a bridge"
         );
         assert!(stages.iter().any(|(kind, active)| {
-            *active
-                && *kind
-                    == StageKind::codec_edge(
-                        "hevc_to_h264",
-                        StageKind::video_preset_with_codec("720p", "hevc"),
-                    )
+            *active && *kind == StageKind::video_preset_with_codec("720p", "h264")
         }));
         assert_eq!(
             stages
@@ -319,12 +312,12 @@ mod tests {
                 })
                 .count(),
             2,
-            "audio selection should happen after the shared codec edge"
+            "audio selection should happen after the shared H.264 video preset"
         );
     }
 
     #[tokio::test]
-    async fn hevc_scaled_stage_is_shared_before_rtmp_codec_edge() {
+    async fn h265_srt_and_legacy_rtmp_presets_use_separate_codec_stages() {
         let engine = Arc::new(MediaEngine::new());
         engine
             .try_register_ingest("pipe-hevc-mixed", "stream-key", "file")
@@ -368,13 +361,13 @@ mod tests {
             *active && *kind == StageKind::video_preset_with_codec("720p", "hevc")
         }));
         assert!(stages.iter().any(|(kind, active)| {
-            *active
-                && *kind
-                    == StageKind::codec_edge(
-                        "hevc_to_h264",
-                        StageKind::video_preset_with_codec("720p", "hevc"),
-                    )
+            *active && *kind == StageKind::video_preset_with_codec("720p", "h264")
         }));
+        assert!(
+            !stages
+                .iter()
+                .any(|(kind, active)| { *active && matches!(kind, StageKind::CodecEdge { .. }) })
+        );
     }
 
     #[tokio::test]
@@ -396,10 +389,7 @@ mod tests {
                 "pipe-hevc-hint",
                 StageKind::audio_route(
                     "atrack:0",
-                    StageKind::codec_edge(
-                        "hevc_to_h264",
-                        StageKind::video_preset_with_codec("720p", "hevc"),
-                    ),
+                    StageKind::video_preset_with_codec("720p", "h264"),
                 )
             )
         );

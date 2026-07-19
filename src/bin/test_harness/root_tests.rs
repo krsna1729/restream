@@ -1748,6 +1748,27 @@ fn mixed_hevc_output_progress_timeout_gets_codec_edge_budget() {
 }
 
 #[test]
+fn mixed_adaptive_ring_gate_bounds_telemetry_requests() {
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/bin/test_harness/mixed_telemetry.rs"
+    ));
+
+    assert!(
+        source.contains("ADAPTIVE_RING_CHECK_TIMEOUT"),
+        "adaptive ring checks should keep an explicit whole-gate deadline"
+    );
+    assert!(
+        source.contains("ADAPTIVE_RING_TELEMETRY_REQUEST_TIMEOUT"),
+        "adaptive ring checks should bound each telemetry poll"
+    );
+    assert!(
+        source.contains("tokio::time::timeout("),
+        "a hung telemetry request must not stall the shard until the outer CI timeout"
+    );
+}
+
+#[test]
 fn mixed_matrix_hevc_rows_do_not_share_capacity_wave() {
     let h264_case = mixed_input_cases()
         .iter()

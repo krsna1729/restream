@@ -3,6 +3,9 @@
 use super::*;
 use std::path::Path;
 
+const ADAPTIVE_RING_CHECK_TIMEOUT: Duration = Duration::from_secs(6);
+const ADAPTIVE_RING_TELEMETRY_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+
 pub(crate) struct MixedRssReport {
     pub(crate) delta_kb: u64,
     pub(crate) per_output_kb: u64,
@@ -156,11 +159,16 @@ pub(crate) async fn verify_optional_mixed_adaptive_ring(
 
     let started = Instant::now();
     let telem_path = format!("/api/v1/pipelines/{pipeline_id}/telemetry");
-    let deadline = Instant::now() + Duration::from_secs(6);
+    let deadline = Instant::now() + ADAPTIVE_RING_CHECK_TIMEOUT;
     let mut last_error = None;
     loop {
-        match api.get_json(&telem_path).await {
-            Ok(telem) => {
+        match tokio::time::timeout(
+            ADAPTIVE_RING_TELEMETRY_REQUEST_TIMEOUT,
+            api.get_json(&telem_path),
+        )
+        .await
+        {
+            Ok(Ok(telem)) => {
                 let snapshot = mixed_adaptive_ring_snapshot(&telem);
                 if snapshot.passed || Instant::now() >= deadline {
                     let passed = snapshot.passed;
@@ -205,8 +213,14 @@ pub(crate) async fn verify_optional_mixed_adaptive_ring(
                     ));
                 }
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 last_error = Some(error);
+            }
+            Err(_) => {
+                last_error = Some(format!(
+                    "telemetry request timed out after {}s",
+                    ADAPTIVE_RING_TELEMETRY_REQUEST_TIMEOUT.as_secs()
+                ));
             }
         }
         if Instant::now() >= deadline {

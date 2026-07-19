@@ -11,7 +11,7 @@ use std::fmt;
 pub use crate::domain::ids::{PipelineId, StageId};
 
 use crate::domain::output_spec::{
-    OutputConfig, OutputEncodingSpec, OutputVideoConfig, VideoSelector,
+    OutputConfig, OutputEncodingSpec, OutputVideoCodec, OutputVideoConfig, VideoSelector,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -287,8 +287,12 @@ impl EncodingStagePlan {
         let pipeline = pipeline_id.into();
         let source = StageKind::source();
         let video_stage = match &config.video {
-            OutputVideoConfig::Preset { preset } => Some(StageKind::video_preset(preset.clone())),
-            OutputVideoConfig::Source | OutputVideoConfig::Custom => None,
+            OutputVideoConfig::Preset { preset, codec } => Some(match codec {
+                OutputVideoCodec::Auto => StageKind::video_preset(preset),
+                OutputVideoCodec::H264 => StageKind::video_preset_with_codec(preset, "h264"),
+                OutputVideoCodec::Hevc => StageKind::video_preset_with_codec(preset, "hevc"),
+            }),
+            OutputVideoConfig::Source { .. } | OutputVideoConfig::Custom => None,
         };
         let upstream = video_stage.clone().unwrap_or_else(|| source.clone());
         let audio_stage = config

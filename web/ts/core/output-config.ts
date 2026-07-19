@@ -2,7 +2,7 @@ import type { OutputConfig, OutputView } from "../types.js";
 
 function defaultOutputConfig(): OutputConfig {
   return {
-    video: { mode: "source" },
+    video: { mode: "source", codec: "auto" },
     audio: { mode: "all" },
     protocol: { type: "auto" },
   };
@@ -53,7 +53,18 @@ export function outputConfigAudioOperation(
 export function normalizeOutputConfig(output: {
   config?: OutputConfig | null;
 }): OutputConfig {
-  return { ...defaultOutputConfig(), ...(output.config || {}) };
+  const config = { ...defaultOutputConfig(), ...(output.config || {}) };
+  switch (config.video.mode) {
+    case "source":
+      config.video = { ...config.video, codec: config.video.codec || "auto" };
+      break;
+    case "preset":
+      config.video = { ...config.video, codec: config.video.codec || "auto" };
+      break;
+    case "custom":
+      break;
+  }
+  return config;
 }
 
 export function outputViewEncodingLabel(

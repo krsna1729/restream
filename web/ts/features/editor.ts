@@ -70,6 +70,7 @@ import type {
   AudioTrack,
   ConfigPipeline,
   OutputConfig,
+  OutputVideoCodec,
   PipelineView,
   OutputView,
   RtmpOutputMode,
@@ -1553,7 +1554,7 @@ async function openOutModal(
   const outputConfig = output
     ? normalizeOutputConfig(output)
     : ({
-        video: { mode: "source" },
+        video: { mode: "source", codec: "auto" },
         audio: { mode: "all" },
       } as OutputConfig);
   let remapTrack =
@@ -1586,6 +1587,8 @@ async function openOutModal(
   populateOutputEncodingSelect(
     outputConfig.video.mode === "preset" ? outputConfig.video.preset : "source",
   );
+  const codecInput = document.getElementById("out-video-codec-input") as HTMLSelectElement | null;
+  if (codecInput) codecInput.value = outputConfig.video.mode === "custom" ? "auto" : outputConfig.video.codec || "auto";
   const trackCount = Math.max(1, currentModalAudioTracks.length);
   populateRemapTrackOptions(trackCount, remapTrack);
   populateRemapChannelOptions(
@@ -1737,13 +1740,15 @@ export async function editOutFormBtn(event: Event): Promise<void> {
   const outputProtocol =
     (document.getElementById("out-protocol-input") as HTMLSelectElement | null)
       ?.value || "rtmp";
+  const rawCodec = (document.getElementById("out-video-codec-input") as HTMLSelectElement | null)?.value || "auto";
+  const selectedCodec: OutputVideoCodec = rawCodec === "h264" || rawCodec === "h265" ? rawCodec : "auto";
 
   const rtmpMode = resolveModalRtmpMode(outputProtocol, serverUrl);
   const config: OutputConfig = {
     video:
       selectedEncoding === "source"
-        ? { mode: "source" }
-        : { mode: "preset", preset: selectedEncoding },
+        ? { mode: "source", codec: selectedCodec }
+        : { mode: "preset", preset: selectedEncoding, codec: selectedCodec },
     audio:
       modalAudioMode === "subset"
         ? { mode: "selectTracks", tracks: modalAudioSelectedTracks }
