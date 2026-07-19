@@ -18,6 +18,8 @@ pub enum PipelineAccessMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthenticatedPipeline {
     pub id: String,
+    pub input_id: String,
+    pub selected: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

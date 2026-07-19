@@ -14,6 +14,7 @@ pub mod ingests;
 pub mod logs;
 pub mod media_library;
 pub mod outputs;
+pub mod pipeline_inputs;
 pub mod pipelines;
 pub mod router;
 pub mod settings;

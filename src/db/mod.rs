@@ -9,6 +9,7 @@ pub mod log_repo;
 pub(crate) mod meta_repo;
 pub(crate) mod migrations;
 pub mod output_repo;
+pub mod pipeline_input_repo;
 pub mod pipeline_repo;
 pub mod recording_repo;
 mod schema;
@@ -28,6 +29,11 @@ pub use log_repo::{
 pub use output_repo::{
     create_output, delete_output, get_output, list_outputs, list_outputs_for_pipeline,
     set_output_desired_state, update_output,
+};
+pub use pipeline_input_repo::{
+    create_pipeline_input, delete_pipeline_input, get_pipeline_input,
+    get_pipeline_input_by_stream_key, list_pipeline_inputs, promote_pipeline_input,
+    update_pipeline_input,
 };
 pub use pipeline_repo::{
     create_pipeline, delete_pipeline, get_pipeline, get_pipeline_by_stream_key, list_pipelines,

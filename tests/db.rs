@@ -83,41 +83,15 @@ async fn update_nonexistent_pipeline_returns_none() {
 }
 
 #[tokio::test]
-async fn schema_setup_reports_legacy_duplicate_pipeline_stream_keys() {
-    let pool = db::create_pool("sqlite::memory:").await.unwrap();
-    sqlx::query(
-        "CREATE TABLE pipelines (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            stream_key TEXT NOT NULL,
-            encoding TEXT,
-            input_ever_seen_live INTEGER NOT NULL DEFAULT 0,
-            input_source TEXT
-        );",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO pipelines (id, name, stream_key)
-         VALUES ('p-old', 'Old', 'dup-key'),
-                ('p-new', 'New', 'dup-key');",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let err = db::setup_database_schema(&pool)
+async fn pipeline_input_stream_keys_are_unique_in_fresh_schema() {
+    let pool = test_pool().await;
+    db::create_pipeline(&pool, "p1", "One", "shared-key", None, None)
         .await
-        .expect_err("legacy duplicate stream keys should block unique-index migration");
-    let message = err.to_string();
-    assert!(
-        message.contains("duplicate pipeline stream keys must be resolved before migration"),
-        "unexpected duplicate-key migration error: {message}"
-    );
-    assert!(message.contains("dup-key"));
-    assert!(message.contains("p-old"));
-    assert!(message.contains("p-new"));
+        .unwrap();
+
+    let duplicate = db::create_pipeline(&pool, "p2", "Two", "shared-key", None, None).await;
+
+    assert!(duplicate.is_err());
 }
 
 #[tokio::test]
@@ -131,7 +105,7 @@ async fn schema_setup_records_current_migration_version_once() {
             .await
             .unwrap();
 
-    assert_eq!(rows, vec![(1, "bootstrap_schema_v1".to_string())]);
+    assert_eq!(rows, vec![(1, "pipeline_inputs_schema_v1".to_string())]);
 }
 
 #[tokio::test]
@@ -194,32 +168,32 @@ async fn schema_constraints_reject_invalid_runtime_invariants() {
         .unwrap();
 
     let invalid_pipeline_bool = sqlx::query(
-        "INSERT INTO pipelines (id, name, stream_key, input_ever_seen_live)
-         VALUES ('p-bool', 'Bad', 'key-bool', 2);",
+        "INSERT INTO pipelines (id, name, input_ever_seen_live)
+         VALUES ('p-bool', 'Bad', 2);",
     )
     .execute(&pool)
     .await;
     assert!(invalid_pipeline_bool.is_err());
 
     let empty_srt_policy = sqlx::query(
-        "INSERT INTO pipelines (id, name, stream_key, srt_ingest_policy)
-         VALUES ('p-empty-policy', 'Empty policy', 'key-empty-policy', '');",
+        "INSERT INTO pipelines (id, name, srt_ingest_policy)
+         VALUES ('p-empty-policy', 'Empty policy', '');",
     )
     .execute(&pool)
     .await;
     assert!(empty_srt_policy.is_ok());
 
     let legacy_srt_policy = sqlx::query(
-        "INSERT INTO pipelines (id, name, stream_key, srt_ingest_policy)
-         VALUES ('p-legacy-policy', 'Legacy policy', 'key-legacy-policy', 'source');",
+        "INSERT INTO pipelines (id, name, srt_ingest_policy)
+         VALUES ('p-legacy-policy', 'Legacy policy', 'source');",
     )
     .execute(&pool)
     .await;
     assert!(legacy_srt_policy.is_ok());
 
     let invalid_srt_policy = sqlx::query(
-        "INSERT INTO pipelines (id, name, stream_key, srt_ingest_policy)
-         VALUES ('p-bad-policy', 'Bad policy', 'key-bad-policy', 'not-json');",
+        "INSERT INTO pipelines (id, name, srt_ingest_policy)
+         VALUES ('p-bad-policy', 'Bad policy', 'not-json');",
     )
     .execute(&pool)
     .await;
@@ -855,36 +829,11 @@ async fn ingest_crud() {
 }
 
 #[tokio::test]
-async fn schema_setup_prunes_duplicate_file_ingests_before_unique_index() {
-    let pool = db::create_pool("sqlite::memory:").await.unwrap();
-    sqlx::query(
-        "CREATE TABLE ingests (
-            id TEXT PRIMARY KEY,
-            filename TEXT NOT NULL,
-            stream_key TEXT NOT NULL,
-            loop INTEGER NOT NULL DEFAULT 0,
-            start_time TEXT NOT NULL DEFAULT ''
-        );",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO ingests (id, filename, stream_key, loop, start_time)
-         VALUES ('old', 'old.mp4', 'same-key', 0, ''),
-                ('new', 'new.mp4', 'same-key', 1, '00:00:05');",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    db::setup_database_schema(&pool).await.unwrap();
-
-    let ingests = db::list_ingests_for_stream_key(&pool, "same-key")
+async fn file_ingest_stream_key_uniqueness_is_enforced_immediately() {
+    let pool = test_pool().await;
+    db::create_ingest(&pool, "first", "first.mp4", "same-key", false, "", false, 2)
         .await
         .unwrap();
-    assert_eq!(ingests.len(), 1);
-    assert_eq!(ingests[0].id, "new");
     let duplicate = db::create_ingest(
         &pool,
         "another",

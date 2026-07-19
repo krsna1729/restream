@@ -4,10 +4,12 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
+use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::services::{
     AgentService, AuthService, FileIngestService, HealthService, IngestService, LogService,
     MediaLibraryService, OutputService, PipelineService, SettingsService,
 };
+use crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore;
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
 use crate::infrastructure::sqlite_ports::{
     SqliteIngestLookup, SqliteJobStore, SqliteLogStore, SqliteMetaStore, SqliteOutputStore,
@@ -17,6 +19,12 @@ use crate::infrastructure::sqlite_ports::{
 impl PipelineService {
     pub fn new(db: SqlitePool) -> Self {
         Self::with_store(Arc::new(SqlitePipelineStore::new(db)))
+    }
+}
+
+impl PipelineInputService {
+    pub fn new(db: SqlitePool, pipelines: PipelineService) -> Self {
+        Self::with_store(Arc::new(SqlitePipelineInputStore::new(db)), pipelines)
     }
 }
 
@@ -70,7 +78,8 @@ impl FileIngestService {
         Self::with_ports(
             ingest_store.clone(),
             ingest_store,
-            Arc::new(SqlitePipelineStore::new(db)),
+            Arc::new(SqlitePipelineStore::new(db.clone())),
+            Arc::new(SqlitePipelineInputStore::new(db)),
             pipeline_service,
         )
     }

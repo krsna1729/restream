@@ -247,6 +247,7 @@ pub(crate) fn apply_egress_retry_state_json(
 }
 
 pub(crate) fn probe_snapshot(pipeline_id: &str, ingest: &ActiveIngest) -> serde_json::Value {
+    let metadata = ingest.metadata();
     let elapsed = ingest.start_time.elapsed().as_secs_f64();
     let bytes = ingest.bytes_received.load(Ordering::Relaxed);
     let bitrate_kbps = if elapsed > 1.0 {
@@ -261,7 +262,7 @@ pub(crate) fn probe_snapshot(pipeline_id: &str, ingest: &ActiveIngest) -> serde_
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if tracks.is_empty() {
-            ingest
+            metadata
                 .audio
                 .as_ref()
                 .map(|a| vec![serde_json::to_value(a).unwrap_or_default()])
@@ -300,12 +301,12 @@ pub(crate) fn probe_snapshot(pipeline_id: &str, ingest: &ActiveIngest) -> serde_
         "pipelineId": pipeline_id,
         "ingest": {
             "protocol": ingest.protocol,
-            "remoteAddr": ingest.remote_addr,
+            "remoteAddr": metadata.remote_addr,
             "uptimeSeconds": (elapsed * 10.0).round() / 10.0,
             "bytesReceived": bytes,
             "bitrateKbps": bitrate_kbps.map(|b| (b * 10.0).round() / 10.0),
         },
-        "video": ingest.video,
+        "video": metadata.video,
         "videoTrackSelection": video_track_selection,
         "audioTracks": audio_tracks,
         "gop": gop,
@@ -313,15 +314,16 @@ pub(crate) fn probe_snapshot(pipeline_id: &str, ingest: &ActiveIngest) -> serde_
 }
 
 fn ingest_video_track_selection_json(ingest: &ActiveIngest) -> serde_json::Value {
-    if ingest.video_track_count == 0 {
+    let metadata = ingest.metadata();
+    if metadata.video_track_count == 0 {
         return serde_json::Value::Null;
     }
 
     serde_json::json!({
         "mode": "firstVideoOnly",
-        "selectedTrackIndex": ingest.selected_video_track_index,
-        "availableTrackCount": ingest.video_track_count,
-        "ignoredTrackCount": ingest.video_track_count.saturating_sub(1),
+        "selectedTrackIndex": metadata.selected_video_track_index,
+        "availableTrackCount": metadata.video_track_count,
+        "ignoredTrackCount": metadata.video_track_count.saturating_sub(1),
     })
 }
 
@@ -366,6 +368,7 @@ pub(crate) fn active_pipeline_input_json(
     readers_count: usize,
     reader_metrics: Vec<serde_json::Value>,
 ) -> serde_json::Value {
+    let metadata = ingest.metadata();
     let elapsed_secs = ingest.start_time.elapsed().as_secs_f64();
     let bytes_received = ingest.bytes_received.load(Ordering::Relaxed);
     let bitrate_kbps = MediaEngine::sample_ingest_bitrate_kbps(ingest);
@@ -382,8 +385,8 @@ pub(crate) fn active_pipeline_input_json(
 
     let publisher_json = serde_json::json!({
         "protocol": ingest.protocol,
-        "remoteAddr": ingest.remote_addr,
-        "quality": ingest.quality,
+        "remoteAddr": metadata.remote_addr,
+        "quality": metadata.quality,
     });
     let audio_tracks = ingest
         .audio_tracks
@@ -392,7 +395,7 @@ pub(crate) fn active_pipeline_input_json(
         .iter()
         .cloned()
         .collect::<Vec<_>>();
-    let probe_ready = ingest.video.is_some() || !audio_tracks.is_empty();
+    let probe_ready = metadata.video.is_some() || !audio_tracks.is_empty();
     let probe_status = if probe_ready { "ready" } else { "pending" };
     let probe_pending_ms = (!probe_ready).then_some((elapsed_secs * 1000.0).round() as u64);
     let (recent_disconnect_count, flapping) = MediaEngine::recent_ingest_flap_state(recent);
@@ -410,9 +413,9 @@ pub(crate) fn active_pipeline_input_json(
         "readerMetrics": reader_metrics,
         "bitrateKbps": bitrate_kbps,
         "lastProgressAgeMs": last_progress_age_ms,
-        "video": ingest.video,
+        "video": metadata.video,
         "videoTrackSelection": video_track_selection,
-        "audio": ingest.audio,
+        "audio": metadata.audio,
         "audioTracks": audio_tracks,
         "publisher": publisher_json,
         "unexpectedReaders": { "count": 0 },
@@ -436,6 +439,7 @@ pub(crate) fn active_pipeline_input_summary_json(
     total_bytes_sent: u64,
     readers_count: usize,
 ) -> serde_json::Value {
+    let metadata = ingest.metadata();
     let elapsed_secs = ingest.start_time.elapsed().as_secs_f64();
     let bytes_received = ingest.bytes_received.load(Ordering::Relaxed);
     let bitrate_kbps = if elapsed_secs > 1.0 {
@@ -451,7 +455,7 @@ pub(crate) fn active_pipeline_input_summary_json(
         .audio_tracks
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let probe_ready = ingest.video.is_some() || !audio_tracks.is_empty();
+    let probe_ready = metadata.video.is_some() || !audio_tracks.is_empty();
     let probe_status = if probe_ready { "ready" } else { "pending" };
     let probe_pending_ms = (!probe_ready).then_some((elapsed_secs * 1000.0).round() as u64);
 
@@ -467,7 +471,7 @@ pub(crate) fn active_pipeline_input_summary_json(
         "bitrateKbps": bitrate_kbps,
         "publisher": {
             "protocol": ingest.protocol,
-            "remoteAddr": ingest.remote_addr,
+            "remoteAddr": metadata.remote_addr,
         },
         "disconnectGraceActive": false,
         "disconnectGraceRemainingMs": null,
@@ -744,13 +748,14 @@ pub(crate) fn engine_telemetry_json(
 }
 
 pub(crate) fn pipeline_ingest_telemetry_json(ingest: &ActiveIngest) -> serde_json::Value {
+    let metadata = ingest.metadata();
     serde_json::json!({
         "protocol": ingest.protocol,
         "streamKey": ingest.stream_key,
         "uptimeSecs": ingest.start_time.elapsed().as_secs_f64(),
         "bytesReceived": ingest.bytes_received.load(Ordering::Relaxed),
-        "video": ingest.video,
-        "audio": ingest.audio,
+        "video": metadata.video,
+        "audio": metadata.audio,
         "metrics": ingest.metrics.snapshot(),
     })
 }
@@ -842,6 +847,7 @@ pub(crate) fn processing_graph_edge(
 }
 
 pub(crate) fn processing_graph_ingest_details(ingest: &ActiveIngest) -> serde_json::Value {
+    let metadata = ingest.metadata();
     let bytes_received = ingest.bytes_received.load(Ordering::Relaxed);
     let bitrate_kbps = MediaEngine::sample_ingest_bitrate_kbps(ingest);
     let last_progress_ms = ingest.last_progress_ms.load(Ordering::Relaxed);
@@ -850,7 +856,7 @@ pub(crate) fn processing_graph_ingest_details(ingest: &ActiveIngest) -> serde_js
     } else {
         None
     };
-    let srt_recv_buffer = srt_recv_buffer_occupancy(&ingest.quality);
+    let srt_recv_buffer = srt_recv_buffer_occupancy(&metadata.quality);
 
     let mut health_status = None;
     let mut health_reason = None;
@@ -875,10 +881,10 @@ pub(crate) fn processing_graph_ingest_details(ingest: &ActiveIngest) -> serde_js
 
     let mut details = serde_json::json!({
         "protocol": ingest.protocol,
-        "remoteAddr": ingest.remote_addr,
-        "video": ingest.video,
+        "remoteAddr": metadata.remote_addr,
+        "video": metadata.video,
         "videoTrackSelection": ingest_video_track_selection_json(ingest),
-        "audio": ingest.audio,
+        "audio": metadata.audio,
         "bytesReceived": bytes_received,
         "bitrateKbps": bitrate_kbps,
         "bytesReceivedPerSec": bitrate_kbps.map(|kbps| (kbps * 1000.0 / 8.0).round() as u64),
@@ -931,11 +937,12 @@ fn human_duration_ms(ms: u64) -> String {
 }
 
 pub(crate) fn processing_graph_demux_details(ingest: &ActiveIngest) -> serde_json::Value {
+    let metadata = ingest.metadata();
     serde_json::json!({
         "protocol": ingest.protocol,
-        "video": ingest.video,
+        "video": metadata.video,
         "videoTrackSelection": ingest_video_track_selection_json(ingest),
-        "audio": ingest.audio,
+        "audio": metadata.audio,
         "audioTracks": ingest
             .audio_tracks
             .lock()
@@ -1215,19 +1222,20 @@ mod tests {
     fn active_pipeline_input_surfaces_recent_flapping_without_old_disconnect_fields() {
         let ingest = ActiveIngest {
             attempt_id: 1,
+            pipeline_id: "pipeline".to_string(),
+            input_id: "input".to_string(),
             stream_key: "stream".to_string(),
+            gate: std::sync::Arc::new(crate::media::input_gate::InputPacketGate::active()),
             start_time: std::time::Instant::now(),
             protocol: "rtmp".to_string(),
             bytes_received: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             metrics: std::sync::Arc::new(StageMetrics::new()),
             last_progress_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            remote_addr: Some("127.0.0.1:1935".to_string()),
-            video: None,
-            selected_video_track_index: None,
-            video_track_count: 0,
-            audio: None,
+            metadata: std::sync::RwLock::new(crate::media::engine::IngestMetadata {
+                remote_addr: Some("127.0.0.1:1935".to_string()),
+                ..Default::default()
+            }),
             audio_tracks: std::sync::Mutex::new(std::sync::Arc::new(Vec::new())),
-            quality: crate::media::engine::PublisherQuality::default(),
             keyframe_times: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             video_sequence_header: std::sync::Mutex::new(None),
             audio_sequence_header: std::sync::Mutex::new(None),
@@ -1263,7 +1271,10 @@ mod tests {
         let now_ms = MediaEngine::now_epoch_ms();
         let ingest = ActiveIngest {
             attempt_id: 1,
+            pipeline_id: "pipeline".to_string(),
+            input_id: "input".to_string(),
             stream_key: "stream".to_string(),
+            gate: std::sync::Arc::new(crate::media::input_gate::InputPacketGate::active()),
             start_time: std::time::Instant::now() - std::time::Duration::from_secs(10),
             protocol: "srt".to_string(),
             bytes_received: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(4096)),
@@ -1271,13 +1282,11 @@ mod tests {
             last_progress_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
                 now_ms.saturating_sub(5_000),
             )),
-            remote_addr: Some("127.0.0.1:9000".to_string()),
-            video: None,
-            selected_video_track_index: None,
-            video_track_count: 0,
-            audio: None,
+            metadata: std::sync::RwLock::new(crate::media::engine::IngestMetadata {
+                remote_addr: Some("127.0.0.1:9000".to_string()),
+                ..Default::default()
+            }),
             audio_tracks: std::sync::Mutex::new(std::sync::Arc::new(Vec::new())),
-            quality: crate::media::engine::PublisherQuality::default(),
             keyframe_times: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             video_sequence_header: std::sync::Mutex::new(None),
             audio_sequence_header: std::sync::Mutex::new(None),
@@ -1300,7 +1309,10 @@ mod tests {
         let now_ms = MediaEngine::now_epoch_ms();
         let ingest = ActiveIngest {
             attempt_id: 1,
+            pipeline_id: "pipeline".to_string(),
+            input_id: "input".to_string(),
             stream_key: "stream".to_string(),
+            gate: std::sync::Arc::new(crate::media::input_gate::InputPacketGate::active()),
             start_time: std::time::Instant::now() - std::time::Duration::from_secs(10),
             protocol: "srt".to_string(),
             bytes_received: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(4096)),
@@ -1308,17 +1320,16 @@ mod tests {
             last_progress_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
                 now_ms.saturating_sub(30_000),
             )),
-            remote_addr: Some("127.0.0.1:9000".to_string()),
-            video: None,
-            selected_video_track_index: None,
-            video_track_count: 0,
-            audio: None,
-            audio_tracks: std::sync::Mutex::new(std::sync::Arc::new(Vec::new())),
-            quality: crate::media::engine::PublisherQuality {
-                srt_recv_buf_bytes: Some(8_218_796),
-                srt_recv_buf_avail_bytes: Some(1_500),
+            metadata: std::sync::RwLock::new(crate::media::engine::IngestMetadata {
+                remote_addr: Some("127.0.0.1:9000".to_string()),
+                quality: crate::media::engine::PublisherQuality {
+                    srt_recv_buf_bytes: Some(8_218_796),
+                    srt_recv_buf_avail_bytes: Some(1_500),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
+            }),
+            audio_tracks: std::sync::Mutex::new(std::sync::Arc::new(Vec::new())),
             keyframe_times: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             video_sequence_header: std::sync::Mutex::new(None),
             audio_sequence_header: std::sync::Mutex::new(None),
@@ -1348,22 +1359,26 @@ mod tests {
     fn active_pipeline_input_surfaces_single_video_selection_policy() {
         let ingest = ActiveIngest {
             attempt_id: 1,
+            pipeline_id: "pipeline".to_string(),
+            input_id: "input".to_string(),
             stream_key: "stream".to_string(),
+            gate: std::sync::Arc::new(crate::media::input_gate::InputPacketGate::active()),
             start_time: std::time::Instant::now(),
             protocol: "srt".to_string(),
             bytes_received: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             metrics: std::sync::Arc::new(StageMetrics::new()),
             last_progress_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            remote_addr: Some("127.0.0.1:9000".to_string()),
-            video: Some(crate::media::engine::VideoMeta {
-                codec: "h264".to_string(),
+            metadata: std::sync::RwLock::new(crate::media::engine::IngestMetadata {
+                remote_addr: Some("127.0.0.1:9000".to_string()),
+                video: Some(crate::media::engine::VideoMeta {
+                    codec: "h264".to_string(),
+                    ..Default::default()
+                }),
+                selected_video_track_index: Some(0),
+                video_track_count: 2,
                 ..Default::default()
             }),
-            selected_video_track_index: Some(0),
-            video_track_count: 2,
-            audio: None,
             audio_tracks: std::sync::Mutex::new(std::sync::Arc::new(Vec::new())),
-            quality: crate::media::engine::PublisherQuality::default(),
             keyframe_times: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             video_sequence_header: std::sync::Mutex::new(None),
             audio_sequence_header: std::sync::Mutex::new(None),

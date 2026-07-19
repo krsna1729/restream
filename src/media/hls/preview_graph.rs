@@ -101,13 +101,72 @@ pub async fn resolve_hls_preview_graph(
     }
 }
 
+pub async fn resolve_input_hls_preview_graph(
+    engine: Arc<MediaEngine>,
+    resource_id: &str,
+    input_id: &str,
+    source_ring: Arc<RingBuffer>,
+    cancel: CancellationToken,
+) -> HlsPreviewGraph {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    let source_video = loop {
+        let video = engine
+            .ingests
+            .sessions
+            .read()
+            .await
+            .get(input_id)
+            .and_then(|ingest| ingest.metadata().video);
+        if video.is_some() || cancel.is_cancelled() || tokio::time::Instant::now() >= deadline {
+            break video;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
+    let codec_hint = source_ring.codec_hint_str();
+    let codec = source_video
+        .as_ref()
+        .map(|video| video.codec.as_str())
+        .or((!codec_hint.is_empty()).then_some(codec_hint));
+    let backend_policy = engine.backend_policy();
+    let preview_stage_key =
+        plan_hls_preview_graph(resource_id, codec, &backend_policy).and_then(|plan| {
+            plan.stages
+                .into_iter()
+                .find(|stage| matches!(stage.kind, StageKind::Preview { .. }))
+                .map(|stage| stage.key)
+        });
+    let Some(key) = preview_stage_key else {
+        return HlsPreviewGraph {
+            video_ring: source_ring,
+            audio_ring: None,
+            video_meta: source_video,
+        };
+    };
+
+    let preview_video = build_preview_video_meta_from_source(source_video).await;
+    let manager = StageRuntimeManager::new(engine);
+    let (handle, created) = manager.ensure_stage(key, source_ring.clone(), None).await;
+    if created {
+        manager.spawn_preview_stage(handle.clone(), source_ring.clone());
+    }
+    HlsPreviewGraph {
+        video_ring: handle.ring,
+        audio_ring: Some(source_ring),
+        video_meta: Some(preview_video),
+    }
+}
+
 async fn build_preview_video_meta(engine: &MediaEngine, pipeline_id: &str) -> Option<VideoMeta> {
     let source_video = {
         let ingests = engine.ingests.active.read().await;
         ingests
             .get(pipeline_id)
-            .and_then(|ingest| ingest.video.clone())
+            .and_then(|ingest| ingest.metadata().video)
     };
+    Some(build_preview_video_meta_from_source(source_video).await)
+}
+
+async fn build_preview_video_meta_from_source(source_video: Option<VideoMeta>) -> VideoMeta {
     let profile = crate::media::profiles::get("720p").await;
     let mut preview_video = source_video.unwrap_or_default();
     preview_video.codec = "h264".to_string();
@@ -120,7 +179,7 @@ async fn build_preview_video_meta(engine: &MediaEngine, pipeline_id: &str) -> Op
     preview_video.profile = None;
     preview_video.level = None;
     preview_video.pixel_format = Some("yuv420p".to_string());
-    Some(preview_video)
+    preview_video
 }
 
 #[cfg(test)]

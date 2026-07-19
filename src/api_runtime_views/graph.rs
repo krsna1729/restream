@@ -38,7 +38,7 @@ pub(crate) async fn processing_graph(
             .map(|ingest| format!("{} ingest", ingest.protocol.to_uppercase()))
             .unwrap_or_else(|| "No ingest".to_string()),
         ingest.is_some(),
-        ingest.map(api_view_models::processing_graph_ingest_details),
+        ingest.map(|ingest| api_view_models::processing_graph_ingest_details(ingest.as_ref())),
         ingest.map(|ingest| serde_json::to_value(ingest.metrics.snapshot()).unwrap_or_default()),
     ));
 
@@ -55,7 +55,7 @@ pub(crate) async fn processing_graph(
             })
             .unwrap_or_else(|| "Demux/probe idle".to_string()),
         ingest.is_some(),
-        ingest.map(api_view_models::processing_graph_demux_details),
+        ingest.map(|ingest| api_view_models::processing_graph_demux_details(ingest.as_ref())),
         ingest.map(|ingest| serde_json::to_value(ingest.metrics.snapshot()).unwrap_or_default()),
     ));
 
@@ -116,8 +116,10 @@ pub(crate) async fn processing_graph(
         .iter()
         .filter(|output| output.pipeline_id == pipeline_id)
         .collect();
-    let ingest_video_codec = ingest
-        .and_then(|ingest| ingest.video.as_ref())
+    let ingest_metadata = ingest.map(|ingest| ingest.metadata());
+    let ingest_video_codec = ingest_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.video.as_ref())
         .map(|video| video.codec.as_str());
     let visible_outputs = pipeline_outputs
         .iter()
@@ -227,8 +229,9 @@ pub(crate) async fn processing_graph(
             }
         }
     }
-    let ingest_is_hevc = ingest
-        .and_then(|ingest| ingest.video.as_ref())
+    let ingest_is_hevc = ingest_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.video.as_ref())
         .map(|video| VideoCodecKind::from_codec_name(&video.codec).is_hevc())
         .unwrap_or(false);
     let mut added_packetizers = std::collections::HashSet::new();

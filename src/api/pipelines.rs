@@ -46,11 +46,7 @@ pub struct PipelinePayload {
 
 /// Generates a dashboard-managed stream key when callers do not provide one.
 fn generate_stream_key() -> String {
-    use rand::RngExt;
-
-    let mut bytes = [0u8; 32];
-    rand::rng().fill(&mut bytes);
-    format!("sk_{}", to_hex(&bytes))
+    crate::application::pipeline_inputs::generated_stream_key()
 }
 
 /// Normalizes storage-layer duplicate-key variants into one conflict branch at
@@ -58,8 +54,8 @@ fn generate_stream_key() -> String {
 fn is_duplicate_stream_key_error(err: &ApiError) -> bool {
     let message = err.to_string();
     message.contains("duplicate stream key")
-        || message.contains("idx_pipelines_stream_key_unique")
-        || message.contains("UNIQUE constraint failed: pipelines.stream_key")
+        || message.contains("idx_pipeline_inputs_stream_key_unique")
+        || message.contains("UNIQUE constraint failed: pipeline_inputs.stream_key")
 }
 
 /// Shared conflict response for user-visible stream-key collisions.
@@ -67,7 +63,7 @@ fn duplicate_stream_key_response() -> Response {
     (
         StatusCode::CONFLICT,
         Json(serde_json::json!({
-            "error": "A pipeline with this stream key already exists"
+            "error": "A pipeline input with this stream key already exists"
         })),
     )
         .into_response()

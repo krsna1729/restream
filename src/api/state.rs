@@ -16,6 +16,7 @@ use tokio::sync::RwLock as TokioRwLock;
 use tracing::warn;
 
 use crate::alerts;
+use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::services::{
     AgentService, AuthService, FileIngestService, HealthService, IngestService, LogService,
     MediaLibraryService, OutputService, PipelineService, SettingsService,
@@ -104,6 +105,7 @@ pub struct AppState {
     srt_passphrase: Option<String>,
     srt_pbkeylen: i32,
     pub pipeline_service: PipelineService,
+    pub pipeline_input_service: PipelineInputService,
     pub output_service: OutputService,
     pub ingest_service: IngestService,
     pub auth_service: AuthService,
@@ -133,6 +135,8 @@ impl AppState {
         runtime: AppStateRuntimeConfig,
     ) -> Self {
         let pipeline_service = PipelineService::new(db.clone());
+        let pipeline_input_service =
+            PipelineInputService::new(db.clone(), pipeline_service.clone());
         let output_service = OutputService::new(db.clone());
         let ingest_service = IngestService::new(db.clone());
         let auth_service = AuthService::new(db.clone());
@@ -157,6 +161,7 @@ impl AppState {
             srt_passphrase: runtime.srt_passphrase,
             srt_pbkeylen: runtime.srt_pbkeylen,
             pipeline_service,
+            pipeline_input_service,
             output_service,
             ingest_service,
             auth_service,

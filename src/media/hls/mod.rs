@@ -359,7 +359,9 @@ pub async fn start_hls_segmenter(
                                         Some(video)
                                     } else {
                                         let ingests = engine.ingests.active.read().await;
-                                        ingests.get(&pipeline_id).and_then(|i| i.video.clone())
+                                        ingests
+                                            .get(&pipeline_id)
+                                            .and_then(|ingest| ingest.metadata().video)
                                     };
                                     if video.is_some() {
                                         break (video, std::sync::Arc::new(tracks.to_vec()));
@@ -374,7 +376,9 @@ pub async fn start_hls_segmenter(
                                         Some(video)
                                     } else {
                                         let ingests = engine.ingests.active.read().await;
-                                        ingests.get(&pipeline_id).and_then(|i| i.video.clone())
+                                        ingests
+                                            .get(&pipeline_id)
+                                            .and_then(|ingest| ingest.metadata().video)
                                     };
                                     if video.is_some() {
                                         break (video, std::sync::Arc::new(tracks.to_vec()));
@@ -383,11 +387,13 @@ pub async fn start_hls_segmenter(
                                 let result = {
                                     let ingests = engine.ingests.active.read().await;
                                     ingests.get(&pipeline_id).and_then(|i| {
-                                        let video = preview_video_meta.clone().or(i.video.clone());
+                                        let metadata = i.metadata();
+                                        let video =
+                                            preview_video_meta.clone().or(metadata.video);
                                         video.as_ref()?;
                                         let lock = i.audio_tracks.lock().unwrap_or_else(|e| e.into_inner());
                                         let tracks = if lock.is_empty()
-                                            && let Some(audio) = i.audio.clone() {
+                                            && let Some(audio) = metadata.audio {
                                                 std::sync::Arc::new(vec![audio])
                                             } else {
                                                 std::sync::Arc::clone(&lock)

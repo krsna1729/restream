@@ -52,6 +52,47 @@ impl MediaEngine {
         self.touch_hls_preview(pipeline_id).await;
         store
     }
+
+    pub async fn ensure_input_hls_preview_runtime(
+        self: &Arc<Self>,
+        input_id: &str,
+    ) -> Option<(String, Arc<Fmp4HlsStore>)> {
+        let source_ring = self.ensure_input_preview_ring(input_id).await?;
+        let resource_id = crate::media::engine_hls::input_hls_preview_resource_id(input_id);
+        let (store, already_running, cancel_token) =
+            self.ensure_hls_preview_segmenter(&resource_id).await;
+        if !already_running {
+            let graph = crate::media::hls::preview_graph::resolve_input_hls_preview_graph(
+                self.clone(),
+                &resource_id,
+                input_id,
+                source_ring,
+                cancel_token.clone(),
+            )
+            .await;
+            let engine = self.clone();
+            let segmenter_id = resource_id.clone();
+            let store_for_task = store.clone();
+            tokio::spawn(async move {
+                crate::media::hls::fmp4::start_hls_fmp4_segmenter(
+                    segmenter_id.clone(),
+                    store_for_task,
+                    graph.video_ring,
+                    graph.audio_ring,
+                    engine.clone(),
+                    cancel_token,
+                    crate::media::hls::HlsSegmenterStart {
+                        video_meta_override: graph.video_meta,
+                        planned_stage_key: None,
+                    },
+                )
+                .await;
+                engine.shutdown_hls_preview_segmenter(&segmenter_id).await;
+            });
+        }
+        self.touch_hls_preview(&resource_id).await;
+        Some((resource_id, store))
+    }
 }
 
 #[cfg(test)]

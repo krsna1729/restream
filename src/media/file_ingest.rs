@@ -90,7 +90,12 @@ impl LoopStartupGate {
         }
     }
 
-    fn filter_packet(&mut self, packet: &MediaPacket, ring_buffer: &Arc<RingBuffer>) -> bool {
+    fn filter_packet(
+        &mut self,
+        packet: &MediaPacket,
+        ring_buffer: &Arc<RingBuffer>,
+        registration: &IngestRegistration,
+    ) -> bool {
         if !self.waiting_for_video_startup {
             return true;
         }
@@ -101,7 +106,14 @@ impl LoopStartupGate {
                 if let Some(parameter_sets) =
                     crate::media::codec::annexb_parameter_sets(&packet.payload)
                 {
-                    ring_buffer.set_video_parameter_sets(parameter_sets);
+                    if let Some(preview_ring) = registration.preview_ring.load_full() {
+                        preview_ring.set_video_parameter_sets(parameter_sets.clone());
+                    }
+                    if registration.gate.state()
+                        == crate::media::input_gate::InputForwardState::Active
+                    {
+                        ring_buffer.set_video_parameter_sets(parameter_sets);
+                    }
                 }
                 if packet.is_keyframe {
                     self.waiting_for_video_startup = false;
@@ -264,6 +276,7 @@ pub fn spawn_internal_file_ingest(
                 seek_ms,
                 loop_enabled,
                 ring_buffer,
+                &registration,
                 cancel.clone(),
             )
         }));
@@ -328,11 +341,13 @@ fn run_internal_file_ingest_loop(
     seek_ms: Option<i64>,
     loop_enabled: bool,
     ring_buffer: Arc<RingBuffer>,
+    registration: &IngestRegistration,
     cancel: CancellationToken,
 ) -> Result<(), String> {
     let (bytes_received, ingest_metrics, last_progress_ms, cached_keyframe_times) =
-        load_ingest_runtime(&engine, &runtime_handle, pipeline_id)?;
+        load_ingest_runtime(&engine, &runtime_handle, registration)?;
     let mut timestamps = LoopTimestampState::default();
+    let mut switch_timestamps = crate::media::input_gate::InputTimestampMapper::default();
 
     loop {
         if cancel.is_cancelled() {
@@ -347,12 +362,14 @@ fn run_internal_file_ingest_loop(
             file_path,
             seek_ms,
             &ring_buffer,
+            registration,
             &cancel,
             &bytes_received,
             &ingest_metrics,
             &last_progress_ms,
             &cached_keyframe_times,
             &mut timestamps,
+            &mut switch_timestamps,
         )?;
         timestamps.finish_pass();
 
@@ -378,19 +395,20 @@ fn run_internal_file_ingest_loop(
 fn load_ingest_runtime(
     engine: &Arc<MediaEngine>,
     runtime_handle: &Handle,
-    pipeline_id: &str,
+    registration: &IngestRegistration,
 ) -> Result<IngestRuntime, String> {
     runtime_handle.block_on(async {
-        let ingests = engine.ingests.active.read().await;
-        let ingest = ingests
-            .get(pipeline_id)
-            .ok_or_else(|| format!("Active ingest missing for pipeline {pipeline_id}"))?;
-        Ok((
-            ingest.bytes_received.clone(),
-            ingest.metrics.clone(),
-            ingest.last_progress_ms.clone(),
-            ingest.keyframe_times.clone(),
-        ))
+        engine
+            .with_ingest_session(registration, |ingest| {
+                (
+                    ingest.bytes_received.clone(),
+                    ingest.metrics.clone(),
+                    ingest.last_progress_ms.clone(),
+                    ingest.keyframe_times.clone(),
+                )
+            })
+            .await
+            .ok_or_else(|| "File ingest session missing during startup".to_string())
     })
 }
 
@@ -444,8 +462,8 @@ fn ingest_codec_name(id: ffmpeg_next::codec::Id) -> String {
 fn prime_input_video_startup_state(
     engine: &Arc<MediaEngine>,
     runtime_handle: &Handle,
-    pipeline_id: &str,
     ring_buffer: &Arc<RingBuffer>,
+    registration: &IngestRegistration,
     ictx: &format::context::Input,
 ) {
     let Some(video_stream) = ictx
@@ -460,10 +478,15 @@ fn prime_input_video_startup_state(
         return;
     };
 
-    ring_buffer.set_video_parameter_sets(parameter_sets);
+    if let Some(preview_ring) = registration.preview_ring.load_full() {
+        preview_ring.set_video_parameter_sets(parameter_sets.clone());
+    }
+    if registration.gate.state() == crate::media::input_gate::InputForwardState::Active {
+        ring_buffer.set_video_parameter_sets(parameter_sets);
+    }
     runtime_handle.block_on(async {
         engine
-            .cache_sequence_header(pipeline_id, true, sequence_header)
+            .cache_ingest_session_sequence_header(registration, true, sequence_header)
             .await;
     });
 }
@@ -478,6 +501,7 @@ fn prime_input_container_metadata(
     engine: &Arc<MediaEngine>,
     runtime_handle: &Handle,
     pipeline_id: &str,
+    registration: &IngestRegistration,
     ictx: &format::context::Input,
 ) {
     let mut video_meta = None;
@@ -544,11 +568,11 @@ fn prime_input_container_metadata(
     let first_audio = audio_tracks.first().cloned();
     runtime_handle.block_on(async {
         engine
-            .update_ingest_meta(pipeline_id, video_meta, first_audio, None)
+            .update_ingest_session_meta(pipeline_id, registration, video_meta, first_audio, None)
             .await;
         if !audio_tracks.is_empty() {
             engine
-                .update_ingest_audio_tracks(pipeline_id, audio_tracks)
+                .update_ingest_session_audio_tracks(pipeline_id, registration, audio_tracks)
                 .await;
         }
     });
@@ -562,8 +586,8 @@ fn prime_input_container_metadata(
 fn prime_input_video_startup_state_from_packet(
     engine: &Arc<MediaEngine>,
     runtime_handle: &Handle,
-    pipeline_id: &str,
     ring_buffer: &Arc<RingBuffer>,
+    registration: &IngestRegistration,
     payload: &[u8],
 ) -> bool {
     let Some(parameter_sets) = crate::media::codec::annexb_parameter_sets(payload) else {
@@ -571,11 +595,16 @@ fn prime_input_video_startup_state_from_packet(
     };
 
     let sequence_header = crate::media::codec::build_avcc_sequence_header(&parameter_sets);
-    ring_buffer.set_video_parameter_sets(parameter_sets);
+    if let Some(preview_ring) = registration.preview_ring.load_full() {
+        preview_ring.set_video_parameter_sets(parameter_sets.clone());
+    }
+    if registration.gate.state() == crate::media::input_gate::InputForwardState::Active {
+        ring_buffer.set_video_parameter_sets(parameter_sets);
+    }
     if let Some(sequence_header) = sequence_header {
         runtime_handle.block_on(async {
             engine
-                .cache_sequence_header(pipeline_id, true, sequence_header)
+                .cache_ingest_session_sequence_header(registration, true, sequence_header)
                 .await;
         });
     }
@@ -590,12 +619,14 @@ fn run_internal_file_ingest_once(
     file_path: &Path,
     seek_ms: Option<i64>,
     ring_buffer: &Arc<RingBuffer>,
+    registration: &IngestRegistration,
     cancel: &CancellationToken,
     bytes_received: &Arc<AtomicU64>,
     ingest_metrics: &Arc<StageMetrics>,
     last_progress_ms: &Arc<AtomicU64>,
     cached_keyframe_times: &KeyframeTimes,
     timestamps: &mut LoopTimestampState,
+    switch_timestamps: &mut crate::media::input_gate::InputTimestampMapper,
 ) -> Result<(), String> {
     let mut ictx = format::input_with_interrupt(&file_path, || cancel.is_cancelled())
         .map_err(|e| format!("Failed to open input file: {e}"))?;
@@ -617,8 +648,8 @@ fn run_internal_file_ingest_once(
         .ok_or_else(|| "Failed to acquire TS output context".to_string())?;
 
     let mut startup_video_state_primed = false;
-    prime_input_video_startup_state(engine, runtime_handle, pipeline_id, ring_buffer, &ictx);
-    prime_input_container_metadata(engine, runtime_handle, pipeline_id, &ictx);
+    prime_input_video_startup_state(engine, runtime_handle, ring_buffer, registration, &ictx);
+    prime_input_container_metadata(engine, runtime_handle, pipeline_id, registration, &ictx);
 
     let mut stream_mapping = vec![-1i32; ictx.nb_streams() as usize];
     let mut ist_time_bases = vec![ffmpeg_next::Rational(0, 1); ictx.nb_streams() as usize];
@@ -659,11 +690,13 @@ fn run_internal_file_ingest_once(
         &mut demuxer,
         &mut packets,
         ring_buffer,
+        registration,
         bytes_received,
         ingest_metrics,
         last_progress_ms,
         cached_keyframe_times,
         timestamps,
+        switch_timestamps,
         &mut startup_gate,
         &mut probe_sent,
     );
@@ -682,8 +715,8 @@ fn run_internal_file_ingest_once(
             startup_video_state_primed = prime_input_video_startup_state_from_packet(
                 engine,
                 runtime_handle,
-                pipeline_id,
                 ring_buffer,
+                registration,
                 payload,
             );
         }
@@ -717,11 +750,13 @@ fn run_internal_file_ingest_once(
             &mut demuxer,
             &mut packets,
             ring_buffer,
+            registration,
             bytes_received,
             ingest_metrics,
             last_progress_ms,
             cached_keyframe_times,
             timestamps,
+            switch_timestamps,
             &mut startup_gate,
             &mut probe_sent,
         );
@@ -737,11 +772,13 @@ fn run_internal_file_ingest_once(
         &mut demuxer,
         &mut packets,
         ring_buffer,
+        registration,
         bytes_received,
         ingest_metrics,
         last_progress_ms,
         cached_keyframe_times,
         timestamps,
+        switch_timestamps,
         &mut startup_gate,
         &mut probe_sent,
     );
@@ -751,14 +788,17 @@ fn run_internal_file_ingest_once(
         &mut demuxer,
         &mut packets,
         ring_buffer,
+        registration,
         cached_keyframe_times,
         timestamps,
+        switch_timestamps,
         &mut startup_gate,
     );
     maybe_publish_probe(
         engine,
         runtime_handle,
         pipeline_id,
+        registration,
         &mut demuxer,
         &mut probe_sent,
     );
@@ -817,11 +857,13 @@ fn drain_remuxed_ts(
     demuxer: &mut TsDemuxer,
     packets: &mut Vec<MediaPacket>,
     ring_buffer: &Arc<RingBuffer>,
+    registration: &IngestRegistration,
     bytes_received: &Arc<AtomicU64>,
     ingest_metrics: &Arc<StageMetrics>,
     last_progress_ms: &Arc<AtomicU64>,
     cached_keyframe_times: &KeyframeTimes,
     timestamps: &mut LoopTimestampState,
+    switch_timestamps: &mut crate::media::input_gate::InputTimestampMapper,
     startup_gate: &mut LoopStartupGate,
     probe_sent: &mut bool,
 ) {
@@ -838,11 +880,20 @@ fn drain_remuxed_ts(
             demuxer,
             packets,
             ring_buffer,
+            registration,
             cached_keyframe_times,
             timestamps,
+            switch_timestamps,
             startup_gate,
         );
-        maybe_publish_probe(engine, runtime_handle, pipeline_id, demuxer, probe_sent);
+        maybe_publish_probe(
+            engine,
+            runtime_handle,
+            pipeline_id,
+            registration,
+            demuxer,
+            probe_sent,
+        );
         bytes_received.fetch_add(read as u64, Ordering::Relaxed);
         ingest_metrics.record_in(read as u64);
         last_progress_ms.store(MediaEngine::now_epoch_ms(), Ordering::Relaxed);
@@ -853,15 +904,17 @@ fn push_demuxed_packets(
     demuxer: &mut TsDemuxer,
     packets: &mut Vec<MediaPacket>,
     ring_buffer: &Arc<RingBuffer>,
+    registration: &IngestRegistration,
     cached_keyframe_times: &KeyframeTimes,
     timestamps: &mut LoopTimestampState,
+    switch_timestamps: &mut crate::media::input_gate::InputTimestampMapper,
     startup_gate: &mut LoopStartupGate,
 ) {
     if demuxer.drain_into(packets) == 0 {
         return;
     }
 
-    packets.retain(|pkt| startup_gate.filter_packet(pkt, ring_buffer));
+    packets.retain(|pkt| startup_gate.filter_packet(pkt, ring_buffer, registration));
     if packets.is_empty() {
         return;
     }
@@ -870,6 +923,29 @@ fn push_demuxed_packets(
         timestamps.apply(pkt);
     }
 
+    if let Some(preview_ring) = registration.preview_ring.load_full() {
+        preview_ring.push_batch(packets.iter().cloned());
+    }
+    let first_keyframe = packets
+        .iter()
+        .position(|packet| packet.media_type == MediaType::Video && packet.is_keyframe);
+    let boundary = if first_keyframe.is_some() {
+        crate::media::input_gate::InputPacketBoundary::VideoKeyframe
+    } else {
+        crate::media::input_gate::InputPacketBoundary::Other
+    };
+    let Some(lease) = registration.gate.try_enter(boundary) else {
+        packets.clear();
+        return;
+    };
+    if lease.activated()
+        && let Some(first_keyframe) = first_keyframe
+    {
+        packets.drain(..first_keyframe);
+    }
+    for packet in packets.iter_mut() {
+        switch_timestamps.map_packet(packet, lease.activated(), &registration.last_forwarded_dts);
+    }
     for pkt in packets.iter() {
         if pkt.media_type == MediaType::Video
             && let Some(parameter_sets) = crate::media::codec::annexb_parameter_sets(&pkt.payload)
@@ -887,6 +963,12 @@ fn push_demuxed_packets(
         }
     }
 
+    if let Some(last) = packets.iter().max_by_key(|packet| packet.dts) {
+        crate::media::input_gate::InputTimestampMapper::record_forwarded(
+            last,
+            &registration.last_forwarded_dts,
+        );
+    }
     ring_buffer.push_drained_batch_capped(packets);
 }
 
@@ -894,6 +976,7 @@ fn maybe_publish_probe(
     engine: &Arc<MediaEngine>,
     runtime_handle: &Handle,
     pipeline_id: &str,
+    registration: &IngestRegistration,
     demuxer: &mut TsDemuxer,
     probe_sent: &mut bool,
 ) {
@@ -910,23 +993,23 @@ fn maybe_publish_probe(
     let selected_video_track_index = probe.video.as_ref().map(|_| 0);
     runtime_handle.block_on(async {
         engine
-            .update_ingest_meta(pipeline_id, probe.video, first_audio, None)
+            .update_ingest_session_meta(pipeline_id, registration, probe.video, first_audio, None)
             .await;
         if let Some(sequence_header) = video_sequence_header {
             engine
-                .cache_sequence_header(pipeline_id, true, sequence_header)
+                .cache_ingest_session_sequence_header(registration, true, sequence_header)
                 .await;
         }
         engine
-            .update_ingest_video_track_selection(
-                pipeline_id,
+            .update_ingest_session_video_track_selection(
+                registration,
                 probe.video_track_count,
                 selected_video_track_index,
             )
             .await;
         if !probe.audio_tracks.is_empty() {
             engine
-                .update_ingest_audio_tracks(pipeline_id, probe.audio_tracks)
+                .update_ingest_session_audio_tracks(pipeline_id, registration, probe.audio_tracks)
                 .await;
         }
     });
@@ -1243,6 +1326,14 @@ mod tests {
     #[test]
     fn loop_startup_gate_waits_for_keyframe_before_releasing_packets() {
         let ring = Arc::new(RingBuffer::new(64));
+        let registration = crate::media::engine::IngestRegistration {
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+            attempt_id: 1,
+            input_id: "input".to_string(),
+            gate: Arc::new(crate::media::input_gate::InputPacketGate::active()),
+            last_forwarded_dts: Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN)),
+            preview_ring: Arc::new(arc_swap::ArcSwapOption::empty()),
+        };
         let mut gate = LoopStartupGate::new(true);
         let delta_video = MediaPacket {
             media_type: MediaType::Video,
@@ -1258,16 +1349,16 @@ mod tests {
         let audio = test_packet(MediaType::Audio, 0, 10, 10);
 
         assert!(
-            !gate.filter_packet(&audio, &ring),
+            !gate.filter_packet(&audio, &ring, &registration),
             "audio must stay gated until the loop reaches a clean video boundary"
         );
         assert!(
-            !gate.filter_packet(&delta_video, &ring),
+            !gate.filter_packet(&delta_video, &ring, &registration),
             "delta video must not start a fresh file-ingest loop"
         );
-        assert!(gate.filter_packet(&keyframe_video, &ring));
+        assert!(gate.filter_packet(&keyframe_video, &ring, &registration));
         assert!(
-            gate.filter_packet(&audio, &ring),
+            gate.filter_packet(&audio, &ring, &registration),
             "once a loop starts on a keyframe, audio may flow again"
         );
     }
@@ -1403,7 +1494,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
         let engine = Arc::new(MediaEngine::new());
         let pipeline_id = "pipe-file-hevc-paramsets-direct";
-        runtime
+        let registration = runtime
             .block_on(engine.try_register_ingest_attempt(pipeline_id, "hevc-key", "file"))
             .expect("register ingest");
         let ring_buffer = runtime.block_on(engine.get_or_create_pipeline(pipeline_id));
@@ -1425,8 +1516,8 @@ mod tests {
         let primed = prime_input_video_startup_state_from_packet(
             &engine,
             runtime.handle(),
-            pipeline_id,
             &ring_buffer,
+            &registration,
             &video_payload,
         );
 
@@ -1442,7 +1533,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
         let engine = Arc::new(MediaEngine::new());
         let pipeline_id = "pipe-file-ingest-eager-meta";
-        runtime
+        let registration = runtime
             .block_on(engine.try_register_ingest_attempt(pipeline_id, "eager-meta-key", "file"))
             .expect("register ingest");
 
@@ -1452,12 +1543,19 @@ mod tests {
 
         // No packets have been read or paced yet: this proves metadata comes
         // from container stream headers, not from the packet-paced probe.
-        prime_input_container_metadata(&engine, runtime.handle(), pipeline_id, &ictx);
+        prime_input_container_metadata(
+            &engine,
+            runtime.handle(),
+            pipeline_id,
+            &registration,
+            &ictx,
+        );
 
         runtime.block_on(async {
             let ingests = engine.ingests.active.read().await;
             let ingest = ingests.get(pipeline_id).expect("ingest registered");
-            let video = ingest.video.as_ref().expect("video meta primed eagerly");
+            let metadata = ingest.metadata();
+            let video = metadata.video.as_ref().expect("video meta primed eagerly");
             assert_eq!(video.codec, "hevc");
             assert!(video.width > 0 && video.height > 0);
 
@@ -1477,7 +1575,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("create runtime");
         let engine = Arc::new(MediaEngine::new());
         let pipeline_id = "pipe-file-probe-seqhdr";
-        runtime
+        let registration = runtime
             .block_on(engine.try_register_ingest_attempt(pipeline_id, "stream-key", "file"))
             .expect("register ingest");
 
@@ -1493,6 +1591,7 @@ mod tests {
             &engine,
             runtime.handle(),
             pipeline_id,
+            &registration,
             &mut demuxer,
             &mut probe_sent,
         );

@@ -556,7 +556,7 @@ async fn resolve_hls_preview_metadata(
                 let ingests = engine.ingests.active.read().await;
                 ingests
                     .get(pipeline_id)
-                    .and_then(|ingest| ingest.video.clone())
+                    .and_then(|ingest| ingest.metadata().video)
             };
             if let Some(video) = video {
                 return Some((video, tracks.to_vec()));
@@ -573,7 +573,7 @@ async fn resolve_hls_preview_metadata(
                 let ingests = engine.ingests.active.read().await;
                 ingests
                     .get(pipeline_id)
-                    .and_then(|ingest| ingest.video.clone())
+                    .and_then(|ingest| ingest.metadata().video)
             };
             if let Some(video) = video {
                 return Some((video, tracks.to_vec()));
@@ -582,13 +582,14 @@ async fn resolve_hls_preview_metadata(
         let result = {
             let ingests = engine.ingests.active.read().await;
             ingests.get(pipeline_id).and_then(|ingest| {
-                let video = preview_video_meta.clone().or(ingest.video.clone())?;
+                let metadata = ingest.metadata();
+                let video = preview_video_meta.clone().or(metadata.video)?;
                 let lock = ingest
                     .audio_tracks
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 let tracks = if lock.is_empty() {
-                    ingest
+                    metadata
                         .audio
                         .clone()
                         .map(|audio| vec![audio])

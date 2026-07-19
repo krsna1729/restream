@@ -30,10 +30,13 @@ async fn srt_server_shutdown_exits_with_no_connections() {
     let engine = Arc::new(MediaEngine::new());
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
     let pipeline_store =
-        Arc::new(crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(pool));
+        Arc::new(crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(pool.clone()));
+    let input_store =
+        Arc::new(crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(pool));
     let pipeline_access = Arc::new(
         crate::application::ingest::PipelineStoreIngestAuthenticator::new(
             pipeline_store,
+            input_store,
             security.clone(),
         ),
     );

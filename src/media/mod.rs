@@ -20,6 +20,7 @@ pub use hls::fmp4 as hls_fmp4;
 pub use hls::preview as hls_preview_runtime;
 pub use hls::upload as hls_upload;
 pub mod ingest_auth;
+pub mod input_gate;
 pub mod mpegts;
 pub mod pipe_metrics;
 pub mod profiles;

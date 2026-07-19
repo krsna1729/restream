@@ -410,6 +410,11 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let ingest_authenticator = Arc::new(
         crate::application::ingest::PipelineStoreIngestAuthenticator::new(
             pipeline_lookup.clone(),
+            Arc::new(
+                crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(
+                    pool.clone(),
+                ),
+            ),
             security.clone(),
         ),
     );

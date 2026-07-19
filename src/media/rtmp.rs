@@ -34,6 +34,7 @@ use crate::media::engine::{
 use crate::media::ingest_auth::{
     PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode,
 };
+use crate::media::input_gate::{InputPacketBoundary, InputTimestampMapper};
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
 use crate::media::security::IngestSecurityService;
 use crate::media::startup_policy;
@@ -65,6 +66,36 @@ struct RtmpIngestHandle {
     bytes_received: Arc<AtomicU64>,
     ingest_metrics: Arc<StageMetrics>,
     last_progress_ms: Arc<AtomicU64>,
+    timestamp_mapper: InputTimestampMapper,
+}
+
+fn push_rtmp_promotion_headers(
+    ring: &RingBuffer,
+    (video, audio): (Option<Bytes>, Option<Bytes>),
+    timestamp: i64,
+) {
+    if let Some(payload) = video {
+        ring.push(MediaPacket {
+            media_type: MediaType::Video,
+            track_index: 0,
+            pts: timestamp,
+            dts: timestamp,
+            is_keyframe: false,
+            format: PayloadFormat::Flv,
+            payload,
+        });
+    }
+    if let Some(payload) = audio {
+        ring.push(MediaPacket {
+            media_type: MediaType::Audio,
+            track_index: 0,
+            pts: timestamp,
+            dts: timestamp,
+            is_keyframe: false,
+            format: PayloadFormat::Flv,
+            payload,
+        });
+    }
 }
 
 /// RTMP Ingest Server
@@ -462,10 +493,6 @@ async fn handle_rtmp_client(
                 }
             }
             _ = tcp_stats_interval.tick(), if active_ingest.is_some() => {
-                let pipeline_id = active_ingest
-                    .as_ref()
-                    .map(|active| active.pipeline_id.as_str())
-                    .unwrap_or_default();
                 let now = Instant::now();
                 let quality = match collect_rtmp_receiver_stats(&socket) {
                     Ok(stats) => {
@@ -503,7 +530,11 @@ async fn handle_rtmp_client(
                         ..PublisherQuality::default()
                     },
                 };
-                engine.update_publisher_quality(pipeline_id, quality).await;
+                if let Some(active) = active_ingest.as_ref() {
+                    engine
+                        .update_ingest_session_quality(&active.registration, quality)
+                        .await;
+                }
             }
         }
     };
@@ -625,24 +656,26 @@ async fn handle_session_results(
                             }
                         };
 
-                        // Reserve the pipeline before accepting the publish request.
-                        // A bonded SRT group is one logical publisher, but a second
-                        // independent RTMP/SRT publisher must not create another
-                        // writer for the same RingBuffer.
                         let Some(registration) = engine
-                            .try_register_ingest_attempt(&pipeline.id, &stream_key, "rtmp")
+                            .try_register_pipeline_input_attempt(
+                                &pipeline.id,
+                                &pipeline.input_id,
+                                &stream_key,
+                                "rtmp",
+                                pipeline.selected,
+                            )
                             .await
                         else {
                             let _ = session.reject_request(
                                 request_id,
                                 "NetStream.Publish.BadName",
-                                "Pipeline already has an active publisher",
+                                "Input already has an active publisher",
                             );
-                            return Err("Pipeline already has an active publisher");
+                            return Err("Input already has an active publisher");
                         };
                         let ring = engine.get_or_create_pipeline(&pipeline.id).await;
                         let Some((bytes_received, ingest_metrics, last_progress_ms)) = engine
-                            .with_active_ingest(&pipeline.id, |ingest| {
+                            .with_ingest_session(&registration, |ingest| {
                                 (
                                     ingest.bytes_received.clone(),
                                     ingest.metrics.clone(),
@@ -656,6 +689,15 @@ async fn handle_session_results(
                                 .await;
                             return Err("Active ingest disappeared during registration");
                         };
+                        engine
+                            .update_ingest_session_meta(
+                                &pipeline.id,
+                                &registration,
+                                None,
+                                None,
+                                Some(client_addr.to_string()),
+                            )
+                            .await;
                         *active_ingest = Some(RtmpIngestHandle {
                             pipeline_id: pipeline.id.clone(),
                             registration,
@@ -663,6 +705,7 @@ async fn handle_session_results(
                             bytes_received,
                             ingest_metrics,
                             last_progress_ms,
+                            timestamp_mapper: InputTimestampMapper::default(),
                         });
                         set_tcp_socket_buffers(socket, engine.config.rtmp_stream_buffer_bytes);
 
@@ -679,14 +722,6 @@ async fn handle_session_results(
                             }
                         }
 
-                        engine
-                            .update_ingest_meta(
-                                &pipeline.id,
-                                None,
-                                None,
-                                Some(client_addr.to_string()),
-                            )
-                            .await;
                         security.record_success(client_ip);
                         info!(
                             "[rtmp] Ingest successfully started on pipeline: {}",
@@ -699,7 +734,7 @@ async fn handle_session_results(
                         data,
                         timestamp,
                     } => {
-                        if let Some(active) = active_ingest.as_ref() {
+                        if let Some(active) = active_ingest.as_mut() {
                             let pipeline_id = &active.pipeline_id;
                             active
                                 .bytes_received
@@ -716,27 +751,18 @@ async fn handle_session_results(
                             let dts = timestamp.value as i64;
                             let pts = dts + flv_video_composition_time_ms(&data) as i64;
 
-                            if is_keyframe {
-                                engine.record_keyframe(pipeline_id, pts).await;
-                            }
-
                             // Cache video sequence header for play subscribers
+                            let parameter_sets = flv_avcc_config_annexb_parameter_sets(&data);
                             if matches!(packet_kind, Some(FlvVideoPacketKind::SequenceHeader))
                                 && (data[0] & 0x0F) == 7
                             {
                                 engine
-                                    .cache_sequence_header(pipeline_id, true, data.clone())
+                                    .cache_ingest_session_sequence_header(
+                                        &active.registration,
+                                        true,
+                                        data.clone(),
+                                    )
                                     .await;
-                                // Raw SPS/PPS on the ingest ring let stages that need
-                                // eager parameter sets (e.g. VideoPreset stages —
-                                // see wait_for_stage_metadata) become ready without
-                                // waiting on a decoded frame; file/SRT ingest already
-                                // populate this, RTMP previously never did.
-                                if let Some(parameter_sets) =
-                                    flv_avcc_config_annexb_parameter_sets(&data)
-                                {
-                                    active.ring.set_video_parameter_sets(parameter_sets);
-                                }
                             }
 
                             // Probe video metadata from sequence header (first config packet)
@@ -751,11 +777,24 @@ async fn handle_session_results(
                                     meta.codec, meta.width, meta.height, meta.profile, meta.level
                                 );
                                 engine
-                                    .update_ingest_meta(pipeline_id, Some(meta), None, None)
+                                    .update_ingest_session_meta(
+                                        pipeline_id,
+                                        &active.registration,
+                                        Some(meta),
+                                        None,
+                                        None,
+                                    )
                                     .await;
                             }
 
-                            let packet = MediaPacket {
+                            let promotion_headers = if is_keyframe {
+                                engine
+                                    .get_ingest_session_sequence_headers(&active.registration)
+                                    .await
+                            } else {
+                                (None, None)
+                            };
+                            let mut packet = MediaPacket {
                                 media_type: MediaType::Video,
                                 track_index: 0,
                                 pts,
@@ -764,7 +803,43 @@ async fn handle_session_results(
                                 format: PayloadFormat::Flv,
                                 payload: data,
                             };
-                            active.ring.push(packet);
+                            let boundary = if is_keyframe {
+                                InputPacketBoundary::VideoKeyframe
+                            } else {
+                                InputPacketBoundary::Other
+                            };
+                            if let Some(preview_ring) = active.registration.preview_ring.load_full()
+                            {
+                                if let Some(parameter_sets) = parameter_sets.clone() {
+                                    preview_ring.set_video_parameter_sets(parameter_sets);
+                                }
+                                preview_ring.push(packet.clone());
+                            }
+                            if let Some(lease) = active.registration.gate.try_enter(boundary) {
+                                active.timestamp_mapper.map_packet(
+                                    &mut packet,
+                                    lease.activated(),
+                                    &active.registration.last_forwarded_dts,
+                                );
+                                if lease.activated() {
+                                    push_rtmp_promotion_headers(
+                                        &active.ring,
+                                        promotion_headers,
+                                        packet.dts.saturating_sub(1),
+                                    );
+                                }
+                                if let Some(parameter_sets) = parameter_sets {
+                                    active.ring.set_video_parameter_sets(parameter_sets);
+                                }
+                                if is_keyframe {
+                                    engine.record_keyframe(pipeline_id, packet.pts).await;
+                                }
+                                InputTimestampMapper::record_forwarded(
+                                    &packet,
+                                    &active.registration.last_forwarded_dts,
+                                );
+                                active.ring.push(packet);
+                            }
                         }
                     }
                     ServerSessionEvent::AudioDataReceived {
@@ -773,7 +848,7 @@ async fn handle_session_results(
                         data,
                         timestamp,
                     } => {
-                        if let Some(active) = active_ingest.as_ref() {
+                        if let Some(active) = active_ingest.as_mut() {
                             let pipeline_id = &active.pipeline_id;
                             active
                                 .bytes_received
@@ -786,7 +861,11 @@ async fn handle_session_results(
                             // Cache audio sequence header for play subscribers
                             if data.len() >= 2 && (data[0] >> 4) == 10 && data[1] == 0 {
                                 engine
-                                    .cache_sequence_header(pipeline_id, false, data.clone())
+                                    .cache_ingest_session_sequence_header(
+                                        &active.registration,
+                                        false,
+                                        data.clone(),
+                                    )
                                     .await;
                             }
 
@@ -808,20 +887,25 @@ async fn handle_session_results(
                                         meta.codec, meta.sample_rate, meta.channels
                                     );
                                     engine
-                                        .update_ingest_meta(
+                                        .update_ingest_session_meta(
                                             pipeline_id,
+                                            &active.registration,
                                             None,
                                             Some(meta.clone()),
                                             None,
                                         )
                                         .await;
                                     engine
-                                        .update_ingest_audio_tracks(pipeline_id, vec![meta])
+                                        .update_ingest_session_audio_tracks(
+                                            pipeline_id,
+                                            &active.registration,
+                                            vec![meta],
+                                        )
                                         .await;
                                 }
                             }
 
-                            let packet = MediaPacket {
+                            let mut packet = MediaPacket {
                                 media_type: MediaType::Audio,
                                 track_index: 0,
                                 pts: timestamp.value as i64,
@@ -830,7 +914,26 @@ async fn handle_session_results(
                                 format: PayloadFormat::Flv,
                                 payload: data,
                             };
-                            active.ring.push(packet);
+                            if let Some(preview_ring) = active.registration.preview_ring.load_full()
+                            {
+                                preview_ring.push(packet.clone());
+                            }
+                            if let Some(_lease) = active
+                                .registration
+                                .gate
+                                .try_enter(InputPacketBoundary::Other)
+                            {
+                                active.timestamp_mapper.map_packet(
+                                    &mut packet,
+                                    false,
+                                    &active.registration.last_forwarded_dts,
+                                );
+                                InputTimestampMapper::record_forwarded(
+                                    &packet,
+                                    &active.registration.last_forwarded_dts,
+                                );
+                                active.ring.push(packet);
+                            }
                         }
                     }
                     ServerSessionEvent::PlayStreamRequested {
@@ -1678,6 +1781,7 @@ async fn resolved_output_audio_tracks(
 
     engine
         .with_active_ingest(pipeline_id, |ingest| {
+            let metadata = ingest.metadata();
             let tracks = ingest
                 .audio_tracks
                 .lock()
@@ -1685,7 +1789,7 @@ async fn resolved_output_audio_tracks(
             if !tracks.is_empty() {
                 tracks.as_ref().clone()
             } else {
-                ingest.audio.clone().into_iter().collect()
+                metadata.audio.into_iter().collect()
             }
         })
         .await
@@ -1709,7 +1813,7 @@ async fn rtmp_publish_metadata(
     output_audio_track: Option<&AudioMeta>,
 ) -> Option<StreamMetadata> {
     let video = engine
-        .with_active_ingest(pipeline_id, |ingest| ingest.video.clone())
+        .with_active_ingest(pipeline_id, |ingest| ingest.metadata().video)
         .await
         .flatten();
     let mut metadata = StreamMetadata::new();

@@ -6,6 +6,7 @@ use crate::application::ports::{
     IngestLookup, IngestLookupError, IngestWriteError, IngestWriter, PipelineStore,
     PipelineStoreError,
 };
+use crate::domain::pipeline_input::PipelineInput;
 use crate::media::engine::MediaEngine;
 use crate::media::ingest_auth::{
     AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessFuture,
@@ -13,6 +14,14 @@ use crate::media::ingest_auth::{
 };
 use crate::media::security::{IngestSecurityService, RateLimitScope};
 use std::sync::Arc;
+use std::{future::Future, pin::Pin};
+
+pub type PipelineInputLookupFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<PipelineInput>, PipelineStoreError>> + Send + 'a>>;
+
+pub trait PipelineInputLookup: Send + Sync {
+    fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineInputLookupFuture<'a>;
+}
 
 #[derive(Debug)]
 pub enum IngestAuthError {
@@ -22,16 +31,19 @@ pub enum IngestAuthError {
 
 pub struct PipelineStoreIngestAuthenticator {
     pipeline_lookup: Arc<dyn PipelineStore>,
+    input_lookup: Arc<dyn PipelineInputLookup>,
     security: Arc<IngestSecurityService>,
 }
 
 impl PipelineStoreIngestAuthenticator {
     pub fn new(
         pipeline_lookup: Arc<dyn PipelineStore>,
+        input_lookup: Arc<dyn PipelineInputLookup>,
         security: Arc<IngestSecurityService>,
     ) -> Self {
         Self {
             pipeline_lookup,
+            input_lookup,
             security,
         }
     }
@@ -80,7 +92,19 @@ impl PipelineAccessAuthenticator for PipelineStoreIngestAuthenticator {
                 .map_err(pipeline_access_error)?,
             };
 
-            Ok(AuthenticatedPipeline { id: pipeline.id })
+            let input = self
+                .input_lookup
+                .get_by_stream_key(stream_key)
+                .await
+                .map_err(|error| PipelineAccessError::LookupFailed(error.to_string()))?
+                .filter(|input| input.pipeline_id == pipeline.id && input.enabled)
+                .ok_or(PipelineAccessError::InvalidStreamKey)?;
+
+            Ok(AuthenticatedPipeline {
+                id: pipeline.id,
+                input_id: input.id,
+                selected: input.selected,
+            })
         })
     }
 }
@@ -462,6 +486,28 @@ mod tests {
         }
     }
 
+    impl PipelineInputLookup for FakePipelineStore {
+        fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineInputLookupFuture<'a> {
+            Box::pin(async move {
+                if let Some(message) = self.error {
+                    return Err(PipelineStoreError::new(message));
+                }
+                Ok(self
+                    .pipelines
+                    .get(stream_key)
+                    .map(|pipeline| PipelineInput {
+                        id: "input-primary".to_string(),
+                        pipeline_id: pipeline.id.clone(),
+                        label: "Primary".to_string(),
+                        stream_key: stream_key.to_string(),
+                        role: crate::domain::pipeline_input::PipelineInputRole::Primary,
+                        enabled: true,
+                        selected: true,
+                    }))
+            })
+        }
+    }
+
     struct FakeIngestLookup {
         by_id: HashMap<String, Ingest>,
         by_stream_key: HashMap<String, Vec<Ingest>>,
@@ -723,7 +769,7 @@ mod tests {
     async fn pipeline_access_authenticator_resolves_rtmp_play_without_rate_limit_side_effects() {
         let lookup = Arc::new(FakePipelineStore::success("live"));
         let security = Arc::new(IngestSecurityService::new(test_security_config()));
-        let auth = PipelineStoreIngestAuthenticator::new(lookup, security.clone());
+        let auth = PipelineStoreIngestAuthenticator::new(lookup.clone(), lookup, security.clone());
 
         let pipeline = auth
             .authenticate(PipelineAccessMode::RtmpPlay, "live", "10.0.0.4")
@@ -741,7 +787,7 @@ mod tests {
             error: None,
         });
         let security = Arc::new(IngestSecurityService::new(test_security_config()));
-        let auth = PipelineStoreIngestAuthenticator::new(lookup, security.clone());
+        let auth = PipelineStoreIngestAuthenticator::new(lookup.clone(), lookup, security.clone());
         let ip = "10.0.0.5";
 
         let result = auth

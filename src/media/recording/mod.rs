@@ -501,13 +501,14 @@ pub async fn start_recording(
                             let metadata = {
                                 let ingests = engine.ingests.active.read().await;
                                 ingests.get(&pipeline_id).and_then(|ingest| {
-                                    let video = ingest.video.clone();
+                                    let metadata = ingest.metadata();
+                                    let video = metadata.video;
                                     let lock = ingest
                                         .audio_tracks
                                         .lock()
                                         .unwrap_or_else(|e| e.into_inner());
                                     let tracks = if lock.is_empty() {
-                                        ingest
+                                        metadata
                                             .audio
                                             .clone()
                                             .map(|audio| Arc::new(vec![audio]))

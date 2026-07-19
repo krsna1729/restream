@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::avio::MemoryQueue;
 use crate::media::engine::{ActiveEgress, MediaEngine, hls_preview_registry_key};
+use crate::media::engine_hls::input_id_from_hls_preview_resource_id;
 use crate::media::engine_registries::StageRuntime;
 use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::ring_buffer::RingBuffer;
@@ -406,24 +407,52 @@ impl MediaEngine {
 
     pub async fn active_hls_preview_stage_keys(&self) -> HashSet<StageKey> {
         let preview_ids = self.hls_preview_pipeline_ids().await;
-        let consumers = self.hls.consumers.read().await;
-        let ingests = self.ingests.active.read().await;
+        let active_preview_ids = {
+            let consumers = self.hls.consumers.read().await;
+            preview_ids
+                .into_iter()
+                .filter(|preview_id| {
+                    consumers
+                        .get(&hls_preview_registry_key(preview_id))
+                        .is_some_and(|consumer| !consumer.cancel_token.is_cancelled())
+                })
+                .collect::<Vec<_>>()
+        };
+        let active_codecs = self
+            .ingests
+            .active
+            .read()
+            .await
+            .iter()
+            .filter_map(|(pipeline_id, ingest)| {
+                ingest
+                    .metadata()
+                    .video
+                    .map(|video| (pipeline_id.clone(), video.codec))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let input_codecs = self
+            .ingests
+            .sessions
+            .read()
+            .await
+            .iter()
+            .filter_map(|(input_id, ingest)| {
+                ingest
+                    .metadata()
+                    .video
+                    .map(|video| (input_id.clone(), video.codec))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
         let mut needed = HashSet::new();
 
-        for pipeline_id in preview_ids {
-            let preview_key = hls_preview_registry_key(&pipeline_id);
-            let Some(consumer) = consumers.get(&preview_key) else {
-                continue;
-            };
-            if consumer.cancel_token.is_cancelled() {
-                continue;
-            }
-
-            let ingest = ingests.get(&pipeline_id);
-            let ingest_codec = ingest
-                .and_then(|i| i.video.as_ref())
-                .map(|v| v.codec.as_str());
-
+        for pipeline_id in active_preview_ids {
+            let ingest_codec =
+                if let Some(input_id) = input_id_from_hls_preview_resource_id(&pipeline_id) {
+                    input_codecs.get(input_id).map(String::as_str)
+                } else {
+                    active_codecs.get(&pipeline_id).map(String::as_str)
+                };
             let backend_policy = self.backend_policy();
             let Some(plan) = crate::planner::graph_plan::plan_hls_preview_graph(
                 &pipeline_id,
