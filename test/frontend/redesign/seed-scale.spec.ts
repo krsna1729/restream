@@ -71,6 +71,37 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
               : pipeline,
       ),
     }),
+    pipelineInputsResponse: (pipelineId) => ({
+      selectedInputId: "input-primary",
+      inputs: [
+        {
+          id: "input-primary",
+          pipelineId,
+          label: "Primary",
+          streamKey: "synthetic-healthy-stream-key-12345",
+          role: "primary",
+          enabled: true,
+          selected: true,
+          ingestUrls: {
+            rtmp:
+              "rtmp://ingest.example.invalid/live/synthetic-healthy-stream-key-12345",
+            srt: "srt://ingest.example.invalid:9000?streamid=synthetic-healthy-stream-key-12345",
+          },
+          previewUrl: "/hls/inputs/input-primary/master.m3u8",
+          runtime: {
+            connected: true,
+            forwardingState: "active",
+            protocol: "rtmp",
+            uptimeSeconds: 720,
+            bytesReceived: 48_000_000,
+            remoteAddr: null,
+            video: { codec: "h264", width: 1920, height: 1080 },
+            audio: null,
+            quality: null,
+          },
+        },
+      ],
+    }),
   });
 
   await expect(page).toHaveURL(/\?mode=overview&ui=v2$/);
@@ -422,7 +453,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
       text: node.textContent?.trim() ?? "",
     })),
   ).toEqual({ childCount: 0, text: "" });
-  expect(await getCdpNodeCount(page)).toBeLessThan(4_800);
+  expect(await getCdpNodeCount(page)).toBeLessThan(5_200);
   await expect(inputStatus.getByText("Audio", { exact: true })).toBeVisible();
   await expect(inputStatus.getByText("ENG", { exact: true })).toBeVisible();
   await inputStatus.getByRole("button", { name: "Rename ENG" }).click();
@@ -456,36 +487,33 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(inputStatus.getByText("Discarded label")).toHaveCount(0);
   await expect(page.locator("#stream-key-section")).toBeHidden();
   await expect(page.locator("#ingest-url-section")).toBeHidden();
-  await expect(inputStatus).toContainText("synthetic-healthy-st***12345");
-  await inputStatus
-    .getByRole("button", {
-      name: "Select SRT ingest URL for Healthy Program",
-      exact: true,
-    })
-    .click();
+  const primaryInput = inputStatus.locator("article").filter({
+    has: page.getByRole("heading", { name: "Primary", exact: true }),
+  });
+  await expect(primaryInput).toContainText(
+    "synthetic-healthy-stream-key-12345",
+  );
+  await expect(primaryInput).toContainText(
+    "rtmp://ingest.example.invalid/live/synthetic-healthy-stream-key-12345",
+  );
+  await expect(primaryInput).toContainText(
+    "srt://ingest.example.invalid:9000?streamid=synthetic-healthy-stream-key-12345",
+  );
   await expect(
-    inputStatus.getByRole("button", {
-      name: "Select SRT ingest URL for Healthy Program",
-      exact: true,
-    }),
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(inputStatus).toContainText("srt://ingest.example.invalid:9000");
-  await expect(
-    inputStatus.getByRole("button", {
-      name: "Copy SRT ingest URL for Healthy Program",
+    primaryInput.getByRole("button", {
+      name: "Copy SRT ingest URL for Primary",
     }),
   ).toBeVisible();
   const healthyInputButtonNames = await getCdpNamesByRole(page, "button");
   expect(healthyInputButtonNames).toEqual(
     expect.arrayContaining([
-      "Copy stream key for Healthy Program",
-      "Select RTMP ingest URL for Healthy Program",
-      "Select SRT ingest URL for Healthy Program",
-      "Copy SRT ingest URL for Healthy Program",
+      "Copy stream key for Primary",
+      "Copy RTMP ingest URL for Primary",
+      "Copy SRT ingest URL for Primary",
     ]),
   );
   expect(healthyInputButtonNames).not.toEqual(
-    expect.arrayContaining(["Copy Key", "RTMP", "SRT", "Copy SRT ingest URL"]),
+    expect.arrayContaining(["Copy", "Rename", "Promote"]),
   );
   await expect(outputOverview).toContainText("Running");
   await expect(outputOverview).toContainText("No outputs need attention");

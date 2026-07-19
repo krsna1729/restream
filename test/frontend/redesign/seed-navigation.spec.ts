@@ -482,7 +482,40 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
     page,
     "mixed-health",
     "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
-    { expectOverviewReady: false },
+    {
+      expectOverviewReady: false,
+      pipelineInputsResponse: (pipelineId) => ({
+        selectedInputId: "input-primary",
+        inputs: [
+          {
+            id: "input-primary",
+            pipelineId,
+            label: "Primary",
+            streamKey: "synthetic-retrying-key",
+            role: "primary",
+            enabled: true,
+            selected: true,
+            ingestUrls: {
+              rtmp:
+                "rtmp://ingest.example.invalid/live/synthetic-retrying-key",
+              srt: null,
+            },
+            previewUrl: "/hls/inputs/input-primary/master.m3u8",
+            runtime: {
+              connected: true,
+              forwardingState: "active",
+              protocol: "rtmp",
+              uptimeSeconds: 540,
+              bytesReceived: 31_000_000,
+              remoteAddr: null,
+              video: null,
+              audio: null,
+              quality: null,
+            },
+          },
+        ],
+      }),
+    },
   );
 
   const monitor = page.locator("#control-mode-panel");
@@ -549,7 +582,7 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
       "Control Room",
       "Monitor controls",
       "Monitor previews",
-      "Local HLS",
+      "Primary",
       "Retrying Output",
     ]),
   );

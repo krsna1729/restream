@@ -71,6 +71,7 @@ export function PipelineInputRow({
                 value={labelDraft}
               />
               <button
+                aria-label={`Save input name for ${input.label}`}
                 className="btn btn-xs btn-accent"
                 disabled={busy}
                 onClick={() => void saveLabel()}
@@ -79,6 +80,7 @@ export function PipelineInputRow({
                 Save
               </button>
               <button
+                aria-label={`Cancel input rename for ${input.label}`}
                 className="btn btn-xs btn-ghost"
                 disabled={busy}
                 onClick={() => setEditing(false)}
@@ -111,6 +113,7 @@ export function PipelineInputRow({
         <div className="flex flex-wrap items-center gap-1.5">
           {!input.selected ? (
             <button
+              aria-label={`Promote ${input.label}`}
               className="btn btn-xs btn-accent"
               disabled={!input.enabled || busy}
               onClick={() =>
@@ -124,6 +127,7 @@ export function PipelineInputRow({
             </button>
           ) : null}
           <button
+            aria-label={`Rename ${input.label}`}
             className="btn btn-xs btn-outline"
             disabled={busy}
             onClick={() => {
@@ -136,6 +140,7 @@ export function PipelineInputRow({
           </button>
           {disableable ? (
             <button
+              aria-label={`${input.enabled ? "Disable" : "Enable"} ${input.label}`}
               className="btn btn-xs btn-outline"
               disabled={busy}
               onClick={() =>
@@ -154,6 +159,7 @@ export function PipelineInputRow({
             deleteConfirm ? (
               <>
                 <button
+                  aria-label={`Confirm delete ${input.label}`}
                   className="btn btn-xs btn-error"
                   disabled={busy}
                   onClick={() =>
@@ -170,6 +176,7 @@ export function PipelineInputRow({
                   Delete
                 </button>
                 <button
+                  aria-label={`Cancel delete ${input.label}`}
                   className="btn btn-xs btn-ghost"
                   disabled={busy}
                   onClick={() => setDeleteConfirm(false)}
@@ -180,6 +187,7 @@ export function PipelineInputRow({
               </>
             ) : (
               <button
+                aria-label={`Delete ${input.label}`}
                 className="btn btn-xs btn-ghost text-error"
                 disabled={busy}
                 onClick={() => setDeleteConfirm(true)}
@@ -200,6 +208,7 @@ export function PipelineInputRow({
               {input.streamKey}
             </code>
             <button
+              aria-label={`Copy stream key for ${input.label}`}
               className="btn btn-xs btn-ghost"
               onClick={() => void actions.copyValue(input.streamKey)}
               type="button"
@@ -226,6 +235,7 @@ export function PipelineInputRow({
                   {url ?? "Unavailable"}
                 </code>
                 <button
+                  aria-label={`Copy ${protocol.toUpperCase()} ingest URL for ${input.label}`}
                   className="btn btn-xs btn-ghost"
                   disabled={!url}
                   onClick={() => {
