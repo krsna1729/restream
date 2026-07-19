@@ -99,6 +99,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 HUNT SPS-EXP-GOLOMB-OVERFLOW FIXED [codex]](#2026-07-19-hunt-sps-exp-golomb-overflow-fixed-codex)
 - [2026-07-19 HUNT FMP4-FLUSH-BUFFER-LEAK-ON-DTS-REWIND FIXED [codex]](#2026-07-19-hunt-fmp4-flush-buffer-leak-on-dts-rewind-fixed-codex)
 - [2026-07-19 HUNT RECORDING-REGISTER-START-RACE FIXED [codex]](#2026-07-19-hunt-recording-register-start-race-fixed-codex)
+- [2026-07-19 HUNT SERVER-PORT-ZERO-SILENT-EPHEMERAL-BIND FIXED [codex]](#2026-07-19-hunt-server-port-zero-silent-ephemeral-bind-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3612,3 +3613,53 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   future hunt pass but not filed as a concrete finding without a
   verified reproduction.
 - Notes: eleventh genuine bug found this hunt run.
+
+## 2026-07-19 HUNT SERVER-PORT-ZERO-SILENT-EPHEMERAL-BIND FIXED [codex]
+
+- What: adversarial hunt on `ServerPorts::from_env` (`src/config.rs`)
+  and config/env parsing generally, plus a follow-up look for the
+  same blind-insert-orphan registry shape as the recording-race fix
+  above (that half of the sweep came up empty — every other
+  `CancellationToken`/handle-holding registry in `src/media/` and
+  `src/application/` either check-and-inserts under one held lock
+  already, or is only reachable from a single serialized call path).
+- Finding: `RESTREAM_HTTP_PORT`/`RESTREAM_RTMP_PORT`/`RESTREAM_SRT_PORT`
+  parsed straight to `u16` with no validation, unlike every other
+  numeric env knob in the file (`rtmp_max_connections`,
+  `avio_capacity`, `ts_ring_capacity`, etc. all `.clamp()`/`.max()`
+  their parsed value). `0` is a syntactically valid `u16`, so
+  `RESTREAM_RTMP_PORT=0` parses cleanly and is handed straight to
+  `TcpListener::bind`/`srt_bind` as the literal port. Binding port `0`
+  doesn't fail — the OS silently assigns a random ephemeral port — so
+  the server starts "successfully" with no error, but the actual
+  bound port is unpredictable and changes every restart. Every API
+  response that advertises a publish endpoint
+  (`src/api/pipeline_inputs.rs`, `src/api/auth.rs`,
+  `src/api/pipelines.rs`, `src/api/agent.rs`, `src/api/settings.rs`)
+  still echoes back the *configured* `0`, e.g.
+  `rtmp://host:0/live/{key}` — a URL nothing can ever publish to. A
+  typo'd env override or a config-templating bug that defaults an
+  unset numeric to `0` turns into a silent, confusing total ingest
+  outage with no panic and no error pointing at the real cause.
+- Fix: added `env_port()` in `src/config.rs`, used by all three
+  `ServerPorts::from_env` fields. Treats `0` the same as a parse
+  failure — falls back to the documented default (3030/1935/10080)
+  and logs a `tracing::warn!` naming the offending env var, instead of
+  silently accepting it.
+- Added `server_ports_reject_zero_and_fall_back_to_defaults` in
+  `src/config.rs`, asserting all three ports fall back to their
+  defaults when their env vars are set to `"0"`. Verified failing
+  (asserted default, got `0`) against the pre-fix blind-parse code and
+  passing post-fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib config::`
+  — 17/17 pass. `cargo fmt --all --check` — clean.
+  `scripts/build/resource-limit.sh cargo clippy --workspace
+  --all-targets -- -D warnings` — clean. `scripts/check/source-audit.sh`
+  — clean (config.rs at 995 lines, well under the 2000-line limit).
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed.
+- Notes: twelfth genuine bug found this hunt run. Background
+  Explore-agent sweep also checked `RESTREAM_SRT_PBKEYLEN` (parsed
+  unvalidated as `i32`) but found it already covered — the SRT ingest
+  loader always calls `.validate()` right after construction, which
+  normalizes/rejects bad values with a `warn!` fallback to plaintext.

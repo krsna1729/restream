@@ -80,6 +80,23 @@ fn server_ports_are_loaded_by_config_module() {
 }
 
 #[test]
+fn server_ports_reject_zero_and_fall_back_to_defaults() {
+    with_env_vars(
+        &[
+            ("RESTREAM_HTTP_PORT", "0"),
+            ("RESTREAM_RTMP_PORT", "0"),
+            ("RESTREAM_SRT_PORT", "0"),
+        ],
+        || {
+            let ports = ServerPorts::from_env();
+            assert_eq!(ports.http, 3030);
+            assert_eq!(ports.rtmp, 1935);
+            assert_eq!(ports.srt, 10080);
+        },
+    );
+}
+
+#[test]
 fn http_bind_addr_defaults_to_loopback_and_can_be_overridden() {
     with_env_overlay(&[], &["RESTREAM_HTTP_BIND_ADDR"], || {
         assert_eq!(AppConfig::from_env().http_bind_addr, "127.0.0.1");
