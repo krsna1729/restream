@@ -363,12 +363,15 @@ pub async fn run_app(config: Arc<AppConfig>) {
         crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(pool.clone());
     let pipeline_catalog: Arc<dyn crate::application::ports::PipelineStore> =
         Arc::new(pipeline_store.clone());
+    let pipeline_input_store =
+        crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(pool.clone());
     let srt_passphrase = config.srt_passphrase.clone();
     let srt_pbkeylen = config.srt_pbkeylen;
     let srt_ingest_policy_store = Arc::new(
         match crate::application::srt_ingest::load_policy_store(
             &meta_store,
             &pipeline_store,
+            &pipeline_input_store,
             srt_passphrase.clone(),
             srt_pbkeylen,
         )
@@ -410,11 +413,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let ingest_authenticator = Arc::new(
         crate::application::ingest::PipelineStoreIngestAuthenticator::new(
             pipeline_lookup.clone(),
-            Arc::new(
-                crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(
-                    pool.clone(),
-                ),
-            ),
+            Arc::new(pipeline_input_store),
             security.clone(),
         ),
     );

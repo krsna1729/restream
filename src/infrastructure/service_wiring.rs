@@ -60,6 +60,7 @@ impl SettingsService {
             meta_store.clone(),
             meta_store,
             Arc::new(SqliteJobStore::new(db.clone())),
+            Arc::new(SqlitePipelineInputStore::new(db.clone())),
             PipelineService::new(db.clone()),
             OutputService::new(db),
         )

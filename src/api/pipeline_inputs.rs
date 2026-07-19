@@ -10,7 +10,9 @@ use serde::Deserialize;
 
 use crate::domain::pipeline_input::PipelineInput;
 
-use super::state::{AppState, MAX_NAME_LEN, check_field_len, require_authenticated};
+use super::state::{
+    AppState, MAX_NAME_LEN, check_field_len, refresh_srt_ingest_policy_store, require_authenticated,
+};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -144,6 +146,7 @@ pub async fn pipeline_inputs_post_handler(
         Ok(input) => input,
         Err(error) => return error.into_response(),
     };
+    refresh_srt_ingest_policy_store(&state).await;
     let host = state.pipeline_service.get_ingest_host().await;
     (
         StatusCode::CREATED,
@@ -197,6 +200,7 @@ pub async fn pipeline_input_patch_handler(
     if !input.enabled {
         state.engine.cancel_pipeline_input(&input.id).await;
     }
+    refresh_srt_ingest_policy_store(&state).await;
     let host = state.pipeline_service.get_ingest_host().await;
     Json(serde_json::json!({
         "input": input_json(&state, &input, &host).await
@@ -219,6 +223,7 @@ pub async fn pipeline_input_delete_handler(
     {
         Ok(true) => {
             state.engine.cancel_pipeline_input(&input_id).await;
+            refresh_srt_ingest_policy_store(&state).await;
             Json(serde_json::json!({"deleted": true})).into_response()
         }
         Ok(false) => StatusCode::NOT_FOUND.into_response(),

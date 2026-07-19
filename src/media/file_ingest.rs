@@ -1366,16 +1366,24 @@ mod tests {
     #[test]
     fn loop_startup_gate_without_video_never_gates_packets() {
         let ring = Arc::new(RingBuffer::new(64));
+        let registration = crate::media::engine::IngestRegistration {
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+            attempt_id: 1,
+            input_id: "input".to_string(),
+            gate: Arc::new(crate::media::input_gate::InputPacketGate::active()),
+            last_forwarded_dts: Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN)),
+            preview_ring: Arc::new(arc_swap::ArcSwapOption::empty()),
+        };
         let mut gate = LoopStartupGate::new(false);
         let audio = test_packet(MediaType::Audio, 0, 10, 10);
         let delta_video = test_packet(MediaType::Video, 0, 0, 0);
 
         assert!(
-            gate.filter_packet(&audio, &ring),
+            gate.filter_packet(&audio, &ring, &registration),
             "audio-only ingest must never wait on a video keyframe that will never arrive"
         );
         assert!(
-            gate.filter_packet(&delta_video, &ring),
+            gate.filter_packet(&delta_video, &ring, &registration),
             "a stream with no video startup gate must pass delta frames through immediately"
         );
     }
