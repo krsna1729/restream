@@ -91,6 +91,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 06:33 HUNT SECURITY-EVICTION-BAN-BYPASS FIXED [codex]](#2026-07-19-0633-hunt-security-eviction-ban-bypass-fixed-codex)
 - [2026-07-19 HUNT STAGE-LIFECYCLE-STALE-SPAWN-METADATA FIXED [codex]](#2026-07-19-hunt-stage-lifecycle-stale-spawn-metadata-fixed-codex)
 - [2026-07-19 HUNT TRANSCODER-SCALE-PATH-PTS-DEFAULT FIXED [codex]](#2026-07-19-hunt-transcoder-scale-path-pts-default-fixed-codex)
+- [2026-07-19 HUNT CODEC-RAW-PARAMETER-SET-DUPLICATION FIXED [codex]](#2026-07-19-hunt-codec-raw-parameter-set-duplication-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3141,3 +3142,64 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Notes: third genuine bug found this hunt run (after the
   `security.rs` eviction-bypass finding on round 2 and the
   `stage_lifecycle.rs` stale-spawn-metadata finding earlier this run).
+
+## 2026-07-19 HUNT CODEC-RAW-PARAMETER-SET-DUPLICATION FIXED [codex]
+- What: hunt target `src/media/codec.rs` (1595 lines pre-fix), the
+  other genuinely-unswept `src/media/` file named as a follow-up in
+  the `TRANSCODER-SCALE-PATH-PTS-DEFAULT` entry above.
+- Finding: real bug in the `PayloadFormat::Raw` arms of both
+  `video_for_ts` and `video_for_ts_into`. Both called
+  `refresh_annexb_parameter_set_cache(payload, sps_pps_cache)` as a
+  bare statement, discarding its `bool` return value (whether the
+  payload's own inline SPS/PPS were used to refresh the cache). The
+  subsequent duplicate-prepend guard then relied solely on
+  `!payload.starts_with(sps_pps_cache.as_slice())` — a raw byte
+  comparison. But `annexb_nalu()` always normalizes cached parameter
+  sets to a 4-byte start code (`00 00 00 01`), while Annex B legally
+  permits (and many encoders emit) a 3-byte start code (`00 00 01`).
+  Any keyframe whose inline SPS/PPS used 3-byte start codes therefore
+  never byte-matched the 4-byte-normalized cache, so the guard fired
+  even though the payload already carried valid parameter sets —
+  prepending a redundant, differently-start-coded copy of SPS/PPS to
+  every such keyframe on the Raw ingest path.
+- Fix: captured the discarded return value as `refreshed` in both
+  functions and added `&& !refreshed` to the duplicate-prepend
+  condition, so a payload that just supplied its own parameter sets
+  (regardless of its start-code byte length) is never treated as
+  missing them. `video_for_ts_into`'s zero-allocation variant got the
+  identical treatment.
+- Added two permanent regression tests:
+  `video_for_ts_raw_inline_parameter_sets_with_3byte_start_codes_not_duplicated`
+  and
+  `video_for_ts_into_raw_inline_parameter_sets_with_3byte_start_codes_not_duplicated`
+  in `src/media/codec.rs`'s `#[cfg(test)]` module, immediately after
+  the existing 4-byte-start-code
+  `video_for_ts_raw_inline_parameter_sets_refresh_cache_without_duplication`
+  test. Both build a payload with SPS/PPS/IDR NALUs using 3-byte start
+  codes and assert the output equals the input byte-for-byte (no
+  duplicate prepend). Both failed against the pre-fix code with a
+  literal byte-level duplication diff, confirming the bug was real and
+  reproducible, and pass after the fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::codec` — 56/56 pass (2 new plus 54 pre-existing, including
+  the proptest fuzzing on `parse_avcc_config` and `adts_frame_count`).
+  `scripts/build/resource-limit.sh cargo test --lib` — full backend
+  suite, 1459/1459 pass, given this conversion path is shared across
+  ingest/mux/feeder stages. `cargo fmt --all` + `cargo fmt --all
+  --check` — clean. `scripts/build/resource-limit.sh cargo clippy
+  --lib --tests -- -D warnings` — clean. `scripts/check/source-audit.sh`
+  — passed. No benchmark re-run: the fix only changes a rare-path
+  branch condition (gating on a return value that was already being
+  computed), doesn't touch the common-case zero-copy `Cow::Borrowed` /
+  buffer-reuse behavior, and actually removes an unnecessary
+  allocation in the previously-buggy case rather than adding one.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression tests. `feeder.rs` (913 lines) remains as the last
+  confirmed genuinely-unswept `src/media/` file from this hunt run's
+  re-ranking.
+- Notes: fourth genuine bug found this hunt run (after the
+  `security.rs` eviction-bypass finding on round 2, the
+  `stage_lifecycle.rs` stale-spawn-metadata finding, and the
+  `transcoder.rs` scale-path PTS-default finding, both earlier this
+  run).

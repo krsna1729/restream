@@ -40,8 +40,9 @@ pub fn video_for_ts<'a>(
             if payload.is_empty() {
                 None
             } else {
-                refresh_annexb_parameter_set_cache(payload, sps_pps_cache);
-                if !sps_pps_cache.is_empty()
+                let refreshed = refresh_annexb_parameter_set_cache(payload, sps_pps_cache);
+                if !refreshed
+                    && !sps_pps_cache.is_empty()
                     && raw_annexb_is_keyframe(payload)
                     && !payload.starts_with(sps_pps_cache.as_slice())
                 {
@@ -164,8 +165,9 @@ pub fn video_for_ts_into<'a>(
             if payload.is_empty() {
                 None
             } else {
-                refresh_annexb_parameter_set_cache(payload, sps_pps_cache);
-                if !sps_pps_cache.is_empty()
+                let refreshed = refresh_annexb_parameter_set_cache(payload, sps_pps_cache);
+                if !refreshed
+                    && !sps_pps_cache.is_empty()
                     && raw_annexb_is_keyframe(payload)
                     && !payload.starts_with(sps_pps_cache.as_slice())
                 {
@@ -1614,6 +1616,56 @@ mod tests {
         assert!(matches!(result, Cow::Borrowed(_)));
         assert_eq!(cache, payload[..17]);
         assert_eq!(&*result, &payload);
+    }
+
+    // Adversarial hunt: the "without duplication" guarantee above was only
+    // ever proven for 4-byte start codes. `annexb_nalu` always normalizes
+    // cached parameter sets to 4-byte start codes, but `refresh_annexb_parameter_set_cache`
+    // followed by `payload.starts_with(sps_pps_cache)` compares raw bytes —
+    // so a payload whose own inline SPS/PPS use 3-byte start codes (legal
+    // Annex B, common from many encoders) never matches the 4-byte-normalized
+    // cache and gets a second, redundant copy of SPS/PPS prepended to every
+    // keyframe.
+    #[test]
+    fn video_for_ts_raw_inline_parameter_sets_with_3byte_start_codes_not_duplicated() {
+        let payload = [
+            0, 0, 1, 0x67, 0x42, 0x00, 0x1E, 0xAB, // SPS (3-byte start code)
+            0, 0, 1, 0x68, 0xCE, 0x38, 0x80, // PPS (3-byte start code)
+            0, 0, 1, 0x65, 0x88, 0x80, // IDR (3-byte start code)
+        ];
+        let mut nls = 4;
+        let mut cache = Vec::new();
+
+        let result = video_for_ts(&payload, PayloadFormat::Raw, &mut nls, &mut cache)
+            .expect("inline SPS/PPS with 3-byte start codes should still pass through");
+
+        assert_eq!(
+            &*result, &payload,
+            "payload already carries its own inline SPS/PPS; a second, \
+             4-byte-normalized copy must not be prepended just because the \
+             cache's start-code length differs from the source's"
+        );
+    }
+
+    #[test]
+    fn video_for_ts_into_raw_inline_parameter_sets_with_3byte_start_codes_not_duplicated() {
+        let payload = [
+            0, 0, 1, 0x67, 0x42, 0x00, 0x1E, 0xAB, // SPS (3-byte start code)
+            0, 0, 1, 0x68, 0xCE, 0x38, 0x80, // PPS (3-byte start code)
+            0, 0, 1, 0x65, 0x88, 0x80, // IDR (3-byte start code)
+        ];
+        let mut nls = 4;
+        let mut cache = Vec::new();
+        let mut buf = Vec::new();
+
+        let result =
+            video_for_ts_into(&payload, PayloadFormat::Raw, &mut nls, &mut cache, &mut buf)
+                .expect("inline SPS/PPS with 3-byte start codes should still pass through");
+
+        assert_eq!(
+            result, &payload,
+            "zero-allocation variant must not duplicate parameter sets either"
+        );
     }
 
     #[test]
