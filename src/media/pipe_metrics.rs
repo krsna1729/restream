@@ -65,3 +65,63 @@ impl PipeMetrics {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_snapshot_has_zeroed_counters_and_no_division_by_zero() {
+        let metrics = PipeMetrics::default();
+        let snap = metrics.snapshot();
+        assert_eq!(snap.stalls, 0);
+        assert_eq!(snap.stall_us, 0);
+        assert_eq!(snap.avg_stall_us, 0);
+        assert_eq!(snap.idles, 0);
+        assert_eq!(snap.idle_us, 0);
+        assert_eq!(snap.avg_idle_us, 0);
+    }
+
+    #[test]
+    fn record_stall_and_record_idle_accumulate_independently() {
+        let metrics = PipeMetrics::default();
+        metrics.record_stall(100);
+        metrics.record_stall(50);
+        metrics.record_idle(9);
+
+        let snap = metrics.snapshot();
+        assert_eq!(snap.stalls, 2);
+        assert_eq!(snap.stall_us, 150);
+        assert_eq!(snap.avg_stall_us, 75);
+        assert_eq!(snap.idles, 1);
+        assert_eq!(snap.idle_us, 9);
+        assert_eq!(snap.avg_idle_us, 9);
+    }
+
+    #[test]
+    fn avg_stall_integer_division_truncates_towards_zero() {
+        let metrics = PipeMetrics::default();
+        metrics.record_stall(10);
+        metrics.record_stall(10);
+        metrics.record_stall(9);
+
+        let snap = metrics.snapshot();
+        assert_eq!(snap.stall_us, 29);
+        assert_eq!(snap.avg_stall_us, 9);
+    }
+
+    #[test]
+    fn counters_wrap_on_u64_overflow_without_panicking() {
+        let metrics = PipeMetrics::default();
+        metrics.stalls.store(u64::MAX, Ordering::Relaxed);
+        metrics.stall_us.store(u64::MAX, Ordering::Relaxed);
+
+        metrics.record_stall(10);
+
+        let snap = metrics.snapshot();
+        assert_eq!(snap.stalls, 0);
+        assert_eq!(snap.stall_us, 9);
+        // stalls wrapped to 0, so the checked_div guard must still catch it.
+        assert_eq!(snap.avg_stall_us, 0);
+    }
+}

@@ -1260,6 +1260,88 @@ mod tests {
     use super::*;
     use crate::media::engine::MediaEngine;
 
+    #[test]
+    fn format_bytes_zero_is_plain_bytes() {
+        assert_eq!(format_bytes(0), "0 B");
+    }
+
+    #[test]
+    fn format_bytes_just_below_kib_stays_in_bytes() {
+        assert_eq!(format_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_bytes_exact_kib_boundary_switches_units() {
+        assert_eq!(format_bytes(1024), "1.00 KiB");
+    }
+
+    #[test]
+    fn format_bytes_just_below_mib_stays_in_kib() {
+        assert_eq!(format_bytes(1024 * 1024 - 1), "1024.00 KiB");
+    }
+
+    #[test]
+    fn format_bytes_exact_mib_boundary_switches_units() {
+        assert_eq!(format_bytes(1024 * 1024), "1.00 MiB");
+    }
+
+    #[test]
+    fn format_bytes_just_below_gib_stays_in_mib() {
+        assert_eq!(format_bytes(1024 * 1024 * 1024 - 1), "1024.00 MiB");
+    }
+
+    #[test]
+    fn format_bytes_exact_gib_boundary_switches_units() {
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.00 GiB");
+    }
+
+    #[test]
+    fn format_bytes_u64_max_does_not_panic_or_overflow() {
+        let formatted = format_bytes(u64::MAX);
+        assert!(formatted.ends_with(" GiB"), "got {formatted}");
+    }
+
+    #[test]
+    fn yes_no_maps_bool_to_expected_strings() {
+        assert_eq!(yes_no(true), "yes");
+        assert_eq!(yes_no(false), "no");
+    }
+
+    #[test]
+    fn media_root_path_joins_relative_dir_onto_cwd() {
+        let cwd = std::env::current_dir().unwrap();
+        let resolved = media_root_path(".");
+        assert_eq!(resolved, std::fs::canonicalize(&cwd).unwrap_or(cwd));
+    }
+
+    #[test]
+    fn media_root_path_falls_back_to_joined_path_when_nonexistent() {
+        let resolved = media_root_path("definitely-does-not-exist-xyz-123");
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        assert_eq!(resolved, cwd.join("definitely-does-not-exist-xyz-123"));
+    }
+
+    #[test]
+    fn media_root_path_preserves_absolute_nonexistent_path_unchanged() {
+        let absolute = PathBuf::from("/definitely-does-not-exist-xyz-123");
+        let resolved = media_root_path(absolute.to_str().unwrap());
+        assert_eq!(resolved, absolute);
+    }
+
+    #[test]
+    fn media_root_path_handles_empty_input_as_relative_to_cwd() {
+        let resolved = media_root_path("");
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        assert_eq!(resolved, std::fs::canonicalize(&cwd).unwrap_or(cwd));
+    }
+
+    #[test]
+    fn disk_for_path_returns_none_when_no_mount_is_a_prefix() {
+        let disks = Disks::new();
+        let bogus = Path::new("/definitely-not-a-real-mount-xyz-123");
+        assert!(disk_for_path(&disks, bogus).is_none());
+    }
+
     #[tokio::test]
     async fn file_diagnostics_return_one_ordered_batch_report() {
         let engine = Arc::new(MediaEngine::new());

@@ -971,6 +971,93 @@ pub async fn start_srt_egress(
 mod tests {
     use super::*;
 
+    fn test_packet(media_type: MediaType, payload_len: usize) -> MediaPacket {
+        MediaPacket {
+            media_type,
+            format: crate::media::ring_buffer::PayloadFormat::Raw,
+            is_keyframe: false,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            payload: bytes::Bytes::from(vec![0u8; payload_len]),
+        }
+    }
+
+    #[test]
+    fn estimate_ts_accum_capacity_floors_at_188_for_empty_burst() {
+        assert_eq!(estimate_ts_accum_capacity(&[]), 188);
+    }
+
+    #[test]
+    fn estimate_ts_accum_capacity_floors_at_188_for_tiny_payloads() {
+        // A single zero-length packet still needs at least one TS packet's
+        // worth of muxer overhead, not a 0-capacity allocation.
+        let packets = vec![Arc::new(test_packet(MediaType::Video, 0))];
+        assert_eq!(estimate_ts_accum_capacity(&packets), 188 * 4);
+    }
+
+    #[test]
+    fn estimate_ts_accum_capacity_sums_payload_plus_ts_packet_overhead() {
+        let packets = vec![
+            Arc::new(test_packet(MediaType::Video, 100)),
+            Arc::new(test_packet(MediaType::Audio, 50)),
+        ];
+        assert_eq!(
+            estimate_ts_accum_capacity(&packets),
+            (100 + 188 * 4) + (50 + 188 * 4)
+        );
+    }
+
+    #[test]
+    fn to_libc_sockaddr_v4_encodes_family_port_and_address_correctly() {
+        let addr: SocketAddr = "203.0.113.5:4433".parse().unwrap();
+        let (storage, len) = to_libc_sockaddr(addr);
+        assert_eq!(len, std::mem::size_of::<libc::sockaddr_in>() as c_int);
+        // SAFETY: to_libc_sockaddr wrote a valid sockaddr_in into storage
+        // for a V4 address; reading it back through the same cast pattern
+        // the production code uses to write it is sound.
+        unsafe {
+            let sin = &storage as *const _ as *const libc::sockaddr_in;
+            assert_eq!((*sin).sin_family, libc::AF_INET as libc::sa_family_t);
+            assert_eq!(u16::from_be((*sin).sin_port), 4433);
+            assert_eq!((*sin).sin_addr.s_addr.to_ne_bytes(), [203, 0, 113, 5]);
+        }
+    }
+
+    #[test]
+    fn to_libc_sockaddr_v6_encodes_family_port_and_address_correctly() {
+        let addr: SocketAddr = "[2001:db8::1]:9000".parse().unwrap();
+        let (storage, len) = to_libc_sockaddr(addr);
+        assert_eq!(len, std::mem::size_of::<libc::sockaddr_in6>() as c_int);
+        let expected_octets = match addr.ip() {
+            std::net::IpAddr::V6(v6) => v6.octets(),
+            std::net::IpAddr::V4(_) => unreachable!(),
+        };
+        // SAFETY: to_libc_sockaddr wrote a valid sockaddr_in6 into storage
+        // for a V6 address; reading it back mirrors the write-side cast.
+        unsafe {
+            let sin6 = &storage as *const _ as *const libc::sockaddr_in6;
+            assert_eq!((*sin6).sin6_family, libc::AF_INET6 as libc::sa_family_t);
+            assert_eq!(u16::from_be((*sin6).sin6_port), 9000);
+            assert_eq!((*sin6).sin6_addr.s6_addr, expected_octets);
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_host_parses_ip_port_on_fast_path_without_dns() {
+        let resolved = resolve_host("127.0.0.1:9999").await;
+        assert_eq!(resolved, Some("127.0.0.1:9999".parse().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn resolve_host_returns_none_for_host_string_missing_port() {
+        // No ':' separator means ToSocketAddrs rejects the string before
+        // any DNS lookup is attempted, so this stays deterministic and
+        // network-free.
+        let resolved = resolve_host("not-a-valid-host-string").await;
+        assert_eq!(resolved, None);
+    }
+
     #[test]
     fn srt_egress_muxer_port_claim_serializes_first_port_selection() {
         let state = std::sync::Mutex::new(None);

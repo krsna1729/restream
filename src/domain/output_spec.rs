@@ -446,6 +446,216 @@ mod tests {
     }
 
     #[test]
+    fn output_url_scheme_from_url_covers_every_variant_and_malformed_input() {
+        assert_eq!(
+            OutputUrlScheme::from_url("rtmp://example/live"),
+            OutputUrlScheme::Rtmp
+        );
+        assert_eq!(
+            OutputUrlScheme::from_url("rtmps://example/live"),
+            OutputUrlScheme::Rtmps
+        );
+        assert_eq!(
+            OutputUrlScheme::from_url("srt://example:9000"),
+            OutputUrlScheme::Srt
+        );
+        assert_eq!(
+            OutputUrlScheme::from_url("hls://example/out"),
+            OutputUrlScheme::Hls
+        );
+        assert_eq!(
+            OutputUrlScheme::from_url("http://example/out"),
+            OutputUrlScheme::Http
+        );
+        assert_eq!(
+            OutputUrlScheme::from_url("https://example/out"),
+            OutputUrlScheme::Https
+        );
+        assert_eq!(
+            OutputUrlScheme::from_url("udp://example"),
+            OutputUrlScheme::Unknown
+        );
+        assert_eq!(OutputUrlScheme::from_url(""), OutputUrlScheme::Unknown);
+        assert_eq!(
+            OutputUrlScheme::from_url("not a url at all"),
+            OutputUrlScheme::Unknown
+        );
+        assert_eq!(
+            OutputUrlScheme::from_url("://missing-scheme"),
+            OutputUrlScheme::Unknown
+        );
+    }
+
+    #[test]
+    fn output_url_scheme_is_supported_output_is_false_only_for_unknown() {
+        assert!(OutputUrlScheme::Rtmp.is_supported_output());
+        assert!(OutputUrlScheme::Rtmps.is_supported_output());
+        assert!(OutputUrlScheme::Srt.is_supported_output());
+        assert!(OutputUrlScheme::Hls.is_supported_output());
+        assert!(OutputUrlScheme::Http.is_supported_output());
+        assert!(OutputUrlScheme::Https.is_supported_output());
+        assert!(!OutputUrlScheme::Unknown.is_supported_output());
+    }
+
+    #[test]
+    fn output_url_scheme_family_and_protocol_classification_is_exhaustive() {
+        let cases = [
+            (
+                OutputUrlScheme::Rtmp,
+                true,
+                false,
+                false,
+                EgressProtocol::Rtmp,
+            ),
+            (
+                OutputUrlScheme::Rtmps,
+                true,
+                false,
+                false,
+                EgressProtocol::Rtmp,
+            ),
+            (
+                OutputUrlScheme::Srt,
+                false,
+                false,
+                true,
+                EgressProtocol::Srt,
+            ),
+            (
+                OutputUrlScheme::Hls,
+                false,
+                true,
+                false,
+                EgressProtocol::Hls,
+            ),
+            (
+                OutputUrlScheme::Http,
+                false,
+                true,
+                true,
+                EgressProtocol::Hls,
+            ),
+            (
+                OutputUrlScheme::Https,
+                false,
+                true,
+                true,
+                EgressProtocol::Hls,
+            ),
+            (
+                OutputUrlScheme::Unknown,
+                false,
+                false,
+                false,
+                EgressProtocol::Unknown,
+            ),
+        ];
+        for (scheme, is_rtmp_family, is_hls_family, supports_monitoring, protocol) in cases {
+            assert_eq!(
+                scheme.is_rtmp_family(),
+                is_rtmp_family,
+                "is_rtmp_family for {scheme:?}"
+            );
+            assert_eq!(
+                scheme.is_hls_family(),
+                is_hls_family,
+                "is_hls_family for {scheme:?}"
+            );
+            assert_eq!(
+                scheme.supports_monitoring(),
+                supports_monitoring,
+                "supports_monitoring for {scheme:?}"
+            );
+            assert_eq!(scheme.protocol(), protocol, "protocol for {scheme:?}");
+        }
+    }
+
+    #[test]
+    fn egress_protocol_is_rtmp_and_as_str_cover_every_variant() {
+        assert!(EgressProtocol::Rtmp.is_rtmp());
+        assert!(!EgressProtocol::Srt.is_rtmp());
+        assert!(!EgressProtocol::Hls.is_rtmp());
+        assert!(!EgressProtocol::Unknown.is_rtmp());
+
+        assert_eq!(EgressProtocol::Rtmp.as_str(), "rtmp");
+        assert_eq!(EgressProtocol::Srt.as_str(), "srt");
+        assert_eq!(EgressProtocol::Hls.as_str(), "hls");
+        assert_eq!(EgressProtocol::Unknown.as_str(), "unknown");
+    }
+
+    #[test]
+    fn video_codec_kind_is_hevc_is_true_only_for_hevc() {
+        assert!(!VideoCodecKind::H264.is_hevc());
+        assert!(VideoCodecKind::Hevc.is_hevc());
+        assert!(!VideoCodecKind::Unknown.is_hevc());
+    }
+
+    #[test]
+    fn video_selector_stage_preset_and_as_encoding_str_and_is_custom() {
+        let source = VideoSelector::Source;
+        assert_eq!(source.stage_preset(), None);
+        assert_eq!(source.as_encoding_str(), "source");
+        assert!(!source.is_custom());
+
+        let custom = VideoSelector::Custom;
+        assert_eq!(custom.stage_preset(), None);
+        assert_eq!(custom.as_encoding_str(), "custom");
+        assert!(custom.is_custom());
+
+        let preset = VideoSelector::Preset("720p".to_string());
+        assert_eq!(preset.stage_preset(), Some("720p"));
+        assert_eq!(preset.as_encoding_str(), "720p");
+        assert!(!preset.is_custom());
+    }
+
+    #[test]
+    fn output_video_config_selector_round_trips_every_variant() {
+        let variants = [
+            OutputVideoConfig::Source,
+            OutputVideoConfig::Custom,
+            OutputVideoConfig::Preset {
+                preset: "1080p".to_string(),
+            },
+        ];
+        for variant in variants {
+            let selector = variant.selector();
+            let round_tripped = OutputVideoConfig::from_selector(&selector);
+            assert_eq!(round_tripped, variant, "round-trip for {variant:?}");
+        }
+    }
+
+    #[test]
+    fn output_video_config_is_custom_and_encoding_label() {
+        assert_eq!(OutputVideoConfig::Source.encoding_label(), "source");
+        assert!(!OutputVideoConfig::Source.is_custom());
+
+        assert_eq!(OutputVideoConfig::Custom.encoding_label(), "custom");
+        assert!(OutputVideoConfig::Custom.is_custom());
+
+        let preset = OutputVideoConfig::Preset {
+            preset: "480p".to_string(),
+        };
+        assert_eq!(preset.encoding_label(), "480p");
+        assert!(!preset.is_custom());
+    }
+
+    #[test]
+    fn output_config_is_custom_output_reflects_video_selector() {
+        assert!(!OutputConfig::default().is_custom_output());
+        assert!(OutputConfig::parse("custom").is_custom_output());
+        assert!(!OutputConfig::parse("720p").is_custom_output());
+    }
+
+    #[test]
+    fn output_encoding_spec_config_round_trip_preserves_video_and_audio() {
+        let spec = OutputEncodingSpec::parse("720p+atrack:0");
+        let config = spec.to_config();
+        let restored = OutputEncodingSpec::from_config(&config);
+        assert_eq!(restored, spec);
+        assert_eq!(spec.to_encoding_string(), "720p+atrack:0");
+    }
+
+    #[test]
     fn stage_preset_spec_parses_stage_key_variants() {
         let video = StagePresetSpec::parse("video:720p");
         assert_eq!(video.video_encoding(), "720p");

@@ -164,3 +164,136 @@ impl FfmpegStagePlan {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::stage::{StageKey as DomainStageKey, StageKind};
+
+    fn input_spec() -> StageInputSpec {
+        StageInputSpec {
+            codec_hint: VideoCodecKind::H264,
+            video_meta: None,
+            audio_tracks: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn from_codec_name_matches_hevc_spellings_case_insensitively() {
+        for spelling in ["hevc", "HEVC", "Hevc", "h265", "H265", "h.265", "H.265"] {
+            assert_eq!(
+                VideoCodecKind::from_codec_name(spelling),
+                VideoCodecKind::Hevc,
+                "expected {spelling:?} to resolve to Hevc"
+            );
+        }
+    }
+
+    #[test]
+    fn from_codec_name_defaults_unrecognized_inputs_to_h264() {
+        for input in [
+            "", "h264", "avc", "vp9", "av1", "mjpeg", "unknown", " hevc", "hevc ", "hevcx",
+            "xhevc", "hvc1", "hev1", " ",
+        ] {
+            assert_eq!(
+                VideoCodecKind::from_codec_name(input),
+                VideoCodecKind::H264,
+                "expected {input:?} to default to H264"
+            );
+        }
+    }
+
+    #[test]
+    fn from_codec_name_handles_malformed_and_extreme_input() {
+        // Non-ASCII lookalikes: `to_ascii_lowercase` only folds ASCII, so
+        // Unicode homoglyphs of "hevc" must not accidentally match.
+        assert_eq!(
+            VideoCodecKind::from_codec_name("һevc"),
+            VideoCodecKind::H264,
+            "Cyrillic 'һ' homoglyph must not match ASCII 'h'"
+        );
+
+        // Embedded NUL and control bytes must not panic or be stripped into a match.
+        assert_eq!(
+            VideoCodecKind::from_codec_name("he\u{0}vc"),
+            VideoCodecKind::H264
+        );
+
+        // Very long input must not panic and must fall through to the default.
+        let long_garbage = "x".repeat(64 * 1024);
+        assert_eq!(
+            VideoCodecKind::from_codec_name(&long_garbage),
+            VideoCodecKind::H264
+        );
+
+        // A long string that legitimately contains "hevc" as a substring but
+        // is not an exact match must still default to H264 (no substring matching).
+        let padded = format!("hevc{}", "y".repeat(4096));
+        assert_eq!(
+            VideoCodecKind::from_codec_name(&padded),
+            VideoCodecKind::H264
+        );
+    }
+
+    #[test]
+    fn as_str_round_trips_through_from_codec_name() {
+        for kind in [VideoCodecKind::H264, VideoCodecKind::Hevc] {
+            assert_eq!(VideoCodecKind::from_codec_name(kind.as_str()), kind);
+        }
+    }
+
+    #[test]
+    fn video_preset_constructor_applies_expected_defaults() {
+        let key = DomainStageKey::new("pipe-1", StageKind::video_preset("720p"));
+        let plan = FfmpegStagePlan::video_preset(
+            key,
+            "pipe-1",
+            "720p",
+            input_spec(),
+            VideoCodecKind::H264,
+        );
+
+        assert_eq!(
+            plan.video,
+            VideoStageOp::ScalePreset {
+                preset: "720p".to_string()
+            }
+        );
+        assert_eq!(plan.audio, AudioStageOp::Passthrough);
+        assert_eq!(plan.output_codec, VideoCodecKind::H264);
+        assert_eq!(plan.output_profile, None);
+        assert!(plan.include_audio);
+        assert_eq!(plan.startup.keyframe_preroll_packets, 64);
+        assert!(plan.startup.require_video_parameter_sets);
+        assert!(plan.startup.wait_for_first_keyframe);
+        assert!(plan.timeline.normalize_to_stage_zero);
+        assert!(plan.timeline.unwrap_discontinuities);
+        assert!(plan.timeline.enforce_dts_monotonicity);
+    }
+
+    #[test]
+    fn hevc_to_h264_constructor_applies_expected_defaults() {
+        let key = DomainStageKey::new(
+            "pipe-1",
+            StageKind::codec_edge("hevc_to_h264", StageKind::source()),
+        );
+        // The constructor's output codec is always H264 regardless of the
+        // codec hint carried in the input spec (it names the *output*, not
+        // the input the edge is converting from).
+        let mut input = input_spec();
+        input.codec_hint = VideoCodecKind::Hevc;
+        let plan = FfmpegStagePlan::hevc_to_h264(key, "pipe-1", input);
+
+        assert_eq!(
+            plan.video,
+            VideoStageOp::CodecEdge {
+                op: CodecEdgeOp::HevcToH264
+            }
+        );
+        assert_eq!(plan.output_codec, VideoCodecKind::H264);
+        assert_eq!(plan.input.codec_hint, VideoCodecKind::Hevc);
+        assert_eq!(plan.startup.keyframe_preroll_packets, 128);
+        assert!(plan.startup.require_video_parameter_sets);
+        assert!(plan.startup.wait_for_first_keyframe);
+    }
+}

@@ -67,6 +67,28 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 17:20 Q-010 DONE [opus]](#2026-07-18-1720-q-010-done-opus)
 - [2026-07-18 17:55 Q-012 DONE [opus]](#2026-07-18-1755-q-012-done-opus)
 - [2026-07-18 18:05 HUNT MPEGTS-PROBE-AUDIO-BOUNDARY DONE [codex]](#2026-07-18-1805-hunt-mpegts-probe-audio-boundary-done-codex)
+- [2026-07-18 20:45 HUNT FFMPEG-STAGE-PLAN-CODEC-DEFAULT DONE [codex]](#2026-07-18-2045-hunt-ffmpeg-stage-plan-codec-default-done-codex)
+- [2026-07-18 21:15 HUNT HLS-PREVIEW-GRAPH-CANCEL DONE [codex]](#2026-07-18-2115-hunt-hls-preview-graph-cancel-done-codex)
+- [2026-07-18 21:45 HUNT SRT-STREAM-ID-ADVERSARIAL DONE [codex]](#2026-07-18-2145-hunt-srt-stream-id-adversarial-done-codex)
+- [2026-07-18 22:05 HUNT STAGE-METRICS-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2205-hunt-stage-metrics-counter-boundaries-done-codex)
+- [2026-07-18 22:20 HUNT PIPE-METRICS-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2220-hunt-pipe-metrics-counter-boundaries-done-codex)
+- [2026-07-18 22:40 HUNT ENGINE-HLS-CONSUMER-IDLE-BOUNDARIES DONE [codex]](#2026-07-18-2240-hunt-engine-hls-consumer-idle-boundaries-done-codex)
+- [2026-07-18 23:05 HUNT SRT-QUALITY-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2305-hunt-srt-quality-counter-boundaries-done-codex)
+- [2026-07-18 23:30 HUNT SRT-MUXER-SHARD-POOL-BOUNDARIES DONE [codex]](#2026-07-18-2330-hunt-srt-muxer-shard-pool-boundaries-done-codex)
+- [2026-07-18 23:50 HUNT SRT-POLICY-FALLBACK-SEMANTICS DONE [codex]](#2026-07-18-2350-hunt-srt-policy-fallback-semantics-done-codex)
+- [2026-07-19 00:10 HUNT TRANSCODE-PROFILE-VALIDATION-BOUNDARIES DONE [codex]](#2026-07-19-0010-hunt-transcode-profile-validation-boundaries-done-codex)
+- [2026-07-19 00:35 HUNT API-VIEW-MODELS-FORMATTING-HELPERS DONE [codex]](#2026-07-19-0035-hunt-api-view-models-formatting-helpers-done-codex)
+- [2026-07-19 01:00 HUNT RESOURCE-MAP-JSON-SHAPING-HELPERS DONE [codex]](#2026-07-19-0100-hunt-resource-map-json-shaping-helpers-done-codex)
+- [2026-07-19 01:20 HUNT STATUS-CPU-AFFINITY-OVERFLOW FIXED [codex]](#2026-07-19-0120-hunt-status-cpu-affinity-overflow-fixed-codex)
+- [2026-07-19 02:00 HUNT HLS-PREVIEW-CODEC-LEVEL-DEFAULT FIXED [codex]](#2026-07-19-0200-hunt-hls-preview-codec-level-default-fixed-codex)
+- [2026-07-19 02:20 HUNT INGEST-SECURITY-VALIDATE-BRANCHES DONE [codex]](#2026-07-19-0220-hunt-ingest-security-validate-branches-done-codex)
+- [2026-07-19 02:35 HUNT SETTINGS-BACKEND-POLICY-FALLBACK DONE [codex]](#2026-07-19-0235-hunt-settings-backend-policy-fallback-done-codex)
+- [2026-07-19 02:50 HUNT SRT-INGEST-APPCONFIG-FALLBACK DONE [codex]](#2026-07-19-0250-hunt-srt-ingest-appconfig-fallback-done-codex)
+- [2026-07-19 03:05 HUNT RECORDING-SETTINGS-FALLBACK-AND-SHORT-CIRCUIT DONE [codex]](#2026-07-19-0305-hunt-recording-settings-fallback-and-short-circuit-done-codex)
+- [2026-07-19 03:30 HUNT INGEST-AUTH-ASYMMETRY-AND-FILE-INGEST-GAPS DONE [codex]](#2026-07-19-0330-hunt-ingest-auth-asymmetry-and-file-ingest-gaps-done-codex)
+- [2026-07-19 03:55 HUNT RECONCILE-DECISION-BRANCH-COVERAGE DONE [codex]](#2026-07-19-0355-hunt-reconcile-decision-branch-coverage-done-codex)
+- [2026-07-19 04:10 HUNT EGRESS-MALFORMED-URL-RESILIENCE DONE [codex]](#2026-07-19-0410-hunt-egress-malformed-url-resilience-done-codex)
+- [2026-07-19 06:33 HUNT SECURITY-EVICTION-BAN-BYPASS FIXED [codex]](#2026-07-19-0633-hunt-security-eviction-ban-bypass-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1785,3 +1807,1202 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   agent (workstream A, Q-009/Q-010/Q-012 on
   `codex/perf-sweep-opus-20260718`) completed independently during this
   hunt — not touched, per instructions.
+
+## 2026-07-18 20:45 HUNT FFMPEG-STAGE-PLAN-CODEC-DEFAULT DONE [codex]
+
+- What: after PR #55 (combined perf-sweep + adversarial-hunt checkpoint)
+  merged, re-derived a fresh low-coverage lead list via `cargo llvm-cov
+  --summary-only --lib` since both prior coverage-map leads
+  (`engine_snapshots.rs`, `mpegts_probe.rs`) were exhausted and the formal
+  Q-001–Q-022 backlog is fully done. Evaluated two candidates:
+  `src/media/hls/preview_graph.rs` (~26% line coverage, async, requires a
+  full `MediaEngine` + `StageRuntimeManager` harness to test meaningfully)
+  and `src/media/ffmpeg/stage_plan.rs` (166 lines, ~25% line coverage, pure
+  synchronous planner code, zero dedicated test file). Picked the latter as
+  tractable and non-duplicative.
+  While reading `stage_plan.rs`, noticed the repo has *two* distinct
+  `VideoCodecKind` types with different semantics: `domain::output_spec::
+  VideoCodecKind` (3 variants incl. `Unknown`, tested) and `media::ffmpeg::
+  stage_plan::VideoCodecKind` (2 variants, no `Unknown`) — the latter's
+  `from_codec_name` silently defaults *any* unrecognized string (empty,
+  "vp9", "av1", ISOBMFF fourccs like "hvc1"/"hev1", homoglyphs, garbage) to
+  `H264` rather than erroring or having a third state. Traced every call
+  site (`stage_runtime.rs`, `ffmpeg_process.rs`) and confirmed the only
+  codec-hint strings that actually flow through this code path in practice
+  are the literals `"h264"`/`"hevc"` set at ingest — so the silent-default
+  behavior is unreachable with malformed input today, not a live bug, but
+  it was completely unpinned: nothing proved the exact-match/case-fold
+  contract, and a future caller passing an ISOBMFF fourcc or a raw ffprobe
+  codec string would silently mis-plan HEVC content as H264 passthrough
+  with no test to catch it.
+  Added a `#[cfg(test)] mod tests` block directly in `stage_plan.rs`
+  (matching the sibling-file convention in `stage_input.rs`/
+  `stage_output.rs`/`timeline.rs`, none of which use a separate test file):
+  `from_codec_name_matches_hevc_spellings_case_insensitively` (all six
+  case variants of "hevc"/"h265"/"h.265"), `from_codec_name_defaults_
+  unrecognized_inputs_to_h264` (empty string, valid-but-non-hevc codec
+  names, near-miss spellings with stray whitespace, ISOBMFF fourccs),
+  `from_codec_name_handles_malformed_and_extreme_input` (Cyrillic
+  homoglyph of "h", embedded NUL byte, a 64KB garbage string, and a string
+  that contains "hevc" as a substring but isn't an exact match — proving no
+  accidental substring matching), `as_str_round_trips_through_from_codec_
+  name`, and defaults assertions for both `FfmpegStagePlan::video_preset`
+  and `::hevc_to_h264` convenience constructors (startup/timeline policy
+  fields, `output_codec` override behavior).
+  Outcome: no bug found — recorded as a proof-gap closure on a previously
+  fully-untested pure function, consistent with the `mpegts_probe.rs` and
+  `engine_snapshots.rs` entries above. The domain-duplication observation
+  (two `VideoCodecKind` types) is left as-is; both are used correctly
+  within their own layers and collapsing them would be a layering change
+  outside this hunt's scope.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib stage_plan` —
+  7/7 new tests pass (1108 pre-existing filtered out, unaffected).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all --check` — clean.
+  `./scripts/check/source-audit.sh` — clean. Single-file, non-lifecycle,
+  non-concurrency pure-function test addition — did not broaden to full
+  `cargo test` or a concurrency proof gate.
+- Commit: `fcb5a755` on `codex/adversarial-hunt-round2-20260718` (branched
+  from `origin/master` post-#55-merge).
+- Follow-ups: none filed.
+- Notes: hit and fixed a worktree/branch-naming mixup mid-session — a
+  local branch `codex/adversarial-hunt-continued-20260718` created in a
+  prior turn ended up checked out in a *different* worktree (the main repo
+  checkout) than this session's actual working directory, so a first
+  attempt at this commit landed on the stale, already-squash-merged
+  `codex/adversarial-test-sweep-20260717` branch instead. Fixed by renaming
+  this worktree's local branch to `codex/adversarial-hunt-round2-20260718`,
+  resetting it to `origin/master`, and cherry-picking the one genuinely new
+  commit onto the clean base before pushing — no work was lost, and the
+  other worktree/branch was left untouched since it may be in use by
+  another agent session.
+
+## 2026-07-18 21:15 HUNT HLS-PREVIEW-GRAPH-CANCEL DONE [codex]
+- What: investigated `src/media/hls/preview_graph.rs::resolve_hls_preview_graph`
+  (zero prior test coverage) for a suspected cancellation-ordering race: the
+  function checks `cancel.is_cancelled()` exactly once per loop iteration,
+  *after* resolving the codec but *before* branching into the work that
+  plans and spawns an HEVC→H.264 preview transcoder stage via
+  `StageRuntimeManager::ensure_stage`/`spawn_preview_stage` — with no further
+  cancellation check during that stage-creation work itself.
+  Traced the full lifecycle to determine whether a late cancellation in that
+  window can orphan a created-but-unwanted preview stage. Found:
+  `ensure_stage` (`src/media/stage_runtime.rs:71`) mints its own independent
+  `CancellationToken` for the stage runtime (not the caller's `cancel`
+  argument — `ensure_stage` doesn't even take one), so the preview stage's
+  lifecycle is never tied to the HLS segmenter's cancellation token in the
+  first place. The segmenter's own shutdown path
+  (`start_hls_fmp4_segmenter` in `fmp4.rs:334`, called with
+  `planned_stage_key: None` from `preview.rs`) tears down a *different*
+  stage key (`StageKind::hls()`), never the `StageKind::Preview` key the
+  graph resolver created — so per-segmenter cancellation was never going to
+  reap this stage. Instead, preview transcoder stages are pooled,
+  per-pipeline shared resources reaped by two independent, coarser-grained
+  mechanisms: `MediaEngine::cleanup_pipeline_stages` (eager sweep on
+  pipeline removal, `engine.rs:991`) and
+  `MediaEngine::sweep_unused_transcoder_stages` (periodic reconciler sweep
+  against the currently-planned key set, `engine.rs:1008`). A stage created
+  microseconds before a caller's cancellation fires is not leaked — it
+  becomes part of the shared pool and is pruned by the next reconciler pass
+  or pipeline teardown like any other stage the current plan no longer
+  wants.
+  Outcome: not a bug — the single-check-per-iteration pattern is consistent
+  with the architecture (stages are reconciled independently of any one
+  caller's lifetime, not synchronously owned by it). Closed the coverage
+  gap instead: added two direct regression tests for
+  `resolve_hls_preview_graph`'s two `None`-returning edge paths, which had
+  no direct test before (only indirectly exercised via `preview.rs`'s
+  higher-level `ensure_hls_preview_runtime` tests, which never await the
+  resolver's own completion). `returns_none_immediately_when_cancelled_
+  before_codec_resolves` pre-cancels the token on a pipeline with no
+  resolvable codec and asserts the paused clock never advances (proving the
+  cancellation check fires on the very first iteration, before the 100ms
+  poll sleep). `returns_none_after_deadline_when_codec_never_resolves`
+  leaves the token uncancelled on the same never-resolves pipeline and
+  asserts the paused clock advances at least the full 3s deadline before
+  returning `None`. Both use `#[tokio::test(start_paused = true)]` so the
+  real 3s deadline costs zero wall-clock time in the suite.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib preview_graph` —
+  2/2 new tests pass (4 pre-existing planner tests in the same filter
+  unaffected). `scripts/build/resource-limit.sh cargo clippy --lib
+  --benches -- -D warnings` — clean. `cargo fmt --all --check` — clean
+  (after `cargo fmt --all` reformatted one over-length line). Single-file,
+  non-lifecycle-signature-changing test addition (no production code
+  touched) — did not broaden to full `cargo test` or
+  `scripts/check/concurrency/contract.sh`.
+- Commit: `25390121` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. The two independent `StageKey`s in play here
+  (`StageKind::Preview` for the transcoder, `StageKind::hls()` for the
+  segmenter) and the two separate stage-pool sweep mechanisms are
+  intentional existing architecture, not a gap to close.
+- Notes: none.
+
+## 2026-07-18 21:45 HUNT SRT-STREAM-ID-ADVERSARIAL DONE [codex]
+
+- What: continued the hunt to `src/media/srt_stream_id.rs` (90 lines,
+  zero dedicated test module — coverage existed only indirectly, via
+  black-box happy-path cases in `srt_tests.rs`). This module parses
+  untrusted, client-supplied SRT handshake stream IDs
+  (`parse_srt_stream_id`, `normalize_srt_stream_key`, `percent_decode`,
+  `strip_query`) and is directly on the network-facing SRT connection path
+  (`srt.rs` uses the parsed mode to distinguish publisher vs. reader
+  connections); AGENTS.md's Media Rules explicitly names "Normalize SRT
+  Stream IDs before lookup" as a core invariant.
+  Read `srt_tests.rs` in full first to avoid duplicating existing coverage
+  (~17 cases across 4 tests already covered common-tool stream ID formats,
+  encoding normalization, and slash-preserving percent-decoding). Added a
+  `#[cfg(test)] mod tests` block directly in `srt_stream_id.rs` (matching
+  the sibling-file convention from the `stage_plan.rs` hunt) targeting
+  genuinely uncovered adversarial edges: `percent_decode` truncated/
+  malformed `%` escapes (trailing `%`, single hex digit, non-hex digits —
+  must fall back to literal, not panic or desync the scan position),
+  case-insensitive hex digits, single-layer-only decoding (`%2525` →
+  `%25`, not `%`), lossy UTF-8 fallback on invalid byte sequences from
+  `%FF` (must not panic), embedded NUL byte preservation; the two-pass
+  `strip_query` interaction in `normalize_srt_stream_key` where a
+  percent-encoded `?` (`%3F`) is only revealed after decoding and still
+  gets stripped by the second `strip_query` call, meaning a stream key can
+  never contain a literal `?` in any encoding; `parse_srt_stream_id`
+  whitespace/NUL-only-input handling, and the `#!::` bracket-format
+  parser's duplicate-key last-wins semantics, `=`-containing values,
+  malformed (no-`=`) parts being silently skipped, case-sensitive keys and
+  mode values, and an empty-rest `#!::` input.
+  The highest-value, most non-obvious finding (documented via a dedicated
+  test, not filed as a bug): any raw (non-`#!::`) stream ID containing a
+  colon has everything before the first colon discarded as a candidate
+  mode marker, *even when that prefix is not a recognized mode keyword* —
+  e.g. `"abc:def"` silently loses `"abc:"` and yields stream key `"def"`
+  under the default Publish mode, and `"Play:key"` (wrong case) likewise
+  loses `"Play:"` yet still defaults to Publish rather than Read. This is
+  existing, intentional-looking behavior (the split happens unconditionally
+  before the recognized-keyword check), not a bug to fix — but it was
+  completely unpinned, so a future refactor could silently change it
+  without any test noticing. Pinned it explicitly instead of filing a fix,
+  since changing SRT Stream ID parsing semantics is a protocol-compat
+  decision, not an adversarial-hunt scope call.
+  Caught one own-test-authoring bug during the red/green cycle: an initial
+  test asserted `"\0 \0 \0"` (NUL-space-NUL-space-NUL) parses to an empty
+  stream key, but `trim_matches('\0')` only strips NUL runs from the two
+  string *ends*, not interior occurrences, so the actual result is a
+  single interior NUL byte, not empty. Fixed by narrowing the empty-input
+  test to inputs that genuinely collapse (pure NUL runs, pure whitespace,
+  NUL-padded whitespace) and adding a separate test,
+  `parse_srt_stream_id_preserves_interior_nul_bytes`, that pins the
+  correct (interior-NUL-survives) behavior explicitly.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib srt_stream_id`
+  — 25/25 pass (21 new + 4 pre-existing `srt.rs`-level black-box tests in
+  the same filter unaffected). `scripts/build/resource-limit.sh cargo
+  clippy --lib --benches -- -D warnings` — clean. `cargo fmt --all` /
+  `--check` — clean. Single pure-function module, not listed among the
+  Inner Loop table's lifecycle-sensitive files (`engine.rs`, `srt.rs`,
+  `ts_chunk_ring.rs`, `avio.rs`, `recording.rs`, `file_ingest.rs`,
+  `external_transcoder.rs`) and no production code was touched — did not
+  broaden to `scripts/check/concurrency/contract.sh` or full `cargo test`.
+- Commit: `8dd9cb9f` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. The unrecognized-colon-prefix-still-stripped
+  behavior and the double-strip-query-after-decode interaction are now
+  pinned by tests; no fix is warranted without a protocol-compatibility
+  decision from a human.
+- Notes: none.
+
+## 2026-07-18 22:05 HUNT STAGE-METRICS-COUNTER-BOUNDARIES DONE [codex]
+
+- What: swept the remaining low-coverage lead list
+  (`stage_registry_access.rs`, `engine_hls.rs`, `snapshots.rs`,
+  `stage_metrics.rs`, `pipe_metrics.rs`, `ingest_auth.rs`) for the next
+  hunt target. Ruled out two before writing anything: `ingest_auth.rs` is
+  a pure trait/type-definition file with zero branching logic, nothing to
+  adversarially test; `stage_registry_access.rs` is thin async CRUD glue
+  over engine registries whose one piece of real logic — SRT egress muxer
+  shard assignment/release — delegates to `SrtMuxerShardPool` in
+  `engine_registries.rs`, which `engine_stage_tests.rs` already covers
+  exhaustively, including a proptest model-based shard-lifecycle test.
+  Picked `src/media/stage_metrics.rs` (106 lines, zero dedicated tests):
+  lock-free `AtomicU64` throughput counters updated on the packet hot path
+  and read by the `/graph` operator-visibility endpoint. Despite being
+  hot-path code (no benchmark needed per Hot-Path Rules — plain atomic
+  `fetch_add`/`load`, no new allocation, logging, or syscalls added; tests
+  are `#[cfg(test)]`-gated and never compiled into the hot path itself).
+  Added a `#[cfg(test)] mod tests` block covering: zeroed-snapshot/
+  divide-by-zero guard (`avg_us_per_packet` must be `0.0`, not `NaN`, when
+  `packets_in == 0`); independent accumulation of `record_in`/
+  `record_out`; `record_in_batch` combining with individual `record_in`
+  calls; a `record_in_batch(0, bytes)` case proving the API has no
+  invariant tying packet count to byte count (zero-packet batches with
+  nonzero bytes are accepted, and the average-guard keys off
+  `packets_in`, not `bytes_in`); and `record_processing`'s contribution to
+  `avg_us_per_packet`.
+  Highest-value case: `counters_wrap_on_u64_overflow_without_panicking`,
+  pinning that `AtomicU64::fetch_add` wraps unconditionally on overflow
+  (unlike checked arithmetic, atomic fetch-add never panics, even in debug
+  builds) — seeded `packets_in`/`bytes_in` at `u64::MAX` via the public
+  atomic fields and confirmed `record_in` wraps to `0`/`9` rather than
+  aborting the stage. This is the resource-exhaustion/boundary-value
+  category from the standing sweep directive: a stage that has processed
+  `u64::MAX` packets (astronomically unlikely in practice, but the counter
+  type makes no other guarantee) must keep running, not panic the OS
+  thread it counts on.
+  Did not pursue `elapsed`-dependent branches (`uptime_secs`,
+  `packets_per_sec`'s zero-elapsed guard) — `start_instant` is a real
+  `std::time::Instant`, not a mockable clock, so forcing `elapsed == 0.0`
+  deterministically isn't possible without either a wall-clock sleep-based
+  flaky test or introducing a clock abstraction, and the guard clause
+  itself is trivial (single comparison, no parsing/adversarial-input
+  surface). Left `engine_hls.rs`, `snapshots.rs`, and `pipe_metrics.rs` on
+  the candidate list for the next iteration.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib stage_metrics`
+  — 6/6 new tests pass. `scripts/build/resource-limit.sh cargo clippy
+  --lib --benches -- -D warnings` — clean. `cargo fmt --all --check` —
+  clean. Pure counter-struct module, not on the Inner Loop table's
+  lifecycle-sensitive list and no production code changed — did not
+  broaden to `scripts/check/concurrency/contract.sh` or full `cargo test`.
+- Commit: `8d166d0d` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed.
+- Notes: none.
+
+## 2026-07-18 22:20 HUNT PIPE-METRICS-COUNTER-BOUNDARIES DONE [codex]
+
+- What: continued the low-coverage sweep to `src/media/pipe_metrics.rs`
+  (67 lines, zero dedicated tests) — the last small candidate on the list
+  after `stage_metrics.rs`. `PipeMetrics` tracks external-transcoder pipe
+  back-pressure (stdin write stalls, stdout read idles) with lock-free
+  `AtomicU64` counters, structurally identical in shape to
+  `stage_metrics.rs`: a `snapshot()` that reads the atomics and computes
+  guarded averages. The averages here use `checked_div(...).unwrap_or(0)`
+  instead of an `if count > 0` branch, a different-looking but
+  equivalent-in-effect divide-by-zero guard worth pinning explicitly.
+  Added a `#[cfg(test)] mod tests` block covering: zeroed-snapshot guard
+  (`avg_stall_us`/`avg_idle_us` must be `0`, not a panic, when `stalls`/
+  `idles` are `0`); independent accumulation of `record_stall`/
+  `record_idle`; integer-division truncation for the average (29us over 3
+  stalls truncates to 9, not rounds to 10 — `checked_div` is integer
+  division, and the snapshot type is `u64`, not `f64`); and the same
+  atomic-overflow-wrap case as the `stage_metrics.rs` hunt
+  (`counters_wrap_on_u64_overflow_without_panicking`), with an added
+  assertion that the `checked_div` guard still fires correctly when
+  `stalls` wraps to `0` (avg must read `0`, not divide-by-zero panic or
+  stale garbage).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib pipe_metrics`
+  — 4 new tests plus 2 pre-existing cross-module tests
+  (`media::engine::tests::pipe_metrics_snapshot_correctness`,
+  `api_runtime_views::telemetry::tests::stage_telemetry_reads_pipe_metrics_from_stage_runtime`)
+  all pass (6/6). `scripts/build/resource-limit.sh cargo clippy --lib
+  --benches -- -D warnings` — clean. `cargo fmt --all --check` — clean.
+  Pure counter-struct module, not on the Inner Loop table's
+  lifecycle-sensitive list and no production code changed — did not
+  broaden to `scripts/check/concurrency/contract.sh` or full `cargo test`.
+- Commit: `68886a10` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed.
+- Notes: `engine_hls.rs` and `snapshots.rs` remain on the candidate list
+  for the next hunt iteration.
+
+## 2026-07-18 22:40 HUNT ENGINE-HLS-CONSUMER-IDLE-BOUNDARIES DONE [codex]
+
+- What: `src/media/engine_hls.rs` had zero dedicated tests of its own;
+  `HlsConsumers::is_idle` only had one flaky-prone real-sleep test in
+  `engine_tests.rs`, and the preview registry key prefix functions
+  (`hls_preview_registry_key` / `pipeline_id_from_hls_preview_registry_key`)
+  had no coverage at all. Added a `#[cfg(test)]` module directly in
+  `engine_hls.rs` (matching the in-file test convention used for
+  `stage_metrics.rs`/`pipe_metrics.rs`/`srt_stream_id.rs`, since
+  `pipeline_id_from_hls_preview_registry_key` is module-private and
+  unreachable from `engine_tests.rs`) with 7 deterministic, sleep-free
+  tests: registry-key roundtrip (including the case where a pipeline id
+  itself contains the `__preview__:` prefix — extraction only strips one
+  outer layer, not recursively); rejection of a key where the prefix
+  appears mid-string instead of anchored at the start; `is_idle(0)`
+  reading idle immediately for a never-touched consumer (no implicit
+  startup grace period); a persistent consumer vetoing idle regardless of
+  timeout or touch history; and two state-corruption-shaped cases pinning
+  the `saturating_sub` guard in `is_idle` — `last_access_ms` artificially
+  ahead of `now_ms` must read not-idle rather than underflow/panic, and
+  `remove_persistent` called without a matching `add_persistent` wraps
+  the `persistent` counter to `u64::MAX` (confirmed via `fetch_sub` with
+  no floor) rather than panicking, which then permanently pins the
+  consumer as non-idle — a real resource-leak shape if a caller ever
+  mismatches add/remove (verified the one production call site in
+  `src/lib.rs` already guards this with a `hls_persistent_registered`
+  bool, so the wrap is pinned as documented defensive behavior, not
+  fixed in production code — consistent with how the atomic-overflow
+  wraps in the `stage_metrics.rs`/`pipe_metrics.rs` hunts were pinned
+  rather than changed).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib engine_hls`
+  — 8/8 pass (7 new plus the pre-existing
+  `hls_preview_registry_key_roundtrips_through_extraction`-adjacent
+  module compiles clean; the original `engine_tests.rs` sleep-based
+  `test_hls_consumers_monotonic_idle` is unchanged and still passes).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` + `--check` — clean. Test-only
+  change to non-hot-path lifecycle bookkeeping (tokio `RwLock`-guarded
+  consumer registry, not a per-packet loop); `engine_hls.rs` is not on
+  the Inner Loop table's lifecycle-sensitive file list, so did not
+  broaden to `scripts/check/concurrency/contract.sh` or full `cargo
+  test`.
+- Commit: `f096f3f6` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. The `remove_persistent` unguarded `fetch_sub`
+  is worth a defensive `saturating`/`checked` fix if a second call site
+  is ever added without the same `*_registered`-bool guard pattern used
+  in `src/lib.rs`; not filed as a backlog item since the only current
+  caller is already safe.
+- Notes: `snapshots.rs` is ruled out (pure data-carrier, no logic).
+  Continuing the open-ended scan for the next low-coverage candidate.
+
+## 2026-07-18 23:05 HUNT SRT-QUALITY-COUNTER-BOUNDARIES DONE [codex]
+
+- What: adversarial sweep on `src/media/srt_quality.rs`'s `counter_rate`
+  and `quality_from_stats`/`sender_quality_from_stats` logic. The 3
+  pre-existing `srt_rates_*` tests in `srt_tests.rs` only covered the
+  positive-delta path; the regression guard (`checked_sub` returning
+  `None` when a counter goes backward, e.g. across a reconnect that
+  reuses the same snapshot struct), the zero-elapsed-seconds guard
+  (`elapsed_seconds <= 0.0` short-circuiting before division), and the
+  `.max(0)` clamp on signed libsrt counters (guarding against libsrt's
+  `-1` "unknown" sentinel sign-extending into a near-`u64::MAX` value
+  when cast) were untested. Added 3 tests to the existing
+  `srt_tests.rs` sibling file (matching this module's established test
+  placement, not a new in-file module): counter regression yields
+  `None` instead of a wrapped/huge delta; zero elapsed seconds yields
+  `None` instead of inf/NaN; negative sentinel counters on
+  `SrtTraceBStats` clamp to `0` in the resulting `PublisherQuality`
+  instead of sign-extending.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::srt::tests` — 59/59 pass (56 pre-existing plus 3 new; the
+  correct module path, since `srt_tests.rs` is pulled in via `#[path =
+  "srt_tests.rs"] mod tests;` inside `srt.rs`, not a standalone
+  `srt_tests` target). `scripts/build/resource-limit.sh cargo clippy
+  --lib --benches -- -D warnings` — clean. `cargo fmt --all` + `--check`
+  — clean (fmt collapsed one new test's call onto fewer lines;
+  confirmed cosmetic via diff review, no semantic change). Test-only
+  change to non-hot-path quality-reporting arithmetic (not a per-packet
+  loop); did not broaden to `scripts/check/concurrency/contract.sh` or
+  full `cargo test`.
+- Commit: `da946c19` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. `counter_rate` and the `.max(0)` clamps
+  already guard correctly in production code; this hunt only closed
+  test-coverage gaps, no behavior change needed.
+- Notes: continuing the open-ended scan of `src/media/` for the next
+  low-coverage candidate.
+
+## 2026-07-18 23:30 HUNT SRT-MUXER-SHARD-POOL-BOUNDARIES DONE [codex]
+
+- What: adversarial sweep on `SrtMuxerShardPool` in
+  `src/media/engine_registries.rs` — the least-occupancy shard
+  load-balancer backing SRT egress muxer sharding. Only one test
+  existed (retiring-shard reuse gating). Added 9 tests covering:
+  idempotent re-assign of the same (output_id, attempt_id) pair does
+  not double-occupy its shard; the idempotent-return `overflowed` flag
+  uses strict `>` against capacity, so sitting exactly at capacity is
+  not flagged as overflowed (a real boundary in the existing code, not
+  a bug — pinned as documented behavior); a reconnect (same output_id,
+  new attempt_id) releases the stale assignment via the internal
+  `release_assignment(..., retire_empty_shard=false)` path and the
+  freed shard is immediately reusable without waiting on
+  `finish_retiring`; least-occupied shard selection is deterministic
+  under ties (`min_by_key` returns the first minimal element); the
+  overflow-warn flag fires exactly once across repeated overflow
+  assigns once both shard count and per-shard capacity are exhausted;
+  a stale `release` carrying a superseded `attempt_id` is a no-op that
+  cannot evict the current assignment (guards a cleanup-task-races-a-
+  reconnect scenario); releasing an unknown `output_id` and retiring an
+  unknown shard index are both no-ops rather than panics; and the
+  `max_shards`/`max_outputs_per_shard` `debug_assert` invariants are
+  enforced (`#[should_panic]`, debug/test-build only — noted as a
+  release-mode gap below).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  engine_registries` — 11/11 pass (2 pre-existing plus 9 new).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` + `--check` — clean. Test-only
+  change to in-memory load-balancing bookkeeping (no sockets, no
+  syscalls); did not broaden to `scripts/check/concurrency/contract.sh`
+  or full `cargo test`.
+- Commit: `0aac54e9` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed as a fix. Noted but not changed: `assign`'s
+  final overflow-fallback arm (`push(0); 0`) is unreachable when the
+  `debug_assert!(max_shards > 0)` holds, but `debug_assert!` compiles
+  out in release builds — calling `assign` with `max_shards == 0` in a
+  release binary would silently create a shard despite the caller's
+  stated cap instead of panicking. No production call site currently
+  passes a non-constant/zero `max_shards`, so this is a latent
+  invalid-assumptions gap, not a live bug; worth a `debug_assert_eq!`
+  upgrade to a real guard only if a call site ever derives `max_shards`
+  from configuration.
+- Notes: continuing the open-ended scan of `src/media/` for the next
+  low-coverage candidate.
+
+## 2026-07-18 23:50 HUNT SRT-POLICY-FALLBACK-SEMANTICS DONE [codex]
+
+- What: adversarial hunt on `src/media/srt_policy.rs`'s
+  `build_policy_snapshot`, which had only one existing test (covering the
+  double-failure case where both the per-entry policy and the global
+  fallback fail to resolve). Reading `src/media/srt/config.rs` and
+  `src/domain/srt_ingest.rs::resolve()` surfaced a genuine, previously
+  undocumented asymmetry: a malformed `serialized_policy` JSON string and a
+  wholly absent (`None`) one are indistinguishable — both collapse to
+  `SrtPipelineIngestConfig::default()` (mode = Inherit) via
+  `parse_pipeline_srt_ingest_policy(...).unwrap_or_default()`, and Inherit
+  silently resolves through to whatever the global policy currently is,
+  with **no warning logged**. This differs from the separate `Err` branch
+  (a parseable-but-invalid policy that fails `.resolve(&global)`), which
+  does `warn!` before falling back. Added 6 tests: a corrupted persisted
+  policy and a genuinely-absent one both silently inherit the global
+  policy, pinning the no-warning-either-way behavior; a parseable-but-
+  invalid per-entry policy (short passphrase) successfully falls back to a
+  *valid* global (the fallback-succeeds branch, previously uncovered —
+  the existing test only exercised fallback-also-fails); duplicate
+  `stream_key` entries across two pipelines, confirming last-insert-wins
+  via `HashMap::insert` overwrite; an empty `entries` slice producing an
+  empty snapshot without panicking; and `replace()` atomically swapping
+  snapshots so stream keys absent from the new entry list stop resolving.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib srt_policy` —
+  6/6 pass (1 pre-existing plus 5 new). `scripts/build/resource-limit.sh
+  cargo clippy --lib --benches -- -D warnings` — clean. `cargo fmt --all`
+  + `--check` — clean. Test-only change to in-memory policy resolution
+  (no sockets, no syscalls); did not broaden to
+  `scripts/check/concurrency/contract.sh` or full `cargo test`.
+- Commit: `1e22f998` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed as a fix. The silent malformed-JSON-equals-absent
+  behavior is now pinned by test rather than changed — flagging that a
+  corrupted persisted policy for a pipeline that was meant to be
+  encrypted-only would silently downgrade to whatever the global mode is
+  (e.g. plaintext), with zero operator-visible diagnostic. Worth revisiting
+  as a real fix (log a warning on JSON parse failure, distinct from
+  absence) only as a deliberate follow-up, not as a side effect of this
+  test sweep.
+- Notes: continuing the open-ended scan of `src/media/` for the next
+  low-coverage candidate (`ts_chunk_ring.rs` 198 lines/2 tests looks like
+  the next best ratio).
+
+## 2026-07-19 00:10 HUNT TRANSCODE-PROFILE-VALIDATION-BOUNDARIES DONE [codex]
+
+- What: `ts_chunk_ring.rs` was re-evaluated and deprioritized — its 4
+  existing tests already cover its own thin-wrapper logic, and the
+  substantive ring behavior lives in already-loom-tested
+  `ring_buffer.rs`. Re-ran a lines-per-test ranking across all
+  `src/media/*.rs` files, cross-referenced against `#[path]`/`mod tests`
+  siblings to filter out false positives (`engine.rs`, `srt.rs`,
+  `rtmp.rs`, `mpegts.rs`, `ring_buffer.rs`, `srt_egress.rs`,
+  `external_transcoder.rs` all have coverage via included sibling test
+  files), then cross-checked the remaining candidates
+  (`stage_registry_access.rs`, `snapshots.rs`, `ingest_auth.rs`) against
+  this journal and confirmed all three were already ruled out in an
+  earlier iteration (see the STAGE-METRICS and ENGINE-HLS entries above:
+  `ingest_auth.rs` is pure trait/type definitions with no branching,
+  `stage_registry_access.rs` is thin CRUD glue already covered
+  transitively via `engine_stage_tests.rs`, `snapshots.rs` is a pure data
+  carrier). With `src/media/` effectively exhausted of small, self-
+  contained, untested candidates, broadened the scan to the rest of
+  `src/` per the standing directive's open-ended scope. Found
+  `src/domain/transcode_profile.rs` (121 lines): `TranscodeProfile::
+  validate()` has real whitelist/range-boundary logic (preset and tune
+  exact-match whitelists, an inclusive `0..=51` crf range) with **zero**
+  dedicated tests anywhere in the codebase — the only prior reference was
+  a single `assert!(TranscodeProfile::default().validate().is_ok())`
+  line inside `media/profiles.rs`'s test module, which never exercised
+  the error paths at all. Added a `#[cfg(test)] mod tests` block
+  covering: every documented preset/tune value validates; an unknown
+  preset/tune is rejected; preset matching is exact-case (`"Ultrafast"`
+  capitalized is rejected, pinning that there is no case-insensitive
+  fallback); crf boundary inclusivity at 0 and 51; crf rejection just
+  outside the range and at `i32::MIN`/`i32::MAX` (proving the range
+  check itself never overflows/panics at the type's extremes); and a
+  pinning test that `validate()` does **not** bound `bitrate`,
+  `max_bitrate`, `gop`, `bframes`, `width`, or `height` at all — a
+  profile with negative bitrate, zero gop, and `u32::MAX` dimensions
+  still validates `Ok`, since those fields rely on a `0 = use
+  source/no limit` sentinel convention enforced by callers, not by this
+  type. Also added serde coverage: an empty `{}` object fills every
+  field from its documented default; a negative bitrate deserializes
+  without any validation being applied at parse time (validation is a
+  separate, opt-in step callers must call); and unknown JSON fields are
+  silently ignored rather than rejected (no `#[serde(deny_unknown_fields)]`).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  transcode_profile` — 15/15 pass (13 new plus 2 pre-existing
+  `application::transcode_profiles::tests` in the same filter,
+  unaffected). `scripts/build/resource-limit.sh cargo clippy --lib
+  --benches -- -D warnings` — clean. `cargo fmt --all` + `--check` —
+  clean (auto-reformatted the new block's multi-line `assert!` calls,
+  cosmetic only). Pure domain value-type module, not on the Inner Loop
+  table's lifecycle-sensitive file list and no production code changed —
+  did not broaden to `scripts/check/concurrency/contract.sh` or full
+  `cargo test`.
+- Commit: `51a69cf9` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. The lack of bitrate/gop/dimension bounds in
+  `validate()` is pinned as documented current behavior, not flagged as a
+  bug — callers depend on `0` as a sentinel and no caller currently
+  passes unchecked user input for those fields without an upstream
+  bound; a stricter `validate()` would be a deliberate API-contract
+  change, not an in-scope fix for a test sweep.
+- Notes: `src/media/` is now largely exhausted of small, self-contained,
+  untested candidates. Continuing the open-ended scan into `src/domain/`,
+  `src/application/`, and `src/api_runtime_views/`, which have not yet
+  been swept this session; `src/bin/test_harness/` is deliberately
+  excluded from this scan since it is harness tooling validated by its
+  own `correctness*`/live-mode gates, not application logic.
+
+## 2026-07-19 00:35 HUNT API-VIEW-MODELS-FORMATTING-HELPERS DONE [codex]
+
+- Scope: continued the open-ended adversarial scan into
+  `src/api_view_models.rs`. Ruled out two other candidates first without
+  writing code: `src/api_runtime_views/graph.rs` (thin async orchestration
+  over live `MediaEngine` `RwLock`-guarded state; would need heavy engine
+  mocking to unit-test in isolation and its real logic is already exercised
+  transitively by existing integration coverage, same reasoning as the
+  earlier-ruled-out `stage_registry_access.rs`) and `src/application/ports.rs`
+  (pure trait/type-definition boilerplate with no branching logic, same
+  reasoning as the earlier-ruled-out `ingest_auth.rs`).
+- Finding: `human_bytes`, `human_duration_ms`, and
+  `srt_recv_buffer_occupancy` in `src/api_view_models.rs` are private pure
+  functions reachable from HTTP-facing JSON response bodies (via
+  `processing_graph_ingest_details` and related call sites) with zero test
+  coverage. Added 13 new `#[test]` functions to the existing `mod tests`
+  block covering: `human_bytes` byte/KiB/MiB tier boundaries at 1023/1024
+  and `1024*1024`, no-panic behavior at `u64::MAX` (confirming there is no
+  GiB/TiB tier — huge values just render as a large MiB number);
+  `human_duration_ms` ms/s/min tier boundaries at 999/1000 and 60_000,
+  no-panic behavior at `u64::MAX` (no hour tier); `srt_recv_buffer_occupancy`
+  returning `None` when either `Option<i32>` field is `None`, returning
+  `None` when both resolve to a total of 0 (div-by-zero guard), clamping
+  negative `i32` values (libsrt reports `-1` for "unavailable") to 0 via
+  `.max(0)` before the `u64` cast rather than underflowing, a normal
+  percentage computation, and an `i32::MAX` case proving the
+  `u64` intermediate cast avoids overflow that would occur if the
+  multiplication/sum stayed in `i32`.
+- Pinned quirk: both `human_bytes` and `human_duration_ms` select their
+  display tier with an `if raw_value < threshold` check on the *unrounded*
+  input, then independently format the *scaled* value at one decimal place.
+  A value one unit below the threshold can round up to look like it already
+  crossed it: `human_bytes(1024 * 1024 - 1)` renders `"1024.0 KiB"` instead
+  of bumping to MiB, and `human_duration_ms(59_999)` renders `"60.0 s"`
+  instead of bumping to minutes. Not a panic or data-loss bug — pinned with
+  an explanatory test comment rather than "fixed", per this session's
+  pin-don't-fix convention; changing the tier-selection logic to round-then-
+  compare would be a deliberate, human-reviewed behavior change to
+  operator-facing display text, out of scope for a test sweep.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib api_view_models`
+  — 30/30 pass (15 new plus 15 pre-existing in the same filter, unaffected).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` + `--check` — clean, no reformatting
+  needed. Test-only change to a module already on the frontend/backend
+  contract surface for its JSON-shaping functions, but no production code
+  or JSON shape changed — did not run `scripts/check/api-contract.sh`
+  since no wire-format behavior was touched, only new tests added.
+- Commit: `ec60433b` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. The tier-selection/rounding disagreement is
+  pinned as documented current display behavior, not flagged as a bug.
+- Notes: continuing the open-ended scan. Remaining unswept areas: most of
+  `src/application/` (`ingest.rs`, `reconcile.rs`, `egress.rs`,
+  `hls_preview.rs`, `recording.rs`, `srt_ingest.rs`, `ingest_security.rs`,
+  `models.rs`, `settings.rs`, `graph.rs` — most already have some tests,
+  ratios not yet deeply evaluated) and `src/api_runtime_views/` thin-ratio
+  files (`status.rs` 833 lines/5 tests, `resource_map.rs` 736/1,
+  `telemetry.rs` 403/3) worth a closer look next.
+
+## 2026-07-19 01:00 HUNT RESOURCE-MAP-JSON-SHAPING-HELPERS DONE [codex]
+
+- Scope: continued the open-ended scan into `src/api_runtime_views/`.
+  Re-checked `telemetry.rs` first: an earlier ratio scan undercounted it
+  (grepping only `#[test]` and missing `#[tokio::test]`) — it actually has
+  3 solid `#[tokio::test]` integration-style tests covering its async
+  `MediaEngine`-coupled functions, including a real regression case
+  (`telemetry_reads_runtime_stage_after_metrics_side_map_removed`). Ruled
+  it out as already adequately covered for its shape (thin async glue,
+  same category as the earlier-ruled-out `graph.rs`).
+- Finding: `src/api_runtime_views/resource_map.rs` (736 lines) had only one
+  `#[test]`, despite containing roughly 15 pure, synchronous functions that
+  shape the operator/agent-facing `GET .../resource-map` JSON from
+  untrusted-shaped `serde_json::Value` telemetry snapshots — field
+  extraction, group-key/label derivation, thread/hotspot merging, node
+  scoring, sorting/truncation, and per-node-kind builders. Added 16 new
+  `#[test]` functions to the existing `mod tests` block covering:
+  `ResourceMapOptions::new`'s `top_n` clamping at the low end (`Some(0)`
+  clamps up to 1, not an empty view) and high end (`Some(MAX_TOP_N +
+  1000)` clamps down, guarding against unbounded node allocation from a
+  malicious or buggy query parameter); `number_field` returning 0 (not
+  panicking or wrapping) for a missing key, a non-integer string, a
+  negative number, and a fractional number, plus round-tripping
+  `u64::MAX`; `group_key`/`group_label` defaulting cleanly on missing
+  `kind`/`execution`/`label` fields, including an all-whitespace egress
+  label (no first word, falls back to `"unknown"`) and an empty group key
+  (single empty split segment, falls through to the `other` arm without
+  panicking); `merge_thread_counts` accumulating counts across repeated
+  calls while silently skipping non-numeric thread-count entries;
+  `append_hotspots` deduplicating repeated hotspot strings while ignoring
+  non-string array entries; `queue_hotspots`' 75%-of-capacity threshold
+  boundary (`len*100 >= capacity*75`, inclusive at exactly 75%) and its
+  `capacity > 0` guard, which prevents a zero-capacity queue from
+  reporting `queue_high` even at `u64::MAX` length (the multiplication
+  would otherwise saturate to a false positive without the guard);
+  `execution_for_stage`'s full backend-string-to-execution-model mapping
+  including both case variants seen in the wild (`externalFfmpeg` /
+  `ExternalFfmpeg`) and its default-to-`shared` fallback for an unknown or
+  missing backend; `stage_backend_pid` rejecting a `backendPid` value that
+  does not fit in `u32` (e.g. `u64::MAX`) via `None` rather than silently
+  truncating it to a different, wrong pid; `node_score`'s cpu-dominates-
+  memory weighting (1% CPU outweighs just under 1 MiB of memory, by
+  design); `top_nodes` sorting descending by score with correct
+  truncation, including a truncate-to-zero case that must return empty
+  rather than panic; and `egress_node`/`source_ring_node`'s protocol- and
+  payload-driven branches (SRT egress is the only protocol treated as an
+  app-owned OS thread; a source ring only reports the `retained_payload`
+  hotspot when it actually holds bytes).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib resource_map`
+  — 17/17 pass (16 new plus 1 pre-existing, unaffected).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` + `--check` — clean (auto-wrapped
+  a few of the new multi-line `assert_eq!` calls, cosmetic only, re-ran
+  the test suite afterward to confirm no behavior changed). Test-only
+  change; the JSON shape of `resource_map`'s public output was not
+  touched, so did not run `scripts/check/api-contract.sh`.
+- Commit: `ef795dac` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. All observed defaults/clamps/guards are
+  existing, intentional-looking behavior; nothing found here rose to the
+  level of a bug.
+- Notes: continuing the open-ended scan. Remaining unswept areas: most of
+  `src/application/` (`ingest.rs`, `reconcile.rs`, `egress.rs`,
+  `hls_preview.rs`, `recording.rs`, `srt_ingest.rs`, `ingest_security.rs`,
+  `models.rs`, `settings.rs`, `graph.rs`) and `src/api_runtime_views/`
+  `status.rs` (833 lines/5 tests) worth a closer look next.
+
+## 2026-07-19 01:20 HUNT STATUS-CPU-AFFINITY-OVERFLOW FIXED [codex]
+
+- Scope: continued into `src/api_runtime_views/status.rs` (833 lines, 5
+  existing tests). Most of the file is `output_status`/`health_snapshot`/
+  `health_summary_snapshot`, thin async orchestration over live
+  `MediaEngine` registries (same shape as the already-ruled-out
+  `telemetry.rs`/`graph.rs`), already covered by two existing lock-ordering
+  regression tests. The file's genuinely undertested surface was its small
+  set of pure, synchronous JSON/parsing helpers: `parse_cpu_list_count`,
+  `parse_cgroup_cpu_max`, and `host_setting_json`.
+- Finding (real bug, not just a gap): `parse_cpu_list_count` computed a
+  CPU-range length as `end - start + 1` with plain (non-checked)
+  arithmetic. `end >= start` was already guaranteed by an earlier check, so
+  the subtraction itself was safe, but the trailing `+ 1` was not: for a
+  range ending at or near `u64::MAX` (e.g. `"0-18446744073709551615"`),
+  `u64::MAX + 1` overflows. Verified with a standalone repro compiled both
+  with and without `debug-assertions`: it panics ("attempt to add with
+  overflow") under debug-assertions — the mode `cargo test` builds in by
+  default — and silently wraps to `Some(0)` in release. In production this
+  parses the kernel-reported `Cpus_allowed_list` from `/proc/self/status`
+  during health-settings reporting, so real-world exploitability is low
+  (the kernel is very unlikely to report a range spanning 2^64 CPUs), but
+  the function has no other input validation boundary and must not panic
+  or silently corrupt its result on any string. Fixed by computing the
+  range length as `(end - start).checked_add(1)?` before folding it into
+  the running `checked_add` total, so an unrepresentable range length now
+  returns `None` (parse failure) instead of panicking or wrapping.
+- Added regression/adversarial coverage: a test pinning the fixed overflow
+  case (`"0-18446744073709551615"` → `None`, not a panic); empty-string and
+  single-element-range (`"5-5"` → `Some(1)`) cases that were previously
+  unexercised boundaries of the same parser; and three new tests for
+  `host_setting_json`'s status derivation — the `current >= required`
+  threshold is inclusive at exactly `required` (`"ok"` at the boundary,
+  `"warning"` one below it), a missing `current` reading reports a distinct
+  `"unknown"` status rather than being conflated with `"warning"` (checked
+  against `required = u64::MAX` to rule out any accidental comparison
+  against the sentinel), and a `None` detail passes through as JSON `null`
+  rather than being coerced to an empty string or omitted.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib status::` —
+  10/10 pass (5 new plus 5 pre-existing) both before and after `cargo fmt
+  --all`. `scripts/build/resource-limit.sh cargo clippy --lib --benches --
+  -D warnings` — clean. `scripts/check/api-contract.sh` — 109/109 contract
+  tests plus the `api-smoke` end-to-end script pass (run because the file
+  lives under `src/api_runtime_views/`, even though this change only
+  touched an internal helper and test-only code, not any public JSON
+  shape).
+- Commit: `51bd88a0` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — the overflow was fixed directly in this commit
+  since it was a small, local, off-hot-path arithmetic correction with an
+  obvious safe fix, not a design question needing a separate backlog item.
+- Notes: continuing the open-ended scan. Remaining unswept areas: most of
+  `src/application/` (`ingest.rs`, `reconcile.rs`, `egress.rs`,
+  `hls_preview.rs`, `recording.rs`, `srt_ingest.rs`, `ingest_security.rs`,
+  `models.rs`, `settings.rs`, `graph.rs`) — none of these have been ratio-
+  scanned yet with the corrected `#[(tokio::)?test]` counting method.
+
+## 2026-07-19 02:00 HUNT HLS-PREVIEW-CODEC-LEVEL-DEFAULT FIXED [codex]
+
+- Scope: checked `src/application/graph.rs` (106 lines, 1 existing test)
+  first and ruled it out — it is thin delegation
+  (`desired_pipeline_graphs`/`planned_output` route to
+  `crate::planner::graph_plan` based on one branch,
+  `OutputUrlScheme::from_url(&output.url).is_hls_family()`, already covered
+  by the file's one existing test) with no further hunt value. Moved on to
+  `src/application/hls_preview.rs` (516 lines, 2 existing tests, both
+  `#[tokio::test]`-level orchestration checks). Most of the file is thin
+  async glue over `Arc<MediaEngine>` (`ensure_hls_preview`,
+  `primary_playlist`, `*_segment`/`*_playlist` handlers — same
+  already-ruled-out shape as `telemetry.rs`/`graph.rs`/`status.rs`'s async
+  handlers), but it also holds ~20 pure, synchronous HLS playlist and
+  H.264/HEVC codec-string-building functions with zero direct unit
+  coverage: `quote_hls_attr`, `build_hls_master_playlist`,
+  `build_hls_audio_track_name`, `estimate_hls_master_bandwidth`,
+  `estimate_audio_bandwidth`, `build_hls_codec_list`,
+  `build_hls_video_codec`, `build_h264_codec_string`,
+  `estimate_h264_level_idc`, `parse_h264_level_idc`,
+  `build_hevc_codec_string`, `parse_h265_level_tenths`,
+  `build_hls_audio_codec`.
+- Finding (real bug, not just a gap): `build_hevc_codec_string`'s fallback
+  for a missing/unparseable `level` was `level_tenths.unwrap_or(120)`, but
+  `level_tenths` is in "major*10+minor" units (`parse_h265_level_tenths`
+  returns `40` for level "4.0"), and gets multiplied by 3 afterward to
+  produce the actual `general_level_idc` written into the codec string.
+  The `120` fallback was itself already expressed in
+  `general_level_idc`-ish units, so the `*3` ran a second time on it,
+  producing `L360` — past the HEVC spec's max level (6.2, `L186`) — for
+  any stream with a missing or malformed level string, instead of a sane
+  default around level 4.0 (`L120`). Cross-checked the two producers of
+  `VideoMeta.level` (`src/media/rtmp/flv.rs:42` and
+  `src/media/mpegts_probe.rs:441`, both format "major.minor" from a
+  decoder-reported `level_idc`) to confirm the unit `parse_h265_level_tenths`
+  expects and produces, then fixed the fallback to `40` (level 4.0),
+  matching those units.
+- Added adversarial/regression coverage (43 new tests): H.264/HEVC level
+  parsing (`None`/empty/whitespace input, missing-dot single-value levels,
+  extra dot segments, non-numeric parts, major overflowing `u8`, and the
+  `saturating_mul`/`saturating_add` boundary at `"99.9"` clamping to
+  `u8::MAX` instead of wrapping); `estimate_h264_level_idc`'s three-tier
+  boundary conditions (exact-`216_000`/`108_000` macroblocks-per-second
+  thresholds) and its zero-dimension/non-finite-fps guards; a dedicated
+  regression test for the `build_hevc_codec_string` fallback-unit bug
+  above (`level: None` and `level: Some("garbage")` both now producing
+  `L120`, not `L360`); `estimate_hls_master_bandwidth`'s non-finite/
+  non-positive video-bandwidth filtering, its `.max(1)` zero-bandwidth
+  floor (a `bw` that rounds down to `0` must still report `1`), and a
+  `saturating_add` overflow check at `f64::MAX`; `estimate_audio_bandwidth`'s
+  full codec/channel-tier lookup table plus case-insensitive codec
+  matching; `build_hls_codec_list`'s dedup behavior and empty-input `None`
+  case; `quote_hls_attr`'s escape-backslash-before-quote ordering (would
+  double-escape if reversed); `build_hls_audio_track_name`'s
+  title/language whitespace-trim fallback chain; and two
+  `build_hls_master_playlist` integration checks — a track title
+  containing an embedded `"` round-trips through `NAME=` correctly escaped
+  (an M3U8-injection angle for attacker-influenced stream metadata), and
+  `DEFAULT=YES` is set on exactly one audio track (ordinal 0) regardless
+  of track count.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib hls_preview::`
+  — 45/45 pass (43 new plus 2 pre-existing).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` — no changes beyond the new tests
+  (diff stat matched exactly); `cargo fmt --all --check` — clean.
+- Commit: `69319407` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — the level-default bug was fixed directly in
+  this commit (a small, local, off-hot-path constant correction with an
+  obvious fix), consistent with the "fix real bugs directly" convention
+  used for the `status.rs` overflow fix earlier in this session.
+- Notes: continuing the open-ended scan. Remaining unswept areas in
+  `src/application/`: `ingest.rs` (923/12), `reconcile.rs` (648/12),
+  `egress.rs` (549/7), `recording.rs` (470/8), `srt_ingest.rs` (357/5),
+  `ingest_security.rs` (195/5), `models.rs` (156/2),
+  `transcode_profiles.rs` (151/2, distinct from the already-hunted
+  `src/domain/transcode_profile.rs`), `settings.rs` (140/2) — none
+  ratio-scanned in depth yet beyond raw line/test counts.
+
+## 2026-07-19 02:20 HUNT INGEST-SECURITY-VALIDATE-BRANCHES DONE [codex]
+
+- Scope: checked `src/application/ingest_security.rs` (195 lines, 5
+  existing tests) and ruled it out — its own doc comment states it owns
+  only "JSON round-tripping" between `MetaStore` and the domain config,
+  with "validation semantics" living in `crate::domain::ingest_security`.
+  The 5 existing tests already cover the full state space for that thin
+  glue: valid-JSON load, malformed/store-error fallback to defaults,
+  normalize-on-load, save round-trip, and save-with-normalize. Same
+  pattern as the already-ruled-out `graph.rs`/`telemetry.rs`/`ports.rs`.
+  Moved to the real target named in that doc comment:
+  `src/domain/ingest_security.rs` (88 lines, 2 existing tests) — small,
+  but its `validate()` had only one of four field branches exercised
+  (`failure_limit`), no test that a valid config passes, no boundary
+  test at exactly `1`, and `normalize()`'s `.max(1)` clamp had no
+  `i64::MIN` case despite taking `i64` input from arbitrary
+  deserialized/API-supplied JSON.
+- Finding: no bug — `.max(1)` on `i64` cannot overflow (`i64::MIN.max(1)
+  == 1`), confirmed by the new `normalize_clamps_i64_min_without_overflow`
+  test. This is a coverage gap, not a defect.
+- Added regression/adversarial coverage (14 new tests, 2 pre-existing
+  kept): one `validate()` test per remaining field
+  (`failure_window_ms`/`ban_ms`/`tracked_ip_limit`, each pinning its own
+  distinct error string), a negative-value case for `failure_limit`
+  (previously only `0` was tested), a default-config-passes-validate
+  case, an all-fields-set-to-`1` boundary-passes case, an
+  all-fields-zero case pinning that the first field in declared order
+  wins (documents `validate`'s short-circuit order), an
+  already-valid-values-are-unchanged case for `normalize` (previously
+  only the clamping path was tested), an exactly-`1`-boundary
+  no-op case, the `i64::MIN` overflow-safety case above, and an
+  integration check that `normalize()` then `validate()` always
+  succeeds regardless of how invalid the input was
+  (`i64::MIN`/`0`/`-42`/`i64::MIN` all clamp to a config that validates
+  clean).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  ingest_security::` — 18/18 pass (16 new/expanded plus 2 pre-existing,
+  spanning both the `application::` and `domain::` modules of the same
+  name). `scripts/build/resource-limit.sh cargo clippy --lib --benches
+  -- -D warnings` — clean. `cargo fmt --all` — no changes beyond the new
+  tests; `cargo fmt --all --check` — clean.
+- Commit: `2387037a` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: continuing the open-ended scan. Remaining unswept areas in
+  `src/application/`: `ingest.rs` (923/12), `reconcile.rs` (648/12),
+  `egress.rs` (549/7), `recording.rs` (470/8), `srt_ingest.rs` (357/5),
+  `models.rs` (156/2, checked — `JobStatus` string round-trip already
+  fully covered, thin serde records otherwise, ruling out),
+  `transcode_profiles.rs` (151/2, checked — thin persistence glue over
+  `crate::domain::transcode_profile`, already-hunted per the prior
+  `TRANSCODE-PROFILE-VALIDATION-BOUNDARIES` entry, ruling out),
+  `settings.rs` (140/2) — not yet ratio-scanned in depth.
+
+## 2026-07-19 02:35 HUNT SETTINGS-BACKEND-POLICY-FALLBACK DONE [codex]
+
+- Scope: `src/application/settings.rs` (140 lines, 2 existing tests).
+  `load_settings_snapshot` is thin cross-source orchestration delegating
+  to already-hunted/well-tested loaders (`load_recording_settings`,
+  `load_global_srt_ingest_config`, `crate::media::profiles::
+  current_effective`, `IngestSecurityService::get_config`), already
+  covered end-to-end by its one integration test. The undertested
+  surface was `load_backend_policy`'s own fallback chain
+  (`.ok().flatten().and_then(...).unwrap_or(default_policy)`): only the
+  "valid persisted JSON present" branch had a test; the "nothing
+  persisted," "persisted value isn't valid JSON," and "persisted JSON
+  parses but isn't the right shape" branches were all unexercised.
+- Finding: no bug — all three fallback branches correctly resolve to the
+  caller-supplied default, exactly as the `.ok()`/`.flatten()`/
+  `.and_then()` chain implies. Coverage gap, not a defect.
+- Added regression coverage (3 new tests): no meta row for the policy
+  key at all; a meta row present but containing invalid JSON syntax
+  (`"{not valid json"`); and a meta row present with syntactically valid
+  but wrong-shaped JSON (a JSON array instead of the expected object) —
+  all three assert the result equals the caller's `default_policy`
+  rather than partially applying or panicking.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib settings::`
+  — 10/10 pass (3 new plus 2 pre-existing in `application::settings`,
+  plus 5 unrelated pre-existing `api::settings` tests sharing the same
+  module-name filter). `scripts/build/resource-limit.sh cargo clippy
+  --lib --benches -- -D warnings` — clean. `cargo fmt --all` — no
+  changes beyond the new tests; `cargo fmt --all --check` — clean.
+- Commit: `df977f2d` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: continuing the open-ended scan. Remaining unswept areas in
+  `src/application/`, largest-first: `ingest.rs` (923/12),
+  `reconcile.rs` (648/12), `egress.rs` (549/7), `recording.rs` (470/8),
+  `srt_ingest.rs` (357/5). All files under ~200 lines in
+  `src/application/` have now been ratio-scanned and either hunted or
+  ruled out this session.
+
+## 2026-07-19 02:50 HUNT SRT-INGEST-APPCONFIG-FALLBACK DONE [codex]
+
+- Scope: `src/application/srt_ingest.rs` (357 lines, 5 existing tests).
+  `load_policy_store`/`refresh_policy_store` are thin orchestration
+  wired together from `load_global_srt_ingest_config` plus catalog
+  lookups, already covered end-to-end by their own two integration
+  tests. `load_global_srt_ingest_config`'s meta-store-present and
+  fail-closed-vs-fail-open validation branches were also already
+  covered by 3 existing tests. The gap was the private
+  `srt_global_config_from_appconfig` helper (lines 76-89) and its
+  `.or_else(...)` integration at line 24: no existing test ever left
+  the fake meta store empty (`value: None`) or passed a non-`None`
+  `srt_passphrase` argument, so the entire app-config-derived fallback
+  path — used when no SRT ingest config has ever been persisted to the
+  meta store yet an operator has configured a global passphrase via
+  app config/CLI flags — was completely dead code as far as the test
+  suite was concerned.
+- Finding: no bug — the fallback and its priority ordering (meta store
+  wins when present, even over a non-empty app-config passphrase)
+  behave exactly as implied by the `.or_else()`/`.unwrap_or_default()`
+  chain. Coverage gap, not a defect.
+- Added regression coverage (6 new tests): 3 direct unit tests of
+  `srt_global_config_from_appconfig` (`None` passphrase → `None`;
+  empty-string passphrase → `None`, i.e. treated as absent rather than
+  a valid empty secret; a real passphrase → an `Encrypted` config
+  carrying the passphrase and `pbkeylen` through unchanged) plus 3
+  integration tests through `load_global_srt_ingest_config` (empty meta
+  store falls back to the app-config passphrase; empty meta store and
+  no app-config passphrase falls back to `SrtGlobalIngestConfig::
+  default()`; a present-but-plaintext meta-store value wins over a
+  simultaneously-supplied app-config passphrase, pinning the priority
+  order).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  srt_ingest::` — 16/16 pass (11 in `application::srt_ingest`, 6 new
+  plus 5 pre-existing; plus 5 unrelated pre-existing
+  `domain::srt_ingest` tests sharing the module-name filter).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` — no changes beyond the new
+  tests; `cargo fmt --all --check` — clean.
+- Commit: `58063998` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: continuing the open-ended scan. Remaining unswept areas in
+  `src/application/`, largest-first: `ingest.rs` (923/12),
+  `reconcile.rs` (648/12), `egress.rs` (549/7), `recording.rs` (470/8).
+  All files under ~400 lines in `src/application/` have now been
+  ratio-scanned and either hunted or ruled out this session.
+
+## 2026-07-19 03:05 HUNT RECORDING-SETTINGS-FALLBACK-AND-SHORT-CIRCUIT DONE [codex]
+
+- Scope: `src/application/recording.rs` (470 lines, 8 existing tests).
+  `recording_enabled_meta_key`, `load_recording_enabled`,
+  `load_recording_enabled_map`, and `save_recording_settings` were
+  already fully covered. `spawn_recording_task` and
+  `apply_recording_commands`'s start/stop dispatch are exercised by
+  live-`MediaEngine` lifecycle tests, matching the already-ruled-out
+  "thin async glue" pattern for their happy-path behavior. Two gaps
+  remained: `load_recording_settings`'s malformed-JSON fallback branch
+  had no test (only the "key missing" fallback case existed), and
+  `apply_recording_commands`'s `needs_settings` short-circuit — which
+  skips loading `RecordingSettings` entirely when the command batch
+  contains no `RecordingCommand::Start` — had no test proving the skip
+  actually happens rather than just being incidentally harmless.
+- Finding: no bug — `load_recording_settings` falls back to
+  `RecordingSettings::default()` on malformed JSON exactly like the
+  missing-key case, and `needs_settings` correctly avoids the
+  meta-store call for stop-only batches. Coverage gap, not a defect.
+- Added regression coverage (2 new tests):
+  `load_recording_settings_falls_back_to_default_on_malformed_json`
+  pins the malformed-JSON fallback. `apply_recording_commands_skips_settings_load_when_only_stopping`
+  uses a call-counting `MetaStore` fake (`get_meta` always errors and
+  increments an `AtomicUsize`) dispatched with a `Stop`-only command
+  list, asserting zero `get_meta` calls — proving the short-circuit
+  actually elides the load rather than merely tolerating a failed one.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib recording::`
+  — 39/39 pass (10 in `application::recording`: 2 new plus 8
+  pre-existing; remainder pre-existing `media::recording` tests sharing
+  the module-name filter). `scripts/build/resource-limit.sh cargo
+  clippy --lib --benches -- -D warnings` — clean. `cargo fmt --all` —
+  no changes beyond the new tests; `cargo fmt --all --check` — clean.
+  `scripts/check/concurrency/fast.sh` — 135/135 pass (run per the
+  Inner Loop table's lifecycle-file gate for `recording.rs`).
+- Commit: `4956018a` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: continuing the open-ended scan. Remaining unswept
+  `src/application/` files: `ingest.rs` (923/12), `reconcile.rs`
+  (648/12), `egress.rs` (549/7).
+
+## 2026-07-19 03:30 HUNT INGEST-AUTH-ASYMMETRY-AND-FILE-INGEST-GAPS DONE [codex]
+
+- Scope: `src/application/ingest.rs` (923 lines, 12 existing tests) —
+  the largest remaining unswept `src/application/` file. Covers
+  `PipelineStoreIngestAuthenticator`/`PipelineAccessAuthenticator`
+  dispatch on `PipelineAccessMode`, the shared
+  `authenticate_stream_key_for_scope` core auth logic, and the
+  file-ingest lifecycle helpers (`resolve_file_ingest_context`,
+  `load_pipeline_file_ingest_state`, `clear_stream_key_file_ingests`,
+  `persist_pipeline_file_ingest`, `remove_pipeline_file_ingest`).
+- Finding: no bug — five coverage gaps, all confirmed correct as
+  designed. (1) `authenticate_publish_stream_key` (RTMP) and
+  `authenticate_srt_stream_key` share `authenticate_stream_key_for_scope`
+  but pass different `clear_on_success` booleans (`false` vs `true`);
+  a successful RTMP publish auth intentionally does NOT clear a prior
+  failure count, while SRT auth does. Only the SRT (clearing) side had
+  a test; the RTMP (non-clearing) side was unproven, leaving the
+  asymmetry unguarded against an accidental future unification. (2)
+  `resolve_file_ingest_context`'s `ResolveFileIngestError::IngestLookup`
+  branch had no test. (3) `persist_pipeline_file_ingest`'s `None` arm
+  (create-new-ingest path) of its `match existing` had no test — only
+  the update-existing arm was covered. (4) The TOCTOU race where
+  `update_ingest` returns `Ok(None)` (target deleted between lookup and
+  update) had no test proving it surfaces as
+  `PersistFileIngestError::IngestWrite`. (5) `remove_pipeline_file_ingest`
+  had zero references anywhere in the test module — a completely
+  untested function despite its siblings all being covered.
+- Added regression coverage (5 new tests):
+  `publish_auth_success_does_not_clear_prior_failure_state` pins the
+  RTMP-vs-SRT `clear_on_success` asymmetry by recording an
+  `RtmpPublish` failure, succeeding an auth, then showing a second
+  failure still trips the ban (proving the first failure count
+  survived the success).
+  `resolve_file_ingest_context_surfaces_ingest_lookup_error` covers the
+  `IngestLookup` error branch.
+  `persist_pipeline_file_ingest_creates_new_ingest_when_none_exists`
+  covers the create-path arm, asserting `create_ingest` is called with
+  the `id_factory()`-generated ID.
+  `persist_pipeline_file_ingest_surfaces_race_when_update_target_disappears`
+  extends `FakeIngestWriter` with an `update_returns_none: bool` flag
+  to simulate the TOCTOU race and asserts `IngestWrite` is returned.
+  `remove_pipeline_file_ingest_deletes_all_ingests_and_clears_input_source`
+  is the first-ever test for `remove_pipeline_file_ingest`, asserting
+  both ingests tied to a stream key are deleted.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib ingest::` —
+  62/62 pass (15 in `application::ingest`: 7 new plus 8 pre-existing;
+  remainder pre-existing `application::srt_ingest`, `domain::srt_ingest`,
+  `media::file_ingest` tests sharing the module-name filter).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` — no changes beyond the new
+  tests; `cargo fmt --all --check` — clean. `scripts/check/concurrency/fast.sh`
+  — 135/135 pass (run per the `staged-gate-router`-recommended
+  follow-up for this file).
+- Commit: `1a2e66e0` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: continuing the open-ended scan. Remaining unswept
+  `src/application/` files: `reconcile.rs` (648/12), `egress.rs`
+  (549/7).
+
+## 2026-07-19 03:55 HUNT RECONCILE-DECISION-BRANCH-COVERAGE DONE [codex]
+
+- Scope: `src/application/reconcile.rs` (648 lines, 12 existing tests)
+  — the pure decision functions (`decide_output_start_action`,
+  `decide_output_stop_action`, `decide_recording_action`,
+  `OutputRetryPolicy::backoff_ms`) plus the async
+  `build_recording_reconcile_plan` orchestrator.
+- Finding: no bug — six coverage gaps, all confirmed correct as
+  designed. `decide_output_start_action`'s `NotApplicable` short-circuit
+  (already-active or not desired-Running) had no test, nor did its
+  plain `StartNow` path with no prior failure, nor the boundary where
+  a `WaitRetry` window has fully elapsed and the action becomes
+  `StartNow` again. `decide_output_stop_action`'s catch-all
+  `KeepRunning` arm — the majority of its match's input space — had
+  zero test coverage; only the two non-default arms were exercised.
+  `OutputRetryPolicy::backoff_ms`'s `retries.min(16)` clamp was never
+  proven to actually cap extreme retry counts. Most notably,
+  `FakePipelineStore` already had an `error: Option<&'static str>`
+  field wired into `list_pipelines`, but no test ever set it to
+  `Some(_)` — the `PipelineStoreError` propagation path through
+  `build_recording_reconcile_plan` was completely unexercised despite
+  the fake being purpose-built for it.
+- Added regression coverage (6 new tests):
+  `start_action_is_not_applicable_when_already_active_or_not_desired_running`,
+  `start_action_starts_now_without_prior_failure`, and
+  `start_action_starts_now_once_backoff_window_elapses` cover the three
+  previously-untested branches of `decide_output_start_action`.
+  `stop_action_keeps_running_by_default` exercises all three inputs
+  that fall through to the `KeepRunning` default arm.
+  `backoff_ms_clamps_retries_beyond_shift_limit` asserts
+  `backoff_ms(16) == backoff_ms(u32::MAX)`, pinning the clamp.
+  `recording_reconcile_plan_propagates_pipeline_store_error` sets
+  `FakePipelineStore.error` and asserts the error message survives
+  through `build_recording_reconcile_plan`.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib reconcile::`
+  — 18/18 pass (6 new plus 12 pre-existing). `scripts/build/resource-limit.sh
+  cargo clippy --lib --benches -- -D warnings` — clean. `cargo fmt --all`
+  — no changes beyond the new tests; `cargo fmt --all --check` — clean.
+  `scripts/check/concurrency/fast.sh` — 135/135 pass (run per the
+  `staged-gate-router`-recommended follow-up for this file).
+- Commit: `ae7c42d3` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: continuing the open-ended scan. Remaining unswept
+  `src/application/` file: `egress.rs` (549/7).
+
+## 2026-07-19 04:10 HUNT EGRESS-MALFORMED-URL-RESILIENCE DONE [codex]
+
+- Scope: `src/application/egress.rs` (549 lines, 7 existing tests) —
+  the last unswept `src/application/` file by size. Unlike the prior
+  three files in this run, this one is dense, sophisticated
+  engine-integration coverage rather than thin glue: the existing 7
+  tests already exercise ring reuse, HEVC->H.264 codec-edge sharing,
+  audio-track-selection dedup, mixed-protocol codec pinning, codec-hint
+  precedence over ingest meta, HLS terminal-stage reporting, and one
+  full end-to-end packet-flow test through a real fixture. All of that
+  held up under review with no gaps.
+- Finding: no bug — one coverage gap. `prepare_output_ring` calls
+  `OutputUrlScheme::from_url` and `EgressProtocol::from_url`
+  (`src/domain/output_spec.rs`), both of which parse via
+  `url::Url::parse(..).ok()` and fall back to `Unknown` for any
+  unparseable string rather than panicking — but every existing test
+  used a well-formed `rtmp://`/`srt://`/`https://` URL, so that
+  fallback path was never exercised through `prepare_output_ring`
+  itself. Confirmed the malformed-input path is handled safely as
+  designed.
+- Added regression coverage (1 new test):
+  `prepare_output_ring_falls_back_gracefully_for_unrecognized_url_scheme`
+  passes an output with url `"not-a-valid-url"` and asserts the
+  function doesn't panic and produces the same source-passthrough
+  result as a normal unencoded output (`Unknown` scheme is neither
+  HLS-family nor RTMP, so no codec override or protocol segmenter
+  applies).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib egress::` —
+  9/9 pass (1 new plus 7 pre-existing `application::egress` tests, plus
+  1 pre-existing `media::srt::srt_egress` test sharing the module-name
+  filter). `scripts/build/resource-limit.sh cargo clippy --lib
+  --benches -- -D warnings` — clean. `cargo fmt --all` — no changes
+  beyond the new test; `cargo fmt --all --check` — clean. `egress.rs`
+  is not on the AGENTS.md lifecycle-file list and the
+  `staged-gate-router` did not recommend the concurrency fast-check for
+  this commit.
+- Commit: `b54baa74` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: this closes out the largest-first scan of `src/application/`
+  — all files in that directory have now been ratio-scanned and either
+  hunted or ruled out this session. Next: pick the next-largest
+  unswept directory (`src/media/` or `src/domain/`) for the following
+  hunt.
+
+## 2026-07-19 06:33 HUNT SECURITY-EVICTION-BAN-BYPASS FIXED [codex]
+
+- Scope: `src/media/security.rs` — the ingest rate-limit/ban service
+  (`IngestSecurityService`). Adversarial focus: the hard-cap eviction
+  path in `evict_oldest_if_needed`, which runs whenever `state.len()`
+  exceeds `tracked_ip_limit` after the normal expired-ban/idle-record
+  retain pass.
+- Finding: real bug, security-relevant. The hard-cap fallback sorted
+  candidate entries by `r.failures.iter().copied().min()` (each
+  record's *earliest* failure) and never consulted `banned_until` at
+  all, then evicted the lowest-ranked `excess` entries outright. Two
+  compounding defects: (1) ignoring ban status meant a currently-banned
+  record was exactly as evictable as any other; (2) ranking by the
+  earliest failure instead of the most recent one inverted the
+  intended "evict the stalest/least-active entry" policy — a
+  long-running attacker's first failure is always older than a
+  fresh one-off flood IP's only failure, so the sort preferentially
+  targeted active attackers over disposable ones. Combined, an
+  attacker with an active ban could clear that ban well before
+  `ban_ms` elapsed by flooding `record_failure` from enough disposable,
+  unrelated IPs to push `tracked_ip_limit` and force their own banned
+  record out. This directly contradicted the function's own inline
+  comment, which claimed the logic existed specifically to prevent an
+  attacker clearing their own record by flooding from many IPs.
+  Confirmed empirically before fixing: three successive throwaway
+  probe tests using `panic!` to print real eviction order under a
+  crafted flood, narrowing from "sort order looks backwards" to a
+  decisive repro where an active ban was evicted by an unrelated
+  flood.
+- Fix: replaced the sort key with a tuple `(currently_banned: bool,
+  most_recent_failure: Instant)`. Tuple `Ord` gives banned status a
+  hard priority tier — a banned entry is never evicted ahead of a
+  non-banned one, regardless of individual recency — and within each
+  tier, entries are ranked by their *most recent* failure (`max()`,
+  not `min()`), so genuinely stale/inactive entries are evicted first
+  within a tier. Updated the surrounding comment to explain both the
+  ban-priority and min-vs-max reasoning so the next reader doesn't
+  reintroduce either defect independently.
+- Added two permanent regression tests:
+  `flood_of_other_ips_does_not_evict_an_active_ban` (bans one IP, then
+  floods 16 disposable IPs past `tracked_ip_limit`, asserts the ban
+  survives) and
+  `eviction_prefers_non_banned_entries_over_banned_ones_regardless_of_recency`
+  (proves banned status is a hard tier, not just a recency tiebreaker,
+  at a tighter `tracked_ip_limit`). Also closed two smaller coverage
+  gaps found while reading the file: `rate_limit_scope_from_key_round_trips_and_rejects_unknown_keys`
+  (no prior direct test of the `RateLimitScope::from_key` reverse
+  mapping) and `embedded_null_byte_in_ip_does_not_forge_a_different_scope_key`
+  (proves an attacker-controlled IP string containing the same NUL
+  delimiter `scoped_key`/`parse_scoped_key` use internally can't
+  masquerade as a different scope's ban record — `split_once` only
+  ever splits at the first NUL, so it can't be exploited, but this was
+  previously unverified).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::security::` — 17/17 pass (4 new plus 13 pre-existing,
+  including the pre-existing `tracked_ip_limit_is_enforced` and
+  `concurrent_is_ip_banned_no_deadlock_or_wrong_result`, confirming the
+  cap is still enforced and concurrent access is still race-free).
+  `cargo fmt --all` / `--check` — clean. `scripts/build/resource-limit.sh
+  cargo clippy --lib --benches -- -D warnings` — clean (clippy first
+  caught an ambiguous `\0198...` octal-looking escape in the embedded-
+  NUL test literal; fixed with an explicit `\x01` hex escape).
+  `security.rs` is not on the AGENTS.md lifecycle-file list and the
+  fix only changes the sort key evaluated inside an already-locked
+  critical section — no new lock, no new thread-hop, no change to what
+  the `RwLock` protects — so the heavier `fast.sh`/`contract.sh`
+  concurrency gates were judged unnecessary; the existing
+  `concurrent_is_ip_banned_no_deadlock_or_wrong_result` test already
+  covers concurrent-access correctness and still passes unchanged.
+- Commit: (this commit) on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — the fix is scoped and fully covered by the
+  two new regression tests.
+- Notes: this is the first genuine bug (as opposed to a routine
+  coverage-gap addition) found so far in this hunt run, hence the
+  journal entry — per this session's practice of journaling real
+  findings and skipping journal entries for routine test-coverage
+  additions.

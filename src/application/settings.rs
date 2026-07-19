@@ -137,4 +137,61 @@ mod tests {
             }
         );
     }
+
+    #[tokio::test]
+    async fn load_backend_policy_falls_back_to_default_when_no_meta_is_persisted() {
+        let pool = db::create_pool("sqlite::memory:").await.unwrap();
+        db::setup_database_schema(&pool).await.unwrap();
+        let store = SqliteMetaStore::new(pool);
+        let fallback = BackendPolicy {
+            internal_video_presets: false,
+            internal_hevc_to_h264: true,
+            internal_hls_preview: false,
+            internal_complex_audio: true,
+        };
+
+        let policy = load_backend_policy(&store, fallback).await;
+
+        assert_eq!(policy, fallback);
+    }
+
+    #[tokio::test]
+    async fn load_backend_policy_falls_back_to_default_when_persisted_json_is_malformed() {
+        let pool = db::create_pool("sqlite::memory:").await.unwrap();
+        db::setup_database_schema(&pool).await.unwrap();
+        db::set_meta(&pool, BACKEND_POLICY_META_KEY, "{not valid json")
+            .await
+            .unwrap();
+        let store = SqliteMetaStore::new(pool);
+        let fallback = BackendPolicy {
+            internal_video_presets: false,
+            internal_hevc_to_h264: true,
+            internal_hls_preview: false,
+            internal_complex_audio: true,
+        };
+
+        let policy = load_backend_policy(&store, fallback).await;
+
+        assert_eq!(policy, fallback);
+    }
+
+    #[tokio::test]
+    async fn load_backend_policy_falls_back_to_default_when_persisted_json_is_wrong_shape() {
+        let pool = db::create_pool("sqlite::memory:").await.unwrap();
+        db::setup_database_schema(&pool).await.unwrap();
+        db::set_meta(&pool, BACKEND_POLICY_META_KEY, r#"["not", "an", "object"]"#)
+            .await
+            .unwrap();
+        let store = SqliteMetaStore::new(pool);
+        let fallback = BackendPolicy {
+            internal_video_presets: true,
+            internal_hevc_to_h264: true,
+            internal_hls_preview: true,
+            internal_complex_audio: true,
+        };
+
+        let policy = load_backend_policy(&store, fallback).await;
+
+        assert_eq!(policy, fallback);
+    }
 }

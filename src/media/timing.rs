@@ -252,4 +252,18 @@ mod tests {
     fn invariant_tsc_check_does_not_panic() {
         let _ = has_invariant_tsc();
     }
+
+    #[test]
+    fn delta_us_saturates_instead_of_underflowing_for_a_future_start() {
+        // `Timestamp` is opaque to callers, but a stale/corrupted value
+        // (e.g. from a clock backend swap or memory corruption) could still
+        // land here with a value "later" than `now`. Both backends use
+        // `saturating_sub`; confirm the result is a clamped 0, not a huge
+        // wrapped u64 that would look like a multi-hour stall.
+        let clock = clock();
+        let real_now = clock.now();
+        let bogus_future = Timestamp(real_now.0.saturating_add(1_000_000_000));
+
+        assert_eq!(clock.delta_us(bogus_future), 0);
+    }
 }

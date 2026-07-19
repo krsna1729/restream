@@ -362,4 +362,80 @@ mod tests {
         assert_eq!(p.preset, "ultrafast");
         assert_eq!(p.tune, "zerolatency");
     }
+
+    // resolve_from_profiles is the pure three-tier fallback (exact name ->
+    // baseline key -> type default) that every cache read (get,
+    // try_get_cached, get_blocking) ultimately delegates to. It is tested
+    // directly here, against a local TranscodeProfiles map, rather than via
+    // the process-global cache functions: the cache is a single OnceLock
+    // shared by every test in the binary, and `cargo test` runs tests in
+    // parallel OS threads, so asserting on cache contents mutated by
+    // `replace_runtime_profiles` elsewhere would be inherently racy.
+
+    #[test]
+    fn resolve_from_profiles_returns_exact_match_when_present() {
+        let mut profiles = TranscodeProfiles::new();
+        profiles.insert(
+            "720p".to_string(),
+            TranscodeProfile {
+                crf: 30,
+                ..TranscodeProfile::default()
+            },
+        );
+        profiles.insert("h264".to_string(), TranscodeProfile::default());
+
+        let resolved = resolve_from_profiles(&profiles, "720p");
+        assert_eq!(resolved.crf, 30);
+    }
+
+    #[test]
+    fn resolve_from_profiles_falls_back_to_baseline_when_name_missing() {
+        let mut profiles = TranscodeProfiles::new();
+        profiles.insert(
+            BASELINE_TRANSCODE_PROFILE_KEY.to_string(),
+            TranscodeProfile {
+                crf: 17,
+                ..TranscodeProfile::default()
+            },
+        );
+
+        let resolved = resolve_from_profiles(&profiles, "no-such-preset");
+        assert_eq!(
+            resolved.crf, 17,
+            "an unknown name must fall back to the baseline profile, not the type default"
+        );
+    }
+
+    #[test]
+    fn resolve_from_profiles_falls_back_to_type_default_when_baseline_also_missing() {
+        // Neither the requested name nor the baseline key are present —
+        // e.g. an empty or corrupted profile set. Must not panic; must
+        // return TranscodeProfile::default() rather than an arbitrary entry.
+        let profiles = TranscodeProfiles::new();
+        let resolved = resolve_from_profiles(&profiles, "no-such-preset");
+        let default = TranscodeProfile::default();
+        assert_eq!(resolved.preset, default.preset);
+        assert_eq!(resolved.tune, default.tune);
+        assert_eq!(resolved.crf, default.crf);
+        assert_eq!(resolved.width, default.width);
+        assert_eq!(resolved.height, default.height);
+    }
+
+    #[test]
+    fn resolve_from_profiles_empty_name_does_not_accidentally_match() {
+        let mut profiles = TranscodeProfiles::new();
+        profiles.insert(
+            BASELINE_TRANSCODE_PROFILE_KEY.to_string(),
+            TranscodeProfile {
+                crf: 11,
+                ..TranscodeProfile::default()
+            },
+        );
+
+        let resolved = resolve_from_profiles(&profiles, "");
+        assert_eq!(
+            resolved.crf, 11,
+            "empty string is not a real profile name and must fall back to baseline"
+        );
+    }
 }

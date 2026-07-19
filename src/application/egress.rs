@@ -354,6 +354,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prepare_output_ring_falls_back_gracefully_for_unrecognized_url_scheme() {
+        let engine = Arc::new(MediaEngine::new());
+        let source = engine.get_or_create_pipeline("pipe-bad-url").await;
+        let output = test_output("pipe-bad-url", "source", "not-a-valid-url");
+
+        let prepared = prepare_output_ring(&engine, &output).await;
+
+        assert!(Arc::ptr_eq(&source, &prepared.ring));
+        assert_eq!(
+            prepared.media_stage_key,
+            StageKey::new("pipe-bad-url", StageKind::source())
+        );
+        assert_eq!(
+            prepared.terminal_stage_key,
+            StageKey::new("pipe-bad-url", StageKind::source())
+        );
+    }
+
+    #[tokio::test]
     async fn prepare_hls_output_ring_reports_protocol_segmenter_terminal() {
         let engine = Arc::new(MediaEngine::new());
         let source = engine.get_or_create_pipeline("pipe-hls-output").await;

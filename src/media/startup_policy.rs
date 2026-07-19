@@ -58,14 +58,6 @@ pub fn recording_keyframe_preroll_packets() -> usize {
     DEFAULT_KEYFRAME_PREROLL_PACKETS
 }
 
-pub fn ext_stage_keyframe_preroll_packets() -> usize {
-    DEFAULT_KEYFRAME_PREROLL_PACKETS
-}
-
-pub fn internal_transcoder_keyframe_preroll_packets() -> usize {
-    DEFAULT_KEYFRAME_PREROLL_PACKETS
-}
-
 pub fn srt_egress_keyframe_preroll_packets(encoding: &str) -> usize {
     let spec = OutputEncodingSpec::parse(encoding);
     match spec.video() {
@@ -148,6 +140,33 @@ mod tests {
         assert_eq!(srt_egress_keyframe_preroll_packets("720p+atrack:0"), 0);
         assert_eq!(
             srt_egress_keyframe_preroll_packets("1080p"),
+            DEFAULT_KEYFRAME_PREROLL_PACKETS
+        );
+    }
+
+    #[test]
+    fn srt_preroll_falls_back_to_zero_for_unknown_or_malformed_presets() {
+        for encoding in ["", "not-a-real-preset", "1080p-typo", "custom"] {
+            assert_eq!(
+                srt_egress_keyframe_preroll_packets(encoding),
+                0,
+                "encoding={encoding:?} must fail safe to no preroll rather than panic"
+            );
+        }
+    }
+
+    #[test]
+    fn rtmp_egress_preroll_matches_the_shared_default() {
+        assert_eq!(
+            rtmp_egress_keyframe_preroll_packets(),
+            DEFAULT_KEYFRAME_PREROLL_PACKETS
+        );
+    }
+
+    #[test]
+    fn recording_preroll_matches_the_shared_default() {
+        assert_eq!(
+            recording_keyframe_preroll_packets(),
             DEFAULT_KEYFRAME_PREROLL_PACKETS
         );
     }
@@ -261,14 +280,6 @@ mod tests {
                 observed_bitrate_bps: None,
             }),
             (1_000_000, EXT_STAGE_PROBE_SIZE_BYTES_MAX)
-        );
-    }
-
-    #[test]
-    fn external_stage_preroll_keeps_buffered_join_window() {
-        assert_eq!(
-            ext_stage_keyframe_preroll_packets(),
-            DEFAULT_KEYFRAME_PREROLL_PACKETS
         );
     }
 

@@ -254,6 +254,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_recording_settings_falls_back_to_default_on_malformed_json() {
+        let store = FakeMetaStore {
+            values: Mutex::new(HashMap::from([(
+                RECORDING_SETTINGS_META_KEY.to_string(),
+                "{not valid json".to_string(),
+            )])),
+            fail_keys: HashMap::new(),
+        };
+
+        assert_eq!(
+            load_recording_settings(&store).await,
+            RecordingSettings::default()
+        );
+    }
+
+    #[tokio::test]
     async fn save_recording_settings_serializes_to_meta_store() {
         let store = FakeMetaStore {
             values: Mutex::new(HashMap::new()),
@@ -409,6 +425,51 @@ mod tests {
         assert_eq!(row.status, RecordingPhase::Ready.as_str());
         assert_eq!(row.temp_path.as_deref(), Some("/tmp/recording-meta.ts"));
         assert_eq!(row.final_path.as_deref(), Some("/tmp/recording-meta.mp4"));
+    }
+
+    #[tokio::test]
+    async fn apply_recording_commands_skips_settings_load_when_only_stopping() {
+        struct CountingMetaStore {
+            get_meta_calls: std::sync::atomic::AtomicUsize,
+        }
+
+        impl MetaStore for CountingMetaStore {
+            fn get_meta<'a>(&'a self, key: &'a str) -> MetaLookupFuture<'a> {
+                self.get_meta_calls
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let message = format!("unexpected get_meta call for {key}");
+                Box::pin(async move { Err(MetaLookupError::new(message)) })
+            }
+        }
+
+        let engine = Arc::new(MediaEngine::new());
+        let media_dir = unique_test_media_dir("recording-commands-stop-only");
+        let store = CountingMetaStore {
+            get_meta_calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let _existing = engine.register_recording("pipeline-stop-only").await;
+
+        apply_recording_commands(
+            engine.clone(),
+            &store,
+            media_dir.to_str().unwrap_or_default(),
+            vec![RecordingCommand::Stop {
+                pipeline_id: "pipeline-stop-only".to_string(),
+            }],
+            None,
+        )
+        .await;
+
+        assert!(!engine.is_recording_active("pipeline-stop-only").await);
+        assert_eq!(
+            store
+                .get_meta_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "stop-only commands must not trigger a recording-settings load"
+        );
+
+        let _ = std::fs::remove_dir_all(media_dir);
     }
 
     fn unique_test_media_dir(prefix: &str) -> PathBuf {
