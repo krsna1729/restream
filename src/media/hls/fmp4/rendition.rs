@@ -137,38 +137,45 @@ impl VideoRenditionState {
             self.payload.clear();
             return Ok(());
         }
-        let Some(sample_entry) = self.sample_entry.clone() else {
-            return Err("missing avc1 sample entry".to_string());
-        };
-        let next_dts =
-            next_segment_first_relative_dts_ms.map(|dts_ms| rescale_ms(dts_ms, VIDEO_TIMESCALE));
-        let samples = build_mux_samples(
-            &self.samples,
-            TrackKind::Video,
-            VIDEO_TIMESCALE,
-            sample_entry,
-            next_dts,
-        )?;
-        let metadata = self
-            .muxer
-            .create_media_segment_metadata(&samples)
-            .map_err(|err| err.to_string())?;
-        let mut segment = metadata;
-        segment.extend_from_slice(&self.payload);
-        let init = self
-            .muxer
-            .init_segment_bytes()
-            .map_err(|err| err.to_string())?;
-        store.publish_video_segment(
-            index,
-            duration_secs.max(0.001),
-            Bytes::from(init),
-            Bytes::from(segment),
-        );
+        let result = (|| {
+            let Some(sample_entry) = self.sample_entry.clone() else {
+                return Err("missing avc1 sample entry".to_string());
+            };
+            let next_dts = next_segment_first_relative_dts_ms
+                .map(|dts_ms| rescale_ms(dts_ms, VIDEO_TIMESCALE));
+            let samples = build_mux_samples(
+                &self.samples,
+                TrackKind::Video,
+                VIDEO_TIMESCALE,
+                sample_entry,
+                next_dts,
+            )?;
+            let metadata = self
+                .muxer
+                .create_media_segment_metadata(&samples)
+                .map_err(|err| err.to_string())?;
+            let mut segment = metadata;
+            segment.extend_from_slice(&self.payload);
+            let init = self
+                .muxer
+                .init_segment_bytes()
+                .map_err(|err| err.to_string())?;
+            store.publish_video_segment(
+                index,
+                duration_secs.max(0.001),
+                Bytes::from(init),
+                Bytes::from(segment),
+            );
+            Ok(())
+        })();
+        // Buffers must be cleared on every exit path, not just success: a
+        // rewound DTS (or any other build/mux failure) must not leave
+        // self.samples/self.payload accumulating unbounded for the rest of
+        // the stream's lifetime while every subsequent flush keeps failing.
         self.samples.clear();
         self.payload.clear();
         self.current_segment_start_ms = None;
-        Ok(())
+        result
     }
 
     pub(super) fn current_segment_duration_secs(&self) -> f64 {
@@ -248,35 +255,40 @@ impl AudioRenditionState {
             self.payload.clear();
             return Ok(());
         }
-        let timescale = self.sample_rate.max(1);
-        let samples = build_mux_samples(
-            &self.samples,
-            TrackKind::Audio,
-            timescale,
-            self.sample_entry.clone(),
-            None,
-        )?;
-        let metadata = self
-            .muxer
-            .create_media_segment_metadata(&samples)
-            .map_err(|err| err.to_string())?;
-        let mut segment = metadata;
-        segment.extend_from_slice(&self.payload);
-        let init = self
-            .muxer
-            .init_segment_bytes()
-            .map_err(|err| err.to_string())?;
-        store.publish_audio_segment(
-            self.track_index,
-            index,
-            duration_secs.max(0.001),
-            Bytes::from(init),
-            Bytes::from(segment),
-        );
+        let result = (|| {
+            let timescale = self.sample_rate.max(1);
+            let samples = build_mux_samples(
+                &self.samples,
+                TrackKind::Audio,
+                timescale,
+                self.sample_entry.clone(),
+                None,
+            )?;
+            let metadata = self
+                .muxer
+                .create_media_segment_metadata(&samples)
+                .map_err(|err| err.to_string())?;
+            let mut segment = metadata;
+            segment.extend_from_slice(&self.payload);
+            let init = self
+                .muxer
+                .init_segment_bytes()
+                .map_err(|err| err.to_string())?;
+            store.publish_audio_segment(
+                self.track_index,
+                index,
+                duration_secs.max(0.001),
+                Bytes::from(init),
+                Bytes::from(segment),
+            );
+            Ok(())
+        })();
+        // See VideoRenditionState::flush_segment: buffers must be cleared on
+        // every exit path so a failed flush can't leak memory unbounded.
         self.samples.clear();
         self.payload.clear();
         self.current_segment_start_ms = None;
-        Ok(())
+        result
     }
 
     pub(super) fn current_segment_duration_secs(&self) -> f64 {
@@ -287,5 +299,85 @@ impl AudioRenditionState {
                 (last_ms.saturating_sub(start_ms)).max(1) as f64 / 1000.0
             })
             .unwrap_or(1.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::media::hls::HlsConfig;
+    use crate::media::metadata::VideoMeta;
+    use crate::media::packet::MediaType;
+
+    fn test_video_meta() -> VideoMeta {
+        VideoMeta {
+            codec: "h264".to_string(),
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            bw: None,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+            level: None,
+            pixel_format: None,
+        }
+    }
+
+    fn high_profile_annexb_keyframe() -> Vec<u8> {
+        vec![
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x64, 0x00, 0x1F, 0xAC, 0xD9, 0x40, 0x50, 0x05, 0xBB,
+            0x01, 0x10, 0x00, 0x00, 0x03, 0x00, 0x10, 0x00, 0x00, 0x03, 0x03, 0xC0, 0xF1, 0x62,
+            0xE4, 0x00, 0x00, 0x00, 0x01, 0x68, 0xEE, 0x3C, 0x80, 0x00, 0x00, 0x00, 0x01, 0x65,
+            0x88, 0x84, 0x00,
+        ]
+    }
+
+    fn test_store() -> Fmp4HlsStore {
+        Fmp4HlsStore::with_config(HlsConfig::default())
+    }
+
+    #[test]
+    fn video_flush_segment_clears_buffers_even_when_dts_rewind_fails_the_flush() {
+        // A DTS rewind (e.g. an attacker-influenced FLV composition offset
+        // decoupling PTS from DTS) makes build_mux_samples compute a
+        // negative sample duration and return Err. Before the fix,
+        // flush_segment returned early on that Err without clearing
+        // self.samples/self.payload, so every future packet kept
+        // accumulating in an unbounded buffer for the rest of the stream.
+        let mut state = VideoRenditionState::new(&test_video_meta(), None);
+        let packet = MediaPacket {
+            media_type: MediaType::Video,
+            payload: Bytes::from(high_profile_annexb_keyframe()),
+            is_keyframe: true,
+            pts: 1_000,
+            dts: 1_000,
+            format: PayloadFormat::Raw,
+            track_index: 0,
+        };
+        state.push_packet(&packet, 0).expect("push buffered sample");
+        assert!(
+            !state.samples.is_empty(),
+            "sample must be buffered before flush"
+        );
+
+        let store = test_store();
+        let result = state.flush_segment(&store, 0, 1.0, Some(-1_000));
+
+        assert!(result.is_err(), "rewound next-DTS must fail the flush");
+        assert!(
+            state.samples.is_empty(),
+            "samples must be cleared even when the flush fails, or they leak forever"
+        );
+        assert!(
+            state.payload.is_empty(),
+            "payload must be cleared even when the flush fails, or it leaks forever"
+        );
+        assert!(state.current_segment_start_ms.is_none());
+
+        // A subsequent flush with no buffered samples must be a cheap no-op,
+        // not another attempt to mux the stale (already-cleared) data.
+        assert!(state.flush_segment(&store, 1, 1.0, None).is_ok());
     }
 }

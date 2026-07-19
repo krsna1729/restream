@@ -97,6 +97,8 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 HUNT SRT-MUXER-SHARD-RETIRING-REUSE FIXED [codex]](#2026-07-19-hunt-srt-muxer-shard-retiring-reuse-fixed-codex)
 - [2026-07-19 HUNT EGRESS-RETRY-STATE-TOCTOU FIXED [codex]](#2026-07-19-hunt-egress-retry-state-toctou-fixed-codex)
 - [2026-07-19 HUNT SPS-EXP-GOLOMB-OVERFLOW FIXED [codex]](#2026-07-19-hunt-sps-exp-golomb-overflow-fixed-codex)
+- [2026-07-19 HUNT FMP4-FLUSH-BUFFER-LEAK-ON-DTS-REWIND FIXED [codex]](#2026-07-19-hunt-fmp4-flush-buffer-leak-on-dts-rewind-fixed-codex)
+- [2026-07-19 HUNT RECORDING-REGISTER-START-RACE FIXED [codex]](#2026-07-19-hunt-recording-register-start-race-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3505,3 +3507,108 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   background Explore agent's investigation, independently verified by
   direct source reading and a failing-then-passing regression test
   before acting on it.
+
+## 2026-07-19 HUNT FMP4-FLUSH-BUFFER-LEAK-ON-DTS-REWIND FIXED [codex]
+
+- What: adversarial hunt on `src/media/hls/fmp4.rs`'s per-segment
+  buffering in `VideoRenditionState::flush_segment` and
+  `AudioRenditionState::flush_segment`, part of a background
+  Explore-agent sweep covering HLS in-memory storage/eviction, the
+  `OutputStore` persistence layer, and recording rotation.
+- Finding: both `flush_segment` methods only cleared
+  `self.samples`/`self.payload` on the success path. Any `Err`
+  propagated via `?` (most reachably from `build_mux_samples`, which
+  errors when a rewound DTS makes `next_dts.saturating_sub(sample.dts)
+  <= 0`) skipped the clear, so buffered samples/payload accumulated
+  unbounded for the rest of the stream's lifetime once a single flush
+  failed. FLV's composition-offset field decouples PTS (which gates
+  segment-flush eligibility) from DTS (which drives monotonic
+  correction), so a publisher can send a keyframe with a rewound raw
+  DTS that slips past the `packet.dts < global_zero_ms` filter while
+  still landing below the previously buffered corrected DTS on the
+  next flush — a single-packet DoS via unbounded memory growth from
+  any RTMP/FLV publisher.
+- Fix: wrap the fallible body of both `flush_segment` methods in an
+  immediately-invoked closure and unconditionally clear
+  `samples`/`payload`/`current_segment_start_ms` after it runs on
+  every exit path (`Ok` or `Err`), propagating the original error
+  unchanged.
+- Added
+  `video_flush_segment_clears_buffers_even_when_dts_rewind_fails_the_flush`,
+  driving a real rewound `next_segment_first_relative_dts_ms` through
+  `flush_segment` and asserting the buffers are empty afterward.
+  Verified failing (panicking on the "must be cleared even when the
+  flush fails" assertion) against the pre-fix code and passing
+  post-fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::hls::fmp4::` — 22/22 pass (new test included). `cargo fmt
+  --all` / `--check` — clean. No concurrency gate: this is single-task
+  buffering state, no cross-task lifecycle surface. No benchmark
+  re-run: buffer clearing runs once per segment flush, not per packet.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression test.
+- Notes: tenth genuine bug found this hunt run.
+
+## 2026-07-19 HUNT RECORDING-REGISTER-START-RACE FIXED [codex]
+
+- What: adversarial hunt on the recording-start path
+  (`MediaEngine::register_recording` in `src/media/engine.rs`,
+  `spawn_recording_task`/`apply_recording_commands` in
+  `src/application/recording.rs`, `recording_start` in
+  `src/application/services/media_library_service.rs`), same
+  background Explore-agent sweep as the fmp4 finding above.
+- Finding: a classic check-then-act TOCTOU. Two concurrent
+  recording-start requests for the same pipeline can both observe
+  `is_recording_active() == false` before either registers, then both
+  proceed to `spawn_recording_task`. `register_recording` did a blind
+  `HashMap::insert` with no check, so the second caller's insert
+  silently overwrote the first caller's `CancellationToken` — orphaning
+  it with no way to cancel it, leaking the first task's OS writer
+  thread, file handle, and ring-buffer reader for the life of the
+  process. Both spawned recorders also independently compute the same
+  output filename (`build_filename`'s second-resolution timestamp +
+  pipeline name) and race `std::fs::File::create` (truncate-on-open)
+  against each other, corrupting the shared `.ts` file via interleaved
+  writes from two OS threads.
+- Fix: made the check-and-register atomic under the single write-lock
+  acquisition `register_recording` already held. It now returns
+  `Option<CancellationToken>`: `None` if a non-cancelled token is
+  already registered for the pipeline (caller must not spawn a second
+  recorder), `Some(token)` only when this call actually won the
+  registration. `spawn_recording_task` now returns
+  `Option<CancellationToken>` and only `tokio::spawn`s the recorder
+  when registration succeeds (via `?` on the `Option`), so a losing
+  racer never reaches `build_filename`/`File::create` at all — this
+  closes both the orphaned-token leak and the filename-collision path
+  at the same root cause rather than patching each symptom.
+  `apply_recording_commands` and `recording_start` already discarded
+  `spawn_recording_task`'s return value, so both keep working unchanged
+  under the new signature.
+- Added `concurrent_register_recording_calls_never_both_succeed` in
+  `src/media/engine_tests.rs`: two tasks call `register_recording` for
+  the same pipeline after a shared `tokio::sync::Barrier`, then assert
+  exactly one gets `Some`. Verified failing (2 successes instead of 1)
+  against a pre-fix blind-insert variant and passing post-fix. Updated
+  four existing `register_recording` call sites in `engine_tests.rs`
+  and one in `recording.rs`
+  (`spawn_recording_task_registers_and_cleans_up_recording`) to unwrap
+  the new `Option` return.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  recording::` — 46/46 pass. Targeted `media::engine::tests::`
+  recording tests (`recording_lifecycle`,
+  `concurrent_register_recording_calls_never_both_succeed`,
+  `cancelled_recording_token_is_not_active`,
+  `processing_graph_marks_cancelled_recording_and_hls_inactive`,
+  `health_snapshot_marks_cancelled_recording_inactive`) — all pass.
+  `scripts/check/concurrency/contract.sh` — lifecycle gate for
+  `engine.rs`/`recording.rs` per AGENTS.md's Inner Loop table. `cargo
+  fmt --all --check` — clean (trimmed `register_recording`'s doc
+  comment to keep `engine.rs` at the 2000-line source-audit limit).
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — the same blind-insert-without-check shape
+  may exist in other `HashMap<pipeline_id, CancellationToken>`-style
+  registries elsewhere in `engine.rs`; worth a targeted look in a
+  future hunt pass but not filed as a concrete finding without a
+  verified reproduction.
+- Notes: eleventh genuine bug found this hunt run.

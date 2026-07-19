@@ -61,6 +61,15 @@ pub async fn save_recording_settings(
         .map(|_| ())
 }
 
+/// Spawns a recorder for `pipeline_id`, or returns `None` if a recording is
+/// already active for it.
+///
+/// `register_recording` is the atomic serialization point: only one of two
+/// racing callers for the same pipeline can receive `Some`, so at most one
+/// recorder task is ever spawned per pipeline at a time. This prevents both
+/// an orphaned cancellation token (leaking the loser's writer thread/file
+/// handle) and a filename collision between two recorders racing
+/// `std::fs::File::create` on the same output path.
 pub async fn spawn_recording_task(
     engine: Arc<MediaEngine>,
     pipeline_name: String,
@@ -69,9 +78,9 @@ pub async fn spawn_recording_task(
     media_dir: String,
     recording_settings: RecordingSettings,
     metadata: Option<RecordingMetadataReporter>,
-) -> CancellationToken {
+) -> Option<CancellationToken> {
     let ring_buffer = engine.get_or_create_pipeline(&pipeline_id).await;
-    let cancel_token = engine.register_recording(&pipeline_id).await;
+    let cancel_token = engine.register_recording(&pipeline_id).await?;
     let cancel_token_for_task = cancel_token.clone();
     let engine_for_task = engine.clone();
     let pipeline_id_for_cleanup = pipeline_id.clone();
@@ -102,7 +111,7 @@ pub async fn spawn_recording_task(
             .await;
     });
 
-    cancel_token
+    Some(cancel_token)
 }
 
 pub async fn apply_recording_commands(
@@ -308,7 +317,8 @@ mod tests {
             RecordingSettings::default(),
             None,
         )
-        .await;
+        .await
+        .expect("first registration for a pipeline must succeed");
 
         assert!(engine.is_recording_active("pipeline-launch").await);
         let planned_key = StageKey::new(
