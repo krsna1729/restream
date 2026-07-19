@@ -95,6 +95,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 HUNT CODEC-FLV-SEQUENCE-HEADER-CACHE-WIPE FIXED [codex]](#2026-07-19-hunt-codec-flv-sequence-header-cache-wipe-fixed-codex)
 - [2026-07-19 HUNT RING-BUFFER-DTS-ENFORCER-OVERFLOW FIXED [codex]](#2026-07-19-hunt-ring-buffer-dts-enforcer-overflow-fixed-codex)
 - [2026-07-19 HUNT SRT-MUXER-SHARD-RETIRING-REUSE FIXED [codex]](#2026-07-19-hunt-srt-muxer-shard-retiring-reuse-fixed-codex)
+- [2026-07-19 HUNT EGRESS-RETRY-STATE-TOCTOU FIXED [codex]](#2026-07-19-hunt-egress-retry-state-toctou-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3382,3 +3383,63 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Notes: seventh genuine bug found this hunt run; found via a
   background research agent's investigation, independently verified by
   direct source reading before acting on it.
+
+## 2026-07-19 HUNT EGRESS-RETRY-STATE-TOCTOU FIXED [codex]
+
+- What: adversarial hunt on `src/media/engine.rs`, focused on the
+  egress retry-state bookkeeping (`update_egress_retry_state`,
+  `update_egress_retry_state_if_current`). Traced a suspected TOCTOU
+  between a retry-state publish's active-egress check and its
+  subsequent insert into `self.egresses.retry`, flagged by a
+  background research agent and independently verified by direct
+  source reading before acting on it.
+- Finding: both functions performed a check ("is this egress currently
+  active?") followed, after an `.await` gap on a separate lock, by an
+  unconditional insert into `self.egresses.retry`. Concurrently,
+  `register_egress_attempt_with_meta` (the only call site is
+  `src/lib.rs:684`) starts by clearing stale retry state
+  (`self.egresses.retry.write().await.remove(output_id)`) and only
+  afterward marks the egress active. If a retry-state publish's
+  check-then-insert straddled a racing registration's clear-then-mark
+  sequence, a stale "retrying" entry could persist alongside a
+  genuinely active egress — an operator-visible status glitch,
+  self-healing on the next reconciler tick (default 1000ms) or on any
+  subsequent fresh registration for the same output.
+- Fix: reordered both functions to acquire the `self.egresses.retry`
+  write lock first, then perform the active-egress check while holding
+  it, then decide insert-vs-remove under that single lock acquisition.
+  This serializes the retry-state decision against
+  `register_egress_attempt_with_meta`'s own first action (also a
+  `retry` write), closing the race window. Verified deadlock-safe via
+  `grep -n "egresses\.active\.\(read\|write\)\|egresses\.retry\.\(read\|write\)"
+  src/media/engine.rs` — no other path acquires `active`/`cancel_tokens`
+  before `retry` in the reverse order, so nesting the check inside the
+  `retry` guard cannot create a lock-ordering cycle.
+- Added one permanent regression test,
+  `concurrent_retry_publish_cannot_outlive_a_racing_registration`, in
+  `src/media/engine_lifecycle_tests.rs`. Holds the `cancel_tokens`
+  write lock open, spawns a retry-state publish and a fresh
+  registration in sequence behind it (each given 50ms to reach its
+  blocking point), then releases the held lock and asserts no stale
+  retry entry survives once both tasks complete. The test failed
+  pre-fix (stale retry entry observed) and passes after the fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::engine` — 147/147 pass (new test included).
+  `scripts/build/resource-limit.sh cargo test --lib` — full backend
+  suite, 1464/1464 pass. `cargo fmt --all` + `cargo fmt --all --check`
+  — clean. `scripts/build/resource-limit.sh cargo clippy --lib --tests
+  -- -D warnings` — clean. `scripts/check/concurrency/contract.sh` —
+  passed (required gate for lifecycle changes in `engine.rs`).
+  `scripts/check/source-audit.sh` — passed. No benchmark re-run: this
+  is egress lifecycle/retry bookkeeping under async `RwLock`s, not a
+  hot packet-loop path.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression test. `record_ingest_disconnect` /
+  `record_ingest_disconnect_if_current` (`engine.rs`) have a similar
+  read-drop-await-write shape but no confirmed racing caller path was
+  found; worth a quick independent look in a future sweep, not urgent.
+- Notes: eighth genuine bug found this hunt run; found via a
+  background research agent's investigation, independently verified by
+  direct source reading and a failing-then-passing regression test
+  before acting on it.
