@@ -229,6 +229,20 @@ is_mcp_feature_surface_file() {
     esac
 }
 
+is_source_audit_scope_file() {
+    case "$1" in
+        test/fixtures/*)
+            return 1
+            ;;
+        src/*.rs | web/ts/*.ts | test/*.rs | test/*.ts | test/*.mjs | test/*.js)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 diff_contains_concurrency_change() {
     ((${#rust_files[@]} > 0)) || return 1
 
@@ -288,6 +302,10 @@ for file in "${changed_files[@]}"; do
 
     if is_mcp_feature_surface_file "$file"; then
         add_follow_up_gate "scripts/build/resource-limit.sh cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings"
+    fi
+
+    if is_source_audit_scope_file "$file"; then
+        add_auto_gate "scripts/check/source-audit.sh"
     fi
 done
 
@@ -374,4 +392,8 @@ fi
 
 if [[ -n "${auto_gates["node scripts/check/docs.mjs"]+x}" ]]; then
     run_gate node scripts/check/docs.mjs
+fi
+
+if [[ -n "${auto_gates["scripts/check/source-audit.sh"]+x}" ]]; then
+    run_gate scripts/check/source-audit.sh
 fi
