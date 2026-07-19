@@ -55,14 +55,18 @@ fn redact_path_tail(path: &str) -> String {
     if path.is_empty() {
         return String::new();
     }
-    let Some((prefix, tail)) = path.rsplit_once('/') else {
+    // A trailing slash (common on some platforms' egress URLs, or a simple
+    // typo) must not defeat redaction: strip it before finding the last
+    // segment, then reattach it so the secret segment still gets redacted.
+    let trimmed = path.trim_end_matches('/');
+    let trailing_slashes = &path[trimmed.len()..];
+    if trimmed.is_empty() {
         return path.to_string();
-    };
-    if tail.is_empty() {
-        path.to_string()
-    } else {
-        format!("{prefix}/{}", redact_secret(tail))
     }
+    let Some((prefix, tail)) = trimmed.rsplit_once('/') else {
+        return format!("{}{trailing_slashes}", redact_secret(trimmed));
+    };
+    format!("{prefix}/{}{trailing_slashes}", redact_secret(tail))
 }
 
 fn redact_query(query: &str) -> String {
@@ -99,6 +103,15 @@ mod tests {
 
         assert_eq!(redacted, "stre...alue");
         assert!(!redacted.contains("stream-key-secret-value"));
+    }
+
+    #[test]
+    fn redacts_path_tail_even_with_a_trailing_slash() {
+        let redacted = redact_url("rtmp://host.example.com/live/superSecretKey123/");
+
+        assert!(!redacted.contains("superSecretKey123"));
+        assert!(redacted.ends_with('/'));
+        assert!(redacted.starts_with("rtmp://host.example.com/live/"));
     }
 
     #[test]
