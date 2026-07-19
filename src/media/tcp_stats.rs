@@ -325,6 +325,24 @@ fn stats_from_tcp_info(info: &LinuxTcpInfo, returned_len: usize) -> TcpReceiverS
     }
 }
 
+/// Parses a `TCP_CONGESTION` sockopt buffer into an algorithm name.
+///
+/// `returned_len` may exceed `buffer.len()` (a caller passing through a raw
+/// kernel-reported length) or fall short of it (a buffer padded with
+/// trailing zero bytes); both are clamped rather than trusted.
+#[cfg(target_os = "linux")]
+fn parse_congestion_algorithm(buffer: &[u8], returned_len: usize) -> Option<String> {
+    let written = returned_len.min(buffer.len());
+    let nul = buffer[..written]
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(written);
+    std::str::from_utf8(&buffer[..nul])
+        .ok()
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
 #[cfg(target_os = "linux")]
 fn collect_tcp_congestion_algorithm(fd: std::os::fd::RawFd) -> Option<String> {
     let mut algorithm = [0u8; 32];
@@ -344,15 +362,7 @@ fn collect_tcp_congestion_algorithm(fd: std::os::fd::RawFd) -> Option<String> {
     if result != 0 {
         return None;
     }
-    let written = (algorithm_len as usize).min(algorithm.len());
-    let nul = algorithm[..written]
-        .iter()
-        .position(|&byte| byte == 0)
-        .unwrap_or(written);
-    std::str::from_utf8(&algorithm[..nul])
-        .ok()
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
+    parse_congestion_algorithm(&algorithm, algorithm_len as usize)
 }
 
 #[cfg(target_os = "linux")]
@@ -603,5 +613,60 @@ mod tests {
         };
         let stats = stats_from_tcp_info(&info, 0);
         assert_eq!(stats, TcpReceiverStats::default());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parses_congestion_algorithm_from_nul_terminated_buffer() {
+        let mut buffer = [0u8; 32];
+        buffer[..5].copy_from_slice(b"cubic");
+        assert_eq!(
+            parse_congestion_algorithm(&buffer, buffer.len()),
+            Some("cubic".to_string())
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parses_congestion_algorithm_with_no_nul_terminator() {
+        // A kernel could in principle report a name filling the whole
+        // buffer with no trailing NUL; the whole reported length must be
+        // treated as the name rather than reading past it.
+        let mut buffer = [b'_'; 32];
+        buffer[..4].copy_from_slice(b"reno");
+        assert_eq!(
+            parse_congestion_algorithm(&buffer, buffer.len()),
+            Some(String::from_utf8(buffer.to_vec()).unwrap())
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rejects_non_utf8_congestion_algorithm_bytes() {
+        let mut buffer = [0u8; 32];
+        buffer[0] = 0xFF;
+        buffer[1] = 0xFE;
+        assert_eq!(parse_congestion_algorithm(&buffer, 2), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rejects_empty_congestion_algorithm_name() {
+        let buffer = [0u8; 32];
+        assert_eq!(parse_congestion_algorithm(&buffer, buffer.len()), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clamps_reported_length_exceeding_buffer_size() {
+        // A returned_len larger than the buffer (e.g. a caller passing
+        // through an unvalidated kernel-reported length) must be clamped,
+        // never used to index past the buffer.
+        let mut buffer = [0u8; 32];
+        buffer[..4].copy_from_slice(b"bbr\0");
+        assert_eq!(
+            parse_congestion_algorithm(&buffer, usize::MAX),
+            Some("bbr".to_string())
+        );
     }
 }
