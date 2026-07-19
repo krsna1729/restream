@@ -784,15 +784,18 @@ fn run_internal_file_ingest_once(
     );
 
     demuxer.flush();
+    let mut packet_state = DemuxPacketState {
+        timestamps,
+        switch_timestamps,
+        startup_gate: &mut startup_gate,
+    };
     push_demuxed_packets(
         &mut demuxer,
         &mut packets,
         ring_buffer,
         registration,
         cached_keyframe_times,
-        timestamps,
-        switch_timestamps,
-        &mut startup_gate,
+        &mut packet_state,
     );
     maybe_publish_probe(
         engine,
@@ -876,15 +879,18 @@ fn drain_remuxed_ts(
         }
 
         demuxer.feed(&buf[..read]);
+        let mut packet_state = DemuxPacketState {
+            timestamps,
+            switch_timestamps,
+            startup_gate,
+        };
         push_demuxed_packets(
             demuxer,
             packets,
             ring_buffer,
             registration,
             cached_keyframe_times,
-            timestamps,
-            switch_timestamps,
-            startup_gate,
+            &mut packet_state,
         );
         maybe_publish_probe(
             engine,
@@ -900,27 +906,35 @@ fn drain_remuxed_ts(
     }
 }
 
+struct DemuxPacketState<'a> {
+    timestamps: &'a mut LoopTimestampState,
+    switch_timestamps: &'a mut crate::media::input_gate::InputTimestampMapper,
+    startup_gate: &'a mut LoopStartupGate,
+}
+
 fn push_demuxed_packets(
     demuxer: &mut TsDemuxer,
     packets: &mut Vec<MediaPacket>,
     ring_buffer: &Arc<RingBuffer>,
     registration: &IngestRegistration,
     cached_keyframe_times: &KeyframeTimes,
-    timestamps: &mut LoopTimestampState,
-    switch_timestamps: &mut crate::media::input_gate::InputTimestampMapper,
-    startup_gate: &mut LoopStartupGate,
+    state: &mut DemuxPacketState<'_>,
 ) {
     if demuxer.drain_into(packets) == 0 {
         return;
     }
 
-    packets.retain(|pkt| startup_gate.filter_packet(pkt, ring_buffer, registration));
+    packets.retain(|pkt| {
+        state
+            .startup_gate
+            .filter_packet(pkt, ring_buffer, registration)
+    });
     if packets.is_empty() {
         return;
     }
 
     for pkt in packets.iter_mut() {
-        timestamps.apply(pkt);
+        state.timestamps.apply(pkt);
     }
 
     if let Some(preview_ring) = registration.preview_ring.load_full() {
@@ -944,7 +958,11 @@ fn push_demuxed_packets(
         packets.drain(..first_keyframe);
     }
     for packet in packets.iter_mut() {
-        switch_timestamps.map_packet(packet, lease.activated(), &registration.last_forwarded_dts);
+        state.switch_timestamps.map_packet(
+            packet,
+            lease.activated(),
+            &registration.last_forwarded_dts,
+        );
     }
     for pkt in packets.iter() {
         if pkt.media_type == MediaType::Video

@@ -26,6 +26,12 @@ use crate::media::engine::MediaEngine;
 use super::error::{ApiError, ApiResult};
 use super::pipeline_service::PipelineService;
 
+#[derive(Default)]
+struct FileIngestTimestamps {
+    continuous: crate::media::file_ingest::ContinuousTimestampState,
+    promotion: crate::media::input_gate::InputTimestampMapper,
+}
+
 /// Transport-facing payload for creating or updating one persisted file ingest
 /// configuration before it is translated into the domain/storage model.
 pub struct FileIngestConfigInput {
@@ -437,8 +443,7 @@ impl FileIngestService {
         registration: &crate::media::engine::IngestRegistration,
         mut stdout: ChildStdout,
         cancel: CancellationToken,
-        timestamps: &mut crate::media::file_ingest::ContinuousTimestampState,
-        switch_timestamps: &mut crate::media::input_gate::InputTimestampMapper,
+        timestamps: &mut FileIngestTimestamps,
     ) -> Result<(), String> {
         let (bytes_received, ingest_metrics, last_progress_ms, cached_keyframe_times) = {
             engine
@@ -473,7 +478,7 @@ impl FileIngestService {
             demuxer.feed(&buf[..read]);
             if demuxer.drain_into(&mut packets) > 0 {
                 for pkt in &mut packets {
-                    timestamps.apply(pkt);
+                    timestamps.continuous.apply(pkt);
                 }
                 if let Some(preview_ring) = registration.preview_ring.load_full() {
                     preview_ring.push_batch(packets.iter().cloned());
@@ -494,7 +499,7 @@ impl FileIngestService {
                         packets.drain(..first_keyframe);
                     }
                     for pkt in &mut packets {
-                        switch_timestamps.map_packet(
+                        timestamps.promotion.map_packet(
                             pkt,
                             lease.activated(),
                             &registration.last_forwarded_dts,
@@ -625,8 +630,7 @@ impl FileIngestService {
         mut spawned: SpawnedFileIngestChild,
     ) {
         let cancel = registration.cancel_token.clone();
-        let mut timestamps = crate::media::file_ingest::ContinuousTimestampState::default();
-        let mut switch_timestamps = crate::media::input_gate::InputTimestampMapper::default();
+        let mut timestamps = FileIngestTimestamps::default();
         loop {
             engine
                 .file_ingests
@@ -644,7 +648,6 @@ impl FileIngestService {
                 spawned.stdout,
                 cancel.clone(),
                 &mut timestamps,
-                &mut switch_timestamps,
             );
             let stderr_fut = Self::log_file_ingest_stderr(&stderr_id, spawned.stderr);
             let (stdout_res, stderr_res) = tokio::join!(stdout_fut, stderr_fut);
