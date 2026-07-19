@@ -1,4 +1,4 @@
-name: Nightly full certification
+name: Nightly
 
 on:
   schedule:

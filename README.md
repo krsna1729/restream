@@ -1,5 +1,11 @@
 # Restream
 
+[![CI](https://github.com/krsna1729/restream/actions/workflows/ci.yml/badge.svg?branch=master&event=push)](https://github.com/krsna1729/restream/actions/workflows/ci.yml?query=branch%3Amaster+event%3Apush)
+[![Nightly](https://github.com/krsna1729/restream/actions/workflows/nightly-full-certification.yml/badge.svg?branch=master&event=schedule)](https://github.com/krsna1729/restream/actions/workflows/nightly-full-certification.yml?query=branch%3Amaster+event%3Aschedule)
+[![Release](https://github.com/krsna1729/restream/actions/workflows/release.yml/badge.svg?event=push)](https://github.com/krsna1729/restream/actions/workflows/release.yml?query=event%3Apush)
+[![Security](https://github.com/krsna1729/restream/actions/workflows/sbom-security.yml/badge.svg?branch=master&event=schedule)](https://github.com/krsna1729/restream/actions/workflows/sbom-security.yml?query=branch%3Amaster+event%3Aschedule)
+[![Harness Image](https://github.com/krsna1729/restream/actions/workflows/ci-harness-runtime-image.yml/badge.svg?branch=master&event=push)](https://github.com/krsna1729/restream/actions/workflows/ci-harness-runtime-image.yml?query=branch%3Amaster+event%3Apush)
+
 Restream is a Rust live-stream routing service. One process owns the dashboard,
 API, SQLite state, RTMP/SRT ingest, RTMP/SRT egress, HLS preview, recording,
 and the media-stage orchestration around transcoding.

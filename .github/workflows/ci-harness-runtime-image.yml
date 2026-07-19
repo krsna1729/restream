@@ -1,4 +1,4 @@
-name: CI harness runtime image
+name: Harness Image
 
 on:
   workflow_dispatch:

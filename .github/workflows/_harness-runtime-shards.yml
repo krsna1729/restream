@@ -1,4 +1,4 @@
-name: Harness runtime shards
+name: Harness Shards
 
 on:
   workflow_call:
