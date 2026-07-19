@@ -19,6 +19,12 @@ pub(super) async fn recovery_live_cases(
         results.push(workflow_result);
     }
 
+    for case in input_promotion_cases() {
+        results.push(
+            run_input_promotion_case(api, ports, fixture_h264, sink_port, timeout, case).await?,
+        );
+    }
+
     // ── 2b. Rapid SRT publisher replacement preserves egress ownership ──
     {
         let pid = create_pipeline_with_stream_key(

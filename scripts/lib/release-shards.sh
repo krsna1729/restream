@@ -38,6 +38,7 @@ bitrate-sweep.mixed-h264-a2
 bitrate-sweep.mixed-h265-a2
 branch-matrix
 fault.resilience
+msr-smoke
 resource-sweep.source
 resource-sweep.transcode
 resource-sweep.hevc
@@ -65,7 +66,7 @@ restream_release_shard_timeout() {
     #     still needed cleanup/completion time beyond the 15m bucket.
     #   - full bitrate measurement family: <= ~15m locally -> 60m
     case "$shard" in
-        smoke|branch-matrix)
+        smoke|branch-matrix|msr-smoke)
             echo 10m
             ;;
         mixed.*.bf0|mixed.*.bf2|fault.resilience|ramp-family)
@@ -123,6 +124,9 @@ restream_release_shard_plan() {
             ;;
         ramp-family|srt-crypto-matrix|branch-matrix|fault.resilience)
             printf 'mode\t%s\n' "$shard"
+            ;;
+        msr-smoke)
+            printf 'msr-smoke\tmsr\n'
             ;;
         *)
             echo "unknown release shard: $shard" >&2

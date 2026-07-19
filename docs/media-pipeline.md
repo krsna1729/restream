@@ -10,6 +10,7 @@ For the performance optimization plan and benchmark results, see
 ## Contents
 
 - [Current shape](#current-shape)
+- [Multi-input selection](#multi-input-selection)
 - [Transcoder stages](#transcoder-stages)
 - [Protocol and codec boundaries](#protocol-and-codec-boundaries)
 - [Resolution presets](#resolution-presets)
@@ -28,8 +29,8 @@ For the performance optimization plan and benchmark results, see
 ```mermaid
 flowchart TD
     subgraph INGESTS["Ingest"]
-        RI["RTMP ingest\nFLV payload"]
-        SI["SRT ingest\nMPEG-TS"]
+        RI["RTMP input sessions\nFLV payload"]
+        SI["SRT input sessions\nMPEG-TS"]
     end
 
     subgraph DEMUX["Ingest demux (inline, async)"]
@@ -37,6 +38,7 @@ flowchart TD
         SD["TsDemuxer\nRaw packets"]
     end
 
+    GATE{"Selected input gate"}
     SR[("source_ring\nSPMC RingBuffer 4096\nMediaPacket · Flv ∣ Raw")]
 
     subgraph PASSTHROUGH["Passthrough — encoding = source"]
@@ -62,8 +64,9 @@ flowchart TD
         OR --> TOUT_S
     end
 
-    RI --> RD --> SR
-    SI --> SD --> SR
+    RI --> RD --> GATE
+    SI --> SD --> GATE
+    GATE -->|"selected only"| SR
 
     SR -->|"Flv · source · RTMP"| PT1
     SR -->|"Flv · source · SRT/HLS"| PT2
@@ -71,6 +74,33 @@ flowchart TD
     SR -->|"Raw · source · SRT/HLS"| PT4
     SR -->|"any format · 720p"| TIN
 ```
+
+## Multi-input selection
+
+A pipeline supports one primary and up to three backup input records. Each
+record has a separate stream key and independent RTMP/SRT session. Unselected
+connected sessions stay warm through socket receive, parsing, demux/probe,
+metadata, transport metrics, and on-demand input-scoped HLS preview generation.
+RTMP and SRT standbys keep the latest complete compressed GOP in a
+protocol-task-local `StandbyGopCache`. The default per-input limits are 16 MiB
+of payload and 2,048 packets. Crossing either limit invalidates the whole GOP;
+non-keyframe packets are then discarded until the next keyframe starts a new
+cache. The cache has no shared lock, async channel, decoder, or transform.
+
+Explicit promotion demotes and drains the old gate, then arms the target gate.
+On the target's next packet, a complete cached GOP activates the gate and is
+drained exactly once from its retained video keyframe. Without a complete cache,
+the target waits for its next live video keyframe. `InputTimestampMapper`
+applies one offset to the replay so its first DTS follows the prior writer's
+last DTS, with PTS/DTS composition offsets preserved across the whole GOP and
+on later re-promotions. The gate stores forwarding state and in-flight lease
+count in one atomic word; loom covers no overlapping writers and one activation
+for a replay-ready boundary.
+
+This is connected standby, not bonded ingest. Each publisher remains an
+independent source and the operator chooses one. Libsrt socket groups remain the
+only bonded SRT path. File inputs retain the next-live-keyframe promotion path;
+the compressed-GOP cache applies to continuously connected RTMP/SRT publishers.
 
 ## Transcoder stages
 
@@ -330,6 +360,7 @@ the normal MPEG-TS demux back into the shared output ring.
 
 | Component | Size | Constraint | Source |
 |---|---|---|---|
+| Standby GOP cache | 16 MiB payload / 2,048 packets per connected RTMP/SRT standby | Keeps only the latest complete compressed GOP; invalidates on either limit | `standby_gop.rs` |
 | RingBuffer capacity | 4096 slots | ~24s at 170 pkt/s (4K60). Overflow fast-forwards to most recent keyframe | `engine.rs` |
 | AVIO buffer | 32 KB | FFmpeg internal read/write chunk | `avio.rs` |
 | MemoryQueue | Bounded `VecDeque<u8>` (2 MB) | Backpressure is structural: writer yields on full, consumer blocks on empty `read()` | `avio.rs` |

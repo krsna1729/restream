@@ -372,9 +372,10 @@ impl StageRuntimeManager {
             ingests
                 .get(key.pipeline.as_str())
                 .map(|i| {
+                    let metadata = i.metadata();
                     let lock = i.audio_tracks.lock().unwrap_or_else(|e| e.into_inner());
                     if lock.is_empty()
-                        && let Some(audio) = i.audio.clone()
+                        && let Some(audio) = metadata.audio
                     {
                         std::sync::Arc::new(vec![audio])
                     } else {
@@ -440,7 +441,8 @@ pub(crate) async fn wait_for_stage_metadata(
         let ingest_result = {
             let ingests = engine.ingests.active.read().await;
             ingests.get(pipeline_id).and_then(|ingest| {
-                let mut video = ingest.video.clone()?;
+                let metadata = ingest.metadata();
+                let mut video = metadata.video?;
                 if let Some(codec) = input_codec_override {
                     video.codec = codec.to_string();
                 } else {
@@ -479,7 +481,7 @@ pub(crate) async fn wait_for_stage_metadata(
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
                         if lock.is_empty() {
-                            ingest
+                            metadata
                                 .audio
                                 .clone()
                                 .map(|audio| std::sync::Arc::new(vec![audio]))

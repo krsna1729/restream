@@ -165,6 +165,7 @@ pub(crate) struct MixedInputCase {
     codec: MixedVideoCodec,
     audio_layout: MixedInputAudioLayout,
     reorder: MixedInputReorder,
+    buffered_standby: bool,
 }
 
 impl MixedInputCase {
@@ -174,6 +175,7 @@ impl MixedInputCase {
         codec: MixedVideoCodec,
         audio_layout: MixedInputAudioLayout,
         reorder: MixedInputReorder,
+        buffered_standby: bool,
     ) -> Self {
         Self {
             id,
@@ -181,6 +183,7 @@ impl MixedInputCase {
             codec,
             audio_layout,
             reorder,
+            buffered_standby,
         }
     }
 
@@ -246,6 +249,10 @@ impl MixedInputCase {
 
     pub(crate) const fn source_has_b_frames(self) -> bool {
         self.reorder().has_b_frames()
+    }
+
+    pub(crate) const fn has_buffered_standby(self) -> bool {
+        self.buffered_standby
     }
 
     pub(crate) const fn fixture_bframe_mode(self) -> AvMarkerBframeMode {
@@ -485,6 +492,8 @@ pub(crate) struct MixedDslInput<'a> {
     pub(crate) video: &'a str,
     pub(crate) audio: &'a str,
     pub(crate) reorder: &'a str,
+    #[serde(default, rename = "bufferedStandby")]
+    pub(crate) buffered_standby: bool,
 }
 
 impl MixedDslInput<'static> {
@@ -514,6 +523,7 @@ impl MixedDslInput<'static> {
             codec,
             audio_layout,
             reorder,
+            self.buffered_standby,
         ))
     }
 }
@@ -1131,5 +1141,25 @@ mod tests {
                 case.scenario_id()
             );
         }
+    }
+
+    #[test]
+    fn mixed_matrix_and_fast_breadth_cover_rtmp_and_srt_buffered_standbys() {
+        let matrix_protocols = mixed_input_cases()
+            .iter()
+            .filter(|case| case.has_buffered_standby())
+            .map(|case| case.protocol())
+            .collect::<Vec<_>>();
+        let breadth_protocols = mixed_fast_breadth_cases()
+            .iter()
+            .filter(|row| row.case.has_buffered_standby())
+            .map(|row| row.case.protocol())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            matrix_protocols,
+            vec![MixedInputProtocol::Rtmp, MixedInputProtocol::Srt]
+        );
+        assert_eq!(breadth_protocols, matrix_protocols);
     }
 }

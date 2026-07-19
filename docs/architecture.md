@@ -10,6 +10,7 @@ dependency.
 - [System shape](#system-shape)
 - [Layer ownership](#layer-ownership)
 - [Runtime ownership](#runtime-ownership)
+- [Input selection](#input-selection)
 - [Packet and container boundaries](#packet-and-container-boundaries)
 - [Shared processing stages](#shared-processing-stages)
 - [Lifecycle and recovery](#lifecycle-and-recovery)
@@ -20,10 +21,11 @@ dependency.
 
 ```mermaid
 flowchart LR
-    Publisher["Publisher"] -->|"RTMP or SRT"| Ingest["Native ingest"]
+    Primary["Selected publisher"] -->|"RTMP or SRT"| Selection["Input selection gate"]
+    Standby["Warm standby publishers"] -->|"RTMP or SRT"| Selection
 
     subgraph Restream["restream process"]
-        Ingest --> Source[("Source packet ring")]
+        Selection --> Source[("Source packet ring")]
         Source --> Direct["Direct RTMP or SRT egress"]
         Source --> Transform["Shared transform stage"]
         Transform --> Encoded[("Encoded packet ring")]
@@ -89,6 +91,25 @@ counts vary with active publishers, outputs, recordings, stage sharing, codec
 backend selection, and native-library internals. Runtime health and engineering
 telemetry are the appropriate source for a running process.
 
+## Input selection
+
+Each pipeline owns up to four independently authenticated input sessions. Every
+input has one opaque stream key and can connect through RTMP or SRT. Connected
+standbys still perform socket receive, protocol parsing, demux/probe, metadata
+collection, and on-demand input-scoped HLS preview generation. Each RTMP/SRT
+standby retains only its newest complete compressed GOP, bounded by bytes and
+packet count. Nothing reaches the shared source ring, outputs, or transforms
+until selection, so downstream media work remains single-source.
+
+Promotion is serialized per pipeline. The current gate rejects new packets and
+drains its existing packet lease before the target gate is armed. The promoted
+network input replays its retained GOP from the cached keyframe on the next
+packet arrival. If it has no complete cached GOP, promotion falls back to its
+next video keyframe. The replay receives one timestamp offset so its first DTS
+follows the prior writer's last DTS while preserving every packet's composition
+offset. This keeps the shared ring single-writer and prevents timestamp
+regression across repeated handoffs.
+
 ## Packet and container boundaries
 
 `MediaPacket` carries media type, track identity, PTS, DTS, keyframe state,
@@ -118,11 +139,12 @@ flowchart LR
     Package --> Destination["Socket, HLS store, or recording"]
 ```
 
-Each pipeline has a single-producer, multi-consumer `RingBuffer`. Independent
-readers prevent one destination from consuming another destination's packets.
-A lagging reader can recover at a keyframe after overflow. This structure is
-bounded; capacity and overflow behavior are owned by
-`src/media/ring_buffer.rs` and `src/config.rs`.
+Each pipeline ring remains single-producer, multi-consumer: multiple connected
+inputs are reduced to one forwarding writer before packets reach the
+`RingBuffer`. Independent readers prevent one destination from consuming
+another destination's packets. A lagging reader can recover at a keyframe after
+overflow. This structure is bounded; capacity and overflow behavior are owned
+by `src/media/ring_buffer.rs` and `src/config.rs`.
 
 SRT fan-out packages a shared MPEG-TS stream into `TsChunkRing` shards and
 keeps per-destination socket state at the edge. Async-to-blocking boundaries

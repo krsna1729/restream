@@ -38,6 +38,8 @@ mod catalog;
 mod catalog_cli;
 #[path = "test_harness/core.rs"]
 mod core;
+#[path = "test_harness/fault_input_promotion.rs"]
+mod fault_input_promotion;
 #[path = "test_harness/fault_manifest.rs"]
 mod fault_manifest;
 #[path = "test_harness/fault_recovery.rs"]
@@ -76,6 +78,7 @@ mod workflow_exec;
 use api_client::*;
 use catalog_cli::*;
 use core::*;
+use fault_input_promotion::*;
 use fault_manifest::*;
 use fault_recovery::*;
 use fault_runner::*;

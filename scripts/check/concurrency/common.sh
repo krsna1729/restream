@@ -3,7 +3,7 @@
 run_common_concurrency_checks() {
   local run_step_fn="$1"
 
-  for target in avio_loom ring_migration_loom ts_chunk_ring_loom ts_muxer_stage_loom transcoder_stage_loom; do
+  for target in avio_loom input_selection_loom ring_migration_loom ts_chunk_ring_loom ts_muxer_stage_loom transcoder_stage_loom; do
     "$run_step_fn" "loom-${target}" ./scripts/harness/loom-target.sh "$target"
   done
 
@@ -41,6 +41,10 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test prop_no_loss_no_gap_no_duplication --test ring_migration -- --nocapture
   "$run_step_fn" ring-multi-reader-proptest \
     scripts/build/resource-limit.sh cargo test prop_multi_reader_migration_preserves_each_reader_order --test ring_migration -- --nocapture
+  "$run_step_fn" input-selection-proptest \
+    scripts/build/resource-limit.sh cargo test gate_matches_sequential_selection_model --test input_selection -- --nocapture
+  "$run_step_fn" standby-gop-proptest \
+    scripts/build/resource-limit.sh cargo test cache_never_exceeds_its_declared_limits --test standby_gop -- --nocapture
   "$run_step_fn" lib-avio-batch \
     scripts/build/resource-limit.sh cargo test write_batch_round_trips_random_chunks --lib -- --nocapture
   "$run_step_fn" lib-avio-unit \

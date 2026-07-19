@@ -8,10 +8,11 @@
 //! registry keep the critical section short and avoid calling out while guards
 //! are live.
 
+use arc_swap::ArcSwapOption;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicI64, AtomicU64};
 use std::sync::{Arc, Mutex};
-use tokio::sync::RwLock as TokioRwLock;
+use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::domain::stage::StageKey;
@@ -33,7 +34,13 @@ pub struct IngestRegistry {
     pub pipelines: TokioRwLock<HashMap<String, Arc<RingBuffer>>>,
     pub cancel_tokens: TokioRwLock<HashMap<String, CancellationToken>>,
     pub next_attempt_id: AtomicU64,
-    pub active: TokioRwLock<HashMap<String, ActiveIngest>>,
+    pub sessions: TokioRwLock<HashMap<String, Arc<ActiveIngest>>>,
+    pub selected_inputs: TokioRwLock<HashMap<String, String>>,
+    pub timelines: TokioRwLock<HashMap<String, Arc<AtomicI64>>>,
+    pub preview_slots: TokioRwLock<HashMap<String, Arc<ArcSwapOption<RingBuffer>>>>,
+    pub selection_lock: TokioMutex<()>,
+    pub preview_lock: TokioMutex<()>,
+    pub active: TokioRwLock<HashMap<String, Arc<ActiveIngest>>>,
     pub recent: TokioRwLock<HashMap<String, RecentIngestOutcome>>,
 }
 
@@ -49,6 +56,12 @@ impl IngestRegistry {
             pipelines: TokioRwLock::new(HashMap::new()),
             cancel_tokens: TokioRwLock::new(HashMap::new()),
             next_attempt_id: AtomicU64::new(1),
+            sessions: TokioRwLock::new(HashMap::new()),
+            selected_inputs: TokioRwLock::new(HashMap::new()),
+            timelines: TokioRwLock::new(HashMap::new()),
+            preview_slots: TokioRwLock::new(HashMap::new()),
+            selection_lock: TokioMutex::new(()),
+            preview_lock: TokioMutex::new(()),
             active: TokioRwLock::new(HashMap::new()),
             recent: TokioRwLock::new(HashMap::new()),
         }

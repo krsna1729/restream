@@ -290,7 +290,8 @@
         "fixture": "av-marker-h264-a1-bf0",
         "trackSelection": "primary-av",
         "hasBFrames": false,
-        "adapter": "rtmpPublisher"
+        "adapter": "rtmpPublisher",
+        "bufferedStandby": true
       },
       "expect": {
         "videoCodec": "h264",
@@ -428,7 +429,8 @@
         "fixture": "av-marker-h264-a2-bf0",
         "trackSelection": "all",
         "hasBFrames": false,
-        "adapter": "srtPublisher"
+        "adapter": "srtPublisher",
+        "bufferedStandby": true
       },
       "expect": {
         "videoCodec": "h264",

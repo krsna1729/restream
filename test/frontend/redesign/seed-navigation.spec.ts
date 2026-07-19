@@ -482,7 +482,40 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
     page,
     "mixed-health",
     "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
-    { expectOverviewReady: false },
+    {
+      expectOverviewReady: false,
+      pipelineInputsResponse: (pipelineId) => ({
+        selectedInputId: "input-primary",
+        inputs: [
+          {
+            id: "input-primary",
+            pipelineId,
+            label: "Primary",
+            streamKey: "synthetic-retrying-key",
+            role: "primary",
+            enabled: true,
+            selected: true,
+            ingestUrls: {
+              rtmp:
+                "rtmp://ingest.example.invalid/live/synthetic-retrying-key",
+              srt: null,
+            },
+            previewUrl: "/hls/inputs/input-primary/master.m3u8",
+            runtime: {
+              connected: true,
+              forwardingState: "active",
+              protocol: "rtmp",
+              uptimeSeconds: 540,
+              bytesReceived: 31_000_000,
+              remoteAddr: null,
+              video: null,
+              audio: null,
+              quality: null,
+            },
+          },
+        ],
+      }),
+    },
   );
 
   const monitor = page.locator("#control-mode-panel");
@@ -549,7 +582,7 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
       "Control Room",
       "Monitor controls",
       "Monitor previews",
-      "Local HLS",
+      "Primary",
       "Retrying Output",
     ]),
   );
@@ -601,6 +634,84 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
     "1/1 monitored · 0 missing monitoring URLs",
   );
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
+});
+
+test("seed: monitor wall renders and promotes connected pipeline inputs", async ({
+  page,
+}, testInfo) => {
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+    {
+      expectOverviewReady: false,
+      pipelineInputsResponse: (pipelineId) => ({
+        selectedInputId: "input-primary",
+        inputs: [
+          {
+            id: "input-primary",
+            pipelineId,
+            label: "Primary feed",
+            streamKey: "sk_primary",
+            role: "primary",
+            enabled: true,
+            selected: true,
+            ingestUrls: { rtmp: "rtmp://seed/primary", srt: "srt://seed/primary" },
+            previewUrl: "/hls/inputs/input-primary/master.m3u8",
+            runtime: {
+              connected: true,
+              forwardingState: "active",
+              protocol: "rtmp",
+              bytesReceived: 12_582_912,
+            },
+          },
+          {
+            id: "input-standby",
+            pipelineId,
+            label: "Warm standby",
+            streamKey: "sk_standby",
+            role: "backup",
+            enabled: true,
+            selected: false,
+            ingestUrls: { rtmp: "rtmp://seed/standby", srt: "srt://seed/standby" },
+            previewUrl: "/hls/inputs/input-standby/master.m3u8",
+            runtime: {
+              connected: true,
+              forwardingState: "standby",
+              protocol: "srt",
+              bytesReceived: 9_437_184,
+            },
+          },
+        ],
+      }),
+    },
+  );
+
+  const primary = page.locator('article[data-card-id="input:input-primary"]');
+  const standby = page.locator('article[data-card-id="input:input-standby"]');
+  await expect(primary.getByRole("heading", { name: "Primary feed" })).toBeVisible();
+  await expect(primary).toContainText("Forwarding");
+  await expect(primary).toContainText("Selected · RTMP");
+  await expect(standby.getByRole("heading", { name: "Warm standby" })).toBeVisible();
+  await expect(standby).toContainText("Warm standby");
+  await expect(standby).toContainText("Standby · SRT");
+
+  await standby
+    .locator('[data-action="control-room-toggle-card-actions"]')
+    .click();
+  await standby
+    .getByRole("button", { name: "Promote", exact: true })
+    .click();
+  await expect(standby).toContainText("Forwarding");
+  await expect(standby).toContainText("Selected · SRT");
+  await expect(primary).toContainText("Connected standby");
+  await expect(primary).toContainText("Standby · RTMP");
+  expect(await getDocumentWidthOverflow(page)).toBe(0);
+
+  await page.screenshot({
+    path: testInfo.outputPath("multi-input-monitor.png"),
+    fullPage: true,
+  });
 });
 
 test("seed: ui=v2 Monitor search understands operator status terms @desktop", async ({

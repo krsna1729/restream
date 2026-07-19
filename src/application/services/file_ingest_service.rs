@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
 use crate::application::ingest::{
-    FileIngestConfig, PipelineFileIngestState, ResolveFileIngestError,
+    FileIngestConfig, PipelineFileIngestState, PipelineInputLookup, ResolveFileIngestError,
     clear_stream_key_file_ingests, load_pipeline_file_ingest_state, persist_pipeline_file_ingest,
     remove_pipeline_file_ingest, resolve_file_ingest_context,
 };
@@ -25,6 +25,12 @@ use crate::media::engine::MediaEngine;
 
 use super::error::{ApiError, ApiResult};
 use super::pipeline_service::PipelineService;
+
+#[derive(Default)]
+struct FileIngestTimestamps {
+    continuous: crate::media::file_ingest::ContinuousTimestampState,
+    promotion: crate::media::input_gate::InputTimestampMapper,
+}
 
 /// Transport-facing payload for creating or updating one persisted file ingest
 /// configuration before it is translated into the domain/storage model.
@@ -65,6 +71,7 @@ pub struct FileIngestService {
     ingest_lookup: Arc<dyn IngestLookup>,
     ingest_writer: Arc<dyn IngestWriter>,
     pipeline_store: Arc<dyn PipelineStore>,
+    pipeline_input_lookup: Arc<dyn PipelineInputLookup>,
     pipeline_service: PipelineService,
 }
 
@@ -75,12 +82,14 @@ impl FileIngestService {
         ingest_lookup: Arc<dyn IngestLookup>,
         ingest_writer: Arc<dyn IngestWriter>,
         pipeline_store: Arc<dyn PipelineStore>,
+        pipeline_input_lookup: Arc<dyn PipelineInputLookup>,
         pipeline_service: PipelineService,
     ) -> Self {
         Self {
             ingest_lookup,
             ingest_writer,
             pipeline_store,
+            pipeline_input_lookup,
             pipeline_service,
         }
     }
@@ -362,10 +371,22 @@ impl FileIngestService {
         }
 
         let file_path = Self::resolve_media_file_path(media_dir, &ingest.filename)?;
+        let input = self
+            .pipeline_input_lookup
+            .get_by_stream_key(&ingest.stream_key)
+            .await
+            .map_err(|error| FileIngestStartError::PipelineStore(error.to_string()))?
+            .ok_or(FileIngestStartError::MissingPipelineForStreamKey)?;
 
         let ring_buffer = engine.get_or_create_pipeline(&pipeline.id).await;
         let Some(registration) = engine
-            .try_register_ingest_attempt(&pipeline.id, &ingest.stream_key, "file")
+            .try_register_pipeline_input_attempt(
+                &pipeline.id,
+                &input.id,
+                &ingest.stream_key,
+                "file",
+                input.selected,
+            )
             .await
         else {
             return Err(FileIngestStartError::PipelineAlreadyActive);
@@ -419,13 +440,14 @@ impl FileIngestService {
         engine: Arc<MediaEngine>,
         pipeline: Pipeline,
         ring_buffer: Arc<crate::media::ring_buffer::RingBuffer>,
+        registration: &crate::media::engine::IngestRegistration,
         mut stdout: ChildStdout,
         cancel: CancellationToken,
-        timestamps: &mut crate::media::file_ingest::ContinuousTimestampState,
+        timestamps: &mut FileIngestTimestamps,
     ) -> Result<(), String> {
         let (bytes_received, ingest_metrics, last_progress_ms, cached_keyframe_times) = {
             engine
-                .with_active_ingest(&pipeline.id, |ingest| {
+                .with_ingest_session(registration, |ingest| {
                     (
                         ingest.bytes_received.clone(),
                         ingest.metrics.clone(),
@@ -456,26 +478,62 @@ impl FileIngestService {
             demuxer.feed(&buf[..read]);
             if demuxer.drain_into(&mut packets) > 0 {
                 for pkt in &mut packets {
-                    timestamps.apply(pkt);
-                    if pkt.media_type == crate::media::ring_buffer::MediaType::Video
-                        && let Some(parameter_sets) =
-                            crate::media::codec::annexb_parameter_sets(&pkt.payload)
+                    timestamps.continuous.apply(pkt);
+                }
+                if let Some(preview_ring) = registration.preview_ring.load_full() {
+                    preview_ring.push_batch(packets.iter().cloned());
+                }
+                let first_keyframe = packets.iter().position(|packet| {
+                    packet.media_type == crate::media::ring_buffer::MediaType::Video
+                        && packet.is_keyframe
+                });
+                let boundary = if first_keyframe.is_some() {
+                    crate::media::input_gate::InputPacketBoundary::VideoKeyframe
+                } else {
+                    crate::media::input_gate::InputPacketBoundary::Other
+                };
+                if let Some(lease) = registration.gate.try_enter(boundary) {
+                    if lease.activated()
+                        && let Some(first_keyframe) = first_keyframe
                     {
-                        ring_buffer.set_video_parameter_sets(parameter_sets);
+                        packets.drain(..first_keyframe);
                     }
-                    if pkt.media_type == crate::media::ring_buffer::MediaType::Video
-                        && pkt.is_keyframe
-                    {
-                        let mut times = cached_keyframe_times
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        times.push(pkt.pts);
-                        if times.len() > 30 {
-                            times.remove(0);
+                    for pkt in &mut packets {
+                        timestamps.promotion.map_packet(
+                            pkt,
+                            lease.activated(),
+                            &registration.last_forwarded_dts,
+                        );
+                    }
+                    for pkt in &packets {
+                        if pkt.media_type == crate::media::ring_buffer::MediaType::Video
+                            && let Some(parameter_sets) =
+                                crate::media::codec::annexb_parameter_sets(&pkt.payload)
+                        {
+                            ring_buffer.set_video_parameter_sets(parameter_sets);
+                        }
+                        if pkt.media_type == crate::media::ring_buffer::MediaType::Video
+                            && pkt.is_keyframe
+                        {
+                            let mut times = cached_keyframe_times
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            times.push(pkt.pts);
+                            if times.len() > 30 {
+                                times.remove(0);
+                            }
                         }
                     }
+                    if let Some(last) = packets.iter().max_by_key(|packet| packet.dts) {
+                        crate::media::input_gate::InputTimestampMapper::record_forwarded(
+                            last,
+                            &registration.last_forwarded_dts,
+                        );
+                    }
+                    ring_buffer.push_drained_batch_capped(&mut packets);
+                } else {
+                    packets.clear();
                 }
-                ring_buffer.push_drained_batch_capped(&mut packets);
             }
 
             if !probe_sent && let Some(probe) = demuxer.take_probe() {
@@ -484,23 +542,33 @@ impl FileIngestService {
                 let video_sequence_header = probe.video_sequence_header.clone();
                 let selected_video_track_index = probe.video.as_ref().map(|_| 0);
                 engine
-                    .update_ingest_meta(&pipeline.id, probe.video, first_audio, None)
+                    .update_ingest_session_meta(
+                        &pipeline.id,
+                        registration,
+                        probe.video,
+                        first_audio,
+                        None,
+                    )
                     .await;
                 if let Some(sequence_header) = video_sequence_header {
                     engine
-                        .cache_sequence_header(&pipeline.id, true, sequence_header)
+                        .cache_ingest_session_sequence_header(registration, true, sequence_header)
                         .await;
                 }
                 engine
-                    .update_ingest_video_track_selection(
-                        &pipeline.id,
+                    .update_ingest_session_video_track_selection(
+                        registration,
                         probe.video_track_count,
                         selected_video_track_index,
                     )
                     .await;
                 if !probe.audio_tracks.is_empty() {
                     engine
-                        .update_ingest_audio_tracks(&pipeline.id, probe.audio_tracks)
+                        .update_ingest_session_audio_tracks(
+                            &pipeline.id,
+                            registration,
+                            probe.audio_tracks,
+                        )
                         .await;
                 }
             }
@@ -562,7 +630,7 @@ impl FileIngestService {
         mut spawned: SpawnedFileIngestChild,
     ) {
         let cancel = registration.cancel_token.clone();
-        let mut timestamps = crate::media::file_ingest::ContinuousTimestampState::default();
+        let mut timestamps = FileIngestTimestamps::default();
         loop {
             engine
                 .file_ingests
@@ -576,6 +644,7 @@ impl FileIngestService {
                 engine.clone(),
                 pipeline.clone(),
                 ring_buffer.clone(),
+                &registration,
                 spawned.stdout,
                 cancel.clone(),
                 &mut timestamps,
@@ -932,6 +1001,27 @@ mod tests {
         }
     }
 
+    impl PipelineInputLookup for StaticPipelineStore {
+        fn get_by_stream_key<'a>(
+            &'a self,
+            stream_key: &'a str,
+        ) -> crate::application::ingest::PipelineInputLookupFuture<'a> {
+            Box::pin(async move {
+                Ok((self.pipeline.stream_key == stream_key).then(|| {
+                    crate::domain::pipeline_input::PipelineInput {
+                        id: "input-primary".to_string(),
+                        pipeline_id: self.pipeline.id.clone(),
+                        label: "Primary".to_string(),
+                        stream_key: stream_key.to_string(),
+                        role: crate::domain::pipeline_input::PipelineInputRole::Primary,
+                        enabled: true,
+                        selected: true,
+                    }
+                }))
+            })
+        }
+    }
+
     #[test]
     fn build_file_ingest_args_uses_copy_path_by_default() {
         let args = FileIngestService::build_file_ingest_args(
@@ -988,12 +1078,14 @@ mod tests {
         };
         let ingest = ingest_with(false);
         let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        let pipeline_store = Arc::new(StaticPipelineStore {
+            pipeline: pipeline.clone(),
+        });
         let service = FileIngestService::with_ports(
             Arc::new(PersistFailingLookup { ingest }),
             Arc::new(NoopIngestWriter),
-            Arc::new(StaticPipelineStore {
-                pipeline: pipeline.clone(),
-            }),
+            pipeline_store.clone(),
+            pipeline_store,
             PipelineService::new(pool),
         );
         let engine = Arc::new(MediaEngine::new());
@@ -1031,14 +1123,16 @@ mod tests {
         };
         let ingest = ingest_with(false);
         let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        let pipeline_store = Arc::new(StaticPipelineStore {
+            pipeline: pipeline.clone(),
+        });
         let service = FileIngestService::with_ports(
             Arc::new(PersistFailingLookup {
                 ingest: ingest.clone(),
             }),
             Arc::new(NoopIngestWriter),
-            Arc::new(StaticPipelineStore {
-                pipeline: pipeline.clone(),
-            }),
+            pipeline_store.clone(),
+            pipeline_store,
             PipelineService::new(pool),
         );
         let engine = Arc::new(MediaEngine::new());

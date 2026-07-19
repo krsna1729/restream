@@ -363,7 +363,7 @@ pub async fn start_hls_fmp4_segmenter(
     let mut packets = Vec::with_capacity(32);
     let mut audio_packets = Vec::with_capacity(32);
     let (video_sequence_header, audio_sequence_header) =
-        engine.get_sequence_headers(&pipeline_id).await;
+        resolve_hls_sequence_headers(&engine, &pipeline_id).await;
     let config = store.config();
     let min_segment_ms = (config.min_segment_secs * 1000.0).round() as i64;
     let preview_video_meta = start.video_meta_override.clone();
@@ -556,7 +556,7 @@ async fn resolve_hls_preview_metadata(
                 let ingests = engine.ingests.active.read().await;
                 ingests
                     .get(pipeline_id)
-                    .and_then(|ingest| ingest.video.clone())
+                    .and_then(|ingest| ingest.metadata().video)
             };
             if let Some(video) = video {
                 return Some((video, tracks.to_vec()));
@@ -573,7 +573,7 @@ async fn resolve_hls_preview_metadata(
                 let ingests = engine.ingests.active.read().await;
                 ingests
                     .get(pipeline_id)
-                    .and_then(|ingest| ingest.video.clone())
+                    .and_then(|ingest| ingest.metadata().video)
             };
             if let Some(video) = video {
                 return Some((video, tracks.to_vec()));
@@ -582,13 +582,14 @@ async fn resolve_hls_preview_metadata(
         let result = {
             let ingests = engine.ingests.active.read().await;
             ingests.get(pipeline_id).and_then(|ingest| {
-                let video = preview_video_meta.clone().or(ingest.video.clone())?;
+                let metadata = ingest.metadata();
+                let video = preview_video_meta.clone().or(metadata.video)?;
                 let lock = ingest
                     .audio_tracks
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 let tracks = if lock.is_empty() {
-                    ingest
+                    metadata
                         .audio
                         .clone()
                         .map(|audio| vec![audio])
@@ -634,6 +635,19 @@ impl MonotonicTimestampState {
         let corrected_pts = corrected_dts.saturating_add(offset);
         self.last_dts = Some(corrected_dts);
         (corrected_pts, corrected_dts)
+    }
+}
+
+async fn resolve_hls_sequence_headers(
+    engine: &MediaEngine,
+    pipeline_id: &str,
+) -> (Option<Bytes>, Option<Bytes>) {
+    if let Some(input_id) =
+        crate::media::engine_hls::input_id_from_hls_preview_resource_id(pipeline_id)
+    {
+        engine.get_input_sequence_headers(input_id).await
+    } else {
+        engine.get_sequence_headers(pipeline_id).await
     }
 }
 
@@ -1228,6 +1242,31 @@ mod tests {
     use loom::sync::{Arc as LoomArc, Mutex as LoomMutex};
     use loom::thread;
     use proptest::prelude::*;
+
+    #[tokio::test]
+    async fn input_preview_resolves_late_join_sequence_headers_from_input_session() {
+        let engine = MediaEngine::new();
+        let registration = engine
+            .try_register_pipeline_input_attempt(
+                "pipeline",
+                "standby-input",
+                "stream-key",
+                "rtmp",
+                false,
+            )
+            .await
+            .expect("register standby input");
+        let expected = Bytes::from(high_profile_sequence_header());
+        engine
+            .cache_ingest_session_sequence_header(&registration, true, expected.clone())
+            .await;
+        let resource_id = crate::media::engine_hls::input_hls_preview_resource_id("standby-input");
+
+        let (video, audio) = resolve_hls_sequence_headers(&engine, &resource_id).await;
+
+        assert_eq!(video, Some(expected));
+        assert_eq!(audio, None);
+    }
 
     fn test_video_meta() -> VideoMeta {
         VideoMeta {

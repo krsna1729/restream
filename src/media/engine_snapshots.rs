@@ -136,8 +136,8 @@ impl MediaEngine {
             .read()
             .await
             .get(pipeline_id)
-            .and_then(|ingest| ingest.video.as_ref())
-            .map(|video| video.codec.clone())
+            .and_then(|ingest| ingest.metadata().video)
+            .map(|video| video.codec)
     }
 
     pub async fn active_ingest_diag_snapshot(
@@ -151,14 +151,15 @@ impl MediaEngine {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        let metadata = ingest.metadata();
         Some(IngestDiagSnapshot {
             protocol: ingest.protocol.clone(),
             uptime_secs: ingest.start_time.elapsed().as_secs_f64(),
             bytes_received: ingest.bytes_received.load(Ordering::Relaxed),
-            remote_addr: ingest.remote_addr.clone(),
-            video: ingest.video.clone(),
-            audio: ingest.audio.clone(),
-            quality: ingest.quality.clone(),
+            remote_addr: metadata.remote_addr,
+            video: metadata.video,
+            audio: metadata.audio,
+            quality: metadata.quality,
             keyframe_times,
         })
     }

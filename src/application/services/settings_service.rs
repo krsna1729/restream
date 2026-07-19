@@ -7,11 +7,14 @@
 use std::sync::Arc;
 
 use crate::application::models::{Job, Output, Pipeline};
+use crate::application::pipeline_inputs::PipelineInputStore;
 use crate::application::ports::{IngestHostStore, JobStore, MetaStore, MetaStoreWriter};
 use crate::application::recording::load_recording_enabled_map;
 use crate::application::recording::save_recording_settings;
 use crate::application::settings::{BACKEND_POLICY_META_KEY, load_settings_snapshot};
-use crate::application::srt_ingest::{load_global_srt_ingest_config, srt_ingest_policy_entries};
+use crate::application::srt_ingest::{
+    list_pipeline_inputs, load_global_srt_ingest_config, srt_ingest_policy_entries,
+};
 use crate::application::{
     ingest_security::save_ingest_security_config, transcode_profiles::save_transcode_profiles,
 };
@@ -35,6 +38,7 @@ pub struct SettingsService {
     meta_writer: Arc<dyn MetaStoreWriter>,
     ingest_host_store: Arc<dyn IngestHostStore>,
     job_store: Arc<dyn JobStore>,
+    input_store: Arc<dyn PipelineInputStore>,
     pipeline_service: PipelineService,
     output_service: OutputService,
 }
@@ -47,6 +51,7 @@ impl SettingsService {
         meta_writer: Arc<dyn MetaStoreWriter>,
         ingest_host_store: Arc<dyn IngestHostStore>,
         job_store: Arc<dyn JobStore>,
+        input_store: Arc<dyn PipelineInputStore>,
         pipeline_service: PipelineService,
         output_service: OutputService,
     ) -> Self {
@@ -55,6 +60,7 @@ impl SettingsService {
             meta_writer,
             ingest_host_store,
             job_store,
+            input_store,
             pipeline_service,
             output_service,
         }
@@ -191,7 +197,10 @@ impl SettingsService {
             load_global_srt_ingest_config(self.meta_store.as_ref(), srt_passphrase, srt_pbkeylen)
                 .await;
         let pipelines = self.list_pipelines().await?;
-        let entries = srt_ingest_policy_entries(&pipelines);
+        let inputs = list_pipeline_inputs(self.input_store.as_ref(), &pipelines)
+            .await
+            .map_err(|error| ApiError::internal(error.to_string()))?;
+        let entries = srt_ingest_policy_entries(&pipelines, &inputs);
         policy_store.replace(global, &entries);
         Ok(())
     }
@@ -310,6 +319,11 @@ mod tests {
             store.clone(),
             store.clone(),
             store,
+            Arc::new(
+                crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore::new(
+                    pool.clone(),
+                ),
+            ),
             PipelineService::new(pool.clone()),
             OutputService::new(pool),
         );

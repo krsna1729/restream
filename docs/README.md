@@ -103,6 +103,7 @@ above remain the better way to learn the system.
 ### Root, legal, distribution, and local guidance
 
 - [Project README](../README.md)
+- [Console design system](../DESIGN.md)
 - [Agent instructions](../AGENTS.md)
 - [Architecture guardrails](../ARCHITECTURE_GUARDRAILS.md)
 - [Claude compatibility shim](../CLAUDE.md)

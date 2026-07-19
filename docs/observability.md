@@ -85,6 +85,17 @@ Active input fields:
 | `publisher.remoteAddr` | Accepted peer address when available |
 | `publisher.quality` | Protocol-specific live transport snapshot |
 
+The pipeline-level health input is the currently selected forwarding session.
+For all configured sessions, `GET /api/v1/pipelines/:id/inputs` exposes a
+per-input runtime object with connection state, `forwardingState`, protocol,
+uptime, bytes received, media metadata, remote address, and quality. The
+forwarding states are `standby`, `awaitingKeyframe`, and `active`. A standby's
+bytes and preview can progress while pipeline-level output counters remain
+driven only by the selected input. `awaitingKeyframe` also covers the brief
+period between arming a connected standby and its ingest task consuming the
+next packet that triggers cached-GOP replay. Cache byte/packet occupancy is not
+currently exposed as telemetry.
+
 `bytesSent` is derived from active egress counters. `readers` is the count of
 live source-ring readers, and `readerMetrics` exposes each reader's lag slots,
 overflow count, unread packet age, read/write indexes, and burst-size stats.

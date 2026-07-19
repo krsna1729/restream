@@ -216,7 +216,7 @@ pub(crate) async fn pipeline_telemetry(
 
     let ingest = ingests
         .get(pipeline_id)
-        .map(api_view_models::pipeline_ingest_telemetry_json);
+        .map(|ingest| api_view_models::pipeline_ingest_telemetry_json(ingest.as_ref()));
 
     let ring_info = pipelines
         .get(pipeline_id)

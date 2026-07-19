@@ -44,6 +44,8 @@ impl PipelineAccessAuthenticator for AcceptAllAuthenticator {
         Box::pin(async move {
             Ok(AuthenticatedPipeline {
                 id: self.pipeline_id.clone(),
+                input_id: _stream_key.to_string(),
+                selected: true,
             })
         })
     }
@@ -655,7 +657,7 @@ async fn detects_h265_from_ingest_video_meta() {
         let ingests = engine.ingests.active.read().await;
         let is_h265 = ingests
             .get("p1")
-            .and_then(|i| i.video.as_ref())
+            .and_then(|ingest| ingest.metadata().video)
             .map(|v| v.codec == "hevc")
             .unwrap_or(false);
         assert!(!is_h265, "no video meta should not be hevc");
@@ -686,7 +688,7 @@ async fn detects_h265_from_ingest_video_meta() {
         let ingests = engine.ingests.active.read().await;
         let is_h265 = ingests
             .get("p1")
-            .and_then(|i| i.video.as_ref())
+            .and_then(|ingest| ingest.metadata().video)
             .map(|v| v.codec == "hevc")
             .unwrap_or(false);
         assert!(!is_h265, "h264 meta should not be hevc");
@@ -717,7 +719,7 @@ async fn detects_h265_from_ingest_video_meta() {
         let ingests = engine.ingests.active.read().await;
         let is_h265 = ingests
             .get("p1")
-            .and_then(|i| i.video.as_ref())
+            .and_then(|ingest| ingest.metadata().video)
             .map(|v| v.codec == "hevc")
             .unwrap_or(false);
         assert!(is_h265, "hevc meta should be detected");
@@ -769,7 +771,9 @@ async fn h265_detection_waits_for_probe_meta() {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {
             let ingests = engine_clone.ingests.active.read().await;
-            let meta = ingests.get(&pipeline_id).and_then(|i| i.video.as_ref());
+            let meta = ingests
+                .get(&pipeline_id)
+                .and_then(|ingest| ingest.metadata().video);
             match meta {
                 Some(v) if v.codec == "hevc" => break 'probe true,
                 Some(_) => break 'probe false,

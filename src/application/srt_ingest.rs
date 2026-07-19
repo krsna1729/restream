@@ -1,8 +1,12 @@
 //! Application-layer SRT ingest configuration loading and policy-store refresh
 //! that connect persisted settings and pipeline catalogs to runtime enforcement.
 
+use std::collections::HashMap;
+
 use crate::application::models::Pipeline;
+use crate::application::pipeline_inputs::{PipelineInputStore, PipelineInputStoreError};
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
+use crate::domain::pipeline_input::PipelineInput;
 use crate::domain::srt_ingest::{SrtGlobalIngestConfig, SrtGlobalIngestMode};
 use crate::media::srt::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 use tracing::warn;
@@ -37,12 +41,14 @@ pub async fn load_global_srt_ingest_config(
 pub async fn load_policy_store(
     meta_store: &dyn MetaStore,
     pipeline_catalog: &dyn PipelineStore,
+    input_store: &dyn PipelineInputStore,
     srt_passphrase: Option<String>,
     srt_pbkeylen: i32,
 ) -> Result<SrtIngestPolicyStore, PipelineStoreError> {
     let global = load_global_srt_ingest_config(meta_store, srt_passphrase, srt_pbkeylen).await;
     let pipelines = pipeline_catalog.list_pipelines().await?;
-    let entries = srt_ingest_policy_entries(&pipelines);
+    let inputs = list_pipeline_inputs(input_store, &pipelines).await?;
+    let entries = srt_ingest_policy_entries(&pipelines, &inputs);
     Ok(SrtIngestPolicyStore::new(global, &entries))
 }
 
@@ -50,27 +56,58 @@ pub async fn refresh_policy_store(
     policy_store: &SrtIngestPolicyStore,
     meta_store: &dyn MetaStore,
     pipeline_catalog: &dyn PipelineStore,
+    input_store: &dyn PipelineInputStore,
     srt_passphrase: Option<String>,
     srt_pbkeylen: i32,
 ) -> Result<(), PipelineStoreError> {
     let global = load_global_srt_ingest_config(meta_store, srt_passphrase, srt_pbkeylen).await;
     let pipelines = pipeline_catalog.list_pipelines().await?;
-    let entries = srt_ingest_policy_entries(&pipelines);
+    let inputs = list_pipeline_inputs(input_store, &pipelines).await?;
+    let entries = srt_ingest_policy_entries(&pipelines, &inputs);
     policy_store.replace(global, &entries);
     Ok(())
 }
 
-pub fn srt_ingest_policy_entries(pipelines: &[Pipeline]) -> Vec<SrtIngestPolicyEntry> {
-    pipelines
+pub async fn list_pipeline_inputs(
+    input_store: &dyn PipelineInputStore,
+    pipelines: &[Pipeline],
+) -> Result<Vec<PipelineInput>, PipelineStoreError> {
+    let mut inputs = Vec::new();
+    for pipeline in pipelines {
+        inputs.extend(
+            input_store
+                .list(&pipeline.id)
+                .await
+                .map_err(map_input_store_error)?,
+        );
+    }
+    Ok(inputs)
+}
+
+pub fn srt_ingest_policy_entries(
+    pipelines: &[Pipeline],
+    inputs: &[PipelineInput],
+) -> Vec<SrtIngestPolicyEntry> {
+    let policies = pipelines
         .iter()
-        .map(|pipeline| {
-            SrtIngestPolicyEntry::new(
-                pipeline.id.as_str(),
-                pipeline.stream_key.as_str(),
-                pipeline.srt_ingest_policy.clone(),
-            )
+        .map(|pipeline| (pipeline.id.as_str(), pipeline.srt_ingest_policy.clone()))
+        .collect::<HashMap<_, _>>();
+    inputs
+        .iter()
+        .filter(|input| input.enabled)
+        .filter_map(|input| {
+            let policy = policies.get(input.pipeline_id.as_str())?;
+            Some(SrtIngestPolicyEntry::new(
+                input.pipeline_id.as_str(),
+                input.stream_key.as_str(),
+                policy.clone(),
+            ))
         })
         .collect()
+}
+
+fn map_input_store_error(error: PipelineInputStoreError) -> PipelineStoreError {
+    PipelineStoreError::new(format!("list pipeline inputs: {error}"))
 }
 
 fn srt_global_config_from_appconfig(
@@ -92,9 +129,14 @@ fn srt_global_config_from_appconfig(
 mod tests {
     use super::*;
     use crate::application::models::Pipeline;
+    use crate::application::pipeline_inputs::{
+        InputDeleteFuture, InputListFuture, InputLookupFuture, InputUpdateFuture, InputWriteFuture,
+        PipelineInputStore, PipelineInputStoreError,
+    };
     use crate::application::ports::{
         MetaLookupError, MetaLookupFuture, MetaStore, PipelineListFuture, PipelineStore,
     };
+    use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole};
     use crate::domain::srt_ingest::ResolvedSrtIngestConfig;
     use crate::media::srt::serialize_pipeline_srt_ingest_policy;
 
@@ -115,6 +157,77 @@ mod tests {
 
     struct FakePipelineStore {
         pipelines: Vec<Pipeline>,
+    }
+
+    struct FakePipelineInputStore {
+        inputs: Vec<PipelineInput>,
+    }
+
+    impl PipelineInputStore for FakePipelineInputStore {
+        fn get<'a>(&'a self, _pipeline_id: &'a str, _input_id: &'a str) -> InputLookupFuture<'a> {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> InputLookupFuture<'a> {
+            Box::pin(async move {
+                Ok(self
+                    .inputs
+                    .iter()
+                    .find(|input| input.stream_key == stream_key)
+                    .cloned())
+            })
+        }
+
+        fn list<'a>(&'a self, pipeline_id: &'a str) -> InputListFuture<'a> {
+            Box::pin(async move {
+                Ok(self
+                    .inputs
+                    .iter()
+                    .filter(|input| input.pipeline_id == pipeline_id)
+                    .cloned()
+                    .collect())
+            })
+        }
+
+        fn create<'a>(
+            &'a self,
+            _id: &'a str,
+            _pipeline_id: &'a str,
+            _label: &'a str,
+            _stream_key: &'a str,
+        ) -> InputWriteFuture<'a> {
+            Box::pin(async {
+                Err(PipelineInputStoreError::Internal(
+                    "not implemented".to_string(),
+                ))
+            })
+        }
+
+        fn update<'a>(
+            &'a self,
+            _pipeline_id: &'a str,
+            _input_id: &'a str,
+            _label: &'a str,
+            _enabled: bool,
+        ) -> InputUpdateFuture<'a> {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn delete<'a>(
+            &'a self,
+            _pipeline_id: &'a str,
+            _input_id: &'a str,
+        ) -> InputDeleteFuture<'a> {
+            Box::pin(async { Ok(false) })
+        }
+
+        fn promote<'a>(
+            &'a self,
+            _pipeline_id: &'a str,
+            _input_id: &'a str,
+        ) -> InputUpdateFuture<'a> {
+            Box::pin(async { Ok(None) })
+        }
     }
 
     impl PipelineStore for FakePipelineStore {
@@ -285,7 +398,13 @@ mod tests {
             }],
         };
 
-        let policy_store = load_policy_store(&store, &catalog, None, 16).await.unwrap();
+        let input_store = FakePipelineInputStore {
+            inputs: vec![pipeline_input("pipeline-1", "stream-one")],
+        };
+
+        let policy_store = load_policy_store(&store, &catalog, &input_store, None, 16)
+            .await
+            .unwrap();
 
         assert_eq!(
             policy_store.global_config().mode,
@@ -334,13 +453,23 @@ mod tests {
                 ),
             }],
         };
-        let policy_store = load_policy_store(&initial_store, &catalog, None, 16)
+        let input_store = FakePipelineInputStore {
+            inputs: vec![pipeline_input("pipeline-1", "stream-one")],
+        };
+        let policy_store = load_policy_store(&initial_store, &catalog, &input_store, None, 16)
             .await
             .unwrap();
 
-        refresh_policy_store(&policy_store, &updated_store, &catalog, None, 16)
-            .await
-            .unwrap();
+        refresh_policy_store(
+            &policy_store,
+            &updated_store,
+            &catalog,
+            &input_store,
+            None,
+            16,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             policy_store.global_config().mode,
@@ -353,6 +482,71 @@ mod tests {
                 pbkeylen: 32,
             })
         );
+    }
+
+    #[test]
+    fn srt_policy_entries_include_every_enabled_pipeline_input() {
+        let pipeline = Pipeline {
+            id: "pipeline-1".to_string(),
+            name: "Pipeline One".to_string(),
+            stream_key: "primary-key".to_string(),
+            input_source: None,
+            srt_ingest_policy: Some("inherited-policy".to_string()),
+        };
+        let inputs = vec![
+            PipelineInput {
+                id: "input-primary".to_string(),
+                pipeline_id: pipeline.id.clone(),
+                label: "Primary".to_string(),
+                stream_key: "primary-key".to_string(),
+                role: PipelineInputRole::Primary,
+                enabled: true,
+                selected: true,
+            },
+            PipelineInput {
+                id: "input-standby".to_string(),
+                pipeline_id: pipeline.id.clone(),
+                label: "Standby".to_string(),
+                stream_key: "standby-key".to_string(),
+                role: PipelineInputRole::Backup,
+                enabled: true,
+                selected: false,
+            },
+            PipelineInput {
+                id: "input-disabled".to_string(),
+                pipeline_id: pipeline.id.clone(),
+                label: "Disabled".to_string(),
+                stream_key: "disabled-key".to_string(),
+                role: PipelineInputRole::Backup,
+                enabled: false,
+                selected: false,
+            },
+        ];
+
+        let entries = srt_ingest_policy_entries(&[pipeline], &inputs);
+        let stream_keys = entries
+            .iter()
+            .map(|entry| entry.stream_key.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(stream_keys, vec!["primary-key", "standby-key"]);
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.serialized_policy.as_deref() == Some("inherited-policy"))
+        );
+    }
+
+    fn pipeline_input(pipeline_id: &str, stream_key: &str) -> PipelineInput {
+        PipelineInput {
+            id: format!("input-{stream_key}"),
+            pipeline_id: pipeline_id.to_string(),
+            label: "Input".to_string(),
+            stream_key: stream_key.to_string(),
+            role: PipelineInputRole::Primary,
+            enabled: true,
+            selected: true,
+        }
     }
 
     #[test]

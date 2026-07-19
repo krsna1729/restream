@@ -82,8 +82,8 @@ pub(super) use mixed_root_cause::{
     mixed_root_cause_summary_json, mixed_root_cause_summary_path, write_mixed_root_cause_summary,
 };
 pub(super) use mixed_runtime::{
-    spawn_mixed_live_publisher, spawn_mixed_srt_multi_publisher, start_mixed_mediamtx,
-    start_mixed_restream,
+    spawn_mixed_live_publisher, spawn_mixed_srt_multi_publisher, spawn_mixed_standby_publisher,
+    start_mixed_mediamtx, start_mixed_restream,
 };
 #[cfg(test)]
 pub(super) use mixed_signal::{
@@ -947,6 +947,21 @@ pub(super) async fn run_mixed_live_config(
         spawn_mixed_live_publisher(env, case, &stream_key).await?
     };
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
+    let mut standby_publisher = if case.has_buffered_standby() {
+        let standby = create_backup_input(api, &pipeline_id).await?;
+        let publisher = spawn_mixed_standby_publisher(env, case, &standby.stream_key).await?;
+        wait_for_input_state(
+            api,
+            &pipeline_id,
+            &standby.id,
+            "standby",
+            Duration::from_secs(30),
+        )
+        .await?;
+        Some((standby, publisher))
+    } else {
+        None
+    };
     verify_optional_mixed_hls_preview(env, api, cfg, &pipeline_id, case, resume).await?;
     let recording = verify_mixed_recording(env, api, cfg, &pipeline_id, case, resume).await?;
     if case.is_multi_track() {
@@ -1053,6 +1068,9 @@ pub(super) async fn run_mixed_live_config(
     .await?;
 
     stop_child(&mut publisher).await;
+    if let Some((_, standby)) = standby_publisher.as_mut() {
+        stop_child(standby).await;
+    }
     stop_mixed_outputs(api, &pipeline_id, &output_ids).await;
     wait_for_outputs_stopped(api, &pipeline_id, &output_ids, Duration::from_secs(60)).await?;
     let delete_summary = delete_and_verify_mixed_outputs(
@@ -1095,6 +1113,11 @@ pub(super) async fn run_mixed_live_config(
         "extFfmpegCount": rss.ffmpeg.count,
         "extFfmpegRssKb": rss.ffmpeg.rss_kb,
         "audioTracks": 2,
+        "bufferedStandby": standby_publisher.as_ref().map(|(input, _)| json!({
+            "inputId": input.id,
+            "connected": true,
+            "forwardingState": "standby",
+        })),
         "recording": recording,
         "outputMatrix": mixed_output_matrix_json(output_cases),
         "artifacts": {

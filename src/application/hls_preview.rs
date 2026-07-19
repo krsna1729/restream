@@ -169,6 +169,74 @@ pub async fn audio_init_segment(
         .ok_or(HlsPreviewReadError::InitSegmentNotFound)
 }
 
+pub async fn input_master_playlist(
+    engine: Arc<MediaEngine>,
+    input_id: &str,
+) -> Result<String, HlsPreviewReadError> {
+    let (resource_id, _) = engine
+        .ensure_input_hls_preview_runtime(input_id)
+        .await
+        .ok_or(HlsPreviewReadError::NoStream)?;
+    master_playlist(engine, &resource_id).await
+}
+
+pub async fn input_video_playlist(
+    engine: Arc<MediaEngine>,
+    input_id: &str,
+) -> Result<String, HlsPreviewReadError> {
+    video_playlist(engine, &input_preview_resource_id(input_id)).await
+}
+
+pub async fn input_audio_playlist(
+    engine: Arc<MediaEngine>,
+    input_id: &str,
+    track_index: u32,
+) -> Result<String, HlsPreviewReadError> {
+    audio_playlist(engine, &input_preview_resource_id(input_id), track_index).await
+}
+
+pub async fn input_video_segment(
+    engine: Arc<MediaEngine>,
+    input_id: &str,
+    segment: &str,
+) -> Result<Bytes, HlsPreviewReadError> {
+    video_segment(engine, &input_preview_resource_id(input_id), segment).await
+}
+
+pub async fn input_video_init_segment(
+    engine: Arc<MediaEngine>,
+    input_id: &str,
+) -> Result<Bytes, HlsPreviewReadError> {
+    video_init_segment(engine, &input_preview_resource_id(input_id)).await
+}
+
+pub async fn input_audio_segment(
+    engine: Arc<MediaEngine>,
+    input_id: &str,
+    track_index: u32,
+    segment: &str,
+) -> Result<Bytes, HlsPreviewReadError> {
+    audio_segment(
+        engine,
+        &input_preview_resource_id(input_id),
+        track_index,
+        segment,
+    )
+    .await
+}
+
+pub async fn input_audio_init_segment(
+    engine: Arc<MediaEngine>,
+    input_id: &str,
+    track_index: u32,
+) -> Result<Bytes, HlsPreviewReadError> {
+    audio_init_segment(engine, &input_preview_resource_id(input_id), track_index).await
+}
+
+fn input_preview_resource_id(input_id: &str) -> String {
+    crate::media::engine_hls::input_hls_preview_resource_id(input_id)
+}
+
 async fn preview_store(
     engine: Arc<MediaEngine>,
     pipeline_id: &str,

@@ -15,6 +15,12 @@ export function buildInputPreviewUrl(pipelineId: string): string {
   return withBasePath(`/hls/${encodeURIComponent(pipelineId)}/master.m3u8`);
 }
 
+export function buildPipelineInputPreviewUrl(inputId: string): string {
+  return withBasePath(
+    `/hls/inputs/${encodeURIComponent(inputId)}/master.m3u8`,
+  );
+}
+
 function formatPreviewSampleRate(
   rate: number | null | undefined,
 ): string | null {

@@ -15,7 +15,7 @@ import {
 } from "./hls-player.js";
 import { buildInputPreviewUrl } from "./input-preview.js";
 import { upsertDashboardOutputConfig } from "./dashboard.js";
-import type { OutputView, PipelineView } from "../types.js";
+import type { OutputView, PipelineInput, PipelineView } from "../types.js";
 import { normalizeOutputConfig } from "../core/output-config.js";
 import type { ControlRoomCheckpointModel } from "./control-room-view-model.js";
 import {
@@ -32,6 +32,12 @@ import type {
   YouTubeApiNamespace,
   YouTubePlayerApi,
 } from "./control-room-types.js";
+import {
+  buildControlRoomInputCard,
+  controlRoomInputs,
+  isControlRoomInputPromotionPending,
+  promoteControlRoomInput,
+} from "./control-room-inputs.js";
 
 declare global {
   interface Window {
@@ -412,7 +418,9 @@ function getCardStatusToneClasses(
 ): string {
   switch ((statusLabel || "").trim().toLowerCase()) {
     case "live":
+    case "forwarding":
       return "border-emerald-500/30 bg-emerald-500/[0.05]";
+    case "awaiting keyframe":
     case "unstable":
     case "recovering":
       return "border-amber-500/30 bg-amber-500/[0.06]";
@@ -429,7 +437,9 @@ function getCardStatusToneClasses(
 function getStatusLabelClasses(statusLabel: string | null | undefined): string {
   switch ((statusLabel || "").trim().toLowerCase()) {
     case "live":
+    case "forwarding":
       return "text-emerald-700 dark:text-emerald-300";
+    case "awaiting keyframe":
     case "unstable":
     case "recovering":
       return "text-amber-700 dark:text-amber-300";
@@ -445,6 +455,7 @@ function getStatusLabelClasses(statusLabel: string | null | undefined): string {
 
 function buildCardDescriptors(
   selectedPipeline: PipelineView | null,
+  pipelineInputs: PipelineInput[] | null,
 ): ControlRoomCardDescriptor[] {
   if (!selectedPipeline) {
     return [
@@ -454,9 +465,9 @@ function buildCardDescriptors(
     ];
   }
 
-  const descriptors: ControlRoomCardDescriptor[] = [
-    buildLocalCard(selectedPipeline),
-  ];
+  const descriptors: ControlRoomCardDescriptor[] = pipelineInputs
+    ? pipelineInputs.map(buildControlRoomInputCard)
+    : [buildLocalCard(selectedPipeline)];
   const allMonitoringOutputs = listMonitoringOutputsForPipeline(
     selectedPipeline.id,
   );
@@ -633,6 +644,13 @@ function ensureShell(container: HTMLElement): void {
       if (!cardId) return;
       controlRoomLoadedEmbedCards.add(cardId);
       renderControlRoom();
+      return;
+    }
+    if (action === "control-room-promote-input") {
+      const pipelineId = button.dataset.pipelineId || "";
+      const inputId = button.dataset.inputId || "";
+      if (!pipelineId || !inputId) return;
+      await promoteControlRoomInput(pipelineId, inputId, renderControlRoom);
       return;
     }
     if (action === "control-room-toggle-card-actions") {
@@ -1496,7 +1514,10 @@ function syncCard(
     : "";
   title.innerHTML = `
         <div class="flex items-start justify-between gap-2">
-            <h3 class="min-w-0 truncate text-sm font-semibold tracking-[0.01em]">${escapeHtml(descriptor.title)}</h3>
+            <div class="min-w-0">
+                <h3 class="truncate text-sm font-semibold tracking-[0.01em]">${escapeHtml(descriptor.title)}</h3>
+                ${descriptor.subtitle ? `<p class="text-base-content/55 mt-1 truncate text-xs">${escapeHtml(descriptor.subtitle)}</p>` : ""}
+            </div>
             <div class="flex shrink-0 items-center gap-1.5" data-role="control-room-card-status-cluster">
                 ${statusLabel}
             </div>
@@ -1557,7 +1578,10 @@ function syncCard(
     }
   } else {
     const hasCardActions =
-      descriptor.editable || !!descriptor.copyUrl || !!descriptor.openUrl;
+      descriptor.editable ||
+      !!descriptor.copyUrl ||
+      !!descriptor.openUrl ||
+      !!descriptor.promoteInputId;
     const cardActionsExpanded =
       !controlRoomV2Active() ||
       !hasCardActions ||
@@ -1573,10 +1597,26 @@ function syncCard(
                     Edit
                 </button>`
       : "";
+    const promotionPending =
+      !!descriptor.promoteInputId &&
+      isControlRoomInputPromotionPending(descriptor.promoteInputId);
+    const promoteButton = descriptor.promoteInputId
+      ? `
+                <button
+                    type="button"
+                    class="btn btn-xs btn-accent"
+                    data-action="control-room-promote-input"
+                    data-pipeline-id="${escapeHtml(descriptor.pipelineId || "")}"
+                    data-input-id="${escapeHtml(descriptor.promoteInputId)}"
+                    ${promotionPending ? "disabled" : ""}>
+                    ${promotionPending ? "Promoting" : "Promote"}
+                </button>`
+      : "";
     const copyDisabled = descriptor.copyUrl ? "" : " disabled";
     const openDisabled = descriptor.openUrl ? "" : " disabled";
     const actionButtons = `
             <div class="flex min-w-0 flex-wrap gap-1.5">
+                ${promoteButton}
                 ${editButton}
                 <button
                     type="button"
@@ -1817,6 +1857,9 @@ function renderControlRoom(): void {
   const pipelines = listPipelines();
   const selectedPipeline =
     pipelines.find((pipe) => pipe.id === controlRoomState.pipelineId) || null;
+  const pipelineInputs = selectedPipeline
+    ? controlRoomInputs(selectedPipeline.id, renderControlRoom)
+    : null;
 
   renderPipelineSelect(container, pipelines);
   renderControlRoomScopeSummary(container, selectedPipeline);
@@ -1852,7 +1895,7 @@ function renderControlRoom(): void {
   const grid = container.querySelector<HTMLElement>("#control-room-grid");
   if (!grid) return;
 
-  const descriptors = buildCardDescriptors(selectedPipeline);
+  const descriptors = buildCardDescriptors(selectedPipeline, pipelineInputs);
   ensureCardElements(grid, descriptors.length);
   descriptors.forEach((descriptor, index) => {
     const article = grid.children[index] as HTMLElement | undefined;

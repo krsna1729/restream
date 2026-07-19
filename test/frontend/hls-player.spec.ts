@@ -946,7 +946,7 @@ test.describe.serial('HLS Player — live playback', () => {
         await expect(modal).not.toBeVisible();
     });
 
-    test('Control Room HLS preview player verification', async ({ page }) => {
+    test('Control Room input HLS preview player verification', async ({ page }) => {
         await selectPipelineForWorkspace(page, livePipelineName);
         await page.locator('#pipeline-workspace-tab-monitor').click();
 
@@ -954,9 +954,15 @@ test.describe.serial('HLS Player — live playback', () => {
         await expect(select).toBeVisible();
         await select.selectOption({ value: livePipelineId });
 
-        await expect(page.getByRole('heading', { name: 'Local HLS' })).toBeVisible();
+        const inputCard = page.locator('article[data-card-id^="input:"]').filter({
+            has: page.getByRole('heading', { name: 'Primary', exact: true }),
+        });
+        await expect(inputCard).toBeVisible();
+        await inputCard
+            .getByRole('button', { name: 'Load preview for Primary' })
+            .click();
 
-        const managedVideo = page.locator('video[data-role="managed-hls-video"]');
+        const managedVideo = inputCard.locator('video[data-role="managed-hls-video"]');
         await expect(managedVideo).toBeAttached({ timeout: 10000 });
         await expectPreviewPlayback(managedVideo);
     });

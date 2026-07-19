@@ -34,7 +34,10 @@ use super::health::{healthz_get_handler, v1_engine_health_handler};
 use super::hls::{
     hls_audio_init_handler, hls_audio_playlist_handler, hls_audio_segment_handler,
     hls_master_handler, hls_playlist_handler, hls_segment_handler, hls_video_init_handler,
-    hls_video_playlist_handler, hls_video_segment_handler,
+    hls_video_playlist_handler, hls_video_segment_handler, input_hls_audio_init_handler,
+    input_hls_audio_playlist_handler, input_hls_audio_segment_handler, input_hls_master_handler,
+    input_hls_video_init_handler, input_hls_video_playlist_handler,
+    input_hls_video_segment_handler,
 };
 use super::ingests::{
     ingests_delete_handler, ingests_get_handler, ingests_post_handler, ingests_start_handler,
@@ -49,6 +52,10 @@ use super::media_library::{
 use super::outputs::{
     output_status_handler, outputs_create_handler, outputs_delete_handler, outputs_start_handler,
     outputs_stop_handler, outputs_update_handler, youtube_monitoring_status_handler,
+};
+use super::pipeline_inputs::{
+    pipeline_input_delete_handler, pipeline_input_patch_handler, pipeline_input_promote_handler,
+    pipeline_inputs_get_handler, pipeline_inputs_post_handler,
 };
 use super::pipelines::{
     pipeline_alerts_handler, pipeline_detail_handler, pipeline_diagnostics_context_handler,
@@ -104,6 +111,9 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/monitoring/youtube-status",
     "/api/v1/pipelines",
     "/api/v1/pipelines/{id}",
+    "/api/v1/pipelines/{pipeline_id}/inputs",
+    "/api/v1/pipelines/{pipeline_id}/inputs/{input_id}",
+    "/api/v1/pipelines/{pipeline_id}/inputs/{input_id}/promote",
     "/api/v1/pipelines/{pipeline_id}/file-ingest",
     "/api/v1/pipelines/{pipeline_id}/outputs",
     "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}",
@@ -161,6 +171,13 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/hls/{pipeline_id}/audio/{track_index}/init.mp4",
     "/hls/{pipeline_id}/audio/{track_index}/{segment}",
     "/hls/{pipeline_id}/{segment}",
+    "/hls/inputs/{input_id}/master.m3u8",
+    "/hls/inputs/{input_id}/video/index.m3u8",
+    "/hls/inputs/{input_id}/video/init.mp4",
+    "/hls/inputs/{input_id}/video/{segment}",
+    "/hls/inputs/{input_id}/audio/{track_index}/index.m3u8",
+    "/hls/inputs/{input_id}/audio/{track_index}/init.mp4",
+    "/hls/inputs/{input_id}/audio/{track_index}/{segment}",
 ];
 
 /// Registers the authenticated HLS transport surface separately from the main
@@ -169,6 +186,34 @@ fn create_hls_router() -> Router<Arc<AppState>> {
     // HLS endpoints are grouped separately because they expose the streaming
     // surface and are easiest to scan when kept together.
     Router::new()
+        .route(
+            "/hls/inputs/{input_id}/master.m3u8",
+            get(input_hls_master_handler),
+        )
+        .route(
+            "/hls/inputs/{input_id}/video/index.m3u8",
+            get(input_hls_video_playlist_handler),
+        )
+        .route(
+            "/hls/inputs/{input_id}/video/init.mp4",
+            get(input_hls_video_init_handler),
+        )
+        .route(
+            "/hls/inputs/{input_id}/video/{segment}",
+            get(input_hls_video_segment_handler),
+        )
+        .route(
+            "/hls/inputs/{input_id}/audio/{track_index}/index.m3u8",
+            get(input_hls_audio_playlist_handler),
+        )
+        .route(
+            "/hls/inputs/{input_id}/audio/{track_index}/init.mp4",
+            get(input_hls_audio_init_handler),
+        )
+        .route(
+            "/hls/inputs/{input_id}/audio/{track_index}/{segment}",
+            get(input_hls_audio_segment_handler),
+        )
         .route("/hls/{pipeline_id}", get(hls_playlist_handler))
         .route("/hls/{pipeline_id}/master.m3u8", get(hls_master_handler))
         .route("/hls/{pipeline_id}/index.m3u8", get(hls_playlist_handler))
@@ -249,6 +294,18 @@ fn create_app_router() -> Router<Arc<AppState>> {
             get(pipeline_detail_handler)
                 .patch(pipelines_update_handler)
                 .delete(pipelines_delete_handler),
+        )
+        .route(
+            "/api/v1/pipelines/{pipeline_id}/inputs",
+            get(pipeline_inputs_get_handler).post(pipeline_inputs_post_handler),
+        )
+        .route(
+            "/api/v1/pipelines/{pipeline_id}/inputs/{input_id}",
+            patch(pipeline_input_patch_handler).delete(pipeline_input_delete_handler),
+        )
+        .route(
+            "/api/v1/pipelines/{pipeline_id}/inputs/{input_id}/promote",
+            post(pipeline_input_promote_handler),
         )
         .route(
             "/api/v1/pipelines/{pipeline_id}/file-ingest",

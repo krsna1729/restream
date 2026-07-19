@@ -20,7 +20,11 @@ and production source own executable detail.
 ```mermaid
 flowchart LR
     Socket["Protocol socket"] --> Parse["Protocol or container parse"]
-    Parse --> Source[("Source RingBuffer")]
+    Parse --> Choice{"Selected input?"}
+    Choice -->|"yes"| Gate["Atomic writer gate"]
+    Choice -->|"no"| Cache["Bounded latest compressed GOP"]
+    Cache -->|"promotion replay"| Gate
+    Gate --> Source[("Source RingBuffer")]
     Source --> Direct["Direct destination"]
     Source --> Stage["Shared transform"]
     Stage --> Output[("Output RingBuffer")]
@@ -53,14 +57,17 @@ shutdown behavior.
 
 ## Bounded transport
 
-The application bounds packet rings, MPEG-TS chunk rings, async/native queues,
-socket admission, sender admission, and child-process admission. Exact defaults
-and environment parsing live in `src/config.rs`; each structure owns its
-overflow or backpressure policy.
+The application bounds packet rings, MPEG-TS chunk rings, standby GOP caches,
+async/native queues, socket admission, sender admission, and child-process
+admission. Configurable defaults and environment parsing live in
+`src/config.rs`; fixed structural limits live with their owning module. Each
+structure owns its overflow or backpressure policy.
 
 Different structures deliberately react differently under pressure:
 
 - a lagging packet-ring reader may recover at a recent keyframe;
+- a connected RTMP/SRT standby retains one compressed GOP and invalidates it
+  entirely when its byte or packet bound is crossed;
 - an MPEG-TS chunk reader detects overwrite and advances according to its
   container boundary;
 - a `MemoryQueue` blocks or wakes its producer/consumer through its explicit
@@ -87,6 +94,12 @@ stays outside the shared stage:
 Sharing must not couple destination failure domains. A stalled or failed
 destination can lose its own buffered data or restart without stopping the
 publisher or another destination.
+
+Multi-input standby caching is intentionally outside shared transforms. It adds
+socket/demux work plus reference-counted compressed payload retention, but no
+standby decode, encode, transform ring, output packaging, or continuously
+generated HLS. With four configured inputs, the default worst case is three
+standby cache bounds in addition to the selected pipeline.
 
 ## Native and child-process boundaries
 

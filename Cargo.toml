@@ -132,6 +132,10 @@ harness = false
 name = "stage_feeder"
 harness = false
 
+[[bench]]
+name = "input_gate"
+harness = false
+
 [profile.dev]
 incremental = true
 codegen-units = 16

@@ -58,8 +58,10 @@ use crate::domain::srt_ingest::ResolvedSrtIngestConfig;
 use crate::domain::state::EgressPhase;
 use crate::media::engine::{EgressRegistration, MediaEngine, PublisherQuality};
 use crate::media::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessMode};
+use crate::media::input_gate::InputTimestampMapper;
 use crate::media::ring_buffer::{MediaPacket, MediaType, Reader, RingBuffer};
 use crate::media::security::RateLimitScope;
+use crate::media::standby_gop::StandbyGopCache;
 use crate::media::startup_policy;
 use crate::media::ts_chunk_ring::{TsChunkReader, TsChunkRing};
 use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
@@ -73,6 +75,8 @@ use crate::secret_display::redact_secret;
 #[path = "srt_policy.rs"]
 mod srt_policy;
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
+#[path = "srt/ingest_packets.rs"]
+mod ingest_packets;
 
 // Raw SRT Types & FFI Bindings
 pub type SRTSOCKET = c_int;
@@ -1344,19 +1348,31 @@ impl SrtServer {
         let mut ring_buffer = self.engine.get_or_create_pipeline(&pipeline.id).await;
         let Some(registration) = self
             .engine
-            .try_register_ingest_attempt(&pipeline.id, stream_key, "srt")
+            .try_register_pipeline_input_attempt(
+                &pipeline.id,
+                &pipeline.input_id,
+                stream_key,
+                "srt",
+                pipeline.selected,
+            )
             .await
         else {
             error!(
-                "[srt] Rejecting duplicate publisher for pipeline {}",
-                pipeline.id
+                "[srt] Rejecting duplicate publisher for input {}",
+                pipeline.input_id
             );
             // SAFETY: Valid socket, not yet closed elsewhere.
             unsafe { srt_close(client_sock) };
             return;
         };
         self.engine
-            .update_ingest_meta(&pipeline.id, None, None, Some(client_addr.to_string()))
+            .update_ingest_session_meta(
+                &pipeline.id,
+                &registration,
+                None,
+                None,
+                Some(client_addr.to_string()),
+            )
             .await;
         if is_group {
             match srt_group_summary(client_sock) {
@@ -1377,7 +1393,7 @@ impl SrtServer {
 
         let Some((bytes_received, ingest_metrics, last_progress_ms)) = self
             .engine
-            .with_active_ingest(&pipeline.id, |ingest| {
+            .with_ingest_session(&registration, |ingest| {
                 (
                     ingest.bytes_received.clone(),
                     ingest.metrics.clone(),
@@ -1403,11 +1419,13 @@ impl SrtServer {
         // HashMap::get()) on every IDR frame in the ingest hot loop.
         let cached_keyframe_times = self
             .engine
-            .with_active_ingest(&pipeline.id, |ingest| ingest.keyframe_times.clone())
+            .with_ingest_session(&registration, |ingest| ingest.keyframe_times.clone())
             .await;
 
         // Pure-Rust MPEG-TS demuxer — no FFmpeg thread or MemoryQueue needed
         let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+        let mut timestamp_mapper = InputTimestampMapper::default();
+        let mut standby_gop = StandbyGopCache::default();
         let mut packets = Vec::with_capacity(16);
         let mut probe_sent = false;
         let mut disconnect_phase: Option<String> = None;
@@ -1640,25 +1658,14 @@ impl SrtServer {
             // Feed into demuxer and push completed packets to ring buffer
             demuxer.feed(&buf[..n as usize]);
             if demuxer.drain_into(&mut packets) > 0 {
-                for pkt in &packets {
-                    if pkt.media_type == crate::media::ring_buffer::MediaType::Video
-                        && let Some(parameter_sets) =
-                            crate::media::codec::annexb_parameter_sets(&pkt.payload)
-                    {
-                        ring_buffer.set_video_parameter_sets(parameter_sets);
-                    }
-                    if pkt.media_type == crate::media::ring_buffer::MediaType::Video
-                        && pkt.is_keyframe
-                        && let Some(ref kf_times) = cached_keyframe_times
-                    {
-                        let mut times = kf_times.lock().unwrap_or_else(|e| e.into_inner());
-                        times.push(pkt.pts);
-                        if times.len() > 30 {
-                            times.remove(0);
-                        }
-                    }
-                }
-                ring_buffer.push_drained_batch_capped(&mut packets);
+                ingest_packets::forward_ingest_packets(
+                    &mut packets,
+                    &ring_buffer,
+                    &registration,
+                    &mut timestamp_mapper,
+                    &mut standby_gop,
+                    cached_keyframe_times.as_ref(),
+                );
             }
 
             // Send probe metadata once ready
@@ -1681,27 +1688,41 @@ impl SrtServer {
                 let first_audio = probe.audio_tracks.first().cloned();
                 let selected_video_track_index = probe.video.as_ref().map(|_| 0);
                 self.engine
-                    .update_ingest_meta(&pipeline.id, probe.video, first_audio, None)
+                    .update_ingest_session_meta(
+                        &pipeline.id,
+                        &registration,
+                        probe.video,
+                        first_audio,
+                        None,
+                    )
                     .await;
                 self.engine
-                    .update_ingest_video_track_selection(
-                        &pipeline.id,
+                    .update_ingest_session_video_track_selection(
+                        &registration,
                         probe.video_track_count,
                         selected_video_track_index,
                     )
                     .await;
                 if !probe.audio_tracks.is_empty() {
                     self.engine
-                        .update_ingest_audio_tracks(&pipeline.id, probe.audio_tracks)
+                        .update_ingest_session_audio_tracks(
+                            &pipeline.id,
+                            &registration,
+                            probe.audio_tracks,
+                        )
                         .await;
                 }
                 // Adapt ring capacity for the detected packet rate.
                 // If the ring was resized, update the local reference so
                 // subsequent push_batch() calls write to the new ring.
-                if let Some(new_ring) = self
+                if self
                     .engine
-                    .adapt_pipeline_ring(&pipeline.id, video_fps, audio_track_count)
+                    .is_ingest_session_selected(&pipeline.id, &registration)
                     .await
+                    && let Some(new_ring) = self
+                        .engine
+                        .adapt_pipeline_ring(&pipeline.id, video_fps, audio_track_count)
+                        .await
                 {
                     ring_buffer = new_ring;
                 }
@@ -1721,13 +1742,13 @@ impl SrtServer {
                     add_srt_group_quality(&mut quality, is_group, group_summary);
                     previous_stats = Some(snapshot);
                     self.engine
-                        .update_publisher_quality(&pipeline.id, quality)
+                        .update_ingest_session_quality(&registration, quality)
                         .await;
                 } else {
                     let mut quality = PublisherQuality::default();
                     add_srt_group_quality(&mut quality, is_group, group_summary);
                     self.engine
-                        .update_publisher_quality(&pipeline.id, quality)
+                        .update_ingest_session_quality(&registration, quality)
                         .await;
                 }
                 last_stats_sample = sampled_at;
@@ -1737,15 +1758,14 @@ impl SrtServer {
         // Flush any remaining PES data
         demuxer.flush();
         if demuxer.drain_into(&mut packets) > 0 {
-            for pkt in &packets {
-                if pkt.media_type == crate::media::ring_buffer::MediaType::Video
-                    && let Some(parameter_sets) =
-                        crate::media::codec::annexb_parameter_sets(&pkt.payload)
-                {
-                    ring_buffer.set_video_parameter_sets(parameter_sets);
-                }
-            }
-            ring_buffer.push_drained_batch_capped(&mut packets);
+            ingest_packets::forward_ingest_packets(
+                &mut packets,
+                &ring_buffer,
+                &registration,
+                &mut timestamp_mapper,
+                &mut standby_gop,
+                None,
+            );
         }
 
         info!("Ingest stream finished for pipeline: {}", pipeline.id);

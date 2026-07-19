@@ -4,7 +4,7 @@
 //! `crate::api_runtime_views` when they need API-facing health JSON.
 
 use ffmpeg_next as ffmpeg;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -41,22 +41,30 @@ pub struct Publisher {
     pub quality: PublisherQuality,
 }
 
-/// Runtime state for one active ingest connection.
-pub struct ActiveIngest {
-    pub attempt_id: u64,
-    pub stream_key: String,
-    pub start_time: Instant,
-    pub protocol: String, // "rtmp" | "srt" | "file"
-    pub bytes_received: Arc<AtomicU64>,
-    pub metrics: Arc<StageMetrics>,
-    pub last_progress_ms: Arc<AtomicU64>,
+#[derive(Clone, Default)]
+pub struct IngestMetadata {
     pub remote_addr: Option<String>,
     pub video: Option<VideoMeta>,
     pub selected_video_track_index: Option<u32>,
     pub video_track_count: usize,
     pub audio: Option<AudioMeta>,
-    pub audio_tracks: std::sync::Mutex<std::sync::Arc<Vec<AudioMeta>>>,
     pub quality: PublisherQuality,
+}
+
+/// Runtime state for one active ingest connection.
+pub struct ActiveIngest {
+    pub attempt_id: u64,
+    pub pipeline_id: String,
+    pub input_id: String,
+    pub stream_key: String,
+    pub gate: Arc<crate::media::input_gate::InputPacketGate>,
+    pub start_time: Instant,
+    pub protocol: String, // "rtmp" | "srt" | "file"
+    pub bytes_received: Arc<AtomicU64>,
+    pub metrics: Arc<StageMetrics>,
+    pub last_progress_ms: Arc<AtomicU64>,
+    pub metadata: std::sync::RwLock<IngestMetadata>,
+    pub audio_tracks: std::sync::Mutex<std::sync::Arc<Vec<AudioMeta>>>,
     pub keyframe_times: Arc<std::sync::Mutex<Vec<i64>>>,
     /// Cached FLV sequence headers for RTMP play subscribers (video config + audio config)
     pub video_sequence_header: std::sync::Mutex<Option<bytes::Bytes>>,
@@ -66,10 +74,23 @@ pub struct ActiveIngest {
     pub bitrate_kbps: std::sync::Mutex<Option<f64>>,
 }
 
-#[derive(Clone, Debug)]
+impl ActiveIngest {
+    pub fn metadata(&self) -> IngestMetadata {
+        self.metadata
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+}
+
+#[derive(Clone)]
 pub struct IngestRegistration {
     pub cancel_token: CancellationToken,
     pub attempt_id: u64,
+    pub input_id: String,
+    pub gate: Arc<crate::media::input_gate::InputPacketGate>,
+    pub last_forwarded_dts: Arc<AtomicI64>,
+    pub preview_ring: Arc<arc_swap::ArcSwapOption<RingBuffer>>,
 }
 
 /// Runtime state for one active egress target.
@@ -238,7 +259,39 @@ impl MediaEngine {
         f: impl FnOnce(&ActiveIngest) -> R,
     ) -> Option<R> {
         let ingests = self.ingests.active.read().await;
-        ingests.get(pipeline_id).map(f)
+        ingests.get(pipeline_id).map(|ingest| f(ingest.as_ref()))
+    }
+
+    pub async fn with_ingest_session<R>(
+        &self,
+        registration: &IngestRegistration,
+        f: impl FnOnce(&ActiveIngest) -> R,
+    ) -> Option<R> {
+        self.current_ingest_session(registration)
+            .await
+            .map(|ingest| f(ingest.as_ref()))
+    }
+
+    async fn current_ingest_session(
+        &self,
+        registration: &IngestRegistration,
+    ) -> Option<Arc<ActiveIngest>> {
+        let sessions = self.ingests.sessions.read().await;
+        let ingest = sessions.get(&registration.input_id)?;
+        (ingest.attempt_id == registration.attempt_id).then(|| ingest.clone())
+    }
+
+    pub async fn is_ingest_session_selected(
+        &self,
+        pipeline_id: &str,
+        registration: &IngestRegistration,
+    ) -> bool {
+        self.ingests
+            .active
+            .read()
+            .await
+            .get(pipeline_id)
+            .is_some_and(|ingest| ingest.attempt_id == registration.attempt_id)
     }
 
     pub async fn with_active_egress<R>(
@@ -250,7 +303,7 @@ impl MediaEngine {
         egresses.get(output_id).map(f)
     }
 
-    async fn with_current_egress<R>(
+    pub(super) async fn with_current_egress<R>(
         &self,
         output_id: &str,
         registration: &EgressRegistration,
@@ -540,7 +593,7 @@ impl MediaEngine {
         }
     }
 
-    fn build_recent_egress_outcome(
+    pub(super) fn build_recent_egress_outcome(
         previous: Option<&RecentEgressOutcome>,
         egress: &ActiveEgress,
         has_ingest: bool,
@@ -1032,59 +1085,134 @@ impl MediaEngine {
         });
     }
 
-    ///
-    /// A pipeline has one application-level producer. A bonded SRT publisher is
-    /// still one producer because libsrt presents the accepted bond as one group
-    /// socket. A second independent RTMP/SRT connection must be rejected instead
-    /// of overwriting the token and creating concurrent RingBuffer writers.
     pub async fn try_register_ingest_attempt(
         &self,
         pipeline_id: &str,
         stream_key: &str,
         protocol: &str,
     ) -> Option<IngestRegistration> {
+        if self.ingests.active.read().await.contains_key(pipeline_id) {
+            return None;
+        }
+        self.try_register_pipeline_input_attempt(
+            pipeline_id,
+            stream_key,
+            stream_key,
+            protocol,
+            true,
+        )
+        .await
+    }
+
+    pub async fn try_register_pipeline_input_attempt(
+        &self,
+        pipeline_id: &str,
+        input_id: &str,
+        stream_key: &str,
+        protocol: &str,
+        selected: bool,
+    ) -> Option<IngestRegistration> {
+        let _selection = self.ingests.selection_lock.lock().await;
         let mut tokens = self.ingests.cancel_tokens.write().await;
-        if let Some(existing) = tokens.get(pipeline_id)
+        if let Some(existing) = tokens.get(input_id)
             && !existing.is_cancelled()
         {
             return None;
         }
 
+        let selected = self
+            .ingests
+            .selected_inputs
+            .read()
+            .await
+            .get(pipeline_id)
+            .map(|selected_input| selected_input == input_id)
+            .unwrap_or(selected);
+        if selected {
+            let previous = self.ingests.active.read().await.get(pipeline_id).cloned();
+            if let Some(previous) = previous
+                && previous.input_id != input_id
+            {
+                previous.gate.demote();
+                previous.gate.wait_until_idle().await;
+            }
+        }
+
         let attempt_id = self.ingests.next_attempt_id.fetch_add(1, Ordering::Relaxed);
         let token = CancellationToken::new();
+        let last_forwarded_dts = {
+            let mut timelines = self.ingests.timelines.write().await;
+            timelines
+                .entry(pipeline_id.to_string())
+                .or_insert_with(|| Arc::new(AtomicI64::new(i64::MIN)))
+                .clone()
+        };
+        let preview_ring = {
+            let mut preview_slots = self.ingests.preview_slots.write().await;
+            preview_slots
+                .entry(input_id.to_string())
+                .or_insert_with(|| Arc::new(arc_swap::ArcSwapOption::empty()))
+                .clone()
+        };
+        let gate = Arc::new(
+            if selected && last_forwarded_dts.load(Ordering::Acquire) == i64::MIN {
+                crate::media::input_gate::InputPacketGate::active()
+            } else if selected {
+                let gate = crate::media::input_gate::InputPacketGate::standby();
+                gate.arm_for_promotion();
+                gate
+            } else {
+                crate::media::input_gate::InputPacketGate::standby()
+            },
+        );
         let registration = IngestRegistration {
             cancel_token: token.clone(),
             attempt_id,
+            input_id: input_id.to_string(),
+            gate: gate.clone(),
+            last_forwarded_dts,
+            preview_ring,
         };
-        tokens.insert(pipeline_id.to_string(), token.clone());
+        tokens.insert(input_id.to_string(), token.clone());
 
-        let mut ingests = self.ingests.active.write().await;
         let now = Instant::now();
-        ingests.insert(
-            pipeline_id.to_string(),
-            ActiveIngest {
-                attempt_id,
-                stream_key: stream_key.to_string(),
-                start_time: now,
-                protocol: protocol.to_string(),
-                bytes_received: Arc::new(AtomicU64::new(0)),
-                metrics: Arc::new(StageMetrics::new()),
-                last_progress_ms: Arc::new(AtomicU64::new(0)),
-                remote_addr: None,
-                video: None,
-                selected_video_track_index: None,
-                video_track_count: 0,
-                audio: None,
-                audio_tracks: std::sync::Mutex::new(std::sync::Arc::new(Vec::new())),
-                quality: PublisherQuality::default(),
-                keyframe_times: Arc::new(std::sync::Mutex::new(Vec::new())),
-                video_sequence_header: std::sync::Mutex::new(None),
-                audio_sequence_header: std::sync::Mutex::new(None),
-                prev_bytes_received: AtomicU64::new(0),
-                prev_sample_time: std::sync::Mutex::new(now),
-                bitrate_kbps: std::sync::Mutex::new(None),
-            },
-        );
+        let ingest = Arc::new(ActiveIngest {
+            attempt_id,
+            pipeline_id: pipeline_id.to_string(),
+            input_id: input_id.to_string(),
+            stream_key: stream_key.to_string(),
+            gate,
+            start_time: now,
+            protocol: protocol.to_string(),
+            bytes_received: Arc::new(AtomicU64::new(0)),
+            metrics: Arc::new(StageMetrics::new()),
+            last_progress_ms: Arc::new(AtomicU64::new(0)),
+            metadata: std::sync::RwLock::new(IngestMetadata::default()),
+            audio_tracks: std::sync::Mutex::new(std::sync::Arc::new(Vec::new())),
+            keyframe_times: Arc::new(std::sync::Mutex::new(Vec::new())),
+            video_sequence_header: std::sync::Mutex::new(None),
+            audio_sequence_header: std::sync::Mutex::new(None),
+            prev_bytes_received: AtomicU64::new(0),
+            prev_sample_time: std::sync::Mutex::new(now),
+            bitrate_kbps: std::sync::Mutex::new(None),
+        });
+        self.ingests
+            .sessions
+            .write()
+            .await
+            .insert(input_id.to_string(), ingest.clone());
+        if selected {
+            self.ingests
+                .selected_inputs
+                .write()
+                .await
+                .insert(pipeline_id.to_string(), input_id.to_string());
+            self.ingests
+                .active
+                .write()
+                .await
+                .insert(pipeline_id.to_string(), ingest);
+        }
 
         self.runtime
             .event_log
@@ -1094,6 +1222,159 @@ impl MediaEngine {
                 stream_key: stream_key.to_string(),
             });
         Some(registration)
+    }
+
+    pub async fn select_pipeline_input(&self, pipeline_id: &str, input_id: &str) -> bool {
+        let _selection = self.ingests.selection_lock.lock().await;
+        let previous = self.ingests.active.read().await.get(pipeline_id).cloned();
+        if previous
+            .as_ref()
+            .is_some_and(|ingest| ingest.input_id == input_id)
+        {
+            self.ingests
+                .selected_inputs
+                .write()
+                .await
+                .insert(pipeline_id.to_string(), input_id.to_string());
+            return true;
+        }
+        if let Some(previous) = previous
+            && previous.input_id != input_id
+        {
+            previous.gate.demote();
+            previous.gate.wait_until_idle().await;
+        }
+
+        self.ingests
+            .selected_inputs
+            .write()
+            .await
+            .insert(pipeline_id.to_string(), input_id.to_string());
+        let replacement = self.ingests.sessions.read().await.get(input_id).cloned();
+        match replacement {
+            Some(replacement) if replacement.pipeline_id == pipeline_id => {
+                replacement.gate.arm_for_promotion();
+                let metadata = replacement.metadata();
+                let audio_tracks = replacement
+                    .audio_tracks
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .clone();
+                if let Some(ring) = self.ingests.pipelines.read().await.get(pipeline_id) {
+                    if let Some(video) = metadata.video {
+                        ring.set_codec_hint(&video.codec);
+                    }
+                    if !audio_tracks.is_empty() {
+                        ring.set_audio_tracks(audio_tracks.as_ref().clone());
+                    }
+                }
+                self.ingests
+                    .active
+                    .write()
+                    .await
+                    .insert(pipeline_id.to_string(), replacement);
+                true
+            }
+            Some(_) | None => {
+                self.ingests.active.write().await.remove(pipeline_id);
+                false
+            }
+        }
+    }
+
+    pub async fn connected_input_count(&self, pipeline_id: &str) -> usize {
+        self.ingests
+            .sessions
+            .read()
+            .await
+            .values()
+            .filter(|ingest| ingest.pipeline_id == pipeline_id)
+            .count()
+    }
+
+    pub async fn cancel_pipeline_input(&self, input_id: &str) -> bool {
+        let token = self
+            .ingests
+            .cancel_tokens
+            .read()
+            .await
+            .get(input_id)
+            .cloned();
+        if let Some(token) = token {
+            token.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn ensure_input_preview_ring(&self, input_id: &str) -> Option<Arc<RingBuffer>> {
+        let _preview = self.ingests.preview_lock.lock().await;
+        let ingest = self.ingests.sessions.read().await.get(input_id).cloned()?;
+        let slot = self
+            .ingests
+            .preview_slots
+            .read()
+            .await
+            .get(input_id)
+            .cloned()?;
+        if let Some(ring) = slot.load_full() {
+            return Some(ring);
+        }
+
+        let ring = Arc::new(RingBuffer::new(self.config.ring_capacity));
+        let metadata = ingest.metadata();
+        if let Some(video) = metadata.video {
+            ring.set_codec_hint(&video.codec);
+        }
+        let audio_tracks = ingest
+            .audio_tracks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        if !audio_tracks.is_empty() {
+            ring.set_audio_tracks(audio_tracks.as_ref().clone());
+        }
+        let video_header = ingest
+            .video_sequence_header
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let audio_header = ingest
+            .audio_sequence_header
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        if let Some(payload) = video_header {
+            ring.push(crate::media::ring_buffer::MediaPacket {
+                media_type: MediaType::Video,
+                track_index: 0,
+                pts: 0,
+                dts: 0,
+                is_keyframe: false,
+                format: crate::media::ring_buffer::PayloadFormat::Flv,
+                payload,
+            });
+        }
+        if let Some(payload) = audio_header {
+            ring.push(crate::media::ring_buffer::MediaPacket {
+                media_type: MediaType::Audio,
+                track_index: 0,
+                pts: 0,
+                dts: 0,
+                is_keyframe: false,
+                format: crate::media::ring_buffer::PayloadFormat::Flv,
+                payload,
+            });
+        }
+        slot.store(Some(ring.clone()));
+        Some(ring)
+    }
+
+    pub async fn release_input_preview_ring(&self, input_id: &str) {
+        if let Some(slot) = self.ingests.preview_slots.read().await.get(input_id) {
+            slot.store(None);
+        }
     }
 
     pub async fn try_register_ingest(
@@ -1114,22 +1395,22 @@ impl MediaEngine {
         reason: Option<String>,
         had_error: bool,
     ) {
-        let ingests = self.ingests.active.read().await;
-        let Some(ingest) = ingests.get(pipeline_id) else {
+        let ingest = self.ingests.active.read().await.get(pipeline_id).cloned();
+        let Some(ingest) = ingest else {
             return;
         };
 
         let previous = self.ingests.recent.read().await.get(pipeline_id).cloned();
+        let metadata = ingest.metadata();
         let snapshot = Self::build_recent_ingest_outcome(
             previous.as_ref(),
             ingest.protocol.clone(),
             phase,
             reason,
             had_error,
-            ingest.remote_addr.clone(),
+            metadata.remote_addr.clone(),
             ingest.bytes_received.load(Ordering::Relaxed),
         );
-        drop(ingests);
 
         self.ingests
             .recent
@@ -1146,25 +1427,43 @@ impl MediaEngine {
         reason: Option<String>,
         had_error: bool,
     ) -> bool {
-        let ingests = self.ingests.active.read().await;
-        let Some(ingest) = ingests.get(pipeline_id) else {
+        let _selection = self.ingests.selection_lock.lock().await;
+        let ingest = self
+            .ingests
+            .sessions
+            .read()
+            .await
+            .get(&registration.input_id)
+            .cloned();
+        let Some(ingest) = ingest else {
             return false;
         };
-        if ingest.attempt_id != registration.attempt_id {
+        if ingest.pipeline_id != pipeline_id || ingest.attempt_id != registration.attempt_id {
             return false;
         }
 
+        let is_selected = self
+            .ingests
+            .active
+            .read()
+            .await
+            .get(pipeline_id)
+            .is_some_and(|active| active.attempt_id == registration.attempt_id);
+        if !is_selected {
+            return true;
+        }
+
         let previous = self.ingests.recent.read().await.get(pipeline_id).cloned();
+        let metadata = ingest.metadata();
         let snapshot = Self::build_recent_ingest_outcome(
             previous.as_ref(),
             ingest.protocol.clone(),
             phase,
             reason,
             had_error,
-            ingest.remote_addr.clone(),
+            metadata.remote_addr.clone(),
             ingest.bytes_received.load(Ordering::Relaxed),
         );
-        drop(ingests);
 
         self.ingests
             .recent
@@ -1175,32 +1474,58 @@ impl MediaEngine {
     }
 
     pub async fn unregister_ingest(&self, pipeline_id: &str) {
-        let mut tokens = self.ingests.cancel_tokens.write().await;
-        if let Some(token) = tokens.remove(pipeline_id) {
-            token.cancel();
+        let _selection = self.ingests.selection_lock.lock().await;
+        let removed_sessions = {
+            let mut sessions = self.ingests.sessions.write().await;
+            let input_ids = sessions
+                .values()
+                .filter(|ingest| ingest.pipeline_id == pipeline_id)
+                .map(|ingest| ingest.input_id.clone())
+                .collect::<Vec<_>>();
+            input_ids
+                .iter()
+                .filter_map(|input_id| sessions.remove(input_id))
+                .collect::<Vec<_>>()
+        };
+        {
+            let mut tokens = self.ingests.cancel_tokens.write().await;
+            for ingest in &removed_sessions {
+                if let Some(token) = tokens.remove(&ingest.input_id) {
+                    token.cancel();
+                }
+            }
         }
 
-        let mut ingests = self.ingests.active.write().await;
-        let removed = ingests.remove(pipeline_id);
-        drop(ingests);
+        let removed_selected = self.ingests.active.write().await.remove(pipeline_id);
+        self.ingests
+            .selected_inputs
+            .write()
+            .await
+            .remove(pipeline_id);
 
-        let protocol = removed
+        let protocol = removed_selected
             .as_ref()
             .map(|ingest| ingest.protocol.clone())
             .unwrap_or_default();
-        if let Some(ingest) = removed {
+        if let Some(ingest) = removed_selected {
+            let remote_addr = ingest
+                .metadata
+                .read()
+                .unwrap_or_else(|error| error.into_inner())
+                .remote_addr
+                .clone();
             let mut recent = self.ingests.recent.write().await;
             recent
                 .entry(pipeline_id.to_string())
                 .or_insert_with(|| RecentIngestOutcome {
-                    protocol: ingest.protocol,
+                    protocol: ingest.protocol.clone(),
                     disconnected_at_ms: Self::now_epoch_ms(),
                     first_disconnect_at_ms: Self::now_epoch_ms(),
                     disconnect_count: 1,
                     reason: None,
                     failure_phase: None,
                     had_error: false,
-                    remote_addr: ingest.remote_addr,
+                    remote_addr,
                     bytes_received: ingest.bytes_received.load(Ordering::Relaxed),
                 });
         }
@@ -1220,39 +1545,57 @@ impl MediaEngine {
         pipeline_id: &str,
         registration: &IngestRegistration,
     ) -> bool {
-        let mut tokens = self.ingests.cancel_tokens.write().await;
-        let mut ingests = self.ingests.active.write().await;
-        let Some(active) = ingests.get(pipeline_id) else {
-            return false;
-        };
-        if active.attempt_id != registration.attempt_id {
-            return false;
+        let _selection = self.ingests.selection_lock.lock().await;
+        {
+            let mut sessions = self.ingests.sessions.write().await;
+            let is_current = sessions.get(&registration.input_id).is_some_and(|ingest| {
+                ingest.pipeline_id == pipeline_id && ingest.attempt_id == registration.attempt_id
+            });
+            if !is_current {
+                return false;
+            }
+            sessions.remove(&registration.input_id);
         }
-
-        if let Some(token) = tokens.remove(pipeline_id) {
+        if let Some(token) = self
+            .ingests
+            .cancel_tokens
+            .write()
+            .await
+            .remove(&registration.input_id)
+        {
             token.cancel();
         }
 
-        let removed = ingests.remove(pipeline_id);
-        drop(ingests);
-
-        let protocol = removed
+        let removed_selected = {
+            let mut active = self.ingests.active.write().await;
+            let is_selected = active
+                .get(pipeline_id)
+                .is_some_and(|ingest| ingest.attempt_id == registration.attempt_id);
+            is_selected.then(|| active.remove(pipeline_id)).flatten()
+        };
+        let protocol = removed_selected
             .as_ref()
             .map(|ingest| ingest.protocol.clone())
             .unwrap_or_default();
-        if let Some(ingest) = removed {
+        if let Some(ingest) = removed_selected {
+            let remote_addr = ingest
+                .metadata
+                .read()
+                .unwrap_or_else(|error| error.into_inner())
+                .remote_addr
+                .clone();
             let mut recent = self.ingests.recent.write().await;
             recent
                 .entry(pipeline_id.to_string())
                 .or_insert_with(|| RecentIngestOutcome {
-                    protocol: ingest.protocol,
+                    protocol: ingest.protocol.clone(),
                     disconnected_at_ms: Self::now_epoch_ms(),
                     first_disconnect_at_ms: Self::now_epoch_ms(),
                     disconnect_count: 1,
                     reason: None,
                     failure_phase: None,
                     had_error: false,
-                    remote_addr: ingest.remote_addr,
+                    remote_addr,
                     bytes_received: ingest.bytes_received.load(Ordering::Relaxed),
                 });
         }
@@ -1266,483 +1609,6 @@ impl MediaEngine {
                 });
         }
         true
-    }
-
-    pub async fn register_egress_attempt(
-        &self,
-        output_id: &str,
-        pipeline_id: &str,
-        url: &str,
-        terminal_stage_key: Option<StageKey>,
-    ) -> EgressRegistration {
-        self.register_egress_attempt_with_meta(
-            output_id,
-            pipeline_id,
-            url,
-            None,
-            None,
-            terminal_stage_key,
-        )
-        .await
-    }
-
-    pub async fn register_egress_attempt_with_meta(
-        &self,
-        output_id: &str,
-        pipeline_id: &str,
-        url: &str,
-        output_name: Option<&str>,
-        encoding: Option<&str>,
-        terminal_stage_key: Option<StageKey>,
-    ) -> EgressRegistration {
-        self.egresses.retry.write().await.remove(output_id);
-
-        let mut tokens = self.egresses.cancel_tokens.write().await;
-        let attempt_id = self
-            .egresses
-            .next_attempt_id
-            .fetch_add(1, Ordering::Relaxed);
-        let token = CancellationToken::new();
-        let registration = EgressRegistration {
-            cancel_token: token.clone(),
-            attempt_id,
-        };
-        tokens.insert(output_id.to_string(), token.clone());
-
-        let mut egresses = self.egresses.active.write().await;
-        let now = Instant::now();
-        egresses.insert(
-            output_id.to_string(),
-            ActiveEgress {
-                attempt_id,
-                output_id: output_id.to_string(),
-                pipeline_id: pipeline_id.to_string(),
-                protocol: Self::egress_protocol_from_url(url).to_string(),
-                target_url: url.to_string(),
-                target_addr: Arc::new(std::sync::Mutex::new(None)),
-                status: EgressStatus::Running,
-                phase: Arc::new(std::sync::Mutex::new(EgressPhase::Starting)),
-                started_at: chrono::Utc::now().to_rfc3339(),
-                start_instant: now,
-                bytes_sent: Arc::new(AtomicU64::new(0)),
-                metrics: Arc::new(StageMetrics::new()),
-                last_progress_ms: Arc::new(AtomicU64::new(0)),
-                last_error: Arc::new(std::sync::Mutex::new(None)),
-                last_error_ms: Arc::new(AtomicU64::new(0)),
-                failure_phase: Arc::new(std::sync::Mutex::new(None)),
-                quality: Arc::new(std::sync::Mutex::new(PublisherQuality::default())),
-                prev_bytes_sent: AtomicU64::new(0),
-                prev_sample_time: std::sync::Mutex::new(now),
-                bitrate_kbps: std::sync::Mutex::new(None),
-                terminal_stage_key,
-                output_name: output_name.unwrap_or("").to_string(),
-                encoding: encoding.unwrap_or("").to_string(),
-            },
-        );
-
-        self.runtime
-            .event_log
-            .emit(crate::events::EventKind::EgressStarted {
-                pipeline_id: pipeline_id.to_string(),
-                output_id: output_id.to_string(),
-            });
-        registration
-    }
-
-    pub async fn register_egress(
-        &self,
-        output_id: &str,
-        pipeline_id: &str,
-        url: &str,
-    ) -> CancellationToken {
-        self.register_egress_attempt(output_id, pipeline_id, url, None)
-            .await
-            .cancel_token
-    }
-
-    pub async fn unregister_egress(&self, output_id: &str) {
-        let previous_recent = self.egresses.recent.read().await.get(output_id).cloned();
-        let mut tokens = self.egresses.cancel_tokens.write().await;
-        if let Some(token) = tokens.remove(output_id) {
-            token.cancel();
-        }
-
-        let mut egresses = self.egresses.active.write().await;
-        let release_srt_muxer = egresses.get(output_id).and_then(|egress| {
-            (egress.protocol == "srt").then(|| {
-                (
-                    egress.pipeline_id.clone(),
-                    egress.encoding.clone(),
-                    egress.attempt_id,
-                )
-            })
-        });
-        let pipeline_id = egresses
-            .get(output_id)
-            .map(|e| e.pipeline_id.clone())
-            .unwrap_or_default();
-        let recent_outcome = egresses.get(output_id).map(|egress| {
-            let has_ingest = self
-                .ingests
-                .active
-                .try_read()
-                .map(|ingests| ingests.contains_key(egress.pipeline_id.as_str()))
-                .unwrap_or(false);
-            Self::build_recent_egress_outcome(previous_recent.as_ref(), egress, has_ingest, true)
-        });
-        egresses.remove(output_id);
-        drop(egresses);
-
-        if let Some((srt_pipeline_id, encoding, attempt_id)) = release_srt_muxer {
-            self.release_srt_egress_muxer_stage(&srt_pipeline_id, &encoding, output_id, attempt_id)
-                .await;
-        }
-
-        if let Some(outcome) = recent_outcome {
-            self.egresses
-                .recent
-                .write()
-                .await
-                .insert(output_id.to_string(), outcome);
-        }
-
-        if !pipeline_id.is_empty() {
-            self.runtime
-                .event_log
-                .emit(crate::events::EventKind::EgressStopped {
-                    pipeline_id,
-                    output_id: output_id.to_string(),
-                });
-        }
-    }
-
-    pub async fn unregister_egress_if_current(
-        &self,
-        output_id: &str,
-        registration: &EgressRegistration,
-    ) -> bool {
-        let previous_recent = self.egresses.recent.read().await.get(output_id).cloned();
-        let mut tokens = self.egresses.cancel_tokens.write().await;
-        let mut egresses = self.egresses.active.write().await;
-        let Some(active) = egresses.get(output_id) else {
-            return false;
-        };
-        if active.attempt_id != registration.attempt_id {
-            return false;
-        }
-
-        if let Some(token) = tokens.remove(output_id) {
-            token.cancel();
-        }
-
-        let release_srt_muxer = (active.protocol == "srt").then(|| {
-            (
-                active.pipeline_id.clone(),
-                active.encoding.clone(),
-                active.attempt_id,
-            )
-        });
-        let pipeline_id = active.pipeline_id.clone();
-        let has_ingest = self
-            .ingests
-            .active
-            .try_read()
-            .map(|ingests| ingests.contains_key(active.pipeline_id.as_str()))
-            .unwrap_or(false);
-        let outcome = Self::build_recent_egress_outcome(
-            previous_recent.as_ref(),
-            active,
-            has_ingest,
-            registration.cancel_token.is_cancelled(),
-        );
-        egresses.remove(output_id);
-        drop(egresses);
-
-        if let Some((srt_pipeline_id, encoding, attempt_id)) = release_srt_muxer {
-            self.release_srt_egress_muxer_stage(&srt_pipeline_id, &encoding, output_id, attempt_id)
-                .await;
-        }
-
-        self.egresses
-            .recent
-            .write()
-            .await
-            .insert(output_id.to_string(), outcome);
-
-        if !pipeline_id.is_empty() {
-            self.runtime
-                .event_log
-                .emit(crate::events::EventKind::EgressStopped {
-                    pipeline_id,
-                    output_id: output_id.to_string(),
-                });
-        }
-        true
-    }
-
-    pub async fn update_egress_phase(&self, output_id: &str, phase: EgressPhase) {
-        let egresses = self.egresses.active.read().await;
-        if let Some(egress) = egresses.get(output_id) {
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = phase;
-        }
-    }
-
-    pub async fn update_egress_phase_if_current(
-        &self,
-        output_id: &str,
-        registration: &EgressRegistration,
-        phase: EgressPhase,
-    ) -> bool {
-        self.with_current_egress(output_id, registration, |egress| {
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = phase;
-        })
-        .await
-        .is_some()
-    }
-
-    pub async fn update_egress_target_addr(&self, output_id: &str, addr: String) {
-        let egresses = self.egresses.active.read().await;
-        if let Some(egress) = egresses.get(output_id) {
-            *egress.target_addr.lock().unwrap_or_else(|e| e.into_inner()) = Some(addr);
-        }
-    }
-
-    pub async fn update_egress_target_addr_if_current(
-        &self,
-        output_id: &str,
-        registration: &EgressRegistration,
-        addr: String,
-    ) -> bool {
-        self.with_current_egress(output_id, registration, |egress| {
-            *egress.target_addr.lock().unwrap_or_else(|e| e.into_inner()) = Some(addr);
-        })
-        .await
-        .is_some()
-    }
-
-    pub async fn update_egress_quality(&self, output_id: &str, quality: PublisherQuality) {
-        let egresses = self.egresses.active.read().await;
-        if let Some(egress) = egresses.get(output_id) {
-            *egress.quality.lock().unwrap_or_else(|e| e.into_inner()) = quality;
-        }
-    }
-
-    pub async fn update_egress_quality_if_current(
-        &self,
-        output_id: &str,
-        registration: &EgressRegistration,
-        quality: PublisherQuality,
-    ) -> bool {
-        self.with_current_egress(output_id, registration, |egress| {
-            *egress.quality.lock().unwrap_or_else(|e| e.into_inner()) = quality;
-        })
-        .await
-        .is_some()
-    }
-
-    pub async fn record_egress_progress(&self, output_id: &str, bytes: u64) {
-        let egresses = self.egresses.active.read().await;
-        if let Some(egress) = egresses.get(output_id) {
-            egress.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
-            egress.metrics.record_out(bytes);
-            egress
-                .last_progress_ms
-                .store(Self::now_epoch_ms(), Ordering::Relaxed);
-            let active_phase = if egress.protocol == "hls" {
-                EgressPhase::Uploading
-            } else {
-                EgressPhase::Sending
-            };
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = active_phase;
-            *egress
-                .failure_phase
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = None;
-            *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            egress.last_error_ms.store(0, Ordering::Relaxed);
-        }
-    }
-
-    pub async fn record_egress_progress_if_current(
-        &self,
-        output_id: &str,
-        registration: &EgressRegistration,
-        bytes: u64,
-    ) -> bool {
-        self.with_current_egress(output_id, registration, |egress| {
-            egress.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
-            egress.metrics.record_out(bytes);
-            egress
-                .last_progress_ms
-                .store(Self::now_epoch_ms(), Ordering::Relaxed);
-            let active_phase = if egress.protocol == "hls" {
-                EgressPhase::Uploading
-            } else {
-                EgressPhase::Sending
-            };
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = active_phase;
-            *egress
-                .failure_phase
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = None;
-            *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            egress.last_error_ms.store(0, Ordering::Relaxed);
-        })
-        .await
-        .is_some()
-    }
-
-    pub async fn egress_has_recorded_progress(&self, output_id: &str) -> bool {
-        let egresses = self.egresses.active.read().await;
-        egresses
-            .get(output_id)
-            .is_some_and(|egress| egress.last_progress_ms.load(Ordering::Relaxed) > 0)
-    }
-
-    pub async fn egress_has_recorded_progress_if_current(
-        &self,
-        output_id: &str,
-        registration: &EgressRegistration,
-    ) -> bool {
-        self.with_current_egress(output_id, registration, |egress| {
-            egress.last_progress_ms.load(Ordering::Relaxed) > 0
-        })
-        .await
-        .unwrap_or(false)
-    }
-
-    pub async fn recent_egress_outcome(&self, output_id: &str) -> Option<RecentEgressOutcome> {
-        self.egresses.recent.read().await.get(output_id).cloned()
-    }
-
-    pub async fn update_egress_retry_state(
-        &self,
-        output_id: &str,
-        attempts: u32,
-        backoff_ms: u64,
-        remaining_ms: u64,
-    ) {
-        if self.has_active_egress(output_id).await {
-            self.egresses.retry.write().await.remove(output_id);
-            return;
-        }
-        let next_retry_at_ms = Self::now_epoch_ms().saturating_add(remaining_ms);
-        self.egresses.retry.write().await.insert(
-            output_id.to_string(),
-            EgressRetryState {
-                attempts,
-                backoff_ms,
-                next_retry_at_ms,
-            },
-        );
-    }
-
-    pub async fn update_egress_retry_state_if_current(
-        &self,
-        output_id: &str,
-        registration: &EgressRegistration,
-        attempts: u32,
-        backoff_ms: u64,
-        remaining_ms: u64,
-    ) -> bool {
-        if self
-            .with_current_egress(output_id, registration, |_| {})
-            .await
-            .is_none()
-        {
-            return false;
-        }
-        let next_retry_at_ms = Self::now_epoch_ms().saturating_add(remaining_ms);
-        self.egresses.retry.write().await.insert(
-            output_id.to_string(),
-            EgressRetryState {
-                attempts,
-                backoff_ms,
-                next_retry_at_ms,
-            },
-        );
-        true
-    }
-
-    pub async fn clear_egress_retry_state(&self, output_id: &str) {
-        self.egresses.retry.write().await.remove(output_id);
-    }
-
-    pub async fn egress_retry_state(&self, output_id: &str) -> Option<EgressRetryState> {
-        self.egresses.retry.read().await.get(output_id).cloned()
-    }
-
-    pub async fn record_egress_error(
-        &self,
-        output_id: &str,
-        phase: &str,
-        message: impl Into<String>,
-    ) {
-        let message = message.into();
-        let event = {
-            let egresses = self.egresses.active.read().await;
-            if let Some(egress) = egresses.get(output_id) {
-                let pipeline_id = egress.pipeline_id.clone();
-                *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::Failed;
-                *egress
-                    .failure_phase
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = Some(phase.to_string());
-                *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(message.clone());
-                egress
-                    .last_error_ms
-                    .store(Self::now_epoch_ms(), Ordering::Relaxed);
-                Some(crate::events::EventKind::EgressFailed {
-                    pipeline_id,
-                    output_id: output_id.to_string(),
-                    phase: phase.to_string(),
-                    error: message,
-                })
-            } else {
-                None
-            }
-        };
-        if let Some(event) = event {
-            self.runtime.event_log.emit(event);
-        }
-    }
-
-    pub async fn record_egress_error_if_current(
-        &self,
-        output_id: &str,
-        registration: &EgressRegistration,
-        phase: &str,
-        message: impl Into<String>,
-    ) -> bool {
-        let message = message.into();
-        let event = self
-            .with_current_egress(output_id, registration, |egress| {
-                let pipeline_id = egress.pipeline_id.clone();
-                *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::Failed;
-                *egress
-                    .failure_phase
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = Some(phase.to_string());
-                *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(message.clone());
-                egress
-                    .last_error_ms
-                    .store(Self::now_epoch_ms(), Ordering::Relaxed);
-                crate::events::EventKind::EgressFailed {
-                    pipeline_id,
-                    output_id: output_id.to_string(),
-                    phase: phase.to_string(),
-                    error: message.clone(),
-                }
-            })
-            .await;
-        if let Some(event) = event {
-            self.runtime.event_log.emit(event);
-            true
-        } else {
-            false
-        }
     }
 
     /// Update bytes received counter for an active ingest (lock-free atomic).
@@ -1803,22 +1669,76 @@ impl MediaEngine {
                 ring.set_codec_hint(&video_meta.codec);
             }
         }
-        let mut ingests = self.ingests.active.write().await;
-        if let Some(ingest) = ingests.get_mut(pipeline_id) {
+        let ingests = self.ingests.active.read().await;
+        if let Some(ingest) = ingests.get(pipeline_id) {
+            let mut metadata = ingest
+                .metadata
+                .write()
+                .unwrap_or_else(|error| error.into_inner());
             if video.is_some() {
-                ingest.video = video;
-                if ingest.video_track_count == 0 {
-                    ingest.video_track_count = 1;
+                metadata.video = video;
+                if metadata.video_track_count == 0 {
+                    metadata.video_track_count = 1;
                 }
-                if ingest.selected_video_track_index.is_none() {
-                    ingest.selected_video_track_index = Some(0);
+                if metadata.selected_video_track_index.is_none() {
+                    metadata.selected_video_track_index = Some(0);
                 }
             }
             if audio.is_some() {
-                ingest.audio = audio;
+                metadata.audio = audio;
             }
             if remote_addr.is_some() {
-                ingest.remote_addr = remote_addr;
+                metadata.remote_addr = remote_addr;
+            }
+        }
+    }
+
+    pub async fn update_ingest_session_meta(
+        &self,
+        pipeline_id: &str,
+        registration: &IngestRegistration,
+        video: Option<VideoMeta>,
+        audio: Option<AudioMeta>,
+        remote_addr: Option<String>,
+    ) {
+        let Some(ingest) = self.current_ingest_session(registration).await else {
+            return;
+        };
+        {
+            let mut metadata = ingest
+                .metadata
+                .write()
+                .unwrap_or_else(|error| error.into_inner());
+            if video.is_some() {
+                metadata.video = video.clone();
+                if metadata.video_track_count == 0 {
+                    metadata.video_track_count = 1;
+                }
+                if metadata.selected_video_track_index.is_none() {
+                    metadata.selected_video_track_index = Some(0);
+                }
+            }
+            if audio.is_some() {
+                metadata.audio = audio;
+            }
+            if remote_addr.is_some() {
+                metadata.remote_addr = remote_addr;
+            }
+        }
+
+        if let Some(video) = video.as_ref()
+            && let Some(preview_ring) = registration.preview_ring.load_full()
+        {
+            preview_ring.set_codec_hint(&video.codec);
+        }
+        if self
+            .is_ingest_session_selected(pipeline_id, registration)
+            .await
+            && let Some(video) = video
+        {
+            let pipelines = self.ingests.pipelines.read().await;
+            if let Some(ring) = pipelines.get(pipeline_id) {
+                ring.set_codec_hint(&video.codec);
             }
         }
     }
@@ -1829,10 +1749,60 @@ impl MediaEngine {
         video_track_count: usize,
         selected_video_track_index: Option<u32>,
     ) {
-        let mut ingests = self.ingests.active.write().await;
-        if let Some(ingest) = ingests.get_mut(pipeline_id) {
-            ingest.video_track_count = video_track_count;
-            ingest.selected_video_track_index = selected_video_track_index;
+        let ingests = self.ingests.active.read().await;
+        if let Some(ingest) = ingests.get(pipeline_id) {
+            let mut metadata = ingest
+                .metadata
+                .write()
+                .unwrap_or_else(|error| error.into_inner());
+            metadata.video_track_count = video_track_count;
+            metadata.selected_video_track_index = selected_video_track_index;
+        }
+    }
+
+    pub async fn update_ingest_session_video_track_selection(
+        &self,
+        registration: &IngestRegistration,
+        video_track_count: usize,
+        selected_video_track_index: Option<u32>,
+    ) {
+        if let Some(ingest) = self.current_ingest_session(registration).await {
+            let mut metadata = ingest
+                .metadata
+                .write()
+                .unwrap_or_else(|error| error.into_inner());
+            metadata.video_track_count = video_track_count;
+            metadata.selected_video_track_index = selected_video_track_index;
+        }
+    }
+
+    pub async fn update_ingest_session_audio_tracks(
+        &self,
+        pipeline_id: &str,
+        registration: &IngestRegistration,
+        tracks: Vec<AudioMeta>,
+    ) {
+        let Some(ingest) = self.current_ingest_session(registration).await else {
+            return;
+        };
+        *ingest
+            .audio_tracks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Arc::new(tracks.clone());
+        if !tracks.is_empty()
+            && let Some(preview_ring) = registration.preview_ring.load_full()
+        {
+            preview_ring.set_audio_tracks(tracks.clone());
+        }
+        if !tracks.is_empty()
+            && self
+                .is_ingest_session_selected(pipeline_id, registration)
+                .await
+        {
+            let pipelines = self.ingests.pipelines.read().await;
+            if let Some(ring) = pipelines.get(pipeline_id) {
+                ring.set_audio_tracks(tracks);
+            }
         }
     }
 
@@ -1856,6 +1826,48 @@ impl MediaEngine {
                     .unwrap_or_else(|e| e.into_inner()) = Some(data);
             }
         }
+    }
+
+    pub async fn cache_ingest_session_sequence_header(
+        &self,
+        registration: &IngestRegistration,
+        is_video: bool,
+        data: bytes::Bytes,
+    ) {
+        let Some(ingest) = self.current_ingest_session(registration).await else {
+            return;
+        };
+        if is_video {
+            *ingest
+                .video_sequence_header
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(data);
+        } else {
+            *ingest
+                .audio_sequence_header
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(data);
+        }
+    }
+
+    pub async fn get_ingest_session_sequence_headers(
+        &self,
+        registration: &IngestRegistration,
+    ) -> (Option<bytes::Bytes>, Option<bytes::Bytes>) {
+        let Some(ingest) = self.current_ingest_session(registration).await else {
+            return (None, None);
+        };
+        let video = ingest
+            .video_sequence_header
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let audio = ingest
+            .audio_sequence_header
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        (video, audio)
     }
 
     pub async fn get_sequence_headers(
@@ -1907,9 +1919,27 @@ impl MediaEngine {
 
     /// Update publisher transport quality metrics.
     pub async fn update_publisher_quality(&self, pipeline_id: &str, quality: PublisherQuality) {
-        let mut ingests = self.ingests.active.write().await;
-        if let Some(ingest) = ingests.get_mut(pipeline_id) {
-            ingest.quality = quality;
+        let ingests = self.ingests.active.read().await;
+        if let Some(ingest) = ingests.get(pipeline_id) {
+            ingest
+                .metadata
+                .write()
+                .unwrap_or_else(|error| error.into_inner())
+                .quality = quality;
+        }
+    }
+
+    pub async fn update_ingest_session_quality(
+        &self,
+        registration: &IngestRegistration,
+        quality: PublisherQuality,
+    ) {
+        if let Some(ingest) = self.current_ingest_session(registration).await {
+            ingest
+                .metadata
+                .write()
+                .unwrap_or_else(|error| error.into_inner())
+                .quality = quality;
         }
     }
 
@@ -1963,7 +1993,6 @@ impl MediaEngine {
     }
 }
 
-#[cfg(test)]
 #[cfg(test)]
 #[path = "engine_tests.rs"]
 mod tests;

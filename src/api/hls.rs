@@ -131,6 +131,91 @@ pub async fn hls_audio_init_handler(
     .await
 }
 
+pub async fn input_hls_master_handler(
+    State(state): State<Arc<AppState>>,
+    Path(input_id): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    playlist_with_hls_access(&state, &headers, &uri, || async {
+        hls_preview::input_master_playlist(state.engine.clone(), &input_id).await
+    })
+    .await
+}
+
+pub async fn input_hls_video_playlist_handler(
+    State(state): State<Arc<AppState>>,
+    Path(input_id): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    playlist_with_hls_access(&state, &headers, &uri, || async {
+        hls_preview::input_video_playlist(state.engine.clone(), &input_id).await
+    })
+    .await
+}
+
+pub async fn input_hls_video_init_handler(
+    State(state): State<Arc<AppState>>,
+    Path(input_id): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    media_with_hls_access(&state, &headers, &uri, "video/mp4", || async {
+        hls_preview::input_video_init_segment(state.engine.clone(), &input_id).await
+    })
+    .await
+}
+
+pub async fn input_hls_video_segment_handler(
+    State(state): State<Arc<AppState>>,
+    Path((input_id, segment)): Path<(String, String)>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    media_with_hls_access(&state, &headers, &uri, "video/mp4", || async {
+        hls_preview::input_video_segment(state.engine.clone(), &input_id, &segment).await
+    })
+    .await
+}
+
+pub async fn input_hls_audio_playlist_handler(
+    State(state): State<Arc<AppState>>,
+    Path((input_id, track_index)): Path<(String, u32)>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    playlist_with_hls_access(&state, &headers, &uri, || async {
+        hls_preview::input_audio_playlist(state.engine.clone(), &input_id, track_index).await
+    })
+    .await
+}
+
+pub async fn input_hls_audio_init_handler(
+    State(state): State<Arc<AppState>>,
+    Path((input_id, track_index)): Path<(String, u32)>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    media_with_hls_access(&state, &headers, &uri, "audio/mp4", || async {
+        hls_preview::input_audio_init_segment(state.engine.clone(), &input_id, track_index).await
+    })
+    .await
+}
+
+pub async fn input_hls_audio_segment_handler(
+    State(state): State<Arc<AppState>>,
+    Path((input_id, track_index, segment)): Path<(String, u32, String)>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    media_with_hls_access(&state, &headers, &uri, "audio/mp4", || async {
+        hls_preview::input_audio_segment(state.engine.clone(), &input_id, track_index, &segment)
+            .await
+    })
+    .await
+}
+
 // Keep the auth gate next to transport response shaping so HLS handlers only
 // describe which playlist source they expose.
 async fn playlist_with_hls_access<F, Fut>(

@@ -7,6 +7,7 @@ pub mod hls_preview;
 pub mod ingest;
 pub mod ingest_security;
 pub mod models;
+pub mod pipeline_inputs;
 pub mod ports;
 pub mod reconcile;
 pub mod recording;

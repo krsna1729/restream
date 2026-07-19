@@ -63,7 +63,8 @@
         "ingest": "rtmp",
         "video": "h264",
         "audio": "a1",
-        "reorder": "bf0"
+        "reorder": "bf0",
+        "bufferedStandby": true
       },
       {
         "id": "mixed.live.rtmp.h264.a1.bf2",
@@ -91,7 +92,8 @@
         "ingest": "srt",
         "video": "h264",
         "audio": "a2",
-        "reorder": "bf0"
+        "reorder": "bf0",
+        "bufferedStandby": true
       },
       {
         "id": "mixed.live.srt.h264.a2.bf2",

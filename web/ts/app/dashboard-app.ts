@@ -58,7 +58,18 @@ import {
   renderPipelines,
   selectPipeline,
 } from "../features/render.js";
-import { getUrlParam } from "../core/utils.js";
+import {
+  createPipelineInput,
+  deletePipelineInput,
+  getPipelineInputs,
+  promotePipelineInput,
+  updatePipelineInput,
+} from "../core/api.js";
+import {
+  copyText,
+  getUrlParam,
+  showCopiedNotification,
+} from "../core/utils.js";
 import {
   configureControlRoomCheckpointPresentation,
   openOutputMonitoringUrl,
@@ -284,6 +295,14 @@ export function initDashboardApp(): void {
       saveAudioTrack: savePipelineAudioTrack,
       selectProtocol: selectPipelineIngestProtocol,
       updateAudioTrackDraft: updatePipelineAudioTrackDraft,
+      copyValue: async (value) => {
+        if (await copyText(value)) showCopiedNotification();
+      },
+      createInput: createPipelineInput,
+      deleteInput: deletePipelineInput,
+      listInputs: getPipelineInputs,
+      promoteInput: promotePipelineInput,
+      updateInput: updatePipelineInput,
     });
     setDashboardV2PipelineOutputOverviewActions({
       addOutput: (pipelineId) => {

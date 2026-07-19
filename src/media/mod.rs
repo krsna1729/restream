@@ -7,6 +7,7 @@
 pub mod avio;
 pub mod codec;
 pub mod engine;
+mod engine_egress;
 pub mod engine_hls;
 pub mod engine_registries;
 mod engine_snapshots;
@@ -20,6 +21,7 @@ pub use hls::fmp4 as hls_fmp4;
 pub use hls::preview as hls_preview_runtime;
 pub use hls::upload as hls_upload;
 pub mod ingest_auth;
+pub mod input_gate;
 pub mod mpegts;
 pub mod pipe_metrics;
 pub mod profiles;
@@ -34,6 +36,7 @@ pub mod stage_lifecycle;
 pub mod stage_metrics;
 pub mod stage_registry_access;
 pub mod stage_runtime;
+pub mod standby_gop;
 pub mod startup_policy;
 
 pub mod ffmpeg;

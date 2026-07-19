@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 
@@ -23,6 +23,11 @@ import type {
   PipelineOutputCardModel,
   PipelineOutputOverviewModel,
 } from "../features/pipeline-operate-view-model.js";
+
+const PipelineInputsPanel = lazy(async () => {
+  const module = await import("../features/pipeline-inputs-panel.js");
+  return { default: module.PipelineInputsPanel };
+});
 
 const toneClasses: Readonly<Record<OverviewTone, string>> = {
   success: "border-success/30 bg-success/10 text-success",
@@ -1169,6 +1174,15 @@ function DashboardV2PipelineInputStatus({
           </dl>
         </div>
       ))}
+      <Suspense
+        fallback={
+          <div className="dashboard-empty mt-3" role="status">
+            Loading inputs...
+          </div>
+        }
+      >
+        <PipelineInputsPanel actions={actions} pipelineId={model.id} />
+      </Suspense>
       <div className="mt-3">
         <div className="flex flex-wrap items-end justify-between gap-2">
           <h3 className="text-base-content/60 text-[0.7rem] font-semibold uppercase tracking-wide">
@@ -1332,71 +1346,6 @@ function DashboardV2PipelineInputStatus({
           <p className="text-base-content/55 mt-1 text-sm">No tracks</p>
         )}
       </div>
-      {model.liveSource ? (
-        <div className="border-base-content/10 mt-4 border-t pt-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <div className="text-base-content/55 text-[0.7rem] font-semibold uppercase">
-                Stream key
-              </div>
-              <code className="mt-1 block text-sm">
-                {model.liveSource.streamKeyLabel}
-              </code>
-            </div>
-            <button
-              aria-label={`Copy stream key for ${model.name}`}
-              className="btn btn-xs btn-accent btn-outline"
-              onClick={() =>
-                void actions.copyStreamKey(model.liveSource!.pipelineId)
-              }
-              type="button"
-            >
-              Copy Key
-            </button>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {model.liveSource.protocols.map((protocol) => (
-              <button
-                aria-pressed={protocol.selected}
-                aria-label={`Select ${protocol.label} ingest URL for ${model.name}`}
-                className={`btn btn-xs ${protocol.selected ? "btn-accent" : "btn-outline"}`}
-                key={protocol.id}
-                onClick={() =>
-                  actions.selectProtocol(
-                    model.liveSource!.pipelineId,
-                    protocol.id,
-                  )
-                }
-                type="button"
-              >
-                {protocol.label}
-              </button>
-            ))}
-          </div>
-          {model.liveSource.protocols
-            .filter(({ selected }) => selected)
-            .map((protocol) => (
-              <div className="mt-2 flex items-start gap-2" key={protocol.id}>
-                <code className="bg-base-200 min-w-0 flex-1 rounded p-2 text-xs break-all">
-                  {protocol.urlLabel}
-                </code>
-                <button
-                  aria-label={`Copy ${protocol.label} ingest URL for ${model.name}`}
-                  className="btn btn-xs btn-outline"
-                  onClick={() =>
-                    void actions.copyIngestUrl(
-                      model.liveSource!.pipelineId,
-                      protocol.id,
-                    )
-                  }
-                  type="button"
-                >
-                  Copy URL
-                </button>
-              </div>
-            ))}
-        </div>
-      ) : null}
       {model.fileSource ? (
         <div className="border-base-content/10 mt-4 border-t pt-3">
           <div className="text-base-content/55 text-[0.7rem] font-semibold uppercase">

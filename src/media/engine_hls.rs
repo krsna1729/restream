@@ -9,6 +9,7 @@ use crate::media::hls::HlsStore;
 use crate::media::hls_fmp4::Fmp4HlsStore;
 
 const HLS_PREVIEW_KEY_PREFIX: &str = "__preview__:";
+const INPUT_PREVIEW_RESOURCE_PREFIX: &str = "__input__:";
 
 pub(crate) fn hls_preview_registry_key(pipeline_id: &str) -> String {
     format!("{HLS_PREVIEW_KEY_PREFIX}{pipeline_id}")
@@ -16,6 +17,14 @@ pub(crate) fn hls_preview_registry_key(pipeline_id: &str) -> String {
 
 fn pipeline_id_from_hls_preview_registry_key(key: &str) -> Option<&str> {
     key.strip_prefix(HLS_PREVIEW_KEY_PREFIX)
+}
+
+pub(crate) fn input_hls_preview_resource_id(input_id: &str) -> String {
+    format!("{INPUT_PREVIEW_RESOURCE_PREFIX}{input_id}")
+}
+
+pub(crate) fn input_id_from_hls_preview_resource_id(resource_id: &str) -> Option<&str> {
+    resource_id.strip_prefix(INPUT_PREVIEW_RESOURCE_PREFIX)
 }
 
 /// Tracks HLS consumers for a pipeline. Persistent consumers (egress outputs)
@@ -70,6 +79,27 @@ impl HlsConsumers {
 }
 
 impl MediaEngine {
+    pub(crate) async fn get_input_sequence_headers(
+        &self,
+        input_id: &str,
+    ) -> (Option<bytes::Bytes>, Option<bytes::Bytes>) {
+        let ingest = self.ingests.sessions.read().await.get(input_id).cloned();
+        let Some(ingest) = ingest else {
+            return (None, None);
+        };
+        let video = ingest
+            .video_sequence_header
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let audio = ingest
+            .audio_sequence_header
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        (video, audio)
+    }
+
     pub async fn ensure_hls_segmenter(&self, pipeline_id: &str) -> (Arc<HlsStore>, bool) {
         let mut consumers = self.hls.consumers.write().await;
         let already_running = consumers.contains_key(pipeline_id);
@@ -165,6 +195,9 @@ impl MediaEngine {
         }
         drop(consumers);
         self.hls.preview_stores.write().await.remove(&preview_key);
+        if let Some(input_id) = input_id_from_hls_preview_resource_id(pipeline_id) {
+            self.release_input_preview_ring(input_id).await;
+        }
     }
 
     /// Get the cancel token for a running HLS segmenter (used to spawn the task).
@@ -251,7 +284,12 @@ impl MediaEngine {
         pipeline_id: &str,
         timeout_ms: u64,
     ) -> bool {
-        let has_ingest = self.has_active_ingest(pipeline_id).await;
+        let has_ingest = if let Some(input_id) = input_id_from_hls_preview_resource_id(pipeline_id)
+        {
+            self.ingests.sessions.read().await.contains_key(input_id)
+        } else {
+            self.has_active_ingest(pipeline_id).await
+        };
         let preview_key = hls_preview_registry_key(pipeline_id);
         let consumers = self.hls.consumers.read().await;
         match consumers.get(&preview_key) {

@@ -13,7 +13,6 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
         "CREATE TABLE IF NOT EXISTS pipelines (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
-            stream_key TEXT NOT NULL CHECK(length(stream_key) > 0),
             encoding TEXT,
             input_ever_seen_live INTEGER NOT NULL DEFAULT 0 CHECK(input_ever_seen_live IN (0, 1)),
             input_source TEXT,
@@ -53,9 +52,54 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
         .execute(pool)
         .await?;
 
-    super::migrations::ensure_no_duplicate_pipeline_stream_keys(pool).await?;
     sqlx::query(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_pipelines_stream_key_unique ON pipelines(stream_key);",
+        "CREATE TABLE IF NOT EXISTS pipeline_inputs (
+            id TEXT PRIMARY KEY,
+            pipeline_id TEXT NOT NULL,
+            label TEXT NOT NULL CHECK(length(trim(label)) > 0),
+            stream_key TEXT NOT NULL CHECK(length(stream_key) > 0),
+            role TEXT NOT NULL CHECK(role IN ('primary', 'backup')),
+            enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+            selected INTEGER NOT NULL DEFAULT 0 CHECK(selected IN (0, 1)),
+            FOREIGN KEY(pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
+        );",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_inputs_stream_key_unique
+         ON pipeline_inputs(stream_key);",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_inputs_one_primary
+         ON pipeline_inputs(pipeline_id) WHERE role = 'primary';",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_inputs_one_selected
+         ON pipeline_inputs(pipeline_id) WHERE selected = 1;",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_pipeline_inputs_pipeline
+         ON pipeline_inputs(pipeline_id);",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE TRIGGER IF NOT EXISTS trg_pipeline_inputs_limit
+         BEFORE INSERT ON pipeline_inputs
+         WHEN (
+             SELECT COUNT(*) FROM pipeline_inputs
+             WHERE pipeline_id = NEW.pipeline_id
+         ) >= 4
+         BEGIN
+             SELECT RAISE(ABORT, 'pipeline input limit exceeded');
+         END;",
     )
     .execute(pool)
     .await?;
@@ -111,7 +155,6 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
         "INTEGER NOT NULL DEFAULT 2",
     )
     .await?;
-    super::migrations::prune_duplicate_ingests_by_stream_key(pool).await?;
     sqlx::query(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_ingests_stream_key_unique ON ingests(stream_key);",
     )

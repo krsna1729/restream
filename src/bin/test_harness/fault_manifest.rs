@@ -27,6 +27,13 @@ pub(crate) enum HarnessPublisherProtocol {
 }
 
 impl HarnessPublisherProtocol {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rtmp => "rtmp",
+            Self::Srt => "srt",
+        }
+    }
+
     pub(crate) fn publish_url(self, ports: &TestPorts, stream_key: &str) -> String {
         match self {
             Self::Rtmp => format!("rtmp://127.0.0.1:{}/live/{stream_key}", ports.rtmp),
@@ -70,6 +77,16 @@ pub(crate) struct RecoveryTransientCase {
     pub(crate) wait_input_off_after_drop: bool,
     pub(crate) require_media_ready_on_resume: bool,
     pub(crate) second_reconnect_checks_flapping: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InputPromotionCase {
+    pub(crate) test_name: String,
+    pub(crate) pipeline: String,
+    pub(crate) output_name: String,
+    pub(crate) sink_stream: String,
+    pub(crate) protocol: HarnessPublisherProtocol,
 }
 
 /// Declarative cell for publisher disconnect fault coverage.
@@ -116,6 +133,7 @@ pub(crate) struct FaultCasesManifest {
     pub(crate) publisher_disconnect: Vec<PublisherDisconnectCase>,
     pub(crate) retry_budget: Vec<RetryBudgetCase>,
     pub(crate) recovery_transient: Vec<RecoveryTransientCase>,
+    pub(crate) input_promotion: Vec<InputPromotionCase>,
     pub(crate) ingest_lifecycle: Vec<IngestLifecycleCase>,
 }
 
@@ -140,6 +158,10 @@ pub(crate) fn recovery_transient_cases() -> &'static [RecoveryTransientCase] {
     &fault_cases_manifest().recovery_transient
 }
 
+pub(crate) fn input_promotion_cases() -> &'static [InputPromotionCase] {
+    &fault_cases_manifest().input_promotion
+}
+
 pub(crate) fn ingest_lifecycle_case(
     test_name: &str,
 ) -> Result<&'static IngestLifecycleCase, String> {
@@ -148,4 +170,18 @@ pub(crate) fn ingest_lifecycle_case(
         .iter()
         .find(|case| case.test_name == test_name)
         .ok_or_else(|| format!("ingest lifecycle case {test_name} missing from manifest"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn input_promotion_matrix_covers_rtmp_and_srt() {
+        let cases = input_promotion_cases();
+
+        assert_eq!(cases.len(), 2);
+        assert!(matches!(cases[0].protocol, HarnessPublisherProtocol::Rtmp));
+        assert!(matches!(cases[1].protocol, HarnessPublisherProtocol::Srt));
+    }
 }

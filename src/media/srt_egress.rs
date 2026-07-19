@@ -101,7 +101,8 @@ pub fn start_shared_ts_muxer(
             }
             let result = engine
                 .with_active_ingest(&pipeline_id_str, |ingest| {
-                    let video = ingest.video.clone();
+                    let metadata = ingest.metadata();
+                    let video = metadata.video;
                     video.as_ref()?;
                     let tracks = if let Some(routed_tracks) = source_ring.audio_tracks()
                         && !routed_tracks.is_empty()
@@ -113,7 +114,7 @@ pub fn start_shared_ts_muxer(
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
                         if lock.is_empty()
-                            && let Some(audio) = ingest.audio.clone()
+                            && let Some(audio) = metadata.audio
                         {
                             std::sync::Arc::new(vec![audio])
                         } else {
