@@ -153,6 +153,33 @@ mod tests {
     }
 
     #[test]
+    fn srt_preroll_falls_back_to_zero_for_unknown_or_malformed_presets() {
+        for encoding in ["", "not-a-real-preset", "1080p-typo", "custom"] {
+            assert_eq!(
+                srt_egress_keyframe_preroll_packets(encoding),
+                0,
+                "encoding={encoding:?} must fail safe to no preroll rather than panic"
+            );
+        }
+    }
+
+    #[test]
+    fn rtmp_egress_preroll_matches_the_shared_default() {
+        assert_eq!(
+            rtmp_egress_keyframe_preroll_packets(),
+            DEFAULT_KEYFRAME_PREROLL_PACKETS
+        );
+    }
+
+    #[test]
+    fn recording_preroll_matches_the_shared_default() {
+        assert_eq!(
+            recording_keyframe_preroll_packets(),
+            DEFAULT_KEYFRAME_PREROLL_PACKETS
+        );
+    }
+
+    #[test]
     fn ext_stage_probe_budget_prefers_hevc_budget_for_hevc_inputs() {
         assert_eq!(
             ext_stage_probe_budget(VideoCodecKind::H264),
