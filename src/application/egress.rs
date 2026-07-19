@@ -33,14 +33,14 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
         .as_deref()
         .map(VideoCodecKind::from_codec_name)
         .is_some_and(VideoCodecKind::is_hevc);
-    let ingest_codec_override =
-        (EgressProtocol::from_url(&output.url).is_rtmp() && ingest_is_hevc).then_some("hevc");
+    let output_protocol = EgressProtocol::from_url(&output.url);
+    let ingest_codec_override = (output_protocol.is_rtmp() && ingest_is_hevc).then_some("hevc");
 
     let url_scheme = OutputUrlScheme::from_url(&output.url);
     let backend_policy = engine.backend_policy();
     let planned_output = PlannedOutput::new(
         output.id.as_str(),
-        output.encoding_string(),
+        output.config.clone(),
         output.url.as_str(),
     );
     let plan = if url_scheme.is_hls_family() {
@@ -142,11 +142,13 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::audio_routing::AudioRouting;
+    use crate::domain::output_spec::{OutputConfig, RtmpOutputMode};
     use crate::domain::stage::StageKind;
     use crate::domain::state::DesiredOutputState;
     use crate::media::engine::VideoMeta;
 
-    fn test_output(pipeline_id: &str, encoding: &str, url: &str) -> Output {
+    fn test_output(pipeline_id: &str, config: OutputConfig, url: &str) -> Output {
         Output {
             id: format!("{pipeline_id}-out"),
             pipeline_id: pipeline_id.to_string(),
@@ -154,15 +156,24 @@ mod tests {
             url: url.to_string(),
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
-            config: crate::domain::output_spec::OutputConfig::parse(encoding),
+            config,
         }
+    }
+
+    fn test_output_with_rtmp_mode(
+        pipeline_id: &str,
+        config: OutputConfig,
+        url: &str,
+        rtmp_mode: RtmpOutputMode,
+    ) -> Output {
+        test_output(pipeline_id, config.with_rtmp_mode(rtmp_mode), url)
     }
 
     #[tokio::test]
     async fn prepare_output_ring_reuses_source_ring_for_passthrough_output() {
         let engine = Arc::new(MediaEngine::new());
         let source = engine.get_or_create_pipeline("pipe-source").await;
-        let output = test_output("pipe-source", "source", "srt://example:9000");
+        let output = test_output("pipe-source", OutputConfig::source(), "srt://example:9000");
 
         let prepared = prepare_output_ring(&engine, &output).await;
 
@@ -174,6 +185,27 @@ mod tests {
         assert_eq!(
             prepared.terminal_stage_key,
             StageKey::new("pipe-source", StageKind::source())
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_output_ring_reuses_hevc_source_for_enhanced_rtmp() {
+        let engine = Arc::new(MediaEngine::new());
+        let source = engine.get_or_create_pipeline("pipe-enhanced-rtmp").await;
+        source.set_codec_hint("hevc");
+        let output = test_output_with_rtmp_mode(
+            "pipe-enhanced-rtmp",
+            OutputConfig::source(),
+            "rtmp://example/live",
+            RtmpOutputMode::Enhanced,
+        );
+
+        let prepared = prepare_output_ring(&engine, &output).await;
+
+        assert!(Arc::ptr_eq(&source, &prepared.ring));
+        assert_eq!(
+            prepared.media_stage_key,
+            StageKey::new("pipe-enhanced-rtmp", StageKind::source())
         );
     }
 
@@ -199,7 +231,11 @@ mod tests {
         let expected = engine
             .get_or_create_h264_transcoder("pipe-hevc", StageKind::source(), source)
             .await;
-        let output = test_output("pipe-hevc", "source", "rtmp://example/live/test");
+        let output = test_output(
+            "pipe-hevc",
+            OutputConfig::source(),
+            "rtmp://example/live/test",
+        );
 
         let prepared = prepare_output_ring(&engine, &output).await;
 
@@ -240,8 +276,16 @@ mod tests {
             )
             .await;
 
-        let output_a = test_output("pipe-hevc-audio", "720p+atrack:0", "rtmp://example/live/a");
-        let output_b = test_output("pipe-hevc-audio", "720p+atrack:1", "rtmp://example/live/b");
+        let output_a = test_output(
+            "pipe-hevc-audio",
+            OutputConfig::preset("720p").with_audio(AudioRouting::SelectTracks { tracks: vec![0] }),
+            "rtmp://example/live/a",
+        );
+        let output_b = test_output(
+            "pipe-hevc-audio",
+            OutputConfig::preset("720p").with_audio(AudioRouting::SelectTracks { tracks: vec![1] }),
+            "rtmp://example/live/b",
+        );
 
         let ring_a = prepare_output_ring(&engine, &output_a).await.ring;
         let ring_b = prepare_output_ring(&engine, &output_b).await.ring;
@@ -298,8 +342,16 @@ mod tests {
             )
             .await;
 
-        let srt = test_output("pipe-hevc-mixed", "720p", "srt://example:9000");
-        let rtmp = test_output("pipe-hevc-mixed", "720p+atrack:0", "rtmp://example/live/a");
+        let srt = test_output(
+            "pipe-hevc-mixed",
+            OutputConfig::preset("720p"),
+            "srt://example:9000",
+        );
+        let rtmp = test_output(
+            "pipe-hevc-mixed",
+            OutputConfig::preset("720p").with_audio(AudioRouting::SelectTracks { tracks: vec![0] }),
+            "rtmp://example/live/a",
+        );
 
         let srt_ring = prepare_output_ring(&engine, &srt).await.ring;
         let rtmp_ring = prepare_output_ring(&engine, &rtmp).await.ring;
@@ -332,7 +384,7 @@ mod tests {
         source.set_codec_hint("hevc");
         let output = test_output(
             "pipe-hevc-hint",
-            "720p+atrack:0",
+            OutputConfig::preset("720p").with_audio(AudioRouting::SelectTracks { tracks: vec![0] }),
             "rtmp://example/live/hint",
         );
 
@@ -357,7 +409,7 @@ mod tests {
     async fn prepare_output_ring_falls_back_gracefully_for_unrecognized_url_scheme() {
         let engine = Arc::new(MediaEngine::new());
         let source = engine.get_or_create_pipeline("pipe-bad-url").await;
-        let output = test_output("pipe-bad-url", "source", "not-a-valid-url");
+        let output = test_output("pipe-bad-url", OutputConfig::source(), "not-a-valid-url");
 
         let prepared = prepare_output_ring(&engine, &output).await;
 
@@ -378,7 +430,7 @@ mod tests {
         let source = engine.get_or_create_pipeline("pipe-hls-output").await;
         let output = test_output(
             "pipe-hls-output",
-            "source",
+            OutputConfig::source(),
             "https://upload.example.test/live/out.m3u8",
         );
 
@@ -472,7 +524,11 @@ mod tests {
             source.set_video_parameter_sets(parameter_sets);
         }
 
-        let output = test_output(pipeline_id, "720p+atrack:0", "rtmp://example/live/selected");
+        let output = test_output(
+            pipeline_id,
+            OutputConfig::preset("720p").with_audio(AudioRouting::SelectTracks { tracks: vec![0] }),
+            "rtmp://example/live/selected",
+        );
         let prepared = prepare_output_ring(&engine, &output).await;
         let terminal_ring = prepared.ring.clone();
         let mut reader =

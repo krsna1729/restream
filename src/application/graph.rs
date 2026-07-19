@@ -54,7 +54,7 @@ pub fn desired_pipeline_graphs(
 fn planned_output(output: &Output) -> PlannedOutput {
     PlannedOutput::new(
         output.id.as_str(),
-        output.encoding_string(),
+        output.config.clone(),
         output.url.as_str(),
     )
 }
@@ -75,7 +75,7 @@ mod tests {
             url: url.to_string(),
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
-            config: crate::domain::output_spec::OutputConfig::parse("source"),
+            config: crate::domain::output_spec::OutputConfig::source(),
         }
     }
 

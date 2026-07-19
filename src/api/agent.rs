@@ -363,9 +363,9 @@ use super::outputs::{
     is_supported_monitoring_url, is_supported_output_url, normalize_monitoring_url,
 };
 #[cfg(feature = "agent-execution")]
-use super::state::MAX_ENCODING_LEN;
-#[cfg(feature = "agent-execution")]
 use super::state::MAX_NAME_LEN;
+#[cfg(feature = "agent-execution")]
+use super::state::MAX_OUTPUT_CONFIG_LEN;
 #[cfg(feature = "agent-execution")]
 use super::state::MAX_URL_LEN;
 #[cfg(feature = "agent-execution")]
@@ -983,10 +983,11 @@ fn validate_output_fields(
     config: &OutputConfig,
     desired_state: &str,
 ) -> Result<(), String> {
-    let encoding = config.to_encoding_string();
+    let config_json = serde_json::to_string(config)
+        .map_err(|err| format!("config must serialize to JSON: {err}"))?;
     validate_len("name", name, MAX_NAME_LEN)?;
     validate_len("url", url, MAX_URL_LEN)?;
-    validate_len("config", &encoding, MAX_ENCODING_LEN)?;
+    validate_len("config", &config_json, MAX_OUTPUT_CONFIG_LEN)?;
     if let Some(monitoring_url) = monitoring_url {
         validate_len("monitoring_url", monitoring_url, MAX_URL_LEN)?;
     }

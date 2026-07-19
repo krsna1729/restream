@@ -29,7 +29,7 @@ use crate::media::srt::SrtIngestPolicyStore;
 
 pub const MAX_NAME_LEN: usize = 256;
 pub const MAX_URL_LEN: usize = 2048;
-pub const MAX_ENCODING_LEN: usize = 512;
+pub const MAX_OUTPUT_CONFIG_LEN: usize = 512;
 pub const MAX_STREAM_KEY_LEN: usize = 256;
 pub const MAX_FFMPEG_ARGS_LEN: usize = 4096;
 pub const MAX_PASSWORD_LEN: usize = 1024;

@@ -5,6 +5,7 @@
 //! HLS previews, and recordings.
 
 use crate::domain::ids::{OutputId, PipelineId};
+use crate::domain::output_spec::OutputConfig;
 use crate::domain::stage::{StageKey, StageKind};
 use crate::domain::state::StageBackendKind;
 use crate::planner::backend_policy::BackendPolicy;
@@ -14,19 +15,15 @@ use crate::runtime::graph::{GraphRole, StageGraphPlan};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedOutput {
     pub id: OutputId,
-    pub encoding: String,
+    pub config: OutputConfig,
     pub url: String,
 }
 
 impl PlannedOutput {
-    pub fn new(
-        id: impl Into<OutputId>,
-        encoding: impl Into<String>,
-        url: impl Into<String>,
-    ) -> Self {
+    pub fn new(id: impl Into<OutputId>, config: OutputConfig, url: impl Into<String>) -> Self {
         Self {
             id: id.into(),
-            encoding: encoding.into(),
+            config,
             url: url.into(),
         }
     }
@@ -61,7 +58,7 @@ pub fn plan_pipeline_graph(
 
     // 2. Add outputs stages
     for (index, output) in outputs.iter().enumerate() {
-        let output_path = OutputPath::resolve(pipeline_id, &output.encoding, &output.url);
+        let output_path = OutputPath::resolve(pipeline_id, output.config.clone(), &output.url);
         if index == 0 {
             plan.terminal_stage = output_path.terminal_stage_key(ingest_codec);
         }
@@ -192,6 +189,8 @@ fn is_hevc_preview_codec(codec: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::audio_routing::AudioRouting;
+    use crate::domain::output_spec::RtmpOutputMode;
     use proptest::prelude::*;
     use std::collections::HashSet;
 
@@ -201,20 +200,15 @@ mod tests {
         audio_case: u8,
         protocol_case: u8,
     ) -> PlannedOutput {
-        let video = match video_case % 3 {
-            0 => "source",
-            1 => "720p",
-            _ => "1080p",
+        let config = match video_case % 3 {
+            0 => OutputConfig::source(),
+            1 => OutputConfig::preset("720p"),
+            _ => OutputConfig::preset("1080p"),
         };
-        let audio = match audio_case % 3 {
-            0 => None,
-            1 => Some("atrack:0"),
-            _ => Some("atrack:0,1"),
-        };
-        let encoding = match (video, audio) {
-            ("source", Some(audio)) => audio.to_string(),
-            (video, Some(audio)) => format!("{video}+{audio}"),
-            (video, None) => video.to_string(),
+        let config = match audio_case % 3 {
+            0 => config,
+            1 => config.with_audio(AudioRouting::SelectTracks { tracks: vec![0] }),
+            _ => config.with_audio(AudioRouting::SelectTracks { tracks: vec![0, 1] }),
         };
         let url = match protocol_case % 3 {
             0 => format!("rtmp://example/live/out-{index}"),
@@ -224,7 +218,7 @@ mod tests {
 
         PlannedOutput {
             id: OutputId::new(format!("out_{index}")),
-            encoding,
+            config,
             url,
         }
     }
@@ -312,7 +306,11 @@ mod tests {
     #[test]
     fn plan_pipeline_graph_sets_terminal_stage_from_output_path() {
         let policy = BackendPolicy::default();
-        let output = PlannedOutput::new("out_1", "720p+atrack:0", "rtmp://example/live");
+        let output = PlannedOutput::new(
+            "out_1",
+            OutputConfig::preset("720p").with_audio(AudioRouting::SelectTracks { tracks: vec![0] }),
+            "rtmp://example/live",
+        );
 
         let plan = plan_pipeline_graph("pipe_1", Some("hevc"), &[output], false, &policy);
 
@@ -326,6 +324,36 @@ mod tests {
                         "hevc_to_h264",
                         StageKind::video_preset_with_codec("720p", "hevc")
                     ),
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn plan_pipeline_graph_enhanced_rtmp_hevc_skips_codec_edge() {
+        let policy = BackendPolicy::default();
+        let output = PlannedOutput::new(
+            "out_1",
+            OutputConfig::preset("720p")
+                .with_audio(AudioRouting::SelectTracks { tracks: vec![0] })
+                .with_rtmp_mode(RtmpOutputMode::Enhanced),
+            "rtmp://example/live",
+        );
+
+        let plan = plan_pipeline_graph("pipe_1", Some("hevc"), &[output], false, &policy);
+
+        assert!(
+            plan.stages
+                .iter()
+                .all(|stage| !matches!(stage.kind, StageKind::CodecEdge { .. }))
+        );
+        assert_eq!(
+            plan.terminal_stage,
+            StageKey::new(
+                "pipe_1",
+                StageKind::audio_route(
+                    "atrack:0",
+                    StageKind::video_preset_with_codec("720p", "hevc")
                 )
             )
         );
@@ -364,7 +392,11 @@ mod tests {
     #[test]
     fn hls_output_graph_terminates_at_protocol_segmenter() {
         let policy = BackendPolicy::default();
-        let output = PlannedOutput::new("out_1", "720p", "https://example.com/live/out.m3u8");
+        let output = PlannedOutput::new(
+            "out_1",
+            OutputConfig::preset("720p"),
+            "https://example.com/live/out.m3u8",
+        );
         let plan = plan_hls_output_graph("pipe_1", Some("hevc"), &output, &policy);
 
         assert_eq!(

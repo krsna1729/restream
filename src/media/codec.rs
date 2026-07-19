@@ -12,6 +12,12 @@ use std::borrow::Cow;
 
 use crate::media::ring_buffer::PayloadFormat;
 
+mod enhanced_rtmp_hevc;
+
+pub use enhanced_rtmp_hevc::{
+    build_hevc_enhanced_rtmp_sequence_header, hevc_video_for_enhanced_rtmp_with_composition_into,
+};
+
 // ---------------------------------------------------------------------------
 // High-level: payload → MPEG-TS ready
 // ---------------------------------------------------------------------------
@@ -248,25 +254,24 @@ impl AnnexbParameterSetAccumulator {
             0
         };
 
-        match h264_nal_type {
-            7 | 8 => {
-                if self.switch_kind(AnnexbCodecKind::H264) {
-                    if h264_nal_type == 7 {
-                        self.h264_sps = Some(annexb_nalu(nalu));
-                    } else {
-                        self.h264_pps = Some(annexb_nalu(nalu));
-                    }
-                }
+        if (32..=34).contains(&h265_nal_type) && self.switch_kind(AnnexbCodecKind::H265) {
+            match h265_nal_type {
+                32 => self.h265_vps = Some(annexb_nalu(nalu)),
+                33 => self.h265_sps = Some(annexb_nalu(nalu)),
+                34 => self.h265_pps = Some(annexb_nalu(nalu)),
+                _ => {}
             }
-            _ => {
-                if (32..=34).contains(&h265_nal_type) && self.switch_kind(AnnexbCodecKind::H265) {
-                    match h265_nal_type {
-                        32 => self.h265_vps = Some(annexb_nalu(nalu)),
-                        33 => self.h265_sps = Some(annexb_nalu(nalu)),
-                        34 => self.h265_pps = Some(annexb_nalu(nalu)),
-                        _ => {}
-                    }
-                }
+            return;
+        }
+
+        if self.kind != AnnexbCodecKind::H265
+            && matches!(h264_nal_type, 7 | 8)
+            && self.switch_kind(AnnexbCodecKind::H264)
+        {
+            if h264_nal_type == 7 {
+                self.h264_sps = Some(annexb_nalu(nalu));
+            } else {
+                self.h264_pps = Some(annexb_nalu(nalu));
             }
         }
     }
@@ -846,6 +851,71 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    fn push_bits(bits: &mut Vec<bool>, value: u64, width: usize) {
+        for shift in (0..width).rev() {
+            bits.push(((value >> shift) & 1) == 1);
+        }
+    }
+
+    fn push_ue(bits: &mut Vec<bool>, value: u64) {
+        let code_num = value + 1;
+        let width = 64 - code_num.leading_zeros() as usize;
+        bits.extend(std::iter::repeat_n(false, width.saturating_sub(1)));
+        push_bits(bits, code_num, width);
+    }
+
+    fn pack_bits(bits: &[bool]) -> Vec<u8> {
+        bits.chunks(8)
+            .map(|chunk| {
+                chunk.iter().enumerate().fold(0u8, |byte, (index, bit)| {
+                    byte | (u8::from(*bit) << (7 - index))
+                })
+            })
+            .collect()
+    }
+
+    fn insert_emulation_prevention(data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(data.len());
+        let mut zero_run = 0u8;
+        for &byte in data {
+            if zero_run >= 2 && byte <= 3 {
+                out.push(3);
+                zero_run = 0;
+            }
+            out.push(byte);
+            zero_run = if byte == 0 {
+                zero_run.saturating_add(1)
+            } else {
+                0
+            };
+        }
+        out
+    }
+
+    fn minimal_hevc_sps_nalu(chroma_format_idc: u64, bit_depth_minus8: u64) -> Vec<u8> {
+        let mut bits = Vec::new();
+        push_bits(&mut bits, 0, 4);
+        push_bits(&mut bits, 0, 3);
+        push_bits(&mut bits, 1, 1);
+        push_bits(&mut bits, 0, 2);
+        push_bits(&mut bits, 0, 1);
+        push_bits(&mut bits, 2, 5);
+        push_bits(&mut bits, 0, 32);
+        push_bits(&mut bits, 0, 48);
+        push_bits(&mut bits, 0x7b, 8);
+        push_ue(&mut bits, 0);
+        push_ue(&mut bits, chroma_format_idc);
+        push_ue(&mut bits, 1920);
+        push_ue(&mut bits, 1080);
+        push_bits(&mut bits, 0, 1);
+        push_ue(&mut bits, bit_depth_minus8);
+        push_ue(&mut bits, bit_depth_minus8);
+
+        let mut sps = vec![0x42, 0x01];
+        sps.extend(insert_emulation_prevention(&pack_bits(&bits)));
+        sps
+    }
+
     #[test]
     fn avcc_annexb_round_trip() {
         // SPS (type 7) + PPS (type 8) + IDR (type 5) as Annex B
@@ -1023,6 +1093,109 @@ mod tests {
         ));
 
         assert_eq!(&out[..5], &[0x27, 0x01, 0xff, 0xff, 0xd8]);
+    }
+
+    #[test]
+    fn hevc_video_for_enhanced_rtmp_uses_coded_frames_x_for_zero_composition() {
+        let annexb = [
+            0, 0, 0, 1, 0x40, 0x01, 0xAA, 0, 0, 0, 1, 0x42, 0x01, 0x01, 0x01, 0x60, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0x78, 0, 0, 0, 1, 0x44, 0x01, 0xCC, 0, 0, 0, 1, 0x26, 0x01, 0xDE, 0xAD,
+        ];
+        let mut out = Vec::new();
+
+        assert!(hevc_video_for_enhanced_rtmp_with_composition_into(
+            &annexb, true, 0, &mut out
+        ));
+
+        assert_eq!(&out[..5], &[0x93, b'h', b'v', b'c', b'1']);
+        let nalu_len = u32::from_be_bytes([out[5], out[6], out[7], out[8]]);
+        assert_eq!(nalu_len, 4);
+        assert_eq!(&out[9..], &[0x26, 0x01, 0xDE, 0xAD]);
+    }
+
+    #[test]
+    fn hevc_video_for_enhanced_rtmp_writes_composition_for_nonzero_offset() {
+        let annexb = [0, 0, 0, 1, 0x26, 0x01, 0xDE, 0xAD];
+        let mut out = Vec::new();
+
+        assert!(hevc_video_for_enhanced_rtmp_with_composition_into(
+            &annexb, true, 40, &mut out
+        ));
+
+        assert_eq!(&out[..8], &[0x91, b'h', b'v', b'c', b'1', 0, 0, 40]);
+        let nalu_len = u32::from_be_bytes([out[8], out[9], out[10], out[11]]);
+        assert_eq!(nalu_len, 4);
+        assert_eq!(&out[12..], &[0x26, 0x01, 0xDE, 0xAD]);
+    }
+
+    #[test]
+    fn hevc_enhanced_rtmp_sequence_header_uses_hvc1_fourcc() {
+        let sps = minimal_hevc_sps_nalu(1, 2);
+        let mut annexb = vec![0, 0, 0, 1, 0x40, 0x01, 0xAA];
+        annexb.extend_from_slice(&[0, 0, 0, 1]);
+        annexb.extend_from_slice(&sps);
+        annexb.extend_from_slice(&[0, 0, 0, 1, 0x44, 0x01, 0xCC]);
+
+        let seq_hdr = build_hevc_enhanced_rtmp_sequence_header(&annexb).unwrap();
+
+        assert_eq!(&seq_hdr[..5], &[0x80, b'h', b'v', b'c', b'1']);
+        assert_eq!(seq_hdr[5], 1);
+        assert_eq!(seq_hdr[6] & 0x1f, 2);
+        assert_eq!(seq_hdr[17], 0x7b);
+        assert_eq!(seq_hdr[21], 0xfd);
+        assert_eq!(seq_hdr[22], 0xfa);
+        assert_eq!(seq_hdr[23], 0xfa);
+    }
+
+    #[test]
+    fn hevc_enhanced_rtmp_sequence_header_builds_from_bf0_fixture() {
+        let fixture = crate::test_fixtures::av_marker_transport_fixture_for_bframes(
+            "h265",
+            false,
+            crate::test_fixtures::AvMarkerBframeMode::Bf0,
+        )
+        .expect("checked-in HEVC BF0 fixture");
+        let bytes = std::fs::read(fixture).expect("read HEVC BF0 fixture");
+        let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+        let mut packets = Vec::new();
+        for chunk in bytes.chunks(1316) {
+            demuxer.feed(chunk);
+        }
+        demuxer.flush();
+        demuxer.drain_into(&mut packets);
+        let first_video_prefix = packets
+            .iter()
+            .find(|packet| packet.media_type == crate::media::ring_buffer::MediaType::Video)
+            .map(|packet| {
+                packet
+                    .payload
+                    .iter()
+                    .take(16)
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_else(|| "none".to_string());
+        let parameter_sets = packets
+            .iter()
+            .find_map(|packet| {
+                (packet.media_type == crate::media::ring_buffer::MediaType::Video)
+                    .then(|| annexb_parameter_sets(&packet.payload))
+                    .flatten()
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "fixture should carry HEVC parameter sets; packets={} first_video={}",
+                    packets.len(),
+                    first_video_prefix
+                )
+            });
+
+        let seq_hdr = build_hevc_enhanced_rtmp_sequence_header(&parameter_sets)
+            .expect("fixture HEVC parameter sets should build Enhanced RTMP hvcC");
+
+        assert_eq!(&seq_hdr[..5], &[0x80, b'h', b'v', b'c', b'1']);
+        assert_eq!(seq_hdr[21], 0xfd);
     }
 
     #[test]

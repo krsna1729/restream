@@ -7,6 +7,7 @@
 //! Egress: connects to an RTMP target URL and forwards packets from the
 //! `RingBuffer` via a `Reader`. Cancellation via `CancellationToken`.
 
+use crate::domain::output_spec::{RtmpOutputMode, VideoCodecKind};
 use crate::domain::state::EgressPhase;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
@@ -44,6 +45,7 @@ use crate::secret_display::{redact_secret, redact_url};
 use bytes::Bytes;
 
 mod egress_transport;
+mod enhanced;
 mod flv;
 mod ingest_packets;
 mod timestamps;
@@ -53,6 +55,10 @@ mod timestamps;
 mod tests;
 
 use egress_transport::{connect_rtmp_egress_stream, parse_rtmp_url, rtmp_sender_quality};
+use enhanced::{
+    cache_hevc_parameter_sets, enhanced_rtmp_connect_packet, hevc_sequence_header_for_keyframe,
+    raw_packet_starts_with_hevc_parameter_set,
+};
 use flv::{
     FlvVideoPacketKind, classify_flv_video_packet, flv_avcc_config_annexb_parameter_sets,
     flv_video_composition_time_ms, parse_flv_audio_meta, parse_flv_video_meta,
@@ -61,6 +67,8 @@ use ingest_packets::try_promote_cached_rtmp;
 use timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
 
 const RTMP_EGRESS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const RTMP_METADATA_VIDEO_CODEC_ID_AVC: u32 = 7;
+const RTMP_METADATA_VIDEO_CODEC_ID_HEVC: u32 = u32::from_be_bytes(*b"hvc1");
 
 struct RtmpIngestHandle {
     pipeline_id: String,
@@ -1095,6 +1103,7 @@ pub async fn start_rtmp_egress(
     ring_buffer: Arc<RingBuffer>,
     engine: Arc<MediaEngine>,
     registration: EgressRegistration,
+    rtmp_mode: RtmpOutputMode,
 ) {
     let cancel_token = registration.cancel_token.clone();
     macro_rules! egress_error {
@@ -1197,6 +1206,11 @@ pub async fn start_rtmp_egress(
         return;
     }
     let mut output_audio_track = output_audio_tracks.first().cloned();
+    let enhanced_rtmp_connect = rtmp_mode.is_enhanced();
+    let enhanced_hevc_video = enhanced_rtmp_connect
+        && output_ring_video_codec_kind(&engine, &pipeline_id, &ring_buffer)
+            .await
+            .is_hevc();
 
     egress_phase!(EgressPhase::Connecting);
     egress_target_addr!(format!("{}:{}", parts.host, parts.port));
@@ -1249,6 +1263,7 @@ pub async fn start_rtmp_egress(
         scheme, parts.host, parts.port, parts.app
     ));
     config.chunk_size = engine.config.rtmp_egress_chunk_size;
+    let connect_config = config.clone();
     let (mut session, initial_results) = match ClientSession::new(config) {
         Ok(s) => s,
         Err(e) => {
@@ -1275,7 +1290,18 @@ pub async fn start_rtmp_egress(
             return;
         }
     };
-    if socket.write_all(&conn_pkt.bytes).await.is_err() {
+    let conn_bytes = if enhanced_rtmp_connect {
+        match enhanced_rtmp_connect_packet(&connect_config, &parts.app) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                egress_error!("connect_app", error);
+                return;
+            }
+        }
+    } else {
+        conn_pkt.bytes
+    };
+    if socket.write_all(&conn_bytes).await.is_err() {
         egress_error!("connect_app", "failed to write connect request");
         return;
     }
@@ -1312,7 +1338,7 @@ pub async fn start_rtmp_egress(
     };
 
     let mut is_publishing = false;
-    let mut raw_h264_parameter_sets = ring_buffer
+    let mut raw_video_parameter_sets = ring_buffer
         .video_parameter_sets()
         .map(|parameter_sets| parameter_sets.to_vec())
         .unwrap_or_default();
@@ -1324,7 +1350,7 @@ pub async fn start_rtmp_egress(
     // Track the last SPS bytes we sent so we can re-send the AVCC decoder
     // config record when the encoder changes resolution or bitrate mid-stream.
     // None = no sequence header sent yet.
-    let mut last_sent_sps: Option<Vec<u8>> = None;
+    let mut last_sent_video_config: Option<Vec<u8>> = None;
     let mut video_ready = false;
     let mut audio_sequence_header_sent = false;
     let mut deferred_audio_sequence_header: Option<Bytes> = None;
@@ -1441,7 +1467,9 @@ pub async fn start_rtmp_egress(
                                     let video_sh = startup_video_sequence_header(
                                         reader.current_ring(),
                                         ingest_video_sh,
+                                        enhanced_hevc_video,
                                     );
+                                    let mut sent_startup_video_sequence_header = false;
                                     if let Some(vsh) = video_sh
                                         && let Ok(ClientSessionResult::OutboundResponse(p)) =
                                             session.publish_video_data(
@@ -1449,13 +1477,25 @@ pub async fn start_rtmp_egress(
                                                 RtmpTimestamp::new(0),
                                                 false,
                                             )
-                                        && socket.write_all(&p.bytes).await.is_err()
                                     {
-                                        egress_error!(
-                                            "send",
-                                            "failed to write video sequence header"
-                                        );
-                                        return;
+                                        if socket.write_all(&p.bytes).await.is_err() {
+                                            egress_error!(
+                                                "send",
+                                                "failed to write video sequence header"
+                                            );
+                                            return;
+                                        }
+                                        sent_startup_video_sequence_header = true;
+                                    }
+                                    if sent_startup_video_sequence_header {
+                                        if enhanced_hevc_video {
+                                            last_sent_video_config =
+                                                reader.current_ring().video_parameter_sets();
+                                        } else if let Some(parameter_sets) =
+                                            reader.current_ring().video_parameter_sets()
+                                        {
+                                            last_sent_video_config = h264_sps_nalu(&parameter_sets);
+                                        }
                                     }
                                     if let Some(ref ash) = audio_sh
                                         && should_send_startup_audio_sequence_header(
@@ -1573,25 +1613,18 @@ pub async fn start_rtmp_egress(
                         let payload = if packet.format == PayloadFormat::Raw {
                             match packet.media_type {
                                 MediaType::Video => {
-                                    cache_h264_parameter_sets(
-                                        &packet.payload,
-                                        &mut raw_h264_parameter_sets,
-                                    );
-                                    // Guard: Raw path is H.264-only.  H.265 packets
-                                    // must be converted by hevc_to_h264 before reaching
-                                    // RTMP egress.  If they arrive here the stage graph
-                                    // was set up before the codec probe completed; drop
-                                    // and warn until a keyframe with a proper H.264 SPS
-                                    // arrives.
-                                    if packet.payload.len() >= 2 {
-                                        // H.265 two-byte NAL header: bits[9:15] = nal_unit_type.
-                                        // H.264 one-byte NAL header: bits[0:4] = nal_unit_type.
-                                        // Detect HEVC by checking for VPS (type 32) or
-                                        // SPS (type 33) in the first NALU — types that cannot
-                                        // appear in H.264 streams.
-                                        let first_nalu_type_h265 =
-                                            (packet.payload[0] >> 1) & 0x3F;
-                                        if matches!(first_nalu_type_h265, 32..=34) {
+                                    if enhanced_hevc_video {
+                                        cache_hevc_parameter_sets(
+                                            &packet.payload,
+                                            &mut raw_video_parameter_sets,
+                                        );
+                                    } else {
+                                        cache_h264_parameter_sets(
+                                            &packet.payload,
+                                            &mut raw_video_parameter_sets,
+                                        );
+                                        if raw_packet_starts_with_hevc_parameter_set(&packet.payload)
+                                        {
                                             error!(
                                                 "[rtmp-egress] H.265 packet on Raw RTMP path \
                                                  for output {} — dropping until hevc_to_h264 \
@@ -1604,22 +1637,23 @@ pub async fn start_rtmp_egress(
                                     if !video_ready && !packet.is_keyframe {
                                         continue;
                                     }
-                                    // On each keyframe, check whether the SPS has changed
-                                    // (encoder resolution/bitrate switch) and (re-)send the
-                                    // AVCC decoder configuration record before the IDR.
                                     if packet.is_keyframe
-                                        && let Some((seq_hdr, new_sps)) =
-                                            h264_sequence_header_for_keyframe(
+                                        && let Some((seq_hdr, new_config)) =
+                                            video_sequence_header_for_keyframe(
+                                                enhanced_hevc_video,
                                                 &packet.payload,
-                                                &raw_h264_parameter_sets,
+                                                &raw_video_parameter_sets,
                                             )
                                     {
-                                            let sps_changed = match (&last_sent_sps, &new_sps) {
+                                            let config_changed = match (
+                                                &last_sent_video_config,
+                                                &new_config,
+                                            ) {
                                                 (None, Some(_)) => true,
                                                 (Some(old), Some(new)) => old != new,
                                                 _ => false,
                                             };
-                                            if sps_changed {
+                                            if config_changed {
                                                 let sequence_header_ts =
                                                     refreshed_video_sequence_header_timestamp(ts);
                                                 if let Ok(ClientSessionResult::OutboundResponse(
@@ -1646,7 +1680,7 @@ pub async fn start_rtmp_egress(
                                                             as u32,
                                                     );
                                                 }
-                                                last_sent_sps = new_sps;
+                                                last_sent_video_config = new_config;
                                             }
                                             video_ready = true;
                                     }
@@ -1658,12 +1692,22 @@ pub async fn start_rtmp_egress(
                                             -8_388_608,
                                             8_388_607,
                                         ) as i32;
-                                    if !codec::video_for_rtmp_with_composition_into(
-                                        &packet.payload,
-                                        packet.is_keyframe,
-                                        composition_time_ms,
-                                        &mut video_buf,
-                                    ) {
+                                    let wrote_video = if enhanced_hevc_video {
+                                        codec::hevc_video_for_enhanced_rtmp_with_composition_into(
+                                            &packet.payload,
+                                            packet.is_keyframe,
+                                            composition_time_ms,
+                                            &mut video_buf,
+                                        )
+                                    } else {
+                                        codec::video_for_rtmp_with_composition_into(
+                                            &packet.payload,
+                                            packet.is_keyframe,
+                                            composition_time_ms,
+                                            &mut video_buf,
+                                        )
+                                    };
+                                    if !wrote_video {
                                         continue;
                                     }
                                     Bytes::copy_from_slice(&video_buf)
@@ -1774,6 +1818,28 @@ async fn resolved_output_audio_tracks(
         .unwrap_or_default()
 }
 
+async fn output_ring_video_codec_kind(
+    engine: &MediaEngine,
+    pipeline_id: &str,
+    output_ring: &RingBuffer,
+) -> VideoCodecKind {
+    let output_codec = output_ring.codec_hint_str();
+    if !output_codec.is_empty() {
+        return VideoCodecKind::from_codec_name(output_codec);
+    }
+
+    engine
+        .with_active_ingest(pipeline_id, |ingest| {
+            ingest
+                .video
+                .as_ref()
+                .map(|video| VideoCodecKind::from_codec_name(&video.codec))
+        })
+        .await
+        .flatten()
+        .unwrap_or(VideoCodecKind::Unknown)
+}
+
 fn validate_rtmp_output_audio_tracks(audio_tracks: &[AudioMeta]) -> Result<(), String> {
     if audio_tracks.len() > 1 {
         return Err(format!(
@@ -1796,10 +1862,15 @@ async fn rtmp_publish_metadata(
         .flatten();
     let mut metadata = StreamMetadata::new();
 
-    if let Some(video) = video
-        && rtmp_output_video_codec(&video, output_ring).eq_ignore_ascii_case("h264")
-    {
-        metadata.video_codec_id = Some(7);
+    if let Some(video) = video {
+        let codec = rtmp_output_video_codec(&video, output_ring);
+        metadata.video_codec_id = if codec.eq_ignore_ascii_case("h264") {
+            Some(RTMP_METADATA_VIDEO_CODEC_ID_AVC)
+        } else if VideoCodecKind::from_codec_name(codec).is_hevc() {
+            Some(RTMP_METADATA_VIDEO_CODEC_ID_HEVC)
+        } else {
+            None
+        };
         metadata.video_width = (video.width > 0).then_some(video.width);
         metadata.video_height = (video.height > 0).then_some(video.height);
         metadata.video_frame_rate = (video.fps > 0.0).then_some(video.fps as f32);
@@ -1841,11 +1912,20 @@ fn cache_h264_parameter_sets(payload: &[u8], cache: &mut Vec<u8>) {
 fn startup_video_sequence_header(
     ring_buffer: &RingBuffer,
     ingest_sequence_header: Option<Bytes>,
+    enhanced_hevc_video: bool,
 ) -> Option<Bytes> {
     if let Some(parameter_sets) = ring_buffer.video_parameter_sets()
-        && let Some(sequence_header) = codec::build_avcc_sequence_header(&parameter_sets)
+        && let Some(sequence_header) = if enhanced_hevc_video {
+            codec::build_hevc_enhanced_rtmp_sequence_header(&parameter_sets)
+        } else {
+            codec::build_avcc_sequence_header(&parameter_sets)
+        }
     {
         return Some(sequence_header);
+    }
+
+    if enhanced_hevc_video {
+        return None;
     }
 
     // A brand-new raw H.264 output ring can be empty when the RTMP publisher
@@ -1924,6 +2004,18 @@ fn h264_sequence_header_for_keyframe(
         .or_else(|| codec::build_avcc_sequence_header(parameter_sets_cache))?;
     let sps = h264_sps_nalu(payload).or_else(|| h264_sps_nalu(parameter_sets_cache));
     Some((sequence_header, sps))
+}
+
+fn video_sequence_header_for_keyframe(
+    enhanced_hevc_video: bool,
+    payload: &[u8],
+    parameter_sets_cache: &[u8],
+) -> Option<(Bytes, Option<Vec<u8>>)> {
+    if enhanced_hevc_video {
+        hevc_sequence_header_for_keyframe(payload, parameter_sets_cache)
+    } else {
+        h264_sequence_header_for_keyframe(payload, parameter_sets_cache)
+    }
 }
 
 fn validate_rtmp_output_audio_packet_track(track_index: u32) -> Result<(), String> {

@@ -96,3 +96,50 @@ pub(crate) async fn backfill_output_configs(pool: &SqlitePool) -> Result<(), sql
     }
     Ok(())
 }
+
+pub(crate) async fn prune_duplicate_ingests_by_stream_key(
+    pool: &SqlitePool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM ingests
+         WHERE rowid NOT IN (
+             SELECT MAX(rowid)
+             FROM ingests
+             GROUP BY stream_key
+         );",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn ensure_no_duplicate_pipeline_stream_keys(
+    pool: &SqlitePool,
+) -> Result<(), sqlx::Error> {
+    let duplicates = sqlx::query(
+        "SELECT stream_key, GROUP_CONCAT(id, ',') AS pipeline_ids, COUNT(*) AS count
+         FROM pipelines
+         GROUP BY stream_key
+         HAVING COUNT(*) > 1
+         ORDER BY stream_key;",
+    )
+    .fetch_all(pool)
+    .await?;
+    if duplicates.is_empty() {
+        return Ok(());
+    }
+
+    let report = duplicates
+        .iter()
+        .map(|row| {
+            let stream_key: String = row.get("stream_key");
+            let pipeline_ids: String = row.get("pipeline_ids");
+            let count: i64 = row.get("count");
+            format!("{stream_key} ({count} pipelines: {pipeline_ids})")
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(sqlx::Error::Protocol(format!(
+        "duplicate pipeline stream keys must be resolved before migration: {report}"
+    )))
+}

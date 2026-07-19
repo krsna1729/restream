@@ -3,10 +3,6 @@ use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;
 use sqlx::{AssertSqlSafe, FromRow, SqlitePool};
 
-pub(crate) fn default_config() -> OutputConfig {
-    OutputConfig::default()
-}
-
 pub(crate) fn serialize_config(config: &OutputConfig) -> Result<String, sqlx::Error> {
     serde_json::to_string(config)
         .map_err(|err| sqlx::Error::Protocol(format!("serialize output config: {err}")))
@@ -15,10 +11,6 @@ pub(crate) fn serialize_config(config: &OutputConfig) -> Result<String, sqlx::Er
 pub(crate) fn deserialize_config(raw: &str) -> Result<OutputConfig, sqlx::Error> {
     serde_json::from_str(raw)
         .map_err(|err| sqlx::Error::Protocol(format!("parse output config json: {err}")))
-}
-
-pub(crate) fn parse_encoding(encoding: &str) -> OutputConfig {
-    OutputConfig::parse(encoding)
 }
 
 #[derive(FromRow)]

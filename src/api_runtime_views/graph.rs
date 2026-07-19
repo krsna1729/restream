@@ -131,7 +131,7 @@ pub(crate) async fn processing_graph(
         .map(|output| {
             PlannedOutput::new(
                 output.id.as_str(),
-                output.encoding_string(),
+                output.config.clone(),
                 output.url.as_str(),
             )
         })
@@ -239,8 +239,6 @@ pub(crate) async fn processing_graph(
     for output in &pipeline_outputs {
         let egress = egresses.get(&output.id);
         let output_node_id = format!("{pipeline_id}_output_{}", output.id);
-        let encoding = output.encoding_string();
-
         let protocol = MediaEngine::egress_protocol_from_url(&output.url);
         let protocol_label = MediaEngine::graph_protocol_label(protocol);
 
@@ -260,7 +258,7 @@ pub(crate) async fn processing_graph(
 
         let output_for_plan = [PlannedOutput::new(
             output.id.as_str(),
-            encoding.as_str(),
+            output.config.clone(),
             output.url.as_str(),
         )];
         let output_stage_plan = plan_pipeline_graph(
@@ -270,6 +268,7 @@ pub(crate) async fn processing_graph(
             false,
             &backend_policy,
         );
+        let stage_encoding_label = output.stage_encoding_label();
         let terminal_kind = output_stage_plan.terminal_stage.kind;
         let terminal_node_id = if matches!(terminal_kind, StageKind::Source) {
             rb_node_id.clone()
@@ -278,7 +277,7 @@ pub(crate) async fn processing_graph(
         };
 
         if protocol == "srt" {
-            let mux_slug = MediaEngine::graph_slug(encoding.as_str());
+            let mux_slug = MediaEngine::graph_slug(stage_encoding_label.as_str());
             let mux_node_id = format!(
                 "{pipeline_id}_ts_mux_{}",
                 if mux_slug.is_empty() {
@@ -287,7 +286,7 @@ pub(crate) async fn processing_graph(
                     mux_slug.as_str()
                 }
             );
-            let mux_key = format!("{pipeline_id}:{encoding}");
+            let mux_key = format!("{pipeline_id}:{stage_encoding_label}");
             let mux_active = ts_muxers
                 .get(&mux_key)
                 .is_some_and(|stage| !stage.cancel.is_cancelled());
@@ -298,11 +297,11 @@ pub(crate) async fn processing_graph(
                 nodes.push(api_view_models::processing_graph_node(
                     mux_node_id.clone(),
                     "packetizer",
-                    format!("MPEG-TS mux: {encoding}"),
+                    format!("MPEG-TS mux: {stage_encoding_label}"),
                     mux_active,
                     Some(api_view_models::processing_graph_packetizer_details(
                         "srt",
-                        encoding.as_str(),
+                        stage_encoding_label.as_str(),
                         mux_key,
                         mux_payload_stats,
                     )),

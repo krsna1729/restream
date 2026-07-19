@@ -32,7 +32,7 @@ returned by login.
 | Maximum request body | 4 MiB |
 | `name` / `serverName` / `label` fields | 256 bytes |
 | `url` / output URL fields | 2048 bytes |
-| `encoding` string | 512 bytes |
+| output `config` JSON | 512 bytes |
 | `streamKey` | 256 bytes |
 | `ffmpegArgs` (custom encoding) | 4096 bytes |
 | `password` | 1024 bytes |
@@ -261,7 +261,8 @@ Create/update body:
   "url": "rtmp://destination.example/live/key",
   "config": {
     "video": { "mode": "preset", "preset": "1080p" },
-    "audio": { "mode": "selectTracks", "tracks": [0] }
+    "audio": { "mode": "selectTracks", "tracks": [0] },
+    "protocol": { "type": "rtmp", "mode": "enhanced" }
   }
 }
 ```
@@ -280,6 +281,13 @@ Output config accepts `source`, built-in video presets, and typed audio-routing
 shapes (`all`, `selectTracks`, `downmix`, `remap`). `custom` output video mode
 is rejected with `400 Bad Request` because custom FFmpeg arguments are persisted
 for future use but are not applied by the runtime yet.
+
+For RTMP and RTMPS outputs, `config.protocol` may be
+`{ "type": "rtmp", "mode": "legacy" | "enhanced" }` and defaults to legacy
+RTMP when omitted. Enhanced RTMP advertises `avc1`, `hvc1`, and `mp4a`
+capabilities during connect; H.264 outputs continue using AVC payloads, while
+HEVC outputs use the Enhanced FLV `hvc1` packet format. Legacy RTMP converts
+HEVC terminal video to H.264 before publish.
 
 Deleting a running output cancels and unregisters its active egress before the
 database row is removed.

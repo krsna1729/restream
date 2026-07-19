@@ -16,13 +16,13 @@ use std::{sync::Arc, time::Duration};
 use crate::api_view_models;
 use crate::application::services::ApiError;
 
-use crate::domain::output_spec::{OutputConfig, OutputUrlScheme};
+use crate::domain::output_spec::{OutputConfig, OutputProtocolConfig, OutputUrlScheme};
 
 use crate::domain::state::DesiredOutputState;
 
 use super::state::{
-    AppState, MAX_ENCODING_LEN, MAX_NAME_LEN, MAX_URL_LEN, check_field_len, require_authenticated,
-    to_hex,
+    AppState, MAX_NAME_LEN, MAX_OUTPUT_CONFIG_LEN, MAX_URL_LEN, check_field_len,
+    require_authenticated, to_hex,
 };
 
 #[derive(Deserialize)]
@@ -35,8 +35,8 @@ pub struct OutputPayload {
 }
 
 impl OutputPayload {
-    pub fn encoding_string(&self) -> String {
-        self.config.to_encoding_string()
+    pub fn stage_encoding_label(&self) -> String {
+        self.config.stage_encoding_label()
     }
 }
 
@@ -59,6 +59,8 @@ pub const MONITORING_URL_PARSE_ERROR: &str =
     "Monitoring URL must be a valid absolute URL with a host";
 pub const CUSTOM_OUTPUT_ENCODING_ERROR: &str =
     "Custom output encoding is not available yet; choose source or a preset encoding";
+pub const OUTPUT_PROTOCOL_CONFIG_ERROR: &str =
+    "RTMP protocol settings require an RTMP or RTMPS output URL";
 const YOUTUBE_MONITORING_TIMEOUT: Duration = Duration::from_secs(5);
 const YOUTUBE_MONITORING_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const YOUTUBE_MONITORING_MAX_BYTES: usize = 512 * 1024;
@@ -304,8 +306,15 @@ fn validate_output_payload(
     }
 
     let output_config = payload.config.clone();
-    let output_encoding = payload.encoding_string();
-    if let Some(response) = check_field_len("config", &output_encoding, MAX_ENCODING_LEN) {
+    let output_config_json = match serde_json::to_string(&output_config) {
+        Ok(value) => value,
+        Err(err) => {
+            return Err(Box::new(bad_request(format!(
+                "Invalid output config: {err}"
+            ))));
+        }
+    };
+    if let Some(response) = check_field_len("config", &output_config_json, MAX_OUTPUT_CONFIG_LEN) {
         return Err(Box::new(response));
     }
     if let Some(monitoring_url) = payload.monitoring_url.as_deref()
@@ -322,6 +331,11 @@ fn validate_output_payload(
     let Some(url) = normalize_output_url(&payload.url) else {
         return Err(Box::new(bad_request(OUTPUT_URL_PARSE_ERROR)));
     };
+    if matches!(output_config.protocol, OutputProtocolConfig::Rtmp { .. })
+        && !OutputUrlScheme::from_url(&url).is_rtmp_family()
+    {
+        return Err(Box::new(bad_request(OUTPUT_PROTOCOL_CONFIG_ERROR)));
+    }
     let monitoring_url = normalize_monitoring_url(payload.monitoring_url.as_deref())
         .map_err(|error| Box::new(bad_request(error)))?;
 
@@ -538,7 +552,7 @@ pub async fn output_status_handler(
 mod tests {
     use super::*;
     use crate::domain::audio_routing::AudioRouting;
-    use crate::domain::output_spec::OutputVideoConfig;
+    use crate::domain::output_spec::{OutputVideoConfig, RtmpOutputMode};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -546,10 +560,7 @@ mod tests {
         OutputPayload {
             name: "Primary Output".to_string(),
             url: url.to_string(),
-            config: OutputConfig {
-                video: OutputVideoConfig::Source,
-                audio: AudioRouting::Passthrough,
-            },
+            config: OutputConfig::source(),
             monitoring_url: None,
         }
     }
@@ -610,12 +621,26 @@ mod tests {
             config: OutputConfig {
                 video: OutputVideoConfig::Custom,
                 audio: AudioRouting::Passthrough,
+                ..OutputConfig::default()
             },
             ..test_output_payload("rtmp://example.com/live")
         };
 
         let response =
             validate_output_payload(&payload).expect_err("custom outputs should be rejected");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_output_payload_rejects_rtmp_protocol_settings_for_srt_url() {
+        let payload = OutputPayload {
+            config: OutputConfig::source().with_rtmp_mode(RtmpOutputMode::Enhanced),
+            ..test_output_payload("srt://example.com:9000")
+        };
+
+        let response = validate_output_payload(&payload)
+            .expect_err("RTMP settings should be rejected for SRT outputs");
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
@@ -628,10 +653,7 @@ mod tests {
             name: "Primary Output".to_string(),
             url: "rtmp://example.com/live/stream".to_string(),
             desired_state: DesiredOutputState::Stopped,
-            config: OutputConfig {
-                video: OutputVideoConfig::Source,
-                audio: AudioRouting::Passthrough,
-            },
+            config: OutputConfig::source(),
             monitoring_url: None,
         };
 

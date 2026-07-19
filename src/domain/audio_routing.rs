@@ -1,8 +1,8 @@
 //! Domain-level audio-routing grammar shared by planner and media backends.
 //!
-//! These types describe what an encoding string means for audio selection or
-//! transformation. Backend modules can then decide how to execute the routing
-//! without owning the grammar themselves.
+//! These types describe audio selection or transformation separately from output
+//! video mode. Backend modules can then decide how to execute routing without
+//! owning the API payload shape themselves.
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "mode", rename_all = "camelCase")]

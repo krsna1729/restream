@@ -165,6 +165,12 @@ export interface ConfigOutput {
   desiredState?: string;
 }
 
+export type RtmpOutputMode = "legacy" | "enhanced";
+
+export type OutputProtocolConfig =
+  | { type: "auto" }
+  | { type: "rtmp"; mode: RtmpOutputMode };
+
 export type OutputConfig = {
   video:
     | { mode: "source" }
@@ -180,6 +186,7 @@ export type OutputConfig = {
         rightChannel: number;
       }
     | { mode: "downmix"; track: number };
+  protocol?: OutputProtocolConfig;
 };
 
 export interface Job {

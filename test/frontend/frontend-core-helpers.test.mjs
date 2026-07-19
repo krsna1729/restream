@@ -223,6 +223,28 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
     {
       value: "rtmp://a.rtmp.youtube.com/live2/",
       inputValue: "abc123",
+      rtmpMode: "enhanced",
+    },
+  );
+  assert.deepEqual(
+    utils.matchOutputServerPreset(
+      "rtmp",
+      "rtmp://b.rtmp.youtube.com/live2?backup=1/backup-key",
+    ),
+    {
+      value: "rtmp://b.rtmp.youtube.com/live2?backup=1/",
+      inputValue: "backup-key",
+      rtmpMode: "enhanced",
+    },
+  );
+  assert.deepEqual(
+    utils.matchOutputServerPreset(
+      "rtmp",
+      "rtmps://live-api-s.facebook.com:443/rtmp/abc123",
+    ),
+    {
+      value: "rtmps://live-api-s.facebook.com:443/rtmp/",
+      inputValue: "abc123",
     },
   );
   assert.equal(

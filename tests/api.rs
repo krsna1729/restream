@@ -2493,7 +2493,7 @@ async fn pipeline_graph_stage_nodes_include_lifecycle_details() {
         "rtmp://example.test/live/graph-life",
         None,
         DesiredOutputState::Running,
-        &OutputConfig::parse("720p"),
+        &OutputConfig::preset("720p"),
     )
     .await
     .unwrap();
@@ -2563,7 +2563,7 @@ async fn pipeline_diagnostics_context_returns_causal_bundle() {
         "rtmp://example.test/live/diagctx",
         None,
         DesiredOutputState::Running,
-        &OutputConfig::parse("720p"),
+        &OutputConfig::preset("720p"),
     )
     .await
     .unwrap();
@@ -2575,7 +2575,7 @@ async fn pipeline_diagnostics_context_returns_causal_bundle() {
         "https://upload.example.test/live/out.m3u8",
         None,
         DesiredOutputState::Running,
-        &OutputConfig::parse("source"),
+        &OutputConfig::source(),
     )
     .await
     .unwrap();

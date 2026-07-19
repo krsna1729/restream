@@ -683,7 +683,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
                     let ring_buf = prepared_output.ring.clone();
                     let terminal_stage_key = Some(prepared_output.terminal_stage_key.clone());
 
-                    let encoding_str = output.encoding_string();
+                    let encoding_str = output.stage_encoding_label();
                     let registration = engine
                         .register_egress_attempt_with_meta(
                             &output.id,
@@ -716,8 +716,9 @@ pub async fn run_app(config: Arc<AppConfig>) {
                     // The egress client is protocol-agnostic w.r.t. this choice.
                     let output_id_c = output.id.clone();
                     let pipeline_id_c = output.pipeline_id.clone();
-                    let encoding_c = output.encoding_string();
+                    let encoding_c = output.stage_encoding_label();
                     let url_c = output.url.clone();
+                    let rtmp_mode_c = output.config.rtmp_mode();
                     let pool_c = pool.clone();
                     let last_failed_c = last_failed.clone();
                     let tuning_c = tuning;
@@ -797,6 +798,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
                                         ring_buf,
                                         engine_c.clone(),
                                         registration_c.clone(),
+                                        rtmp_mode_c,
                                     )
                                     .await;
                                 }

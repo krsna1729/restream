@@ -1,7 +1,7 @@
 //! Typed parsing for output encodings, egress protocols, codec families, and
 //! output configuration payloads.
 
-use crate::domain::audio_routing::{AudioRouting, is_audio_operation, parse_audio_operation};
+use crate::domain::audio_routing::{AudioRouting, is_audio_operation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EgressProtocol {
@@ -107,6 +107,65 @@ impl VideoCodecKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RtmpOutputMode {
+    Legacy,
+    Enhanced,
+}
+
+impl Default for RtmpOutputMode {
+    fn default() -> Self {
+        Self::Legacy
+    }
+}
+
+impl RtmpOutputMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Enhanced => "enhanced",
+        }
+    }
+
+    pub fn is_legacy(&self) -> bool {
+        matches!(self, Self::Legacy)
+    }
+
+    pub fn is_enhanced(self) -> bool {
+        matches!(self, Self::Enhanced)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum OutputProtocolConfig {
+    Auto,
+    Rtmp {
+        #[serde(default)]
+        mode: RtmpOutputMode,
+    },
+}
+
+impl Default for OutputProtocolConfig {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+impl OutputProtocolConfig {
+    pub fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+
+    pub fn rtmp_mode(&self) -> Option<RtmpOutputMode> {
+        match self {
+            Self::Rtmp { mode } => Some(*mode),
+            Self::Auto => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VideoSelector {
     Source,
@@ -175,28 +234,6 @@ impl OutputEncodingSpec {
     pub fn is_custom_output(&self) -> bool {
         self.video.is_custom()
     }
-
-    pub fn from_config(config: &OutputConfig) -> Self {
-        Self {
-            video: config.video.selector(),
-            audio_operation: config.audio.operation_string(),
-        }
-    }
-
-    pub fn to_config(&self) -> OutputConfig {
-        OutputConfig {
-            video: OutputVideoConfig::from_selector(&self.video),
-            audio: self
-                .audio_operation
-                .as_deref()
-                .map(parse_audio_operation)
-                .unwrap_or(AudioRouting::Passthrough),
-        }
-    }
-
-    pub fn to_encoding_string(&self) -> String {
-        self.to_config().to_encoding_string()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -204,6 +241,8 @@ impl OutputEncodingSpec {
 pub struct OutputConfig {
     pub video: OutputVideoConfig,
     pub audio: AudioRouting,
+    #[serde(default, skip_serializing_if = "OutputProtocolConfig::is_auto")]
+    pub protocol: OutputProtocolConfig,
 }
 
 impl Default for OutputConfig {
@@ -211,16 +250,40 @@ impl Default for OutputConfig {
         Self {
             video: OutputVideoConfig::Source,
             audio: AudioRouting::Passthrough,
+            protocol: OutputProtocolConfig::Auto,
         }
     }
 }
 
 impl OutputConfig {
-    pub fn parse(encoding: &str) -> Self {
-        OutputEncodingSpec::parse(encoding).to_config()
+    pub fn source() -> Self {
+        Self::default()
     }
 
-    pub fn to_encoding_string(&self) -> String {
+    pub fn preset(preset: impl Into<String>) -> Self {
+        Self {
+            video: OutputVideoConfig::Preset {
+                preset: preset.into(),
+            },
+            ..Self::default()
+        }
+    }
+
+    pub fn with_audio(mut self, audio: AudioRouting) -> Self {
+        self.audio = audio;
+        self
+    }
+
+    pub fn with_rtmp_mode(mut self, mode: RtmpOutputMode) -> Self {
+        self.protocol = OutputProtocolConfig::Rtmp { mode };
+        self
+    }
+
+    pub fn rtmp_mode(&self) -> RtmpOutputMode {
+        self.protocol.rtmp_mode().unwrap_or_default()
+    }
+
+    pub fn stage_encoding_label(&self) -> String {
         let video = self.video.encoding_label();
         match self.audio.operation_string() {
             Some(audio) if matches!(self.video, OutputVideoConfig::Source) => audio,
@@ -243,24 +306,6 @@ pub enum OutputVideoConfig {
 }
 
 impl OutputVideoConfig {
-    pub fn selector(&self) -> VideoSelector {
-        match self {
-            Self::Source => VideoSelector::Source,
-            Self::Preset { preset } => VideoSelector::Preset(preset.clone()),
-            Self::Custom => VideoSelector::Custom,
-        }
-    }
-
-    pub fn from_selector(selector: &VideoSelector) -> Self {
-        match selector {
-            VideoSelector::Source => Self::Source,
-            VideoSelector::Preset(preset) => Self::Preset {
-                preset: preset.clone(),
-            },
-            VideoSelector::Custom => Self::Custom,
-        }
-    }
-
     pub fn encoding_label(&self) -> &str {
         match self {
             Self::Source => "source",
@@ -418,23 +463,9 @@ mod tests {
     }
 
     #[test]
-    fn output_config_round_trips_through_legacy_encoding_string() {
-        let config = OutputConfig::parse("720p+downmix:1");
-        assert_eq!(
-            config,
-            OutputConfig {
-                video: OutputVideoConfig::Preset {
-                    preset: "720p".to_string()
-                },
-                audio: AudioRouting::Downmix { track: 1 },
-            }
-        );
-        assert_eq!(config.to_encoding_string(), "720p+downmix:1");
-    }
-
-    #[test]
     fn output_config_serde_uses_typed_shape() {
-        let config = OutputConfig::parse("atrack:0,2");
+        let config =
+            OutputConfig::source().with_audio(AudioRouting::SelectTracks { tracks: vec![0, 2] });
         let value = serde_json::to_value(&config).unwrap();
         assert_eq!(
             value,
@@ -609,22 +640,6 @@ mod tests {
     }
 
     #[test]
-    fn output_video_config_selector_round_trips_every_variant() {
-        let variants = [
-            OutputVideoConfig::Source,
-            OutputVideoConfig::Custom,
-            OutputVideoConfig::Preset {
-                preset: "1080p".to_string(),
-            },
-        ];
-        for variant in variants {
-            let selector = variant.selector();
-            let round_tripped = OutputVideoConfig::from_selector(&selector);
-            assert_eq!(round_tripped, variant, "round-trip for {variant:?}");
-        }
-    }
-
-    #[test]
     fn output_video_config_is_custom_and_encoding_label() {
         assert_eq!(OutputVideoConfig::Source.encoding_label(), "source");
         assert!(!OutputVideoConfig::Source.is_custom());
@@ -642,17 +657,38 @@ mod tests {
     #[test]
     fn output_config_is_custom_output_reflects_video_selector() {
         assert!(!OutputConfig::default().is_custom_output());
-        assert!(OutputConfig::parse("custom").is_custom_output());
-        assert!(!OutputConfig::parse("720p").is_custom_output());
+        assert!(
+            OutputConfig {
+                video: OutputVideoConfig::Custom,
+                ..OutputConfig::default()
+            }
+            .is_custom_output()
+        );
+        assert!(!OutputConfig::preset("720p").is_custom_output());
     }
 
     #[test]
-    fn output_encoding_spec_config_round_trip_preserves_video_and_audio() {
-        let spec = OutputEncodingSpec::parse("720p+atrack:0");
-        let config = spec.to_config();
-        let restored = OutputEncodingSpec::from_config(&config);
-        assert_eq!(restored, spec);
-        assert_eq!(spec.to_encoding_string(), "720p+atrack:0");
+    fn output_config_defaults_missing_protocol_to_auto_legacy_rtmp() {
+        let value = serde_json::json!({
+            "video": {"mode": "source"},
+            "audio": {"mode": "all"}
+        });
+
+        let config: OutputConfig = serde_json::from_value(value).unwrap();
+
+        assert_eq!(config.protocol, OutputProtocolConfig::Auto);
+        assert_eq!(config.rtmp_mode(), RtmpOutputMode::Legacy);
+    }
+
+    #[test]
+    fn output_config_serializes_enhanced_rtmp_mode_under_protocol() {
+        let config = OutputConfig::source().with_rtmp_mode(RtmpOutputMode::Enhanced);
+        let value = serde_json::to_value(&config).unwrap();
+
+        assert_eq!(
+            value["protocol"],
+            serde_json::json!({"type": "rtmp", "mode": "enhanced"})
+        );
     }
 
     #[test]

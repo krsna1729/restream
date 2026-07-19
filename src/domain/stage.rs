@@ -10,7 +10,9 @@ use std::fmt;
 
 pub use crate::domain::ids::{PipelineId, StageId};
 
-use crate::domain::output_spec::{OutputEncodingSpec, VideoSelector};
+use crate::domain::output_spec::{
+    OutputConfig, OutputEncodingSpec, OutputVideoConfig, VideoSelector,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct WorkerId(String);
@@ -271,6 +273,27 @@ impl EncodingStagePlan {
         let upstream = video_stage.clone().unwrap_or_else(|| source.clone());
         let audio_stage = encoding
             .audio_operation()
+            .map(|operation| StageKind::audio_route(operation, upstream));
+
+        Self {
+            pipeline,
+            source,
+            video_stage,
+            audio_stage,
+        }
+    }
+
+    pub fn from_output_config(pipeline_id: impl Into<PipelineId>, config: &OutputConfig) -> Self {
+        let pipeline = pipeline_id.into();
+        let source = StageKind::source();
+        let video_stage = match &config.video {
+            OutputVideoConfig::Preset { preset } => Some(StageKind::video_preset(preset.clone())),
+            OutputVideoConfig::Source | OutputVideoConfig::Custom => None,
+        };
+        let upstream = video_stage.clone().unwrap_or_else(|| source.clone());
+        let audio_stage = config
+            .audio
+            .operation_string()
             .map(|operation| StageKind::audio_route(operation, upstream));
 
         Self {

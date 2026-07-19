@@ -18,7 +18,7 @@ For the performance optimization plan and benchmark results, see
 - [Current protocol matrix](#current-protocol-matrix)
 - [Minimum work per consumer](#minimum-work-per-consumer)
 - [Harness coverage](#harness-coverage)
-- [What is shared when outputs use the same encoding](#what-is-shared-when-outputs-use-the-same-encoding)
+- [What is shared when outputs use the same video and audio config](#what-is-shared-when-outputs-use-the-same-video-and-audio-config)
 - [Audio stage cache](#audio-stage-cache)
 - [Buffer sizing for 4K 60fps](#buffer-sizing-for-4k-60fps)
 - [SRT bonding](#srt-bonding)
@@ -318,7 +318,7 @@ count: identical `(pipeline_id, stage_key)` values reuse expensive work, while
 each destination keeps its own sender. Current scenario composition and
 resource measurements belong to the catalog and dated evidence.
 
-## What is shared when outputs use the same encoding
+## What is shared when outputs use the same video and audio config
 
 Stage sharing is keyed by `(pipeline_id, stage_key)`:
 

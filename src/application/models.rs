@@ -54,8 +54,8 @@ pub struct Output {
 }
 
 impl Output {
-    pub fn encoding_string(&self) -> String {
-        self.config.to_encoding_string()
+    pub fn stage_encoding_label(&self) -> String {
+        self.config.stage_encoding_label()
     }
 }
 

@@ -160,7 +160,7 @@ runDomScenarioMatrix({
         assert.equal(dot.getAttribute("aria-label"), null);
         assert.equal(toggle.textContent, "Stop");
         assert.equal(metricValue(metrics, "up"), "0:00:15");
-        assert.equal(metricValue(metrics, "enc"), "source");
+        assert.equal(metricValue(metrics, "cfg"), "source");
         assert.equal(metricValue(metrics, "sent"), "2.0 MB");
         assert.equal(metricValue(metrics, "rate"), "1.5 Mb/s");
         assertHidden(error);
@@ -289,7 +289,7 @@ runDomScenarioMatrix({
 
         assert.match(dot.className, /status-neutral/);
         assert.equal(toggle.textContent, "Start");
-        assert.equal(metricValue(metrics, "enc"), "source");
+        assert.equal(metricValue(metrics, "cfg"), "source");
         assert.equal(metrics.querySelector('[data-metric-key="up"]'), null);
         assert.equal(metrics.querySelector('[data-metric-key="rate"]'), null);
         assert.equal(deleteButton.disabled, false);
