@@ -3,7 +3,7 @@ use proptest::prelude::*;
 use restream::media::input_gate::{
     InputForwardState, InputPacketBoundary, InputPacketGate, InputTimestampMapper,
 };
-use restream::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat};
+use restream::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use std::sync::atomic::{AtomicI64, Ordering};
 
 fn packet(dts: i64, composition_offset: i64) -> MediaPacket {

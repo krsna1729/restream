@@ -22,7 +22,7 @@ async fn test_app_with_engine() -> (axum::Router, SqlitePool, Arc<MediaEngine>) 
     db::setup_database_schema(&pool).await.unwrap();
 
     let sessions = Arc::new(TokioRwLock::new(HashSet::new()));
-    api::initialize_auth_for_test(&pool, &sessions, "admin").await;
+    restream::infrastructure::bootstrap::initialize_auth_for_test(&pool, &sessions, "admin").await;
 
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
     let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
@@ -33,7 +33,7 @@ async fn test_app_with_engine() -> (axum::Router, SqlitePool, Arc<MediaEngine>) 
     let engine = Arc::new(MediaEngine::new());
 
     let state = Arc::new(api::AppState::test_new(
-        pool.clone(),
+        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
         security,
         ingest_policy_store,
         sessions,
