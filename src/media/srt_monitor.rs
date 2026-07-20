@@ -49,7 +49,7 @@ pub(super) fn read_udp_socket_stats(port: u16) -> Option<(u64, u64)> {
 
 pub(super) async fn monitor_listener_socket(
     port: u16,
-    stats: Arc<crate::media::engine::ListenerSocketStats>,
+    stats: Arc<crate::media::snapshots::ListenerSocketStats>,
     effective_udp_recv_capacity: u64,
 ) {
     use std::sync::atomic::Ordering;

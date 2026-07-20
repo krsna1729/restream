@@ -50,7 +50,7 @@ async fn shared_ts_muxer_shares_across_multiple_readers() {
     wait_for_shared_muxer_source_reader(&source_ring).await;
 
     // Push a video packet to the source ring
-    source_ring.push(crate::media::ring_buffer::MediaPacket {
+    source_ring.push(crate::media::packet::MediaPacket {
         media_type: MediaType::Video,
         track_index: 0,
         pts: 1000,
@@ -147,7 +147,7 @@ async fn shared_ts_muxer_uses_routed_audio_track_metadata() {
         .expect("fixture keyframe")
         .payload
         .clone();
-    source_ring.push(crate::media::ring_buffer::MediaPacket {
+    source_ring.push(crate::media::packet::MediaPacket {
         media_type: MediaType::Video,
         track_index: 0,
         pts: 1000,
@@ -156,7 +156,7 @@ async fn shared_ts_muxer_uses_routed_audio_track_metadata() {
         format: PayloadFormat::Raw,
         payload: probe_ready_video,
     });
-    source_ring.push(crate::media::ring_buffer::MediaPacket {
+    source_ring.push(crate::media::packet::MediaPacket {
         media_type: MediaType::Audio,
         track_index: 0,
         pts: 1020,
@@ -248,7 +248,7 @@ async fn shared_ts_muxer_seeds_raw_hevc_parameter_sets_for_late_joiners() {
     let mut reader = TsChunkReader::new("routed-hevc-reader".to_string(), &stage);
     wait_for_shared_muxer_source_reader(&source_ring).await;
 
-    source_ring.push(crate::media::ring_buffer::MediaPacket {
+    source_ring.push(crate::media::packet::MediaPacket {
         media_type: MediaType::Video,
         track_index: 0,
         pts: 1000,
@@ -257,7 +257,7 @@ async fn shared_ts_muxer_seeds_raw_hevc_parameter_sets_for_late_joiners() {
         format: PayloadFormat::Raw,
         payload: bytes::Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0xDD]),
     });
-    source_ring.push(crate::media::ring_buffer::MediaPacket {
+    source_ring.push(crate::media::packet::MediaPacket {
         media_type: MediaType::Audio,
         track_index: 1,
         pts: 1020,
@@ -359,7 +359,7 @@ async fn shared_ts_muxer_prefers_preset_ring_parameter_sets_over_ingest_cache() 
     let mut reader = TsChunkReader::new("preset-reader".to_string(), &stage);
     wait_for_shared_muxer_source_reader(&preset_ring).await;
 
-    preset_ring.push(crate::media::ring_buffer::MediaPacket {
+    preset_ring.push(crate::media::packet::MediaPacket {
         media_type: MediaType::Video,
         track_index: 0,
         pts: 1000,
@@ -458,7 +458,7 @@ async fn shared_ts_muxer_replays_prebuffered_hevc_keyframe() {
         0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
     ];
     source_ring.set_video_parameter_sets(parameter_sets.clone());
-    source_ring.push(crate::media::ring_buffer::MediaPacket {
+    source_ring.push(crate::media::packet::MediaPacket {
         media_type: MediaType::Video,
         track_index: 0,
         pts: 1000,
@@ -467,7 +467,7 @@ async fn shared_ts_muxer_replays_prebuffered_hevc_keyframe() {
         format: PayloadFormat::Raw,
         payload: bytes::Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0xDD]),
     });
-    source_ring.push(crate::media::ring_buffer::MediaPacket {
+    source_ring.push(crate::media::packet::MediaPacket {
         media_type: MediaType::Audio,
         track_index: 0,
         pts: 1020,
@@ -611,7 +611,7 @@ async fn benchmark_srt_sharing() {
         level: None,
         pixel_format: None,
     };
-    let audio_track = crate::media::engine::AudioMeta {
+    let audio_track = crate::media::metadata::AudioMeta {
         track_index: 0,
         codec: "aac".to_string(),
         sample_rate: 48000,
@@ -642,7 +642,7 @@ async fn benchmark_srt_sharing() {
         };
         rng_seed = rng_seed.wrapping_add(1);
         let payload = bytes::Bytes::from(vec![rng_seed; size]);
-        packets.push(crate::media::ring_buffer::MediaPacket {
+        packets.push(crate::media::packet::MediaPacket {
             media_type,
             track_index: 0,
             pts: i as i64 * 33,
