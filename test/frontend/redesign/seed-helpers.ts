@@ -31,6 +31,17 @@ export async function getCdpNamesByRole(
 export async function getCdpNodeCount(page: Page): Promise<number> {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Performance.enable");
+  // The "Nodes" metric counts every DOM Node object Blink still holds a
+  // reference to, including ones already removed from the document that
+  // just haven't been garbage-collected yet. Without forcing a collection
+  // first, this count reflects unrelated GC timing (how much detached
+  // markup from earlier route switches is still pending cleanup) rather
+  // than the page's actual retained DOM size, which made budget assertions
+  // against this metric flaky independent of any real leak: repeated local
+  // runs show the live attached DOM (`document.querySelectorAll("*")`)
+  // holding rock-steady while this metric swings by hundreds of nodes.
+  await cdp.send("HeapProfiler.enable");
+  await cdp.send("HeapProfiler.collectGarbage");
   const performanceMetrics = await cdp.send("Performance.getMetrics");
   await cdp.detach();
   return (
