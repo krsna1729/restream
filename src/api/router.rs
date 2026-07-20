@@ -252,12 +252,27 @@ fn create_app_router() -> Router<Arc<AppState>> {
     // Keep the full route table in one place so the public dashboard surface is
     // easy to audit, even though individual handlers stay in smaller modules.
     Router::new()
-        .route("/login", get(login_get_handler))
-        .route("/login.html", get(login_html_redirect_handler))
-        .route("/settings.html", get(settings_html_redirect_handler))
-        .route("/status.html", get(status_html_redirect_handler))
+        .route(
+            "/login",
+            get(login_get_handler).layer(CompressionLayer::new()),
+        )
+        .route(
+            "/login.html",
+            get(login_html_redirect_handler).layer(CompressionLayer::new()),
+        )
+        .route(
+            "/settings.html",
+            get(settings_html_redirect_handler).layer(CompressionLayer::new()),
+        )
+        .route(
+            "/status.html",
+            get(status_html_redirect_handler).layer(CompressionLayer::new()),
+        )
         .route("/logo.png", get(logo_handler))
-        .route("/output.css", get(css_handler))
+        .route(
+            "/output.css",
+            get(css_handler).layer(CompressionLayer::new()),
+        )
         .route("/api/v1/auth/login", post(login_post_handler))
         .route("/api/v1/auth/logout", post(logout_handler))
         .route(
@@ -462,16 +477,22 @@ fn create_app_router() -> Router<Arc<AppState>> {
         .route("/metrics/system", get(metrics_system_handler))
         .merge(create_hls_router())
         .route("/api/{*path}", any(api_not_found_handler))
-        .fallback(get(spa_fallback_handler))
+        .fallback(get(spa_fallback_handler).layer(CompressionLayer::new()))
 }
 
-// These layers define transport-wide policy that should apply equally to JSON,
-// static assets, and streaming endpoints unless a route opts out explicitly.
+// These layers define transport-wide policy shared by dashboard APIs, static
+// assets, and streaming endpoints. Compression is intentionally not one of
+// them: it is scoped per-route in create_app_router to the static document
+// surface (login/settings/status shells, output.css, and the SPA fallback
+// that serves the compiled JS bundles and index.html), not applied
+// blanket-wide. Dashboard JSON APIs are fetched on tight polling/navigation
+// intervals and are typically small; gzip's CPU/latency cost on every one of
+// those requests is not worth it, and HLS/media responses are already
+// codec-compressed, so gzipping them again is pure overhead.
 /// Applies baseline transport policy shared by dashboard APIs, static assets,
 /// and media endpoints unless a specific route opts out.
 fn apply_standard_layers(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     router
-        .layer(CompressionLayer::new())
         .layer(DefaultBodyLimit::max(DEFAULT_API_BODY_LIMIT_BYTES))
         .layer(SetResponseHeaderLayer::if_not_present(
             header::HeaderName::from_static("x-content-type-options"),
