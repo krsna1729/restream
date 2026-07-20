@@ -18,7 +18,6 @@ use rml_rtmp::sessions::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::ffi::OsStr;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
@@ -117,8 +116,7 @@ fn planned_mixed_stage_count(
     duplicates_per_output: usize,
 ) -> MixedStageCount {
     use restream::domain::stage::StageKind;
-    use restream::planner::backend_policy::BackendPolicy;
-    use restream::planner::graph_plan::{PlannedOutput, plan_pipeline_graph};
+    use restream::planner::{BackendPolicy, PlannedOutput, plan_pipeline_graph};
 
     let outputs = mixed_output_cases_for_input(case)
         .iter()

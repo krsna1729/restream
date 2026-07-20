@@ -1,3 +1,4 @@
+use super::measurement::round2;
 use super::*;
 
 fn parse_bitrate_specs(name: &str, default: &str) -> Result<Vec<BitrateSpec>, String> {
