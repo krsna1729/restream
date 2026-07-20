@@ -1,9 +1,8 @@
 //! HTTP backend that talks to the existing `/api/v1/agent/*` routes.
 
-use crate::agent_core::backend::{AgentBackend, AgentFuture};
-use crate::agent_core::errors::AgentError;
-use crate::agent_core::types::{
-    ApprovalRequest, InvestigationRequest, OperationCreateRequest, PlanRequest, VerifyRequest,
+use crate::agent_core::{
+    AgentBackend, AgentError, AgentFuture, ApprovalRequest, InvestigationRequest,
+    OperationCreateRequest, PlanRequest, VerifyRequest,
 };
 use reqwest::header::{CONTENT_TYPE, COOKIE, HeaderMap, HeaderValue};
 use serde::Serialize;
@@ -28,6 +27,10 @@ struct BuildIdentity {
     version: String,
     commit: String,
     native_build_id: String,
+}
+
+fn transport_error(error: reqwest::Error) -> AgentError {
+    AgentError::Transport(error.to_string())
 }
 
 impl HttpAgentBackend {
@@ -67,7 +70,8 @@ impl HttpAgentBackend {
             .get(format!("{}{}", self.base_url, path))
             .headers(self.auth_headers()?)
             .send()
-            .await?;
+            .await
+            .map_err(transport_error)?;
         Self::decode_response(response).await
     }
 
@@ -83,7 +87,8 @@ impl HttpAgentBackend {
             .header(CONTENT_TYPE, "application/json")
             .body(serde_json::to_vec(body)?)
             .send()
-            .await?;
+            .await
+            .map_err(transport_error)?;
         Self::decode_response(response).await
     }
 
@@ -113,7 +118,7 @@ impl HttpAgentBackend {
 
     async fn decode_response(response: reqwest::Response) -> Result<Value, AgentError> {
         let status = response.status();
-        let text = response.text().await?;
+        let text = response.text().await.map_err(transport_error)?;
         let body =
             serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({ "raw": text }));
         if status.is_success() {

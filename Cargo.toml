@@ -16,7 +16,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 default = []
 agent-plane = []
 agent-execution = ["agent-plane"]
-mcp-core = ["agent-plane"]
+mcp-core = []
 mcp-server = ["mcp-core"]
 mcp-http-backend = ["mcp-core"]
 mcp-embedded = ["mcp-core", "agent-plane"]

@@ -5,8 +5,7 @@
 //! and backends; this layer is only responsible for carrying those operations
 //! over MCP transports.
 
-use crate::agent_core::backend::AgentBackend;
-use crate::agent_core::errors::AgentError;
+use crate::agent_core::{AgentBackend, AgentError};
 use crate::agent_mcp::handlers::AgentToolHandler;
 use crate::agent_mcp::tools::available_tool_catalog;
 use axum::body::Body;
@@ -644,7 +643,10 @@ fn method_not_allowed_response(allow: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_core::backend::{AgentBackend, AgentFuture};
+    use crate::agent_core::{
+        AgentBackend, AgentFuture, ApprovalRequest, InvestigationRequest, OperationCreateRequest,
+        PlanRequest, VerifyRequest,
+    };
     use std::io::ErrorKind;
     use tokio::time::{Duration, sleep};
 
@@ -660,35 +662,23 @@ mod tests {
             Box::pin(async { Ok(json!({"tool":"context"})) })
         }
 
-        fn investigate(
-            &self,
-            _request: crate::agent_core::types::InvestigationRequest,
-        ) -> AgentFuture<'_, Value> {
+        fn investigate(&self, _request: InvestigationRequest) -> AgentFuture<'_, Value> {
             Box::pin(async { Ok(json!({"tool":"investigate"})) })
         }
 
-        fn plan(&self, _request: crate::agent_core::types::PlanRequest) -> AgentFuture<'_, Value> {
+        fn plan(&self, _request: PlanRequest) -> AgentFuture<'_, Value> {
             Box::pin(async { Ok(json!({"tool":"plan"})) })
         }
 
-        fn validate(
-            &self,
-            _request: crate::agent_core::types::PlanRequest,
-        ) -> AgentFuture<'_, Value> {
+        fn validate(&self, _request: PlanRequest) -> AgentFuture<'_, Value> {
             Box::pin(async { Ok(json!({"tool":"validate"})) })
         }
 
-        fn graph_diff(
-            &self,
-            _request: crate::agent_core::types::PlanRequest,
-        ) -> AgentFuture<'_, Value> {
+        fn graph_diff(&self, _request: PlanRequest) -> AgentFuture<'_, Value> {
             Box::pin(async { Ok(json!({"tool":"graph"})) })
         }
 
-        fn create_operation(
-            &self,
-            _request: crate::agent_core::types::OperationCreateRequest,
-        ) -> AgentFuture<'_, Value> {
+        fn create_operation(&self, _request: OperationCreateRequest) -> AgentFuture<'_, Value> {
             Box::pin(async { Ok(json!({"tool":"create"})) })
         }
 
@@ -699,7 +689,7 @@ mod tests {
         fn approve_operation(
             &self,
             _operation_id: &str,
-            _request: crate::agent_core::types::ApprovalRequest,
+            _request: ApprovalRequest,
         ) -> AgentFuture<'_, Value> {
             Box::pin(async { Ok(json!({"tool":"approve"})) })
         }
@@ -708,10 +698,7 @@ mod tests {
             Box::pin(async { Ok(json!({"tool":"apply"})) })
         }
 
-        fn verify_operation(
-            &self,
-            _request: crate::agent_core::types::VerifyRequest,
-        ) -> AgentFuture<'_, Value> {
+        fn verify_operation(&self, _request: VerifyRequest) -> AgentFuture<'_, Value> {
             Box::pin(async { Ok(json!({"tool":"verify"})) })
         }
     }
