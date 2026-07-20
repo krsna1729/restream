@@ -575,9 +575,9 @@ deliberate exception: it is the stable observer-facing API beside
 versioned public-API change, not as an internal layering cleanup.
 
 Run `scripts/check/source-audit.sh` after changing a candidate boundary. It
-stays deliberately mechanical and bash/grep-only: forbidden-import greps, the
-per-file raw-line-count report (`target/source-audit.json`, one JSON object
-per audited file with its size band and responsibility class), approved
+stays deliberately mechanical and bash/grep-only: forbidden-import greps, a
+per-file raw-line-count check (`FAIL`/`WARN` on stdout for every file at or
+over its size band, grouped by responsibility class), approved
 `std::env::var` owners, and the API/harness guardrails it has always run.
 
 Wrong-direction imports, upward-compatibility re-export facades, external

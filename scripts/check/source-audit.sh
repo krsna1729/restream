@@ -6,7 +6,6 @@ set -euo pipefail
 
 ROOT_DIR="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 cd "$ROOT_DIR"
-mkdir -p target
 
 echo "=== Restream Source Audit ==="
 FAILED=0
@@ -27,8 +26,6 @@ echo "Checking file size limits..."
 SOURCE_LINE_LIMIT=999
 SOURCE_LINE_WARNING=800
 FRONTEND_SOURCE_LINE_LIMIT=2000
-LARGE_FILE_REPORT=target/source-audit.json
-: > "$LARGE_FILE_REPORT"
 
 SOURCE_ROOTS=()
 for root in src web/ts test tests benches; do
@@ -95,36 +92,26 @@ SOURCE_SIZE_WARNINGS=0
 while IFS= read -r -d '' file; do
     lines=$(awk 'END { print NR }' "$file")
     classification=$(classify_source_file "$file")
-    status=pass
     if [ "${file##*.}" = rs ]; then
         file_limit=$SOURCE_LINE_LIMIT
         warning_threshold=$SOURCE_LINE_WARNING
-        language=rust
         RUST_CLASS_COUNTS["$classification"]=$((RUST_CLASS_COUNTS["$classification"] + 1))
         if [ "$lines" -gt "$file_limit" ]; then
-            status=fail
             echo "FAIL [$classification]: $file has $lines raw lines (Rust hard maximum: $file_limit; 1000 fails)" >&2
             FAILED=1
             SOURCE_SIZE_FAILED=1
         elif [ "$lines" -ge "$warning_threshold" ]; then
-            status=warn
             SOURCE_SIZE_WARNINGS=$((SOURCE_SIZE_WARNINGS + 1))
             echo "WARN [$classification]: $file has $lines raw lines (Rust pressure band: ${warning_threshold}-${file_limit})" >&2
         fi
     else
         file_limit=$FRONTEND_SOURCE_LINE_LIMIT
-        warning_threshold=null
-        language=typescript-or-javascript
         if [ "$lines" -gt "$file_limit" ]; then
-            status=fail
             echo "FAIL [$classification]: $file has $lines raw lines (frontend hard maximum: $file_limit; 2001 fails)" >&2
             FAILED=1
             SOURCE_SIZE_FAILED=1
         fi
     fi
-    printf '{"file":"%s","lines":%s,"limit":%s,"warningThreshold":%s,"language":"%s","classification":"%s","status":"%s"}\n' \
-        "$file" "$lines" "$file_limit" "$warning_threshold" "$language" \
-        "$classification" "$status" >> "$LARGE_FILE_REPORT"
 done < <(find_audited_source_files)
 
 echo "Line policies: Rust hard maximum ${SOURCE_LINE_LIMIT} (warn at ${SOURCE_LINE_WARNING}); TypeScript/JavaScript hard maximum ${FRONTEND_SOURCE_LINE_LIMIT}."
@@ -191,8 +178,6 @@ if [ -n "$HARNESS_STATE_FIELD_READS" ]; then
 else
     echo "OK: Harness does not read the removed output status state field."
 fi
-
-echo "Wrote $LARGE_FILE_REPORT"
 
 echo ""
 if [ "$FAILED" -eq 1 ]; then

@@ -19,10 +19,10 @@ scripts/check/source-audit.sh
 ```
 
 [scripts/check/source-audit.sh](scripts/check/source-audit.sh) is authoritative
-for the boundaries it rejects and the schema of `target/source-audit.json`.
-Do not copy its current import patterns, file limits, approved environment-read
-locations, schema fields, or generated inventories into this page. A change to
-one of those rules belongs in the script and its tests or CI wiring.
+for the boundaries it rejects; its stdout is the report. Do not copy its
+current import patterns, file limits, approved environment-read locations, or
+generated inventories into this page. A change to one of those rules belongs
+in the script and its tests or CI wiring.
 
 The audit is deliberately mechanical. Passing it proves that the encoded
 high-risk regressions are absent; it does not prove that every module boundary

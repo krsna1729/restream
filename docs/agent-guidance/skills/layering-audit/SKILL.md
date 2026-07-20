@@ -184,9 +184,10 @@ When auditing a candidate seam:
 7. Reassess after the change whether another extraction is still justified.
 8. Record whether the result is a lexical split, an ownership split, or a
    crate-ready module boundary.
-9. Check `target/source-audit.json` by Rust responsibility class so the root
-   build script, production code, dedicated tests, harnesses, benchmarks, and
-   integration tests cannot hide one another's pressure.
+9. Run `scripts/check/source-audit.sh` and read its stdout `FAIL`/`WARN` lines
+   by Rust responsibility class so the root build script, production code,
+   dedicated tests, harnesses, benchmarks, and integration tests cannot hide
+   one another's pressure.
 10. For wrong-direction imports, upward-compatibility re-export facades, and
     types with inherent `impl` blocks outside their owner file, query the
     Graphify code graph (`docs/agent-guidance/graphify.md`) rather than
