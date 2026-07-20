@@ -1,4 +1,3 @@
-use crate::application::models::Output;
 use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;
 use sqlx::{AssertSqlSafe, FromRow, SqlitePool};
@@ -24,7 +23,18 @@ struct OutputRow {
     config: String,
 }
 
-impl TryFrom<OutputRow> for Output {
+#[derive(Debug, Clone)]
+pub struct OutputRecord {
+    pub id: String,
+    pub pipeline_id: String,
+    pub name: String,
+    pub url: String,
+    pub monitoring_url: Option<String>,
+    pub desired_state: DesiredOutputState,
+    pub config: OutputConfig,
+}
+
+impl TryFrom<OutputRow> for OutputRecord {
     type Error = sqlx::Error;
 
     fn try_from(row: OutputRow) -> Result<Self, Self::Error> {
@@ -44,14 +54,14 @@ async fn fetch_output_optional(
     pool: &SqlitePool,
     query: &str,
     binds: &[&str],
-) -> Result<Option<Output>, sqlx::Error> {
+) -> Result<Option<OutputRecord>, sqlx::Error> {
     let mut sql = sqlx::query_as::<_, OutputRow>(AssertSqlSafe(query.to_string()));
     for bind in binds {
         sql = sql.bind(*bind);
     }
     sql.fetch_optional(pool)
         .await?
-        .map(Output::try_from)
+        .map(OutputRecord::try_from)
         .transpose()
 }
 
@@ -59,7 +69,7 @@ async fn fetch_output_all(
     pool: &SqlitePool,
     query: &str,
     binds: &[&str],
-) -> Result<Vec<Output>, sqlx::Error> {
+) -> Result<Vec<OutputRecord>, sqlx::Error> {
     let mut sql = sqlx::query_as::<_, OutputRow>(AssertSqlSafe(query.to_string()));
     for bind in binds {
         sql = sql.bind(*bind);
@@ -67,7 +77,7 @@ async fn fetch_output_all(
     sql.fetch_all(pool)
         .await?
         .into_iter()
-        .map(Output::try_from)
+        .map(OutputRecord::try_from)
         .collect()
 }
 
@@ -81,7 +91,7 @@ pub async fn create_output(
     monitoring_url: Option<&str>,
     desired_state: DesiredOutputState,
     config: &OutputConfig,
-) -> Result<Output, sqlx::Error> {
+) -> Result<OutputRecord, sqlx::Error> {
     let config_json = serialize_config(config)?;
     sqlx::query(
         "INSERT INTO outputs (id, pipeline_id, name, url, monitoring_url, desired_state, config) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -105,7 +115,7 @@ pub async fn get_output(
     pool: &SqlitePool,
     pipeline_id: &str,
     id: &str,
-) -> Result<Option<Output>, sqlx::Error> {
+) -> Result<Option<OutputRecord>, sqlx::Error> {
     fetch_output_optional(
         pool,
         "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, config \
@@ -115,7 +125,7 @@ pub async fn get_output(
     .await
 }
 
-pub async fn list_outputs(pool: &SqlitePool) -> Result<Vec<Output>, sqlx::Error> {
+pub async fn list_outputs(pool: &SqlitePool) -> Result<Vec<OutputRecord>, sqlx::Error> {
     fetch_output_all(
         pool,
         "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, config FROM outputs",
@@ -127,7 +137,7 @@ pub async fn list_outputs(pool: &SqlitePool) -> Result<Vec<Output>, sqlx::Error>
 pub async fn list_outputs_for_pipeline(
     pool: &SqlitePool,
     pipeline_id: &str,
-) -> Result<Vec<Output>, sqlx::Error> {
+) -> Result<Vec<OutputRecord>, sqlx::Error> {
     fetch_output_all(
         pool,
         "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, config \
@@ -145,7 +155,7 @@ pub async fn update_output(
     url: &str,
     monitoring_url: Option<&str>,
     config: &OutputConfig,
-) -> Result<Option<Output>, sqlx::Error> {
+) -> Result<Option<OutputRecord>, sqlx::Error> {
     let config_json = serialize_config(config)?;
     let result = sqlx::query(
         "UPDATE outputs SET name = ?, url = ?, monitoring_url = ?, config = ? WHERE id = ? AND pipeline_id = ?",
@@ -171,7 +181,7 @@ pub async fn set_output_desired_state(
     pipeline_id: &str,
     id: &str,
     desired_state: DesiredOutputState,
-) -> Result<Output, sqlx::Error> {
+) -> Result<OutputRecord, sqlx::Error> {
     sqlx::query("UPDATE outputs SET desired_state = ? WHERE id = ? AND pipeline_id = ?")
         .bind(desired_state.as_str())
         .bind(id)

@@ -1,6 +1,6 @@
 use restream::media::engine::MediaEngine;
 use restream::media::input_gate::{InputForwardState, InputPacketBoundary};
-use restream::media::snapshots::{AudioMeta, VideoMeta};
+use restream::media::metadata::{AudioMeta, VideoMeta};
 use std::sync::Arc;
 
 #[tokio::test]

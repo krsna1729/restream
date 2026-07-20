@@ -17,11 +17,9 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 use std::sync::Arc;
 
-use crate::application::services::{
-    ApiError,
-    media_library_service::{MediaDeleteError, MediaRenameError},
-};
+use crate::application::services::media_library_service::{MediaDeleteError, MediaRenameError};
 
+use super::error::ApiError;
 use super::state::{AppState, require_authenticated};
 
 #[derive(Deserialize)]
@@ -293,23 +291,12 @@ pub async fn media_analysis_handler(
         Err(status) => return status.into_response(),
     };
 
-    let analysis = match tokio::task::spawn_blocking(move || {
-        crate::media::file_analysis::analyze_media_file(&path)
-    })
-    .await
-    {
-        Ok(Ok(analysis)) => analysis,
-        Ok(Err(error)) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": error })),
-            )
-                .into_response();
-        }
+    let analysis = match state.media_library_service.analyze_media_file(path).await {
+        Ok(analysis) => analysis,
         Err(error) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("analysis task failed: {error}") })),
+                Json(serde_json::json!({ "error": error })),
             )
                 .into_response();
         }

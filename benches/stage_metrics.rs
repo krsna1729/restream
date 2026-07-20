@@ -9,7 +9,8 @@
 //!   cargo bench --bench stage_metrics --profile bench-dev
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use restream::media::engine::{PipeMetrics, StageMetrics};
+use restream::media::pipe_metrics::PipeMetrics;
+use restream::media::stage_metrics::StageMetrics;
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Instant;

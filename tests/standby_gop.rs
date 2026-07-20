@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use proptest::prelude::*;
-use restream::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat};
+use restream::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use restream::media::standby_gop::StandbyGopCache;
 
 fn packet(media_type: MediaType, dts: i64, keyframe: bool, bytes: usize) -> MediaPacket {

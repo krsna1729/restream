@@ -23,9 +23,9 @@ use crate::domain::recording::RecordingSettings;
 use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::media::security::IngestSecurityService;
 use crate::media::srt::SrtIngestPolicyStore;
-use crate::planner::backend_policy::BackendPolicy;
+use crate::planner::BackendPolicy;
 
-use super::error::{ApiError, ApiResult};
+use super::error::{ServiceError, ServiceResult};
 use super::output_service::OutputService;
 use super::pipeline_service::PipelineService;
 
@@ -72,7 +72,7 @@ impl SettingsService {
         &self,
         security: &IngestSecurityService,
         default_backend_policy: BackendPolicy,
-    ) -> ApiResult<crate::application::settings::SettingsSnapshot> {
+    ) -> ServiceResult<crate::application::settings::SettingsSnapshot> {
         load_settings_snapshot(
             &*self.meta_store,
             &*self.ingest_host_store,
@@ -80,72 +80,72 @@ impl SettingsService {
             default_backend_policy,
         )
         .await
-        .map_err(|e| ApiError::internal(format!("load settings: {e}")))
+        .map_err(|e| ServiceError::internal(format!("load settings: {e}")))
     }
 
     /// Lists pipelines for settings views that need the current catalog while
     /// staying independent of pipeline-store details.
-    pub async fn list_pipelines(&self) -> ApiResult<Vec<Pipeline>> {
+    pub async fn list_pipelines(&self) -> ServiceResult<Vec<Pipeline>> {
         self.pipeline_service.list_pipelines().await
     }
 
     /// Lists outputs for settings surfaces that need to summarize configured
     /// egress targets alongside global settings.
-    pub async fn list_outputs(&self) -> ApiResult<Vec<Output>> {
+    pub async fn list_outputs(&self) -> ServiceResult<Vec<Output>> {
         self.output_service.list_outputs().await
     }
 
     /// Lists background jobs that should appear in the operator settings view.
-    pub async fn list_jobs(&self) -> ApiResult<Vec<Job>> {
+    pub async fn list_jobs(&self) -> ServiceResult<Vec<Job>> {
         self.job_store
             .list_jobs()
             .await
-            .map_err(|e| ApiError::internal(format!("list jobs: {e}")))
+            .map_err(|e| ServiceError::internal(format!("list jobs: {e}")))
     }
 
     /// Returns the raw persisted ingest host value without applying the
     /// pipeline service's localhost fallback.
-    pub async fn get_ingest_host_raw(&self) -> ApiResult<String> {
+    pub async fn get_ingest_host_raw(&self) -> ServiceResult<String> {
         self.ingest_host_store
             .get_ingest_host()
             .await
             .map(|h| h.unwrap_or_default())
-            .map_err(|e| ApiError::internal(format!("get ingest host: {e}")))
+            .map_err(|e| ServiceError::internal(format!("get ingest host: {e}")))
     }
 
     /// Persists the operator-visible server name using the shared meta write
     /// path used by other settings keys.
-    pub async fn set_server_name(&self, name: &str) -> ApiResult<()> {
+    pub async fn set_server_name(&self, name: &str) -> ServiceResult<()> {
         self.set_meta(SERVER_NAME_META_KEY, name).await
     }
 
     /// Persists the ingest host override that pipeline and dashboard views use
     /// for generated publish URLs.
-    pub async fn set_ingest_host(&self, host: &str) -> ApiResult<()> {
+    pub async fn set_ingest_host(&self, host: &str) -> ServiceResult<()> {
         self.ingest_host_store
             .set_ingest_host(host)
             .await
             .map(|_| ())
-            .map_err(|e| ApiError::internal(format!("set ingest host: {e}")))
+            .map_err(|e| ServiceError::internal(format!("set ingest host: {e}")))
     }
 
     /// Reads one arbitrary settings meta entry for callers that work with
     /// feature-specific persisted values.
-    pub async fn get_meta(&self, key: &str) -> ApiResult<Option<String>> {
+    pub async fn get_meta(&self, key: &str) -> ServiceResult<Option<String>> {
         self.meta_store
             .get_meta(key)
             .await
-            .map_err(|e| ApiError::internal(format!("get meta: {e}")))
+            .map_err(|e| ServiceError::internal(format!("get meta: {e}")))
     }
 
     /// Persists one arbitrary settings meta entry and hides the writer store's
     /// concrete return value from higher layers.
-    pub async fn set_meta(&self, key: &str, value: &str) -> ApiResult<()> {
+    pub async fn set_meta(&self, key: &str, value: &str) -> ServiceResult<()> {
         self.meta_writer
             .set_meta(key, value)
             .await
             .map(|_| ())
-            .map_err(|e| ApiError::internal(format!("set meta: {e}")))
+            .map_err(|e| ServiceError::internal(format!("set meta: {e}")))
     }
 
     /// Saves the ingest security configuration through the shared meta-backed
@@ -153,32 +153,32 @@ impl SettingsService {
     pub async fn save_ingest_security_config(
         &self,
         config: &IngestSecurityConfig,
-    ) -> ApiResult<()> {
+    ) -> ServiceResult<()> {
         save_ingest_security_config(self.meta_writer.as_ref(), config)
             .await
-            .map_err(|e| ApiError::internal(format!("save ingest security config: {e}")))
+            .map_err(|e| ServiceError::internal(format!("save ingest security config: {e}")))
     }
 
     /// Saves recording settings that influence operator-visible recording
     /// behavior across pipelines.
-    pub async fn save_recording_settings(&self, settings: &RecordingSettings) -> ApiResult<()> {
+    pub async fn save_recording_settings(&self, settings: &RecordingSettings) -> ServiceResult<()> {
         save_recording_settings(self.meta_writer.as_ref(), settings)
             .await
-            .map_err(|e| ApiError::internal(format!("save recording settings: {e}")))
+            .map_err(|e| ServiceError::internal(format!("save recording settings: {e}")))
     }
 
     /// Saves the transcode profile catalog exposed through dashboard settings.
-    pub async fn save_transcode_profiles(&self, profiles: &TranscodeProfiles) -> ApiResult<()> {
+    pub async fn save_transcode_profiles(&self, profiles: &TranscodeProfiles) -> ServiceResult<()> {
         save_transcode_profiles(self.meta_writer.as_ref(), profiles)
             .await
-            .map_err(|e| ApiError::internal(format!("save transcode profiles: {e}")))
+            .map_err(|e| ServiceError::internal(format!("save transcode profiles: {e}")))
     }
 
     /// Serializes and persists the default backend policy that planner-facing
     /// settings screens expose to operators.
-    pub async fn save_backend_policy(&self, policy: BackendPolicy) -> ApiResult<()> {
+    pub async fn save_backend_policy(&self, policy: BackendPolicy) -> ServiceResult<()> {
         let raw = serde_json::to_string(&policy)
-            .map_err(|e| ApiError::internal(format!("serialize backend policy: {e}")))?;
+            .map_err(|e| ServiceError::internal(format!("serialize backend policy: {e}")))?;
         self.set_meta(BACKEND_POLICY_META_KEY, &raw).await
     }
 
@@ -190,7 +190,7 @@ impl SettingsService {
         policy_store: &SrtIngestPolicyStore,
         srt_passphrase: Option<String>,
         srt_pbkeylen: i32,
-    ) -> ApiResult<()> {
+    ) -> ServiceResult<()> {
         // Rebuild the policy store from persisted global settings plus the
         // current pipeline catalog so libsrt sees one coherent snapshot.
         let global =
@@ -199,7 +199,7 @@ impl SettingsService {
         let pipelines = self.list_pipelines().await?;
         let inputs = list_pipeline_inputs(self.input_store.as_ref(), &pipelines)
             .await
-            .map_err(|error| ApiError::internal(error.to_string()))?;
+            .map_err(|error| ServiceError::internal(error.to_string()))?;
         let entries = srt_ingest_policy_entries(&pipelines, &inputs);
         policy_store.replace(global, &entries);
         Ok(())
@@ -228,6 +228,7 @@ mod tests {
     use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
     use crate::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
     use crate::domain::srt_ingest::{SrtGlobalIngestConfig, SrtGlobalIngestMode};
+    use crate::infrastructure::service_wiring::SqliteServiceFactory;
     use crate::media::security::IngestSecurityService;
     use crate::media::srt::SrtIngestPolicyStore;
 
@@ -324,8 +325,8 @@ mod tests {
                     pool.clone(),
                 ),
             ),
-            PipelineService::new(pool.clone()),
-            OutputService::new(pool),
+            SqliteServiceFactory::new(&pool).pipeline_service(),
+            SqliteServiceFactory::new(&pool).output_service(),
         );
 
         service.set_server_name("Studio").await.unwrap();

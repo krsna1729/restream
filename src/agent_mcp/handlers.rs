@@ -1,11 +1,10 @@
 //! Thin MCP handlers that parse tool input and delegate to `AgentBackend`.
 
-use crate::agent_core::backend::AgentBackend;
-use crate::agent_core::errors::AgentError;
-use crate::agent_core::types::{
-    InvestigationRequest, OperationApprovalInput, OperationCreateRequest, OperationIdInput,
-    PlanRequest, VerifyRequest,
+use crate::agent_core::{
+    AgentBackend, AgentError, InvestigationRequest, OperationCreateRequest, PlanRequest,
+    VerifyRequest,
 };
+use crate::agent_mcp::inputs::{OperationApprovalInput, OperationIdInput};
 use serde_json::Value;
 use std::sync::Arc;
 

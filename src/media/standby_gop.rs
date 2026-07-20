@@ -1,4 +1,4 @@
-use crate::media::ring_buffer::{MediaPacket, MediaType};
+use crate::media::packet::{MediaPacket, MediaType};
 
 pub const DEFAULT_STANDBY_GOP_MAX_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_STANDBY_GOP_MAX_PACKETS: usize = 2_048;

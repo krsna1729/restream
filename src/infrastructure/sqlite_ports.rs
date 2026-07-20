@@ -1,5 +1,8 @@
 //! SQLite-backed implementations of application storage ports.
 
+pub(super) mod records;
+
+use self::records::{ingest_model, job_model, output_model, pipeline_model};
 use crate::application::models::Pipeline;
 use crate::application::ports::*;
 use crate::domain::output_spec::OutputConfig;
@@ -100,6 +103,7 @@ impl PipelineStore for SqlitePipelineStore {
         Box::pin(async move {
             crate::db::get_pipeline(&self.pool, id)
                 .await
+                .map(|record| record.map(pipeline_model))
                 .map_err(|err| PipelineStoreError::new(err.to_string()))
         })
     }
@@ -108,6 +112,7 @@ impl PipelineStore for SqlitePipelineStore {
         Box::pin(async move {
             crate::db::get_pipeline_by_stream_key(&self.pool, stream_key)
                 .await
+                .map(|record| record.map(pipeline_model))
                 .map_err(|err| PipelineStoreError::new(err.to_string()))
         })
     }
@@ -116,6 +121,7 @@ impl PipelineStore for SqlitePipelineStore {
         Box::pin(async move {
             crate::db::list_pipelines(&self.pool)
                 .await
+                .map(|records| records.into_iter().map(pipeline_model).collect())
                 .map_err(|err| PipelineStoreError::new(err.to_string()))
         })
     }
@@ -138,6 +144,7 @@ impl PipelineStore for SqlitePipelineStore {
                 srt_ingest_policy,
             )
             .await
+            .map(pipeline_model)
             .map_err(|err| PipelineStoreError::new(err.to_string()))
         })
     }
@@ -160,6 +167,7 @@ impl PipelineStore for SqlitePipelineStore {
                 srt_ingest_policy,
             )
             .await
+            .map(|record| record.map(pipeline_model))
             .map_err(|err| PipelineStoreError::new(err.to_string()))
         })
     }
@@ -195,6 +203,7 @@ impl PipelineStore for SqlitePipelineStore {
                 pipeline.srt_ingest_policy.as_deref(),
             )
             .await
+            .map(|record| record.map(pipeline_model))
             .map_err(|err| PipelineStoreError::new(err.to_string()))
         })
     }
@@ -205,6 +214,7 @@ impl OutputStore for SqliteOutputStore {
         Box::pin(async move {
             crate::db::list_outputs(&self.pool)
                 .await
+                .map(|records| records.into_iter().map(output_model).collect())
                 .map_err(|err| OutputStoreError::new(err.to_string()))
         })
     }
@@ -213,6 +223,7 @@ impl OutputStore for SqliteOutputStore {
         Box::pin(async move {
             crate::db::list_outputs_for_pipeline(&self.pool, pipeline_id)
                 .await
+                .map(|records| records.into_iter().map(output_model).collect())
                 .map_err(|err| OutputStoreError::new(err.to_string()))
         })
     }
@@ -221,6 +232,7 @@ impl OutputStore for SqliteOutputStore {
         Box::pin(async move {
             crate::db::get_output(&self.pool, pipeline_id, id)
                 .await
+                .map(|record| record.map(output_model))
                 .map_err(|err| OutputStoreError::new(err.to_string()))
         })
     }
@@ -247,6 +259,7 @@ impl OutputStore for SqliteOutputStore {
                 config,
             )
             .await
+            .map(output_model)
             .map_err(|err| OutputStoreError::new(err.to_string()))
         })
     }
@@ -271,6 +284,7 @@ impl OutputStore for SqliteOutputStore {
                 config,
             )
             .await
+            .map(|record| record.map(output_model))
             .map_err(|err| OutputStoreError::new(err.to_string()))
         })
     }
@@ -292,6 +306,7 @@ impl OutputStore for SqliteOutputStore {
         Box::pin(async move {
             crate::db::set_output_desired_state(&self.pool, pipeline_id, id, desired_state)
                 .await
+                .map(output_model)
                 .map_err(|err| OutputStoreError::new(err.to_string()))
         })
     }
@@ -302,6 +317,7 @@ impl IngestLookup for SqliteIngestLookup {
         Box::pin(async move {
             crate::db::get_ingest(&self.pool, id)
                 .await
+                .map(|record| record.map(ingest_model))
                 .map_err(|err| IngestLookupError::new(err.to_string()))
         })
     }
@@ -310,6 +326,7 @@ impl IngestLookup for SqliteIngestLookup {
         Box::pin(async move {
             crate::db::get_ingest_by_stream_key(&self.pool, stream_key)
                 .await
+                .map(|record| record.map(ingest_model))
                 .map_err(|err| IngestLookupError::new(err.to_string()))
         })
     }
@@ -318,6 +335,7 @@ impl IngestLookup for SqliteIngestLookup {
         Box::pin(async move {
             crate::db::list_ingests(&self.pool)
                 .await
+                .map(|records| records.into_iter().map(ingest_model).collect())
                 .map_err(|err| IngestLookupError::new(err.to_string()))
         })
     }
@@ -326,6 +344,7 @@ impl IngestLookup for SqliteIngestLookup {
         Box::pin(async move {
             crate::db::list_ingests_for_filename(&self.pool, filename)
                 .await
+                .map(|records| records.into_iter().map(ingest_model).collect())
                 .map_err(|err| IngestLookupError::new(err.to_string()))
         })
     }
@@ -334,6 +353,7 @@ impl IngestLookup for SqliteIngestLookup {
         Box::pin(async move {
             crate::db::list_ingests_for_stream_key(&self.pool, stream_key)
                 .await
+                .map(|records| records.into_iter().map(ingest_model).collect())
                 .map_err(|err| IngestLookupError::new(err.to_string()))
         })
     }
@@ -362,6 +382,7 @@ impl IngestWriter for SqliteIngestLookup {
                 target_gop_seconds,
             )
             .await
+            .map(ingest_model)
             .map_err(|err| IngestWriteError::new(err.to_string()))
         })
     }
@@ -388,6 +409,7 @@ impl IngestWriter for SqliteIngestLookup {
                 target_gop_seconds,
             )
             .await
+            .map(|record| record.map(ingest_model))
             .map_err(|err| IngestWriteError::new(err.to_string()))
         })
     }
@@ -494,6 +516,7 @@ impl JobStore for SqliteJobStore {
         Box::pin(async move {
             crate::db::list_jobs(&self.pool)
                 .await
+                .map(|records| records.into_iter().map(job_model).collect())
                 .map_err(|err| JobStoreError::new(err.to_string()))
         })
     }

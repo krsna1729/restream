@@ -160,16 +160,15 @@ pub struct OutputStageSweepInput<'a> {
 
 pub fn collect_needed_stage_keys<'a>(
     outputs: impl IntoIterator<Item = OutputStageSweepInput<'a>>,
-    policy: &crate::planner::backend_policy::BackendPolicy,
+    policy: &crate::planner::BackendPolicy,
 ) -> HashSet<StageKey> {
     let mut needed_stages = HashSet::new();
     for output in outputs {
         if output.effective_has_ingest
             && (output.is_active || output.desired_state == DesiredOutputState::Running)
         {
-            let planned_output =
-                crate::planner::graph_plan::PlannedOutput::new("", output.config, output.url);
-            let plan = crate::planner::graph_plan::plan_pipeline_graph(
+            let planned_output = crate::planner::PlannedOutput::new("", output.config, output.url);
+            let plan = crate::planner::plan_pipeline_graph(
                 output.pipeline_id,
                 output.ingest_video_codec.as_deref(),
                 &[planned_output],
@@ -256,7 +255,7 @@ mod tests {
     use crate::domain::audio_routing::AudioRouting;
     use crate::domain::output_spec::OutputConfig;
     use crate::domain::stage::StageKind;
-    use crate::media::engine::VideoMeta;
+    use crate::media::metadata::VideoMeta;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -455,7 +454,7 @@ mod tests {
                     ingest_video_codec: Some("hevc".to_string()),
                 },
             ],
-            &crate::planner::backend_policy::BackendPolicy::default(),
+            &crate::planner::BackendPolicy::default(),
         );
 
         let h264_720p = StageKind::video_preset_with_codec("720p", "h264");

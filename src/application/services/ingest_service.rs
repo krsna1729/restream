@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::application::models::Ingest;
 use crate::application::ports::{IngestLookup, IngestWriter};
 
-use super::error::{ApiError, ApiResult};
+use super::error::{ServiceError, ServiceResult};
 
 #[derive(Clone)]
 /// Application service that coordinates ingest catalog reads and persisted
@@ -28,26 +28,26 @@ impl IngestService {
 
     /// Builds the shared not-found error shape used when callers reference an
     /// ingest ID that is missing from the catalog.
-    fn ingest_not_found(id: &str) -> ApiError {
-        ApiError::not_found(format!("ingest {id} not found"))
+    fn ingest_not_found(id: &str) -> ServiceError {
+        ServiceError::not_found(format!("ingest {id} not found"))
     }
 
     /// Lists every persisted ingest record without applying higher-level
     /// transport or runtime filtering.
-    pub async fn list_ingests(&self) -> ApiResult<Vec<Ingest>> {
+    pub async fn list_ingests(&self) -> ServiceResult<Vec<Ingest>> {
         self.lookup
             .list_ingests()
             .await
-            .map_err(|e| ApiError::internal(format!("list ingests: {e}")))
+            .map_err(|e| ServiceError::internal(format!("list ingests: {e}")))
     }
 
     /// Resolves one ingest by ID and upgrades missing-store results into the
     /// service layer's stable not-found error.
-    pub async fn get_by_id(&self, id: &str) -> ApiResult<Ingest> {
+    pub async fn get_by_id(&self, id: &str) -> ServiceResult<Ingest> {
         self.lookup
             .get_ingest(id)
             .await
-            .map_err(|e| ApiError::internal(format!("get ingest: {e}")))?
+            .map_err(|e| ServiceError::internal(format!("get ingest: {e}")))?
             .ok_or_else(|| Self::ingest_not_found(id))
     }
 
@@ -63,7 +63,7 @@ impl IngestService {
         start_time: &str,
         live_optimized: bool,
         target_gop_seconds: u32,
-    ) -> ApiResult<Ingest> {
+    ) -> ServiceResult<Ingest> {
         self.writer
             .create_ingest(
                 id,
@@ -75,7 +75,7 @@ impl IngestService {
                 target_gop_seconds,
             )
             .await
-            .map_err(|e| ApiError::internal(format!("create ingest: {e}")))
+            .map_err(|e| ServiceError::internal(format!("create ingest: {e}")))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -90,7 +90,7 @@ impl IngestService {
         start_time: &str,
         live_optimized: bool,
         target_gop_seconds: u32,
-    ) -> ApiResult<Ingest> {
+    ) -> ServiceResult<Ingest> {
         self.writer
             .update_ingest(
                 id,
@@ -102,24 +102,24 @@ impl IngestService {
                 target_gop_seconds,
             )
             .await
-            .map_err(|e| ApiError::internal(format!("update ingest: {e}")))?
+            .map_err(|e| ServiceError::internal(format!("update ingest: {e}")))?
             .ok_or_else(|| Self::ingest_not_found(id))
     }
 
     /// Lists all ingest records that point at one media-library filename.
-    pub async fn list_for_filename(&self, filename: &str) -> ApiResult<Vec<Ingest>> {
+    pub async fn list_for_filename(&self, filename: &str) -> ServiceResult<Vec<Ingest>> {
         self.lookup
             .list_ingests_for_filename(filename)
             .await
-            .map_err(|e| ApiError::internal(format!("list ingests for filename: {e}")))
+            .map_err(|e| ServiceError::internal(format!("list ingests for filename: {e}")))
     }
 
     /// Deletes one persisted ingest record from the catalog.
-    pub async fn delete_ingest(&self, id: &str) -> ApiResult<bool> {
+    pub async fn delete_ingest(&self, id: &str) -> ServiceResult<bool> {
         self.writer
             .delete_ingest(id)
             .await
-            .map_err(|e| ApiError::internal(format!("delete ingest: {e}")))
+            .map_err(|e| ServiceError::internal(format!("delete ingest: {e}")))
     }
 }
 
@@ -297,6 +297,6 @@ mod tests {
             .update_ingest("missing", "clip.mp4", "stream-key", false, "", false, 2)
             .await
             .unwrap_err();
-        assert!(matches!(err, ApiError::NotFound(_)));
+        assert!(matches!(err, ServiceError::NotFound(_)));
     }
 }

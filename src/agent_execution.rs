@@ -11,10 +11,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
-use crate::agent_core::types::PlanRequest;
+use crate::agent_core::{ApprovalRequest, OperationCreateRequest, PlanRequest};
 use crate::agent_plane::PlanResponse;
-
-pub use crate::agent_core::types::{ApprovalRequest, OperationCreateRequest, VerifyRequest};
 
 const MAX_AGENT_EXECUTION_RECORDS: usize = 1024;
 const AUTHENTICATED_DASHBOARD_ACTOR: &str = "dashboard-admin";

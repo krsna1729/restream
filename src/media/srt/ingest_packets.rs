@@ -2,7 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::media::engine::IngestRegistration;
 use crate::media::input_gate::{InputForwardState, InputPacketBoundary, InputTimestampMapper};
-use crate::media::ring_buffer::{MediaPacket, MediaType, RingBuffer};
+use crate::media::packet::{MediaPacket, MediaType};
+use crate::media::ring_buffer::RingBuffer;
 use crate::media::standby_gop::StandbyGopCache;
 
 pub(super) fn forward_ingest_packets(
@@ -102,7 +103,7 @@ mod tests {
 
     use super::*;
     use crate::media::input_gate::InputPacketGate;
-    use crate::media::ring_buffer::PayloadFormat;
+    use crate::media::packet::PayloadFormat;
 
     fn packet(media_type: MediaType, dts: i64, is_keyframe: bool) -> MediaPacket {
         MediaPacket {

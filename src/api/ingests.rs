@@ -12,8 +12,9 @@ use serde::Deserialize;
 use std::path::Path as FsPath;
 use std::sync::Arc;
 
-use crate::application::services::{ApiError, file_ingest_service::FileIngestStartError};
+use crate::application::services::{ServiceError, file_ingest_service::FileIngestStartError};
 
+use super::error::ApiError;
 use super::file_ingest::validate_file_ingest_filename;
 use super::state::{
     AppState, MAX_NAME_LEN, MAX_STREAM_KEY_LEN, check_field_len, require_authenticated, to_hex,
@@ -147,11 +148,11 @@ fn map_start_ingest_error(error: FileIngestStartError) -> Response {
     }
 }
 
-fn map_stop_ingest_error(error: ApiError) -> Response {
+fn map_stop_ingest_error(error: ServiceError) -> Response {
     match error {
-        ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "Ingest not found").into_response(),
-        ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        ApiError::Conflict(_) => StatusCode::CONFLICT.into_response(),
+        ServiceError::NotFound(_) => (StatusCode::NOT_FOUND, "Ingest not found").into_response(),
+        ServiceError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        ServiceError::Conflict(_) => StatusCode::CONFLICT.into_response(),
     }
 }
 

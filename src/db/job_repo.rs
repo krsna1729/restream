@@ -1,5 +1,5 @@
-use crate::application::models::{Job, JobStatus};
 use sqlx::{AssertSqlSafe, FromRow, SqlitePool};
+use std::str::FromStr;
 
 #[derive(FromRow)]
 struct JobRow {
@@ -14,11 +14,54 @@ struct JobRow {
     exit_signal: Option<String>,
 }
 
-impl TryFrom<JobRow> for Job {
+#[derive(Debug, Clone)]
+pub struct JobRecord {
+    pub id: String,
+    pub pipeline_id: String,
+    pub output_id: String,
+    pub pid: Option<i64>,
+    pub status: JobStatusRecord,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub exit_code: Option<i64>,
+    pub exit_signal: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobStatusRecord {
+    Running,
+    Stopped,
+    Failed,
+}
+
+impl JobStatusRecord {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl FromStr for JobStatusRecord {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "running" => Ok(Self::Running),
+            "stopped" => Ok(Self::Stopped),
+            "failed" => Ok(Self::Failed),
+            _ => Err("unknown job status"),
+        }
+    }
+}
+
+impl TryFrom<JobRow> for JobRecord {
     type Error = sqlx::Error;
 
     fn try_from(row: JobRow) -> Result<Self, Self::Error> {
-        let status = JobStatus::try_from(row.status.as_str())
+        let status = JobStatusRecord::from_str(&row.status)
             .map_err(|err| sqlx::Error::Protocol(format!("parse job status: {err}")))?;
         Ok(Self {
             id: row.id,
@@ -34,18 +77,24 @@ impl TryFrom<JobRow> for Job {
     }
 }
 
+impl JobRecord {
+    pub const fn status_typed(&self) -> Option<JobStatusRecord> {
+        Some(self.status)
+    }
+}
+
 async fn fetch_job_optional(
     pool: &SqlitePool,
     query: &str,
     binds: &[&str],
-) -> Result<Option<Job>, sqlx::Error> {
+) -> Result<Option<JobRecord>, sqlx::Error> {
     let mut sql = sqlx::query_as::<_, JobRow>(AssertSqlSafe(query.to_string()));
     for bind in binds {
         sql = sql.bind(*bind);
     }
     sql.fetch_optional(pool)
         .await?
-        .map(Job::try_from)
+        .map(JobRecord::try_from)
         .transpose()
 }
 
@@ -53,7 +102,7 @@ async fn fetch_job_all(
     pool: &SqlitePool,
     query: &str,
     binds: &[&str],
-) -> Result<Vec<Job>, sqlx::Error> {
+) -> Result<Vec<JobRecord>, sqlx::Error> {
     let mut sql = sqlx::query_as::<_, JobRow>(AssertSqlSafe(query.to_string()));
     for bind in binds {
         sql = sql.bind(*bind);
@@ -61,19 +110,23 @@ async fn fetch_job_all(
     sql.fetch_all(pool)
         .await?
         .into_iter()
-        .map(Job::try_from)
+        .map(JobRecord::try_from)
         .collect()
 }
 
-pub async fn create_job(
+pub async fn create_job<S>(
     pool: &SqlitePool,
     id: &str,
     pipeline_id: &str,
     output_id: &str,
     pid: Option<i64>,
-    status: JobStatus,
+    status: S,
     started_at: &str,
-) -> Result<Job, sqlx::Error> {
+) -> Result<JobRecord, sqlx::Error>
+where
+    S: Into<JobStatusRecord>,
+{
+    let status = status.into();
     sqlx::query(
         "INSERT INTO jobs (id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal)
          VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
@@ -100,7 +153,7 @@ pub async fn create_job(
         .ok_or_else(|| sqlx::Error::RowNotFound)
 }
 
-pub async fn get_job(pool: &SqlitePool, id: &str) -> Result<Option<Job>, sqlx::Error> {
+pub async fn get_job(pool: &SqlitePool, id: &str) -> Result<Option<JobRecord>, sqlx::Error> {
     fetch_job_optional(
         pool,
         "SELECT id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal FROM jobs WHERE id = ?",
@@ -113,31 +166,34 @@ pub async fn get_running_job_for(
     pool: &SqlitePool,
     pipeline_id: &str,
     output_id: &str,
-) -> Result<Option<Job>, sqlx::Error> {
+) -> Result<Option<JobRecord>, sqlx::Error> {
     fetch_job_optional(
         pool,
         "SELECT id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal
          FROM jobs WHERE pipeline_id = ? AND output_id = ? AND status = ? LIMIT 1",
-        &[pipeline_id, output_id, JobStatus::Running.as_str()],
+        &[pipeline_id, output_id, JobStatusRecord::Running.as_str()],
     )
     .await
 }
 
-pub async fn update_job(
+pub async fn update_job<S>(
     pool: &SqlitePool,
     id: &str,
     pid: Option<i64>,
-    status: Option<JobStatus>,
+    status: Option<S>,
     ended_at: Option<&str>,
     exit_code: Option<i64>,
     exit_signal: Option<&str>,
-) -> Result<Option<Job>, sqlx::Error> {
+) -> Result<Option<JobRecord>, sqlx::Error>
+where
+    S: Into<JobStatusRecord>,
+{
     sqlx::query(
         "UPDATE jobs SET pid = COALESCE(?, pid), status = COALESCE(?, status), ended_at = COALESCE(?, ended_at),
                          exit_code = COALESCE(?, exit_code), exit_signal = COALESCE(?, exit_signal) WHERE id = ?",
     )
     .bind(pid)
-    .bind(status.map(JobStatus::as_str))
+    .bind(status.map(Into::into).map(JobStatusRecord::as_str))
     .bind(ended_at)
     .bind(exit_code)
     .bind(exit_signal)
@@ -152,7 +208,7 @@ pub async fn list_jobs_for_output(
     pool: &SqlitePool,
     pipeline_id: &str,
     output_id: &str,
-) -> Result<Vec<Job>, sqlx::Error> {
+) -> Result<Vec<JobRecord>, sqlx::Error> {
     fetch_job_all(
         pool,
         "SELECT id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal
@@ -162,7 +218,7 @@ pub async fn list_jobs_for_output(
     .await
 }
 
-pub async fn list_jobs(pool: &SqlitePool) -> Result<Vec<Job>, sqlx::Error> {
+pub async fn list_jobs(pool: &SqlitePool) -> Result<Vec<JobRecord>, sqlx::Error> {
     fetch_job_all(
         pool,
         "SELECT id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal
@@ -180,8 +236,8 @@ pub async fn cleanup_old_jobs(pool: &SqlitePool) -> Result<(u64, u64), sqlx::Err
          WHERE (status IN (?, ?) AND ended_at IS NOT NULL AND datetime(ended_at) < datetime('now', '-7 days'))
             OR datetime(COALESCE(ended_at, started_at)) < datetime('now', '-30 days')",
     )
-    .bind(JobStatus::Stopped.as_str())
-    .bind(JobStatus::Failed.as_str())
+    .bind(JobStatusRecord::Stopped.as_str())
+    .bind(JobStatusRecord::Failed.as_str())
     .execute(&mut *tx)
     .await?;
 
@@ -194,9 +250,9 @@ pub async fn reset_running_jobs(pool: &SqlitePool, now_ts: &str) -> Result<(), s
         "UPDATE jobs SET status = ?, ended_at = ?, exit_code = NULL, exit_signal = 'SIGKILL'
          WHERE status = ?",
     )
-    .bind(JobStatus::Stopped.as_str())
+    .bind(JobStatusRecord::Stopped.as_str())
     .bind(now_ts)
-    .bind(JobStatus::Running.as_str())
+    .bind(JobStatusRecord::Running.as_str())
     .execute(pool)
     .await?;
     Ok(())

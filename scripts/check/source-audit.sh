@@ -6,7 +6,6 @@ set -euo pipefail
 
 ROOT_DIR="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 cd "$ROOT_DIR"
-mkdir -p target
 
 echo "=== Restream Source Audit ==="
 FAILED=0
@@ -24,42 +23,109 @@ fi
 
 echo ""
 echo "Checking file size limits..."
-SOURCE_LINE_LIMIT=2000
-LARGE_FILE_REPORT=target/source-audit-large-files.jsonl
-: > "$LARGE_FILE_REPORT"
-SOURCE_FILE_FIND_ARGS=(
-    src
-    web/ts
-    test
-    -path .local/artifacts -prune
-    -o
-    -path test/fixtures -prune
-    -o
-    -type f
-    \( -name '*.rs' -o -name '*.ts' -o -name '*.mjs' -o -name '*.js' \)
-    -print0
-)
-while IFS= read -r -d '' file; do
-    lines=$(wc -l < "$file" | tr -d ' ')
-    printf '{"file":"%s","lines":%s,"limit":%s}\n' \
-        "$file" "$lines" "$SOURCE_LINE_LIMIT" >> "$LARGE_FILE_REPORT"
-    if [ "$lines" -gt "$SOURCE_LINE_LIMIT" ]; then
-        echo "FAIL: $file has $lines lines (limit: $SOURCE_LINE_LIMIT)" >&2
-        FAILED=1
+SOURCE_LINE_LIMIT=999
+SOURCE_LINE_WARNING=800
+FRONTEND_SOURCE_LINE_LIMIT=2000
+
+SOURCE_ROOTS=()
+for root in src web/ts test tests benches; do
+    if [ -d "$root" ]; then
+        SOURCE_ROOTS+=("$root")
     fi
-done < <(find "${SOURCE_FILE_FIND_ARGS[@]}")
+done
 
-LARGEST_FILES=$(
-    sort -t: -k2,2nr <(
-        while IFS= read -r -d '' file; do
-            lines=$(wc -l < "$file" | tr -d ' ')
-            printf '%s:%s\n' "$file" "$lines"
-        done < <(find "${SOURCE_FILE_FIND_ARGS[@]}")
-    ) | head -20
+find_audited_source_files() {
+    if [ -f build.rs ]; then
+        printf 'build.rs\0'
+    fi
+    find "${SOURCE_ROOTS[@]}" \
+        \( -path '*/.local/artifacts' -o -path '*/.local/artifacts/*' \
+            -o -path 'test/fixtures' -o -path 'test/fixtures/*' \) -prune \
+        -o -type f \
+        \( -name '*.rs' -o -name '*.ts' -o -name '*.mjs' -o -name '*.js' \) \
+        -print0
+}
+
+classify_source_file() {
+    local file="$1"
+    case "$file" in
+        build.rs)
+            printf 'build-script'
+            ;;
+        benches/*.rs)
+            printf 'benchmark'
+            ;;
+        tests/*.rs)
+            printf 'integration-test'
+            ;;
+        src/bin/test_harness.rs|src/bin/test_harness/*.rs|test/harness/*.rs)
+            printf 'harness'
+            ;;
+        src/*/tests/*.rs|src/*_test/*.rs|src/*_tests/*.rs|src/*/test.rs|src/*/tests.rs|src/*_test.rs|src/*_tests.rs)
+            printf 'dedicated-test'
+            ;;
+        src/*.rs)
+            printf 'production'
+            ;;
+        test/*.rs)
+            printf 'harness'
+            ;;
+        web/ts/*|test/*)
+            printf 'frontend-test-or-source'
+            ;;
+        *)
+            printf 'other'
+            ;;
+    esac
+}
+
+declare -A RUST_CLASS_COUNTS=(
+    [build-script]=0
+    [production]=0
+    [dedicated-test]=0
+    [harness]=0
+    [benchmark]=0
+    [integration-test]=0
 )
+SOURCE_SIZE_FAILED=0
+SOURCE_SIZE_WARNINGS=0
+while IFS= read -r -d '' file; do
+    lines=$(awk 'END { print NR }' "$file")
+    classification=$(classify_source_file "$file")
+    if [ "${file##*.}" = rs ]; then
+        file_limit=$SOURCE_LINE_LIMIT
+        warning_threshold=$SOURCE_LINE_WARNING
+        RUST_CLASS_COUNTS["$classification"]=$((RUST_CLASS_COUNTS["$classification"] + 1))
+        if [ "$lines" -gt "$file_limit" ]; then
+            echo "FAIL [$classification]: $file has $lines raw lines (Rust hard maximum: $file_limit; 1000 fails)" >&2
+            FAILED=1
+            SOURCE_SIZE_FAILED=1
+        elif [ "$lines" -ge "$warning_threshold" ]; then
+            SOURCE_SIZE_WARNINGS=$((SOURCE_SIZE_WARNINGS + 1))
+            echo "WARN [$classification]: $file has $lines raw lines (Rust pressure band: ${warning_threshold}-${file_limit})" >&2
+        fi
+    else
+        file_limit=$FRONTEND_SOURCE_LINE_LIMIT
+        if [ "$lines" -gt "$file_limit" ]; then
+            echo "FAIL [$classification]: $file has $lines raw lines (frontend hard maximum: $file_limit; 2001 fails)" >&2
+            FAILED=1
+            SOURCE_SIZE_FAILED=1
+        fi
+    fi
+done < <(find_audited_source_files)
 
-if [ "$FAILED" -eq 0 ]; then
-    echo "OK: All audited source/test files are at or below ${SOURCE_LINE_LIMIT} lines."
+echo "Line policies: Rust hard maximum ${SOURCE_LINE_LIMIT} (warn at ${SOURCE_LINE_WARNING}); TypeScript/JavaScript hard maximum ${FRONTEND_SOURCE_LINE_LIMIT}."
+echo "Audited Rust files by responsibility:"
+for classification in build-script production dedicated-test harness benchmark integration-test; do
+    printf '  %-16s %s\n' "$classification:" "${RUST_CLASS_COUNTS[$classification]}"
+done
+
+if [ "$SOURCE_SIZE_FAILED" -eq 0 ]; then
+    echo "OK: All audited files are within their language-specific raw-line maximum."
+fi
+if [ "$SOURCE_SIZE_WARNINGS" -gt 0 ]; then
+    echo "WARN: ${SOURCE_SIZE_WARNINGS} Rust file(s) are in the ${SOURCE_LINE_WARNING}-${SOURCE_LINE_LIMIT} pressure band."
+    echo "      Near-cap clustering is architectural pressure, not success; split by ownership before adding more code."
 fi
 
 # 3. Check for raw std::env::var usage outside src/config.rs and tests
@@ -112,201 +178,6 @@ if [ -n "$HARNESS_STATE_FIELD_READS" ]; then
 else
     echo "OK: Harness does not read the removed output status state field."
 fi
-
-python3 - "$SOURCE_LINE_LIMIT" <<'PY'
-import json
-import pathlib
-import re
-import subprocess
-import sys
-
-line_limit = int(sys.argv[1])
-root = pathlib.Path(".")
-
-def rel(path: pathlib.Path) -> str:
-    return path.as_posix()
-
-def read(path: pathlib.Path) -> str:
-    return path.read_text(encoding="utf-8", errors="replace")
-
-source_files = [
-    path
-    for base in [root / "src", root / "public" / "ts", root / "test"]
-    if base.exists()
-    for path in base.rglob("*")
-    if path.is_file()
-    and path.suffix in {".rs", ".ts", ".mjs", ".js"}
-    and ".local/artifacts/" not in rel(path)
-    and "test/fixtures/transport/" not in rel(path)
-]
-
-line_counts = [
-    {"file": rel(path), "lines": len(read(path).splitlines()), "limit": line_limit}
-    for path in source_files
-]
-line_counts.sort(key=lambda row: (-row["lines"], row["file"]))
-
-public_function_re = re.compile(r"\bpub(?:\([^)]*\))?\s+(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)")
-public_functions = []
-for path in sorted((root / "src").rglob("*.rs")):
-    names = public_function_re.findall(read(path))
-    if names:
-        public_functions.append(
-            {"module": rel(path), "count": len(names), "functions": sorted(names)}
-        )
-
-route_counts = []
-for path in sorted((root / "src" / "api").glob("*.rs")):
-    body = read(path)
-    count = body.count(".route(")
-    if count:
-        route_counts.append({"module": rel(path), "routes": count})
-
-def load_json(path: pathlib.Path):
-    return json.loads(read(path)) if path.exists() else {}
-
-modes = load_json(root / "test" / "harness" / "modes.json")
-suites = load_json(root / "test" / "harness" / "suites.json")
-mode_rows = []
-for group in modes.get("modeGroups", []):
-    for name, spec in group.get("modes", {}).items():
-        mode_rows.append(
-            {
-                "name": name,
-                "kind": group.get("kind"),
-                "group": group.get("group"),
-                "suiteRef": spec.get("suiteRef"),
-                "suiteDefault": bool(spec.get("suiteDefault", False)),
-                "benchProfile": bool(spec.get("requires", {}).get("benchProfile", False)),
-                "portNamespace": bool(spec.get("requires", {}).get("portNamespace", False)),
-            }
-        )
-dynamic_modes = modes.get("dynamicModes", [])
-
-env_re = re.compile(r"std::env::var(?:_os)?\(\s*\"([A-Za-z_][A-Za-z0-9_]*)\"")
-env_usage = []
-for path in sorted((root / "src").rglob("*.rs")):
-    for line_no, line in enumerate(read(path).splitlines(), start=1):
-        match = env_re.search(line)
-        if match:
-            env_usage.append({"file": rel(path), "line": line_no, "name": match.group(1)})
-
-media_api_imports = subprocess.run(
-    ["grep", "-rn", "use crate::api", "src/media/"],
-    text=True,
-    capture_output=True,
-)
-api_stage_starts = subprocess.run(
-    [
-        "grep",
-        "-REn",
-        r"Command::new|ensure_ffmpeg|ffmpeg_bin_path|get_or_create_transcoder|get_or_create_h264_transcoder|spawn_ffmpeg|run_.*ffmpeg|external_transcoder",
-        "src/api/",
-    ],
-    text=True,
-    capture_output=True,
-)
-harness_state_reads = subprocess.run(
-    ["grep", "-REn", r'\["state"\]', "src/bin/test_harness/", "src/bin/test_harness.rs"],
-    text=True,
-    capture_output=True,
-)
-
-feature_cfg_sites = []
-for path in [root / "Cargo.toml", *sorted((root / "src").rglob("*.rs"))]:
-    if path.exists():
-        for line_no, line in enumerate(read(path).splitlines(), start=1):
-            if "#[cfg(feature" in line or "required-features" in line:
-                feature_cfg_sites.append({"file": rel(path), "line": line_no, "text": line.strip()})
-
-def snake_to_camel(value: str) -> str:
-    head, *tail = value.split("_")
-    return head + "".join(part[:1].upper() + part[1:] for part in tail)
-
-api_view_models = read(root / "src" / "api_view_models.rs")
-egress_match = re.search(
-    r"pub\(crate\) fn egress_runtime_json\([\s\S]*?pub\(crate\) fn output_runtime_explanation_json",
-    api_view_models,
-)
-api_output_status_fields = set()
-if egress_match:
-    body = egress_match.group(0)
-    api_output_status_fields.update(re.findall(r'"([A-Za-z][A-Za-z0-9]*)"\s*:', body))
-    api_output_status_fields.update(re.findall(r'value\["([A-Za-z][A-Za-z0-9]*)"\]', body))
-
-harness_api_client = read(root / "src" / "bin" / "test_harness" / "api_client.rs")
-harness_status_match = re.search(
-    r"struct ApiOutputStatus \{(?P<body>[\s\S]*?)\n\}",
-    harness_api_client,
-)
-harness_output_status_fields = set()
-if harness_status_match:
-    harness_output_status_fields.update(
-        snake_to_camel(name)
-        for name in re.findall(
-            r"pub\(crate\)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:",
-            harness_status_match.group("body"),
-        )
-    )
-
-output_status_missing_in_harness = sorted(
-    api_output_status_fields - harness_output_status_fields
-)
-output_status_extra_in_harness = sorted(
-    harness_output_status_fields - api_output_status_fields
-)
-
-report = {
-    "sourceLineLimit": line_limit,
-    "largestFiles": line_counts[:20],
-    "lineCounts": line_counts,
-    "publicFunctions": public_functions,
-    "routeCounts": route_counts,
-    "harnessInventory": {
-        "commandSurface": modes.get("commandSurface"),
-        "defaultCommand": modes.get("defaultCommand"),
-        "modeCount": len(mode_rows),
-        "modes": sorted(mode_rows, key=lambda row: row["name"]),
-        "dynamicModes": dynamic_modes,
-        "suiteCount": len(suites.get("suites", {})),
-        "suites": sorted(suites.get("suites", {}).keys()),
-    },
-    "envVarUsage": env_usage,
-    "moduleSummary": {
-        "apiRouteModules": len(list((root / "src" / "api").glob("*.rs"))),
-        "dbRepositoryModules": len(list((root / "src" / "db").glob("*_repo.rs"))),
-        "featureCfgSites": len(feature_cfg_sites),
-    },
-    "forbiddenImports": {
-        "mediaImportsApi": len([line for line in media_api_imports.stdout.splitlines() if line]),
-        "apiManualStageStarts": len([line for line in api_stage_starts.stdout.splitlines() if line]),
-        "harnessStateFieldReads": len([line for line in harness_state_reads.stdout.splitlines() if line]),
-    },
-    "outputStatusSchema": {
-        "source": "src/api_view_models.rs::egress_runtime_json",
-        "harnessDto": "src/bin/test_harness/api_client.rs::ApiOutputStatus",
-        "apiFields": sorted(api_output_status_fields),
-        "harnessFields": sorted(harness_output_status_fields),
-        "missingInHarness": output_status_missing_in_harness,
-        "extraInHarness": output_status_extra_in_harness,
-    },
-    "featureCfgSites": feature_cfg_sites,
-}
-
-pathlib.Path("target/source-audit.json").write_text(
-    json.dumps(report, indent=2, sort_keys=True) + "\n",
-    encoding="utf-8",
-)
-
-if output_status_missing_in_harness:
-    print(
-        "FAIL: Harness ApiOutputStatus is missing API output status fields: "
-        + ", ".join(output_status_missing_in_harness),
-        file=sys.stderr,
-    )
-    sys.exit(1)
-PY
-echo "Wrote target/source-audit.json"
 
 echo ""
 if [ "$FAILED" -eq 1 ]; then

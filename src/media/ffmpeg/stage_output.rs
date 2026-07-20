@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use crate::media::codec::AnnexbParameterSetAccumulator;
-use crate::media::ring_buffer::{MediaPacket, MediaType, RingBuffer};
+use crate::media::packet::{MediaPacket, MediaType};
+use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
 
@@ -145,7 +146,7 @@ impl StageOutputSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::ring_buffer::PayloadFormat;
+    use crate::media::packet::PayloadFormat;
     use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
     use bytes::Bytes;
     use proptest::prelude::*;

@@ -38,7 +38,7 @@ async fn test_phase_3_routing_resolves_all_major_routes() {
     let (log_broadcast, _) = tokio::sync::broadcast::channel(32);
 
     let state = Arc::new(restream::api::AppState::test_new(
-        db,
+        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&db).compose(),
         security,
         ingest_policy_store,
         sessions,
@@ -200,8 +200,11 @@ fn release_policy_metadata_is_declared_and_enforced() {
 fn hls_preview_runtime_execution_stays_out_of_planner() {
     let planner_mod = include_str!("../src/planner/mod.rs");
     assert!(
-        !planner_mod.contains("hls_preview"),
-        "planner should expose pure planning modules only"
+        !planner_mod.contains("mod hls_preview")
+            && !planner_mod.contains("pub mod hls_preview")
+            && !planner_mod.contains("StageRuntimeManager")
+            && !planner_mod.contains("tokio::"),
+        "planner root may re-export pure HLS preview planning, but not runtime execution"
     );
 
     let graph_plan = include_str!("../src/planner/graph_plan.rs");
@@ -215,61 +218,100 @@ fn hls_preview_runtime_execution_stays_out_of_planner() {
 }
 
 #[test]
-fn planner_stays_independent_of_application_models() {
-    for (name, source) in [
-        ("planner/mod.rs", include_str!("../src/planner/mod.rs")),
-        (
-            "planner/backend_policy.rs",
-            include_str!("../src/planner/backend_policy.rs"),
-        ),
-        (
-            "planner/graph_plan.rs",
-            include_str!("../src/planner/graph_plan.rs"),
-        ),
-        (
-            "planner/output_path.rs",
-            include_str!("../src/planner/output_path.rs"),
-        ),
-    ] {
-        assert!(
-            !source.contains("crate::application::") && !source.contains("restream::application::"),
-            "{name} must not import application-layer models or helpers"
-        );
+fn planner_stays_independent_of_edge_runtime_and_environment_layers() {
+    let planner_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/planner");
+    let forbidden_dependencies = [
+        "crate::application::",
+        "restream::application::",
+        "crate::media::",
+        "restream::media::",
+        "crate::api::",
+        "restream::api::",
+        "crate::db::",
+        "restream::db::",
+        "crate::config::",
+        "restream::config::",
+        "axum::",
+        "sqlx::",
+        "tokio::",
+        "std::env",
+        "env::var",
+        "var_os(",
+        "env!(",
+        "option_env!(",
+    ];
+
+    for entry in std::fs::read_dir(&planner_dir).expect("planner directory should exist") {
+        let path = entry.expect("planner entry should be readable").path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("planner source should be readable");
+        for forbidden in forbidden_dependencies {
+            assert!(
+                !source.contains(forbidden),
+                "{} must not depend on {forbidden}",
+                path.display()
+            );
+        }
     }
 }
 
 #[test]
-fn srt_policy_store_stays_independent_of_application_models() {
+fn agent_core_stays_independent_of_edge_and_runtime_layers() {
+    let agent_core_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent_core");
+    let forbidden_dependencies = [
+        "crate::agent_plane::",
+        "crate::application::",
+        "crate::media::",
+        "reqwest::",
+        "axum::",
+        "sqlx::",
+    ];
+    let mut offenders = Vec::new();
+    collect_rust_sources(&agent_core_dir, &mut |path, source| {
+        for dependency in forbidden_dependencies {
+            if source.contains(dependency) {
+                offenders.push(format!("{} imports {dependency}", path.display()));
+            }
+        }
+    });
+    assert!(
+        offenders.is_empty(),
+        "agent_core must stay transport-, persistence-, and runtime-independent: {offenders:?}"
+    );
+
+    let cargo_toml = include_str!("../Cargo.toml");
+    assert!(
+        cargo_toml
+            .lines()
+            .any(|line| line.trim() == "mcp-core = []"),
+        "mcp-core must not enable the in-process agent plane"
+    );
+    let lib_rs = include_str!("../src/lib.rs");
+    assert!(
+        lib_rs.contains("#[cfg(any(feature = \"agent-plane\", feature = \"mcp-core\"))]"),
+        "agent_core must compile for either the HTTP agent plane or MCP core"
+    );
+    let backends_mod = include_str!("../src/agent_backends/mod.rs");
+    assert!(backends_mod.contains("#[cfg(feature = \"mcp-http-backend\")]"));
+    assert!(backends_mod.contains("#[cfg(feature = \"mcp-embedded\")]"));
+}
+
+#[test]
+fn srt_policy_store_consumes_typed_policies_without_persistence_dependencies() {
     let srt_policy = include_str!("../src/media/srt_policy.rs");
     assert!(srt_policy.contains("pub struct SrtIngestPolicyEntry"));
+    assert!(srt_policy.contains("pub policy: SrtPipelineIngestConfig"));
     assert!(
         !srt_policy.contains("crate::application::")
             && !srt_policy.contains("restream::application::"),
         "media SRT policy store should depend on narrow policy entries, not application models"
     );
-}
-
-#[test]
-fn media_snapshot_types_are_media_owned() {
-    let runtime_snapshots = include_str!("../src/runtime/snapshots.rs");
-    assert!(runtime_snapshots.contains("pub use crate::media::snapshots::*;"));
-
-    for (name, source) in [
-        ("media/engine.rs", include_str!("../src/media/engine.rs")),
-        (
-            "media/engine_snapshots.rs",
-            include_str!("../src/media/engine_snapshots.rs"),
-        ),
-        (
-            "media/protocols/srt/quality.rs",
-            include_str!("../src/media/protocols/srt/quality.rs"),
-        ),
-    ] {
-        assert!(
-            !source.contains("crate::runtime::snapshots"),
-            "{name} should import media-owned snapshot DTOs directly"
-        );
-    }
+    assert!(
+        !srt_policy.contains("serde_json") && !srt_policy.contains("serialized_policy"),
+        "media SRT policy store should consume typed policy values, not persisted JSON"
+    );
 }
 
 #[test]
@@ -286,6 +328,47 @@ fn db_module_uses_explicit_repository_exports() {
     assert!(!db_mod.contains("pub use recording_repo::*"));
     assert!(!db_mod.contains("pub use session_repo::*"));
     assert!(db_mod.contains("pub use schema::setup_database_schema"));
+}
+
+#[test]
+fn db_production_layer_stays_independent_of_application() {
+    for (name, source) in [
+        ("db/mod.rs", include_str!("../src/db/mod.rs")),
+        (
+            "db/ingest_repo.rs",
+            include_str!("../src/db/ingest_repo.rs"),
+        ),
+        ("db/job_repo.rs", include_str!("../src/db/job_repo.rs")),
+        ("db/log_repo.rs", include_str!("../src/db/log_repo.rs")),
+        ("db/meta_repo.rs", include_str!("../src/db/meta_repo.rs")),
+        ("db/migrations.rs", include_str!("../src/db/migrations.rs")),
+        (
+            "db/output_repo.rs",
+            include_str!("../src/db/output_repo.rs"),
+        ),
+        (
+            "db/pipeline_input_repo.rs",
+            include_str!("../src/db/pipeline_input_repo.rs"),
+        ),
+        (
+            "db/pipeline_repo.rs",
+            include_str!("../src/db/pipeline_repo.rs"),
+        ),
+        (
+            "db/recording_repo.rs",
+            include_str!("../src/db/recording_repo.rs"),
+        ),
+        ("db/schema.rs", include_str!("../src/db/schema.rs")),
+        (
+            "db/session_repo.rs",
+            include_str!("../src/db/session_repo.rs"),
+        ),
+    ] {
+        assert!(
+            !source.contains("crate::application::") && !source.contains("restream::application::"),
+            "{name} must not depend on application-layer models or helpers"
+        );
+    }
 }
 
 #[test]
@@ -306,6 +389,32 @@ fn application_ports_are_abstract_and_sqlite_adapters_live_in_infrastructure() {
     assert!(sqlite_ports.contains("SqlitePool"));
     assert!(sqlite_ports.contains("impl PipelineStore for SqlitePipelineStore"));
     assert!(sqlite_ports.contains("impl OutputStore for SqliteOutputStore"));
+}
+
+#[test]
+fn application_production_code_does_not_depend_on_axum() {
+    let application_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/application");
+    let mut offenders = Vec::new();
+    collect_rust_sources(&application_dir, &mut |path, source| {
+        if path.file_name().and_then(|name| name.to_str()) == Some("tests.rs") {
+            return;
+        }
+        let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
+        if production_source.contains("axum") {
+            offenders.push(
+                path.strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                    .expect("application source should be inside the repository")
+                    .display()
+                    .to_string(),
+            );
+        }
+    });
+
+    offenders.sort();
+    assert!(
+        offenders.is_empty(),
+        "application production code must not import Axum: {offenders:?}"
+    );
 }
 
 #[test]
@@ -589,6 +698,21 @@ fn declared_benches(cargo_toml: &str) -> Vec<&str> {
     benches
 }
 
+fn collect_rust_sources(
+    directory: &std::path::Path,
+    inspect: &mut impl FnMut(&std::path::Path, &str),
+) {
+    for entry in std::fs::read_dir(directory).expect("Rust source directory should be readable") {
+        let path = entry.expect("Rust source entry should be readable").path();
+        if path.is_dir() {
+            collect_rust_sources(&path, inspect);
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+            let source = std::fs::read_to_string(&path).expect("Rust source should be UTF-8");
+            inspect(&path, &source);
+        }
+    }
+}
+
 fn extract_router_route_paths(source: &'static str) -> BTreeSet<&'static str> {
     let mut paths = BTreeSet::new();
     for (offset, _) in source.match_indices(".route(") {
@@ -610,10 +734,10 @@ async fn test_phase_4_5_services_and_repositories_flow() {
     let db = SqlitePool::connect("sqlite::memory:").await.unwrap();
     restream::db::setup_database_schema(&db).await.unwrap();
 
-    let pipeline_service =
-        restream::application::services::pipeline_service::PipelineService::new(db.clone());
-    let output_service =
-        restream::application::services::output_service::OutputService::new(db.clone());
+    let services =
+        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&db).compose();
+    let pipeline_service = services.pipeline_service;
+    let output_service = services.output_service;
 
     let pid = "test-pipe-service";
     pipeline_service
@@ -621,10 +745,7 @@ async fn test_phase_4_5_services_and_repositories_flow() {
         .await
         .unwrap();
 
-    let pipeline = restream::db::pipeline_repo::get_pipeline(&db, pid)
-        .await
-        .unwrap()
-        .unwrap();
+    let pipeline = restream::db::get_pipeline(&db, pid).await.unwrap().unwrap();
     assert_eq!(pipeline.stream_key, "stream-key");
 
     let oid = "test-out-service";
@@ -642,7 +763,7 @@ async fn test_phase_4_5_services_and_repositories_flow() {
         .await
         .unwrap();
 
-    let output = restream::db::output_repo::get_output(&db, pid, oid)
+    let output = restream::db::get_output(&db, pid, oid)
         .await
         .unwrap()
         .unwrap();

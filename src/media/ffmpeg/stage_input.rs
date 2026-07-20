@@ -3,12 +3,15 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
+use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
+use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
-use crate::media::ring_buffer::{MediaType, Reader, RingBuffer};
+use crate::media::metadata::{AudioMeta, VideoMeta};
+use crate::media::packet::MediaType;
+use crate::media::ring_buffer::MEDIA_PULL_BURST_PACKETS;
+use crate::media::ring_buffer::{Reader, RingBuffer};
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
-use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
 
 /// Shared input pump that provides identical byte-feeding semantics to both
 /// external-process and in-process FFmpeg backends.
@@ -211,7 +214,7 @@ impl StageInputPump {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::ring_buffer::{MediaPacket, PayloadFormat};
+    use crate::media::packet::{MediaPacket, PayloadFormat};
     use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
     use bytes::Bytes;
     use std::sync::atomic::Ordering;

@@ -45,15 +45,27 @@
 //! would otherwise be the bottleneck at 500+ concurrent egress readers.
 
 use arc_swap::ArcSwapOption;
-use bytes::Bytes;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
-use tracing::{debug, info, warn};
+use tracing::debug;
 
-use super::MEDIA_PRODUCER_BATCH_PACKETS;
+/// Compatibility path for the historical ring-owned packet vocabulary.
+///
+/// Remove only with an explicit downstream API migration; in-tree consumers
+/// import these types from `media::packet`.
+pub use super::packet::{MediaPacket, MediaType, PayloadFormat};
+
+mod reader;
+pub use reader::{Reader, ReaderInfo, ReaderSnapshot};
 
 pub const DEFAULT_RING_CAPACITY: usize = 1024;
+
+/// Max media packets a runtime reader processes per hot-loop burst.
+pub const MEDIA_PULL_BURST_PACKETS: usize = 32;
+
+/// Soft cap for producer-side publications into a packet ring.
+pub const MEDIA_PRODUCER_BATCH_PACKETS: usize = MEDIA_PULL_BURST_PACKETS;
 
 pub fn default_ring_capacity() -> usize {
     DEFAULT_RING_CAPACITY
@@ -69,74 +81,6 @@ pub const DEFAULT_TRANSCODER_RING_CAPACITY: usize = 512;
 
 pub fn default_transcoder_ring_capacity() -> usize {
     DEFAULT_TRANSCODER_RING_CAPACITY
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum MediaType {
-    Video = 0,
-    Audio = 1,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum PayloadFormat {
-    Flv = 0,
-    Raw = 1,
-}
-
-/// 56-byte media packet.  `#[repr(C)]` pins the field order so the declared
-/// layout is always respected, preventing the compiler from reordering fields
-/// into a layout that scatters hot fields across two cache lines.
-///
-/// Without `#[repr(C)]`, rustc's default greedy-alignment algorithm places the
-/// largest field (`payload: Bytes`, 32 bytes) first within the struct.  That
-/// puts `media_type`, `is_keyframe`, and `pts`/`dts` at offsets 52–63 inside
-/// `ArcInner`, spanning two 64-byte cache lines — reading `media_type` to
-/// dispatch the packet requires the *second* cache line.
-///
-/// With the declared field order the `ArcInner<MediaPacket>` layout is:
-/// ```text
-/// Byte  0– 7  strong refcount          (ArcInner header)
-/// Byte  8–15  weak refcount            (ArcInner header)
-/// Byte 16     media_type               ← cache line 0 (bytes 0–63)
-/// Byte 17     format
-/// Byte 18     is_keyframe
-/// Byte 19     (1 byte padding)
-/// Byte 20–23  track_index
-/// Byte 24–31  pts
-/// Byte 32–39  dts
-/// Byte 40–47  payload.ptr              ← pointer to codec output, needed immediately
-/// Byte 48–55  payload.len
-/// Byte 56–63  payload.data             ← cache line 1 (bytes 64+): Arc management only
-/// Byte 64–71  payload.vtable
-/// ```
-///
-/// All hot consumer fields — type dispatch, track routing, timestamps, and the
-/// payload pointer+length — fit in the first cache line.  Only the `Bytes` Arc
-/// management fields (`data`, `vtable`) land in the second cache line, and those
-/// are only touched on clone/drop, not on every field read.
-///
-/// Access groups ordered by first-touch in the hot path:
-///   1. Type dispatch  : `media_type`, `format`, `is_keyframe` (offset  0– 2)
-///   2. Track routing  : `track_index`                          (offset  4– 7)
-///   3. Timestamps     : `pts`, `dts`                          (offset  8–23)
-///   4. Payload        : `payload`                             (offset 24–55)
-#[derive(Clone, Debug)]
-#[repr(C)]
-pub struct MediaPacket {
-    // Group 1: type dispatch — read first in every consumer (3 bytes + 1 pad = 4)
-    pub media_type: MediaType,
-    pub format: PayloadFormat,
-    pub is_keyframe: bool,
-    // 1 byte implicit C padding before the u32
-    // Group 2: track routing
-    pub track_index: u32,
-    // Group 3: timestamps — DTS enforcer reads both together
-    pub pts: i64,
-    pub dts: i64,
-    // Group 4: payload — largest field, accessed after codec dispatch
-    pub payload: Bytes,
 }
 
 pub struct RingSlot {
@@ -166,31 +110,6 @@ const fn burst_bucket(n: usize) -> usize {
     }
 }
 
-pub struct ReaderInfo {
-    pub name: String,
-    pub read_idx: AtomicUsize,
-    pub overflow_count: AtomicUsize,
-    /// Total `pull_burst` calls that returned ≥ 1 packet.
-    pub burst_count: AtomicU64,
-    /// Total packets returned across all bursts (avg = packet_sum / burst_count).
-    pub packet_sum: AtomicU64,
-    /// Histogram of burst sizes across 6 buckets (see `burst_bucket`).
-    pub burst_hist: [AtomicU64; BURST_HIST_BUCKETS],
-}
-
-#[derive(Debug, Clone)]
-pub struct ReaderSnapshot {
-    pub name: String,
-    pub read_idx: usize,
-    pub write_idx: usize,
-    pub lag_slots: usize,
-    pub overflow_count: usize,
-    pub packet_age_ms: Option<u64>,
-    pub burst_count: u64,
-    pub avg_burst_size: f64,
-    pub median_burst_size: usize,
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PayloadStats {
     pub slots: usize,
@@ -199,56 +118,6 @@ pub struct PayloadStats {
     pub audio_bytes: usize,
     pub min_payload_bytes: usize,
     pub max_payload_bytes: usize,
-}
-
-impl ReaderInfo {
-    fn new(name: String, read_idx: usize) -> Self {
-        Self {
-            name,
-            read_idx: AtomicUsize::new(read_idx),
-            overflow_count: AtomicUsize::new(0),
-            burst_count: AtomicU64::new(0),
-            packet_sum: AtomicU64::new(0),
-            burst_hist: std::array::from_fn(|_| AtomicU64::new(0)),
-        }
-    }
-
-    /// Snapshot of burst size statistics: (avg, approx_median, burst_count).
-    pub fn burst_stats(&self) -> (f64, usize, u64) {
-        let bursts = self.burst_count.load(Ordering::Relaxed);
-        let pkts = self.packet_sum.load(Ordering::Relaxed);
-        let avg = if bursts > 0 {
-            pkts as f64 / bursts as f64
-        } else {
-            0.0
-        };
-
-        // Approximate median: walk histogram buckets until cumulative count ≥ 50%
-        let hist: [u64; BURST_HIST_BUCKETS] =
-            std::array::from_fn(|i| self.burst_hist[i].load(Ordering::Relaxed));
-        let median = {
-            let half = bursts.div_ceil(2);
-            let mut cum = 0u64;
-            let mut median_bucket = 0usize;
-            for (i, &count) in hist.iter().enumerate() {
-                cum += count;
-                if cum >= half {
-                    median_bucket = i;
-                    break;
-                }
-            }
-            // Return representative value for the bucket midpoint
-            match median_bucket {
-                0 => 1,
-                1 => 2,
-                2 => 3,
-                3 => 6,
-                4 => 12,
-                _ => 24,
-            }
-        };
-        (avg, median, bursts)
-    }
 }
 
 pub struct RingBuffer {
@@ -271,7 +140,7 @@ pub struct RingBuffer {
     /// Audio tracks metadata of packets in this ring.
     /// Stored behind ArcSwapOption so it can be updated when a publisher reconnects
     /// with a different track configuration (OnceLock would silently ignore updates).
-    pub audio_tracks: ArcSwapOption<Vec<crate::media::engine::AudioMeta>>,
+    pub audio_tracks: ArcSwapOption<Vec<crate::media::metadata::AudioMeta>>,
     /// Estimated packet rate (pkt/s) set once after stream probe.
     /// Used by telemetry to compute buffer depth in seconds.
     pub estimated_pkt_rate: std::sync::atomic::AtomicU32,
@@ -460,7 +329,7 @@ impl RingBuffer {
     /// Set (or update) the audio track metadata for this ring.
     /// An empty `tracks` vec clears the metadata, signalling "not yet known" to
     /// downstream stages — this is used by RTMP ingest on publisher reconnect.
-    pub fn set_audio_tracks(&self, tracks: Vec<crate::media::engine::AudioMeta>) {
+    pub fn set_audio_tracks(&self, tracks: Vec<crate::media::metadata::AudioMeta>) {
         let count = tracks.len();
         if tracks.is_empty() {
             self.audio_tracks.store(None);
@@ -474,7 +343,7 @@ impl RingBuffer {
     /// Returns a snapshot clone of the audio track metadata, or `None` if not yet known.
     /// Clones the inner Vec; `audio_tracks` is only read at stage startup, not on the
     /// hot packet path, so this clone is acceptable.
-    pub fn audio_tracks(&self) -> Option<Vec<crate::media::engine::AudioMeta>> {
+    pub fn audio_tracks(&self) -> Option<Vec<crate::media::metadata::AudioMeta>> {
         self.audio_tracks.load_full().map(|arc| (*arc).clone())
     }
 
@@ -776,311 +645,6 @@ impl RingBuffer {
         // Return the current write position to start at the live edge rather
         // than using saturating_sub(100) which returns 0 when write_idx < 100.
         current_write_idx
-    }
-}
-
-pub struct Reader {
-    buffer: Arc<RingBuffer>,
-    pub info: Arc<ReaderInfo>,
-    read_idx: usize,
-    migration_preroll_packets: usize,
-}
-
-impl Drop for Reader {
-    fn drop(&mut self) {
-        // Remove our entry and any other stale Weak refs from the ring's reader
-        // list.  Called while self.info still has strong_count = 1 (our field),
-        // so we use Arc::ptr_eq to identify our slot; entries where upgrade()
-        // returns None are also pruned.
-        //
-        // unwrap_or_else instead of if-let-Ok: a poisoned mutex (from a panic
-        // while holding the lock) must not silently skip cleanup — leaving our
-        // Weak in the list would artificially inflate min_read_idx and stall
-        // producer overflow recovery.
-        let mut readers = self
-            .buffer
-            .readers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        readers.retain(|w| match w.upgrade() {
-            Some(info) => !Arc::ptr_eq(&info, &self.info),
-            None => false,
-        });
-        info!(reader = %self.info.name, overflows = self.info.overflow_count.load(Ordering::Relaxed), "ring reader deregistered");
-    }
-}
-
-impl Reader {
-    fn register(
-        name: String,
-        buffer: Arc<RingBuffer>,
-        start_idx: usize,
-        migration_preroll_packets: usize,
-    ) -> Self {
-        let info = Arc::new(ReaderInfo::new(name.clone(), start_idx));
-
-        {
-            let mut r = buffer.readers.lock().unwrap_or_else(|e| e.into_inner());
-            r.push(Arc::downgrade(&info));
-        }
-
-        Self {
-            buffer,
-            info,
-            read_idx: start_idx,
-            migration_preroll_packets,
-        }
-    }
-
-    /// Current ring this reader is consuming from.  Changes after a successful
-    /// migration triggered by `wait_for_data` following `seal_and_forward`.
-    pub fn current_ring(&self) -> &Arc<RingBuffer> {
-        &self.buffer
-    }
-
-    pub fn is_caught_up_to_end_of_stream(&self) -> bool {
-        self.buffer.is_end_of_stream() && self.buffer.get_write_idx() == self.read_idx
-    }
-
-    pub fn new(name: String, buffer: Arc<RingBuffer>) -> Self {
-        let current_write = buffer.get_write_idx();
-        let start_idx = buffer.fast_forward(current_write);
-        let reader = Self::register(name, buffer, start_idx, 0);
-        info!(reader = %reader.info.name, start_idx, "ring reader registered");
-        reader
-    }
-
-    pub fn new_with_keyframe_preroll(
-        name: String,
-        buffer: Arc<RingBuffer>,
-        preroll_packets: usize,
-    ) -> Self {
-        let current_write = buffer.get_write_idx();
-        let keyframe_start = buffer.fast_forward(current_write);
-        let oldest_available = current_write.saturating_sub(buffer.capacity.saturating_sub(1));
-        let start_idx = if keyframe_start < current_write {
-            keyframe_start
-                .saturating_sub(preroll_packets)
-                .max(oldest_available)
-        } else {
-            keyframe_start
-        };
-        let reader = Self::register(name, buffer, start_idx, 0);
-        info!(
-            reader = %reader.info.name,
-            start_idx,
-            preroll_packets,
-            "ring reader registered (keyframe preroll)"
-        );
-        reader
-    }
-
-    pub(crate) fn new_stage_input(
-        name: String,
-        buffer: Arc<RingBuffer>,
-        preroll_packets: usize,
-    ) -> Self {
-        let current_write = buffer.get_write_idx();
-        let keyframe_start = buffer.fast_forward(current_write);
-        let oldest_available = current_write.saturating_sub(buffer.capacity.saturating_sub(1));
-        let start_idx = if keyframe_start < current_write {
-            keyframe_start
-                .saturating_sub(preroll_packets)
-                .max(oldest_available)
-        } else {
-            keyframe_start
-        };
-        let reader = Self::register(name, buffer, start_idx, preroll_packets);
-        info!(
-            reader = %reader.info.name,
-            start_idx,
-            preroll_packets,
-            "ring reader registered (stage input)"
-        );
-        reader
-    }
-
-    pub fn new_live(name: String, buffer: Arc<RingBuffer>) -> Self {
-        let current_write = buffer.get_write_idx();
-        let reader = Self::register(name, buffer, current_write, 0);
-        info!(reader = %reader.info.name, start_idx = current_write, "ring reader registered (live edge)");
-        reader
-    }
-
-    pub fn pull(&mut self) -> Result<Option<Arc<MediaPacket>>, &'static str> {
-        let write_idx = self.buffer.get_write_idx();
-
-        if write_idx > self.read_idx && write_idx - self.read_idx >= self.buffer.capacity {
-            let new_idx = self.buffer.fast_forward(write_idx);
-            let lag = write_idx.saturating_sub(self.read_idx);
-            self.read_idx = new_idx;
-            self.info.read_idx.store(new_idx, Ordering::Relaxed);
-            self.info.overflow_count.fetch_add(1, Ordering::Relaxed);
-            warn!(reader = %self.info.name, lag_packets = lag, "ring reader overflowed — fast-forwarding to keyframe");
-            return Err("Overflow: reader lagged and was fast-forwarded");
-        }
-
-        if self.read_idx == write_idx {
-            return Ok(None);
-        }
-
-        let packet = self.buffer.read_at(self.read_idx);
-        let post_write_idx = self.buffer.get_write_idx();
-        if post_write_idx > self.read_idx && post_write_idx - self.read_idx >= self.buffer.capacity
-        {
-            let new_idx = self.buffer.fast_forward(post_write_idx);
-            let lag = post_write_idx.saturating_sub(self.read_idx);
-            self.read_idx = new_idx;
-            self.info.read_idx.store(new_idx, Ordering::Relaxed);
-            self.info.overflow_count.fetch_add(1, Ordering::Relaxed);
-            warn!(reader = %self.info.name, lag_packets = lag, "ring reader overflowed mid-read — fast-forwarding to keyframe");
-            return Err("Overflow: reader lagged and was fast-forwarded");
-        }
-
-        if packet.is_some() {
-            self.read_idx += 1;
-            self.info.read_idx.store(self.read_idx, Ordering::Relaxed);
-        }
-        Ok(packet)
-    }
-
-    /// Load up to `max_packets` using one write-index acquisition.
-    ///
-    /// Appends packets to `output` and returns the number appended. Overflow
-    /// behavior matches `pull()`.
-    pub fn pull_burst(
-        &mut self,
-        output: &mut Vec<Arc<MediaPacket>>,
-        max_packets: usize,
-    ) -> Result<usize, &'static str> {
-        if max_packets == 0 {
-            return Ok(0);
-        }
-
-        let write_idx = self.buffer.get_write_idx();
-        if write_idx > self.read_idx && write_idx - self.read_idx >= self.buffer.capacity {
-            self.read_idx = self.buffer.fast_forward(write_idx);
-            self.info.read_idx.store(self.read_idx, Ordering::Relaxed);
-            self.info.overflow_count.fetch_add(1, Ordering::Relaxed);
-            return Err("Overflow: reader lagged and was fast-forwarded");
-        }
-
-        let available = write_idx.saturating_sub(self.read_idx).min(max_packets);
-        output.reserve(available);
-        let start_len = output.len();
-
-        for idx in self.read_idx..self.read_idx + available {
-            let Some(packet) = self.buffer.read_at(idx) else {
-                break;
-            };
-            output.push(packet);
-        }
-
-        let post_write_idx = self.buffer.get_write_idx();
-        if post_write_idx > self.read_idx && post_write_idx - self.read_idx >= self.buffer.capacity
-        {
-            output.truncate(start_len);
-            self.read_idx = self.buffer.fast_forward(post_write_idx);
-            self.info.read_idx.store(self.read_idx, Ordering::Relaxed);
-            self.info.overflow_count.fetch_add(1, Ordering::Relaxed);
-            return Err("Overflow: reader lagged and was fast-forwarded");
-        }
-
-        let loaded = output.len() - start_len;
-        self.read_idx += loaded;
-        self.info.read_idx.store(self.read_idx, Ordering::Relaxed);
-        if loaded > 0 {
-            self.info.burst_count.fetch_add(1, Ordering::Relaxed);
-            self.info
-                .packet_sum
-                .fetch_add(loaded as u64, Ordering::Relaxed);
-            self.info.burst_hist[burst_bucket(loaded)].fetch_add(1, Ordering::Relaxed);
-        }
-        Ok(loaded)
-    }
-
-    /// Wait until the ring (or its successor) has unread data past `read_idx`.
-    ///
-    /// If the current ring was sealed while we were waiting (`ring.next` is set),
-    /// we drain any remaining unread slots in the current ring, then silently
-    /// migrate to the next ring.  External egress connections are never
-    /// disrupted — they just observe a brief pause in data flow.
-    pub async fn wait_for_data(&mut self) {
-        loop {
-            let notify = self.buffer.get_notify();
-            // Re-check for data before blocking to avoid a TOCTOU race:
-            // the writer could notify_waiters() between our pull() returning
-            // None and this notified().await registering — Notify does NOT
-            // store notifications for future waiters, so we'd sleep forever.
-            if self.buffer.get_write_idx() > self.read_idx {
-                return;
-            }
-            // Check if this ring was superseded by a larger one.
-            if let Some(next) = self.buffer.next.load_full() {
-                // De-register from old ring's reader list and migrate.
-                self.migrate_to(next);
-                continue; // re-check write_idx on new ring
-            }
-            // Subscribe BEFORE the final check so `notify_waiters()` fired
-            // during seal_and_forward() cannot be missed.
-            let notified = notify.notified();
-            if self.buffer.get_write_idx() > self.read_idx {
-                return;
-            }
-            if self.buffer.next.load().is_some() {
-                // sealed between our last check and notified subscription; retry
-                continue;
-            }
-            if self.buffer.is_end_of_stream() {
-                return;
-            }
-            notified.await;
-        }
-    }
-
-    /// Migrate this reader to `new_ring`, carrying `read_idx` forward.
-    fn migrate_to(&mut self, new_ring: Arc<RingBuffer>) {
-        let old_read_idx = self.read_idx;
-        // Drain any final unread slots in the old ring before switching.
-        // In practice the old ring is sealed only after write_idx stabilises,
-        // so lag is 0 or very small.
-        // (Nothing to drain here — the loop in wait_for_data already pulled
-        //  everything via pull_burst before calling us.)
-        let old = std::mem::replace(&mut self.buffer, new_ring.clone());
-        // Re-register reader with new ring so active_reader_count() is accurate.
-        if let Ok(mut guard) = new_ring.readers.lock() {
-            guard.push(Arc::downgrade(&self.info));
-        }
-        let new_write_idx = new_ring.get_write_idx();
-        if self.migration_preroll_packets > 0 && old_read_idx == new_write_idx {
-            let keyframe_start = new_ring.fast_forward(new_write_idx);
-            if keyframe_start < new_write_idx {
-                let oldest_available =
-                    new_write_idx.saturating_sub(new_ring.capacity.saturating_sub(1));
-                self.read_idx = keyframe_start
-                    .saturating_sub(self.migration_preroll_packets)
-                    .max(oldest_available);
-                self.info.read_idx.store(self.read_idx, Ordering::Relaxed);
-            }
-        }
-        // Remove from old ring's reader list (best-effort; Weak will expire anyway).
-        if let Ok(mut guard) = old.readers.lock() {
-            guard.retain(|w| w.upgrade().is_some());
-        }
-        debug!(
-            read_idx = self.read_idx,
-            name = %self.info.name,
-            "reader migrated to resized ring"
-        );
-    }
-
-    /// Number of slots this reader is behind the write cursor.
-    ///
-    /// Zero means fully caught up; values approaching `capacity` mean
-    /// the reader is at risk of overflow. Useful as a health metric for slow
-    /// egress consumers.
-    pub fn lag(&self) -> usize {
-        self.buffer.get_write_idx().saturating_sub(self.read_idx)
     }
 }
 

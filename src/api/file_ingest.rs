@@ -14,8 +14,9 @@ use std::path::{Component, Path as FsPath};
 use std::sync::Arc;
 
 use crate::api_view_models;
-use crate::application::services::{ApiError, file_ingest_service::FileIngestConfigInput};
+use crate::application::services::file_ingest_service::FileIngestConfigInput;
 
+use super::error::ApiError;
 use super::ingests::sanitize_target_gop_seconds;
 use super::state::{AppState, MAX_NAME_LEN, check_field_len, require_authenticated};
 
@@ -129,7 +130,7 @@ pub async fn apply_pipeline_file_ingest_payload(
         .file_ingest_service
         .apply_file_ingest_payload(&state.engine, pipeline, previous_stream_key, payload)
         .await
-        .map_err(IntoResponse::into_response)
+        .map_err(|error| ApiError::from(error).into_response())
 }
 
 /// Returns the current file-ingest configuration and runtime flag for one

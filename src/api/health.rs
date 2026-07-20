@@ -6,8 +6,8 @@ use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use serde::Deserialize;
 use std::sync::Arc;
 
+use super::error::ApiError;
 use super::state::{AppState, recording_enabled_map, require_authenticated};
-use crate::application::services::ApiError;
 
 #[derive(Deserialize)]
 pub struct EngineHealthQuery {

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::application::ports::{MetaStore, MetaStoreWriter, SessionStore};
 
-use super::error::{ApiError, ApiResult};
+use super::error::{ServiceError, ServiceResult};
 
 const DASHBOARD_PASSWORD_HASH_META_KEY: &str = "dashboardPasswordHash";
 
@@ -38,16 +38,16 @@ impl AuthService {
 
     /// Reads the persisted dashboard password hash used for interactive login
     /// verification.
-    pub async fn get_password_hash(&self) -> ApiResult<Option<String>> {
+    pub async fn get_password_hash(&self) -> ServiceResult<Option<String>> {
         self.meta_store
             .get_meta(DASHBOARD_PASSWORD_HASH_META_KEY)
             .await
-            .map_err(|e| ApiError::internal(format!("get password hash: {e}")))
+            .map_err(|e| ServiceError::internal(format!("get password hash: {e}")))
     }
 
     /// Seeds the initial dashboard password hash only when bootstrap has not
     /// already stored one.
-    pub async fn ensure_password_hash(&self, hash: &str) -> ApiResult<()> {
+    pub async fn ensure_password_hash(&self, hash: &str) -> ServiceResult<()> {
         // Bootstrap flows should only seed an initial password; later changes
         // must go through the explicit password-update path.
         if self.get_password_hash().await?.is_none() {
@@ -58,68 +58,68 @@ impl AuthService {
 
     /// Persists the dashboard password hash using the shared auth-meta write
     /// path used by other auth settings.
-    pub async fn set_password_hash(&self, hash: &str) -> ApiResult<()> {
+    pub async fn set_password_hash(&self, hash: &str) -> ServiceResult<()> {
         self.set_meta(DASHBOARD_PASSWORD_HASH_META_KEY, hash).await
     }
 
     /// Persists one auth-specific meta entry while hiding the underlying store
     /// return value from callers.
-    pub async fn set_meta(&self, key: &str, value: &str) -> ApiResult<()> {
+    pub async fn set_meta(&self, key: &str, value: &str) -> ServiceResult<()> {
         self.meta_writer
             .set_meta(key, value)
             .await
             .map(|_| ())
-            .map_err(|e| ApiError::internal(format!("set auth meta: {e}")))
+            .map_err(|e| ServiceError::internal(format!("set auth meta: {e}")))
     }
 
     /// Creates a new dashboard session token with its creation timestamp.
-    pub async fn create_session(&self, token: &str, ts: i64) -> ApiResult<()> {
+    pub async fn create_session(&self, token: &str, ts: i64) -> ServiceResult<()> {
         self.session_store
             .create_session(token, ts)
             .await
-            .map_err(|e| ApiError::internal(format!("create session: {e}")))
+            .map_err(|e| ServiceError::internal(format!("create session: {e}")))
     }
 
     /// Deletes one dashboard session token.
-    pub async fn delete_session(&self, token: &str) -> ApiResult<()> {
+    pub async fn delete_session(&self, token: &str) -> ServiceResult<()> {
         self.session_store
             .delete_session(token)
             .await
-            .map_err(|e| ApiError::internal(format!("delete session: {e}")))
+            .map_err(|e| ServiceError::internal(format!("delete session: {e}")))
     }
 
     /// Deletes all dashboard sessions except the caller-selected token, which
     /// is used after password changes and similar security events.
-    pub async fn delete_sessions_except(&self, token: &str) -> ApiResult<()> {
+    pub async fn delete_sessions_except(&self, token: &str) -> ServiceResult<()> {
         self.session_store
             .delete_sessions_except(token)
             .await
-            .map_err(|e| ApiError::internal(format!("delete other sessions: {e}")))
+            .map_err(|e| ServiceError::internal(format!("delete other sessions: {e}")))
     }
 
     /// Reads the creation timestamp for one session token so callers can apply
     /// session-age and timeout policy.
-    pub async fn get_session_created_at(&self, token: &str) -> ApiResult<Option<i64>> {
+    pub async fn get_session_created_at(&self, token: &str) -> ServiceResult<Option<i64>> {
         self.session_store
             .get_session_created_at(token)
             .await
-            .map_err(|e| ApiError::internal(format!("get session created_at: {e}")))
+            .map_err(|e| ServiceError::internal(format!("get session created_at: {e}")))
     }
 
     /// Prunes expired sessions according to the configured maximum age.
-    pub async fn prune_expired_sessions(&self, max_age_ms: i64) -> ApiResult<()> {
+    pub async fn prune_expired_sessions(&self, max_age_ms: i64) -> ServiceResult<()> {
         self.session_store
             .prune_expired_sessions(max_age_ms)
             .await
-            .map_err(|e| ApiError::internal(format!("prune sessions: {e}")))
+            .map_err(|e| ServiceError::internal(format!("prune sessions: {e}")))
     }
 
     /// Lists active dashboard session tokens for audit and housekeeping flows.
-    pub async fn list_sessions(&self) -> ApiResult<Vec<String>> {
+    pub async fn list_sessions(&self) -> ServiceResult<Vec<String>> {
         self.session_store
             .list_sessions()
             .await
-            .map_err(|e| ApiError::internal(format!("list sessions: {e}")))
+            .map_err(|e| ServiceError::internal(format!("list sessions: {e}")))
     }
 }
 
@@ -133,6 +133,7 @@ mod tests {
         MetaLookupError, MetaLookupFuture, MetaWriteFuture, SessionListFuture, SessionLookupFuture,
         SessionStoreError, SessionWriteFuture,
     };
+    use crate::infrastructure::service_wiring::SqliteServiceFactory;
 
     #[derive(Default)]
     struct FakeAuthStore {
@@ -251,7 +252,7 @@ mod tests {
     async fn ensure_password_hash_preserves_existing_hash() {
         let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
         crate::db::setup_database_schema(&pool).await.unwrap();
-        let service = AuthService::new(pool);
+        let service = SqliteServiceFactory::new(&pool).auth_service();
 
         service.ensure_password_hash("first").await.unwrap();
         service.ensure_password_hash("second").await.unwrap();
@@ -266,7 +267,7 @@ mod tests {
     async fn list_sessions_returns_created_sessions() {
         let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
         crate::db::setup_database_schema(&pool).await.unwrap();
-        let service = AuthService::new(pool);
+        let service = SqliteServiceFactory::new(&pool).auth_service();
 
         service.create_session("token-a", 100).await.unwrap();
         service.create_session("token-b", 200).await.unwrap();

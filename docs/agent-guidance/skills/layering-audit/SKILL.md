@@ -28,6 +28,48 @@ Prefer the lightest boundary that fixes the coupling:
 
 Do not jump to a crate, package, or new top-level folder because a module feels busy.
 
+## Size Is A Trigger, Not A Design
+
+The source audit has a hard maximum of 999 raw lines for backend Rust. It warns
+Rust files at 800:
+
+- below 500 lines is a comfortable default, not a reason to merge unrelated owners
+- 500-799 lines is a reviewable growth band for a cohesive module
+- 800-999 lines is architectural pressure and requires an ownership review
+- 1,000 or more Rust lines fails, including the root build script, dedicated
+  tests, harnesses, integration tests, and benchmarks
+
+Aim new or split files below 800. Do not target 990-999, and do not declare a
+split successful merely because the receiving file passes the mechanical cap.
+Line count starts the audit; responsibility, dependency direction, and a narrow
+public surface decide the seam.
+
+### Historical regression
+
+The former audit introduced by `aa139026` used a 2,000-line limit and rejected
+only files above it. It codified a threshold-seeking pattern already visible
+in the immediately preceding split work: `9ad55101` created `srt_egress.rs` at
+exactly 1,000 lines, and test-only moves in `6594db34`, `409da728`, and
+`2ae8f6f8` improved production readability while transferring near-cap units
+into dedicated files. The pattern then continued after the audit in
+`63d44602`. The roomy global cap allowed production files to cluster between
+roughly 1,900 and 2,000 lines; it did not cause the earlier splits.
+
+Do not repeat that pattern:
+
+- never use the cap as a target size
+- split test files by behavior or fixture ownership when moving tests out
+- distinguish a lexical split from an ownership split in the review summary
+- treat several sibling files in the warning band as evidence that the parent
+  module still lacks a clear owner boundary
+
+Feature topology can hide the same regression. Commit `72f9441e` declared
+`mcp-core = ["agent-plane"]`, so compiling the supposed lower feature also
+compiled the higher layer and concealed upward agent-core dependencies. A
+lower feature boundary is proven only when it compiles without the higher
+feature. Keep HTTP/in-process adapter `cfg` gates beside the adapter modules,
+not on a parent feature that silently pulls the higher layer in.
+
 ## Good Extractions In This Repo
 
 Backend signals:
@@ -74,6 +116,61 @@ Do not extract when it mostly:
 - adds ports that only one callsite uses and are unlikely to stabilize
 - scatters endpoint-local CRUD or feature-local UI into many tiny files
 
+For a size-driven pass, stop only when all of these are true:
+
+- every audited file is below 1,000 raw lines
+- no new or extracted file was deliberately parked in the 800-999 warning band
+- each moved concept has one stated owner and dependencies still point inward
+- compatibility re-exports are removed or have a named, time-bounded migration
+  purpose
+- the next proposed split would add more navigation or wrappers than ownership
+  clarity
+
+If the pass spans multiple commits, ratchet monotonically: do not increase any
+already-oversized file, do not add a new warning-band file, and reduce either
+the count of failing files or their aggregate excess in every checkpoint. Do
+not weaken the global limit or add broad permanent exceptions to make an
+intermediate checkpoint green.
+
+## Module Versus Crate Gate
+
+Choose a private helper or lower-level type when the code has no independent
+lifecycle and is used by one owner. Choose a module when the concept owns
+related state/validation/helpers but still shares crate internals. Consider a
+crate only after the same boundary has already worked as a module and all of
+these are true:
+
+1. Its purpose and public API fit in one sentence.
+2. Its dependency direction is acyclic and enforceable.
+3. Its public surface is intentionally narrow; it does not export a broad set
+   of internals merely to make the move compile.
+4. It can avoid edge/runtime-heavy dependencies such as `axum`, `sqlx`,
+   FFmpeg/libsrt bindings, and unrelated application state unless those are the
+   crate's explicit purpose.
+5. Independent compilation, reuse, feature isolation, or test isolation has a
+   measured benefit.
+6. Moving it does not require compatibility facades that recreate the old
+   coupling.
+
+Current backend readiness:
+
+- `domain` and `runtime` contracts are mechanically close to a contracts
+  crate: runtime now depends downward on domain, snapshot/health back-edges are
+  gone, and `output_spec` has a curated facade over focused children.
+- `planner` is also mechanically close: it depends on domain/runtime contracts
+  and owns `EncodingStagePlan` plus its configuration-derived behavior.
+- Do not create either crate without a measured compile-time, reuse, release,
+  or dependency-isolation benefit. A clean module DAG is already valuable.
+- `agent_core` is transport-neutral and independently feature-compilable;
+  extract it only if standalone sidecar/package isolation is valuable enough
+  to justify another package and release surface.
+- `db`, `application`, `media`, SRT/protocol implementations, and bootstrap
+  remain modules. Their persistence adapters, orchestration, native bindings,
+  or lifecycle ownership still belong to the main runtime.
+
+These are readiness assessments, not claims that any additional crate exists
+or instructions to create one during a layering pass.
+
 ## Review Checklist
 
 When auditing a candidate seam:
@@ -85,6 +182,26 @@ When auditing a candidate seam:
 5. Keep the runtime or render-hot layer responsible for hot-path/runtime/UI concerns.
 6. Add or update focused tests that prove the moved behavior still works.
 7. Reassess after the change whether another extraction is still justified.
+8. Record whether the result is a lexical split, an ownership split, or a
+   crate-ready module boundary.
+9. Run `scripts/check/source-audit.sh` and read its stdout `FAIL`/`WARN` lines
+   by Rust responsibility class so the root build script, production code,
+   dedicated tests, harnesses, benchmarks, and integration tests cannot hide
+   one another's pressure.
+10. For wrong-direction imports, upward-compatibility re-export facades, and
+    types with inherent `impl` blocks outside their owner file, query the
+    Graphify code graph (`docs/agent-guidance/graphify.md`) rather than
+    grepping by hand: `graphify explain "<Type>"` and
+    `graphify path "<A>" "<B>"` show the real dependency edges. A
+    lower-to-higher edge blocks the audit; a facade re-export or an external
+    inherent impl is review evidence, not an automatic failure.
+11. After MCP/agent feature-boundary changes, run the negative feature-matrix
+    compile commands from `docs/layering-roadmap.md` directly (`cargo check
+    --lib --no-default-features --features mcp-core`, `mcp-server`,
+    `mcp-embedded`, and the `restream-mcp` binary with
+    `mcp-server,mcp-http-backend`). The proof is that lower features compile
+    while `agent-plane`/`agent-execution` stay disabled — run the compiler,
+    do not infer it from the feature graph.
 
 ## Verification
 
@@ -93,6 +210,9 @@ When auditing a candidate seam:
 - keep API contract tests when edge behavior still depends on the seam
 - keep frontend DOM/render tests around refactored UI seams
 - if the change touches hot runtime code or high-frequency frontend refresh paths, follow the benchmark/proof rules in `AGENTS.md`
+- after MCP/agent feature-boundary changes, run at least the `mcp-core`
+  and standalone sidecar (`mcp-server,mcp-http-backend`) negative feature-matrix
+  compile commands from `docs/layering-roadmap.md`
 
 ## Read This Reference
 

@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use crate::media::engine::PublisherQuality;
+use crate::media::snapshots::PublisherQuality;
 
 use super::SrtTraceBStats;
 

@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod handlers;
+pub(crate) mod inputs;
 pub mod tools;
 pub mod transport;
 

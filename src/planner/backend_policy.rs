@@ -56,7 +56,7 @@ impl BackendPolicy {
     }
 }
 
-pub fn is_lightweight_audio_route(routing: &AudioRouting) -> bool {
+fn is_lightweight_audio_route(routing: &AudioRouting) -> bool {
     matches!(
         routing,
         AudioRouting::SelectTracks { .. } | AudioRouting::Passthrough

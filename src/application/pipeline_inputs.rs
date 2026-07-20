@@ -3,7 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::application::services::{ApiError, ApiResult, PipelineService};
+use crate::application::services::{PipelineService, ServiceError, ServiceResult};
 use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole};
 
 pub const MAX_PIPELINE_INPUTS: usize = 4;
@@ -70,26 +70,29 @@ impl PipelineInputService {
         Self { store, pipelines }
     }
 
-    pub async fn list(&self, pipeline_id: &str) -> ApiResult<Vec<PipelineInput>> {
+    pub async fn list(&self, pipeline_id: &str) -> ServiceResult<Vec<PipelineInput>> {
         self.pipelines.get_by_id(pipeline_id).await?;
         self.store
             .list(pipeline_id)
             .await
-            .map_err(|error| ApiError::internal(format!("list pipeline inputs: {error}")))
+            .map_err(|error| ServiceError::internal(format!("list pipeline inputs: {error}")))
     }
 
-    pub async fn get_by_stream_key(&self, stream_key: &str) -> ApiResult<Option<PipelineInput>> {
+    pub async fn get_by_stream_key(
+        &self,
+        stream_key: &str,
+    ) -> ServiceResult<Option<PipelineInput>> {
         self.store
             .get_by_stream_key(stream_key)
             .await
             .map(|input| input.filter(|candidate| candidate.enabled))
-            .map_err(|error| ApiError::internal(format!("get pipeline input: {error}")))
+            .map_err(|error| ServiceError::internal(format!("get pipeline input: {error}")))
     }
 
-    pub async fn create(&self, pipeline_id: &str, label: &str) -> ApiResult<PipelineInput> {
+    pub async fn create(&self, pipeline_id: &str, label: &str) -> ServiceResult<PipelineInput> {
         let existing = self.list(pipeline_id).await?;
         if existing.len() >= MAX_PIPELINE_INPUTS {
-            return Err(ApiError::conflict(format!(
+            return Err(ServiceError::conflict(format!(
                 "pipeline input limit is {MAX_PIPELINE_INPUTS}"
             )));
         }
@@ -105,19 +108,19 @@ impl PipelineInputService {
                 Err(PipelineInputStoreError::Conflict(message))
                     if message.contains("pipeline input limit exceeded") =>
                 {
-                    return Err(ApiError::conflict(format!(
+                    return Err(ServiceError::conflict(format!(
                         "pipeline input limit is {MAX_PIPELINE_INPUTS}"
                     )));
                 }
                 Err(PipelineInputStoreError::Conflict(_)) => continue,
                 Err(PipelineInputStoreError::Internal(message)) => {
-                    return Err(ApiError::internal(format!(
+                    return Err(ServiceError::internal(format!(
                         "create pipeline input: {message}"
                     )));
                 }
             }
         }
-        Err(ApiError::internal(
+        Err(ServiceError::internal(
             "could not allocate a unique pipeline input credential",
         ))
     }
@@ -128,10 +131,10 @@ impl PipelineInputService {
         input_id: &str,
         label: &str,
         enabled: bool,
-    ) -> ApiResult<PipelineInput> {
+    ) -> ServiceResult<PipelineInput> {
         let current = self.get(pipeline_id, input_id).await?;
         if !enabled && (current.role == PipelineInputRole::Primary || current.selected) {
-            return Err(ApiError::conflict(
+            return Err(ServiceError::conflict(
                 "primary or selected inputs cannot be disabled",
             ));
         }
@@ -142,10 +145,10 @@ impl PipelineInputService {
             .ok_or_else(|| input_not_found(input_id))
     }
 
-    pub async fn delete(&self, pipeline_id: &str, input_id: &str) -> ApiResult<bool> {
+    pub async fn delete(&self, pipeline_id: &str, input_id: &str) -> ServiceResult<bool> {
         let current = self.get(pipeline_id, input_id).await?;
         if current.role == PipelineInputRole::Primary || current.selected {
-            return Err(ApiError::conflict(
+            return Err(ServiceError::conflict(
                 "primary or selected inputs cannot be deleted",
             ));
         }
@@ -155,10 +158,10 @@ impl PipelineInputService {
             .map_err(store_error)
     }
 
-    pub async fn promote(&self, pipeline_id: &str, input_id: &str) -> ApiResult<PipelineInput> {
+    pub async fn promote(&self, pipeline_id: &str, input_id: &str) -> ServiceResult<PipelineInput> {
         let current = self.get(pipeline_id, input_id).await?;
         if !current.enabled {
-            return Err(ApiError::conflict("disabled inputs cannot be promoted"));
+            return Err(ServiceError::conflict("disabled inputs cannot be promoted"));
         }
         self.store
             .promote(pipeline_id, input_id)
@@ -167,7 +170,7 @@ impl PipelineInputService {
             .ok_or_else(|| input_not_found(input_id))
     }
 
-    pub async fn get(&self, pipeline_id: &str, input_id: &str) -> ApiResult<PipelineInput> {
+    pub async fn get(&self, pipeline_id: &str, input_id: &str) -> ServiceResult<PipelineInput> {
         self.store
             .get(pipeline_id, input_id)
             .await
@@ -184,13 +187,13 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn input_not_found(input_id: &str) -> ApiError {
-    ApiError::not_found(format!("pipeline input {input_id} not found"))
+fn input_not_found(input_id: &str) -> ServiceError {
+    ServiceError::not_found(format!("pipeline input {input_id} not found"))
 }
 
-fn store_error(error: PipelineInputStoreError) -> ApiError {
+fn store_error(error: PipelineInputStoreError) -> ServiceError {
     match error {
-        PipelineInputStoreError::Conflict(message) => ApiError::conflict(message),
-        PipelineInputStoreError::Internal(message) => ApiError::internal(message),
+        PipelineInputStoreError::Conflict(message) => ServiceError::conflict(message),
+        PipelineInputStoreError::Internal(message) => ServiceError::internal(message),
     }
 }

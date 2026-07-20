@@ -6,307 +6,26 @@
 //! step-sequencing, `${...}` template resolution, and expression evaluation
 //! needed to drive those helpers from the on-disk JSON workflow manifests.
 
-use super::*;
+use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+use tokio::process::Child;
 
-// ── Expression language: tokenizer + recursive-descent parser ──────────────
-//
-// Powers both `${...}` templates and raw `when`/`assert.all` condition
-// strings. Precedence: `||` -> `&&` -> comparison -> additive -> unary ->
-// primary. Path lookups are lenient (missing segments resolve to `Value::Null`
-// rather than erroring) so that `||`/`&&` expressions can reference variables
-// that only exist when a preceding conditional step actually ran.
+use super::{
+    GeneralizedSinkMetrics, GeneralizedSinkServer, HarnessPublisherProtocol, RampApi,
+    RecoveryTransientCase, RetryBudgetCase, TestPorts, catalog, create_output,
+    create_pipeline_with_stream_key, disconnect_grace_remaining_bounded, harness_catalog_root,
+    health_input_snapshot, input_disconnect_cleared, spawn_publisher,
+    start_generalized_sink_server, start_output, stop_child, stop_generalized_sink_server,
+    stop_mixed_outputs, wait_for_api_input_live, wait_for_api_input_media_ready,
+    wait_for_api_input_off, wait_for_sink_video_above,
+};
 
-#[derive(Debug, Clone, PartialEq)]
-enum ExprTok {
-    Ident(String),
-    Num(f64),
-    Str(String),
-    True,
-    False,
-    Null,
-    OrOr,
-    AndAnd,
-    EqEq,
-    NotEq,
-    Ge,
-    Le,
-    Gt,
-    Lt,
-    Bang,
-    Plus,
-    Minus,
-    LParen,
-    RParen,
-}
-
-fn tokenize_expr(src: &str) -> Result<Vec<ExprTok>, String> {
-    let chars: Vec<char> = src.chars().collect();
-    let mut i = 0;
-    let mut toks = Vec::new();
-    while i < chars.len() {
-        let c = chars[i];
-        if c.is_whitespace() {
-            i += 1;
-            continue;
-        }
-        match c {
-            '(' => {
-                toks.push(ExprTok::LParen);
-                i += 1;
-            }
-            ')' => {
-                toks.push(ExprTok::RParen);
-                i += 1;
-            }
-            '+' => {
-                toks.push(ExprTok::Plus);
-                i += 1;
-            }
-            '-' => {
-                toks.push(ExprTok::Minus);
-                i += 1;
-            }
-            '!' if chars.get(i + 1) == Some(&'=') => {
-                toks.push(ExprTok::NotEq);
-                i += 2;
-            }
-            '!' => {
-                toks.push(ExprTok::Bang);
-                i += 1;
-            }
-            '=' if chars.get(i + 1) == Some(&'=') => {
-                toks.push(ExprTok::EqEq);
-                i += 2;
-            }
-            '>' if chars.get(i + 1) == Some(&'=') => {
-                toks.push(ExprTok::Ge);
-                i += 2;
-            }
-            '>' => {
-                toks.push(ExprTok::Gt);
-                i += 1;
-            }
-            '<' if chars.get(i + 1) == Some(&'=') => {
-                toks.push(ExprTok::Le);
-                i += 2;
-            }
-            '<' => {
-                toks.push(ExprTok::Lt);
-                i += 1;
-            }
-            '|' if chars.get(i + 1) == Some(&'|') => {
-                toks.push(ExprTok::OrOr);
-                i += 2;
-            }
-            '&' if chars.get(i + 1) == Some(&'&') => {
-                toks.push(ExprTok::AndAnd);
-                i += 2;
-            }
-            '\'' | '"' => {
-                let quote = c;
-                let mut s = String::new();
-                i += 1;
-                while i < chars.len() && chars[i] != quote {
-                    s.push(chars[i]);
-                    i += 1;
-                }
-                if i >= chars.len() {
-                    return Err(format!("unterminated string literal in expression: {src}"));
-                }
-                i += 1;
-                toks.push(ExprTok::Str(s));
-            }
-            c if c.is_ascii_digit() => {
-                let start = i;
-                while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
-                    i += 1;
-                }
-                let text: String = chars[start..i].iter().collect();
-                let num = text
-                    .parse::<f64>()
-                    .map_err(|_| format!("bad number literal '{text}' in expression: {src}"))?;
-                toks.push(ExprTok::Num(num));
-            }
-            c if c.is_alphabetic() || c == '_' => {
-                let start = i;
-                while i < chars.len()
-                    && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '.')
-                {
-                    i += 1;
-                }
-                let text: String = chars[start..i].iter().collect();
-                match text.as_str() {
-                    "true" => toks.push(ExprTok::True),
-                    "false" => toks.push(ExprTok::False),
-                    "null" => toks.push(ExprTok::Null),
-                    _ => toks.push(ExprTok::Ident(text)),
-                }
-            }
-            other => {
-                return Err(format!(
-                    "unexpected character '{other}' in expression: {src}"
-                ));
-            }
-        }
-    }
-    Ok(toks)
-}
-
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Bool(b) => *b,
-        Value::Null => false,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
-
-fn as_f64(v: &Value) -> Result<f64, String> {
-    v.as_f64()
-        .ok_or_else(|| format!("expected a numeric value in expression, got {v:?}"))
-}
-
-fn json_number(n: f64) -> Value {
-    if n.is_finite() && n.fract() == 0.0 {
-        Value::from(n as i64)
-    } else {
-        serde_json::Number::from_f64(n)
-            .map(Value::Number)
-            .unwrap_or(Value::Null)
-    }
-}
-
-fn compare_values(op: &str, left: &Value, right: &Value) -> bool {
-    if let (Some(a), Some(b)) = (left.as_f64(), right.as_f64()) {
-        return match op {
-            "==" => a == b,
-            "!=" => a != b,
-            ">=" => a >= b,
-            "<=" => a <= b,
-            ">" => a > b,
-            "<" => a < b,
-            _ => false,
-        };
-    }
-    match op {
-        "==" => left == right,
-        "!=" => left != right,
-        _ => false,
-    }
-}
-
-struct ExprParser<'t> {
-    toks: &'t [ExprTok],
-    pos: usize,
-}
-
-impl<'t> ExprParser<'t> {
-    fn peek(&self) -> Option<&ExprTok> {
-        self.toks.get(self.pos)
-    }
-
-    fn bump(&mut self) -> Option<ExprTok> {
-        let tok = self.toks.get(self.pos).cloned();
-        if tok.is_some() {
-            self.pos += 1;
-        }
-        tok
-    }
-
-    fn parse_or(&mut self, scope: &WorkflowCtx) -> Result<Value, String> {
-        let mut left = self.parse_and(scope)?;
-        while matches!(self.peek(), Some(ExprTok::OrOr)) {
-            self.bump();
-            let right = self.parse_and(scope)?;
-            left = Value::Bool(truthy(&left) || truthy(&right));
-        }
-        Ok(left)
-    }
-
-    fn parse_and(&mut self, scope: &WorkflowCtx) -> Result<Value, String> {
-        let mut left = self.parse_cmp(scope)?;
-        while matches!(self.peek(), Some(ExprTok::AndAnd)) {
-            self.bump();
-            let right = self.parse_cmp(scope)?;
-            left = Value::Bool(truthy(&left) && truthy(&right));
-        }
-        Ok(left)
-    }
-
-    fn parse_cmp(&mut self, scope: &WorkflowCtx) -> Result<Value, String> {
-        let left = self.parse_add(scope)?;
-        let op = match self.peek() {
-            Some(ExprTok::EqEq) => Some("=="),
-            Some(ExprTok::NotEq) => Some("!="),
-            Some(ExprTok::Ge) => Some(">="),
-            Some(ExprTok::Le) => Some("<="),
-            Some(ExprTok::Gt) => Some(">"),
-            Some(ExprTok::Lt) => Some("<"),
-            _ => None,
-        };
-        if let Some(op) = op {
-            self.bump();
-            let right = self.parse_add(scope)?;
-            return Ok(Value::Bool(compare_values(op, &left, &right)));
-        }
-        Ok(left)
-    }
-
-    fn parse_add(&mut self, scope: &WorkflowCtx) -> Result<Value, String> {
-        let mut left = self.parse_unary(scope)?;
-        loop {
-            match self.peek() {
-                Some(ExprTok::Plus) => {
-                    self.bump();
-                    let right = self.parse_unary(scope)?;
-                    left = json_number(as_f64(&left)? + as_f64(&right)?);
-                }
-                Some(ExprTok::Minus) => {
-                    self.bump();
-                    let right = self.parse_unary(scope)?;
-                    left = json_number(as_f64(&left)? - as_f64(&right)?);
-                }
-                _ => break,
-            }
-        }
-        Ok(left)
-    }
-
-    fn parse_unary(&mut self, scope: &WorkflowCtx) -> Result<Value, String> {
-        if matches!(self.peek(), Some(ExprTok::Bang)) {
-            self.bump();
-            let value = self.parse_unary(scope)?;
-            return Ok(Value::Bool(!truthy(&value)));
-        }
-        if matches!(self.peek(), Some(ExprTok::Minus)) {
-            self.bump();
-            let value = self.parse_unary(scope)?;
-            return Ok(json_number(-as_f64(&value)?));
-        }
-        self.parse_primary(scope)
-    }
-
-    fn parse_primary(&mut self, scope: &WorkflowCtx) -> Result<Value, String> {
-        match self.bump() {
-            Some(ExprTok::LParen) => {
-                let value = self.parse_or(scope)?;
-                match self.bump() {
-                    Some(ExprTok::RParen) => Ok(value),
-                    other => Err(format!("expected ')' in expression, found {other:?}")),
-                }
-            }
-            Some(ExprTok::Num(n)) => Ok(json_number(n)),
-            Some(ExprTok::Str(s)) => Ok(Value::String(s)),
-            Some(ExprTok::True) => Ok(Value::Bool(true)),
-            Some(ExprTok::False) => Ok(Value::Bool(false)),
-            Some(ExprTok::Null) => Ok(Value::Null),
-            Some(ExprTok::Ident(path)) => Ok(scope.resolve_path(&path)),
-            other => Err(format!("unexpected token {other:?} in expression")),
-        }
-    }
-}
+#[path = "workflow_exec/expression.rs"]
+mod expression;
 
 // ── Workflow execution context ──────────────────────────────────────────────
 
@@ -375,20 +94,11 @@ impl<'a> WorkflowCtx<'a> {
     }
 
     fn eval_expr(&self, expr: &str) -> Result<Value, String> {
-        let toks = tokenize_expr(expr)?;
-        let mut parser = ExprParser {
-            toks: &toks,
-            pos: 0,
-        };
-        let value = parser.parse_or(self)?;
-        if parser.pos != toks.len() {
-            return Err(format!("trailing tokens in expression '{expr}'"));
-        }
-        Ok(value)
+        expression::evaluate(expr, &self.vars)
     }
 
     fn eval_bool(&self, expr: &str) -> Result<bool, String> {
-        Ok(truthy(&self.eval_expr(expr)?))
+        Ok(expression::truthy(&self.eval_expr(expr)?))
     }
 
     fn resolve_string(&self, s: &str) -> Result<Value, String> {
@@ -460,7 +170,7 @@ impl<'a> WorkflowCtx<'a> {
     }
 
     fn field_bool(&self, obj: &Value, field: &str) -> Result<bool, String> {
-        Ok(truthy(&self.field(obj, field)?))
+        Ok(expression::truthy(&self.field(obj, field)?))
     }
 
     fn into_result(self, test_name: &str) -> Value {

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::application::ports::LogStore;
 use crate::logging::types::{AppLogFilters, AppLogRow};
 
-use super::error::{ApiError, ApiResult};
+use super::error::{ServiceError, ServiceResult};
 
 #[derive(Clone)]
 /// Application service that mediates persisted operator log queries and the
@@ -26,11 +26,11 @@ impl LogService {
 
     /// Lists persisted application logs using the caller-supplied filters
     /// without applying any stream-specific merge behavior.
-    pub async fn list_logs(&self, filters: &AppLogFilters) -> ApiResult<Vec<AppLogRow>> {
+    pub async fn list_logs(&self, filters: &AppLogFilters) -> ServiceResult<Vec<AppLogRow>> {
         self.store
             .list_app_logs(filters)
             .await
-            .map_err(|e| ApiError::internal(format!("list logs: {e}")))
+            .map_err(|e| ServiceError::internal(format!("list logs: {e}")))
     }
 
     /// Builds the dashboard stream backfill view, optionally merging pipeline
@@ -39,7 +39,7 @@ impl LogService {
         &self,
         filters: &AppLogFilters,
         include_restream: bool,
-    ) -> ApiResult<Vec<AppLogRow>> {
+    ) -> ServiceResult<Vec<AppLogRow>> {
         let limit = filters.limit.unwrap_or(200).clamp(1, 1000);
         if !should_merge_restream_backfill(filters, include_restream) {
             return self.list_logs(filters).await;
@@ -72,6 +72,7 @@ fn should_merge_restream_backfill(filters: &AppLogFilters, include_restream: boo
 mod tests {
     use super::*;
     use crate::application::ports::{LogListFuture, LogStore, LogStoreError};
+    use crate::infrastructure::service_wiring::SqliteServiceFactory;
     use crate::logging::types::AppLogEntry;
 
     fn entry(message: &str, pipeline_id: Option<&str>) -> AppLogEntry {
@@ -193,7 +194,7 @@ mod tests {
         .await
         .unwrap();
 
-        let service = LogService::new(pool);
+        let service = SqliteServiceFactory::new(&pool).log_service();
         let backfill = service
             .list_stream_backfill(&filters_for_pipeline("pipe-1", 10), true)
             .await
@@ -220,7 +221,7 @@ mod tests {
         .await
         .unwrap();
 
-        let service = LogService::new(pool);
+        let service = SqliteServiceFactory::new(&pool).log_service();
         let backfill = service
             .list_stream_backfill(&filters_for_pipeline("pipe-1", 10), false)
             .await
@@ -261,7 +262,7 @@ mod tests {
             .await
             .unwrap();
 
-        let service = LogService::new(pool);
+        let service = SqliteServiceFactory::new(&pool).log_service();
         let mut filters = filters_for_pipeline("pipe-1", 200);
         let mut cursor = 0;
         let mut received_ids = Vec::new();

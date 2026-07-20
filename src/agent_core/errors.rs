@@ -32,12 +32,6 @@ impl Display for AgentError {
 
 impl std::error::Error for AgentError {}
 
-impl From<reqwest::Error> for AgentError {
-    fn from(value: reqwest::Error) -> Self {
-        Self::Transport(value.to_string())
-    }
-}
-
 impl From<serde_json::Error> for AgentError {
     fn from(value: serde_json::Error) -> Self {
         Self::InvalidRequest(value.to_string())

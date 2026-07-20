@@ -19,13 +19,14 @@ use crate::domain::stage::StageKey;
 use crate::events::EventLog;
 use crate::media::avio::MemoryQueue;
 use crate::media::engine::{
-    ActiveEgress, ActiveIngest, EgressRetryState, HlsConsumers, ListenerSocketStats,
-    RecentEgressOutcome, RecentIngestOutcome, RtmpListenerStats,
+    ActiveEgress, ActiveIngest, EgressRetryState, RecentEgressOutcome, RecentIngestOutcome,
 };
+use crate::media::engine_hls::HlsConsumers;
 use crate::media::hls::HlsStore;
 use crate::media::hls_fmp4::Fmp4HlsStore;
 use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::ring_buffer::RingBuffer;
+use crate::media::snapshots::{ListenerSocketStats, RtmpListenerStats};
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
 use crate::media::ts_chunk_ring::TsChunkRing;

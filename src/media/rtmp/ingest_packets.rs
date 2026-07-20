@@ -1,9 +1,10 @@
 use bytes::Bytes;
 
-use super::RtmpIngestHandle;
+use super::ingest::RtmpIngestHandle;
 use crate::media::engine::MediaEngine;
 use crate::media::input_gate::{InputForwardState, InputPacketBoundary, InputTimestampMapper};
-use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, RingBuffer};
+use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+use crate::media::ring_buffer::RingBuffer;
 
 pub(super) fn push_promotion_headers(
     ring: &RingBuffer,

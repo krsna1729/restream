@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 use crate::domain::pipeline_input::PipelineInput;
 
+use super::error::ApiError;
 use super::state::{
     AppState, MAX_NAME_LEN, check_field_len, refresh_srt_ingest_policy_store, require_authenticated,
 };
@@ -108,7 +109,7 @@ pub async fn pipeline_inputs_get_handler(
     }
     let inputs = match state.pipeline_input_service.list(&pipeline_id).await {
         Ok(inputs) => inputs,
-        Err(error) => return error.into_response(),
+        Err(error) => return ApiError::from(error).into_response(),
     };
     let host = state.pipeline_service.get_ingest_host().await;
     let selected_input_id = inputs
@@ -144,7 +145,7 @@ pub async fn pipeline_inputs_post_handler(
         .await
     {
         Ok(input) => input,
-        Err(error) => return error.into_response(),
+        Err(error) => return ApiError::from(error).into_response(),
     };
     refresh_srt_ingest_policy_store(&state).await;
     let host = state.pipeline_service.get_ingest_host().await;
@@ -177,7 +178,7 @@ pub async fn pipeline_input_patch_handler(
         .await
     {
         Ok(input) => input,
-        Err(error) => return error.into_response(),
+        Err(error) => return ApiError::from(error).into_response(),
     };
     let label = payload
         .label
@@ -195,7 +196,7 @@ pub async fn pipeline_input_patch_handler(
         .await
     {
         Ok(input) => input,
-        Err(error) => return error.into_response(),
+        Err(error) => return ApiError::from(error).into_response(),
     };
     if !input.enabled {
         state.engine.cancel_pipeline_input(&input.id).await;
@@ -227,7 +228,7 @@ pub async fn pipeline_input_delete_handler(
             Json(serde_json::json!({"deleted": true})).into_response()
         }
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(error) => error.into_response(),
+        Err(error) => ApiError::from(error).into_response(),
     }
 }
 
@@ -245,7 +246,7 @@ pub async fn pipeline_input_promote_handler(
         .await
     {
         Ok(input) => input,
-        Err(error) => return error.into_response(),
+        Err(error) => return ApiError::from(error).into_response(),
     };
     let connected = state
         .engine

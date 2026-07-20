@@ -2,8 +2,7 @@
 
 use crate::application::models::Output;
 use crate::domain::output_spec::OutputUrlScheme;
-use crate::planner::backend_policy::BackendPolicy;
-use crate::planner::graph_plan::PlannedOutput;
+use crate::planner::{BackendPolicy, PlannedOutput};
 use crate::runtime::graph::StageGraphPlan;
 
 pub struct DesiredPipelineGraphs {
@@ -18,7 +17,7 @@ pub fn desired_pipeline_graphs(
     policy: &BackendPolicy,
 ) -> DesiredPipelineGraphs {
     let planned_outputs = outputs.iter().map(planned_output).collect::<Vec<_>>();
-    let aggregate = crate::planner::graph_plan::plan_pipeline_graph(
+    let aggregate = crate::planner::plan_pipeline_graph(
         pipeline_id,
         ingest_codec,
         &planned_outputs,
@@ -30,14 +29,9 @@ pub fn desired_pipeline_graphs(
         .map(|output| {
             let planned = planned_output(output);
             if OutputUrlScheme::from_url(&output.url).is_hls_family() {
-                crate::planner::graph_plan::plan_hls_output_graph(
-                    pipeline_id,
-                    ingest_codec,
-                    &planned,
-                    policy,
-                )
+                crate::planner::plan_hls_output_graph(pipeline_id, ingest_codec, &planned, policy)
             } else {
-                crate::planner::graph_plan::plan_pipeline_graph(
+                crate::planner::plan_pipeline_graph(
                     pipeline_id,
                     ingest_codec,
                     std::slice::from_ref(&planned),
@@ -64,7 +58,7 @@ mod tests {
     use super::*;
     use crate::domain::ids::OutputId;
     use crate::domain::state::DesiredOutputState;
-    use crate::planner::backend_policy::BackendPolicy;
+    use crate::planner::BackendPolicy;
     use crate::runtime::graph::GraphRole;
 
     fn test_output(id: &str, url: &str) -> Output {

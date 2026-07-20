@@ -1,21 +1,29 @@
 //! Application-layer output path planning that interprets output encoding and
 //! target protocol choices into stage-aware routing decisions.
 
+#[cfg(test)]
+use crate::domain::output_spec::OutputVideoConfig;
 use crate::domain::output_spec::{
-    EgressProtocol, OutputConfig, OutputConfigError, OutputVideoConfig, ProtocolCapabilities,
-    ResolvedOutputVideo, VideoCodecKind,
+    EgressProtocol, OutputConfig, OutputConfigError, ProtocolCapabilities, ResolvedOutputVideo,
+    VideoCodecKind,
 };
-use crate::domain::stage::{EncodingStagePlan, PipelineId, StageKey, StageKind};
+use crate::domain::stage::{PipelineId, StageKey, StageKind};
+
+use super::encoding_stage_plan::EncodingStagePlan;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutputPath {
+pub(super) struct OutputPath {
     stage_plan: EncodingStagePlan,
     protocol: EgressProtocol,
     config: OutputConfig,
 }
 
 impl OutputPath {
-    pub fn resolve(pipeline_id: impl Into<PipelineId>, config: OutputConfig, url: &str) -> Self {
+    pub(super) fn resolve(
+        pipeline_id: impl Into<PipelineId>,
+        config: OutputConfig,
+        url: &str,
+    ) -> Self {
         Self {
             stage_plan: EncodingStagePlan::from_output_config(pipeline_id, &config),
             protocol: EgressProtocol::from_url(url),
@@ -23,11 +31,12 @@ impl OutputPath {
         }
     }
 
-    pub fn is_rtmp(&self) -> bool {
+    #[cfg(test)]
+    fn is_rtmp(&self) -> bool {
         self.protocol.is_rtmp()
     }
 
-    pub fn video_stage(&self, ingest_video_codec: Option<&str>) -> Option<StageKey> {
+    fn video_stage(&self, ingest_video_codec: Option<&str>) -> Option<StageKey> {
         let input_codec = normalized_input_codec(ingest_video_codec);
         if let Ok(resolved) = self.resolved_config(input_codec)
             && let ResolvedOutputVideo::Preset { preset, codec } = resolved.video
@@ -49,11 +58,13 @@ impl OutputPath {
             .unwrap_or_else(|| self.stage_plan.video_terminal_kind().clone())
     }
 
-    pub fn audio_stage(&self) -> Option<StageKey> {
+    #[cfg(test)]
+    fn audio_stage(&self) -> Option<StageKey> {
         self.stage_plan.audio_stage()
     }
 
-    pub fn codec_edge_candidate_stage(&self) -> Option<StageKey> {
+    #[cfg(test)]
+    fn codec_edge_candidate_stage(&self) -> Option<StageKey> {
         self.codec_edge_may_be_needed_without_input().then(|| {
             StageKey::new(
                 self.stage_plan.pipeline().clone(),
@@ -62,18 +73,20 @@ impl OutputPath {
         })
     }
 
-    pub fn needs_rtmp_h264_conv(&self, ingest_video_codec: Option<&str>) -> bool {
+    #[cfg(test)]
+    fn needs_rtmp_h264_conv(&self, ingest_video_codec: Option<&str>) -> bool {
         self.needs_h264_codec_edge(ingest_video_codec)
     }
 
-    pub fn ingest_codec_override(&self, ingest_video_codec: Option<&str>) -> Option<&'static str> {
+    #[cfg(test)]
+    fn ingest_codec_override(&self, ingest_video_codec: Option<&str>) -> Option<&'static str> {
         ingest_video_codec
             .map(VideoCodecKind::from_codec_name)
             .is_some_and(VideoCodecKind::is_hevc)
             .then_some("hevc")
     }
 
-    pub fn codec_edge_stage(&self, ingest_video_codec: Option<&str>) -> Option<StageKey> {
+    fn codec_edge_stage(&self, ingest_video_codec: Option<&str>) -> Option<StageKey> {
         self.needs_h264_codec_edge(ingest_video_codec).then(|| {
             StageKey::new(
                 self.stage_plan.pipeline().clone(),
@@ -85,15 +98,7 @@ impl OutputPath {
         })
     }
 
-    pub fn codec_edge_upstream_kind(&self, ingest_video_codec: Option<&str>) -> StageKind {
-        if self.needs_rtmp_h264_conv(ingest_video_codec) {
-            self.codec_edge_upstream_stage_kind(ingest_video_codec)
-        } else {
-            self.stage_plan.terminal_kind().clone()
-        }
-    }
-
-    pub fn routed_audio_stage(&self, ingest_video_codec: Option<&str>) -> Option<StageKey> {
+    fn routed_audio_stage(&self, ingest_video_codec: Option<&str>) -> Option<StageKey> {
         if let Some(codec_edge) = self.codec_edge_stage(ingest_video_codec) {
             return self.stage_plan.audio_stage_from_upstream(codec_edge.kind);
         }
@@ -103,7 +108,7 @@ impl OutputPath {
         self.stage_plan.audio_stage()
     }
 
-    pub fn terminal_stage_kind(&self, ingest_video_codec: Option<&str>) -> StageKind {
+    fn terminal_stage_kind(&self, ingest_video_codec: Option<&str>) -> StageKind {
         self.routed_audio_stage(ingest_video_codec)
             .or_else(|| self.codec_edge_stage(ingest_video_codec))
             .or_else(|| self.video_stage(ingest_video_codec))
@@ -111,14 +116,14 @@ impl OutputPath {
             .unwrap_or_else(|| self.stage_plan.terminal_kind().clone())
     }
 
-    pub fn terminal_stage_key(&self, ingest_video_codec: Option<&str>) -> StageKey {
+    pub(super) fn terminal_stage_key(&self, ingest_video_codec: Option<&str>) -> StageKey {
         StageKey::new(
             self.stage_plan.pipeline().clone(),
             self.terminal_stage_kind(ingest_video_codec),
         )
     }
 
-    pub fn needed_stage_keys(&self, ingest_video_codec: Option<&str>) -> Vec<StageKey> {
+    pub(super) fn needed_stage_keys(&self, ingest_video_codec: Option<&str>) -> Vec<StageKey> {
         let mut stages = Vec::new();
         if let Some(stage) = self.video_stage(ingest_video_codec) {
             stages.push(stage);
@@ -139,7 +144,7 @@ impl OutputPath {
         }
     }
 
-    pub fn resolved_config(
+    fn resolved_config(
         &self,
         input_codec: VideoCodecKind,
     ) -> Result<crate::domain::output_spec::ResolvedOutputConfig, OutputConfigError> {
@@ -147,6 +152,7 @@ impl OutputPath {
             .resolve_for_input_codec(self.capabilities(), input_codec)
     }
 
+    #[cfg(test)]
     fn codec_edge_may_be_needed_without_input(&self) -> bool {
         matches!(self.config.video, OutputVideoConfig::Source { .. })
             && self

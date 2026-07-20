@@ -2,7 +2,11 @@ name: Security
 
 on:
   schedule:
-    - cron: '0 3 * * *'
+    # 20:30 UTC = 02:00 IST (Asia/Kolkata, UTC+5:30) the next calendar day,
+    # one hour after the nightly full-certification run. GitHub Actions cron
+    # always runs in UTC; there is no timezone field for workflow-level
+    # schedules, so keep this comment in sync if the target IST time changes.
+    - cron: '30 20 * * *'
   workflow_dispatch:
 
 permissions:

@@ -19,7 +19,7 @@ pub async fn authenticated_app() -> (axum::Router, SqlitePool, String) {
         .await
         .expect("schema setup");
     let sessions = Arc::new(RwLock::new(HashSet::new()));
-    api::initialize_auth_for_test(&pool, &sessions, "admin").await;
+    restream::infrastructure::bootstrap::initialize_auth_for_test(&pool, &sessions, "admin").await;
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
     let policies = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
         SrtGlobalIngestConfig::default(),
@@ -27,7 +27,7 @@ pub async fn authenticated_app() -> (axum::Router, SqlitePool, String) {
     ));
     let (logs, _) = broadcast::channel(32);
     let state = Arc::new(api::AppState::test_new(
-        pool.clone(),
+        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose(),
         security,
         policies,
         sessions,

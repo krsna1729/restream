@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::application::models::Pipeline;
 use crate::application::ports::PipelineStore;
 
-use super::error::{ApiError, ApiResult};
+use super::error::{ServiceError, ServiceResult};
 
 /// Application service for pipeline CRUD and read operations.
 ///
@@ -30,36 +30,36 @@ impl PipelineService {
 
     /// Builds the shared not-found error shape used when callers reference a
     /// pipeline ID that no longer exists in the catalog.
-    fn pipeline_not_found(id: &str) -> ApiError {
-        ApiError::not_found(format!("pipeline {id} not found"))
+    fn pipeline_not_found(id: &str) -> ServiceError {
+        ServiceError::not_found(format!("pipeline {id} not found"))
     }
 
     /// Lists every persisted pipeline record without applying transport-level
     /// filtering or shaping.
-    pub async fn list_pipelines(&self) -> ApiResult<Vec<Pipeline>> {
+    pub async fn list_pipelines(&self) -> ServiceResult<Vec<Pipeline>> {
         self.store
             .list_pipelines()
             .await
-            .map_err(|e| ApiError::internal(format!("list pipelines: {e}")))
+            .map_err(|e| ServiceError::internal(format!("list pipelines: {e}")))
     }
 
     /// Resolves one pipeline by ID and upgrades missing-store results into the
     /// service layer's stable not-found error.
-    pub async fn get_by_id(&self, id: &str) -> ApiResult<Pipeline> {
+    pub async fn get_by_id(&self, id: &str) -> ServiceResult<Pipeline> {
         self.store
             .get_pipeline(id)
             .await
-            .map_err(|e| ApiError::internal(format!("get pipeline: {e}")))?
+            .map_err(|e| ServiceError::internal(format!("get pipeline: {e}")))?
             .ok_or_else(|| Self::pipeline_not_found(id))
     }
 
     /// Looks up a pipeline by publish stream key for ingest routing and other
     /// catalog lookups that start from transport credentials.
-    pub async fn get_by_stream_key(&self, stream_key: &str) -> ApiResult<Option<Pipeline>> {
+    pub async fn get_by_stream_key(&self, stream_key: &str) -> ServiceResult<Option<Pipeline>> {
         self.store
             .get_pipeline_by_stream_key(stream_key)
             .await
-            .map_err(|e| ApiError::internal(format!("get pipeline by stream key: {e}")))
+            .map_err(|e| ServiceError::internal(format!("get pipeline by stream key: {e}")))
     }
 
     /// Persists a new pipeline record with the caller-provided stream key,
@@ -71,11 +71,11 @@ impl PipelineService {
         stream_key: &str,
         input_source: Option<&str>,
         srt_ingest_policy: Option<&str>,
-    ) -> ApiResult<Pipeline> {
+    ) -> ServiceResult<Pipeline> {
         self.store
             .create_pipeline(id, name, stream_key, input_source, srt_ingest_policy)
             .await
-            .map_err(|e| ApiError::internal(format!("create pipeline: {e}")))
+            .map_err(|e| ServiceError::internal(format!("create pipeline: {e}")))
     }
 
     /// Updates the mutable fields of one persisted pipeline and normalizes a
@@ -87,20 +87,20 @@ impl PipelineService {
         stream_key: &str,
         input_source: Option<&str>,
         srt_ingest_policy: Option<&str>,
-    ) -> ApiResult<Pipeline> {
+    ) -> ServiceResult<Pipeline> {
         self.store
             .update_pipeline(id, name, stream_key, input_source, srt_ingest_policy)
             .await
-            .map_err(|e| ApiError::internal(format!("update pipeline: {e}")))?
+            .map_err(|e| ServiceError::internal(format!("update pipeline: {e}")))?
             .ok_or_else(|| Self::pipeline_not_found(id))
     }
 
     /// Deletes one pipeline record from the persisted catalog.
-    pub async fn delete_pipeline(&self, id: &str) -> ApiResult<bool> {
+    pub async fn delete_pipeline(&self, id: &str) -> ServiceResult<bool> {
         self.store
             .delete_pipeline(id)
             .await
-            .map_err(|e| ApiError::internal(format!("delete pipeline: {e}")))
+            .map_err(|e| ServiceError::internal(format!("delete pipeline: {e}")))
     }
 
     /// Rewrites only the input-source field while carrying forward the rest of
@@ -109,7 +109,7 @@ impl PipelineService {
         &self,
         id: &str,
         input_source: Option<&str>,
-    ) -> ApiResult<Pipeline> {
+    ) -> ServiceResult<Pipeline> {
         // Preserve the existing pipeline fields here so callers can update only
         // the transport input source without reconstructing the whole record.
         let pipeline = self.get_by_id(id).await?;
@@ -122,12 +122,12 @@ impl PipelineService {
                 pipeline.srt_ingest_policy.as_deref(),
             )
             .await
-            .map_err(|e| ApiError::internal(format!("set input source: {e}")))?
+            .map_err(|e| ServiceError::internal(format!("set input source: {e}")))?
             .ok_or_else(|| Self::pipeline_not_found(id))
     }
 
     /// List all pipeline IDs (used by health and settings).
-    pub async fn list_pipeline_ids(&self) -> ApiResult<Vec<String>> {
+    pub async fn list_pipeline_ids(&self) -> ServiceResult<Vec<String>> {
         let pipelines = self.list_pipelines().await?;
         Ok(pipelines.into_iter().map(|p| p.id).collect())
     }
