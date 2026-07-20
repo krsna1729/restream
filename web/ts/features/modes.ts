@@ -2,11 +2,15 @@ import { getRestreamHistory } from "../core/api.js";
 import { createManagedLogStream } from "../core/log-stream.js";
 import { escapeHtml } from "../core/utils.js";
 import { state } from "../core/state.js";
-import { renderControlRoom } from "./control-room.js";
+import {
+  renderControlRoom,
+  setControlRoomContainerId,
+} from "./control-room.js";
 import {
   refreshMediaLibraryMetricsOnly,
   renderMediaLibraryMode,
   resetMediaLibraryShellState,
+  setMediaLibraryContainerId,
 } from "./media-library.js";
 import { loadSettings, renderSettingsPanel } from "./settings.js";
 import {
@@ -33,6 +37,7 @@ import { renderEngineerTelemetryMode } from "./engineer-telemetry.js";
 import {
   renderPipelineInspector,
   resetPipelineInspectorSelection,
+  setPipelineInspectorContainerId,
   syncPipelineInspectorVisibility,
 } from "./pipeline-inspector.js";
 import {
@@ -67,6 +72,58 @@ interface NavigationOptions {
 }
 type StatusTone = "success" | "warning" | "error" | "neutral" | "info";
 type SummaryCounts = ReturnType<typeof buildOverviewViewModel>["counts"];
+type DashboardV2RouteBodyMode =
+  | "pipeline-inspect"
+  | "pipeline-monitor"
+  | "incidents"
+  | "telemetry"
+  | "media"
+  | "settings"
+  | "status";
+
+interface DashboardV2RouteBodyConfig {
+  readonly legacyBodyId: string;
+  readonly mode: DashboardV2RouteBodyMode;
+  readonly v2HostId: string;
+}
+
+const DASHBOARD_V2_ROUTE_BODIES: readonly DashboardV2RouteBodyConfig[] = [
+  {
+    legacyBodyId: "inspect-mode-content",
+    mode: "pipeline-inspect",
+    v2HostId: "dashboard-v2-pipeline-inspect-content",
+  },
+  {
+    legacyBodyId: "control-mode-content",
+    mode: "pipeline-monitor",
+    v2HostId: "dashboard-v2-control-room-content",
+  },
+  {
+    legacyBodyId: "incidents-mode-content",
+    mode: "incidents",
+    v2HostId: "dashboard-v2-incidents-content",
+  },
+  {
+    legacyBodyId: "telemetry-mode-content",
+    mode: "telemetry",
+    v2HostId: "dashboard-v2-telemetry-content",
+  },
+  {
+    legacyBodyId: "media-mode-content",
+    mode: "media",
+    v2HostId: "dashboard-v2-media-content",
+  },
+  {
+    legacyBodyId: "settings-mode-content",
+    mode: "settings",
+    v2HostId: "dashboard-v2-settings-content",
+  },
+  {
+    legacyBodyId: "status-mode-content",
+    mode: "status",
+    v2HostId: "dashboard-v2-status-content",
+  },
+] as const;
 
 const OVERVIEW_HISTORY_LIMIT = 28;
 const OVERVIEW_ACTIVITY_LIMIT = 6;
@@ -625,8 +682,8 @@ function overviewMetricHero(value: string): string {
         <span class="text-base-content/70 shrink-0 text-xs font-semibold">${escapeHtml(match[2])}</span>
     </span>`;
 }
-function renderSettingsMode(): void {
-  const container = document.getElementById("settings-mode-content");
+function renderSettingsMode(containerId = "settings-mode-content"): void {
+  const container = document.getElementById(containerId);
   if (!container) return;
   if (!settingsMounted || !container.querySelector("#settings-server-name")) {
     renderSettingsPanel(container);
@@ -635,8 +692,8 @@ function renderSettingsMode(): void {
   }
 }
 
-function renderStatusMode(): void {
-  const container = document.getElementById("status-mode-content");
+function renderStatusMode(containerId = "status-mode-content"): void {
+  const container = document.getElementById(containerId);
   if (!container) return;
   if (!statusMounted || !container.querySelector("#status-versions")) {
     container.innerHTML = `
@@ -700,6 +757,79 @@ function dashboardV2ShellActive(): boolean {
   }
 }
 
+function dashboardV2RouteBodyMode(
+  mode: DashboardMode,
+  pipelineView: PipelineWorkspaceView,
+): DashboardV2RouteBodyMode | null {
+  if (mode === "pipeline" && pipelineView === "inspect")
+    return "pipeline-inspect";
+  if (mode === "pipeline" && pipelineView === "monitor")
+    return "pipeline-monitor";
+  if (
+    mode === "incidents" ||
+    mode === "telemetry" ||
+    mode === "media" ||
+    mode === "settings" ||
+    mode === "status"
+  ) {
+    return mode;
+  }
+  return null;
+}
+
+function dashboardV2RouteBodyConfig(
+  mode: DashboardV2RouteBodyMode,
+): DashboardV2RouteBodyConfig {
+  const config = DASHBOARD_V2_ROUTE_BODIES.find((entry) => entry.mode === mode);
+  if (!config) throw new Error(`Unknown dashboard v2 route body: ${mode}`);
+  return config;
+}
+
+function routeBodyTargetId(
+  activeMode: DashboardV2RouteBodyMode | null,
+  config: DashboardV2RouteBodyConfig,
+): string {
+  return activeMode === config.mode ? config.v2HostId : config.legacyBodyId;
+}
+
+function clearDormantRouteBodies(
+  activeMode: DashboardV2RouteBodyMode | null,
+): void {
+  for (const config of DASHBOARD_V2_ROUTE_BODIES) {
+    const clearId =
+      activeMode === config.mode ? config.legacyBodyId : config.v2HostId;
+    document.getElementById(clearId)?.replaceChildren();
+  }
+  if (activeMode !== "media") resetMediaLibraryShellState();
+  if (activeMode !== "settings") settingsMounted = false;
+  if (activeMode !== "status") statusMounted = false;
+}
+
+function configureDashboardV2RouteBodyTargets(
+  mode: DashboardMode,
+  pipelineView: PipelineWorkspaceView,
+): void {
+  const activeMode = dashboardV2ShellActive()
+    ? dashboardV2RouteBodyMode(mode, pipelineView)
+    : null;
+  clearDormantRouteBodies(activeMode);
+  setPipelineInspectorContainerId(
+    routeBodyTargetId(
+      activeMode,
+      dashboardV2RouteBodyConfig("pipeline-inspect"),
+    ),
+  );
+  setControlRoomContainerId(
+    routeBodyTargetId(
+      activeMode,
+      dashboardV2RouteBodyConfig("pipeline-monitor"),
+    ),
+  );
+  setMediaLibraryContainerId(
+    routeBodyTargetId(activeMode, dashboardV2RouteBodyConfig("media")),
+  );
+}
+
 function rememberPipelineWorkspaceLocation(href = window.location.href): void {
   try {
     const location = resolveDashboardLocation(href);
@@ -723,15 +853,6 @@ function restoredPipelineWorkspaceUrl(): URL | null {
 function snapshotPanelShell(panelId: string): string | null {
   const panel = document.getElementById(panelId);
   return panel ? panel.innerHTML : null;
-}
-
-function clearPanelShellExcept(panelId: string, preservedChildIds: string[]): void {
-  const panel = document.getElementById(panelId);
-  if (!panel) return;
-  const preserved = preservedChildIds
-    .map((id) => document.getElementById(id))
-    .filter((element): element is HTMLElement => Boolean(element));
-  panel.replaceChildren(...preserved);
 }
 
 function restorePanelShell(panelId: string, html: string | null): void {
@@ -764,12 +885,6 @@ function unmountInactiveV2PipelineWorkspace(
   if (!dashboardV2ShellActive()) return;
   inspectPanelShellHtml ??= snapshotPanelShell("inspect-mode-panel");
   controlPanelShellHtml ??= snapshotPanelShell("control-mode-panel");
-  clearPanelShellExcept("inspect-mode-panel", [
-    "dashboard-v2-pipeline-inspect-root",
-  ]);
-  clearPanelShellExcept("control-mode-panel", [
-    "dashboard-v2-control-room-root",
-  ]);
 }
 
 function unmountInactiveV2HeavyRoute(previousMode: DashboardMode | null): void {
@@ -858,20 +973,7 @@ function applyMode(
                 : mode === "settings"
                   ? "Server configuration"
                   : "Runtime status";
-    const ownership =
-      mode === "overview" || (mode === "pipeline" && pipelineView === "operate")
-        ? "UI v2 owned"
-        : (mode === "pipeline" &&
-              (pipelineView === "inspect" || pipelineView === "monitor")) ||
-            mode === "incidents" ||
-            mode === "telemetry" ||
-            mode === "status" ||
-            mode === "media" ||
-            mode === "settings"
-          ? "UI v2 checkpoint"
-        : mode === "pipeline"
-          ? "Legacy checkpoint"
-          : "Legacy-owned checkpoint";
+    const ownership = dashboardV2ShellActive() ? "UI v2 owned" : "Legacy owned";
     summary.textContent = `${ownership} · ${taskSummary}`;
   }
   if (
@@ -882,6 +984,9 @@ function applyMode(
   ) {
     void refreshDashboard();
   }
+  const activeV2BodyMode = dashboardV2ShellActive()
+    ? dashboardV2RouteBodyMode(mode, pipelineView)
+    : null;
   if (mode === "pipeline" && pipelineView === "monitor") {
     restorePipelineWorkspaceShell(pipelineView);
     renderControlRoom();
@@ -892,6 +997,10 @@ function applyMode(
   }));
   renderIncidentsMode({
     active: mode === "incidents",
+    containerId: routeBodyTargetId(
+      activeV2BodyMode,
+      dashboardV2RouteBodyConfig("incidents"),
+    ),
     pipelines: pipelineOptions,
     navigateToPipeline: (pipelineId) => {
       selectPipeline(pipelineId);
@@ -900,19 +1009,45 @@ function applyMode(
   });
   renderEngineerTelemetryMode({
     active: mode === "telemetry",
+    containerId: routeBodyTargetId(
+      activeV2BodyMode,
+      dashboardV2RouteBodyConfig("telemetry"),
+    ),
     pipelines: pipelineOptions,
   });
   if (mode === "media") {
-    if (previousMode !== "media") {
+    const mediaContentId = routeBodyTargetId(
+      activeV2BodyMode,
+      dashboardV2RouteBodyConfig("media"),
+    );
+    const mediaShellMissing = !document
+      .getElementById(mediaContentId)
+      ?.querySelector("#media-library-root");
+    if (
+      previousMode !== "media" ||
+      (dashboardV2ShellActive() && mediaShellMissing)
+    ) {
       requestDetailedMetricsRefresh();
       void refreshDashboardRuntime();
-      void renderMediaLibraryMode();
+      void renderMediaLibraryMode({ force: mediaShellMissing });
     } else {
       refreshMediaLibraryMetricsOnly();
     }
   }
-  if (mode === "settings") renderSettingsMode();
-  if (mode === "status") renderStatusMode();
+  if (mode === "settings")
+    renderSettingsMode(
+      routeBodyTargetId(
+        activeV2BodyMode,
+        dashboardV2RouteBodyConfig("settings"),
+      ),
+    );
+  if (mode === "status")
+    renderStatusMode(
+      routeBodyTargetId(
+        activeV2BodyMode,
+        dashboardV2RouteBodyConfig("status"),
+      ),
+    );
   syncDashboardPolling();
 }
 
@@ -1030,6 +1165,7 @@ export function renderDashboardModes(): void {
     rememberPipelineWorkspaceLocation(location.url.href);
   }
   dashboardModePresentationSync?.(location);
+  configureDashboardV2RouteBodyTargets(location.mode, location.pipelineView);
   if (location.mode === "overview") renderOverview();
   if (location.mode === "pipeline" && location.pipelineView === "inspect") {
     restorePipelineWorkspaceShell(location.pipelineView);
@@ -1073,6 +1209,18 @@ export function initDashboardModes(): void {
     ) {
       syncPipelineInspectorVisibility();
     }
+  });
+  document.addEventListener("dashboard:v2-checkpoints-ready", () => {
+    const location = resolveDashboardLocation(window.location.href);
+    configureDashboardV2RouteBodyTargets(location.mode, location.pipelineView);
+    if (
+      location.mode === "pipeline" &&
+      location.pipelineView === "inspect"
+    ) {
+      renderPipelineInspector();
+      return;
+    }
+    applyMode(location.mode, location.pipelineView);
   });
   window.setDashboardMode = setDashboardMode;
   refreshActiveMode();

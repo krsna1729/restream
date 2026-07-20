@@ -5,6 +5,8 @@ import {
   getStageTelemetry,
 } from "../core/api.js";
 import { escapeHtml } from "../core/utils.js";
+import { RenderScope } from "../core/render-scope.js";
+import type { RenderScopeToken } from "../core/render-scope.js";
 import type { HealthData, HostSettingRow } from "../types.js";
 import type {
   EngineTelemetrySnapshot,
@@ -22,6 +24,7 @@ export interface TelemetryPipelineOption {
 
 interface TelemetryViewOptions {
   active: boolean;
+  containerId?: string;
   pipelines: TelemetryPipelineOption[];
 }
 
@@ -45,6 +48,7 @@ let telemetryLoaded = false;
 let telemetryUnavailable = false;
 let stageUnavailable = false;
 let viewOptions: TelemetryViewOptions | null = null;
+const telemetryScope = new RenderScope("telemetry-mode-content");
 let telemetrySearchQuery = "";
 let telemetryEgressExpanded = false;
 let telemetryStagesExpanded = false;
@@ -555,10 +559,15 @@ export function renderEngineerTelemetryHtml(
   </div>`;
 }
 
-function paintTelemetry(): void {
-  const root = document.getElementById("telemetry-mode-content");
-  if (!root || !viewOptions) return;
+function isRenderCurrent(token: RenderScopeToken): boolean {
+  return viewOptions?.active === true && telemetryScope.isCurrent(token);
+}
+
+function paintTelemetry(containerId = telemetryScope.current()): void {
+  if (!viewOptions) return;
   telemetryCheckpointCallback?.(buildTelemetryCheckpointModel());
+  const root = document.getElementById(containerId);
+  if (!root) return;
   root.innerHTML = renderEngineerTelemetryHtml(
     engineSnapshot,
     pipelineSnapshot,
@@ -573,6 +582,7 @@ function paintTelemetry(): void {
     },
     telemetrySearchQuery,
   );
+  suppressV2RouteChrome(root);
   const select = document.getElementById(
     "telemetry-pipeline-select",
   ) as HTMLSelectElement | null;
@@ -645,23 +655,41 @@ function paintTelemetry(): void {
     });
 }
 
+function suppressV2RouteChrome(root: HTMLElement): void {
+  if (
+    typeof root.matches !== "function" ||
+    !root.matches("[data-dashboard-v2-owned-route-body]")
+  )
+    return;
+  root
+    .querySelectorAll<HTMLElement>(
+      ":scope > div > header:first-child h1, :scope > div > header:first-child p",
+    )
+    .forEach((element) => {
+      element.hidden = true;
+      element.setAttribute("aria-hidden", "true");
+    });
+}
+
 export async function fetchStageDetail(stageKeyValue: string): Promise<void> {
   if (!viewOptions?.active || document.hidden) return;
   const sequence = ++stageRequestSequence;
   const pipelineAtRequest = selectedPipelineId;
+  const scopeToken = telemetryScope.token();
   selectedStageKey = stageKeyValue;
   stageUnavailable = false;
   const result = await getStageTelemetry(stageKeyValue);
   if (
     sequence !== stageRequestSequence ||
     pipelineAtRequest !== selectedPipelineId ||
-    selectedStageKey !== stageKeyValue
+    selectedStageKey !== stageKeyValue ||
+    !isRenderCurrent(scopeToken)
   )
     return;
   // A stage may disappear between the pipeline snapshot and this detail fetch.
   if (result) stageSnapshot = result;
   stageUnavailable = result === null;
-  paintTelemetry();
+  paintTelemetry(scopeToken.containerId);
 }
 
 export async function refreshEngineerTelemetry(force = false): Promise<void> {
@@ -673,6 +701,7 @@ export async function refreshEngineerTelemetry(force = false): Promise<void> {
   const sequence = ++requestSequence;
   const pipelineAtRequest = selectedPipelineId;
   const stageAtRequest = selectedStageKey;
+  const scopeToken = telemetryScope.token();
   const request = (async () => {
     const [engine, health, pipeline, stage] = await Promise.all([
       getEngineTelemetry(),
@@ -686,7 +715,8 @@ export async function refreshEngineerTelemetry(force = false): Promise<void> {
     ]);
     if (
       sequence !== requestSequence ||
-      pipelineAtRequest !== selectedPipelineId
+      pipelineAtRequest !== selectedPipelineId ||
+      !isRenderCurrent(scopeToken)
     )
       return;
     engineSnapshot = engine ?? engineSnapshot;
@@ -702,7 +732,7 @@ export async function refreshEngineerTelemetry(force = false): Promise<void> {
       stageUnavailable = stage === null;
     }
     lastFetchedAt = Date.now();
-    paintTelemetry();
+    paintTelemetry(scopeToken.containerId);
   })().finally(() => {
     if (inFlightByPipeline.get(scope)?.promise === request) {
       inFlightByPipeline.delete(scope);
@@ -729,15 +759,17 @@ export function selectTelemetryPipeline(pipelineId: string): void {
 export function renderEngineerTelemetryMode(
   options: TelemetryViewOptions,
 ): void {
+  if (viewOptions?.active !== options.active) telemetryScope.invalidate();
+  telemetryScope.setContainerId(options.containerId || "telemetry-mode-content");
   viewOptions = options;
+  if (!options.active) {
+    telemetryCheckpointCallback?.(null);
+    return;
+  }
   if (
     !options.pipelines.some((pipeline) => pipeline.id === selectedPipelineId)
   ) {
     selectTelemetryPipeline(options.pipelines[0]?.id || "");
-  }
-  if (!options.active) {
-    telemetryCheckpointCallback?.(null);
-    return;
   }
   paintTelemetry();
   void refreshEngineerTelemetry();

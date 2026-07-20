@@ -7,6 +7,8 @@ import {
 } from "../core/utils.js";
 import { getYoutubeMonitoringStatus, updateOutput } from "../core/api.js";
 import type { YoutubeMonitoringStatus } from "../core/api.js";
+import { RenderScope } from "../core/render-scope.js";
+import type { RenderScopeToken } from "../core/render-scope.js";
 import { state } from "../core/state.js";
 import {
   clearManagedHlsPlayer,
@@ -14,6 +16,7 @@ import {
   renderManagedHlsPlayer,
 } from "./hls-player.js";
 import { buildInputPreviewUrl } from "./input-preview.js";
+import { controlRoomShellHtml } from "./control-room-shell.js";
 import { upsertDashboardOutputConfig } from "./dashboard.js";
 import type { OutputView, PipelineInput, PipelineView } from "../types.js";
 import { normalizeOutputConfig } from "../core/output-config.js";
@@ -68,6 +71,7 @@ let controlRoomState: ControlRoomState = {
   page: 0,
   searchQuery: "",
 };
+const controlRoomScope = new RenderScope("control-mode-content");
 const controlRoomMonitoringDrafts = new Map<string, string>();
 const controlRoomMonitoringSavePending = new Set<string>();
 const controlRoomCardWarnings = new Map<string, string>();
@@ -105,6 +109,10 @@ function controlRoomV2Active(): boolean {
   } catch (_err) {
     return false;
   }
+}
+
+function renderControlRoomIfCurrent(token: RenderScopeToken): void {
+  if (controlRoomScope.isCurrent(token)) renderControlRoom();
 }
 
 export function configureControlRoomCheckpointPresentation(options: {
@@ -341,7 +349,7 @@ function buildLocalCard(pipe: PipelineView): ControlRoomCardDescriptor {
     id: `local:${pipe.id}`,
     title: "Local HLS",
     mediaUrl: inputLive ? localPreviewUrl : null,
-    loadOnDemand: false,
+    loadOnDemand: true,
     emptyMessage:
       pipe.input.status === "on"
         ? pipe.input.flapping
@@ -496,51 +504,7 @@ function buildCardDescriptors(
 function ensureShell(container: HTMLElement): void {
   if (container.dataset.ready === "true") return;
   container.dataset.ready = "true";
-  container.innerHTML = `
-        <div class="space-y-5">
-            <section class="border-base-content/10 from-base-200 via-base-200 to-base-100 rounded-2xl border bg-gradient-to-br p-4 shadow-sm">
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                        <h1 class="text-lg font-semibold">Control Room</h1>
-                        <p id="control-room-route-summary" class="text-base-content/60 mt-1 text-sm" role="status" aria-live="polite"></p>
-                    </div>
-                    <div class="flex flex-wrap items-center gap-2">
-                        <button type="button" class="btn btn-sm btn-outline" data-action="control-room-toggle-playback-all">Play All</button>
-                        <button type="button" class="btn btn-sm btn-outline" data-action="control-room-toggle-mute-all">Mute All</button>
-                        <button type="button" id="control-room-reset-btn" class="btn btn-sm btn-outline" aria-label="Reset monitor wall">Reset</button>
-                    </div>
-                </div>
-                <div class="mt-4 border-t border-base-content/10 pt-3">
-                    <h2 id="control-room-controls-title" class="text-sm font-semibold tracking-[0.01em]">Monitor controls</h2>
-                    <p class="text-base-content/60 mt-1 text-xs">Choose a pipeline, narrow the wall, and control all visible previews.</p>
-                </div>
-                <div class="mt-3 flex flex-wrap items-end gap-3" aria-labelledby="control-room-controls-title">
-                    <label class="min-w-[18rem] flex-1 text-sm">
-                        <span class="text-base-content/70 mb-1 block text-xs font-semibold uppercase">Pipeline</span>
-                        <select id="control-room-pipeline-select" class="select select-sm w-full" aria-label="Filter monitor by pipeline"></select>
-                    </label>
-                    <label class="min-w-[12rem] flex-1 text-sm">
-                        <span class="text-base-content/70 mb-1 block text-xs font-semibold uppercase">Search Outputs</span>
-                        <input type="text" id="control-room-search-input" aria-label="Search monitor outputs" placeholder="Search outputs..." class="input input-sm input-bordered w-full" />
-                    </label>
-                    <div class="flex items-center gap-2">
-                        <button type="button" class="btn btn-sm btn-outline" data-action="control-room-prev-page" aria-label="Previous monitor page">Prev</button>
-                        <span id="control-room-page-label" class="text-base-content/70 min-w-[6rem] text-center text-sm">Page 1 / 1</span>
-                        <button type="button" class="btn btn-sm btn-outline" data-action="control-room-next-page" aria-label="Next monitor page">Next</button>
-                    </div>
-                </div>
-                <div class="text-base-content/60 mt-2 text-xs" id="control-room-summary" role="status" aria-live="polite"></div>
-            </section>
-            <section aria-labelledby="control-room-previews-title" class="space-y-3">
-                <div class="flex flex-wrap items-end justify-between gap-3">
-                    <div>
-                        <h2 id="control-room-previews-title" class="text-sm font-semibold tracking-[0.01em]">Monitor previews</h2>
-                        <p class="text-base-content/60 mt-1 text-xs">Local HLS first, followed by configured output monitors.</p>
-                    </div>
-                </div>
-                <div id="control-room-grid" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"></div>
-            </section>
-        </div>`;
+  container.innerHTML = controlRoomShellHtml();
 
   container.addEventListener("change", (event) => {
     const select = (event.target as Element | null)?.closest?.(
@@ -650,7 +614,10 @@ function ensureShell(container: HTMLElement): void {
       const pipelineId = button.dataset.pipelineId || "";
       const inputId = button.dataset.inputId || "";
       if (!pipelineId || !inputId) return;
-      await promoteControlRoomInput(pipelineId, inputId, renderControlRoom);
+      const token = controlRoomScope.token();
+      await promoteControlRoomInput(pipelineId, inputId, () =>
+        renderControlRoomIfCurrent(token),
+      );
       return;
     }
     if (action === "control-room-toggle-card-actions") {
@@ -1851,24 +1818,26 @@ function renderSummaryAndPagination(
 }
 
 function renderControlRoom(): void {
-  const container = document.getElementById("control-mode-content");
-  if (!container) return;
-
+  const token = controlRoomScope.token();
   ensureStateLoaded();
   syncControlRoomWorkspaceSelection();
   persistState();
-  ensureShell(container);
 
   const pipelines = listPipelines();
   const selectedPipeline =
     pipelines.find((pipe) => pipe.id === controlRoomState.pipelineId) || null;
+  renderControlRoomCheckpointPresentation(selectedPipeline);
+  const container = document.getElementById(controlRoomScope.current());
+  if (!container) return;
+  ensureShell(container);
   const pipelineInputs = selectedPipeline
-    ? controlRoomInputs(selectedPipeline.id, renderControlRoom)
+    ? controlRoomInputs(selectedPipeline.id, () =>
+        renderControlRoomIfCurrent(token),
+      )
     : null;
 
   renderPipelineSelect(container, pipelines);
   renderControlRoomScopeSummary(container, selectedPipeline);
-  renderControlRoomCheckpointPresentation(selectedPipeline);
 
   // Sync search input value
   const searchInput = container.querySelector<HTMLInputElement>(
@@ -1953,6 +1922,7 @@ async function saveMonitoringUrlFromControlRoom(
 
   input?.classList.remove("input-error");
   controlRoomMonitoringSavePending.add(outputId);
+  const token = controlRoomScope.token();
   renderControlRoom();
 
   try {
@@ -1967,7 +1937,7 @@ async function saveMonitoringUrlFromControlRoom(
     upsertDashboardOutputConfig(res.output);
   } finally {
     controlRoomMonitoringSavePending.delete(outputId);
-    renderControlRoom();
+    renderControlRoomIfCurrent(token);
   }
 }
 
@@ -1997,4 +1967,12 @@ export function openControlRoomForOutput(outputId: string): void {
   renderControlRoom();
 }
 
-export { renderControlRoom, refreshYouTubeCardWarning };
+function setControlRoomContainerId(containerId: string): void {
+  controlRoomScope.setContainerId(containerId);
+}
+
+export {
+  renderControlRoom,
+  refreshYouTubeCardWarning,
+  setControlRoomContainerId,
+};

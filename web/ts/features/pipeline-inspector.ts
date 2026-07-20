@@ -3,6 +3,7 @@ import { state } from "../core/state.js";
 import { escapeHtml, escapeRedactedHtml, getUrlParam } from "../core/utils.js";
 import type { OutputView, PipelineView } from "../types.js";
 import { openDiagnosticsModal } from "./diagnostics.js";
+import { pipelineInspectorShellHtml } from "./pipeline-inspector-shell.js";
 import { getPipelineSummary, getResourceMap } from "../core/api.js";
 import type {
   OperatorAlert,
@@ -47,6 +48,7 @@ let inspectProbeDetailsExpanded = false;
 let inspectPresentationCallback:
   | ((model: PipelineInspectCheckpointModel | null) => void)
   | null = null;
+let pipelineInspectorContainerId = "inspect-mode-content";
 
 const RUNTIME_SCOPE_VALUE = "__runtime";
 const RESOURCE_MAP_TOP_N = 25;
@@ -71,6 +73,28 @@ export function setPipelineInspectorDependencies(
   next: Partial<PipelineInspectorDependencies>,
 ): void {
   Object.assign(dependencies, next || {});
+}
+
+export function setPipelineInspectorContainerId(containerId: string): void {
+  pipelineInspectorContainerId = containerId;
+}
+
+function ensurePipelineInspectorShell(container: HTMLElement): void {
+  if (
+    container.querySelector("#inspect-pipeline-select") ||
+    document.getElementById("inspect-pipeline-select")
+  )
+    return;
+  container.innerHTML = pipelineInspectorShellHtml();
+}
+
+function pipelineInspectorContainer(): HTMLElement | null {
+  const root = document.getElementById(pipelineInspectorContainerId);
+  if (root) return root;
+  if (document.getElementById("inspect-pipeline-select")) return document.body;
+  return pipelineInspectorContainerId === "inspect-mode-content"
+    ? document.getElementById("inspect-mode-panel")
+    : null;
 }
 
 function selectedPipeline(): PipelineView | null {
@@ -504,8 +528,11 @@ function renderInspectCheckpointPresentation(
 export function renderPipelineInspector(): void {
   const pipe = selectedPipeline();
   const invalidPipelineSelection = hasInvalidPipelineSelection();
-  updateInspectRouteSummary(pipe, invalidPipelineSelection);
   renderInspectCheckpointPresentation(pipe, invalidPipelineSelection);
+  const root = pipelineInspectorContainer();
+  if (!root) return;
+  ensurePipelineInspectorShell(root);
+  updateInspectRouteSummary(pipe, invalidPipelineSelection);
   const stateKey = graphStateKey(pipe);
   const select = document.getElementById(
     "inspect-pipeline-select",

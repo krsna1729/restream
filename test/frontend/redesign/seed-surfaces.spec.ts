@@ -26,14 +26,14 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   const search = media.getByLabel("Search media library");
   const summary = media.locator("#media-library-results-summary");
   await expect(checkpoint.locator("#dashboard-v2-media-title")).toBeVisible();
-  await expect(
-    media.getByRole("heading", { name: "Media Library" }),
-  ).toBeVisible();
+  await expect(media.getByLabel("Search media library")).toBeVisible();
   await expect(summary).toHaveText(
     "1 media file total · 0 recordings · 1 source file",
   );
   await expect(
-    checkpoint.getByText("1 media file total · 0 recordings · 1 source file"),
+    checkpoint
+      .getByText("1 media file total · 0 recordings · 1 source file")
+      .first(),
   ).toBeVisible();
   await expect(
     checkpoint.getByText("1 source file", { exact: true }),
@@ -115,7 +115,7 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   await expect(
     checkpoint.getByText(
       '1/1 media file shown · 0 recordings · 1 source file matched · "synthetic"',
-    ),
+    ).first(),
   ).toBeVisible();
   await expect(media.getByText("synthetic-source.mp4")).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
@@ -129,7 +129,7 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   await expect(
     checkpoint.getByText(
       '0/1 media files shown · 0 recordings · 0 source files matched · "missing"',
-    ),
+    ).first(),
   ).toBeVisible();
   await expect(
     media.getByText(
@@ -158,7 +158,9 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
     "1 media file total · 0 recordings · 1 source file",
   );
   await expect(
-    checkpoint.getByText("1 media file total · 0 recordings · 1 source file"),
+    checkpoint
+      .getByText("1 media file total · 0 recordings · 1 source file")
+      .first(),
   ).toBeVisible();
   await expect(clearSearch).toBeHidden();
   await expect(media.getByText("synthetic-source.mp4")).toBeVisible();
@@ -202,9 +204,9 @@ test("seed: ui=v2 Media bounds dense libraries until requested @desktop", async 
     "26 media files total · 12 recordings · 14 source files",
   );
   await expect(
-    checkpoint.getByText(
-      "26 media files total · 12 recordings · 14 source files",
-    ),
+    checkpoint
+      .getByText("26 media files total · 12 recordings · 14 source files")
+      .first(),
   ).toBeVisible();
   await expect(
     checkpoint.getByText("12 recordings", { exact: true }),
@@ -264,7 +266,7 @@ test("seed: ui=v2 Media bounds dense libraries until requested @desktop", async 
   await expect(
     checkpoint.getByText(
       '1/26 media file shown · 0 recordings · 1 source file matched · "dense-source-14"',
-    ),
+    ).first(),
   ).toBeVisible();
   await expect(media.getByText("dense-source-14.mp4")).toBeVisible();
   await expect(
@@ -286,12 +288,7 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   const status = page.locator("#status-mode-panel");
   const checkpoint = status.locator("#dashboard-v2-status-root");
   await expect(checkpoint.locator("#dashboard-v2-status-title")).toBeVisible();
-  await expect(
-    status.locator("#status-mode-content").getByRole("heading", {
-      name: "Status",
-    }),
-  ).toBeVisible();
-  await expect(status.locator("#status-route-summary")).toHaveText(
+  await expect(checkpoint).toContainText(
     "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
   );
   await expect(
@@ -418,28 +415,30 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   await expect(searchSummary).toHaveText("1 activity · 1 process log visible");
 
   await search.fill("synthetic");
-  await expect(status.locator("#status-route-summary")).toHaveText(
+  await expect(checkpoint).toContainText(
     "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
   );
   await expect(searchSummary).toHaveText(
     '1 activity · 1 process log match "synthetic"',
   );
   await expect(
-    checkpoint.getByText('1 activity · 1 process log match "synthetic"'),
+    checkpoint.getByText('1 activity · 1 process log match "synthetic"').first(),
   ).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     '1 activity · 1 process log match "synthetic"',
   );
 
   await search.fill("missing");
-  await expect(status.locator("#status-route-summary")).toHaveText(
+  await expect(checkpoint).toContainText(
     "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
   );
   await expect(searchSummary).toHaveText(
     '0 activities · 0 process logs match "missing"',
   );
   await expect(
-    checkpoint.getByText('0 activities · 0 process logs match "missing"'),
+    checkpoint
+      .getByText('0 activities · 0 process logs match "missing"')
+      .first(),
   ).toBeVisible();
   await expect(
     status.getByText(
@@ -466,7 +465,7 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   await expect(search).toHaveValue("");
   await expect(searchSummary).toHaveText("1 activity · 1 process log visible");
   await expect(
-    checkpoint.getByText("1 activity · 1 process log visible"),
+    checkpoint.getByText("1 activity · 1 process log visible").first(),
   ).toBeVisible();
   await expect(clearSearch).toBeHidden();
   await expect(
@@ -517,7 +516,7 @@ test("seed: ui=v2 Status bounds dense process logs until requested @desktop", as
 
   const status = page.locator("#status-mode-panel");
   const checkpoint = status.locator("#dashboard-v2-status-root");
-  await expect(status.locator("#status-route-summary")).toHaveText(
+  await expect(checkpoint).toContainText(
     "Status loaded for seeded · commit seeded · 35 process logs · 5 notable activities",
   );
   await expect(
@@ -530,7 +529,7 @@ test("seed: ui=v2 Status bounds dense process logs until requested @desktop", as
     "5 activities · 35 process logs visible",
   );
   await expect(
-    checkpoint.getByText("5 activities · 35 process logs visible"),
+    checkpoint.getByText("5 activities · 35 process logs visible").first(),
   ).toBeVisible();
   const logs = status.getByLabel("Process log entries");
   await expect(status.getByText("20 process logs shown of 35")).toBeVisible();
@@ -558,7 +557,7 @@ test("seed: ui=v2 Status bounds dense process logs until requested @desktop", as
     '0 activities · 1 process log match "log 35"',
   );
   await expect(
-    checkpoint.getByText('0 activities · 1 process log match "log 35"'),
+    checkpoint.getByText('0 activities · 1 process log match "log 35"').first(),
   ).toBeVisible();
   await expect(logs.getByText("routine status log 35")).toBeVisible();
   await expect(
@@ -579,16 +578,10 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
 
   const incidents = page.locator("#incidents-mode-panel");
   const checkpoint = incidents.locator("#dashboard-v2-incidents-root");
-  const summary = incidents.locator("#incidents-route-summary");
   await expect(
     checkpoint.locator("#dashboard-v2-incidents-title"),
   ).toBeVisible();
-  await expect(
-    incidents
-      .locator("#incidents-mode-content")
-      .getByRole("heading", { name: "Incidents" }),
-  ).toBeVisible();
-  await expect(summary).toHaveText(
+  await expect(checkpoint).toContainText(
     "0 critical · 1 warning · 1 recent event · fleet",
   );
   await expect(
@@ -598,7 +591,7 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
     checkpoint.getByText("1 recent event", { exact: true }),
   ).toBeVisible();
   await expect(
-    checkpoint.getByText("1 alert group · 1 event visible"),
+    checkpoint.getByText("1 alert group · 1 event visible").first(),
   ).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     "0 critical · 1 warning · 1 recent event · fleet",
@@ -659,28 +652,32 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   await expect(retryingAlert.getByText("Recommended action:")).toHaveCount(0);
 
   await search.fill("destination");
-  await expect(summary).toHaveText(
+  await expect(search).toHaveValue("destination");
+  await expect(checkpoint).toContainText(
     "0 critical · 1 warning · 1 recent event · fleet",
   );
   await expect(searchSummary).toHaveText(
     '1 alert group · 1 event match "destination"',
   );
   await expect(
-    checkpoint.getByText('1 alert group · 1 event match "destination"'),
+    checkpoint
+      .getByText('1 alert group · 1 event match "destination"')
+      .first(),
   ).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     '1 alert group · 1 event match "destination"',
   );
 
   await search.fill("healthy");
-  await expect(summary).toHaveText(
+  await expect(search).toHaveValue("healthy");
+  await expect(checkpoint).toContainText(
     "0 critical · 1 warning · 1 recent event · fleet",
   );
   await expect(searchSummary).toHaveText(
     '0 alert groups · 0 events match "healthy"',
   );
   await expect(
-    checkpoint.getByText('0 alert groups · 0 events match "healthy"'),
+    checkpoint.getByText('0 alert groups · 0 events match "healthy"').first(),
   ).toBeVisible();
   await expect(
     incidents.getByText(
@@ -707,7 +704,7 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   await expect(search).toHaveValue("");
   await expect(searchSummary).toHaveText("1 alert group · 1 event visible");
   await expect(
-    checkpoint.getByText("1 alert group · 1 event visible"),
+    checkpoint.getByText("1 alert group · 1 event visible").first(),
   ).toBeVisible();
   await expect(clearSearch).toBeHidden();
   await expect(
@@ -730,14 +727,14 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   await incidents
     .getByLabel("Filter incidents by pipeline")
     .selectOption("pipe-healthy");
-  await expect(summary).toHaveText(
+  await expect(checkpoint).toContainText(
     "0 critical · 0 warning · 0 recent events · Healthy Program",
   );
   await expect(
     checkpoint.getByText("0 critical · 0 warning", { exact: true }),
   ).toBeVisible();
   await expect(
-    checkpoint.getByText("Healthy Program", { exact: true }),
+    checkpoint.getByText("Healthy Program", { exact: true }).first(),
   ).toBeVisible();
   await expect(
     incidents.getByText("No active alerts for this pipeline."),
@@ -794,7 +791,7 @@ test("seed: ui=v2 Incidents bounds dense alert and event lists until requested @
     checkpoint.getByText("3 critical", { exact: true }),
   ).toBeVisible();
   await expect(
-    checkpoint.getByText("14 alert groups · 20 events visible"),
+    checkpoint.getByText("14 alert groups · 20 events visible").first(),
   ).toBeVisible();
   await expect(
     incidents.locator("#incidents-search-results-summary"),
@@ -882,20 +879,14 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
 
   const telemetry = page.locator("#telemetry-mode-panel");
   const checkpoint = telemetry.locator("#dashboard-v2-telemetry-root");
-  const summary = telemetry.locator("#telemetry-route-summary");
   await expect(
     checkpoint.locator("#dashboard-v2-telemetry-title"),
   ).toBeVisible();
-  await expect(
-    telemetry
-      .locator("#telemetry-mode-content")
-      .getByRole("heading", { name: "Engineer telemetry" }),
-  ).toBeVisible();
-  await expect(summary).toHaveText(
+  await expect(checkpoint).toContainText(
     "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Healthy Program",
   );
   await expect(
-    checkpoint.getByText("Healthy Program", { exact: true }),
+    checkpoint.getByText("Healthy Program", { exact: true }).first(),
   ).toBeVisible();
   await expect(
     checkpoint.getByText("2 stage counters", { exact: true }),
@@ -936,11 +927,11 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   await telemetry
     .getByLabel("Filter telemetry by pipeline")
     .selectOption("pipe-retrying");
-  await expect(summary).toHaveText(
+  await expect(checkpoint).toContainText(
     "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Retrying Destination",
   );
   await expect(
-    checkpoint.getByText("Retrying Destination", { exact: true }),
+    checkpoint.getByText("Retrying Destination", { exact: true }).first(),
   ).toBeVisible();
   const search = telemetry.getByLabel("Search telemetry items");
   expect(await getCdpNamesByRole(page, "searchbox")).toContain(
@@ -958,7 +949,7 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   await expect(
     checkpoint.getByText(
       '1/4 telemetry items match "video" · 0 readers · 1 stage · 0 egresses',
-    ),
+    ).first(),
   ).toBeVisible();
   await expect(
     telemetry.getByText(
@@ -993,7 +984,7 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   await expect(
     checkpoint.getByText(
       '0/4 telemetry items match "absent" · 0 readers · 0 stages · 0 egresses',
-    ),
+    ).first(),
   ).toBeVisible();
   const clearSearch = telemetry.getByRole("button", {
     name: "Clear telemetry search",
@@ -1017,7 +1008,7 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
     "1 reader · 2 stages · 1 egress visible",
   );
   await expect(
-    checkpoint.getByText("1 reader · 2 stages · 1 egress visible"),
+    checkpoint.getByText("1 reader · 2 stages · 1 egress visible").first(),
   ).toBeVisible();
   await expect(clearSearch).toBeHidden();
   await expect(telemetry.getByText("retrying-output-reader")).toBeVisible();
@@ -1091,14 +1082,16 @@ test("seed: ui=v2 Telemetry bounds dense stage and egress lists until requested 
   await telemetry
     .getByLabel("Filter telemetry by pipeline")
     .selectOption("pipe-retrying");
-  await expect(telemetry.locator("#telemetry-route-summary")).toHaveText(
+  await expect(telemetry.locator("#dashboard-v2-telemetry-root")).toContainText(
     "Telemetry loaded · 2 ingests · 12 stages · 12 egresses · 1 reader · Retrying Destination",
   );
   await expect(
     checkpoint.getByText("12 egresses", { exact: true }),
   ).toBeVisible();
   await expect(
-    checkpoint.getByText("1 reader · 12 stages · 12 egresses visible"),
+    checkpoint
+      .getByText("1 reader · 12 stages · 12 egresses visible")
+      .first(),
   ).toBeVisible();
   await expect(
     telemetry.locator("#telemetry-search-results-summary"),
@@ -1153,7 +1146,7 @@ test("seed: ui=v2 Telemetry bounds dense stage and egress lists until requested 
   await expect(
     checkpoint.getByText(
       '1/25 telemetry items match "out-dense-12" · 0 readers · 0 stages · 1 egress',
-    ),
+    ).first(),
   ).toBeVisible();
   await expect(
     stages.getByRole("button", { name: /Show (all|fewer)/ }),

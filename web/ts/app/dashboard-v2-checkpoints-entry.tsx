@@ -1,3 +1,4 @@
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 
@@ -33,6 +34,8 @@ type DashboardV2CheckpointAction = readonly [
 
 interface DashboardV2CheckpointCardProps {
   readonly actions: readonly DashboardV2CheckpointAction[];
+  readonly bodyHostId: string;
+  readonly bodyRouteKey: string;
   readonly className?: string;
   readonly focusLabel: string;
   readonly focusTitle: string;
@@ -58,6 +61,8 @@ function toneBadgeClass(tone: string): string {
 
 function DashboardV2CheckpointCard({
   actions,
+  bodyHostId,
+  bodyRouteKey,
   className = "",
   focusLabel,
   focusTitle,
@@ -79,7 +84,6 @@ function DashboardV2CheckpointCard({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h1
-              aria-label={`${title} checkpoint`}
               className="text-base-content text-lg font-semibold leading-tight"
               id={headingId}
             >
@@ -146,6 +150,11 @@ function DashboardV2CheckpointCard({
           Next: {nextStep}
         </p>
       </div>
+      <div
+        id={bodyHostId}
+        className="mt-4 min-w-0"
+        data-dashboard-v2-owned-route-body={bodyRouteKey}
+      />
     </section>
   );
 }
@@ -180,6 +189,8 @@ function DashboardV2PipelineInspectCheckpoint({
           "Run diagnostics for inspected pipeline",
         ],
       ]}
+      bodyHostId="dashboard-v2-pipeline-inspect-content"
+      bodyRouteKey="pipeline-inspect"
       className="border-info/25 bg-info/5"
       focusLabel={model.focusLabel}
       focusTitle="Inspection focus"
@@ -221,6 +232,8 @@ function DashboardV2ControlRoomCheckpoint({
           "Operate monitored pipeline",
         ],
       ]}
+      bodyHostId="dashboard-v2-control-room-content"
+      bodyRouteKey="pipeline-monitor"
       className="border-accent/25 bg-accent/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Monitor focus"
@@ -259,6 +272,8 @@ function DashboardV2IncidentsCheckpoint({
           "Open telemetry from incidents",
         ],
       ]}
+      bodyHostId="dashboard-v2-incidents-content"
+      bodyRouteKey="incidents"
       className="border-error/25 bg-error/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Incident focus"
@@ -297,6 +312,8 @@ function DashboardV2TelemetryCheckpoint({
           "Open status from telemetry",
         ],
       ]}
+      bodyHostId="dashboard-v2-telemetry-content"
+      bodyRouteKey="telemetry"
       className="border-secondary/25 bg-secondary/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Telemetry focus"
@@ -335,6 +352,8 @@ function DashboardV2StatusCheckpoint({
           "Open telemetry from status",
         ],
       ]}
+      bodyHostId="dashboard-v2-status-content"
+      bodyRouteKey="status"
       className="border-neutral/25 bg-base-200/50 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Status focus"
@@ -373,6 +392,8 @@ function DashboardV2MediaCheckpoint({
           "Open overview from media",
         ],
       ]}
+      bodyHostId="dashboard-v2-media-content"
+      bodyRouteKey="media"
       className="border-primary/25 bg-primary/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Media focus"
@@ -411,6 +432,8 @@ function DashboardV2SettingsCheckpoint({
           "Open status from settings",
         ],
       ]}
+      bodyHostId="dashboard-v2-settings-content"
+      bodyRouteKey="settings"
       className="border-warning/25 bg-warning/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Settings focus"
@@ -494,11 +517,13 @@ export function renderDashboardV2PipelineInspectCheckpoint(
 ): void {
   inspectRoot ??= createRoot(inspectContainer);
   inspectContainer.hidden = model === null;
-  inspectRoot.render(
-    model ? (
-      <DashboardV2PipelineInspectCheckpoint actions={actions} model={model} />
-    ) : null,
-  );
+  flushSync(() => {
+    inspectRoot?.render(
+      model ? (
+        <DashboardV2PipelineInspectCheckpoint actions={actions} model={model} />
+      ) : null,
+    );
+  });
 }
 
 export function renderDashboardV2IncidentsCheckpoint(
@@ -507,11 +532,13 @@ export function renderDashboardV2IncidentsCheckpoint(
 ): void {
   incidentsRoot ??= createRoot(incidentsRootContainer);
   incidentsRootContainer.hidden = model === null;
-  incidentsRoot.render(
-    model ? (
-      <DashboardV2IncidentsCheckpoint actions={actions} model={model} />
-    ) : null,
-  );
+  flushSync(() => {
+    incidentsRoot?.render(
+      model ? (
+        <DashboardV2IncidentsCheckpoint actions={actions} model={model} />
+      ) : null,
+    );
+  });
 }
 
 export function renderDashboardV2TelemetryCheckpoint(
@@ -520,11 +547,13 @@ export function renderDashboardV2TelemetryCheckpoint(
 ): void {
   telemetryRoot ??= createRoot(telemetryRootContainer);
   telemetryRootContainer.hidden = model === null;
-  telemetryRoot.render(
-    model ? (
-      <DashboardV2TelemetryCheckpoint actions={actions} model={model} />
-    ) : null,
-  );
+  flushSync(() => {
+    telemetryRoot?.render(
+      model ? (
+        <DashboardV2TelemetryCheckpoint actions={actions} model={model} />
+      ) : null,
+    );
+  });
 }
 
 export function renderDashboardV2StatusCheckpoint(
@@ -533,9 +562,13 @@ export function renderDashboardV2StatusCheckpoint(
 ): void {
   statusRoot ??= createRoot(statusRootContainer);
   statusRootContainer.hidden = model === null;
-  statusRoot.render(
-    model ? <DashboardV2StatusCheckpoint actions={actions} model={model} /> : null,
-  );
+  flushSync(() => {
+    statusRoot?.render(
+      model ? (
+        <DashboardV2StatusCheckpoint actions={actions} model={model} />
+      ) : null,
+    );
+  });
 }
 
 export function renderDashboardV2MediaCheckpoint(
@@ -544,9 +577,11 @@ export function renderDashboardV2MediaCheckpoint(
 ): void {
   mediaRoot ??= createRoot(mediaRootContainer);
   mediaRootContainer.hidden = model === null;
-  mediaRoot.render(
-    model ? <DashboardV2MediaCheckpoint actions={actions} model={model} /> : null,
-  );
+  flushSync(() => {
+    mediaRoot?.render(
+      model ? <DashboardV2MediaCheckpoint actions={actions} model={model} /> : null,
+    );
+  });
 }
 
 export function renderDashboardV2SettingsCheckpoint(
@@ -555,11 +590,13 @@ export function renderDashboardV2SettingsCheckpoint(
 ): void {
   settingsRoot ??= createRoot(settingsRootContainer);
   settingsRootContainer.hidden = model === null;
-  settingsRoot.render(
-    model ? (
-      <DashboardV2SettingsCheckpoint actions={actions} model={model} />
-    ) : null,
-  );
+  flushSync(() => {
+    settingsRoot?.render(
+      model ? (
+        <DashboardV2SettingsCheckpoint actions={actions} model={model} />
+      ) : null,
+    );
+  });
 }
 
 export function renderDashboardV2ControlRoomCheckpoint(
@@ -568,9 +605,11 @@ export function renderDashboardV2ControlRoomCheckpoint(
 ): void {
   controlRoomRoot ??= createRoot(controlRoomRootContainer);
   controlRoomRootContainer.hidden = model === null;
-  controlRoomRoot.render(
-    model ? (
-      <DashboardV2ControlRoomCheckpoint actions={actions} model={model} />
-    ) : null,
-  );
+  flushSync(() => {
+    controlRoomRoot?.render(
+      model ? (
+        <DashboardV2ControlRoomCheckpoint actions={actions} model={model} />
+      ) : null,
+    );
+  });
 }

@@ -13,6 +13,19 @@ async function login(page: Page): Promise<void> {
     await page.waitForURL('**/');
 }
 
+// v2 is the default dashboard UI; these specs exercise the legacy player DOM
+// (#pipelines, #pipe-info-col, #video-player, etc.) specifically, so pin the
+// UI version explicitly rather than relying on whatever the default happens
+// to be. Only "v1"/"v2" are recognized values that get written to the
+// persisted localStorage preference (see resolveDashboardUiVersion in
+// dashboard-v2-loader.ts); any other value only takes effect for the current
+// navigation and does NOT persist, so a later bare page.goto('/') elsewhere
+// in the same test would silently fall back to the v2 default again.
+async function loginToLegacyDashboard(page: Page): Promise<void> {
+    await login(page);
+    await page.goto('/?ui=v1');
+}
+
 async function openPipelineWorkspace(page: Page): Promise<void> {
     const tab = page.locator('#workspace-tab-pipeline');
     await expect(tab).toBeVisible();
@@ -89,6 +102,108 @@ async function expectPreviewPlayback(video: Locator): Promise<void> {
         paused: false,
         playable: true,
     });
+}
+
+// Shared by the legacy (#video-player) and v2
+// (#dashboard-v2-pipeline-input-status-root) alternate-audio tests: both
+// containers mount the same renderInputPreview() component from
+// web/ts/features/input-preview.ts, so the audio-track picker markup and
+// behavior are identical — only the surrounding container differs.
+async function verifyAlternateAudioTrackSwitch(
+    page: Page,
+    previewContainer: Locator,
+    pipelineId: string,
+): Promise<void> {
+    const requestedAudio15Urls = new Set<string>();
+    const responseListener = (response: { url(): string; status(): number }) => {
+        const url = response.url();
+        if (response.status() === 200 && url.includes(`/hls/${pipelineId}/audio/15/`)) {
+            requestedAudio15Urls.add(url);
+        }
+    };
+    page.on('response', responseListener);
+
+    const video = previewContainer.locator('video[data-role="input-preview-video"]');
+    await expect(video).toBeAttached();
+
+    const playBtn = previewContainer.getByRole('button', { name: /Play (input )?preview/ });
+    await expect(playBtn).toBeVisible();
+    await playBtn.click();
+
+    const usesHlsJs = await page.evaluate(() => !!window.Hls);
+    if (usesHlsJs) {
+        await expect(video).toHaveAttribute('src', /blob:/, { timeout: 20000 });
+    } else {
+        await expect(video).toHaveAttribute('src', new RegExp(`/hls/${pipelineId}/master.m3u8`), { timeout: 20000 });
+    }
+
+    const audioPickerButton = previewContainer.locator('button[aria-haspopup="listbox"]');
+    await expect(audioPickerButton).toBeVisible({ timeout: 20000 });
+
+    await expect.poll(
+        () => video.evaluate((element) => {
+            const videoEl = element as HTMLVideoElement;
+            return videoEl.readyState >= 2 && videoEl.currentTime > 0 && !videoEl.error;
+        }),
+        { timeout: 20000 },
+    ).toBe(true);
+
+    const playbackBeforeSwitch = await video.evaluate((element) => {
+        const videoEl = element as HTMLVideoElement;
+        return {
+            currentTime: videoEl.currentTime,
+            readyState: videoEl.readyState,
+            paused: videoEl.paused,
+            errorCode: videoEl.error?.code ?? null,
+        };
+    });
+    expect(playbackBeforeSwitch.readyState).toBeGreaterThanOrEqual(2);
+    expect(playbackBeforeSwitch.currentTime).toBeGreaterThan(0);
+    expect(playbackBeforeSwitch.paused).toBe(false);
+    expect(playbackBeforeSwitch.errorCode).toBeNull();
+
+    const beforeLabel = await audioPickerButton.textContent();
+
+    await audioPickerButton.click();
+    const options = page.locator('[role="option"]');
+    await expect(options).toHaveCount(16, { timeout: 20000 });
+    await options.last().click();
+
+    if (beforeLabel) {
+        await expect(audioPickerButton).not.toHaveText(beforeLabel, { timeout: 10000 });
+    }
+
+    await audioPickerButton.click();
+    await expect(options.last()).toHaveAttribute('aria-selected', 'true');
+
+    await expect.poll(
+        () => video.evaluate((element) => {
+            const videoEl = element as HTMLVideoElement;
+            return Boolean(videoEl.currentTime > 0 && !videoEl.paused && !videoEl.error);
+        }),
+        { timeout: 20000 },
+    ).toBe(true);
+
+    await expect.poll(
+        () => requestedAudio15Urls.size,
+        { timeout: 20000 },
+    ).toBeGreaterThan(0);
+
+    const playbackAfterSwitch = await video.evaluate((element) => {
+        const videoEl = element as HTMLVideoElement;
+        return {
+            currentTime: videoEl.currentTime,
+            readyState: videoEl.readyState,
+            paused: videoEl.paused,
+            errorCode: videoEl.error?.code ?? null,
+        };
+    });
+    expect(playbackAfterSwitch.readyState).toBeGreaterThanOrEqual(2);
+    expect(playbackAfterSwitch.currentTime).toBeGreaterThan(playbackBeforeSwitch.currentTime);
+    expect(playbackAfterSwitch.paused).toBe(false);
+    expect(playbackAfterSwitch.errorCode).toBeNull();
+
+    page.off('response', responseListener);
 }
 
 test.describe('HLS Player — pure helpers', () => {
@@ -637,7 +752,7 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test.beforeEach(async ({ page }) => {
-        await login(page);
+        await loginToLegacyDashboard(page);
     });
 
     test('HLS playlist is served for active pipeline', async ({ page }) => {
@@ -706,7 +821,7 @@ test.describe.serial('HLS Player — live playback', () => {
         await page.request.delete(`/api/v1/pipelines/${pipeId}`);
     });
 
-    test('select pipeline and click Play preview triggers HLS load', async ({ page }) => {
+    test('ui=v1 (legacy): select pipeline and click Play preview triggers HLS load', async ({ page }) => {
         await openPipelineWorkspace(page);
         const pipelineItem = page.locator('#pipelines li', {
             hasText: livePipelineName,
@@ -739,7 +854,7 @@ test.describe.serial('HLS Player — live playback', () => {
         }
     });
 
-    test('ui=v2 mounts the complete HLS player in React and loads preview media', async ({ page }) => {
+    test('ui=v2: mounts the complete HLS player in React and loads preview media', async ({ page }) => {
         const standbyPipelineName = `PlaywrightHlsStandby_${Date.now()}`;
         const standbyResponse = await page.request.post('/api/v1/pipelines', {
             data: {
@@ -1043,7 +1158,7 @@ test.describe.serial('HLS Player — alternate audio preview', () => {
     });
 
     test.beforeEach(async ({ page }) => {
-        await login(page);
+        await loginToLegacyDashboard(page);
     });
 
     test('master playlist advertises alternate audio renditions', async ({ page }) => {
@@ -1057,118 +1172,25 @@ test.describe.serial('HLS Player — alternate audio preview', () => {
         expect((playlist.match(/#EXT-X-MEDIA:TYPE=AUDIO/g) || []).length).toBe(16);
     });
 
-    test('browser preview loads video and switches alternate audio tracks', async ({ page }) => {
-        const requestedAudio15Urls = new Set<string>();
-        const responseListener = (response: { url(): string; status(): number }) => {
-            const url = response.url();
-            if (
-                response.status() === 200 &&
-                url.includes(`/hls/${pipelineId}/audio/15/`)
-            ) {
-                requestedAudio15Urls.add(url);
-            }
-        };
-        page.on('response', responseListener);
-
+    test('ui=v1 (legacy): browser preview loads video and switches alternate audio tracks', async ({ page }) => {
         await openPipelineWorkspace(page);
         const pipelineItem = page.locator('#pipelines li', { hasText: pipelineName });
         await expect(pipelineItem).toBeVisible({ timeout: 10000 });
         await pipelineItem.click();
 
         const videoPlayer = page.locator('#video-player');
-        const video = videoPlayer.locator('video[data-role="input-preview-video"]');
-        await expect(video).toBeAttached();
+        await verifyAlternateAudioTrackSwitch(page, videoPlayer, pipelineId);
+    });
 
-        const playBtn = videoPlayer.locator('button', { hasText: 'Play preview' });
-        await expect(playBtn).toBeVisible();
-        await playBtn.click();
+    test('ui=v2: browser preview loads video and switches alternate audio tracks', async ({ page }) => {
+        await page.goto('/?mode=pipeline&ui=v2');
+        const pipelineSelector = page.locator('#dashboard-v2-pipeline-selector-root');
+        await selectPipelineInV2Selector(pipelineSelector, pipelineId, pipelineName);
 
-        const usesHlsJs = await page.evaluate(() => !!window.Hls);
-        if (usesHlsJs) {
-            await expect(video).toHaveAttribute('src', /blob:/, { timeout: 20000 });
-        } else {
-            await expect(video).toHaveAttribute('src', new RegExp(`/hls/${pipelineId}/master.m3u8`), { timeout: 20000 });
-        }
+        const inputStatus = page.locator('#dashboard-v2-pipeline-input-status-root');
+        const previewPlayer = inputStatus.locator('[data-role="dashboard-v2-input-preview"]');
+        await expect(previewPlayer).toBeVisible();
 
-        await page.waitForFunction(() => {
-            const videoEl = document.querySelector<HTMLVideoElement>('video[data-role="input-preview-video"]');
-            const picker = document.querySelector<HTMLButtonElement>('#video-player button[aria-haspopup="listbox"]');
-            if (!videoEl || !picker) return false;
-            const pickerStyle = window.getComputedStyle(picker);
-            const pickerVisible = pickerStyle.display !== 'none' && pickerStyle.visibility !== 'hidden';
-            const hasPlaybackTarget = Boolean(videoEl.currentSrc || videoEl.src || videoEl.dataset.previewSrc);
-            return pickerVisible && hasPlaybackTarget;
-        }, { timeout: 20000 });
-
-        const currentSrc = await video.evaluate((element) => {
-            const videoEl = element as HTMLVideoElement;
-            return videoEl.currentSrc || videoEl.src || videoEl.dataset.previewSrc || null;
-        });
-        expect(currentSrc).toBeTruthy();
-
-        await page.waitForFunction(() => {
-            const videoEl = document.querySelector<HTMLVideoElement>('video[data-role="input-preview-video"]');
-            if (!videoEl) return false;
-            return videoEl.readyState >= 2 && videoEl.currentTime > 0 && !videoEl.error;
-        }, { timeout: 20000 });
-
-        const playbackBeforeSwitch = await video.evaluate((element) => {
-            const videoEl = element as HTMLVideoElement;
-            return {
-                currentTime: videoEl.currentTime,
-                readyState: videoEl.readyState,
-                paused: videoEl.paused,
-                errorCode: videoEl.error?.code ?? null,
-            };
-        });
-        expect(playbackBeforeSwitch.readyState).toBeGreaterThanOrEqual(2);
-        expect(playbackBeforeSwitch.currentTime).toBeGreaterThan(0);
-        expect(playbackBeforeSwitch.paused).toBe(false);
-        expect(playbackBeforeSwitch.errorCode).toBeNull();
-
-        const audioPickerButton = videoPlayer.locator('button[aria-haspopup="listbox"]');
-        await expect(audioPickerButton).toBeVisible({ timeout: 20000 });
-        const beforeLabel = await audioPickerButton.textContent();
-
-        await audioPickerButton.click();
-        const options = page.locator('[role="option"]');
-        await expect(options).toHaveCount(16, { timeout: 20000 });
-        await options.last().click();
-
-        if (beforeLabel) {
-            await expect(audioPickerButton).not.toHaveText(beforeLabel, { timeout: 10000 });
-        }
-
-        await audioPickerButton.click();
-        await expect(options.last()).toHaveAttribute('aria-selected', 'true');
-
-        await page.waitForFunction(
-            () => {
-                const videoEl = document.querySelector<HTMLVideoElement>('video[data-role="input-preview-video"]');
-                return Boolean(videoEl && videoEl.currentTime > 0 && !videoEl.paused && !videoEl.error);
-            },
-            { timeout: 20000 },
-        );
-
-        await expect.poll(
-            () => requestedAudio15Urls.size,
-            { timeout: 20000 },
-        ).toBeGreaterThan(0);
-
-        const playbackAfterSwitch = await video.evaluate((element) => {
-            const videoEl = element as HTMLVideoElement;
-            return {
-                currentTime: videoEl.currentTime,
-                readyState: videoEl.readyState,
-                paused: videoEl.paused,
-                errorCode: videoEl.error?.code ?? null,
-            };
-        });
-        expect(playbackAfterSwitch.readyState).toBeGreaterThanOrEqual(2);
-        expect(playbackAfterSwitch.currentTime).toBeGreaterThan(playbackBeforeSwitch.currentTime);
-        expect(playbackAfterSwitch.paused).toBe(false);
-        expect(playbackAfterSwitch.errorCode).toBeNull();
-
-        page.off('response', responseListener);
+        await verifyAlternateAudioTrackSwitch(page, previewPlayer, pipelineId);
     });
 });

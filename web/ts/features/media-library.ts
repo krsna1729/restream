@@ -6,6 +6,8 @@ import {
   type MediaFile,
 } from "../core/api.js";
 import { withBasePath } from "../core/base-path.js";
+import { RenderScope } from "../core/render-scope.js";
+import type { RenderScopeToken } from "../core/render-scope.js";
 import {
   confirmInApp,
   escapeHtml,
@@ -27,6 +29,7 @@ let lastMediaFiles: MediaFile[] = [];
 let mediaRecordingsExpanded = false;
 let mediaSourcesExpanded = false;
 const mediaActionRowsExpanded = new Set<string>();
+const mediaLibraryScope = new RenderScope("media-mode-content");
 let mediaCheckpointCallback:
   | ((model: MediaCheckpointModel | null) => void)
   | null = null;
@@ -307,6 +310,19 @@ export function configureMediaCheckpointPresentation(options: {
   }
 }
 
+export function setMediaLibraryContainerId(containerId: string): void {
+  if (mediaLibraryScope.setContainerId(containerId)) {
+    resetMediaLibraryShellState();
+  }
+}
+
+async function refreshMediaLibraryIfCurrent(
+  token: RenderScopeToken,
+): Promise<void> {
+  if (!mediaLibraryScope.isCurrent(token)) return;
+  await renderMediaLibraryMode({ force: true });
+}
+
 function mountMediaShell(container: HTMLElement): void {
   if (mediaShellMounted && document.getElementById("media-library-root"))
     return;
@@ -380,7 +396,12 @@ function setHtmlIfChanged(id: string, html: string): boolean {
 }
 
 export function refreshMediaLibraryMetricsOnly(): void {
-  if (!mediaShellMounted || !document.getElementById("media-library-root"))
+  if (
+    !mediaShellMounted ||
+    !document
+      .getElementById(mediaLibraryScope.current())
+      ?.querySelector("#media-library-root")
+  )
     return;
   setHtmlIfChanged("media-disk-summary", mediaDiskSummaryHtml());
   publishMediaCheckpoint(lastMediaFiles);
@@ -471,11 +492,12 @@ function attachMediaActions(container: HTMLElement): void {
     uploadButton.dataset.bound = "1";
     uploadButton.addEventListener("click", () => uploadInput.click());
     uploadInput.addEventListener("change", async () => {
+      const token = mediaLibraryScope.token();
       const file = uploadInput.files?.[0];
       uploadInput.value = "";
       if (!file) return;
       const result = await uploadMediaFile(file);
-      if (result !== null) await renderMediaLibraryMode({ force: true });
+      if (result !== null) await refreshMediaLibraryIfCurrent(token);
     });
   }
   container
@@ -484,6 +506,7 @@ function attachMediaActions(container: HTMLElement): void {
       if (btn.dataset.bound === "1") return;
       btn.dataset.bound = "1";
       btn.addEventListener("click", async () => {
+        const token = mediaLibraryScope.token();
         const filename = btn.dataset.filename;
         if (!filename) return;
         const nextName = await promptInApp({
@@ -495,14 +518,16 @@ function attachMediaActions(container: HTMLElement): void {
           placeholder: filename,
         });
         if (nextName === null) return;
+        if (!mediaLibraryScope.isCurrent(token)) return;
         const trimmed = nextName.trim();
         if (!trimmed || trimmed === filename) return;
         const res = await renameMediaFile(filename, trimmed);
+        if (!mediaLibraryScope.isCurrent(token)) return;
         if (res === null) {
           showErrorAlert("Rename failed");
           return;
         }
-        await renderMediaLibraryMode({ force: true });
+        await refreshMediaLibraryIfCurrent(token);
       });
     });
   container
@@ -511,6 +536,7 @@ function attachMediaActions(container: HTMLElement): void {
       if (btn.dataset.bound === "1") return;
       btn.dataset.bound = "1";
       btn.addEventListener("click", async () => {
+        const token = mediaLibraryScope.token();
         const filename = btn.dataset.filename;
         if (!filename) return;
         const confirmed = await confirmInApp({
@@ -520,8 +546,9 @@ function attachMediaActions(container: HTMLElement): void {
           destructive: true,
         });
         if (!confirmed) return;
+        if (!mediaLibraryScope.isCurrent(token)) return;
         const res = await deleteMediaFile(filename);
-        if (res !== null) await renderMediaLibraryMode({ force: true });
+        if (res !== null) await refreshMediaLibraryIfCurrent(token);
       });
     });
 }
@@ -639,13 +666,15 @@ function renderMediaLibraryLists(files: MediaFile[], force: boolean): void {
   );
   const root = document.getElementById("media-library-root");
   if (root) attachMediaActions(root);
-  publishMediaCheckpoint(files);
 }
 
 export async function renderMediaLibraryMode({
   force = false,
 }: { force?: boolean } = {}): Promise<void> {
-  const container = document.getElementById("media-mode-content");
+  publishMediaCheckpoint(lastMediaFiles);
+  const scopeToken = mediaLibraryScope.token();
+  const containerIdAtRequest = scopeToken.containerId;
+  const container = document.getElementById(containerIdAtRequest);
   if (!container) return;
   if (mediaRefreshInFlight && !force) return mediaRefreshInFlight;
 
@@ -653,6 +682,9 @@ export async function renderMediaLibraryMode({
 
   mediaRefreshInFlight = (async () => {
     const result = await listMediaFiles();
+    if (!mediaLibraryScope.isCurrent(scopeToken)) {
+      return;
+    }
     const files = [...(result?.files ?? [])].sort((a, b) => {
       const aTime = new Date(a.modifiedAt).getTime() || 0;
       const bTime = new Date(b.modifiedAt).getTime() || 0;
@@ -667,9 +699,16 @@ export async function renderMediaLibraryMode({
     if (!force && signature === lastMediaSignature) return;
 
     lastMediaFiles = files;
+    publishMediaCheckpoint(files);
+    if (!mediaLibraryScope.isCurrent(scopeToken)) {
+      return;
+    }
+    const activeContainer = document.getElementById(containerIdAtRequest);
+    if (!activeContainer) return;
+    mountMediaShell(activeContainer);
     setHtmlIfChanged("media-disk-summary", diskHtml);
     renderMediaLibraryLists(files, force);
-    attachMediaActions(container);
+    attachMediaActions(activeContainer);
     lastMediaSignature = signature;
   })();
 

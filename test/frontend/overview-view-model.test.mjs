@@ -220,6 +220,7 @@ test("overview view model carries engine history and semantic activity", async (
       headline: "Restream task exited",
       summary: "A runtime task stopped unexpectedly.",
       details: ["Server Task Exit"],
+      evidence: "2 logs reviewed / Server Task Exit",
       eventCount: 2,
       startedAt: "2026-07-14T12:00:00Z",
       endedAt: "2026-07-14T12:00:01Z",

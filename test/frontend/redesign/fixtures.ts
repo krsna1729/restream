@@ -9,12 +9,16 @@ export interface SeededDashboardOptions {
   failOutputControl?: string;
   failRecordingControl?: string;
   failFileIngestControl?: string;
+  controlRoomPromotionDelayMs?: number;
+  controlRoomSaveDelayMs?: number;
   pipelineControlDelayMs?: number;
   outputControlDelayMs?: number;
   expectOverviewReady?: boolean;
   settingsResponse?: (settings: Record<string, unknown>) => unknown;
   alertsResponse?: (alerts: Record<string, unknown>) => unknown;
+  incidentsDelayMs?: number;
   eventsResponse?: (events: Record<string, unknown>) => unknown;
+  mediaDelayMs?: number;
   mediaResponse?: (media: Record<string, unknown>) => unknown;
   resourceMapResponse?: (
     pipelineId: string | null,
@@ -25,6 +29,8 @@ export interface SeededDashboardOptions {
     pipelineId: string,
     telemetry: Record<string, unknown>,
   ) => unknown;
+  stageTelemetryDelayMs?: number;
+  telemetryDelayMs?: number;
   pipelineInputsResponse?: (
     pipelineId: string,
   ) => { inputs: Array<Record<string, unknown>>; selectedInputId: string };
@@ -321,6 +327,11 @@ async function fulfillJson(route: Route, body: unknown): Promise<void> {
   });
 }
 
+async function delayResponse(delayMs = 0): Promise<void> {
+  if (delayMs <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
 async function login(page: Page): Promise<void> {
   await page.goto("/login");
   await page.locator("#password-input").fill("admin");
@@ -339,6 +350,14 @@ export async function openSeededDashboard(
   const settings =
     options.settingsResponse?.(structuredClone(fixture.settings)) ??
     fixture.settings;
+  let mediaFiles: Array<Record<string, unknown>> = [
+    {
+      name: "synthetic-source.mp4",
+      kind: "upload",
+      size: 1_048_576,
+      modifiedAt: "2026-07-14T00:00:00Z",
+    },
+  ];
   let runtimeRequestCount = 0;
   const controlledOutputs = new Map<string, ControlledOutputState>();
   const controlledRecordings = new Map<
@@ -365,6 +384,7 @@ export async function openSeededDashboard(
       /^\/api\/v1\/pipelines\/([^/]+)\/inputs\/([^/]+)\/promote$/,
     );
     if (route.request().method() === "POST" && promoteInputMatch) {
+      await delayResponse(options.controlRoomPromotionDelayMs);
       const [, encodedPipelineId, encodedInputId] = promoteInputMatch;
       const pipelineId = decodeURIComponent(encodedPipelineId);
       const inputId = decodeURIComponent(encodedInputId);
@@ -382,6 +402,82 @@ export async function openSeededDashboard(
         throw new Error(`Unknown seeded pipeline input: ${url.pathname}`);
       }
       await fulfillJson(route, { input, connected: true });
+      return;
+    }
+    const outputUpdateMatch = url.pathname.match(
+      /^\/api\/v1\/pipelines\/([^/]+)\/outputs\/([^/]+)$/,
+    );
+    if (route.request().method() === "PATCH" && outputUpdateMatch) {
+      await delayResponse(options.controlRoomSaveDelayMs);
+      const [, encodedPipelineId, encodedOutputId] = outputUpdateMatch;
+      const pipelineId = decodeURIComponent(encodedPipelineId);
+      const outputId = decodeURIComponent(encodedOutputId);
+      const outputs = Array.isArray(
+        (settings as Record<string, unknown>).outputs,
+      )
+        ? ((settings as Record<string, unknown>).outputs as Array<
+            Record<string, unknown>
+          >)
+        : [];
+      const output = outputs.find(
+        (candidate) =>
+          candidate.pipelineId === pipelineId && candidate.id === outputId,
+      );
+      if (!output) {
+        throw new Error(`Unknown seeded output update target: ${url.pathname}`);
+      }
+      await fulfillJson(route, {
+        output: {
+          ...output,
+          monitoringUrl:
+            (route.request().postDataJSON() as { monitoringUrl?: string })
+              .monitoringUrl ?? null,
+        },
+      });
+      return;
+    }
+    const mediaFileMutationMatch = url.pathname.match(/^\/api\/v1\/media\/([^/]+)$/);
+    if (
+      mediaFileMutationMatch &&
+      (route.request().method() === "PATCH" ||
+        route.request().method() === "DELETE")
+    ) {
+      await delayResponse(options.mediaDelayMs);
+      const filename = decodeURIComponent(mediaFileMutationMatch[1]);
+      if (route.request().method() === "PATCH") {
+        const newName =
+          (route.request().postDataJSON() as { newName?: string }).newName ??
+          filename;
+        mediaFiles = mediaFiles.map((file) =>
+          file.name === filename ? { ...file, name: newName } : file,
+        );
+        await fulfillJson(route, {
+          renamed: true,
+          name: newName,
+          updatedIngests: 0,
+        });
+        return;
+      }
+      mediaFiles = mediaFiles.filter((file) => file.name !== filename);
+      await fulfillJson(route, { deleted: true });
+      return;
+    }
+    if (route.request().method() === "POST" && url.pathname === "/api/v1/media/upload") {
+      await delayResponse(options.mediaDelayMs);
+      mediaFiles = [
+        {
+          name: "uploaded-source.mp4",
+          kind: "upload",
+          size: 2_048,
+          modifiedAt: "2026-07-14T00:01:00Z",
+        },
+        ...mediaFiles,
+      ];
+      await fulfillJson(route, {
+        uploaded: true,
+        name: "uploaded-source.mp4",
+        size: 2_048,
+      });
       return;
     }
     const pipelineInputsMatch = url.pathname.match(
@@ -563,6 +659,7 @@ export async function openSeededDashboard(
       /^\/api\/v1\/stages\/([^/]+)\/telemetry$/,
     );
     if (stageTelemetryMatch) {
+      await delayResponse(options.stageTelemetryDelayMs);
       const [, encodedStageKey] = stageTelemetryMatch;
       await fulfillJson(
         route,
@@ -576,12 +673,14 @@ export async function openSeededDashboard(
         return;
       case "/api/v1/alerts":
         {
+          await delayResponse(options.incidentsDelayMs);
           const alerts = seededAlerts(stateName);
           await fulfillJson(route, options.alertsResponse?.(alerts) ?? alerts);
         }
         return;
       case "/api/v1/events":
         {
+          await delayResponse(options.incidentsDelayMs);
           const events = seededLifecycleEvents(
             stateName,
             url.searchParams.get("pipeline_id"),
@@ -645,6 +744,7 @@ export async function openSeededDashboard(
         });
         return;
       case "/api/v1/engine/telemetry":
+        await delayResponse(options.telemetryDelayMs);
         await fulfillJson(route, seededEngineTelemetry(stateName));
         return;
       case "/api/v1/security/rate-limits":
@@ -697,16 +797,8 @@ export async function openSeededDashboard(
         return;
       case "/api/v1/media":
         {
-          const media = {
-            files: [
-              {
-                name: "synthetic-source.mp4",
-                kind: "upload",
-                size: 1_048_576,
-                modifiedAt: "2026-07-14T00:00:00Z",
-              },
-            ],
-          };
+          await delayResponse(options.mediaDelayMs);
+          const media = { files: mediaFiles };
           await fulfillJson(route, options.mediaResponse?.(media) ?? media);
         }
         return;

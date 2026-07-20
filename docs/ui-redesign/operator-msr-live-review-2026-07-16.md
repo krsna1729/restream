@@ -58,19 +58,19 @@ The crawl logged into the live dashboard, forced `ui=v2`, and visited:
 - Incidents
 - Telemetry
 
-Summary:
+Current default-readiness summary:
 
-| Screen | Ownership today | CDP nodes | Observation |
+| Screen | Default-readiness ownership | CDP nodes | Observation |
 |---|---|---:|---|
 | Overview | v2 | 3,829 | Calm fleet summary; 1 live input / 120 running outputs visible. |
 | Pipeline / Operate | v2 | 6,260 | Bounded output list works under 120 outputs with search/filter and first-8 default. |
-| Pipeline / Inspect | legacy | 13,863 | Usable, but still visually/DOM-heavy compared with v2. |
-| Pipeline / Monitor | legacy | 17,052 | Usable, but a separate redesign pass is still needed. |
-| Media | v2 checkpoint + legacy library | 18,990 | First-glance recording/source and search state is v2; dense media actions remain legacy. |
-| Settings | v2 checkpoint + legacy form | 22,123 | First-glance config/auth security state is v2; dense admin controls remain legacy. |
-| Status | v2 checkpoint + legacy details | 25,700 | First-glance process/build state is v2; dense status sections remain legacy. |
-| Incidents | v2 checkpoint + legacy feed | 28,494 | First-glance incident state is v2; dense alert/event feed remains legacy. |
-| Telemetry | v2 checkpoint + legacy counters | 32,479 | First-glance telemetry state is v2; dense counter grids remain legacy. |
+| Pipeline / Inspect | v2-owned route body | 4,850 | V2 host owns the visible route body; graph/resource controls still use the existing feature renderer inside that host. |
+| Pipeline / Monitor | v2-owned route body | 7,409 | V2 host owns the visible route body; wall/player controls still use the existing control-room renderer inside that host. |
+| Media | v2-owned route body | 9,389 | V2 host owns the visible route body; media actions still use the existing media-library renderer inside that host. |
+| Settings | v2-owned route body | 12,477 | V2 host owns the visible route body; dense admin mutations still use the existing settings renderer inside that host. |
+| Status | v2-owned route body | 14,758 | V2 host owns the visible route body; dense status details still use the existing status renderer inside that host. |
+| Incidents | v2-owned route body | 16,685 | V2 host owns the visible route body; alert/event controls still use the existing incidents renderer inside that host. |
+| Telemetry | v2-owned route body | 19,462 | V2 host owns the visible route body; dense counters still use the existing telemetry renderer inside that host. |
 
 The seeded browser proof now also exercises the owned v2 path by keyboard:
 Overview tabs to `Add Pipeline`, tabs to an attention pipeline `Operate`
@@ -79,16 +79,17 @@ the v2 selector. CDP assertions keep Overview and Operate node budgets bounded
 and verify stable accessible button names for output operations.
 
 The shared workspace summary now also announces the current ownership state:
-`UI v2 owned` for Overview and Pipeline Operate, `UI v2 checkpoint` for
-Pipeline Inspect, Pipeline Monitor, Media, Settings, Incidents, Telemetry, and
-Status. Seeded Playwright/CDP
-coverage proves that cue is visible and exposed as status text while moving
-across the route journey.
+`UI v2 owned` for Overview, Pipeline Operate, Pipeline Inspect, Pipeline
+Monitor, Media, Settings, Status, Incidents, and Telemetry. Seeded
+Playwright/CDP coverage proves that cue is visible and exposed as status text
+while moving across the route journey.
 
 Incidents and Telemetry are now discoverable from the primary workspace tab
-strip instead of being route-only surfaces. They remain legacy-owned
-checkpoints, but operators can reach alert triage and engineering counters from
-the same shell navigation as Overview, Pipeline, Media, Settings, and Status.
+strip instead of being route-only surfaces. Their route bodies now mount inside
+v2-owned hosts, while the existing feature modules continue to render the dense
+alert and counter controls inside those hosts. Operators can reach alert triage
+and engineering counters from the same shell navigation as Overview, Pipeline,
+Media, Settings, and Status.
 
 The workspace and Pipeline sub-tab bars now support Arrow, Home, and End
 keyboard navigation with activation. Seeded Playwright/CDP coverage walks
@@ -133,10 +134,11 @@ attention count. It also promotes the diagnostics focus into one live status
 line: probe readiness, fault-candidate count, and suggested next step. Seeded
 Playwright/CDP coverage proves the Overview → Inspect flow lands on both
 summaries and exposes them as status text.
-Inspect now has its first v2-owned checkpoint as well: a React scan strip that
-summarizes selected pipeline health, graph readiness, output attention, and the
-next diagnostic step before the legacy graph/resource panels. The existing graph
-explorer and output-preview search remain legacy-owned underneath that strip.
+Inspect now has a v2-owned route body: a React scan strip summarizes selected
+pipeline health, graph readiness, output attention, and the next diagnostic step
+before the existing graph/resource panels render inside the v2 host. The graph
+explorer and output-preview search remain implemented by the existing feature
+module until a later component rewrite.
 Inspect resource details now also follow the v2 scan-first rule: process and
 pipeline-attribution summary cards stay visible, while raw FFmpeg worker tables,
 resource truncation notes, and attribution-accuracy details mount only after the
@@ -163,17 +165,18 @@ Open/Copy/Edit URL actions remain available behind an explicit per-card
 `Show monitor actions` disclosure. That keeps the initial Monitor checkpoint
 lighter, makes cross-origin preview loading intentional, and lets the wall read
 as live status first rather than URL maintenance first.
-Monitor now also has its first v2-owned checkpoint strip above the legacy wall.
-It turns that same control-room state into one scan layer: monitor coverage,
-missing URLs, active search narrowing, lazy web-preview count, and next operator
-step. Playback, edit/save, player lifecycle, and external preview loading remain
-legacy-owned underneath it.
+Monitor now also has a v2-owned route body above the monitoring wall. It turns
+that same control-room state into one scan layer: monitor coverage, missing
+URLs, active search narrowing, lazy web-preview count, and next operator step.
+Playback, edit/save, player lifecycle, and external preview loading remain
+implemented by the existing control-room module inside the v2 host.
 
-Media now has the same lightweight operator checkpoint above the legacy library.
-The v2 strip answers the first operator question before the dense rows: how many
-recordings, how many source files, whether search is narrowing the library, and
-whether storage telemetry is visible. Upload, rename, delete, playback, and
-download remain legacy-owned below it.
+Media now has the same lightweight operator checkpoint inside a v2-owned route
+body. The v2 strip answers the first operator question before the dense rows:
+how many recordings, how many source files, whether search is narrowing the
+library, and whether storage telemetry is visible. Upload, rename, delete,
+playback, and download remain implemented by the existing media-library module
+inside that host.
 
 Media search now follows the same feedback contract: the checkpoint and legacy
 Media route expose one live result-count summary that also splits matches by
@@ -261,7 +264,7 @@ form. The v2 strip answers the first operator question before the dense
 controls: which config surface is loaded, how many profiles exist, how many
 auth attempts are tracked, whether auth search is filtering, and whether any
 attempts are currently banned. Save/logout/password/profile mutations remain
-legacy-owned below it.
+implemented by the existing settings module inside the v2-owned route body.
 
 Settings now also has a local authentication-attempt search surface. The route
 summary and v2 checkpoint remain the unfiltered settings truth, while the
@@ -309,16 +312,15 @@ Download/Copy Status and SBOM actions only after `Show export actions`. That
 keeps the default Status readout focused on build, system, activity, and log
 state while preserving the release/audit evidence workflow.
 
-The seeded browser proof also includes a route-checkpoint matrix across the
-checkpoint screens: Inspect, Monitor, Media, Settings, Status, Incidents, and
-Telemetry. That matrix walks the screens as an operator journey and proves each
-one exposes a visible checkpoint, matching CDP accessibility `status` text, and
-a route-specific node budget. Inspect and Monitor now use v2-owned checkpoint
-strips while the other dense surfaces remain legacy-owned. In the seeded route
-journey, those budgets are
-currently 6k / 8.5k / 10.5k / 13.5k / 16k / 18k / 21k nodes respectively. This
-does not make those screens full v2 yet, but it gives the redesign loop a
-stable regression tripwire before deeper ownership passes.
+The seeded browser proof also includes a route-ownership matrix across Inspect,
+Monitor, Media, Settings, Status, Incidents, and Telemetry. That matrix walks
+the screens as an operator journey and proves each one exposes a visible
+v2-owned route body, leaves its direct legacy fallback empty, keeps the legacy
+body out of the v2 root, announces matching CDP accessibility `status` text, and
+stays under a route-specific node budget. In the seeded route journey, those
+budgets are currently 9k / 13.5k / 11.5k / 14.75k / 16.5k / 18.5k / 21.5k nodes
+respectively for Inspect, Monitor, Media, Settings, Status, Incidents, and
+Telemetry.
 That same route journey now proves that non-pipeline checkpoint routes do not
 carry hidden Pipeline Inspect or Monitor detail shells. The v2 checkpoint root
 anchors stay mounted for presentation, but the heavy detail DOM is removed until
@@ -430,24 +432,24 @@ What changed from the live operator pass:
   the dominant scan layer and exposes Edit/Copy/Open only when the operator asks
   for them.
 
-Still not a full v2 redesign:
+Still not a full React component rewrite:
 
 - Inspect graph/resource details, the Monitor wall, the Incidents feed, the
-  Telemetry counter grids, some Status detail sections, Media library details, and some Settings form details are still
-  intentionally legacy-owned, now with lightweight route checkpoints where useful
-  rather than full v2 layouts. Inspect, Monitor, Media, Settings, Incidents,
-  Telemetry, and Status each have only their first v2-owned decision checkpoint.
-- Legacy-owned route details still have substantial active DOM when visible.
-  Under v2, dense checkpoint detail DOM and inactive Pipeline workspace shells
-  are now unmounted on route exit, but active detail-section redesign remains a
-  future performance/accessibility cleanup. Seeded Playwright/CDP now also
-  proves the Media route remounts with populated rows after that cleanup.
+  Telemetry counter grids, some Status detail sections, Media library details,
+  and some Settings form details still use the existing feature renderers. They
+  now mount into v2-owned route bodies instead of staying owned by visible
+  legacy panels.
+- Dense route details still have substantial active DOM when visible. Under v2,
+  inactive Pipeline workspace shells are unmounted on route exit, direct legacy
+  fallback bodies remain empty, and active detail-section React rewrites remain
+  future performance/accessibility cleanup. Seeded Playwright/CDP also proves
+  the Media route remounts with populated rows after that cleanup.
 
 ## Done-state interpretation
 
-For an rc3 merge candidate, v2 is ready as a bounded, opt-in replacement for
-Overview and Pipeline / Operate. It is not yet a complete dashboard-wide v2.
-The remaining evolution should be sequenced as separate ownership passes:
+For the default-readiness candidate, v2 is ready as the default dashboard shell
+and route owner. It is not yet a complete React rewrite of every dense control.
+The remaining evolution should be sequenced as separate component rewrites:
 
 1. Complete Pipeline / Inspect v2 beyond the checkpoint strip.
 2. Complete Pipeline / Monitor v2 beyond the checkpoint strip.

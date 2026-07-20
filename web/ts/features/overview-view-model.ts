@@ -68,6 +68,7 @@ export interface OverviewActivityItem {
   readonly headline: string;
   readonly summary: string;
   readonly details: readonly string[];
+  readonly evidence: string;
   readonly eventCount: number;
   readonly startedAt?: string;
   readonly endedAt?: string;
@@ -355,6 +356,12 @@ function activityTone(burst: OverviewActivityBurstInput): OverviewTone {
   return "neutral";
 }
 
+function activityEvidence(burst: OverviewActivityBurstInput): string {
+  const detail = burst.detailBadges.slice(0, 2).join(" / ");
+  const eventLabel = `${burst.logs.length} log${burst.logs.length === 1 ? "" : "s"} reviewed`;
+  return detail ? `${eventLabel} / ${detail}` : eventLabel;
+}
+
 export function buildOverviewViewModel(
   pipelines: readonly PipelineView[],
   systemMetrics: SystemMetrics = {},
@@ -519,6 +526,7 @@ export function buildOverviewViewModel(
       headline: burst.headline,
       summary: burst.summary,
       details: burst.detailBadges,
+      evidence: activityEvidence(burst),
       eventCount: burst.logs.length,
       startedAt: burst.startedAt,
       endedAt: burst.endedAt,
