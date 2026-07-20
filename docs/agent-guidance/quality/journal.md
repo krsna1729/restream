@@ -101,6 +101,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 HUNT RECORDING-REGISTER-START-RACE FIXED [codex]](#2026-07-19-hunt-recording-register-start-race-fixed-codex)
 - [2026-07-19 HUNT SERVER-PORT-ZERO-SILENT-EPHEMERAL-BIND FIXED [codex]](#2026-07-19-hunt-server-port-zero-silent-ephemeral-bind-fixed-codex)
 - [2026-07-20 HUNT CONTROL-ROOM-YOUTUBE-WARNING-STALE-FETCH-RACE FIXED [codex]](#2026-07-20-hunt-control-room-youtube-warning-stale-fetch-race-fixed-codex)
+- [2026-07-20 HUNT PIPELINE-INSPECTOR-RUNTIME-GRAPH-STALE-CONTAINER-RACE FIXED [codex]](#2026-07-20-hunt-pipeline-inspector-runtime-graph-stale-container-race-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3703,6 +3704,62 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   unconditional `setCardWarning` call and passing post-fix.
 - Gates: `npm run test:frontend` — 59/59 pass. `node scripts/check/docs.mjs`
   — clean.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed.
+
+## 2026-07-20 HUNT PIPELINE-INSPECTOR-RUNTIME-GRAPH-STALE-CONTAINER-RACE FIXED [codex]
+
+- What: same hunt run, `web/ts/features/pipeline-inspector.ts` — the
+  processing-graph refresh path shared by the pipeline-scoped and
+  whole-runtime views of the pipeline inspector.
+- Finding: `refreshPipelineInspectorGraph()` captures
+  `container = document.getElementById("inspect-graph-container")` and its
+  staleness guards before awaiting the network fetch, but the guards
+  (`requestSeq !== graphRequestSeq` and, for the whole-runtime branch,
+  `selectedPipeline()`) never accounted for the inspector's host container
+  being swapped out from under it. `setPipelineInspectorContainerId(...)` is
+  called on every dashboard-mode render (`configureDashboardV2RouteBodyTargets`
+  in `web/ts/features/modes.ts`) to point the inspector at whichever
+  legacy/v2 route-body host is currently active; swapping away from and back
+  to the pipeline-inspect view mid-fetch left `requestSeq` unchanged and, for
+  the no-pipeline-selected ("whole runtime") branch, left `selectedPipeline()`
+  unchanged too (`dashboardModeUrl` already strips the `p` param on any
+  mode swap, so it was absent both before and after). Neither guard could
+  detect the swap, so a fetch response that resolved after the swap would
+  still be painted into `#inspect-graph-container` and would set
+  `graphRenderedStateKey = "runtime"`, corrupting state for whichever view
+  had actually become current in the meantime. `control-room.ts` already
+  has an equivalent host-swap hazard and solves it with a `RenderScope`
+  (container id + generation counter); `pipeline-inspector.ts` had never
+  adopted the same guard.
+- Fix: replaced the plain `pipelineInspectorContainerId` string with a
+  `RenderScope` instance (`pipelineInspectorScope`), captured a
+  `scopeToken` before each fetch in `refreshPipelineInspectorGraph()`, and
+  added `!pipelineInspectorScope.isCurrent(scopeToken)` to both staleness
+  guards (pipeline-scoped and whole-runtime branches). Also closed an
+  adjacent gap in `renderPipelineInspector()`: the whole-runtime branch was
+  missing a forced-refresh check mirroring the pipeline-scoped branch's
+  `(graphPipelineId !== pipe.id || graphRenderedStateKey !== stateKey)`
+  condition, so re-entering the runtime view after a swap now reliably
+  triggers a fresh fetch instead of depending solely on the auto-refresh
+  toggle. A DOM-connectivity check (`container.isConnected`) was considered
+  and rejected: `test/support/helpers/fake-dom.mjs` does not implement
+  `Node.isConnected`, so that guard would have been silently always-falsy
+  under every existing frontend test.
+- Added `inspector runtime graph refresh ignores a stale resolution after
+  the container is swapped mid-flight` in
+  `test/frontend/frontend-pipeline-workspace.test.mjs`. Defers the
+  `/resource-map` fetch behind a controllable promise, asserts the loading
+  placeholder is painted synchronously, calls
+  `setPipelineInspectorContainerId(...)` to simulate a mode swap while the
+  fetch is still in flight, releases the fetch, and asserts the resolved
+  content is dropped (container and status text stay on the loading
+  placeholder) rather than overwriting the now-stale container. A final
+  step swaps the container id back and calls
+  `refreshPipelineInspectorGraph()` again to confirm the module's cache
+  state was not left poisoned — the graph still populates on the next
+  legitimate refresh.
+- Gates: `npm run test:frontend` — 61/61 pass.
 - Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
 - Follow-ups: none filed.
 - Notes: thirteenth genuine bug found this hunt run, and the first from the

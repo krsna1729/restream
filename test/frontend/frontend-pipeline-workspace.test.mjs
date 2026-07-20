@@ -1029,6 +1029,112 @@ test("inspector keeps the previous graph visible during background refresh", asy
   await refresh;
 });
 
+test("inspector runtime graph refresh ignores a stale resolution after the container is swapped mid-flight", async () => {
+  const { document, window } = installFakeDom();
+  window.location.href = "http://localhost/?mode=pipeline&view=inspect";
+  for (const [tag, id] of [
+    ["select", "inspect-pipeline-select"],
+    ["button", "inspect-open-pipeline-btn"],
+    ["div", "inspect-pipeline-summary"],
+    ["div", "inspect-diagnostics-summary"],
+    ["div", "inspect-resource-details"],
+    ["button", "inspect-refresh-graph-btn"],
+    ["button", "inspect-open-diagnostics-btn"],
+    ["div", "inspect-graph-status"],
+    ["div", "inspect-graph-container"],
+  ]) {
+    appendRoot(document, tag, id);
+  }
+
+  const inspector = await loadCompiledFrontendModule(
+    "features/pipeline-inspector.js",
+  );
+  const { state } = await loadCompiledFrontendModule("core/state.js");
+  state.pipelines = [];
+
+  let resourceMapRequestCount = 0;
+  let releaseResourceMapRequest;
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    if (href.includes("/resource-map")) {
+      resourceMapRequestCount += 1;
+      if (resourceMapRequestCount === 1) {
+        await new Promise((resolve) => {
+          releaseResourceMapRequest = resolve;
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          scope: { kind: "runtime" },
+          summary: {
+            cpuPercent: 1,
+            totalMemoryBytes: 1,
+            processThreadCount: 1,
+            srtSenderThreads: 0,
+            srtSenderThreadLimit: 1,
+            externalFfmpegCount: 0,
+            retainedPayloadBytes: 0,
+          },
+          nodes: [
+            {
+              id: "runtime:restream",
+              kind: "runtime_process",
+              label: "restream",
+              execution: "process",
+              cpuPercent: 1,
+              memory: { attributedBytes: 1, confidence: "measured" },
+              threads: { process: 1 },
+              hotspots: [],
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  const graphContainer = document.getElementById("inspect-graph-container");
+  const graphStatus = document.getElementById("inspect-graph-status");
+
+  const refresh = inspector.refreshPipelineInspectorGraph();
+  assert.match(
+    graphContainer.innerHTML,
+    /Loading runtime resources/,
+    "the loading placeholder should be painted synchronously before the fetch resolves",
+  );
+
+  // Simulate a dashboard-mode swap away from and back to the pipeline-inspect
+  // view while the runtime resource-map fetch is still in flight. The `p`
+  // query param stays absent in both states, so selectedPipeline() alone
+  // cannot detect this swap -- only the RenderScope container-id check can.
+  inspector.setPipelineInspectorContainerId("control-mode-content");
+  releaseResourceMapRequest();
+  await refresh;
+
+  assert.doesNotMatch(
+    graphContainer.innerHTML,
+    /restream/,
+    "a resolution that lands after the host container was swapped away must not paint into the stale container",
+  );
+  assert.match(
+    graphStatus.textContent,
+    /Loading runtime resources/,
+    "a stale resolution must not overwrite the status line either",
+  );
+
+  // Swap back to the pipeline-inspect container and confirm a fresh refresh
+  // still populates the graph -- the stale resolution must not have left the
+  // module's cache state (graphRenderedStateKey/graphPipelineId) poisoned.
+  inspector.setPipelineInspectorContainerId("inspect-mode-content");
+  await inspector.refreshPipelineInspectorGraph();
+  assert.match(
+    graphContainer.innerHTML,
+    /restream/,
+    "a refresh once the container is current again must still populate the graph",
+  );
+});
+
 test("processing graph collapses repeated egress leaves by count", async () => {
   const { document } = installFakeDom();
   const graph = await loadCompiledFrontendModule("features/graph.js");

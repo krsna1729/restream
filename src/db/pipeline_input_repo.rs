@@ -146,15 +146,23 @@ pub async fn promote_pipeline_input(
     if !target_exists {
         return Ok(None);
     }
-    sqlx::query(
-        "UPDATE pipeline_inputs
-         SET selected = CASE WHEN id = ? THEN 1 ELSE 0 END
-         WHERE pipeline_id = ?",
-    )
-    .bind(input_id)
-    .bind(pipeline_id)
-    .execute(&mut *transaction)
-    .await?;
+    // Two statements, not one CASE-based UPDATE: `idx_pipeline_inputs_one_selected`
+    // is a partial unique index that SQLite checks after each row a
+    // multi-row UPDATE touches, in rowid order, not once at end-of-statement.
+    // A single UPDATE that flips every row's `selected` together can hit a
+    // transient state where the target row is set to 1 before the
+    // currently-selected row (a lower rowid, e.g. the primary input created
+    // first) is cleared, tripping the unique constraint on a perfectly valid
+    // end state. Clearing first removes that transient collision.
+    sqlx::query("UPDATE pipeline_inputs SET selected = 0 WHERE pipeline_id = ? AND selected = 1")
+        .bind(pipeline_id)
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::query("UPDATE pipeline_inputs SET selected = 1 WHERE pipeline_id = ? AND id = ?")
+        .bind(pipeline_id)
+        .bind(input_id)
+        .execute(&mut *transaction)
+        .await?;
     transaction.commit().await?;
     get_pipeline_input(pool, pipeline_id, input_id).await
 }
@@ -193,4 +201,54 @@ pub async fn delete_pipeline_input(
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{create_pipeline, create_pool, setup_database_schema};
+
+    async fn test_pool() -> SqlitePool {
+        let pool = create_pool("sqlite::memory:").await.unwrap();
+        setup_database_schema(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn promote_can_fail_back_to_an_input_created_before_the_current_selection() {
+        // The primary input is inserted first (lowest rowid) and starts
+        // selected. Promoting a later-created backup input, then failing
+        // back to the primary, must succeed both ways: the partial unique
+        // index on `selected = 1` must not reject a valid end state just
+        // because the two-row UPDATE crosses rowid order transiently.
+        let pool = test_pool().await;
+        create_pipeline(&pool, "p1", "Pipeline", "sk1", None, None)
+            .await
+            .unwrap();
+        create_pipeline_input(&pool, "input_backup_1", "p1", "Backup", "sk2")
+            .await
+            .unwrap();
+
+        let promoted = promote_pipeline_input(&pool, "p1", "input_backup_1")
+            .await
+            .unwrap()
+            .expect("backup input exists");
+        assert!(promoted.selected);
+
+        let failed_back = promote_pipeline_input(&pool, "p1", "input_primary_p1")
+            .await
+            .unwrap()
+            .expect("primary input exists");
+        assert!(
+            failed_back.selected,
+            "failing back to the primary input must succeed, not hit the unique-selected index"
+        );
+
+        let inputs = list_pipeline_inputs(&pool, "p1").await.unwrap();
+        let selected_count = inputs.iter().filter(|input| input.selected).count();
+        assert_eq!(
+            selected_count, 1,
+            "exactly one input must remain selected after fail-back"
+        );
+    }
 }
