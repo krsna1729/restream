@@ -9,9 +9,8 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use sqlx::SqlitePool;
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 use tokio::sync::RwLock as TokioRwLock;
 use tracing::warn;
 
@@ -27,6 +26,8 @@ use crate::media::engine::MediaEngine;
 use crate::media::security::{IngestSecurityService, RateLimitScope, RateLimitSnapshot};
 use crate::media::srt::SrtIngestPolicyStore;
 
+use super::AppServices;
+
 pub const MAX_NAME_LEN: usize = 256;
 pub const MAX_URL_LEN: usize = 2048;
 pub const MAX_OUTPUT_CONFIG_LEN: usize = 512;
@@ -34,15 +35,6 @@ pub const MAX_STREAM_KEY_LEN: usize = 256;
 pub const MAX_FFMPEG_ARGS_LEN: usize = 4096;
 pub const MAX_PASSWORD_LEN: usize = 1024;
 pub const MIN_DASHBOARD_PASSWORD_LEN: usize = 12;
-
-#[derive(Clone, Copy)]
-pub struct EngineCpuSample {
-    pub total_ticks: u64,
-    pub restream_ticks: u64,
-    pub external_ffmpeg_ticks: u64,
-}
-
-pub static ENGINE_CPU_SAMPLE: OnceLock<Mutex<Option<EngineCpuSample>>> = OnceLock::new();
 
 pub const SESSION_COOKIE_NAME: &str = "session";
 pub const SESSION_MAX_AGE_SECONDS: i64 = 30 * 24 * 60 * 60;
@@ -93,7 +85,6 @@ impl From<&AppConfig> for AppStateRuntimeConfig {
 }
 
 pub struct AppState {
-    pub db: SqlitePool,
     security: Arc<IngestSecurityService>,
     ingest_policy_store: Arc<SrtIngestPolicyStore>,
     sessions: Arc<TokioRwLock<HashSet<String>>>,
@@ -123,10 +114,9 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Wires together the shared API state and the default service wrappers
-    /// built from the application's primary SQLite pool.
+    /// Wires storage-neutral application services into shared HTTP state.
     pub fn new(
-        db: SqlitePool,
+        services: AppServices,
         security: Arc<IngestSecurityService>,
         ingest_policy_store: Arc<SrtIngestPolicyStore>,
         sessions: Arc<TokioRwLock<HashSet<String>>>,
@@ -134,22 +124,21 @@ impl AppState {
         log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
         runtime: AppStateRuntimeConfig,
     ) -> Self {
-        let pipeline_service = PipelineService::new(db.clone());
-        let pipeline_input_service =
-            PipelineInputService::new(db.clone(), pipeline_service.clone());
-        let output_service = OutputService::new(db.clone());
-        let ingest_service = IngestService::new(db.clone());
-        let auth_service = AuthService::new(db.clone());
-        let settings_service = SettingsService::new(db.clone());
-        let health_service = HealthService::new(db.clone());
-        let file_ingest_service = FileIngestService::new(db.clone(), pipeline_service.clone());
-        let media_library_service =
-            MediaLibraryService::new(db.clone(), pipeline_service.clone(), ingest_service.clone());
-        let log_service = LogService::new(db.clone());
-        let agent_service = AgentService::new(db.clone());
+        let AppServices {
+            pipeline_service,
+            pipeline_input_service,
+            output_service,
+            ingest_service,
+            auth_service,
+            settings_service,
+            health_service,
+            file_ingest_service,
+            media_library_service,
+            log_service,
+            agent_service,
+        } = services;
 
         Self {
-            db,
             security,
             ingest_policy_store,
             sessions,
@@ -242,7 +231,7 @@ impl AppState {
 
     pub async fn settings_snapshot(
         &self,
-    ) -> crate::application::services::ApiResult<crate::application::settings::SettingsSnapshot>
+    ) -> crate::application::services::ServiceResult<crate::application::settings::SettingsSnapshot>
     {
         self.settings_service
             .load_snapshot(&self.security, self.engine.backend_policy())
@@ -251,7 +240,7 @@ impl AppState {
 
     pub async fn refresh_srt_ingest_policy_store(
         &self,
-    ) -> crate::application::services::ApiResult<()> {
+    ) -> crate::application::services::ServiceResult<()> {
         self.settings_service
             .refresh_srt_ingest_policy_store(
                 &self.ingest_policy_store,
@@ -310,7 +299,7 @@ impl AppState {
 
     /// Construct an AppState with all default services wired, for testing.
     pub fn test_new(
-        db: SqlitePool,
+        services: AppServices,
         security: Arc<IngestSecurityService>,
         ingest_policy_store: Arc<SrtIngestPolicyStore>,
         sessions: Arc<TokioRwLock<HashSet<String>>>,
@@ -318,7 +307,7 @@ impl AppState {
         log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     ) -> Self {
         Self::new(
-            db,
+            services,
             security,
             ingest_policy_store,
             sessions,
@@ -330,7 +319,7 @@ impl AppState {
 
     /// Construct an AppState with default services and an isolated media directory.
     pub fn test_new_with_media_dir(
-        db: SqlitePool,
+        services: AppServices,
         security: Arc<IngestSecurityService>,
         ingest_policy_store: Arc<SrtIngestPolicyStore>,
         sessions: Arc<TokioRwLock<HashSet<String>>>,
@@ -343,7 +332,7 @@ impl AppState {
             ..AppStateRuntimeConfig::default()
         };
         Self::new(
-            db,
+            services,
             security,
             ingest_policy_store,
             sessions,

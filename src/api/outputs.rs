@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 
 use crate::api_view_models;
-use crate::application::services::ApiError;
 
 use crate::domain::output_spec::{
     OutputConfig, OutputProtocolConfig, OutputUrlScheme, ProtocolCapabilities,
@@ -22,6 +21,7 @@ use crate::domain::output_spec::{
 
 use crate::domain::state::DesiredOutputState;
 
+use super::error::ApiError;
 use super::state::{
     AppState, MAX_NAME_LEN, MAX_OUTPUT_CONFIG_LEN, MAX_URL_LEN, check_field_len,
     require_authenticated, to_hex,

@@ -18,7 +18,7 @@ use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
 use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::domain::srt_ingest::SrtGlobalIngestConfig;
 use crate::domain::transcode_profile::TranscodeProfiles;
-use crate::planner::backend_policy::BackendPolicy;
+use crate::planner::BackendPolicy;
 
 use super::state::{
     AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, DEFAULT_INGEST_HOST, require_authenticated,
@@ -436,7 +436,7 @@ mod tests {
             ingest_security: crate::domain::ingest_security::IngestSecurityConfig::default(),
             recording_settings: crate::domain::recording::RecordingSettings::default(),
             srt_ingest: crate::domain::srt_ingest::SrtGlobalIngestConfig::default(),
-            backend_policy: crate::planner::backend_policy::BackendPolicy::default(),
+            backend_policy: crate::planner::BackendPolicy::default(),
             transcode_profiles: crate::domain::transcode_profile::TranscodeProfiles::default(),
         };
 
