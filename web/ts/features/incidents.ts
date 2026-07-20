@@ -4,6 +4,8 @@ import {
   getLifecycleEvents,
   getOverview,
 } from "../core/api.js";
+import { RenderScope } from "../core/render-scope.js";
+import type { RenderScopeToken } from "../core/render-scope.js";
 import { state } from "../core/state.js";
 import { escapeHtml } from "../core/utils.js";
 import type {
@@ -31,6 +33,7 @@ export interface IncidentSnapshot {
 
 interface IncidentsViewOptions {
   active: boolean;
+  containerId?: string;
   pipelines: IncidentPipelineOption[];
   navigateToPipeline: (pipelineId: string) => void;
 }
@@ -54,6 +57,7 @@ let snapshot: IncidentSnapshot = {
   unavailable: false,
 };
 let viewOptions: IncidentsViewOptions | null = null;
+const incidentsScope = new RenderScope("incidents-mode-content");
 let incidentSearchQuery = "";
 let incidentAlertGroupsExpanded = false;
 let incidentEventsExpanded = false;
@@ -745,9 +749,12 @@ export function selectIncidentPipeline(pipelineId: string): void {
   void refreshIncidents(true);
 }
 
-function paintIncidents(): void {
-  const root = document.getElementById("incidents-mode-content");
-  if (!root || !viewOptions) return;
+function isRenderCurrent(token: RenderScopeToken): boolean {
+  return viewOptions?.active === true && incidentsScope.isCurrent(token);
+}
+
+function paintIncidents(containerId = incidentsScope.current()): void {
+  if (!viewOptions) return;
   incidentsCheckpointCallback?.(
     buildIncidentsCheckpointModel(
       snapshot,
@@ -756,13 +763,32 @@ function paintIncidents(): void {
       incidentSearchQuery,
     ),
   );
+  const root = document.getElementById(containerId);
+  if (!root) return;
   root.innerHTML = renderIncidentsHtml(
     snapshot,
     viewOptions.pipelines,
     selectedPipelineId,
     incidentSearchQuery,
   );
+  suppressV2RouteChrome(root);
   bindIncidentControls();
+}
+
+function suppressV2RouteChrome(root: HTMLElement): void {
+  if (
+    typeof root.matches !== "function" ||
+    !root.matches("[data-dashboard-v2-owned-route-body]")
+  )
+    return;
+  root
+    .querySelectorAll<HTMLElement>(
+      ":scope > div > header:first-child h1, :scope > div > header:first-child p",
+    )
+    .forEach((element) => {
+      element.hidden = true;
+      element.setAttribute("aria-hidden", "true");
+    });
 }
 
 export async function refreshIncidents(force = false): Promise<void> {
@@ -774,6 +800,7 @@ export async function refreshIncidents(force = false): Promise<void> {
   const sequence = ++requestSequence;
   const pipelineAtRequest = selectedPipelineId;
   const needsPipelineNames = !viewOptions.pipelines.length;
+  const scopeToken = incidentsScope.token();
   const request = (async () => {
     const [overview, alerts, events, config] = await Promise.all([
       getOverview(),
@@ -788,7 +815,8 @@ export async function refreshIncidents(force = false): Promise<void> {
     ]);
     if (
       sequence !== requestSequence ||
-      pipelineAtRequest !== selectedPipelineId
+      pipelineAtRequest !== selectedPipelineId ||
+      !isRenderCurrent(scopeToken)
     )
       return;
     const configPipelines = incidentPipelineOptionsFromConfig(config);
@@ -803,7 +831,7 @@ export async function refreshIncidents(force = false): Promise<void> {
       unavailable: overview === null || alerts === null || events === null,
     };
     lastFetchedAt = Date.now();
-    paintIncidents();
+    paintIncidents(scopeToken.containerId);
   })().finally(() => {
     if (inFlightByScope.get(scope)?.promise === request) {
       inFlightByScope.delete(scope);
@@ -814,6 +842,8 @@ export async function refreshIncidents(force = false): Promise<void> {
 }
 
 export function renderIncidentsMode(options: IncidentsViewOptions): void {
+  if (viewOptions?.active !== options.active) incidentsScope.invalidate();
+  incidentsScope.setContainerId(options.containerId || "incidents-mode-content");
   viewOptions = options;
   if (
     !options.pipelines.some((pipeline) => pipeline.id === selectedPipelineId)

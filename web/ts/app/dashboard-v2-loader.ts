@@ -243,6 +243,13 @@ const DASHBOARD_V2_CONTAINER_IDS = [
   "dashboard-v2-settings-root",
 ] as const;
 
+function isOptionalNodeBundleMiss(error: unknown, bundle: string): boolean {
+  if (!(error instanceof Error)) return false;
+  const maybeError = error as Error & { code?: unknown; url?: unknown };
+  if (maybeError.code !== "ERR_MODULE_NOT_FOUND") return false;
+  return String(maybeError.url || "").endsWith(bundle.replace("./", "/"));
+}
+
 function setContainerHidden(id: string, hidden: boolean): void {
   const element = document.getElementById(id);
   if (element) element.hidden = hidden;
@@ -336,6 +343,7 @@ function ensureDashboardV2Module(): void {
     })
     .catch((error: unknown) => {
       dashboardV2ModulePromise = null;
+      if (isOptionalNodeBundleMiss(error, DASHBOARD_V2_BUNDLE)) return;
       console.error("Unable to start the dashboard v2 experiment", error);
     });
 }
@@ -358,9 +366,12 @@ function ensureDashboardV2CheckpointsModule(): void {
       renderLatestStatus();
       renderLatestMedia();
       renderLatestSettings();
+      document.dispatchEvent(new CustomEvent("dashboard:v2-checkpoints-ready"));
     })
     .catch((error: unknown) => {
       dashboardV2CheckpointsModulePromise = null;
+      if (isOptionalNodeBundleMiss(error, DASHBOARD_V2_CHECKPOINTS_BUNDLE))
+        return;
       console.error("Unable to start the dashboard v2 checkpoints", error);
     });
 }

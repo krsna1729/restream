@@ -45,7 +45,8 @@
   }
 
   .dashboard-subtitle {
-    @apply text-base-content/70 mt-1 text-sm leading-5;
+    @apply mt-1 text-sm leading-5;
+    color: color-mix(in oklab, var(--color-base-content) 78%, transparent);
   }
 
   .dashboard-card {
@@ -81,23 +82,23 @@
     min-width: 2.75rem !important;
   }
 
-  [data-dashboard-v2-route-body-slot] .btn {
+  [data-dashboard-v2-owned-route-body] .btn {
     min-height: 2.25rem;
   }
 
   #dashboard-v2-root .btn-accent.btn-outline,
   #dashboard-grid .btn-accent.btn-outline,
-  [data-dashboard-v2-route-body-slot] .btn-accent.btn-outline {
+  [data-dashboard-v2-owned-route-body] .btn-accent.btn-outline {
     --dashboard-v2-outline-accent: color-mix(
       in oklab,
-      var(--color-accent) 42%,
+      var(--color-accent) 24%,
       var(--color-base-content)
     );
     --btn-color: var(--dashboard-v2-outline-accent);
-    --btn-fg: var(--dashboard-v2-outline-accent);
-    --btn-rest-fg: var(--dashboard-v2-outline-accent);
+    --btn-fg: var(--color-base-content);
+    --btn-rest-fg: var(--color-base-content);
     border-color: var(--dashboard-v2-outline-accent);
-    color: var(--dashboard-v2-outline-accent);
+    color: var(--color-base-content);
   }
 
   #skip-to-dashboard-main,
@@ -128,15 +129,25 @@
     );
   }
 
-  [data-dashboard-v2-route-body-slot] .text-base-content\/50,
-  [data-dashboard-v2-route-body-slot] .text-base-content\/55,
-  [data-dashboard-v2-route-body-slot] .text-base-content\/60,
-  [data-dashboard-v2-route-body-slot] .text-base-content\/70 {
+  [data-dashboard-v2-owned-route-body] .text-base-content\/50,
+  [data-dashboard-v2-owned-route-body] .text-base-content\/55,
+  [data-dashboard-v2-owned-route-body] .text-base-content\/60,
+  [data-dashboard-v2-owned-route-body] .text-base-content\/70 {
     color: color-mix(
       in oklab,
       var(--color-base-content) 82%,
       transparent
     );
+  }
+
+  [data-dashboard-v2-owned-route-body] > .dashboard-page-shell > .flex:first-child > div:first-child {
+    display: none;
+  }
+
+  [data-dashboard-v2-owned-route-body] > .dashboard-title:first-child,
+  [data-dashboard-v2-owned-route-body] > h1:first-child,
+  [data-dashboard-v2-owned-route-body] > p[role="status"]:first-of-type {
+    display: none;
   }
 }
 

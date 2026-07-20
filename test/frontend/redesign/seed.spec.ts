@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { openSeededDashboard } from "./fixtures";
 import {
@@ -85,7 +85,7 @@ test("seed: mixed-health Overview exposes upstream and output state @desktop", a
   );
 });
 
-test("seed: ui=v2 slots v2 route bodies under the owning roots @desktop", async ({
+test("seed: ui=v2 mounts Settings body in the v2-owned route host @desktop", async ({
   page,
 }) => {
   const v2Requests: string[] = [];
@@ -109,19 +109,21 @@ test("seed: ui=v2 slots v2 route bodies under the owning roots @desktop", async 
   );
   await expect(
     page.locator(
-      '#dashboard-v2-settings-root [data-dashboard-v2-route-body-slot="dashboard-v2-settings-body-slot"] > #settings-mode-content',
+      '#dashboard-v2-settings-root #dashboard-v2-settings-content[data-dashboard-v2-owned-route-body="settings"]',
     ),
   ).toBeVisible();
   await expect(
-    page.locator("#settings-mode-panel > :not(#dashboard-v2-settings-root)"),
+    page.locator("#dashboard-v2-settings-root #settings-mode-content"),
   ).toHaveCount(0);
+  await expect(page.locator("#settings-mode-panel > #settings-mode-content")).toHaveCount(1);
+  await expect(page.locator("#settings-mode-panel > #settings-mode-content > *")).toHaveCount(0);
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
     "UI v2 owned · Server configuration",
   );
   expect(await getCdpStatusTexts(page)).toContain(
     "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
   );
-  const settings = page.locator("#settings-mode-content");
+  const settings = page.locator("#dashboard-v2-settings-content");
   const authSearch = settings.getByLabel("Search authentication attempts");
   const authSearchSummary = settings.locator("#auth-attempts-search-summary");
   await expect(authSearchSummary).toHaveText("1 auth attempt visible");
@@ -253,7 +255,7 @@ test("seed: ui=v2 slots v2 route bodies under the owning roots @desktop", async 
   expect(hiddenSettingsChildCount).toBe(0);
   await expect(page.locator("#dashboard-v2-media-title")).toBeVisible();
   await expect(
-    page.locator("#media-mode-content").getByRole("heading", {
+    page.locator("#dashboard-v2-media-content").getByRole("heading", {
       name: "Media Library",
     }),
   ).toBeVisible();
@@ -296,9 +298,9 @@ test("seed: ui=v2 slots v2 route bodies under the owning roots @desktop", async 
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterMedia);
 
   await page.goto("/?mode=media&ui=v2");
-  await expect(page.locator("#media-library-results-summary")).toHaveText(
-    "1 media file total · 0 recordings · 1 source file",
-  );
+  await expect(
+    page.locator("#dashboard-v2-media-content #media-library-results-summary"),
+  ).toHaveText("1 media file total · 0 recordings · 1 source file");
   await expect(page.getByText("synthetic-source.mp4")).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     "1 media file total · 0 recordings · 1 source file",
@@ -389,7 +391,7 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
     }),
   });
 
-  const settings = page.locator("#settings-mode-content");
+  const settings = page.locator("#dashboard-v2-settings-content");
   const checkpoint = page.locator("#dashboard-v2-settings-root");
   const authSearch = settings.getByLabel("Search authentication attempts");
   const authSearchSummary = settings.locator("#auth-attempts-search-summary");
@@ -398,7 +400,7 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
       () =>
         Array.from(
           document.querySelectorAll<HTMLElement>(
-            "#settings-mode-content button,#settings-mode-content a[href],#settings-mode-content input,#settings-mode-content select,#settings-mode-content summary,[role='button']",
+            "#dashboard-v2-settings-content button,#dashboard-v2-settings-content a[href],#dashboard-v2-settings-content input,#dashboard-v2-settings-content select,#dashboard-v2-settings-content summary,[role='button']",
           ),
         ).filter((element) => {
           const rect = element.getBoundingClientRect();
@@ -612,71 +614,78 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   expect(await getCdpNodeCount(page)).toBeLessThan(13_500);
 });
 
-test("seed: ui=v2 v2-owned routes slot operator bodies under route roots @desktop", async ({
+test("seed: ui=v2 mounts route bodies in v2-owned hosts @desktop", async ({
   page,
 }) => {
   const routes = [
     {
-      bodyId: "inspect-mode-content",
+      hostId: "dashboard-v2-pipeline-inspect-content",
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      legacyBodyId: "inspect-mode-content",
       nodeBudget: 9_000,
       panelId: "inspect-mode-panel",
+      routeKey: "pipeline-inspect",
       rootId: "dashboard-v2-pipeline-inspect-root",
-      slotId: "dashboard-v2-pipeline-inspect-body-slot",
       text: "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
     },
     {
-      bodyId: "control-mode-content",
+      hostId: "dashboard-v2-control-room-content",
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      legacyBodyId: "control-mode-content",
       nodeBudget: 13_500,
       panelId: "control-mode-panel",
+      routeKey: "pipeline-monitor",
       rootId: "dashboard-v2-control-room-root",
-      slotId: "dashboard-v2-control-room-body-slot",
       text: "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
     },
     {
-      bodyId: "media-mode-content",
+      hostId: "dashboard-v2-media-content",
       href: "/?mode=media&ui=v2",
+      legacyBodyId: "media-mode-content",
       nodeBudget: 11_500,
       panelId: "media-mode-panel",
+      routeKey: "media",
       rootId: "dashboard-v2-media-root",
-      slotId: "dashboard-v2-media-body-slot",
       text: "1 media file total · 0 recordings · 1 source file",
     },
     {
-      bodyId: "settings-mode-content",
+      hostId: "dashboard-v2-settings-content",
       href: "/?mode=settings&ui=v2",
+      legacyBodyId: "settings-mode-content",
       nodeBudget: 14_750,
       panelId: "settings-mode-panel",
+      routeKey: "settings",
       rootId: "dashboard-v2-settings-root",
-      slotId: "dashboard-v2-settings-body-slot",
       text: "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
     },
     {
-      bodyId: "status-mode-content",
+      hostId: "dashboard-v2-status-content",
       href: "/?mode=status&ui=v2",
+      legacyBodyId: "status-mode-content",
       nodeBudget: 16_500,
       panelId: "status-mode-panel",
+      routeKey: "status",
       rootId: "dashboard-v2-status-root",
-      slotId: "dashboard-v2-status-body-slot",
       text: "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
     },
     {
-      bodyId: "incidents-mode-content",
+      hostId: "dashboard-v2-incidents-content",
       href: "/?mode=incidents&ui=v2",
+      legacyBodyId: "incidents-mode-content",
       nodeBudget: 18_500,
       panelId: "incidents-mode-panel",
+      routeKey: "incidents",
       rootId: "dashboard-v2-incidents-root",
-      slotId: "dashboard-v2-incidents-body-slot",
       text: "0 critical · 1 warning · 1 recent event · fleet",
     },
     {
-      bodyId: "telemetry-mode-content",
+      hostId: "dashboard-v2-telemetry-content",
       href: "/?mode=telemetry&ui=v2",
+      legacyBodyId: "telemetry-mode-content",
       nodeBudget: 21_500,
       panelId: "telemetry-mode-panel",
+      routeKey: "telemetry",
       rootId: "dashboard-v2-telemetry-root",
-      slotId: "dashboard-v2-telemetry-body-slot",
       text: "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Healthy Program",
     },
   ] as const;
@@ -684,6 +693,17 @@ test("seed: ui=v2 v2-owned routes slot operator bodies under route roots @deskto
   await openSeededDashboard(page, "mixed-health", routes[0].href, {
     expectOverviewReady: false,
   });
+
+  const routeMetrics: Array<{
+    href: string;
+    legacyEmpty: boolean;
+    nodeBudget: number;
+    nodeCount: number;
+    noLegacyInsideV2: boolean;
+    ownedHostVisible: boolean;
+    routeKey: string;
+    statusAnnounced: boolean;
+  }> = [];
 
   for (const route of routes) {
     if (page.url() !== new URL(route.href, page.url()).href) {
@@ -694,18 +714,36 @@ test("seed: ui=v2 v2-owned routes slot operator bodies under route roots @deskto
     await expect(activeRoot, route.href).toContainText(route.text);
     await expect(
       page.locator(
-        `#${route.rootId} [data-dashboard-v2-route-body-slot="${route.slotId}"] > #${route.bodyId}`,
+        `#${route.rootId} #${route.hostId}[data-dashboard-v2-owned-route-body="${route.routeKey}"]`,
       ),
       route.href,
     ).toBeVisible();
     await expect(
-      page.locator(`#${route.panelId} > :not(#${route.rootId})`),
+      page.locator(`#${route.rootId} #${route.legacyBodyId}`),
       route.href,
     ).toHaveCount(0);
-    expect(await getCdpStatusTexts(page)).toContain(route.text);
-    expect(await getCdpNodeCount(page), route.href).toBeLessThan(
-      route.nodeBudget,
-    );
+    await expect(
+      page.locator(`#${route.panelId} > #${route.legacyBodyId}`),
+      route.href,
+    ).toHaveCount(1);
+    await expect(
+      page.locator(`#${route.panelId} > #${route.legacyBodyId} > *`),
+      route.href,
+    ).toHaveCount(0);
+    const statusTexts = await getCdpStatusTexts(page);
+    expect(statusTexts).toContain(route.text);
+    const nodeCount = await getCdpNodeCount(page);
+    expect(nodeCount, route.href).toBeLessThan(route.nodeBudget);
+    routeMetrics.push({
+      href: route.href,
+      legacyEmpty: true,
+      nodeBudget: route.nodeBudget,
+      nodeCount,
+      noLegacyInsideV2: true,
+      ownedHostVisible: true,
+      routeKey: route.routeKey,
+      statusAnnounced: statusTexts.includes(route.text),
+    });
     for (const otherRoute of routes) {
       const root = page.locator(`#${otherRoute.rootId}`);
       if (otherRoute.rootId === route.rootId) {
@@ -719,6 +757,7 @@ test("seed: ui=v2 v2-owned routes slot operator bodies under route roots @deskto
       }
     }
   }
+  console.info(`ui-v2-route-ownership-metrics=${JSON.stringify(routeMetrics)}`);
 
   await page.goto("/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2");
   await expect(page.locator("#dashboard-v2-pipeline-inspect-root")).toContainText(
@@ -726,7 +765,7 @@ test("seed: ui=v2 v2-owned routes slot operator bodies under route roots @deskto
   );
   await expect(
     page.locator(
-      '#dashboard-v2-pipeline-inspect-root [data-dashboard-v2-route-body-slot="dashboard-v2-pipeline-inspect-body-slot"] > #inspect-mode-content',
+      '#dashboard-v2-pipeline-inspect-root #dashboard-v2-pipeline-inspect-content[data-dashboard-v2-owned-route-body="pipeline-inspect"]',
     ),
   ).toBeVisible();
 
@@ -736,9 +775,365 @@ test("seed: ui=v2 v2-owned routes slot operator bodies under route roots @deskto
   );
   await expect(
     page.locator(
-      '#dashboard-v2-control-room-root [data-dashboard-v2-route-body-slot="dashboard-v2-control-room-body-slot"] > #control-mode-content',
+      '#dashboard-v2-control-room-root #dashboard-v2-control-room-content[data-dashboard-v2-owned-route-body="pipeline-monitor"]',
     ),
   ).toBeVisible();
+});
+
+async function expectStaleRouteCompletionIgnored(
+  page: Page,
+  route: {
+    delay: {
+      incidentsDelayMs?: number;
+      mediaDelayMs?: number;
+      telemetryDelayMs?: number;
+    };
+    href: string;
+    legacyBodyId: string;
+    readySelector: string;
+    rootId: string;
+    routeKey: string;
+    staleText: string;
+  },
+): Promise<void> {
+  const delayMs =
+    route.delay.incidentsDelayMs ??
+    route.delay.mediaDelayMs ??
+    route.delay.telemetryDelayMs ??
+    0;
+  await openSeededDashboard(page, "mixed-health", route.href, {
+    expectOverviewReady: false,
+    ...route.delay,
+  });
+  await expect(page.locator(route.readySelector)).toBeVisible();
+
+  await page.locator("#workspace-tab-overview").click();
+  await expect(page).toHaveURL(/mode=overview/);
+  await expect(page.locator("#workspace-mode-summary")).toContainText(
+    "UI v2 owned",
+  );
+  await page.waitForTimeout(delayMs + 250);
+
+  const domCounts = await page.evaluate(
+    ({ legacyBodyId, rootId }) => {
+      const legacyBody = document.getElementById(legacyBodyId);
+      const v2Root = document.getElementById(rootId);
+      return {
+        legacyChildCount: legacyBody?.childElementCount ?? 0,
+        legacyTextLength: legacyBody?.textContent?.trim().length ?? 0,
+        v2RootChildCount: v2Root?.childElementCount ?? 0,
+      };
+    },
+    {
+      legacyBodyId: route.legacyBodyId,
+      rootId: route.rootId,
+    },
+  );
+  const statusTexts = await getCdpStatusTexts(page);
+  const metric = {
+    ...domCounts,
+    cdpNodeCount: await getCdpNodeCount(page),
+    overviewStatusAnnounced: statusTexts.some((text) =>
+      text.includes("UI v2 owned"),
+    ),
+    routeKey: route.routeKey,
+  };
+  expect(metric.legacyChildCount, route.routeKey).toBe(0);
+  expect(metric.legacyTextLength, route.routeKey).toBe(0);
+  expect(metric.v2RootChildCount, route.routeKey).toBe(0);
+  expect(metric.overviewStatusAnnounced, route.routeKey).toBe(true);
+  await expect(page.locator(`#${route.legacyBodyId}`)).not.toContainText(
+    route.staleText,
+  );
+  console.info(`ui-v2-stale-route-guard-metrics=${JSON.stringify(metric)}`);
+}
+
+async function waitForBrowserWork(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+}
+
+async function expectInactiveRouteEmpty(
+  page: Page,
+  route: {
+    legacyBodyId: string;
+    rootId: string;
+    routeKey: string;
+  },
+): Promise<void> {
+  const domCounts = await page.evaluate(
+    ({ legacyBodyId, rootId }) => {
+      const legacyBody = document.getElementById(legacyBodyId);
+      const v2Root = document.getElementById(rootId);
+      return {
+        legacyChildCount: legacyBody?.childElementCount ?? 0,
+        legacyTextLength: legacyBody?.textContent?.trim().length ?? 0,
+        v2RootChildCount: v2Root?.childElementCount ?? 0,
+      };
+    },
+    {
+      legacyBodyId: route.legacyBodyId,
+      rootId: route.rootId,
+    },
+  );
+  const statusTexts = await getCdpStatusTexts(page);
+  const metric = {
+    ...domCounts,
+    cdpNodeCount: await getCdpNodeCount(page),
+    overviewStatusAnnounced: statusTexts.some((text) =>
+      text.includes("UI v2 owned"),
+    ),
+    routeKey: route.routeKey,
+  };
+  expect(metric.legacyChildCount, route.routeKey).toBe(0);
+  expect(metric.legacyTextLength, route.routeKey).toBe(0);
+  expect(metric.v2RootChildCount, route.routeKey).toBe(0);
+  expect(metric.overviewStatusAnnounced, route.routeKey).toBe(true);
+  console.info(`ui-v2-secondary-stale-guard-metrics=${JSON.stringify(metric)}`);
+}
+
+test("seed: ui=v2 ignores stale Media completions after tab navigation @desktop", async ({
+  page,
+}) => {
+  await expectStaleRouteCompletionIgnored(page, {
+    delay: { mediaDelayMs: 700 },
+    href: "/?mode=media&ui=v2",
+    legacyBodyId: "media-mode-content",
+    readySelector: "#dashboard-v2-media-root",
+    rootId: "dashboard-v2-media-root",
+    routeKey: "media",
+    staleText: "synthetic-source.mp4",
+  });
+});
+
+test("seed: ui=v2 ignores stale Incidents completions after tab navigation @desktop", async ({
+  page,
+}) => {
+  await expectStaleRouteCompletionIgnored(page, {
+    delay: { incidentsDelayMs: 700 },
+    href: "/?mode=incidents&ui=v2",
+    legacyBodyId: "incidents-mode-content",
+    readySelector: "#dashboard-v2-incidents-root",
+    rootId: "dashboard-v2-incidents-root",
+    routeKey: "incidents",
+    staleText: "Active alerts",
+  });
+});
+
+test("seed: ui=v2 ignores stale Telemetry completions after tab navigation @desktop", async ({
+  page,
+}) => {
+  await expectStaleRouteCompletionIgnored(page, {
+    delay: { telemetryDelayMs: 700 },
+    href: "/?mode=telemetry&ui=v2",
+    legacyBodyId: "telemetry-mode-content",
+    readySelector: "#dashboard-v2-telemetry-root",
+    rootId: "dashboard-v2-telemetry-root",
+    routeKey: "telemetry",
+    staleText: "Source ring",
+  });
+});
+
+test("seed: ui=v2 ignores stale Telemetry stage detail after tab navigation @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=telemetry&ui=v2", {
+    expectOverviewReady: false,
+    stageTelemetryDelayMs: 700,
+  });
+  await expect(
+    page.getByRole("button", { name: "View video telemetry details" }),
+  ).toBeVisible();
+
+  const requestPromise = page.waitForRequest(
+    (request) =>
+      request.method() === "GET" &&
+      request.url().includes("/api/v1/stages/") &&
+      request.url().endsWith("/telemetry"),
+  );
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === "GET" &&
+      response.url().includes("/api/v1/stages/") &&
+      response.url().endsWith("/telemetry"),
+  );
+  await page.getByRole("button", { name: "View video telemetry details" }).click();
+  await requestPromise;
+  await page.locator("#workspace-tab-overview").click();
+  await expect(page).toHaveURL(/mode=overview/);
+  await responsePromise;
+  await waitForBrowserWork(page);
+  await expectInactiveRouteEmpty(page, {
+    legacyBodyId: "telemetry-mode-content",
+    rootId: "dashboard-v2-telemetry-root",
+    routeKey: "telemetry-stage-detail",
+  });
+});
+
+test("seed: ui=v2 ignores stale Media delete completion after tab navigation @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=media&ui=v2", {
+    expectOverviewReady: false,
+    mediaDelayMs: 700,
+  });
+  const sourceRow = page.locator('[data-filename="synthetic-source.mp4"]');
+  await sourceRow
+    .getByRole("button", {
+      name: "Show media actions for synthetic-source.mp4",
+    })
+    .click();
+  await sourceRow
+    .getByRole("button", { name: "Delete synthetic-source.mp4" })
+    .click();
+  const requestPromise = page.waitForRequest(
+    (request) =>
+      request.method() === "DELETE" &&
+      request.url().includes("/api/v1/media/synthetic-source.mp4"),
+  );
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === "DELETE" &&
+      response.url().includes("/api/v1/media/synthetic-source.mp4"),
+  );
+  await page.locator('#app-confirm-dialog button[value="confirm"]').click();
+  await requestPromise;
+  await page.locator("#workspace-tab-overview").click();
+  await expect(page).toHaveURL(/mode=overview/);
+  await responsePromise;
+  await waitForBrowserWork(page);
+  await expectInactiveRouteEmpty(page, {
+    legacyBodyId: "media-mode-content",
+    rootId: "dashboard-v2-media-root",
+    routeKey: "media-delete",
+  });
+});
+
+test("seed: ui=v2 ignores stale Monitor input promotion after tab navigation @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+    {
+      controlRoomPromotionDelayMs: 700,
+      expectOverviewReady: false,
+      pipelineInputsResponse: (pipelineId) => ({
+        selectedInputId: "input-primary",
+        inputs: [
+          {
+            id: "input-primary",
+            pipelineId,
+            label: "Primary feed",
+            streamKey: "sk_primary",
+            role: "primary",
+            enabled: true,
+            selected: true,
+            ingestUrls: { rtmp: "rtmp://seed/primary", srt: "srt://seed/primary" },
+            previewUrl: "/hls/inputs/input-primary/master.m3u8",
+            runtime: {
+              connected: true,
+              forwardingState: "active",
+              protocol: "rtmp",
+              bytesReceived: 12_582_912,
+            },
+          },
+          {
+            id: "input-standby",
+            pipelineId,
+            label: "Warm standby",
+            streamKey: "sk_standby",
+            role: "backup",
+            enabled: true,
+            selected: false,
+            ingestUrls: { rtmp: "rtmp://seed/standby", srt: "srt://seed/standby" },
+            previewUrl: "/hls/inputs/input-standby/master.m3u8",
+            runtime: {
+              connected: true,
+              forwardingState: "standby",
+              protocol: "srt",
+              bytesReceived: 9_437_184,
+            },
+          },
+        ],
+      }),
+    },
+  );
+  const standby = page.locator('article[data-card-id="input:input-standby"]');
+  await standby.locator('[data-action="control-room-toggle-card-actions"]').click();
+  const requestPromise = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" &&
+      request.url().includes("/inputs/input-standby/promote"),
+  );
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().includes("/inputs/input-standby/promote"),
+  );
+  await standby.getByRole("button", { name: "Promote", exact: true }).click();
+  await requestPromise;
+  await page.locator("#workspace-tab-overview").click();
+  await expect(page).toHaveURL(/mode=overview/);
+  await responsePromise;
+  await waitForBrowserWork(page);
+  await expectInactiveRouteEmpty(page, {
+    legacyBodyId: "control-mode-content",
+    rootId: "dashboard-v2-control-room-root",
+    routeKey: "monitor-promote",
+  });
+});
+
+test("seed: ui=v2 ignores stale Monitor URL save after tab navigation @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+    {
+      controlRoomSaveDelayMs: 700,
+      expectOverviewReady: false,
+    },
+  );
+  const outputCard = page.locator("article").filter({
+    hasText: "Retrying Output",
+  });
+  await outputCard
+    .getByRole("button", { name: "Show monitor actions for Retrying Output" })
+    .click();
+  await outputCard
+    .getByRole("button", { name: "Edit monitoring URL for Retrying Output" })
+    .click();
+  await outputCard
+    .locator('[data-role="control-room-monitoring-input"]')
+    .fill("https://monitor.example.invalid/retrying-next");
+  const requestPromise = page.waitForRequest(
+    (request) =>
+      request.method() === "PATCH" &&
+      request.url().includes("/outputs/out-retrying"),
+  );
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PATCH" &&
+      response.url().includes("/outputs/out-retrying"),
+  );
+  await outputCard.getByRole("button", { name: "Save" }).click();
+  await requestPromise;
+  await page.locator("#workspace-tab-overview").click();
+  await expect(page).toHaveURL(/mode=overview/);
+  await responsePromise;
+  await waitForBrowserWork(page);
+  await expectInactiveRouteEmpty(page, {
+    legacyBodyId: "control-mode-content",
+    rootId: "dashboard-v2-control-room-root",
+    routeKey: "monitor-url-save",
+  });
 });
 
 test("seed: ui=v2 unmounts inactive Operate surfaces outside Pipeline @desktop", async ({
@@ -770,7 +1165,9 @@ test("seed: ui=v2 unmounts inactive Operate surfaces outside Pipeline @desktop",
   expect(await operateRootChildCount()).toBeGreaterThan(0);
 
   await page.goto("/?mode=media&ui=v2");
-  await expect(page.locator("#media-library-results-summary")).toBeVisible();
+  await expect(
+    page.locator("#dashboard-v2-media-content #media-library-results-summary"),
+  ).toBeVisible();
   await expect.poll(operateRootChildCount).toBe(0);
   await expect(page.locator("#dashboard-main")).not.toContainText(
     "Start file ingest for Retrying Destination",
@@ -983,7 +1380,7 @@ test("seed: ui=v2 shell tolerates operator text zoom without horizontal overflow
   );
   await expectTabVisibleInRail(page, "#workspace-tab-telemetry");
   await expect(
-    page.locator("#telemetry-mode-panel").getByRole("heading", {
+    page.locator("#dashboard-v2-telemetry-root").getByRole("heading", {
       name: "Engineer telemetry",
     }),
   ).toBeVisible();
