@@ -187,16 +187,20 @@ When auditing a candidate seam:
 9. Check `target/source-audit.json` by Rust responsibility class so the root
    build script, production code, dedicated tests, harnesses, benchmarks, and
    integration tests cannot hide one another's pressure.
-10. Inspect `boundaryHazards` for wrong-direction imports, upward compatibility
-    re-exports, and types with inherent `impl` blocks outside their owner file.
-    Wrong-direction imports block; facade re-exports and external inherent
-    impls are review evidence, not automatic failures.
-11. Inspect `featureTopology` and run its negative matrix after feature changes.
-    The important proof is that lower features compile while higher features
-    remain disabled. Every matrix row records its requested features, computed
-    closure, evaluated `mustEnable`/`mustNotEnable` claims, and an unexecuted
-    Cargo proof command. A failed topology claim blocks the audit; run the
-    listed resource-limited command separately for compile proof.
+10. For wrong-direction imports, upward-compatibility re-export facades, and
+    types with inherent `impl` blocks outside their owner file, query the
+    Graphify code graph (`docs/agent-guidance/graphify.md`) rather than
+    grepping by hand: `graphify explain "<Type>"` and
+    `graphify path "<A>" "<B>"` show the real dependency edges. A
+    lower-to-higher edge blocks the audit; a facade re-export or an external
+    inherent impl is review evidence, not an automatic failure.
+11. After MCP/agent feature-boundary changes, run the negative feature-matrix
+    compile commands from `docs/layering-roadmap.md` directly (`cargo check
+    --lib --no-default-features --features mcp-core`, `mcp-server`,
+    `mcp-embedded`, and the `restream-mcp` binary with
+    `mcp-server,mcp-http-backend`). The proof is that lower features compile
+    while `agent-plane`/`agent-execution` stay disabled — run the compiler,
+    do not infer it from the feature graph.
 
 ## Verification
 
@@ -205,9 +209,9 @@ When auditing a candidate seam:
 - keep API contract tests when edge behavior still depends on the seam
 - keep frontend DOM/render tests around refactored UI seams
 - if the change touches hot runtime code or high-frequency frontend refresh paths, follow the benchmark/proof rules in `AGENTS.md`
-- after MCP/agent feature-boundary changes, run at least the reported
-  `mcp-core`-without-`agent-plane` check and the standalone sidecar check from
-  `target/source-audit.json`
+- after MCP/agent feature-boundary changes, run at least the `mcp-core`
+  and standalone sidecar (`mcp-server,mcp-http-backend`) negative feature-matrix
+  compile commands from `docs/layering-roadmap.md`
 
 ## Read This Reference
 

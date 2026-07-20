@@ -574,28 +574,35 @@ deliberate exception: it is the stable observer-facing API beside
 `domain::state` remains the defining owner. Remove the re-export only as a
 versioned public-API change, not as an internal layering cleanup.
 
-Run `scripts/check/source-audit.sh` after changing a candidate boundary. Its
-additive report fields are:
+Run `scripts/check/source-audit.sh` after changing a candidate boundary. It
+stays deliberately mechanical and bash/grep-only: forbidden-import greps, the
+per-file raw-line-count report (`target/source-audit.json`, one JSON object
+per audited file with its size band and responsibility class), approved
+`std::env::var` owners, and the API/harness guardrails it has always run.
 
-- `boundaryHazards.wrongDirectionImports`: blocking encoded lower-to-higher
-  imports
-- `boundaryHazards.upwardCompatibilityReexports`: review-only wrong-direction,
-  allowed cross-owner, and explicit/re-export-only same-owner facades that can
-  conceal an unfinished migration; ordinary curated same-owner exports are
-  omitted
-- `boundaryHazards.parserChecks`: deterministic grouped/multiline Rust
-  `crate::{...}` import coverage
-- `boundaryHazards.externalInherentImpls`: review-only owner/implementation
-  sites, including whether they cross layers
-- `featureTopology.features` and `featureTopology.closures`: declared and
-  transitive feature edges for `mcp-core`, `mcp-server`, `mcp-http-backend`,
-  and `mcp-embedded`
-- `featureTopology.staticChecks`: adapter-local gate and lower-feature topology
-  checks
-- `featureTopology.negativeMatrix`: requested features, computed closures,
-  evaluated `mustEnable`/`mustNotEnable` claims, and unexecuted Cargo proof
-  commands. Each row records `executed: false`; run those resource-limited
-  commands separately before claiming compile proof.
+Wrong-direction imports, upward-compatibility re-export facades, external
+inherent `impl` placement, and Cargo feature-topology closures are reviewed
+with the Graphify code graph instead of a maintained parser
+(`docs/agent-guidance/graphify.md`): `graphify explain "<Type>"` and
+`graphify path "<A>" "<B>"` answer "who depends on this" and "does an edge
+exist between these two owners" directly against the real dependency graph,
+without a second bespoke Rust-import parser to keep in sync with the
+language. Use the Layering Ladder and Ownership Matrix in this document as
+the ownership rules to check the graph against.
+
+After MCP/agent feature-boundary changes, prove the topology by running the
+negative-matrix commands directly rather than inspecting a generated claim:
+
+```sh
+scripts/build/resource-limit.sh cargo check --lib --no-default-features --features mcp-core
+scripts/build/resource-limit.sh cargo check --lib --no-default-features --features mcp-server
+scripts/build/resource-limit.sh cargo check --bin restream-mcp --no-default-features --features mcp-server,mcp-http-backend
+scripts/build/resource-limit.sh cargo check --lib --no-default-features --features mcp-embedded
+```
+
+Each should succeed while `agent-plane`/`agent-execution` stay disabled. That
+compiler run is the proof; a topology-only claim about the feature graph is
+not a substitute for it.
 
 Do not turn every external inherent implementation into a failure. Same-layer
 engine/protocol extension impls and infrastructure constructors can be
@@ -637,8 +644,9 @@ Best next low-risk code steps:
 
 1. Keep every Rust file below 1,000 and work down the 800-999 warning cluster
    only where another owner is clear.
-2. Use `boundaryHazards.externalInherentImpls` when evaluating a proposed crate;
-   move or replace only the impls that would actually cross that boundary.
+2. Use Graphify (`docs/agent-guidance/graphify.md`) when evaluating a proposed
+   crate; query the real dependency graph for external inherent impls and
+   move or replace only the ones that would actually cross that boundary.
 3. Preserve the clean contracts/planner DAG and collect rebuild/reuse evidence
    before proposing packages.
 4. Keep agent-core feature-independent and run the reported negative matrix
