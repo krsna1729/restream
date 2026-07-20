@@ -707,6 +707,9 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test('select pipeline and click Play preview triggers HLS load', async ({ page }) => {
+        // This test exercises the legacy player DOM specifically; the v2
+        // player is covered by the "ui=v2 mounts..." test below.
+        await page.goto('/?ui=legacy');
         await openPipelineWorkspace(page);
         const pipelineItem = page.locator('#pipelines li', {
             hasText: livePipelineName,
@@ -1070,6 +1073,8 @@ test.describe.serial('HLS Player — alternate audio preview', () => {
         };
         page.on('response', responseListener);
 
+        // This test exercises the legacy player DOM specifically.
+        await page.goto('/?ui=legacy');
         await openPipelineWorkspace(page);
         const pipelineItem = page.locator('#pipelines li', { hasText: pipelineName });
         await expect(pipelineItem).toBeVisible({ timeout: 10000 });
