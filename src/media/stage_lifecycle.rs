@@ -5,10 +5,24 @@
 //! observers consume the types beside `StageLifecycleSnapshot`, while the
 //! implementation and dependency ownership remain in `domain`.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 pub use crate::domain::state::{StageBackendKind, StagePhase};
+
+// A panic while holding `StageLifecycle::inner` (e.g. from an unrelated bug
+// elsewhere in the same critical section) must not permanently disable
+// lifecycle tracking for the rest of the stage's life: every other lock site
+// uses `.expect()`, so poisoning here would cascade into a stuck
+// `.expect()` panic on every subsequent transition/snapshot call, in
+// violation of the "no internal failure path may crash the engine" rule in
+// AGENTS.md. Recovering the guard is safe because the inner state is a
+// plain data struct with no invariant that spans multiple field writes.
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[derive(Clone, Debug)]
 pub struct StageLifecycleSnapshot {
@@ -102,7 +116,7 @@ impl StageLifecycle {
     }
 
     pub fn transition(&self, phase: StagePhase) {
-        let mut inner = self.inner.lock().expect("stage lifecycle lock poisoned");
+        let mut inner = lock_or_recover(&self.inner);
         // A stale StartingBackend/BackendSpawned event racing in after the
         // stage has already progressed past first input must be ignored
         // wholesale: not just the phase, but also the backend kind and pid
@@ -132,7 +146,7 @@ impl StageLifecycle {
     }
 
     pub fn record_first_input(&self) {
-        let mut inner = self.inner.lock().expect("stage lifecycle lock poisoned");
+        let mut inner = lock_or_recover(&self.inner);
         if inner.first_input_at.is_none() {
             inner.first_input_at = Some(Instant::now());
             if matches!(
@@ -145,7 +159,7 @@ impl StageLifecycle {
     }
 
     pub fn record_first_output(&self) {
-        let mut inner = self.inner.lock().expect("stage lifecycle lock poisoned");
+        let mut inner = lock_or_recover(&self.inner);
         if inner.first_output_at.is_none() {
             inner.first_output_at = Some(Instant::now());
             if matches!(
@@ -161,7 +175,7 @@ impl StageLifecycle {
     }
 
     pub fn record_producing(&self) {
-        let mut inner = self.inner.lock().expect("stage lifecycle lock poisoned");
+        let mut inner = lock_or_recover(&self.inner);
         if matches!(
             inner.phase,
             StagePhase::FirstOutput
@@ -174,13 +188,13 @@ impl StageLifecycle {
     }
 
     pub fn record_error(&self, error: impl Into<String>) {
-        let mut inner = self.inner.lock().expect("stage lifecycle lock poisoned");
+        let mut inner = lock_or_recover(&self.inner);
         inner.last_error = Some(error.into());
         inner.phase = StagePhase::Failed;
     }
 
     pub fn snapshot(&self) -> StageLifecycleSnapshot {
-        let inner = self.inner.lock().expect("stage lifecycle lock poisoned");
+        let inner = lock_or_recover(&self.inner);
         StageLifecycleSnapshot {
             phase: inner.phase.clone(),
             backend: inner.backend,
@@ -193,18 +207,11 @@ impl StageLifecycle {
     }
 
     pub fn current_phase(&self) -> StagePhase {
-        self.inner
-            .lock()
-            .expect("stage lifecycle lock poisoned")
-            .phase
-            .clone()
+        lock_or_recover(&self.inner).phase.clone()
     }
 
     pub fn current_backend(&self) -> StageBackendKind {
-        self.inner
-            .lock()
-            .expect("stage lifecycle lock poisoned")
-            .backend
+        lock_or_recover(&self.inner).backend
     }
 }
 
@@ -449,5 +456,24 @@ mod tests {
             StageBackendKind::InternalFfmpeg,
         );
         assert_eq!(lc.current_backend(), StageBackendKind::InternalFfmpeg);
+    }
+
+    #[test]
+    fn poisoned_inner_lock_does_not_panic_subsequent_calls() {
+        let lc = StageLifecycle::new(StagePhase::Producing);
+
+        let poison_lc = lc.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = poison_lc.inner.lock().unwrap();
+            panic!("poison stage lifecycle lock");
+        }));
+
+        lc.record_error("recovered after poison");
+        assert_eq!(lc.current_phase(), StagePhase::Failed);
+        assert_eq!(
+            lc.snapshot().last_error,
+            Some("recovered after poison".to_string()),
+            "a poisoned lifecycle lock must still be usable by later transitions and reads"
+        );
     }
 }
