@@ -8,9 +8,9 @@ use crate::domain::ids::{OutputId, PipelineId};
 use crate::domain::output_spec::OutputConfig;
 use crate::domain::stage::{StageKey, StageKind};
 use crate::domain::state::StageBackendKind;
-use crate::planner::backend_policy::BackendPolicy;
-use crate::planner::output_path::OutputPath;
 use crate::runtime::graph::{GraphRole, StageGraphPlan};
+
+use super::{BackendPolicy, output_path::OutputPath};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedOutput {
