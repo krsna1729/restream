@@ -84,9 +84,17 @@ pub enum OperationStoreError {
 }
 
 #[derive(Default)]
+struct AgentExecutionState {
+    records: HashMap<String, OperationRecord>,
+    idempotency: HashMap<String, String>,
+}
+
+// records and idempotency share a single lock so idempotency-key dedup in
+// `create()` is atomic end-to-end: two concurrent creates with the same key
+// must not both observe "not present yet" and both insert a full record.
+#[derive(Default)]
 pub struct AgentExecutionStore {
-    records: Mutex<HashMap<String, OperationRecord>>,
-    idempotency: Mutex<HashMap<String, String>>,
+    state: Mutex<AgentExecutionState>,
 }
 
 impl AgentExecutionStore {
@@ -102,9 +110,11 @@ impl AgentExecutionStore {
             .idempotency_key
             .as_ref()
             .map(|_| operation_idempotency_hash(&request, &plan_hash));
+
+        let mut state = lock_or_recover(&self.state);
         if let Some(key) = request.idempotency_key.as_deref()
-            && let Some(operation_id) = lock_or_recover(&self.idempotency).get(key).cloned()
-            && let Some(record) = lock_or_recover(&self.records).get(&operation_id).cloned()
+            && let Some(operation_id) = state.idempotency.get(key).cloned()
+            && let Some(record) = state.records.get(&operation_id).cloned()
         {
             if record.idempotency_hash.as_ref() != idempotency_hash.as_ref() {
                 return Err(OperationStoreError::IdempotencyConflict);
@@ -176,13 +186,10 @@ impl AgentExecutionStore {
         };
 
         if let Some(key) = record.idempotency_key.clone() {
-            lock_or_recover(&self.idempotency).insert(key, operation_id.clone());
+            state.idempotency.insert(key, operation_id.clone());
         }
-        {
-            let mut records = lock_or_recover(&self.records);
-            records.insert(operation_id.clone(), record.clone());
-            self.enforce_record_limit(&mut records);
-        }
+        state.records.insert(operation_id.clone(), record.clone());
+        Self::enforce_record_limit(&mut state);
 
         Ok(StoreCreateResult {
             operation: public_record(&record),
@@ -191,7 +198,10 @@ impl AgentExecutionStore {
     }
 
     pub fn get(&self, operation_id: &str) -> Option<OperationRecord> {
-        lock_or_recover(&self.records).get(operation_id).cloned()
+        lock_or_recover(&self.state)
+            .records
+            .get(operation_id)
+            .cloned()
     }
 
     pub fn approve(
@@ -199,8 +209,9 @@ impl AgentExecutionStore {
         operation_id: &str,
         approval: ApprovalRequest,
     ) -> Result<OperationRecord, OperationStoreError> {
-        let mut records = lock_or_recover(&self.records);
-        let record = records
+        let mut state = lock_or_recover(&self.state);
+        let record = state
+            .records
             .get_mut(operation_id)
             .ok_or(OperationStoreError::NotFound)?;
         match record.status {
@@ -232,8 +243,9 @@ impl AgentExecutionStore {
     }
 
     pub fn start_apply(&self, operation_id: &str) -> Result<OperationRecord, OperationStoreError> {
-        let mut records = lock_or_recover(&self.records);
-        let record = records
+        let mut state = lock_or_recover(&self.state);
+        let record = state
+            .records
             .get_mut(operation_id)
             .ok_or(OperationStoreError::NotFound)?;
         match record.status {
@@ -322,23 +334,23 @@ impl AgentExecutionStore {
         operation_id: &str,
         f: impl FnOnce(&mut OperationRecord, String),
     ) -> Option<OperationRecord> {
-        let mut records = lock_or_recover(&self.records);
-        let record = records.get_mut(operation_id)?;
+        let mut state = lock_or_recover(&self.state);
+        let record = state.records.get_mut(operation_id)?;
         let ts = now();
         f(record, ts.clone());
         record.updated_at = ts;
         Some(record.clone())
     }
 
-    fn enforce_record_limit(&self, records: &mut HashMap<String, OperationRecord>) {
-        while records.len() > MAX_AGENT_EXECUTION_RECORDS {
-            let Some(operation_id) = oldest_operation_id(records) else {
+    fn enforce_record_limit(state: &mut AgentExecutionState) {
+        while state.records.len() > MAX_AGENT_EXECUTION_RECORDS {
+            let Some(operation_id) = oldest_operation_id(&state.records) else {
                 return;
             };
-            if let Some(record) = records.remove(&operation_id)
+            if let Some(record) = state.records.remove(&operation_id)
                 && let Some(key) = record.idempotency_key
             {
-                lock_or_recover(&self.idempotency).remove(&key);
+                state.idempotency.remove(&key);
             }
         }
     }
@@ -559,14 +571,14 @@ mod tests {
     fn record_limit_evicts_oldest_and_removes_idempotency_key() {
         let store = AgentExecutionStore::default();
         {
-            let mut records = lock_or_recover(&store.records);
-            records.insert(
+            let mut state = lock_or_recover(&store.state);
+            state.records.insert(
                 "old".to_string(),
                 test_record("old", Some("old-key".to_string()), "2026-01-01T00:00:00Z"),
             );
             for index in 0..MAX_AGENT_EXECUTION_RECORDS {
                 let operation_id = format!("new-{index}");
-                records.insert(
+                state.records.insert(
                     operation_id.clone(),
                     test_record(
                         &operation_id,
@@ -575,37 +587,43 @@ mod tests {
                     ),
                 );
             }
-        }
-        {
-            let mut idempotency = lock_or_recover(&store.idempotency);
-            idempotency.insert("old-key".to_string(), "old".to_string());
+            state
+                .idempotency
+                .insert("old-key".to_string(), "old".to_string());
             for index in 0..MAX_AGENT_EXECUTION_RECORDS {
-                idempotency.insert(format!("new-key-{index}"), format!("new-{index}"));
+                state
+                    .idempotency
+                    .insert(format!("new-key-{index}"), format!("new-{index}"));
             }
         }
 
-        let mut records = lock_or_recover(&store.records);
-        store.enforce_record_limit(&mut records);
-        drop(records);
+        {
+            let mut state = lock_or_recover(&store.state);
+            AgentExecutionStore::enforce_record_limit(&mut state);
+        }
 
         assert!(store.get("old").is_none());
         assert_eq!(
-            lock_or_recover(&store.records).len(),
+            lock_or_recover(&store.state).records.len(),
             MAX_AGENT_EXECUTION_RECORDS
         );
-        assert!(!lock_or_recover(&store.idempotency).contains_key("old-key"));
+        assert!(
+            !lock_or_recover(&store.state)
+                .idempotency
+                .contains_key("old-key")
+        );
     }
 
     #[test]
     fn poisoned_record_lock_does_not_panic_reads() {
         let store = AgentExecutionStore::default();
-        lock_or_recover(&store.records).insert(
+        lock_or_recover(&store.state).records.insert(
             "op".to_string(),
             test_record("op", Some("key".to_string()), "2026-01-01T00:00:00Z"),
         );
 
         let _ = std::panic::catch_unwind(|| {
-            let _guard = store.records.lock().unwrap();
+            let _guard = store.state.lock().unwrap();
             panic!("poison records lock");
         });
 
@@ -667,5 +685,53 @@ mod tests {
             approved.approval.unwrap().approved_by,
             AUTHENTICATED_DASHBOARD_APPROVER
         );
+    }
+
+    #[test]
+    fn concurrent_create_with_same_idempotency_key_creates_exactly_one_record() {
+        let store = std::sync::Arc::new(AgentExecutionStore::default());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let store = std::sync::Arc::clone(&store);
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let request = test_request(Some("race-key".to_string()));
+                    barrier.wait();
+                    store
+                        .create(request, test_plan(), 0)
+                        .expect("create should not error for identical requests")
+                })
+            })
+            .collect();
+
+        let results: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("thread should not panic"))
+            .collect();
+
+        let operation_ids: std::collections::HashSet<_> = results
+            .iter()
+            .map(|result| {
+                result.operation["operationId"]
+                    .as_str()
+                    .expect("operationId present")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            operation_ids.len(),
+            1,
+            "all concurrent creates with the same idempotency key must resolve to one operation"
+        );
+
+        let reused_count = results.iter().filter(|result| result.reused).count();
+        assert_eq!(
+            reused_count, 7,
+            "exactly one create should win and the rest should be reported as reused"
+        );
+
+        assert_eq!(lock_or_recover(&store.state).records.len(), 1);
     }
 }
