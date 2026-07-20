@@ -49,8 +49,9 @@ use crate::media::ffmpeg::stage_plan::{FfmpegStagePlan, VideoStageOp};
 use crate::media::mpegts::TsDemuxer;
 use crate::media::pipe_metrics::PipeMetrics;
 
+use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
+use crate::media::ring_buffer::MEDIA_PRODUCER_BATCH_PACKETS;
 use crate::media::stage_lifecycle::{StageBackendKind, StageLifecycleGuard, StagePhase};
-use crate::media::{MEDIA_PRODUCER_BATCH_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
 
 mod ffmpeg_process;
 use ffmpeg_process::{ExternalStdinSink, spawn_external_stderr_logger};
@@ -67,13 +68,13 @@ const PIPE_STALL_THRESHOLD_US: u64 = 1_000;
 use crate::media::timing;
 
 #[cfg(test)]
-use crate::media::ring_buffer::MediaType;
+use crate::media::packet::MediaType;
 
 #[cfg(test)]
 fn external_output_stream_idx(
     media_type: MediaType,
     track_index: u32,
-    audio_tracks: &[crate::media::engine::AudioMeta],
+    audio_tracks: &[crate::media::metadata::AudioMeta],
     include_audio: bool,
 ) -> Option<usize> {
     match media_type {

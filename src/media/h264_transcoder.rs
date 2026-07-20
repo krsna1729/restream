@@ -21,7 +21,7 @@ use crate::domain::stage::StageKey;
 use crate::media::avio::MemoryQueue;
 use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ffmpeg::stage_output::{StageOutputNormalizer, StageOutputSink};
-use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat};
+use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use crate::media::transcoder::InternalMemoryQueueSink;
 
 #[cfg(test)]

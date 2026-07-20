@@ -6,7 +6,7 @@
 //! keys or preset names.
 
 use crate::domain::stage::StageKey;
-use crate::media::engine::{AudioMeta, VideoMeta};
+use crate::media::metadata::{AudioMeta, VideoMeta};
 
 /// Codec kinds that can appear in a stage plan.
 #[derive(Clone, Debug, PartialEq, Eq)]

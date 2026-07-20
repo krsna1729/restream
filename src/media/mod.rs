@@ -9,8 +9,13 @@ pub mod codec;
 pub mod engine;
 mod engine_egress;
 pub mod engine_hls;
+mod engine_ingest;
+mod engine_ingest_metadata;
+mod engine_pipeline;
 pub mod engine_registries;
+mod engine_runtime;
 mod engine_snapshots;
+pub(crate) mod external_file_ingest;
 pub mod external_transcoder;
 pub mod feeder;
 pub mod file_analysis;
@@ -22,10 +27,11 @@ pub use hls::preview as hls_preview_runtime;
 pub use hls::upload as hls_upload;
 pub mod ingest_auth;
 pub mod input_gate;
+pub mod metadata;
 pub mod mpegts;
+pub mod packet;
 pub mod pipe_metrics;
 pub mod profiles;
-pub mod protocols;
 pub mod recording;
 pub mod ring_buffer;
 pub mod rtmp;
@@ -45,11 +51,7 @@ pub mod timing;
 pub mod transcoder;
 pub mod ts_chunk_ring;
 
-/// Max media packets a runtime reader processes per hot-loop burst.
-pub const MEDIA_PULL_BURST_PACKETS: usize = 32;
-
-/// Soft cap for producer-side ring publications from demux/transcode drains.
-pub const MEDIA_PRODUCER_BATCH_PACKETS: usize = MEDIA_PULL_BURST_PACKETS;
+use ring_buffer::MEDIA_PULL_BURST_PACKETS;
 
 /// One fixed-size MPEG-TS packet.
 pub const MPEG_TS_PACKET_BYTES: usize = 188;
@@ -66,13 +68,7 @@ pub const MEDIA_TS_BATCH_TARGET_BYTES: usize = SRT_TS_PAYLOAD_BYTES * MEDIA_PULL
 #[cfg(test)]
 mod namespace_tests {
     #[test]
-    fn phase_h_adapter_namespaces_are_exported() {
-        let _rtmp_ingest = crate::media::protocols::rtmp::ingest::start_rtmp_server_on;
-        let _rtmp_egress = crate::media::protocols::rtmp::egress::start_rtmp_egress;
-        let _srt_version =
-            crate::media::protocols::srt::ingest::linked_srt_version as fn() -> String;
-        let _srt_egress = crate::media::protocols::srt::egress::start_srt_egress;
-        let _ = std::mem::size_of::<crate::media::protocols::srt::quality::SrtTraceBStats>();
+    fn recording_namespaces_are_exported() {
         let _ = std::mem::size_of::<crate::media::recording::runtime::RecordingStart>();
         let _ = std::mem::size_of::<crate::media::recording::writer::RecordingStart>();
     }

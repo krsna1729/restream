@@ -12,23 +12,30 @@
 pub mod fmp4;
 pub mod preview;
 pub mod preview_graph;
-pub mod ts;
+mod segmenter;
+mod store;
 pub mod upload;
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+#[cfg(test)]
+use std::sync::Arc;
 
-use bytes::{Bytes, BytesMut};
-use tokio_util::sync::CancellationToken;
+#[cfg(test)]
+use bytes::Bytes;
 
-use crate::domain::stage::{StageKey, StageKind};
-use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
-use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
-use crate::media::ring_buffer::{MediaType, Reader, RingBuffer};
-use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
+use crate::domain::stage::StageKey;
+#[cfg(test)]
+use crate::domain::stage::StageKind;
+#[cfg(test)]
+use crate::media::engine::MediaEngine;
+use crate::media::metadata::VideoMeta;
+#[cfg(test)]
+use crate::media::packet::MediaType;
+#[cfg(test)]
+use crate::media::ring_buffer::RingBuffer;
 
-const TARGET_DURATION_SECS: f64 = 6.0;
+pub use segmenter::start_hls_segmenter;
+pub use store::{HlsSegmentSnapshot, HlsSegmentVariant, HlsStore, HlsStoreSnapshot};
+
 const MIN_SEGMENT_SECS: f64 = 1.0;
 const SEGMENT_CAPACITY: usize = 8 * 1024 * 1024;
 // Keep a longer live window so preview clients can still fetch segments that are
@@ -65,397 +72,6 @@ impl HlsConfig {
             segment_capacity: config.hls_segment_capacity_bytes,
             max_segments: config.hls_max_segments,
         }
-    }
-}
-
-struct HlsSegment {
-    index: u64,
-    duration: f64,
-    data: Bytes,
-}
-
-#[derive(Clone)]
-pub struct HlsSegmentSnapshot {
-    pub index: u64,
-    pub data: Bytes,
-}
-
-pub struct HlsStoreSnapshot {
-    pub playlist: String,
-    pub segments: Vec<HlsSegmentSnapshot>,
-}
-
-pub struct HlsStore {
-    inner: Mutex<HlsStoreInner>,
-    config: HlsConfig,
-}
-
-struct HlsStoreInner {
-    segments: VecDeque<HlsSegment>,
-    next_index: u64,
-    target_duration: f64,
-    video: Option<VideoMeta>,
-    audio_tracks: Vec<AudioMeta>,
-    variant_segments: HashMap<(u64, HlsSegmentVariant), Bytes>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HlsSegmentVariant {
-    Video,
-    Audio(u32),
-}
-
-impl Default for HlsStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl HlsStore {
-    pub fn new() -> Self {
-        Self::with_config(HlsConfig::default())
-    }
-
-    pub fn with_config(config: HlsConfig) -> Self {
-        Self {
-            inner: Mutex::new(HlsStoreInner {
-                segments: VecDeque::new(),
-                next_index: 0,
-                target_duration: TARGET_DURATION_SECS,
-                video: None,
-                audio_tracks: Vec::new(),
-                variant_segments: HashMap::new(),
-            }),
-            config,
-        }
-    }
-
-    pub fn config(&self) -> HlsConfig {
-        self.config
-    }
-
-    pub fn clear(&self) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.segments.clear();
-        inner.next_index = 0;
-        inner.target_duration = TARGET_DURATION_SECS;
-        inner.variant_segments.clear();
-    }
-
-    pub fn push_segment(&self, duration: f64, data: Bytes) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let index = inner.next_index;
-        inner.next_index += 1;
-        if duration > inner.target_duration {
-            inner.target_duration = duration.ceil();
-        }
-        inner.segments.push_back(HlsSegment {
-            index,
-            duration,
-            data,
-        });
-        while inner.segments.len() > self.config.max_segments {
-            if let Some(segment) = inner.segments.pop_front() {
-                inner
-                    .variant_segments
-                    .retain(|(segment_index, _), _| *segment_index != segment.index);
-            }
-        }
-    }
-
-    pub fn get_playlist(&self) -> Option<String> {
-        self.get_playlist_with_segment_uri(|index| format!("seg{index}.ts"))
-    }
-
-    pub fn get_playlist_with_segment_uri<F>(&self, mut segment_uri: F) -> Option<String>
-    where
-        F: FnMut(u64) -> String,
-    {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if inner.segments.is_empty() {
-            return None;
-        }
-        let first_seq = inner.segments.front().map(|s| s.index).unwrap_or(0);
-        let target_dur = inner.target_duration.ceil() as u64;
-
-        let mut m3u8 = format!(
-            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:{}\n#EXT-X-MEDIA-SEQUENCE:{}\n",
-            target_dur, first_seq
-        );
-        for seg in &inner.segments {
-            let uri = segment_uri(seg.index);
-            m3u8.push_str(&format!("#EXTINF:{:.3},\n{}\n", seg.duration, uri));
-        }
-        Some(m3u8)
-    }
-
-    pub fn get_segment(&self, index: u64) -> Option<Bytes> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner
-            .segments
-            .iter()
-            .find(|s| s.index == index)
-            .map(|s| s.data.clone())
-    }
-
-    pub fn set_stream_metadata(&self, video: Option<VideoMeta>, audio_tracks: Vec<AudioMeta>) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.video = video;
-        inner.audio_tracks = audio_tracks;
-    }
-
-    pub fn stream_metadata(&self) -> (Option<VideoMeta>, Vec<AudioMeta>) {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        (inner.video.clone(), inner.audio_tracks.clone())
-    }
-
-    pub fn get_variant_segment(&self, index: u64, variant: HlsSegmentVariant) -> Option<Bytes> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.variant_segments.get(&(index, variant)).cloned()
-    }
-
-    pub fn put_variant_segment(&self, index: u64, variant: HlsSegmentVariant, data: Bytes) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if inner.segments.iter().any(|segment| segment.index == index) {
-            inner.variant_segments.insert((index, variant), data);
-        }
-    }
-
-    pub fn snapshot(&self) -> Option<HlsStoreSnapshot> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if inner.segments.is_empty() {
-            return None;
-        }
-        let first_seq = inner.segments.front().map(|s| s.index).unwrap_or(0);
-        let target_dur = inner.target_duration.ceil() as u64;
-        let mut playlist = format!(
-            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:{}\n#EXT-X-MEDIA-SEQUENCE:{}\n",
-            target_dur, first_seq
-        );
-        let mut segments = Vec::with_capacity(inner.segments.len());
-        for seg in &inner.segments {
-            playlist.push_str(&format!(
-                "#EXTINF:{:.3},\nseg{}.ts\n",
-                seg.duration, seg.index
-            ));
-            segments.push(HlsSegmentSnapshot {
-                index: seg.index,
-                data: seg.data.clone(),
-            });
-        }
-        Some(HlsStoreSnapshot { playlist, segments })
-    }
-}
-
-pub async fn start_hls_segmenter(
-    pipeline_id: String,
-    store: Arc<HlsStore>,
-    ring_buffer: Arc<RingBuffer>,
-    audio_ring_buffer: Option<Arc<RingBuffer>>,
-    engine: Arc<MediaEngine>,
-    cancel_token: CancellationToken,
-    start: HlsSegmenterStart,
-) {
-    let hls_stage_key = start
-        .planned_stage_key
-        .unwrap_or_else(|| StageKey::new(pipeline_id.as_str(), StageKind::hls()));
-    let (lifecycle, metrics) = engine
-        .get_or_create_non_ring_stage_runtime(
-            hls_stage_key.clone(),
-            crate::media::stage_lifecycle::StagePhase::Registered,
-            crate::media::stage_lifecycle::StageBackendKind::HlsSegmenter,
-            cancel_token.clone(),
-        )
-        .await;
-    let _lifecycle_guard =
-        crate::media::stage_lifecycle::StageLifecycleGuard::new(lifecycle.clone());
-    lifecycle.transition(crate::media::stage_lifecycle::StagePhase::BackendSpawned {
-        backend: crate::media::stage_lifecycle::StageBackendKind::HlsSegmenter,
-        pid: None,
-    });
-    engine
-        .runtime
-        .event_log
-        .emit(crate::events::EventKind::StageRegistered {
-            pipeline_id: pipeline_id.clone(),
-            encoding: "hls".to_string(),
-        });
-    let mut reader = Reader::new(format!("hls:{}", pipeline_id), ring_buffer.clone());
-    let mut audio_reader = audio_ring_buffer
-        .clone()
-        .map(|ring| Reader::new(format!("hls-audio:{}", pipeline_id), ring));
-    let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
-    let mut audio_packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
-    let mut feeder: Option<TsPacketFeeder> = None;
-    // Pre-populate SPS/PPS cache from the engine's stored FLV sequence header.
-    // This handles the case where the HLS task starts after the seq header has
-    // already passed through the ring buffer (e.g. late-joining consumers).
-    let (video_sequence_header, _) = engine.get_sequence_headers(&pipeline_id).await;
-    let config = store.config();
-    let mut accumulator = BytesMut::with_capacity(config.segment_capacity);
-    let mut segment_start = Instant::now();
-    let mut got_first_keyframe = false;
-    let mut ts_packet_buf = Vec::<u8>::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
-    let preview_video_meta = start.video_meta_override.clone();
-
-    loop {
-        tokio::select! {
-            _ = cancel_token.cancelled() => break,
-            _ = reader.wait_for_data() => {
-                loop {
-                    packets.clear();
-                    match reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {}
-                    }
-
-                    if let Some(audio_reader) = audio_reader.as_mut() {
-                        audio_packets.clear();
-                        let _ = audio_reader.pull_burst(&mut audio_packets, MEDIA_PULL_BURST_PACKETS);
-                    }
-
-                    for packet in packets.iter().chain(
-                        audio_packets
-                            .iter()
-                            .filter(|packet| packet.media_type == MediaType::Audio),
-                    ) {
-                        if packet.media_type == MediaType::Video && packet.is_keyframe {
-                            if got_first_keyframe {
-                                let elapsed = segment_start.elapsed().as_secs_f64();
-                                if elapsed >= config.min_segment_secs && !accumulator.is_empty() {
-                                    let ts_segment = accumulator.split().freeze();
-                                    store.push_segment(elapsed, ts_segment);
-                                    accumulator.reserve(config.segment_capacity);
-                                    segment_start = Instant::now();
-                                }
-                            }
-                            got_first_keyframe = true;
-                        }
-
-                        if !got_first_keyframe {
-                            continue;
-                        }
-
-                        metrics.record_in(packet.payload.len() as u64);
-
-                        // Lazily create the feeder once we have ingest metadata.
-                        // Wait for video metadata to avoid creating a muxer with zero audio
-                        // streams when the probe hasn't completed yet.
-                        if feeder.is_none() {
-                            let (video, audio_tracks) = loop {
-                                if cancel_token.is_cancelled() {
-                                    engine.remove_stage_runtime(&hls_stage_key).await;
-                                    engine.runtime.event_log.emit(crate::events::EventKind::StageStopped {
-                                        pipeline_id: pipeline_id.clone(),
-                                        encoding: "hls".to_string(),
-                                    });
-                                    return;
-                                }
-                                if let Some(tracks) = ring_buffer
-                                    .audio_tracks()
-                                    .filter(|tracks| !tracks.is_empty())
-                                {
-                                    let video = if let Some(video) = preview_video_meta.clone() {
-                                        Some(video)
-                                    } else {
-                                        let ingests = engine.ingests.active.read().await;
-                                        ingests
-                                            .get(&pipeline_id)
-                                            .and_then(|ingest| ingest.metadata().video)
-                                    };
-                                    if video.is_some() {
-                                        break (video, std::sync::Arc::new(tracks.to_vec()));
-                                    }
-                                }
-                                if let Some(audio_ring_buffer) = audio_ring_buffer.as_ref()
-                                    && let Some(tracks) = audio_ring_buffer
-                                        .audio_tracks()
-                                        .filter(|tracks| !tracks.is_empty())
-                                {
-                                    let video = if let Some(video) = preview_video_meta.clone() {
-                                        Some(video)
-                                    } else {
-                                        let ingests = engine.ingests.active.read().await;
-                                        ingests
-                                            .get(&pipeline_id)
-                                            .and_then(|ingest| ingest.metadata().video)
-                                    };
-                                    if video.is_some() {
-                                        break (video, std::sync::Arc::new(tracks.to_vec()));
-                                    }
-                                }
-                                let result = {
-                                    let ingests = engine.ingests.active.read().await;
-                                    ingests.get(&pipeline_id).and_then(|i| {
-                                        let metadata = i.metadata();
-                                        let video =
-                                            preview_video_meta.clone().or(metadata.video);
-                                        video.as_ref()?;
-                                        let lock = i.audio_tracks.lock().unwrap_or_else(|e| e.into_inner());
-                                        let tracks = if lock.is_empty()
-                                            && let Some(audio) = metadata.audio {
-                                                std::sync::Arc::new(vec![audio])
-                                            } else {
-                                                std::sync::Arc::clone(&lock)
-                                            };
-                                        Some((video, tracks))
-                                    })
-                                };
-                                if let Some(meta) = result {
-                                    break meta;
-                                }
-                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                            };
-                            let audio_tracks_vec = audio_tracks.as_ref().clone();
-                            feeder = Some(TsPacketFeeder::new(
-                                video.as_ref(),
-                                audio_tracks,
-                                PacketFeedConfig {
-                                    video_sequence_header: video_sequence_header
-                                        .as_ref()
-                                        .map(|v| v.to_vec()),
-                                    raw_video_parameter_sets: reader
-                                        .current_ring()
-                                        .video_parameter_sets()
-                                        .map(|v| v.to_vec()),
-                                    ..PacketFeedConfig::default()
-                                },
-                            ));
-                            store.set_stream_metadata(video.clone(), audio_tracks_vec);
-                        }
-
-                        let Some(ref mut feeder) = feeder else {
-                            continue;
-                        };
-
-                        let t0 = Instant::now();
-                        ts_packet_buf.clear();
-                        let wrote = feeder.extend_ts_for_packet(packet, &mut ts_packet_buf);
-                        metrics.record_processing(t0.elapsed().as_micros() as u64);
-                        if wrote {
-                            metrics.record_out(ts_packet_buf.len() as u64);
-                            accumulator.extend_from_slice(&ts_packet_buf);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    engine.remove_stage_runtime(&hls_stage_key).await;
-    engine
-        .runtime
-        .event_log
-        .emit(crate::events::EventKind::StageStopped {
-            pipeline_id: pipeline_id.clone(),
-            encoding: "hls".to_string(),
-        });
-
-    // Flush remaining data as final segment
-    if !accumulator.is_empty() {
-        let elapsed = segment_start.elapsed().as_secs_f64();
-        let ts_segment = accumulator.freeze();
-        store.push_segment(elapsed, ts_segment);
     }
 }
 
@@ -728,7 +344,7 @@ mod tests {
         assert!(v.is_none());
         assert!(a.is_empty());
 
-        let video = crate::media::engine::VideoMeta {
+        let video = crate::media::metadata::VideoMeta {
             codec: "h264".into(),
             width: 1920,
             height: 1080,
@@ -741,7 +357,7 @@ mod tests {
             level: None,
             pixel_format: None,
         };
-        let audio = crate::media::engine::AudioMeta {
+        let audio = crate::media::metadata::AudioMeta {
             codec: "aac".into(),
             sample_rate: 48000,
             channels: 2,

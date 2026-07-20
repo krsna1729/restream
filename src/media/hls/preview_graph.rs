@@ -8,10 +8,11 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::domain::stage::StageKind;
-use crate::media::engine::{MediaEngine, VideoMeta};
+use crate::media::engine::MediaEngine;
+use crate::media::metadata::VideoMeta;
 use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_runtime::StageRuntimeManager;
-use crate::planner::graph_plan::plan_hls_preview_graph;
+use crate::planner::plan_hls_preview_graph;
 
 /// Resolved HLS preview graph.
 pub struct HlsPreviewGraph {

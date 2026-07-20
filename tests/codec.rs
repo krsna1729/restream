@@ -8,9 +8,9 @@ use restream::media::codec::{
     audio_for_rtmp, audio_for_ts, avcc_to_annexb, build_aac_sequence_header, build_adts_header,
     build_avcc_sequence_header, parse_avcc_config, strip_adts, video_for_rtmp, video_for_ts,
 };
-use restream::media::engine::{AudioMeta, VideoMeta};
+use restream::media::metadata::{AudioMeta, VideoMeta};
 use restream::media::mpegts::TsMuxer;
-use restream::media::ring_buffer::{MediaType, PayloadFormat};
+use restream::media::packet::{MediaType, PayloadFormat};
 
 // ---------------------------------------------------------------------------
 // Minimal test fixtures
