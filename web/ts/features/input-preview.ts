@@ -11,6 +11,12 @@ const MEANINGLESS_LANG = new Set(["und", "unk", "zxx"]);
 
 const hlsInstances = new WeakMap<HTMLVideoElement, Hls>();
 const previewControllers = new WeakMap<HTMLElement, AbortController>();
+// The audio-track picker menu is portal'd to document.body (so it can escape
+// clipped/overflow-hidden preview containers), which detaches it from
+// playerElem's own subtree. Track it per playerElem so clearing one preview
+// instance (e.g. a hidden legacy #video-player while v2 owns the route)
+// cannot also destroy another concurrently-mounted instance's open menu.
+const audioPickerMenus = new WeakMap<HTMLElement, HTMLElement>();
 export function buildInputPreviewUrl(pipelineId: string): string {
   return withBasePath(`/hls/${encodeURIComponent(pipelineId)}/master.m3u8`);
 }
@@ -204,9 +210,8 @@ export function clearInputPreview(playerElem: HTMLElement | null): void {
   }
   playerElem.replaceChildren();
   delete playerElem.dataset.previewSrc;
-  document
-    .querySelectorAll('[data-role="input-preview-audio-menu"]')
-    .forEach((menu) => menu.remove());
+  audioPickerMenus.get(playerElem)?.remove();
+  audioPickerMenus.delete(playerElem);
 }
 
 function setPreviewMessage(playerElem: HTMLElement, message: string): void {
@@ -303,6 +308,7 @@ export function renderInputPreview(
 
   audioPicker.append(audioPickerButton);
   document.body.appendChild(audioPickerMenu);
+  audioPickerMenus.set(playerElem, audioPickerMenu);
 
   function positionAudioTrackPicker(): void {
     const rect = audioPickerButton.getBoundingClientRect();
