@@ -6,8 +6,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "03:00"
-      timezone: "UTC"
+      time: "01:00"
+      timezone: "Asia/Kolkata"
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
@@ -21,8 +21,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "03:15"
-      timezone: "UTC"
+      time: "01:15"
+      timezone: "Asia/Kolkata"
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
@@ -36,8 +36,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "03:30"
-      timezone: "UTC"
+      time: "01:30"
+      timezone: "Asia/Kolkata"
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
@@ -51,8 +51,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "03:45"
-      timezone: "UTC"
+      time: "01:45"
+      timezone: "Asia/Kolkata"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"

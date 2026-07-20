@@ -2,7 +2,11 @@ name: Nightly
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    # 19:30 UTC = 01:00 IST (Asia/Kolkata, UTC+5:30) the next calendar day.
+    # GitHub Actions cron always runs in UTC; there is no timezone field for
+    # workflow-level schedules, so keep this comment in sync if the target
+    # IST time changes.
+    - cron: '30 19 * * *'
   workflow_dispatch:
 
 permissions:
