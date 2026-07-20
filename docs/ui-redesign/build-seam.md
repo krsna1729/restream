@@ -35,22 +35,27 @@
 
 ## Objective
 
-Prove that an opt-in React/Vite island can coexist with the embedded legacy
-dashboard without changing default behavior, routes, API ownership, refresh
-cadence, or stable release asset names.
+The original seam proved that an opt-in React/Vite island could coexist with
+the embedded legacy dashboard without changing routes, API ownership, refresh
+cadence, or stable release asset names. The current default-readiness pass keeps
+those release seams while making the v2 shell the default dashboard experience
+and moving every primary route body into a v2-owned host.
 
 ## Contract
 
-- The legacy dashboard remains the default and continues to boot from
-  `public/js/app/dashboard-entry.js`.
+- `public/js/app/dashboard-entry.js` remains the stable embedded entry and
+  dynamically selects the dashboard UI. With no stored or query override, the
+  loader now resolves to v2; `ui=legacy` remains the explicit fallback.
 - `?mode=overview&ui=v2` preserves the canonical Overview location and loads
-  `public/js/app/dashboard-v2-entry.js` dynamically. Checkpoint-only pipeline
-  routes load `public/js/app/dashboard-v2-checkpoints-entry.js`; both share the
-  stable `public/js/app/dashboard-v2-jsx-runtime.js` chunk.
+  `public/js/app/dashboard-v2-entry.js` dynamically. Dense route bodies for
+  Pipeline Inspect, Pipeline Monitor, Media, Settings, Status, Incidents, and
+  Telemetry load `public/js/app/dashboard-v2-checkpoints-entry.js`; both v2
+  bundles share the stable `public/js/app/dashboard-v2-jsx-runtime.js` chunk.
 - The experimental React root receives a typed, read-only Overview model. It
   does not fetch data, read shared state, own URL state, subscribe to lifecycle
-  events, or own mutations. Under the explicit flag it replaces the Overview
-  presentation only; the legacy renderer remains the unflagged default.
+  events, or own mutations. v2 owns the shell and route-body hosts; existing
+  feature modules keep their runtime/API ownership while rendering into those
+  hosts until each dense control set is rewritten.
 - The existing frontend preparation script remains the sole owner of the
   generated `public/` tree. Vite does not copy or clear that directory.
 - Both legacy TypeScript and the TSX island are type-checked during the normal
@@ -70,11 +75,12 @@ Measurements were taken from the same worktree before and after the seam.
 | Opt-in React bundle, gzip | 0 B | 66,581 B |
 | Shared CSS, gzip | 28,265 B | 28,298 B |
 
-The default route does not request the React bundle. Its measured bootstrap
-delta is 309 gzip bytes across the entry and loader, plus one small module
-request. The opt-in bundle started with a 75,000-byte gzip guardrail; after the
-large-fleet Overview search slice, the current smoke guard is 76,000 bytes with
-the measured rationale recorded below.
+The initial opt-in seam measured a legacy default route that did not request the
+React bundle. Current default-readiness measurements are tracked by the
+Playwright/CDP redesign baseline instead: each default v2 route must expose a
+visible v2-owned body host, leave its legacy fallback body empty, announce the
+same summary through CDP accessibility status text, and stay below its
+route-specific node budget.
 
 The synthetic DOM-operation benchmark remained unchanged for 125 outputs over
 100 refreshes:
@@ -94,11 +100,12 @@ checks. Two integration hazards were caught during the experiment:
 2. Library mode left React's environment branch unresolved until the build
    explicitly defined production mode.
 
-React is not justified as the default merely because the seam works. Its
-66.6 KB gzip floor must be amortized by simpler ownership and tests. The first
-typed feature input and its updated measurement are recorded in
-the follow-up below; `core/api.ts`, the URL contract, polling, and lifecycle
-coordination remain outside the component boundary.
+React was not justified as the default merely because the seam worked. The
+default-readiness bar is now the measured ownership path: Overview, Pipeline
+Operate, Pipeline Inspect, Pipeline Monitor, Media, Settings, Status, Incidents,
+and Telemetry render through v2 shell ownership, while `core/api.ts`, the URL
+contract, polling, and lifecycle coordination remain outside the component
+boundary.
 
 ## Typed Overview view-model follow-up
 
@@ -656,10 +663,10 @@ playlist advancement, and alternate-audio switching. The opt-in bundle moved
 from 296,767 bytes raw and 73,320 bytes gzip in Vite's report to 297,399 bytes
 raw and 73,470 bytes gzip, remaining below the 75,000-byte guardrail.
 
-This completes the selected-pipeline Operate migration for the opt-in React
-surface. The legacy dashboard remains the default, and the experiment still
-shares the existing state, polling, controller, API, and media-lifecycle
-owners rather than introducing a second application runtime.
+This completed the selected-pipeline Operate migration while the React surface
+was still opt-in. The current default-readiness pass now selects v2 by default,
+and the surface still shares the existing state, polling, controller, API, and
+media-lifecycle owners rather than introducing a second application runtime.
 
 ## Overview large-fleet search
 
@@ -690,9 +697,9 @@ Pipeline Inspect now has a first v2-owned checkpoint strip above the legacy
 graph/resource panels. The checkpoint summarizes pipeline health, input/output
 scope, graph readiness, attention count, and the suggested diagnostic next step,
 while the existing graph explorer, resource attribution, diagnostics modal, and
-output-preview search remain legacy-owned underneath it.
+output-preview search render inside the v2-owned route body.
 
-This is intentionally a partial ownership step rather than a full Inspect
+This is intentionally a route-ownership step rather than a full Inspect React
 rewrite. It moves the operator's first decision point into the React seam
 without duplicating graph rendering or resource-map logic. The seeded
 Playwright/CDP proof covers Overview → Inspect navigation, visible checkpoint
@@ -713,31 +720,31 @@ pipeline monitor coverage, missing monitoring URLs, active search narrowing,
 lazy web-preview count, and the next operator step before the iframe/player grid
 appears.
 
-The full monitoring wall remains legacy-owned. Playback, mute/play-all controls,
-monitoring URL edits, save validation, direct Open/Copy actions, YouTube status
-checks, and lazy iframe mounting still live in `control-room.ts`. The v2 model is
-read-only and exists to make the wall's state legible before the operator starts
-loading external previews.
+The monitoring wall renders inside the v2-owned route body, while playback,
+mute/play-all controls, monitoring URL edits, save validation, direct Open/Copy
+actions, YouTube status checks, and lazy iframe mounting still live in
+`control-room.ts`. The v2 model is read-only and exists to make the wall's state
+legible before the operator starts loading external previews.
 
-Seeded Playwright/CDP coverage proves the Monitor checkpoint appears under
-`ui=v2`, the route ownership cue changes to `UI v2 checkpoint`, search updates
-the checkpoint match count without relabeling filtered outputs as missing
+Seeded Playwright/CDP coverage proves the Monitor route body appears under
+`ui=v2`, the route ownership cue says `UI v2 owned`, search updates the
+checkpoint match count without relabeling filtered outputs as missing
 configuration, and generic web monitors are counted as lazy previews before the
 iframe is mounted.
 
 ## Incidents checkpoint
 
-Incidents now follows the same checkpoint seam without taking over the dense
-alert/event feed. The v2 strip summarizes current alert state, recent lifecycle
-event volume, active scope, and the shared incident search state before the
-legacy feed renders below it. The single v2 action jumps to Telemetry, matching
-the normal incident-investigation flow without adding a second search/filter
-surface.
+Incidents now follows the same route-body seam while preserving the existing
+alert/event feed implementation. The v2 strip summarizes current alert state,
+recent lifecycle event volume, active scope, and the shared incident search
+state before the feed renders inside the v2-owned host. The single v2 action
+jumps to Telemetry, matching the normal incident-investigation flow without
+adding a second search/filter surface.
 
-Seeded Playwright/CDP coverage proves the Incidents checkpoint appears under
-`ui=v2`, the route ownership cue changes to `UI v2 checkpoint`, the checkpoint
-reacts to hit/no-hit incident search states, and scoped pipeline filtering keeps
-the checkpoint and legacy route summary aligned.
+Seeded Playwright/CDP coverage proves the Incidents route body appears under
+`ui=v2`, the route ownership cue says `UI v2 owned`, the checkpoint reacts to
+hit/no-hit incident search states, and scoped pipeline filtering keeps the
+checkpoint and route summary aligned.
 
 The opt-in checkpoint bundle is deliberately separate from the full
 Overview/Operate bundle. In the Settings checkpoint build, Vite reports
@@ -756,14 +763,14 @@ transcoder-buffer count. Its single follow-on action jumps to Status, which is
 the natural process-health companion when telemetry is stale or incomplete.
 
 The telemetry counter grids, stage detail fetch, local search input, and egress
-expansion remain legacy-owned. The checkpoint reads the existing telemetry
-snapshots and search state, then renders a compact operator orientation layer
-above the legacy page.
+expansion render inside the v2-owned route body. The checkpoint reads the
+existing telemetry snapshots and search state, then renders a compact operator
+orientation layer above the detailed page.
 
-Seeded Playwright/CDP coverage proves the Telemetry checkpoint appears under
-`ui=v2`, the route ownership cue changes to `UI v2 checkpoint`, the checkpoint
-reacts to pipeline switching and hit/no-hit telemetry search states, and dense
-egress list filtering keeps the checkpoint and legacy route summary aligned.
+Seeded Playwright/CDP coverage proves the Telemetry route body appears under
+`ui=v2`, the route ownership cue says `UI v2 owned`, the checkpoint reacts to
+pipeline switching and hit/no-hit telemetry search states, and dense egress
+list filtering keeps the checkpoint and route summary aligned.
 
 ## Status checkpoint
 
@@ -774,21 +781,22 @@ component count, and uptime. Its single follow-on action jumps back to
 Telemetry, completing the process-health plus counter-evidence loop.
 
 The existing status sections, log search input, process-log bounds, and
-download/copy actions remain legacy-owned. The checkpoint reads the existing
-status snapshot and log-search state, then renders a compact operator
-orientation layer above the legacy page.
+download/copy actions render inside the v2-owned route body. The checkpoint
+reads the existing status snapshot and log-search state, then renders a compact
+operator orientation layer above the detailed page.
 
-Seeded Playwright/CDP coverage proves the Status checkpoint appears under
-`ui=v2`, the route ownership cue changes to `UI v2 checkpoint`, the checkpoint
-reacts to hit/no-hit status-log search states, and dense process-log filtering
-keeps the checkpoint and legacy route summary aligned.
+Seeded Playwright/CDP coverage proves the Status route body appears under
+`ui=v2`, the route ownership cue says `UI v2 owned`, the checkpoint reacts to
+hit/no-hit status-log search states, and dense process-log filtering keeps the
+checkpoint and route summary aligned.
 
 ## Media checkpoint
 
 Media now uses the checkpoint seam before the dense recording/source-file
 library. The checkpoint summarizes recordings, source files, active search
-scope, storage visibility, and the next operator step while leaving upload,
-rename, delete, playback, download, and bounded library sections legacy-owned.
+scope, storage visibility, and the next operator step while upload, rename,
+delete, playback, download, and bounded library sections render inside the
+v2-owned route body.
 
 This is intentionally not a second media browser. It gives the operator a calm
 answer to "what is in this library and am I filtered?" before they enter the
@@ -797,7 +805,7 @@ media-library state, so the React strip owns presentation only and does not
 fetch files or duplicate file actions.
 
 Seeded Playwright/CDP coverage proves the Media checkpoint appears under
-`ui=v2`, the route ownership cue changes to `UI v2 checkpoint`, the checkpoint
+`ui=v2`, the route ownership cue says `UI v2 owned`, the checkpoint
 bundle loads without the full Overview/Operate bundle, search hit/no-hit counts
 stay aligned with the legacy library summary, and dense media lists remain
 bounded until the operator chooses `Show all`.
@@ -807,8 +815,8 @@ bounded until the operator chooses `Show all`.
 Settings now uses the checkpoint seam before the dense admin form. The v2 strip
 summarizes configured sections, transcode profiles, authentication-attempt
 volume, active auth search, security/banned-attempt state, and the next operator
-step while leaving all save/reset/logout/password/transcode mutations
-legacy-owned.
+step while all save/reset/logout/password/transcode mutations render inside the
+v2-owned route body and remain owned by the existing settings runtime.
 
 The checkpoint deliberately avoids becoming a second settings form. It answers
 "what config surface am I in, and is auth security filtered or needing review?"
@@ -816,7 +824,7 @@ before the operator touches dense controls. Auth-attempt search updates the
 checkpoint from the existing legacy table state, so React owns presentation only.
 
 Seeded Playwright/CDP coverage proves the Settings checkpoint appears under
-`ui=v2`, the route ownership cue changes to `UI v2 checkpoint`, the checkpoint
+`ui=v2`, the route ownership cue says `UI v2 owned`, the checkpoint
 bundle loads without the full Overview/Operate bundle, auth-attempt filtering
 updates the checkpoint search card, dense auth rows remain bounded, and the
 heavy legacy Settings form is unmounted after leaving the route under v2.
