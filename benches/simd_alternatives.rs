@@ -222,9 +222,9 @@ fn bench_memcpy_alternatives(c: &mut Criterion) {
 }
 
 fn bench_ts_mux_inhouse(c: &mut Criterion) {
-    use restream::media::engine::{AudioMeta, VideoMeta};
+    use restream::media::metadata::{AudioMeta, VideoMeta};
     use restream::media::mpegts::TsMuxer;
-    use restream::media::ring_buffer::MediaType;
+    use restream::media::packet::MediaType;
 
     let video = VideoMeta {
         codec: "h264".to_string(),

@@ -20,7 +20,7 @@ use restream::media::codec::{
     annexb_to_avcc, annexb_to_avcc_with_scratch, audio_for_rtmp, audio_for_rtmp_into, audio_for_ts,
     avcc_to_annexb, video_for_rtmp, video_for_rtmp_with_composition_into, video_for_ts,
 };
-use restream::media::ring_buffer::PayloadFormat;
+use restream::media::packet::PayloadFormat;
 use std::hint::black_box;
 
 // ---------------------------------------------------------------------------

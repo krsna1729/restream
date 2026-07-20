@@ -8,9 +8,9 @@ use std::num::NonZeroU32;
 
 use bytes::Bytes;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use restream::media::engine::{AudioMeta, VideoMeta};
 use restream::media::hls::HlsConfig;
 use restream::media::hls_fmp4::Fmp4HlsStore;
+use restream::media::metadata::{AudioMeta, VideoMeta};
 use shiguredo_mp4::{
     FixedPointNumber, TrackKind, Uint,
     boxes::EsdsBox,

@@ -11,10 +11,10 @@
 
 use bytes::{Bytes, BytesMut};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use restream::media::engine::{AudioMeta, VideoMeta};
 use restream::media::hls::{HlsConfig, HlsStore};
+use restream::media::metadata::{AudioMeta, VideoMeta};
 use restream::media::mpegts::TsMuxer;
-use restream::media::ring_buffer::MediaType;
+use restream::media::packet::MediaType;
 use std::hint::black_box;
 
 const SEGMENT_SECONDS: u32 = 6;
