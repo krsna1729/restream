@@ -38,11 +38,25 @@ function formatCodecName(codec: string | undefined | null): string | null {
 }
 
 function isValidOutput(str: string): boolean {
-  return !!str && !str.includes(" ") && /^(rtmps?|https?|srt):\/\//i.test(str);
+  const normalized = String(str).trim();
+  if (!normalized || /\s/.test(normalized)) return false;
+
+  const parsed = safeParseUrl(normalized);
+  if (!parsed || !parsed.hostname) return false;
+
+  return /^rtmp(s)?$/.test(parsed.protocol.replace(/:$/, "")) || 
+    parsed.protocol === "https:" ||
+    parsed.protocol === "http:";
 }
 
 function isValidMonitoringUrl(str: string): boolean {
-  return !!str && !str.includes(" ") && /^(https?|srt):\/\//i.test(str);
+  const normalized = String(str).trim();
+  if (!normalized || /\s/.test(normalized)) return false;
+
+  const parsed = safeParseUrl(normalized);
+  if (!parsed || !parsed.hostname) return false;
+
+  return parsed.protocol === "https:" || parsed.protocol === "http:" || parsed.protocol === "srt:";
 }
 
 function legacyCopy(text: string): boolean {

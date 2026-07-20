@@ -181,9 +181,6 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
   assert.match(hostileRedacted, /&lt;img/);
   assert.equal(utils.formatCodecName("avc1"), "H.264");
   assert.equal(utils.formatCodecName("opus"), "Opus");
-  assert.equal(utils.isValidOutput("rtmps://example.com/live/key"), true);
-  assert.equal(utils.isValidMonitoringUrl("srt://example.com:9000"), true);
-
   utils.setUrlParam("mode", "inspect");
   assert.match(pushedUrl, /mode=inspect/);
   assert.equal(utils.getUrlParam("mode"), "inspect");
@@ -446,6 +443,153 @@ test("pipeline parsing maps input, output, retry, and throughput fields", async 
   assert.equal(second[0].outs[0].bitrateKbps !== null, true);
 });
 
+test("pipeline parsing prefers valid latest jobs when malformed timestamps are present", async () => {
+  const { parsePipelinesInfo } = await loadCompiledFrontendModule("core/pipeline.js");
+
+  const config = {
+    pipelines: [
+      {
+        id: "pipe-jobs",
+        name: "Jobs",
+        streamKey: "jobs",
+      },
+    ],
+    outputs: [
+      {
+        id: "out-jobs",
+        pipelineId: "pipe-jobs",
+        name: "Primary",
+        desiredState: "started",
+        url: "rtmp://dest/live/key",
+      },
+    ],
+    jobs: [
+      {
+        pipelineId: "pipe-jobs",
+        outputId: "out-jobs",
+        startedAt: "not-a-timestamp",
+      },
+      {
+        pipelineId: "pipe-jobs",
+        outputId: "out-jobs",
+        startedAt: "2026-06-30T00:00:20Z",
+      },
+    ],
+  };
+
+  const health = {
+    pipelines: {
+      "pipe-jobs": {
+        input: {
+          status: "off",
+        },
+        outputs: {
+          "out-jobs": {
+            status: "running",
+            totalSize: 4096,
+          },
+        },
+      },
+    },
+  };
+
+  const originalDateNow = Date.now;
+  const parseTs = Date.parse("2026-06-30T00:00:20Z");
+  try {
+    Date.now = () => parseTs + 1_000;
+    const views = parsePipelinesInfo(config, health);
+
+    assert.equal(views.length, 1);
+    assert.equal(views[0].outs[0].job?.startedAt, "2026-06-30T00:00:20Z");
+    assert.equal(views[0].outs[0].time, 1000);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
+test("pipeline parsing clamps throughput under non-monotonic byte counters", async () => {
+  const { parsePipelinesInfo } = await loadCompiledFrontendModule("core/pipeline.js");
+
+  const config = {
+    pipelines: [
+      {
+        id: "pipe-throttle",
+        name: "Throttle",
+        streamKey: "throttle",
+      },
+    ],
+    outputs: [
+      {
+        id: "out-throttle",
+        pipelineId: "pipe-throttle",
+        name: "Primary",
+        desiredState: "started",
+        url: "rtmp://dest/live/key",
+      },
+    ],
+    jobs: [
+      {
+        pipelineId: "pipe-throttle",
+        outputId: "out-throttle",
+        startedAt: "2026-06-30T00:00:00Z",
+      },
+    ],
+  };
+
+  const healthSeed = {
+    pipelines: {
+      "pipe-throttle": {
+        outputs: {
+          "out-throttle": {
+            status: "running",
+            totalSize: "4096",
+          },
+        },
+      },
+    },
+  };
+
+  const originalDateNow = Date.now;
+  try {
+    Date.now = () => 1_000;
+    const first = parsePipelinesInfo(config, healthSeed);
+    assert.equal(first[0].outs[0].bitrateKbps, null);
+
+    Date.now = () => 1_500;
+    const flat = parsePipelinesInfo(config, {
+      pipelines: {
+        "pipe-throttle": {
+          outputs: {
+            "out-throttle": {
+              status: "running",
+              totalSize: "4096",
+            },
+          },
+        },
+      },
+    });
+    assert.equal(flat[0].outs[0].bitrateKbps, 0);
+
+    Date.now = () => 2_000;
+    const down = parsePipelinesInfo(config, {
+      pipelines: {
+        "pipe-throttle": {
+          outputs: {
+            "out-throttle": {
+              status: "running",
+              totalSize: "2048",
+              uptimeSecs: "2",
+            },
+          },
+        },
+      },
+    });
+    assert.equal(down[0].outs[0].bitrateKbps, 0);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
 test("ingest detail rendering and publisher quality helpers surface operator-facing values", async () => {
   const { document } = installFakeDom();
   const grid = document.createElement("div");
@@ -535,4 +679,180 @@ test("ingest detail rendering and publisher quality helpers surface operator-fac
     typeof deps.pipelineViewDependencies.openGraphExplorer,
     "function",
   );
+});
+
+test("core utils reject hostile inputs and recover from storage/state corruption", async () => {
+  const { document, window } = installFakeDom();
+  window.location.href = "http://localhost/dashboard?mode=overview";
+
+  const utils = await loadCompiledFrontendModule("core/utils.js");
+
+  assert.equal(utils.isValidOutput("rtmp://example.com/live/stream"), true);
+  assert.equal(
+    utils.isValidOutput("  rtmp://example.com/live/stream  "),
+    true,
+  );
+  assert.equal(utils.isValidOutput("rtmp://"), false);
+  assert.equal(utils.isValidOutput("http://example.com/live/stream"), true);
+  assert.equal(utils.isValidOutput("http://"), false);
+  assert.equal(utils.isValidOutput("rtmp://example.com/live/\r\nattack"), false);
+  assert.equal(utils.isValidMonitoringUrl("https://example.com/health"), true);
+  assert.equal(utils.isValidMonitoringUrl("srt://monitor.example:9000"), true);
+  assert.equal(utils.isValidMonitoringUrl("srt://"), false);
+  assert.equal(utils.isValidMonitoringUrl(" http://example.com/health"), true);
+  assert.equal(
+    utils.isValidMonitoringUrl("ftp://example.com/health"),
+    false,
+  );
+  assert.equal(utils.safeParseUrl(""), null);
+
+  assert.deepEqual(
+    utils.parseSrtFields(
+      "srt://edge.example.com:5000?streamid=publish%3Afeed%2Fchild&passphrase=alpha%20beta&pbkeylen=24&unknown=one&unknown=two",
+    ),
+    {
+      host: "edge.example.com",
+      port: "5000",
+      streamId: "publish:feed/child",
+      passphrase: "alpha beta",
+      pbkeylen: "24",
+      extraQuery: "unknown=one&unknown=two",
+    },
+  );
+  assert.deepEqual(
+    utils.parseSrtFields("https://example.com/live/out.m3u8?cid=invalid", "fallback"),
+    {
+      host: "example.com",
+      port: "6000",
+      streamId: "publish:invalid",
+      passphrase: "",
+      pbkeylen: "16",
+      extraQuery: "",
+    },
+  );
+  assert.equal(
+    utils.extractCandidateStreamToken("example.com/live/out.m3u8?x=1"),
+    "live",
+  );
+
+  window.sessionStorage.setItem(
+    "dashboard:selected-pipeline",
+    "{\"id\":123,\"name\":false,\"key\":\"legacy\"}",
+  );
+  const migratedHint = utils.readSelectedPipelineHint();
+  assert.deepEqual(migratedHint, { id: null, name: null });
+  const migratedRaw = window.sessionStorage.getItem("dashboard:selected-pipeline");
+  assert.equal(migratedRaw, JSON.stringify({ id: null, name: null }));
+});
+
+test("pipeline parsing remains stable when health payloads are malformed", async () => {
+  const { parsePipelinesInfo } = await loadCompiledFrontendModule("core/pipeline.js");
+
+  const config = {
+    pipelines: [
+      {
+        id: "pipe-missing",
+        name: "Corrupt",
+        streamKey: null,
+        outputCount: "x",
+      },
+      {
+        id: "pipe-orphan",
+        name: "Orphaned Output",
+        streamKey: "stream",
+      },
+    ],
+    outputs: [
+      {
+        id: "out-orphan",
+        pipelineId: "pipe-orphan",
+        name: "Out",
+        desiredState: "started",
+        url: "rtmp://edge/live/stream",
+        monitoringUrl: null,
+      },
+      {
+        id: "out-orphaned",
+        pipelineId: "pipe-lost",
+        name: "Lost",
+        desiredState: "started",
+        url: "rtmp://edge/live/lost",
+      },
+    ],
+  };
+
+  const health = {
+    pipelines: {
+      "pipe-missing": {
+        input: {
+          status: "on",
+          disconnectGraceActive: true,
+          disconnectGraceRemainingMs: "1800",
+          bytesReceived: "123",
+          bytesSent: "12",
+          readers: "7",
+          bitrateKbps: "not-a-number",
+          audioTracks: [{ index: "bad", pid: "foo", sampleRate: "44k" }],
+          publisher: "",
+          unexpectedReaders: { count: "3" },
+          lastSessionBytesReceived: "abc",
+          lastProgressAgeMs: Infinity,
+          lastDisconnectAgeMs: {},
+          publishStartedAt: "2026-06-30T00:00:00Z",
+          recentDisconnectError: 1,
+          hlsPreview: {
+            active: "yes",
+            persistentConsumers: "-1",
+            segments: "-3",
+            playlistBytes: "-9",
+          },
+        },
+      },
+      "pipe-orphan": {
+        outputs: {
+          "out-orphan": {
+            status: "running",
+            totalSize: "x",
+            uptimeSecs: "10",
+            bitrateKbps: "0",
+            lastProgressAgeMs: Infinity,
+            recentFailureCount: "4",
+            retryAttempts: "3",
+            retryBackoffMs: "15",
+            retryRemainingMs: "NaN",
+          },
+        },
+      },
+    },
+  };
+
+  const view = parsePipelinesInfo(config, health);
+  assert.equal(view.length, 3);
+  assert.equal(view[0].id, "pipe-missing");
+  assert.equal(view[0].input.bytesReceived, 123);
+  assert.equal(view[0].input.bitrateKbps, null);
+  assert.equal(view[0].input.audioTracks[0].index, "bad");
+  assert.equal(view[0].input.unexpectedReadersCount, 3);
+  assert.equal(view[0].hlsPreview.active, true);
+  assert.equal(view[0].hlsPreview.segments, 0);
+  assert.equal(view[0].hlsPreview.playlistBytes, 0);
+  assert.equal(view[0].hlsPreview.persistentConsumers, 0);
+  assert.equal(view[0].outs.length, 0);
+
+  assert.equal(view[1].id, "pipe-orphan");
+  assert.equal(view[1].outs[0].id, "out-orphan");
+  assert.equal(view[1].outs[0].bitrateKbps, 0);
+  assert.equal(view[1].outs[0].lastProgressAgeMs, null);
+  assert.equal(view[1].outs[0].recentFailureCount, 4);
+  assert.equal(view[1].outs[0].retryAttempts, 3);
+  assert.equal(view[1].outs[0].retryBackoffMs, 15);
+  assert.equal(view[1].outs[0].retryRemainingMs, null);
+  assert.equal(view[1].outs[0].time, 10000);
+
+  const missingPipe = view.find((pipe) => pipe.id === "pipe-lost");
+  assert.ok(missingPipe);
+  if (missingPipe) {
+    assert.equal(missingPipe.name, "Undefined");
+    assert.equal(missingPipe.outs[0].id, "out-orphaned");
+  }
 });

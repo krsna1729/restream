@@ -2,6 +2,7 @@ import type {
   AudioTrack,
   ConfigData,
   HealthData,
+  HlsPreviewHealth,
   IngestUrls,
   Job,
   PipelineView,
@@ -12,6 +13,40 @@ import { normalizeOutputConfig } from "./output-config.js";
 const throughputState = {
   outputBytes: new Map<string, { ts: number; bytes: number }>(),
 };
+
+function parseFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return null;
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function parseFiniteNumberOrZero(value: unknown): number {
+  return parseFiniteNumber(value) ?? 0;
+}
+
+function parseKbps(value: unknown): number | null {
+  const parsed = parseFiniteNumber(value);
+  return parsed === null ? null : Number(parsed.toFixed(1));
+}
+
+function parseEpochMs(value: unknown): number | null {
+  if (!value) return null;
+  if (
+    typeof value !== "string" &&
+    typeof value !== "number" &&
+    !(value instanceof Date)
+  ) {
+    return null;
+  }
+
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 function computeKbps(
   stateMap: Map<string, { ts: number; bytes: number }>,
@@ -48,25 +83,31 @@ function parsePipelinesInfo(
   (config?.jobs || []).forEach((job) => {
     const key = `${job.pipelineId}:${job.outputId}`;
     const previous = latestJobsByOutput.get(key);
+    const currentStart = parseEpochMs(job.startedAt || job.endedAt);
+    const previousStart = previous
+      ? parseEpochMs(previous.startedAt || previous.endedAt)
+      : null;
+
     if (!previous) {
       latestJobsByOutput.set(key, job);
       return;
     }
 
-    const previousTime = new Date(
-      previous.startedAt || previous.endedAt || 0,
-    ).getTime();
-    const currentTime = new Date(job.startedAt || job.endedAt || 0).getTime();
-    if (currentTime >= previousTime) latestJobsByOutput.set(key, job);
+    if (
+      currentStart !== null &&
+      (previousStart === null || currentStart >= previousStart)
+    ) {
+      latestJobsByOutput.set(key, job);
+    }
   });
 
   (config?.pipelines || []).forEach((p) => {
     const inputHealth = healthByPipeline[p.id]?.input;
     const inputBytesReceived =
-      healthByPipeline[p.id]?.input?.bytesReceived || 0;
+      parseFiniteNumberOrZero(inputHealth?.bytesReceived);
     const inputPublisher = healthByPipeline[p.id]?.input?.publisher || null;
     const unexpectedReadersCount = Number(
-      healthByPipeline[p.id]?.input?.unexpectedReaders?.count || 0,
+      parseFiniteNumberOrZero(inputHealth?.unexpectedReaders?.count),
     );
     const rawInputVideo = healthByPipeline[p.id]?.input?.video;
     const inputVideo: VideoTrack | null = rawInputVideo
@@ -92,16 +133,10 @@ function parsePipelinesInfo(
         : rawInputAudio
           ? [mapAudioTrack(rawInputAudio)]
           : [];
-    const rawInputKbps = healthByPipeline[p.id]?.input?.bitrateKbps;
-    const inputKbps = Number.isFinite(rawInputKbps as number)
-      ? Number((rawInputKbps as number).toFixed(1))
-      : null;
+    const rawInputKbps = inputHealth?.bitrateKbps;
+    const inputKbps = parseKbps(rawInputKbps);
     const rawInputProgressAgeMs = inputHealth?.lastProgressAgeMs;
-    const inputLastProgressAgeMs = Number.isFinite(
-      rawInputProgressAgeMs as number,
-    )
-      ? Number(rawInputProgressAgeMs)
-      : null;
+    const inputLastProgressAgeMs = parseFiniteNumber(rawInputProgressAgeMs);
 
     if (inputVideo) inputVideo.bw = inputKbps;
 
@@ -111,11 +146,9 @@ function parsePipelinesInfo(
     );
     const rawDisconnectGraceRemainingMs =
       healthByPipeline[p.id]?.input?.disconnectGraceRemainingMs;
-    const disconnectGraceRemainingMs = Number.isFinite(
-      rawDisconnectGraceRemainingMs as number,
-    )
-      ? Number(rawDisconnectGraceRemainingMs)
-      : null;
+    const disconnectGraceRemainingMs = parseFiniteNumber(
+      rawDisconnectGraceRemainingMs,
+    );
     const inputStatus =
       rawInputStatus === "off" && disconnectGraceActive
         ? "warning"
@@ -123,21 +156,13 @@ function parsePipelinesInfo(
     const probeReady = Boolean(healthByPipeline[p.id]?.input?.probeReady);
     const probeStatus = healthByPipeline[p.id]?.input?.probeStatus || "off";
     const rawProbePendingMs = healthByPipeline[p.id]?.input?.probePendingMs;
-    const probePendingMs = Number.isFinite(rawProbePendingMs as number)
-      ? Number(rawProbePendingMs)
-      : null;
+    const probePendingMs = parseFiniteNumber(rawProbePendingMs);
     const rawLastDisconnectAgeMs =
       healthByPipeline[p.id]?.input?.lastDisconnectAgeMs;
-    const lastDisconnectAgeMs = Number.isFinite(
-      rawLastDisconnectAgeMs as number,
-    )
-      ? Number(rawLastDisconnectAgeMs)
-      : null;
-    const publishStartedAt =
-      healthByPipeline[p.id]?.input?.publishStartedAt || null;
-    const publishStartedTs = publishStartedAt
-      ? new Date(publishStartedAt).getTime()
-      : NaN;
+    const lastDisconnectAgeMs = parseFiniteNumber(rawLastDisconnectAgeMs);
+    const publishStartedTs = parseEpochMs(
+      healthByPipeline[p.id]?.input?.publishStartedAt,
+    ) ?? NaN;
 
     let inputTime: number | null = null;
     if (
@@ -148,11 +173,11 @@ function parsePipelinesInfo(
       inputTime = Math.max(0, nowMs - publishStartedTs);
     }
 
-    const rawHlsPreview = healthByPipeline[p.id]?.hlsPreview;
+    const rawHlsPreview =
+      (healthByPipeline[p.id] as { hlsPreview?: HlsPreviewHealth })?.hlsPreview ||
+      (inputHealth as { hlsPreview?: HlsPreviewHealth })?.hlsPreview;
     const rawHlsLastAccessAgeMs = rawHlsPreview?.lastAccessAgeMs;
-    const hlsLastAccessAgeMs = Number.isFinite(rawHlsLastAccessAgeMs as number)
-      ? Number(rawHlsLastAccessAgeMs)
-      : null;
+    const hlsLastAccessAgeMs = parseFiniteNumber(rawHlsLastAccessAgeMs);
 
     newPipelines.push({
       id: p.id,
@@ -174,8 +199,8 @@ function parsePipelinesInfo(
         audio: inputAudioTracks[0] || null,
         audioTracks: inputAudioTracks,
         bytesReceived: inputBytesReceived,
-        bytesSent: healthByPipeline[p.id]?.input?.bytesSent || 0,
-        readers: healthByPipeline[p.id]?.input?.readers || 0,
+        bytesSent: parseFiniteNumberOrZero(inputHealth?.bytesSent),
+        readers: parseFiniteNumberOrZero(inputHealth?.readers),
         bitrateKbps: inputKbps,
         lastProgressAgeMs: inputLastProgressAgeMs,
         publisher: inputPublisher ?? null,
@@ -193,23 +218,19 @@ function parsePipelinesInfo(
           healthByPipeline[p.id]?.input?.recentDisconnectError,
         ),
         recentDisconnectCount:
-          typeof inputHealth?.recentDisconnectCount === "number"
-            ? Number(inputHealth.recentDisconnectCount)
-            : 0,
+          parseFiniteNumberOrZero(inputHealth?.recentDisconnectCount),
         flapping: Boolean(healthByPipeline[p.id]?.input?.flapping),
         disconnectGraceActive,
         disconnectGraceRemainingMs,
         lastRemoteAddr: healthByPipeline[p.id]?.input?.lastRemoteAddr || null,
         lastSessionBytesReceived:
-          typeof inputHealth?.lastSessionBytesReceived === "number"
-            ? inputHealth.lastSessionBytesReceived
-            : null,
+          parseFiniteNumber(inputHealth?.lastSessionBytesReceived),
       },
       outs: [],
       stats: {
         inputBitrateKbps: inputKbps,
         outputBitrateKbps: null,
-        readerCount: healthByPipeline[p.id]?.input?.readers || 0,
+        readerCount: parseFiniteNumberOrZero(inputHealth?.readers),
         outputCount: 0,
         readerMismatch: false,
         unexpectedReadersCount,
@@ -220,10 +241,16 @@ function parsePipelinesInfo(
       },
       hlsPreview: {
         active: Boolean(rawHlsPreview?.active),
-        persistentConsumers: Number(rawHlsPreview?.persistentConsumers || 0),
+        persistentConsumers: Math.max(
+          0,
+          parseFiniteNumberOrZero(rawHlsPreview?.persistentConsumers),
+        ),
         lastAccessAgeMs: hlsLastAccessAgeMs,
-        segments: Number(rawHlsPreview?.segments || 0),
-        playlistBytes: Number(rawHlsPreview?.playlistBytes || 0),
+        segments: Math.max(0, parseFiniteNumberOrZero(rawHlsPreview?.segments)),
+        playlistBytes: Math.max(
+          0,
+          parseFiniteNumberOrZero(rawHlsPreview?.playlistBytes),
+        ),
       },
     });
   });
@@ -300,11 +327,11 @@ function parsePipelinesInfo(
       newPipelines.push(pipe);
     }
 
-    const outputTotalSize = outHealth?.totalSize ?? null;
+    const outputTotalSize = parseFiniteNumber(outHealth?.totalSize);
     // Prefer the direct bitrate reading from ffmpeg progress (reliable for all protocols
     // including HLS where total_size may report N/A). Fall back to computing from byte delta.
     const outBitrateKbps =
-      outHealth?.bitrateKbps ??
+      parseKbps(outHealth?.bitrateKbps) ??
       computeKbps(
         throughputState.outputBytes,
         `${out.pipelineId}:${out.id}`,
@@ -324,7 +351,10 @@ function parsePipelinesInfo(
       (status === "on" || status === "running") &&
       latestJob?.startedAt
     ) {
-      outTime = Math.max(0, nowMs - new Date(latestJob.startedAt).getTime());
+      const latestStartedAt = parseEpochMs(latestJob.startedAt);
+      if (latestStartedAt !== null) {
+        outTime = Math.max(0, nowMs - latestStartedAt);
+      }
     }
 
     pipe.outs.push({
@@ -343,28 +373,17 @@ function parsePipelinesInfo(
       lastErrorAt: outHealth?.lastErrorAt || null,
       lastProgressAt: outHealth?.lastProgressAt || null,
       lastProgressAgeMs:
-        typeof outHealth?.lastProgressAgeMs === "number"
-          ? outHealth.lastProgressAgeMs
-          : null,
+        parseFiniteNumber(outHealth?.lastProgressAgeMs),
       recentFailureCount:
-        typeof outHealth?.recentFailureCount === "number"
-          ? outHealth.recentFailureCount
-          : 0,
+        parseFiniteNumberOrZero(outHealth?.recentFailureCount),
       flapping,
       retrying,
       retryAttempts:
-        typeof outHealth?.retryAttempts === "number"
-          ? outHealth.retryAttempts
-          : null,
+        parseFiniteNumber(outHealth?.retryAttempts),
       retryBackoffMs:
-        typeof outHealth?.retryBackoffMs === "number"
-          ? outHealth.retryBackoffMs
-          : null,
+        parseFiniteNumber(outHealth?.retryBackoffMs),
       nextRetryAt: outHealth?.nextRetryAt || null,
-      retryRemainingMs:
-        typeof outHealth?.retryRemainingMs === "number"
-          ? outHealth.retryRemainingMs
-          : null,
+      retryRemainingMs: parseFiniteNumber(outHealth?.retryRemainingMs),
       time: outTime,
       job: latestJob || null,
       totalSize: outputTotalSize,
