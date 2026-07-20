@@ -13,6 +13,15 @@ async function login(page: Page): Promise<void> {
     await page.waitForURL('**/');
 }
 
+// v2 is the default dashboard UI; these specs exercise the legacy player DOM
+// (#pipelines, #pipe-info-col, #video-player, etc.) specifically, so pin the
+// UI version explicitly rather than relying on whatever the default happens
+// to be. The preference persists in localStorage for the rest of the test.
+async function loginToLegacyDashboard(page: Page): Promise<void> {
+    await login(page);
+    await page.goto('/?ui=legacy');
+}
+
 async function openPipelineWorkspace(page: Page): Promise<void> {
     const tab = page.locator('#workspace-tab-pipeline');
     await expect(tab).toBeVisible();
@@ -637,7 +646,7 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test.beforeEach(async ({ page }) => {
-        await login(page);
+        await loginToLegacyDashboard(page);
     });
 
     test('HLS playlist is served for active pipeline', async ({ page }) => {
@@ -707,9 +716,6 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test('select pipeline and click Play preview triggers HLS load', async ({ page }) => {
-        // This test exercises the legacy player DOM specifically; the v2
-        // player is covered by the "ui=v2 mounts..." test below.
-        await page.goto('/?ui=legacy');
         await openPipelineWorkspace(page);
         const pipelineItem = page.locator('#pipelines li', {
             hasText: livePipelineName,
@@ -1046,7 +1052,7 @@ test.describe.serial('HLS Player — alternate audio preview', () => {
     });
 
     test.beforeEach(async ({ page }) => {
-        await login(page);
+        await loginToLegacyDashboard(page);
     });
 
     test('master playlist advertises alternate audio renditions', async ({ page }) => {
@@ -1073,8 +1079,6 @@ test.describe.serial('HLS Player — alternate audio preview', () => {
         };
         page.on('response', responseListener);
 
-        // This test exercises the legacy player DOM specifically.
-        await page.goto('/?ui=legacy');
         await openPipelineWorkspace(page);
         const pipelineItem = page.locator('#pipelines li', { hasText: pipelineName });
         await expect(pipelineItem).toBeVisible({ timeout: 10000 });
