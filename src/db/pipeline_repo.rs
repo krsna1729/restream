@@ -1,25 +1,12 @@
-use crate::application::models::Pipeline;
 use sqlx::SqlitePool;
 
-#[derive(sqlx::FromRow)]
-struct PipelineRow {
-    id: String,
-    name: String,
-    stream_key: String,
-    input_source: Option<String>,
-    srt_ingest_policy: Option<String>,
-}
-
-impl From<PipelineRow> for Pipeline {
-    fn from(row: PipelineRow) -> Self {
-        Self {
-            id: row.id,
-            name: row.name,
-            stream_key: row.stream_key,
-            input_source: row.input_source,
-            srt_ingest_policy: row.srt_ingest_policy,
-        }
-    }
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct PipelineRecord {
+    pub id: String,
+    pub name: String,
+    pub stream_key: String,
+    pub input_source: Option<String>,
+    pub srt_ingest_policy: Option<String>,
 }
 
 pub async fn create_pipeline(
@@ -29,7 +16,7 @@ pub async fn create_pipeline(
     stream_key: &str,
     input_source: Option<&str>,
     srt_ingest_policy: Option<&str>,
-) -> Result<Pipeline, sqlx::Error> {
+) -> Result<PipelineRecord, sqlx::Error> {
     let mut transaction = pool.begin().await?;
     sqlx::query(
         "INSERT INTO pipelines (id, name, input_source, srt_ingest_policy) VALUES (?, ?, ?, ?)",
@@ -49,8 +36,11 @@ pub async fn create_pipeline(
         .ok_or_else(|| sqlx::Error::RowNotFound)
 }
 
-pub async fn get_pipeline(pool: &SqlitePool, id: &str) -> Result<Option<Pipeline>, sqlx::Error> {
-    sqlx::query_as::<_, PipelineRow>(
+pub async fn get_pipeline(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<PipelineRecord>, sqlx::Error> {
+    sqlx::query_as::<_, PipelineRecord>(
         "SELECT p.id, p.name, i.stream_key, p.input_source, p.srt_ingest_policy
          FROM pipelines p
          JOIN pipeline_inputs i ON i.pipeline_id = p.id AND i.selected = 1
@@ -59,14 +49,13 @@ pub async fn get_pipeline(pool: &SqlitePool, id: &str) -> Result<Option<Pipeline
     .bind(id)
     .fetch_optional(pool)
     .await
-    .map(|row| row.map(Into::into))
 }
 
 pub async fn get_pipeline_by_stream_key(
     pool: &SqlitePool,
     stream_key: &str,
-) -> Result<Option<Pipeline>, sqlx::Error> {
-    sqlx::query_as::<_, PipelineRow>(
+) -> Result<Option<PipelineRecord>, sqlx::Error> {
+    sqlx::query_as::<_, PipelineRecord>(
         "SELECT p.id, p.name, i.stream_key, p.input_source, p.srt_ingest_policy
          FROM pipelines p
          JOIN pipeline_inputs i ON i.pipeline_id = p.id
@@ -75,18 +64,16 @@ pub async fn get_pipeline_by_stream_key(
     .bind(stream_key)
     .fetch_optional(pool)
     .await
-    .map(|row| row.map(Into::into))
 }
 
-pub async fn list_pipelines(pool: &SqlitePool) -> Result<Vec<Pipeline>, sqlx::Error> {
-    sqlx::query_as::<_, PipelineRow>(
+pub async fn list_pipelines(pool: &SqlitePool) -> Result<Vec<PipelineRecord>, sqlx::Error> {
+    sqlx::query_as::<_, PipelineRecord>(
         "SELECT p.id, p.name, i.stream_key, p.input_source, p.srt_ingest_policy
          FROM pipelines p
          JOIN pipeline_inputs i ON i.pipeline_id = p.id AND i.selected = 1",
     )
     .fetch_all(pool)
     .await
-    .map(|rows| rows.into_iter().map(Into::into).collect())
 }
 
 pub async fn update_pipeline(
@@ -96,7 +83,7 @@ pub async fn update_pipeline(
     stream_key: &str,
     input_source: Option<&str>,
     srt_ingest_policy: Option<&str>,
-) -> Result<Option<Pipeline>, sqlx::Error> {
+) -> Result<Option<PipelineRecord>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
     let result = sqlx::query(
         "UPDATE pipelines SET name = ?, input_source = ?, srt_ingest_policy = ? WHERE id = ?",

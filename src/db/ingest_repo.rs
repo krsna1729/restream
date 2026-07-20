@@ -1,30 +1,15 @@
-use crate::application::models::Ingest;
 use sqlx::SqlitePool;
 
-#[derive(sqlx::FromRow)]
-struct IngestRow {
-    id: String,
-    filename: String,
-    stream_key: String,
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct IngestRecord {
+    pub id: String,
+    pub filename: String,
+    pub stream_key: String,
     #[sqlx(rename = "loop")]
-    loop_flag: bool,
-    start_time: String,
-    live_optimized: bool,
-    target_gop_seconds: u32,
-}
-
-impl From<IngestRow> for Ingest {
-    fn from(row: IngestRow) -> Self {
-        Self {
-            id: row.id,
-            filename: row.filename,
-            stream_key: row.stream_key,
-            loop_flag: row.loop_flag,
-            start_time: row.start_time,
-            live_optimized: row.live_optimized,
-            target_gop_seconds: row.target_gop_seconds,
-        }
-    }
+    pub loop_flag: bool,
+    pub start_time: String,
+    pub live_optimized: bool,
+    pub target_gop_seconds: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -37,7 +22,7 @@ pub async fn create_ingest(
     start_time: &str,
     live_optimized: bool,
     target_gop_seconds: u32,
-) -> Result<Ingest, sqlx::Error> {
+) -> Result<IngestRecord, sqlx::Error> {
     sqlx::query(
         "INSERT INTO ingests (id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
@@ -56,62 +41,57 @@ pub async fn create_ingest(
         .ok_or_else(|| sqlx::Error::RowNotFound)
 }
 
-pub async fn get_ingest(pool: &SqlitePool, id: &str) -> Result<Option<Ingest>, sqlx::Error> {
-    sqlx::query_as::<_, IngestRow>(
+pub async fn get_ingest(pool: &SqlitePool, id: &str) -> Result<Option<IngestRecord>, sqlx::Error> {
+    sqlx::query_as::<_, IngestRecord>(
         "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
     .await
-    .map(|row| row.map(Into::into))
 }
 
 pub async fn get_ingest_by_stream_key(
     pool: &SqlitePool,
     stream_key: &str,
-) -> Result<Option<Ingest>, sqlx::Error> {
-    sqlx::query_as::<_, IngestRow>(
+) -> Result<Option<IngestRecord>, sqlx::Error> {
+    sqlx::query_as::<_, IngestRecord>(
         "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests WHERE stream_key = ? ORDER BY rowid DESC LIMIT 1",
     )
     .bind(stream_key)
     .fetch_optional(pool)
     .await
-    .map(|row| row.map(Into::into))
 }
 
 pub async fn list_ingests_for_stream_key(
     pool: &SqlitePool,
     stream_key: &str,
-) -> Result<Vec<Ingest>, sqlx::Error> {
-    sqlx::query_as::<_, IngestRow>(
+) -> Result<Vec<IngestRecord>, sqlx::Error> {
+    sqlx::query_as::<_, IngestRecord>(
         "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests WHERE stream_key = ? ORDER BY rowid ASC",
     )
     .bind(stream_key)
     .fetch_all(pool)
     .await
-    .map(|rows| rows.into_iter().map(Into::into).collect())
 }
 
-pub async fn list_ingests(pool: &SqlitePool) -> Result<Vec<Ingest>, sqlx::Error> {
-    sqlx::query_as::<_, IngestRow>(
+pub async fn list_ingests(pool: &SqlitePool) -> Result<Vec<IngestRecord>, sqlx::Error> {
+    sqlx::query_as::<_, IngestRecord>(
         "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests ORDER BY rowid ASC",
     )
     .fetch_all(pool)
     .await
-    .map(|rows| rows.into_iter().map(Into::into).collect())
 }
 
 pub async fn list_ingests_for_filename(
     pool: &SqlitePool,
     filename: &str,
-) -> Result<Vec<Ingest>, sqlx::Error> {
-    sqlx::query_as::<_, IngestRow>(
+) -> Result<Vec<IngestRecord>, sqlx::Error> {
+    sqlx::query_as::<_, IngestRecord>(
         "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests WHERE filename = ?",
     )
     .bind(filename)
     .fetch_all(pool)
     .await
-    .map(|rows| rows.into_iter().map(Into::into).collect())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -124,7 +104,7 @@ pub async fn update_ingest(
     start_time: &str,
     live_optimized: bool,
     target_gop_seconds: u32,
-) -> Result<Option<Ingest>, sqlx::Error> {
+) -> Result<Option<IngestRecord>, sqlx::Error> {
     let result = sqlx::query(
         "UPDATE ingests SET filename = ?, stream_key = ?, loop = ?, start_time = ?, live_optimized = ?, target_gop_seconds = ? WHERE id = ?",
     )

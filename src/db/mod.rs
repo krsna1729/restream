@@ -3,32 +3,32 @@
 //! in-place column backfills for contract migrations. WAL mode is enabled for
 //! concurrent reader/writer access.
 
-pub mod ingest_repo;
-pub mod job_repo;
+mod ingest_repo;
+mod job_repo;
 pub mod log_repo;
 pub(crate) mod meta_repo;
 pub(crate) mod migrations;
-pub mod output_repo;
+mod output_repo;
 pub mod pipeline_input_repo;
-pub mod pipeline_repo;
+mod pipeline_repo;
 pub mod recording_repo;
 mod schema;
 pub(crate) mod session_repo;
 
 pub use ingest_repo::{
-    create_ingest, delete_ingest, get_ingest, get_ingest_by_stream_key, list_ingests,
+    IngestRecord, create_ingest, delete_ingest, get_ingest, get_ingest_by_stream_key, list_ingests,
     list_ingests_for_filename, list_ingests_for_stream_key, update_ingest,
 };
 pub use job_repo::{
-    cleanup_old_jobs, create_job, get_job, get_running_job_for, list_jobs, list_jobs_for_output,
-    reset_running_jobs, update_job,
+    JobRecord, JobStatusRecord, cleanup_old_jobs, create_job, get_job, get_running_job_for,
+    list_jobs, list_jobs_for_output, reset_running_jobs, update_job,
 };
 pub use log_repo::{
     append_app_log_batch, append_app_log_batch_returning, delete_app_logs_older_than, list_app_logs,
 };
 pub use output_repo::{
-    create_output, delete_output, get_output, list_outputs, list_outputs_for_pipeline,
-    set_output_desired_state, update_output,
+    OutputRecord, create_output, delete_output, get_output, list_outputs,
+    list_outputs_for_pipeline, set_output_desired_state, update_output,
 };
 pub use pipeline_input_repo::{
     create_pipeline_input, delete_pipeline_input, get_pipeline_input,
@@ -36,8 +36,8 @@ pub use pipeline_input_repo::{
     update_pipeline_input,
 };
 pub use pipeline_repo::{
-    create_pipeline, delete_pipeline, get_pipeline, get_pipeline_by_stream_key, list_pipelines,
-    update_pipeline,
+    PipelineRecord, create_pipeline, delete_pipeline, get_pipeline, get_pipeline_by_stream_key,
+    list_pipelines, update_pipeline,
 };
 pub use recording_repo::{
     RecordingRow, create_recording, delete_recording, finalize_recording, get_recording,
