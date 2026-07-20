@@ -4,7 +4,8 @@
 use bytes::Bytes;
 use proptest::prelude::*;
 use proptest::test_runner::{Config as ProptestConfig, FileFailurePersistence};
-use restream::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
+use restream::media::packet::{MediaPacket, MediaType, PayloadFormat};
+use restream::media::ring_buffer::{Reader, RingBuffer};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
