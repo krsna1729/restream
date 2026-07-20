@@ -1,5 +1,7 @@
 //! Egress lifecycle operations owned by `MediaEngine`.
 
+mod status;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -8,12 +10,151 @@ use tokio_util::sync::CancellationToken;
 
 use crate::domain::stage::StageKey;
 use crate::domain::state::{EgressPhase, EgressStatus};
+use crate::media::avio::MemoryQueue;
 use crate::media::engine::{
-    ActiveEgress, EgressRegistration, EgressRetryState, MediaEngine, PublisherQuality,
-    RecentEgressOutcome, StageMetrics,
+    ActiveEgress, EgressRegistration, EgressRetryState, MediaEngine, RecentEgressOutcome,
 };
+use crate::media::packet::MediaType;
+use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
+use crate::media::snapshots::PublisherQuality;
+use crate::media::stage_metrics::StageMetrics;
 
 impl MediaEngine {
+    pub async fn with_active_egress<R>(
+        &self,
+        output_id: &str,
+        f: impl FnOnce(&ActiveEgress) -> R,
+    ) -> Option<R> {
+        let egresses = self.egresses.active.read().await;
+        egresses.get(output_id).map(f)
+    }
+
+    pub(super) async fn with_current_egress<R>(
+        &self,
+        output_id: &str,
+        registration: &EgressRegistration,
+        f: impl FnOnce(&ActiveEgress) -> R,
+    ) -> Option<R> {
+        let egresses = self.egresses.active.read().await;
+        let egress = egresses.get(output_id)?;
+        (egress.attempt_id == registration.attempt_id).then(|| f(egress))
+    }
+
+    pub async fn has_active_egress(&self, output_id: &str) -> bool {
+        self.egresses
+            .cancel_tokens
+            .read()
+            .await
+            .contains_key(output_id)
+    }
+
+    pub async fn wait_for_upstream_warmup(
+        &self,
+        output_id: &str,
+        registration: &EgressRegistration,
+        ring_buffer: Arc<RingBuffer>,
+        cancel_token: CancellationToken,
+    ) {
+        if ring_buffer.codec_hint_str().is_empty() {
+            return;
+        }
+
+        self.update_egress_phase_if_current(output_id, registration, EgressPhase::WaitingUpstream)
+            .await;
+        let mut warmup = Reader::new(format!("egress_warmup:{output_id}"), ring_buffer.clone());
+        let mut warmup_packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
+        tokio::select! {
+            _ = cancel_token.cancelled() => {}
+            _ = async {
+                loop {
+                    warmup.wait_for_data().await;
+                    warmup_packets.clear();
+                    let _ = warmup.pull_burst(
+                        &mut warmup_packets,
+                        MEDIA_PULL_BURST_PACKETS,
+                    );
+
+                    if ring_buffer.video_parameter_sets().is_some()
+                        || warmup_packets
+                            .iter()
+                            .any(|packet| packet.media_type == MediaType::Video)
+                        || (!warmup_packets.is_empty()
+                            && ring_buffer.video_parameter_sets().is_none())
+                    {
+                        break;
+                    }
+                }
+            } => {}
+        }
+    }
+
+    pub async fn register_egress_queue(&self, output_id: &str, queue: Arc<MemoryQueue>) {
+        self.egresses
+            .queues
+            .write()
+            .await
+            .insert(output_id.to_string(), queue);
+    }
+
+    pub async fn register_egress_queue_if_current(
+        &self,
+        output_id: &str,
+        registration: &EgressRegistration,
+        queue: Arc<MemoryQueue>,
+    ) -> bool {
+        if self
+            .with_current_egress(output_id, registration, |_| ())
+            .await
+            .is_none()
+        {
+            return false;
+        }
+        self.egresses
+            .queues
+            .write()
+            .await
+            .insert(output_id.to_string(), queue);
+        true
+    }
+
+    pub async fn remove_egress_queue(&self, output_id: &str) {
+        self.egresses.queues.write().await.remove(output_id);
+    }
+
+    pub async fn remove_egress_queue_if_current(
+        &self,
+        output_id: &str,
+        registration: &EgressRegistration,
+    ) -> bool {
+        if self
+            .with_current_egress(output_id, registration, |_| ())
+            .await
+            .is_none()
+        {
+            return false;
+        }
+        self.egresses.queues.write().await.remove(output_id);
+        true
+    }
+
+    pub async fn update_egress_bytes(&self, output_id: &str, bytes: u64) {
+        let egresses = self.egresses.active.read().await;
+        if let Some(egress) = egresses.get(output_id) {
+            egress.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
+            egress
+                .last_progress_ms
+                .store(Self::now_epoch_ms(), Ordering::Relaxed);
+        }
+    }
+
+    pub async fn egress_bytes(&self, output_id: &str) -> u64 {
+        let egresses = self.egresses.active.read().await;
+        egresses
+            .get(output_id)
+            .map(|egress| egress.bytes_sent.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
     pub async fn register_egress_attempt(
         &self,
         output_id: &str,

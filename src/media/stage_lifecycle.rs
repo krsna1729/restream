@@ -1,8 +1,9 @@
 //! First-class stage lifecycle state.
 //!
-//! `StagePhase` and `StageBackendKind` are defined in `domain::state` and
-//! re-exported here so existing imports from `media::stage_lifecycle` continue
-//! to work.
+//! `StagePhase` and `StageBackendKind` are defined in `domain::state`. Their
+//! re-export here is a deliberate stable public API: downstream lifecycle
+//! observers consume the types beside `StageLifecycleSnapshot`, while the
+//! implementation and dependency ownership remain in `domain`.
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
