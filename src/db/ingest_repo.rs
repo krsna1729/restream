@@ -125,6 +125,31 @@ pub async fn update_ingest(
     }
 }
 
+/// Updates only `filename`, leaving `stream_key`, `loop_flag`, `start_time`,
+/// `live_optimized`, and `target_gop_seconds` untouched. Callers that only
+/// intend to rename an ingest's backing file must use this instead of
+/// `update_ingest`: that function requires the full row and overwrites every
+/// column from whatever `Ingest` snapshot the caller passes in, silently
+/// reverting any of those fields if they were changed by a concurrent
+/// request after the snapshot was taken.
+pub async fn update_ingest_filename(
+    pool: &SqlitePool,
+    id: &str,
+    filename: &str,
+) -> Result<Option<IngestRecord>, sqlx::Error> {
+    let result = sqlx::query("UPDATE ingests SET filename = ? WHERE id = ?")
+        .bind(filename)
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    if result.rows_affected() > 0 {
+        get_ingest(pool, id).await
+    } else {
+        Ok(None)
+    }
+}
+
 pub async fn delete_ingest(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
     let result = sqlx::query("DELETE FROM ingests WHERE id = ?")
         .bind(id)

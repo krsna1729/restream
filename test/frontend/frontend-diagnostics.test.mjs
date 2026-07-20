@@ -126,6 +126,35 @@ test("diagnostics uses abortable JSON batches and rejects stale responses", asyn
   assert.match(list.innerHTML, /Diagnostics could not be completed/);
 });
 
+test("escapeHtml neutralizes quote characters so attribute values cannot break out", async () => {
+  installFakeDom();
+  const diagnostics = await loadCompiledFrontendModule(
+    "features/diagnostics.js",
+  );
+
+  // Diagnostic text (e.g. an output id or reader name lifted from backend
+  // stdout) is interpolated directly into title="${escapeHtml(...)}"
+  // attributes. If a double quote survives escaping, an attacker-influenced
+  // value like an output target or stream id can close the attribute early
+  // and inject arbitrary markup/attributes.
+  const payload = `evil" onmouseover="alert(1)`;
+  const escaped = diagnostics.escapeHtml(payload);
+  const rendered = `<div title="${escaped}">${escaped}</div>`;
+
+  assert.ok(
+    !escaped.includes('"'),
+    "escapeHtml must not leave raw double quotes in its output",
+  );
+  assert.ok(
+    !rendered.includes('evil" onmouseover="alert(1)'),
+    "the raw payload must not survive intact inside an attribute value",
+  );
+  assert.match(escaped, /evil&quot; onmouseover=&quot;alert\(1\)/);
+
+  // Single quotes and the core HTML metacharacters must also survive.
+  assert.equal(diagnostics.escapeHtml(`&<>"'`), "&amp;&lt;&gt;&quot;&#39;");
+});
+
 function diagnosticCheck(name) {
   return {
     index: 0,

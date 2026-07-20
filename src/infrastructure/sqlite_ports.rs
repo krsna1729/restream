@@ -194,17 +194,10 @@ impl PipelineStore for SqlitePipelineStore {
         input_source: Option<&'a str>,
     ) -> PipelineUpdateFuture<'a> {
         Box::pin(async move {
-            crate::db::update_pipeline(
-                &self.pool,
-                &pipeline.id,
-                &pipeline.name,
-                &pipeline.stream_key,
-                input_source,
-                pipeline.srt_ingest_policy.as_deref(),
-            )
-            .await
-            .map(|record| record.map(pipeline_model))
-            .map_err(|err| PipelineStoreError::new(err.to_string()))
+            crate::db::update_pipeline_input_source(&self.pool, &pipeline.id, input_source)
+                .await
+                .map(|record| record.map(pipeline_model))
+                .map_err(|err| PipelineStoreError::new(err.to_string()))
         })
     }
 }
@@ -414,6 +407,19 @@ impl IngestWriter for SqliteIngestLookup {
         })
     }
 
+    fn update_ingest_filename<'a>(
+        &'a self,
+        id: &'a str,
+        filename: &'a str,
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move {
+            crate::db::update_ingest_filename(&self.pool, id, filename)
+                .await
+                .map(|record| record.map(ingest_model))
+                .map_err(|err| IngestWriteError::new(err.to_string()))
+        })
+    }
+
     fn delete_ingest<'a>(&'a self, id: &'a str) -> IngestDeleteFuture<'a> {
         Box::pin(async move {
             crate::db::delete_ingest(&self.pool, id)
@@ -591,6 +597,41 @@ mod tests {
         let pipeline = store.get_pipeline_by_stream_key("missing").await.unwrap();
 
         assert!(pipeline.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_pipeline_input_source_does_not_revert_concurrent_rename_or_key_rotation() {
+        // Regression test: file-ingest apply/remove (src/application/ingest.rs)
+        // fetch a `Pipeline` snapshot once, then call
+        // update_pipeline_input_source with it after several `.await` points.
+        // If that call rewrote name/stream_key/srt_ingest_policy from the
+        // stale snapshot (as it did before this fix, via the shared
+        // full-row update_pipeline), a concurrent rename or stream-key
+        // rotation landing in that window would be silently reverted —
+        // e.g. reviving a just-rotated, potentially-leaked stream key.
+        let pool = test_pool().await;
+        crate::db::create_pipeline(&pool, "p1", "Original Name", "sk_original", None, None)
+            .await
+            .unwrap();
+        let store = SqlitePipelineStore::new(pool.clone());
+        let stale_snapshot = store.get_pipeline("p1").await.unwrap().unwrap();
+
+        // Simulate a concurrent request rotating the stream key and renaming
+        // the pipeline after the snapshot above was taken, but before the
+        // stale caller's update_pipeline_input_source call below runs.
+        crate::db::update_pipeline(&pool, "p1", "Renamed", "sk_rotated", None, None)
+            .await
+            .unwrap();
+
+        store
+            .update_pipeline_input_source(&stale_snapshot, Some("file:clip.ts"))
+            .await
+            .unwrap();
+
+        let after = store.get_pipeline("p1").await.unwrap().unwrap();
+        assert_eq!(after.name, "Renamed");
+        assert_eq!(after.stream_key, "sk_rotated");
+        assert_eq!(after.input_source.as_deref(), Some("file:clip.ts"));
     }
 
     #[tokio::test]

@@ -204,6 +204,24 @@ impl IngestWriter for FakeIngestWriter {
         })
     }
 
+    fn update_ingest_filename<'a>(
+        &'a self,
+        id: &'a str,
+        filename: &'a str,
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move {
+            if self.update_returns_none {
+                return Ok(None);
+            }
+            if let Some(message) = self.fail {
+                return Err(IngestWriteError::new(message));
+            }
+            self.create_ingest(id, filename, "", false, "", false, 0)
+                .await
+                .map(Some)
+        })
+    }
+
     fn delete_ingest<'a>(&'a self, id: &'a str) -> IngestDeleteFuture<'a> {
         Box::pin(async move {
             if let Some(message) = self.fail {

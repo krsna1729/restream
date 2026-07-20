@@ -97,6 +97,10 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 HUNT SRT-MUXER-SHARD-RETIRING-REUSE FIXED [codex]](#2026-07-19-hunt-srt-muxer-shard-retiring-reuse-fixed-codex)
 - [2026-07-19 HUNT EGRESS-RETRY-STATE-TOCTOU FIXED [codex]](#2026-07-19-hunt-egress-retry-state-toctou-fixed-codex)
 - [2026-07-19 HUNT SPS-EXP-GOLOMB-OVERFLOW FIXED [codex]](#2026-07-19-hunt-sps-exp-golomb-overflow-fixed-codex)
+- [2026-07-19 HUNT FMP4-FLUSH-BUFFER-LEAK-ON-DTS-REWIND FIXED [codex]](#2026-07-19-hunt-fmp4-flush-buffer-leak-on-dts-rewind-fixed-codex)
+- [2026-07-19 HUNT RECORDING-REGISTER-START-RACE FIXED [codex]](#2026-07-19-hunt-recording-register-start-race-fixed-codex)
+- [2026-07-19 HUNT SERVER-PORT-ZERO-SILENT-EPHEMERAL-BIND FIXED [codex]](#2026-07-19-hunt-server-port-zero-silent-ephemeral-bind-fixed-codex)
+- [2026-07-20 HUNT CONTROL-ROOM-YOUTUBE-WARNING-STALE-FETCH-RACE FIXED [codex]](#2026-07-20-hunt-control-room-youtube-warning-stale-fetch-race-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3505,3 +3509,204 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   background Explore agent's investigation, independently verified by
   direct source reading and a failing-then-passing regression test
   before acting on it.
+
+## 2026-07-19 HUNT FMP4-FLUSH-BUFFER-LEAK-ON-DTS-REWIND FIXED [codex]
+
+- What: adversarial hunt on `src/media/hls/fmp4.rs`'s per-segment
+  buffering in `VideoRenditionState::flush_segment` and
+  `AudioRenditionState::flush_segment`, part of a background
+  Explore-agent sweep covering HLS in-memory storage/eviction, the
+  `OutputStore` persistence layer, and recording rotation.
+- Finding: both `flush_segment` methods only cleared
+  `self.samples`/`self.payload` on the success path. Any `Err`
+  propagated via `?` (most reachably from `build_mux_samples`, which
+  errors when a rewound DTS makes `next_dts.saturating_sub(sample.dts)
+  <= 0`) skipped the clear, so buffered samples/payload accumulated
+  unbounded for the rest of the stream's lifetime once a single flush
+  failed. FLV's composition-offset field decouples PTS (which gates
+  segment-flush eligibility) from DTS (which drives monotonic
+  correction), so a publisher can send a keyframe with a rewound raw
+  DTS that slips past the `packet.dts < global_zero_ms` filter while
+  still landing below the previously buffered corrected DTS on the
+  next flush — a single-packet DoS via unbounded memory growth from
+  any RTMP/FLV publisher.
+- Fix: wrap the fallible body of both `flush_segment` methods in an
+  immediately-invoked closure and unconditionally clear
+  `samples`/`payload`/`current_segment_start_ms` after it runs on
+  every exit path (`Ok` or `Err`), propagating the original error
+  unchanged.
+- Added
+  `video_flush_segment_clears_buffers_even_when_dts_rewind_fails_the_flush`,
+  driving a real rewound `next_segment_first_relative_dts_ms` through
+  `flush_segment` and asserting the buffers are empty afterward.
+  Verified failing (panicking on the "must be cleared even when the
+  flush fails" assertion) against the pre-fix code and passing
+  post-fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::hls::fmp4::` — 22/22 pass (new test included). `cargo fmt
+  --all` / `--check` — clean. No concurrency gate: this is single-task
+  buffering state, no cross-task lifecycle surface. No benchmark
+  re-run: buffer clearing runs once per segment flush, not per packet.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression test.
+- Notes: tenth genuine bug found this hunt run.
+
+## 2026-07-19 HUNT RECORDING-REGISTER-START-RACE FIXED [codex]
+
+- What: adversarial hunt on the recording-start path
+  (`MediaEngine::register_recording` in `src/media/engine.rs`,
+  `spawn_recording_task`/`apply_recording_commands` in
+  `src/application/recording.rs`, `recording_start` in
+  `src/application/services/media_library_service.rs`), same
+  background Explore-agent sweep as the fmp4 finding above.
+- Finding: a classic check-then-act TOCTOU. Two concurrent
+  recording-start requests for the same pipeline can both observe
+  `is_recording_active() == false` before either registers, then both
+  proceed to `spawn_recording_task`. `register_recording` did a blind
+  `HashMap::insert` with no check, so the second caller's insert
+  silently overwrote the first caller's `CancellationToken` — orphaning
+  it with no way to cancel it, leaking the first task's OS writer
+  thread, file handle, and ring-buffer reader for the life of the
+  process. Both spawned recorders also independently compute the same
+  output filename (`build_filename`'s second-resolution timestamp +
+  pipeline name) and race `std::fs::File::create` (truncate-on-open)
+  against each other, corrupting the shared `.ts` file via interleaved
+  writes from two OS threads.
+- Fix: made the check-and-register atomic under the single write-lock
+  acquisition `register_recording` already held. It now returns
+  `Option<CancellationToken>`: `None` if a non-cancelled token is
+  already registered for the pipeline (caller must not spawn a second
+  recorder), `Some(token)` only when this call actually won the
+  registration. `spawn_recording_task` now returns
+  `Option<CancellationToken>` and only `tokio::spawn`s the recorder
+  when registration succeeds (via `?` on the `Option`), so a losing
+  racer never reaches `build_filename`/`File::create` at all — this
+  closes both the orphaned-token leak and the filename-collision path
+  at the same root cause rather than patching each symptom.
+  `apply_recording_commands` and `recording_start` already discarded
+  `spawn_recording_task`'s return value, so both keep working unchanged
+  under the new signature.
+- Added `concurrent_register_recording_calls_never_both_succeed` in
+  `src/media/engine_tests.rs`: two tasks call `register_recording` for
+  the same pipeline after a shared `tokio::sync::Barrier`, then assert
+  exactly one gets `Some`. Verified failing (2 successes instead of 1)
+  against a pre-fix blind-insert variant and passing post-fix. Updated
+  four existing `register_recording` call sites in `engine_tests.rs`
+  and one in `recording.rs`
+  (`spawn_recording_task_registers_and_cleans_up_recording`) to unwrap
+  the new `Option` return.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  recording::` — 46/46 pass. Targeted `media::engine::tests::`
+  recording tests (`recording_lifecycle`,
+  `concurrent_register_recording_calls_never_both_succeed`,
+  `cancelled_recording_token_is_not_active`,
+  `processing_graph_marks_cancelled_recording_and_hls_inactive`,
+  `health_snapshot_marks_cancelled_recording_inactive`) — all pass.
+  `scripts/check/concurrency/contract.sh` — lifecycle gate for
+  `engine.rs`/`recording.rs` per AGENTS.md's Inner Loop table. `cargo
+  fmt --all --check` — clean (trimmed `register_recording`'s doc
+  comment to keep `engine.rs` at the 2000-line source-audit limit).
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — the same blind-insert-without-check shape
+  may exist in other `HashMap<pipeline_id, CancellationToken>`-style
+  registries elsewhere in `engine.rs`; worth a targeted look in a
+  future hunt pass but not filed as a concrete finding without a
+  verified reproduction.
+- Notes: eleventh genuine bug found this hunt run.
+
+## 2026-07-19 HUNT SERVER-PORT-ZERO-SILENT-EPHEMERAL-BIND FIXED [codex]
+
+- What: adversarial hunt on `ServerPorts::from_env` (`src/config.rs`)
+  and config/env parsing generally, plus a follow-up look for the
+  same blind-insert-orphan registry shape as the recording-race fix
+  above (that half of the sweep came up empty — every other
+  `CancellationToken`/handle-holding registry in `src/media/` and
+  `src/application/` either check-and-inserts under one held lock
+  already, or is only reachable from a single serialized call path).
+- Finding: `RESTREAM_HTTP_PORT`/`RESTREAM_RTMP_PORT`/`RESTREAM_SRT_PORT`
+  parsed straight to `u16` with no validation, unlike every other
+  numeric env knob in the file (`rtmp_max_connections`,
+  `avio_capacity`, `ts_ring_capacity`, etc. all `.clamp()`/`.max()`
+  their parsed value). `0` is a syntactically valid `u16`, so
+  `RESTREAM_RTMP_PORT=0` parses cleanly and is handed straight to
+  `TcpListener::bind`/`srt_bind` as the literal port. Binding port `0`
+  doesn't fail — the OS silently assigns a random ephemeral port — so
+  the server starts "successfully" with no error, but the actual
+  bound port is unpredictable and changes every restart. Every API
+  response that advertises a publish endpoint
+  (`src/api/pipeline_inputs.rs`, `src/api/auth.rs`,
+  `src/api/pipelines.rs`, `src/api/agent.rs`, `src/api/settings.rs`)
+  still echoes back the *configured* `0`, e.g.
+  `rtmp://host:0/live/{key}` — a URL nothing can ever publish to. A
+  typo'd env override or a config-templating bug that defaults an
+  unset numeric to `0` turns into a silent, confusing total ingest
+  outage with no panic and no error pointing at the real cause.
+- Fix: added `env_port()` in `src/config.rs`, used by all three
+  `ServerPorts::from_env` fields. Treats `0` the same as a parse
+  failure — falls back to the documented default (3030/1935/10080)
+  and logs a `tracing::warn!` naming the offending env var, instead of
+  silently accepting it.
+- Added `server_ports_reject_zero_and_fall_back_to_defaults` in
+  `src/config.rs`, asserting all three ports fall back to their
+  defaults when their env vars are set to `"0"`. Verified failing
+  (asserted default, got `0`) against the pre-fix blind-parse code and
+  passing post-fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib config::`
+  — 17/17 pass. `cargo fmt --all --check` — clean.
+  `scripts/build/resource-limit.sh cargo clippy --workspace
+  --all-targets -- -D warnings` — clean. `scripts/check/source-audit.sh`
+  — clean (config.rs at 995 lines, well under the 2000-line limit).
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed.
+- Notes: twelfth genuine bug found this hunt run. Background
+  Explore-agent sweep also checked `RESTREAM_SRT_PBKEYLEN` (parsed
+  unvalidated as `i32`) but found it already covered — the SRT ingest
+  loader always calls `.validate()` right after construction, which
+  normalizes/rejects bad values with a `warn!` fallback to plaintext.
+
+## 2026-07-20 HUNT CONTROL-ROOM-YOUTUBE-WARNING-STALE-FETCH-RACE FIXED [codex]
+
+- What: first frontend pass this hunt run, `web/ts/features/control-room.ts`
+  — the control room's per-card YouTube live-status warning refresh.
+- Finding: `refreshYouTubeCardWarning(shell, monitoringUrl)` kicks off an
+  async `fetchYouTubeMonitoringStatus` call per card and, on resolution,
+  unconditionally called `setCardWarning(shell, ...)`. Card DOM shells are
+  reused across renders (`ensureCardElements` recycles `article` nodes by
+  grid position, not by output identity), so a shell showing card A can be
+  reassigned to card B while A's status fetch is still in flight. If A's
+  fetch resolves after B's shell reassignment, its stale result overwrites
+  whatever warning B's own (possibly already-resolved) fetch had correctly
+  set — the reused shell is not guarded against out-of-order network
+  resolution. `setCardWarning` re-derives the card id from
+  `shell.closest("article")` at call time, so nothing at write time
+  distinguishes a stale write from a current one.
+- Fix: added a guard in `refreshYouTubeCardWarning`'s `.then()`: drop the
+  result if `shell.dataset.mediaKey !== monitoringUrl`. `syncCard` always
+  writes `shell.dataset.mediaKey` synchronously (via `syncCardMedia`) in the
+  same call that starts a new `refreshYouTubeCardWarning`, before any fetch
+  can resolve, so the mediaKey reliably reflects whichever card currently
+  owns the shell by the time a `.then()` callback runs — a fetch whose
+  captured `monitoringUrl` no longer matches is provably stale.
+- Added `YouTube monitor warning refresh ignores a stale response after the
+  shell is reassigned` in `test/frontend/frontend-pipeline-workspace.test.mjs`.
+  The fake DOM test harness can't exercise the full `renderControlRoom()`
+  grid (its `innerHTML` setter stores a string rather than parsing it into
+  queryable child elements, so `ensureShell`'s templated grid never
+  materializes), so the test builds a minimal real shell/article pair by
+  hand and calls `refreshYouTubeCardWarning` directly — which required
+  exporting that one previously-private function for test use. A
+  controllable `fetch` mock lets card B's fetch resolve first (live, no
+  warning) and card A's stale fetch resolve after the shell has moved to B
+  (not live, would add a warning); asserts no warning badge appears.
+  Verified failing (stale warning badge appeared) against the pre-fix
+  unconditional `setCardWarning` call and passing post-fix.
+- Gates: `npm run test:frontend` — 59/59 pass. `node scripts/check/docs.mjs`
+  — clean.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed.
+- Notes: thirteenth genuine bug found this hunt run, and the first from the
+  frontend TypeScript pass (previous hunts this run were backend/Rust
+  only). Worth a look in a future pass: whether the fake DOM harness should
+  gain real `innerHTML` parsing so `renderControlRoom()`'s card grid can be
+  exercised end-to-end instead of only through hand-built DOM fragments.

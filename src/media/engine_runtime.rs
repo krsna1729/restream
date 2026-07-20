@@ -153,12 +153,15 @@ impl MediaEngine {
         self.file_ingests.active.write().await.remove(id);
     }
 
-    /// Register an active recording for a pipeline. Returns a cancellation token.
-    pub async fn register_recording(&self, pipeline_id: &str) -> CancellationToken {
+    /// Registers a recording, or returns `None` if already active; check-and-insert under one lock closes the start/start race.
+    pub async fn register_recording(&self, pipeline_id: &str) -> Option<CancellationToken> {
         let mut tokens = self.recordings.cancel_tokens.write().await;
+        if tokens.get(pipeline_id).is_some_and(|t| !t.is_cancelled()) {
+            return None;
+        }
         let token = CancellationToken::new();
         tokens.insert(pipeline_id.to_string(), token.clone());
-        token
+        Some(token)
     }
 
     /// Unregister and cancel an active recording for a pipeline.

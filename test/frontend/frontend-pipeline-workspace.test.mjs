@@ -1236,3 +1236,70 @@ test("monitor consumes and propagates the shared workspace selection", async () 
   controlRoom.openControlRoomForOutput("out-b");
   assert.deepEqual(openedMonitorSelections, ["pipe-b"]);
 });
+
+test("YouTube monitor warning refresh ignores a stale response after the shell is reassigned", async () => {
+  const { document } = installFakeDom();
+  const controlRoom = await loadCompiledFrontendModule(
+    "features/control-room.js",
+  );
+
+  const urlA = "https://www.youtube.com/watch?v=aaaaaaaaaaa";
+  const urlB = "https://www.youtube.com/watch?v=bbbbbbbbbbb";
+  const statusByUrl = {
+    [urlA]: { live_now: false, live_content: true, upcoming: false },
+    [urlB]: { live_now: true, live_content: false, upcoming: false },
+  };
+  const releasers = new Map();
+  globalThis.fetch = async (url) => {
+    const requestedUrl = decodeURIComponent(String(url).split("url=").at(-1));
+    return new Promise((resolve) => {
+      releasers.set(requestedUrl, () =>
+        resolve(
+          new Response(JSON.stringify(statusByUrl[requestedUrl]), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+      );
+    });
+  };
+
+  const article = document.createElement("article");
+  article.dataset.cardId = "output:out-b";
+  const statusCluster = document.createElement("div");
+  statusCluster.dataset.role = "control-room-card-status-cluster";
+  article.appendChild(statusCluster);
+  const shell = document.createElement("div");
+  shell.dataset.role = "control-room-player-shell";
+  article.appendChild(shell);
+  document.body.appendChild(article);
+
+  // Card A occupies the shell first; its status fetch starts but is held pending.
+  shell.dataset.mediaKey = urlA;
+  controlRoom.refreshYouTubeCardWarning(shell, urlA);
+
+  // The shell is reused for card B before A's fetch resolves. This mirrors
+  // syncCard's synchronous mediaKey write, which always happens-before any
+  // fetch .then() callback can fire.
+  shell.dataset.mediaKey = urlB;
+  controlRoom.refreshYouTubeCardWarning(shell, urlB);
+
+  // B resolves first: it is live now, so no warning should be applied.
+  releasers.get(urlB)();
+  await flushAsyncWork();
+  assert.equal(
+    statusCluster.querySelector('[data-role="control-room-card-warning"]'),
+    null,
+    "a live status must not add a warning badge",
+  );
+
+  // A resolves late (stale). Its "not live" warning must be dropped rather
+  // than clobbering the shell that now belongs to card B.
+  releasers.get(urlA)();
+  await flushAsyncWork();
+  assert.equal(
+    statusCluster.querySelector('[data-role="control-room-card-warning"]'),
+    null,
+    "a stale response for a reassigned shell must not overwrite the current card's warning",
+  );
+});

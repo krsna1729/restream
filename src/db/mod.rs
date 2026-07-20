@@ -17,7 +17,7 @@ pub(crate) mod session_repo;
 
 pub use ingest_repo::{
     IngestRecord, create_ingest, delete_ingest, get_ingest, get_ingest_by_stream_key, list_ingests,
-    list_ingests_for_filename, list_ingests_for_stream_key, update_ingest,
+    list_ingests_for_filename, list_ingests_for_stream_key, update_ingest, update_ingest_filename,
 };
 pub use job_repo::{
     JobRecord, JobStatusRecord, cleanup_old_jobs, create_job, get_job, get_running_job_for,
@@ -37,7 +37,7 @@ pub use pipeline_input_repo::{
 };
 pub use pipeline_repo::{
     PipelineRecord, create_pipeline, delete_pipeline, get_pipeline, get_pipeline_by_stream_key,
-    list_pipelines, update_pipeline,
+    list_pipelines, update_pipeline, update_pipeline_input_source,
 };
 pub use recording_repo::{
     RecordingRow, create_recording, delete_recording, finalize_recording, get_recording,

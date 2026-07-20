@@ -111,6 +111,31 @@ pub async fn update_pipeline(
     }
 }
 
+/// Updates only `input_source`, leaving `name`, `stream_key`, and
+/// `srt_ingest_policy` untouched. Callers that only intend to change the
+/// transport input source (e.g. file-ingest apply/remove) must use this
+/// instead of `update_pipeline`: that function requires the full row and
+/// overwrites every column from whatever `Pipeline` snapshot the caller
+/// passes in, silently reverting any of those fields if they were changed
+/// by a concurrent request after the snapshot was taken.
+pub async fn update_pipeline_input_source(
+    pool: &SqlitePool,
+    id: &str,
+    input_source: Option<&str>,
+) -> Result<Option<PipelineRecord>, sqlx::Error> {
+    let result = sqlx::query("UPDATE pipelines SET input_source = ? WHERE id = ?")
+        .bind(input_source)
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    if result.rows_affected() > 0 {
+        get_pipeline(pool, id).await
+    } else {
+        Ok(None)
+    }
+}
+
 pub async fn delete_pipeline(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
     let result = sqlx::query("DELETE FROM pipelines WHERE id = ?")
         .bind(id)

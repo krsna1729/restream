@@ -184,21 +184,26 @@ fn derive_external_ffmpeg_permits(
         .max(1)
 }
 
+/// Port `0` means "let the OS pick" for a bind() call, not a meaningful configured port;
+/// accepting it here would silently bind an unpredictable ephemeral port while every API
+/// response keeps advertising `:0` as the connect address. Reject it like a parse failure.
+fn env_port(name: &str, default: u16) -> u16 {
+    match std::env::var(name).ok().and_then(|v| v.parse::<u16>().ok()) {
+        Some(0) => {
+            tracing::warn!(env = name, "port 0 is not valid; using default {default}");
+            default
+        }
+        Some(port) => port,
+        None => default,
+    }
+}
+
 impl ServerPorts {
     pub fn from_env() -> Self {
         Self {
-            http: std::env::var("RESTREAM_HTTP_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(3030),
-            rtmp: std::env::var("RESTREAM_RTMP_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(1935),
-            srt: std::env::var("RESTREAM_SRT_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10080),
+            http: env_port("RESTREAM_HTTP_PORT", 3030),
+            rtmp: env_port("RESTREAM_RTMP_PORT", 1935),
+            srt: env_port("RESTREAM_SRT_PORT", 10080),
         }
     }
 }
