@@ -7,11 +7,23 @@ use crate::application::models::Pipeline;
 use crate::application::pipeline_inputs::{PipelineInputStore, PipelineInputStoreError};
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
 use crate::domain::pipeline_input::PipelineInput;
-use crate::domain::srt_ingest::{SrtGlobalIngestConfig, SrtGlobalIngestMode};
+use crate::domain::srt_ingest::{
+    SrtGlobalIngestConfig, SrtGlobalIngestMode, SrtPipelineIngestConfig,
+};
 use crate::media::srt::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 use tracing::warn;
 
 pub const SRT_INGEST_GLOBAL_CONFIG_META_KEY: &str = "srt_ingest_global_config";
+
+pub fn parse_persisted_srt_ingest_policy(raw: Option<&str>) -> Option<SrtPipelineIngestConfig> {
+    raw.and_then(|value| serde_json::from_str(value).ok())
+}
+
+pub fn serialize_persisted_srt_ingest_policy(
+    config: &SrtPipelineIngestConfig,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string(config)
+}
 
 pub async fn load_global_srt_ingest_config(
     meta_store: &dyn MetaStore,
@@ -90,7 +102,13 @@ pub fn srt_ingest_policy_entries(
 ) -> Vec<SrtIngestPolicyEntry> {
     let policies = pipelines
         .iter()
-        .map(|pipeline| (pipeline.id.as_str(), pipeline.srt_ingest_policy.clone()))
+        .map(|pipeline| {
+            (
+                pipeline.id.as_str(),
+                parse_persisted_srt_ingest_policy(pipeline.srt_ingest_policy.as_deref())
+                    .unwrap_or_default(),
+            )
+        })
         .collect::<HashMap<_, _>>();
     inputs
         .iter()
@@ -138,7 +156,6 @@ mod tests {
     };
     use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole};
     use crate::domain::srt_ingest::ResolvedSrtIngestConfig;
-    use crate::media::srt::serialize_pipeline_srt_ingest_policy;
 
     struct FakeMetaStore {
         value: Option<String>,
@@ -390,7 +407,7 @@ mod tests {
                 stream_key: "stream-one".to_string(),
                 input_source: None,
                 srt_ingest_policy: Some(
-                    serialize_pipeline_srt_ingest_policy(
+                    serialize_persisted_srt_ingest_policy(
                         &crate::domain::srt_ingest::SrtPipelineIngestConfig::default(),
                     )
                     .unwrap(),
@@ -446,7 +463,7 @@ mod tests {
                 stream_key: "stream-one".to_string(),
                 input_source: None,
                 srt_ingest_policy: Some(
-                    serialize_pipeline_srt_ingest_policy(
+                    serialize_persisted_srt_ingest_policy(
                         &crate::domain::srt_ingest::SrtPipelineIngestConfig::default(),
                     )
                     .unwrap(),
@@ -491,7 +508,10 @@ mod tests {
             name: "Pipeline One".to_string(),
             stream_key: "primary-key".to_string(),
             input_source: None,
-            srt_ingest_policy: Some("inherited-policy".to_string()),
+            srt_ingest_policy: Some(
+                serialize_persisted_srt_ingest_policy(&SrtPipelineIngestConfig::default())
+                    .expect("serialize inherited policy"),
+            ),
         };
         let inputs = vec![
             PipelineInput {
@@ -533,7 +553,53 @@ mod tests {
         assert!(
             entries
                 .iter()
-                .all(|entry| entry.serialized_policy.as_deref() == Some("inherited-policy"))
+                .all(|entry| entry.policy == SrtPipelineIngestConfig::default())
+        );
+    }
+
+    #[test]
+    fn persisted_policy_translation_distinguishes_valid_json_from_invalid_or_absent_values() {
+        let policy = SrtPipelineIngestConfig::default();
+        let serialized = serialize_persisted_srt_ingest_policy(&policy).expect("serialize policy");
+
+        assert_eq!(
+            parse_persisted_srt_ingest_policy(Some(&serialized)),
+            Some(policy)
+        );
+        assert_eq!(parse_persisted_srt_ingest_policy(Some("{ not json")), None);
+        assert_eq!(parse_persisted_srt_ingest_policy(None), None);
+    }
+
+    #[test]
+    fn malformed_and_absent_persisted_policies_both_become_inherited_typed_entries() {
+        let pipelines = [
+            Pipeline {
+                id: "malformed".to_string(),
+                name: "Malformed".to_string(),
+                stream_key: "malformed-key".to_string(),
+                input_source: None,
+                srt_ingest_policy: Some("{ not json".to_string()),
+            },
+            Pipeline {
+                id: "absent".to_string(),
+                name: "Absent".to_string(),
+                stream_key: "absent-key".to_string(),
+                input_source: None,
+                srt_ingest_policy: None,
+            },
+        ];
+        let inputs = [
+            pipeline_input("malformed", "malformed-key"),
+            pipeline_input("absent", "absent-key"),
+        ];
+
+        let entries = srt_ingest_policy_entries(&pipelines, &inputs);
+
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.policy == SrtPipelineIngestConfig::default())
         );
     }
 

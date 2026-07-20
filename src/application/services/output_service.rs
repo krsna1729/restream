@@ -11,7 +11,7 @@ use crate::application::ports::OutputStore;
 use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;
 
-use super::error::{ApiError, ApiResult};
+use super::error::{ServiceError, ServiceResult};
 
 /// Application service for output CRUD and lifecycle requests.
 ///
@@ -32,33 +32,33 @@ impl OutputService {
 
     /// Builds the shared not-found error shape used when an output lookup or
     /// mutation cannot resolve the requested output ID.
-    fn output_not_found(id: &str) -> ApiError {
-        ApiError::not_found(format!("output {id} not found"))
+    fn output_not_found(id: &str) -> ServiceError {
+        ServiceError::not_found(format!("output {id} not found"))
     }
 
     /// Lists every persisted output record without applying pipeline filters.
-    pub async fn list_outputs(&self) -> ApiResult<Vec<Output>> {
+    pub async fn list_outputs(&self) -> ServiceResult<Vec<Output>> {
         self.store
             .list_outputs()
             .await
-            .map_err(|e| ApiError::internal(format!("list outputs: {e}")))
+            .map_err(|e| ServiceError::internal(format!("list outputs: {e}")))
     }
 
     /// Lists the outputs attached to one pipeline for dashboard detail views
     /// and runtime coordination.
-    pub async fn list_for_pipeline(&self, pipeline_id: &str) -> ApiResult<Vec<Output>> {
+    pub async fn list_for_pipeline(&self, pipeline_id: &str) -> ServiceResult<Vec<Output>> {
         self.store
             .list_outputs_for_pipeline(pipeline_id)
             .await
-            .map_err(|e| ApiError::internal(format!("list outputs for pipeline: {e}")))
+            .map_err(|e| ServiceError::internal(format!("list outputs for pipeline: {e}")))
     }
 
     /// Resolves one persisted output by composite pipeline/output identity.
-    pub async fn get_by_id(&self, pipeline_id: &str, id: &str) -> ApiResult<Output> {
+    pub async fn get_by_id(&self, pipeline_id: &str, id: &str) -> ServiceResult<Output> {
         self.store
             .get_output(pipeline_id, id)
             .await
-            .map_err(|e| ApiError::internal(format!("get output: {e}")))?
+            .map_err(|e| ServiceError::internal(format!("get output: {e}")))?
             .ok_or_else(|| Self::output_not_found(id))
     }
 
@@ -74,7 +74,7 @@ impl OutputService {
         monitoring_url: Option<&str>,
         desired_state: &str,
         config: &OutputConfig,
-    ) -> ApiResult<Output> {
+    ) -> ServiceResult<Output> {
         // API callers still pass desired state as transport text; convert it to
         // the domain enum once here before persistence sees it.
         let desired_state = DesiredOutputState::from(desired_state);
@@ -89,7 +89,7 @@ impl OutputService {
                 config,
             )
             .await
-            .map_err(|e| ApiError::internal(format!("create output: {e}")))
+            .map_err(|e| ServiceError::internal(format!("create output: {e}")))
     }
 
     /// Updates the mutable settings for one persisted output while preserving
@@ -102,20 +102,20 @@ impl OutputService {
         url: &str,
         monitoring_url: Option<&str>,
         config: &OutputConfig,
-    ) -> ApiResult<Output> {
+    ) -> ServiceResult<Output> {
         self.store
             .update_output(pipeline_id, id, name, url, monitoring_url, config)
             .await
-            .map_err(|e| ApiError::internal(format!("update output: {e}")))?
+            .map_err(|e| ServiceError::internal(format!("update output: {e}")))?
             .ok_or_else(|| Self::output_not_found(id))
     }
 
     /// Deletes one persisted output record by pipeline/output identity.
-    pub async fn delete_output(&self, pipeline_id: &str, id: &str) -> ApiResult<bool> {
+    pub async fn delete_output(&self, pipeline_id: &str, id: &str) -> ServiceResult<bool> {
         self.store
             .delete_output(pipeline_id, id)
             .await
-            .map_err(|e| ApiError::internal(format!("delete output: {e}")))
+            .map_err(|e| ServiceError::internal(format!("delete output: {e}")))
     }
 
     /// Shared desired-state transition helper for start/stop lifecycle intents.
@@ -125,15 +125,15 @@ impl OutputService {
         id: &str,
         desired_state: DesiredOutputState,
         action: &'static str,
-    ) -> ApiResult<Output> {
+    ) -> ServiceResult<Output> {
         self.store
             .set_output_desired_state(pipeline_id, id, desired_state)
             .await
-            .map_err(|e| ApiError::internal(format!("{action}: {e}")))
+            .map_err(|e| ServiceError::internal(format!("{action}: {e}")))
     }
 
     /// Set the output's desired state to `running`, resuming any stopped egress.
-    pub async fn request_start(&self, pipeline_id: &str, id: &str) -> ApiResult<Output> {
+    pub async fn request_start(&self, pipeline_id: &str, id: &str) -> ServiceResult<Output> {
         self.desired_state_request(
             pipeline_id,
             id,
@@ -144,7 +144,7 @@ impl OutputService {
     }
 
     /// Set the output's desired state to `stopped`, halting any active egress.
-    pub async fn request_stop(&self, pipeline_id: &str, id: &str) -> ApiResult<Output> {
+    pub async fn request_stop(&self, pipeline_id: &str, id: &str) -> ServiceResult<Output> {
         self.desired_state_request(pipeline_id, id, DesiredOutputState::Stopped, "request stop")
             .await
     }

@@ -11,7 +11,7 @@ use crate::domain::recording::RecordingSettings;
 use crate::domain::srt_ingest::SrtGlobalIngestConfig;
 use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::media::security::IngestSecurityService;
-use crate::planner::backend_policy::BackendPolicy;
+use crate::planner::BackendPolicy;
 
 pub const BACKEND_POLICY_META_KEY: &str = "backend_policy";
 

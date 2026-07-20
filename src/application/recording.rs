@@ -3,6 +3,7 @@
 
 use crate::application::ports::{MetaLookupError, MetaStore, MetaStoreWriter};
 use crate::application::reconcile::RecordingCommand;
+use crate::domain::recording::RecordingSettings;
 use crate::media::engine::MediaEngine;
 use crate::media::recording::{RecordingMetadataReporter, RecordingStart};
 use std::collections::HashMap;
@@ -10,8 +11,6 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 pub const RECORDING_SETTINGS_META_KEY: &str = "recording_settings";
-
-pub use crate::domain::recording::RecordingSettings;
 
 pub fn recording_enabled_meta_key(pipeline_id: &str) -> String {
     format!("recording_enabled:{pipeline_id}")
@@ -77,8 +76,7 @@ pub async fn spawn_recording_task(
     let engine_for_task = engine.clone();
     let pipeline_id_for_cleanup = pipeline_id.clone();
     let backend_policy = engine.backend_policy();
-    let recording_plan =
-        crate::planner::graph_plan::plan_recording_graph(&pipeline_id, &backend_policy);
+    let recording_plan = crate::planner::plan_recording_graph(&pipeline_id, &backend_policy);
     let stage_key = recording_plan.terminal_stage;
     let recording_id = format!("recording_{:016x}", rand::random::<u64>());
 

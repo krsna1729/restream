@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::application::ports::PipelineStore;
 
-use super::error::{ApiError, ApiResult};
+use super::error::{ServiceError, ServiceResult};
 
 #[derive(Clone)]
 /// Application service that exposes lightweight persistence-backed health
@@ -24,12 +24,12 @@ impl HealthService {
 
     /// Performs the low-cost database health probe by issuing one catalog read
     /// against the pipeline store and translating success into a simple boolean.
-    pub async fn check_db(&self) -> ApiResult<bool> {
+    pub async fn check_db(&self) -> ServiceResult<bool> {
         self.store
             .list_pipelines()
             .await
             .map(|_| true)
-            .map_err(|e| ApiError::internal(format!("db health check: {e}")))
+            .map_err(|e| ServiceError::internal(format!("db health check: {e}")))
     }
 }
 
@@ -118,7 +118,7 @@ mod tests {
         let service = HealthService::with_store(Arc::new(FakePipelineStore { fail: true }));
         assert!(matches!(
             service.check_db().await.unwrap_err(),
-            ApiError::Internal(_)
+            ServiceError::Internal(_)
         ));
     }
 }

@@ -6,7 +6,7 @@ use crate::domain::output_spec::{EgressProtocol, OutputUrlScheme, VideoCodecKind
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::ring_buffer::RingBuffer;
-use crate::planner::graph_plan::PlannedOutput;
+use crate::planner::PlannedOutput;
 use std::sync::Arc;
 
 /// Prepared runtime attachment point for an output.
@@ -44,14 +44,14 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
         output.url.as_str(),
     );
     let plan = if url_scheme.is_hls_family() {
-        crate::planner::graph_plan::plan_hls_output_graph(
+        crate::planner::plan_hls_output_graph(
             &output.pipeline_id,
             ingest_video_codec.as_deref(),
             &planned_output,
             &backend_policy,
         )
     } else {
-        crate::planner::graph_plan::plan_pipeline_graph(
+        crate::planner::plan_pipeline_graph(
             &output.pipeline_id,
             ingest_video_codec.as_deref(),
             std::slice::from_ref(&planned_output),
@@ -144,7 +144,7 @@ mod tests {
     use crate::domain::output_spec::{OutputConfig, RtmpOutputMode};
     use crate::domain::stage::StageKind;
     use crate::domain::state::DesiredOutputState;
-    use crate::media::engine::VideoMeta;
+    use crate::media::metadata::VideoMeta;
 
     fn test_output(pipeline_id: &str, config: OutputConfig, url: &str) -> Output {
         Output {
@@ -448,8 +448,9 @@ mod tests {
     #[tokio::test]
     async fn hevc_rtmp_selected_audio_terminal_ring_makes_progress() {
         use crate::media::mpegts::TsDemuxer;
-        use crate::media::ring_buffer::{MediaType, Reader};
-        use crate::planner::backend_policy::BackendPolicy;
+        use crate::media::packet::MediaType;
+        use crate::media::ring_buffer::Reader;
+        use crate::planner::BackendPolicy;
         use crate::test_fixtures::bench_transport_fixture;
 
         let path = bench_transport_fixture("h265", "1_5m", true)

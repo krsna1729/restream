@@ -17,7 +17,7 @@ pub mod settings_service;
 
 pub use agent_service::AgentService;
 pub use auth_service::AuthService;
-pub use error::{ApiError, ApiResult};
+pub use error::{ServiceError, ServiceResult};
 pub use file_ingest_service::FileIngestService;
 pub use health_service::HealthService;
 pub use ingest_service::IngestService;
