@@ -1,5 +1,5 @@
 use crate::domain::output_spec::OutputUrlScheme;
-use crate::media::engine::PublisherQuality;
+use crate::media::snapshots::PublisherQuality;
 use crate::media::tcp_stats::collect_rtmp_sender_stats;
 use percent_encoding::percent_decode_str;
 use reqwest::Url;

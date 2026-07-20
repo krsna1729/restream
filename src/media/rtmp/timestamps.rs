@@ -1,6 +1,6 @@
 use rml_rtmp::time::RtmpTimestamp;
 
-use crate::media::ring_buffer::{MediaPacket, MediaType};
+use crate::media::packet::{MediaPacket, MediaType};
 
 pub(super) struct RtmpTimestampGuard {
     last_video_ms: i64,
