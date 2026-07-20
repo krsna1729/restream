@@ -5,41 +5,14 @@
 //! but the process RSS remains the authoritative measured total.
 
 use crate::media::engine::MediaEngine;
+use crate::system_sampling::{
+    ChildProcessResourceSnapshot, ProcessResourceSnapshot, sample_child_process_resources,
+};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 
 const DEFAULT_TOP_N: usize = 25;
 const MAX_TOP_N: usize = 200;
-
-static CHILD_PROCESS_CPU_SAMPLES: OnceLock<Mutex<HashMap<u32, ChildProcessCpuSample>>> =
-    OnceLock::new();
-
-#[derive(Clone, Debug, Default)]
-pub struct ProcessResourceSnapshot {
-    pub cpu_percent: f64,
-    pub restream_cpu_percent: f64,
-    pub external_ffmpeg_cpu_percent: f64,
-    pub cpu_sample_ready: bool,
-    pub restream_memory_bytes: u64,
-    pub external_ffmpeg_memory_bytes: u64,
-    pub total_memory_bytes: u64,
-    pub external_ffmpeg_count: u64,
-    pub process_thread_count: u64,
-    pub fd_count: Option<u64>,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ChildProcessCpuSample {
-    total_ticks: u64,
-    process_ticks: u64,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ChildProcessResource {
-    cpu_percent: Option<f64>,
-    memory_bytes: Option<u64>,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResourceMapView {
@@ -90,66 +63,6 @@ fn memory(attributed_bytes: u64, confidence: &str, source: &str) -> Value {
         "confidence": confidence,
         "source": source,
     })
-}
-
-fn proc_rss_bytes(pid: u32) -> Option<u64> {
-    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-    let rss_kib = status.lines().find_map(|line| {
-        let value = line.strip_prefix("VmRSS:")?.trim();
-        value
-            .split_whitespace()
-            .next()
-            .and_then(|number| number.parse::<u64>().ok())
-    })?;
-    Some(rss_kib.saturating_mul(1024))
-}
-
-fn child_process_resources(
-    pids: impl IntoIterator<Item = u32>,
-) -> HashMap<u32, ChildProcessResource> {
-    let pids = pids.into_iter().collect::<Vec<_>>();
-    if pids.is_empty() {
-        return HashMap::new();
-    }
-    let total_ticks = crate::api::telemetry::proc_total_ticks();
-    let core_count = std::thread::available_parallelism()
-        .map(|parallelism| parallelism.get())
-        .unwrap_or(1);
-    let sample_store = CHILD_PROCESS_CPU_SAMPLES.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut previous = match sample_store.lock() {
-        Ok(lock) => lock,
-        Err(_) => return HashMap::new(),
-    };
-    let mut resources = HashMap::new();
-    for pid in pids {
-        let process_ticks = crate::api::telemetry::proc_process_ticks(pid);
-        let cpu_percent = total_ticks.zip(process_ticks).and_then(|(total, ticks)| {
-            let sample = ChildProcessCpuSample {
-                total_ticks: total,
-                process_ticks: ticks,
-            };
-            let cpu = previous.get(&pid).and_then(|prev| {
-                let total_delta = sample.total_ticks.saturating_sub(prev.total_ticks);
-                if total_delta == 0 {
-                    return None;
-                }
-                let process_delta = sample.process_ticks.saturating_sub(prev.process_ticks);
-                let scale = core_count.max(1) as f64 * 100.0 / total_delta as f64;
-                Some(process_delta as f64 * scale)
-            });
-            previous.insert(pid, sample);
-            cpu
-        });
-        let memory_bytes = proc_rss_bytes(pid);
-        resources.insert(
-            pid,
-            ChildProcessResource {
-                cpu_percent,
-                memory_bytes,
-            },
-        );
-    }
-    resources
 }
 
 fn node_memory_bytes(node: &Value) -> u64 {
@@ -357,7 +270,10 @@ fn queue_hotspots(len: u64, capacity: u64, blocked_writes: u64) -> Vec<&'static 
     hotspots
 }
 
-fn stage_node(stage: &Value, child_resources: &HashMap<u32, ChildProcessResource>) -> Value {
+fn stage_node(
+    stage: &Value,
+    child_resources: &HashMap<u32, ChildProcessResourceSnapshot>,
+) -> Value {
     let stage_key = stage
         .get("stageKey")
         .and_then(Value::as_str)
@@ -550,7 +466,8 @@ pub(crate) async fn resource_map(
         });
 
     let mut nodes = Vec::new();
-    let child_resources = child_process_resources(stages.iter().filter_map(stage_backend_pid));
+    let child_resources =
+        sample_child_process_resources(stages.iter().filter_map(stage_backend_pid));
     nodes.push(json!({
         "id": "runtime:restream",
         "kind": "runtime_process",
@@ -687,262 +604,5 @@ pub(crate) async fn resource_map(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stage_node_reports_child_process_resources_when_pid_is_known() {
-        let stage = json!({
-            "stageKey": "pipe-1:transcoder:720p",
-            "kind": "video:720p:codec:hevc",
-            "pipelineId": "pipe-1",
-            "lifecycle": {
-                "backend": "externalFfmpeg",
-                "backendPid": 4242
-            },
-            "payloadStats": {
-                "payloadBytes": 1024
-            },
-            "metrics": {
-                "processingUs": 0
-            }
-        });
-        let child_resources = HashMap::from([(
-            4242,
-            ChildProcessResource {
-                cpu_percent: Some(12.5),
-                memory_bytes: Some(64 * 1024 * 1024),
-            },
-        )]);
-
-        let node = stage_node(&stage, &child_resources);
-
-        assert_eq!(node.get("backendPid").and_then(Value::as_u64), Some(4242));
-        assert_eq!(node.get("cpuPercent").and_then(Value::as_f64), Some(12.5));
-        assert_eq!(
-            node.pointer("/memory/attributedBytes")
-                .and_then(Value::as_u64),
-            Some(64 * 1024 * 1024)
-        );
-        assert_eq!(
-            node.pointer("/memory/confidence").and_then(Value::as_str),
-            Some("measured")
-        );
-        assert_eq!(
-            node.pointer("/memory/source").and_then(Value::as_str),
-            Some("child_process_rss")
-        );
-    }
-
-    #[test]
-    fn resource_map_options_new_clamps_top_n_to_valid_range() {
-        assert_eq!(
-            ResourceMapOptions::new(ResourceMapView::Grouped, None).top_n,
-            DEFAULT_TOP_N
-        );
-        assert_eq!(
-            ResourceMapOptions::new(ResourceMapView::Grouped, Some(0)).top_n,
-            1,
-            "zero must clamp up to the minimum, not produce an empty view"
-        );
-        assert_eq!(
-            ResourceMapOptions::new(ResourceMapView::Grouped, Some(MAX_TOP_N + 1_000)).top_n,
-            MAX_TOP_N,
-            "oversized requests must clamp down rather than allocate unbounded nodes"
-        );
-        assert_eq!(
-            ResourceMapOptions::new(ResourceMapView::Grouped, Some(50)).top_n,
-            50
-        );
-    }
-
-    #[test]
-    fn number_field_defaults_to_zero_for_missing_or_non_integer_values() {
-        assert_eq!(number_field(&json!({}), "missing"), 0);
-        assert_eq!(number_field(&json!({"n": "not a number"}), "n"), 0);
-        assert_eq!(
-            number_field(&json!({"n": -1}), "n"),
-            0,
-            "negative is not a u64"
-        );
-        assert_eq!(
-            number_field(&json!({"n": 1.5}), "n"),
-            0,
-            "fractional is not a u64"
-        );
-        assert_eq!(number_field(&json!({"n": u64::MAX}), "n"), u64::MAX);
-    }
-
-    #[test]
-    fn group_key_falls_back_to_defaults_on_missing_fields() {
-        assert_eq!(group_key(&json!({})), "unknown");
-        assert_eq!(
-            group_key(&json!({"kind": "egress"})),
-            "egress:unknown:shared"
-        );
-        assert_eq!(
-            group_key(&json!({"kind": "egress", "execution": "os_thread", "label": "RTMP output"})),
-            "egress:RTMP:os_thread"
-        );
-        assert_eq!(
-            group_key(&json!({"kind": "egress", "label": "   "})),
-            "egress:unknown:shared",
-            "an all-whitespace label has no first word, so it falls back to unknown"
-        );
-        assert_eq!(group_key(&json!({"kind": "stage"})), "stage:shared");
-        assert_eq!(group_key(&json!({"kind": "source_ring"})), "source_ring");
-    }
-
-    #[test]
-    fn group_label_formats_each_known_prefix_and_falls_back_for_unknown_keys() {
-        assert_eq!(group_label("egress:rtmp:tokio_task", 3), "RTMP outputs (3)");
-        assert_eq!(group_label("stage:os_thread", 2), "os_thread stages (2)");
-        assert_eq!(group_label("source_ring", 1), "Source rings (1)");
-        assert_eq!(group_label("runtime_process", 1), "restream");
-        assert_eq!(group_label("child_process_group", 1), "External FFmpeg");
-        assert_eq!(group_label("unknown", 5), "unknown (5)");
-        assert_eq!(
-            group_label("", 1),
-            " (1)",
-            "an empty key still yields a single empty part, not a panic"
-        );
-    }
-
-    #[test]
-    fn merge_thread_counts_accumulates_and_ignores_non_numeric_entries() {
-        let mut target = serde_json::Map::new();
-        merge_thread_counts(
-            &mut target,
-            &json!({"threads": {"appOwned": 1, "childProcess": 2}}),
-        );
-        merge_thread_counts(
-            &mut target,
-            &json!({"threads": {"appOwned": 3, "bogus": "not a number"}}),
-        );
-        merge_thread_counts(&mut target, &json!({}));
-
-        assert_eq!(target.get("appOwned").and_then(Value::as_u64), Some(4));
-        assert_eq!(target.get("childProcess").and_then(Value::as_u64), Some(2));
-        assert_eq!(target.get("bogus"), None);
-    }
-
-    #[test]
-    fn append_hotspots_deduplicates_and_ignores_non_string_entries() {
-        let mut target = vec!["processing".to_string()];
-        append_hotspots(
-            &mut target,
-            &json!({"hotspots": ["processing", "cpu", 42, "cpu"]}),
-        );
-        assert_eq!(target, vec!["processing", "cpu"]);
-    }
-
-    #[test]
-    fn queue_hotspots_high_watermark_is_inclusive_at_75_percent() {
-        assert_eq!(queue_hotspots(75, 100, 0), vec!["queue_high"]);
-        assert_eq!(queue_hotspots(74, 100, 0), Vec::<&str>::new());
-        assert_eq!(
-            queue_hotspots(u64::MAX, 0, 0),
-            Vec::<&str>::new(),
-            "zero capacity must not report a hotspot even for a huge queue length"
-        );
-        assert_eq!(queue_hotspots(0, 100, 1), vec!["backpressure"]);
-        assert_eq!(
-            queue_hotspots(u64::MAX, u64::MAX, u64::MAX),
-            vec!["queue_high", "backpressure"]
-        );
-    }
-
-    #[test]
-    fn execution_for_stage_maps_every_known_backend_and_defaults_to_shared() {
-        let backend = |name: &str| json!({"lifecycle": {"backend": name}});
-        assert_eq!(
-            execution_for_stage(&backend("externalFfmpeg")),
-            "child_process"
-        );
-        assert_eq!(
-            execution_for_stage(&backend("ExternalFfmpeg")),
-            "child_process"
-        );
-        assert_eq!(execution_for_stage(&backend("internalFfmpeg")), "os_thread");
-        assert_eq!(execution_for_stage(&backend("recording")), "os_thread");
-        assert_eq!(execution_for_stage(&backend("Recording")), "os_thread");
-        assert_eq!(execution_for_stage(&backend("audioRouter")), "tokio_task");
-        assert_eq!(execution_for_stage(&backend("hlsSegmenter")), "tokio_task");
-        assert_eq!(execution_for_stage(&backend("somethingElse")), "shared");
-        assert_eq!(execution_for_stage(&json!({})), "shared");
-    }
-
-    #[test]
-    fn stage_backend_pid_rejects_values_that_overflow_u32() {
-        assert_eq!(
-            stage_backend_pid(&json!({"lifecycle": {"backendPid": 4242}})),
-            Some(4242)
-        );
-        assert_eq!(stage_backend_pid(&json!({})), None);
-        assert_eq!(
-            stage_backend_pid(&json!({"lifecycle": {"backendPid": u64::MAX}})),
-            None,
-            "a pid that does not fit in u32 must not silently truncate"
-        );
-    }
-
-    #[test]
-    fn node_score_weighs_cpu_percent_far_above_a_single_byte_of_memory() {
-        let cpu_heavy = node_score(&json!({"cpuPercent": 1.0}));
-        let memory_heavy = node_score(&json!({"memory": {"attributedBytes": 1024 * 1024 - 1}}));
-        assert!(cpu_heavy > memory_heavy);
-    }
-
-    #[test]
-    fn top_nodes_sorts_descending_by_score_and_truncates() {
-        let nodes = vec![
-            json!({"id": "low", "cpuPercent": 1.0}),
-            json!({"id": "high", "cpuPercent": 90.0}),
-            json!({"id": "mid", "cpuPercent": 40.0}),
-        ];
-        let top = top_nodes(nodes, 2);
-        assert_eq!(top.len(), 2);
-        assert_eq!(top[0]["id"], "high");
-        assert_eq!(top[1]["id"], "mid");
-    }
-
-    #[test]
-    fn top_nodes_truncate_to_zero_yields_empty_without_panicking() {
-        let nodes = vec![json!({"id": "only"})];
-        assert!(top_nodes(nodes, 0).is_empty());
-    }
-
-    #[test]
-    fn egress_node_uses_os_thread_only_for_srt_protocol() {
-        let srt = egress_node(&json!({"outputId": "o1", "protocol": "srt"}), &[]);
-        assert_eq!(srt["execution"], "os_thread");
-        assert_eq!(srt["threads"]["appOwned"], 1);
-
-        let rtmp = egress_node(&json!({"outputId": "o2", "protocol": "rtmp"}), &[]);
-        assert_eq!(rtmp["execution"], "tokio_task");
-        assert_eq!(rtmp["threads"]["appOwned"], 0);
-    }
-
-    #[test]
-    fn egress_node_with_no_matching_queue_reports_zeroed_stats_and_no_hotspots() {
-        let node = egress_node(
-            &json!({"outputId": "missing-queue", "protocol": "rtmp"}),
-            &[],
-        );
-        assert_eq!(node["memory"]["attributedBytes"], 0);
-        assert_eq!(node["hotspots"], json!([]));
-        assert_eq!(node["queue"], Value::Null);
-    }
-
-    #[test]
-    fn source_ring_node_reports_retained_payload_hotspot_only_when_bytes_present() {
-        let empty = source_ring_node(&json!({"pipelineId": "pipe-1"}));
-        assert_eq!(empty["hotspots"], json!([]));
-
-        let retaining = source_ring_node(&json!({
-            "pipelineId": "pipe-1",
-            "payloadStats": {"payloadBytes": 100}
-        }));
-        assert_eq!(retaining["hotspots"], json!(["retained_payload"]));
-    }
-}
+#[path = "resource_map_projection_tests.rs"]
+mod resource_map_projection_tests;

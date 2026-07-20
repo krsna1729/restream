@@ -3,13 +3,13 @@
 //! This file owns the HTTP-facing node/edge projection over runtime stage and
 //! output state, including packetizer, recording, and preview branches.
 
-use crate::api_view_models;
+use super::graph_projection as api_view_models;
 use crate::application::models::Output;
 use crate::domain::output_spec::VideoCodecKind;
 use crate::domain::stage::{StageKey, StageKind};
 use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
-use crate::planner::graph_plan::{PlannedOutput, plan_pipeline_graph, plan_recording_graph};
+use crate::planner::{PlannedOutput, plan_pipeline_graph, plan_recording_graph};
 use std::collections::{HashMap, HashSet};
 
 pub(crate) async fn processing_graph(
@@ -172,7 +172,7 @@ pub(crate) async fn processing_graph(
                 .pipe_metrics
                 .as_ref()
                 .map(|pipe| serde_json::to_value(pipe.snapshot()).unwrap_or_default());
-            let mut node = api_view_models::processing_graph_stage_node(
+            let mut node = super::graph_projection::processing_graph_stage_node(
                 stage_id.clone(),
                 kind.graph_type(),
                 kind.graph_label(),

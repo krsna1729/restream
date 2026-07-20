@@ -6,54 +6,39 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 
-use crate::api_view_models;
+use super::status_projection as api_view_models;
 use crate::media::engine::MediaEngine;
+use crate::system_sampling::{
+    CpuCapacitySnapshot, HostSettingsSnapshot, NofileLimitSnapshot, sample_host_settings,
+};
 
 const REQUIRED_RMEM_MAX: u64 = 26_214_400;
 const REQUIRED_WMEM_MAX: u64 = 8_388_608;
 
-#[cfg(unix)]
-fn nofile_limit_json(configured: u64) -> serde_json::Value {
-    let mut limit = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: getrlimit writes to the provided rlimit struct for the current
-    // process. The pointer is valid for the duration of the call.
-    let read_ok = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0 };
-    if !read_ok {
-        return serde_json::json!({
+fn nofile_limit_json(configured: u64, snapshot: NofileLimitSnapshot) -> serde_json::Value {
+    match snapshot {
+        NofileLimitSnapshot::Available { soft, hard } => serde_json::json!({
+            "configured": configured,
+            "soft": soft,
+            "hard": hard,
+            "satisfied": soft >= configured,
+        }),
+        NofileLimitSnapshot::ReadFailed => serde_json::json!({
             "configured": configured,
             "soft": null,
             "hard": null,
             "satisfied": false,
             "error": "getrlimit failed",
-        });
+        }),
+        #[cfg(not(unix))]
+        NofileLimitSnapshot::Unsupported => serde_json::json!({
+            "configured": configured,
+            "soft": null,
+            "hard": null,
+            "satisfied": true,
+            "unsupported": true,
+        }),
     }
-    serde_json::json!({
-        "configured": configured,
-        "soft": limit.rlim_cur,
-        "hard": limit.rlim_max,
-        "satisfied": limit.rlim_cur >= configured,
-    })
-}
-
-#[cfg(not(unix))]
-fn nofile_limit_json(configured: u64) -> serde_json::Value {
-    serde_json::json!({
-        "configured": configured,
-        "soft": null,
-        "hard": null,
-        "satisfied": true,
-        "unsupported": true,
-    })
-}
-
-fn proc_sys_u64(key: &str) -> Option<u64> {
-    let path = format!("/proc/sys/{}", key.replace('.', "/"));
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
 }
 
 fn host_info_setting_json(
@@ -99,82 +84,9 @@ fn host_setting_json(
     })
 }
 
-#[cfg(target_os = "linux")]
-fn proc_status_value(key: &str) -> Option<String> {
-    let contents = std::fs::read_to_string("/proc/self/status").ok()?;
-    contents.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        (name == key).then(|| value.trim().to_string())
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn parse_cpu_list_count(list: &str) -> Option<u64> {
-    let mut count = 0u64;
-    for part in list
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-    {
-        let Some((start, end)) = part.split_once('-') else {
-            part.parse::<u64>().ok()?;
-            count = count.checked_add(1)?;
-            continue;
-        };
-        let start = start.trim().parse::<u64>().ok()?;
-        let end = end.trim().parse::<u64>().ok()?;
-        if end < start {
-            return None;
-        }
-        let range_len = (end - start).checked_add(1)?;
-        count = count.checked_add(range_len)?;
-    }
-    Some(count)
-}
-
-#[cfg(target_os = "linux")]
-fn read_cgroup_cpu_max() -> Option<(String, Option<f64>)> {
-    let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-    let unified_path = cgroup.lines().find_map(|line| {
-        let mut parts = line.splitn(3, ':');
-        let hierarchy = parts.next()?;
-        let controllers = parts.next()?;
-        let path = parts.next()?;
-        (hierarchy == "0" && controllers.is_empty()).then_some(path)
-    })?;
-    let relative = unified_path.trim_start_matches('/');
-    let cpu_max_path = std::path::Path::new("/sys/fs/cgroup")
-        .join(relative)
-        .join("cpu.max");
-    let value = std::fs::read_to_string(cpu_max_path).ok()?;
-    Some(parse_cgroup_cpu_max(value.trim()))
-}
-
-#[cfg(target_os = "linux")]
-fn parse_cgroup_cpu_max(value: &str) -> (String, Option<f64>) {
-    let mut parts = value.split_whitespace();
-    let quota = parts.next().unwrap_or("max");
-    let period = parts.next().unwrap_or("");
-    if quota == "max" {
-        return (value.to_string(), None);
-    }
-    let quota = quota.parse::<f64>().ok();
-    let period = period.parse::<f64>().ok();
-    let cpus = match (quota, period) {
-        (Some(quota), Some(period)) if period > 0.0 => Some(quota / period),
-        _ => None,
-    };
-    (value.to_string(), cpus)
-}
-
-#[cfg(target_os = "linux")]
-fn cpu_capacity_settings() -> Vec<serde_json::Value> {
+fn cpu_capacity_settings(snapshot: &CpuCapacitySnapshot) -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
-    let online = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .ok()
-        .and_then(|cpus| u64::try_from(cpus).ok());
-    if let Some(cpus) = online {
+    if let Some(cpus) = snapshot.available_parallelism {
         rows.push(host_info_setting_json(
             "runtime.cpu.available_parallelism",
             "Available CPU parallelism",
@@ -183,26 +95,30 @@ fn cpu_capacity_settings() -> Vec<serde_json::Value> {
             "basis for default Tokio worker sizing before workload-specific tuning",
         ));
     }
-    if let Some(mask) = proc_status_value("Cpus_allowed_list") {
-        let count = parse_cpu_list_count(&mask);
+    if let Some(allowed) = &snapshot.allowed_list {
         rows.push(host_info_setting_json(
             "runtime.cpu.allowed_list",
             "Allowed CPU mask",
-            serde_json::json!(mask),
+            serde_json::json!(allowed.raw),
             "cpuset",
             format!(
                 "process scheduler affinity{}; container cpusets can make this smaller than the host",
-                count.map(|value| format!(" ({value} CPUs)")).unwrap_or_default()
+                allowed
+                    .count
+                    .map(|value| format!(" ({value} CPUs)"))
+                    .unwrap_or_default()
             ),
         ));
     }
-    if let Some((raw, cpus)) = read_cgroup_cpu_max() {
+    if let Some(cgroup) = &snapshot.cgroup_max {
         rows.push(host_info_setting_json(
             "runtime.cpu.cgroup_max",
             "Cgroup CPU quota",
-            serde_json::json!(raw),
+            serde_json::json!(cgroup.raw),
             "quota",
-            cpus.map(|value| format!("effective quota {:.2} CPUs", value))
+            cgroup
+                .cpus
+                .map(|value| format!("effective quota {:.2} CPUs", value))
                 .unwrap_or_else(|| {
                     "no cgroup CPU quota; scheduling is cpuset/host limited".to_string()
                 }),
@@ -211,26 +127,8 @@ fn cpu_capacity_settings() -> Vec<serde_json::Value> {
     rows
 }
 
-#[cfg(not(target_os = "linux"))]
-fn cpu_capacity_settings() -> Vec<serde_json::Value> {
-    let cpus = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .ok()
-        .and_then(|cpus| u64::try_from(cpus).ok());
-    cpus.map(|cpus| {
-        vec![host_info_setting_json(
-            "runtime.cpu.available_parallelism",
-            "Available CPU parallelism",
-            serde_json::json!(cpus),
-            "cpus",
-            "basis for default Tokio worker sizing before workload-specific tuning",
-        )]
-    })
-    .unwrap_or_default()
-}
-
-fn host_settings_json(engine: &MediaEngine) -> serde_json::Value {
-    let nofile = nofile_limit_json(engine.config.tuning.nofile_limit);
+fn host_settings_json(engine: &MediaEngine, snapshot: &HostSettingsSnapshot) -> serde_json::Value {
+    let nofile = nofile_limit_json(engine.config.tuning.nofile_limit, snapshot.nofile);
     let nofile_soft = nofile.get("soft").and_then(|value| value.as_u64());
     let nofile_hard = nofile.get("hard").and_then(|value| value.as_u64());
     let nofile_detail = nofile_hard.map(|hard| format!("hard limit {hard}"));
@@ -247,7 +145,7 @@ fn host_settings_json(engine: &MediaEngine) -> serde_json::Value {
         host_setting_json(
             "net.core.rmem_max",
             "Kernel receive buffer ceiling",
-            proc_sys_u64("net.core.rmem_max"),
+            snapshot.receive_buffer_max,
             REQUIRED_RMEM_MAX,
             "bytes",
             Some("needed for SRT UDP receive buffers".to_string()),
@@ -255,7 +153,7 @@ fn host_settings_json(engine: &MediaEngine) -> serde_json::Value {
         host_setting_json(
             "net.core.wmem_max",
             "Kernel send buffer ceiling",
-            proc_sys_u64("net.core.wmem_max"),
+            snapshot.send_buffer_max,
             REQUIRED_WMEM_MAX,
             "bytes",
             Some("needed for SRT UDP send buffers".to_string()),
@@ -275,7 +173,7 @@ fn host_settings_json(engine: &MediaEngine) -> serde_json::Value {
             "upper bound for spawn_blocking work such as SRT handshakes and epoll waiters; protects ramp-up latency without unbounded idle thread footprint",
         ),
     ];
-    rows.extend(cpu_capacity_settings());
+    rows.extend(cpu_capacity_settings(&snapshot.cpu_capacity));
     serde_json::json!(rows)
 }
 
@@ -318,7 +216,7 @@ pub(crate) async fn output_status(
         };
         if let Some(blocked_by) = blocked_by {
             explanation.blocked_by = Some(blocked_by.key.clone());
-            value["blockedBy"] = blocked_by.to_json();
+            value["blockedBy"] = super::stage_projection::stage_runtime_snapshot_json(&blocked_by);
         }
         value["explanation"] = api_view_models::output_runtime_explanation_json(&explanation);
 
@@ -523,7 +421,8 @@ pub(crate) async fn health_snapshot(
             .and_then(|outputs| outputs.as_object_mut())
             .and_then(|outputs| outputs.get_mut(&output_id))
         {
-            output_json["blockedBy"] = blocked_by.to_json();
+            output_json["blockedBy"] =
+                super::stage_projection::stage_runtime_snapshot_json(&blocked_by);
         }
     }
 
@@ -558,19 +457,26 @@ pub(crate) async fn health_snapshot(
     for pipeline_id in pipeline_ids {
         for snap in engine.pipeline_stage_runtime_snapshots(pipeline_id).await {
             let key_str = snap.key.to_string();
-            stages_json.insert(key_str, snap.to_json());
+            stages_json.insert(
+                key_str,
+                super::stage_projection::stage_runtime_snapshot_json(&snap),
+            );
         }
     }
 
+    let host_settings = sample_host_settings();
     serde_json::json!({
         "generatedAt": chrono::Utc::now().to_rfc3339(),
         "status": "ready",
         "pipelines": serde_json::Value::Object(pipelines_json),
         "stages": serde_json::Value::Object(stages_json),
         "runtimeLimits": {
-            "nofile": nofile_limit_json(engine.config.tuning.nofile_limit),
+            "nofile": nofile_limit_json(
+                engine.config.tuning.nofile_limit,
+                host_settings.nofile,
+            ),
         },
-        "hostSettings": host_settings_json(engine),
+        "hostSettings": host_settings_json(engine, &host_settings),
         "rtmpListener": {
             "acceptErrors": rtmp_accept_errors,
             "fdExhaustionErrors": rtmp_fd_exhaustion_errors,
@@ -725,13 +631,17 @@ pub(crate) async fn health_summary_snapshot(
         );
     }
 
+    let host_settings = sample_host_settings();
     serde_json::json!({
         "status": "ready",
         "pipelines": serde_json::Value::Object(pipelines_json),
         "runtimeLimits": {
-            "nofile": nofile_limit_json(engine.config.tuning.nofile_limit),
+            "nofile": nofile_limit_json(
+                engine.config.tuning.nofile_limit,
+                host_settings.nofile,
+            ),
         },
-        "hostSettings": host_settings_json(engine),
+        "hostSettings": host_settings_json(engine, &host_settings),
     })
 }
 
@@ -744,54 +654,6 @@ mod tests {
     use crate::media::engine::MediaEngine;
 
     use super::host_setting_json;
-    #[cfg(target_os = "linux")]
-    use super::{parse_cgroup_cpu_max, parse_cpu_list_count};
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn cpu_list_count_handles_ranges_and_singletons() {
-        assert_eq!(parse_cpu_list_count("0-3"), Some(4));
-        assert_eq!(parse_cpu_list_count("0-1,4,7-9"), Some(6));
-        assert_eq!(parse_cpu_list_count(" 2 , 5-6 "), Some(3));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn cpu_list_count_rejects_invalid_ranges() {
-        assert_eq!(parse_cpu_list_count("4-2"), None);
-        assert_eq!(parse_cpu_list_count("0,nope"), None);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn cpu_list_count_handles_empty_input_and_single_element_ranges() {
-        assert_eq!(parse_cpu_list_count(""), Some(0));
-        assert_eq!(parse_cpu_list_count("5-5"), Some(1));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn cpu_list_count_rejects_rather_than_panics_on_range_len_overflow() {
-        // A single range spanning from 0 to u64::MAX has a length of
-        // u64::MAX + 1, which does not fit in a u64. Regression test for a
-        // bug where `end - start + 1` computed this unchecked and panicked
-        // (debug) / silently wrapped to 0 (release) instead of returning
-        // None. This file's affinity-mask input normally comes from the
-        // kernel, but the parser must not panic on any string input.
-        assert_eq!(parse_cpu_list_count("0-18446744073709551615"), None);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn cgroup_cpu_max_reports_unlimited_and_quota() {
-        assert_eq!(
-            parse_cgroup_cpu_max("max 100000"),
-            ("max 100000".to_string(), None)
-        );
-        let (raw, cpus) = parse_cgroup_cpu_max("250000 100000");
-        assert_eq!(raw, "250000 100000");
-        assert_eq!(cpus, Some(2.5));
-    }
 
     #[test]
     fn host_setting_json_status_boundary_is_inclusive_at_required() {

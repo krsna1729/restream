@@ -3,7 +3,7 @@
 //! This file owns JSON shaping for queue, ring, and stage telemetry while the
 //! runtime layer continues to own the underlying counters and registries.
 
-use crate::api_view_models;
+use super::telemetry_projection as api_view_models;
 use crate::domain::stage::StageKey;
 use crate::media::engine::MediaEngine;
 use crate::media::pipe_metrics::PipeMetrics;
