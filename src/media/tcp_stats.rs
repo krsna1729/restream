@@ -584,8 +584,22 @@ mod tests {
         assert!(stats.tcp_congestion_algorithm.is_some());
         assert!(stats.tcp_rtt_ms.is_some());
         assert!(stats.tcp_bytes_received.unwrap_or(0) >= payload.len() as u64);
-        assert!(stats.tcp_skmem_rmem_max.unwrap_or(0) > 0);
-        assert!(stats.tcp_skmem_wmem_max.unwrap_or(0) > 0);
+
+        let socket_memory = [
+            stats.tcp_skmem_rmem_alloc,
+            stats.tcp_skmem_rmem_max,
+            stats.tcp_skmem_wmem_alloc,
+            stats.tcp_skmem_wmem_max,
+        ];
+        let populated = socket_memory.iter().filter(|value| value.is_some()).count();
+        assert!(
+            populated == 0 || populated == socket_memory.len(),
+            "SO_MEMINFO must be either wholly available or wholly unavailable: {socket_memory:?}"
+        );
+        if populated == socket_memory.len() {
+            assert!(stats.tcp_skmem_rmem_max.unwrap_or(0) > 0);
+            assert!(stats.tcp_skmem_wmem_max.unwrap_or(0) > 0);
+        }
     }
 
     #[cfg(target_os = "linux")]

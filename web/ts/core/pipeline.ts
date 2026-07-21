@@ -8,10 +8,22 @@ import type {
   VideoTrack,
 } from "../types.js";
 import { normalizeOutputConfig } from "./output-config.js";
+import {
+  type UnknownRecord,
+  finiteNonNegativeNumber,
+  isRecord,
+  nonNegativeNumberOrZero,
+  stringOrNull,
+  timestampMs,
+} from "./validators.js";
 
 const throughputState = {
   outputBytes: new Map<string, { ts: number; bytes: number }>(),
 };
+
+function jobTimestamp(job: Job): number | null {
+  return timestampMs(job.startedAt) ?? timestampMs(job.endedAt);
+}
 
 function computeKbps(
   stateMap: Map<string, { ts: number; bytes: number }>,
@@ -19,149 +31,263 @@ function computeKbps(
   totalBytes: number,
   nowMs: number,
 ): number | null {
-  if (!key) return null;
-  const safeBytes = Number(totalBytes || 0);
+  if (!key || finiteNonNegativeNumber(totalBytes) === null) return null;
   const prev = stateMap.get(key);
-  stateMap.set(key, { ts: nowMs, bytes: safeBytes });
+  stateMap.set(key, { ts: nowMs, bytes: totalBytes });
 
   if (!prev) return null;
   const dtMs = nowMs - prev.ts;
   if (dtMs <= 0) return null;
 
-  const deltaBytes = Math.max(0, safeBytes - prev.bytes);
+  const deltaBytes = Math.max(0, totalBytes - prev.bytes);
   return Number(((deltaBytes * 8) / (dtMs / 1000) / 1000).toFixed(1));
 }
 
-function resolveIngestUrls(pipeline: { ingestUrls?: IngestUrls }): IngestUrls {
-  return pipeline?.ingestUrls || { rtmp: null, srt: null };
+function resolveIngestUrls(pipeline: UnknownRecord): IngestUrls {
+  const ingestUrls = isRecord(pipeline.ingestUrls) ? pipeline.ingestUrls : {};
+  return {
+    rtmp: stringOrNull(ingestUrls.rtmp),
+    srt: stringOrNull(ingestUrls.srt),
+  };
+}
+
+function mapVideoTrack(track: UnknownRecord): VideoTrack {
+  const rawWidth = finiteNonNegativeNumber(track.width);
+  const width = rawWidth !== null && Number.isInteger(rawWidth) ? rawWidth : null;
+  const rawHeight = finiteNonNegativeNumber(track.height);
+  const height = rawHeight !== null && Number.isInteger(rawHeight) ? rawHeight : null;
+  const fps = finiteNonNegativeNumber(track.fps);
+  const rawPid = finiteNonNegativeNumber(track.pid);
+  const pid = rawPid !== null && Number.isInteger(rawPid) ? rawPid : null;
+  return {
+    codec: stringOrNull(track.codec) ?? undefined,
+    width: width ?? undefined,
+    height: height ?? undefined,
+    fps: fps ?? undefined,
+    pid: pid ?? null,
+    language: stringOrNull(track.language),
+    title: stringOrNull(track.title),
+    profile: stringOrNull(track.profile) ?? undefined,
+    level: stringOrNull(track.level) ?? undefined,
+  };
+}
+
+function mapAudioTrack(track: UnknownRecord): AudioTrack {
+  const rawIndex = finiteNonNegativeNumber(track.index ?? track.trackIndex);
+  const index = rawIndex !== null && Number.isInteger(rawIndex) ? rawIndex : null;
+  const rawPid = finiteNonNegativeNumber(track.pid);
+  const pid = rawPid !== null && Number.isInteger(rawPid) ? rawPid : null;
+  const rawChannels = finiteNonNegativeNumber(track.channels);
+  const channels = rawChannels !== null && Number.isInteger(rawChannels) ? rawChannels : null;
+  const rawSampleRate = finiteNonNegativeNumber(track.sampleRate ?? track.sample_rate);
+  const sampleRate = rawSampleRate !== null && Number.isInteger(rawSampleRate) ? rawSampleRate : null;
+  return {
+    index: index ?? undefined,
+    pid: pid ?? null,
+    codec: stringOrNull(track.codec) ?? undefined,
+    channels: channels ?? undefined,
+    sample_rate: sampleRate ?? undefined,
+    language: stringOrNull(track.language),
+    title: stringOrNull(track.title),
+    profile: stringOrNull(track.profile) ?? undefined,
+  };
+}
+
+function missingPipeline(pipelineId: string): PipelineView {
+  return {
+    id: pipelineId,
+    name: "Undefined",
+    key: null,
+    inputSource: null,
+    srtIngestPolicy: null,
+    fileIngest: null,
+    input: {
+      status: "off",
+      time: null,
+      probeReady: false,
+      probeStatus: "off",
+      probePendingMs: null,
+      video: null,
+      videoTrackSelection: null,
+      audio: null,
+      audioTracks: [],
+      bitrateKbps: null,
+      lastProgressAgeMs: null,
+      bytesReceived: 0,
+      bytesSent: 0,
+      readers: 0,
+      publisher: null,
+      unexpectedReadersCount: 0,
+      lastSessionProtocol: null,
+      lastDisconnectAt: null,
+      lastDisconnectAgeMs: null,
+      lastDisconnectReason: null,
+      lastFailurePhase: null,
+      recentDisconnectError: false,
+      recentDisconnectCount: 0,
+      flapping: false,
+      disconnectGraceActive: false,
+      disconnectGraceRemainingMs: null,
+      lastRemoteAddr: null,
+      lastSessionBytesReceived: null,
+    },
+    ingestUrls: { rtmp: null, srt: null },
+    outs: [],
+    stats: {
+      inputBitrateKbps: null,
+      outputBitrateKbps: null,
+      readerCount: 0,
+      outputCount: 0,
+      readerMismatch: false,
+      unexpectedReadersCount: 0,
+    },
+    recording: { enabled: false, active: false },
+    hlsPreview: {
+      active: false,
+      persistentConsumers: 0,
+      lastAccessAgeMs: null,
+      segments: 0,
+      playlistBytes: 0,
+    },
+  };
 }
 
 function parsePipelinesInfo(
   config: Partial<ConfigData>,
   health: Partial<HealthData>,
 ): PipelineView[] {
+  const rawConfig: UnknownRecord = isRecord(config) ? config : {};
+  const rawHealth: UnknownRecord = isRecord(health) ? health : {};
+  const healthByPipeline: UnknownRecord = isRecord(rawHealth.pipelines)
+    ? rawHealth.pipelines
+    : {};
+  const pipelineHealthFor = (pipelineId: string): UnknownRecord => {
+    const value = healthByPipeline[pipelineId];
+    return isRecord(value) ? value : {};
+  };
+
   const newPipelines: PipelineView[] = [];
+  const pipelineById = new Map<string, PipelineView>();
   const latestJobsByOutput = new Map<string, Job>();
-  const healthByPipeline = health?.pipelines || {};
+  const activeOutputStateKeys = new Set<string>();
   const nowMs = Date.now();
 
-  (config?.jobs || []).forEach((job) => {
-    const key = `${job.pipelineId}:${job.outputId}`;
+  for (const rawJob of Array.isArray(rawConfig.jobs) ? rawConfig.jobs : []) {
+    if (!isRecord(rawJob)) continue;
+    const pipelineId = typeof rawJob.pipelineId === "string" && rawJob.pipelineId.length > 0 ? rawJob.pipelineId : null;
+    const outputId = typeof rawJob.outputId === "string" && rawJob.outputId.length > 0 ? rawJob.outputId : null;
+    if (!pipelineId || !outputId) continue;
+
+    const job: Job = {
+      pipelineId,
+      outputId,
+      startedAt: stringOrNull(rawJob.startedAt) ?? undefined,
+      endedAt: stringOrNull(rawJob.endedAt) ?? undefined,
+    };
+    const key = `${pipelineId}:${outputId}`;
     const previous = latestJobsByOutput.get(key);
     if (!previous) {
       latestJobsByOutput.set(key, job);
-      return;
+      continue;
     }
 
-    const previousTime = new Date(
-      previous.startedAt || previous.endedAt || 0,
-    ).getTime();
-    const currentTime = new Date(job.startedAt || job.endedAt || 0).getTime();
-    if (currentTime >= previousTime) latestJobsByOutput.set(key, job);
-  });
+    const previousTime = jobTimestamp(previous);
+    const currentTime = jobTimestamp(job);
+    if (
+      currentTime !== null &&
+      (previousTime === null || currentTime >= previousTime)
+    ) {
+      latestJobsByOutput.set(key, job);
+    }
+  }
 
-  (config?.pipelines || []).forEach((p) => {
-    const inputHealth = healthByPipeline[p.id]?.input;
-    const inputBytesReceived =
-      healthByPipeline[p.id]?.input?.bytesReceived || 0;
-    const inputPublisher = healthByPipeline[p.id]?.input?.publisher || null;
-    const unexpectedReadersCount = Number(
-      healthByPipeline[p.id]?.input?.unexpectedReaders?.count || 0,
+  for (const rawPipeline of Array.isArray(rawConfig.pipelines) ? rawConfig.pipelines : []) {
+    if (!isRecord(rawPipeline)) continue;
+    const pipelineId = typeof rawPipeline.id === "string" && rawPipeline.id.length > 0 ? rawPipeline.id : null;
+    if (!pipelineId) continue;
+
+    const pipelineHealth = pipelineHealthFor(pipelineId);
+    const inputHealth = isRecord(pipelineHealth.input)
+      ? pipelineHealth.input
+      : {};
+    const inputBytesReceived = nonNegativeNumberOrZero(
+      inputHealth.bytesReceived,
     );
-    const rawInputVideo = healthByPipeline[p.id]?.input?.video;
-    const inputVideo: VideoTrack | null = rawInputVideo
-      ? { ...rawInputVideo }
+    const inputPublisher = isRecord(inputHealth.publisher)
+      ? (inputHealth.publisher as unknown as PipelineView["input"]["publisher"])
       : null;
-    const rawInputAudio = healthByPipeline[p.id]?.input?.audio || null;
-    const rawInputAudioTracks =
-      healthByPipeline[p.id]?.input?.audioTracks || [];
-    const mapAudioTrack = (track: any): AudioTrack => ({
-      index: track.index !== undefined ? track.index : track.trackIndex,
-      pid: track.pid ?? null,
-      codec: track.codec,
-      channels: track.channels,
-      sample_rate:
-        track.sampleRate !== undefined ? track.sampleRate : track.sample_rate,
-      language: track.language ?? null,
-      title: track.title ?? null,
-      profile: track.profile,
-    });
-    const inputAudioTracks: AudioTrack[] =
-      rawInputAudioTracks.length > 0
-        ? rawInputAudioTracks.map(mapAudioTrack)
-        : rawInputAudio
-          ? [mapAudioTrack(rawInputAudio)]
-          : [];
-    const rawInputKbps = healthByPipeline[p.id]?.input?.bitrateKbps;
-    const inputKbps = Number.isFinite(rawInputKbps as number)
-      ? Number((rawInputKbps as number).toFixed(1))
+    const unexpectedReaders = isRecord(inputHealth.unexpectedReaders)
+      ? inputHealth.unexpectedReaders
+      : {};
+    const unexpectedReadersCount = nonNegativeNumberOrZero(
+      unexpectedReaders.count,
+    );
+    const inputVideo = isRecord(inputHealth.video)
+      ? mapVideoTrack(inputHealth.video)
       : null;
-    const rawInputProgressAgeMs = inputHealth?.lastProgressAgeMs;
-    const inputLastProgressAgeMs = Number.isFinite(
-      rawInputProgressAgeMs as number,
-    )
-      ? Number(rawInputProgressAgeMs)
+    const rawInputAudio = isRecord(inputHealth.audio)
+      ? inputHealth.audio
       : null;
+    const inputAudioTracks = (Array.isArray(inputHealth.audioTracks) ? inputHealth.audioTracks : [])
+      .filter(isRecord)
+      .map(mapAudioTrack);
+    if (inputAudioTracks.length === 0 && rawInputAudio) {
+      inputAudioTracks.push(mapAudioTrack(rawInputAudio));
+    }
+
+    const rawInputKbps = finiteNonNegativeNumber(inputHealth.bitrateKbps);
+    const inputKbps =
+      rawInputKbps === null ? null : Number(rawInputKbps.toFixed(1));
+    const inputLastProgressAgeMs = finiteNonNegativeNumber(
+      inputHealth.lastProgressAgeMs,
+    );
 
     if (inputVideo) inputVideo.bw = inputKbps;
 
-    const rawInputStatus = healthByPipeline[p.id]?.input?.status || "off";
-    const disconnectGraceActive = Boolean(
-      healthByPipeline[p.id]?.input?.disconnectGraceActive,
+    const rawInputStatus = stringOrNull(inputHealth.status) || "off";
+    const disconnectGraceActive = inputHealth.disconnectGraceActive === true;
+    const disconnectGraceRemainingMs = finiteNonNegativeNumber(
+      inputHealth.disconnectGraceRemainingMs,
     );
-    const rawDisconnectGraceRemainingMs =
-      healthByPipeline[p.id]?.input?.disconnectGraceRemainingMs;
-    const disconnectGraceRemainingMs = Number.isFinite(
-      rawDisconnectGraceRemainingMs as number,
-    )
-      ? Number(rawDisconnectGraceRemainingMs)
-      : null;
     const inputStatus =
       rawInputStatus === "off" && disconnectGraceActive
         ? "warning"
         : rawInputStatus;
-    const probeReady = Boolean(healthByPipeline[p.id]?.input?.probeReady);
-    const probeStatus = healthByPipeline[p.id]?.input?.probeStatus || "off";
-    const rawProbePendingMs = healthByPipeline[p.id]?.input?.probePendingMs;
-    const probePendingMs = Number.isFinite(rawProbePendingMs as number)
-      ? Number(rawProbePendingMs)
-      : null;
-    const rawLastDisconnectAgeMs =
-      healthByPipeline[p.id]?.input?.lastDisconnectAgeMs;
-    const lastDisconnectAgeMs = Number.isFinite(
-      rawLastDisconnectAgeMs as number,
-    )
-      ? Number(rawLastDisconnectAgeMs)
-      : null;
-    const publishStartedAt =
-      healthByPipeline[p.id]?.input?.publishStartedAt || null;
-    const publishStartedTs = publishStartedAt
-      ? new Date(publishStartedAt).getTime()
-      : NaN;
+    const probeReady = inputHealth.probeReady === true;
+    const probeStatus = stringOrNull(inputHealth.probeStatus) || "off";
+    const probePendingMs = finiteNonNegativeNumber(inputHealth.probePendingMs);
+    const lastDisconnectAgeMs = finiteNonNegativeNumber(
+      inputHealth.lastDisconnectAgeMs,
+    );
+    const publishStartedAt = stringOrNull(inputHealth.publishStartedAt);
+    const publishStartedTs = timestampMs(publishStartedAt);
 
     let inputTime: number | null = null;
-    if (
-      inputStatus === "on" &&
-      Number.isFinite(publishStartedTs) &&
-      publishStartedTs > 0
-    ) {
+    if (inputStatus === "on" && publishStartedTs !== null && publishStartedTs > 0) {
       inputTime = Math.max(0, nowMs - publishStartedTs);
     }
 
-    const rawHlsPreview = healthByPipeline[p.id]?.hlsPreview;
-    const rawHlsLastAccessAgeMs = rawHlsPreview?.lastAccessAgeMs;
-    const hlsLastAccessAgeMs = Number.isFinite(rawHlsLastAccessAgeMs as number)
-      ? Number(rawHlsLastAccessAgeMs)
-      : null;
-
-    newPipelines.push({
-      id: p.id,
-      name: p.name,
-      key: p.streamKey,
-      inputSource: p.inputSource || null,
-      srtIngestPolicy: p.srtIngestPolicy || null,
-      ingestUrls: resolveIngestUrls(p),
-      fileIngest: p.fileIngest || null,
+    const rawHlsPreview = isRecord(pipelineHealth.hlsPreview)
+      ? pipelineHealth.hlsPreview
+      : {};
+    const hlsLastAccessAgeMs = finiteNonNegativeNumber(
+      rawHlsPreview.lastAccessAgeMs,
+    );
+    const recording = isRecord(pipelineHealth.recording)
+      ? pipelineHealth.recording
+      : {};
+    const pipeline: PipelineView = {
+      id: pipelineId,
+      name: stringOrNull(rawPipeline.name) || pipelineId,
+      key: stringOrNull(rawPipeline.streamKey),
+      inputSource: stringOrNull(rawPipeline.inputSource),
+      srtIngestPolicy: isRecord(rawPipeline.srtIngestPolicy)
+        ? (rawPipeline.srtIngestPolicy as unknown as PipelineView["srtIngestPolicy"])
+        : null,
+      ingestUrls: resolveIngestUrls(rawPipeline),
+      fileIngest: isRecord(rawPipeline.fileIngest)
+        ? (rawPipeline.fileIngest as unknown as PipelineView["fileIngest"])
+        : null,
       input: {
         status: inputStatus,
         time: inputTime,
@@ -169,220 +295,174 @@ function parsePipelinesInfo(
         probeStatus,
         probePendingMs,
         video: inputVideo,
-        videoTrackSelection:
-          healthByPipeline[p.id]?.input?.videoTrackSelection || null,
+        videoTrackSelection: isRecord(inputHealth.videoTrackSelection)
+          ? (inputHealth.videoTrackSelection as unknown as PipelineView["input"]["videoTrackSelection"])
+          : null,
         audio: inputAudioTracks[0] || null,
         audioTracks: inputAudioTracks,
         bytesReceived: inputBytesReceived,
-        bytesSent: healthByPipeline[p.id]?.input?.bytesSent || 0,
-        readers: healthByPipeline[p.id]?.input?.readers || 0,
+        bytesSent: nonNegativeNumberOrZero(inputHealth.bytesSent),
+        readers: nonNegativeNumberOrZero(inputHealth.readers),
         bitrateKbps: inputKbps,
         lastProgressAgeMs: inputLastProgressAgeMs,
-        publisher: inputPublisher ?? null,
+        publisher: inputPublisher,
         unexpectedReadersCount,
-        lastSessionProtocol:
-          healthByPipeline[p.id]?.input?.lastSessionProtocol || null,
-        lastDisconnectAt:
-          healthByPipeline[p.id]?.input?.lastDisconnectAt || null,
+        lastSessionProtocol: stringOrNull(inputHealth.lastSessionProtocol),
+        lastDisconnectAt: stringOrNull(inputHealth.lastDisconnectAt),
         lastDisconnectAgeMs,
-        lastDisconnectReason:
-          healthByPipeline[p.id]?.input?.lastDisconnectReason || null,
-        lastFailurePhase:
-          healthByPipeline[p.id]?.input?.lastFailurePhase || null,
-        recentDisconnectError: Boolean(
-          healthByPipeline[p.id]?.input?.recentDisconnectError,
+        lastDisconnectReason: stringOrNull(inputHealth.lastDisconnectReason),
+        lastFailurePhase: stringOrNull(inputHealth.lastFailurePhase),
+        recentDisconnectError: inputHealth.recentDisconnectError === true,
+        recentDisconnectCount: nonNegativeNumberOrZero(
+          inputHealth.recentDisconnectCount,
         ),
-        recentDisconnectCount:
-          typeof inputHealth?.recentDisconnectCount === "number"
-            ? Number(inputHealth.recentDisconnectCount)
-            : 0,
-        flapping: Boolean(healthByPipeline[p.id]?.input?.flapping),
+        flapping: inputHealth.flapping === true,
         disconnectGraceActive,
         disconnectGraceRemainingMs,
-        lastRemoteAddr: healthByPipeline[p.id]?.input?.lastRemoteAddr || null,
-        lastSessionBytesReceived:
-          typeof inputHealth?.lastSessionBytesReceived === "number"
-            ? inputHealth.lastSessionBytesReceived
-            : null,
+        lastRemoteAddr: stringOrNull(inputHealth.lastRemoteAddr),
+        lastSessionBytesReceived: finiteNonNegativeNumber(
+          inputHealth.lastSessionBytesReceived,
+        ),
       },
       outs: [],
       stats: {
         inputBitrateKbps: inputKbps,
         outputBitrateKbps: null,
-        readerCount: healthByPipeline[p.id]?.input?.readers || 0,
+        readerCount: nonNegativeNumberOrZero(inputHealth.readers),
         outputCount: 0,
         readerMismatch: false,
         unexpectedReadersCount,
       },
-      recording: healthByPipeline[p.id]?.recording ?? {
-        enabled: false,
-        active: false,
+      recording: {
+        enabled: recording.enabled === true,
+        active: recording.active === true,
       },
       hlsPreview: {
-        active: Boolean(rawHlsPreview?.active),
-        persistentConsumers: Number(rawHlsPreview?.persistentConsumers || 0),
+        active: rawHlsPreview.active === true,
+        persistentConsumers: nonNegativeNumberOrZero(
+          rawHlsPreview.persistentConsumers,
+        ),
         lastAccessAgeMs: hlsLastAccessAgeMs,
-        segments: Number(rawHlsPreview?.segments || 0),
-        playlistBytes: Number(rawHlsPreview?.playlistBytes || 0),
+        segments: nonNegativeNumberOrZero(rawHlsPreview.segments),
+        playlistBytes: nonNegativeNumberOrZero(rawHlsPreview.playlistBytes),
       },
-    });
-  });
+    };
+    newPipelines.push(pipeline);
+    if (!pipelineById.has(pipelineId)) pipelineById.set(pipelineId, pipeline);
+  }
 
-  (config?.outputs || []).forEach((out) => {
-    const config = normalizeOutputConfig(out);
-    let pipe = newPipelines.find((p) => p.id === out.pipelineId);
-    const latestJob = latestJobsByOutput.get(`${out.pipelineId}:${out.id}`);
-    const outHealth =
-      healthByPipeline[out.pipelineId]?.outputs?.[out.id] || null;
-    const status = outHealth?.status || "off";
-    const retrying =
-      status === "retrying" || Boolean(outHealth?.retrying || false);
-    const flapping = Boolean(outHealth?.flapping || false);
+  for (const rawOutput of Array.isArray(rawConfig.outputs) ? rawConfig.outputs : []) {
+    if (!isRecord(rawOutput)) continue;
+    const outputId = typeof rawOutput.id === "string" && rawOutput.id.length > 0 ? rawOutput.id : null;
+    const pipelineId = typeof rawOutput.pipelineId === "string" && rawOutput.pipelineId.length > 0 ? rawOutput.pipelineId : null;
+    if (!outputId || !pipelineId) continue;
+
+    const outputStateKey = `${pipelineId}:${outputId}`;
+    activeOutputStateKeys.add(outputStateKey);
+    const outputConfig = normalizeOutputConfig(rawOutput);
+    let pipe = pipelineById.get(pipelineId);
+    const latestJob = latestJobsByOutput.get(outputStateKey);
+    const pipelineHealth = pipelineHealthFor(pipelineId);
+    const outputHealthById = isRecord(pipelineHealth.outputs)
+      ? pipelineHealth.outputs
+      : {};
+    const outHealth = isRecord(outputHealthById[outputId])
+      ? outputHealthById[outputId]
+      : {};
+    const status = stringOrNull(outHealth.status) || "off";
+    const retrying = status === "retrying" || outHealth.retrying === true;
+    const flapping = outHealth.flapping === true;
 
     if (!pipe) {
-      console.error("Not found pipeline for output: ", out);
-      pipe = {
-        id: out.pipelineId,
-        name: "Undefined",
-        key: null,
-        inputSource: null,
-        srtIngestPolicy: null,
-        fileIngest: null,
-        input: {
-          status: "off",
-          time: null,
-          probeReady: false,
-          probeStatus: "off",
-          probePendingMs: null,
-          video: null,
-          videoTrackSelection: null,
-          audio: null,
-          audioTracks: [],
-          bitrateKbps: null,
-          lastProgressAgeMs: null,
-          bytesReceived: 0,
-          bytesSent: 0,
-          readers: 0,
-          publisher: null,
-          unexpectedReadersCount: 0,
-          lastSessionProtocol: null,
-          lastDisconnectAt: null,
-          lastDisconnectAgeMs: null,
-          lastDisconnectReason: null,
-          lastFailurePhase: null,
-          recentDisconnectError: false,
-          recentDisconnectCount: 0,
-          flapping: false,
-          disconnectGraceActive: false,
-          disconnectGraceRemainingMs: null,
-          lastRemoteAddr: null,
-          lastSessionBytesReceived: null,
-        },
-        ingestUrls: { rtmp: null, srt: null },
-        outs: [],
-        stats: {
-          inputBitrateKbps: null,
-          outputBitrateKbps: null,
-          readerCount: 0,
-          outputCount: 0,
-          readerMismatch: false,
-          unexpectedReadersCount: 0,
-        },
-        recording: { enabled: false, active: false },
-        hlsPreview: {
-          active: false,
-          persistentConsumers: 0,
-          lastAccessAgeMs: null,
-          segments: 0,
-          playlistBytes: 0,
-        },
-      };
+      console.error("Not found pipeline for output: ", rawOutput);
+      pipe = missingPipeline(pipelineId);
       newPipelines.push(pipe);
+      pipelineById.set(pipelineId, pipe);
     }
 
-    const outputTotalSize = outHealth?.totalSize ?? null;
-    // Prefer the direct bitrate reading from ffmpeg progress (reliable for all protocols
-    // including HLS where total_size may report N/A). Fall back to computing from byte delta.
-    const outBitrateKbps =
-      outHealth?.bitrateKbps ??
-      computeKbps(
-        throughputState.outputBytes,
-        `${out.pipelineId}:${out.id}`,
-        outputTotalSize ?? 0,
-        nowMs,
-      );
+    const outputTotalSize = finiteNonNegativeNumber(outHealth.totalSize);
+    // Always refresh a valid byte-counter baseline, even when ffmpeg supplies a
+    // direct bitrate. A later fallback sample must compare with the immediately
+    // preceding counter rather than a stale pre-direct sample.
+    const computedOutputKbps =
+      outputTotalSize === null
+        ? null
+        : computeKbps(
+            throughputState.outputBytes,
+            outputStateKey,
+            outputTotalSize,
+            nowMs,
+          );
+    const directOutputKbps = finiteNonNegativeNumber(outHealth.bitrateKbps);
+    const outBitrateKbps = directOutputKbps ?? computedOutputKbps;
 
     let outTime: number | null = null;
-    const runtimeUptimeSecs = Number(outHealth?.uptimeSecs);
+    const runtimeUptimeSecs = finiteNonNegativeNumber(outHealth.uptimeSecs);
     if (
       (status === "on" || status === "running") &&
-      Number.isFinite(runtimeUptimeSecs) &&
-      runtimeUptimeSecs >= 0
+      runtimeUptimeSecs !== null
     ) {
       outTime = Math.round(runtimeUptimeSecs * 1000);
     } else if (
       (status === "on" || status === "running") &&
       latestJob?.startedAt
     ) {
-      outTime = Math.max(0, nowMs - new Date(latestJob.startedAt).getTime());
+      const startedAt = timestampMs(latestJob.startedAt);
+      if (startedAt !== null) outTime = Math.max(0, nowMs - startedAt);
     }
 
     pipe.outs.push({
-      id: out.id,
+      id: outputId,
       pipe: pipe.name,
-      name: out.name,
-      desiredState: out.desiredState || "stopped",
-      config,
-      url: out.url,
-      monitoringUrl: out.monitoringUrl || null,
+      name: stringOrNull(rawOutput.name) || outputId,
+      desiredState: stringOrNull(rawOutput.desiredState) || "stopped",
+      config: outputConfig,
+      url: stringOrNull(rawOutput.url) || "",
+      monitoringUrl: stringOrNull(rawOutput.monitoringUrl),
       status,
-      rawStatus: outHealth?.rawStatus || null,
-      phase: outHealth?.phase || null,
-      failurePhase: outHealth?.failurePhase || null,
-      lastError: outHealth?.lastError || null,
-      lastErrorAt: outHealth?.lastErrorAt || null,
-      lastProgressAt: outHealth?.lastProgressAt || null,
-      lastProgressAgeMs:
-        typeof outHealth?.lastProgressAgeMs === "number"
-          ? outHealth.lastProgressAgeMs
-          : null,
-      recentFailureCount:
-        typeof outHealth?.recentFailureCount === "number"
-          ? outHealth.recentFailureCount
-          : 0,
+      rawStatus: stringOrNull(outHealth.rawStatus),
+      phase: stringOrNull(outHealth.phase),
+      failurePhase: stringOrNull(outHealth.failurePhase),
+      lastError: stringOrNull(outHealth.lastError),
+      lastErrorAt: stringOrNull(outHealth.lastErrorAt),
+      lastProgressAt: stringOrNull(outHealth.lastProgressAt),
+      lastProgressAgeMs: finiteNonNegativeNumber(outHealth.lastProgressAgeMs),
+      recentFailureCount: nonNegativeNumberOrZero(outHealth.recentFailureCount),
       flapping,
       retrying,
-      retryAttempts:
-        typeof outHealth?.retryAttempts === "number"
-          ? outHealth.retryAttempts
-          : null,
-      retryBackoffMs:
-        typeof outHealth?.retryBackoffMs === "number"
-          ? outHealth.retryBackoffMs
-          : null,
-      nextRetryAt: outHealth?.nextRetryAt || null,
-      retryRemainingMs:
-        typeof outHealth?.retryRemainingMs === "number"
-          ? outHealth.retryRemainingMs
-          : null,
+      retryAttempts: finiteNonNegativeNumber(outHealth.retryAttempts),
+      retryBackoffMs: finiteNonNegativeNumber(outHealth.retryBackoffMs),
+      nextRetryAt: stringOrNull(outHealth.nextRetryAt),
+      retryRemainingMs: finiteNonNegativeNumber(outHealth.retryRemainingMs),
       time: outTime,
       job: latestJob || null,
       totalSize: outputTotalSize,
       bitrateKbps: outBitrateKbps,
     });
-  });
+  }
+
+  for (const stateKey of throughputState.outputBytes.keys()) {
+    if (!activeOutputStateKeys.has(stateKey)) {
+      throughputState.outputBytes.delete(stateKey);
+    }
+  }
 
   newPipelines.forEach((pipe) => {
     const outputCount = pipe.outs.length;
-    const readerCount = pipe.input.readers || 0;
+    const readerCount = pipe.input.readers;
 
     const activeOutputKbps = pipe.outs
       .filter(
-        (o) =>
-          o.status === "on" || o.status === "running" || o.status === "warning",
+        (output) =>
+          output.status === "on" ||
+          output.status === "running" ||
+          output.status === "warning",
       )
-      .map((o) => o.bitrateKbps)
-      .filter((k): k is number => k !== null && k >= 0);
+      .map((output) => output.bitrateKbps)
+      .filter(
+        (kbps): kbps is number =>
+          kbps !== null && Number.isFinite(kbps) && kbps >= 0,
+      );
     const outputBitrateKbps =
       activeOutputKbps.length > 0
         ? Number(activeOutputKbps.reduce((a, b) => a + b, 0).toFixed(1))
@@ -394,7 +474,7 @@ function parsePipelinesInfo(
       readerCount,
       outputCount,
       readerMismatch: readerCount !== outputCount,
-      unexpectedReadersCount: Number(pipe.input.unexpectedReadersCount || 0),
+      unexpectedReadersCount: pipe.input.unexpectedReadersCount,
     };
   });
 

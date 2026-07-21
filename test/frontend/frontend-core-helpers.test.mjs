@@ -443,7 +443,251 @@ test("pipeline parsing maps input, output, retry, and throughput fields", async 
   assert.equal(first[0].outs[0].job.startedAt, "2026-06-30T00:00:20Z");
   assert.equal(first[0].outs[0].time, null);
   assert.equal(second[0].outs[0].time, 9_250);
-  assert.equal(second[0].outs[0].bitrateKbps !== null, true);
+  assert.equal(second[0].outs[0].bitrateKbps, 160);
+});
+
+test("pipeline parsing tolerates malformed collection and nested config shapes", async () => {
+  installFakeDom();
+  const { parsePipelinesInfo } =
+    await loadCompiledFrontendModule("core/pipeline.js");
+
+  assert.deepEqual(
+    parsePipelinesInfo(
+      { pipelines: {}, outputs: "not-an-array", jobs: null },
+      { pipelines: [] },
+    ),
+    [],
+  );
+
+  const parsed = parsePipelinesInfo(
+    {
+      pipelines: [
+        null,
+        "not-a-pipeline",
+        {
+          id: "pipe-malformed",
+          name: "Safe pipeline",
+          streamKey: "safe-key",
+          ingestUrls: "not-an-object",
+        },
+        { id: "" },
+      ],
+      outputs: [
+        null,
+        {
+          id: "out-malformed",
+          pipelineId: "pipe-malformed",
+          name: "Safe output",
+          url: 42,
+          config: {
+            video: null,
+            audio: "not-an-object",
+            protocol: { type: "rtmp", mode: "future-mode" },
+          },
+        },
+        { id: null, pipelineId: "pipe-malformed" },
+      ],
+      jobs: [null, { pipelineId: "pipe-malformed", outputId: null }],
+    },
+    {
+      pipelines: {
+        "pipe-malformed": {
+          input: {
+            video: "not-a-track",
+            audioTracks: { length: 1, 0: { codec: "aac" } },
+          },
+          outputs: { "out-malformed": "not-health" },
+          recording: null,
+          hlsPreview: "not-health",
+        },
+      },
+    },
+  );
+
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].id, "pipe-malformed");
+  assert.deepEqual(parsed[0].ingestUrls, { rtmp: null, srt: null });
+  assert.equal(parsed[0].input.video, null);
+  assert.deepEqual(parsed[0].input.audioTracks, []);
+  assert.equal(parsed[0].outs.length, 1);
+  assert.equal(parsed[0].outs[0].url, "");
+  assert.deepEqual(parsed[0].outs[0].config, {
+    video: { mode: "source", codec: "auto" },
+    audio: { mode: "all" },
+    protocol: { type: "rtmp", mode: "legacy" },
+  });
+});
+
+test("pipeline parsing rejects invalid telemetry and lets valid job timestamps win", async () => {
+  installFakeDom();
+  const { parsePipelinesInfo } =
+    await loadCompiledFrontendModule("core/pipeline.js");
+
+  const originalDateNow = Date.now;
+  const now = Date.parse("2026-07-01T00:00:30Z");
+  let parsed;
+  try {
+    Date.now = () => now;
+    parsed = parsePipelinesInfo(
+      {
+        pipelines: [
+          { id: "pipe-telemetry", name: "Telemetry", streamKey: "key" },
+        ],
+        outputs: [
+          {
+            id: "out-telemetry",
+            pipelineId: "pipe-telemetry",
+            name: "Telemetry output",
+            url: "rtmp://example.test/live/key",
+            config: null,
+          },
+        ],
+        jobs: [
+          {
+            pipelineId: "pipe-telemetry",
+            outputId: "out-telemetry",
+            startedAt: "not-a-date",
+          },
+          {
+            pipelineId: "pipe-telemetry",
+            outputId: "out-telemetry",
+            startedAt: "2026-07-01T00:00:20Z",
+          },
+          {
+            pipelineId: "pipe-telemetry",
+            outputId: "out-telemetry",
+            endedAt: "still-not-a-date",
+          },
+        ],
+      },
+      {
+        pipelines: {
+          "pipe-telemetry": {
+            input: {
+              status: "on",
+              publishStartedAt: "2026-07-01T00:00:10Z",
+              bytesReceived: -1,
+              bytesSent: Number.NaN,
+              readers: Number.POSITIVE_INFINITY,
+              bitrateKbps: Number.POSITIVE_INFINITY,
+              lastProgressAgeMs: -5,
+              disconnectGraceRemainingMs: -1,
+              recentDisconnectCount: -2,
+              lastSessionBytesReceived: Number.NaN,
+              audioTracks: { length: 1 },
+              audio: {
+                trackIndex: 2,
+                pid: 300,
+                codec: "aac",
+                channels: 2,
+                sampleRate: 48_000,
+              },
+              unexpectedReaders: { count: -1 },
+            },
+            outputs: {
+              "out-telemetry": {
+                status: "running",
+                uptimeSecs: -1,
+                totalSize: Number.POSITIVE_INFINITY,
+                bitrateKbps: Number.NaN,
+                lastProgressAgeMs: -1,
+                recentFailureCount: -1,
+                retryAttempts: Number.POSITIVE_INFINITY,
+                retryBackoffMs: -1,
+                retryRemainingMs: Number.NaN,
+              },
+            },
+            hlsPreview: {
+              persistentConsumers: -1,
+              lastAccessAgeMs: -1,
+              segments: Number.NaN,
+              playlistBytes: Number.POSITIVE_INFINITY,
+            },
+          },
+        },
+      },
+    );
+  } finally {
+    Date.now = originalDateNow;
+  }
+
+  const pipeline = parsed[0];
+  const output = pipeline.outs[0];
+  assert.equal(pipeline.input.time, 20_000);
+  assert.equal(pipeline.input.bytesReceived, 0);
+  assert.equal(pipeline.input.bytesSent, 0);
+  assert.equal(pipeline.input.readers, 0);
+  assert.equal(pipeline.input.bitrateKbps, null);
+  assert.equal(pipeline.input.lastProgressAgeMs, null);
+  assert.equal(pipeline.input.audioTracks.length, 1);
+  assert.equal(pipeline.input.audioTracks[0].index, 2);
+  assert.equal(pipeline.input.audioTracks[0].sample_rate, 48_000);
+  assert.equal(pipeline.input.unexpectedReadersCount, 0);
+  assert.equal(pipeline.input.disconnectGraceRemainingMs, null);
+  assert.equal(pipeline.input.recentDisconnectCount, 0);
+  assert.equal(pipeline.input.lastSessionBytesReceived, null);
+  assert.equal(pipeline.hlsPreview.persistentConsumers, 0);
+  assert.equal(pipeline.hlsPreview.lastAccessAgeMs, null);
+  assert.equal(pipeline.hlsPreview.segments, 0);
+  assert.equal(pipeline.hlsPreview.playlistBytes, 0);
+  assert.equal(output.job.startedAt, "2026-07-01T00:00:20Z");
+  assert.equal(output.time, 10_000);
+  assert.equal(output.totalSize, null);
+  assert.equal(output.bitrateKbps, null);
+  assert.equal(output.lastProgressAgeMs, null);
+  assert.equal(output.recentFailureCount, 0);
+  assert.equal(output.retryAttempts, null);
+  assert.equal(output.retryBackoffMs, null);
+  assert.equal(output.retryRemainingMs, null);
+});
+
+test("pipeline throughput state follows direct samples and is pruned on output removal", async () => {
+  installFakeDom();
+  const { parsePipelinesInfo } =
+    await loadCompiledFrontendModule("core/pipeline.js");
+
+  const pipeline = { id: "pipe-state", name: "State", streamKey: "key" };
+  const output = {
+    id: "out-state",
+    pipelineId: "pipe-state",
+    name: "State output",
+    url: "rtmp://example.test/live/key",
+    config: null,
+  };
+  const config = { pipelines: [pipeline], outputs: [output], jobs: [] };
+  const healthAt = (totalSize, bitrateKbps) => ({
+    pipelines: {
+      "pipe-state": {
+        outputs: {
+          "out-state": { status: "running", totalSize, bitrateKbps },
+        },
+      },
+    },
+  });
+
+  const originalDateNow = Date.now;
+  let fakeNow = 1_000;
+  try {
+    Date.now = () => fakeNow;
+    const direct = parsePipelinesInfo(config, healthAt(10_000, 900));
+    assert.equal(direct[0].outs[0].bitrateKbps, 900);
+
+    fakeNow += 1_000;
+    const fallback = parsePipelinesInfo(config, healthAt(30_000, undefined));
+    assert.equal(fallback[0].outs[0].bitrateKbps, 160);
+
+    fakeNow += 1_000;
+    parsePipelinesInfo(
+      { pipelines: [pipeline], outputs: [], jobs: [] },
+      { pipelines: {} },
+    );
+
+    fakeNow += 1_000;
+    const recreated = parsePipelinesInfo(config, healthAt(50_000, undefined));
+    assert.equal(recreated[0].outs[0].bitrateKbps, null);
+  } finally {
+    Date.now = originalDateNow;
+  }
 });
 
 test("ingest detail rendering and publisher quality helpers surface operator-facing values", async () => {
