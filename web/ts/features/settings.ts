@@ -16,7 +16,7 @@ import type {
   SrtGlobalIngestConfig,
 } from "../types.js";
 import type { SettingsCheckpointModel } from "./settings-view-model.js";
-import { showErrorAlert } from "../core/utils.js";
+import { escapeHtml, showErrorAlert } from "../core/utils.js";
 import { state } from "../core/state.js";
 import { withBasePath } from "../core/base-path.js";
 
@@ -82,24 +82,6 @@ export async function loadSettings({
   loadTranscodeProfiles();
 }
 
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => {
-    switch (char) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case '"':
-        return "&quot;";
-      case "'":
-        return "&#39;";
-      default:
-        return char;
-    }
-  });
-}
 
 function settingsSectionFor(childId: string): HTMLElement | null {
   return document

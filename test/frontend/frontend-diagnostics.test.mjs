@@ -137,8 +137,14 @@ test("escapeHtml neutralizes quote characters so attribute values cannot break o
   // attributes. If a double quote survives escaping, an attacker-influenced
   // value like an output target or stream id can close the attribute early
   // and inject arbitrary markup/attributes.
+  //
+  // escapeHtml was moved from features/diagnostics.ts to core/utils.ts
+  // as the canonical version; tests import it from its new home.
+  const utils = await loadCompiledFrontendModule(
+    "core/utils.js",
+  );
   const payload = `evil" onmouseover="alert(1)`;
-  const escaped = diagnostics.escapeHtml(payload);
+  const escaped = utils.escapeHtml(payload);
   const rendered = `<div title="${escaped}">${escaped}</div>`;
 
   assert.ok(
@@ -152,7 +158,7 @@ test("escapeHtml neutralizes quote characters so attribute values cannot break o
   assert.match(escaped, /evil&quot; onmouseover=&quot;alert\(1\)/);
 
   // Single quotes and the core HTML metacharacters must also survive.
-  assert.equal(diagnostics.escapeHtml(`&<>"'`), "&amp;&lt;&gt;&quot;&#39;");
+  assert.equal(utils.escapeHtml(`&<>"'`), "&amp;&lt;&gt;&quot;&#39;");
 });
 
 function diagnosticCheck(name) {
