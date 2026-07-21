@@ -4,32 +4,32 @@ import {
   showCopiedNotification,
   showErrorAlert,
   escapeHtml,
-} from "../core/utils.js";
-import { updateOutput } from "../core/api.js";
-import { RenderScope } from "../core/render-scope.js";
-import type { RenderScopeToken } from "../core/render-scope.js";
-import { state } from "../core/state.js";
-import { controlRoomShellHtml } from "./control-room-shell.js";
-import { upsertDashboardOutputConfig } from "./dashboard.js";
-import type { OutputView, PipelineInput, PipelineView } from "../types.js";
-import { normalizeOutputConfig } from "../core/output-config.js";
-import type { ControlRoomCheckpointModel } from "./control-room-view-model.js";
+} from "../../core/utils.js";
+import { updateOutput } from "../../core/api.js";
+import { RenderScope } from "../../core/render-scope.js";
+import type { RenderScopeToken } from "../../core/render-scope.js";
+import { state } from "../../core/state.js";
+import { controlRoomShellHtml } from "./shell.js";
+import { upsertDashboardOutputConfig } from "../dashboard.js";
+import type { OutputView, PipelineInput, PipelineView } from "../../types.js";
+import { normalizeOutputConfig } from "../../core/output-config.js";
+import type { ControlRoomCheckpointModel } from "./view-model.js";
 import {
   buildControlRoomCheckpointModel,
   controlRoomScopeSummaryText,
-} from "./control-room-checkpoint.js";
+} from "./checkpoint.js";
 import type {
   ControlRoomCardDescriptor,
   ControlRoomOutputOption,
   ControlRoomState,
   ControlRoomWorkspaceDependencies,
-} from "./control-room-types.js";
+} from "./types.js";
 import {
   buildControlRoomInputCard,
   controlRoomInputs,
   isControlRoomInputPromotionPending,
   promoteControlRoomInput,
-} from "./control-room-inputs.js";
+} from "./inputs.js";
 import {
   controlRoomCardWarnings,
   controlRoomLoadedEmbedCards,
@@ -43,7 +43,7 @@ import {
   syncGlobalPlaybackButton,
   getMediaControllerForAction,
   syncGlobalMediaButtons,
-} from "./control-room-monitor.js";
+} from "./monitor.js";
 import {
   buildEmptyCard,
   buildLocalCard,
@@ -52,7 +52,7 @@ import {
   getOutputMonitorStatusLabel,
   isPreviewableOutputStatus,
   syncCard,
-} from "./control-room-cards.js";
+} from "./cards.js";
 
 const CONTROL_ROOM_STATE_KEY = "dashboard:control-room-state";
 const OUTPUTS_PER_PAGE = 11;
@@ -816,4 +816,4 @@ export {
   renderControlRoom,
   setControlRoomContainerId,
 };
-export { openOutputMonitoringUrl, refreshYouTubeCardWarning } from "./control-room-monitor.js";
+export { openOutputMonitoringUrl, refreshYouTubeCardWarning } from "./monitor.js";

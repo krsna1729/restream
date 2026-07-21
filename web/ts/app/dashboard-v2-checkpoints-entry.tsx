@@ -2,7 +2,7 @@ import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 
-import type { ControlRoomCheckpointModel } from "../features/control-room-view-model.js";
+import type { ControlRoomCheckpointModel } from "../features/control-room/view-model.js";
 import type { IncidentsCheckpointModel } from "../features/incidents-view-model.js";
 import type { MediaCheckpointModel } from "../features/media-view-model.js";
 import type { PipelineInspectCheckpointModel } from "../features/pipeline-inspect-view-model.js";

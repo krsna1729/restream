@@ -1,32 +1,47 @@
-import { outputViewEncodingLabel } from "../core/output-config.js";
-import { RenderScope } from "../core/render-scope.js";
-import type { RenderScopeToken } from "../core/render-scope.js";
-import { state } from "../core/state.js";
-import { escapeHtml, escapeRedactedHtml, getUrlParam } from "../core/utils.js";
-import type { OutputView, PipelineView } from "../types.js";
-import { openDiagnosticsModal } from "./diagnostics.js";
-import { pipelineInspectorShellHtml } from "./pipeline-inspector-shell.js";
-import { getPipelineSummary, getResourceMap } from "../core/api.js";
+import { outputViewEncodingLabel } from "../../core/output-config.js";
+import { RenderScope } from "../../core/render-scope.js";
+import type { RenderScopeToken } from "../../core/render-scope.js";
+import { state } from "../../core/state.js";
+import { escapeHtml, escapeRedactedHtml, getUrlParam } from "../../core/utils.js";
+import type { OutputView, PipelineView } from "../../types.js";
+import { openDiagnosticsModal } from "../diagnostics.js";
+import { pipelineInspectorShellHtml } from "./shell.js";
+import { getPipelineSummary, getResourceMap } from "../../core/api.js";
 import type {
   OperatorAlert,
   PipelineSummarySnapshot,
   ResourceMapNode,
   ResourceMapSnapshot,
-} from "../core/api.js";
-import { fetchProcessingGraph, renderGraphInto } from "./graph.js";
+} from "../../core/api.js";
+import { fetchProcessingGraph, renderGraphInto } from "../graph.js";
 import {
   isOutputFlapping,
   isOutputIntentStopped,
   isOutputRunning,
   isOutputRetrying,
   isOutputUnexpectedlyDown,
-} from "../core/output-status.js";
-import type { PipelineInspectCheckpointModel } from "./pipeline-inspect-view-model.js";
+} from "../../core/output-status.js";
+import type { PipelineInspectCheckpointModel } from "../pipeline-inspect-view-model.js";
 import {
   renderResourceMapInto,
   resourceDetailPanelHtml,
   resourceSummaryGroupsHtml,
-} from "./pipeline-inspector-resource-view.js";
+} from "./resource-view.js";
+import {
+  getGraphAutoRefresh,
+  getGraphInFlight,
+  getGraphPipelineId,
+  getGraphRenderedStateKey,
+  getCachedResourceMap,
+  refreshPipelineInspectorGraph,
+  renderGraphIntoShellSlot,
+  resetGraphState,
+  setGraphAutoRefresh,
+  setGraphDeps,
+  syncPipelineInspectorVisibility,
+  graphStateKey,
+  shouldAutoRefreshGraph,
+} from "./graph.js";
 
 interface PipelineInspectorDependencies {
   selectPipeline: (pipelineId: string) => void;
@@ -38,17 +53,11 @@ const dependencies: PipelineInspectorDependencies = {
   openOperateView: () => {},
 };
 
-let graphPipelineId: string | null = null;
-let graphInFlight: Promise<void> | null = null;
-let graphRequestSeq = 0;
-let graphRenderedStateKey: string | null = null;
-let graphAutoRefresh = true;
 let forceRuntimeScope = false;
 let runtimeScopeMaskedPipelineId: string | null = null;
 let summaryRequestSeq = 0;
 let summaryInFlight: Promise<void> | null = null;
 const pipelineSummaryCache = new Map<string, PipelineSummarySnapshot>();
-const pipelineResourceMapCache = new Map<string, ResourceMapSnapshot>();
 let inspectOutputSearchQuery = "";
 let inspectResourceDetailsExpanded = false;
 let inspectProbeDetailsExpanded = false;
@@ -436,7 +445,7 @@ function buildInspectCheckpointModel(
       inputLabel: pluralize(state.pipelines.length, "pipeline"),
       outputLabel: "Runtime resource map",
       attentionLabel: "Select a pipeline for diagnostics",
-      graphLabel: graphInFlight ? "Loading resources" : "Runtime resources",
+      graphLabel: getGraphInFlight() ? "Loading resources" : "Runtime resources",
       focusLabel: "Inspection focus · select a pipeline to inspect diagnostics.",
       nextStep: "Select a pipeline to inspect graph edges and active probes.",
       canOpenPipeline: false,
@@ -446,7 +455,7 @@ function buildInspectCheckpointModel(
         { label: "Pipelines", value: String(state.pipelines.length) },
         {
           label: "Graph",
-          value: graphInFlight ? "Loading" : "Runtime",
+          value: getGraphInFlight() ? "Loading" : "Runtime",
         },
       ],
     };
@@ -570,7 +579,7 @@ export function renderPipelineInspector(): void {
       void refreshPipelineInspectorGraph();
     };
   }
-  if (!pipe && graphPipelineId !== null) resetPipelineInspectorSelection(null);
+  if (!pipe && getGraphPipelineId() !== null) resetPipelineInspectorSelection(null);
 
   const openBtn = document.getElementById(
     "inspect-open-pipeline-btn",
@@ -592,7 +601,7 @@ export function renderPipelineInspector(): void {
   if (pipe) refreshPipelineSummary(pipe.id);
   renderInspectorResourceDetails(
     pipe,
-    pipe ? pipelineResourceMapCache.get(pipe.id) || null : null,
+    pipe ? getCachedResourceMap(pipe.id) || null : null,
   );
   renderDiagnostics(pipe);
   const graphHeading = document.getElementById("inspect-graph-heading");
@@ -604,21 +613,22 @@ export function renderPipelineInspector(): void {
     "inspect-refresh-graph-btn",
   ) as HTMLButtonElement | null;
   if (refreshBtn) {
-    refreshBtn.textContent = graphAutoRefresh ? "Stop Refresh" : "Auto Refresh";
+    const autoRefresh = getGraphAutoRefresh();
+    refreshBtn.textContent = autoRefresh ? "Stop Refresh" : "Auto Refresh";
     refreshBtn.setAttribute(
       "aria-label",
-      graphAutoRefresh ? "Stop graph auto refresh" : "Start graph auto refresh",
+      autoRefresh ? "Stop graph auto refresh" : "Start graph auto refresh",
     );
-    refreshBtn.classList.toggle("btn-accent", graphAutoRefresh);
-    refreshBtn.classList.toggle("btn-outline", !graphAutoRefresh);
+    refreshBtn.classList.toggle("btn-accent", autoRefresh);
+    refreshBtn.classList.toggle("btn-outline", !autoRefresh);
     refreshBtn.setAttribute(
       "aria-pressed",
-      graphAutoRefresh ? "true" : "false",
+      autoRefresh ? "true" : "false",
     );
     refreshBtn.onclick = () => {
-      graphAutoRefresh = !graphAutoRefresh;
+      setGraphAutoRefresh(!getGraphAutoRefresh());
       renderPipelineInspector();
-      if (graphAutoRefresh) void refreshPipelineInspectorGraph();
+      if (getGraphAutoRefresh()) void refreshPipelineInspectorGraph();
     };
   }
   const diagnosticsBtn = document.getElementById(
@@ -640,8 +650,8 @@ export function renderPipelineInspector(): void {
 
   if (
     pipe &&
-    !graphInFlight &&
-    (graphPipelineId !== pipe.id || graphRenderedStateKey !== stateKey)
+    !getGraphInFlight() &&
+    (getGraphPipelineId() !== pipe.id || getGraphRenderedStateKey() !== stateKey)
   ) {
     void refreshPipelineInspectorGraph();
   } else if (pipe && shouldAutoRefreshGraph()) {
@@ -649,8 +659,8 @@ export function renderPipelineInspector(): void {
   } else if (
     !pipe &&
     !invalidPipelineSelection &&
-    !graphInFlight &&
-    (graphPipelineId !== null || graphRenderedStateKey !== "runtime")
+    !getGraphInFlight() &&
+    (getGraphPipelineId() !== null || getGraphRenderedStateKey() !== "runtime")
   ) {
     void refreshPipelineInspectorGraph();
   } else if (
@@ -681,10 +691,8 @@ export function resetPipelineInspectorSelection(
   inspectResourceDetailsExpanded = false;
   inspectProbeDetailsExpanded = false;
   runtimeScopeMaskedPipelineId =
-    pipelineId === null ? getUrlParam("p") || graphPipelineId : null;
-  graphRequestSeq++;
-  graphPipelineId = pipelineId;
-  graphRenderedStateKey = null;
+    pipelineId === null ? getUrlParam("p") || getGraphPipelineId() : null;
+  resetGraphState(pipelineId);
   const status = document.getElementById("inspect-graph-status");
   const container = document.getElementById("inspect-graph-container");
   if (status)
@@ -1053,220 +1061,25 @@ function renderInspectorResourceDetails(
     });
 }
 
-export async function refreshPipelineInspectorGraph(): Promise<void> {
-  const pipe = selectedPipeline();
-  const requestStateKey = graphStateKey(pipe);
-  const status = document.getElementById("inspect-graph-status");
-  const container = document.getElementById("inspect-graph-container");
-  if (!container) return;
-  const requestSeq = ++graphRequestSeq;
-  const scopeToken = pipelineInspectorScope.token();
-  if (!pipe && hasInvalidPipelineSelection()) {
-    graphPipelineId = null;
-    if (status) status.textContent = "Select a pipeline.";
-    withPreservedScroll(container, () => {
-      container.innerHTML =
-        '<div class="text-base-content/60 flex h-full min-h-72 items-center justify-center text-sm">Select a pipeline to inspect its graph.</div>';
-    });
-    return;
-  }
-  if (!pipe) {
-    const canRefreshInPlace =
-      graphPipelineId === null && graphRenderedStateKey === "runtime";
-    graphPipelineId = null;
-    if (status && !canRefreshInPlace)
-      status.textContent = "Loading runtime resources...";
-    if (!canRefreshInPlace) {
-      withPreservedScroll(container, () => {
-        container.innerHTML = `<div class="text-base-content/60 flex h-full min-h-72 items-center justify-center text-sm">
-        Loading runtime resources...
-    </div>`;
-      });
-    }
-    graphInFlight = (async () => {
-      const resourceMap = await getResourceMap(null, {
-        view: "detail",
-        topN: 200,
-      });
-      if (
-        requestSeq !== graphRequestSeq ||
-        !pipelineInspectorScope.isCurrent(scopeToken) ||
-        selectedPipeline()
-      )
-        return;
-      if (!resourceMap) {
-        if (status) status.textContent = "Runtime resources unavailable.";
-        withPreservedScroll(container, () => {
-          container.innerHTML =
-            '<div class="text-base-content/60 flex h-full min-h-72 items-center justify-center text-sm">Runtime resources unavailable.</div>';
-        });
-        return;
-      }
-      withPreservedScroll(container, () => {
-        renderResourceMapInto(container, resourceMap);
-      });
-      graphRenderedStateKey = "runtime";
-      if (status) status.textContent = "Whole Runtime / resource overview";
-    })();
-    try {
-      await graphInFlight;
-    } finally {
-      if (requestSeq === graphRequestSeq) graphInFlight = null;
-    }
-    return;
-  }
-  const requestPipelineId = pipe.id;
-  const canRefreshInPlace =
-    graphPipelineId === requestPipelineId && graphRenderedStateKey !== null;
-  graphPipelineId = requestPipelineId;
-  if (status && !canRefreshInPlace) status.textContent = "Loading graph...";
-  if (!canRefreshInPlace) {
-    withPreservedScroll(container, () => {
-      container.innerHTML = `<div class="text-base-content/60 flex h-full min-h-72 items-center justify-center text-sm">
-        Loading graph...
-    </div>`;
-    });
-  }
-  graphInFlight = (async () => {
-    const [graph, resourceMap] = await Promise.all([
-      fetchProcessingGraph(requestPipelineId),
-      getResourceMap(requestPipelineId, {
-        view: "detail",
-        topN: 50,
-      }),
-    ]);
-    if (
-      requestSeq !== graphRequestSeq ||
-      !pipelineInspectorScope.isCurrent(scopeToken) ||
-      selectedPipeline()?.id !== requestPipelineId
-    ) {
-      return;
-    }
-    graphPipelineId = requestPipelineId;
-    if (!graph || graph.pipelineId !== requestPipelineId) {
-      if (status) status.textContent = "Graph unavailable.";
-      withPreservedScroll(container, () => {
-        container.innerHTML =
-          '<div class="text-base-content/60 flex h-full min-h-72 items-center justify-center text-sm">Graph unavailable.</div>';
-      });
-      return;
-    }
-    withPreservedScroll(container, () => {
-      renderProcessingGraphExplorer(
-        container,
-        graph as Parameters<typeof renderGraphInto>[1],
-      );
-    });
-    if (resourceMap) {
-      pipelineResourceMapCache.set(requestPipelineId, resourceMap);
-      const currentPipe = selectedPipeline();
-      if (currentPipe?.id === requestPipelineId) {
-        withPreservedScroll(container, () => renderSummary(currentPipe));
-        renderInspectorResourceDetails(currentPipe, resourceMap);
-        renderInspectCheckpointPresentation(currentPipe);
-      }
-    }
-    graphRenderedStateKey = requestStateKey;
-    if (status) {
-      const inputState =
-        pipe.input.status === "on" ? "live" : pipe.input.status;
-      status.textContent = `${pipe.name} / processing graph / ${pipe.outs.length} outputs / input ${inputState}`;
-    }
-  })();
-  try {
-    await graphInFlight;
-  } finally {
-    if (requestSeq === graphRequestSeq) graphInFlight = null;
-  }
-}
+// Wire graph deps — the graph module calls several functions defined in this
+// file; setGraphDeps breaks the circular dependency between index and graph.
+setGraphDeps({
+  selectedPipeline,
+  hasInvalidPipelineSelection,
+  withPreservedScroll,
+  renderSummary,
+  renderInspectorResourceDetails,
+  renderInspectCheckpointPresentation,
+  clearPipelineUrlSelection,
+  pipelineInspectorScope,
+});
 
-function renderProcessingGraphExplorer(
-  container: HTMLElement,
-  graph: Parameters<typeof renderGraphInto>[1],
-): void {
-  container.innerHTML = "";
-  renderGraphInto(container, graph);
-}
+// Re-export symbols that graph.ts owns but that callers might reach through
+// index (even though no current consumer does — kept for consistency / safety).
+export {
+  refreshPipelineInspectorGraph,
+  renderGraphIntoShellSlot,
+  syncPipelineInspectorVisibility,
+} from "./graph.js";
 
-export function renderGraphIntoShellSlot(
-  container: HTMLElement,
-  slot: HTMLElement | null,
-  slotId: string,
-  graph: Parameters<typeof renderGraphInto>[1],
-): void {
-  if (slot) {
-    renderGraphInto(slot, graph);
-    return;
-  }
-  const fallback = document.createElement("div");
-  renderGraphInto(fallback, graph);
-  const slotPattern = new RegExp(
-    `(<div id="${slotId}"[^>]*>)(</div>)`,
-  );
-  container.innerHTML = container.innerHTML.replace(
-    slotPattern,
-    `$1${fallback.innerHTML}$2`,
-  );
-}
 
-function graphExplorerShellHtml({
-  graphSlotId,
-  title,
-  scopeLabel,
-  footerHtml = "",
-}: {
-  graphSlotId: string;
-  title: string;
-  scopeLabel: string;
-  footerHtml?: string;
-}): string {
-  return `<div class="space-y-3 p-3">
-    <section class="dashboard-section p-3">
-      <div class="mb-2 flex items-center justify-between gap-2">
-        <h3 class="dashboard-section-title text-sm">${escapeHtml(title)}</h3>
-        <span class="text-base-content/50 text-xs">${escapeHtml(scopeLabel)}</span>
-      </div>
-      <div id="${escapeHtml(graphSlotId)}" class="bg-base-100 h-[460px] overflow-auto rounded-lg"></div>
-    </section>
-    ${footerHtml}
-  </div>`;
-}
-
-function graphStateKey(pipe: PipelineView | null): string | null {
-  if (!pipe) return null;
-  const outputs = pipe.outs
-    .map((out) =>
-      [
-        out.id,
-        out.status,
-        out.desiredState,
-        outputViewEncodingLabel(out),
-        out.phase || "",
-        out.retrying ? "1" : "0",
-        out.flapping ? "1" : "0",
-        out.lastError || "",
-      ].join(":"),
-    )
-    .join("|");
-  return [
-    pipe.id,
-    pipe.name,
-    pipe.input.status,
-    pipe.input.probeStatus,
-    pipe.input.readers,
-    pipe.input.audioTracks.length,
-    pipe.input.video?.codec || "",
-    pipe.hlsPreview?.active ? "1" : "0",
-    outputs,
-  ].join("::");
-}
-
-export function syncPipelineInspectorVisibility(): void {
-  if (graphAutoRefresh && !document.hidden && !graphInFlight) {
-    void refreshPipelineInspectorGraph();
-  }
-}
-
-function shouldAutoRefreshGraph(): boolean {
-  return graphAutoRefresh && !document.hidden && !graphInFlight;
-}

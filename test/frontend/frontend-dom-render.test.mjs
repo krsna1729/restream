@@ -211,7 +211,7 @@ runCheck(
     const outputsList = appendRoot(document, "div", "outputs-list");
 
     const pipelineView = await loadCompiledFrontendModule(
-      "features/pipeline-view.js",
+      "features/pipeline-view/index.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
 
@@ -274,7 +274,7 @@ runCheck(
     const outputsList = appendRoot(document, "div", "outputs-list");
 
     const pipelineView = await loadCompiledFrontendModule(
-      "features/pipeline-view.js",
+      "features/pipeline-view/index.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
 
@@ -320,7 +320,7 @@ runCheck(
     const outputsList = appendRoot(document, "div", "outputs-list");
 
     const pipelineView = await loadCompiledFrontendModule(
-      "features/pipeline-view.js",
+      "features/pipeline-view/index.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
 
@@ -355,7 +355,7 @@ runCheck(
     const outputsList = appendRoot(document, "div", "outputs-list");
 
     const pipelineView = await loadCompiledFrontendModule(
-      "features/pipeline-view.js",
+      "features/pipeline-view/index.js",
     );
     const controlState = await loadCompiledFrontendModule(
       "features/output-control-state.js",
@@ -589,7 +589,7 @@ runCheck(
     statsShell.appendChild(inputStats);
 
     const pipelineView = await loadCompiledFrontendModule(
-      "features/pipeline-view.js",
+      "features/pipeline-view/index.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
 
@@ -665,7 +665,7 @@ runCheck(
     appendRoot(document, "div", "input-stats");
 
     const pipelineView = await loadCompiledFrontendModule(
-      "features/pipeline-view.js",
+      "features/pipeline-view/index.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
 
@@ -895,7 +895,7 @@ runCheck(
     };
 
     const pipelineView = await loadCompiledFrontendModule(
-      "features/pipeline-view.js",
+      "features/pipeline-view/index.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
 
@@ -1024,7 +1024,7 @@ runCheck(
     appendRoot(document, "div", "ingest-url-details-note");
 
     const pipelineView = await loadCompiledFrontendModule(
-      "features/pipeline-view.js",
+      "features/pipeline-view/index.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
 
@@ -1128,7 +1128,7 @@ runCheck(
     appendRoot(document, "div", "input-audio-tracks");
 
     const pipelineView = await loadCompiledFrontendModule(
-      "features/pipeline-view.js",
+      "features/pipeline-view/index.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
     state.pipelines = [

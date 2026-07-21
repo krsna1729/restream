@@ -1,14 +1,14 @@
-import { escapeHtml } from "../core/utils.js";
-import type { PipelineInput, PipelineView } from "../types.js";
+import { escapeHtml } from "../../core/utils.js";
+import type { PipelineInput, PipelineView } from "../../types.js";
 import type {
   ControlRoomCardDescriptor,
   ControlRoomOutputOption,
-} from "./control-room-types.js";
-import { buildInputPreviewUrl } from "./input-preview.js";
+} from "./types.js";
+import { buildInputPreviewUrl } from "../input-preview.js";
 import {
   buildControlRoomInputCard,
   isControlRoomInputPromotionPending,
-} from "./control-room-inputs.js";
+} from "./inputs.js";
 import {
   clearCardPlayerShell,
   controlRoomCardWarnings,
@@ -17,13 +17,13 @@ import {
   setCardWarning,
   syncCardMedia,
   toOpenableMonitoringUrl,
-} from "./control-room-monitor.js";
+} from "./monitor.js";
 import {
   controlRoomCardActionsExpanded,
   controlRoomMonitoringDrafts,
   controlRoomMonitoringSavePending,
   pendingMonitoringInputFocusOutputId,
-} from "./control-room.js";
+} from "./index.js";
 
 const CONTROL_ROOM_CARD_BASE_CLASS =
   "group flex min-h-[17rem] min-w-0 w-full max-w-full flex-col overflow-hidden rounded-2xl border p-3 shadow-[0_18px_45px_rgba(15,23,42,0.12)]";

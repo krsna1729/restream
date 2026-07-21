@@ -5,7 +5,7 @@ import { state } from "../core/state.js";
 import {
   renderControlRoom,
   setControlRoomContainerId,
-} from "../features/control-room.js";
+} from "../features/control-room/index.js";
 import {
   refreshMediaLibraryMetricsOnly,
   renderMediaLibraryMode,
@@ -39,7 +39,7 @@ import {
   resetPipelineInspectorSelection,
   setPipelineInspectorContainerId,
   syncPipelineInspectorVisibility,
-} from "../features/pipeline-inspector.js";
+} from "../features/pipeline-inspector/index.js";
 import {
   canonicalizeDashboardLocation,
   dashboardModeUrl,

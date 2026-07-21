@@ -120,7 +120,7 @@ async function runOptimizedBenchmark(outputCount, iterations, mutateTelemetry) {
   appendRoot(document, "div", "outs-col");
   const outputsList = appendRoot(document, "div", "outputs-list");
 
-  const pipelineView = await loadCompiledFrontendModule("features/pipeline-view.js");
+  const pipelineView = await loadCompiledFrontendModule("features/pipeline-view/index.js");
   const { state } = await loadCompiledFrontendModule("core/state.js");
   const pipeline = makePipeline(outputCount);
   state.pipelines = [pipeline];

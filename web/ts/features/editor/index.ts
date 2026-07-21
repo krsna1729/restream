@@ -4,12 +4,12 @@ import {
   refreshAudioRoutingUi,
   setOutputTogglePending, setOutputToggleBusy,
   modalAudioCtx,
-} from "./editor-audio.js";
+} from "./audio.js";
 import {
   pipeFormBtn, addPipeBtn, editPipeBtn, deletePipeBtn,
   loadStreamKeysOnce, getSuggestedPipelineName,
   populateOutputEncodingSelect,
-} from "./editor-pipeline.js";
+} from "./pipeline.js";
 import {
   getStreamKeys,
   startOut,
@@ -23,12 +23,12 @@ import {
   listMediaFiles,
   getPipelineFileIngest,
   getMediaFileAnalysis,
-} from "../core/api.js";
+} from "../../core/api.js";
 import type {
   MediaFile,
   MediaFileAnalysis,
   PipelineFileIngestConfig,
-} from "../core/api.js";
+} from "../../core/api.js";
 import {
   getUrlParam,
   isValidOutput,
@@ -50,21 +50,21 @@ import {
   showErrorAlert,
   confirmInApp,
   OUTPUT_SERVER_PRESETS,
-} from "../core/utils.js";
-import type { MatchedPreset, SrtFields } from "../core/utils.js";
+} from "../../core/utils.js";
+import type { MatchedPreset, SrtFields } from "../../core/utils.js";
 import {
   detectAudioPlatform,
   detectAudioProtocol,
   getAudioCaps,
   getAudioPlatformLabel,
-} from "../core/audio-caps.js";
-import type { AudioCaps, AudioProtocol } from "../core/audio-caps.js";
-import { isOutputManagedActive } from "../core/output-status.js";
+} from "../../core/audio-caps.js";
+import type { AudioCaps, AudioProtocol } from "../../core/audio-caps.js";
+import { isOutputManagedActive } from "../../core/output-status.js";
 import {
   normalizeOutputConfig,
   outputConfigRtmpMode,
-} from "../core/output-config.js";
-import { state } from "../core/state.js";
+} from "../../core/output-config.js";
+import { state } from "../../core/state.js";
 import {
   awaitDashboardRuntimeMutationConvergence,
   removeDashboardOutputConfig,
@@ -72,12 +72,12 @@ import {
   refreshDashboardRuntime,
   upsertDashboardPipelineConfig,
   upsertDashboardOutputConfig,
-} from "./dashboard.js";
+} from "../dashboard.js";
 import {
   beginOutputControlIntent,
   finishOutputControlIntent,
   setOutputControlError,
-} from "./output-control-state.js";
+} from "../output-control-state.js";
 import type {
   AudioTrack,
   ConfigPipeline,
@@ -88,10 +88,10 @@ import type {
   RtmpOutputMode,
   SrtPipelineIngestConfig,
   StreamKey,
-} from "../types.js";
+} from "../../types.js";
 
-export { isOutputToggleBusy } from "./editor-audio.js";
-export { addPipeBtn, deletePipeBtn, editPipeBtn, pipeFormBtn } from "./editor-pipeline.js";
+export { isOutputToggleBusy } from "./audio.js";
+export { addPipeBtn, deletePipeBtn, editPipeBtn, pipeFormBtn } from "./pipeline.js";
 
 function currentOutputView(pipeId: string, outId: string): OutputView | null {
   return (

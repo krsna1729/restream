@@ -1,24 +1,23 @@
 import {
   copyText,
   escapeHtml,
-  formatChannelCount,
   formatCodecName,
   formatMaskedStreamKey,
   getUrlParam,
   msToHHMMSS,
   showCopiedNotification,
-} from "../core/utils.js";
-import { setBitrateWithSubtleUnit } from "./metric-format.js";
-import { state } from "../core/state.js";
+} from "../../core/utils.js";
+import { setBitrateWithSubtleUnit } from "../metric-format.js";
+import { state } from "../../core/state.js";
 import {
   getPublisherQualityAlerts,
   normalizePublisherProtocolLabel,
-} from "./publisher-quality.js";
+} from "../publisher-quality.js";
 import {
   parseProtocolAwareIngestUrl,
   renderProtocolDetails,
-} from "./ingest-url-details.js";
-import { clearInputPreview, renderInputPreview } from "./input-preview.js";
+} from "../ingest-url-details.js";
+import { clearInputPreview, renderInputPreview } from "../input-preview.js";
 import {
   getMediaFileAnalysis,
   listMediaFiles,
@@ -26,227 +25,70 @@ import {
   startRecording,
   stopIngest,
   stopRecording,
-} from "../core/api.js";
-import type { MediaFile, MediaFileAnalysis } from "../core/api-types.js";
-import type { AudioTrack, PipelineView } from "../types.js";
-import {
-  audioTrackKey,
-  getAudioTrackLabel,
-  getAudioTrackStoredLabel,
-  setAudioTrackStoredLabel,
-} from "./audio-track-labels.js";
+} from "../../core/api.js";
+import type { MediaFile, MediaFileAnalysis } from "../../core/api-types.js";
+import type { PipelineView } from "../../types.js";
 import {
   pipelineViewDependencies,
   setPipelineViewDependencies,
-} from "./pipeline-dependencies.js";
+} from "../pipeline-dependencies.js";
 import {
   buildPipelineOperateHeaderModel,
   buildPipelineOperateInputStatusModel,
-} from "./pipeline-operate-view-model.js";
+} from "../pipeline-operate-view-model.js";
 import type {
-  PipelineOperateAudioTrackModel,
   PipelineOperateFileSourceModel,
-  PipelineOperateHeaderModel,
-  PipelineOperateInputStatusModel,
-} from "./pipeline-operate-view-model.js";
+} from "../pipeline-operate-view-model.js";
+import {
+  getPendingFileIngestIntent,
+  getPendingRecordingIntent,
+  getFileIngestLifecycleError,
+  getRecordingLifecycleError,
+  setFileIngestLifecycleError,
+  setPendingFileIngestIntent,
+  setPendingRecordingIntent,
+  setRecordingLifecycleError,
+} from "./recording.js";
+import {
+  configurePipelineHeaderPresentation,
+  configurePipelineInputStatusPresentation,
+  legacyPipelineAudioTracksRenderEnabled,
+  legacyPipelineInputStatusRenderEnabled,
+  legacyPipelinePreviewRenderEnabled,
+  pipelineHeaderPresentationHook,
+  pipelineInputStatusPresentationHook,
+} from "./config.js";
+import {
+  buildAudioTrackModels,
+  formatShortDurationMs,
+  renderAudioTracksTable,
+} from "./audio.js";
+import {
+  formatFileContainer,
+  formatFileModifiedAt,
+  formatFileSize,
+  formatSourceDuration,
+  formatSourceFps,
+  formatSourceGop,
+  getFileSourceName,
+  hideFileIngestControl,
+  setTextIfPresent,
+} from "./file-source.js";
+import { setTextIfChanged, syncPublisherMeta } from "./publisher.js";
+
+// ── Module-level state ─────────────────────────────────────────────────
 
 const ingestUiState = {
   selectedProtocol: "rtmp",
 };
 
-const audioLabelEditKeys = new Set<string>();
-const audioLabelDrafts = new Map<string, string>();
-const expandedAudioTrackLists = new Set<string>();
-let pendingAudioLabelFocusKey: string | null = null;
 const sourceFileMetadataCache = new Map<string, MediaFile | null>();
 const sourceFileAnalysisCache = new Map<string, MediaFileAnalysis | null>();
 let sourceFileMetadataLoadPromise: Promise<void> | null = null;
 const sourceFileAnalysisLoadPromises = new Map<string, Promise<void>>();
-const pendingRecordingIntents = new Map<string, "starting" | "stopping">();
-const pendingFileIngestIntents = new Map<string, "starting" | "stopping">();
-const recordingLifecycleErrors = new Map<string, string>();
-const fileIngestLifecycleErrors = new Map<string, string>();
 let lastRenderedPipelineInfoId: string | null = null;
-const AUDIO_TRACK_EXPANSION_STORAGE_KEY = "restream.audioTrackExpansion.v1";
 
-function loadAudioTrackExpansionState(): void {
-  expandedAudioTrackLists.clear();
-  try {
-    const raw = window.localStorage.getItem(AUDIO_TRACK_EXPANSION_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return;
-    for (const key of parsed) {
-      if (typeof key === "string" && key.trim()) {
-        expandedAudioTrackLists.add(key);
-      }
-    }
-  } catch {
-    // Expansion persistence is a convenience; rendering should never depend on it.
-  }
-}
-
-function persistAudioTrackExpansionState(): void {
-  try {
-    window.localStorage.setItem(
-      AUDIO_TRACK_EXPANSION_STORAGE_KEY,
-      JSON.stringify([...expandedAudioTrackLists]),
-    );
-  } catch {
-    // Ignore storage failures so the dashboard remains usable.
-  }
-}
-
-function audioTrackExpansionKey(pipelineId: string): string {
-  return pipelineId;
-}
-
-let legacyPipelineHeaderRenderEnabled = true;
-let legacyPipelineLifecycleControlsEnabled = true;
-let pipelineHeaderPresentationHook:
-  ((model: PipelineOperateHeaderModel | null) => void) | null = null;
-let legacyPipelineInputStatusRenderEnabled = true;
-let legacyPipelineAudioTracksRenderEnabled = true;
-let legacyPipelinePreviewRenderEnabled = true;
-let pipelineInputStatusPresentationHook:
-  ((model: PipelineOperateInputStatusModel | null) => void) | null = null;
-
-export function configurePipelineHeaderPresentation(options: {
-  legacyLifecycleControlsEnabled?: boolean;
-  legacyRenderEnabled: boolean;
-  onPresentation?: (model: PipelineOperateHeaderModel | null) => void;
-}): void {
-  legacyPipelineHeaderRenderEnabled = options.legacyRenderEnabled;
-  legacyPipelineLifecycleControlsEnabled =
-    options.legacyLifecycleControlsEnabled !== false;
-  pipelineHeaderPresentationHook = options.onPresentation || null;
-  for (const id of [
-    "pipeline-header-legacy-identity",
-    "graph-pipe-btn",
-    "diagnose-pipe-btn",
-    "edit-pipe-action-item",
-    "pipeline-header-legacy-actions",
-  ]) {
-    const element = document.getElementById(id);
-    if (element) element.hidden = !legacyPipelineHeaderRenderEnabled;
-  }
-  for (const id of ["record-pipe-btn", "file-ingest-pipe-btn"]) {
-    const element = document.getElementById(id);
-    if (element) element.hidden = !legacyPipelineLifecycleControlsEnabled;
-  }
-}
-
-export function configurePipelineInputStatusPresentation(options: {
-  legacyRenderEnabled: boolean;
-  onPresentation?: (model: PipelineOperateInputStatusModel | null) => void;
-}): void {
-  legacyPipelineInputStatusRenderEnabled = options.legacyRenderEnabled;
-  legacyPipelineAudioTracksRenderEnabled = options.legacyRenderEnabled;
-  legacyPipelinePreviewRenderEnabled = options.legacyRenderEnabled;
-  pipelineInputStatusPresentationHook = options.onPresentation || null;
-  const publisherMeta = document.getElementById("publisher-meta");
-  if (publisherMeta)
-    publisherMeta.hidden = !legacyPipelineInputStatusRenderEnabled;
-  for (const id of [
-    "pipeline-input-legacy-traffic-heading",
-    "pipeline-input-legacy-traffic",
-    "pipeline-input-legacy-video-heading",
-    "pipeline-input-legacy-video",
-    "pipeline-input-legacy-audio-heading",
-    "input-audio-tracks",
-    "video-player",
-  ]) {
-    const element = document.getElementById(id);
-    if (element) element.hidden = !legacyPipelineInputStatusRenderEnabled;
-  }
-  for (const id of [
-    "stream-key-section",
-    "ingest-url-section",
-    "file-source-section",
-  ]) {
-    const element = document.getElementById(id);
-    if (element) element.hidden = !legacyPipelineInputStatusRenderEnabled;
-  }
-  if (!legacyPipelineAudioTracksRenderEnabled) {
-    document.getElementById("input-audio-tracks")?.replaceChildren();
-  }
-  if (!legacyPipelinePreviewRenderEnabled) {
-    clearInputPreview(document.getElementById("video-player"));
-  }
-}
-
-function recordingIntentKey(pipeId: string): string {
-  return pipeId;
-}
-
-function getPendingRecordingIntent(
-  pipeId: string,
-): "starting" | "stopping" | null {
-  return pendingRecordingIntents.get(recordingIntentKey(pipeId)) || null;
-}
-
-function setPendingRecordingIntent(
-  pipeId: string,
-  intent: "starting" | "stopping" | null,
-): void {
-  const key = recordingIntentKey(pipeId);
-  if (intent === null) {
-    pendingRecordingIntents.delete(key);
-  } else {
-    pendingRecordingIntents.set(key, intent);
-  }
-}
-
-function getRecordingLifecycleError(pipeId: string): string | null {
-  return recordingLifecycleErrors.get(pipeId) || null;
-}
-
-function setRecordingLifecycleError(
-  pipeId: string,
-  message: string | null,
-): void {
-  if (message) {
-    recordingLifecycleErrors.set(pipeId, message);
-  } else {
-    recordingLifecycleErrors.delete(pipeId);
-  }
-}
-
-function fileIngestIntentKey(pipeId: string): string {
-  return pipeId;
-}
-
-function getPendingFileIngestIntent(
-  pipeId: string,
-): "starting" | "stopping" | null {
-  return pendingFileIngestIntents.get(fileIngestIntentKey(pipeId)) || null;
-}
-
-function setPendingFileIngestIntent(
-  pipeId: string,
-  intent: "starting" | "stopping" | null,
-): void {
-  const key = fileIngestIntentKey(pipeId);
-  if (intent === null) {
-    pendingFileIngestIntents.delete(key);
-  } else {
-    pendingFileIngestIntents.set(key, intent);
-  }
-}
-
-function getFileIngestLifecycleError(pipeId: string): string | null {
-  return fileIngestLifecycleErrors.get(pipeId) || null;
-}
-
-function setFileIngestLifecycleError(
-  pipeId: string,
-  message: string | null,
-): void {
-  if (message) {
-    fileIngestLifecycleErrors.set(pipeId, message);
-  } else {
-    fileIngestLifecycleErrors.delete(pipeId);
-  }
-}
+// ── Toggle actions ─────────────────────────────────────────────────────
 
 export async function togglePipelineRecording(pipeId: string): Promise<void> {
   const pipe = state.pipelines.find((candidate) => candidate.id === pipeId);
@@ -336,6 +178,8 @@ export async function togglePipelineFileIngest(pipeId: string): Promise<void> {
   }
 }
 
+// ── Ingest protocol / copy helpers ─────────────────────────────────────
+
 export function selectPipelineIngestProtocol(
   pipeId: string,
   protocol: "rtmp" | "srt",
@@ -361,81 +205,7 @@ export async function copyPipelineIngestUrl(
   if (url && (await copyText(url))) showCopiedNotification();
 }
 
-function getFileSourceName(pipe: PipelineView): string | null {
-  if (pipe.fileIngest?.filename) return pipe.fileIngest.filename;
-  const inputSource = (pipe.inputSource || "").trim();
-  if (!inputSource.startsWith("file:")) return null;
-  const filename = inputSource.slice("file:".length).trim();
-  return filename || null;
-}
-
-function hideFileIngestControl(button: HTMLButtonElement): void {
-  button.classList.add("hidden");
-  button.disabled = true;
-  button.classList.add("btn-disabled");
-  button.title = "";
-  button.onclick = null;
-}
-
-function formatFileSize(bytes: number | null | undefined): string {
-  if (!Number.isFinite(bytes as number) || (bytes as number) <= 0) return "--";
-  const value = bytes as number;
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
-  if (value < 1024 * 1024 * 1024)
-    return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
-  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
-}
-
-function formatFileModifiedAt(value: string | null | undefined): string {
-  if (!value) return "--";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "--";
-  return date.toLocaleString();
-}
-
-function formatFileContainer(name: string | null | undefined): string {
-  const ext = name?.split(".").pop()?.trim().toLowerCase() || "";
-  switch (ext) {
-    case "ts":
-      return "MPEG-TS";
-    case "mp4":
-      return "MP4";
-    case "mkv":
-      return "Matroska";
-    case "mov":
-      return "QuickTime";
-    default:
-      return ext ? ext.toUpperCase() : "--";
-  }
-}
-
-function formatSourceDuration(value: number | null | undefined): string {
-  if (!Number.isFinite(value as number) || (value as number) <= 0) return "--";
-  return `${Number(value).toFixed(1)}s`;
-}
-
-function formatSourceFps(value: number | null | undefined): string {
-  if (!Number.isFinite(value as number) || (value as number) <= 0) return "--";
-  const fps = Number(value);
-  return `${fps.toFixed(fps === Math.round(fps) ? 0 : 1)} FPS`;
-}
-
-function formatSourceGop(analysis: MediaFileAnalysis | null): string {
-  if (
-    !analysis ||
-    !Number.isFinite(analysis.averageKeyframeIntervalSec as number) ||
-    !Number.isFinite(analysis.maxKeyframeIntervalSec as number)
-  ) {
-    return "--";
-  }
-  return `avg ${Number(analysis.averageKeyframeIntervalSec).toFixed(1)}s | max ${Number(analysis.maxKeyframeIntervalSec).toFixed(1)}s`;
-}
-
-function setTextIfPresent(id: string, value: string): void {
-  const element = document.getElementById(id);
-  if (element) element.textContent = value;
-}
+// ── Source file cache & loading (keeps cache state in main) ────────────
 
 function rerenderSelectedPipelineIfSourceFileLoaded(
   filename: string | null,
@@ -498,386 +268,7 @@ function scheduleSourceFileAnalysisLoad(filename: string | null): void {
   sourceFileAnalysisLoadPromises.set(filename, request);
 }
 
-interface PublisherMetaBadgeSpec {
-  key: string;
-  tagName: "span" | "button";
-  className: string;
-  text: string;
-  title: string;
-}
-
-function editIconSvg(): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Z" />
-        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 7.125 16.875 4.5" />
-    </svg>`;
-}
-
-function formatProgressFps(value: number | null | undefined): string | null {
-  if (!Number.isFinite(value) || (value as number) <= 0) return null;
-  return Number.isInteger(value)
-    ? `${value} FPS`
-    : `${(value as number).toFixed(1)} FPS`;
-}
-
-function formatSampleRate(value: number | null | undefined): string {
-  if (!Number.isFinite(value) || (value as number) <= 0) return "--";
-  const khz = (value as number) / 1000;
-  return `${Number.isInteger(khz) ? khz : khz.toFixed(1)} kHz`;
-}
-
-function formatShortDurationMs(value: number | null | undefined): string {
-  if (!Number.isFinite(value) || (value as number) < 0) return "--";
-  const totalSeconds = Math.round((value as number) / 1000);
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  return msToHHMMSS(totalSeconds * 1000) || "--";
-}
-
-function formatAudioTrackIdentity(track: AudioTrack, label: string): string {
-  const parts: string[] = [];
-  if (Number.isFinite(track.pid as number)) {
-    parts.push(`PID 0x${Number(track.pid).toString(16).toUpperCase()}`);
-  }
-  if (
-    track.language?.trim() &&
-    track.language.trim().toUpperCase() !== label.trim().toUpperCase()
-  ) {
-    parts.push(track.language.trim().toUpperCase());
-  }
-  return parts.join(" / ") || "Metadata";
-}
-
-function buildAudioTrackModels(
-  pipelineId: string,
-  tracks: readonly AudioTrack[],
-): PipelineOperateAudioTrackModel[] {
-  return tracks.map((track, index) => {
-    const key = audioTrackKey(track, index);
-    const editKey = `${pipelineId}:${key}`;
-    const label = getAudioTrackLabel(pipelineId, track, index);
-    return {
-      key,
-      index,
-      label,
-      identity: formatAudioTrackIdentity(track, label),
-      codec: formatCodecName(track.codec) || track.codec || "--",
-      sampleRate: formatSampleRate(track.sample_rate),
-      channels:
-        track.channels !== null && track.channels !== undefined
-          ? formatChannelCount(track.channels)
-          : "--",
-      profile: track.profile || "--",
-      editing: audioLabelEditKeys.has(editKey),
-      draft:
-        audioLabelDrafts.get(editKey) ??
-        getAudioTrackStoredLabel(pipelineId, track, index),
-    };
-  });
-}
-
-function resolveAudioTrack(pipelineId: string, key: string) {
-  const pipeline = state.pipelines.find(({ id }) => id === pipelineId);
-  const index = pipeline?.input.audioTracks.findIndex(
-    (track, position) => audioTrackKey(track, position) === key,
-  );
-  if (!pipeline || index === undefined || index < 0) return null;
-  return { pipeline, track: pipeline.input.audioTracks[index], index };
-}
-
-export function editPipelineAudioTrack(pipelineId: string, key: string): void {
-  const resolved = resolveAudioTrack(pipelineId, key);
-  if (!resolved) return;
-  const editKey = `${pipelineId}:${key}`;
-  audioLabelEditKeys.add(editKey);
-  audioLabelDrafts.set(
-    editKey,
-    getAudioTrackStoredLabel(pipelineId, resolved.track, resolved.index),
-  );
-  renderPipelineInfoColumn(pipelineId);
-}
-
-export function updatePipelineAudioTrackDraft(
-  pipelineId: string,
-  key: string,
-  value: string,
-): void {
-  if (!resolveAudioTrack(pipelineId, key)) return;
-  audioLabelDrafts.set(`${pipelineId}:${key}`, value);
-}
-
-export function cancelPipelineAudioTrackEdit(
-  pipelineId: string,
-  key: string,
-): void {
-  const editKey = `${pipelineId}:${key}`;
-  audioLabelEditKeys.delete(editKey);
-  audioLabelDrafts.delete(editKey);
-  renderPipelineInfoColumn(pipelineId);
-}
-
-export function savePipelineAudioTrack(
-  pipelineId: string,
-  key: string,
-): void {
-  const resolved = resolveAudioTrack(pipelineId, key);
-  if (!resolved) return;
-  const editKey = `${pipelineId}:${key}`;
-  setAudioTrackStoredLabel(
-    pipelineId,
-    resolved.track,
-    resolved.index,
-    audioLabelDrafts.get(editKey) || "",
-  );
-  audioLabelEditKeys.delete(editKey);
-  audioLabelDrafts.delete(editKey);
-  renderPipelineInfoColumn(pipelineId);
-}
-
-export function mountPipelineInputPreview(
-  pipelineId: string,
-  container: HTMLElement,
-): void {
-  const pipeline = state.pipelines.find(({ id }) => id === pipelineId);
-  if (!pipeline || pipeline.input.status === "off") {
-    clearInputPreview(container);
-    return;
-  }
-  renderInputPreview(container, pipeline);
-}
-
-export function clearPipelineInputPreview(container: HTMLElement): void {
-  clearInputPreview(container);
-}
-
-function renderAudioTracksTable(
-  pipelineId: string,
-  tracks: AudioTrack[],
-): void {
-  const audioTracksContainer = document.getElementById("input-audio-tracks");
-  if (!audioTracksContainer) return;
-  loadAudioTrackExpansionState();
-  const expansionKey = audioTrackExpansionKey(pipelineId);
-  const existingDetails = audioTracksContainer.querySelector<HTMLDetailsElement>(
-    "details[data-audio-track-expansion-key]",
-  );
-  if (existingDetails) {
-    if (existingDetails.open) {
-      expandedAudioTrackLists.add(expansionKey);
-    } else {
-      expandedAudioTrackLists.delete(expansionKey);
-    }
-  }
-
-  const activeInput =
-    document.activeElement instanceof HTMLInputElement &&
-    audioTracksContainer.contains(document.activeElement)
-      ? document.activeElement
-      : null;
-  const activeEditKey = activeInput?.dataset.audioLabelEditKey || null;
-  const activeSelectionStart = activeInput?.selectionStart ?? null;
-  const activeSelectionEnd = activeInput?.selectionEnd ?? null;
-  if (activeEditKey && activeInput) {
-    audioLabelDrafts.set(activeEditKey, activeInput.value);
-  }
-
-  if (tracks.length === 0) {
-    expandedAudioTrackLists.delete(expansionKey);
-    persistAudioTrackExpansionState();
-    audioTracksContainer.innerHTML =
-      '<div class="stats border-base-content/10 bg-base-100 w-full border"><div class="stat p-3"><div class="stat-title">Audio</div><div class="stat-value text-sm">No tracks</div></div></div>';
-    return;
-  }
-
-  const renderTrack = (track: AudioTrack, index: number): string => {
-      const codec = formatCodecName(track.codec) || track.codec || "--";
-      const label = getAudioTrackLabel(pipelineId, track, index);
-      const storedLabel = getAudioTrackStoredLabel(pipelineId, track, index);
-      const identity = formatAudioTrackIdentity(track, label);
-      const key = audioTrackKey(track, index);
-      const editKey = `${pipelineId}:${key}`;
-      const isEditing = audioLabelEditKeys.has(editKey);
-      const draftLabel = audioLabelDrafts.get(editKey) ?? storedLabel;
-      const channelLabel =
-        track.channels !== null && track.channels !== undefined
-          ? formatChannelCount(track.channels)
-          : "--";
-      const trackStat = isEditing
-        ? `<div class="stat min-w-0 place-items-center p-2 text-center">
-                    <div class="stat-title">Track ${index + 1}</div>
-                    <input
-                        type="text"
-                        class="input input-bordered input-xs mt-1 w-full max-w-44 text-center"
-                        data-audio-label-input="${escapeHtml(key)}"
-                        data-audio-label-index="${index}"
-                        data-audio-label-edit-key="${escapeHtml(editKey)}"
-                        value="${escapeHtml(draftLabel)}"
-                        placeholder="${escapeHtml(label)}"
-                        aria-label="Audio track name"
-                    />
-                    <div class="mt-1 flex justify-center gap-1">
-                        <button type="button" class="btn btn-xs btn-accent" data-audio-label-action="save" data-audio-label-index="${index}">Save</button>
-                        <button type="button" class="btn btn-xs btn-ghost" data-audio-label-action="cancel" data-audio-label-index="${index}">Cancel</button>
-                    </div>
-                </div>`
-        : `<div class="stat relative min-w-0 place-items-center p-2 text-center">
-                    <button
-                        type="button"
-                        class="btn btn-xs btn-ghost btn-square absolute top-1 right-1 h-6 min-h-0 w-6 opacity-70 hover:opacity-100"
-                        data-audio-label-action="edit"
-                        data-audio-label-index="${index}"
-                        title="Rename track"
-                        aria-label="Rename ${escapeHtml(label)}">
-                        ${editIconSvg()}
-                    </button>
-                    <div class="stat-title">Track ${index + 1}</div>
-                    <div class="stat-value truncate text-sm">${escapeHtml(label)}</div>
-                    <div class="stat-desc truncate">${escapeHtml(identity)}</div>
-                </div>`;
-
-      return `<div class="stats border-base-content/10 bg-base-100 grid w-full grid-cols-2 overflow-hidden border sm:grid-cols-[minmax(0,1.15fr)_minmax(4rem,.65fr)_minmax(5rem,.8fr)_minmax(6rem,.95fr)_minmax(4rem,.65fr)]">
-                ${trackStat}
-                <div class="stat min-w-0 place-items-center p-2 text-center">
-                    <div class="stat-title">Codec</div>
-                    <div class="stat-value truncate text-sm">${escapeHtml(codec)}</div>
-                </div>
-                <div class="stat min-w-0 place-items-center p-2 text-center">
-                    <div class="stat-title">Freq</div>
-                    <div class="stat-value truncate text-sm">${escapeHtml(formatSampleRate(track.sample_rate))}</div>
-                </div>
-                <div class="stat min-w-0 place-items-center p-2 text-center">
-                    <div class="stat-title">Channels</div>
-                    <div class="stat-value truncate text-sm">${escapeHtml(channelLabel)}</div>
-                </div>
-                <div class="stat min-w-0 place-items-center p-2 text-center">
-                    <div class="stat-title">Profile</div>
-                    <div class="stat-value truncate text-sm">${escapeHtml(track.profile || "--")}</div>
-                </div>
-            </div>`;
-    };
-
-  const visibleLimit = tracks.length > 8 ? 6 : tracks.length;
-  const visibleTracks = tracks
-    .slice(0, visibleLimit)
-    .map((track, index) => renderTrack(track, index))
-    .join("");
-  const extraTracks = tracks
-    .slice(visibleLimit)
-    .map((track, offset) => renderTrack(track, visibleLimit + offset))
-    .join("");
-  const extraTracksOpen = expandedAudioTrackLists.has(expansionKey);
-
-  audioTracksContainer.innerHTML = `${visibleTracks}
-    ${
-      extraTracks
-        ? `<details class="border-base-content/10 bg-base-100 rounded-lg border p-2" data-audio-track-expansion-key="${escapeHtml(expansionKey)}"${extraTracksOpen ? " open" : ""}>
-            <summary class="cursor-pointer px-2 py-1 text-sm font-semibold">
-              ${tracks.length - visibleLimit} more audio tracks
-            </summary>
-            <div class="mt-2 space-y-1">${extraTracks}</div>
-          </details>`
-        : ""
-    }`;
-
-  audioTracksContainer
-    .querySelectorAll<HTMLDetailsElement>(
-      "details[data-audio-track-expansion-key]",
-    )
-    .forEach((details) => {
-      details.addEventListener("toggle", () => {
-        const key = details.dataset.audioTrackExpansionKey || expansionKey;
-        if (details.open) {
-          expandedAudioTrackLists.add(key);
-        } else {
-          expandedAudioTrackLists.delete(key);
-        }
-        persistAudioTrackExpansionState();
-      });
-    });
-
-  audioTracksContainer
-    .querySelectorAll<HTMLButtonElement>("button[data-audio-label-action]")
-    .forEach((button) => {
-      const index = Number(button.dataset.audioLabelIndex);
-      if (!Number.isFinite(index)) return;
-      const track = tracks[index];
-      const editKey = `${pipelineId}:${audioTrackKey(track, index)}`;
-      button.addEventListener("click", () => {
-        const action = button.dataset.audioLabelAction;
-        if (action === "edit") {
-          audioLabelEditKeys.add(editKey);
-          audioLabelDrafts.set(
-            editKey,
-            getAudioTrackStoredLabel(pipelineId, track, index),
-          );
-          pendingAudioLabelFocusKey = editKey;
-        } else if (action === "cancel") {
-          audioLabelEditKeys.delete(editKey);
-          audioLabelDrafts.delete(editKey);
-        } else if (action === "save") {
-          const input = audioTracksContainer.querySelector<HTMLInputElement>(
-            `input[data-audio-label-index="${index}"]`,
-          );
-          setAudioTrackStoredLabel(
-            pipelineId,
-            track,
-            index,
-            audioLabelDrafts.get(editKey) ?? input?.value ?? "",
-          );
-          audioLabelEditKeys.delete(editKey);
-          audioLabelDrafts.delete(editKey);
-        }
-        renderAudioTracksTable(pipelineId, tracks);
-      });
-    });
-  audioTracksContainer
-    .querySelectorAll<HTMLInputElement>("input[data-audio-label-index]")
-    .forEach((input) => {
-      const index = Number(input.dataset.audioLabelIndex);
-      if (!Number.isFinite(index)) return;
-      const editKey = `${pipelineId}:${audioTrackKey(tracks[index], index)}`;
-      input.addEventListener("input", () => {
-        audioLabelDrafts.set(editKey, input.value);
-      });
-      input.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          setAudioTrackStoredLabel(
-            pipelineId,
-            tracks[index],
-            index,
-            audioLabelDrafts.get(editKey) ?? input.value,
-          );
-          audioLabelEditKeys.delete(editKey);
-          audioLabelDrafts.delete(editKey);
-          renderAudioTracksTable(pipelineId, tracks);
-        }
-        if (event.key === "Escape") {
-          audioLabelEditKeys.delete(editKey);
-          audioLabelDrafts.delete(editKey);
-          renderAudioTracksTable(pipelineId, tracks);
-        }
-      });
-    });
-
-  const focusKey = activeEditKey || pendingAudioLabelFocusKey;
-  if (focusKey) {
-    const input = audioTracksContainer.querySelector<HTMLInputElement>(
-      `input[data-audio-label-edit-key="${CSS.escape(focusKey)}"]`,
-    );
-    if (input) {
-      input.focus();
-      if (
-        activeEditKey === focusKey &&
-        activeSelectionStart !== null &&
-        activeSelectionEnd !== null
-      ) {
-        input.setSelectionRange(activeSelectionStart, activeSelectionEnd);
-      } else {
-        input.select();
-      }
-    }
-  }
-  pendingAudioLabelFocusKey = null;
-}
+// ── Video track details ────────────────────────────────────────────────
 
 function renderVideoTrackDetails(
   video: Partial<NonNullable<PipelineView["input"]["video"]>>,
@@ -912,6 +303,8 @@ function renderVideoTrackDetails(
     );
   }
 }
+
+// ── Main pipeline info column renderer ─────────────────────────────────
 
 export function renderPipelineInfoColumn(selectedPipe: string | null): void {
   lastRenderedPipelineInfoId = selectedPipe;
@@ -1415,7 +808,7 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
 
     const video = pipe.input.video || {};
     const stats =
-      pipe.stats || ({} as Partial<import("../types.js").PipelineStats>);
+      pipe.stats || ({} as Partial<import("../../types.js").PipelineStats>);
 
     const setTextContent = (id: string, value: unknown): void => {
       const el = document.getElementById(id);
@@ -1577,79 +970,31 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
             title: "",
           }
         : null,
-    ].filter(Boolean) as PublisherMetaBadgeSpec[],
+    ].filter(Boolean) as {
+      key: string;
+      tagName: "span" | "button";
+      className: string;
+      text: string;
+      title: string;
+    }[],
     pipe.id,
   );
 }
 
-function setTextIfChanged(target: HTMLElement, text: string): void {
-  if (target.textContent !== text) {
-    target.textContent = text;
-  }
-}
+// ── Re-exports ─────────────────────────────────────────────────────────
+export { setPipelineViewDependencies } from "../pipeline-dependencies.js";
+export { renderOutsColumn } from "../pipeline-output-list.js";
 
-function setClassNameIfChanged(target: HTMLElement, className: string): void {
-  if (target.className !== className) {
-    target.className = className;
-  }
-}
-
-function setTitleIfChanged(target: HTMLElement, title: string): void {
-  if (target.title !== title) {
-    target.title = title;
-  }
-}
-
-function createPublisherMetaBadge(spec: PublisherMetaBadgeSpec): HTMLElement {
-  const badge = document.createElement(spec.tagName);
-  badge.dataset.metaKey = spec.key;
-  if (spec.tagName === "button") {
-    (badge as HTMLButtonElement).type = "button";
-  }
-  setClassNameIfChanged(badge, spec.className);
-  setTextIfChanged(badge, spec.text);
-  setTitleIfChanged(badge, spec.title);
-  return badge;
-}
-
-function syncPublisherMeta(
-  container: HTMLElement,
-  specs: PublisherMetaBadgeSpec[],
-  pipeId: string,
-): void {
-  const existingBadges = new Map<string, HTMLElement>();
-  Array.from(container.children).forEach((child) => {
-    if (!(child instanceof HTMLElement) || !child.dataset.metaKey) return;
-    existingBadges.set(child.dataset.metaKey, child);
-  });
-
-  for (const [index, spec] of specs.entries()) {
-    let badge = existingBadges.get(spec.key);
-    if (!badge) {
-      badge = createPublisherMetaBadge(spec);
-    } else {
-      existingBadges.delete(spec.key);
-      setClassNameIfChanged(badge, spec.className);
-      setTextIfChanged(badge, spec.text);
-      setTitleIfChanged(badge, spec.title);
-    }
-
-    if (spec.key === "quality" && badge instanceof HTMLButtonElement) {
-      badge.onclick = () => {
-        pipelineViewDependencies.openPublisherHealthModal?.(pipeId);
-      };
-    }
-
-    const currentAtIndex = container.children[index] as HTMLElement | undefined;
-    if (currentAtIndex !== badge) {
-      container.insertBefore(badge, currentAtIndex ?? null);
-    }
-  }
-
-  for (const staleBadge of existingBadges.values()) {
-    staleBadge.remove();
-  }
-}
-
-export { setPipelineViewDependencies };
-export { renderOutsColumn } from "./pipeline-output-list.js";
+// Backward-compatible re-exports from extracted sub-modules
+export {
+  editPipelineAudioTrack,
+  updatePipelineAudioTrackDraft,
+  cancelPipelineAudioTrackEdit,
+  savePipelineAudioTrack,
+  mountPipelineInputPreview,
+  clearPipelineInputPreview,
+} from "./audio.js";
+export {
+  configurePipelineHeaderPresentation,
+  configurePipelineInputStatusPresentation,
+} from "./config.js";

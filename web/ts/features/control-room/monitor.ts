@@ -1,17 +1,17 @@
-import { escapeHtml } from "../core/utils.js";
-import { getYoutubeMonitoringStatus } from "../core/api.js";
-import type { YoutubeMonitoringStatus } from "../core/api-types.js";
+import { escapeHtml } from "../../core/utils.js";
+import { getYoutubeMonitoringStatus } from "../../core/api.js";
+import type { YoutubeMonitoringStatus } from "../../core/api-types.js";
 import {
   clearManagedHlsPlayer,
   getManagedHlsController,
   renderManagedHlsPlayer,
-} from "./hls-player.js";
+} from "../hls-player.js";
 import type {
   ControlRoomMediaController,
   MonitoringEmbedKind,
   YouTubeApiNamespace,
   YouTubePlayerApi,
-} from "./control-room-types.js";
+} from "./types.js";
 
 declare global {
   interface Window {
@@ -30,7 +30,7 @@ const YOUTUBE_MONITORING_STATUS_TTL_MS = 60_000;
 import {
   controlRoomMuteIntent,
   controlRoomPlaybackIntent,
-} from "./control-room.js";
+} from "./index.js";
 
 const controlRoomCardWarnings = new Map<string, string>();
 const controlRoomMediaControllers = new WeakMap<

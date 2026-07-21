@@ -1,13 +1,13 @@
 import {
   isAbsoluteUrl, resolvePresetOutputUrl, detectOutputProtocol,
   formatChannelCount, formatCodecName, OUTPUT_SERVER_PRESETS,
-} from "../core/utils.js";
+} from "../../core/utils.js";
 import {
   detectAudioPlatform, detectAudioProtocol, getAudioCaps, getAudioPlatformLabel,
-} from "../core/audio-caps.js";
-import type { AudioCaps, AudioProtocol } from "../core/audio-caps.js";
-import { state } from "../core/state.js";
-import type { AudioTrack } from "../types.js";
+} from "../../core/audio-caps.js";
+import type { AudioCaps, AudioProtocol } from "../../core/audio-caps.js";
+import { state } from "../../core/state.js";
+import type { AudioTrack } from "../../types.js";
 
 export function getDefaultOutputHost(): string {
   return state.config?.ingestHost || "localhost";

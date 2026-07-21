@@ -1,22 +1,22 @@
 import {
   getStreamKeys, createPipeline, updatePipeline, deletePipeline,
   listMediaFiles, getPipelineFileIngest, getMediaFileAnalysis,
-} from "../core/api.js";
+} from "../../core/api.js";
 import type {
   MediaFile, MediaFileAnalysis, PipelineFileIngestConfig,
-} from "../core/api.js";
+} from "../../core/api.js";
 import {
   getUrlParam, setUrlParam, escapeHtml, showErrorAlert, confirmInApp,
   formatMaskedStreamKey,
-} from "../core/utils.js";
-import { state } from "../core/state.js";
-import { isOutputManagedActive } from "../core/output-status.js";
+} from "../../core/utils.js";
+import { state } from "../../core/state.js";
+import { isOutputManagedActive } from "../../core/output-status.js";
 import {
   upsertDashboardPipelineConfig, removeDashboardPipelineConfig,
-} from "./dashboard.js";
+} from "../dashboard.js";
 import type {
   ConfigPipeline, PipelineView, StreamKey, SrtPipelineIngestConfig,
-} from "../types.js";
+} from "../../types.js";
 
 const DEFAULT_FILE_INGEST_GOP_SECONDS = 2;
 const fileAnalysisCache = new Map<string, MediaFileAnalysis | null>();
