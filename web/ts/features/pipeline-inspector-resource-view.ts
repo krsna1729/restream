@@ -1,7 +1,7 @@
 import { state } from "../core/state.js";
 import { escapeHtml } from "../core/utils.js";
 import type { PipelineView } from "../types.js";
-import type { ResourceMapNode, ResourceMapSnapshot } from "../core/api.js";
+import type { ResourceMapNode, ResourceMapSnapshot } from "../core/api-types.js";
 import type { renderGraphInto } from "./graph.js";
 import {
   formatBytes,

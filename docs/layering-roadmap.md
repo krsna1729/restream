@@ -101,8 +101,8 @@ agent-core dependencies could remain hidden. The durable rule is:
 `scripts/check/source-audit.sh` measures raw physical lines for authored Rust
 in the root `build.rs` and in `src/`, `test/`, `tests/`, and `benches/`.
 Fixtures and generated artifacts remain outside this metric. Authored
-TypeScript and JavaScript keep their existing 2,000-line policy; reducing that
-limit is a separate frontend task.
+TypeScript and JavaScript now share the same 1,000-line hard maximum as the
+backend Rust policy.
 
 The backend Rust bands are:
 

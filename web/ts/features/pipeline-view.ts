@@ -27,7 +27,7 @@ import {
   stopIngest,
   stopRecording,
 } from "../core/api.js";
-import type { MediaFile, MediaFileAnalysis } from "../core/api.js";
+import type { MediaFile, MediaFileAnalysis } from "../core/api-types.js";
 import type { AudioTrack, PipelineView } from "../types.js";
 import {
   audioTrackKey,

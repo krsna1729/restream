@@ -6,7 +6,7 @@ import {
   showErrorAlert,
 } from "../core/utils.js";
 import { getYoutubeMonitoringStatus, updateOutput } from "../core/api.js";
-import type { YoutubeMonitoringStatus } from "../core/api.js";
+import type { YoutubeMonitoringStatus } from "../core/api-types.js";
 import { RenderScope } from "../core/render-scope.js";
 import type { RenderScopeToken } from "../core/render-scope.js";
 import { state } from "../core/state.js";
