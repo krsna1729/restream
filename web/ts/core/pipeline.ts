@@ -8,49 +8,18 @@ import type {
   VideoTrack,
 } from "../types.js";
 import { normalizeOutputConfig } from "./output-config.js";
-
-type UnknownRecord = Record<string, unknown>;
+import {
+  type UnknownRecord,
+  finiteNonNegativeNumber,
+  isRecord,
+  nonNegativeNumberOrZero,
+  stringOrNull,
+  timestampMs,
+} from "./validators.js";
 
 const throughputState = {
   outputBytes: new Map<string, { ts: number; bytes: number }>(),
 };
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function stringOrNull(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function finiteNonNegativeNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? value
-    : null;
-}
-
-function finiteNonNegativeInteger(value: unknown): number | null {
-  const number = finiteNonNegativeNumber(value);
-  return number !== null && Number.isInteger(number) ? number : null;
-}
-
-function nonNegativeNumberOrZero(value: unknown): number {
-  return finiteNonNegativeNumber(value) ?? 0;
-}
-
-function timestampMs(value: unknown): number | null {
-  if (typeof value !== "string" || value.length === 0) return null;
-  const timestamp = new Date(value).getTime();
-  return Number.isFinite(timestamp) ? timestamp : null;
-}
 
 function jobTimestamp(job: Job): number | null {
   return timestampMs(job.startedAt) ?? timestampMs(job.endedAt);
@@ -83,10 +52,13 @@ function resolveIngestUrls(pipeline: UnknownRecord): IngestUrls {
 }
 
 function mapVideoTrack(track: UnknownRecord): VideoTrack {
-  const width = finiteNonNegativeInteger(track.width);
-  const height = finiteNonNegativeInteger(track.height);
+  const rawWidth = finiteNonNegativeNumber(track.width);
+  const width = rawWidth !== null && Number.isInteger(rawWidth) ? rawWidth : null;
+  const rawHeight = finiteNonNegativeNumber(track.height);
+  const height = rawHeight !== null && Number.isInteger(rawHeight) ? rawHeight : null;
   const fps = finiteNonNegativeNumber(track.fps);
-  const pid = finiteNonNegativeInteger(track.pid);
+  const rawPid = finiteNonNegativeNumber(track.pid);
+  const pid = rawPid !== null && Number.isInteger(rawPid) ? rawPid : null;
   return {
     codec: stringOrNull(track.codec) ?? undefined,
     width: width ?? undefined,
@@ -101,12 +73,14 @@ function mapVideoTrack(track: UnknownRecord): VideoTrack {
 }
 
 function mapAudioTrack(track: UnknownRecord): AudioTrack {
-  const index = finiteNonNegativeInteger(track.index ?? track.trackIndex);
-  const pid = finiteNonNegativeInteger(track.pid);
-  const channels = finiteNonNegativeInteger(track.channels);
-  const sampleRate = finiteNonNegativeInteger(
-    track.sampleRate ?? track.sample_rate,
-  );
+  const rawIndex = finiteNonNegativeNumber(track.index ?? track.trackIndex);
+  const index = rawIndex !== null && Number.isInteger(rawIndex) ? rawIndex : null;
+  const rawPid = finiteNonNegativeNumber(track.pid);
+  const pid = rawPid !== null && Number.isInteger(rawPid) ? rawPid : null;
+  const rawChannels = finiteNonNegativeNumber(track.channels);
+  const channels = rawChannels !== null && Number.isInteger(rawChannels) ? rawChannels : null;
+  const rawSampleRate = finiteNonNegativeNumber(track.sampleRate ?? track.sample_rate);
+  const sampleRate = rawSampleRate !== null && Number.isInteger(rawSampleRate) ? rawSampleRate : null;
   return {
     index: index ?? undefined,
     pid: pid ?? null,
@@ -198,10 +172,10 @@ function parsePipelinesInfo(
   const activeOutputStateKeys = new Set<string>();
   const nowMs = Date.now();
 
-  for (const rawJob of asArray(rawConfig.jobs)) {
+  for (const rawJob of Array.isArray(rawConfig.jobs) ? rawConfig.jobs : []) {
     if (!isRecord(rawJob)) continue;
-    const pipelineId = nonEmptyString(rawJob.pipelineId);
-    const outputId = nonEmptyString(rawJob.outputId);
+    const pipelineId = typeof rawJob.pipelineId === "string" && rawJob.pipelineId.length > 0 ? rawJob.pipelineId : null;
+    const outputId = typeof rawJob.outputId === "string" && rawJob.outputId.length > 0 ? rawJob.outputId : null;
     if (!pipelineId || !outputId) continue;
 
     const job: Job = {
@@ -227,9 +201,9 @@ function parsePipelinesInfo(
     }
   }
 
-  for (const rawPipeline of asArray(rawConfig.pipelines)) {
+  for (const rawPipeline of Array.isArray(rawConfig.pipelines) ? rawConfig.pipelines : []) {
     if (!isRecord(rawPipeline)) continue;
-    const pipelineId = nonEmptyString(rawPipeline.id);
+    const pipelineId = typeof rawPipeline.id === "string" && rawPipeline.id.length > 0 ? rawPipeline.id : null;
     if (!pipelineId) continue;
 
     const pipelineHealth = pipelineHealthFor(pipelineId);
@@ -254,7 +228,7 @@ function parsePipelinesInfo(
     const rawInputAudio = isRecord(inputHealth.audio)
       ? inputHealth.audio
       : null;
-    const inputAudioTracks = asArray(inputHealth.audioTracks)
+    const inputAudioTracks = (Array.isArray(inputHealth.audioTracks) ? inputHealth.audioTracks : [])
       .filter(isRecord)
       .map(mapAudioTrack);
     if (inputAudioTracks.length === 0 && rawInputAudio) {
@@ -377,10 +351,10 @@ function parsePipelinesInfo(
     if (!pipelineById.has(pipelineId)) pipelineById.set(pipelineId, pipeline);
   }
 
-  for (const rawOutput of asArray(rawConfig.outputs)) {
+  for (const rawOutput of Array.isArray(rawConfig.outputs) ? rawConfig.outputs : []) {
     if (!isRecord(rawOutput)) continue;
-    const outputId = nonEmptyString(rawOutput.id);
-    const pipelineId = nonEmptyString(rawOutput.pipelineId);
+    const outputId = typeof rawOutput.id === "string" && rawOutput.id.length > 0 ? rawOutput.id : null;
+    const pipelineId = typeof rawOutput.pipelineId === "string" && rawOutput.pipelineId.length > 0 ? rawOutput.pipelineId : null;
     if (!outputId || !pipelineId) continue;
 
     const outputStateKey = `${pipelineId}:${outputId}`;

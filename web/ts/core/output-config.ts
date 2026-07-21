@@ -4,12 +4,7 @@ import type {
   OutputVideoCodec,
   OutputView,
 } from "../types.js";
-
-type UnknownRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import { type UnknownRecord, isRecord } from "./validators.js";
 
 function defaultOutputConfig(): OutputConfig {
   return {
