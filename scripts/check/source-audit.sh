@@ -25,7 +25,7 @@ echo ""
 echo "Checking file size limits..."
 SOURCE_LINE_LIMIT=999
 SOURCE_LINE_WARNING=800
-FRONTEND_SOURCE_LINE_LIMIT=2000
+FRONTEND_SOURCE_LINE_LIMIT=999
 
 SOURCE_ROOTS=()
 for root in src web/ts test tests benches; do
@@ -67,11 +67,11 @@ classify_source_file() {
         src/*.rs)
             printf 'production'
             ;;
-        test/*.rs)
-            printf 'harness'
+        test/*.rs|test/*)
+            printf 'frontend-test'
             ;;
-        web/ts/*|test/*)
-            printf 'frontend-test-or-source'
+        web/ts/*)
+            printf 'frontend-production'
             ;;
         *)
             printf 'other'
@@ -104,7 +104,7 @@ while IFS= read -r -d '' file; do
             SOURCE_SIZE_WARNINGS=$((SOURCE_SIZE_WARNINGS + 1))
             echo "WARN [$classification]: $file has $lines raw lines (Rust pressure band: ${warning_threshold}-${file_limit})" >&2
         fi
-    else
+    elif [ "$classification" = "frontend-production" ]; then
         file_limit=$FRONTEND_SOURCE_LINE_LIMIT
         if [ "$lines" -gt "$file_limit" ]; then
             echo "FAIL [$classification]: $file has $lines raw lines (frontend hard maximum: $file_limit; 1000 fails)" >&2

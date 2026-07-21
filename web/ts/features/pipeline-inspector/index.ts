@@ -13,6 +13,17 @@ import type {
   ResourceMapNode,
   ResourceMapSnapshot,
 } from "../../core/api.js";
+import {
+  alertSummaryHtml,
+  renderDiagnostics,
+  renderInspectorResourceDetails,
+} from "./alerts-and-diagnostics.js";
+import {
+  inspectFaultCandidates,
+  inspectProbeBlockers,
+  inspectSuggestedNextStep,
+  pipelineInspectV2Active,
+} from "./view-helpers.js";
 import { fetchProcessingGraph, renderGraphInto } from "../graph.js";
 import {
   isOutputFlapping,
@@ -334,15 +345,7 @@ function protocolValue(value: string | null | undefined): string {
   return normalized.length <= 5 ? normalized.toUpperCase() : titleCaseValue(normalized);
 }
 
-export function pipelineInspectV2Active(): boolean {
-  const toggle = document.getElementById("dashboard-ui-v2-toggle");
-  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
-  try {
-    return new URLSearchParams(window.location.search).get("ui") === "v2";
-  } catch (_err) {
-    return false;
-  }
-}
+
 
 function normalizeInspectSearch(value: string): string {
   return value.trim().toLowerCase();
@@ -380,36 +383,6 @@ function inspectSummaryText(
   if (!pipe)
     return `Inspecting whole runtime · ${pluralize(state.pipelines.length, "pipeline")}`;
   return `Inspecting ${pipe.name} · ${inspectInputLabel(pipe)} · ${pluralize(pipe.outs.length, "output")} · ${pluralize(inspectAttentionCount(pipe), "attention item")}`;
-}
-
-function inspectFaultCandidates(pipe: PipelineView): OutputView[] {
-  return pipe.outs.filter(
-    (output) =>
-      isOutputUnexpectedlyDown(output) ||
-      isOutputRetrying(output) ||
-      isOutputFlapping(output),
-  );
-}
-
-function inspectProbeBlockers(pipe: PipelineView): string[] {
-  const blockers: string[] = [];
-  if (pipe.input.status !== "on")
-    blockers.push("Input must be online for active probes.");
-  if (!pipe.input.publisher?.protocol)
-    blockers.push("Publisher protocol is not known yet.");
-  return blockers;
-}
-
-function inspectSuggestedNextStep(pipe: PipelineView): string {
-  const retryingOutputs = pipe.outs.filter(isOutputRetrying);
-  const flappingOutputs = pipe.outs.filter(isOutputFlapping);
-  return pipe.input.status === "on"
-    ? retryingOutputs.length
-      ? "Inspect recent errors and retry backoff before forcing a restart."
-      : flappingOutputs.length
-        ? "Inspect recent sink failures before forcing a restart."
-        : "Run diagnostics, then inspect graph edges with zero packet output."
-    : "Start or reconnect the publisher before probing.";
 }
 
 function buildInspectCheckpointModel(
@@ -865,60 +838,7 @@ function bindInspectOutputSearch(pipe: PipelineView): void {
     });
 }
 
-function alertSummaryHtml(
-  alerts: OperatorAlert[] | null,
-  pipe: PipelineView,
-): string {
-  if (alerts === null) {
-    return `<section class="border-base-content/10 bg-base-100/40 mt-3 rounded-lg border px-2.5 py-2">
-      <div class="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">Active Alerts</div>
-      <div class="text-base-content/60 mt-1 text-sm">Loading alert details.</div>
-    </section>`;
-  }
-  if (alerts.length === 0) {
-    return `<section class="border-base-content/10 bg-base-100/40 mt-3 rounded-lg border px-2.5 py-2">
-      <div class="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">Active Alerts</div>
-      <div class="text-base-content/60 mt-1 text-sm">No active operator alerts.</div>
-    </section>`;
-  }
-  return `<section class="border-warning/30 bg-warning/5 mt-3 rounded-lg border px-2.5 py-2">
-    <div class="mb-1.5 flex items-center justify-between gap-2">
-      <div class="text-warning text-[0.68rem] font-semibold uppercase tracking-wide">Active Alerts</div>
-      <span class="text-warning text-xs font-medium tabular-nums">${escapeHtml(String(alerts.length))}</span>
-    </div>
-    <div class="max-h-64 space-y-2 overflow-y-auto pr-1" data-scroll-preserve="pipeline-alerts">
-      ${alerts
-        .map(
-          (alert) => `<div class="border-warning/20 border-t pt-2 first:border-t-0 first:pt-0">
-            <div class="flex min-w-0 items-center justify-between gap-2">
-              <div class="min-w-0 truncate text-sm font-medium">${escapeHtml(operatorAlertText(alert.title, pipe))}</div>
-              <span class="badge ${alertSeverityBadgeClass(alert.severity)} badge-sm shrink-0">${escapeHtml(titleCaseValue(alert.severity))}</span>
-            </div>
-            <div class="text-base-content/65 mt-0.5 line-clamp-2 text-xs">${escapeHtml(operatorAlertText(alert.cause, pipe))}</div>
-            ${alert.recommendedAction ? `<div class="text-base-content/50 mt-1 text-xs">${escapeHtml(operatorAlertText(alert.recommendedAction, pipe))}</div>` : ""}
-          </div>`,
-        )
-        .join("")}
-    </div>
-  </section>`;
-}
-
-function alertSeverityBadgeClass(severity: OperatorAlert["severity"]): string {
-  if (severity === "critical") return "badge-error";
-  if (severity === "warning") return "badge-warning";
-  return "badge-info";
-}
-
-function operatorAlertText(text: string, pipe: PipelineView): string {
-  let display = text || "";
-  for (const output of pipe.outs) {
-    if (!output.id || !output.name) continue;
-    display = display.replaceAll(output.id, output.name);
-  }
-  display = display.replace(/\bOutput '([^']+)'/g, "$1");
-  if (pipe.id) display = display.replaceAll(`${pipe.id}:`, "");
-  return display;
-}
+// Extracted to alerts-and-diagnostics.ts
 
 function refreshPipelineSummary(pipelineId: string): void {
   if (pipelineSummaryCache.has(pipelineId)) return;
@@ -937,127 +857,6 @@ function refreshPipelineSummary(pipelineId: string): void {
     .catch(() => {})
     .finally(() => {
       summaryInFlight = null;
-    });
-}
-
-function renderDiagnostics(pipe: PipelineView | null): void {
-  const container = document.getElementById("inspect-diagnostics-summary");
-  if (!container) return;
-  const focusSummary = document.getElementById("inspect-focus-summary");
-  if (!pipe) {
-    if (focusSummary) {
-      focusSummary.textContent =
-        "Inspection focus · select a pipeline to inspect diagnostics.";
-    }
-    container.innerHTML =
-      '<div class="text-base-content/60 text-sm">Select a pipeline to inspect diagnostics.</div>';
-    return;
-  }
-
-  const blockers = inspectProbeBlockers(pipe);
-  const faultCandidates = inspectFaultCandidates(pipe);
-  const suggestedNextStep = inspectSuggestedNextStep(pipe);
-  const blockerText = blockers.length
-    ? blockers.map(escapeHtml).join("<br>")
-    : "Ready for active diagnostics.";
-  const faultText = faultCandidates.length
-    ? faultCandidates.map((out) => escapeHtml(out.name)).join("<br>")
-    : "No unexpected output failures.";
-  if (focusSummary) {
-    focusSummary.textContent = `Inspection focus · ${blockers.length ? `${pluralize(blockers.length, "blocker")} before active probes` : "ready for active probes"} · ${pluralize(faultCandidates.length, "fault candidate")} · ${suggestedNextStep}`;
-  }
-
-  if (pipelineInspectV2Active()) {
-    const detailLabel = `${
-      inspectProbeDetailsExpanded ? "Hide" : "Show"
-    } probe details for ${pipe.name}`;
-    container.innerHTML = `<section class="border-base-content/10 bg-base-100/35 rounded-lg border p-3">
-        <div class="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div class="dashboard-kicker">Probe plan</div>
-            <div class="mt-1 text-sm">${escapeHtml(suggestedNextStep)}</div>
-            <div class="text-base-content/55 mt-1 text-xs">${escapeHtml(pluralize(blockers.length, "blocker"))} · ${escapeHtml(pluralize(faultCandidates.length, "fault candidate"))}</div>
-          </div>
-          <button id="inspect-probe-details-toggle" type="button" class="btn btn-xs btn-outline" aria-label="${escapeHtml(detailLabel)}" aria-expanded="${inspectProbeDetailsExpanded ? "true" : "false"}">${inspectProbeDetailsExpanded ? "Hide probe details" : "Show probe details"}</button>
-        </div>
-        ${
-          inspectProbeDetailsExpanded
-            ? `<div class="mt-3 grid gap-3 md:grid-cols-2">
-                <div class="dashboard-stat-card-compact">
-                  <div class="dashboard-kicker">Probe Readiness</div>
-                  <div class="mt-2 text-sm">${blockerText}</div>
-                </div>
-                <div class="dashboard-stat-card-compact">
-                  <div class="dashboard-kicker">Fault Candidates</div>
-                  <div class="mt-2 text-sm">${faultText}</div>
-                </div>
-              </div>`
-            : ""
-        }
-      </section>`;
-    document
-      .getElementById("inspect-probe-details-toggle")
-      ?.addEventListener("click", () => {
-        inspectProbeDetailsExpanded = !inspectProbeDetailsExpanded;
-        renderDiagnostics(pipe);
-      });
-    return;
-  }
-
-  container.innerHTML = `<div class="grid gap-3 md:grid-cols-3">
-        <div class="dashboard-stat-card-compact">
-            <div class="dashboard-kicker">Probe Readiness</div>
-            <div class="mt-2 text-sm">${blockerText}</div>
-        </div>
-        <div class="dashboard-stat-card-compact">
-            <div class="dashboard-kicker">Fault Candidates</div>
-            <div class="mt-2 text-sm">${faultText}</div>
-        </div>
-        <div class="dashboard-stat-card-compact">
-            <div class="dashboard-kicker">Suggested Next Step</div>
-            <div class="mt-2 text-sm">${suggestedNextStep}</div>
-        </div>
-    </div>`;
-}
-
-function renderInspectorResourceDetails(
-  pipe: PipelineView | null,
-  resourceMap: ResourceMapSnapshot | null,
-): void {
-  const container = document.getElementById("inspect-resource-details");
-  if (!container) return;
-  if (!pipe) {
-    container.innerHTML =
-      '<div class="text-base-content/60 text-sm">Select a pipeline to inspect its FFmpeg workers and resource attribution.</div>';
-    return;
-  }
-  if (!resourceMap) {
-    container.innerHTML =
-      '<div class="text-base-content/60 text-sm">Resource details are loading.</div>';
-    return;
-  }
-  const detailHtml = resourceDetailPanelHtml(resourceMap, pipe);
-  const resourceDetailsLabel = `${inspectResourceDetailsExpanded ? "Hide" : "Show"} resource details for ${pipe.name}`;
-  const resourceDetailPanel = !pipelineInspectV2Active()
-    ? detailHtml
-    : `<section class="border-base-content/10 bg-base-100/35 rounded-lg border p-3">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <div class="text-sm font-semibold">Resource detail tables</div>
-          </div>
-          <button id="inspect-resource-details-toggle" type="button" class="btn btn-xs btn-outline" aria-label="${escapeHtml(resourceDetailsLabel)}" aria-expanded="${inspectResourceDetailsExpanded ? "true" : "false"}">${inspectResourceDetailsExpanded ? "Hide resource details" : "Show resource details"}</button>
-        </div>
-        ${inspectResourceDetailsExpanded ? `<div class="mt-3">${detailHtml}</div>` : ""}
-      </section>`;
-  container.innerHTML = `<div class="space-y-3">
-    ${resourceSummaryGroupsHtml(resourceMap)}
-    ${resourceDetailPanel}
-  </div>`;
-  document
-    .getElementById("inspect-resource-details-toggle")
-    ?.addEventListener("click", () => {
-      inspectResourceDetailsExpanded = !inspectResourceDetailsExpanded;
-      renderInspectorResourceDetails(pipe, resourceMap);
     });
 }
 
@@ -1081,5 +880,6 @@ export {
   renderGraphIntoShellSlot,
   syncPipelineInspectorVisibility,
 } from "./graph.js";
+export { pipelineInspectV2Active } from "./view-helpers.js";
 
 
