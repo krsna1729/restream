@@ -9,15 +9,17 @@
 #   scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
 #
 # Defaults:
-#   RESTREAM_MB_PER_JOB=500     approximate memory budget per compiler job
-#   RESTREAM_CPU_RESERVE=1      CPUs to leave free when the machine has room
-#   RESTREAM_MIN_JOBS=1         lower bound after memory/CPU sizing
-#   RESTREAM_MAX_JOBS unset     optional hard cap
+#   RESTREAM_MB_PER_JOB=500            approximate memory budget per compiler job
+#   RESTREAM_CPU_RESERVE=1             CPUs to leave free when the machine has room
+#   RESTREAM_MIN_JOBS=1                lower bound after memory/CPU sizing
+#   RESTREAM_MAX_JOBS unset            optional hard cap
+#   RESTREAM_MB_PER_TEST_THREAD=500    approximate memory budget per test thread
 #
 # The lockfile defaults to the repo root at .local/build/lock (gitignored). Set
 # RESTREAM_BUILD_LOCK_FILE to an absolute host-global path when multiple
 # worktrees share the same machine. While the lock is held, this script exports
-# BUILD_JOBS, CARGO_BUILD_JOBS, CMAKE_BUILD_PARALLEL_LEVEL, and MAKEFLAGS.
+# BUILD_JOBS, CARGO_BUILD_JOBS, CMAKE_BUILD_PARALLEL_LEVEL, MAKEFLAGS, and
+# RUST_TEST_THREADS.
 
 set -euo pipefail
 
@@ -54,6 +56,20 @@ require_positive_uint() {
     fi
 }
 
+read_available_mb() {
+    local avail_mb
+    avail_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+    if [[ -z "$avail_mb" ]]; then
+        echo "resource-limit: could not read MemAvailable from /proc/meminfo" >&2
+        exit 2
+    fi
+    echo "$avail_mb"
+}
+
+read_cpu_count() {
+    nproc
+}
+
 configure_build_jobs() {
     local mb_per_job="${RESTREAM_MB_PER_JOB:-500}"
     local min_jobs="${RESTREAM_MIN_JOBS:-1}"
@@ -68,14 +84,10 @@ configure_build_jobs() {
     fi
 
     local avail_mb
-    avail_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
-    if [[ -z "$avail_mb" ]]; then
-        echo "resource-limit: could not read MemAvailable from /proc/meminfo" >&2
-        exit 2
-    fi
+    avail_mb=$(read_available_mb)
 
     local cpus
-    cpus=$(nproc)
+    cpus=$(read_cpu_count)
 
     local mem_jobs=$((avail_mb / mb_per_job))
     local cpu_jobs=$((cpus - cpu_reserve))
@@ -98,7 +110,43 @@ configure_build_jobs() {
     export CMAKE_BUILD_PARALLEL_LEVEL="$jobs"
     export MAKEFLAGS="-j$jobs${MAKEFLAGS:+ $MAKEFLAGS}"
 
-    echo "resource-limit: ${avail_mb}MB available, ${cpus} CPUs, reserve ${cpu_reserve} -> $jobs build jobs" >&2
+    configure_rust_test_threads "$avail_mb" "$cpus" "$cpu_reserve"
+
+    echo "resource-limit: ${avail_mb}MB available, ${cpus} CPUs, reserve ${cpu_reserve} -> $jobs build jobs, RUST_TEST_THREADS=${RUST_TEST_THREADS:-<unset>}" >&2
+}
+
+configure_rust_test_threads() {
+    local avail_mb="${1:-}"
+    local cpus="${2:-}"
+    local cpu_reserve="${3:-${RESTREAM_CPU_RESERVE:-1}}"
+
+    if [[ -n "${RUST_TEST_THREADS:-}" ]]; then
+        require_positive_uint RUST_TEST_THREADS "$RUST_TEST_THREADS"
+        return
+    fi
+
+    if [[ -z "$avail_mb" ]]; then
+        avail_mb=$(read_available_mb)
+    fi
+    if [[ -z "$cpus" ]]; then
+        cpus=$(read_cpu_count)
+    fi
+
+    local mb_per_thread="${RESTREAM_MB_PER_TEST_THREAD:-500}"
+    require_positive_uint RESTREAM_MB_PER_TEST_THREAD "$mb_per_thread"
+
+    local mem_threads=$((avail_mb / mb_per_thread))
+    local cpu_threads=$((cpus - cpu_reserve))
+
+    (( mem_threads > cpus )) && mem_threads="$cpus"
+    (( cpu_threads < 1 )) && cpu_threads=1
+    (( cpu_threads > cpus )) && cpu_threads="$cpus"
+
+    local threads="$mem_threads"
+    (( cpu_threads < threads )) && threads="$cpu_threads"
+    (( threads < 1 )) && threads=1
+
+    export RUST_TEST_THREADS="$threads"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -134,6 +182,8 @@ fi
 if [[ -n "${RESTREAM_BUILD_LOCK_HELD:-}" ]]; then
     if [[ -z "${BUILD_JOBS:-}" ]]; then
         configure_build_jobs
+    else
+        configure_rust_test_threads
     fi
     exec "$@"
 fi

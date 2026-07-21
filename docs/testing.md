@@ -138,9 +138,37 @@ Keep correctness throughput high, but treat measurement fidelity as a separate
 constraint.
 
 - Rust unit and integration tests: prefer a single `scripts/build/resource-limit.sh cargo test ...`
-  invocation and let Cargo own compile and test-thread parallelism. Avoid
-  launching multiple heavy `cargo test` commands against the same worktree at
-  once; that just trades useful concurrency for lock contention and noisier logs.
+  invocation and let Cargo own compile parallelism while `resource-limit.sh`
+  bounds `RUST_TEST_THREADS` from the same available-memory and CPU budget.
+  Avoid launching multiple heavy `cargo test` commands against the same worktree
+  at once; that just trades useful concurrency for lock contention and noisier
+  logs.
+
+### Test thread concurrency
+
+`scripts/build/resource-limit.sh` derives a default `RUST_TEST_THREADS` from
+available memory so that `cargo test` does not exhaust RAM on constrained
+machines such as WSL2 or small CI runners.
+
+The default budget is 500 MB per test thread (`RESTREAM_MB_PER_TEST_THREAD`,
+minimum 1). The final value is capped so that test threads never exceed the
+available CPU count minus the configured reserve
+(`RESTREAM_CPU_RESERVE`, default 1).
+
+```sh
+# Let the wrapper derive the thread count from the machine's resources:
+scripts/build/resource-limit.sh cargo test
+
+# Override the per-thread memory budget:
+RESTREAM_MB_PER_TEST_THREAD=1024 scripts/build/resource-limit.sh cargo test
+
+# Pin an explicit thread count (skips memory derivation entirely):
+RUST_TEST_THREADS=2 scripts/build/resource-limit.sh cargo test
+```
+
+The derivation runs both on the outer lock-acquiring invocation and on nested
+(re-entrant) invocations, so the budget is always applied when the build lock
+is held.
 - Live harness correctness modes: `src/bin/test_harness.rs` may batch
   correctness-only suite modes in parallel when each mode is isolated in its
   own network namespace and work directory.

@@ -171,7 +171,7 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 - For concurrency or thread-hop changes, extend `scripts/check/concurrency/fast.sh` or explain why the existing proof gate already covers the change.
 - If teardown or recovery semantics change, update the live harness assertion and the operator-visible status contract in the same change.
 - Gate selection by files touched: see the Inner Loop table above.
-- Let Cargo keep normal test parallelism for correctness work; do not shard multiple heavy `cargo test` runs across the same tree without explicit isolation.
+- Keep libtest parallel for correctness work, but run it through `scripts/build/resource-limit.sh`; the wrapper bounds `RUST_TEST_THREADS` with a separate memory/CPU-derived test budget unless explicitly overridden.
 - For scale or integration checks, use `scripts/build/resource-limit.sh target/debug/test_harness mixed-anchor`.
 
 ## Autonomous Quality Loops

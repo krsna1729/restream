@@ -68,6 +68,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check source size and generated-file boundaries
         run: ./scripts/check/source-audit.sh
+      - name: Check resource limiter concurrency policy
+        run: ./scripts/check/resource-limit.sh
 
   docker-runtime-smoke:
     name: Docker runtime source-build smoke (targeted)
