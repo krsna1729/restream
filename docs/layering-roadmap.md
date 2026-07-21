@@ -28,18 +28,15 @@ The backend already has promising boundaries:
 - `db` for persistence
 - `api` for the HTTP/UI edge
 
-The frontend now also has a clearer shape:
+The frontend now has a clear, modular shape:
 
-- `web/ts/app` for dashboard composition/bootstrap
+- `web/ts/app` for dashboard composition, routing, and bootstrap (`app/modes/` sub-modules)
 - `web/ts/core` for shared transport, state, and pure transforms
-- `web/ts/features` for bounded UI modules, now with ownership subdirectories
-  (`pipeline-view/`, `control-room/`, `editor/`, `pipeline-inspector/`)
+- `web/ts/features` for bounded UI modules with ownership subdirectories
+  (`pipeline-view/`, `control-room/`, `editor/`, `pipeline-inspector/`, `settings/`, `status/`)
 - `web/ts/history` for history-specific controller/rendering behavior
 
-The remaining issue is no longer a known lower-layer back-edge. Wave 2 removed
-the encoded wrong-direction imports and made several candidate boundaries
-mechanically clean. The remaining decision is whether another boundary creates
-measurable isolation or only more packaging.
+All authored frontend TypeScript files (`web/ts/*`) are strictly under 999 raw lines, enforced by `./scripts/check/source-audit.sh`.
 
 Current backend evidence:
 

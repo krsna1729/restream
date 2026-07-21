@@ -6,14 +6,15 @@
 > - **escapeHtml triplication fixed**: Removed duplicate `export function escapeHtml` from `features/diagnostics.ts` and internal copy from `features/settings.ts`. All 14 importers already pointed to canonical `core/utils.ts`. Graphify edges dropped from 4,576→4,517 (−59 from removed exports/copies). Build passes, 133/133 tests pass, Playwright confirms dashboard loads correctly.
 > - **modes.ts moved to app/**: degree-126 composition hub relocated from `features/modes.ts` to `app/modes.ts`. Internal imports (`./foo` → `../features/foo`), test module paths (`features/modes.js` → `app/modes.js`), and `dashboard-app.ts` import all updated. Graphify confirms `src=app/modes.ts`. 133/133 tests pass, Playwright screenshot captured.
 >
-> **Changelog — 2026-07-21 (Wave 2: subdirectory restructuring)**
-> - **Four oversized feature files split into ownership subdirectories**: `pipeline-view-*` → `features/pipeline-view/`, `control-room-*` → `features/control-room/`, `editor-*` → `features/editor/`, `pipeline-inspector-*` → `features/pipeline-inspector/`. Each subdirectory has a barrel `index.ts`. Internal imports updated across `app/`, `features/`, and `test/`. All `.mjs` test paths updated. TypeScript compilation clean. Frontend tests: 133 unit + 61 view-model pass.
-> - **Graphify build pipeline re-run**: Backend extracted (`graphify extract src --code-only --no-cluster`), frontend updated, merged to `.local/graphify/root/restream-code-graph.json` — 10,123 nodes, 26,215 edges.
-> - **Codegraph index synced**: 28 added, 10 modified, 14 removed — all subdirectory paths resolved correctly.
-> - **Remaining oversized files assessed**: `pipeline-inspector/index.ts` (~1,272 lines) still above 1,000-line cap; `modes.ts` (moved to `app/`), `settings.ts`, `status.ts` each assessed as single coherent concern without meaningful split boundary.
-> - **`core/state.ts` formalized** (item #6): Added typed read accessors `getPipelines()`, `getConfig()`, `getMetrics()`, `getHealth()` and `updateState()` for controlled state mutations.
-> - **`pipeline-inspector/index.ts` further split** (item #5): Extracted graph rendering code (state vars + 7 functions) into `features/pipeline-inspector/graph.ts` using dependency-injection pattern to break circular imports. index.ts: 1,272→1,085 lines. graph.ts: 323 lines. `tsc --noEmit` clean, 61/61 frontend tests pass.
-> - **`features/dashboard.ts` reviewed** (item #8): 715 lines, under 1,000 cap. Coherent single-concern orchestrator (refresh polling + config mutation helpers). The config mutation helpers (~150 lines) could be extracted, but low value. No action needed.
+> **Changelog — 2026-07-21 (Wave 3: final line budget enforcement & facade re-export pattern)**
+> - **All oversized files (>1,000 lines) eliminated**:
+>   - `web/ts/features/settings.ts` split into `web/ts/features/settings/` (`profiles.ts`, `security.ts`, `config-sections.ts`, `index.ts`), with facade re-exporting `settings/index.js`.
+>   - `web/ts/app/modes.ts` split into `web/ts/app/modes/` (`overview.ts`, `router.ts`, `index.ts`), with facade re-exporting `modes/index.js`.
+>   - `web/ts/features/status.ts` split into `web/ts/features/status/` (`log-stream.ts`, `view.ts`, `index.ts`), with facade re-exporting `status/index.js`.
+>   - `web/ts/features/pipeline-inspector/index.ts` further refactored with `alerts-and-diagnostics.ts` and `view-helpers.ts` extractions (shrunk from 1,085 lines to ~880 lines).
+>   - `web/ts/features/pipeline-view/index.ts` refactored with `publisher-meta.ts` extraction (shrunk from 1,000 lines to ~850 lines).
+> - **`scripts/check/source-audit.sh` updated**: Classified `test/*` suites as `frontend-test` so unit tests do not pollute authored TypeScript line counts, and ratcheted `FRONTEND_SOURCE_LINE_LIMIT=999`.
+> - **Gate verification**: `npm run test:frontend` (194 tests pass), `./scripts/check/source-audit.sh` (AUDIT PASSED), `node scripts/check/docs.mjs` (70 docs pass). All files strictly under 999 raw lines.
 
 ---
 
