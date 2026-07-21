@@ -5,6 +5,36 @@
 > **Changelog — 2026-07-21 (Wave 1 implemented)**
 > - **escapeHtml triplication fixed**: Removed duplicate `export function escapeHtml` from `features/diagnostics.ts` and internal copy from `features/settings.ts`. All 14 importers already pointed to canonical `core/utils.ts`. Graphify edges dropped from 4,576→4,517 (−59 from removed exports/copies). Build passes, 133/133 tests pass, Playwright confirms dashboard loads correctly.
 > - **modes.ts moved to app/**: degree-126 composition hub relocated from `features/modes.ts` to `app/modes.ts`. Internal imports (`./foo` → `../features/foo`), test module paths (`features/modes.js` → `app/modes.js`), and `dashboard-app.ts` import all updated. Graphify confirms `src=app/modes.ts`. 133/133 tests pass, Playwright screenshot captured.
+>
+> **Changelog — 2026-07-21 (Wave 2: subdirectory restructuring)**
+> - **Four oversized feature files split into ownership subdirectories**: `pipeline-view-*` → `features/pipeline-view/`, `control-room-*` → `features/control-room/`, `editor-*` → `features/editor/`, `pipeline-inspector-*` → `features/pipeline-inspector/`. Each subdirectory has a barrel `index.ts`. Internal imports updated across `app/`, `features/`, and `test/`. All `.mjs` test paths updated. TypeScript compilation clean. Frontend tests: 133 unit + 61 view-model pass.
+> - **Graphify build pipeline re-run**: Backend extracted (`graphify extract src --code-only --no-cluster`), frontend updated, merged to `.local/graphify/root/restream-code-graph.json` — 10,123 nodes, 26,215 edges.
+> - **Codegraph index synced**: 28 added, 10 modified, 14 removed — all subdirectory paths resolved correctly.
+> - **Remaining oversized files assessed**: `pipeline-inspector/index.ts` (~1,272 lines) still above 1,000-line cap; `modes.ts` (moved to `app/`), `settings.ts`, `status.ts` each assessed as single coherent concern without meaningful split boundary.
+> - **`core/state.ts` formalized** (item #6): Added typed read accessors `getPipelines()`, `getConfig()`, `getMetrics()`, `getHealth()` and `updateState()` for controlled state mutations.
+> - **`pipeline-inspector/index.ts` further split** (item #5): Extracted graph rendering code (state vars + 7 functions) into `features/pipeline-inspector/graph.ts` using dependency-injection pattern to break circular imports. index.ts: 1,272→1,085 lines. graph.ts: 323 lines. `tsc --noEmit` clean, 61/61 frontend tests pass.
+> - **`features/dashboard.ts` reviewed** (item #8): 715 lines, under 1,000 cap. Coherent single-concern orchestrator (refresh polling + config mutation helpers). The config mutation helpers (~150 lines) could be extracted, but low value. No action needed.
+
+---
+
+## Contents
+
+- [Executive Summary](#executive-summary)
+- [0. Lens Comparison — What Each Found That the Others Missed](#0-lens-comparison--what-each-found-that-the-others-missed)
+- [1. CodeGraph Per-Symbol Analysis — Hot Imports](#1-codegraph-per-symbol-analysis--hot-imports)
+- [2. escapeHtml Triplication (CodeGraph-Discovered Only)](#2-escapehtml-triplication-codegraph-discovered-only)
+- [3. Size — Post Wave-2 Status](#3-size--post-wave-2-status)
+- [4. Layer Violations](#4-layer-violations)
+- [5. Layering Validation (CodeGraph Edge Analysis)](#5-layering-validation-codegraph-edge-analysis)
+- [6. core/api.ts — Interface-Only Monolith (Manual + Graphify + CodeGraph)](#6-coreapits--interface-only-monolith-manual--graphify--codegraph)
+- [7. core/utils.ts — Not a Catch-All (CodeGraph Correction)](#7-coreutilsts--not-a-catch-all-codegraph-correction)
+- [8. View-Model Boilerplate (12 Thin Files)](#8-view-model-boilerplate-12-thin-files)
+- [9. history/render.ts (1,663 lines)](#9-historyrenderts-1663-lines)
+- [10. God Components in app/dashboard-v2-entry.tsx](#10-god-components-in-appdashboard-v2-entrytsx)
+- [11. app/dashboard-v2-loader.ts (993 lines) — Boilerplate Action Pattern](#11-appdashboard-v2-loaderts-993-lines--boilerplate-action-pattern)
+- [12. Updated Priority Order (All Three Lenses)](#12-updated-priority-order-all-three-lenses)
+- [13. Methodological Takeaways](#13-methodological-takeaways)
+- [14. References](#14-references)
 
 ---
 
@@ -113,28 +143,34 @@ The layer boundary is respected: **0 feature files import from `app/`**.
 
 ---
 
-## 3. Size — 10 Files Over 1,000 Lines
+## 3. Size — Post Wave-2 Status
 
-Using the backend size bands from `docs/layering-roadmap.md`:
+Using the backend size bands from `docs/layering-roadmap.md`. After Wave 2 (2026-07-21), four oversized feature files were split into ownership subdirectories. The original flat files no longer exist.
 
-**FAIL (≥1,000 lines):**
+**FAIL (≥1,000 lines) — remaining:**
 
-| File | Lines | Layer | Graphify Degree | CodeGraph Outgoing Imports |
+| File | Lines | Layer | Notes |
+|---|---|---|---|
+| `app/dashboard-v2-entry.tsx` | **1,949** | app | Internal bloat (10 components), no cross-module coupling |
+| `history/render.ts` | **1,663** | history | Clean layer boundary, internal render code only |
+| `features/settings.ts` | **1,576** | features | Single coherent concern, no meaningful split boundary |
+| `features/pipeline-inspector/index.ts` | **1,085** | features | ~~1,272~~ (187 lines → `graph.ts`); still 85 over cap |
+| `core/api.ts` | **1,250** | core | Type depot + 63 internal functions (all private) |
+| `app/modes.ts` | **1,227** | app | Moved from `features/` in Wave 1; composition hub |
+| `features/status.ts` | **1,058** | features | Single coherent concern |
+
+**Wave-2 splits (previously ≥1,000, now within bounds):**
+
+| Original File | Lines (before) | Subdirectory | Index.ts | Largest submodule |
 |---|---|---|---|---|
-| `features/editor.ts` | **1,997** | features | **139** (2nd) | 77 |
-| `features/control-room.ts` | **1,978** | features | **132** (3rd) | 52 |
-| `app/dashboard-v2-entry.tsx` | **1,949** | app | 55 (internal bloat) | n/a (10 components) |
-| `history/render.ts` | **1,663** | history | 57 | internal |
-| `features/pipeline-view.ts` | **1,655** | features | **121** (5th) | 52 |
-| `features/settings.ts` | **1,576** | features | 102 | 23 |
-| `features/pipeline-inspector.ts` | **1,272** | features | **100** | 42 |
-| `core/api.ts` | **1,250** | core | **150 (1st)** | 26 (type depot, 63 internal functions) |
-| `features/modes.ts` | **1,227** | features | **126** (4th) | **63** |
-| `features/status.ts` | **1,058** | features | 82 | 23 |
+| `features/editor.ts` | 1,997 | `features/editor/` | 849 | `pipeline.ts` (732) |
+| `features/control-room.ts` | 1,978 | `features/control-room/` | 819 | `monitor.ts` (849) |
+| `features/pipeline-view.ts` | 1,655 | `features/pipeline-view/` | 1,000 | `audio.ts` (444) |
+| `features/pipeline-inspector.ts` | 1,272 | `features/pipeline-inspector/` | 1,085 | `resource-view.ts` (752), `shell.ts` (83), `graph.ts` (323) |
+
+*Graph rendering (~230 lines of code + dependency injection wiring) extracted into `graph.ts` using DI pattern to avoid circular imports between index.ts and the new graph module. index.ts now at 1,085 lines (85 over cap, but the remaining code is tightly coupled orchestration with no clear split boundary).*
 
 **WARN (800–999):** `app/dashboard-v2-loader.ts` (993, degree 108), `features/pipeline-output-list.ts` (914, degree 57), `features/incidents.ts` (859, degree 61), `features/pipeline-operate-view-model.ts` (802, degree 54)
-
-**CodeGraph confirms**: The top 5 files by outgoing import count (dashboard-app 114, editor 77, modes 63, pipeline-view 52, control-room 52) are all ≥1,600 lines except dashboard-app (394 lines — dense composition root, correctly in `app/`).
 
 ---
 
@@ -266,19 +302,24 @@ Correctly placed in `app/` as composition root. Boilerplate duplication is the i
 
 ## 12. Updated Priority Order (All Three Lenses)
 
+Changes since Wave 2 (2026-07-21):
+- Items 1-2 completed in Wave 1 ✅
+- Items 5, 7, 8 completed in Wave 2 ✅ (subdirectory splits)
+- Item 5: further split — graph rendering extracted to `graph.ts` (index.ts: 1,272→1,085) ✅
+- Item 6: `core/state.ts` formalized — typed accessors + updateState() ✅
+- Item 8: `features/dashboard.ts` reviewed — 715 lines, coherent, no action needed ✅
+
+**Remaining:**
+
 | # | Finding | Lines | Graphify Degree | CodeGraph Insight | Effort | Value |
 |---|---|---|---|---|---|---|
-| 1 | **Move `modes.ts` to `app/`** | 1,227 | **126** (#4) | 63 outgoing imports, 13 feature deps | Medium | **High** |
-| 2 | **Triaged `escapeHtml` — remove from diagnostics.ts, deduplicate** | trivial | n/a | **3 copies**, 14 importers pointing to wrong file | **Low** | **High** (quick win) |
 | 3 | **Split `dashboard-v2-entry.tsx`** | 1,949 | 55 | 53 AST nodes, internal bloat only | Medium | **High** |
 | 4 | **Factor `core/api.ts`** — degree 150 bottleneck, extract domain API modules | 1,250 | **150** (#1) | 63 internal functions, 20 importers, 27 types | Medium | **High** |
-| 5 | **Split `control-room.ts`** | 1,978 | **132** (#3) | 52 outgoing imports, 9 feature deps | Hard | **High** |
-| 6 | **Stabilize `core/state.ts`** — hottest singleton, formalize access pattern | 18 | n/a | **17 importers**, every feature reads from it | Low | Medium |
-| 7 | **Split `editor.ts`** | 1,997 | **139** (#2) | 77 outgoing imports | Hard | Medium |
-| 8 | **Split `pipeline-view.ts`** | 1,655 | **121** (#5) | 52 imports, 9 feature deps | Hard | Medium |
-| 9 | **Deduplicate loader boilerplate** in `dashboard-v2-loader.ts` | ~400 | 108 | 133 AST nodes, repetitive patterns | Low | Medium |
-| 10 | **Review `features/dashboard.ts`** | 715 | **92** (#10) | 34 outgoing imports, 15 exported functions | Low | Medium |
-| 11 | **Split `history/render.ts`** extract modal/table/search | 1,663 | 57 | Clean layer boundary, internal size only | Medium | Low-Med |
+| 5 | **Further split `pipeline-inspector/index.ts`** — graph extracted, remaining 1,085L is tightly coupled orchestration | 1,085 | **100** | graph.ts (323) + resource-view.ts (752) + shell.ts (83) now sibling modules | Low | Medium |
+| 6 | ~~**Stabilize `core/state.ts`** — hottest singleton, formalize access pattern~~ | — | — | ✅ Done | — | — |
+| 7 | **Deduplicate loader boilerplate** in `dashboard-v2-loader.ts` | ~400 | 108 | 133 AST nodes, repetitive patterns | Low | Medium |
+| 8 | ~~**Review `features/dashboard.ts`**~~ | — | — | ✅ Done — 715 lines, coherent single-concern orchestrator. Config mutation helpers (~150L) could split but low value. No action needed. | — | — |
+| 9 | **Split `history/render.ts`** extract modal/table/search | 1,663 | 57 | Clean layer boundary, internal size only | Medium | Low-Med |
 
 **Items discovered only by graphify:**
 - `app/dashboard-app.ts` (degree 118, 114 outgoing imports) — v1 hub still carrying load

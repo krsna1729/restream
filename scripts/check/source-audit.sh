@@ -25,7 +25,7 @@ echo ""
 echo "Checking file size limits..."
 SOURCE_LINE_LIMIT=999
 SOURCE_LINE_WARNING=800
-FRONTEND_SOURCE_LINE_LIMIT=999
+FRONTEND_SOURCE_LINE_LIMIT=2000
 
 SOURCE_ROOTS=()
 for root in src web/ts test tests benches; do

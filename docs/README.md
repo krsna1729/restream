@@ -69,6 +69,7 @@ active documentation set.
 - [Current priorities](current-priorities.md) — maintained forward-looking
   priorities.
 - [Layering roadmap](layering-roadmap.md) — maintained refactor sequence.
+- [Frontend layering audit](../audits/frontend-layering-audit-2026-07-21.md) — three-lens frontend architecture audit.
 - [Testing decision record](testing-strategy.md) — accepted rationale for the
   unit/live tier boundary. Use [testing.md](testing.md) for current commands.
 - [Mahashivratri scenario](mahashivratri-hero-scenario.md) — durable scale

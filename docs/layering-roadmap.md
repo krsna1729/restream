@@ -32,7 +32,8 @@ The frontend now also has a clearer shape:
 
 - `web/ts/app` for dashboard composition/bootstrap
 - `web/ts/core` for shared transport, state, and pure transforms
-- `web/ts/features` for bounded UI modules
+- `web/ts/features` for bounded UI modules, now with ownership subdirectories
+  (`pipeline-view/`, `control-room/`, `editor/`, `pipeline-inspector/`)
 - `web/ts/history` for history-specific controller/rendering behavior
 
 The remaining issue is no longer a known lower-layer back-edge. Wave 2 removed
@@ -58,7 +59,9 @@ Current backend evidence:
 
 Frontend examples:
 
-- large feature modules still mix rendering, async coordination, and cross-feature wiring
+- four oversized feature groups are now in ownership subdirectories, each with a
+  barrel `index.ts`; `pipeline-inspector/index.ts` remains above the 1,000-line
+  cap and needs a meaningful seam before the split pass is fully done
 - some feature modules still import peer features because the composition owner is not yet narrow enough
 - globals/window hooks remain as a compatibility surface that should stay edge-facing
 
@@ -265,6 +268,11 @@ Frontend low-risk extractions already landed:
 
 1. Dashboard feature wiring now has an `app` composition root.
 2. Pipeline output-list rendering and delegated actions now live outside `pipeline-view.ts`.
+3. Four oversized feature files (`pipeline-view-*`, `control-room-*`, `editor-*`,
+   `pipeline-inspector-*`) moved into `features/<name>/` subdirectories with
+   barrel `index.ts` re-exports (2026-07-21). Only `pipeline-inspector/index.ts`
+   (~1,272 lines) remains above the 1,000-line hard cap; the other three are
+   within bounds.
 
 These moves are useful because they move "how the app is composed" away from
 "how one feature renders."
