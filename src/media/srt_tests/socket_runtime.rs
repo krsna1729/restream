@@ -15,6 +15,7 @@ async fn srt_server_shutdown_exits_with_no_connections() {
             security.clone(),
         ),
     );
+    let _srt_runtime = SrtTestRuntime::lock();
     let server = Arc::new(SrtServer::new(
         pipeline_access,
         engine.clone(),
@@ -49,6 +50,9 @@ async fn srt_server_shutdown_exits_with_no_connections() {
         .await
         .expect("SRT server did not exit after listener shutdown")
         .expect("SRT server task panicked");
+    // SrtServer::new() called srt_startup() but SrtServer::Drop intentionally
+    // skips srt_cleanup() (see impl Drop for SrtServer). Balance the refcount
+    // here while the test lock still serializes access.
     teardown_srt();
 }
 
@@ -153,16 +157,13 @@ fn srt_sender_semaphore_releases_on_drop() {
 // This is the same guard used by start_srt_egress.
 #[test]
 fn linked_libsrt_exposes_group_connect_when_required() {
-    unsafe {
-        assert_eq!(srt_startup(), 0);
-    }
+    let _srt_runtime = SrtTestRuntime::startup();
 
     let listener = unsafe { srt_create_socket() };
     assert!(listener >= 0);
     if let Err(error) = enable_srt_group_connect(listener) {
         unsafe {
             srt_close(listener);
-            srt_cleanup();
         }
         if crate::AppConfig::from_env().require_srt_bonding {
             panic!(
@@ -180,9 +181,7 @@ fn linked_libsrt_exposes_group_connect_when_required() {
 
 #[test]
 fn linked_libsrt_accepts_every_supported_pbkeylen_via_socket_option() {
-    unsafe {
-        assert_eq!(srt_startup(), 0);
-    }
+    let _srt_runtime = SrtTestRuntime::startup();
 
     for pbkeylen in [16, 24, 32] {
         let crypto = srt_crypto_from_url("s3cret-passphrase".to_string(), Some(pbkeylen))
@@ -199,17 +198,11 @@ fn linked_libsrt_accepts_every_supported_pbkeylen_via_socket_option() {
             "pbkeylen={pbkeylen} should be accepted by libsrt via SRTO_PBKEYLEN: {result:?}"
         );
     }
-
-    unsafe {
-        srt_cleanup();
-    }
 }
 
 #[test]
 fn linked_libsrt_rejects_out_of_range_pbkeylen_via_socket_option() {
-    unsafe {
-        assert_eq!(srt_startup(), 0);
-    }
+    let _srt_runtime = SrtTestRuntime::startup();
 
     let crypto = srt_crypto_from_url("s3cret-passphrase".to_string(), Some(999))
         .expect("non-empty passphrase must yield a crypto config");
@@ -219,7 +212,6 @@ fn linked_libsrt_rejects_out_of_range_pbkeylen_via_socket_option() {
     let result = apply_srt_crypto_socket(sock, &crypto);
     unsafe {
         srt_close(sock);
-        srt_cleanup();
     }
 
     let error =
@@ -245,9 +237,7 @@ fn linked_libsrt_rejects_out_of_range_pbkeylen_via_socket_option() {
 /// failure is the signal that the workaround can be revisited.
 #[test]
 fn linked_libsrt_member_config_rejects_passphrase_and_streamid() {
-    unsafe {
-        assert_eq!(srt_startup(), 0);
-    }
+    let _srt_runtime = SrtTestRuntime::startup();
 
     let config = unsafe { srt_create_config() };
     assert!(!config.is_null());
@@ -272,7 +262,6 @@ fn linked_libsrt_member_config_rejects_passphrase_and_streamid() {
     };
     unsafe {
         srt_delete_config(config);
-        srt_cleanup();
     }
 
     assert_eq!(
@@ -289,9 +278,7 @@ fn linked_libsrt_member_config_rejects_passphrase_and_streamid() {
 
 #[test]
 fn linked_libsrt_group_socket_accepts_crypto_via_setsockopt() {
-    unsafe {
-        assert_eq!(srt_startup(), 0);
-    }
+    let _srt_runtime = SrtTestRuntime::startup();
     let group = unsafe { srt_create_group(SRT_GTYPE_BACKUP) };
     assert!(group >= 0, "group={group}");
 
@@ -300,7 +287,6 @@ fn linked_libsrt_group_socket_accepts_crypto_via_setsockopt() {
     let result = apply_srt_crypto_socket(group, &crypto);
     unsafe {
         srt_close(group);
-        srt_cleanup();
     }
     assert!(
         result.is_ok(),
@@ -311,9 +297,7 @@ fn linked_libsrt_group_socket_accepts_crypto_via_setsockopt() {
 
 #[test]
 fn linked_libsrt_group_socket_accepts_streamid_via_setsockopt() {
-    unsafe {
-        assert_eq!(srt_startup(), 0);
-    }
+    let _srt_runtime = SrtTestRuntime::startup();
     let group = unsafe { srt_create_group(SRT_GTYPE_BACKUP) };
     assert!(group >= 0, "group={group}");
     let streamid_c = std::ffi::CString::new("probe").unwrap();
@@ -331,7 +315,6 @@ fn linked_libsrt_group_socket_accepts_streamid_via_setsockopt() {
     };
     unsafe {
         srt_close(group);
-        srt_cleanup();
     }
     assert!(
         result.is_ok(),
