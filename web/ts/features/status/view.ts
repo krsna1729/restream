@@ -1,4 +1,5 @@
 import {
+  getEngineSbomEndpoint,
   getEngineStatus,
   getRestreamHistory,
 } from "../../core/api.js";
@@ -139,7 +140,7 @@ function renderStatusContent(container: HTMLElement, data: StatusData): void {
         </div>
         <div class="flex items-center gap-2">
           <button type="button" class="btn btn-sm btn-outline js-copy-diagnostics">Copy Diagnostics</button>
-          <a href="${withBasePath("/api/v1/sbom")}" target="_blank" class="btn btn-sm btn-ghost">View Raw SBOM</a>
+          <a href="${withBasePath(getEngineSbomEndpoint(null))}" target="_blank" class="btn btn-sm btn-ghost">View Raw SBOM</a>
         </div>
       </div>
 
