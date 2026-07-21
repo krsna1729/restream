@@ -3,12 +3,12 @@ import { escapeHtml } from "../../core/utils.js";
 import type { PipelineView } from "../../types.js";
 import type { ResourceMapNode, ResourceMapSnapshot } from "../../core/api-types.js";
 import type { renderGraphInto } from "../graph.js";
-import { pipelineInspectV2Active } from "./view-helpers.js";
 import {
   formatBytes,
+  pipelineInspectV2Active,
   renderGraphIntoShellSlot,
   selectedPipeline,
-} from "./index.js";
+} from "./view-helpers.js";
 
 function resourceSummaryStripHtml(snapshot: ResourceMapSnapshot): string {
   const scopeKind = snapshot.scope?.kind || "runtime";

@@ -23,6 +23,8 @@ import {
   inspectProbeBlockers,
   inspectSuggestedNextStep,
   pipelineInspectV2Active,
+  selectedPipeline,
+  setForceRuntimeScope,
 } from "./view-helpers.js";
 import { fetchProcessingGraph, renderGraphInto } from "../graph.js";
 import {
@@ -64,8 +66,7 @@ const dependencies: PipelineInspectorDependencies = {
   openOperateView: () => {},
 };
 
-let forceRuntimeScope = false;
-let runtimeScopeMaskedPipelineId: string | null = null;
+
 let summaryRequestSeq = 0;
 let summaryInFlight: Promise<void> | null = null;
 const pipelineSummaryCache = new Map<string, PipelineSummarySnapshot>();
@@ -124,20 +125,7 @@ function pipelineInspectorContainer(): HTMLElement | null {
     : null;
 }
 
-export function selectedPipeline(): PipelineView | null {
-  const urlPipelineId = getUrlParam("p");
-  if (
-    forceRuntimeScope &&
-    urlPipelineId &&
-    runtimeScopeMaskedPipelineId !== urlPipelineId
-  ) {
-    forceRuntimeScope = false;
-    runtimeScopeMaskedPipelineId = null;
-  }
-  const selectedId = forceRuntimeScope ? null : urlPipelineId;
-  if (!selectedId) return null;
-  return state.pipelines.find((pipeline) => pipeline.id === selectedId) || null;
-}
+
 
 function hasInvalidPipelineSelection(): boolean {
   const selectedId = getUrlParam("p");
@@ -545,7 +533,7 @@ export function renderPipelineInspector(): void {
         return;
       }
       if (!pipelineId) return;
-      forceRuntimeScope = false;
+      setForceRuntimeScope(false);
       dependencies.selectPipeline(pipelineId);
       resetPipelineInspectorSelection(pipelineId);
       renderPipelineInspector();
@@ -659,12 +647,11 @@ function setPipelineOnlySectionsVisible(visible: boolean): void {
 export function resetPipelineInspectorSelection(
   pipelineId: string | null,
 ): void {
-  forceRuntimeScope = pipelineId === null;
+  const maskedId = pipelineId === null ? getUrlParam("p") || getGraphPipelineId() : null;
+  setForceRuntimeScope(pipelineId === null, maskedId);
   inspectOutputSearchQuery = "";
   inspectResourceDetailsExpanded = false;
   inspectProbeDetailsExpanded = false;
-  runtimeScopeMaskedPipelineId =
-    pipelineId === null ? getUrlParam("p") || getGraphPipelineId() : null;
   resetGraphState(pipelineId);
   const status = document.getElementById("inspect-graph-status");
   const container = document.getElementById("inspect-graph-container");

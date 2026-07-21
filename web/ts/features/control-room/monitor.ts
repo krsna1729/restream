@@ -30,7 +30,7 @@ const YOUTUBE_MONITORING_STATUS_TTL_MS = 60_000;
 import {
   controlRoomMuteIntent,
   controlRoomPlaybackIntent,
-} from "./index.js";
+} from "./state.js";
 
 const controlRoomCardWarnings = new Map<string, string>();
 const controlRoomMediaControllers = new WeakMap<

@@ -23,7 +23,7 @@ import {
   controlRoomMonitoringDrafts,
   controlRoomMonitoringSavePending,
   pendingMonitoringInputFocusOutputId,
-} from "./index.js";
+} from "./state.js";
 
 const CONTROL_ROOM_CARD_BASE_CLASS =
   "group flex min-h-[17rem] min-w-0 w-full max-w-full flex-col overflow-hidden rounded-2xl border p-3 shadow-[0_18px_45px_rgba(15,23,42,0.12)]";

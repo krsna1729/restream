@@ -70,12 +70,17 @@ let controlRoomState: ControlRoomState = {
   searchQuery: "",
 };
 const controlRoomScope = new RenderScope("control-mode-content");
-const controlRoomMonitoringDrafts = new Map<string, string>();
-const controlRoomMonitoringSavePending = new Set<string>();
-const controlRoomCardActionsExpanded = new Set<string>();
-let pendingMonitoringInputFocusOutputId: string | null = null;
-let controlRoomPlaybackIntent: "play" | "pause" = "play";
-let controlRoomMuteIntent: "mute" | "unmute" = "mute";
+import {
+  controlRoomCardActionsExpanded,
+  controlRoomMonitoringDrafts,
+  controlRoomMonitoringSavePending,
+  controlRoomMuteIntent,
+  controlRoomPlaybackIntent,
+  pendingMonitoringInputFocusOutputId,
+  setControlRoomMuteIntent,
+  setControlRoomPlaybackIntent,
+  setPendingMonitoringInputFocusOutputId,
+} from "./state.js";
 let controlRoomCheckpointCallback:
   ((model: ControlRoomCheckpointModel | null) => void) | null = null;
 const controlRoomNameCollator = new Intl.Collator(undefined, {
@@ -335,24 +340,23 @@ function ensureShell(container: HTMLElement): void {
     if (action === "control-room-toggle-playback-all") {
       const mounted = listMountedMediaControllers(container);
       const shouldPause = controlRoomPlaybackIntent === "play";
-      controlRoomPlaybackIntent = shouldPause ? "pause" : "play";
-      mounted.forEach(({ controller }) => {
+      setControlRoomPlaybackIntent(shouldPause ? "pause" : "play");
+      for (const { controller } of mounted) {
         if (shouldPause) {
           controller.pause?.();
         } else {
           controller.play?.();
         }
-      });
-      window.setTimeout(() => {
-        syncGlobalPlaybackButton(container);
-        syncCardPlaybackButtons(container);
-      }, 0);
+      }
       return;
     }
     if (action === "control-room-toggle-mute-all") {
       const mounted = listMountedMediaControllers(container);
-      const shouldMute = controlRoomMuteIntent !== "mute";
-      controlRoomMuteIntent = shouldMute ? "mute" : "unmute";
+      const anyUnmuted = mounted.some(
+        ({ controller }) => controller.isMuted?.() === false,
+      );
+      const shouldMute = anyUnmuted || controlRoomMuteIntent === "unmute";
+      setControlRoomMuteIntent(shouldMute ? "mute" : "unmute");
       mounted.forEach(({ controller }) => {
         controller.setMuted?.(shouldMute);
       });
@@ -413,7 +417,7 @@ function ensureShell(container: HTMLElement): void {
       if (!target?.controller.setMuted || !target.controller.isMuted) return;
       const muted = target.controller.isMuted();
       target.controller.setMuted(!muted);
-      controlRoomMuteIntent = !muted ? "mute" : "unmute";
+      setControlRoomMuteIntent(!muted ? "mute" : "unmute");
       setMuteButtonLabel(button, !muted);
       syncGlobalMuteButton(container);
       return;
@@ -429,10 +433,10 @@ function ensureShell(container: HTMLElement): void {
       }
       if (target.controller.isPlaying()) {
         target.controller.pause();
-        controlRoomPlaybackIntent = "pause";
+        setControlRoomPlaybackIntent("pause");
       } else {
         target.controller.play();
-        controlRoomPlaybackIntent = "play";
+        setControlRoomPlaybackIntent("play");
       }
       window.setTimeout(() => {
         setPlaybackButtonLabel(
@@ -448,7 +452,7 @@ function ensureShell(container: HTMLElement): void {
       const output = findOutput(outputId);
       if (!outputId || !output) return;
       controlRoomMonitoringDrafts.set(outputId, output.monitoringUrl || "");
-      pendingMonitoringInputFocusOutputId = outputId;
+      setPendingMonitoringInputFocusOutputId(outputId);
       renderControlRoom();
       return;
     }
@@ -715,7 +719,7 @@ function renderControlRoom(): void {
     const article = grid.children[index] as HTMLElement | undefined;
     if (article) syncCard(article, descriptor);
   });
-  pendingMonitoringInputFocusOutputId = null;
+  setPendingMonitoringInputFocusOutputId(null);
   syncGlobalMediaButtons(container);
 }
 

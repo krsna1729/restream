@@ -1,21 +1,67 @@
-import { escapeHtml } from "../../core/utils.js";
-import type { ResourceMapNode, ResourceMapSnapshot } from "../../core/api.js";
+import { escapeHtml, getUrlParam } from "../../core/utils.js";
+import { state } from "../../core/state.js";
+import type { ResourceMapSnapshot } from "../../core/api.js";
 import type { OutputView, PipelineView } from "../../types.js";
+import { fetchProcessingGraph, renderGraphInto } from "../graph.js";
 import {
   isOutputFlapping,
   isOutputRetrying,
   isOutputUnexpectedlyDown,
 } from "../../core/output-status.js";
 
-function formatBytes(bytes: number | null | undefined): string {
-  if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return "--";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+export function renderGraphIntoShellSlot(
+  container: HTMLElement,
+  slot: HTMLElement | null,
+  slotId: string,
+  graph: Parameters<typeof renderGraphInto>[1],
+): void {
+  if (slot) {
+    renderGraphInto(slot, graph);
+    return;
+  }
+  const fallback = document.createElement("div");
+  renderGraphInto(fallback, graph);
+  const slotPattern = new RegExp(
+    `(<div id="${slotId}"[^>]*>)(</div>)`,
+  );
+  container.innerHTML = container.innerHTML.replace(
+    slotPattern,
+    `$1${fallback.innerHTML}$2`,
+  );
 }
 
-function formatPercentage(pct: number | null | undefined): string {
+let forceRuntimeScope = false;
+let runtimeScopeMaskedPipelineId: string | null = null;
+
+export function setForceRuntimeScope(force: boolean, maskedId: string | null = null): void {
+  forceRuntimeScope = force;
+  runtimeScopeMaskedPipelineId = maskedId;
+}
+
+export function selectedPipeline(): PipelineView | null {
+  const urlPipelineId = getUrlParam("p");
+  if (
+    forceRuntimeScope &&
+    urlPipelineId &&
+    runtimeScopeMaskedPipelineId !== urlPipelineId
+  ) {
+    forceRuntimeScope = false;
+    runtimeScopeMaskedPipelineId = null;
+  }
+  const selectedId = forceRuntimeScope ? null : urlPipelineId;
+  if (!selectedId) return null;
+  return state.pipelines.find((pipeline) => pipeline.id === selectedId) || null;
+}
+
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return "--";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
+}
+
+export function formatPercentage(pct: number | null | undefined): string {
   if (pct === null || pct === undefined || !Number.isFinite(pct)) return "--";
   return `${pct.toFixed(1)}%`;
 }
