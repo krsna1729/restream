@@ -70,6 +70,7 @@ scripts/release/prepare-build-tree.sh
 npm run test:frontend
 scripts/check/api-contract.sh
 scripts/check/test-hygiene.sh
+scripts/check/resource-limit.sh
 scripts/check/fixture-discipline.sh
 
 if [[ "$SKIP_HARNESS" -eq 0 ]]; then
