@@ -93,7 +93,7 @@ test("overview activity uses a restream-scoped log stream after the initial snap
     configurable: true,
   });
 
-  const modes = await loadCompiledFrontendModule("features/modes.js");
+  const modes = await loadCompiledFrontendModule("app/modes.js");
   const { state } = await loadCompiledFrontendModule("core/state.js");
   state.pipelines = [];
   state.metrics = {};

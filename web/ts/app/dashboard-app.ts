@@ -48,7 +48,7 @@ import {
   renderDashboardModes,
   setDashboardMode,
   setPipelineWorkspaceView,
-} from "../features/modes.js";
+} from "./modes.js";
 import {
   configurePipelineInspectCheckpointPresentation,
   setPipelineInspectorDependencies,

@@ -5,24 +5,24 @@ import { state } from "../core/state.js";
 import {
   renderControlRoom,
   setControlRoomContainerId,
-} from "./control-room.js";
+} from "../features/control-room.js";
 import {
   refreshMediaLibraryMetricsOnly,
   renderMediaLibraryMode,
   resetMediaLibraryShellState,
   setMediaLibraryContainerId,
-} from "./media-library.js";
-import { loadSettings, renderSettingsPanel } from "./settings.js";
+} from "../features/media-library.js";
+import { loadSettings, renderSettingsPanel } from "../features/settings.js";
 import {
   loadStatus,
   setStatusStreamActive,
   syncStatusStreamVisibility,
-} from "./status.js";
-import { selectPipeline } from "./render.js";
+} from "../features/status.js";
+import { selectPipeline } from "../features/render.js";
 import {
   buildRestreamActivityBursts,
   renderRestreamActivityCards,
-} from "./overview-activity.js";
+} from "../features/overview-activity.js";
 import {
   handleDashboardRuntimeLifecycleLog,
   refreshDashboard,
@@ -30,16 +30,16 @@ import {
   requestDetailedMetricsRefresh,
   syncDashboardPolling,
   syncDashboardRuntimeStream,
-} from "./dashboard.js";
+} from "../features/dashboard.js";
 import type { AppLogRow } from "../types.js";
-import { renderIncidentsMode } from "./incidents.js";
-import { renderEngineerTelemetryMode } from "./engineer-telemetry.js";
+import { renderIncidentsMode } from "../features/incidents.js";
+import { renderEngineerTelemetryMode } from "../features/engineer-telemetry.js";
 import {
   renderPipelineInspector,
   resetPipelineInspectorSelection,
   setPipelineInspectorContainerId,
   syncPipelineInspectorVisibility,
-} from "./pipeline-inspector.js";
+} from "../features/pipeline-inspector.js";
 import {
   canonicalizeDashboardLocation,
   dashboardModeUrl,
@@ -51,13 +51,13 @@ import type {
   DashboardMode,
   PipelineWorkspaceView,
 } from "../core/pipeline-workspace.js";
-import { syncPipelineWorkspaceShell } from "./pipeline-workspace-shell.js";
-import { buildOverviewViewModel } from "./overview-view-model.js";
+import { syncPipelineWorkspaceShell } from "../features/pipeline-workspace-shell.js";
+import { buildOverviewViewModel } from "../features/overview-view-model.js";
 import type {
   OverviewMetricKey,
   OverviewPresentationInput,
   OverviewViewModel,
-} from "./overview-view-model.js";
+} from "../features/overview-view-model.js";
 
 const runtimeDashboardModes = new Set<DashboardMode>(["overview", "pipeline"]);
 let currentMode: DashboardMode | null = null;

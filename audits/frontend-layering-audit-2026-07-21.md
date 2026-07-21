@@ -4,6 +4,7 @@
 
 > **Changelog — 2026-07-21 (Wave 1 implemented)**
 > - **escapeHtml triplication fixed**: Removed duplicate `export function escapeHtml` from `features/diagnostics.ts` and internal copy from `features/settings.ts`. All 14 importers already pointed to canonical `core/utils.ts`. Graphify edges dropped from 4,576→4,517 (−59 from removed exports/copies). Build passes, 133/133 tests pass, Playwright confirms dashboard loads correctly.
+> - **modes.ts moved to app/**: degree-126 composition hub relocated from `features/modes.ts` to `app/modes.ts`. Internal imports (`./foo` → `../features/foo`), test module paths (`features/modes.js` → `app/modes.js`), and `dashboard-app.ts` import all updated. Graphify confirms `src=app/modes.ts`. 133/133 tests pass, Playwright screenshot captured.
 
 ---
 
