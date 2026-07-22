@@ -19,7 +19,7 @@ import {
   setStatusStreamActive,
   syncStatusStreamVisibility,
 } from "../../features/status/index.js";
-import { loadSettings, renderSettingsPanel } from "../../features/settings/index.js";
+import { renderSettingsPanel } from "../../features/settings/index.js";
 import {
   refreshMediaLibraryMetricsOnly,
   renderMediaLibraryMode,
@@ -190,9 +190,11 @@ function routeBodyTargetId(
   return activeMode === config.mode ? config.v2HostId : config.legacyBodyId;
 }
 
-function clearDormantRouteBodies(
-  activeMode: DashboardV2RouteBodyMode | null,
-): void {
+function clearDormantRouteBodies(options: {
+  readonly activeMode: DashboardV2RouteBodyMode | null;
+  readonly shellActive: boolean;
+}): void {
+  const { activeMode, shellActive } = options;
   for (const config of DASHBOARD_V2_ROUTE_BODIES) {
     const clearId =
       activeMode === config.mode ? config.legacyBodyId : config.v2HostId;
@@ -202,6 +204,7 @@ function clearDormantRouteBodies(
       activeMode !== config.mode,
     );
   }
+  if (!shellActive) return;
   if (activeMode !== "media") resetMediaLibraryShellState();
   if (activeMode !== "settings") settingsMounted = false;
   if (activeMode !== "status") statusMounted = false;
@@ -211,10 +214,11 @@ function configureDashboardV2RouteBodyTargets(
   mode: DashboardMode,
   pipelineView: PipelineWorkspaceView,
 ): void {
-  const activeMode = dashboardV2ShellActive()
+  const shellActive = dashboardV2ShellActive();
+  const activeMode = shellActive
     ? dashboardV2RouteBodyMode(mode, pipelineView)
     : null;
-  clearDormantRouteBodies(activeMode);
+  clearDormantRouteBodies({ activeMode, shellActive });
   setPipelineInspectorContainerId(
     routeBodyTargetId(
       activeMode,
@@ -301,7 +305,6 @@ function renderSettingsMode(containerId: string): void {
     renderSettingsPanel(container);
     settingsMounted = true;
   }
-  void loadSettings({ embedded: true });
 }
 
 function renderStatusMode(containerId: string): void {
