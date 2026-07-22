@@ -40,9 +40,12 @@ pub mod scheduler;
 pub mod shard;
 pub mod supervisor;
 pub mod timer;
+pub mod visit;
 
 #[cfg(any(test, feature = "egress-test-driver"))]
 pub mod test_driver;
+#[cfg(test)]
+mod visit_tests;
 
 // Re-export the stable public surface for this phase.
 pub use backend::{
@@ -66,3 +69,4 @@ pub use supervisor::{
     EgressShardRecovery, EgressSupervisor, EgressSupervisorConfig, EgressSupervisorError,
     EgressSupervisorRecovery,
 };
+pub use visit::{EngineVisit, EngineVisitOutcome, EngineVisitResult};
