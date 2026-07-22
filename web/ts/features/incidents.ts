@@ -36,6 +36,7 @@ interface IncidentsViewOptions {
   containerId?: string;
   pipelines: IncidentPipelineOption[];
   navigateToPipeline: (pipelineId: string) => void;
+  v2Active?: boolean;
 }
 
 const INCIDENT_REFRESH_MS = 5_000;
@@ -222,13 +223,7 @@ function normalizeSearch(value: string): string {
 }
 
 function incidentsV2Active(): boolean {
-  const toggle = document.getElementById("dashboard-ui-v2-toggle");
-  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
-  try {
-    return new URLSearchParams(window.location.search).get("ui") === "v2";
-  } catch (_err) {
-    return false;
-  }
+  return viewOptions?.v2Active === true;
 }
 
 function alertSearchText(alert: OperatorAlert): string {

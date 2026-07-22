@@ -21,6 +21,7 @@ import {
 } from "../../features/status/index.js";
 import { renderSettingsPanel } from "../../features/settings/index.js";
 import {
+  mediaLibraryShellMountedInCurrentContainer,
   refreshMediaLibraryMetricsOnly,
   renderMediaLibraryMode,
   resetMediaLibraryShellState,
@@ -146,13 +147,7 @@ function focusActivePanel(): void {
 }
 
 function dashboardV2ShellActive(): boolean {
-  const toggle = document.getElementById("dashboard-ui-v2-toggle");
-  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
-  try {
-    return new URLSearchParams(window.location.search).get("ui") === "v2";
-  } catch {
-    return false;
-  }
+  return true;
 }
 
 function dashboardV2RouteBodyMode(
@@ -415,8 +410,7 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
                 : mode === "settings"
                   ? "Server configuration"
                   : "Runtime status";
-    const ownership = dashboardV2ShellActive() ? "UI v2 owned" : "Legacy owned";
-    summary.textContent = `${ownership} · ${taskSummary}`;
+    summary.textContent = `UI v2 owned · ${taskSummary}`;
   }
   const activeV2BodyMode = dashboardV2ShellActive()
     ? dashboardV2RouteBodyMode(mode, activePipelineView)
@@ -440,6 +434,7 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
       selectPipeline(pipelineId);
       setDashboardMode("pipeline");
     },
+    v2Active: activeV2BodyMode === "incidents",
   });
   renderEngineerTelemetryMode({
     active: mode === "telemetry",
@@ -469,9 +464,7 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
       activeV2BodyMode,
       dashboardV2RouteBodyConfig("media"),
     );
-    const mediaShellMissing = !document
-      .getElementById(mediaContentId)
-      ?.querySelector("#media-library-root");
+    const mediaShellMissing = !mediaLibraryShellMountedInCurrentContainer();
     if (
       previousMode !== "media" ||
       (dashboardV2ShellActive() && mediaShellMissing)

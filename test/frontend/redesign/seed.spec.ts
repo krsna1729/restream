@@ -51,37 +51,41 @@ test("seed: default empty Overview is v2 and canonical @desktop", async ({
   ).toBe(true);
 });
 
-test("seed: ui=v1 empty Overview keeps the explicit legacy fallback @desktop", async ({
+test("seed: obsolete ui=v1 empty Overview still renders v2 @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(page, "empty", "/?mode=overview&ui=v1");
 
-  const overview = page.locator("#overview-mode-content");
+  const overview = page.locator("#dashboard-v2-overview");
   await expect(page).toHaveURL(/\?mode=overview&ui=v1$/);
+  await expect(
+    overview.getByRole("heading", { name: "Fleet overview" }),
+  ).toBeVisible();
   await expect(
     overview.getByRole("cell", { name: "No pipelines configured." }),
   ).toBeVisible();
   await expect(
-    overview.getByRole("button", { name: "Add Pipeline", exact: true }),
+    overview.getByRole("button", { name: "Add a new pipeline" }),
   ).toBeVisible();
-  await expect(page.locator("#dashboard-v2-root")).toBeHidden();
-  await expect(page.locator("#pipeline-selector-legacy")).not.toHaveAttribute(
-    "hidden",
-  );
+  await expect(page.locator("#dashboard-v2-root")).toBeVisible();
+  await expect(page.locator("#overview-mode-content")).toBeHidden();
   await expect(
-    page.locator("#pipeline-header-legacy-identity"),
-  ).not.toHaveAttribute("hidden");
+    page.locator("#dashboard-v2-pipeline-selector-root"),
+  ).toBeHidden();
+  await expect(page.locator("#dashboard-v2-pipeline-header-root")).toBeHidden();
   await expect(
-    page.locator("#pipeline-output-overview-legacy"),
-  ).not.toHaveAttribute("hidden");
-  await expect(page.locator("#outs-col > h2")).not.toHaveAttribute("hidden");
+    page.locator("#dashboard-v2-pipeline-input-status-root"),
+  ).toBeHidden();
+  await expect(
+    page.locator("#dashboard-v2-pipeline-output-overview-root"),
+  ).toBeHidden();
   expect(
     await page.evaluate(() =>
       performance
         .getEntriesByType("resource")
         .some((entry) => entry.name.includes("dashboard-v2-entry.js")),
     ),
-  ).toBe(false);
+  ).toBe(true);
 });
 
 test("seed: default mixed-health Overview exposes upstream and output state through v2 @desktop", async ({

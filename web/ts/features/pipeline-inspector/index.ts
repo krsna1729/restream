@@ -19,6 +19,7 @@ import {
   renderInspectorResourceDetails,
 } from "./alerts-and-diagnostics.js";
 import {
+  configurePipelineInspectV2Presentation,
   inspectFaultCandidates,
   inspectProbeBlockers,
   inspectSuggestedNextStep,
@@ -85,7 +86,9 @@ export function configurePipelineInspectCheckpointPresentation(options: {
   readonly onPresentation?: (
     model: PipelineInspectCheckpointModel | null,
   ) => void;
+  readonly v2Active?: boolean;
 }): void {
+  configurePipelineInspectV2Presentation({ active: options.v2Active === true });
   inspectPresentationCallback = options.onPresentation ?? null;
 }
 
@@ -868,5 +871,4 @@ export {
   syncPipelineInspectorVisibility,
 } from "./graph.js";
 export { pipelineInspectV2Active } from "./view-helpers.js";
-
 

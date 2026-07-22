@@ -97,6 +97,32 @@ function appendRoot(document, tagName, id) {
   return element;
 }
 
+function appendDashboardV2Roots(document) {
+  for (const id of [
+    "dashboard-v2-root",
+    "dashboard-v2-pipeline-selector-root",
+    "dashboard-v2-pipeline-header-root",
+    "dashboard-v2-pipeline-input-status-root",
+    "dashboard-v2-pipeline-output-overview-root",
+    "dashboard-v2-pipeline-inspect-root",
+    "dashboard-v2-pipeline-inspect-content",
+    "dashboard-v2-control-room-root",
+    "dashboard-v2-control-room-content",
+    "dashboard-v2-media-root",
+    "dashboard-v2-media-content",
+    "dashboard-v2-settings-root",
+    "dashboard-v2-settings-content",
+    "dashboard-v2-status-root",
+    "dashboard-v2-status-content",
+    "dashboard-v2-incidents-root",
+    "dashboard-v2-incidents-content",
+    "dashboard-v2-telemetry-root",
+    "dashboard-v2-telemetry-content",
+  ]) {
+    appendRoot(document, "div", id);
+  }
+}
+
 function runCheck(name, fn) {
   test(name, { concurrency: false }, fn);
 }
@@ -1329,6 +1355,7 @@ runCheck(
     const { document, window } = installFakeDom();
     window.location.href = "http://localhost/?mode=media";
     appendRoot(document, "div", "dashboard-grid");
+    appendDashboardV2Roots(document);
     appendRoot(document, "div", "overview-mode-panel");
     appendRoot(document, "div", "inspect-mode-panel");
     appendRoot(document, "div", "control-mode-panel");
@@ -1442,6 +1469,7 @@ runCheck(
     window.location.href = "http://localhost/?mode=settings";
     appendRoot(document, "div", "overview-mode-panel");
     appendRoot(document, "div", "dashboard-grid");
+    appendDashboardV2Roots(document);
     appendRoot(document, "div", "inspect-mode-panel");
     appendRoot(document, "div", "control-mode-panel");
     appendRoot(document, "div", "media-mode-panel");

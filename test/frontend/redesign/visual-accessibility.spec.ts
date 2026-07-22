@@ -452,7 +452,6 @@ test("cdp: ui=v2 wayfinding and next-step controls keep sturdy targets @desktop"
         "#skip-to-dashboard-main",
         "#workspace-mode-bar [role='tab']",
         "#pipeline-workspace-view-bar:not(.hidden) [role='tab']",
-        "label[for='dashboard-ui-v2-toggle']",
         "button[aria-label^='Add a new pipeline']",
         "button[aria-label^='Open restream']",
         "button[aria-label^='Operate ']",

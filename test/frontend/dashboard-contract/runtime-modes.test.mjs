@@ -212,6 +212,32 @@ test("overview activity SSE wakes the dashboard runtime without waiting for the 
   }
 });
 
+function appendDashboardV2Roots(document) {
+  for (const id of [
+    "dashboard-v2-root",
+    "dashboard-v2-pipeline-selector-root",
+    "dashboard-v2-pipeline-header-root",
+    "dashboard-v2-pipeline-input-status-root",
+    "dashboard-v2-pipeline-output-overview-root",
+    "dashboard-v2-pipeline-inspect-root",
+    "dashboard-v2-pipeline-inspect-content",
+    "dashboard-v2-control-room-root",
+    "dashboard-v2-control-room-content",
+    "dashboard-v2-media-root",
+    "dashboard-v2-media-content",
+    "dashboard-v2-settings-root",
+    "dashboard-v2-settings-content",
+    "dashboard-v2-status-root",
+    "dashboard-v2-status-content",
+    "dashboard-v2-incidents-root",
+    "dashboard-v2-incidents-content",
+    "dashboard-v2-telemetry-root",
+    "dashboard-v2-telemetry-content",
+  ]) {
+    appendRoot(document, "div", id);
+  }
+}
+
 test("dashboard non-runtime modes skip health polling until a runtime mode resumes", async () => {
   const settingsUrl = "/api/v1/settings?view=dashboard";
   const fullSettingsUrl = "/api/v1/settings";
@@ -224,6 +250,7 @@ test("dashboard non-runtime modes skip health polling until a runtime mode resum
   appendRoot(document, "div", "overview-mode-panel");
   appendRoot(document, "div", "overview-mode-content");
   appendRoot(document, "div", "dashboard-grid");
+  appendDashboardV2Roots(document);
   appendRoot(document, "div", "inspect-mode-panel");
   appendRoot(document, "div", "control-mode-panel");
   appendRoot(document, "div", "media-mode-panel");
@@ -633,6 +660,7 @@ test("inspect mode refreshes graphs from dashboard runtime cadence without its o
   const { document, window } = installFakeDom();
   window.location.href = "http://localhost/?mode=inspect&p=pipe-1";
   appendRoot(document, "div", "dashboard-grid");
+  appendDashboardV2Roots(document);
   appendRoot(document, "section", "inspect-mode-panel");
   appendRoot(document, "select", "inspect-pipeline-select");
   appendRoot(document, "button", "inspect-open-pipeline-btn");

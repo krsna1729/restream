@@ -1,9 +1,22 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 
 async function readPublicFile(name) {
   return readFile(new URL(`../../public/${name}`, import.meta.url), "utf8");
+}
+
+async function sourceFilesUnder(dirUrl) {
+  const entries = await readdir(dirUrl, { withFileTypes: true });
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const url = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, dirUrl);
+      if (entry.isDirectory()) return sourceFilesUnder(url);
+      if (/\.(tsx?|mts|cts)$/.test(entry.name)) return [url];
+      return [];
+    }),
+  );
+  return nested.flat();
 }
 
 function idsIn(html) {
@@ -109,5 +122,31 @@ test("dashboard grid sizing lives in responsive CSS instead of inline scripts", 
   assert.doesNotMatch(
     renderTs,
     /minmax\(24rem,\s*34rem\).*minmax\(24rem,\s*1fr\)/s,
+  );
+});
+
+test("feature modules receive dashboard UI version through app-owned configuration", async () => {
+  const featureFiles = await sourceFilesUnder(
+    new URL("../../web/ts/features/", import.meta.url),
+  );
+  const violations = [];
+  await Promise.all(
+    featureFiles.map(async (fileUrl) => {
+      const source = await readFile(fileUrl, "utf8");
+      if (
+        source.includes("dashboard-ui-v2-toggle") ||
+        /URLSearchParams\(window\.location\.search\)[\s\S]{0,120}\.get\("ui"\)/.test(
+          source,
+        )
+      ) {
+        violations.push(fileUrl.pathname);
+      }
+    }),
+  );
+
+  assert.deepEqual(
+    violations.sort(),
+    [],
+    "feature modules must not read app chrome or URL UI-version state directly",
   );
 });

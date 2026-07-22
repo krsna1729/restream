@@ -48,6 +48,7 @@ import {
   buildEmptyCard,
   buildLocalCard,
   buildOutputCard,
+  configureControlRoomV2Presentation,
   ensureCardElements,
   getOutputMonitorStatusLabel,
   isPreviewableOutputStatus,
@@ -103,7 +104,9 @@ function renderControlRoomIfCurrent(token: RenderScopeToken): void {
 
 export function configureControlRoomCheckpointPresentation(options: {
   readonly onPresentation?: (model: ControlRoomCheckpointModel | null) => void;
+  readonly v2Active?: boolean;
 }): void {
+  configureControlRoomV2Presentation({ active: options.v2Active === true });
   controlRoomCheckpointCallback = options.onPresentation ?? null;
 }
 

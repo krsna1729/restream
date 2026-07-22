@@ -10,18 +10,6 @@ import {
 } from "../support/helpers/fake-dom.mjs";
 import { resolveFrontendModulesDir } from "../support/helpers/frontend-module-loader.mjs";
 
-function makeStorage() {
-  const data = new Map();
-  return {
-    getItem(key) {
-      return data.has(key) ? data.get(key) : null;
-    },
-    setItem(key, value) {
-      data.set(key, String(value));
-    },
-  };
-}
-
 async function flushAsyncWork() {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -57,81 +45,24 @@ test("compiled dashboard bootstrap remains idempotent", async () => {
   assert.equal(window.setDashboardMode, firstSetDashboardMode);
 });
 
-test("dashboard v2 loader resolves URL overrides and saved preference", async () => {
+test("dashboard v2 loader always enables the v2 dashboard after cutover", async () => {
   installFakeDom();
   const loader = await loadCompiledFrontendModule("app/dashboard-v2-loader.js");
-  const storage = makeStorage();
 
   assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
+    loader.dashboardV2ExperimentEnabled(),
     true,
   );
-  assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview&ui=v2", storage),
-    true,
-  );
-  assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
-    true,
-  );
-  assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview&ui=v1", storage),
-    false,
-  );
-  assert.equal(loader.dashboardV2ExperimentEnabled("?ui=V2", storage), false);
 });
 
-test("dashboard UI version toggle persists changes and updates the URL", async () => {
-  const { document, window } = installFakeDom();
-  const loader = await loadCompiledFrontendModule("app/dashboard-v2-loader.js");
-  const storage = makeStorage();
-  const toggle = document.createElement("input");
-  toggle.id = "dashboard-ui-v2-toggle";
-  toggle.type = "checkbox";
-  document.body.appendChild(toggle);
-
-  window.location.href = "http://localhost/?mode=overview";
-  let replacedUrl = "";
-  let reloads = 0;
-  const history = {
-    replaceState(_state, _title, url) {
-      replacedUrl = String(url);
-    },
-  };
-
-  loader.initDashboardUiVersionToggle({
-    document,
-    history,
-    location: window.location,
-    reload: () => {
-      reloads += 1;
-    },
-    search: "?mode=overview",
-    storage,
-  });
-
-  assert.equal(toggle.checked, true);
-  toggle.checked = false;
-  toggle.dispatchEvent({ type: "change" });
-
-  assert.equal(reloads, 1);
-  assert.equal(replacedUrl, "http://localhost/?mode=overview");
-  assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
-    false,
+test("compiled dashboard no longer exposes a UI version toggle", async () => {
+  const indexHtml = await readFile(
+    new URL("../../public/index.html", import.meta.url),
+    "utf8",
   );
 
-  window.location.href = replacedUrl;
-  replacedUrl = "";
-  toggle.checked = true;
-  toggle.dispatchEvent({ type: "change" });
-
-  assert.equal(reloads, 2);
-  assert.equal(replacedUrl, "http://localhost/?mode=overview&ui=v2");
-  assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
-    true,
-  );
+  assert.doesNotMatch(indexHtml, /dashboard-ui-v2-toggle/);
+  assert.doesNotMatch(indexHtml, /Use dashboard UI v2/);
 });
 
 test("compiled dashboard keeps the default React seam in a bounded bundle", async () => {

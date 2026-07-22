@@ -1,6 +1,7 @@
 import { patchConfig, type TranscodeProfile, type TranscodeProfiles } from "../../core/api.js";
 import { state } from "../../core/state.js";
 import { showErrorAlert } from "../../core/utils.js";
+import { settingsV2Active } from "./presentation-mode.js";
 
 const BUILT_IN_PROFILE_ORDER = [
   "h264",
@@ -50,10 +51,6 @@ function effectiveTranscodeProfiles(): TranscodeProfiles {
   const current = state.config?.transcodeProfiles;
   if (current && Object.keys(current).length > 0) return current;
   return DEFAULT_PROFILES;
-}
-
-function settingsV2Active(): boolean {
-  return Boolean(document.getElementById("dashboard-v2-host"));
 }
 
 function profileNumber(row: HTMLElement, selector: string, dataKey: keyof HTMLElement["dataset"]): number {

@@ -32,6 +32,10 @@ import {
   settingsRateLimitPresentation,
   syncDashboardPasswordPrompt,
 } from "./security.js";
+import {
+  configureSettingsV2Presentation,
+  settingsV2Active,
+} from "./presentation-mode.js";
 
 const SETTINGS_SECTION_COUNT = 5;
 
@@ -89,8 +93,11 @@ export async function loadSettings({
 
 export function configureSettingsCheckpointPresentation(options: {
   onPresentation?: (model: SettingsCheckpointModel | null) => void;
+  v2Active?: boolean;
   onStateChange?: (model: SettingsCheckpointModel | null) => void;
 }): void {
+  const v2Active = options.v2Active === true;
+  configureSettingsV2Presentation({ active: v2Active });
   settingsCheckpointCallback = options.onPresentation || options.onStateChange || null;
   if (settingsCheckpointCallback) publishSettingsCheckpoint();
 }
@@ -105,16 +112,6 @@ function pluralize(
   plural = `${singular}s`,
 ): string {
   return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function settingsV2Active(): boolean {
-  const toggle = document.getElementById("dashboard-ui-v2-toggle");
-  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
-  try {
-    return new URLSearchParams(window.location.search).get("ui") === "v2";
-  } catch (_err) {
-    return false;
-  }
 }
 
 function countConfiguredProfiles(): number {

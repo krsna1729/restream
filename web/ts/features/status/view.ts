@@ -110,10 +110,13 @@ const statusAdvancedSectionsExpanded = new Set<string>();
 let statusCheckpointCallback:
   | ((model: StatusCheckpointModel | null) => void)
   | null = null;
+let statusV2PresentationActive = false;
 
 export function configureStatusCheckpointPresentation(options: {
   readonly onPresentation?: (model: StatusCheckpointModel | null) => void;
+  readonly v2Active?: boolean;
 }): void {
+  statusV2PresentationActive = options.v2Active === true;
   statusCheckpointCallback = options.onPresentation ?? null;
   if (!statusCheckpointCallback) return;
   statusCheckpointCallback(buildStatusCheckpointModel());
@@ -267,13 +270,7 @@ function advancedSectionActionLabel(
 }
 
 function statusV2Active(): boolean {
-  const toggle = document.getElementById("dashboard-ui-v2-toggle");
-  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
-  try {
-    return new URLSearchParams(window.location.search).get("ui") === "v2";
-  } catch (_err) {
-    return false;
-  }
+  return statusV2PresentationActive;
 }
 
 function advancedSection(

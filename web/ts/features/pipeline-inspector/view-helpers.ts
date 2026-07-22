@@ -66,14 +66,16 @@ export function formatPercentage(pct: number | null | undefined): string {
   return `${pct.toFixed(1)}%`;
 }
 
+let pipelineInspectV2PresentationActive = false;
+
+export function configurePipelineInspectV2Presentation(options: {
+  readonly active: boolean;
+}): void {
+  pipelineInspectV2PresentationActive = options.active;
+}
+
 export function pipelineInspectV2Active(): boolean {
-  const toggle = document.getElementById("dashboard-ui-v2-toggle");
-  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
-  try {
-    return new URLSearchParams(window.location.search).get("ui") === "v2";
-  } catch {
-    return false;
-  }
+  return pipelineInspectV2PresentationActive;
 }
 
 export function inspectFaultCandidates(pipe: PipelineView): OutputView[] {

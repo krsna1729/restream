@@ -16,24 +16,6 @@ import type { PipelineInputsPanelActions } from "../features/pipeline-inputs-con
 
 const DASHBOARD_V2_BUNDLE = "./dashboard-v2-entry.js";
 const DASHBOARD_V2_CHECKPOINTS_BUNDLE = "./dashboard-v2-checkpoints-entry.js";
-const DASHBOARD_UI_VERSION_STORAGE_KEY = "restream.dashboardUiVersion.v1";
-const DASHBOARD_UI_VERSION_TOGGLE_ID = "dashboard-ui-v2-toggle";
-
-export type DashboardUiVersion = "v1" | "v2";
-
-interface DashboardUiVersionStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-}
-
-interface DashboardUiVersionToggleOptions {
-  readonly document?: Document;
-  readonly history?: History;
-  readonly location?: Location;
-  readonly reload?: () => void;
-  readonly search?: string;
-  readonly storage?: DashboardUiVersionStorage | null;
-}
 
 export interface DashboardV2OverviewActions {
   readonly addPipeline: () => void;
@@ -376,120 +358,6 @@ function ensureDashboardV2CheckpointsModule(): void {
     });
 }
 
-function normalizedDashboardUiVersion(
-  value: string | null,
-): DashboardUiVersion | null {
-  return value === "v1" || value === "v2" ? value : null;
-}
-
-function dashboardStorage(): DashboardUiVersionStorage | null {
-  try {
-    return window.localStorage;
-  } catch (_err) {
-    return null;
-  }
-}
-
-function dashboardSearch(): string {
-  const location = window.location;
-  if (location.search) return location.search;
-  try {
-    return new URL(location.href).search;
-  } catch (_err) {
-    return "";
-  }
-}
-
-function readDashboardUiVersionPreference(
-  storage: DashboardUiVersionStorage | null = dashboardStorage(),
-): DashboardUiVersion | null {
-  if (!storage) return null;
-  try {
-    return normalizedDashboardUiVersion(
-      storage.getItem(DASHBOARD_UI_VERSION_STORAGE_KEY),
-    );
-  } catch (_err) {
-    return null;
-  }
-}
-
-function writeDashboardUiVersionPreference(
-  version: DashboardUiVersion,
-  storage: DashboardUiVersionStorage | null = dashboardStorage(),
-): void {
-  if (!storage) return;
-  try {
-    storage.setItem(DASHBOARD_UI_VERSION_STORAGE_KEY, version);
-  } catch (_err) {
-    // UI version persistence is a convenience; URL opt-in should still work.
-  }
-}
-
-export function resolveDashboardUiVersion(
-  search = dashboardSearch(),
-  storage: DashboardUiVersionStorage | null = dashboardStorage(),
-): DashboardUiVersion {
-  const params = new URLSearchParams(search);
-  const urlUiVersion = params.get("ui");
-  const urlVersion = normalizedDashboardUiVersion(urlUiVersion);
-  if (urlVersion) {
-    writeDashboardUiVersionPreference(urlVersion, storage);
-    return urlVersion;
-  }
-  if (urlUiVersion !== null) return "v1";
-  return readDashboardUiVersionPreference(storage) ?? "v2";
-}
-
-export function dashboardUiVersionUrl(
-  href: string,
-  version: DashboardUiVersion,
-): string {
-  const url = new URL(href, "http://localhost/");
-  if (version === "v2") {
-    url.searchParams.set("ui", "v2");
-  } else {
-    url.searchParams.delete("ui");
-  }
-  return url.toString();
-}
-
-export function initDashboardUiVersionToggle(
-  options: DashboardUiVersionToggleOptions = {},
-): void {
-  const doc = options.document ?? document;
-  const toggle = doc.getElementById(
-    DASHBOARD_UI_VERSION_TOGGLE_ID,
-  ) as HTMLInputElement | null;
-  if (!toggle) return;
-
-  const storage = options.storage ?? dashboardStorage();
-  const currentVersion = resolveDashboardUiVersion(
-    options.search ?? dashboardSearch(),
-    storage,
-  );
-  toggle.checked = currentVersion === "v2";
-  toggle.title = toggle.checked
-    ? "Dashboard UI v2 is remembered for this browser"
-    : "Dashboard UI v1 is remembered for this browser";
-
-  if (toggle.dataset.dashboardUiVersionBound === "true") return;
-  toggle.dataset.dashboardUiVersionBound = "true";
-  toggle.addEventListener("change", () => {
-    const nextVersion: DashboardUiVersion = toggle.checked ? "v2" : "v1";
-    writeDashboardUiVersionPreference(nextVersion, storage);
-    const location = options.location ?? window.location;
-    const history = options.history ?? window.history;
-    const nextUrl = dashboardUiVersionUrl(location.href, nextVersion);
-    try {
-      history.replaceState({}, "", nextUrl);
-    } catch (_err) {
-      location.href = nextUrl;
-    }
-    const reload = options.reload ?? (() => window.location.reload());
-    reload();
-  });
-}
-
 function renderLatestOverview(): void {
   if (!dashboardV2OverviewActive) {
     hideDashboardV2Overview();
@@ -728,15 +596,11 @@ function renderLatestSettings(): void {
   );
 }
 
-export function dashboardV2ExperimentEnabled(
-  search = dashboardSearch(),
-  storage: DashboardUiVersionStorage | null = dashboardStorage(),
-): boolean {
-  return resolveDashboardUiVersion(search, storage) === "v2";
+export function dashboardV2ExperimentEnabled(): boolean {
+  return true;
 }
 
 export async function startDashboardV2Experiment(): Promise<boolean> {
-  if (!dashboardV2ExperimentEnabled()) return false;
   return true;
 }
 

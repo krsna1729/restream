@@ -9,6 +9,7 @@ import {
 } from "../../core/api.js";
 import { state } from "../../core/state.js";
 import { escapeHtml, showErrorAlert } from "../../core/utils.js";
+import { settingsV2Active } from "./presentation-mode.js";
 
 const AUTH_ATTEMPT_VISIBLE_LIMIT = 8;
 let lastRateLimitAttemptCount = 0;
@@ -95,16 +96,6 @@ function pluralize(
 
 function normalizeSettingsSearch(value: string): string {
   return value.trim().toLowerCase();
-}
-
-function settingsV2Active(): boolean {
-  const toggle = document.getElementById("dashboard-ui-v2-toggle");
-  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
-  try {
-    return new URLSearchParams(window.location.search).get("ui") === "v2";
-  } catch (_err) {
-    return false;
-  }
 }
 
 function formatRateLimitScope(scope: string): string {

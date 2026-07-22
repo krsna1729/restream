@@ -197,11 +197,13 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
     onPresentation: pipelineInspectV2Active
       ? updateDashboardV2PipelineInspectCheckpoint
       : undefined,
+    v2Active: pipelineInspectV2Active,
   });
   configureControlRoomCheckpointPresentation({
     onPresentation: controlRoomV2Active
       ? updateDashboardV2ControlRoomCheckpoint
       : undefined,
+    v2Active: controlRoomV2Active,
   });
   configureIncidentsCheckpointPresentation({
     onPresentation: incidentsV2Active
@@ -212,17 +214,21 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
     onPresentation: telemetryV2Active
       ? updateDashboardV2TelemetryCheckpoint
       : undefined,
+    v2Active: telemetryV2Active,
   });
   configureStatusCheckpointPresentation({
     onPresentation: statusV2Active ? updateDashboardV2StatusCheckpoint : undefined,
+    v2Active: statusV2Active,
   });
   configureMediaCheckpointPresentation({
     onPresentation: mediaV2Active ? updateDashboardV2MediaCheckpoint : undefined,
+    v2Active: mediaV2Active,
   });
   configureSettingsCheckpointPresentation({
     onPresentation: settingsV2Active
       ? updateDashboardV2SettingsCheckpoint
       : undefined,
+    v2Active: settingsV2Active,
   });
 }
 

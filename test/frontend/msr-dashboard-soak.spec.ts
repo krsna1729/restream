@@ -50,27 +50,43 @@ async function login(page: Page): Promise<void> {
     await page.waitForURL('**/');
 }
 
-async function openPipelineWorkspace(page: Page): Promise<void> {
-    const tab = page.locator('#workspace-tab-pipeline');
-    await expect(tab).toBeVisible();
-    await tab.click();
+async function selectPipelineInV2Selector(
+    root: Locator,
+    pipelineId: string,
+    pipelineName: string,
+): Promise<void> {
+    await expect(root).toBeVisible();
+    const compactSelector = root.getByLabel('Select pipeline');
+    const pipelineButton = root.getByRole('button', { name: new RegExp(pipelineName) });
+    await expect
+        .poll(async () => (await compactSelector.count()) + (await pipelineButton.count()))
+        .toBeGreaterThan(0);
+    if ((await compactSelector.count()) > 0) {
+        await expect(compactSelector).toBeVisible();
+        await compactSelector.selectOption(pipelineId);
+        return;
+    }
+    await pipelineButton.click();
 }
 
 async function selectPipeline(page: Page, target: DashboardPipelineTarget): Promise<void> {
-    await openPipelineWorkspace(page);
-    const pipeline = page.locator('#pipelines li', { hasText: target.name });
-    await expect(pipeline).toBeVisible({ timeout: 30000 });
-    await pipeline.click();
-    await page.locator('#pipeline-workspace-tab-operate').click();
-    const heading = page.locator('#pipe-info-col');
-    await expect(heading).toBeVisible({ timeout: 30000 });
-    const showAll = page.locator('#outputs-toggle-full-list');
-    if (await showAll.isVisible().catch(() => false)) {
-        const text = (await showAll.textContent()) || '';
-        if (/show all/i.test(text)) {
-            await showAll.click();
-        }
-    }
+    await page.goto('/?mode=pipeline');
+    await selectPipelineInV2Selector(
+        page.locator('#dashboard-v2-pipeline-selector-root'),
+        target.id,
+        target.name,
+    );
+    await expect(page.locator('#dashboard-v2-pipeline-output-overview-root')).toBeVisible({
+        timeout: 30000,
+    });
+}
+
+function outputOverview(page: Page): Locator {
+    return page.locator('#dashboard-v2-pipeline-output-overview-root');
+}
+
+function outputCard(page: Page, outputName: string): Locator {
+    return outputOverview(page).locator('article', { hasText: outputName }).first();
 }
 
 async function createChurnOutput(
@@ -79,7 +95,9 @@ async function createChurnOutput(
     outputName: string,
 ): Promise<Locator> {
     await selectPipeline(page, target);
-    await page.locator('#add-out-btn').click();
+    await outputOverview(page)
+        .getByRole('button', { name: `Add output for ${target.name}` })
+        .click();
     const modal = page.locator('#edit-out-modal');
     await expect(modal).toBeVisible();
     await modal.locator('#out-name-input').fill(outputName);
@@ -89,27 +107,26 @@ async function createChurnOutput(
         .fill(`rtmp://127.0.0.1:${OUTPUT_RTMP_PORT}/live/${outputName}`);
     await modal.locator('#out-submit-btn').click();
     await expect(modal).not.toBeVisible({ timeout: 30000 });
-    const card = page.locator('#outputs-list [data-output-key]', { hasText: outputName });
+    const card = outputCard(page, outputName);
     await expect(card).toBeVisible({ timeout: 30000 });
     return card;
 }
 
 async function toggleOutput(card: Locator, toState: 'start' | 'stop'): Promise<void> {
-    const toggle = card.locator('button[data-role="toggle-output"]');
+    const toggle = card.getByRole('button', {
+        name: toState === 'start' ? /^Start / : /^Stop /,
+    });
     await expect(toggle).toBeVisible();
-    const desired = toState === 'start' ? /start/i : /stop/i;
-    const alternate = toState === 'start' ? /stop|starting/i : /start|stopping/i;
-    if (desired.test((await toggle.textContent()) || '')) {
-        await toggle.click();
-    } else if (!alternate.test((await toggle.textContent()) || '')) {
-        await toggle.click();
-    }
-    await expect(toggle).toHaveText(alternate, { timeout: 30000 });
+    await toggle.click();
+    const nextState = card.getByRole('button', {
+        name: toState === 'start' ? /^(Stop|Starting) / : /^(Start|Stopping) /,
+    });
+    await expect(nextState).toBeVisible({ timeout: 30000 });
 }
 
 async function deleteOutput(page: Page, card: Locator): Promise<void> {
-    await card.locator('button[aria-label="Output actions"]').click();
-    await card.locator('button[data-role="delete-output"]').click();
+    await card.getByRole('button', { name: /^More output actions for / }).click();
+    await card.getByRole('menuitem', { name: /^Delete / }).click();
     const confirm = page.locator('#app-confirm-dialog button[value="confirm"]');
     await expect(confirm).toBeVisible({ timeout: 10000 });
     await confirm.click();
@@ -204,8 +221,8 @@ test.describe.serial('MSR dashboard overnight soak', () => {
         });
 
         await login(page);
-        await openPipelineWorkspace(page);
-        await expect(page.locator('#pipelines li').first()).toBeVisible({
+        await page.goto('/?mode=pipeline');
+        await expect(page.locator('#dashboard-v2-pipeline-selector-root')).toBeVisible({
             timeout: 30000,
         });
 
@@ -231,9 +248,7 @@ test.describe.serial('MSR dashboard overnight soak', () => {
                     const oldest = managed.shift();
                     if (oldest) {
                         await selectPipeline(page, target);
-                        const oldCard = page.locator('#outputs-list [data-output-key]', {
-                            hasText: oldest,
-                        });
+                        const oldCard = outputCard(page, oldest);
                         await expect(oldCard).toBeVisible({ timeout: 30000 });
                         await toggleOutput(oldCard, 'stop');
                         await deleteOutput(page, oldCard);

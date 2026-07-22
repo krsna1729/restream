@@ -56,10 +56,13 @@ let telemetryHostSettingsExpanded = false;
 let telemetryCheckpointCallback:
   | ((model: TelemetryCheckpointModel | null) => void)
   | null = null;
+let telemetryV2PresentationActive = false;
 
 export function configureTelemetryCheckpointPresentation(options: {
   readonly onPresentation?: (model: TelemetryCheckpointModel | null) => void;
+  readonly v2Active?: boolean;
 }): void {
+  telemetryV2PresentationActive = options.v2Active === true;
   telemetryCheckpointCallback = options.onPresentation ?? null;
   if (!telemetryCheckpointCallback || !viewOptions?.active) {
     telemetryCheckpointCallback?.(null);
@@ -123,13 +126,7 @@ function renderHostSettings(settings: HostSettingRow[] | undefined): string {
 }
 
 function telemetryV2Active(): boolean {
-  const toggle = document.getElementById("dashboard-ui-v2-toggle");
-  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
-  try {
-    return new URLSearchParams(window.location.search).get("ui") === "v2";
-  } catch (_err) {
-    return false;
-  }
+  return telemetryV2PresentationActive;
 }
 
 function renderHostSettingsSection(health: HealthData | null): string {

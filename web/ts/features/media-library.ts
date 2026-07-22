@@ -33,6 +33,7 @@ const mediaLibraryScope = new RenderScope("media-mode-content");
 let mediaCheckpointCallback:
   | ((model: MediaCheckpointModel | null) => void)
   | null = null;
+let mediaV2PresentationActive = false;
 
 const MEDIA_SECTION_VISIBLE_LIMIT = 8;
 
@@ -130,13 +131,7 @@ function isNativelyPlayable(file: MediaFile): boolean {
 }
 
 function mediaV2Active(): boolean {
-  const toggle = document.getElementById("dashboard-ui-v2-toggle");
-  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
-  try {
-    return new URLSearchParams(window.location.search).get("ui") === "v2";
-  } catch (_err) {
-    return false;
-  }
+  return mediaV2PresentationActive;
 }
 
 function mediaRowSecondaryActions(
@@ -303,8 +298,16 @@ function publishMediaCheckpoint(files: MediaFile[]): void {
 
 export function configureMediaCheckpointPresentation(options: {
   onPresentation?: (model: MediaCheckpointModel | null) => void;
+  v2Active?: boolean;
 }): void {
+  const nextV2PresentationActive = options.v2Active === true;
+  const presentationModeChanged =
+    mediaV2PresentationActive !== nextV2PresentationActive;
+  mediaV2PresentationActive = nextV2PresentationActive;
   mediaCheckpointCallback = options.onPresentation || null;
+  if (presentationModeChanged) {
+    resetMediaLibraryShellState();
+  }
   if (mediaCheckpointCallback) {
     mediaCheckpointCallback(buildMediaCheckpointModel(lastMediaFiles));
   }
@@ -413,6 +416,13 @@ export function resetMediaLibraryShellState(): void {
   lastRecordingsSignature = "";
   lastSourcesSignature = "";
   mediaActionRowsExpanded.clear();
+}
+
+export function mediaLibraryShellMountedInCurrentContainer(): boolean {
+  return (
+    mediaShellMounted &&
+    document.getElementById(mediaLibraryScope.current()) !== null
+  );
 }
 
 function attachMediaActions(container: HTMLElement): void {

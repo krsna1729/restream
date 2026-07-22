@@ -30,9 +30,9 @@
 9. Legacy removal only after all state-matrix rows have executable proofs.
 
 The optional build experiment in step 2 is implemented and measured in
-`build-seam.md`. It began as an opt-in `ui=v2` seam; the current
-default-readiness pass selects v2 when no explicit UI override is stored or
-provided, while preserving `ui=legacy` as the explicit fallback.
+`build-seam.md`. It began as an opt-in `ui=v2` seam; the cutover pass now boots
+the v2 dashboard unconditionally. Obsolete UI-version query parameters are
+ignored instead of reviving the old surface.
 
 The follow-up typed snapshot in `build-seam.md` proved the first real data
 boundary without moving runtime ownership. That same boundary still holds:
@@ -43,10 +43,9 @@ Settings, Status, Incidents, and Telemetry. Dense controls can still be
 rewritten slice by slice after the default switch because the route body
 mount-point ownership is no longer split across hidden legacy panels.
 
-Seeded browser fixtures now mirror the production default: a dashboard URL
-without a `ui` parameter leaves local UI preference unset and therefore boots
-v2. Fallback checks request `ui=v1` explicitly, so no-query coverage proves the
-cutover path while the escape hatch remains tested.
+Seeded browser fixtures now mirror the production cutover: dashboard URLs with
+or without obsolete `ui` parameters boot v2, and browser proofs assert the
+legacy route body remains empty.
 
 ## Stop rules
 
