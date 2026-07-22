@@ -148,7 +148,7 @@ test("seed: ui=v2 mounts Settings body in the v2-owned route host @desktop", asy
   await expect(page.locator("#settings-mode-panel > #settings-mode-content")).toHaveCount(1);
   await expect(page.locator("#settings-mode-panel > #settings-mode-content > *")).toHaveCount(0);
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 owned · Server configuration",
+    "Dashboard · Server configuration",
   );
   expect(await getCdpStatusTexts(page)).toContain(
     "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
@@ -290,7 +290,7 @@ test("seed: ui=v2 mounts Settings body in the v2-owned route host @desktop", asy
     }),
   ).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 owned · Recordings and source files",
+    "Dashboard · Recordings and source files",
   );
   expect(
     v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
@@ -317,7 +317,7 @@ test("seed: ui=v2 mounts Settings body in the v2-owned route host @desktop", asy
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 owned · Runtime status",
+    "Dashboard · Runtime status",
   );
   expect(
     v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
@@ -349,7 +349,7 @@ test("seed: ui=v2 mounts Settings body in the v2-owned route host @desktop", asy
     page.locator("#dashboard-v2-pipeline-inspect-title"),
   ).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 owned · Pipeline graph and diagnostics",
+    "Dashboard · Pipeline graph and diagnostics",
   );
   expect(
     v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
@@ -370,7 +370,7 @@ test("seed: ui=v2 mounts Settings body in the v2-owned route host @desktop", asy
   ).toBeHidden();
   await expect(page.locator("#dashboard-v2-control-room-title")).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 owned · Pipeline monitoring wall",
+    "Dashboard · Pipeline monitoring wall",
   );
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterInspect);
   const requestsAfterMonitor = v2Requests.length;
@@ -380,7 +380,7 @@ test("seed: ui=v2 mounts Settings body in the v2-owned route host @desktop", asy
   await expect(page.locator("#dashboard-v2-control-room-root")).toBeHidden();
   await expect(page.locator("#dashboard-v2-incidents-title")).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 owned · Alerts, evidence, and lifecycle events",
+    "Dashboard · Alerts, evidence, and lifecycle events",
   );
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterMonitor);
   const requestsAfterIncidents = v2Requests.length;
@@ -390,7 +390,7 @@ test("seed: ui=v2 mounts Settings body in the v2-owned route host @desktop", asy
   await expect(page.locator("#dashboard-v2-incidents-root")).toBeHidden();
   await expect(page.locator("#dashboard-v2-telemetry-title")).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 owned · Engine and pipeline counters",
+    "Dashboard · Engine and pipeline counters",
   );
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterIncidents);
   const requestsAfterTelemetry = v2Requests.length;
@@ -842,7 +842,7 @@ async function expectStaleRouteCompletionIgnored(
   await page.locator("#workspace-tab-overview").click();
   await expect(page).toHaveURL(/mode=overview/);
   await expect(page.locator("#workspace-mode-summary")).toContainText(
-    "UI v2 owned",
+    "Dashboard",
   );
   await page.waitForTimeout(delayMs + 250);
 
@@ -866,7 +866,7 @@ async function expectStaleRouteCompletionIgnored(
     ...domCounts,
     cdpNodeCount: await getCdpNodeCount(page),
     overviewStatusAnnounced: statusTexts.some((text) =>
-      text.includes("UI v2 owned"),
+      text.includes("Dashboard"),
     ),
     routeKey: route.routeKey,
   };
@@ -917,7 +917,7 @@ async function expectInactiveRouteEmpty(
     ...domCounts,
     cdpNodeCount: await getCdpNodeCount(page),
     overviewStatusAnnounced: statusTexts.some((text) =>
-      text.includes("UI v2 owned"),
+      text.includes("Dashboard"),
     ),
     routeKey: route.routeKey,
   };
@@ -1212,37 +1212,37 @@ test("seed: ui=v2 unmounts inactive Operate surfaces outside Pipeline @desktop",
   expect(await operateRootChildCount()).toBeGreaterThan(0);
 });
 
-test("seed: ui=v2 shell announces ownership while moving across routes @desktop", async ({
+test("seed: dashboard status summary updates while moving across routes @desktop", async ({
   page,
 }) => {
   const routes = [
     {
       href: "/?mode=overview&ui=v2",
-      text: "UI v2 owned · 2 live inputs / 1 running outputs / 1 retrying",
+      text: "Dashboard · 2 live inputs / 1 running outputs / 1 retrying",
     },
     {
       href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
-      text: "UI v2 owned · Pipeline workflow",
+      text: "Dashboard · Pipeline workflow",
     },
     {
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
-      text: "UI v2 owned · Pipeline graph and diagnostics",
+      text: "Dashboard · Pipeline graph and diagnostics",
     },
     {
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
-      text: "UI v2 owned · Pipeline monitoring wall",
+      text: "Dashboard · Pipeline monitoring wall",
     },
     {
       href: "/?mode=incidents&ui=v2",
-      text: "UI v2 owned · Alerts, evidence, and lifecycle events",
+      text: "Dashboard · Alerts, evidence, and lifecycle events",
     },
     {
       href: "/?mode=telemetry&ui=v2",
-      text: "UI v2 owned · Engine and pipeline counters",
+      text: "Dashboard · Engine and pipeline counters",
     },
     {
       href: "/?mode=status&ui=v2",
-      text: "UI v2 owned · Runtime status",
+      text: "Dashboard · Runtime status",
     },
   ] as const;
 
@@ -1280,7 +1280,7 @@ test("seed: ui=v2 shell announces ownership while moving across routes @desktop"
   expect(await getCdpNodeCount(page)).toBeLessThan(21_000);
 });
 
-test("seed: ui=v2 shell tablists support arrow key navigation @desktop", async ({
+test("seed: dashboard tablists support arrow key navigation @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2");
@@ -1293,7 +1293,7 @@ test("seed: ui=v2 shell tablists support arrow key navigation @desktop", async (
     "true",
   );
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 owned · Pipeline workflow",
+    "Dashboard · Pipeline workflow",
   );
 
   await page.keyboard.press("ArrowRight");
@@ -1313,7 +1313,7 @@ test("seed: ui=v2 shell tablists support arrow key navigation @desktop", async (
     "true",
   );
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 owned · Engine and pipeline counters",
+    "Dashboard · Engine and pipeline counters",
   );
 
   await page.keyboard.press("End");
@@ -1351,14 +1351,14 @@ test("seed: ui=v2 shell tablists support arrow key navigation @desktop", async (
   await expect(inspectTab).toHaveAttribute("aria-selected", "true");
   expect(await getCdpStatusTexts(page)).toEqual(
     expect.arrayContaining([
-      "UI v2 owned · Pipeline graph and diagnostics",
+      "Dashboard · Pipeline graph and diagnostics",
       "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
     ]),
   );
   expect(await getCdpNodeCount(page)).toBeLessThan(12_000);
 });
 
-test("seed: ui=v2 shell keeps active tabs visible in narrow rails @desktop", async ({
+test("seed: dashboard keeps active tabs visible in narrow rails @desktop", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1394,7 +1394,7 @@ test("seed: ui=v2 shell keeps active tabs visible in narrow rails @desktop", asy
   expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
 });
 
-test("seed: ui=v2 shell tolerates operator text zoom without horizontal overflow @desktop", async ({
+test("seed: dashboard tolerates operator text zoom without horizontal overflow @desktop", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });

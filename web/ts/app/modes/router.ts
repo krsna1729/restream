@@ -410,12 +410,15 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
                 : mode === "settings"
                   ? "Server configuration"
                   : "Runtime status";
-    summary.textContent = `UI v2 owned · ${taskSummary}`;
+    summary.textContent = `Dashboard · ${taskSummary}`;
   }
   const activeV2BodyMode = dashboardV2ShellActive()
     ? dashboardV2RouteBodyMode(mode, activePipelineView)
     : null;
-  if (mode === "pipeline" && activePipelineView === "monitor") {
+  if (mode === "pipeline" && activePipelineView === "inspect") {
+    restorePipelineWorkspaceShell(activePipelineView);
+    renderPipelineInspector();
+  } else if (mode === "pipeline" && activePipelineView === "monitor") {
     restorePipelineWorkspaceShell(activePipelineView);
     renderControlRoom();
   }
@@ -605,10 +608,6 @@ export function renderDashboardModes(): void {
   dashboardModePresentationSync?.(location);
   configureDashboardV2RouteBodyTargets(location.mode, location.pipelineView);
   if (location.mode === "overview") renderOverview();
-  if (location.mode === "pipeline" && location.pipelineView === "inspect") {
-    restorePipelineWorkspaceShell(location.pipelineView);
-    renderPipelineInspector();
-  }
   applyMode(location.mode, location.pipelineView);
 }
 

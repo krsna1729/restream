@@ -451,10 +451,10 @@ test("seed: ui=v2 top-level Pipeline tab restores last workspace context @deskto
     "pipe-retrying",
   );
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 owned · Pipeline monitoring wall",
+    "Dashboard · Pipeline monitoring wall",
   );
   expect(await getCdpStatusTexts(page)).toContain(
-    "UI v2 owned · Pipeline monitoring wall",
+    "Dashboard · Pipeline monitoring wall",
   );
 
   await page.goBack();
