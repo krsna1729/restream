@@ -60,5 +60,6 @@ pub use shard::{
     EgressShardHeartbeat, EgressShardSendError, EgressShardSnapshot,
 };
 pub use supervisor::{
-    EgressShardRecovery, EgressSupervisor, EgressSupervisorError, EgressSupervisorRecovery,
+    EgressShardRecovery, EgressSupervisor, EgressSupervisorConfig, EgressSupervisorError,
+    EgressSupervisorRecovery,
 };
