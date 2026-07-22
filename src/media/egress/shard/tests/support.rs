@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 pub(super) struct ProbeState {
     pub(super) commands: Vec<String>,
     pub(super) timers: Vec<String>,
+    pub(super) ready_events: u64,
     pub(super) media_ticks: u64,
     pub(super) shutdowns: u64,
     generations: HashMap<String, u64>,
@@ -57,11 +58,23 @@ impl Probe {
         assert!(result.0.timers.len() >= target);
     }
 
+    pub(super) fn wait_for_ready_events(&self, target: u64) {
+        let (lock, condvar) = &*self.inner;
+        let state = lock.lock().unwrap();
+        let result = condvar
+            .wait_timeout_while(state, Duration::from_secs(2), |state| {
+                state.ready_events < target
+            })
+            .unwrap();
+        assert!(result.0.ready_events >= target);
+    }
+
     pub(super) fn state(&self) -> ProbeState {
         let state = self.inner.0.lock().unwrap();
         ProbeState {
             commands: state.commands.clone(),
             timers: state.timers.clone(),
+            ready_events: state.ready_events,
             media_ticks: state.media_ticks,
             shutdowns: state.shutdowns,
             generations: state.generations.clone(),
@@ -98,6 +111,14 @@ impl EgressShardBackend for ProbeBackend {
         let (lock, condvar) = &*self.probe.inner;
         let mut state = lock.lock().unwrap();
         state.timers.push(format!("{output_id}:{generation}"));
+        condvar.notify_all();
+        EgressShardCommandEffect::Continue
+    }
+
+    fn on_ready(&mut self) -> EgressShardCommandEffect {
+        let (lock, condvar) = &*self.probe.inner;
+        let mut state = lock.lock().unwrap();
+        state.ready_events = state.ready_events.saturating_add(1);
         condvar.notify_all();
         EgressShardCommandEffect::Continue
     }
@@ -248,9 +269,41 @@ impl EgressShardBackend for TimerBackend {
     }
 }
 
+#[derive(Debug)]
+pub(super) struct ReadyFloodBackend {
+    pub(super) probe: Probe,
+}
+
+impl EgressShardBackend for ReadyFloodBackend {
+    fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
+        let label = command_label(&command);
+        let (lock, condvar) = &*self.probe.inner;
+        let mut state = lock.lock().unwrap();
+        state.commands.push(label);
+        condvar.notify_all();
+        EgressShardCommandEffect::ScheduleReady { count: 8 }
+    }
+
+    fn on_ready(&mut self) -> EgressShardCommandEffect {
+        let (lock, condvar) = &*self.probe.inner;
+        let mut state = lock.lock().unwrap();
+        state.ready_events = state.ready_events.saturating_add(1);
+        condvar.notify_all();
+        EgressShardCommandEffect::ScheduleReady { count: 1 }
+    }
+
+    fn on_shutdown(&mut self) {
+        let (lock, condvar) = &*self.probe.inner;
+        let mut state = lock.lock().unwrap();
+        state.shutdowns += 1;
+        condvar.notify_all();
+    }
+}
+
 pub(super) fn config(capacity: usize, command_budget: usize) -> EgressShardConfig {
     EgressShardConfig::new(
         capacity,
+        command_budget,
         command_budget,
         command_budget,
         Duration::from_millis(10),

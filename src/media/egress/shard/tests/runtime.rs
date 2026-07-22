@@ -1,6 +1,7 @@
 use super::super::*;
 use super::support::{
-    BlockingBackend, Gate, Probe, ProbeBackend, TimerBackend, config, output_spec,
+    BlockingBackend, Gate, Probe, ProbeBackend, ReadyFloodBackend, TimerBackend, config,
+    output_spec,
 };
 use crate::media::egress::command::{EgressCommand, ShardId};
 use std::time::Duration;
@@ -8,15 +9,19 @@ use std::time::Duration;
 #[test]
 fn config_rejects_zero_capacity_and_budget() {
     assert_eq!(
-        EgressShardConfig::new(0, 1, 1, Duration::ZERO),
+        EgressShardConfig::new(0, 1, 1, 1, Duration::ZERO),
         Err(EgressShardConfigError::ZeroCommandCapacity)
     );
     assert_eq!(
-        EgressShardConfig::new(1, 0, 1, Duration::ZERO),
+        EgressShardConfig::new(1, 0, 1, 1, Duration::ZERO),
         Err(EgressShardConfigError::ZeroCommandBatch)
     );
     assert_eq!(
-        EgressShardConfig::new(1, 1, 0, Duration::ZERO),
+        EgressShardConfig::new(1, 1, 0, 1, Duration::ZERO),
+        Err(EgressShardConfigError::ZeroReadyBatch)
+    );
+    assert_eq!(
+        EgressShardConfig::new(1, 1, 1, 0, Duration::ZERO),
         Err(EgressShardConfigError::ZeroTimerBatch)
     );
 }
@@ -86,7 +91,7 @@ fn timer_batch_budget_allows_media_ticks_during_timer_flood() {
     let probe = Probe::default();
     let handle = EgressShardHandle::spawn(
         ShardId::new(0),
-        EgressShardConfig::new(16, 16, 2, Duration::from_millis(10)).unwrap(),
+        EgressShardConfig::new(16, 16, 16, 2, Duration::from_millis(10)).unwrap(),
         TimerBackend {
             probe: probe.clone(),
             delay: Duration::ZERO,
@@ -113,6 +118,36 @@ fn timer_batch_budget_allows_media_ticks_during_timer_flood() {
     );
     assert!(running_snapshot.media_ticks >= 1);
     assert!(snapshot.stopped);
+}
+
+#[test]
+fn readiness_batch_budget_allows_shutdown_during_ready_flood() {
+    let probe = Probe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        EgressShardConfig::new(16, 16, 2, 16, Duration::from_millis(10)).unwrap(),
+        ReadyFloodBackend {
+            probe: probe.clone(),
+        },
+    );
+
+    assert_eq!(
+        handle.try_send(EgressCommand::Add(output_spec("out-ready-flood"))),
+        Ok(())
+    );
+    probe.wait_for_ready_events(2);
+    assert_eq!(handle.try_send(EgressCommand::Shutdown), Ok(()));
+    let snapshot = handle.shutdown_and_join();
+
+    assert!(probe.state().ready_events >= 2);
+    assert_eq!(probe.state().shutdowns, 1);
+    assert_eq!(
+        snapshot.metrics.ready_depth,
+        snapshot.metrics.ready_depth_hwm
+    );
+    assert!(snapshot.metrics.ready_depth > 0);
+    assert!(snapshot.stopped);
+    assert!(!snapshot.panicked);
 }
 
 #[test]

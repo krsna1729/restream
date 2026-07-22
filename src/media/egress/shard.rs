@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
@@ -16,6 +17,7 @@ pub use group::{EgressShardGroup, EgressShardGroupError, EgressShardHealth, Egre
 pub enum EgressShardConfigError {
     ZeroCommandCapacity,
     ZeroCommandBatch,
+    ZeroReadyBatch,
     ZeroTimerBatch,
 }
 
@@ -23,6 +25,7 @@ pub enum EgressShardConfigError {
 pub struct EgressShardConfig {
     command_channel_capacity: NonZeroUsize,
     command_batch_budget: NonZeroUsize,
+    readiness_batch_budget: NonZeroUsize,
     timer_batch_budget: NonZeroUsize,
     idle_wait: Duration,
 }
@@ -31,6 +34,7 @@ impl EgressShardConfig {
     pub fn new(
         command_channel_capacity: usize,
         command_batch_budget: usize,
+        readiness_batch_budget: usize,
         timer_batch_budget: usize,
         idle_wait: Duration,
     ) -> Result<Self, EgressShardConfigError> {
@@ -38,11 +42,14 @@ impl EgressShardConfig {
             .ok_or(EgressShardConfigError::ZeroCommandCapacity)?;
         let command_batch_budget = NonZeroUsize::new(command_batch_budget)
             .ok_or(EgressShardConfigError::ZeroCommandBatch)?;
+        let readiness_batch_budget = NonZeroUsize::new(readiness_batch_budget)
+            .ok_or(EgressShardConfigError::ZeroReadyBatch)?;
         let timer_batch_budget =
             NonZeroUsize::new(timer_batch_budget).ok_or(EgressShardConfigError::ZeroTimerBatch)?;
         Ok(Self {
             command_channel_capacity,
             command_batch_budget,
+            readiness_batch_budget,
             timer_batch_budget,
             idle_wait,
         })
@@ -58,6 +65,10 @@ impl EgressShardConfig {
 
     pub fn timer_batch_budget(self) -> NonZeroUsize {
         self.timer_batch_budget
+    }
+
+    pub fn readiness_batch_budget(self) -> NonZeroUsize {
+        self.readiness_batch_budget
     }
 
     pub fn idle_wait(self) -> Duration {
@@ -107,6 +118,10 @@ pub trait EgressShardBackend: Send + 'static {
         EgressShardCommandEffect::Continue
     }
 
+    fn on_ready(&mut self) -> EgressShardCommandEffect {
+        EgressShardCommandEffect::Continue
+    }
+
     fn on_media_tick(&mut self) {}
 
     fn on_shutdown(&mut self) {}
@@ -119,6 +134,9 @@ pub enum EgressShardCommandEffect {
         output_id: OutputId,
         generation: u64,
         fire_at: Instant,
+    },
+    ScheduleReady {
+        count: usize,
     },
     Stop,
 }
@@ -195,6 +213,7 @@ fn run_shard_thread<B: EgressShardBackend>(
             config,
             receiver,
             backend: &mut backend,
+            ready_backlog: VecDeque::new(),
             timers: TimerWheel::new(),
             metrics: ShardMetrics::new(shard_id),
             snapshot: Arc::clone(&snapshot),
@@ -213,6 +232,7 @@ struct EgressShardRuntime<'a, B: EgressShardBackend> {
     config: EgressShardConfig,
     receiver: Receiver<EgressCommand>,
     backend: &'a mut B,
+    ready_backlog: VecDeque<()>,
     timers: TimerWheel<OutputId>,
     metrics: ShardMetrics,
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
@@ -224,9 +244,13 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         while running {
             let loop_started_at = Instant::now();
             let mut processed = self.process_command_batch(&mut running);
+            let mut ready_processed = self.process_ready_batch(&mut running);
             let mut timers_processed = self.process_timer_batch(&mut running);
-            if running && processed == 0 && timers_processed == 0 {
+            if running && processed == 0 && ready_processed == 0 && timers_processed == 0 {
                 processed = self.wait_for_command(&mut running);
+                if running {
+                    ready_processed += self.process_ready_batch(&mut running);
+                }
                 if running {
                     timers_processed = self.process_timer_batch(&mut running);
                 }
@@ -280,6 +304,22 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         }
     }
 
+    fn process_ready_batch(&mut self, running: &mut bool) -> usize {
+        let mut processed = 0;
+        while processed < self.config.readiness_batch_budget.get() {
+            if self.ready_backlog.pop_front().is_none() {
+                break;
+            }
+            processed += 1;
+            let effect = self.backend.on_ready();
+            if self.apply_effect(effect).stops_shard() {
+                *running = false;
+                break;
+            }
+        }
+        processed
+    }
+
     fn process_timer_batch(&mut self, running: &mut bool) -> usize {
         let now = Instant::now();
         let expired = self.timers.drain_expired_limited(
@@ -309,6 +349,10 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 self.timers.insert(fire_at, output_id, generation);
                 EgressShardCommandEffect::Continue
             }
+            EgressShardCommandEffect::ScheduleReady { count } => {
+                self.ready_backlog.extend(std::iter::repeat_n((), count));
+                EgressShardCommandEffect::Continue
+            }
             effect => effect,
         }
     }
@@ -330,6 +374,8 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             .timers_processed
             .saturating_add(timers_processed as u64);
         self.metrics.pending_timers = u32::try_from(self.timers.len()).unwrap_or(u32::MAX);
+        self.metrics
+            .observe_ready_depth(u32::try_from(self.ready_backlog.len()).unwrap_or(u32::MAX));
         self.metrics.media_ticks = self.metrics.media_ticks.saturating_add(1);
         self.metrics.collected_at = Some(Instant::now());
 
