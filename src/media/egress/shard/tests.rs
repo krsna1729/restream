@@ -1,5 +1,9 @@
 use super::*;
 use crate::media::egress::command::{FeedId, OutputId, OutputSpec, ProtocolSpec};
+use crate::media::egress::manager::{
+    DesiredOutput, EgressManager, EgressManagerConfig, EgressManagerDispatchError,
+    ManagerCommandOutcome,
+};
 use crate::media::egress::policy::LeafPolicy;
 use std::num::NonZeroU32;
 use std::sync::Condvar;
@@ -170,6 +174,20 @@ fn output_spec(id: &str) -> OutputSpec {
         },
         policy: LeafPolicy::default(),
     }
+}
+
+fn manager(shards: u32) -> EgressManager {
+    EgressManager::new(EgressManagerConfig::new(shards, 16).unwrap())
+}
+
+fn spec_for_shard(manager: &EgressManager, target: ShardId) -> OutputSpec {
+    for index in 0..1_000 {
+        let candidate = output_spec(&format!("out-target-{index}"));
+        if manager.assign_spec(&candidate) == target {
+            return candidate;
+        }
+    }
+    panic!("test fixture could not find output for {target}");
 }
 
 fn command_label(command: &EgressCommand) -> String {
@@ -415,6 +433,83 @@ fn shard_group_heartbeat_reports_running_shard() {
     assert_eq!(heartbeat.len(), 1);
     assert_eq!(heartbeat[0].state, EgressShardHealth::Healthy);
     assert_eq!(heartbeat[0].shard_id, ShardId::new(0));
+    assert_eq!(snapshots.len(), 1);
+}
+
+#[test]
+fn manager_dispatch_to_group_routes_add_to_assigned_thread() {
+    let mut manager = manager(2);
+    let shard_zero = Probe::default();
+    let shard_one = Probe::default();
+    let group = EgressShardGroup::spawn(
+        NonZeroU32::new(2).unwrap(),
+        config(4, 4),
+        vec![
+            ProbeBackend {
+                probe: shard_zero.clone(),
+            },
+            ProbeBackend {
+                probe: shard_one.clone(),
+            },
+        ],
+    )
+    .unwrap();
+    let output = spec_for_shard(&manager, ShardId::new(1));
+    let output_id = output.id.clone();
+
+    let result = manager.dispatch_to_group(EgressCommand::Add(output.clone()), &group);
+    shard_one.wait_for_commands(1);
+    let snapshots = group.shutdown_and_join();
+
+    assert_eq!(
+        result,
+        Ok(ManagerCommandOutcome::Enqueued {
+            shard_id: ShardId::new(1)
+        })
+    );
+    assert!(shard_zero.state().commands.is_empty());
+    assert_eq!(shard_one.state().commands, vec![format!("add:{output_id}")]);
+    assert_eq!(
+        manager.desired_output(&output_id),
+        Some(&DesiredOutput {
+            id: output_id,
+            generation: 1,
+            shard_id: ShardId::new(1),
+        })
+    );
+    assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
+}
+
+#[test]
+fn manager_dispatch_to_group_preserves_state_when_group_rejects_shard() {
+    let mut manager = manager(2);
+    let shard_zero = Probe::default();
+    let group = EgressShardGroup::spawn(
+        NonZeroU32::new(1).unwrap(),
+        config(4, 4),
+        vec![ProbeBackend {
+            probe: shard_zero.clone(),
+        }],
+    )
+    .unwrap();
+    let output = spec_for_shard(&manager, ShardId::new(1));
+    let output_id = output.id.clone();
+
+    let result = manager.dispatch_to_group(EgressCommand::Add(output), &group);
+    let snapshots = group.shutdown_and_join();
+
+    assert_eq!(
+        result,
+        Err(EgressManagerDispatchError::Dispatch {
+            shard_id: ShardId::new(1),
+            source: EgressShardGroupError::UnknownShard {
+                shard_id: ShardId::new(1)
+            },
+        })
+    );
+    assert!(manager.desired_output(&output_id).is_none());
+    assert_eq!(manager.command_depth(ShardId::new(1)), 0);
+    assert!(shard_zero.state().commands.is_empty());
     assert_eq!(snapshots.len(), 1);
 }
 

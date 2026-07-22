@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ShardId};
+use crate::media::egress::shard::{EgressShardGroup, EgressShardGroupError};
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -130,6 +131,16 @@ impl EgressManager {
             }
             EgressCommand::Shutdown => self.dispatch_shutdown(dispatch),
         }
+    }
+
+    pub fn dispatch_to_group(
+        &mut self,
+        command: EgressCommand,
+        group: &EgressShardGroup,
+    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<EgressShardGroupError>> {
+        self.dispatch_command(command, |shard_id, command| {
+            group.try_send_to(shard_id, command)
+        })
     }
 
     fn dispatch_spec<E, F>(
