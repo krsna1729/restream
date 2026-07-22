@@ -177,7 +177,7 @@ test("seed: default v2 replaces Overview while delegating operator actions @desk
   await expect(fileInputStatus).toContainText("MP4");
   await expect(fileInputStatus).toContainText("1.0 MiB");
   await expect(fileInputStatus).toContainText("Sparse source GOP detected");
-  await expect(page.locator("#file-source-section")).toBeHidden();
+  await expect(page.locator("#file-source-section")).toHaveCount(0);
   await expect(page.locator("#record-pipe-btn")).toHaveCount(0);
   await expect(page.locator("#file-ingest-pipe-btn")).toHaveCount(0);
   const startFile = pipelineHeader.getByRole("button", {
@@ -412,10 +412,10 @@ test("seed: default v2 replaces Overview while delegating operator actions @desk
   ).toBeVisible();
   await expect(inputStatus.getByText("Video", { exact: true })).toBeVisible();
   await expect(inputStatus).toContainText("1920×1080");
-  await expect(page.locator("#publisher-meta")).toBeHidden();
-  await expect(page.locator("#pipeline-input-legacy-traffic")).toBeHidden();
-  await expect(page.locator("#pipeline-input-legacy-video")).toBeHidden();
-  await expect(page.locator("#video-player")).toBeHidden();
+  await expect(page.locator("#publisher-meta")).toHaveCount(0);
+  await expect(page.locator("#pipeline-input-legacy-traffic")).toHaveCount(0);
+  await expect(page.locator("#pipeline-input-legacy-video")).toHaveCount(0);
+  await expect(page.locator("#video-player")).toHaveCount(0);
   const previewPlayer = inputStatus.locator(
     '[data-role="dashboard-v2-input-preview"]',
   );
@@ -426,23 +426,11 @@ test("seed: default v2 replaces Overview while delegating operator actions @desk
     }),
   ).toBeVisible();
   expect(await getCdpNamesByRole(page, "button")).not.toContain("Play preview");
-  await expect(page.locator("#input-stats")).toBeHidden();
+  await expect(page.locator("#input-stats")).toHaveCount(0);
   await expect(
     page.locator("#pipeline-input-legacy-audio-heading"),
-  ).toBeHidden();
-  await expect(page.locator("#input-audio-tracks")).toBeHidden();
-  expect(
-    await page.locator("#input-audio-tracks").evaluate((node) => ({
-      childCount: node.childElementCount,
-      text: node.textContent?.trim() ?? "",
-    })),
-  ).toEqual({ childCount: 0, text: "" });
-  expect(
-    await page.locator("#video-player").evaluate((node) => ({
-      childCount: node.childElementCount,
-      text: node.textContent?.trim() ?? "",
-    })),
-  ).toEqual({ childCount: 0, text: "" });
+  ).toHaveCount(0);
+  await expect(page.locator("#input-audio-tracks")).toHaveCount(0);
   expect(await getCdpNodeCount(page)).toBeLessThan(5_200);
   await expect(inputStatus.getByText("Audio", { exact: true })).toBeVisible();
   await expect(inputStatus.getByText("ENG", { exact: true })).toBeVisible();
@@ -475,8 +463,8 @@ test("seed: default v2 replaces Overview while delegating operator actions @desk
     inputStatus.getByText("Program Audio", { exact: true }),
   ).toBeVisible();
   await expect(inputStatus.getByText("Discarded label")).toHaveCount(0);
-  await expect(page.locator("#stream-key-section")).toBeHidden();
-  await expect(page.locator("#ingest-url-section")).toBeHidden();
+  await expect(page.locator("#stream-key-section")).toHaveCount(0);
+  await expect(page.locator("#ingest-url-section")).toHaveCount(0);
   const primaryInput = inputStatus.locator("article").filter({
     has: page.getByRole("heading", { name: "Primary", exact: true }),
   });

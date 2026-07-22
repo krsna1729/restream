@@ -172,7 +172,6 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
       : undefined,
   });
   configurePipelineInputStatusPresentation({
-    legacyRenderEnabled: !pipelineV2Active,
     onPresentation: pipelineV2Active
       ? updateDashboardV2PipelineInputStatus
       : undefined,

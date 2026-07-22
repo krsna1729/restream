@@ -639,10 +639,9 @@ test.describe('HLS Player — integration', () => {
         await expect(page.locator('body')).toBeVisible();
     });
 
-    test('dashboard has video-player container (hidden by default)', async ({ page }) => {
-        const playerContainer = page.locator('#video-player');
-        await expect(playerContainer).toBeAttached();
-        await expect(playerContainer).toBeEmpty();
+    test('dashboard owns preview through the v2 input status host', async ({ page }) => {
+        await expect(page.locator('#video-player')).toHaveCount(0);
+        await expect(page.locator('#dashboard-v2-pipeline-input-status-root')).toBeAttached();
     });
 
     test('health endpoint is reachable', async ({ page }) => {
@@ -817,7 +816,7 @@ test.describe.serial('HLS Player — live playback', () => {
         const inputStatus = page.locator('#dashboard-v2-pipeline-input-status-root');
         const videoPlayer = inputStatus.locator('[data-role="dashboard-v2-input-preview"]');
         await expect(videoPlayer).toBeVisible();
-        await expect(page.locator('#video-player')).toBeHidden();
+        await expect(page.locator('#video-player')).toHaveCount(0);
 
         const video = videoPlayer.locator('video[data-role="input-preview-video"]');
         await expect(video).toBeAttached();
@@ -862,7 +861,7 @@ test.describe.serial('HLS Player — live playback', () => {
             '[data-role="dashboard-v2-input-preview"]',
         );
         await expect(previewPlayer).toBeVisible();
-        await expect(page.locator('#video-player')).toBeHidden();
+        await expect(page.locator('#video-player')).toHaveCount(0);
 
         const video = previewPlayer.locator(
             'video[data-role="input-preview-video"]',

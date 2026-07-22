@@ -11,14 +11,6 @@ export function getFileSourceName(pipe: PipelineView): string | null {
   return filename || null;
 }
 
-export function hideFileIngestControl(button: HTMLButtonElement): void {
-  button.classList.add("hidden");
-  button.disabled = true;
-  button.classList.add("btn-disabled");
-  button.title = "";
-  button.onclick = null;
-}
-
 // ── File metadata formatters ───────────────────────────────────────────
 
 export function formatFileSize(
@@ -86,11 +78,4 @@ export function formatSourceGop(
     return "--";
   }
   return `avg ${Number(analysis.averageKeyframeIntervalSec).toFixed(1)}s | max ${Number(analysis.maxKeyframeIntervalSec).toFixed(1)}s`;
-}
-
-// ── DOM convenience ────────────────────────────────────────────────────
-
-export function setTextIfPresent(id: string, value: string): void {
-  const element = document.getElementById(id);
-  if (element) element.textContent = value;
 }

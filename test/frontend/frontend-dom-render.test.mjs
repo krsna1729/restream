@@ -439,19 +439,21 @@ runCheck(
 );
 
 runCheck(
-  "renderPipelineInfoColumn reuses publisher meta badges across refreshes",
+  "renderPipelineInfoColumn publishes input status models across refreshes",
   async () => {
     const { document } = installFakeDom();
     appendRoot(document, "div", "pipe-info-col");
-    const statsShell = appendRoot(document, "div", "stats-shell");
-    const inputStats = document.createElement("div");
-    inputStats.id = "input-stats";
-    statsShell.appendChild(inputStats);
 
     const pipelineView = await loadCompiledFrontendModule(
       "features/pipeline-view/index.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
+    const inputModels = [];
+    pipelineView.configurePipelineInputStatusPresentation({
+      onPresentation: (model) => {
+        inputModels.push(model);
+      },
+    });
 
     state.pipelines = [
       makePipeline({
@@ -470,24 +472,21 @@ runCheck(
     ];
 
     pipelineView.renderPipelineInfoColumn("pipe-1");
-    const publisherMeta = document.getElementById("publisher-meta");
-    const qualityBadge = publisherMeta.querySelector(
-      '[data-meta-key="quality"]',
-    );
+    const firstModel = inputModels.at(-1);
 
-    assert.ok(publisherMeta instanceof FakeElement);
-    assert.ok(qualityBadge instanceof FakeElement);
-    assert.equal(publisherMeta.stats.innerHTMLWrites, 0);
+    assert.equal(firstModel.publisherLabel, "SRT");
+    assert.equal(firstModel.publisherDetail, "10.0.0.1:5000");
+    assert.equal(firstModel.publisherHealth.label, "Healthy");
+    assert.equal(document.getElementById("publisher-meta"), null);
 
     state.pipelines[0].input.time = 35_000;
     state.pipelines[0].hlsPreview.lastAccessAgeMs = 5_000;
     pipelineView.renderPipelineInfoColumn("pipe-1");
+    const secondModel = inputModels.at(-1);
 
-    assert.equal(
-      publisherMeta.querySelector('[data-meta-key="quality"]'),
-      qualityBadge,
-    );
-    assert.equal(publisherMeta.stats.innerHTMLWrites, 0);
+    assert.equal(secondModel.uptimeLabel, "0:00:35 uptime");
+    assert.equal(secondModel.previewDetail, "3 segments · 1 viewer");
+    pipelineView.configurePipelineInputStatusPresentation({});
   },
 );
 
@@ -496,26 +495,6 @@ runCheck(
   async () => {
     const { document } = installFakeDom();
     appendRoot(document, "div", "pipe-info-col");
-    appendRoot(document, "div", "input-time");
-    appendRoot(document, "section", "file-source-section");
-    appendRoot(document, "span", "file-source-inline");
-    appendRoot(document, "details", "file-source-details");
-    appendRoot(document, "div", "file-source-container");
-    appendRoot(document, "div", "file-source-size");
-    appendRoot(document, "div", "file-source-modified");
-    appendRoot(document, "div", "file-source-loop");
-    appendRoot(document, "div", "file-source-start-time");
-    appendRoot(document, "section", "stream-key-section");
-    appendRoot(document, "code", "stream-key-inline");
-    appendRoot(document, "button", "stream-key-copy-btn");
-    appendRoot(document, "section", "ingest-url-section");
-    appendRoot(document, "button", "ingest-url-copy-btn");
-    appendRoot(document, "div", "ingest-url-surface");
-    appendRoot(document, "code", "ingest-url");
-    appendRoot(document, "div", "ingest-url-details");
-    appendRoot(document, "div", "ingest-details-grid");
-    appendRoot(document, "div", "video-player");
-    appendRoot(document, "div", "input-stats");
 
     const pipelineView = await loadCompiledFrontendModule(
       "features/pipeline-view/index.js",
@@ -525,6 +504,12 @@ runCheck(
     pipelineView.configurePipelineHeaderPresentation({
       onPresentation: (model) => {
         headerModels.push(model);
+      },
+    });
+    const inputModels = [];
+    pipelineView.configurePipelineInputStatusPresentation({
+      onPresentation: (model) => {
+        inputModels.push(model);
       },
     });
 
@@ -550,54 +535,22 @@ runCheck(
 
     pipelineView.renderPipelineInfoColumn("pipe-1");
 
+    const inputStatus = inputModels.at(-1);
+    const details = new Map(
+      inputStatus.fileSource.details.map((detail) => [
+        detail.key,
+        detail.value,
+      ]),
+    );
     assert.equal(headerModels.at(-1).fileIngestControl?.label, "Start File");
-    assert.equal(
-      document
-        .getElementById("file-source-section")
-        .classList.contains("hidden"),
-      false,
-    );
-    assert.equal(
-      document.getElementById("file-source-inline").textContent,
-      "session-recording.ts",
-    );
-    assert.equal(
-      document
-        .getElementById("file-source-inline")
-        .className.includes("font-mono"),
-      false,
-    );
-    assert.equal(
-      document
-        .getElementById("file-source-details")
-        .classList.contains("hidden"),
-      false,
-    );
-    assert.equal(
-      document.getElementById("file-source-container").textContent,
-      "MPEG-TS",
-    );
-    assert.equal(
-      document.getElementById("file-source-loop").textContent,
-      "Disabled",
-    );
-    assert.equal(
-      document.getElementById("file-source-start-time").textContent,
-      "00:00:00",
-    );
-    assert.equal(
-      document
-        .getElementById("stream-key-section")
-        .classList.contains("hidden"),
-      true,
-    );
-    assert.equal(document.getElementById("stream-key-copy-btn").disabled, true);
-    assert.equal(
-      document
-        .getElementById("ingest-url-section")
-        .classList.contains("hidden"),
-      true,
-    );
+    assert.equal(inputStatus.fileSource.filename, "session-recording.ts");
+    assert.equal(details.get("container"), "MPEG-TS");
+    assert.equal(details.get("loop"), "Disabled");
+    assert.equal(details.get("start"), "00:00:00");
+    assert.equal(inputStatus.liveSource, null);
+    assert.equal(document.getElementById("file-source-section"), null);
+    assert.equal(document.getElementById("stream-key-section"), null);
+    pipelineView.configurePipelineInputStatusPresentation({});
   },
 );
 
@@ -638,32 +591,6 @@ runCheck(
     }
     window.location.href = "http://localhost/?mode=pipeline&p=pipe-1";
     appendRoot(document, "div", "pipe-info-col");
-    appendRoot(document, "div", "input-time");
-    appendRoot(document, "section", "file-source-section");
-    appendRoot(document, "span", "file-source-inline");
-    appendRoot(document, "details", "file-source-details");
-    appendRoot(document, "div", "file-source-container");
-    appendRoot(document, "div", "file-source-size");
-    appendRoot(document, "div", "file-source-modified");
-    appendRoot(document, "div", "file-source-loop");
-    appendRoot(document, "div", "file-source-start-time");
-    appendRoot(document, "div", "file-source-optimization");
-    appendRoot(document, "div", "file-source-video-codec");
-    appendRoot(document, "div", "file-source-fps");
-    appendRoot(document, "div", "file-source-duration");
-    appendRoot(document, "div", "file-source-gop");
-    appendRoot(document, "div", "file-source-gop-warning");
-    appendRoot(document, "section", "stream-key-section");
-    appendRoot(document, "code", "stream-key-inline");
-    appendRoot(document, "button", "stream-key-copy-btn");
-    appendRoot(document, "section", "ingest-url-section");
-    appendRoot(document, "button", "ingest-url-copy-btn");
-    appendRoot(document, "div", "ingest-url-surface");
-    appendRoot(document, "code", "ingest-url");
-    appendRoot(document, "div", "ingest-url-details");
-    appendRoot(document, "div", "ingest-details-grid");
-    appendRoot(document, "div", "video-player");
-    appendRoot(document, "div", "input-stats");
 
     const requests = [];
     let resolveMediaList;
@@ -741,6 +668,12 @@ runCheck(
       "features/pipeline-view/index.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
+    const inputModels = [];
+    pipelineView.configurePipelineInputStatusPresentation({
+      onPresentation: (model) => {
+        inputModels.push(model);
+      },
+    });
 
     state.pipelines = [
       makePipeline({
@@ -776,17 +709,11 @@ runCheck(
     ];
 
     pipelineView.renderPipelineInfoColumn("pipe-1");
-    assert.equal(
-      document.getElementById("file-source-inline").textContent,
-      "alpha.ts",
-    );
+    assert.equal(inputModels.at(-1).fileSource.filename, "alpha.ts");
 
     window.location.href = "http://localhost/?mode=pipeline&p=pipe-2";
     pipelineView.renderPipelineInfoColumn("pipe-2");
-    assert.equal(
-      document.getElementById("file-source-inline").textContent,
-      "beta.ts",
-    );
+    assert.equal(inputModels.at(-1).fileSource.filename, "beta.ts");
     assert.equal(
       requests.includes("/api/v1/media/beta.ts/analysis"),
       true,
@@ -796,25 +723,38 @@ runCheck(
     resolveAlphaAnalysis();
     await flushAsyncWork();
     assert.equal(
-      document.getElementById("file-source-inline").textContent,
+      inputModels.at(-1).fileSource.filename,
       "beta.ts",
       "a stale alpha analysis completion should not repaint the pipe-2 panel",
     );
 
     resolveMediaList();
     await flushAsyncWork();
+    const afterMediaListDetails = new Map(
+      inputModels.at(-1).fileSource.details.map((detail) => [
+        detail.key,
+        detail.value,
+      ]),
+    );
     assert.equal(
-      document.getElementById("file-source-size").textContent,
+      afterMediaListDetails.get("size"),
       "3.3 KiB",
       "shared media metadata should re-render the currently selected pipeline",
     );
 
     resolveBetaAnalysis();
     await flushAsyncWork();
+    const afterAnalysisDetails = new Map(
+      inputModels.at(-1).fileSource.details.map((detail) => [
+        detail.key,
+        detail.value,
+      ]),
+    );
     assert.equal(
-      document.getElementById("file-source-video-codec").textContent,
+      afterAnalysisDetails.get("codec"),
       "HEVC",
     );
+    pipelineView.configurePipelineInputStatusPresentation({});
   },
 );
 
@@ -823,46 +763,17 @@ runCheck(
   async () => {
     const { document } = installFakeDom();
     appendRoot(document, "div", "pipe-info-col");
-    appendRoot(document, "div", "input-time");
-    appendRoot(document, "div", "input-stats");
-    appendRoot(document, "div", "input-video-codec");
-    appendRoot(document, "div", "input-video-resolution");
-    appendRoot(document, "div", "input-video-fps");
-    appendRoot(document, "div", "input-video-level");
-    appendRoot(document, "div", "input-video-profile");
-    appendRoot(document, "div", "input-video-pid-stat");
-    appendRoot(document, "div", "input-video-pid");
-    appendRoot(document, "div", "input-video-selection-stat");
-    appendRoot(document, "div", "input-video-selection");
-    appendRoot(document, "div", "input-audio-tracks");
-    appendRoot(document, "div", "input-total-bw");
-    appendRoot(document, "div", "output-total-bw");
-    appendRoot(document, "div", "input-reader-count");
-    appendRoot(document, "div", "input-output-count");
-    appendRoot(document, "section", "file-source-section");
-    appendRoot(document, "span", "file-source-inline");
-    appendRoot(document, "details", "file-source-details");
-    appendRoot(document, "div", "file-source-container");
-    appendRoot(document, "div", "file-source-size");
-    appendRoot(document, "div", "file-source-modified");
-    appendRoot(document, "div", "file-source-loop");
-    appendRoot(document, "div", "file-source-start-time");
-    appendRoot(document, "section", "stream-key-section");
-    appendRoot(document, "code", "stream-key-inline");
-    appendRoot(document, "button", "stream-key-copy-btn");
-    appendRoot(document, "section", "ingest-url-section");
-    appendRoot(document, "button", "ingest-url-copy-btn");
-    appendRoot(document, "div", "ingest-url-surface");
-    appendRoot(document, "code", "ingest-url");
-    appendRoot(document, "div", "ingest-url-details");
-    appendRoot(document, "div", "ingest-details-grid");
-    appendRoot(document, "div", "ingest-url-details-heading");
-    appendRoot(document, "div", "ingest-url-details-note");
 
     const pipelineView = await loadCompiledFrontendModule(
       "features/pipeline-view/index.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
+    const inputModels = [];
+    pipelineView.configurePipelineInputStatusPresentation({
+      onPresentation: (model) => {
+        inputModels.push(model);
+      },
+    });
 
     state.pipelines = [
       makePipeline({
@@ -915,57 +826,45 @@ runCheck(
 
     pipelineView.renderPipelineInfoColumn("pipe-1");
 
-    assert.equal(
-      document.getElementById("input-video-codec").textContent,
-      "H.264",
+    const inputStatus = inputModels.at(-1);
+    const traffic = inputStatus.metricGroups.find(
+      ({ key }) => key === "traffic",
     );
-    assert.equal(
-      document.getElementById("input-video-resolution").textContent,
-      "1920x1080",
+    const video = inputStatus.metricGroups.find(({ key }) => key === "video");
+    const videoMetrics = new Map(
+      video.metrics.map((metric) => [metric.key, metric.value]),
     );
-    assert.equal(
-      document.getElementById("input-video-pid").textContent,
-      "0x100",
+    const trafficMetrics = new Map(
+      traffic.metrics.map((metric) => [metric.key, metric.value]),
     );
-    assert.equal(
-      document.getElementById("input-video-selection").textContent,
-      "Track 1 of 2",
-    );
-    assert.match(
-      document.getElementById("input-audio-tracks").innerHTML,
-      /Main Mix/,
-    );
-    assert.match(
-      document.getElementById("input-audio-tracks").innerHTML,
-      /Stereo/,
-    );
-    assert.equal(
-      document.getElementById("input-reader-count").textContent,
-      "3",
-    );
-    assert.equal(
-      document.getElementById("input-output-count").textContent,
-      "1",
-    );
+    assert.equal(videoMetrics.get("codec"), "H264");
+    assert.equal(videoMetrics.get("resolution"), "1920×1080");
+    assert.equal(videoMetrics.get("pid"), "0x100");
+    assert.equal(videoMetrics.get("selection"), "Track 1 of 2");
+    assert.equal(inputStatus.audioTracks[0].label, "Main Mix");
+    assert.equal(inputStatus.audioTracks[0].channels, "Stereo (2 ch)");
+    assert.equal(trafficMetrics.get("readers"), "3");
+    assert.equal(trafficMetrics.get("outputs"), "1");
+    pipelineView.configurePipelineInputStatusPresentation({});
   },
 );
 
 runCheck(
-  "renderPipelineInfoColumn restores expanded long audio-track lists",
+  "renderPipelineInfoColumn publishes complete long audio-track lists",
   async () => {
-    const { document, window } = installFakeDom();
-    window.localStorage.setItem(
-      "restream.audioTrackExpansion.v1",
-      JSON.stringify(["pipe-1"]),
-    );
+    const { document } = installFakeDom();
     appendRoot(document, "div", "pipe-info-col");
-    appendRoot(document, "div", "input-stats");
-    appendRoot(document, "div", "input-audio-tracks");
 
     const pipelineView = await loadCompiledFrontendModule(
       "features/pipeline-view/index.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
+    const inputModels = [];
+    pipelineView.configurePipelineInputStatusPresentation({
+      onPresentation: (model) => {
+        inputModels.push(model);
+      },
+    });
     state.pipelines = [
       makePipeline({
         input: {
@@ -986,10 +885,10 @@ runCheck(
 
     pipelineView.renderPipelineInfoColumn("pipe-1");
 
-    assert.match(
-      document.getElementById("input-audio-tracks").innerHTML,
-      /data-audio-track-expansion-key="pipe-1" open/,
-    );
+    assert.equal(inputModels.at(-1).audioTracks.length, 10);
+    assert.equal(inputModels.at(-1).audioLabel, "10 audio tracks");
+    assert.equal(document.getElementById("input-audio-tracks"), null);
+    pipelineView.configurePipelineInputStatusPresentation({});
   },
 );
 
