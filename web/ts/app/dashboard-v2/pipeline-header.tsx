@@ -145,8 +145,10 @@ export function DashboardV2PipelineHeader({
 }
 
 export function DashboardV2PipelineDetailsPlaceholderCard({
+  actions,
   model,
 }: {
+  actions: DashboardV2PipelineHeaderActions;
   model: DashboardV2PipelineDetailsPlaceholder;
 }): React.JSX.Element {
   return (
@@ -169,6 +171,15 @@ export function DashboardV2PipelineDetailsPlaceholderCard({
           <p className="text-base-content/65 mt-1 max-w-2xl text-sm">
             {model.message}
           </p>
+          {model.actionLabel ? (
+            <button
+              className="btn btn-sm btn-accent btn-outline mt-4"
+              onClick={actions.addPipeline}
+              type="button"
+            >
+              {model.actionLabel}
+            </button>
+          ) : null}
         </div>
       </div>
     </section>

@@ -1118,6 +1118,36 @@ test("default v2 pipeline details placeholder makes convergence explicit @deskto
   await expect(header).toBeHidden();
 });
 
+test("default v2 Operate no-selection state is owned by the pipeline header placeholder @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=operate",
+    { expectOverviewReady: false },
+  );
+
+  await expect(page.locator("#stats-col")).toHaveCount(0);
+  await expect(page.locator("#stats-table")).toHaveCount(0);
+  await expect(page.locator("#pipe-info-col")).toBeVisible();
+  await expect(page.locator("#outs-col")).toBeHidden();
+  await expect(
+    page.locator("#dashboard-v2-pipeline-details-placeholder-title"),
+  ).toHaveText("Select a pipeline");
+  await expect(
+    page.locator("#dashboard-v2-pipeline-header-root"),
+  ).toContainText(
+    "Pipeline details, ingest preview, outputs, and controls appear here.",
+  );
+  await expect(
+    page.locator("#dashboard-v2-pipeline-input-status-root"),
+  ).toBeHidden();
+  await expect(
+    page.locator("#dashboard-v2-pipeline-output-overview-root"),
+  ).toBeHidden();
+});
+
 test("default v2 keeps failed recording mutation context in the pipeline header @desktop", async ({
   page,
 }) => {

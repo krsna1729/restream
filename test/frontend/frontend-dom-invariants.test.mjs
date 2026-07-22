@@ -81,7 +81,8 @@ test("static HTML keeps core DOM accessibility and layout invariants", async () 
   assert.match(indexHtml, /id="overview-mode-panel"[\s\S]*role="tabpanel"/);
   assert.doesNotMatch(indexHtml, /Cy Ganderton|Quality Control Specialist/);
   assert.doesNotMatch(indexHtml, /grid-template-columns:/);
-  assert.match(indexHtml, /id="stats-table"><\/tbody>/);
+  assert.doesNotMatch(indexHtml, /id="stats-col"/);
+  assert.doesNotMatch(indexHtml, /id="stats-table"/);
   assert.match(indexHtml, /<details[\s\S]*id="pipe-srt-ingest-fields"/);
   assert.match(indexHtml, /id="out-srt-passphrase-input"/);
   assert.match(indexHtml, /id="out-srt-pbkeylen-input"/);
@@ -120,6 +121,8 @@ test("dashboard grid sizing lives in responsive CSS instead of inline scripts", 
   assert.match(inputCss, /#dashboard-grid\.has-selected-pipeline/s);
   assert.match(inputCss, /\.text-base-content\\\/50,[\s\S]*\.stat-title/s);
   assert.match(renderTs, /classList\.toggle\("has-selected-pipeline"/);
+  assert.doesNotMatch(renderTs, /stats-col/);
+  assert.doesNotMatch(renderTs, /renderStatsColumn/);
   assert.doesNotMatch(
     renderTs,
     /minmax\(24rem,\s*34rem\).*minmax\(24rem,\s*1fr\)/s,

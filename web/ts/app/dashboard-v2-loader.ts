@@ -30,6 +30,7 @@ export interface DashboardV2PipelineSelectorActions {
 }
 
 export interface DashboardV2PipelineHeaderActions {
+  readonly addPipeline: () => void;
   readonly deletePipeline: (pipelineId: string) => void;
   readonly diagnosePipeline: (pipelineId: string) => void;
   readonly editPipeline: (pipelineId: string) => void;
@@ -40,6 +41,7 @@ export interface DashboardV2PipelineHeaderActions {
 }
 
 export interface DashboardV2PipelineDetailsPlaceholder {
+  readonly actionLabel?: string;
   readonly title: string;
   readonly message: string;
 }
@@ -413,6 +415,7 @@ function pipelineDetailsPlaceholder(): DashboardV2PipelineDetailsPlaceholder {
   const selector = latestPipelineSelectorModel;
   if (!selector || selector.pipelines.length === 0) {
     return {
+      actionLabel: "Add Pipeline",
       title: "No pipelines configured",
       message: "Create a pipeline to start configuring ingest and outputs.",
     };

@@ -1175,7 +1175,8 @@
 
         <!-- Middle Column -->
         <div
-          class="border-base-content/10 bg-base-200 hidden overflow-y-auto rounded-lg border p-4"
+          class="border-base-content/10 bg-base-200 overflow-y-auto rounded-lg border p-4"
+          data-dashboard-v2-operate-detail-shell
           id="pipe-info-col"
         >
           <div>
@@ -1192,37 +1193,11 @@
 
         <!-- Right Column -->
         <div
-          class="border-base-content/10 bg-base-200 hidden w-full min-w-0 overflow-y-auto rounded-lg border p-4 xl:min-w-[24rem]"
+          class="border-base-content/10 bg-base-200 w-full min-w-0 overflow-y-auto rounded-lg border p-4 xl:min-w-[24rem]"
+          data-dashboard-v2-operate-output-shell
           id="outs-col"
         >
           <div id="dashboard-v2-pipeline-output-overview-root" hidden></div>
-        </div>
-
-        <!-- Stats Column -->
-        <div
-          class="border-base-content/10 bg-base-200 hidden overflow-y-auto rounded-lg border p-4"
-          id="stats-col"
-        >
-          <div class="overflow-x-auto">
-            <table class="table">
-              <!-- head -->
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Name</th>
-                  <th>Bitrate (Mb/s)</th>
-                  <th>Codec</th>
-                  <th>Size</th>
-                  <th>FPS</th>
-                  <th>Trk</th>
-                  <th>Codec</th>
-                  <th>Ch</th>
-                  <th>Freq</th>
-                </tr>
-              </thead>
-              <tbody id="stats-table"></tbody>
-            </table>
-          </div>
         </div>
       </div>
     </main>

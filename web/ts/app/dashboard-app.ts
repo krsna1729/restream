@@ -239,6 +239,7 @@ export function initDashboardApp(): void {
     selectPipeline,
   });
   setDashboardV2PipelineHeaderActions({
+    addPipeline: () => void window.addPipeBtn(),
     deletePipeline: (pipelineId) => {
       selectPipeline(pipelineId);
       void deletePipeBtn();

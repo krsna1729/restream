@@ -175,6 +175,20 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+[data-dashboard-v2-operate-detail-shell],
+[data-dashboard-v2-operate-output-shell] {
+  display: none;
+}
+
+[data-dashboard-v2-operate-detail-shell]:has(
+    #dashboard-v2-pipeline-header-root:not([hidden])
+  ),
+[data-dashboard-v2-operate-output-shell]:has(
+    #dashboard-v2-pipeline-output-overview-root:not([hidden])
+  ) {
+  display: block;
+}
+
 .dashboard-scrollbar {
   scrollbar-width: thin;
 }

@@ -159,7 +159,6 @@ async function flushAsyncWork() {
 runCheck("renderPipelines publishes selector models to the v2 owner", async () => {
   const { document } = installFakeDom();
   appendRoot(document, "div", "dashboard-grid");
-  appendRoot(document, "div", "stats-col");
   appendRoot(document, "div", "pipe-info-col");
   appendRoot(document, "div", "outs-col");
 
@@ -180,24 +179,6 @@ runCheck("renderPipelines publishes selector models to the v2 owner", async () =
   assert.equal(presented.pipelines[0].id, "pipe-1");
   assert.equal(document.getElementById("pipelines"), null);
   render.configurePipelineSelectorPresentation({});
-});
-
-runCheck("renderStatsColumn skips identical empty-state rewrites", async () => {
-  const { document, window } = installFakeDom();
-  const statsCol = appendRoot(document, "div", "stats-col");
-  window.addPipeBtn = () => {};
-
-  const render = await loadCompiledFrontendModule("features/render.js");
-  const { state } = await loadCompiledFrontendModule("core/state.js");
-
-  state.pipelines = [];
-
-  render.renderStatsColumn(null);
-  const firstWriteCount = statsCol.stats.innerHTMLWrites;
-
-  render.renderStatsColumn(null);
-
-  assert.equal(statsCol.stats.innerHTMLWrites, firstWriteCount);
 });
 
 runCheck("renderSettingsPanel emits delegated actions without inline handlers", async () => {

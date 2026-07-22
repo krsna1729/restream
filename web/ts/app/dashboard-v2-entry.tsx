@@ -98,7 +98,10 @@ export function renderDashboardV2PipelineHeader(
     model ? (
       <DashboardV2PipelineHeader actions={actions} model={model} />
     ) : placeholder ? (
-      <DashboardV2PipelineDetailsPlaceholderCard model={placeholder} />
+      <DashboardV2PipelineDetailsPlaceholderCard
+        actions={actions}
+        model={placeholder}
+      />
     ) : null,
   );
 }

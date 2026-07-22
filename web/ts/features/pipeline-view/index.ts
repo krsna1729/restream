@@ -259,11 +259,8 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
   if (!selectedPipe) {
     pipelineHeaderPresentationHook?.(null);
     pipelineInputStatusPresentationHook?.(null);
-    document.getElementById("pipe-info-col")?.classList.add("hidden");
     return;
   }
-
-  document.getElementById("pipe-info-col")?.classList.remove("hidden");
 
   const pipe = state.pipelines.find((p) => p.id === selectedPipe);
   if (!pipe) {

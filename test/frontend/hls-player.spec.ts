@@ -381,7 +381,7 @@ test.describe('HLS Player — DOM rendering', () => {
     test('v2 preview host replaces the legacy global video container', async ({ page }) => {
         await page.goto('/?mode=pipeline');
         await expect(page.locator('#video-player')).toHaveCount(0);
-        await expect(page.locator('#pipe-info-col')).toHaveClass(/hidden/);
+        await expect(page.locator('#pipe-info-col')).toBeVisible();
         await expect(page.locator('#dashboard-v2-pipeline-input-status-root')).toBeAttached();
         await expect(page.locator('[data-role="dashboard-v2-input-preview"]')).toHaveCount(0);
     });

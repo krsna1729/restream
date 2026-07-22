@@ -31,11 +31,8 @@ export function togglePipelineOutputList(pipeId: string): void {
 export function renderOutsColumn(selectedPipe: string | null): void {
   if (!selectedPipe) {
     outputOverviewPresentationHook?.(null);
-    document.getElementById("outs-col")?.classList.add("hidden");
     return;
   }
-
-  document.getElementById("outs-col")?.classList.remove("hidden");
 
   const pipe = state.pipelines.find((candidate) => candidate.id === selectedPipe);
   if (!pipe) {
