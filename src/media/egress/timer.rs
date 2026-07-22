@@ -140,9 +140,9 @@ mod tests {
     fn fires_in_order() {
         let now = Instant::now();
         let mut wheel = TimerWheel::<u32>::new();
-        wheel.insert(now + Duration::from_millis(200), 2, 1);
+        wheel.insert(now + Duration::from_millis(200), 2, 2);
         wheel.insert(now + Duration::from_millis(100), 1, 1);
-        wheel.insert(now + Duration::from_millis(300), 3, 1);
+        wheel.insert(now + Duration::from_millis(300), 3, 3);
 
         // None should fire yet (now is before all deadlines).
         let fired = wheel.drain_expired(now, |k| Some(*k as u64));

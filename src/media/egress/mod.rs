@@ -1,7 +1,7 @@
 //! Protocol-neutral egress fabric.
 //!
 //! This module contains the target architecture described in
-//! `egress-architecture.md`. It is introduced behind the
+//! `docs/egress-architecture.md`. It is introduced behind the
 //! `RESTREAM_EGRESS_FABRIC` rollout selector and coexists with the legacy
 //! per-output task model during migration.
 //!
@@ -25,6 +25,7 @@
 pub mod backend;
 pub mod command;
 pub mod feed;
+pub mod journal;
 pub mod leaf;
 pub mod lifecycle;
 pub mod metrics;
