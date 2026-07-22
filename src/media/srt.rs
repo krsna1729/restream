@@ -42,6 +42,9 @@ mod srt_egress_engine;
 #[cfg(test)]
 #[path = "srt/egress_engine_tests.rs"]
 mod srt_egress_engine_tests;
+#[cfg(test)]
+#[path = "srt/egress_fabric_tests.rs"]
+mod srt_egress_fabric_tests;
 #[path = "srt/egress_poller.rs"]
 mod srt_egress_poller;
 #[cfg(test)]
