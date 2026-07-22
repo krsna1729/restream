@@ -87,6 +87,36 @@ fn command_batch_budget_allows_media_ticks_during_flood() {
 }
 
 #[test]
+fn command_batch_budget_services_ready_work_during_command_flood() {
+    let probe = Probe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        EgressShardConfig::new(32, 2, 2, 16, Duration::from_millis(10)).unwrap(),
+        ReadyFloodBackend {
+            probe: probe.clone(),
+        },
+    );
+
+    for i in 0..8 {
+        assert_eq!(
+            handle.try_send(EgressCommand::Add(output_spec(&format!(
+                "out-ready-during-command-{i}"
+            )))),
+            Ok(())
+        );
+    }
+    probe.wait_for_ready_events(2);
+    let snapshot = handle.shutdown_and_join();
+
+    assert!(probe.state().commands.len() >= 2);
+    assert!(probe.state().ready_events >= 2);
+    assert!(snapshot.metrics.ready_depth > 0);
+    assert!(snapshot.commands_processed >= 2);
+    assert!(snapshot.stopped);
+    assert!(!snapshot.panicked);
+}
+
+#[test]
 fn timer_batch_budget_allows_media_ticks_during_timer_flood() {
     let probe = Probe::default();
     let handle = EgressShardHandle::spawn(
