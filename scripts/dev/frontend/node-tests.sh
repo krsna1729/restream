@@ -37,6 +37,7 @@ TEST_FILES=(
   test/frontend/frontend-overview-activity-stream.test.mjs
   test/frontend/frontend-publisher-health-contract.test.mjs
   test/frontend/frontend-status-stream.test.mjs
+  test/frontend/frontend-pipeline-route-body.test.mjs
   test/frontend/frontend-media-render.test.mjs
   test/frontend/frontend-status-render.test.mjs
   test/frontend/frontend-settings-render.test.mjs

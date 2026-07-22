@@ -1,12 +1,44 @@
-export function pipelineInspectorShellHtml(): string {
-  return `
+interface PipelineInspectorShellOptions {
+  readonly v2RouteBody?: boolean;
+}
+
+export function pipelineInspectorShellHtml(
+  options: PipelineInspectorShellOptions = {},
+): string {
+  const routeChromeHtml = options.v2RouteBody
+    ? ""
+    : `
           <h1 class="dashboard-title">Pipeline inspect</h1>
           <p
             id="inspect-route-summary"
             class="text-base-content/60 text-sm"
             role="status"
             aria-live="polite"
-          ></p>
+          ></p>`;
+  const operateActionHtml = options.v2RouteBody
+    ? ""
+    : `
+            <button
+              type="button"
+              id="inspect-open-pipeline-btn"
+              class="btn btn-sm btn-outline min-h-10"
+              aria-label="Operate selected pipeline"
+            >
+              Operate
+            </button>`;
+  const diagnosticsActionHtml = options.v2RouteBody
+    ? ""
+    : `
+                <button
+                  type="button"
+                  id="inspect-open-diagnostics-btn"
+                  class="btn btn-xs btn-outline"
+                >
+                  Run Diagnostics
+                </button>`;
+
+  return `
+          ${routeChromeHtml}
           <div
             class="border-base-content/10 bg-base-200 flex flex-wrap items-center gap-2 rounded-lg border p-3"
           >
@@ -15,14 +47,7 @@ export function pipelineInspectorShellHtml(): string {
               class="select select-sm min-w-0 flex-1"
               aria-label="Inspect pipeline"
             ></select>
-            <button
-              type="button"
-              id="inspect-open-pipeline-btn"
-              class="btn btn-sm btn-outline min-h-10"
-              aria-label="Operate selected pipeline"
-            >
-              Operate
-            </button>
+            ${operateActionHtml}
           </div>
           <section
             class="border-base-content/10 bg-base-200 min-h-[28rem] min-w-0 rounded-lg border p-3"
@@ -75,13 +100,7 @@ export function pipelineInspectorShellHtml(): string {
                 class="mb-3 flex flex-wrap items-center justify-between gap-2"
               >
                 <h2 class="text-base font-semibold">Diagnostics Deep Dive</h2>
-                <button
-                  type="button"
-                  id="inspect-open-diagnostics-btn"
-                  class="btn btn-xs btn-outline"
-                >
-                  Run Diagnostics
-                </button>
+                ${diagnosticsActionHtml}
               </div>
               <p
                 id="inspect-focus-summary"

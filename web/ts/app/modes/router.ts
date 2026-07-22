@@ -9,9 +9,7 @@ import {
 } from "../../core/pipeline-workspace.js";
 import { state } from "../../core/state.js";
 import {
-  renderPipelineInspector,
   resetPipelineInspectorSelection,
-  setPipelineInspectorContainerId,
   syncPipelineInspectorVisibility,
 } from "../../features/pipeline-inspector/index.js";
 import {
@@ -34,9 +32,11 @@ import {
   renderDashboardV2TelemetryBody,
 } from "../../features/telemetry-route-body.js";
 import {
-  renderControlRoom,
-  setControlRoomContainerId,
-} from "../../features/control-room/index.js";
+  renderDashboardV2ControlRoomBody,
+} from "../../features/control-room-route-body.js";
+import {
+  renderDashboardV2PipelineInspectBody,
+} from "../../features/pipeline-inspect-route-body.js";
 import { selectPipeline } from "../../features/render.js";
 import { buildOverviewViewModel } from "../../features/overview-view-model.js";
 import { syncPipelineWorkspaceShell } from "../../features/pipeline-workspace-shell.js";
@@ -200,12 +200,6 @@ function configureDashboardV2RouteBodyTargets(
 ): void {
   const activeMode = dashboardV2RouteBodyMode(mode, pipelineView);
   clearDormantRouteBodies({ activeMode });
-  setPipelineInspectorContainerId(
-    dashboardV2RouteBodyConfig("pipeline-inspect").v2HostId,
-  );
-  setControlRoomContainerId(
-    dashboardV2RouteBodyConfig("pipeline-monitor").v2HostId,
-  );
   setMediaLibraryContainerId(
     dashboardV2RouteBodyConfig("media").v2HostId,
   );
@@ -367,10 +361,14 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
   }
   if (mode === "pipeline" && activePipelineView === "inspect") {
     restorePipelineWorkspaceShell(activePipelineView);
-    renderPipelineInspector();
+    renderDashboardV2PipelineInspectBody(
+      dashboardV2RouteBodyConfig("pipeline-inspect").v2HostId,
+    );
   } else if (mode === "pipeline" && activePipelineView === "monitor") {
     restorePipelineWorkspaceShell(activePipelineView);
-    renderControlRoom();
+    renderDashboardV2ControlRoomBody(
+      dashboardV2RouteBodyConfig("pipeline-monitor").v2HostId,
+    );
   }
   const pipelineOptions = state.pipelines.map((pipeline) => ({
     id: pipeline.id,

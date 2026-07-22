@@ -116,7 +116,9 @@ function ensurePipelineInspectorShell(container: HTMLElement): void {
     document.getElementById("inspect-pipeline-select")
   )
     return;
-  container.innerHTML = pipelineInspectorShellHtml();
+  container.innerHTML = pipelineInspectorShellHtml({
+    v2RouteBody: pipelineInspectV2Active(),
+  });
 }
 
 function pipelineInspectorContainer(): HTMLElement | null {
@@ -871,4 +873,3 @@ export {
   syncPipelineInspectorVisibility,
 } from "./graph.js";
 export { pipelineInspectV2Active } from "./view-helpers.js";
-

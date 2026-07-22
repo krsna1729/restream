@@ -203,6 +203,71 @@ test("status route body uses the v2-owned renderer", async () => {
   assert.match(statusSource, /container\.dataset\.statusRouteBody = "v2"/);
 });
 
+test("pipeline inspect route body uses the v2-owned renderer", async () => {
+  const [routerSource, routeBodySource, shellSource] = await Promise.all([
+    readFile(new URL("../../web/ts/app/modes/router.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL(
+        "../../web/ts/features/pipeline-inspect-route-body.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "../../web/ts/features/pipeline-inspector/shell.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ]);
+
+  assert.doesNotMatch(routerSource, /renderPipelineInspector/);
+  assert.doesNotMatch(routerSource, /setPipelineInspectorContainerId/);
+  assert.match(routerSource, /renderDashboardV2PipelineInspectBody/);
+  assert.match(
+    routerSource,
+    /dashboardV2RouteBodyConfig\("pipeline-inspect"\)\.v2HostId/,
+  );
+  assert.match(
+    routeBodySource,
+    /export function renderDashboardV2PipelineInspectBody\(\s*containerId: string,/,
+  );
+  assert.match(routeBodySource, /setPipelineInspectorContainerId\(containerId\)/);
+  assert.match(routeBodySource, /renderPipelineInspector\(\)/);
+  assert.match(
+    routeBodySource,
+    /container\.dataset\.pipelineInspectRouteBody = "v2"/,
+  );
+  assert.match(shellSource, /readonly v2RouteBody\?: boolean/);
+  assert.match(shellSource, /options\.v2RouteBody\s*\?\s*""/);
+});
+
+test("pipeline monitor route body uses the v2-owned renderer", async () => {
+  const [routerSource, routeBodySource] = await Promise.all([
+    readFile(new URL("../../web/ts/app/modes/router.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../../web/ts/features/control-room-route-body.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.doesNotMatch(routerSource, /renderControlRoom/);
+  assert.doesNotMatch(routerSource, /setControlRoomContainerId/);
+  assert.match(routerSource, /renderDashboardV2ControlRoomBody/);
+  assert.match(
+    routerSource,
+    /dashboardV2RouteBodyConfig\("pipeline-monitor"\)\.v2HostId/,
+  );
+  assert.match(
+    routeBodySource,
+    /export function renderDashboardV2ControlRoomBody\(containerId: string\): void/,
+  );
+  assert.match(routeBodySource, /setControlRoomContainerId\(containerId\)/);
+  assert.match(routeBodySource, /renderControlRoom\(\)/);
+  assert.match(routeBodySource, /container\.dataset\.controlRoomRouteBody = "v2"/);
+});
+
 test("settings route body uses the v2-owned renderer", async () => {
   const [routerSource, settingsSource] = await Promise.all([
     readFile(new URL("../../web/ts/app/modes/router.ts", import.meta.url), "utf8"),

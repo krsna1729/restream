@@ -53,6 +53,34 @@ test(
     assert.equal(container.dataset.settingsRouteBody, "v2");
     assert.doesNotMatch(container.innerHTML, /\son[a-z]+\s*=/i);
     assert.match(container.innerHTML, /data-settings-action="save-server-name"/);
+    assert.match(container.innerHTML, /value="Synthetic Restream"/);
     assert.match(container.innerHTML, /id="settings-route-summary"/);
+  },
+);
+
+test(
+  "settings uses the effective server name when config stores a blank name",
+  { concurrency: false },
+  async () => {
+    const { document } = installFakeDom();
+    const nameInput = appendRoot(document, "input", "settings-server-name");
+    const summary = appendRoot(document, "p", "settings-route-summary");
+
+    const settings = await loadCompiledFrontendModule("features/settings.js");
+    const { state } = await loadCompiledFrontendModule("core/state.js");
+    state.config = {
+      backendPolicy: {},
+      ingestHost: "",
+      ingestSecurity: {},
+      recordingSettings: {},
+      serverName: "",
+      srtIngest: {},
+      transcodeProfiles: {},
+    };
+
+    await settings.loadSettings({ embedded: true });
+
+    assert.equal(nameInput.value, "Restream");
+    assert.match(summary.textContent, /Restream settings/);
   },
 );

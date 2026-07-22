@@ -110,6 +110,10 @@ function needsFullSettingsConfig(): boolean {
   );
 }
 
+function effectiveServerName(): string {
+  return state.config?.serverName?.trim() || "Restream";
+}
+
 async function ensureFullSettingsConfig(): Promise<void> {
   if (!needsFullSettingsConfig()) return;
   const fullConfig = await getConfig();
@@ -127,7 +131,7 @@ export async function loadSettings({
   const nameInput = document.getElementById(
     "settings-server-name",
   ) as HTMLInputElement | null;
-  if (nameInput) nameInput.value = state.config?.serverName || "";
+  if (nameInput) nameInput.value = effectiveServerName();
   const hostInput = document.getElementById(
     "settings-ingest-host",
   ) as HTMLInputElement | null;
@@ -176,7 +180,7 @@ function countConfiguredProfiles(): number {
 
 function settingsSummaryText(): string {
   const rateLimit = settingsRateLimitPresentation();
-  const serverName = state.config?.serverName || "server";
+  const serverName = effectiveServerName();
   return `${serverName} settings · ${pluralize(SETTINGS_SECTION_COUNT, "section")} · ${pluralize(countConfiguredProfiles(), "profile")} · ${pluralize(rateLimit.totalCount, "auth attempt")}`;
 }
 
@@ -191,7 +195,7 @@ function buildSettingsCheckpointModel(): SettingsCheckpointModel {
         ? `${rateLimit.bannedCount} authentication attempt${rateLimit.bannedCount === 1 ? " is" : "s are"} currently banned; review the table before resetting global limits.`
         : "Configuration sections stay grouped by operational concern; use the section rail before editing dense forms.",
     metrics: [
-      { label: "Server", value: state.config?.serverName || "server" },
+      { label: "Server", value: effectiveServerName() },
       {
         label: "Security",
         value: rateLimit.bannedCount
@@ -330,6 +334,7 @@ function renderSettingsRoute(
   container: HTMLElement,
   options: SettingsRouteRenderOptions,
 ): void {
+  const serverNameValue = escapeHtml(effectiveServerName());
   container.innerHTML = `
         <div class="dashboard-page-shell">
             <div class="flex flex-wrap items-end justify-between gap-3">
@@ -350,7 +355,7 @@ function renderSettingsRoute(
                     <div class="max-w-2xl space-y-2">
                         <label for="settings-server-name" class="text-sm font-medium">Server Name</label>
                         <div class="flex flex-wrap items-center gap-2">
-                            <input type="text" id="settings-server-name" class="input input-sm min-w-0 flex-1" placeholder="Name" aria-label="Server name" />
+                            <input type="text" id="settings-server-name" class="input input-sm min-w-0 flex-1" placeholder="Name" aria-label="Server name" value="${serverNameValue}" />
                             <button class="btn btn-accent btn-sm" data-settings-action="save-server-name" aria-label="Save server name">Save</button>
                             <span id="server-name-saved" class="text-success hidden text-sm">Saved</span>
                         </div>

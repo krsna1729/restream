@@ -1032,7 +1032,9 @@ test.describe.serial('HLS Player — live playback', () => {
         await expect(select).toBeVisible();
         await select.selectOption({ value: livePipelineId });
 
-        const runDiagBtn = page.locator('#inspect-open-diagnostics-btn');
+        const runDiagBtn = page
+            .locator('#dashboard-v2-pipeline-inspect-root')
+            .getByRole('button', { name: 'Diagnostics' });
         await expect(runDiagBtn).toBeVisible();
         await expect(runDiagBtn).toBeEnabled();
         await runDiagBtn.click();
