@@ -30,9 +30,11 @@ export interface DashboardV2PipelineSelectorActions {
 }
 
 export interface DashboardV2PipelineHeaderActions {
+  readonly deletePipeline: (pipelineId: string) => void;
   readonly diagnosePipeline: (pipelineId: string) => void;
   readonly editPipeline: (pipelineId: string) => void;
   readonly inspectPipeline: (pipelineId: string) => void;
+  readonly openHistory: (pipelineId: string, pipelineName: string) => void;
   readonly toggleFileIngest: (pipelineId: string) => Promise<void>;
   readonly toggleRecording: (pipelineId: string) => Promise<void>;
 }

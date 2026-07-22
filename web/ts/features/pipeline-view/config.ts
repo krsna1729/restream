@@ -6,8 +6,6 @@ import type {
 
 // ── Legacy rendering flags / presentation hooks ────────────────────────
 
-export let legacyPipelineHeaderRenderEnabled = true;
-export let legacyPipelineLifecycleControlsEnabled = true;
 export let pipelineHeaderPresentationHook:
   ((model: PipelineOperateHeaderModel | null) => void) | null = null;
 export let legacyPipelineInputStatusRenderEnabled = true;
@@ -19,28 +17,9 @@ export let pipelineInputStatusPresentationHook:
 // ── Configure functions ────────────────────────────────────────────────
 
 export function configurePipelineHeaderPresentation(options: {
-  legacyLifecycleControlsEnabled?: boolean;
-  legacyRenderEnabled: boolean;
   onPresentation?: (model: PipelineOperateHeaderModel | null) => void;
 }): void {
-  legacyPipelineHeaderRenderEnabled = options.legacyRenderEnabled;
-  legacyPipelineLifecycleControlsEnabled =
-    options.legacyLifecycleControlsEnabled !== false;
   pipelineHeaderPresentationHook = options.onPresentation || null;
-  for (const id of [
-    "pipeline-header-legacy-identity",
-    "graph-pipe-btn",
-    "diagnose-pipe-btn",
-    "edit-pipe-action-item",
-    "pipeline-header-legacy-actions",
-  ]) {
-    const element = document.getElementById(id);
-    if (element) element.hidden = !legacyPipelineHeaderRenderEnabled;
-  }
-  for (const id of ["record-pipe-btn", "file-ingest-pipe-btn"]) {
-    const element = document.getElementById(id);
-    if (element) element.hidden = !legacyPipelineLifecycleControlsEnabled;
-  }
 }
 
 export function configurePipelineInputStatusPresentation(options: {

@@ -178,8 +178,8 @@ test("seed: default v2 replaces Overview while delegating operator actions @desk
   await expect(fileInputStatus).toContainText("1.0 MiB");
   await expect(fileInputStatus).toContainText("Sparse source GOP detected");
   await expect(page.locator("#file-source-section")).toBeHidden();
-  await expect(page.locator("#record-pipe-btn")).toBeHidden();
-  await expect(page.locator("#file-ingest-pipe-btn")).toBeHidden();
+  await expect(page.locator("#record-pipe-btn")).toHaveCount(0);
+  await expect(page.locator("#file-ingest-pipe-btn")).toHaveCount(0);
   const startFile = pipelineHeader.getByRole("button", {
     name: "Start file ingest for Retrying Destination",
   });
@@ -361,7 +361,7 @@ test("seed: default v2 replaces Overview while delegating operator actions @desk
     /Healthy Program/,
   );
   await expect(page).toHaveURL(/p=pipe-healthy/);
-  await expect(page.locator("#pipe-name")).toHaveText("Healthy Program");
+  await expect(page.locator("#pipe-name")).toHaveCount(0);
   await expect(pipelineHeader).toBeVisible();
   await expect(
     pipelineHeader.getByRole("heading", { name: "Healthy Program" }),
@@ -383,18 +383,20 @@ test("seed: default v2 replaces Overview while delegating operator actions @desk
       "Inspect graph for Healthy Program",
       "Diagnose Healthy Program",
       "Edit pipeline Healthy Program",
+      "Open history for Healthy Program",
+      "Delete pipeline Healthy Program",
     ]),
   );
   expect(healthyHeaderButtonNames).not.toEqual(
     expect.arrayContaining(["Record", "Graph", "Diagnose", "Edit"]),
   );
   expect(healthyHeaderButtonNames).not.toContain("Pipeline actions");
-  await expect(page.locator("#pipeline-header-legacy-identity")).toBeHidden();
-  await expect(page.locator("#graph-pipe-btn")).toBeHidden();
-  await expect(page.locator("#diagnose-pipe-btn")).toBeHidden();
-  await expect(page.locator("#edit-pipe-action-item")).toBeHidden();
-  await expect(page.locator("#pipeline-header-legacy-actions")).toBeHidden();
-  await expect(page.locator("#record-pipe-btn")).toBeHidden();
+  await expect(page.locator("#pipeline-header-legacy-identity")).toHaveCount(0);
+  await expect(page.locator("#graph-pipe-btn")).toHaveCount(0);
+  await expect(page.locator("#diagnose-pipe-btn")).toHaveCount(0);
+  await expect(page.locator("#edit-pipe-action-item")).toHaveCount(0);
+  await expect(page.locator("#pipeline-header-legacy-actions")).toHaveCount(0);
+  await expect(page.locator("#record-pipe-btn")).toHaveCount(0);
   const inputStatus = page.locator("#dashboard-v2-pipeline-input-status-root");
   await expect(inputStatus).toBeVisible();
   await expect(

@@ -72,7 +72,8 @@ test("static HTML keeps core DOM accessibility and layout invariants", async () 
     indexHtml,
     /<section[\s\S]*id="pipeline-workspace-view-bar"[\s\S]*aria-label="Pipeline navigation"/,
   );
-  assert.match(indexHtml, /<h1[\s\S]*id="pipe-name"/);
+  assert.match(indexHtml, /id="dashboard-v2-pipeline-header-root"/);
+  assert.doesNotMatch(indexHtml, /id="pipe-name"/);
   assert.match(
     indexHtml,
     /role="tab"[\s\S]*aria-controls="overview-mode-panel"/,

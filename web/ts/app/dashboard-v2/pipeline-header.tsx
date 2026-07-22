@@ -104,6 +104,24 @@ export function DashboardV2PipelineHeader({
           >
             Edit
           </button>
+          <button
+            aria-label={`Open history for ${model.name}`}
+            className="btn btn-xs btn-outline"
+            onClick={() => actions.openHistory(model.id, model.name)}
+            type="button"
+          >
+            History
+          </button>
+          <button
+            aria-label={`Delete pipeline ${model.name}`}
+            className="btn btn-xs btn-outline text-error"
+            disabled={!model.canDelete}
+            onClick={() => actions.deletePipeline(model.id)}
+            title={model.deleteTitle}
+            type="button"
+          >
+            Delete
+          </button>
         </div>
       </div>
       {model.lifecycleMessages.length ? (

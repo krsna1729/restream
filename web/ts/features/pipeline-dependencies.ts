@@ -1,7 +1,6 @@
 import type { PipelineFileIngestState } from "../types.js";
 
 export interface PipelineViewDependencies {
-  openPipelineHistoryModal: ((pipeId: string, pipeName: string) => void) | null;
   openPublisherHealthModal: ((pipeId: string) => void) | null;
   isOutputToggleBusy: ((pipeId: string, outId: string) => boolean) | null;
   startOutBtn:
@@ -41,13 +40,10 @@ export interface PipelineViewDependencies {
         ) => void
       )
     | null;
-  openDiagnosticsModal: ((pipeId: string) => void) | null;
-  openGraphExplorer: ((pipeId: string) => void) | null;
   openOutputMonitoringUrl: ((url: string | null | undefined) => void) | null;
 }
 
 export const pipelineViewDependencies: PipelineViewDependencies = {
-  openPipelineHistoryModal: null,
   openPublisherHealthModal: null,
   isOutputToggleBusy: null,
   startOutBtn: null,
@@ -60,8 +56,6 @@ export const pipelineViewDependencies: PipelineViewDependencies = {
   awaitDashboardRuntimeMutationConvergence: null,
   updateDashboardPipelineFileIngestState: null,
   updateDashboardPipelineRecordingState: null,
-  openDiagnosticsModal: null,
-  openGraphExplorer: null,
   openOutputMonitoringUrl: null,
 };
 

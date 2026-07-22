@@ -102,14 +102,6 @@ function appendRoot(document, tagName, id) {
 
 function setupPipelineInfoDom(document) {
   appendRoot(document, "div", "pipe-info-col");
-  appendRoot(document, "div", "pipe-name");
-  appendRoot(document, "button", "pipe-history-btn");
-  appendRoot(document, "button", "file-ingest-pipe-btn");
-  appendRoot(document, "button", "record-pipe-btn");
-  appendRoot(document, "button", "graph-pipe-btn");
-  appendRoot(document, "button", "diagnose-pipe-btn");
-  appendRoot(document, "button", "edit-pipe-btn");
-  appendRoot(document, "button", "delete-pipe-btn");
   appendRoot(document, "div", "input-time");
 
   appendRoot(document, "section", "file-source-section");
@@ -163,12 +155,16 @@ runDomScenarioMatrix({
 
     pipelineDeps.setPipelineViewDependencies({
       refreshDashboard: async () => {},
-      openDiagnosticsModal: () => {},
-      openGraphExplorer: () => {},
-      openPipelineHistoryModal: () => {},
+    });
+    const headerModels = [];
+    pipelineView.configurePipelineHeaderPresentation({
+      onPresentation: (model) => {
+        headerModels.push(model);
+      },
     });
 
     return {
+      headerModels,
       renderPipelineInfoColumn: pipelineView.renderPipelineInfoColumn,
       state,
     };
@@ -176,7 +172,7 @@ runDomScenarioMatrix({
   scenarios: [
     {
       name: "probe pending live input shows a probing badge and keeps diagnostics available",
-      async run({ document, renderPipelineInfoColumn, state }) {
+      async run({ document, headerModels, renderPipelineInfoColumn, state }) {
         globalThis.fetch = undefined;
         state.pipelines = [
           makePipeline({
@@ -193,19 +189,19 @@ runDomScenarioMatrix({
         renderPipelineInfoColumn("pipe-1");
 
         const publisherMeta = requireElement(document, "#publisher-meta");
-        const diagnoseButton = requireElement(document, "#diagnose-pipe-btn");
         const inputStats = requireElement(document, "#input-stats");
         const player = requireElement(document, "#video-player");
+        const header = headerModels.at(-1);
 
         assert.match(publisherMeta.innerHTML, /Probing/);
-        assert.equal(diagnoseButton.disabled, false);
+        assert.equal(header.canDiagnose, true);
         assertVisible(inputStats);
         assertVisible(player);
       },
     },
     {
       name: "offline failure state surfaces last failure context and disables live-only actions",
-      async run({ document, renderPipelineInfoColumn, state }) {
+      async run({ document, headerModels, renderPipelineInfoColumn, state }) {
         globalThis.fetch = undefined;
         state.pipelines = [
           makePipeline({
@@ -225,21 +221,20 @@ runDomScenarioMatrix({
         renderPipelineInfoColumn("pipe-1");
 
         const publisherMeta = requireElement(document, "#publisher-meta");
-        const diagnoseButton = requireElement(document, "#diagnose-pipe-btn");
-        const recordButton = requireElement(document, "#record-pipe-btn");
         const inputStats = requireElement(document, "#input-stats");
         const player = requireElement(document, "#video-player");
+        const header = headerModels.at(-1);
 
         assert.match(publisherMeta.innerHTML, /Last failure/);
-        assert.equal(diagnoseButton.disabled, true);
-        assert.equal(recordButton.disabled, true);
+        assert.equal(header.canDiagnose, false);
+        assert.equal(header.recordingControl.disabled, true);
         assertHidden(inputStats);
         assertHidden(player);
       },
     },
     {
       name: "file source analysis shows sparse GOP warnings without manual dashboard inspection",
-      async run({ document, renderPipelineInfoColumn, state }) {
+      async run({ document, headerModels, renderPipelineInfoColumn, state }) {
         globalThis.fetch = async (url) => {
           const href = String(url);
           if (href === "/api/v1/media") {
@@ -302,11 +297,11 @@ runDomScenarioMatrix({
         const fileSourceSection = requireElement(document, "#file-source-section");
         const streamKeySection = requireElement(document, "#stream-key-section");
         const warning = requireElement(document, "#file-source-gop-warning");
-        const ingestButton = requireElement(document, "#file-ingest-pipe-btn");
+        const header = headerModels.at(-1);
 
         assertVisible(fileSourceSection);
         assertHidden(streamKeySection);
-        assert.equal(ingestButton.textContent, "Start File");
+        assert.equal(header.fileIngestControl?.label, "Start File");
         assert.equal(requireElement(document, "#file-source-container").textContent, "MPEG-TS");
         assert.equal(requireElement(document, "#file-source-loop").textContent, "Enabled");
         assert.equal(requireElement(document, "#file-source-start-time").textContent, "00:00:05");
@@ -321,7 +316,7 @@ runDomScenarioMatrix({
     },
     {
       name: "recording lock keeps edit disabled while live-source ingest controls remain available",
-      async run({ document, renderPipelineInfoColumn, state }) {
+      async run({ document, headerModels, renderPipelineInfoColumn, state }) {
         globalThis.fetch = undefined;
         state.pipelines = [
           makePipeline({
@@ -339,14 +334,14 @@ runDomScenarioMatrix({
 
         renderPipelineInfoColumn("pipe-1");
 
-        const editButton = requireElement(document, "#edit-pipe-btn");
         const streamKeySection = requireElement(document, "#stream-key-section");
         const ingestUrlSection = requireElement(document, "#ingest-url-section");
         const streamKeyCopy = requireElement(document, "#stream-key-copy-btn");
         const ingestCopy = requireElement(document, "#ingest-url-copy-btn");
+        const header = headerModels.at(-1);
 
-        assert.equal(editButton.disabled, true);
-        assert.match(editButton.title, /Stop recording before editing/);
+        assert.equal(header.canEdit, false);
+        assert.match(header.editDisabledReason, /Stop recording before editing/);
         assertVisible(streamKeySection);
         assertVisible(ingestUrlSection);
         assert.equal(streamKeyCopy.disabled, false);

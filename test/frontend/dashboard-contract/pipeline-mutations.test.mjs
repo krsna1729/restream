@@ -442,14 +442,6 @@ test("recording patches local state immediately, while file-ingest falls back to
   window.location.href = "http://localhost/?mode=pipeline&p=pipe-1";
   appendRoot(document, "div", "dashboard-grid");
   appendRoot(document, "div", "pipe-info-col");
-  appendRoot(document, "div", "pipe-name");
-  appendRoot(document, "button", "pipe-history-btn");
-  appendRoot(document, "button", "file-ingest-pipe-btn");
-  appendRoot(document, "button", "record-pipe-btn");
-  appendRoot(document, "button", "graph-pipe-btn");
-  appendRoot(document, "button", "diagnose-pipe-btn");
-  appendRoot(document, "button", "edit-pipe-btn");
-  appendRoot(document, "button", "delete-pipe-btn");
   appendRoot(document, "div", "input-time");
   appendRoot(document, "section", "file-source-section");
   appendRoot(document, "span", "file-source-inline");
@@ -595,7 +587,13 @@ test("recording patches local state immediately, while file-ingest falls back to
   const dashboard = await loadCompiledFrontendModule("features/dashboard.js");
   const pipelineView = await loadCompiledFrontendModule("features/pipeline-view/index.js");
   const { state } = await loadCompiledFrontendModule("core/state.js");
+  const headerModels = [];
 
+  pipelineView.configurePipelineHeaderPresentation({
+    onPresentation: (model) => {
+      headerModels.push(model);
+    },
+  });
   pipelineView.setPipelineViewDependencies({
     refreshDashboardRuntime: dashboard.refreshDashboardRuntime,
     awaitDashboardRuntimeMutationConvergence:
@@ -609,13 +607,12 @@ test("recording patches local state immediately, while file-ingest falls back to
   pipelineView.renderPipelineInfoColumn("pipe-1");
   requests.length = 0;
 
-  const recordButton = document.getElementById("record-pipe-btn");
-  const startRecordingPromise = recordButton.onclick();
+  const startRecordingPromise = pipelineView.togglePipelineRecording("pipe-1");
   await flushAsyncWork();
+  const startingRecordingHeader = headerModels.at(-1);
 
-  assert.equal(recordButton.textContent, "Starting...");
-  assert.equal(recordButton.disabled, true);
-  assert.equal(recordButton.classList.contains("btn-disabled"), true);
+  assert.equal(startingRecordingHeader.recordingControl.label, "Starting...");
+  assert.equal(startingRecordingHeader.recordingControl.disabled, true);
   assert.deepEqual(requests, [["POST", startRecordingUrl]]);
 
   resolveStartRecordingRequest();
@@ -625,9 +622,10 @@ test("recording patches local state immediately, while file-ingest falls back to
   assert.deepEqual(requests, [["POST", startRecordingUrl]]);
   assert.equal(state.pipelines[0].recording.enabled, true);
   assert.equal(state.pipelines[0].recording.active, true);
+  const recordingHeader = headerModels.at(-1);
   assert.equal(
-    document.getElementById("edit-pipe-btn").disabled,
-    true,
+    recordingHeader.canEdit,
+    false,
     "active recording should lock pipeline editing immediately from the mutation response",
   );
 
@@ -636,21 +634,24 @@ test("recording patches local state immediately, while file-ingest falls back to
   pipelineView.renderPipelineInfoColumn("pipe-1");
   requests.length = 0;
 
-  const fileIngestButton = document.getElementById("file-ingest-pipe-btn");
-  const startIngestPromise = fileIngestButton.onclick();
+  const startIngestPromise = pipelineView.togglePipelineFileIngest("pipe-1");
   await flushAsyncWork();
+  const startingIngestHeader = headerModels.at(-1);
 
-  assert.equal(fileIngestButton.textContent, "Starting File...");
-  assert.equal(fileIngestButton.disabled, true);
-  assert.equal(fileIngestButton.classList.contains("btn-disabled"), true);
+  assert.equal(
+    startingIngestHeader.fileIngestControl?.label,
+    "Starting File...",
+  );
+  assert.equal(startingIngestHeader.fileIngestControl?.disabled, true);
   assert.deepEqual(requests, [["POST", startIngestUrl]]);
 
   resolveStartIngestRequest();
   await startIngestPromise;
   await flushAsyncWork();
 
-  assert.equal(fileIngestButton.textContent, "Stop File");
-  assert.equal(fileIngestButton.disabled, false);
+  const runningIngestHeader = headerModels.at(-1);
+  assert.equal(runningIngestHeader.fileIngestControl?.label, "Stop File");
+  assert.equal(runningIngestHeader.fileIngestControl?.disabled, false);
   assert.equal(state.config.pipelines[0].fileIngest?.running, true);
   assert.deepEqual(requests, [
     ["POST", startIngestUrl],

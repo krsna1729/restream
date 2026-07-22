@@ -179,11 +179,6 @@
   scrollbar-width: thin;
 }
 
-.dashboard-action-menu {
-  max-height: min(28rem, calc(100vh - 8rem));
-  overflow-y: auto;
-}
-
 @media (min-width: 768px) {
   #dashboard-grid {
     grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr);

@@ -773,10 +773,10 @@ test("ingest detail rendering and publisher quality helpers surface operator-fac
   assert.ok(rtmpMetrics.some((metric) => metric.code === "tcp_rtt"));
 
   deps.setPipelineViewDependencies({
-    openGraphExplorer: (pipeId) => pipeId,
+    refreshDashboard: async () => {},
   });
   assert.equal(
-    typeof deps.pipelineViewDependencies.openGraphExplorer,
+    typeof deps.pipelineViewDependencies.refreshDashboard,
     "function",
   );
 });

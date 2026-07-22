@@ -443,7 +443,6 @@ runCheck(
   async () => {
     const { document } = installFakeDom();
     appendRoot(document, "div", "pipe-info-col");
-    appendRoot(document, "div", "pipe-name");
     const statsShell = appendRoot(document, "div", "stats-shell");
     const inputStats = document.createElement("div");
     inputStats.id = "input-stats";
@@ -497,13 +496,6 @@ runCheck(
   async () => {
     const { document } = installFakeDom();
     appendRoot(document, "div", "pipe-info-col");
-    appendRoot(document, "div", "pipe-name");
-    appendRoot(document, "button", "file-ingest-pipe-btn");
-    appendRoot(document, "button", "record-pipe-btn");
-    appendRoot(document, "button", "graph-pipe-btn");
-    appendRoot(document, "button", "diagnose-pipe-btn");
-    appendRoot(document, "button", "edit-pipe-btn");
-    appendRoot(document, "button", "delete-pipe-btn");
     appendRoot(document, "div", "input-time");
     appendRoot(document, "section", "file-source-section");
     appendRoot(document, "span", "file-source-inline");
@@ -529,6 +521,12 @@ runCheck(
       "features/pipeline-view/index.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
+    const headerModels = [];
+    pipelineView.configurePipelineHeaderPresentation({
+      onPresentation: (model) => {
+        headerModels.push(model);
+      },
+    });
 
     state.pipelines = [
       makePipeline({
@@ -552,16 +550,7 @@ runCheck(
 
     pipelineView.renderPipelineInfoColumn("pipe-1");
 
-    assert.equal(
-      document
-        .getElementById("file-ingest-pipe-btn")
-        .classList.contains("hidden"),
-      false,
-    );
-    assert.equal(
-      document.getElementById("file-ingest-pipe-btn").textContent,
-      "Start File",
-    );
+    assert.equal(headerModels.at(-1).fileIngestControl?.label, "Start File");
     assert.equal(
       document
         .getElementById("file-source-section")
@@ -649,13 +638,6 @@ runCheck(
     }
     window.location.href = "http://localhost/?mode=pipeline&p=pipe-1";
     appendRoot(document, "div", "pipe-info-col");
-    appendRoot(document, "div", "pipe-name");
-    appendRoot(document, "button", "file-ingest-pipe-btn");
-    appendRoot(document, "button", "record-pipe-btn");
-    appendRoot(document, "button", "graph-pipe-btn");
-    appendRoot(document, "button", "diagnose-pipe-btn");
-    appendRoot(document, "button", "edit-pipe-btn");
-    appendRoot(document, "button", "delete-pipe-btn");
     appendRoot(document, "div", "input-time");
     appendRoot(document, "section", "file-source-section");
     appendRoot(document, "span", "file-source-inline");
@@ -841,13 +823,6 @@ runCheck(
   async () => {
     const { document } = installFakeDom();
     appendRoot(document, "div", "pipe-info-col");
-    appendRoot(document, "div", "pipe-name");
-    appendRoot(document, "button", "file-ingest-pipe-btn");
-    appendRoot(document, "button", "record-pipe-btn");
-    appendRoot(document, "button", "graph-pipe-btn");
-    appendRoot(document, "button", "diagnose-pipe-btn");
-    appendRoot(document, "button", "edit-pipe-btn");
-    appendRoot(document, "button", "delete-pipe-btn");
     appendRoot(document, "div", "input-time");
     appendRoot(document, "div", "input-stats");
     appendRoot(document, "div", "input-video-codec");
@@ -984,7 +959,6 @@ runCheck(
       JSON.stringify(["pipe-1"]),
     );
     appendRoot(document, "div", "pipe-info-col");
-    appendRoot(document, "div", "pipe-name");
     appendRoot(document, "div", "input-stats");
     appendRoot(document, "div", "input-audio-tracks");
 

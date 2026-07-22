@@ -184,6 +184,8 @@ test("pipeline header model derives identity, status, and action availability", 
     diagnoseDisabledReason: undefined,
     canEdit: true,
     editDisabledReason: undefined,
+    canDelete: false,
+    deleteTitle: "Stop all outputs before deleting the pipeline",
     recordingControl: {
       label: "Record",
       disabled: false,

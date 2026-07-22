@@ -8,6 +8,7 @@ import {
 } from "../features/dashboard.js";
 import {
   addOutBtn,
+  deletePipeBtn,
   deleteOutBtn,
   editPipeBtn,
   editOutBtn,
@@ -166,8 +167,6 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
       : undefined,
   });
   configurePipelineHeaderPresentation({
-    legacyLifecycleControlsEnabled: !pipelineV2Active,
-    legacyRenderEnabled: !pipelineV2Active,
     onPresentation: pipelineV2Active
       ? updateDashboardV2PipelineHeader
       : undefined,
@@ -241,6 +240,10 @@ export function initDashboardApp(): void {
     selectPipeline,
   });
   setDashboardV2PipelineHeaderActions({
+    deletePipeline: (pipelineId) => {
+      selectPipeline(pipelineId);
+      void deletePipeBtn();
+    },
     diagnosePipeline: openDiagnosticsModal,
     editPipeline: (pipelineId) => {
       selectPipeline(pipelineId);
@@ -248,6 +251,7 @@ export function initDashboardApp(): void {
     },
     inspectPipeline: (pipelineId) =>
       openInspectGraph(pipelineId, { focus: "panel" }),
+    openHistory: openPipelineHistoryModal,
     toggleFileIngest: togglePipelineFileIngest,
     toggleRecording: togglePipelineRecording,
   });
@@ -346,7 +350,6 @@ export function initDashboardApp(): void {
   });
 
   setPipelineViewDependencies({
-    openPipelineHistoryModal,
     openPublisherHealthModal,
     isOutputToggleBusy,
     startOutBtn,
@@ -359,8 +362,6 @@ export function initDashboardApp(): void {
     awaitDashboardRuntimeMutationConvergence,
     updateDashboardPipelineFileIngestState,
     updateDashboardPipelineRecordingState,
-    openDiagnosticsModal,
-    openGraphExplorer: openInspectGraph,
     openOutputMonitoringUrl,
   });
 

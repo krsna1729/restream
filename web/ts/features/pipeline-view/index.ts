@@ -73,7 +73,6 @@ import {
   formatSourceFps,
   formatSourceGop,
   getFileSourceName,
-  hideFileIngestControl,
   setTextIfPresent,
 } from "./file-source.js";
 import { setTextIfChanged, syncPublisherMeta } from "./publisher.js";
@@ -338,150 +337,11 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
   const isFileSource = (pipe.inputSource || "").startsWith("file:");
   const fileSourceName = getFileSourceName(pipe);
 
-  const pipeNameEl = document.getElementById("pipe-name");
-  if (pipeNameEl) pipeNameEl.textContent = pipe.name;
-
-  const historyBtn = document.getElementById("pipe-history-btn");
-  if (historyBtn) {
-    historyBtn.onclick = () => {
-      pipelineViewDependencies.openPipelineHistoryModal?.(pipe.id, pipe.name);
-    };
-  }
-
-  const recordBtn = document.getElementById(
-    "record-pipe-btn",
-  ) as HTMLButtonElement | null;
-  if (recordBtn) {
-    const isRecordingEnabled = pipe.recording.enabled;
-    const inputOn = pipe.input.status === "on";
-    const canStart = inputOn || isRecordingEnabled;
-    const pendingIntent = getPendingRecordingIntent(pipe.id);
-    const pending = pendingIntent !== null;
-    recordBtn.textContent = pending
-      ? pendingIntent === "starting"
-        ? "Starting..."
-        : "Stopping..."
-      : isRecordingEnabled
-        ? "Stop Rec"
-        : "Record";
-    recordBtn.classList.toggle(
-      "btn-error",
-      pendingIntent === "stopping" || (!pending && isRecordingEnabled),
-    );
-    recordBtn.classList.toggle(
-      "btn-accent",
-      pendingIntent === "starting" || (!pending && !isRecordingEnabled),
-    );
-    recordBtn.classList.toggle(
-      "btn-outline",
-      pendingIntent !== "starting" && !isRecordingEnabled,
-    );
-    recordBtn.disabled = pending || !canStart;
-    recordBtn.classList.toggle("btn-disabled", pending || !canStart);
-    recordBtn.title = pending
-      ? ""
-      : !canStart
-        ? "Input must be on to start recording"
-        : "";
-    recordBtn.onclick = () => togglePipelineRecording(pipe.id);
-  }
-
-  const fileIngestBtn = document.getElementById(
-    "file-ingest-pipe-btn",
-  ) as HTMLButtonElement | null;
-  if (fileIngestBtn) {
-    const fileIngest = pipe.fileIngest || null;
-    const configured = Boolean(isFileSource && fileIngest?.configured);
-    if (!configured || !fileIngest?.id) {
-      setPendingFileIngestIntent(pipe.id, null);
-      hideFileIngestControl(fileIngestBtn);
-    } else {
-      const running = Boolean(fileIngest.running);
-      const pendingIntent = getPendingFileIngestIntent(pipe.id);
-      const pending = pendingIntent !== null;
-      fileIngestBtn.classList.remove("hidden");
-      fileIngestBtn.textContent = pending
-        ? pendingIntent === "starting"
-          ? "Starting File..."
-          : "Stopping File..."
-        : running
-          ? "Stop File"
-          : "Start File";
-      fileIngestBtn.classList.toggle(
-        "btn-error",
-        pendingIntent === "stopping" || (!pending && running),
-      );
-      fileIngestBtn.classList.toggle(
-        "btn-accent",
-        pendingIntent === "starting" || (!pending && !running),
-      );
-      fileIngestBtn.classList.toggle(
-        "btn-outline",
-        pendingIntent !== "starting" && !running,
-      );
-      fileIngestBtn.disabled = pending;
-      fileIngestBtn.classList.toggle("btn-disabled", pending);
-      fileIngestBtn.title = fileIngest.filename
-        ? `${running ? "Stop" : "Start"} file ingest for ${fileIngest.filename}`
-        : "";
-      fileIngestBtn.onclick = () => togglePipelineFileIngest(pipe.id);
-    }
-  }
-
-  const graphBtn = document.getElementById(
-    "graph-pipe-btn",
-  ) as HTMLButtonElement | null;
-  if (graphBtn) {
-    graphBtn.disabled = false;
-    graphBtn.classList.remove("btn-disabled");
-    graphBtn.title = "";
-    graphBtn.onclick = () => {
-      pipelineViewDependencies.openGraphExplorer?.(pipe.id);
-    };
-  }
-
-  const diagnoseBtn = document.getElementById(
-    "diagnose-pipe-btn",
-  ) as HTMLButtonElement | null;
-  if (diagnoseBtn) {
-    const inputOn = pipe.input.status === "on";
-    diagnoseBtn.disabled = !inputOn;
-    diagnoseBtn.classList.toggle("btn-disabled", !inputOn);
-    diagnoseBtn.title = inputOn
-      ? ""
-      : "Input must be online to run diagnostics";
-    diagnoseBtn.onclick = () => {
-      pipelineViewDependencies.openDiagnosticsModal?.(pipe.id);
-    };
-  }
-
-  const editPipeBtn = document.getElementById(
-    "edit-pipe-btn",
-  ) as HTMLButtonElement | null;
-  if (editPipeBtn) {
-    const isRecordingActive = pipe.recording.active;
-    editPipeBtn.disabled = isRecordingActive;
-    editPipeBtn.classList.toggle("btn-disabled", isRecordingActive);
-    editPipeBtn.title = isRecordingActive
-      ? "Stop recording before editing"
-      : "";
-  }
   const inputTimeElem = document.getElementById("input-time");
   if (inputTimeElem) {
     inputTimeElem.classList.add("hidden");
     inputTimeElem.textContent =
       pipe.input.time === null ? "" : msToHHMMSS(pipe.input.time);
-  }
-
-  const deletePipeBtn = document.getElementById("delete-pipe-btn");
-  if (deletePipeBtn) {
-    if (pipe.outs.find((o) => o.status !== "off")) {
-      deletePipeBtn.classList.add("btn-disabled");
-      deletePipeBtn.title = "Stop all outputs before deleting the pipeline";
-    } else {
-      deletePipeBtn.classList.remove("btn-disabled");
-      deletePipeBtn.title = "";
-    }
   }
 
   const streamKeySection = document.getElementById("stream-key-section");
