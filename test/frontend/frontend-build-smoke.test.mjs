@@ -45,14 +45,19 @@ test("compiled dashboard bootstrap remains idempotent", async () => {
   assert.equal(window.setDashboardMode, firstSetDashboardMode);
 });
 
-test("dashboard v2 loader always enables the v2 dashboard after cutover", async () => {
+test("compiled dashboard no longer exposes v2 experiment switches", async () => {
   installFakeDom();
-  const loader = await loadCompiledFrontendModule("app/dashboard-v2-loader.js");
+  const [entrySource, loader] = await Promise.all([
+    readFile(
+      new URL("../../public/js/app/dashboard-entry.js", import.meta.url),
+      "utf8",
+    ),
+    loadCompiledFrontendModule("app/dashboard-v2-loader.js"),
+  ]);
 
-  assert.equal(
-    loader.dashboardV2ExperimentEnabled(),
-    true,
-  );
+  assert.equal("dashboardV2ExperimentEnabled" in loader, false);
+  assert.equal("startDashboardV2Experiment" in loader, false);
+  assert.doesNotMatch(entrySource, /startDashboardV2Experiment/);
 });
 
 test("compiled dashboard no longer exposes a UI version toggle", async () => {

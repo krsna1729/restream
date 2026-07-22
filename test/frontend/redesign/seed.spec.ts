@@ -644,13 +644,13 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   expect(await getCdpNodeCount(page)).toBeLessThan(13_500);
 });
 
-test("seed: ui=v2 mounts route bodies in v2-owned hosts @desktop", async ({
+test("seed: default dashboard mounts route bodies in v2-owned hosts @desktop", async ({
   page,
 }) => {
   const routes = [
     {
       hostId: "dashboard-v2-pipeline-inspect-content",
-      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying",
       legacyBodyId: "inspect-mode-content",
       nodeBudget: 9_000,
       panelId: "inspect-mode-panel",
@@ -660,7 +660,7 @@ test("seed: ui=v2 mounts route bodies in v2-owned hosts @desktop", async ({
     },
     {
       hostId: "dashboard-v2-control-room-content",
-      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying",
       legacyBodyId: "control-mode-content",
       nodeBudget: 13_500,
       panelId: "control-mode-panel",
@@ -670,7 +670,7 @@ test("seed: ui=v2 mounts route bodies in v2-owned hosts @desktop", async ({
     },
     {
       hostId: "dashboard-v2-media-content",
-      href: "/?mode=media&ui=v2",
+      href: "/?mode=media",
       legacyBodyId: "media-mode-content",
       nodeBudget: 11_500,
       panelId: "media-mode-panel",
@@ -680,7 +680,7 @@ test("seed: ui=v2 mounts route bodies in v2-owned hosts @desktop", async ({
     },
     {
       hostId: "dashboard-v2-settings-content",
-      href: "/?mode=settings&ui=v2",
+      href: "/?mode=settings",
       legacyBodyId: "settings-mode-content",
       nodeBudget: 14_750,
       panelId: "settings-mode-panel",
@@ -690,7 +690,7 @@ test("seed: ui=v2 mounts route bodies in v2-owned hosts @desktop", async ({
     },
     {
       hostId: "dashboard-v2-status-content",
-      href: "/?mode=status&ui=v2",
+      href: "/?mode=status",
       legacyBodyId: "status-mode-content",
       nodeBudget: 16_500,
       panelId: "status-mode-panel",
@@ -700,7 +700,7 @@ test("seed: ui=v2 mounts route bodies in v2-owned hosts @desktop", async ({
     },
     {
       hostId: "dashboard-v2-incidents-content",
-      href: "/?mode=incidents&ui=v2",
+      href: "/?mode=incidents",
       legacyBodyId: "incidents-mode-content",
       nodeBudget: 18_500,
       panelId: "incidents-mode-panel",
@@ -710,7 +710,7 @@ test("seed: ui=v2 mounts route bodies in v2-owned hosts @desktop", async ({
     },
     {
       hostId: "dashboard-v2-telemetry-content",
-      href: "/?mode=telemetry&ui=v2",
+      href: "/?mode=telemetry",
       legacyBodyId: "telemetry-mode-content",
       nodeBudget: 21_500,
       panelId: "telemetry-mode-panel",
@@ -787,9 +787,11 @@ test("seed: ui=v2 mounts route bodies in v2-owned hosts @desktop", async ({
       }
     }
   }
-  console.info(`ui-v2-route-ownership-metrics=${JSON.stringify(routeMetrics)}`);
+  console.info(
+    `dashboard-v2-default-route-ownership-metrics=${JSON.stringify(routeMetrics)}`,
+  );
 
-  await page.goto("/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2");
+  await page.goto("/?mode=pipeline&view=inspect&p=pipe-retrying");
   await expect(page.locator("#dashboard-v2-pipeline-inspect-root")).toContainText(
     "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
   );
@@ -799,7 +801,7 @@ test("seed: ui=v2 mounts route bodies in v2-owned hosts @desktop", async ({
     ),
   ).toBeVisible();
 
-  await page.goto("/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2");
+  await page.goto("/?mode=pipeline&view=monitor&p=pipe-retrying");
   await expect(page.locator("#dashboard-v2-control-room-root")).toContainText(
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );

@@ -30,9 +30,9 @@ import { DashboardV2PipelineOutputOverview } from "./dashboard-v2/pipeline-outpu
 
 const dashboardV2Container = document.getElementById("dashboard-v2-root");
 if (!dashboardV2Container)
-  throw new Error("Dashboard v2 experiment root is missing");
+  throw new Error("Dashboard v2 root is missing");
 const container: HTMLElement = dashboardV2Container;
-container.dataset.uiV2Seam = "UI v2 seam active";
+container.dataset.uiV2Shell = "Dashboard v2 active";
 let root: Root | null = null;
 const pipelineSelectorContainer = document.getElementById(
   "dashboard-v2-pipeline-selector-root",

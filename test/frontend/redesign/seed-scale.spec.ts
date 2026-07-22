@@ -30,14 +30,14 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     }) as typeof window.open;
   });
   const pageErrors: string[] = [];
-  const seamErrors: string[] = [];
+  const shellErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("console", (message) => {
     if (
       message.type() === "error" &&
-      message.text().includes("Unable to start the dashboard v2 experiment")
+      message.text().includes("Unable to start the dashboard v2 shell")
     ) {
-      seamErrors.push(message.text());
+      shellErrors.push(message.text());
     }
   });
   await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2", {
@@ -107,7 +107,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(page).toHaveURL(/\?mode=overview&ui=v2$/);
   await page.waitForTimeout(100);
   expect(pageErrors).toEqual([]);
-  expect(seamErrors).toEqual([]);
+  expect(shellErrors).toEqual([]);
   expect(
     await page.evaluate(() => ({
       loaded: performance

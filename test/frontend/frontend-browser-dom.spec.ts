@@ -227,7 +227,7 @@ test.describe("Frontend Browser DOM", () => {
   test("login returns to the preserved dashboard location after auth expiry", async ({
     page,
   }) => {
-    const returnPath = "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2";
+    const returnPath = "/?mode=pipeline&view=operate&p=pipe-retrying#outputs";
     await page.goto(`/login.html?return=${encodeURIComponent(returnPath)}`);
     const requests: unknown[] = [];
     await page.exposeFunction("recordLoginReturnRequest", (request: unknown) => {

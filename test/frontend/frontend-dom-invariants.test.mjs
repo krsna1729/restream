@@ -150,3 +150,28 @@ test("feature modules receive dashboard UI version through app-owned configurati
     "feature modules must not read app chrome or URL UI-version state directly",
   );
 });
+
+test("dashboard app source has no UI-version experiment gate after cutover", async () => {
+  const appFiles = await sourceFilesUnder(
+    new URL("../../web/ts/app/", import.meta.url),
+  );
+  const violations = [];
+  await Promise.all(
+    appFiles.map(async (fileUrl) => {
+      const source = await readFile(fileUrl, "utf8");
+      if (
+        source.includes("dashboard-ui-v2-toggle") ||
+        source.includes("dashboardV2ExperimentEnabled") ||
+        source.includes("startDashboardV2Experiment")
+      ) {
+        violations.push(fileUrl.pathname);
+      }
+    }),
+  );
+
+  assert.deepEqual(
+    violations.sort(),
+    [],
+    "dashboard app modules must not retain UI-version experiment switches",
+  );
+});

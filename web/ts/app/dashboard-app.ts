@@ -89,7 +89,6 @@ import {
   togglePipelineOutputList,
 } from "../features/pipeline-output-list.js";
 import {
-  dashboardV2ExperimentEnabled,
   setDashboardV2PresentationScope,
   setDashboardV2OverviewActions,
   setDashboardV2ControlRoomActions,
@@ -120,25 +119,21 @@ import {
 let dashboardAppInitialized = false;
 
 function syncDashboardV2Presentation(location: DashboardLocation): void {
-  const dashboardV2Enabled = dashboardV2ExperimentEnabled();
-  const overviewV2Active = dashboardV2Enabled && location.mode === "overview";
+  const overviewV2Active = location.mode === "overview";
   const pipelineV2Active =
-    dashboardV2Enabled &&
     location.mode === "pipeline" &&
     location.pipelineView === "operate";
   const pipelineInspectV2Active =
-    dashboardV2Enabled &&
     location.mode === "pipeline" &&
     location.pipelineView === "inspect";
   const controlRoomV2Active =
-    dashboardV2Enabled &&
     location.mode === "pipeline" &&
     location.pipelineView === "monitor";
-  const incidentsV2Active = dashboardV2Enabled && location.mode === "incidents";
-  const telemetryV2Active = dashboardV2Enabled && location.mode === "telemetry";
-  const statusV2Active = dashboardV2Enabled && location.mode === "status";
-  const mediaV2Active = dashboardV2Enabled && location.mode === "media";
-  const settingsV2Active = dashboardV2Enabled && location.mode === "settings";
+  const incidentsV2Active = location.mode === "incidents";
+  const telemetryV2Active = location.mode === "telemetry";
+  const statusV2Active = location.mode === "status";
+  const mediaV2Active = location.mode === "media";
+  const settingsV2Active = location.mode === "settings";
 
   setDashboardV2PresentationScope({
     overviewActive: overviewV2Active,
@@ -235,123 +230,118 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
 export function initDashboardApp(): void {
   if (dashboardAppInitialized) return;
   dashboardAppInitialized = true;
-  const dashboardV2Enabled = dashboardV2ExperimentEnabled();
-  if (dashboardV2Enabled) {
-    configureDashboardModePresentationSync(syncDashboardV2Presentation);
-    setDashboardV2OverviewActions({
-      addPipeline: () => void window.addPipeBtn(),
-      inspectPipeline: (pipelineId) =>
-        openInspectGraph(pipelineId, { focus: "panel" }),
-      openPipeline: (pipelineId) => {
-        setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
-        renderPipelines();
-      },
-      openStatus: () => setDashboardMode("status", { focus: "panel" }),
-    });
-    setDashboardV2PipelineSelectorActions({
-      addPipeline: () => void window.addPipeBtn(),
-      selectPipeline,
-    });
-    setDashboardV2PipelineHeaderActions({
-      diagnosePipeline: openDiagnosticsModal,
-      editPipeline: (pipelineId) => {
-        selectPipeline(pipelineId);
-        void editPipeBtn();
-      },
-      inspectPipeline: (pipelineId) =>
-        openInspectGraph(pipelineId, { focus: "panel" }),
-      toggleFileIngest: togglePipelineFileIngest,
-      toggleRecording: togglePipelineRecording,
-    });
-    setDashboardV2PipelineInspectActions({
-      openPipeline: (pipelineId) => {
-        selectPipeline(pipelineId);
-        setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
-      },
-      runDiagnostics: openDiagnosticsModal,
-    });
-    setDashboardV2ControlRoomActions({
-      openPipeline: (pipelineId) => {
-        selectPipeline(pipelineId);
-        setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
-      },
-    });
-    setDashboardV2IncidentsActions({
-      openTelemetry: () => setDashboardMode("telemetry", { focus: "panel" }),
-    });
-    setDashboardV2TelemetryActions({
-      openStatus: () => setDashboardMode("status", { focus: "panel" }),
-    });
-    setDashboardV2StatusActions({
-      openTelemetry: () => setDashboardMode("telemetry", { focus: "panel" }),
-    });
-    setDashboardV2MediaActions({
-      openOverview: () => setDashboardMode("overview", { focus: "panel" }),
-    });
-    setDashboardV2SettingsActions({
-      openStatus: () => setDashboardMode("status", { focus: "panel" }),
-    });
-    setDashboardV2PipelineInputStatusActions({
-      cancelAudioTrackEdit: cancelPipelineAudioTrackEdit,
-      clearPreview: clearPipelineInputPreview,
-      copyIngestUrl: copyPipelineIngestUrl,
-      copyStreamKey: copyPipelineStreamKey,
-      editAudioTrack: editPipelineAudioTrack,
-      mountPreview: mountPipelineInputPreview,
-      saveAudioTrack: savePipelineAudioTrack,
-      selectProtocol: selectPipelineIngestProtocol,
-      updateAudioTrackDraft: updatePipelineAudioTrackDraft,
-      copyValue: async (value) => {
-        if (await copyText(value)) showCopiedNotification();
-      },
-      createInput: createPipelineInput,
-      deleteInput: deletePipelineInput,
-      listInputs: getPipelineInputs,
-      promoteInput: promotePipelineInput,
-      updateInput: updatePipelineInput,
-    });
-    setDashboardV2PipelineOutputOverviewActions({
-      addOutput: (pipelineId) => {
-        selectPipeline(pipelineId);
-        void addOutBtn();
-      },
-      deleteOutput: async (pipelineId, outputId) => {
-        await deleteOutBtn(pipelineId, outputId);
+  configureDashboardModePresentationSync(syncDashboardV2Presentation);
+  setDashboardV2OverviewActions({
+    addPipeline: () => void window.addPipeBtn(),
+    inspectPipeline: (pipelineId) =>
+      openInspectGraph(pipelineId, { focus: "panel" }),
+    openPipeline: (pipelineId) => {
+      setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
+      renderPipelines();
+    },
+    openStatus: () => setDashboardMode("status", { focus: "panel" }),
+  });
+  setDashboardV2PipelineSelectorActions({
+    addPipeline: () => void window.addPipeBtn(),
+    selectPipeline,
+  });
+  setDashboardV2PipelineHeaderActions({
+    diagnosePipeline: openDiagnosticsModal,
+    editPipeline: (pipelineId) => {
+      selectPipeline(pipelineId);
+      void editPipeBtn();
+    },
+    inspectPipeline: (pipelineId) =>
+      openInspectGraph(pipelineId, { focus: "panel" }),
+    toggleFileIngest: togglePipelineFileIngest,
+    toggleRecording: togglePipelineRecording,
+  });
+  setDashboardV2PipelineInspectActions({
+    openPipeline: (pipelineId) => {
+      selectPipeline(pipelineId);
+      setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
+    },
+    runDiagnostics: openDiagnosticsModal,
+  });
+  setDashboardV2ControlRoomActions({
+    openPipeline: (pipelineId) => {
+      selectPipeline(pipelineId);
+      setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
+    },
+  });
+  setDashboardV2IncidentsActions({
+    openTelemetry: () => setDashboardMode("telemetry", { focus: "panel" }),
+  });
+  setDashboardV2TelemetryActions({
+    openStatus: () => setDashboardMode("status", { focus: "panel" }),
+  });
+  setDashboardV2StatusActions({
+    openTelemetry: () => setDashboardMode("telemetry", { focus: "panel" }),
+  });
+  setDashboardV2MediaActions({
+    openOverview: () => setDashboardMode("overview", { focus: "panel" }),
+  });
+  setDashboardV2SettingsActions({
+    openStatus: () => setDashboardMode("status", { focus: "panel" }),
+  });
+  setDashboardV2PipelineInputStatusActions({
+    cancelAudioTrackEdit: cancelPipelineAudioTrackEdit,
+    clearPreview: clearPipelineInputPreview,
+    copyIngestUrl: copyPipelineIngestUrl,
+    copyStreamKey: copyPipelineStreamKey,
+    editAudioTrack: editPipelineAudioTrack,
+    mountPreview: mountPipelineInputPreview,
+    saveAudioTrack: savePipelineAudioTrack,
+    selectProtocol: selectPipelineIngestProtocol,
+    updateAudioTrackDraft: updatePipelineAudioTrackDraft,
+    copyValue: async (value) => {
+      if (await copyText(value)) showCopiedNotification();
+    },
+    createInput: createPipelineInput,
+    deleteInput: deletePipelineInput,
+    listInputs: getPipelineInputs,
+    promoteInput: promotePipelineInput,
+    updateInput: updatePipelineInput,
+  });
+  setDashboardV2PipelineOutputOverviewActions({
+    addOutput: (pipelineId) => {
+      selectPipeline(pipelineId);
+      void addOutBtn();
+    },
+    deleteOutput: async (pipelineId, outputId) => {
+      await deleteOutBtn(pipelineId, outputId);
+      renderOutsColumn(pipelineId);
+    },
+    editOutput: (pipelineId, outputId) => {
+      void editOutBtn(pipelineId, outputId);
+    },
+    monitorOutput: (pipelineId, outputId) => {
+      const monitoringUrl = state.pipelines
+        .find((pipeline) => pipeline.id === pipelineId)
+        ?.outs.find((output) => output.id === outputId)?.monitoringUrl;
+      openOutputMonitoringUrl(monitoringUrl);
+    },
+    openOutputHistory: (pipelineId, outputId, outputName) => {
+      void openOutputHistoryModal(pipelineId, outputId, outputName);
+    },
+    toggleOutput: async (pipelineId, outputId) => {
+      const output = state.pipelines
+        .find((pipeline) => pipeline.id === pipelineId)
+        ?.outs.find((candidate) => candidate.id === outputId);
+      if (!output) return;
+      const mutation =
+        output.desiredState === "stopped"
+          ? startOutBtn(pipelineId, outputId)
+          : stopOutBtn(pipelineId, outputId);
+      renderOutsColumn(pipelineId);
+      try {
+        await mutation;
+      } finally {
         renderOutsColumn(pipelineId);
-      },
-      editOutput: (pipelineId, outputId) => {
-        void editOutBtn(pipelineId, outputId);
-      },
-      monitorOutput: (pipelineId, outputId) => {
-        const monitoringUrl = state.pipelines
-          .find((pipeline) => pipeline.id === pipelineId)
-          ?.outs.find((output) => output.id === outputId)?.monitoringUrl;
-        openOutputMonitoringUrl(monitoringUrl);
-      },
-      openOutputHistory: (pipelineId, outputId, outputName) => {
-        void openOutputHistoryModal(pipelineId, outputId, outputName);
-      },
-      toggleOutput: async (pipelineId, outputId) => {
-        const output = state.pipelines
-          .find((pipeline) => pipeline.id === pipelineId)
-          ?.outs.find((candidate) => candidate.id === outputId);
-        if (!output) return;
-        const mutation =
-          output.desiredState === "stopped"
-            ? startOutBtn(pipelineId, outputId)
-            : stopOutBtn(pipelineId, outputId);
-        renderOutsColumn(pipelineId);
-        try {
-          await mutation;
-        } finally {
-          renderOutsColumn(pipelineId);
-        }
-      },
-      toggleOutputList: togglePipelineOutputList,
-    });
-  } else {
-    configureDashboardModePresentationSync(null);
-  }
+      }
+    },
+    toggleOutputList: togglePipelineOutputList,
+  });
 
   setDashboardHooks({
     afterRender: () => {

@@ -307,11 +307,7 @@ function hideDashboardV2Settings(): void {
 }
 
 function ensureDashboardV2Module(): void {
-  if (
-    dashboardV2Module ||
-    dashboardV2ModulePromise ||
-    !dashboardV2ExperimentEnabled()
-  ) {
+  if (dashboardV2Module || dashboardV2ModulePromise) {
     return;
   }
   dashboardV2ModulePromise = import(DASHBOARD_V2_BUNDLE)
@@ -326,16 +322,12 @@ function ensureDashboardV2Module(): void {
     .catch((error: unknown) => {
       dashboardV2ModulePromise = null;
       if (isOptionalNodeBundleMiss(error, DASHBOARD_V2_BUNDLE)) return;
-      console.error("Unable to start the dashboard v2 experiment", error);
+      console.error("Unable to start the dashboard v2 shell", error);
     });
 }
 
 function ensureDashboardV2CheckpointsModule(): void {
-  if (
-    dashboardV2CheckpointsModule ||
-    dashboardV2CheckpointsModulePromise ||
-    !dashboardV2ExperimentEnabled()
-  ) {
+  if (dashboardV2CheckpointsModule || dashboardV2CheckpointsModulePromise) {
     return;
   }
   dashboardV2CheckpointsModulePromise = import(DASHBOARD_V2_CHECKPOINTS_BUNDLE)
@@ -596,14 +588,6 @@ function renderLatestSettings(): void {
   );
 }
 
-export function dashboardV2ExperimentEnabled(): boolean {
-  return true;
-}
-
-export async function startDashboardV2Experiment(): Promise<boolean> {
-  return true;
-}
-
 export function setDashboardV2PresentationScope(options: {
   readonly overviewActive: boolean;
   readonly pipelineActive: boolean;
@@ -615,24 +599,15 @@ export function setDashboardV2PresentationScope(options: {
   readonly mediaActive?: boolean;
   readonly settingsActive?: boolean;
 }): void {
-  const nextOverviewActive =
-    dashboardV2ExperimentEnabled() && options.overviewActive;
-  const nextPipelineActive =
-    dashboardV2ExperimentEnabled() && options.pipelineActive;
-  const nextPipelineInspectActive =
-    dashboardV2ExperimentEnabled() && Boolean(options.pipelineInspectActive);
-  const nextControlRoomActive =
-    dashboardV2ExperimentEnabled() && Boolean(options.controlRoomActive);
-  const nextIncidentsActive =
-    dashboardV2ExperimentEnabled() && Boolean(options.incidentsActive);
-  const nextTelemetryActive =
-    dashboardV2ExperimentEnabled() && Boolean(options.telemetryActive);
-  const nextStatusActive =
-    dashboardV2ExperimentEnabled() && Boolean(options.statusActive);
-  const nextMediaActive =
-    dashboardV2ExperimentEnabled() && Boolean(options.mediaActive);
-  const nextSettingsActive =
-    dashboardV2ExperimentEnabled() && Boolean(options.settingsActive);
+  const nextOverviewActive = options.overviewActive;
+  const nextPipelineActive = options.pipelineActive;
+  const nextPipelineInspectActive = Boolean(options.pipelineInspectActive);
+  const nextControlRoomActive = Boolean(options.controlRoomActive);
+  const nextIncidentsActive = Boolean(options.incidentsActive);
+  const nextTelemetryActive = Boolean(options.telemetryActive);
+  const nextStatusActive = Boolean(options.statusActive);
+  const nextMediaActive = Boolean(options.mediaActive);
+  const nextSettingsActive = Boolean(options.settingsActive);
   const overviewChanged = dashboardV2OverviewActive !== nextOverviewActive;
   const pipelineChanged = dashboardV2PipelineActive !== nextPipelineActive;
   const pipelineInspectChanged =
