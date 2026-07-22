@@ -151,6 +151,35 @@ fn readiness_batch_budget_allows_shutdown_during_ready_flood() {
 }
 
 #[test]
+fn readiness_batch_budget_allows_remove_during_ready_flood() {
+    let probe = Probe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        EgressShardConfig::new(16, 16, 2, 16, Duration::from_millis(10)).unwrap(),
+        ReadyFloodBackend {
+            probe: probe.clone(),
+        },
+    );
+    let output = output_spec("out-ready-remove");
+    let output_id = output.id.clone();
+
+    assert_eq!(handle.try_send(EgressCommand::Add(output)), Ok(()));
+    probe.wait_for_ready_events(2);
+    assert_eq!(handle.try_send(EgressCommand::Remove(output_id)), Ok(()));
+    probe.wait_for_commands(2);
+    let snapshot = handle.shutdown_and_join();
+
+    assert_eq!(
+        probe.state().commands,
+        vec!["add:out-ready-remove", "remove:out-ready-remove"]
+    );
+    assert!(probe.state().ready_events >= 2);
+    assert!(snapshot.metrics.ready_depth > 0);
+    assert!(snapshot.stopped);
+    assert!(!snapshot.panicked);
+}
+
+#[test]
 fn stale_timer_generation_is_ignored_on_shard_thread() {
     let probe = Probe::default();
     let handle = EgressShardHandle::spawn(
