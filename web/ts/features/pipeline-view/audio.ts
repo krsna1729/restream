@@ -21,6 +21,7 @@ const audioLabelEditKeys = new Set<string>();
 const audioLabelDrafts = new Map<string, string>();
 const expandedAudioTrackLists = new Set<string>();
 let pendingAudioLabelFocusKey: string | null = null;
+let audioTrackStateChangeHandler: (() => void) | null = null;
 const AUDIO_TRACK_EXPANSION_STORAGE_KEY =
   "restream.audioTrackExpansion.v1";
 
@@ -53,6 +54,16 @@ function persistAudioTrackExpansionState(): void {
 
 function audioTrackExpansionKey(pipelineId: string): string {
   return pipelineId;
+}
+
+export function setAudioTrackStateChangeHandler(
+  handler: (() => void) | null,
+): void {
+  audioTrackStateChangeHandler = handler;
+}
+
+function notifyAudioTrackStateChanged(): void {
+  audioTrackStateChangeHandler?.();
 }
 
 // ── SVG icon helper ────────────────────────────────────────────────────
@@ -131,6 +142,7 @@ export function editPipelineAudioTrack(pipelineId: string, key: string): void {
     getAudioTrackStoredLabel(pipelineId, resolved.track, resolved.index),
   );
   renderAudioTracksTable(pipelineId);
+  notifyAudioTrackStateChanged();
 }
 
 export function updatePipelineAudioTrackDraft(
@@ -140,6 +152,7 @@ export function updatePipelineAudioTrackDraft(
 ): void {
   if (!resolveAudioTrack(pipelineId, key)) return;
   audioLabelDrafts.set(`${pipelineId}:${key}`, value);
+  notifyAudioTrackStateChanged();
 }
 
 export function cancelPipelineAudioTrackEdit(
@@ -150,6 +163,7 @@ export function cancelPipelineAudioTrackEdit(
   audioLabelEditKeys.delete(editKey);
   audioLabelDrafts.delete(editKey);
   renderAudioTracksTable(pipelineId);
+  notifyAudioTrackStateChanged();
 }
 
 export function savePipelineAudioTrack(
@@ -168,6 +182,7 @@ export function savePipelineAudioTrack(
   audioLabelEditKeys.delete(editKey);
   audioLabelDrafts.delete(editKey);
   renderAudioTracksTable(pipelineId);
+  notifyAudioTrackStateChanged();
 }
 
 // ── Input preview ───────────────────────────────────────────────────────

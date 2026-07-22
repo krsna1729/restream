@@ -656,10 +656,7 @@ export function initDashboardModes(): void {
     }
   });
   document.addEventListener("dashboard:v2-checkpoints-ready", () => {
-    const location = resolveDashboardLocation(window.location.href);
-    dashboardModePresentationSync?.(location);
-    configureDashboardV2RouteBodyTargets(location.mode, location.pipelineView);
-    applyMode(location.mode, location.pipelineView);
+    renderDashboardModes();
   });
   (window as any).setDashboardMode = setDashboardMode;
   refreshActiveMode();

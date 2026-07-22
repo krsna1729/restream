@@ -3,13 +3,13 @@ import { state } from "../../core/state.js";
 import { showErrorAlert } from "../../core/utils.js";
 
 const BUILT_IN_PROFILE_ORDER = [
-  "passthrough",
-  "transcode_1080p60",
-  "transcode_720p60",
+  "h264",
+  "720p",
+  "1080p",
 ];
 
 const DEFAULT_PROFILES: TranscodeProfiles = {
-  passthrough: {
+  h264: {
     preset: "ultrafast",
     tune: "zerolatency",
     crf: 23,
@@ -19,6 +19,28 @@ const DEFAULT_PROFILES: TranscodeProfiles = {
     maxBitrate: 0,
     width: 0,
     height: 0,
+  },
+  "720p": {
+    preset: "ultrafast",
+    tune: "zerolatency",
+    crf: 23,
+    gop: 60,
+    bframes: 0,
+    bitrate: 0,
+    maxBitrate: 0,
+    width: 1280,
+    height: 720,
+  },
+  "1080p": {
+    preset: "ultrafast",
+    tune: "zerolatency",
+    crf: 23,
+    gop: 60,
+    bframes: 0,
+    bitrate: 0,
+    maxBitrate: 0,
+    width: 1920,
+    height: 1080,
   },
 };
 
@@ -97,7 +119,7 @@ function renderProfileRow(name: string, p: TranscodeProfile): string {
           ${isBuiltIn ? '<span class="badge badge-ghost badge-sm">Built-in</span>' : ""}
         </div>
         <div class="flex items-center gap-2">
-          <button type="button" class="btn btn-ghost btn-xs js-profile-tuning-toggle" data-name="${name}" aria-expanded="${expanded}">
+          <button type="button" class="btn btn-ghost btn-xs js-profile-tuning-toggle" data-name="${name}" aria-expanded="${expanded}" aria-label="${expanded ? "Hide" : "Show"} tuning for ${name}">
             ${expanded ? "Hide tuning" : "Show tuning"}
           </button>
           ${!isBuiltIn ? '<button type="button" class="btn btn-ghost btn-xs text-error js-profile-delete">Remove</button>' : ""}
@@ -106,7 +128,7 @@ function renderProfileRow(name: string, p: TranscodeProfile): string {
       <div class="grid grid-cols-2 gap-3 sm:grid-cols-2">
         <div>
           <label class="label text-xs">Preset</label>
-          <select class="select select-bordered select-sm w-full js-profile-preset">
+          <select class="select select-bordered select-sm w-full js-profile-preset" aria-label="${name} preset">
             <option value="ultrafast" ${preset === "ultrafast" ? "selected" : ""}>ultrafast</option>
             <option value="superfast" ${preset === "superfast" ? "selected" : ""}>superfast</option>
             <option value="veryfast" ${preset === "veryfast" ? "selected" : ""}>veryfast</option>

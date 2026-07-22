@@ -63,6 +63,7 @@ import {
   buildAudioTrackModels,
   formatShortDurationMs,
   renderAudioTracksTable,
+  setAudioTrackStateChangeHandler,
 } from "./audio.js";
 import {
   formatFileContainer,
@@ -309,6 +310,7 @@ function renderVideoTrackDetails(
 
 export function renderPipelineInfoColumn(selectedPipe: string | null): void {
   lastRenderedPipelineInfoId = selectedPipe;
+  setAudioTrackStateChangeHandler(() => renderPipelineInfoColumn(selectedPipe));
   if (!selectedPipe) {
     pipelineHeaderPresentationHook?.(null);
     pipelineInputStatusPresentationHook?.(null);

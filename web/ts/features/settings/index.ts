@@ -1,5 +1,6 @@
 import { getConfig } from "../../core/api.js";
 import { state } from "../../core/state.js";
+import { escapeHtml } from "../../core/utils.js";
 import type { SettingsCheckpointModel } from "../settings-view-model.js";
 
 import {
@@ -27,12 +28,23 @@ import {
   resetRateLimitStateFromUi,
   saveDashboardPassword,
   saveIngestSecurity,
+  setSettingsRateLimitStateChangeHandler,
+  settingsRateLimitPresentation,
   syncDashboardPasswordPrompt,
 } from "./security.js";
+
+const SETTINGS_SECTION_COUNT = 5;
 
 let settingsCheckpointCallback:
   | ((model: SettingsCheckpointModel | null) => void)
   | null = null;
+
+interface SettingsDisclosureConfig {
+  readonly ariaLabel: string;
+  readonly id: string;
+  readonly summary: string;
+  readonly title: string;
+}
 
 function needsFullSettingsConfig(): boolean {
   return (
@@ -72,6 +84,7 @@ export async function loadSettings({
   syncDashboardPasswordPrompt();
   void refreshRateLimitState();
   loadTranscodeProfiles();
+  updateSettingsSummary();
 }
 
 export function configureSettingsCheckpointPresentation(options: {
@@ -79,10 +92,226 @@ export function configureSettingsCheckpointPresentation(options: {
   onStateChange?: (model: SettingsCheckpointModel | null) => void;
 }): void {
   settingsCheckpointCallback = options.onPresentation || options.onStateChange || null;
+  if (settingsCheckpointCallback) publishSettingsCheckpoint();
 }
 
 export function registerSettingsGlobals(): void {
   // Global event handlers bound on demand
+}
+
+function pluralize(
+  count: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function settingsV2Active(): boolean {
+  const toggle = document.getElementById("dashboard-ui-v2-toggle");
+  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
+  try {
+    return new URLSearchParams(window.location.search).get("ui") === "v2";
+  } catch (_err) {
+    return false;
+  }
+}
+
+function countConfiguredProfiles(): number {
+  const list = document.getElementById("transcode-profiles-list");
+  if (!list) {
+    return Object.keys(state.config?.transcodeProfiles || {}).length || 1;
+  }
+  const rendered = list.querySelectorAll("[data-profile-name]").length;
+  return rendered || Object.keys(state.config?.transcodeProfiles || {}).length || 1;
+}
+
+function settingsSummaryText(): string {
+  const rateLimit = settingsRateLimitPresentation();
+  const serverName = state.config?.serverName || "server";
+  return `${serverName} settings · ${pluralize(SETTINGS_SECTION_COUNT, "section")} · ${pluralize(countConfiguredProfiles(), "profile")} · ${pluralize(rateLimit.totalCount, "auth attempt")}`;
+}
+
+function buildSettingsCheckpointModel(): SettingsCheckpointModel {
+  const rateLimit = settingsRateLimitPresentation();
+  return {
+    authLabel: pluralize(rateLimit.totalCount, "auth attempt"),
+    canOpenStatus: true,
+    focusLabel: rateLimit.query
+      ? `${rateLimit.filteredCount} authentication attempt${rateLimit.filteredCount === 1 ? "" : "s"} match "${rateLimit.query}". Clear search before changing global rate-limit settings.`
+      : rateLimit.bannedCount > 0
+        ? `${rateLimit.bannedCount} authentication attempt${rateLimit.bannedCount === 1 ? " is" : "s are"} currently banned; review the table before resetting global limits.`
+        : "Configuration sections stay grouped by operational concern; use the section rail before editing dense forms.",
+    metrics: [
+      { label: "Server", value: state.config?.serverName || "server" },
+      {
+        label: "Security",
+        value: rateLimit.bannedCount
+          ? pluralize(rateLimit.bannedCount, "banned attempt")
+          : "No bans",
+      },
+      { label: "Ingest host", value: state.config?.ingestHost || "default host" },
+    ],
+    nextStep:
+      rateLimit.bannedCount > 0
+        ? "Review or reset the banned attempts, then open Status to confirm the service is healthy."
+        : "Edit the needed section, save, then open Status to confirm runtime health.",
+    profileLabel: pluralize(countConfiguredProfiles(), "profile"),
+    searchLabel: rateLimit.searchLabel,
+    sectionLabel: pluralize(SETTINGS_SECTION_COUNT, "section"),
+    securityLabel: rateLimit.bannedCount
+      ? pluralize(rateLimit.bannedCount, "banned attempt")
+      : "No bans",
+    statusLabel: rateLimit.query
+      ? "Filtered"
+      : rateLimit.bannedCount
+        ? "Review"
+        : "Loaded",
+    statusTone:
+      rateLimit.query || rateLimit.bannedCount ? "warning" : "success",
+    summary: settingsSummaryText(),
+    title: "Settings",
+  };
+}
+
+function publishSettingsCheckpoint(): void {
+  settingsCheckpointCallback?.(buildSettingsCheckpointModel());
+}
+
+function updateSettingsSummary(): void {
+  const summary = document.getElementById("settings-route-summary");
+  if (summary) summary.textContent = settingsSummaryText();
+  publishSettingsCheckpoint();
+}
+
+function settingsNavHtml(id = ""): string {
+  const selectId = id ? `${id}-section-jump` : "settings-section-jump";
+  return `<nav${id ? ` id="${id}"` : ""} class="dashboard-nav-strip w-full" aria-label="Settings sections">
+      <label class="flex w-full max-w-xs flex-col gap-1 text-sm">
+          <span class="text-base-content/60 text-xs font-medium uppercase tracking-[0.12em]">Jump to section</span>
+          <select id="${selectId}" class="select select-sm w-full" data-settings-section-jump aria-label="Jump to settings section">
+              <option value="">Choose a settings section…</option>
+              <option value="server-settings-section">Server</option>
+              <option value="recording-settings-section">Recording</option>
+              <option value="srt-settings-section">SRT</option>
+              <option value="backend-policy-section">Backend</option>
+              <option value="transcode-profiles-section">Profiles</option>
+          </select>
+      </label>
+  </nav>`;
+}
+
+function bindSettingsSectionJump(container: HTMLElement): void {
+  container
+    .querySelectorAll<HTMLSelectElement>("[data-settings-section-jump]")
+    .forEach((select) => {
+      select.addEventListener("change", () => {
+        const targetId = select.value;
+        if (!targetId) return;
+        const target = document.getElementById(targetId);
+        if (!target) return;
+        if (target instanceof HTMLDetailsElement) target.open = true;
+        target.scrollIntoView({ block: "start" });
+        history.replaceState(null, "", `#${targetId}`);
+      });
+    });
+}
+
+function applySettingsV2Disclosure(container: HTMLElement): void {
+  if (!settingsV2Active()) return;
+  const disclosures: readonly SettingsDisclosureConfig[] = [
+    {
+      id: "recording-settings-section",
+      title: "Recording",
+      summary: "Retention policy for completed MPEG-TS to MP4 conversions.",
+      ariaLabel: "Recording settings",
+    },
+    {
+      id: "dashboard-password-section",
+      title: "Dashboard Password",
+      summary: "Change the dashboard login password.",
+      ariaLabel: "Dashboard password settings",
+    },
+    {
+      id: "ingest-security-section",
+      title: "Ingest Security",
+      summary: "Failure thresholds, ban window, and tracked IP limits.",
+      ariaLabel: "Ingest security settings",
+    },
+    {
+      id: "auth-attempts-section",
+      title: "Authentication Attempts",
+      summary: "Recent login and publish failures with optional reset actions.",
+      ariaLabel: "Authentication attempt settings",
+    },
+    {
+      id: "srt-settings-section",
+      title: "Global SRT Ingest",
+      summary: "Default encryption policy for SRT publishers.",
+      ariaLabel: "Global SRT ingest settings",
+    },
+    {
+      id: "backend-policy-section",
+      title: "Transcoding Backend",
+      summary: "Backend selection for newly started transcoding stages.",
+      ariaLabel: "Transcoding backend settings",
+    },
+    {
+      id: "transcode-profiles-section",
+      title: "Transcode Profiles",
+      summary: "Encoder presets used by HEVC/H.264 and resolution workflows.",
+      ariaLabel: "Transcode profile settings",
+    },
+  ];
+
+  for (const disclosure of disclosures) {
+    const body = container.querySelector<HTMLElement>(`#${disclosure.id}`);
+    if (!body || body.closest("[data-settings-v2-disclosure]")) continue;
+    const wrapper = document.createElement("details");
+    wrapper.id = disclosure.id;
+    wrapper.className =
+      "border-base-content/10 bg-base-100/60 rounded-lg border px-3 py-2";
+    wrapper.dataset.settingsV2Disclosure = disclosure.id;
+    wrapper.innerHTML = `<summary class="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2" aria-label="${escapeHtml(disclosure.ariaLabel)}">
+        <span>
+          <h2 class="text-sm font-semibold">${escapeHtml(disclosure.title)}</h2>
+          <span class="text-base-content/60 mt-1 block text-xs">${escapeHtml(disclosure.summary)}</span>
+        </span>
+        <span class="btn btn-xs btn-outline pointer-events-none">Show settings</span>
+      </summary>`;
+    body.removeAttribute("id");
+    body.classList.add("mt-3");
+    body.dataset.settingsV2DisclosureBody = disclosure.id;
+    body.replaceWith(wrapper);
+    wrapper.append(body);
+  }
+}
+
+function syncSettingsAccountActions(container: ParentNode = document): void {
+  const toggle = container.querySelector<HTMLButtonElement>(
+    "#settings-account-actions-toggle",
+  );
+  const logoutButton = container.querySelector<HTMLButtonElement>(
+    "#settings-logout-btn",
+  );
+  const expanded = toggle?.getAttribute("aria-expanded") === "true";
+  toggle?.classList.toggle("hidden", !settingsV2Active());
+  logoutButton?.classList.toggle("hidden", settingsV2Active() && !expanded);
+  if (toggle) {
+    toggle.textContent = expanded ? "Hide account actions" : "Show account actions";
+  }
+}
+
+function bindSettingsPanelActions(container: HTMLElement): void {
+  container
+    .querySelector<HTMLButtonElement>("#settings-account-actions-toggle")
+    ?.addEventListener("click", (event) => {
+      const button = event.currentTarget as HTMLButtonElement;
+      const expanded = button.getAttribute("aria-expanded") === "true";
+      button.setAttribute("aria-expanded", expanded ? "false" : "true");
+      syncSettingsAccountActions(container);
+      button.focus();
+    });
 }
 
 export function renderSettingsPanel(container: HTMLElement): void {
@@ -94,6 +323,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     <p class="dashboard-subtitle">Server, security, and encoding configuration.</p>
                 </div>
             </div>
+            ${settingsNavHtml("settings-admin-nav")}
             <p id="settings-route-summary" class="text-base-content/60 text-sm" role="status" aria-live="polite"></p>
 
             <section id="server-settings-section" class="dashboard-section space-y-5 p-5">
@@ -255,7 +485,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
 
                 <div id="srt-settings-section" class="space-y-2">
                     <div class="text-sm font-medium">Global SRT Ingest</div>
-                    <p class="text-base-content/60 text-sm">Default listener policy for SRT publishers.</p>
+                    <p class="text-base-content/60 text-sm">Pipelines can inherit the global SRT policy, force plaintext, or use their own passphrase.</p>
                     <div class="flex flex-wrap items-end gap-3">
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend">Mode</legend>
@@ -331,10 +561,17 @@ export function renderSettingsPanel(container: HTMLElement): void {
                 </div>
 
                 <div class="flex flex-wrap justify-end gap-2">
+                    <button id="settings-account-actions-toggle" type="button" class="btn btn-outline btn-sm hidden" aria-expanded="false">Show account actions</button>
                     <button id="settings-logout-btn" class="btn btn-error btn-outline btn-sm" data-settings-action="logout">Logout</button>
                 </div>
             </section>
         </div>`;
+
+  applySettingsV2Disclosure(container);
+  syncSettingsAccountActions(container);
+  bindSettingsSectionJump(container);
+  bindSettingsPanelActions(container);
+  setSettingsRateLimitStateChangeHandler(updateSettingsSummary);
 
   container.onclick = (event) => {
     const button = (event.target as Element | null)?.closest(
@@ -386,6 +623,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
   };
 
   void loadSettings({ embedded: true });
+  updateSettingsSummary();
 }
 
 export {
