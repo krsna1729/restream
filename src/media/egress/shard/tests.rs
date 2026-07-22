@@ -1,6 +1,7 @@
 use super::*;
 use crate::media::egress::command::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::policy::LeafPolicy;
+use std::num::NonZeroU32;
 use std::sync::Condvar;
 
 #[derive(Debug, Default)]
@@ -25,6 +26,17 @@ impl Probe {
             })
             .unwrap();
         assert!(result.0.media_ticks >= target);
+    }
+
+    fn wait_for_commands(&self, target: usize) {
+        let (lock, condvar) = &*self.inner;
+        let state = lock.lock().unwrap();
+        let result = condvar
+            .wait_timeout_while(state, Duration::from_secs(2), |state| {
+                state.commands.len() < target
+            })
+            .unwrap();
+        assert!(result.0.commands.len() >= target);
     }
 
     fn state(&self) -> ProbeState {
@@ -64,6 +76,35 @@ impl EgressShardBackend for ProbeBackend {
         let mut state = lock.lock().unwrap();
         state.shutdowns += 1;
         condvar.notify_all();
+    }
+}
+
+#[derive(Debug)]
+enum ScriptBackend {
+    Probe(ProbeBackend),
+    Panic,
+}
+
+impl EgressShardBackend for ScriptBackend {
+    fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
+        match self {
+            Self::Probe(backend) => backend.on_command(command),
+            Self::Panic => panic!("scripted shard panic"),
+        }
+    }
+
+    fn on_media_tick(&mut self) {
+        match self {
+            Self::Probe(backend) => backend.on_media_tick(),
+            Self::Panic => {}
+        }
+    }
+
+    fn on_shutdown(&mut self) {
+        match self {
+            Self::Probe(backend) => backend.on_shutdown(),
+            Self::Panic => {}
+        }
     }
 }
 
@@ -245,4 +286,135 @@ fn shutdown_joins_without_leaking_thread() {
     assert!(snapshot.stopped);
     assert!(!snapshot.panicked);
     assert_eq!(probe.state().shutdowns, 1);
+}
+
+#[test]
+fn shard_group_starts_fixed_shards_and_routes_by_shard_id() {
+    let shard_zero = Probe::default();
+    let shard_one = Probe::default();
+    let group = EgressShardGroup::spawn(
+        NonZeroU32::new(2).unwrap(),
+        config(4, 4),
+        vec![
+            ProbeBackend {
+                probe: shard_zero.clone(),
+            },
+            ProbeBackend {
+                probe: shard_one.clone(),
+            },
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(group.shard_count(), 2);
+    assert_eq!(
+        group.try_send_to(ShardId::new(0), EgressCommand::Add(output_spec("out-zero"))),
+        Ok(())
+    );
+    assert_eq!(
+        group.try_send_to(ShardId::new(1), EgressCommand::Add(output_spec("out-one"))),
+        Ok(())
+    );
+    shard_zero.wait_for_commands(1);
+    shard_one.wait_for_commands(1);
+    let snapshots = group.shutdown_and_join();
+
+    assert_eq!(shard_zero.state().commands, vec!["add:out-zero"]);
+    assert_eq!(shard_one.state().commands, vec!["add:out-one"]);
+    assert_eq!(snapshots.len(), 2);
+    assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
+}
+
+#[test]
+fn shard_group_rejects_mismatched_backend_count() {
+    let result = EgressShardGroup::spawn(
+        NonZeroU32::new(2).unwrap(),
+        config(4, 4),
+        vec![ProbeBackend {
+            probe: Probe::default(),
+        }],
+    );
+
+    assert!(matches!(
+        result,
+        Err(EgressShardGroupError::BackendCountMismatch {
+            expected: 2,
+            actual: 1,
+        })
+    ));
+}
+
+#[test]
+fn shard_group_reports_unknown_shard_without_touching_live_shards() {
+    let probe = Probe::default();
+    let group = EgressShardGroup::spawn(
+        NonZeroU32::new(1).unwrap(),
+        config(4, 4),
+        vec![ProbeBackend {
+            probe: probe.clone(),
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(7),
+            EgressCommand::Add(output_spec("out-missing"))
+        ),
+        Err(EgressShardGroupError::UnknownShard {
+            shard_id: ShardId::new(7)
+        })
+    );
+    let snapshots = group.shutdown_and_join();
+
+    assert!(probe.state().commands.is_empty());
+    assert_eq!(snapshots.len(), 1);
+}
+
+#[test]
+fn shard_group_contains_panic_to_assigned_shard() {
+    let survivor = Probe::default();
+    let group = EgressShardGroup::spawn(
+        NonZeroU32::new(2).unwrap(),
+        config(4, 4),
+        vec![
+            ScriptBackend::Panic,
+            ScriptBackend::Probe(ProbeBackend {
+                probe: survivor.clone(),
+            }),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(0),
+            EgressCommand::Add(output_spec("out-panic"))
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(1),
+            EgressCommand::Add(output_spec("out-survivor"))
+        ),
+        Ok(())
+    );
+    survivor.wait_for_commands(1);
+    survivor.wait_for_media_ticks(1);
+    let snapshots = group.shutdown_and_join();
+
+    let panicked = snapshots
+        .iter()
+        .find(|snapshot| snapshot.shard_id == ShardId::new(0))
+        .unwrap();
+    let healthy = snapshots
+        .iter()
+        .find(|snapshot| snapshot.shard_id == ShardId::new(1))
+        .unwrap();
+    assert!(panicked.panicked);
+    assert!(panicked.stopped);
+    assert!(!healthy.panicked);
+    assert!(healthy.stopped);
+    assert_eq!(survivor.state().commands, vec!["add:out-survivor"]);
 }

@@ -7,6 +7,9 @@ use std::time::{Duration, Instant};
 
 use crate::media::egress::command::{EgressCommand, ShardId};
 
+mod group;
+pub use group::{EgressShardGroup, EgressShardGroupError};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EgressShardConfigError {
     ZeroCommandCapacity,
