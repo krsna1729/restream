@@ -116,9 +116,7 @@ function ensurePipelineInspectorShell(container: HTMLElement): void {
     document.getElementById("inspect-pipeline-select")
   )
     return;
-  container.innerHTML = pipelineInspectorShellHtml({
-    v2RouteBody: pipelineInspectV2Active(),
-  });
+  container.innerHTML = pipelineInspectorShellHtml();
 }
 
 function pipelineInspectorContainer(): HTMLElement | null {

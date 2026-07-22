@@ -139,7 +139,9 @@ async function runDiagnostics(page: Page, target: DashboardPipelineTarget): Prom
     const select = page.locator('#inspect-pipeline-select');
     await expect(select).toBeVisible({ timeout: 30000 });
     await select.selectOption({ value: target.id });
-    const openButton = page.locator('#inspect-open-diagnostics-btn');
+    const openButton = page
+        .locator('#dashboard-v2-pipeline-inspect-root')
+        .getByRole('button', { name: 'Run diagnostics for inspected pipeline' });
     await expect(openButton).toBeEnabled({ timeout: 30000 });
     const responsePromise = page.waitForResponse(
         (response) =>

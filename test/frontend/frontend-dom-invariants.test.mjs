@@ -249,8 +249,10 @@ test("pipeline inspect route body uses the v2-owned renderer", async () => {
     routeBodySource,
     /container\.dataset\.pipelineInspectRouteBody = "v2"/,
   );
-  assert.match(shellSource, /readonly v2RouteBody\?: boolean/);
-  assert.match(shellSource, /options\.v2RouteBody\s*\?\s*""/);
+  assert.doesNotMatch(shellSource, /v2RouteBody/);
+  assert.doesNotMatch(shellSource, /inspect-route-summary/);
+  assert.doesNotMatch(shellSource, /inspect-open-pipeline-btn/);
+  assert.doesNotMatch(shellSource, /inspect-open-diagnostics-btn/);
 });
 
 test("pipeline monitor route body uses the v2-owned renderer", async () => {
