@@ -49,6 +49,7 @@ pub struct EgressManager {
     desired: HashMap<OutputId, DesiredOutput>,
     desired_specs: HashMap<OutputId, OutputSpec>,
     command_depths: Vec<usize>,
+    draining_shards: Vec<bool>,
     shutting_down: bool,
 }
 
@@ -59,6 +60,7 @@ impl EgressManager {
             config,
             desired: HashMap::new(),
             desired_specs: HashMap::new(),
+            draining_shards: vec![false; config.shard_count.get() as usize],
             shutting_down: false,
         }
     }
@@ -129,6 +131,8 @@ impl EgressManager {
                     .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
                 self.reserve_command_slot(shard_id)
                     .map_err(EgressManagerDispatchError::Command)?;
+                self.mark_draining(shard_id)
+                    .map_err(EgressManagerDispatchError::Command)?;
                 Ok(ManagerCommandOutcome::Enqueued { shard_id })
             }
             EgressCommand::Shutdown => self.dispatch_shutdown(dispatch),
@@ -197,6 +201,14 @@ impl EgressManager {
             }
         }
 
+        if self
+            .is_draining(shard_id)
+            .map_err(EgressManagerDispatchError::Command)?
+        {
+            return Err(EgressManagerDispatchError::Command(
+                EgressManagerCommandError::ShardDraining { shard_id },
+            ));
+        }
         self.check_command_slot(shard_id)
             .map_err(EgressManagerDispatchError::Command)?;
         dispatch(shard_id, command)
@@ -291,6 +303,21 @@ impl EgressManager {
         Ok(())
     }
 
+    fn is_draining(&self, shard_id: ShardId) -> Result<bool, EgressManagerCommandError> {
+        self.draining_shards
+            .get(shard_id.index() as usize)
+            .copied()
+            .ok_or(EgressManagerCommandError::UnknownShard { shard_id })
+    }
+
+    fn mark_draining(&mut self, shard_id: ShardId) -> Result<(), EgressManagerCommandError> {
+        let Some(draining) = self.draining_shards.get_mut(shard_id.index() as usize) else {
+            return Err(EgressManagerCommandError::UnknownShard { shard_id });
+        };
+        *draining = true;
+        Ok(())
+    }
+
     fn specs_for_shard(
         &self,
         shard_id: ShardId,
@@ -347,6 +374,7 @@ pub enum ManagerCommandOutcome {
 pub enum EgressManagerCommandError {
     UnknownShard { shard_id: ShardId },
     CommandChannelFull { shard_id: ShardId },
+    ShardDraining { shard_id: ShardId },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -6,7 +6,8 @@ use super::support::{
 use crate::media::egress::command::OutputSpec;
 use crate::media::egress::command::{EgressCommand, ShardId};
 use crate::media::egress::manager::{
-    DesiredOutput, EgressManager, EgressManagerDispatchError, ManagerCommandOutcome,
+    DesiredOutput, EgressManager, EgressManagerCommandError, EgressManagerDispatchError,
+    ManagerCommandOutcome,
 };
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
@@ -206,6 +207,71 @@ fn manager_dispatch_to_group_converges_after_shard_queue_full() {
             shard_id: ShardId::new(0),
         })
     );
+    assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
+}
+
+#[test]
+fn manager_dispatch_to_group_rejects_new_assignments_to_draining_shard() {
+    let mut manager = manager(2);
+    let shard_zero = Probe::default();
+    let shard_one = Probe::default();
+    let group = EgressShardGroup::spawn(
+        NonZeroU32::new(2).unwrap(),
+        config(4, 4),
+        vec![
+            ProbeBackend {
+                probe: shard_zero.clone(),
+            },
+            ProbeBackend {
+                probe: shard_one.clone(),
+            },
+        ],
+    )
+    .unwrap();
+    let outputs = specs_for_shard(&manager, ShardId::new(0), 2);
+    let active_id = outputs[0].id.clone();
+    let rejected_id = outputs[1].id.clone();
+
+    assert!(matches!(
+        manager.dispatch_to_group(EgressCommand::Add(outputs[0].clone()), &group),
+        Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
+    ));
+    shard_zero.wait_for_commands(1);
+    assert!(matches!(
+        manager.dispatch_to_group(EgressCommand::DrainShard(ShardId::new(0)), &group),
+        Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
+    ));
+    shard_zero.wait_for_commands(2);
+
+    let rejected = manager.dispatch_to_group(EgressCommand::Add(outputs[1].clone()), &group);
+
+    assert_eq!(
+        rejected,
+        Err(EgressManagerDispatchError::Command(
+            EgressManagerCommandError::ShardDraining {
+                shard_id: ShardId::new(0),
+            },
+        ))
+    );
+    assert!(manager.desired_output(&rejected_id).is_none());
+    assert_eq!(
+        shard_zero.state().commands,
+        vec![format!("add:{active_id}"), "drain:0".to_string()]
+    );
+
+    assert!(matches!(
+        manager.dispatch_to_group(EgressCommand::Remove(active_id.clone()), &group),
+        Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
+    ));
+    shard_zero.wait_for_commands(3);
+    assert!(manager.desired_output(&active_id).is_none());
+    assert!(matches!(
+        manager.dispatch_to_group(EgressCommand::Shutdown, &group),
+        Ok(ManagerCommandOutcome::Broadcast { shard_count }) if shard_count == NonZeroU32::new(2).unwrap()
+    ));
+    let snapshots = group.shutdown_and_join();
+
+    assert!(shard_one.state().commands.is_empty());
     assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
 }
 
