@@ -67,6 +67,8 @@ pub struct ProgressState {
     pub total_bytes_sent: u64,
     /// Total media units consumed.
     pub total_units_sent: u64,
+    pub total_bytes_discarded: u64,
+    pub total_units_discarded: u64,
     /// Number of times the leaf has been resynchronized.
     pub resync_count: u32,
     /// Number of feed overruns recorded.
@@ -80,6 +82,8 @@ impl ProgressState {
             last_protocol_progress: None,
             total_bytes_sent: 0,
             total_units_sent: 0,
+            total_bytes_discarded: 0,
+            total_units_discarded: 0,
             resync_count: 0,
             overrun_count: 0,
         }
@@ -95,6 +99,18 @@ impl ProgressState {
         if units > 0 {
             self.last_protocol_progress = Some(now);
             self.total_units_sent = self.total_units_sent.saturating_add(units as u64);
+        }
+    }
+
+    pub fn record_discard(&mut self, bytes: usize, units: usize) {
+        let now = Instant::now();
+        if bytes > 0 {
+            self.last_byte_progress = Some(now);
+            self.total_bytes_discarded = self.total_bytes_discarded.saturating_add(bytes as u64);
+        }
+        if units > 0 {
+            self.last_protocol_progress = Some(now);
+            self.total_units_discarded = self.total_units_discarded.saturating_add(units as u64);
         }
     }
 
@@ -259,6 +275,21 @@ mod tests {
         assert!(p.last_byte_progress.is_some());
         assert_eq!(p.total_bytes_sent, 1024);
         assert_eq!(p.total_units_sent, 2);
+        assert_eq!(p.total_bytes_discarded, 0);
+        assert_eq!(p.total_units_discarded, 0);
+    }
+
+    #[test]
+    fn progress_state_records_discards_without_counting_them_as_sends() {
+        let mut p = ProgressState::new();
+        assert!(p.last_byte_progress.is_none());
+        p.record_discard(1024, 2);
+        assert!(p.last_byte_progress.is_some());
+        assert!(p.last_protocol_progress.is_some());
+        assert_eq!(p.total_bytes_sent, 0);
+        assert_eq!(p.total_units_sent, 0);
+        assert_eq!(p.total_bytes_discarded, 1024);
+        assert_eq!(p.total_units_discarded, 2);
     }
 
     #[test]
