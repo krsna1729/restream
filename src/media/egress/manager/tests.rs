@@ -119,6 +119,25 @@ fn duplicate_generation_is_idempotent_without_reenqueue() {
 }
 
 #[test]
+fn duplicate_add_is_idempotent_without_reenqueue() {
+    let mut manager = manager(4);
+    let output_spec = spec("out-add-dup");
+    let shard_id = manager.assign_spec(&output_spec);
+
+    assert!(matches!(
+        manager.apply_command(EgressCommand::Add(output_spec.clone())),
+        Ok(ManagerCommandOutcome::Enqueued { .. })
+    ));
+    let duplicate = manager.apply_command(EgressCommand::Add(output_spec));
+
+    assert_eq!(
+        duplicate,
+        Ok(ManagerCommandOutcome::AlreadyCurrent { shard_id })
+    );
+    assert_eq!(manager.command_depth(shard_id), 1);
+}
+
+#[test]
 fn stale_generation_is_ignored_without_reenqueue() {
     let mut manager = manager(4);
     let mut current = spec("out-stale");
