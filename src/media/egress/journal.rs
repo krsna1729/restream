@@ -43,7 +43,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 
@@ -67,6 +67,8 @@ pub struct FeedLimits {
     pub max_retained_bytes: u64,
     /// Maximum number of media units retained (slot count).
     pub max_retained_units: usize,
+    pub max_retained_media_age: Duration,
+    pub max_unit_bytes: u64,
 }
 
 impl Default for FeedLimits {
@@ -74,7 +76,86 @@ impl Default for FeedLimits {
         Self {
             max_retained_bytes: 32 * 1024 * 1024, // 32 MiB
             max_retained_units: 1024,
+            max_retained_media_age: Duration::from_secs(30),
+            max_unit_bytes: 4 * 1024 * 1024,
         }
+    }
+}
+
+impl FeedLimits {
+    pub fn evaluate(&self, snapshot: FeedRetentionSnapshot) -> FeedLimitStatus {
+        let max_age_ms = self
+            .max_retained_media_age
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
+        FeedLimitStatus {
+            retained_bytes_exceeded: snapshot.retained_bytes > self.max_retained_bytes,
+            retained_units_exceeded: snapshot.retained_units > self.max_retained_units,
+            media_age_exceeded: snapshot.media_age_ms.is_some_and(|age| age > max_age_ms),
+            oversized_unit_count: u64::from(snapshot.largest_unit_bytes > self.max_unit_bytes),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeedRetentionSnapshot {
+    pub head_sequence: u64,
+    pub oldest_sequence: u64,
+    pub retained_units: usize,
+    pub retained_bytes: u64,
+    pub media_age_ms: Option<u64>,
+    pub largest_unit_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FeedLimitStatus {
+    pub retained_bytes_exceeded: bool,
+    pub retained_units_exceeded: bool,
+    pub media_age_exceeded: bool,
+    pub oversized_unit_count: u64,
+}
+
+impl FeedLimitStatus {
+    pub fn is_within_limits(self) -> bool {
+        !self.retained_bytes_exceeded
+            && !self.retained_units_exceeded
+            && !self.media_age_exceeded
+            && self.oversized_unit_count == 0
+    }
+}
+
+fn retention_snapshot(ring: &RingBuffer) -> FeedRetentionSnapshot {
+    let head_sequence = ring.get_write_idx() as u64;
+    let oldest_sequence = oldest_retained_sequence(ring);
+    let mut retained_units = 0usize;
+    let mut retained_bytes = 0u64;
+    let mut largest_unit_bytes = 0u64;
+    let mut min_dts: Option<i64> = None;
+    let mut max_dts: Option<i64> = None;
+
+    for sequence in oldest_sequence..head_sequence {
+        let Some(packet) = ring.read_at(sequence as usize) else {
+            continue;
+        };
+        let payload_len = packet.payload.len() as u64;
+        retained_units += 1;
+        retained_bytes = retained_bytes.saturating_add(payload_len);
+        largest_unit_bytes = largest_unit_bytes.max(payload_len);
+        min_dts = Some(min_dts.map_or(packet.dts, |dts| dts.min(packet.dts)));
+        max_dts = Some(max_dts.map_or(packet.dts, |dts| dts.max(packet.dts)));
+    }
+
+    let media_age_ms = min_dts
+        .zip(max_dts)
+        .map(|(min, max)| max.saturating_sub(min) as u64);
+
+    FeedRetentionSnapshot {
+        head_sequence,
+        oldest_sequence,
+        retained_units,
+        retained_bytes,
+        media_age_ms,
+        largest_unit_bytes,
     }
 }
 
@@ -183,6 +264,14 @@ impl RingFeed {
         let oldest = oldest_retained_sequence(&self.ring);
         self.cached_oldest.store(oldest, Ordering::Relaxed);
         oldest
+    }
+
+    pub fn retention_snapshot(&self) -> FeedRetentionSnapshot {
+        retention_snapshot(&self.ring)
+    }
+
+    pub fn limit_status(&self, limits: &FeedLimits) -> FeedLimitStatus {
+        limits.evaluate(self.retention_snapshot())
     }
 }
 
@@ -326,6 +415,14 @@ impl TsFeed {
         self.cached_oldest.store(oldest, Ordering::Relaxed);
         oldest
     }
+
+    pub fn retention_snapshot(&self) -> FeedRetentionSnapshot {
+        retention_snapshot(&self.ring)
+    }
+
+    pub fn limit_status(&self, limits: &FeedLimits) -> FeedLimitStatus {
+        limits.evaluate(self.retention_snapshot())
+    }
 }
 
 impl std::fmt::Debug for TsFeed {
@@ -455,6 +552,10 @@ impl FeedOverrunStats {
     pub fn record_epoch(&mut self) {
         self.epoch_count += 1;
     }
+
+    pub fn record_oversized_unit(&mut self) {
+        self.oversized_unit_count += 1;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -523,16 +624,20 @@ mod tests {
     // RingFeed
     // -----------------------------------------------------------------------
 
-    fn push_packet(ring: &RingBuffer, payload: &[u8], is_keyframe: bool) {
+    fn push_packet_at(ring: &RingBuffer, payload: &[u8], is_keyframe: bool, dts: i64) {
         ring.push(MediaPacket {
             media_type: MediaType::Video,
             track_index: 0,
-            pts: 0,
-            dts: 0,
+            pts: dts,
+            dts,
             is_keyframe,
             format: PayloadFormat::Raw,
             payload: Bytes::copy_from_slice(payload),
         });
+    }
+
+    fn push_packet(ring: &RingBuffer, payload: &[u8], is_keyframe: bool) {
+        push_packet_at(ring, payload, is_keyframe, 0);
     }
 
     #[test]
@@ -605,6 +710,65 @@ mod tests {
         match feed.read_from(cursor, ReadBudget::new(3, usize::MAX)) {
             FeedRead::Units { units, .. } => assert!(units.len() <= 3),
             other => panic!("expected Units, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ring_feed_retention_snapshot_tracks_retained_bytes_and_media_age() {
+        let ring = Arc::new(RingBuffer::new(4));
+        let epoch = Arc::new(FeedEpoch::new());
+        for i in 0..6 {
+            push_packet_at(&ring, &[i as u8; 3], i == 4, i * 10);
+        }
+
+        let feed = RingFeed::new(ring, epoch);
+        let snapshot = feed.retention_snapshot();
+
+        assert_eq!(snapshot.head_sequence, 6);
+        assert_eq!(snapshot.oldest_sequence, 2);
+        assert_eq!(snapshot.retained_units, 4);
+        assert_eq!(snapshot.retained_bytes, 12);
+        assert_eq!(snapshot.media_age_ms, Some(30));
+        assert_eq!(snapshot.largest_unit_bytes, 3);
+    }
+
+    #[test]
+    fn ring_feed_limit_status_reports_strict_retention_violations() {
+        let ring = Arc::new(RingBuffer::new(4));
+        let epoch = Arc::new(FeedEpoch::new());
+        push_packet_at(&ring, &[0; 2], true, 10);
+        push_packet_at(&ring, &[1; 8], false, 80);
+
+        let feed = RingFeed::new(ring, epoch);
+        let limits = FeedLimits {
+            max_retained_bytes: 9,
+            max_retained_units: 1,
+            max_retained_media_age: Duration::from_millis(50),
+            max_unit_bytes: 4,
+        };
+        let status = feed.limit_status(&limits);
+
+        assert!(status.retained_bytes_exceeded);
+        assert!(status.retained_units_exceeded);
+        assert!(status.media_age_exceeded);
+        assert_eq!(status.oversized_unit_count, 1);
+        assert!(!status.is_within_limits());
+    }
+
+    #[test]
+    fn ring_feed_reads_single_oversized_unit_under_nonzero_byte_budget() {
+        let ring = Arc::new(RingBuffer::new(4));
+        let epoch = Arc::new(FeedEpoch::new());
+        push_packet(&ring, &[7; 8], true);
+
+        let feed = RingFeed::new(ring, epoch);
+        match feed.read_from(FeedCursor::new(0, 0), ReadBudget::new(8, 4)) {
+            FeedRead::Units { units, next_cursor } => {
+                assert_eq!(units.len(), 1);
+                assert_eq!(units[0].payload.len(), 8);
+                assert_eq!(next_cursor, FeedCursor::new(0, 1));
+            }
+            other => panic!("expected oversized unit to be admitted, got {other:?}"),
         }
     }
 
@@ -735,6 +899,26 @@ mod tests {
     }
 
     #[test]
+    fn ts_feed_retention_snapshot_tracks_retained_bytes() {
+        let cancel = CancellationToken::new();
+        let ts_ring = TsChunkRing::new(4, cancel);
+        for i in 0..6 {
+            ts_ring.push(Bytes::from(vec![i as u8; 2]), i == 4);
+        }
+
+        let epoch = Arc::new(FeedEpoch::new());
+        let feed = TsFeed::new(&ts_ring, epoch);
+        let snapshot = feed.retention_snapshot();
+
+        assert_eq!(snapshot.head_sequence, 6);
+        assert_eq!(snapshot.oldest_sequence, 2);
+        assert_eq!(snapshot.retained_units, 4);
+        assert_eq!(snapshot.retained_bytes, 8);
+        assert_eq!(snapshot.media_age_ms, Some(0));
+        assert_eq!(snapshot.largest_unit_bytes, 2);
+    }
+
+    #[test]
     fn ts_feed_reports_overrun_at_retention_boundary() {
         let cancel = CancellationToken::new();
         let ts_ring = TsChunkRing::new(4, cancel);
@@ -780,5 +964,7 @@ mod tests {
         assert!(stats.last_overrun_at.is_some());
         stats.record_epoch();
         assert_eq!(stats.epoch_count, 1);
+        stats.record_oversized_unit();
+        assert_eq!(stats.oversized_unit_count, 1);
     }
 }

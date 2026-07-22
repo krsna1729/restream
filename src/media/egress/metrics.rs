@@ -165,6 +165,8 @@ pub struct FeedMetrics {
     pub oldest_sequence: u64,
     /// Retained bytes.
     pub retained_bytes: u64,
+    pub retained_media_age_ms: Option<u64>,
+    pub oversized_unit_count: u64,
     /// Number of shards currently subscribed.
     pub subscriber_shard_count: u32,
     /// Number of coalesced wakeup notifications sent.
@@ -192,6 +194,8 @@ pub mod names {
     pub const SHARD_HEARTBEAT_AGE_MS: &str = "egress.shard.heartbeat_age_ms";
     pub const SHARD_COMMAND_DEPTH: &str = "egress.shard.command_depth";
     pub const FEED_RETAINED_BYTES: &str = "egress.feed.retained_bytes";
+    pub const FEED_RETAINED_MEDIA_AGE_MS: &str = "egress.feed.retained_media_age_ms";
+    pub const FEED_OVERSIZED_UNITS: &str = "egress.feed.oversized_units";
     pub const FEED_LAG_MS: &str = "egress.feed.lag_ms";
     pub const FEED_WAKE_COALESCED: &str = "egress.feed.wake_coalesced";
     pub const FEED_OVERRUNS: &str = "egress.feed.overruns";
@@ -256,5 +260,7 @@ mod tests {
         // Smoke-check that constants are non-empty (catches accidental blanks).
         assert!(!names::LEAF_PENDING_BYTES.is_empty());
         assert!(!names::DRIVER_BUDGET_VIOLATIONS.is_empty());
+        assert!(!names::FEED_RETAINED_MEDIA_AGE_MS.is_empty());
+        assert!(!names::FEED_OVERSIZED_UNITS.is_empty());
     }
 }
