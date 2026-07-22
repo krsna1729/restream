@@ -146,10 +146,6 @@ function focusActivePanel(): void {
   activeModeContainer.scrollIntoView({ block: "start" });
 }
 
-function dashboardV2ShellActive(): boolean {
-  return true;
-}
-
 function dashboardV2RouteBodyMode(
   mode: DashboardMode,
   pipelineView: PipelineWorkspaceView,
@@ -187,9 +183,8 @@ function routeBodyTargetId(
 
 function clearDormantRouteBodies(options: {
   readonly activeMode: DashboardV2RouteBodyMode | null;
-  readonly shellActive: boolean;
 }): void {
-  const { activeMode, shellActive } = options;
+  const { activeMode } = options;
   for (const config of DASHBOARD_V2_ROUTE_BODIES) {
     const clearId =
       activeMode === config.mode ? config.legacyBodyId : config.v2HostId;
@@ -199,7 +194,6 @@ function clearDormantRouteBodies(options: {
       activeMode !== config.mode,
     );
   }
-  if (!shellActive) return;
   if (activeMode !== "media") resetMediaLibraryShellState();
   if (activeMode !== "settings") settingsMounted = false;
   if (activeMode !== "status") statusMounted = false;
@@ -209,11 +203,8 @@ function configureDashboardV2RouteBodyTargets(
   mode: DashboardMode,
   pipelineView: PipelineWorkspaceView,
 ): void {
-  const shellActive = dashboardV2ShellActive();
-  const activeMode = shellActive
-    ? dashboardV2RouteBodyMode(mode, pipelineView)
-    : null;
-  clearDormantRouteBodies({ activeMode, shellActive });
+  const activeMode = dashboardV2RouteBodyMode(mode, pipelineView);
+  clearDormantRouteBodies({ activeMode });
   setPipelineInspectorContainerId(
     routeBodyTargetId(
       activeMode,
@@ -263,7 +254,6 @@ function unmountInactiveV2PipelineWorkspace(
 ): void {
   if (currentMode === "pipeline") return;
   if (previousMode !== null && previousMode !== "pipeline") return;
-  if (!dashboardV2ShellActive()) return;
   inspectPanelShellHtml ??= snapshotPanelShell("inspect-mode-panel");
   controlPanelShellHtml ??= snapshotPanelShell("control-mode-panel");
 }
@@ -278,7 +268,6 @@ function unmountInactiveV2HeavyRoute(previousMode: DashboardMode | null): void {
   )
     return;
   if (previousMode === currentMode) return;
-  if (!dashboardV2ShellActive()) return;
   const contentIdByMode: Partial<Record<DashboardMode, string>> = {
     incidents: "incidents-mode-content",
     telemetry: "telemetry-mode-content",
@@ -412,9 +401,7 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
                   : "Runtime status";
     summary.textContent = `Dashboard · ${taskSummary}`;
   }
-  const activeV2BodyMode = dashboardV2ShellActive()
-    ? dashboardV2RouteBodyMode(mode, activePipelineView)
-    : null;
+  const activeV2BodyMode = dashboardV2RouteBodyMode(mode, activePipelineView);
   if (mode === "pipeline" && activePipelineView === "inspect") {
     restorePipelineWorkspaceShell(activePipelineView);
     renderPipelineInspector();
@@ -468,10 +455,7 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
       dashboardV2RouteBodyConfig("media"),
     );
     const mediaShellMissing = !mediaLibraryShellMountedInCurrentContainer();
-    if (
-      previousMode !== "media" ||
-      (dashboardV2ShellActive() && mediaShellMissing)
-    ) {
+    if (previousMode !== "media" || mediaShellMissing) {
       requestDetailedMetricsRefresh();
       void refreshDashboardRuntime();
       void renderMediaLibraryMode({ force: mediaShellMissing });
