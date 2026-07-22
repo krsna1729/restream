@@ -37,6 +37,8 @@ mod socket;
 mod srt_crypto;
 #[path = "srt_egress.rs"]
 mod srt_egress;
+#[path = "srt/egress_poller.rs"]
+mod srt_egress_poller;
 #[path = "srt_monitor.rs"]
 mod srt_monitor;
 #[path = "srt_policy.rs"]

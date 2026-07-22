@@ -105,6 +105,9 @@ fn socket_option_constants_match_srt_header() {
     assert_eq!(SRTO_TRANSTYPE, 50);
     assert_eq!(SRTO_GROUPCONNECT, 57);
     assert_eq!(SRTGROUP_MASK, 1 << 30);
+    assert_eq!(SRT_EPOLL_IN, 0x1);
+    assert_eq!(SRT_EPOLL_OUT, 0x4);
+    assert_eq!(SRT_EPOLL_ERR, 0x8);
 }
 
 #[test]
@@ -345,4 +348,3 @@ async fn start_srt_egress_handles_invalid_streamid_without_panic() {
     )
     .await;
 }
-
