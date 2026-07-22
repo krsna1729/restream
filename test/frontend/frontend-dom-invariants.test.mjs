@@ -176,20 +176,31 @@ test("dashboard app source has no UI-version experiment gate after cutover", asy
   );
 });
 
-test("status route body renders only into the v2-owned host", async () => {
-  const routerSource = await readFile(
-    new URL("../../web/ts/app/modes/router.ts", import.meta.url),
-    "utf8",
-  );
+test("status route body uses the v2-owned renderer", async () => {
+  const [routerSource, statusSource] = await Promise.all([
+    readFile(new URL("../../web/ts/app/modes/router.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../../web/ts/features/status/route-body.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
 
   assert.doesNotMatch(
     routerSource,
     /document\.getElementById\("status-mode-content"\)/,
   );
+  assert.doesNotMatch(routerSource, /id="status-versions"/);
+  assert.doesNotMatch(routerSource, /refresh-status-btn/);
+  assert.match(routerSource, /renderDashboardV2StatusBody/);
   assert.match(
     routerSource,
     /renderStatusMode\(dashboardV2RouteBodyConfig\("status"\)\.v2HostId\)/,
   );
+  assert.match(
+    statusSource,
+    /export function renderDashboardV2StatusBody\(\s*container: HTMLElement,\s*\): Promise<void>/,
+  );
+  assert.match(statusSource, /container\.dataset\.statusRouteBody = "v2"/);
 });
 
 test("settings route body uses the v2-owned renderer", async () => {

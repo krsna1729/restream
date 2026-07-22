@@ -15,7 +15,7 @@ import {
   syncPipelineInspectorVisibility,
 } from "../../features/pipeline-inspector/index.js";
 import {
-  loadStatus,
+  renderDashboardV2StatusBody,
   setStatusStreamActive,
   syncStatusStreamVisibility,
 } from "../../features/status/index.js";
@@ -55,7 +55,6 @@ type NavigationOptions = {
 let currentMode: DashboardMode | null = null;
 let currentPipelineView: PipelineWorkspaceView | null = null;
 let settingsMounted = false;
-let statusMounted = false;
 let inspectPanelShellHtml: string | null = null;
 let controlPanelShellHtml: string | null = null;
 let dashboardModePresentationSync:
@@ -189,7 +188,6 @@ function clearDormantRouteBodies(options: {
   }
   if (activeMode !== "media") resetMediaLibraryShellState();
   if (activeMode !== "settings") settingsMounted = false;
-  if (activeMode !== "status") statusMounted = false;
 }
 
 function configureDashboardV2RouteBodyTargets(
@@ -266,7 +264,6 @@ function unmountInactiveV2HeavyRoute(previousMode: DashboardMode | null): void {
   if (contentId) document.getElementById(contentId)?.replaceChildren();
   if (previousMode === "media") resetMediaLibraryShellState();
   if (previousMode === "settings") settingsMounted = false;
-  if (previousMode === "status") statusMounted = false;
 }
 
 function renderSettingsMode(containerId: string): void {
@@ -281,29 +278,7 @@ function renderSettingsMode(containerId: string): void {
 function renderStatusMode(containerId: string): void {
   const container = document.getElementById(containerId);
   if (!container) return;
-  if (!statusMounted || !container.querySelector("#status-versions")) {
-    container.innerHTML = `
-      <div class="dashboard-page-shell">
-        <div class="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 class="dashboard-title">Status</h1>
-            <p class="dashboard-subtitle">Runtime build, native libraries, and system details.</p>
-          </div>
-          <button type="button" class="btn btn-sm btn-outline" id="refresh-status-btn" aria-label="Refresh status data">Refresh</button>
-        </div>
-        <section class="dashboard-section p-5">
-          <h2 class="dashboard-section-title mb-4">Runtime</h2>
-          <div id="status-versions" class="space-y-5">
-            <p class="text-sm opacity-60">Loading...</p>
-          </div>
-        </section>
-      </div>`;
-    container
-      .querySelector<HTMLButtonElement>("#refresh-status-btn")
-      ?.addEventListener("click", () => void loadStatus());
-    statusMounted = true;
-  }
-  void loadStatus();
+  void renderDashboardV2StatusBody(container);
 }
 
 const runtimeDashboardModes = new Set<DashboardMode>([
