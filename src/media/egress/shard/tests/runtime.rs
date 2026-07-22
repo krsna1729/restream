@@ -151,6 +151,46 @@ fn timer_batch_budget_allows_media_ticks_during_timer_flood() {
 }
 
 #[test]
+fn timer_batch_budget_allows_remove_during_timer_flood() {
+    let probe = Probe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        EgressShardConfig::new(16, 16, 16, 2, Duration::from_millis(10)).unwrap(),
+        TimerBackend {
+            probe: probe.clone(),
+            delay: Duration::ZERO,
+        },
+    );
+    let removed = output_spec("out-timer-remove");
+    let removed_id = removed.id.clone();
+
+    assert_eq!(handle.try_send(EgressCommand::Add(removed)), Ok(()));
+    for index in 0..6 {
+        assert_eq!(
+            handle.try_send(EgressCommand::Add(output_spec(&format!(
+                "out-timer-flood-{index}"
+            )))),
+            Ok(())
+        );
+    }
+    probe.wait_for_timers(4);
+    assert_eq!(handle.try_send(EgressCommand::Remove(removed_id)), Ok(()));
+    probe.wait_for_commands(8);
+    let snapshot = handle.shutdown_and_join();
+
+    assert!(
+        probe
+            .state()
+            .commands
+            .iter()
+            .any(|command| command == "remove:out-timer-remove")
+    );
+    assert!(snapshot.timers_processed >= 4);
+    assert!(snapshot.stopped);
+    assert!(!snapshot.panicked);
+}
+
+#[test]
 fn readiness_batch_budget_allows_shutdown_during_ready_flood() {
     let probe = Probe::default();
     let handle = EgressShardHandle::spawn(
