@@ -3,6 +3,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::srt_egress_engine::*;
 use super::srt_egress_poller::*;
+use super::srt_egress_sender::*;
 use super::sys::SRTSOCKET;
 use crate::media::egress::backend::{EngineProgress, ProtocolEngine, Readiness};
 use crate::media::egress::feed::FeedCursor;

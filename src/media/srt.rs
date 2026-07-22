@@ -50,6 +50,8 @@ mod srt_egress_poller;
 #[cfg(test)]
 #[path = "srt/egress_poller_tests.rs"]
 mod srt_egress_poller_tests;
+#[path = "srt/egress_sender.rs"]
+mod srt_egress_sender;
 #[cfg(test)]
 #[path = "srt/egress_sender_tests.rs"]
 mod srt_egress_sender_tests;

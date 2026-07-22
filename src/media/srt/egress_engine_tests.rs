@@ -2,6 +2,7 @@ use bytes::Bytes;
 use tokio_util::sync::CancellationToken;
 
 use super::srt_egress_engine::*;
+use super::srt_egress_sender::*;
 use crate::media::egress::backend::{
     CloseReason, EngineProgress, ProtocolEngine, Readiness, RecoveryCapability,
 };

@@ -1,6 +1,6 @@
 use bytes::Bytes;
 
-use super::srt_egress_engine::*;
+use super::srt_egress_sender::*;
 use super::sys::{SRT_EASYNCSND, SRT_ECONNLOST, SRT_ENOCONN, SRT_ESCLOSED};
 use crate::media::egress::backend::CloseReason;
 use std::cell::RefCell;
