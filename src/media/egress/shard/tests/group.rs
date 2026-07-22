@@ -541,6 +541,40 @@ fn blocked_command_on_one_shard_does_not_starve_another_shard_command() {
     assert!(snapshots.iter().all(|snapshot| !snapshot.panicked));
 }
 
+#[test]
+fn stalled_shard_heartbeat_does_not_trigger_panic_replacement() {
+    let gate = Gate::default();
+    let replacement = Probe::default();
+    let mut group = EgressShardGroup::spawn(
+        NonZeroU32::new(1).unwrap(),
+        config(4, 4),
+        vec![BlockingBackend { gate: gate.clone() }],
+    )
+    .unwrap();
+
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(0),
+            EgressCommand::Add(output_spec("out-stalled"))
+        ),
+        Ok(())
+    );
+    gate.wait_until_entered();
+    let heartbeat = group.heartbeat(Instant::now(), Duration::ZERO);
+    let replaced = group.replace_panicked(config(4, 4), |_| ProbeBackend {
+        probe: replacement.clone(),
+    });
+    gate.release();
+    let snapshots = group.shutdown_and_join();
+
+    assert_eq!(heartbeat.len(), 1);
+    assert_eq!(heartbeat[0].state, EgressShardHealth::Stalled);
+    assert!(replaced.is_empty());
+    assert!(replacement.state().commands.is_empty());
+    assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
+    assert!(snapshots.iter().all(|snapshot| !snapshot.panicked));
+}
+
 fn wait_for_panicked(group: &EgressShardGroup, shard_id: ShardId) {
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
