@@ -85,6 +85,8 @@ pub enum ProtocolSpec {
     Rtmp { url: String, tls: bool },
     /// SRT egress.
     Srt { url: String },
+    /// Discard prepared media while exercising the common fabric path.
+    Sink,
 }
 
 // ---------------------------------------------------------------------------

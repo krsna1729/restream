@@ -16,6 +16,7 @@
 //!   scheduler.rs    — ReadyQueue, ScheduleState, round-robin
 //!   policy.rs       — LeafPolicy, RetryState, WorkBudget, LeafLimits
 //!   backend.rs      — ProtocolEngine trait, EngineProgress, Readiness
+//!   backends/       — concrete fabric protocol engines
 //!   leaf.rs         — Leaf<P>, LeafCommon, LeafDeadlines, ProgressState
 //!   timer.rs        — TimerWheel<K>
 //!   metrics.rs      — ShardMetrics, LeafMetrics, FeedMetrics
@@ -26,6 +27,7 @@
 //! ```
 
 pub mod backend;
+pub mod backends;
 pub mod command;
 pub mod feed;
 pub mod journal;
@@ -46,6 +48,7 @@ pub mod test_driver;
 pub use backend::{
     CloseReason, EngineProgress, Interest, ProtocolEngine, Readiness, RecoveryCapability,
 };
+pub use backends::sink::{SinkDiscardStats, SinkEngine, SinkTransport};
 pub use command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec, ShardId};
 pub use feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 pub use lifecycle::LeafLifecycle;
