@@ -112,6 +112,10 @@ pub use sys::{
     srt_startup,
 };
 
+pub(crate) fn srt_fabric_message_sender(socket: SRTSOCKET) -> impl SrtMessageSender {
+    srt_egress_sender::SrtNativeMessageSender::new(socket)
+}
+
 #[cfg(test)]
 use ingest::{
     EpollWaiterSignal, SRT_INGEST_READINESS_RETRY, SrtReceiveErrorAction,

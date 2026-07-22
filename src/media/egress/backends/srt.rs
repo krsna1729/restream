@@ -6,7 +6,7 @@ use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::policy::WorkBudget;
 use crate::media::egress::scheduler::VisitDecision;
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
-use crate::media::srt::{SrtEgressEngine, SrtMessageSender};
+use crate::media::srt::{SRTSOCKET, SrtEgressEngine, SrtMessageSender, srt_fabric_message_sender};
 
 pub(crate) struct SrtFabricLeaf<T>
 where
@@ -59,6 +59,13 @@ where
 
 pub(crate) fn requeue_after_srt_visit(decision: VisitDecision) -> bool {
     matches!(decision, VisitDecision::Continue)
+}
+
+pub(crate) fn srt_fabric_leaf_from_socket(
+    common: LeafCommon,
+    socket: SRTSOCKET,
+) -> SrtFabricLeaf<impl SrtMessageSender> {
+    SrtFabricLeaf::new(common, srt_fabric_message_sender(socket))
 }
 
 #[cfg(test)]
