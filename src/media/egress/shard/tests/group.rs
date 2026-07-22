@@ -490,6 +490,57 @@ fn ready_flood_on_one_shard_does_not_starve_another_shard_command() {
     assert!(snapshots.iter().all(|snapshot| !snapshot.panicked));
 }
 
+#[test]
+fn blocked_command_on_one_shard_does_not_starve_another_shard_command() {
+    let gate = Gate::default();
+    let survivor = Probe::default();
+    let group = EgressShardGroup::spawn(
+        NonZeroU32::new(2).unwrap(),
+        config(4, 4),
+        vec![
+            ScriptBackend::Blocking(BlockingBackend { gate: gate.clone() }),
+            ScriptBackend::Probe(ProbeBackend {
+                probe: survivor.clone(),
+            }),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(0),
+            EgressCommand::Add(output_spec("out-blocked"))
+        ),
+        Ok(())
+    );
+    gate.wait_until_entered();
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(1),
+            EgressCommand::Add(output_spec("out-survivor"))
+        ),
+        Ok(())
+    );
+    survivor.wait_for_commands(1);
+    survivor.wait_for_media_ticks(1);
+    gate.release();
+    let snapshots = group.shutdown_and_join();
+
+    let blocked_snapshot = snapshots
+        .iter()
+        .find(|snapshot| snapshot.shard_id == ShardId::new(0))
+        .unwrap();
+    let survivor_snapshot = snapshots
+        .iter()
+        .find(|snapshot| snapshot.shard_id == ShardId::new(1))
+        .unwrap();
+    assert_eq!(survivor.state().commands, vec!["add:out-survivor"]);
+    assert!(blocked_snapshot.commands_processed >= 1);
+    assert!(survivor_snapshot.commands_processed >= 1);
+    assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
+    assert!(snapshots.iter().all(|snapshot| !snapshot.panicked));
+}
+
 fn wait_for_panicked(group: &EgressShardGroup, shard_id: ShardId) {
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
