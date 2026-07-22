@@ -52,10 +52,6 @@ interface SettingsDisclosureConfig {
 
 type RateLimitResetScope = "all" | "ip" | "username";
 
-interface SettingsRouteRenderOptions {
-  readonly v2RouteBody: boolean;
-}
-
 const SETTINGS_DISCLOSURES: readonly SettingsDisclosureConfig[] = [
   {
     id: "recording-settings-section",
@@ -330,10 +326,7 @@ function bindSettingsPanelActions(container: HTMLElement): void {
     });
 }
 
-function renderSettingsRoute(
-  container: HTMLElement,
-  options: SettingsRouteRenderOptions,
-): void {
+function renderSettingsRoute(container: HTMLElement): void {
   const serverNameValue = escapeHtml(effectiveServerName());
   container.innerHTML = `
         <div class="dashboard-page-shell">
@@ -587,8 +580,8 @@ function renderSettingsRoute(
             </section>
         </div>`;
 
-  container.dataset.settingsRouteBody = options.v2RouteBody ? "v2" : "legacy";
-  if (options.v2RouteBody) mountSettingsV2Disclosures(container);
+  container.dataset.settingsRouteBody = "v2";
+  mountSettingsV2Disclosures(container);
   syncSettingsAccountActions(container);
   bindSettingsSectionJump(container);
   bindSettingsPanelActions(container);
@@ -650,12 +643,8 @@ function renderSettingsRoute(
   updateSettingsSummary();
 }
 
-export function renderSettingsPanel(container: HTMLElement): void {
-  renderSettingsRoute(container, { v2RouteBody: false });
-}
-
 export function renderDashboardV2SettingsBody(container: HTMLElement): void {
-  renderSettingsRoute(container, { v2RouteBody: true });
+  renderSettingsRoute(container);
 }
 
 export {

@@ -181,9 +181,13 @@ runCheck("renderPipelines publishes selector models to the v2 owner", async () =
   render.configurePipelineSelectorPresentation({});
 });
 
-runCheck("renderSettingsPanel emits delegated actions without inline handlers", async () => {
+runCheck("renderDashboardV2SettingsBody emits delegated actions without inline handlers", async () => {
   const { document } = installFakeDom();
-  const container = appendRoot(document, "div", "settings-mode-content");
+  const container = appendRoot(
+    document,
+    "div",
+    "dashboard-v2-settings-content",
+  );
 
   const settings = await loadCompiledFrontendModule("features/settings.js");
   const { state } = await loadCompiledFrontendModule("core/state.js");
@@ -203,7 +207,7 @@ runCheck("renderSettingsPanel emits delegated actions without inline handlers", 
       },
     },
   };
-  settings.renderSettingsPanel(container);
+  settings.renderDashboardV2SettingsBody(container);
   settings.loadTranscodeProfiles();
 
   assert.doesNotMatch(container.innerHTML, /\son[a-z]+\s*=/i);

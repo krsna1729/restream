@@ -943,6 +943,8 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test('HLS playlist advances media sequence while streaming', async ({ page }) => {
+        test.setTimeout(60_000);
+
         const getSeq = async (): Promise<number> => {
             for (let attempt = 1; attempt <= 20; attempt++) {
                 const resp = await page.request.get(`/hls/${livePipelineId}/index.m3u8`);

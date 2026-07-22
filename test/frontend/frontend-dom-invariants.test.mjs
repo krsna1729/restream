@@ -204,7 +204,7 @@ test("status route body uses the v2-owned renderer", async () => {
   assert.match(routerSource, /renderDashboardV2StatusBody/);
   assert.match(
     routerSource,
-    /renderStatusMode\(dashboardV2RouteBodyConfig\("status"\)\.v2HostId\)/,
+    /renderStatusMode\(dashboardV2RouteBodyConfig\("status"\)\.hostId\)/,
   );
   assert.match(
     statusSource,
@@ -237,7 +237,7 @@ test("pipeline inspect route body uses the v2-owned renderer", async () => {
   assert.match(routerSource, /renderDashboardV2PipelineInspectBody/);
   assert.match(
     routerSource,
-    /dashboardV2RouteBodyConfig\("pipeline-inspect"\)\.v2HostId/,
+    /dashboardV2RouteBodyConfig\("pipeline-inspect"\)\.hostId/,
   );
   assert.match(
     routeBodySource,
@@ -267,7 +267,7 @@ test("pipeline monitor route body uses the v2-owned renderer", async () => {
   assert.match(routerSource, /renderDashboardV2ControlRoomBody/);
   assert.match(
     routerSource,
-    /dashboardV2RouteBodyConfig\("pipeline-monitor"\)\.v2HostId/,
+    /dashboardV2RouteBodyConfig\("pipeline-monitor"\)\.hostId/,
   );
   assert.match(
     routeBodySource,
@@ -288,19 +288,21 @@ test("settings route body uses the v2-owned renderer", async () => {
   ]);
 
   assert.doesNotMatch(routerSource, /renderSettingsPanel/);
+  assert.doesNotMatch(settingsSource, /renderSettingsPanel/);
+  assert.doesNotMatch(settingsSource, /v2RouteBody/);
+  assert.doesNotMatch(settingsSource, /settingsRouteBody = "legacy"/);
   assert.match(routerSource, /renderDashboardV2SettingsBody/);
   assert.match(
     routerSource,
-    /renderSettingsMode\(dashboardV2RouteBodyConfig\("settings"\)\.v2HostId\)/,
+    /renderSettingsMode\(dashboardV2RouteBodyConfig\("settings"\)\.hostId\)/,
   );
   assert.match(
     settingsSource,
     /export function renderDashboardV2SettingsBody\(container: HTMLElement\): void/,
   );
-  assert.match(
-    settingsSource,
-    /renderSettingsRoute\(container, \{ v2RouteBody: true \}\)/,
-  );
+  assert.match(settingsSource, /renderSettingsRoute\(container\)/);
+  assert.match(settingsSource, /container\.dataset\.settingsRouteBody = "v2"/);
+  assert.match(settingsSource, /mountSettingsV2Disclosures\(container\)/);
 });
 
 test("media route body uses the v2-owned renderer", async () => {
@@ -316,7 +318,7 @@ test("media route body uses the v2-owned renderer", async () => {
   assert.match(routerSource, /renderDashboardV2MediaBody/);
   assert.match(
     routerSource,
-    /dashboardV2RouteBodyConfig\("media"\)\.v2HostId/,
+    /dashboardV2RouteBodyConfig\("media"\)\.hostId/,
   );
   assert.match(
     mediaSource,
@@ -346,7 +348,7 @@ test("incidents route body uses the v2-owned renderer", async () => {
   assert.match(routerSource, /clearDashboardV2IncidentsBody/);
   assert.match(
     routerSource,
-    /dashboardV2RouteBodyConfig\("incidents"\)\.v2HostId/,
+    /dashboardV2RouteBodyConfig\("incidents"\)\.hostId/,
   );
   assert.match(
     routeBodySource,
@@ -376,7 +378,7 @@ test("telemetry route body uses the v2-owned renderer", async () => {
   assert.match(routerSource, /clearDashboardV2TelemetryBody/);
   assert.match(
     routerSource,
-    /dashboardV2RouteBodyConfig\("telemetry"\)\.v2HostId/,
+    /dashboardV2RouteBodyConfig\("telemetry"\)\.hostId/,
   );
   assert.match(
     routeBodySource,
@@ -388,4 +390,38 @@ test("telemetry route body uses the v2-owned renderer", async () => {
     telemetrySource,
     /export function clearEngineerTelemetryMode\(\): void/,
   );
+});
+
+test("dashboard v2 route-body hosts are app-owned in one contract", async () => {
+  const [routeBodiesSource, routerSource, checkpointsSource] = await Promise.all([
+    readFile(
+      new URL("../../web/ts/app/dashboard-v2-route-bodies.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(new URL("../../web/ts/app/modes/router.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL(
+        "../../web/ts/app/dashboard-v2-checkpoints-entry.tsx",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ]);
+  const hostIds = [
+    "dashboard-v2-pipeline-inspect-content",
+    "dashboard-v2-control-room-content",
+    "dashboard-v2-incidents-content",
+    "dashboard-v2-telemetry-content",
+    "dashboard-v2-media-content",
+    "dashboard-v2-settings-content",
+    "dashboard-v2-status-content",
+  ];
+
+  for (const hostId of hostIds) {
+    assert.match(routeBodiesSource, new RegExp(`hostId: "${hostId}"`));
+    assert.doesNotMatch(routerSource, new RegExp(hostId));
+    assert.doesNotMatch(checkpointsSource, new RegExp(hostId));
+  }
+  assert.match(checkpointsSource, /routeBody={dashboardV2RouteBodyConfig/);
+  assert.match(checkpointsSource, /data-dashboard-v2-owned-route-body={routeBody\.mode}/);
 });

@@ -50,6 +50,11 @@ import {
   renderOverview,
   syncOverviewActivityStream,
 } from "./overview.js";
+import {
+  DASHBOARD_V2_ROUTE_BODIES,
+  dashboardV2RouteBodyConfig,
+  type DashboardV2RouteBodyMode,
+} from "../dashboard-v2-route-bodies.js";
 
 type NavigationOptions = {
   focus?: "panel" | "none";
@@ -63,51 +68,6 @@ let dashboardModePresentationSync:
   | null = null;
 
 const rememberedPipelineUrlsKey = "restream:remembered-pipeline-urls";
-type DashboardV2RouteBodyMode =
-  | "pipeline-inspect"
-  | "pipeline-monitor"
-  | "incidents"
-  | "telemetry"
-  | "media"
-  | "settings"
-  | "status";
-
-interface DashboardV2RouteBodyConfig {
-  readonly mode: DashboardV2RouteBodyMode;
-  readonly v2HostId: string;
-}
-
-const DASHBOARD_V2_ROUTE_BODIES: readonly DashboardV2RouteBodyConfig[] = [
-  {
-    mode: "pipeline-inspect",
-    v2HostId: "dashboard-v2-pipeline-inspect-content",
-  },
-  {
-    mode: "pipeline-monitor",
-    v2HostId: "dashboard-v2-control-room-content",
-  },
-  {
-    mode: "incidents",
-    v2HostId: "dashboard-v2-incidents-content",
-  },
-  {
-    mode: "telemetry",
-    v2HostId: "dashboard-v2-telemetry-content",
-  },
-  {
-    mode: "media",
-    v2HostId: "dashboard-v2-media-content",
-  },
-  {
-    mode: "settings",
-    v2HostId: "dashboard-v2-settings-content",
-  },
-  {
-    mode: "status",
-    v2HostId: "dashboard-v2-status-content",
-  },
-] as const;
-
 export function configureDashboardModePresentationSync(
   callback: ((location: DashboardLocation) => void) | null,
 ): void {
@@ -158,23 +118,15 @@ function dashboardV2RouteBodyMode(
   return null;
 }
 
-function dashboardV2RouteBodyConfig(
-  mode: DashboardV2RouteBodyMode,
-): DashboardV2RouteBodyConfig {
-  const config = DASHBOARD_V2_ROUTE_BODIES.find((entry) => entry.mode === mode);
-  if (!config) throw new Error(`Unknown dashboard v2 route body: ${mode}`);
-  return config;
-}
-
 function clearDormantRouteBodies(options: {
   readonly activeMode: DashboardV2RouteBodyMode | null;
 }): void {
   const { activeMode } = options;
   for (const config of DASHBOARD_V2_ROUTE_BODIES) {
     if (activeMode !== config.mode) {
-      document.getElementById(config.v2HostId)?.replaceChildren();
+      document.getElementById(config.hostId)?.replaceChildren();
     }
-    document.getElementById(config.v2HostId)?.toggleAttribute(
+    document.getElementById(config.hostId)?.toggleAttribute(
       "hidden",
       activeMode !== config.mode,
     );
@@ -301,11 +253,11 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
   }
   if (mode === "pipeline" && activePipelineView === "inspect") {
     renderDashboardV2PipelineInspectBody(
-      dashboardV2RouteBodyConfig("pipeline-inspect").v2HostId,
+      dashboardV2RouteBodyConfig("pipeline-inspect").hostId,
     );
   } else if (mode === "pipeline" && activePipelineView === "monitor") {
     renderDashboardV2ControlRoomBody(
-      dashboardV2RouteBodyConfig("pipeline-monitor").v2HostId,
+      dashboardV2RouteBodyConfig("pipeline-monitor").hostId,
     );
   }
   const pipelineOptions = state.pipelines.map((pipeline) => ({
@@ -314,7 +266,7 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
   }));
   if (mode === "incidents") {
     renderDashboardV2IncidentsBody(
-      dashboardV2RouteBodyConfig("incidents").v2HostId,
+      dashboardV2RouteBodyConfig("incidents").hostId,
       {
         pipelines: pipelineOptions,
         navigateToPipeline: (pipelineId) => {
@@ -328,7 +280,7 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
   }
   if (mode === "telemetry") {
     renderDashboardV2TelemetryBody(
-      dashboardV2RouteBodyConfig("telemetry").v2HostId,
+      dashboardV2RouteBodyConfig("telemetry").hostId,
       { pipelines: pipelineOptions },
     );
   } else {
@@ -336,12 +288,12 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
   }
 
   if (mode === "settings") {
-    renderSettingsMode(dashboardV2RouteBodyConfig("settings").v2HostId);
+    renderSettingsMode(dashboardV2RouteBodyConfig("settings").hostId);
   } else if (mode === "status") {
-    renderStatusMode(dashboardV2RouteBodyConfig("status").v2HostId);
+    renderStatusMode(dashboardV2RouteBodyConfig("status").hostId);
   } else if (mode === "media") {
     const container = document.getElementById(
-      dashboardV2RouteBodyConfig("media").v2HostId,
+      dashboardV2RouteBodyConfig("media").hostId,
     );
     if (container) {
       const result = renderDashboardV2MediaBody(container, {
