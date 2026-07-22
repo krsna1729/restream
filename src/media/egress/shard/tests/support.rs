@@ -140,6 +140,7 @@ impl EgressShardBackend for ProbeBackend {
 
 #[derive(Debug)]
 pub(super) enum ScriptBackend {
+    Blocking(BlockingBackend),
     Probe(ProbeBackend),
     Panic,
 }
@@ -147,6 +148,7 @@ pub(super) enum ScriptBackend {
 impl EgressShardBackend for ScriptBackend {
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
         match self {
+            Self::Blocking(backend) => backend.on_command(command),
             Self::Probe(backend) => backend.on_command(command),
             Self::Panic => panic!("scripted shard panic"),
         }
@@ -154,6 +156,7 @@ impl EgressShardBackend for ScriptBackend {
 
     fn on_media_tick(&mut self) {
         match self {
+            Self::Blocking(_) => {}
             Self::Probe(backend) => backend.on_media_tick(),
             Self::Panic => {}
         }
@@ -161,6 +164,7 @@ impl EgressShardBackend for ScriptBackend {
 
     fn timer_generation(&self, output_id: &OutputId) -> Option<u64> {
         match self {
+            Self::Blocking(_) => None,
             Self::Probe(backend) => backend.timer_generation(output_id),
             Self::Panic => None,
         }
@@ -168,6 +172,7 @@ impl EgressShardBackend for ScriptBackend {
 
     fn on_timer(&mut self, output_id: OutputId, generation: u64) -> EgressShardCommandEffect {
         match self {
+            Self::Blocking(_) => EgressShardCommandEffect::Continue,
             Self::Probe(backend) => backend.on_timer(output_id, generation),
             Self::Panic => EgressShardCommandEffect::Continue,
         }
@@ -175,6 +180,7 @@ impl EgressShardBackend for ScriptBackend {
 
     fn on_shutdown(&mut self) {
         match self {
+            Self::Blocking(backend) => backend.on_shutdown(),
             Self::Probe(backend) => backend.on_shutdown(),
             Self::Panic => {}
         }

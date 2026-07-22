@@ -1,10 +1,12 @@
 use super::super::*;
 use super::support::{
-    Probe, ProbeBackend, ScriptBackend, config, manager, output_spec, spec_for_shard,
+    BlockingBackend, Gate, Probe, ProbeBackend, ScriptBackend, config, manager, output_spec,
+    spec_for_shard,
 };
+use crate::media::egress::command::OutputSpec;
 use crate::media::egress::command::{EgressCommand, ShardId};
 use crate::media::egress::manager::{
-    DesiredOutput, EgressManagerDispatchError, ManagerCommandOutcome,
+    DesiredOutput, EgressManager, EgressManagerDispatchError, ManagerCommandOutcome,
 };
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
@@ -143,6 +145,68 @@ fn manager_dispatch_to_group_preserves_state_when_group_rejects_shard() {
     assert_eq!(manager.command_depth(ShardId::new(1)), 0);
     assert!(shard_zero.state().commands.is_empty());
     assert_eq!(snapshots.len(), 1);
+}
+
+#[test]
+fn manager_dispatch_to_group_converges_after_shard_queue_full() {
+    let mut manager = manager(2);
+    let gate = Gate::default();
+    let survivor = Probe::default();
+    let group = EgressShardGroup::spawn(
+        NonZeroU32::new(2).unwrap(),
+        config(1, 1),
+        vec![
+            ScriptBackend::Blocking(BlockingBackend { gate: gate.clone() }),
+            ScriptBackend::Probe(ProbeBackend {
+                probe: survivor.clone(),
+            }),
+        ],
+    )
+    .unwrap();
+    let outputs = specs_for_shard(&manager, ShardId::new(0), 3);
+    let rejected_id = outputs[2].id.clone();
+
+    assert!(matches!(
+        manager.dispatch_to_group(EgressCommand::Add(outputs[0].clone()), &group),
+        Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
+    ));
+    gate.wait_until_entered();
+    assert!(matches!(
+        manager.dispatch_to_group(EgressCommand::Add(outputs[1].clone()), &group),
+        Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
+    ));
+    let full = manager.dispatch_to_group(EgressCommand::Add(outputs[2].clone()), &group);
+
+    assert_eq!(
+        full,
+        Err(EgressManagerDispatchError::Dispatch {
+            shard_id: ShardId::new(0),
+            source: EgressShardGroupError::SendFailed {
+                shard_id: ShardId::new(0),
+                source: EgressShardSendError::Full,
+            },
+        })
+    );
+    assert!(manager.desired_output(&rejected_id).is_none());
+    assert_eq!(manager.command_depth(ShardId::new(0)), 2);
+
+    gate.release();
+    wait_for_command_depth_at_least(&group, ShardId::new(0), 2);
+    assert!(matches!(
+        manager.dispatch_to_group(EgressCommand::Add(outputs[2].clone()), &group),
+        Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
+    ));
+    let snapshots = group.shutdown_and_join();
+
+    assert_eq!(
+        manager.desired_output(&rejected_id),
+        Some(&DesiredOutput {
+            id: rejected_id,
+            generation: 1,
+            shard_id: ShardId::new(0),
+        })
+    );
+    assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
 }
 
 #[test]
@@ -320,6 +384,35 @@ fn wait_for_panicked(group: &EgressShardGroup, shard_id: ShardId) {
         std::thread::yield_now();
     }
     panic!("timed out waiting for {shard_id:?} to report panic");
+}
+
+fn specs_for_shard(manager: &EgressManager, shard_id: ShardId, count: usize) -> Vec<OutputSpec> {
+    let mut specs = Vec::with_capacity(count);
+    for index in 0..2_000 {
+        let candidate = output_spec(&format!("out-full-{index}"));
+        if manager.assign_spec(&candidate) == shard_id {
+            specs.push(candidate);
+            if specs.len() == count {
+                return specs;
+            }
+        }
+    }
+    panic!("test fixture could not find {count} outputs for {shard_id}");
+}
+
+fn wait_for_command_depth_at_least(group: &EgressShardGroup, shard_id: ShardId, target: u64) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if group
+            .snapshots()
+            .iter()
+            .any(|snapshot| snapshot.shard_id == shard_id && snapshot.commands_processed >= target)
+        {
+            return;
+        }
+        std::thread::yield_now();
+    }
+    panic!("timed out waiting for {shard_id:?} to process {target} commands");
 }
 
 #[test]
