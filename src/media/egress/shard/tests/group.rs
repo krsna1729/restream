@@ -321,3 +321,70 @@ fn wait_for_panicked(group: &EgressShardGroup, shard_id: ShardId) {
     }
     panic!("timed out waiting for {shard_id:?} to report panic");
 }
+
+#[test]
+fn manager_replays_only_replaced_shard_outputs_after_panic() {
+    let mut manager = manager(2);
+    let survivor = Probe::default();
+    let replacement = Probe::default();
+    let panicked_output = spec_for_shard(&manager, ShardId::new(0));
+    let survivor_output = spec_for_shard(&manager, ShardId::new(1));
+    let panicked_output_id = panicked_output.id.clone();
+    let survivor_output_id = survivor_output.id.clone();
+    let mut group = EgressShardGroup::spawn(
+        NonZeroU32::new(2).unwrap(),
+        config(4, 4),
+        vec![
+            ScriptBackend::Panic,
+            ScriptBackend::Probe(ProbeBackend {
+                probe: survivor.clone(),
+            }),
+        ],
+    )
+    .unwrap();
+
+    assert!(matches!(
+        manager.dispatch_to_group(EgressCommand::Add(panicked_output), &group),
+        Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(0)
+    ));
+    assert!(matches!(
+        manager.dispatch_to_group(EgressCommand::Add(survivor_output), &group),
+        Ok(ManagerCommandOutcome::Enqueued { shard_id }) if shard_id == ShardId::new(1)
+    ));
+    survivor.wait_for_commands(1);
+    wait_for_panicked(&group, ShardId::new(0));
+
+    assert_eq!(
+        group.replace_panicked(config(4, 4), |_| ProbeBackend {
+            probe: replacement.clone(),
+        }),
+        vec![ShardId::new(0)]
+    );
+    let replay = manager.dispatch_recreate_shard(ShardId::new(0), |shard_id, command| {
+        group.try_send_to(shard_id, command)
+    });
+
+    assert_eq!(
+        replay,
+        Ok(ManagerCommandOutcome::Replayed {
+            shard_id: ShardId::new(0),
+            output_count: 1,
+        })
+    );
+    replacement.wait_for_commands(1);
+    let snapshots = group.shutdown_and_join();
+
+    assert_eq!(
+        replacement.state().commands,
+        vec![format!("add:{panicked_output_id}")]
+    );
+    assert_eq!(
+        survivor.state().commands,
+        vec![format!("add:{survivor_output_id}")]
+    );
+    assert!(
+        snapshots
+            .iter()
+            .all(|snapshot| snapshot.stopped && !snapshot.panicked)
+    );
+}

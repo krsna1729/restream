@@ -47,6 +47,7 @@ impl EgressManagerConfig {
 pub struct EgressManager {
     config: EgressManagerConfig,
     desired: HashMap<OutputId, DesiredOutput>,
+    desired_specs: HashMap<OutputId, OutputSpec>,
     command_depths: Vec<usize>,
     shutting_down: bool,
 }
@@ -57,6 +58,7 @@ impl EgressManager {
             command_depths: vec![0; config.shard_count.get() as usize],
             config,
             desired: HashMap::new(),
+            desired_specs: HashMap::new(),
             shutting_down: false,
         }
     }
@@ -143,6 +145,35 @@ impl EgressManager {
         })
     }
 
+    pub fn dispatch_recreate_shard<E, F>(
+        &mut self,
+        shard_id: ShardId,
+        mut dispatch: F,
+    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<E>>
+    where
+        F: FnMut(ShardId, EgressCommand) -> Result<(), E>,
+    {
+        if self.shutting_down {
+            return Ok(ManagerCommandOutcome::AlreadyShuttingDown);
+        }
+        let mut specs = self
+            .specs_for_shard(shard_id)
+            .map_err(EgressManagerDispatchError::Command)?;
+        specs.sort_by(|left, right| left.id.cmp(&right.id));
+        self.check_command_slots(shard_id, specs.len())
+            .map_err(EgressManagerDispatchError::Command)?;
+        for spec in specs {
+            dispatch(shard_id, EgressCommand::Add(spec))
+                .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
+            self.reserve_command_slot(shard_id)
+                .map_err(EgressManagerDispatchError::Command)?;
+        }
+        Ok(ManagerCommandOutcome::Replayed {
+            shard_id,
+            output_count: self.desired_count_for_shard(shard_id),
+        })
+    }
+
     fn dispatch_spec<E, F>(
         &mut self,
         command: EgressCommand,
@@ -177,7 +208,9 @@ impl EgressManager {
             generation: spec.generation,
             shard_id,
         };
-        self.desired.insert(spec.id, desired.clone());
+        let output_id = spec.id.clone();
+        self.desired.insert(output_id.clone(), desired.clone());
+        self.desired_specs.insert(output_id, spec);
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     }
 
@@ -200,6 +233,7 @@ impl EgressManager {
         self.reserve_command_slot(shard_id)
             .map_err(EgressManagerDispatchError::Command)?;
         self.desired.remove(&output_id);
+        self.desired_specs.remove(&output_id);
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     }
 
@@ -240,13 +274,43 @@ impl EgressManager {
     }
 
     fn check_command_slot(&self, shard_id: ShardId) -> Result<(), EgressManagerCommandError> {
+        self.check_command_slots(shard_id, 1)
+    }
+
+    fn check_command_slots(
+        &self,
+        shard_id: ShardId,
+        additional: usize,
+    ) -> Result<(), EgressManagerCommandError> {
         let Some(depth) = self.command_depths.get(shard_id.index() as usize) else {
             return Err(EgressManagerCommandError::UnknownShard { shard_id });
         };
-        if *depth >= self.config.command_channel_capacity.get() {
+        if depth.saturating_add(additional) > self.config.command_channel_capacity.get() {
             return Err(EgressManagerCommandError::CommandChannelFull { shard_id });
         }
         Ok(())
+    }
+
+    fn specs_for_shard(
+        &self,
+        shard_id: ShardId,
+    ) -> Result<Vec<OutputSpec>, EgressManagerCommandError> {
+        self.check_command_slots(shard_id, 0)?;
+        Ok(self
+            .desired_specs
+            .iter()
+            .filter_map(|(output_id, spec)| {
+                let desired = self.desired.get(output_id)?;
+                (desired.shard_id == shard_id).then(|| spec.clone())
+            })
+            .collect())
+    }
+
+    fn desired_count_for_shard(&self, shard_id: ShardId) -> usize {
+        self.desired
+            .values()
+            .filter(|desired| desired.shard_id == shard_id)
+            .count()
     }
 }
 
@@ -259,12 +323,24 @@ pub struct DesiredOutput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManagerCommandOutcome {
-    Enqueued { shard_id: ShardId },
-    Broadcast { shard_count: NonZeroU32 },
-    IgnoredStale { shard_id: ShardId },
-    AlreadyCurrent { shard_id: ShardId },
+    Enqueued {
+        shard_id: ShardId,
+    },
+    Broadcast {
+        shard_count: NonZeroU32,
+    },
+    IgnoredStale {
+        shard_id: ShardId,
+    },
+    AlreadyCurrent {
+        shard_id: ShardId,
+    },
     AlreadyRemoved,
     AlreadyShuttingDown,
+    Replayed {
+        shard_id: ShardId,
+        output_count: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
