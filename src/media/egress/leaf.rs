@@ -114,6 +114,10 @@ impl ProgressState {
         }
     }
 
+    pub fn record_overrun(&mut self) {
+        self.overrun_count = self.overrun_count.saturating_add(1);
+    }
+
     /// Age of the last byte progress in seconds, or `None` if no bytes sent.
     pub fn byte_progress_age_secs(&self, now: Instant) -> Option<f64> {
         self.last_byte_progress
@@ -290,6 +294,19 @@ mod tests {
         assert_eq!(p.total_units_sent, 0);
         assert_eq!(p.total_bytes_discarded, 1024);
         assert_eq!(p.total_units_discarded, 2);
+    }
+
+    #[test]
+    fn progress_state_records_overruns_separately_from_progress_totals() {
+        let mut p = ProgressState::new();
+        p.record_overrun();
+        p.record_overrun();
+
+        assert_eq!(p.overrun_count, 2);
+        assert_eq!(p.total_bytes_sent, 0);
+        assert_eq!(p.total_units_sent, 0);
+        assert_eq!(p.total_bytes_discarded, 0);
+        assert_eq!(p.total_units_discarded, 0);
     }
 
     #[test]

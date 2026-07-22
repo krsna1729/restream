@@ -2,6 +2,7 @@ use super::*;
 use crate::media::egress::backend::Readiness;
 use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::egress::leaf::ProgressState;
+use crate::media::egress::lifecycle::{LeafLifecycle, LifecycleEvent, apply_event};
 use crate::media::egress::metrics::LeafMetrics;
 use crate::media::egress::test_driver::FakeFeed;
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
@@ -193,6 +194,35 @@ fn sink_reports_feed_overrun_for_stale_cursor() {
     );
 
     assert!(matches!(progress, EngineProgress::FeedOverrun));
+    assert_eq!(cursor, FeedCursor::new(0, 0));
+    assert_eq!(transport.stats(), SinkDiscardStats::default());
+}
+
+#[test]
+fn sink_feed_overrun_uses_common_resynchronization_policy() {
+    let feed = FakeFeed::new();
+    feed.push(Bytes::from_static(b"abc"), true);
+    feed.set_overrun_at(1);
+    let mut engine = SinkEngine::<FakeFeed>::default();
+    let mut transport = SinkTransport::default();
+    let mut cursor = FeedCursor::new(0, 0);
+    let mut progress_state = ProgressState::new();
+
+    let progress = engine.advance(
+        &mut transport,
+        Readiness::WRITABLE,
+        &feed,
+        &mut cursor,
+        budget(8, 1024),
+    );
+    assert!(matches!(progress, EngineProgress::FeedOverrun));
+    progress_state.record_overrun();
+    let lifecycle = apply_event(LeafLifecycle::Active, LifecycleEvent::FeedOverrun);
+
+    assert_eq!(lifecycle, Ok(LeafLifecycle::Resynchronizing));
+    assert_eq!(progress_state.overrun_count, 1);
+    assert_eq!(progress_state.total_bytes_sent, 0);
+    assert_eq!(progress_state.total_bytes_discarded, 0);
     assert_eq!(cursor, FeedCursor::new(0, 0));
     assert_eq!(transport.stats(), SinkDiscardStats::default());
 }
