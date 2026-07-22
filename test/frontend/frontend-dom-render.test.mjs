@@ -1573,6 +1573,7 @@ runCheck(
     const { document, window } = installFakeDom();
     window.location.href = "http://localhost/?mode=pipeline";
     appendRoot(document, "div", "dashboard-grid");
+    appendDashboardV2Roots(document);
     const app = await loadCompiledFrontendModule("app/dashboard-app.js");
     const deps = await loadCompiledFrontendModule(
       "features/pipeline-dependencies.js",
@@ -1584,6 +1585,7 @@ runCheck(
 
     assert.equal(typeof firstSetDashboardMode, "function");
     assert.equal(window.setDashboardMode, firstSetDashboardMode);
+    await flushAsyncWork();
     assert.equal(
       typeof deps.pipelineViewDependencies.refreshDashboardRuntime,
       "function",

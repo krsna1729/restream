@@ -70,6 +70,18 @@ test("compiled dashboard no longer exposes a UI version toggle", async () => {
   assert.doesNotMatch(indexHtml, /Use dashboard UI v2/);
 });
 
+test("compiled dashboard requires v2 bundles instead of falling back to legacy", async () => {
+  const loaderSource = await readFile(
+    new URL("../../public/js/app/dashboard-v2-loader.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.doesNotMatch(loaderSource, /isOptionalNodeBundleMiss/);
+  assert.doesNotMatch(loaderSource, /ERR_MODULE_NOT_FOUND/);
+  assert.match(loaderSource, /Unable to start the dashboard v2 shell/);
+  assert.match(loaderSource, /Unable to start the dashboard v2 checkpoints/);
+});
+
 test("compiled dashboard keeps the default React seam in a bounded bundle", async () => {
   const appDir = path.join(resolveFrontendModulesDir(), "app");
   const [defaultEntry, v2Entry, checkpointsEntry, sharedRuntime] =

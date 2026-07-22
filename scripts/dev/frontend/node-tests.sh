@@ -17,6 +17,7 @@ trap cleanup EXIT
 cd "$ROOT_DIR"
 
 npx tsc -p tsconfig.frontend-node-test.json --outDir "$BUILD_DIR"
+cp test/support/frontend-v2-node-stubs/app/*.js "$BUILD_DIR/app/"
 
 export FRONTEND_MODULES_DIR="$BUILD_DIR"
 export TMPDIR="$TMP_BASE"

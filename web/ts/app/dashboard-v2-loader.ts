@@ -225,11 +225,11 @@ const DASHBOARD_V2_CONTAINER_IDS = [
   "dashboard-v2-settings-root",
 ] as const;
 
-function isOptionalNodeBundleMiss(error: unknown, bundle: string): boolean {
-  if (!(error instanceof Error)) return false;
-  const maybeError = error as Error & { code?: unknown; url?: unknown };
-  if (maybeError.code !== "ERR_MODULE_NOT_FOUND") return false;
-  return String(maybeError.url || "").endsWith(bundle.replace("./", "/"));
+function dashboardV2BundleLoadError(message: string, error: unknown): Error {
+  if (error instanceof Error) {
+    return new Error(`${message}: ${error.message}`);
+  }
+  return new Error(`${message}: ${String(error)}`);
 }
 
 function setContainerHidden(id: string, hidden: boolean): void {
@@ -321,8 +321,10 @@ function ensureDashboardV2Module(): void {
     })
     .catch((error: unknown) => {
       dashboardV2ModulePromise = null;
-      if (isOptionalNodeBundleMiss(error, DASHBOARD_V2_BUNDLE)) return;
-      console.error("Unable to start the dashboard v2 shell", error);
+      throw dashboardV2BundleLoadError(
+        "Unable to start the dashboard v2 shell",
+        error,
+      );
     });
 }
 
@@ -344,9 +346,10 @@ function ensureDashboardV2CheckpointsModule(): void {
     })
     .catch((error: unknown) => {
       dashboardV2CheckpointsModulePromise = null;
-      if (isOptionalNodeBundleMiss(error, DASHBOARD_V2_CHECKPOINTS_BUNDLE))
-        return;
-      console.error("Unable to start the dashboard v2 checkpoints", error);
+      throw dashboardV2BundleLoadError(
+        "Unable to start the dashboard v2 checkpoints",
+        error,
+      );
     });
 }
 
