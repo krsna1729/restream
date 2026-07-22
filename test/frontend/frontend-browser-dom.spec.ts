@@ -140,19 +140,19 @@ test.describe("Frontend Browser DOM", () => {
     await page.evaluate(() => {
       document.body.innerHTML = `
         <main>
-          <div id="dashboard-grid" class="mx-auto grid min-h-0 w-full max-w-7xl flex-1 gap-4 p-4 has-selected-pipeline">
+          <div id="dashboard-v2-operate-panel" class="mx-auto grid min-h-0 w-full max-w-7xl flex-1 gap-4 p-4 ">
             <div class="border-base-content/10 bg-base-200 w-full max-w-[18rem] overflow-y-auto rounded-lg border"></div>
-            <div id="pipe-info-col" class="border-base-content/10 bg-base-200 overflow-y-auto rounded-lg border p-4"></div>
-            <div id="outs-col" class="border-base-content/10 bg-base-200 w-full min-w-0 overflow-y-auto rounded-lg border p-4 xl:min-w-[24rem]"></div>
+            <div data-dashboard-v2-operate-detail-shell class="border-base-content/10 bg-base-200 overflow-y-auto rounded-lg border p-4"></div>
+            <div data-dashboard-v2-operate-output-shell class="border-base-content/10 bg-base-200 w-full min-w-0 overflow-y-auto rounded-lg border p-4 xl:min-w-[24rem]"></div>
           </div>
         </main>`;
     });
 
     const overflow = await page.evaluate(() => ({
-      gridScrollWidth: document.getElementById("dashboard-grid")?.scrollWidth,
-      gridClientWidth: document.getElementById("dashboard-grid")?.clientWidth,
+      gridScrollWidth: document.getElementById("dashboard-v2-operate-panel")?.scrollWidth,
+      gridClientWidth: document.getElementById("dashboard-v2-operate-panel")?.clientWidth,
       gridTemplate: getComputedStyle(
-        document.getElementById("dashboard-grid") as HTMLElement,
+        document.getElementById("dashboard-v2-operate-panel") as HTMLElement,
       ).gridTemplateColumns,
     }));
 

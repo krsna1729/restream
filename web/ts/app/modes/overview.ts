@@ -39,11 +39,6 @@ export function configureOverviewPresentation(options: {
   onPresentation?: (presentation: OverviewPresentationInput) => void;
 }): void {
   overviewPresentationHook = options.onPresentation || null;
-  const legacyContainer = document.getElementById("overview-mode-content");
-  if (legacyContainer) {
-    legacyContainer.hidden = true;
-    legacyContainer.replaceChildren();
-  }
 }
 
 export function currentOverviewPresentation(): OverviewPresentationInput {

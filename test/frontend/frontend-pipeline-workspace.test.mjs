@@ -97,12 +97,16 @@ test("pipeline workspace shell exposes one active subordinate view", async () =>
   const monitor = document.createElement("button");
   monitor.dataset.pipelineWorkspaceView = "monitor";
   document.body.append(operate, inspect, monitor);
-  const operatePanel = appendRoot(document, "section", "dashboard-grid");
+  const operatePanel = appendRoot(
+    document,
+    "section",
+    "dashboard-v2-operate-panel",
+  );
   const inspectPanel = appendRoot(document, "section", "inspect-mode-panel");
   const monitorPanel = appendRoot(document, "section", "control-mode-panel");
 
   const shell = await loadCompiledFrontendModule(
-    "features/pipeline-workspace-shell.js",
+    "app/modes/pipeline-workspace-shell.js",
   );
   shell.syncPipelineWorkspaceShell("pipeline", "inspect");
 

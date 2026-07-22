@@ -19,7 +19,7 @@ test("output start and stop controls refresh runtime without invalidating dashbo
   const stopUrl = "/api/v1/pipelines/pipe-1/outputs/out-1/stop";
   const { document, window } = installFakeDom();
   window.location.href = "http://localhost/?mode=pipeline&p=pipe-1";
-  appendRoot(document, "div", "dashboard-grid");
+  appendRoot(document, "div", "dashboard-v2-operate-panel");
 
   const requests = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -151,7 +151,7 @@ test("output start and stop controls prefer lifecycle SSE convergence before fal
   const stopUrl = "/api/v1/pipelines/pipe-1/outputs/out-1/stop";
   const { document, window } = installFakeDom();
   window.location.href = "http://localhost/?mode=pipeline&p=pipe-1";
-  appendRoot(document, "div", "dashboard-grid");
+  appendRoot(document, "div", "dashboard-v2-operate-panel");
 
   let desiredState = "stopped";
   const requests = [];
@@ -461,7 +461,7 @@ test("output config mutations reuse returned output payloads instead of refetchi
   const createUrl = "/api/v1/pipelines/pipe-1/outputs";
   const { document, window } = installFakeDom();
   window.location.href = "http://localhost/?mode=pipeline&p=pipe-1";
-  appendRoot(document, "div", "dashboard-grid");
+  appendRoot(document, "div", "dashboard-v2-operate-panel");
 
   const appendField = (tagName, id, value = "") => {
     const element = document.createElement(tagName);
@@ -686,7 +686,7 @@ test("pipeline and output deletes patch dashboard state locally instead of refet
   const deletePipelineUrl = "/api/v1/pipelines/pipe-1";
   const { document, window } = installFakeDom();
   window.location.href = "http://localhost/?mode=pipeline&p=pipe-1";
-  appendRoot(document, "div", "dashboard-grid");
+  appendRoot(document, "div", "dashboard-v2-operate-panel");
 
   const originalCreateElement = document.createElement.bind(document);
   document.createElement = (tagName) => {

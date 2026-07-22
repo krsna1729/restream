@@ -158,7 +158,7 @@ async function flushAsyncWork() {
 
 runCheck("renderPipelines publishes selector models to the v2 owner", async () => {
   const { document } = installFakeDom();
-  appendRoot(document, "div", "dashboard-grid");
+  appendRoot(document, "div", "dashboard-v2-operate-panel");
   appendRoot(document, "div", "pipe-info-col");
   appendRoot(document, "div", "outs-col");
 
@@ -1024,7 +1024,7 @@ runCheck(
     const { document, window } = installFakeDom();
     window.location.href = "http://localhost/?mode=pipeline";
     appendRoot(document, "div", "overview-mode-content");
-    appendRoot(document, "div", "dashboard-grid");
+    appendRoot(document, "div", "dashboard-v2-operate-panel");
 
     const modes = await loadCompiledFrontendModule("app/modes.js");
     const { state } = await loadCompiledFrontendModule("core/state.js");
@@ -1043,7 +1043,7 @@ runCheck(
   async () => {
     const { document, window } = installFakeDom();
     window.location.href = "http://localhost/?mode=media";
-    appendRoot(document, "div", "dashboard-grid");
+    appendRoot(document, "div", "dashboard-v2-operate-panel");
     appendDashboardV2Roots(document);
     appendRoot(document, "div", "overview-mode-panel");
     appendRoot(document, "div", "inspect-mode-panel");
@@ -1157,7 +1157,7 @@ runCheck(
     const { document, window } = installFakeDom();
     window.location.href = "http://localhost/?mode=settings";
     appendRoot(document, "div", "overview-mode-panel");
-    appendRoot(document, "div", "dashboard-grid");
+    appendRoot(document, "div", "dashboard-v2-operate-panel");
     appendDashboardV2Roots(document);
     appendRoot(document, "div", "inspect-mode-panel");
     appendRoot(document, "div", "control-mode-panel");
@@ -1261,7 +1261,7 @@ runCheck(
   async () => {
     const { document, window } = installFakeDom();
     window.location.href = "http://localhost/?mode=pipeline";
-    appendRoot(document, "div", "dashboard-grid");
+    appendRoot(document, "div", "dashboard-v2-operate-panel");
     appendDashboardV2Roots(document);
     const v2Loader = await loadCompiledFrontendModule("app/dashboard-v2-loader.js");
     v2Loader.setDashboardV2PresentationScope({

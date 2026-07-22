@@ -19,7 +19,7 @@ test("pipeline edits reuse returned pipeline payloads instead of refetching dash
   const mediaAnalysisUrl = "/api/v1/media/recording-1.ts/analysis";
   const { document, window } = installFakeDom();
   window.location.href = "http://localhost/?mode=pipeline&p=pipe-1";
-  appendRoot(document, "div", "dashboard-grid");
+  appendRoot(document, "div", "dashboard-v2-operate-panel");
 
   const appendField = (tagName, id, value = "") => {
     const element = document.createElement(tagName);
@@ -239,7 +239,7 @@ test("pipeline edit modal defers media file lookups until file mode is selected"
   const mediaAnalysisUrl = "/api/v1/media/recording-1.ts/analysis";
   const { document, window } = installFakeDom();
   window.location.href = "http://localhost/?mode=pipeline&p=pipe-1";
-  appendRoot(document, "div", "dashboard-grid");
+  appendRoot(document, "div", "dashboard-v2-operate-panel");
 
   const appendField = (tagName, id, value = "") => {
     const element = document.createElement(tagName);
@@ -440,7 +440,7 @@ test("recording patches local state immediately, while file-ingest falls back to
   const startIngestUrl = "/api/v1/ingests/ingest-1/start";
   const { document, window } = installFakeDom();
   window.location.href = "http://localhost/?mode=pipeline&p=pipe-1";
-  appendRoot(document, "div", "dashboard-grid");
+  appendRoot(document, "div", "dashboard-v2-operate-panel");
   appendRoot(document, "div", "pipe-info-col");
 
   const requests = [];

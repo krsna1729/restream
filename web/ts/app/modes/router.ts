@@ -38,7 +38,7 @@ import {
 } from "../../features/pipeline-inspect-route-body.js";
 import { selectPipeline } from "../../features/render.js";
 import { buildOverviewViewModel } from "../../features/overview-view-model.js";
-import { syncPipelineWorkspaceShell } from "../../features/pipeline-workspace-shell.js";
+import { syncPipelineWorkspaceShell } from "./pipeline-workspace-shell.js";
 import {
   refreshDashboard,
   refreshDashboardRuntime,

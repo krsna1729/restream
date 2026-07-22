@@ -150,7 +150,7 @@ test("seed: default v2 replaces Overview while delegating operator actions @desk
     .getByRole("button", { name: "Operate Retrying Destination", exact: true })
     .click();
   await expect(page).toHaveURL(/mode=pipeline/);
-  await expect(page.locator("#dashboard-grid")).toBeVisible();
+  await expect(page.locator("#dashboard-v2-operate-panel")).toBeVisible();
   const pipelineSelector = page.locator("#dashboard-v2-pipeline-selector-root");
   await expect(pipelineSelector).toBeVisible();
   await expect(pipelineSelector.getByText("Pipelines")).toBeVisible();
@@ -1130,8 +1130,12 @@ test("default v2 Operate no-selection state is owned by the pipeline header plac
 
   await expect(page.locator("#stats-col")).toHaveCount(0);
   await expect(page.locator("#stats-table")).toHaveCount(0);
-  await expect(page.locator("#pipe-info-col")).toBeVisible();
-  await expect(page.locator("#outs-col")).toBeHidden();
+  await expect(
+    page.locator("[data-dashboard-v2-operate-detail-shell]"),
+  ).toBeVisible();
+  await expect(
+    page.locator("[data-dashboard-v2-operate-output-shell]"),
+  ).toBeHidden();
   await expect(
     page.locator("#dashboard-v2-pipeline-details-placeholder-title"),
   ).toHaveText("Select a pipeline");

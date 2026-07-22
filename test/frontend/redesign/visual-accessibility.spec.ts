@@ -200,7 +200,7 @@ test("axe/cdp: default dashboard Operate preserves contrast and semantic landmar
     }),
   ).toBeVisible();
   const results = await new AxeBuilder({ page })
-    .include("#dashboard-grid")
+    .include("#dashboard-v2-operate-panel")
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();
   const blocking = results.violations.filter(

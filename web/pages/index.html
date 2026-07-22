@@ -169,7 +169,7 @@
               data-dashboard-mode="pipeline"
               role="tab"
               aria-selected="false"
-              aria-controls="dashboard-grid"
+              aria-controls="dashboard-v2-operate-panel"
               tabindex="-1"
             >
               Pipeline
@@ -262,7 +262,7 @@
           data-pipeline-workspace-view="operate"
           role="tab"
           aria-selected="true"
-          aria-controls="dashboard-grid"
+          aria-controls="dashboard-v2-operate-panel"
           tabindex="0"
         >
           Operate
@@ -1160,7 +1160,7 @@
       </section>
 
       <div
-        id="dashboard-grid"
+        id="dashboard-v2-operate-panel"
         role="tabpanel"
         aria-labelledby="pipeline-workspace-tab-operate"
         class="mx-auto grid hidden min-h-0 w-full max-w-7xl flex-1 gap-4 p-4"
@@ -1177,7 +1177,6 @@
         <div
           class="border-base-content/10 bg-base-200 overflow-y-auto rounded-lg border p-4"
           data-dashboard-v2-operate-detail-shell
-          id="pipe-info-col"
         >
           <div>
             <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
@@ -1195,7 +1194,6 @@
         <div
           class="border-base-content/10 bg-base-200 w-full min-w-0 overflow-y-auto rounded-lg border p-4 xl:min-w-[24rem]"
           data-dashboard-v2-operate-output-shell
-          id="outs-col"
         >
           <div id="dashboard-v2-pipeline-output-overview-root" hidden></div>
         </div>

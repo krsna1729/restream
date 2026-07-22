@@ -49,13 +49,6 @@ function renderPipelines(): void {
       : null,
   );
 
-  const gridElem = document.getElementById("dashboard-grid");
-  if (!gridElem) {
-    return;
-  }
-  gridElem.classList.toggle("has-selected-pipeline", Boolean(selectedPipe));
-  gridElem.style.gridTemplateColumns = "";
-
   pipelineSelectorPresentationHook?.(
     buildPipelineOperateSelectorModel(state.pipelines, selectedPipe),
   );

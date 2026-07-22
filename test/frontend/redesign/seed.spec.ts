@@ -1484,8 +1484,8 @@ test("seed: default v2 owned routes keep keyboard and CDP budgets @desktop", asy
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/mode=pipeline/);
   await expect(page).toHaveURL(/p=pipe-retrying/);
-  await expect(page.locator("#dashboard-grid")).toBeVisible();
-  await expect(page.locator("#dashboard-grid")).toBeFocused();
+  await expect(page.locator("#dashboard-v2-operate-panel")).toBeVisible();
+  await expect(page.locator("#dashboard-v2-operate-panel")).toBeFocused();
 
   const selector = page.locator("#dashboard-v2-pipeline-selector-root");
   const header = page.locator("#dashboard-v2-pipeline-header-root");

@@ -90,6 +90,10 @@ test("static HTML keeps core DOM accessibility and layout invariants", async () 
     indexHtml,
     /min-w-0 overflow-y-auto rounded-lg border p-4 xl:min-w-\[24rem\]/,
   );
+  assert.match(indexHtml, /id="dashboard-v2-operate-panel"/);
+  assert.doesNotMatch(indexHtml, /id="dashboard-grid"/);
+  assert.doesNotMatch(indexHtml, /id="pipe-info-col"/);
+  assert.doesNotMatch(indexHtml, /id="outs-col"/);
   assert.doesNotMatch(hlsBundle, /sourceMappingURL=hls\.min\.js\.map/);
 });
 
@@ -116,11 +120,12 @@ test("dashboard grid sizing lives in responsive CSS instead of inline scripts", 
 
   assert.match(
     inputCss,
-    /#dashboard-grid\s*{\s*grid-template-columns: minmax\(0, 1fr\);/s,
+    /#dashboard-v2-operate-panel\s*{\s*grid-template-columns: minmax\(0, 1fr\);/s,
   );
-  assert.match(inputCss, /#dashboard-grid\.has-selected-pipeline/s);
+  assert.match(inputCss, /#dashboard-v2-operate-panel:has/s);
   assert.match(inputCss, /\.text-base-content\\\/50,[\s\S]*\.stat-title/s);
-  assert.match(renderTs, /classList\.toggle\("has-selected-pipeline"/);
+  assert.doesNotMatch(renderTs, /dashboard-grid/);
+  assert.doesNotMatch(renderTs, /has-selected-pipeline/);
   assert.doesNotMatch(renderTs, /stats-col/);
   assert.doesNotMatch(renderTs, /renderStatsColumn/);
   assert.doesNotMatch(

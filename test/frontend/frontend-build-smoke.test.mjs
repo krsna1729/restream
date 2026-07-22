@@ -20,7 +20,7 @@ test("compiled dashboard bootstrap remains idempotent", async () => {
   window.location.href = "http://localhost/?mode=pipeline";
 
   const dashboardGrid = document.createElement("div");
-  dashboardGrid.id = "dashboard-grid";
+  dashboardGrid.id = "dashboard-v2-operate-panel";
   document.body.appendChild(dashboardGrid);
   for (const id of [
     "dashboard-v2-root",
