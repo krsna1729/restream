@@ -24,8 +24,8 @@ if [[ "${RESTREAM_E2E_SKIP_BUILD:-0}" != "1" ]]; then
     # The SBOM belongs to a distributable build. Regenerating it for an
     # isolated browser test dirties the worktree without testing a different
     # artifact, so keep this development build side-effect free.
-    RESTREAM_SKIP_SBOM=1 "$ROOT/scripts/build/resource-limit.sh" "$ROOT/scripts/build/app-native.sh"
     (cd "$ROOT" && npm run build:frontend)
+    RESTREAM_SKIP_SBOM=1 "$ROOT/scripts/build/resource-limit.sh" "$ROOT/scripts/build/app-native.sh"
 fi
 
 if [[ ! -x "$APP" ]]; then
