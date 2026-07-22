@@ -279,9 +279,7 @@ function renderSettingsMode(containerId: string): void {
 }
 
 function renderStatusMode(containerId: string): void {
-  const container =
-    document.getElementById(containerId) ||
-    document.getElementById("status-mode-content");
+  const container = document.getElementById(containerId);
   if (!container) return;
   if (!statusMounted || !container.querySelector("#status-versions")) {
     container.innerHTML = `

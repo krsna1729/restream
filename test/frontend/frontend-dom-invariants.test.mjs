@@ -175,3 +175,19 @@ test("dashboard app source has no UI-version experiment gate after cutover", asy
     "dashboard app modules must not retain UI-version experiment switches",
   );
 });
+
+test("status route body renders only into the v2-owned host", async () => {
+  const routerSource = await readFile(
+    new URL("../../web/ts/app/modes/router.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.doesNotMatch(
+    routerSource,
+    /document\.getElementById\("status-mode-content"\)/,
+  );
+  assert.match(
+    routerSource,
+    /renderStatusMode\(dashboardV2RouteBodyConfig\("status"\)\.v2HostId\)/,
+  );
+});

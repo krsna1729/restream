@@ -481,7 +481,7 @@ test("status mode reuses its own restream log SSE without opening a second lifec
   appendRoot(document, "div", "media-mode-panel");
   appendRoot(document, "div", "settings-mode-panel");
   appendRoot(document, "div", "status-mode-panel");
-  appendRoot(document, "div", "status-mode-content");
+  appendDashboardV2Roots(document);
   appendRoot(document, "div", "status-versions");
   appendRoot(document, "div", "workspace-mode-summary");
   appendRoot(document, "div", "restream-process-indicator");
