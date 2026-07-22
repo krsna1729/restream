@@ -14,11 +14,11 @@ import {
   tabUntilFocused,
 } from "./seed-helpers";
 
-test("seed: ui=v2 overview Operate is one predictable history step @desktop", async ({
+test("seed: default dashboard overview Operate is one predictable history step @desktop", async ({
   page,
 }) => {
   await installPushStateCounter(page);
-  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2");
+  await openSeededDashboard(page, "mixed-health", "/?mode=overview");
   await resetPushStateCounter(page);
 
   await page
@@ -27,7 +27,7 @@ test("seed: ui=v2 overview Operate is one predictable history step @desktop", as
     .filter({ hasText: "Retrying Destination" })
     .getByRole("button", { name: "Operate Retrying Destination", exact: true })
     .click();
-  await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
+  await expect(page).toHaveURL(/mode=pipeline/);
   await expect(page).toHaveURL(/view=operate/);
   await expect(page).toHaveURL(/p=pipe-retrying/);
   await expect(
@@ -38,7 +38,7 @@ test("seed: ui=v2 overview Operate is one predictable history step @desktop", as
   await expectPushStateCount(page, 1);
 
   await page.goBack();
-  await expect(page).toHaveURL(/\?mode=overview&ui=v2$/);
+  await expect(page).toHaveURL(/\?mode=overview$/);
   await expect(
     page
       .locator("#dashboard-v2-overview")
@@ -47,11 +47,11 @@ test("seed: ui=v2 overview Operate is one predictable history step @desktop", as
   expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
 });
 
-test("seed: ui=v2 overview Inspect is one predictable history step @desktop", async ({
+test("seed: default dashboard overview Inspect is one predictable history step @desktop", async ({
   page,
 }) => {
   await installPushStateCounter(page);
-  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2", {
+  await openSeededDashboard(page, "mixed-health", "/?mode=overview", {
     resourceMapResponse: (pipelineId, resourceMap) => ({
       ...resourceMap,
       scope: { kind: "pipeline", pipelineId },
@@ -95,7 +95,7 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
     .filter({ hasText: "Retrying Destination" })
     .getByRole("button", { name: "Inspect Retrying Destination", exact: true })
     .click();
-  await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
+  await expect(page).toHaveURL(/mode=pipeline/);
   await expect(page).toHaveURL(/view=inspect/);
   await expect(page).toHaveURL(/p=pipe-retrying/);
   await expect(page.locator("#inspect-mode-panel")).toBeVisible();
@@ -221,7 +221,7 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   await expectPushStateCount(page, 1);
 
   await page.goBack();
-  await expect(page).toHaveURL(/\?mode=overview&ui=v2$/);
+  await expect(page).toHaveURL(/\?mode=overview$/);
   await expect(
     page
       .locator("#dashboard-v2-overview")
@@ -230,13 +230,13 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   expect(await getCdpNodeCount(page)).toBeLessThan(7_000);
 });
 
-test("seed: ui=v2 Inspect output search narrows noisy sibling outputs @desktop", async ({
+test("seed: default dashboard Inspect output search narrows noisy sibling outputs @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "chaos-recovery",
-    "/?mode=pipeline&view=inspect&p=pipe-stall&ui=v2",
+    "/?mode=pipeline&view=inspect&p=pipe-stall",
     { expectOverviewReady: false },
   );
 
@@ -279,13 +279,13 @@ test("seed: ui=v2 Inspect output search narrows noisy sibling outputs @desktop",
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
 });
 
-test("seed: ui=v2 Inspect output search understands down aliases @desktop", async ({
+test("seed: default dashboard Inspect output search understands down aliases @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "chaos-recovery",
-    "/?mode=pipeline&view=inspect&p=pipe-stall&ui=v2",
+    "/?mode=pipeline&view=inspect&p=pipe-stall",
     {
       expectOverviewReady: false,
       runtimeResponse: (runtime) => {
@@ -348,14 +348,14 @@ test("seed: ui=v2 Inspect output search understands down aliases @desktop", asyn
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
 });
 
-test("seed: ui=v2 pipeline workspace tabs preserve one selected context @desktop", async ({
+test("seed: default dashboard pipeline workspace tabs preserve one selected context @desktop", async ({
   page,
 }) => {
   await installPushStateCounter(page);
   await openSeededDashboard(
     page,
     "mixed-health",
-    "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+    "/?mode=pipeline&view=operate&p=pipe-retrying",
     { expectOverviewReady: false },
   );
   await resetPushStateCounter(page);
@@ -404,13 +404,13 @@ test("seed: ui=v2 pipeline workspace tabs preserve one selected context @desktop
   await expect(operateTab).toHaveAttribute("aria-selected", "true");
 });
 
-test("seed: ui=v2 top-level Pipeline tab restores last workspace context @desktop", async ({
+test("seed: default dashboard top-level Pipeline tab restores last workspace context @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "mixed-health",
-    "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+    "/?mode=pipeline&view=monitor&p=pipe-retrying",
     { expectOverviewReady: false },
   );
 
@@ -473,13 +473,13 @@ test("seed: ui=v2 top-level Pipeline tab restores last workspace context @deskto
   );
 });
 
-test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @desktop", async ({
+test("seed: default dashboard Monitor search does not mislabel filtered outputs as missing @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "mixed-health",
-    "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+    "/?mode=pipeline&view=monitor&p=pipe-retrying",
     {
       expectOverviewReady: false,
       pipelineInputsResponse: (pipelineId) => ({
@@ -639,7 +639,7 @@ test("seed: monitor wall renders and promotes connected pipeline inputs", async 
   await openSeededDashboard(
     page,
     "mixed-health",
-    "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+    "/?mode=pipeline&view=monitor&p=pipe-retrying",
     {
       expectOverviewReady: false,
       pipelineInputsResponse: (pipelineId) => ({
@@ -711,13 +711,13 @@ test("seed: monitor wall renders and promotes connected pipeline inputs", async 
   });
 });
 
-test("seed: ui=v2 Monitor search understands operator status terms @desktop", async ({
+test("seed: default dashboard Monitor search understands operator status terms @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "chaos-recovery",
-    "/?mode=pipeline&view=monitor&p=pipe-retry-budget&ui=v2",
+    "/?mode=pipeline&view=monitor&p=pipe-retry-budget",
     {
       expectOverviewReady: false,
       settingsResponse: (settings) => ({
@@ -797,13 +797,13 @@ test("seed: ui=v2 Monitor search understands operator status terms @desktop", as
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
 });
 
-test("seed: ui=v2 Monitor lazily loads generic web previews @desktop", async ({
+test("seed: default dashboard Monitor lazily loads generic web previews @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "chaos-recovery",
-    "/?mode=pipeline&view=monitor&p=pipe-flapping&ui=v2",
+    "/?mode=pipeline&view=monitor&p=pipe-flapping",
     { expectOverviewReady: false },
   );
 
@@ -872,13 +872,13 @@ test("seed: ui=v2 Monitor lazily loads generic web previews @desktop", async ({
   await expect(monitor.locator("iframe")).toHaveCount(1);
 });
 
-test("seed: ui=v2 Monitor lazily loads HLS output previews @desktop", async ({
+test("seed: default dashboard Monitor lazily loads HLS output previews @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "mixed-health",
-    "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+    "/?mode=pipeline&view=monitor&p=pipe-retrying",
     {
       expectOverviewReady: false,
       settingsResponse: (settings) => ({
