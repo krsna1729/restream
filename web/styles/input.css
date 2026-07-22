@@ -101,6 +101,26 @@
     color: var(--color-base-content);
   }
 
+  #dashboard-v2-root .btn-accent.btn-outline:disabled,
+  #dashboard-grid .btn-accent.btn-outline:disabled,
+  [data-dashboard-v2-owned-route-body] .btn-accent.btn-outline:disabled {
+    --dashboard-v2-disabled-outline: color-mix(
+      in oklab,
+      var(--color-base-content) 70%,
+      var(--color-base-200)
+    );
+    --btn-color: var(--dashboard-v2-disabled-outline);
+    --btn-fg: var(--dashboard-v2-disabled-outline);
+    --btn-rest-fg: var(--dashboard-v2-disabled-outline);
+    border-color: color-mix(
+      in oklab,
+      var(--color-base-content) 38%,
+      transparent
+    );
+    color: var(--dashboard-v2-disabled-outline);
+    opacity: 1;
+  }
+
   #skip-to-dashboard-main,
   #workspace-mode-bar [role="tab"],
   #pipeline-workspace-view-bar [role="tab"] {

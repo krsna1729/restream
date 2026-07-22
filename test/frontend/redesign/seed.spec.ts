@@ -14,20 +14,24 @@ import {
   tabUntilFocused,
 } from "./seed-helpers";
 
-test("seed: empty Overview is deterministic and canonical @desktop", async ({
+test("seed: default empty Overview is v2 and canonical @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(page, "empty");
 
-  const overview = page.locator("#overview-mode-content");
+  const overview = page.locator("#dashboard-v2-overview");
   await expect(page).toHaveURL(/\?mode=overview$/);
+  await expect(
+    overview.getByRole("heading", { name: "Fleet overview" }),
+  ).toBeVisible();
   await expect(
     overview.getByRole("cell", { name: "No pipelines configured." }),
   ).toBeVisible();
   await expect(
-    overview.getByRole("button", { name: "Add Pipeline", exact: true }),
+    overview.getByRole("button", { name: "Add a new pipeline" }),
   ).toBeVisible();
-  await expect(page.locator("#dashboard-v2-root")).toBeHidden();
+  await expect(page.locator("#dashboard-v2-root")).toBeVisible();
+  await expect(page.locator("#overview-mode-content")).toBeHidden();
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
@@ -38,6 +42,29 @@ test("seed: empty Overview is deterministic and canonical @desktop", async ({
   await expect(
     page.locator("#dashboard-v2-pipeline-output-overview-root"),
   ).toBeHidden();
+  expect(
+    await page.evaluate(() =>
+      performance
+        .getEntriesByType("resource")
+        .some((entry) => entry.name.includes("dashboard-v2-entry.js")),
+    ),
+  ).toBe(true);
+});
+
+test("seed: ui=v1 empty Overview keeps the explicit legacy fallback @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "empty", "/?mode=overview&ui=v1");
+
+  const overview = page.locator("#overview-mode-content");
+  await expect(page).toHaveURL(/\?mode=overview&ui=v1$/);
+  await expect(
+    overview.getByRole("cell", { name: "No pipelines configured." }),
+  ).toBeVisible();
+  await expect(
+    overview.getByRole("button", { name: "Add Pipeline", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("#dashboard-v2-root")).toBeHidden();
   await expect(page.locator("#pipeline-selector-legacy")).not.toHaveAttribute(
     "hidden",
   );
@@ -57,28 +84,27 @@ test("seed: empty Overview is deterministic and canonical @desktop", async ({
   ).toBe(false);
 });
 
-test("seed: mixed-health Overview exposes upstream and output state @desktop", async ({
+test("seed: default mixed-health Overview exposes upstream and output state through v2 @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(page, "mixed-health");
 
-  const overview = page.locator("#overview-mode-content");
+  const overview = page.locator("#dashboard-v2-overview");
   await expect(
-    overview.getByRole("button", { name: "Healthy Program", exact: true }),
+    overview.getByRole("button", { name: "Open pipeline Healthy Program" }),
   ).toBeVisible();
   await expect(
     overview.getByRole("button", {
-      name: "Retrying Destination",
-      exact: true,
+      name: "Open pipeline Retrying Destination",
     }),
   ).toBeVisible();
-  const attention = overview.locator("#overview-attention");
+  const attention = overview.locator("#dashboard-v2-attention-title");
   await expect(attention).toContainText("1 pipeline needs attention");
   await expect(
-    attention.getByRole("heading", { name: "Retrying Destination" }),
+    overview.getByRole("heading", { name: "Retrying Destination" }),
   ).toBeVisible();
   await expect(
-    attention.getByRole("heading", { name: "Healthy Program" }),
+    overview.getByRole("heading", { name: "Healthy Program" }),
   ).toHaveCount(0);
   await expect(page.locator("#workspace-mode-summary")).toContainText(
     "1 retrying",
