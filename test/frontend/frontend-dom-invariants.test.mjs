@@ -252,3 +252,65 @@ test("media route body uses the v2-owned renderer", async () => {
   assert.match(mediaSource, /mediaLibraryShellMountedInCurrentContainer\(\)/);
   assert.match(mediaSource, /refreshMediaLibraryMetricsOnly\(\)/);
 });
+
+test("incidents route body uses the v2-owned renderer", async () => {
+  const [routerSource, incidentsSource, routeBodySource] = await Promise.all([
+    readFile(new URL("../../web/ts/app/modes/router.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../../web/ts/features/incidents.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../../web/ts/features/incidents-route-body.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.doesNotMatch(routerSource, /renderIncidentsMode/);
+  assert.match(routerSource, /renderDashboardV2IncidentsBody/);
+  assert.match(routerSource, /clearDashboardV2IncidentsBody/);
+  assert.match(
+    routerSource,
+    /dashboardV2RouteBodyConfig\("incidents"\)\.v2HostId/,
+  );
+  assert.match(
+    routeBodySource,
+    /export function renderDashboardV2IncidentsBody\(\s*containerId: string,/,
+  );
+  assert.match(routeBodySource, /container\.dataset\.incidentsRouteBody = "v2"/);
+  assert.match(routeBodySource, /renderIncidentsMode\(\{\s*active: true,/);
+  assert.match(routeBodySource, /v2Active: true/);
+  assert.match(incidentsSource, /export function clearIncidentsMode\(\): void/);
+});
+
+test("telemetry route body uses the v2-owned renderer", async () => {
+  const [routerSource, telemetrySource, routeBodySource] = await Promise.all([
+    readFile(new URL("../../web/ts/app/modes/router.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../../web/ts/features/engineer-telemetry.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../../web/ts/features/telemetry-route-body.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.doesNotMatch(routerSource, /renderEngineerTelemetryMode/);
+  assert.match(routerSource, /renderDashboardV2TelemetryBody/);
+  assert.match(routerSource, /clearDashboardV2TelemetryBody/);
+  assert.match(
+    routerSource,
+    /dashboardV2RouteBodyConfig\("telemetry"\)\.v2HostId/,
+  );
+  assert.match(
+    routeBodySource,
+    /export function renderDashboardV2TelemetryBody\(\s*containerId: string,/,
+  );
+  assert.match(routeBodySource, /container\.dataset\.telemetryRouteBody = "v2"/);
+  assert.match(routeBodySource, /renderEngineerTelemetryMode\(\{\s*active: true,/);
+  assert.match(
+    telemetrySource,
+    /export function clearEngineerTelemetryMode\(\): void/,
+  );
+});

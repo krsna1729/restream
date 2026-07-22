@@ -852,3 +852,10 @@ export function renderIncidentsMode(options: IncidentsViewOptions): void {
   paintIncidents();
   void refreshIncidents();
 }
+
+export function clearIncidentsMode(): void {
+  if (!viewOptions || viewOptions.active === false) return;
+  incidentsScope.invalidate();
+  viewOptions = { ...viewOptions, active: false };
+  incidentsCheckpointCallback?.(null);
+}

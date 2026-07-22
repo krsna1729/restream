@@ -771,3 +771,10 @@ export function renderEngineerTelemetryMode(
   paintTelemetry();
   void refreshEngineerTelemetry();
 }
+
+export function clearEngineerTelemetryMode(): void {
+  if (!viewOptions || viewOptions.active === false) return;
+  telemetryScope.invalidate();
+  viewOptions = { ...viewOptions, active: false };
+  telemetryCheckpointCallback?.(null);
+}

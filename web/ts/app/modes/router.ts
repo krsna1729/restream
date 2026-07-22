@@ -25,8 +25,14 @@ import {
   resetMediaLibraryShellState,
   setMediaLibraryContainerId,
 } from "../../features/media-library.js";
-import { renderIncidentsMode } from "../../features/incidents.js";
-import { renderEngineerTelemetryMode } from "../../features/engineer-telemetry.js";
+import {
+  clearDashboardV2IncidentsBody,
+  renderDashboardV2IncidentsBody,
+} from "../../features/incidents-route-body.js";
+import {
+  clearDashboardV2TelemetryBody,
+  renderDashboardV2TelemetryBody,
+} from "../../features/telemetry-route-body.js";
 import {
   renderControlRoom,
   setControlRoomContainerId,
@@ -370,21 +376,28 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
     id: pipeline.id,
     name: pipeline.name || pipeline.id,
   }));
-  renderIncidentsMode({
-    active: mode === "incidents",
-    containerId: dashboardV2RouteBodyConfig("incidents").v2HostId,
-    pipelines: pipelineOptions,
-    navigateToPipeline: (pipelineId) => {
-      selectPipeline(pipelineId);
-      setDashboardMode("pipeline");
-    },
-    v2Active: mode === "incidents",
-  });
-  renderEngineerTelemetryMode({
-    active: mode === "telemetry",
-    containerId: dashboardV2RouteBodyConfig("telemetry").v2HostId,
-    pipelines: pipelineOptions,
-  });
+  if (mode === "incidents") {
+    renderDashboardV2IncidentsBody(
+      dashboardV2RouteBodyConfig("incidents").v2HostId,
+      {
+        pipelines: pipelineOptions,
+        navigateToPipeline: (pipelineId) => {
+          selectPipeline(pipelineId);
+          setDashboardMode("pipeline");
+        },
+      },
+    );
+  } else {
+    clearDashboardV2IncidentsBody();
+  }
+  if (mode === "telemetry") {
+    renderDashboardV2TelemetryBody(
+      dashboardV2RouteBodyConfig("telemetry").v2HostId,
+      { pipelines: pipelineOptions },
+    );
+  } else {
+    clearDashboardV2TelemetryBody();
+  }
 
   if (mode === "settings") {
     renderSettingsMode(dashboardV2RouteBodyConfig("settings").v2HostId);
