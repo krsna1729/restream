@@ -368,10 +368,14 @@ export async function openSeededDashboard(
   await login(page);
 
   await page.addInitScript((uiVersion: string | null) => {
-    window.localStorage.setItem(
-      "restream.dashboardUiVersion.v1",
-      uiVersion === "v2" ? "v2" : "v1",
-    );
+    if (uiVersion === null) {
+      window.localStorage.removeItem("restream.dashboardUiVersion.v1");
+    } else {
+      window.localStorage.setItem(
+        "restream.dashboardUiVersion.v1",
+        uiVersion === "v2" ? "v2" : "v1",
+      );
+    }
     Object.defineProperty(window, "EventSource", {
       configurable: true,
       value: undefined,
@@ -840,7 +844,9 @@ export async function openSeededDashboard(
     }
     return;
   }
-  const overview = href.includes("ui=v2")
+  const requestedUi = requested.searchParams.get("ui");
+  const usesV2Overview = requestedUi === null || requestedUi === "v2";
+  const overview = usesV2Overview
     ? page.locator("#dashboard-v2-overview")
     : page.locator("#overview-mode-content");
   await expect(

@@ -43,6 +43,11 @@ Settings, Status, Incidents, and Telemetry. Dense controls can still be
 rewritten slice by slice after the default switch because the route body
 mount-point ownership is no longer split across hidden legacy panels.
 
+Seeded browser fixtures now mirror the production default: a dashboard URL
+without a `ui` parameter leaves local UI preference unset and therefore boots
+v2. Fallback checks request `ui=v1` explicitly, so no-query coverage proves the
+cutover path while the escape hatch remains tested.
+
 ## Stop rules
 
 - Do not create the full target folder tree before a slice needs it.

@@ -5,6 +5,7 @@ import { openSeededDashboard, type SeededDashboardOptions } from "./fixtures";
 import { type OperatorStateName } from "./fixtures/operator-states";
 
 const FIXED_TIME = new Date("2026-07-14T06:30:10Z");
+const ADD_PIPELINE_SELECTOR = '[aria-label="Add a new pipeline"]';
 const viewportStates: OperatorStateName[] = ["empty", "mixed-health"];
 
 async function openStableOverview(
@@ -15,7 +16,7 @@ async function openStableOverview(
   await page.clock.setFixedTime(FIXED_TIME);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await openSeededDashboard(page, stateName, "/?mode=overview", options);
-  await expect(page.locator("#overview-mode-content")).toBeVisible();
+  await expect(page.locator("#dashboard-v2-overview")).toBeVisible();
 }
 
 async function reachFromOverviewTab(
@@ -94,16 +95,16 @@ for (const stateName of viewportStates) {
       fullPage: true,
     });
     await expect(page.locator("#workspace-tab-overview")).toBeVisible();
-    await expect(page.locator("#overview-add-pipeline-btn")).toBeVisible();
+    await expect(page.locator(ADD_PIPELINE_SELECTOR)).toBeVisible();
     if (stateName === "mixed-health") {
       const attentionBox = await page
-        .locator("#overview-attention")
+        .getByRole("region", { name: "1 pipeline needs attention" })
         .boundingBox();
       const signalsBox = await page
-        .locator("#overview-fleet-signals")
+        .getByRole("region", { name: "Fleet signals" })
         .boundingBox();
       const pipelineBox = await page
-        .locator("#overview-pipelines")
+        .getByRole("region", { name: "All pipelines" })
         .boundingBox();
       expect(attentionBox).not.toBeNull();
       expect(signalsBox).not.toBeNull();
@@ -138,11 +139,11 @@ test.describe("desktop accessibility contract @desktop", () => {
         };
       },
     });
-    await reachFromOverviewTab(page, "#overview-add-pipeline-btn");
-    await expect(page.locator("#overview-add-pipeline-btn")).toBeFocused();
+    await reachFromOverviewTab(page, ADD_PIPELINE_SELECTOR);
+    await expect(page.locator(ADD_PIPELINE_SELECTOR)).toBeFocused();
     await page.waitForTimeout(6_000);
-    await expect(page.locator("#overview-add-pipeline-btn")).toBeFocused();
-    await page.locator("#overview-add-pipeline-btn").press("Enter");
+    await expect(page.locator(ADD_PIPELINE_SELECTOR)).toBeFocused();
+    await page.locator(ADD_PIPELINE_SELECTOR).press("Enter");
 
     const editor = page.locator("#edit-pipe-modal");
     await expect(editor).toBeVisible();

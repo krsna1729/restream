@@ -84,7 +84,7 @@ export function PipelineInputsPanel({
           </p>
         </div>
         <button
-          className="btn btn-xs btn-accent btn-outline"
+          className="btn btn-xs btn-accent"
           disabled={
             inputs === null ||
             inputs.length >= MAX_PIPELINE_INPUTS ||
