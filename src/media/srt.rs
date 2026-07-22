@@ -100,6 +100,9 @@ pub(crate) use srt_egress_poller::{SrtEgressInterest, SrtEgressPollError, SrtRea
 pub(crate) use srt_egress_sender::SrtMessageSender;
 #[cfg(test)]
 pub(crate) use srt_egress_sender::SrtSendResult;
+pub(crate) use srt_egress_socket::{
+    SrtEgressSendMode, SrtEgressSocketError, configure_connected_srt_egress_socket,
+};
 #[cfg(test)]
 use srt_monitor::{audio_codec_id, monitor_listener_socket, read_udp_socket_stats, video_codec_id};
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};

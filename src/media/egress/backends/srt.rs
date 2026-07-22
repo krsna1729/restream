@@ -10,9 +10,15 @@ use crate::media::egress::scheduler::{LeafKey, VisitDecision};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::srt::{
-    SRTSOCKET, SrtEgressEngine, SrtEgressInterest, SrtEgressPollError, SrtFabricPoller,
-    SrtMessageSender, SrtReadyLeaf, srt_fabric_message_sender,
+    SRTSOCKET, SrtEgressEngine, SrtEgressInterest, SrtEgressPollError, SrtEgressSendMode,
+    SrtFabricPoller, SrtMessageSender, SrtReadyLeaf, srt_fabric_message_sender,
 };
+
+mod add_error;
+mod socket_config;
+
+pub(crate) use add_error::SrtBackendAddError;
+pub(crate) use socket_config::{NativeSrtSocketConfigurator, SrtSocketConfigurator};
 
 type NativeSrtLeaf = SrtFabricLeaf<Box<dyn SrtMessageSender + Send>>;
 
@@ -115,11 +121,13 @@ impl SrtReadinessPoller for SrtFabricPoller {
     }
 }
 
-pub(crate) struct SrtShardBackend<P>
+pub(crate) struct SrtShardBackend<P, C = NativeSrtSocketConfigurator>
 where
     P: SrtReadinessPoller,
+    C: SrtSocketConfigurator,
 {
     poller: P,
+    socket_configurator: C,
     feed: TsFeed,
     budget: WorkBudget,
     leaves: Vec<Option<NativeSrtLeaf>>,
@@ -127,13 +135,29 @@ where
     poll_buffer: Vec<SrtReadyLeaf>,
 }
 
-impl<P> SrtShardBackend<P>
+impl<P> SrtShardBackend<P, NativeSrtSocketConfigurator>
 where
     P: SrtReadinessPoller,
 {
     pub(crate) fn new(poller: P, feed: TsFeed, budget: WorkBudget) -> Self {
+        Self::with_socket_configurator(poller, feed, budget, NativeSrtSocketConfigurator)
+    }
+}
+
+impl<P, C> SrtShardBackend<P, C>
+where
+    P: SrtReadinessPoller,
+    C: SrtSocketConfigurator,
+{
+    pub(crate) fn with_socket_configurator(
+        poller: P,
+        feed: TsFeed,
+        budget: WorkBudget,
+        socket_configurator: C,
+    ) -> Self {
         Self {
             poller,
+            socket_configurator,
             feed,
             budget,
             leaves: Vec::new(),
@@ -146,9 +170,17 @@ where
         &mut self,
         common: LeafCommon,
         socket: SRTSOCKET,
-    ) -> Result<LeafKey, SrtEgressPollError> {
+    ) -> Result<LeafKey, SrtBackendAddError> {
+        self.socket_configurator
+            .configure_connected(socket, SrtEgressSendMode::FabricNonblocking)?;
+
+        let key = LeafKey(self.leaves.len());
+        self.poller
+            .register_leaf(socket, key, common.generation, SrtEgressInterest::WRITE)
+            .map_err(SrtBackendAddError::Poller)?;
         let leaf = srt_fabric_leaf_from_socket(common, socket);
-        self.add_leaf(socket, leaf)
+        self.leaves.push(Some(leaf));
+        Ok(key)
     }
 
     fn add_leaf(
@@ -211,9 +243,10 @@ where
     }
 }
 
-impl<P> EgressShardBackend for SrtShardBackend<P>
+impl<P, C> EgressShardBackend for SrtShardBackend<P, C>
 where
     P: SrtReadinessPoller + Send + 'static,
+    C: SrtSocketConfigurator + Send + 'static,
 {
     fn on_command(
         &mut self,

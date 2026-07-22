@@ -17,7 +17,7 @@ impl SrtEgressSocketConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SrtEgressSocketError {
+pub(crate) struct SrtEgressSocketError {
     pub option: &'static str,
     pub code: c_int,
     pub message: String,
@@ -33,12 +33,41 @@ impl SrtEgressSocketError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SrtEgressSendMode {
+    LegacyBlocking,
+    FabricNonblocking,
+}
+
 pub(super) fn configure_srt_egress_socket(socket: SRTSOCKET) -> Result<(), SrtEgressSocketError> {
     configure_srt_egress_socket_with(
         socket,
         SrtEgressSocketConfig::NONBLOCKING_SEND,
         LibSrtSocketOps,
     )
+}
+
+pub(crate) fn configure_connected_srt_egress_socket(
+    socket: SRTSOCKET,
+    mode: SrtEgressSendMode,
+) -> Result<(), SrtEgressSocketError> {
+    configure_connected_srt_egress_socket_with(socket, mode, LibSrtSocketOps)
+}
+
+fn configure_connected_srt_egress_socket_with<O>(
+    socket: SRTSOCKET,
+    mode: SrtEgressSendMode,
+    ops: O,
+) -> Result<(), SrtEgressSocketError>
+where
+    O: SrtSocketOps,
+{
+    match mode {
+        SrtEgressSendMode::LegacyBlocking => Ok(()),
+        SrtEgressSendMode::FabricNonblocking => {
+            configure_srt_egress_socket_with(socket, SrtEgressSocketConfig::NONBLOCKING_SEND, ops)
+        }
+    }
 }
 
 fn configure_srt_egress_socket_with<O>(
@@ -151,5 +180,33 @@ mod tests {
 
         assert_eq!(error.option, "SRTO_SNDSYN");
         assert_eq!(error.code, 4321);
+    }
+
+    #[test]
+    fn fabric_connected_socket_disables_synchronous_send() {
+        let ops = FakeSocketOps::default();
+
+        configure_connected_srt_egress_socket_with(
+            42,
+            SrtEgressSendMode::FabricNonblocking,
+            ops.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(ops.calls.borrow().as_slice(), &[(42, SRTO_SNDSYN, 0)]);
+    }
+
+    #[test]
+    fn legacy_connected_socket_preserves_existing_send_mode() {
+        let ops = FakeSocketOps::default();
+
+        configure_connected_srt_egress_socket_with(
+            42,
+            SrtEgressSendMode::LegacyBlocking,
+            ops.clone(),
+        )
+        .unwrap();
+
+        assert!(ops.calls.borrow().is_empty());
     }
 }
