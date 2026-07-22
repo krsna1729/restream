@@ -45,5 +45,8 @@ pub use backend::{
 pub use command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec, ShardId};
 pub use feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 pub use lifecycle::LeafLifecycle;
-pub use manager::{EgressManager, EgressManagerConfig, EgressManagerConfigError};
+pub use manager::{
+    DesiredOutput, EgressManager, EgressManagerCommandError, EgressManagerConfig,
+    EgressManagerConfigError, ManagerCommandOutcome,
+};
 pub use policy::{LeafLimits, LeafPolicy, RetryState, WorkBudget};
