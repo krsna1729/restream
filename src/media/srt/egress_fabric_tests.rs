@@ -5,11 +5,13 @@ use super::srt_egress_engine::*;
 use super::srt_egress_poller::*;
 use super::srt_egress_sender::*;
 use super::sys::SRTSOCKET;
-use crate::media::egress::backend::{EngineProgress, ProtocolEngine, Readiness};
-use crate::media::egress::feed::FeedCursor;
+use crate::media::egress::backend::{EngineProgress, Readiness};
+use crate::media::egress::command::{FeedId, OutputId};
 use crate::media::egress::journal::{FeedEpoch, TsFeed};
-use crate::media::egress::policy::WorkBudget;
-use crate::media::egress::scheduler::LeafKey;
+use crate::media::egress::leaf::LeafCommon;
+use crate::media::egress::policy::{LeafLimits, WorkBudget};
+use crate::media::egress::scheduler::{LeafKey, VisitDecision};
+use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::ts_chunk_ring::TsChunkRing;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -137,10 +139,9 @@ impl SrtPollOps for FakePollOps {
 
 struct SrtFabricHarness {
     socket: SRTSOCKET,
-    generation: u64,
     poller: SrtEgressPoller<FakePollOps>,
     feed: TsFeed,
-    cursor: FeedCursor,
+    common: LeafCommon,
     engine: SrtEgressEngine<SrtNativeMessageSender<FakeSendOps>>,
     sender: SrtNativeMessageSender<FakeSendOps>,
     send_ops: FakeSendOps,
@@ -163,32 +164,40 @@ impl SrtFabricHarness {
         let send_ops = FakeSendOps::default();
         Self {
             socket,
-            generation,
             poller,
             feed: TsFeed::new(&ring, Arc::new(FeedEpoch::new())),
-            cursor: FeedCursor::new(0, 0),
+            common: LeafCommon::new(
+                OutputId::new("out-srt"),
+                generation,
+                FeedId::new("feed-srt"),
+                LeafLimits::default(),
+            ),
             engine: SrtEgressEngine::default(),
             sender: SrtNativeMessageSender::with_ops(socket, send_ops.clone()),
             send_ops,
         }
     }
 
-    fn drive_ready_once(&mut self) -> Option<EngineProgress> {
+    fn drive_ready_once(&mut self) -> EngineVisitResult {
         let mut ready = Vec::new();
         self.poller.poll_leaves(0, &mut ready).unwrap();
         let event = ready
             .into_iter()
-            .find(|event| event.socket == self.socket && event.generation == self.generation)?;
-        Some(self.engine.advance(
-            &mut self.sender,
-            Readiness {
+            .find(|event| event.socket == self.socket)
+            .unwrap();
+        EngineVisit {
+            generation: event.generation,
+            common: &mut self.common,
+            engine: &mut self.engine,
+            transport: &mut self.sender,
+            readiness: Readiness {
                 readable: false,
                 writable: event.writable,
             },
-            &self.feed,
-            &mut self.cursor,
-            WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        ))
+            feed: &self.feed,
+            budget: WorkBudget::new(8, 1024, Duration::from_millis(1)),
+        }
+        .run()
     }
 }
 
@@ -198,15 +207,21 @@ fn srt_fabric_ready_leaf_sends_shared_ts_message_through_native_sender() {
 
     let progress = harness.drive_ready_once();
 
+    let EngineVisitResult::Visited(outcome) = progress else {
+        panic!("expected visited SRT leaf");
+    };
     assert!(matches!(
-        progress,
-        Some(EngineProgress::Progress {
+        outcome.progress,
+        EngineProgress::Progress {
             bytes: 3,
             units: 1,
             ..
-        })
+        }
     ));
-    assert_eq!(harness.cursor, FeedCursor::new(0, 1));
+    assert_eq!(outcome.decision, VisitDecision::Continue);
+    assert_eq!(harness.common.cursor.next_sequence, 1);
+    assert_eq!(harness.common.progress.total_bytes_sent, 3);
+    assert_eq!(harness.common.progress.total_units_sent, 1);
     assert_eq!(
         harness.send_ops.sends.borrow().as_slice(),
         &[(42, Bytes::from_static(b"abc"))]
@@ -216,11 +231,11 @@ fn srt_fabric_ready_leaf_sends_shared_ts_message_through_native_sender() {
 #[test]
 fn srt_fabric_ignores_stale_generation_readiness_before_send() {
     let mut harness = SrtFabricHarness::new(42, 8, [Bytes::from_static(b"abc")]);
-    harness.generation = 9;
+    harness.common.generation = 9;
 
     let progress = harness.drive_ready_once();
 
-    assert!(progress.is_none());
-    assert_eq!(harness.cursor, FeedCursor::new(0, 0));
+    assert!(matches!(progress, EngineVisitResult::StaleGeneration));
+    assert_eq!(harness.common.cursor.next_sequence, 0);
     assert!(harness.send_ops.sends.borrow().is_empty());
 }
