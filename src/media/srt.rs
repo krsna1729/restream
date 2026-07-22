@@ -1,6 +1,5 @@
 //! Native SRT ingest and egress via raw `libsrt` FFI bindings.
 
-use std::net::SocketAddr;
 use std::os::raw::{c_int, c_void};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -37,6 +36,8 @@ mod socket;
 mod srt_crypto;
 #[path = "srt_egress.rs"]
 mod srt_egress;
+#[path = "srt/egress_connect.rs"]
+mod srt_egress_connect;
 #[path = "srt/egress_engine.rs"]
 mod srt_egress_engine;
 #[cfg(test)]
@@ -80,8 +81,8 @@ use socket::{
     summarize_group_members,
 };
 use socket::{
-    add_srt_group_quality, check_srt_option_result, check_sysctl_limits, last_srt_error,
-    srt_group_summary, srt_log_effective_opts, srt_set_highbitrate_opts, to_sockaddr_in,
+    add_srt_group_quality, check_srt_option_result, check_sysctl_limits, srt_group_summary,
+    srt_log_effective_opts, srt_set_highbitrate_opts, to_sockaddr_in,
     try_acquire_srt_sender_permit,
 };
 #[cfg(test)]
@@ -89,6 +90,11 @@ use srt_crypto::apply_srt_crypto_socket;
 #[cfg(test)]
 use srt_crypto::srt_crypto_from_url;
 pub use srt_egress::start_srt_egress;
+pub(crate) use srt_egress_connect::{
+    SrtEgressMuxerPortClaim, bind_srt_egress_muxer_port, claim_srt_egress_muxer_port,
+    connected_srt_local_port, resolve_host as resolve_srt_egress_host, set_srt_reuseaddr,
+    to_libc_sockaddr,
+};
 pub(crate) use srt_egress_engine::SrtEgressEngine;
 pub(crate) use srt_egress_poller::{SrtEgressInterest, SrtEgressPollError, SrtReadyLeaf};
 pub(crate) use srt_egress_sender::SrtMessageSender;

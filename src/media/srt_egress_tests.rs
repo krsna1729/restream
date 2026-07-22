@@ -1,4 +1,5 @@
 use super::*;
+use std::net::SocketAddr;
 
 #[test]
 fn to_libc_sockaddr_v4_encodes_family_port_and_address_correctly() {
