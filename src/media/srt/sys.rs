@@ -113,6 +113,7 @@ pub(super) const SRT_EPOLL_ERR: c_int = 0x8;
 pub(super) const SRT_ESCLOSED: c_int = 1005;
 pub(super) const SRT_ECONNLOST: c_int = 2001;
 pub(super) const SRT_ENOCONN: c_int = 2002;
+pub(super) const SRT_EASYNCSND: c_int = 6001;
 pub(super) const SRT_EASYNCRCV: c_int = 6002;
 pub(super) const SRT_ETIMEOUT: c_int = 6003;
 
