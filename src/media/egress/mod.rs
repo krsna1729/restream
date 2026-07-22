@@ -19,6 +19,8 @@
 //!   leaf.rs         — Leaf<P>, LeafCommon, LeafDeadlines, ProgressState
 //!   timer.rs        — TimerWheel<K>
 //!   metrics.rs      — ShardMetrics, LeafMetrics, FeedMetrics
+//!   manager.rs      — desired output assignment and command admission
+//!   shard.rs        — fixed shard threads, supervision snapshots, wake budgets
 //!   test_driver.rs  — FakeFeed, FakeEngine, FakePoller (cfg(test) / test-only)
 //! ```
 
@@ -39,7 +41,6 @@ pub mod timer;
 pub mod test_driver;
 
 // Re-export the stable public surface for this phase.
-// EgressManager and shard types are added in Phase 3.
 pub use backend::{
     CloseReason, EngineProgress, Interest, ProtocolEngine, Readiness, RecoveryCapability,
 };
