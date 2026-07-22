@@ -89,6 +89,10 @@ use srt_crypto::apply_srt_crypto_socket;
 #[cfg(test)]
 use srt_crypto::srt_crypto_from_url;
 pub use srt_egress::start_srt_egress;
+pub(crate) use srt_egress_engine::SrtEgressEngine;
+pub(crate) use srt_egress_sender::SrtMessageSender;
+#[cfg(test)]
+pub(crate) use srt_egress_sender::SrtSendResult;
 #[cfg(test)]
 use srt_monitor::{audio_codec_id, monitor_listener_socket, read_udp_socket_stats, video_codec_id};
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};

@@ -11,21 +11,21 @@ use super::sys::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SrtSendFailure {
+pub(crate) struct SrtSendFailure {
     pub reason: &'static str,
     pub detail: String,
     pub retryable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum SrtSendResult {
+pub(crate) enum SrtSendResult {
     Accepted { bytes: usize },
     WouldBlock,
     PeerClosed,
     Failed(SrtSendFailure),
 }
 
-pub(super) trait SrtMessageSender {
+pub(crate) trait SrtMessageSender {
     fn send_message(&mut self, message: &Bytes) -> SrtSendResult;
     fn close(&mut self, reason: CloseReason);
 }

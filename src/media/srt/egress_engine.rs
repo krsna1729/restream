@@ -13,14 +13,23 @@ use crate::media::egress::policy::WorkBudget;
 
 use super::srt_egress_sender::{SrtMessageSender, SrtSendResult};
 
-#[derive(Debug, Default)]
-pub(super) struct SrtEgressEngine<T> {
+#[derive(Debug)]
+pub(crate) struct SrtEgressEngine<T> {
     pending: Option<Bytes>,
     _transport: PhantomData<fn() -> T>,
 }
 
+impl<T> Default for SrtEgressEngine<T> {
+    fn default() -> Self {
+        Self {
+            pending: None,
+            _transport: PhantomData,
+        }
+    }
+}
+
 impl<T> SrtEgressEngine<T> {
-    pub(super) fn pending_message_bytes(&self) -> usize {
+    pub(crate) fn pending_message_bytes(&self) -> usize {
         self.pending.as_ref().map_or(0, Bytes::len)
     }
 
