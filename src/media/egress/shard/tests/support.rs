@@ -261,18 +261,27 @@ impl EgressShardBackend for TimerBackend {
         let (lock, condvar) = &*self.probe.inner;
         let mut state = lock.lock().unwrap();
         state.commands.push(label);
-        let (EgressCommand::Add(spec) | EgressCommand::Update(spec)) = command else {
-            condvar.notify_all();
-            return EgressShardCommandEffect::Continue;
-        };
-        state
-            .generations
-            .insert(spec.id.as_str().to_string(), spec.generation);
-        condvar.notify_all();
-        EgressShardCommandEffect::ScheduleTimer {
-            output_id: spec.id,
-            generation: spec.generation,
-            fire_at: Instant::now() + self.delay,
+        match command {
+            EgressCommand::Add(spec) | EgressCommand::Update(spec) => {
+                state
+                    .generations
+                    .insert(spec.id.as_str().to_string(), spec.generation);
+                condvar.notify_all();
+                EgressShardCommandEffect::ScheduleTimer {
+                    output_id: spec.id,
+                    generation: spec.generation,
+                    fire_at: Instant::now() + self.delay,
+                }
+            }
+            EgressCommand::Remove(output_id) => {
+                state.generations.remove(output_id.as_str());
+                condvar.notify_all();
+                EgressShardCommandEffect::Continue
+            }
+            EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {
+                condvar.notify_all();
+                EgressShardCommandEffect::Continue
+            }
         }
     }
 

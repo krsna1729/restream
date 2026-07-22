@@ -277,6 +277,32 @@ fn stale_timer_generation_is_ignored_on_shard_thread() {
 }
 
 #[test]
+fn removed_output_timer_is_ignored_on_shard_thread() {
+    let probe = Probe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        config(8, 4),
+        TimerBackend {
+            probe: probe.clone(),
+            delay: Duration::from_millis(20),
+        },
+    );
+    let output = output_spec("out-removed-timer");
+    let output_id = output.id.clone();
+
+    assert_eq!(handle.try_send(EgressCommand::Add(output)), Ok(()));
+    assert_eq!(handle.try_send(EgressCommand::Remove(output_id)), Ok(()));
+    probe.wait_for_commands(2);
+    std::thread::sleep(Duration::from_millis(40));
+    let snapshot = handle.shutdown_and_join();
+
+    assert!(probe.state().timers.is_empty());
+    assert_eq!(snapshot.timers_processed, 0);
+    assert_eq!(snapshot.metrics.timers_processed, 0);
+    assert!(snapshot.stopped);
+}
+
+#[test]
 fn drain_for_other_shard_is_ignored_locally() {
     let probe = Probe::default();
     let handle = EgressShardHandle::spawn(
