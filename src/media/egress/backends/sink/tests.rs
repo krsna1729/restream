@@ -1,6 +1,7 @@
 use super::*;
 use crate::media::egress::backend::Readiness;
 use crate::media::egress::journal::{FeedEpoch, RingFeed};
+use crate::media::egress::metrics::LeafMetrics;
 use crate::media::egress::test_driver::FakeFeed;
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use crate::media::ring_buffer::RingBuffer;
@@ -113,6 +114,33 @@ fn sink_does_not_retain_ring_payload_after_discard_visit() {
     assert_eq!(cursor, FeedCursor::new(0, 1));
     assert_eq!(transport.stats().discarded_units, 1);
     assert_eq!(Arc::strong_count(&retained), 2);
+}
+
+#[test]
+fn sink_discard_stats_update_discard_metrics_not_sent_metrics() {
+    let feed = FakeFeed::new();
+    feed.push(Bytes::from_static(b"abc"), true);
+    feed.push(Bytes::from_static(b"de"), false);
+    let mut engine = SinkEngine::<FakeFeed>::default();
+    let mut transport = SinkTransport::default();
+    let mut cursor = FeedCursor::new(0, 0);
+    let mut metrics = LeafMetrics::default();
+
+    let progress = engine.advance(
+        &mut transport,
+        Readiness::WRITABLE,
+        &feed,
+        &mut cursor,
+        budget(8, 1024),
+    );
+    let stats = transport.stats();
+    metrics.record_discarded(stats.discarded_bytes, stats.discarded_units);
+
+    assert!(matches!(progress, EngineProgress::Progress { .. }));
+    assert_eq!(metrics.bytes_sent, 0);
+    assert_eq!(metrics.units_sent, 0);
+    assert_eq!(metrics.bytes_discarded, 5);
+    assert_eq!(metrics.units_discarded, 2);
 }
 
 #[test]

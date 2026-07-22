@@ -155,6 +155,21 @@ pub struct LeafMetrics {
     // --- Total sent ---
     pub bytes_sent: u64,
     pub units_sent: u64,
+
+    pub bytes_discarded: u64,
+    pub units_discarded: u64,
+}
+
+impl LeafMetrics {
+    pub fn record_sent(&mut self, bytes: u64, units: u64) {
+        self.bytes_sent = self.bytes_sent.saturating_add(bytes);
+        self.units_sent = self.units_sent.saturating_add(units);
+    }
+
+    pub fn record_discarded(&mut self, bytes: u64, units: u64) {
+        self.bytes_discarded = self.bytes_discarded.saturating_add(bytes);
+        self.units_discarded = self.units_discarded.saturating_add(units);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +225,10 @@ pub mod names {
     pub const LEAF_PARTIAL_WRITES: &str = "egress.leaf.partial_writes";
     pub const LEAF_RESYNCS: &str = "egress.leaf.resyncs";
     pub const LEAF_RETRY_ATTEMPT: &str = "egress.leaf.retry_attempt";
+    pub const LEAF_BYTES_SENT: &str = "egress.leaf.bytes_sent";
+    pub const LEAF_UNITS_SENT: &str = "egress.leaf.units_sent";
+    pub const LEAF_BYTES_DISCARDED: &str = "egress.leaf.bytes_discarded";
+    pub const LEAF_UNITS_DISCARDED: &str = "egress.leaf.units_discarded";
     pub const DRIVER_CALL_DURATION_US: &str = "egress.driver.call_duration_us";
     pub const DRIVER_BUDGET_VIOLATIONS: &str = "egress.driver.budget_violations";
 }
@@ -261,11 +280,27 @@ mod tests {
     }
 
     #[test]
+    fn leaf_metrics_keep_sent_and_discarded_totals_separate() {
+        let mut m = LeafMetrics::default();
+        m.record_sent(10, 1);
+        m.record_discarded(30, 3);
+        m.record_sent(5, 2);
+        m.record_discarded(7, 4);
+
+        assert_eq!(m.bytes_sent, 15);
+        assert_eq!(m.units_sent, 3);
+        assert_eq!(m.bytes_discarded, 37);
+        assert_eq!(m.units_discarded, 7);
+    }
+
+    #[test]
     fn metric_names_not_empty() {
         // Smoke-check that constants are non-empty (catches accidental blanks).
         assert!(!names::LEAF_PENDING_BYTES.is_empty());
         assert!(!names::DRIVER_BUDGET_VIOLATIONS.is_empty());
         assert!(!names::FEED_RETAINED_MEDIA_AGE_MS.is_empty());
         assert!(!names::FEED_OVERSIZED_UNITS.is_empty());
+        assert!(!names::LEAF_BYTES_SENT.is_empty());
+        assert!(!names::LEAF_BYTES_DISCARDED.is_empty());
     }
 }
