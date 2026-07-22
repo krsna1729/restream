@@ -89,6 +89,30 @@ impl EgressShardGroup {
             .collect()
     }
 
+    pub fn replace_panicked<B, F>(
+        &mut self,
+        config: EgressShardConfig,
+        mut backend_for: F,
+    ) -> Vec<ShardId>
+    where
+        B: EgressShardBackend,
+        F: FnMut(ShardId) -> B,
+    {
+        let mut replaced = Vec::new();
+        for handle in &mut self.handles {
+            let snapshot = handle.snapshot();
+            if !snapshot.panicked {
+                continue;
+            }
+            let shard_id = snapshot.shard_id;
+            let replacement = EgressShardHandle::spawn(shard_id, config, backend_for(shard_id));
+            let old = std::mem::replace(handle, replacement);
+            let _ = old.shutdown_and_join();
+            replaced.push(shard_id);
+        }
+        replaced
+    }
+
     pub fn shutdown_and_join(self) -> Vec<EgressShardSnapshot> {
         self.handles
             .into_iter()

@@ -238,3 +238,86 @@ fn shard_group_contains_panic_to_assigned_shard() {
     assert!(healthy.stopped);
     assert_eq!(survivor.state().commands, vec!["add:out-survivor"]);
 }
+
+#[test]
+fn shard_group_replaces_only_panicked_shards() {
+    let survivor = Probe::default();
+    let replacement = Probe::default();
+    let mut group = EgressShardGroup::spawn(
+        NonZeroU32::new(2).unwrap(),
+        config(4, 4),
+        vec![
+            ScriptBackend::Panic,
+            ScriptBackend::Probe(ProbeBackend {
+                probe: survivor.clone(),
+            }),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(0),
+            EgressCommand::Add(output_spec("out-panicked"))
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(1),
+            EgressCommand::Add(output_spec("out-survivor-before"))
+        ),
+        Ok(())
+    );
+    survivor.wait_for_commands(1);
+    wait_for_panicked(&group, ShardId::new(0));
+
+    let replaced = group.replace_panicked(config(4, 4), |_| ProbeBackend {
+        probe: replacement.clone(),
+    });
+
+    assert_eq!(replaced, vec![ShardId::new(0)]);
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(0),
+            EgressCommand::Add(output_spec("out-replacement"))
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(1),
+            EgressCommand::Add(output_spec("out-survivor-after"))
+        ),
+        Ok(())
+    );
+    replacement.wait_for_commands(1);
+    survivor.wait_for_commands(2);
+    let snapshots = group.shutdown_and_join();
+
+    assert_eq!(replacement.state().commands, vec!["add:out-replacement"]);
+    assert_eq!(
+        survivor.state().commands,
+        vec!["add:out-survivor-before", "add:out-survivor-after"]
+    );
+    assert!(
+        snapshots
+            .iter()
+            .all(|snapshot| snapshot.stopped && !snapshot.panicked)
+    );
+}
+
+fn wait_for_panicked(group: &EgressShardGroup, shard_id: ShardId) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if group
+            .snapshots()
+            .iter()
+            .any(|snapshot| snapshot.shard_id == shard_id && snapshot.panicked)
+        {
+            return;
+        }
+        std::thread::yield_now();
+    }
+    panic!("timed out waiting for {shard_id:?} to report panic");
+}
