@@ -19,8 +19,10 @@ and live scale parity.
 - [Phase 1: Common contracts and deterministic model](#phase-1-common-contracts-and-deterministic-model)
 - [Phase 2: Bounded feeds and cursor semantics](#phase-2-bounded-feeds-and-cursor-semantics)
 - [Phase 3: Shard runtime and scheduler](#phase-3-shard-runtime-and-scheduler)
+- [Phase 4a: Sink backend](#phase-4a-sink-backend)
 - [Phase 4: SRT migration](#phase-4-srt-migration)
 - [Phase 5: RTMP and RTMPS migration](#phase-5-rtmp-and-rtmps-migration)
+- [Phase 6a: Pipeline recirculation backend](#phase-6a-pipeline-recirculation-backend)
 - [Phase 6: Production integration and rollout](#phase-6-production-integration-and-rollout)
 - [Phase 7: Tuning and legacy removal](#phase-7-tuning-and-legacy-removal)
 - [Existing-code change map](#existing-code-change-map)
@@ -143,6 +145,16 @@ pub struct OutputSpec {
 ```
 
 `generation` is required to reject stale commands, timers, and readiness events.
+
+The initial `ProtocolSpec` set covers network egress. Two planned non-network
+variants extend the same contract:
+
+- `Sink`, which consumes a selected feed and intentionally discards every unit;
+- `Pipeline`, which recirculates one pipeline's prepared output into another
+  in-process pipeline input.
+
+Neither variant gets a manager or lifecycle bypass. Both remain ordinary
+outputs with user-visible status, policy, and admission behavior.
 
 ### Common leaf state
 
@@ -463,6 +475,65 @@ native-hang replacement.
 The fake backend must run the full same-shard and cross-shard isolation matrix
 on actual shard threads with deterministic bounded completion.
 
+## Phase 4a: Sink backend
+
+### Objective
+
+Add a user-selectable egress kind that consumes prepared media through the
+fabric and discards it without sending bytes to a network or file destination.
+
+This lands before SRT migration because it is the cheapest real backend that
+exercises feed cursors, wakeups, lifecycle, policy, metrics, status, and shard
+fairness without native transport readiness.
+
+### Use cases
+
+- capacity tests that measure source, preparation, feed, and scheduler cost
+  without provisioning receivers;
+- soak tests for slow-neighbor isolation and feed-retention behavior where
+  network variability would obscure fabric bugs;
+- operator diagnostics: prove that a pipeline produces egress-ready media even
+  when an external destination is unavailable;
+- staging or rehearsal outputs that intentionally black-hole media while
+  keeping desired-output and status surfaces realistic;
+- benchmark separation between shared preparation cost and protocol transport
+  cost;
+- safe failure-injection targets that can simulate progress, no-progress,
+  overrun, or configured discard rates without sockets.
+
+### Work
+
+Add a `Sink` protocol spec and backend that:
+
+- consumes the configured feed using normal cursors and `WorkBudget`;
+- reports byte and unit progress through common progress accounting;
+- can optionally cap units or bytes per visit for deterministic fairness tests;
+- uses no transport readiness registration and is treated as always writable;
+- publishes ordinary output status, lifecycle, counters, and removal behavior;
+- never bypasses admission, shard assignment, retry/no-progress policy, or
+  feed-overrun handling.
+
+The first version should not add new media transforms. It should discard the
+same feed units a network backend would consume for the selected output.
+
+### Proof
+
+- sink add, remove, update, stale generation, and shutdown behavior matches
+  other fabric outputs;
+- sink leaves cannot pin retained media after removal;
+- sink progress advances feed cursors and status monotonically;
+- a deliberately slow sink does not starve healthy sink or network leaves on
+  the same shard;
+- a sink overrun follows the shared overrun policy;
+- sink metrics can distinguish discarded units and bytes from network-sent
+  units and bytes.
+
+### Exit gate
+
+Fabric sink is available through the same desired-output API as other output
+kinds and is safe to use in local, test, and staging environments. It does not
+become a substitute for live SRT or RTMP correctness evidence.
+
 ## Phase 4: SRT migration
 
 ### Objective
@@ -635,6 +706,70 @@ Live tests cover:
 
 Fabric RTMP and RTMPS become default only after media correctness, tail progress,
 CPU, RSS, context switches, and allocator behavior match or improve on legacy.
+
+## Phase 6a: Pipeline recirculation backend
+
+### Objective
+
+Expose a user-facing output kind that connects one pipeline's prepared output to
+another pipeline's input inside the same process.
+
+This lands after the network protocol migrations because it changes
+user-visible topology and can create feedback loops. It should reuse the proven
+fabric ownership model instead of inventing a second in-process routing system.
+
+### User-facing behavior
+
+Users can configure an output whose destination is another pipeline input. The
+UI and API must make the relationship visible as an edge in the pipeline graph,
+including source pipeline, target pipeline/input, enabled state, status, and
+recent progress.
+
+The configuration must reject or clearly gate:
+
+- direct cycles and obvious indirect cycles in the pipeline graph;
+- incompatible media formats or track selections;
+- recirculation into a pipeline whose input ownership would conflict with an
+  external publisher;
+- ambiguous fan-in where ordering or timestamp ownership is not defined.
+
+### Work
+
+Add a `Pipeline` or `Recirculate` protocol spec and backend that:
+
+- consumes source feed units through the common egress leaf and scheduler;
+- hands media to the target input through an in-process adapter, not a socket;
+- preserves immutable ownership where possible, using shared buffers or
+  reference-counted packets rather than serialize/parse loops;
+- keeps timestamp domains explicit and does not rewrite PTS/DTS unless the
+  target input contract requires it;
+- uses common lifecycle, status, retry/no-progress policy, cancellation, and
+  backpressure accounting;
+- charges any target-side pending media against explicit bounded limits;
+- publishes graph-visible status so operators can distinguish recirculation
+  failures from source-pipeline or target-pipeline failures.
+
+The backend may start with a same-format path only. Any transcoding or
+container conversion required between pipelines belongs in normal media stages,
+not hidden inside the recirculation egress backend.
+
+### Proof
+
+- direct and indirect topology loops are rejected deterministically;
+- compatible pipeline-to-pipeline media advances without a network socket;
+- incompatible formats fail visibly before media is consumed;
+- target backpressure stalls only the recirculation leaf, not unrelated leaves;
+- removal releases target input ownership and feed cursors;
+- zero-copy or bounded-copy behavior is measured and documented;
+- UI/API integration tests cover create, update, disable, delete, status, and
+  graph rendering.
+
+### Exit gate
+
+Recirculation is user-facing only after topology validation, target-input
+ownership, bounded buffering, status publication, and rollback behavior are
+proven. The accepted implementation must be cheaper than routing through a
+loopback network output and input for the same compatible media path.
 
 ## Phase 6: Production integration and rollout
 
@@ -1107,15 +1242,17 @@ Keep pull requests narrow enough to review ownership and proof together.
 5. **Wake coalescing:** model-checked cross-thread seam.
 6. **Shard runtime and manager:** fake backend on real threads.
 7. **Supervisor and diagnostics:** panic and lifecycle recovery.
-8. **SRT non-blocking poller:** no production routing yet.
-9. **SRT engine and shared-message handoff:** integration tests.
-10. **SRT opt-in rollout:** live scale and bad-neighbor proof.
-11. **SRT default and legacy removal:** remove sender queue and thread.
-12. **TCP poller and RTMP engine extraction:** no default switch.
-13. **RTMP partial-I/O and RTMPS:** protocol tests.
-14. **RTMP opt-in rollout:** live scale and isolation proof.
-15. **RTMP default and legacy removal:** one fabric path.
-16. **Shard-count tuning and final documentation:** remove temporary flags.
+8. **Sink backend:** fabric-only discard output and diagnostic/status proof.
+9. **SRT non-blocking poller:** no production routing yet.
+10. **SRT engine and shared-message handoff:** integration tests.
+11. **SRT opt-in rollout:** live scale and bad-neighbor proof.
+12. **SRT default and legacy removal:** remove sender queue and thread.
+13. **TCP poller and RTMP engine extraction:** no default switch.
+14. **RTMP partial-I/O and RTMPS:** protocol tests.
+15. **RTMP opt-in rollout:** live scale and isolation proof.
+16. **RTMP default and legacy removal:** one fabric path.
+17. **Pipeline recirculation:** topology-visible in-process output to input.
+18. **Shard-count tuning and final documentation:** remove temporary flags.
 
 A pull request that changes a hot-path abstraction must include its benchmark or
 explicitly state that it is a correctness-only step whose performance is gated
@@ -1138,6 +1275,9 @@ before rollout.
 | RTMP partial-write state corrupts wire stream | Receiver disconnect or bad media | Exhaustive boundary tests and protocol probe |
 | RTMPS buffering exceeds leaf limits | Memory amplification | Account plaintext and encrypted pending buffers |
 | SRT message semantics mishandled | Packet loss or invalid TS | Retain complete immutable messages and test asynchronous send saturation |
+| Sink output hides real delivery failures | False confidence in production readiness | Status labels and docs distinguish discarded progress from delivered network bytes |
+| Recirculation creates a topology loop | Pipeline feedback, timestamp drift, unbounded buffering | Validate graph cycles and input ownership before admission |
+| Recirculation copies through serialization | CPU and memory regression versus loopback | Measure zero-copy or bounded-copy behavior before user-facing rollout |
 | Shard assignment imbalance | One hot shard while others idle | Start stable; measure service delay; add weighting only with evidence |
 | Too many shards increase overhead | Higher CPU and cache misses | Sweep shard counts and choose smallest passing value |
 | Dual-path rollout creates duplicate connection | Destination receives duplicate publisher | Atomic owner selection by output generation; explicit diagnostics |
@@ -1169,6 +1309,10 @@ The effort is complete only when:
 - [ ] leaf cursors cannot pin retained media;
 - [ ] SRT uses non-blocking send readiness with no per-output sender thread;
 - [ ] RTMP and RTMPS use partial non-blocking I/O under the same scheduler;
+- [ ] sink outputs discard through the common fabric with honest status and
+      discard metrics;
+- [ ] pipeline recirculation is user-facing, topology-validated, bounded, and
+      cheaper than compatible loopback network routing;
 - [ ] all protocols share retry, stall, overrun, and status policy;
 - [ ] 998 healthy plus two bad same-shard destinations passes;
 - [ ] cross-shard failure isolation passes;

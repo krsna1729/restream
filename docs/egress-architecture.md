@@ -218,6 +218,8 @@ flowchart LR
     Canonical["Canonical encoded media"] --> RtmpFeed["RTMP-compatible media feed"]
     Canonical --> TsMux["Shared MPEG-TS muxer"]
     TsMux --> SrtFeed["SRT transport-chunk feed"]
+    Canonical --> SinkFeed["Sink validation feed"]
+    Canonical --> RecirculateFeed["In-process recirculation feed"]
     Canonical --> Future["Future shared preparation"]
 ```
 
@@ -232,6 +234,23 @@ chunking, acknowledgement, connection, and optional TLS state.
 SRT leaves consume immutable MPEG-TS messages produced once for compatible
 outputs. Each leaf still owns SRT connection, congestion, retransmission, and
 encryption state inside libsrt.
+
+Sink leaves consume prepared media and discard it after accounting progress.
+They have no transport readiness adapter, but they still run through the same
+manager, shard scheduler, lifecycle, feed cursor, limits, status, and
+observability paths. Useful cases include capacity and soak tests without
+external receivers, validating feed wake/cursor behavior, measuring preparation
+cost separately from network cost, deliberate black-hole outputs for staging
+pipelines, and operator diagnostics where the question is whether media reaches
+egress at all.
+
+Pipeline or recirculation leaves connect one pipeline's prepared output to
+another pipeline's input in the same process. They must not serialize through a
+network protocol or a byte queue when the source and destination can share
+immutable media ownership. The adapter for this backend is a topology bridge:
+it translates feed units into the target pipeline's ingress contract and
+publishes wakeups, but retry, backpressure, lifecycle, and loop prevention stay
+with the common control plane and fabric.
 
 Preparation feeds must not perform destination-specific retries or retain data
 for a single slow output.
@@ -478,6 +497,17 @@ policy; moving buffering into libsrt does not make it free or unbounded.
 A future protocol either reuses an existing readiness family or adds a new
 backend. It must still use the same manager, shard loop, leaf shell, lifecycle,
 backpressure, retry, and observability contracts.
+
+The sink backend is the simplest non-network backend: it is always ready and
+exists to exercise the fabric, feed, policy, and observability path without an
+external transport. It must not be special-cased around admission, scheduling,
+or status publication.
+
+The recirculation backend is a non-network transport adapter between pipelines.
+It should be in-process and cheap, preferably sharing immutable feed units or
+reference-counted buffers end to end. It must not create a hidden pipeline
+engine, private media backlog, or recursive bypass around the application
+topology graph.
 
 ## Lifecycle
 
