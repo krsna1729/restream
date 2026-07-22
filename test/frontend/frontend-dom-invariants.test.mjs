@@ -227,3 +227,28 @@ test("settings route body uses the v2-owned renderer", async () => {
     /renderSettingsRoute\(container, \{ v2RouteBody: true \}\)/,
   );
 });
+
+test("media route body uses the v2-owned renderer", async () => {
+  const [routerSource, mediaSource] = await Promise.all([
+    readFile(new URL("../../web/ts/app/modes/router.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../../web/ts/features/media-library.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.doesNotMatch(routerSource, /renderMediaLibraryMode/);
+  assert.match(routerSource, /renderDashboardV2MediaBody/);
+  assert.match(
+    routerSource,
+    /dashboardV2RouteBodyConfig\("media"\)\.v2HostId/,
+  );
+  assert.match(
+    mediaSource,
+    /export function renderDashboardV2MediaBody\(\s*container: HTMLElement,/,
+  );
+  assert.match(mediaSource, /container\.dataset\.mediaRouteBody = "v2"/);
+  assert.match(mediaSource, /setMediaLibraryContainerId\(container\.id\)/);
+  assert.match(mediaSource, /mediaLibraryShellMountedInCurrentContainer\(\)/);
+  assert.match(mediaSource, /refreshMediaLibraryMetricsOnly\(\)/);
+});

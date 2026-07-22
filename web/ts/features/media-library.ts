@@ -37,6 +37,11 @@ let mediaV2PresentationActive = false;
 
 const MEDIA_SECTION_VISIBLE_LIMIT = 8;
 
+interface DashboardV2MediaBodyRender {
+  readonly needsDashboardRuntimeRefresh: boolean;
+  readonly rendered: Promise<void> | null;
+}
+
 function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
@@ -727,4 +732,24 @@ export async function renderMediaLibraryMode({
   } finally {
     mediaRefreshInFlight = null;
   }
+}
+
+export function renderDashboardV2MediaBody(
+  container: HTMLElement,
+  options: { readonly routeChanged: boolean },
+): DashboardV2MediaBodyRender {
+  container.dataset.mediaRouteBody = "v2";
+  setMediaLibraryContainerId(container.id);
+  const mediaShellMissing = !mediaLibraryShellMountedInCurrentContainer();
+  if (options.routeChanged || mediaShellMissing) {
+    return {
+      needsDashboardRuntimeRefresh: true,
+      rendered: renderMediaLibraryMode({ force: mediaShellMissing }),
+    };
+  }
+  refreshMediaLibraryMetricsOnly();
+  return {
+    needsDashboardRuntimeRefresh: false,
+    rendered: null,
+  };
 }

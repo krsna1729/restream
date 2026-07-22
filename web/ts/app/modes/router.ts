@@ -21,9 +21,7 @@ import {
 } from "../../features/status/index.js";
 import { renderDashboardV2SettingsBody } from "../../features/settings/index.js";
 import {
-  mediaLibraryShellMountedInCurrentContainer,
-  refreshMediaLibraryMetricsOnly,
-  renderMediaLibraryMode,
+  renderDashboardV2MediaBody,
   resetMediaLibraryShellState,
   setMediaLibraryContainerId,
 } from "../../features/media-library.js";
@@ -393,13 +391,18 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
   } else if (mode === "status") {
     renderStatusMode(dashboardV2RouteBodyConfig("status").v2HostId);
   } else if (mode === "media") {
-    const mediaShellMissing = !mediaLibraryShellMountedInCurrentContainer();
-    if (previousMode !== "media" || mediaShellMissing) {
-      requestDetailedMetricsRefresh();
-      void refreshDashboardRuntime();
-      void renderMediaLibraryMode({ force: mediaShellMissing });
-    } else {
-      refreshMediaLibraryMetricsOnly();
+    const container = document.getElementById(
+      dashboardV2RouteBodyConfig("media").v2HostId,
+    );
+    if (container) {
+      const result = renderDashboardV2MediaBody(container, {
+        routeChanged: previousMode !== "media",
+      });
+      if (result.needsDashboardRuntimeRefresh) {
+        requestDetailedMetricsRefresh();
+        void refreshDashboardRuntime();
+      }
+      if (result.rendered) void result.rendered;
     }
   }
   syncDashboardPolling();
