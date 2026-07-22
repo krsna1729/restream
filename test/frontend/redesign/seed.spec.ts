@@ -31,7 +31,7 @@ test("seed: default empty Overview is v2 and canonical @desktop", async ({
     overview.getByRole("button", { name: "Add a new pipeline" }),
   ).toBeVisible();
   await expect(page.locator("#dashboard-v2-root")).toBeVisible();
-  await expect(page.locator("#overview-mode-content")).toBeHidden();
+  await expect(page.locator("#overview-mode-content")).toHaveCount(0);
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
@@ -68,7 +68,7 @@ test("seed: obsolete ui=v1 empty Overview still renders v2 @desktop", async ({
     overview.getByRole("button", { name: "Add a new pipeline" }),
   ).toBeVisible();
   await expect(page.locator("#dashboard-v2-root")).toBeVisible();
-  await expect(page.locator("#overview-mode-content")).toBeHidden();
+  await expect(page.locator("#overview-mode-content")).toHaveCount(0);
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();

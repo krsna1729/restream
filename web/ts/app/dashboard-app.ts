@@ -148,7 +148,6 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
   });
 
   configureOverviewPresentation({
-    legacyRenderEnabled: !overviewV2Active,
     onPresentation: overviewV2Active
       ? (presentation) => {
           updateDashboardV2Overview(
