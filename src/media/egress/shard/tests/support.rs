@@ -142,6 +142,7 @@ impl EgressShardBackend for ProbeBackend {
 pub(super) enum ScriptBackend {
     Blocking(BlockingBackend),
     Probe(ProbeBackend),
+    ReadyFlood(ReadyFloodBackend),
     Panic,
 }
 
@@ -150,6 +151,7 @@ impl EgressShardBackend for ScriptBackend {
         match self {
             Self::Blocking(backend) => backend.on_command(command),
             Self::Probe(backend) => backend.on_command(command),
+            Self::ReadyFlood(backend) => backend.on_command(command),
             Self::Panic => panic!("scripted shard panic"),
         }
     }
@@ -158,6 +160,7 @@ impl EgressShardBackend for ScriptBackend {
         match self {
             Self::Blocking(_) => {}
             Self::Probe(backend) => backend.on_media_tick(),
+            Self::ReadyFlood(_) => {}
             Self::Panic => {}
         }
     }
@@ -166,6 +169,7 @@ impl EgressShardBackend for ScriptBackend {
         match self {
             Self::Blocking(_) => None,
             Self::Probe(backend) => backend.timer_generation(output_id),
+            Self::ReadyFlood(_) => None,
             Self::Panic => None,
         }
     }
@@ -174,6 +178,16 @@ impl EgressShardBackend for ScriptBackend {
         match self {
             Self::Blocking(_) => EgressShardCommandEffect::Continue,
             Self::Probe(backend) => backend.on_timer(output_id, generation),
+            Self::ReadyFlood(_) => EgressShardCommandEffect::Continue,
+            Self::Panic => EgressShardCommandEffect::Continue,
+        }
+    }
+
+    fn on_ready(&mut self) -> EgressShardCommandEffect {
+        match self {
+            Self::Blocking(_) => EgressShardCommandEffect::Continue,
+            Self::Probe(backend) => backend.on_ready(),
+            Self::ReadyFlood(backend) => backend.on_ready(),
             Self::Panic => EgressShardCommandEffect::Continue,
         }
     }
@@ -182,6 +196,7 @@ impl EgressShardBackend for ScriptBackend {
         match self {
             Self::Blocking(backend) => backend.on_shutdown(),
             Self::Probe(backend) => backend.on_shutdown(),
+            Self::ReadyFlood(backend) => backend.on_shutdown(),
             Self::Panic => {}
         }
     }

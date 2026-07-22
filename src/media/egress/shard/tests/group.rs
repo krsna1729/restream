@@ -1,7 +1,7 @@
 use super::super::*;
 use super::support::{
-    BlockingBackend, Gate, Probe, ProbeBackend, ScriptBackend, config, manager, output_spec,
-    spec_for_shard,
+    BlockingBackend, Gate, Probe, ProbeBackend, ReadyFloodBackend, ScriptBackend, config, manager,
+    output_spec, spec_for_shard,
 };
 use crate::media::egress::command::OutputSpec;
 use crate::media::egress::command::{EgressCommand, ShardId};
@@ -435,6 +435,59 @@ fn shard_group_replaces_only_panicked_shards() {
             .iter()
             .all(|snapshot| snapshot.stopped && !snapshot.panicked)
     );
+}
+
+#[test]
+fn ready_flood_on_one_shard_does_not_starve_another_shard_command() {
+    let flooding = Probe::default();
+    let survivor = Probe::default();
+    let group = EgressShardGroup::spawn(
+        NonZeroU32::new(2).unwrap(),
+        EgressShardConfig::new(16, 16, 2, 16, Duration::from_millis(10)).unwrap(),
+        vec![
+            ScriptBackend::ReadyFlood(ReadyFloodBackend {
+                probe: flooding.clone(),
+            }),
+            ScriptBackend::Probe(ProbeBackend {
+                probe: survivor.clone(),
+            }),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(0),
+            EgressCommand::Add(output_spec("out-flooding"))
+        ),
+        Ok(())
+    );
+    flooding.wait_for_ready_events(2);
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(1),
+            EgressCommand::Add(output_spec("out-survivor"))
+        ),
+        Ok(())
+    );
+    survivor.wait_for_commands(1);
+    survivor.wait_for_media_ticks(1);
+    let snapshots = group.shutdown_and_join();
+
+    let flooded_snapshot = snapshots
+        .iter()
+        .find(|snapshot| snapshot.shard_id == ShardId::new(0))
+        .unwrap();
+    let survivor_snapshot = snapshots
+        .iter()
+        .find(|snapshot| snapshot.shard_id == ShardId::new(1))
+        .unwrap();
+    assert!(flooding.state().ready_events >= 2);
+    assert_eq!(survivor.state().commands, vec!["add:out-survivor"]);
+    assert!(flooded_snapshot.metrics.ready_depth > 0);
+    assert!(survivor_snapshot.commands_processed >= 1);
+    assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
+    assert!(snapshots.iter().all(|snapshot| !snapshot.panicked));
 }
 
 fn wait_for_panicked(group: &EgressShardGroup, shard_id: ShardId) {
