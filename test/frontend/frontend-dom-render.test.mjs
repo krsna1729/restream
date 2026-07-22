@@ -237,158 +237,53 @@ runCheck("renderSettingsPanel emits delegated actions without inline handlers", 
 });
 
 runCheck(
-  "renderOutsColumn reuses cards and patches live telemetry fields",
+  "renderOutsColumn publishes v2 output models and preserves expansion state",
   async () => {
     const { document } = installFakeDom();
     appendRoot(document, "div", "outs-col");
-    const outputsList = appendRoot(document, "div", "outputs-list");
-
-    const pipelineView = await loadCompiledFrontendModule(
-      "features/pipeline-view/index.js",
+    const outputList = await loadCompiledFrontendModule(
+      "features/pipeline-output-list.js",
     );
     const { state } = await loadCompiledFrontendModule("core/state.js");
+    state.pipelines = [
+      makePipeline({
+        outs: Array.from({ length: 10 }, (_, index) =>
+          makeOutput({ id: `out-${index}`, name: `Output ${index}` }),
+        ),
+      }),
+    ];
+    let presented = null;
 
-    const pipeline = makePipeline({
-      outs: [
-        makeOutput(),
-        makeOutput({
-          id: "out-2",
-          name: "Backup Output",
-          url: "rtmp://example.com/live/backup",
-          monitoringUrl: null,
-          bitrateKbps: 600,
-        }),
-      ],
-    });
-    state.pipelines = [pipeline];
-
-    pipelineView.setPipelineViewDependencies({
-      isOutputToggleBusy: () => false,
-    });
-    pipelineView.renderOutsColumn("pipe-1");
-    const firstHandler = outputsList.onclick;
-
-    assert.equal(outputsList.children.length, 2);
-    const firstCard = outputsList.children[0];
-    const metrics = firstCard.querySelector('[data-role="output-metrics"]');
-    const toggleButton = firstCard.querySelector('[data-role="toggle-output"]');
-    const error = firstCard.querySelector('[data-role="output-error"]');
-    const url = firstCard.querySelector('[data-role="output-url"]');
-
-    assert.ok(firstCard instanceof FakeElement);
-    assert.ok(metrics instanceof FakeElement);
-    assert.ok(toggleButton instanceof FakeElement);
-    assert.ok(error instanceof FakeElement);
-    assert.ok(url instanceof FakeElement);
-    assert.match(metrics.innerHTML, /1\.5 Mb\/s/);
-    assert.equal(url.title, "rtmp://example.com/live/secret");
-
-    pipeline.outs[0].time = 25_000;
-    pipeline.outs[0].bitrateKbps = 2750;
-    pipeline.outs[0].lastError = "connection reset";
-    pipeline.outs[0].status = "running";
-
-    pipelineView.renderOutsColumn("pipe-1");
-
-    assert.equal(outputsList.children[0], firstCard);
-    assert.equal(outputsList.onclick, firstHandler);
-    assert.match(metrics.innerHTML, /2\.8 Mb\/s/);
-    assert.equal(error.textContent, "connection reset");
-    assert.equal(error.classList.contains("hidden"), false);
-    assert.equal(toggleButton.textContent, "Stop");
-  },
-);
-
-runCheck(
-  "renderOutsColumn preserves keyed cards across reorder and removes stale cards",
-  async () => {
-    const { document } = installFakeDom();
-    appendRoot(document, "div", "outs-col");
-    const outputsList = appendRoot(document, "div", "outputs-list");
-
-    const pipelineView = await loadCompiledFrontendModule(
-      "features/pipeline-view/index.js",
-    );
-    const { state } = await loadCompiledFrontendModule("core/state.js");
-
-    const first = makeOutput({ id: "out-1", name: "First" });
-    const second = makeOutput({
-      id: "out-2",
-      name: "Second",
-      url: "rtmp://example.com/live/second",
-    });
-    const third = makeOutput({
-      id: "out-3",
-      name: "Third",
-      url: "rtmp://example.com/live/third",
-    });
-    state.pipelines = [makePipeline({ outs: [first, second, third] })];
-
-    pipelineView.setPipelineViewDependencies({
-      isOutputToggleBusy: () => false,
-    });
-    pipelineView.renderOutsColumn("pipe-1");
-
-    const initialCards = Array.from(outputsList.children);
-    const secondCard = initialCards[1];
-
-    state.pipelines[0].outs = [third, second];
-    pipelineView.renderOutsColumn("pipe-1");
-
-    assert.equal(outputsList.children.length, 2);
-    assert.equal(outputsList.children[1], secondCard);
-    assert.equal(
-      outputsList.children[0].querySelector('[data-role="output-name"]')
-        .textContent,
-      "Third",
-    );
-  },
-);
-
-runCheck(
-  "renderOutsColumn delegates actions with stable output ids",
-  async () => {
-    const { document } = installFakeDom();
-    appendRoot(document, "div", "outs-col");
-    const outputsList = appendRoot(document, "div", "outputs-list");
-
-    const pipelineView = await loadCompiledFrontendModule(
-      "features/pipeline-view/index.js",
-    );
-    const { state } = await loadCompiledFrontendModule("core/state.js");
-
-    const calls = [];
-    state.pipelines = [makePipeline()];
-
-    pipelineView.setPipelineViewDependencies({
-      isOutputToggleBusy: () => false,
-      stopOutBtn: async (pipeId, outId) => {
-        calls.push(["stop", pipeId, outId]);
+    outputList.configurePipelineOutputOverviewPresentation({
+      onPresentation: (model) => {
+        presented = model;
       },
     });
-    pipelineView.renderOutsColumn("pipe-1");
+    outputList.renderOutsColumn("pipe-1");
 
-    const toggleButton = outputsList.querySelector(
-      '[data-role="toggle-output"]',
-    );
-    assert.ok(toggleButton instanceof FakeElement);
-    assert.equal(typeof outputsList.onclick, "function");
+    assert.equal(presented.cards.length, 8);
+    assert.equal(presented.expanded, false);
+    assert.equal(document.getElementById("outputs-list"), null);
 
-    await outputsList.onclick({ target: toggleButton });
-
-    assert.deepEqual(calls, [["stop", "pipe-1", "out-1"]]);
+    outputList.togglePipelineOutputList("pipe-1");
+    assert.equal(presented.cards.length, 10);
+    assert.equal(presented.expanded, true);
+    assert.equal(presented.listCaption, "Showing all 10 outputs");
+    outputList.configurePipelineOutputOverviewPresentation({});
   },
 );
 
 runCheck(
-  "renderOutsColumn shows an immediate starting state while a start request is in flight",
+  "renderOutsColumn carries output control state into the v2 model",
   async () => {
     const { document } = installFakeDom();
     appendRoot(document, "div", "outs-col");
-    const outputsList = appendRoot(document, "div", "outputs-list");
 
-    const pipelineView = await loadCompiledFrontendModule(
-      "features/pipeline-view/index.js",
+    const outputList = await loadCompiledFrontendModule(
+      "features/pipeline-output-list.js",
+    );
+    const pipelineDeps = await loadCompiledFrontendModule(
+      "features/pipeline-dependencies.js",
     );
     const controlState = await loadCompiledFrontendModule(
       "features/output-control-state.js",
@@ -408,90 +303,23 @@ runCheck(
         ],
       }),
     ];
-
-    let busy = false;
-    let resolveStart = null;
-    pipelineView.setPipelineViewDependencies({
-      isOutputToggleBusy: () => busy,
-      startOutBtn: async () => {
-        busy = true;
-        controlState.beginOutputControlIntent("pipe-1", "out-1", "starting");
-        await new Promise((resolve) => {
-          resolveStart = () => {
-            state.pipelines[0].outs[0].desiredState = "running";
-            state.pipelines[0].outs[0].status = "running";
-            state.pipelines[0].outs[0].rawStatus = "running";
-            state.pipelines[0].outs[0].time = 2_000;
-            busy = false;
-            controlState.finishOutputControlIntent("pipe-1", "out-1");
-            resolve();
-          };
-        });
-      },
-    });
-    pipelineView.renderOutsColumn("pipe-1");
-
-    const toggleButton = outputsList.querySelector(
-      '[data-role="toggle-output"]',
-    );
-    const metrics = outputsList.querySelector('[data-role="output-metrics"]');
-    assert.ok(toggleButton instanceof FakeElement);
-    assert.ok(metrics instanceof FakeElement);
-
-    const clickPromise = outputsList.onclick({ target: toggleButton });
-    await flushAsyncWork();
-
-    assert.equal(toggleButton.textContent, "Starting...");
-    assert.equal(toggleButton.disabled, true);
-    assert.match(metrics.innerHTML, /starting/);
-
-    resolveStart?.();
-    await clickPromise;
-
-    assert.equal(toggleButton.textContent, "Stop");
-    assert.equal(toggleButton.disabled, false);
-  },
-);
-
-runCheck(
-  "React output presentation replaces legacy cards and preserves expansion state",
-  async () => {
-    const { document } = installFakeDom();
-    appendRoot(document, "div", "outs-col");
-    const outputsList = appendRoot(document, "div", "outputs-list");
-    const toolbar = appendRoot(document, "div", "outputs-list-toolbar");
-    const outputList = await loadCompiledFrontendModule(
-      "features/pipeline-output-list.js",
-    );
-    const { state } = await loadCompiledFrontendModule("core/state.js");
-    state.pipelines = [
-      makePipeline({
-        outs: Array.from({ length: 10 }, (_, index) =>
-          makeOutput({ id: `out-${index}`, name: `Output ${index}` }),
-        ),
-      }),
-    ];
     let presented = null;
 
+    pipelineDeps.setPipelineViewDependencies({
+      isOutputToggleBusy: () => true,
+    });
+    controlState.beginOutputControlIntent("pipe-1", "out-1", "starting");
     outputList.configurePipelineOutputOverviewPresentation({
-      legacyCardsEnabled: false,
-      legacyRenderEnabled: false,
       onPresentation: (model) => {
         presented = model;
       },
     });
     outputList.renderOutsColumn("pipe-1");
 
-    assert.equal(outputsList.hidden, true);
-    assert.equal(toolbar.hidden, true);
-    assert.equal(outputsList.children.length, 0);
-    assert.equal(presented.cards.length, 8);
-    assert.equal(presented.expanded, false);
-
-    outputList.togglePipelineOutputList("pipe-1");
-    assert.equal(presented.cards.length, 10);
-    assert.equal(presented.expanded, true);
-    assert.equal(presented.listCaption, "Showing all 10 outputs");
+    assert.equal(presented.cards[0].controlLabel, "Starting...");
+    assert.equal(presented.cards[0].controlDisabled, true);
+    outputList.configurePipelineOutputOverviewPresentation({});
+    controlState.finishOutputControlIntent("pipe-1", "out-1");
   },
 );
 

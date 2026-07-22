@@ -255,10 +255,9 @@ test("seed: default v2 replaces Overview while delegating operator actions @desk
   ).toBeVisible();
   await expect(outputOverview).toContainText("Retrying");
   await expect(outputOverview).toContainText("Retrying Output");
-  await expect(page.locator("#pipeline-output-overview-legacy")).toBeHidden();
-  await expect(page.locator("#outs-col > h2")).toBeHidden();
-  await expect(page.locator("#outputs-list")).toBeHidden();
-  await expect(page.locator("#add-out-btn")).toBeHidden();
+  await expect(page.locator("#pipeline-output-overview-legacy")).toHaveCount(0);
+  await expect(page.locator("#outputs-list")).toHaveCount(0);
+  await expect(page.locator("#add-out-btn")).toHaveCount(0);
   const openRetryingOutputActions = async () => {
     await outputOverview
       .getByRole("button", { name: "More output actions for Retrying Output" })

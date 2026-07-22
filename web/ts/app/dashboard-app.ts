@@ -180,9 +180,6 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
       : undefined,
   });
   configurePipelineOutputOverviewPresentation({
-    legacyAddActionEnabled: !pipelineV2Active,
-    legacyCardsEnabled: !pipelineV2Active,
-    legacyRenderEnabled: !pipelineV2Active,
     onPresentation: pipelineV2Active
       ? updateDashboardV2PipelineOutputOverview
       : undefined,
