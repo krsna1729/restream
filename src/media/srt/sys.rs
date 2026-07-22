@@ -259,7 +259,6 @@ unsafe extern "C" {
     ) -> c_int;
 }
 
-#[cfg(test)]
 pub const SRTO_SNDSYN: c_int = 1;
 pub const SRTO_RCVSYN: c_int = 2;
 pub const SRTO_FC: c_int = 4;
