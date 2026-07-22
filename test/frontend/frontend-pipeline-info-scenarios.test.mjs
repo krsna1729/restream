@@ -155,7 +155,7 @@ runDomScenarioMatrix({
     setupPipelineInfoDom(document);
   },
   async loadModules({ loadCompiledFrontendModule }) {
-    const pipelineView = await loadCompiledFrontendModule("features/pipeline-view.js");
+    const pipelineView = await loadCompiledFrontendModule("features/pipeline-view/index.js");
     const pipelineDeps = await loadCompiledFrontendModule(
       "features/pipeline-dependencies.js",
     );

@@ -14,7 +14,7 @@ import {
   isOutputToggleBusy,
   startOutBtn,
   stopOutBtn,
-} from "../features/editor.js";
+} from "../features/editor/index.js";
 import {
   openOutputHistoryModal,
   openPipelineHistoryModal,
@@ -34,7 +34,7 @@ import {
   togglePipelineFileIngest,
   togglePipelineRecording,
   updatePipelineAudioTrackDraft,
-} from "../features/pipeline-view.js";
+} from "../features/pipeline-view/index.js";
 import { openDiagnosticsModal } from "../features/diagnostics.js";
 import {
   openPublisherHealthModal,
@@ -48,11 +48,11 @@ import {
   renderDashboardModes,
   setDashboardMode,
   setPipelineWorkspaceView,
-} from "../features/modes.js";
+} from "./modes.js";
 import {
   configurePipelineInspectCheckpointPresentation,
   setPipelineInspectorDependencies,
-} from "../features/pipeline-inspector.js";
+} from "../features/pipeline-inspector/index.js";
 import {
   configurePipelineSelectorPresentation,
   renderPipelines,
@@ -74,7 +74,7 @@ import {
   configureControlRoomCheckpointPresentation,
   openOutputMonitoringUrl,
   setControlRoomWorkspaceDependencies,
-} from "../features/control-room.js";
+} from "../features/control-room/index.js";
 import { configureIncidentsCheckpointPresentation } from "../features/incidents.js";
 import { configureMediaCheckpointPresentation } from "../features/media-library.js";
 import { configureTelemetryCheckpointPresentation } from "../features/engineer-telemetry.js";

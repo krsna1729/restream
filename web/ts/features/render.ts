@@ -12,7 +12,7 @@ import {
   isOutputRetrying,
   isOutputUnexpectedlyDown,
 } from "../core/output-status.js";
-import { renderPipelineInfoColumn, renderOutsColumn } from "./pipeline-view.js";
+import { renderPipelineInfoColumn, renderOutsColumn } from "./pipeline-view/index.js";
 import { renderHealthBanner, renderServerMetrics } from "./metrics.js";
 import { state } from "../core/state.js";
 import type { PipelineView } from "../types.js";

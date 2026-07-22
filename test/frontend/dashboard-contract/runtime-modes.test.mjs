@@ -150,7 +150,7 @@ test("overview activity SSE wakes the dashboard runtime without waiting for the 
 
   try {
     const dashboard = await loadCompiledFrontendModule("features/dashboard.js");
-    const modes = await loadCompiledFrontendModule("features/modes.js");
+    const modes = await loadCompiledFrontendModule("app/modes.js");
 
     await dashboard.refreshDashboardRuntime();
     modes.renderDashboardModes();
@@ -323,7 +323,7 @@ test("dashboard non-runtime modes skip health polling until a runtime mode resum
 
   try {
     const dashboard = await loadCompiledFrontendModule("features/dashboard.js");
-    const modes = await loadCompiledFrontendModule("features/modes.js");
+    const modes = await loadCompiledFrontendModule("app/modes.js");
     const indicator = await loadCompiledFrontendModule(
       "features/restream-process-indicator.js",
     );
@@ -558,7 +558,7 @@ test("status mode reuses its own restream log SSE without opening a second lifec
 
   try {
     const dashboard = await loadCompiledFrontendModule("features/dashboard.js");
-    const modes = await loadCompiledFrontendModule("features/modes.js");
+    const modes = await loadCompiledFrontendModule("app/modes.js");
 
     dashboard.startDashboardRuntime();
     modes.renderDashboardModes();
@@ -765,7 +765,7 @@ test("inspect mode refreshes graphs from dashboard runtime cadence without its o
 
   try {
     const dashboard = await loadCompiledFrontendModule("features/dashboard.js");
-    const modes = await loadCompiledFrontendModule("features/modes.js");
+    const modes = await loadCompiledFrontendModule("app/modes.js");
 
     dashboard.setDashboardHooks({
       afterRender: () => {

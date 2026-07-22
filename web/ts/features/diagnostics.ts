@@ -1,5 +1,5 @@
 import { runPipelineDiagnostics } from "../core/api.js";
-import { copyText, showCopiedNotification } from "../core/utils.js";
+import { copyText, escapeHtml, showCopiedNotification } from "../core/utils.js";
 import { state } from "../core/state.js";
 import type { DiagnosticResult, PipelineView } from "../types.js";
 
@@ -151,15 +151,6 @@ async function runDiagnostics(): Promise<void> {
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
-}
-
-export function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 function colorizeJson(str: string): string {

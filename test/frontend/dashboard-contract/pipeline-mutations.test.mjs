@@ -195,7 +195,7 @@ test("pipeline edits reuse returned pipeline payloads instead of refetching dash
   };
 
   const dashboard = await loadCompiledFrontendModule("features/dashboard.js");
-  const editor = await loadCompiledFrontendModule("features/editor.js");
+  const editor = await loadCompiledFrontendModule("features/editor/index.js");
   const { state } = await loadCompiledFrontendModule("core/state.js");
 
   await dashboard.refreshDashboard();
@@ -383,7 +383,7 @@ test("pipeline edit modal defers media file lookups until file mode is selected"
   };
 
   const dashboard = await loadCompiledFrontendModule("features/dashboard.js");
-  const editor = await loadCompiledFrontendModule("features/editor.js");
+  const editor = await loadCompiledFrontendModule("features/editor/index.js");
 
   await dashboard.refreshDashboard();
   await editor.editPipeBtn();
@@ -593,7 +593,7 @@ test("recording patches local state immediately, while file-ingest falls back to
   };
 
   const dashboard = await loadCompiledFrontendModule("features/dashboard.js");
-  const pipelineView = await loadCompiledFrontendModule("features/pipeline-view.js");
+  const pipelineView = await loadCompiledFrontendModule("features/pipeline-view/index.js");
   const { state } = await loadCompiledFrontendModule("core/state.js");
 
   pipelineView.setPipelineViewDependencies({

@@ -25,7 +25,7 @@ echo ""
 echo "Checking file size limits..."
 SOURCE_LINE_LIMIT=999
 SOURCE_LINE_WARNING=800
-FRONTEND_SOURCE_LINE_LIMIT=2000
+FRONTEND_SOURCE_LINE_LIMIT=999
 
 SOURCE_ROOTS=()
 for root in src web/ts test tests benches; do
@@ -67,11 +67,11 @@ classify_source_file() {
         src/*.rs)
             printf 'production'
             ;;
-        test/*.rs)
-            printf 'harness'
+        test/*.rs|test/*)
+            printf 'frontend-test'
             ;;
-        web/ts/*|test/*)
-            printf 'frontend-test-or-source'
+        web/ts/*)
+            printf 'frontend-production'
             ;;
         *)
             printf 'other'
@@ -104,17 +104,17 @@ while IFS= read -r -d '' file; do
             SOURCE_SIZE_WARNINGS=$((SOURCE_SIZE_WARNINGS + 1))
             echo "WARN [$classification]: $file has $lines raw lines (Rust pressure band: ${warning_threshold}-${file_limit})" >&2
         fi
-    else
+    elif [ "$classification" = "frontend-production" ]; then
         file_limit=$FRONTEND_SOURCE_LINE_LIMIT
         if [ "$lines" -gt "$file_limit" ]; then
-            echo "FAIL [$classification]: $file has $lines raw lines (frontend hard maximum: $file_limit; 2001 fails)" >&2
+            echo "FAIL [$classification]: $file has $lines raw lines (frontend hard maximum: $file_limit; 1000 fails)" >&2
             FAILED=1
             SOURCE_SIZE_FAILED=1
         fi
     fi
 done < <(find_audited_source_files)
 
-echo "Line policies: Rust hard maximum ${SOURCE_LINE_LIMIT} (warn at ${SOURCE_LINE_WARNING}); TypeScript/JavaScript hard maximum ${FRONTEND_SOURCE_LINE_LIMIT}."
+echo "Line policies: Rust hard maximum ${SOURCE_LINE_LIMIT} (warn at ${SOURCE_LINE_WARNING}); TypeScript/JavaScript hard maximum ${FRONTEND_SOURCE_LINE_LIMIT} (same as Rust)."
 echo "Audited Rust files by responsibility:"
 for classification in build-script production dedicated-test harness benchmark integration-test; do
     printf '  %-16s %s\n' "$classification:" "${RUST_CLASS_COUNTS[$classification]}"

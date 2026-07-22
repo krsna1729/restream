@@ -1,4 +1,4 @@
-import type { ControlRoomCheckpointModel } from "../features/control-room-view-model.js";
+import type { ControlRoomCheckpointModel } from "../features/control-room/view-model.js";
 import type { IncidentsCheckpointModel } from "../features/incidents-view-model.js";
 import type { MediaCheckpointModel } from "../features/media-view-model.js";
 import type { OverviewViewModel } from "../features/overview-view-model.js";

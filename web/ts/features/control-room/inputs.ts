@@ -1,11 +1,11 @@
-import { getPipelineInputs, promotePipelineInput } from "../core/api.js";
-import type { PipelineInput } from "../types.js";
-import { buildPipelineInputPreviewUrl } from "./input-preview.js";
-import type { ControlRoomCardDescriptor } from "./control-room-types.js";
+import { getPipelineInputs, promotePipelineInput } from "../../core/api.js";
+import type { PipelineInput } from "../../types.js";
+import { buildPipelineInputPreviewUrl } from "../input-preview.js";
+import type { ControlRoomCardDescriptor } from "./types.js";
 import {
   pipelineInputStatusLabel,
   pipelineInputSubtitle,
-} from "./pipeline-inputs-view-model.js";
+} from "../pipeline-inputs-view-model.js";
 
 const STATUS_TTL_MS = 2_000;
 const promotionPending = new Set<string>();

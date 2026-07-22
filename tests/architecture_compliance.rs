@@ -572,19 +572,26 @@ fn frontend_tooling_and_vendored_assets_are_reproducible() {
 fn frontend_features_do_not_import_app_composition_modules() {
     let features_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/ts/features");
     let mut offenders = Vec::new();
-    for entry in std::fs::read_dir(&features_dir).expect("features dir should exist") {
-        let path = entry.expect("feature entry should be readable").path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("ts") {
-            continue;
-        }
-        let source = std::fs::read_to_string(&path).expect("feature source should be UTF-8");
-        if source.contains("../app/") {
-            offenders.push(
-                path.strip_prefix(env!("CARGO_MANIFEST_DIR"))
-                    .unwrap()
-                    .display()
-                    .to_string(),
-            );
+    let mut stack = vec![features_dir];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("features dir should exist") {
+            let path = entry.expect("feature entry should be readable").path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("ts") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("feature source should be UTF-8");
+            if source.contains("../app/") {
+                offenders.push(
+                    path.strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                        .unwrap()
+                        .display()
+                        .to_string(),
+                );
+            }
         }
     }
     assert!(
@@ -598,10 +605,13 @@ fn frontend_render_modules_do_not_import_runtime_composition_modules() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let forbidden_edges = [
         (
-            "web/ts/features/pipeline-view.ts",
+            "web/ts/features/pipeline-view/index.ts",
             "from \"./dashboard.js\"",
         ),
-        ("web/ts/features/pipeline-view.ts", "from './dashboard.js'"),
+        (
+            "web/ts/features/pipeline-view/index.ts",
+            "from './dashboard.js'",
+        ),
         (
             "web/ts/features/pipeline-output-list.ts",
             "from \"./control-room.js\"",

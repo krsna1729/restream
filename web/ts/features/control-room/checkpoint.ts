@@ -1,5 +1,5 @@
-import type { PipelineView } from "../types.js";
-import type { ControlRoomCheckpointModel } from "./control-room-view-model.js";
+import type { PipelineView } from "../../types.js";
+import type { ControlRoomCheckpointModel } from "./view-model.js";
 
 interface ControlRoomCheckpointInputs {
   allMonitoringOutputs: Array<{

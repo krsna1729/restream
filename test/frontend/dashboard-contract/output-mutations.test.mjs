@@ -115,7 +115,7 @@ test("output start and stop controls refresh runtime without invalidating dashbo
   };
 
   const dashboard = await loadCompiledFrontendModule("features/dashboard.js");
-  const editor = await loadCompiledFrontendModule("features/editor.js");
+  const editor = await loadCompiledFrontendModule("features/editor/index.js");
 
   await dashboard.refreshDashboard();
   requests.length = 0;
@@ -354,7 +354,7 @@ test("output start and stop controls prefer lifecycle SSE convergence before fal
 
   try {
     const dashboard = await loadCompiledFrontendModule("features/dashboard.js");
-    const editor = await loadCompiledFrontendModule("features/editor.js");
+    const editor = await loadCompiledFrontendModule("features/editor/index.js");
     const { state } = await loadCompiledFrontendModule("core/state.js");
 
     await dashboard.refreshDashboard();
@@ -616,7 +616,7 @@ test("output config mutations reuse returned output payloads instead of refetchi
   };
 
   const dashboard = await loadCompiledFrontendModule("features/dashboard.js");
-  const editor = await loadCompiledFrontendModule("features/editor.js");
+  const editor = await loadCompiledFrontendModule("features/editor/index.js");
   const { state } = await loadCompiledFrontendModule("core/state.js");
 
   await dashboard.refreshDashboard();
@@ -845,7 +845,7 @@ test("pipeline and output deletes patch dashboard state locally instead of refet
   };
 
   const dashboard = await loadCompiledFrontendModule("features/dashboard.js");
-  const editor = await loadCompiledFrontendModule("features/editor.js");
+  const editor = await loadCompiledFrontendModule("features/editor/index.js");
   const { state } = await loadCompiledFrontendModule("core/state.js");
 
   await dashboard.refreshDashboard();

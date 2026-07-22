@@ -28,17 +28,15 @@ The backend already has promising boundaries:
 - `db` for persistence
 - `api` for the HTTP/UI edge
 
-The frontend now also has a clearer shape:
+The frontend now has a clear, modular shape:
 
-- `web/ts/app` for dashboard composition/bootstrap
+- `web/ts/app` for dashboard composition, routing, and bootstrap (`app/modes/` sub-modules)
 - `web/ts/core` for shared transport, state, and pure transforms
-- `web/ts/features` for bounded UI modules
+- `web/ts/features` for bounded UI modules with ownership subdirectories
+  (`pipeline-view/`, `control-room/`, `editor/`, `pipeline-inspector/`, `settings/`, `status/`)
 - `web/ts/history` for history-specific controller/rendering behavior
 
-The remaining issue is no longer a known lower-layer back-edge. Wave 2 removed
-the encoded wrong-direction imports and made several candidate boundaries
-mechanically clean. The remaining decision is whether another boundary creates
-measurable isolation or only more packaging.
+All authored frontend TypeScript files (`web/ts/*`) are strictly under 999 raw lines, enforced by `./scripts/check/source-audit.sh`.
 
 Current backend evidence:
 
@@ -58,7 +56,9 @@ Current backend evidence:
 
 Frontend examples:
 
-- large feature modules still mix rendering, async coordination, and cross-feature wiring
+- four oversized feature groups are now in ownership subdirectories, each with a
+  barrel `index.ts`; `pipeline-inspector/index.ts` remains above the 1,000-line
+  cap and needs a meaningful seam before the split pass is fully done
 - some feature modules still import peer features because the composition owner is not yet narrow enough
 - globals/window hooks remain as a compatibility surface that should stay edge-facing
 
@@ -101,8 +101,8 @@ agent-core dependencies could remain hidden. The durable rule is:
 `scripts/check/source-audit.sh` measures raw physical lines for authored Rust
 in the root `build.rs` and in `src/`, `test/`, `tests/`, and `benches/`.
 Fixtures and generated artifacts remain outside this metric. Authored
-TypeScript and JavaScript keep their existing 2,000-line policy; reducing that
-limit is a separate frontend task.
+TypeScript and JavaScript now share the same 1,000-line hard maximum as the
+backend Rust policy.
 
 The backend Rust bands are:
 
@@ -265,6 +265,11 @@ Frontend low-risk extractions already landed:
 
 1. Dashboard feature wiring now has an `app` composition root.
 2. Pipeline output-list rendering and delegated actions now live outside `pipeline-view.ts`.
+3. Four oversized feature files (`pipeline-view-*`, `control-room-*`, `editor-*`,
+   `pipeline-inspector-*`) moved into `features/<name>/` subdirectories with
+   barrel `index.ts` re-exports (2026-07-21). Only `pipeline-inspector/index.ts`
+   (~1,272 lines) remains above the 1,000-line hard cap; the other three are
+   within bounds.
 
 These moves are useful because they move "how the app is composed" away from
 "how one feature renders."

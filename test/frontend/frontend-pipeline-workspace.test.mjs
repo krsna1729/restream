@@ -173,7 +173,7 @@ test("inspector treats URL pipeline selection as authoritative across views", as
     "core/pipeline-workspace.js",
   );
   const inspector = await loadCompiledFrontendModule(
-    "features/pipeline-inspector.js",
+    "features/pipeline-inspector/index.js",
   );
   const { state } = await loadCompiledFrontendModule("core/state.js");
   state.pipelines = [
@@ -247,7 +247,7 @@ test("inspector keeps explicit runtime scope even if workspace refresh restores 
     appendRoot(document, tag, id);
   }
   const inspector = await loadCompiledFrontendModule(
-    "features/pipeline-inspector.js",
+    "features/pipeline-inspector/index.js",
   );
   const { state } = await loadCompiledFrontendModule("core/state.js");
   state.pipelines = [
@@ -325,7 +325,7 @@ test("inspector preserves absent and invalid workspace selections", async () => 
     appendRoot(document, tag, id);
   }
   const inspector = await loadCompiledFrontendModule(
-    "features/pipeline-inspector.js",
+    "features/pipeline-inspector/index.js",
   );
   const { state } = await loadCompiledFrontendModule("core/state.js");
   state.pipelines = [
@@ -376,7 +376,7 @@ test("inspector renders runtime resource overview with accuracy labels", async (
     appendRoot(document, tag, id);
   }
   const inspector = await loadCompiledFrontendModule(
-    "features/pipeline-inspector.js",
+    "features/pipeline-inspector/index.js",
   );
   const { state } = await loadCompiledFrontendModule("core/state.js");
   state.pipelines = [];
@@ -743,7 +743,7 @@ test("inspector keeps processing graph for large-output pipelines", async () => 
   };
 
   const inspector = await loadCompiledFrontendModule(
-    "features/pipeline-inspector.js",
+    "features/pipeline-inspector/index.js",
   );
   const { state } = await loadCompiledFrontendModule("core/state.js");
   state.pipelines = [
@@ -942,7 +942,7 @@ test("inspector keeps the previous graph visible during background refresh", asy
   }
 
   const inspector = await loadCompiledFrontendModule(
-    "features/pipeline-inspector.js",
+    "features/pipeline-inspector/index.js",
   );
   const { state } = await loadCompiledFrontendModule("core/state.js");
   state.pipelines = [
@@ -1047,7 +1047,7 @@ test("inspector runtime graph refresh ignores a stale resolution after the conta
   }
 
   const inspector = await loadCompiledFrontendModule(
-    "features/pipeline-inspector.js",
+    "features/pipeline-inspector/index.js",
   );
   const { state } = await loadCompiledFrontendModule("core/state.js");
   state.pipelines = [];
@@ -1297,7 +1297,7 @@ test("processing graph collapses repeated non-egress leaf stages at the branch p
 test("monitor consumes and propagates the shared workspace selection", async () => {
   installFakeDom();
   const controlRoom = await loadCompiledFrontendModule(
-    "features/control-room.js",
+    "features/control-room/index.js",
   );
   const { state } = await loadCompiledFrontendModule("core/state.js");
   const makePipeline = (id, outputId) => ({
@@ -1346,7 +1346,7 @@ test("monitor consumes and propagates the shared workspace selection", async () 
 test("YouTube monitor warning refresh ignores a stale response after the shell is reassigned", async () => {
   const { document } = installFakeDom();
   const controlRoom = await loadCompiledFrontendModule(
-    "features/control-room.js",
+    "features/control-room/index.js",
   );
 
   const urlA = "https://www.youtube.com/watch?v=aaaaaaaaaaa";
