@@ -11,8 +11,10 @@ use std::sync::Condvar;
 #[derive(Debug, Default)]
 struct ProbeState {
     commands: Vec<String>,
+    timers: Vec<String>,
     media_ticks: u64,
     shutdowns: u64,
+    generations: std::collections::HashMap<String, u64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -43,12 +45,25 @@ impl Probe {
         assert!(result.0.commands.len() >= target);
     }
 
+    fn wait_for_timers(&self, target: usize) {
+        let (lock, condvar) = &*self.inner;
+        let state = lock.lock().unwrap();
+        let result = condvar
+            .wait_timeout_while(state, Duration::from_secs(2), |state| {
+                state.timers.len() < target
+            })
+            .unwrap();
+        assert!(result.0.timers.len() >= target);
+    }
+
     fn state(&self) -> ProbeState {
         let state = self.inner.0.lock().unwrap();
         ProbeState {
             commands: state.commands.clone(),
+            timers: state.timers.clone(),
             media_ticks: state.media_ticks,
             shutdowns: state.shutdowns,
+            generations: state.generations.clone(),
         }
     }
 }
@@ -64,6 +79,24 @@ impl EgressShardBackend for ProbeBackend {
         let (lock, condvar) = &*self.probe.inner;
         let mut state = lock.lock().unwrap();
         state.commands.push(label);
+        if let EgressCommand::Add(spec) | EgressCommand::Update(spec) = &command {
+            state
+                .generations
+                .insert(spec.id.as_str().to_string(), spec.generation);
+        }
+        condvar.notify_all();
+        EgressShardCommandEffect::Continue
+    }
+
+    fn timer_generation(&self, output_id: &OutputId) -> Option<u64> {
+        let state = self.probe.inner.0.lock().unwrap();
+        state.generations.get(output_id.as_str()).copied()
+    }
+
+    fn on_timer(&mut self, output_id: OutputId, generation: u64) -> EgressShardCommandEffect {
+        let (lock, condvar) = &*self.probe.inner;
+        let mut state = lock.lock().unwrap();
+        state.timers.push(format!("{output_id}:{generation}"));
         condvar.notify_all();
         EgressShardCommandEffect::Continue
     }
@@ -101,6 +134,20 @@ impl EgressShardBackend for ScriptBackend {
         match self {
             Self::Probe(backend) => backend.on_media_tick(),
             Self::Panic => {}
+        }
+    }
+
+    fn timer_generation(&self, output_id: &OutputId) -> Option<u64> {
+        match self {
+            Self::Probe(backend) => backend.timer_generation(output_id),
+            Self::Panic => None,
+        }
+    }
+
+    fn on_timer(&mut self, output_id: OutputId, generation: u64) -> EgressShardCommandEffect {
+        match self {
+            Self::Probe(backend) => backend.on_timer(output_id, generation),
+            Self::Panic => EgressShardCommandEffect::Continue,
         }
     }
 
@@ -159,8 +206,55 @@ impl EgressShardBackend for BlockingBackend {
     }
 }
 
-fn config(capacity: usize, budget: usize) -> EgressShardConfig {
-    EgressShardConfig::new(capacity, budget, Duration::from_millis(10)).unwrap()
+#[derive(Debug)]
+struct TimerBackend {
+    probe: Probe,
+    delay: Duration,
+}
+
+impl EgressShardBackend for TimerBackend {
+    fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
+        let label = command_label(&command);
+        let (lock, condvar) = &*self.probe.inner;
+        let mut state = lock.lock().unwrap();
+        state.commands.push(label);
+        let (EgressCommand::Add(spec) | EgressCommand::Update(spec)) = command else {
+            condvar.notify_all();
+            return EgressShardCommandEffect::Continue;
+        };
+        state
+            .generations
+            .insert(spec.id.as_str().to_string(), spec.generation);
+        condvar.notify_all();
+        EgressShardCommandEffect::ScheduleTimer {
+            output_id: spec.id,
+            generation: spec.generation,
+            fire_at: Instant::now() + self.delay,
+        }
+    }
+
+    fn timer_generation(&self, output_id: &OutputId) -> Option<u64> {
+        let state = self.probe.inner.0.lock().unwrap();
+        state.generations.get(output_id.as_str()).copied()
+    }
+
+    fn on_timer(&mut self, output_id: OutputId, generation: u64) -> EgressShardCommandEffect {
+        let (lock, condvar) = &*self.probe.inner;
+        let mut state = lock.lock().unwrap();
+        state.timers.push(format!("{output_id}:{generation}"));
+        condvar.notify_all();
+        EgressShardCommandEffect::Continue
+    }
+}
+
+fn config(capacity: usize, command_budget: usize) -> EgressShardConfig {
+    EgressShardConfig::new(
+        capacity,
+        command_budget,
+        command_budget,
+        Duration::from_millis(10),
+    )
+    .unwrap()
 }
 
 fn output_spec(id: &str) -> OutputSpec {
@@ -203,12 +297,16 @@ fn command_label(command: &EgressCommand) -> String {
 #[test]
 fn config_rejects_zero_capacity_and_budget() {
     assert_eq!(
-        EgressShardConfig::new(0, 1, Duration::ZERO),
+        EgressShardConfig::new(0, 1, 1, Duration::ZERO),
         Err(EgressShardConfigError::ZeroCommandCapacity)
     );
     assert_eq!(
-        EgressShardConfig::new(1, 0, Duration::ZERO),
+        EgressShardConfig::new(1, 0, 1, Duration::ZERO),
         Err(EgressShardConfigError::ZeroCommandBatch)
+    );
+    assert_eq!(
+        EgressShardConfig::new(1, 1, 0, Duration::ZERO),
+        Err(EgressShardConfigError::ZeroTimerBatch)
     );
 }
 
@@ -267,6 +365,61 @@ fn command_batch_budget_allows_media_ticks_during_flood() {
 }
 
 #[test]
+fn timer_batch_budget_allows_media_ticks_during_timer_flood() {
+    let probe = Probe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        EgressShardConfig::new(16, 16, 2, Duration::from_millis(10)).unwrap(),
+        TimerBackend {
+            probe: probe.clone(),
+            delay: Duration::ZERO,
+        },
+    );
+
+    for index in 0..6 {
+        assert_eq!(
+            handle.try_send(EgressCommand::Add(output_spec(&format!(
+                "out-timer-{index}"
+            )))),
+            Ok(())
+        );
+    }
+    probe.wait_for_timers(4);
+    let running_snapshot = handle.snapshot();
+    let snapshot = handle.shutdown_and_join();
+
+    assert!(snapshot.timers_processed >= 4);
+    assert!(running_snapshot.media_ticks >= 1);
+    assert!(snapshot.stopped);
+}
+
+#[test]
+fn stale_timer_generation_is_ignored_on_shard_thread() {
+    let probe = Probe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        config(8, 4),
+        TimerBackend {
+            probe: probe.clone(),
+            delay: Duration::from_millis(20),
+        },
+    );
+    let mut first = output_spec("out-stale-timer");
+    first.generation = 1;
+    let mut second = output_spec("out-stale-timer");
+    second.generation = 2;
+
+    assert_eq!(handle.try_send(EgressCommand::Add(first)), Ok(()));
+    assert_eq!(handle.try_send(EgressCommand::Update(second)), Ok(()));
+    probe.wait_for_timers(1);
+    let snapshot = handle.shutdown_and_join();
+
+    assert_eq!(probe.state().timers, vec!["out-stale-timer:2"]);
+    assert_eq!(snapshot.timers_processed, 1);
+    assert!(snapshot.stopped);
+}
+
+#[test]
 fn drain_for_other_shard_is_ignored_locally() {
     let probe = Probe::default();
     let handle = EgressShardHandle::spawn(
@@ -313,6 +466,8 @@ fn heartbeat_classifies_snapshot_health_states() {
         shard_id: ShardId::new(0),
         loop_iterations: 7,
         commands_processed: 3,
+        timers_processed: 2,
+        pending_timers: 1,
         media_ticks: 5,
         last_progress_at: Some(now - Duration::from_millis(10)),
         stopped: false,
@@ -364,6 +519,8 @@ fn heartbeat_treats_missing_progress_as_stalled() {
             shard_id: ShardId::new(0),
             loop_iterations: 0,
             commands_processed: 0,
+            timers_processed: 0,
+            pending_timers: 0,
             media_ticks: 0,
             last_progress_at: None,
             stopped: false,

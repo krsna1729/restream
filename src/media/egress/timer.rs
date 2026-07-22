@@ -93,8 +93,27 @@ impl<K: Ord + Clone> TimerWheel<K> {
     where
         F: FnMut(&K) -> Option<u64>,
     {
+        self.drain_expired_limited(now, usize::MAX, &mut valid_gen)
+    }
+
+    /// Drain at most `max_fired` current entries whose `fire_at <= now`.
+    ///
+    /// Stale entries are still discarded while searching for current timers.
+    /// Current entries beyond the limit remain in the heap for a later pass.
+    pub fn drain_expired_limited<F>(
+        &mut self,
+        now: Instant,
+        max_fired: usize,
+        mut valid_gen: F,
+    ) -> Vec<(K, u64)>
+    where
+        F: FnMut(&K) -> Option<u64>,
+    {
         let mut fired = Vec::new();
-        while let Some(entry) = self.heap.peek() {
+        while fired.len() < max_fired {
+            let Some(entry) = self.heap.peek() else {
+                break;
+            };
             if entry.fire_at > now {
                 break;
             }

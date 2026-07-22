@@ -13,7 +13,7 @@ use std::fmt;
 ///
 /// Carried as a thin `String` newtype so pipeline IDs, output IDs, etc.
 /// cannot be accidentally mixed (mirrors `crate::domain::ids` conventions).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OutputId(String);
 
 impl OutputId {
