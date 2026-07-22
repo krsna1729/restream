@@ -32,6 +32,7 @@ pub mod manager;
 pub mod metrics;
 pub mod policy;
 pub mod scheduler;
+pub mod shard;
 pub mod timer;
 
 #[cfg(any(test, feature = "egress-test-driver"))]
@@ -50,3 +51,7 @@ pub use manager::{
     EgressManagerConfigError, ManagerCommandOutcome,
 };
 pub use policy::{LeafLimits, LeafPolicy, RetryState, WorkBudget};
+pub use shard::{
+    EgressShardBackend, EgressShardCommandEffect, EgressShardConfig, EgressShardConfigError,
+    EgressShardHandle, EgressShardSendError, EgressShardSnapshot,
+};
