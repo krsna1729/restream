@@ -460,6 +460,37 @@ fn shutdown_joins_without_leaking_thread() {
 }
 
 #[test]
+fn repeated_shard_group_startup_shutdown_joins_every_thread() {
+    for iteration in 0..8 {
+        let shard_zero = Probe::default();
+        let shard_one = Probe::default();
+        let group = EgressShardGroup::spawn(
+            NonZeroU32::new(2).unwrap(),
+            config(4, 4),
+            vec![
+                ProbeBackend {
+                    probe: shard_zero.clone(),
+                },
+                ProbeBackend {
+                    probe: shard_one.clone(),
+                },
+            ],
+        )
+        .unwrap();
+
+        shard_zero.wait_for_media_ticks(1);
+        shard_one.wait_for_media_ticks(1);
+        let snapshots = group.shutdown_and_join();
+
+        assert_eq!(snapshots.len(), 2, "iteration {iteration}");
+        assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
+        assert!(snapshots.iter().all(|snapshot| !snapshot.panicked));
+        assert_eq!(shard_zero.state().shutdowns, 1);
+        assert_eq!(shard_one.state().shutdowns, 1);
+    }
+}
+
+#[test]
 fn heartbeat_classifies_snapshot_health_states() {
     let now = Instant::now();
     let base = EgressShardSnapshot {
