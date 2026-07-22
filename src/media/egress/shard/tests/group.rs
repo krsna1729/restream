@@ -370,6 +370,59 @@ fn shard_group_contains_panic_to_assigned_shard() {
 }
 
 #[test]
+fn panicked_shard_closes_command_path_without_stopping_other_shards() {
+    let survivor = Probe::default();
+    let group = EgressShardGroup::spawn(
+        NonZeroU32::new(2).unwrap(),
+        config(4, 4),
+        vec![
+            ScriptBackend::Panic,
+            ScriptBackend::Probe(ProbeBackend {
+                probe: survivor.clone(),
+            }),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(0),
+            EgressCommand::Add(output_spec("out-panic"))
+        ),
+        Ok(())
+    );
+    wait_for_panicked(&group, ShardId::new(0));
+    let panicked_send = group.try_send_to(
+        ShardId::new(0),
+        EgressCommand::Add(output_spec("out-after-panic")),
+    );
+    assert_eq!(
+        group.try_send_to(
+            ShardId::new(1),
+            EgressCommand::Add(output_spec("out-survivor"))
+        ),
+        Ok(())
+    );
+    survivor.wait_for_commands(1);
+    let snapshots = group.shutdown_and_join();
+
+    assert_eq!(
+        panicked_send,
+        Err(EgressShardGroupError::SendFailed {
+            shard_id: ShardId::new(0),
+            source: EgressShardSendError::Closed,
+        })
+    );
+    assert_eq!(survivor.state().commands, vec!["add:out-survivor"]);
+    assert!(snapshots.iter().any(|snapshot| {
+        snapshot.shard_id == ShardId::new(0) && snapshot.panicked && snapshot.stopped
+    }));
+    assert!(snapshots.iter().any(|snapshot| {
+        snapshot.shard_id == ShardId::new(1) && !snapshot.panicked && snapshot.stopped
+    }));
+}
+
+#[test]
 fn shard_group_replaces_only_panicked_shards() {
     let survivor = Probe::default();
     let replacement = Probe::default();
