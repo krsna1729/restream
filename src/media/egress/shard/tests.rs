@@ -289,6 +289,77 @@ fn shutdown_joins_without_leaking_thread() {
 }
 
 #[test]
+fn heartbeat_classifies_snapshot_health_states() {
+    let now = Instant::now();
+    let base = EgressShardSnapshot {
+        shard_id: ShardId::new(0),
+        loop_iterations: 7,
+        commands_processed: 3,
+        media_ticks: 5,
+        last_progress_at: Some(now - Duration::from_millis(10)),
+        stopped: false,
+        panicked: false,
+    };
+
+    let healthy =
+        EgressShardHeartbeat::from_snapshot(base.clone(), now, Duration::from_millis(100));
+    let stalled = EgressShardHeartbeat::from_snapshot(
+        EgressShardSnapshot {
+            last_progress_at: Some(now - Duration::from_secs(5)),
+            ..base.clone()
+        },
+        now,
+        Duration::from_millis(100),
+    );
+    let stopped = EgressShardHeartbeat::from_snapshot(
+        EgressShardSnapshot {
+            stopped: true,
+            ..base.clone()
+        },
+        now,
+        Duration::from_millis(100),
+    );
+    let panicked = EgressShardHeartbeat::from_snapshot(
+        EgressShardSnapshot {
+            panicked: true,
+            stopped: true,
+            ..base
+        },
+        now,
+        Duration::from_millis(100),
+    );
+
+    assert_eq!(healthy.state, EgressShardHealth::Healthy);
+    assert_eq!(healthy.loop_iterations, 7);
+    assert_eq!(healthy.media_ticks, 5);
+    assert_eq!(healthy.progress_age, Some(Duration::from_millis(10)));
+    assert_eq!(stalled.state, EgressShardHealth::Stalled);
+    assert_eq!(stopped.state, EgressShardHealth::Stopped);
+    assert_eq!(panicked.state, EgressShardHealth::Panicked);
+}
+
+#[test]
+fn heartbeat_treats_missing_progress_as_stalled() {
+    let now = Instant::now();
+    let heartbeat = EgressShardHeartbeat::from_snapshot(
+        EgressShardSnapshot {
+            shard_id: ShardId::new(0),
+            loop_iterations: 0,
+            commands_processed: 0,
+            media_ticks: 0,
+            last_progress_at: None,
+            stopped: false,
+            panicked: false,
+        },
+        now,
+        Duration::from_millis(100),
+    );
+
+    assert_eq!(heartbeat.state, EgressShardHealth::Stalled);
+    assert_eq!(heartbeat.progress_age, None);
+}
+
+#[test]
 fn shard_group_starts_fixed_shards_and_routes_by_shard_id() {
     let shard_zero = Probe::default();
     let shard_one = Probe::default();
@@ -323,6 +394,28 @@ fn shard_group_starts_fixed_shards_and_routes_by_shard_id() {
     assert_eq!(shard_one.state().commands, vec!["add:out-one"]);
     assert_eq!(snapshots.len(), 2);
     assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
+}
+
+#[test]
+fn shard_group_heartbeat_reports_running_shard() {
+    let probe = Probe::default();
+    let group = EgressShardGroup::spawn(
+        NonZeroU32::new(1).unwrap(),
+        config(4, 4),
+        vec![ProbeBackend {
+            probe: probe.clone(),
+        }],
+    )
+    .unwrap();
+
+    probe.wait_for_media_ticks(1);
+    let heartbeat = group.heartbeat(Instant::now(), Duration::from_secs(10));
+    let snapshots = group.shutdown_and_join();
+
+    assert_eq!(heartbeat.len(), 1);
+    assert_eq!(heartbeat[0].state, EgressShardHealth::Healthy);
+    assert_eq!(heartbeat[0].shard_id, ShardId::new(0));
+    assert_eq!(snapshots.len(), 1);
 }
 
 #[test]

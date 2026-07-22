@@ -1,4 +1,5 @@
 use std::num::NonZeroU32;
+use std::time::{Duration, Instant};
 
 use crate::media::egress::command::{EgressCommand, ShardId};
 use crate::media::egress::shard::{
@@ -81,10 +82,62 @@ impl EgressShardGroup {
             .collect()
     }
 
+    pub fn heartbeat(&self, now: Instant, stall_after: Duration) -> Vec<EgressShardHeartbeat> {
+        self.snapshots()
+            .into_iter()
+            .map(|snapshot| EgressShardHeartbeat::from_snapshot(snapshot, now, stall_after))
+            .collect()
+    }
+
     pub fn shutdown_and_join(self) -> Vec<EgressShardSnapshot> {
         self.handles
             .into_iter()
             .map(EgressShardHandle::shutdown_and_join)
             .collect()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EgressShardHeartbeat {
+    pub shard_id: ShardId,
+    pub state: EgressShardHealth,
+    pub loop_iterations: u64,
+    pub media_ticks: u64,
+    pub progress_age: Option<Duration>,
+}
+
+impl EgressShardHeartbeat {
+    pub fn from_snapshot(
+        snapshot: EgressShardSnapshot,
+        now: Instant,
+        stall_after: Duration,
+    ) -> Self {
+        let progress_age = snapshot
+            .last_progress_at
+            .map(|progress_at| now.saturating_duration_since(progress_at));
+        let state = if snapshot.panicked {
+            EgressShardHealth::Panicked
+        } else if snapshot.stopped {
+            EgressShardHealth::Stopped
+        } else if progress_age.is_none_or(|age| age >= stall_after) {
+            EgressShardHealth::Stalled
+        } else {
+            EgressShardHealth::Healthy
+        };
+        Self {
+            shard_id: snapshot.shard_id,
+            state,
+            loop_iterations: snapshot.loop_iterations,
+            media_ticks: snapshot.media_ticks,
+            progress_age,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EgressShardHealth {
+    Healthy,
+    Stalled,
+    Stopped,
+    Panicked,
 }
