@@ -28,6 +28,7 @@ pub mod feed;
 pub mod journal;
 pub mod leaf;
 pub mod lifecycle;
+pub mod manager;
 pub mod metrics;
 pub mod policy;
 pub mod scheduler;
@@ -44,4 +45,5 @@ pub use backend::{
 pub use command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec, ShardId};
 pub use feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 pub use lifecycle::LeafLifecycle;
+pub use manager::{EgressManager, EgressManagerConfig, EgressManagerConfigError};
 pub use policy::{LeafLimits, LeafPolicy, RetryState, WorkBudget};
