@@ -1,0 +1,58 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  installFakeDom,
+  loadCompiledFrontendModule,
+} from "../support/helpers/fake-dom.mjs";
+
+function appendRoot(document, tagName, id) {
+  const element = document.createElement(tagName);
+  element.id = id;
+  document.body.appendChild(element);
+  return element;
+}
+
+test(
+  "renderDashboardV2SettingsBody owns the settings route body",
+  { concurrency: false },
+  async () => {
+    const { document } = installFakeDom();
+    const container = appendRoot(
+      document,
+      "div",
+      "dashboard-v2-settings-content",
+    );
+
+    const settings = await loadCompiledFrontendModule("features/settings.js");
+    const { state } = await loadCompiledFrontendModule("core/state.js");
+    state.config = {
+      backendPolicy: {},
+      ingestHost: "127.0.0.1",
+      ingestSecurity: {},
+      recordingSettings: {},
+      serverName: "Synthetic Restream",
+      srtIngest: {},
+      transcodeProfiles: {
+        mobile: {
+          preset: "veryfast",
+          tune: "zerolatency",
+          crf: 26,
+          gop: 60,
+          bframes: 0,
+          bitrate: 0,
+          maxBitrate: 0,
+          width: 854,
+          height: 480,
+        },
+      },
+    };
+
+    settings.renderDashboardV2SettingsBody(container);
+
+    assert.equal(container.dataset.settingsRouteBody, "v2");
+    assert.doesNotMatch(container.innerHTML, /\son[a-z]+\s*=/i);
+    assert.match(container.innerHTML, /data-settings-action="save-server-name"/);
+    assert.match(container.innerHTML, /id="settings-route-summary"/);
+  },
+);

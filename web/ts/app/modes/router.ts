@@ -19,7 +19,7 @@ import {
   setStatusStreamActive,
   syncStatusStreamVisibility,
 } from "../../features/status/index.js";
-import { renderSettingsPanel } from "../../features/settings/index.js";
+import { renderDashboardV2SettingsBody } from "../../features/settings/index.js";
 import {
   mediaLibraryShellMountedInCurrentContainer,
   refreshMediaLibraryMetricsOnly,
@@ -273,7 +273,7 @@ function renderSettingsMode(containerId: string): void {
   const container = document.getElementById(containerId);
   if (!container) return;
   if (!settingsMounted || container.children.length === 0) {
-    renderSettingsPanel(container);
+    renderDashboardV2SettingsBody(container);
     settingsMounted = true;
   }
 }

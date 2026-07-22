@@ -191,3 +191,28 @@ test("status route body renders only into the v2-owned host", async () => {
     /renderStatusMode\(dashboardV2RouteBodyConfig\("status"\)\.v2HostId\)/,
   );
 });
+
+test("settings route body uses the v2-owned renderer", async () => {
+  const [routerSource, settingsSource] = await Promise.all([
+    readFile(new URL("../../web/ts/app/modes/router.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../../web/ts/features/settings/index.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.doesNotMatch(routerSource, /renderSettingsPanel/);
+  assert.match(routerSource, /renderDashboardV2SettingsBody/);
+  assert.match(
+    routerSource,
+    /renderSettingsMode\(dashboardV2RouteBodyConfig\("settings"\)\.v2HostId\)/,
+  );
+  assert.match(
+    settingsSource,
+    /export function renderDashboardV2SettingsBody\(container: HTMLElement\): void/,
+  );
+  assert.match(
+    settingsSource,
+    /renderSettingsRoute\(container, \{ v2RouteBody: true \}\)/,
+  );
+});

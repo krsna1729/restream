@@ -50,6 +50,57 @@ interface SettingsDisclosureConfig {
   readonly title: string;
 }
 
+type RateLimitResetScope = "all" | "ip" | "username";
+
+interface SettingsRouteRenderOptions {
+  readonly v2RouteBody: boolean;
+}
+
+const SETTINGS_DISCLOSURES: readonly SettingsDisclosureConfig[] = [
+  {
+    id: "recording-settings-section",
+    title: "Recording",
+    summary: "Retention policy for completed MPEG-TS to MP4 conversions.",
+    ariaLabel: "Recording settings",
+  },
+  {
+    id: "dashboard-password-section",
+    title: "Dashboard Password",
+    summary: "Change the dashboard login password.",
+    ariaLabel: "Dashboard password settings",
+  },
+  {
+    id: "ingest-security-section",
+    title: "Ingest Security",
+    summary: "Failure thresholds, ban window, and tracked IP limits.",
+    ariaLabel: "Ingest security settings",
+  },
+  {
+    id: "auth-attempts-section",
+    title: "Authentication Attempts",
+    summary: "Recent login and publish failures with optional reset actions.",
+    ariaLabel: "Authentication attempt settings",
+  },
+  {
+    id: "srt-settings-section",
+    title: "Global SRT Ingest",
+    summary: "Default encryption policy for SRT publishers.",
+    ariaLabel: "Global SRT ingest settings",
+  },
+  {
+    id: "backend-policy-section",
+    title: "Transcoding Backend",
+    summary: "Backend selection for newly started transcoding stages.",
+    ariaLabel: "Transcoding backend settings",
+  },
+  {
+    id: "transcode-profiles-section",
+    title: "Transcode Profiles",
+    summary: "Encoder presets used by HEVC/H.264 and resolution workflows.",
+    ariaLabel: "Transcode profile settings",
+  },
+];
+
 function needsFullSettingsConfig(): boolean {
   return (
     (state.config as any)?.ingestSecurity === undefined ||
@@ -214,54 +265,8 @@ function bindSettingsSectionJump(container: HTMLElement): void {
     });
 }
 
-function applySettingsV2Disclosure(container: HTMLElement): void {
-  if (!settingsV2Active()) return;
-  const disclosures: readonly SettingsDisclosureConfig[] = [
-    {
-      id: "recording-settings-section",
-      title: "Recording",
-      summary: "Retention policy for completed MPEG-TS to MP4 conversions.",
-      ariaLabel: "Recording settings",
-    },
-    {
-      id: "dashboard-password-section",
-      title: "Dashboard Password",
-      summary: "Change the dashboard login password.",
-      ariaLabel: "Dashboard password settings",
-    },
-    {
-      id: "ingest-security-section",
-      title: "Ingest Security",
-      summary: "Failure thresholds, ban window, and tracked IP limits.",
-      ariaLabel: "Ingest security settings",
-    },
-    {
-      id: "auth-attempts-section",
-      title: "Authentication Attempts",
-      summary: "Recent login and publish failures with optional reset actions.",
-      ariaLabel: "Authentication attempt settings",
-    },
-    {
-      id: "srt-settings-section",
-      title: "Global SRT Ingest",
-      summary: "Default encryption policy for SRT publishers.",
-      ariaLabel: "Global SRT ingest settings",
-    },
-    {
-      id: "backend-policy-section",
-      title: "Transcoding Backend",
-      summary: "Backend selection for newly started transcoding stages.",
-      ariaLabel: "Transcoding backend settings",
-    },
-    {
-      id: "transcode-profiles-section",
-      title: "Transcode Profiles",
-      summary: "Encoder presets used by HEVC/H.264 and resolution workflows.",
-      ariaLabel: "Transcode profile settings",
-    },
-  ];
-
-  for (const disclosure of disclosures) {
+function mountSettingsV2Disclosures(container: HTMLElement): void {
+  for (const disclosure of SETTINGS_DISCLOSURES) {
     const body = container.querySelector<HTMLElement>(`#${disclosure.id}`);
     if (!body || body.closest("[data-settings-v2-disclosure]")) continue;
     const wrapper = document.createElement("details");
@@ -281,6 +286,16 @@ function applySettingsV2Disclosure(container: HTMLElement): void {
     body.dataset.settingsV2DisclosureBody = disclosure.id;
     body.replaceWith(wrapper);
     wrapper.append(body);
+  }
+}
+
+function settingsResetScope(value: string | undefined): RateLimitResetScope {
+  switch (value) {
+    case "ip":
+    case "username":
+      return value;
+    default:
+      return "all";
   }
 }
 
@@ -311,7 +326,10 @@ function bindSettingsPanelActions(container: HTMLElement): void {
     });
 }
 
-export function renderSettingsPanel(container: HTMLElement): void {
+function renderSettingsRoute(
+  container: HTMLElement,
+  options: SettingsRouteRenderOptions,
+): void {
   container.innerHTML = `
         <div class="dashboard-page-shell">
             <div class="flex flex-wrap items-end justify-between gap-3">
@@ -564,7 +582,8 @@ export function renderSettingsPanel(container: HTMLElement): void {
             </section>
         </div>`;
 
-  applySettingsV2Disclosure(container);
+  container.dataset.settingsRouteBody = options.v2RouteBody ? "v2" : "legacy";
+  if (options.v2RouteBody) mountSettingsV2Disclosures(container);
   syncSettingsAccountActions(container);
   bindSettingsSectionJump(container);
   bindSettingsPanelActions(container);
@@ -596,7 +615,10 @@ export function renderSettingsPanel(container: HTMLElement): void {
         void refreshRateLimitState();
         break;
       case "reset-rate-limits":
-        void resetRateLimitStateFromUi(button.dataset.scope as any, button.dataset.ip);
+        void resetRateLimitStateFromUi(
+          settingsResetScope(button.dataset.scope),
+          button.dataset.ip,
+        );
         break;
       case "save-recording-settings":
         void saveRecordingSettings();
@@ -621,6 +643,14 @@ export function renderSettingsPanel(container: HTMLElement): void {
 
   void loadSettings({ embedded: true });
   updateSettingsSummary();
+}
+
+export function renderSettingsPanel(container: HTMLElement): void {
+  renderSettingsRoute(container, { v2RouteBody: false });
+}
+
+export function renderDashboardV2SettingsBody(container: HTMLElement): void {
+  renderSettingsRoute(container, { v2RouteBody: true });
 }
 
 export {
