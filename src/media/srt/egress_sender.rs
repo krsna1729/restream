@@ -30,6 +30,19 @@ pub(crate) trait SrtMessageSender {
     fn close(&mut self, reason: CloseReason);
 }
 
+impl<T> SrtMessageSender for Box<T>
+where
+    T: SrtMessageSender + ?Sized,
+{
+    fn send_message(&mut self, message: &Bytes) -> SrtSendResult {
+        (**self).send_message(message)
+    }
+
+    fn close(&mut self, reason: CloseReason) {
+        (**self).close(reason);
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct SrtNativeMessageSender<O = LibSrtSendOps>
 where

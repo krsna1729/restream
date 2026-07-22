@@ -90,6 +90,7 @@ use srt_crypto::apply_srt_crypto_socket;
 use srt_crypto::srt_crypto_from_url;
 pub use srt_egress::start_srt_egress;
 pub(crate) use srt_egress_engine::SrtEgressEngine;
+pub(crate) use srt_egress_poller::{SrtEgressInterest, SrtEgressPollError, SrtReadyLeaf};
 pub(crate) use srt_egress_sender::SrtMessageSender;
 #[cfg(test)]
 pub(crate) use srt_egress_sender::SrtSendResult;
@@ -112,8 +113,39 @@ pub use sys::{
     srt_startup,
 };
 
-pub(crate) fn srt_fabric_message_sender(socket: SRTSOCKET) -> impl SrtMessageSender {
-    srt_egress_sender::SrtNativeMessageSender::new(socket)
+pub(crate) struct SrtFabricPoller(srt_egress_poller::SrtEgressPoller);
+
+impl SrtFabricPoller {
+    #[allow(dead_code)]
+    pub(crate) fn new(max_events: usize) -> Result<Self, SrtEgressPollError> {
+        srt_egress_poller::SrtEgressPoller::new(max_events).map(Self)
+    }
+
+    pub(crate) fn register_leaf(
+        &mut self,
+        socket: SRTSOCKET,
+        key: crate::media::egress::scheduler::LeafKey,
+        generation: u64,
+        interest: SrtEgressInterest,
+    ) -> Result<(), SrtEgressPollError> {
+        self.0.register_leaf(socket, key, generation, interest)
+    }
+
+    pub(crate) fn remove(&mut self, socket: SRTSOCKET) -> Result<(), SrtEgressPollError> {
+        self.0.remove(socket)
+    }
+
+    pub(crate) fn poll_leaves(
+        &mut self,
+        timeout_ms: i64,
+        ready: &mut Vec<SrtReadyLeaf>,
+    ) -> Result<usize, SrtEgressPollError> {
+        self.0.poll_leaves(timeout_ms, ready)
+    }
+}
+
+pub(crate) fn srt_fabric_message_sender(socket: SRTSOCKET) -> Box<dyn SrtMessageSender + Send> {
+    Box::new(srt_egress_sender::SrtNativeMessageSender::new(socket))
 }
 
 #[cfg(test)]

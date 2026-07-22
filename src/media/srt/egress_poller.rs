@@ -11,7 +11,7 @@ use super::sys::{
 use crate::media::egress::scheduler::LeafKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(super) struct SrtEgressInterest {
+pub(crate) struct SrtEgressInterest {
     pub writable: bool,
 }
 
@@ -26,7 +26,7 @@ pub(super) struct SrtReadySocket {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct SrtReadyLeaf {
+pub(crate) struct SrtReadyLeaf {
     pub socket: SRTSOCKET,
     pub key: LeafKey,
     pub generation: u64,
@@ -34,7 +34,7 @@ pub(super) struct SrtReadyLeaf {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SrtEgressPollError {
+pub(crate) struct SrtEgressPollError {
     pub operation: &'static str,
     pub code: c_int,
     pub message: String,
