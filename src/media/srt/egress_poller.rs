@@ -8,6 +8,7 @@ use super::sys::{
     SRT_EPOLL_ERR, SRT_EPOLL_OUT, SRTSOCKET, srt_epoll_add_usock, srt_epoll_create,
     srt_epoll_release, srt_epoll_remove_usock, srt_epoll_update_usock, srt_epoll_wait,
 };
+use crate::media::egress::scheduler::LeafKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct SrtEgressInterest {
@@ -21,6 +22,14 @@ impl SrtEgressInterest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SrtReadySocket {
     pub socket: SRTSOCKET,
+    pub writable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SrtReadyLeaf {
+    pub socket: SRTSOCKET,
+    pub key: LeafKey,
+    pub generation: u64,
     pub writable: bool,
 }
 
@@ -49,7 +58,7 @@ where
     ops: O,
     readfds: Vec<SRTSOCKET>,
     writefds: Vec<SRTSOCKET>,
-    registered: HashMap<SRTSOCKET, SrtEgressInterest>,
+    registered: HashMap<SRTSOCKET, SrtRegisteredLeaf>,
 }
 
 impl SrtEgressPoller<LibSrtPollOps> {
@@ -78,9 +87,11 @@ where
         })
     }
 
-    pub(super) fn register(
+    pub(super) fn register_leaf(
         &mut self,
         socket: SRTSOCKET,
+        key: LeafKey,
+        generation: u64,
         interest: SrtEgressInterest,
     ) -> Result<(), SrtEgressPollError> {
         let events = events_for(interest);
@@ -94,7 +105,8 @@ where
             return Err(self.ops.error("srt_epoll_register"));
         }
 
-        self.registered.insert(socket, interest);
+        self.registered
+            .insert(socket, SrtRegisteredLeaf { key, generation });
         Ok(())
     }
 
@@ -154,6 +166,29 @@ where
 
         Ok(ready.len())
     }
+
+    pub(super) fn poll_leaves(
+        &mut self,
+        timeout_ms: i64,
+        ready: &mut Vec<SrtReadyLeaf>,
+    ) -> Result<usize, SrtEgressPollError> {
+        let mut ready_sockets = Vec::new();
+        self.poll(timeout_ms, &mut ready_sockets)?;
+        ready.clear();
+
+        for event in ready_sockets {
+            if let Some(registered) = self.registered.get(&event.socket) {
+                ready.push(SrtReadyLeaf {
+                    socket: event.socket,
+                    key: registered.key,
+                    generation: registered.generation,
+                    writable: event.writable,
+                });
+            }
+        }
+
+        Ok(ready.len())
+    }
 }
 
 impl<O> Drop for SrtEgressPoller<O>
@@ -171,6 +206,12 @@ fn events_for(interest: SrtEgressInterest) -> c_int {
         events |= SRT_EPOLL_OUT;
     }
     events
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SrtRegisteredLeaf {
+    key: LeafKey,
+    generation: u64,
 }
 
 pub(super) trait SrtPollOps {

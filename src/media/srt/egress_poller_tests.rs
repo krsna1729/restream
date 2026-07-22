@@ -1,5 +1,6 @@
 use super::srt_egress_poller::*;
 use super::sys::{SRT_EPOLL_ERR, SRT_EPOLL_OUT, SRTSOCKET};
+use crate::media::egress::scheduler::LeafKey;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::os::raw::c_int;
@@ -131,8 +132,12 @@ fn register_adds_then_updates_socket_interest() {
     let ops = FakePollOps::default();
     let mut poller = SrtEgressPoller::with_ops(8, ops.clone()).unwrap();
 
-    poller.register(42, SrtEgressInterest::WRITE).unwrap();
-    poller.register(42, SrtEgressInterest::WRITE).unwrap();
+    poller
+        .register_leaf(42, LeafKey(0), 0, SrtEgressInterest::WRITE)
+        .unwrap();
+    poller
+        .register_leaf(42, LeafKey(0), 0, SrtEgressInterest::WRITE)
+        .unwrap();
 
     let state = ops.state.borrow();
     assert_eq!(state.added, vec![(7, 42, SRT_EPOLL_OUT | SRT_EPOLL_ERR)]);
@@ -144,7 +149,9 @@ fn remove_deregisters_once_before_socket_close() {
     let ops = FakePollOps::default();
     let mut poller = SrtEgressPoller::with_ops(8, ops.clone()).unwrap();
 
-    poller.register(42, SrtEgressInterest::WRITE).unwrap();
+    poller
+        .register_leaf(42, LeafKey(0), 0, SrtEgressInterest::WRITE)
+        .unwrap();
     poller.remove(42).unwrap();
     poller.remove(42).unwrap();
 
@@ -192,6 +199,46 @@ fn poll_merges_error_style_read_and_write_reports() {
             writable: true,
         }]
     );
+}
+
+#[test]
+fn register_leaf_preserves_key_and_generation_for_ready_events() {
+    let ops = FakePollOps::default();
+    ops.push_wait(Vec::new(), vec![42]);
+    let mut poller = SrtEgressPoller::with_ops(8, ops).unwrap();
+    let mut ready = Vec::new();
+
+    poller
+        .register_leaf(42, LeafKey(9), 77, SrtEgressInterest::WRITE)
+        .unwrap();
+    let count = poller.poll_leaves(25, &mut ready).unwrap();
+
+    assert_eq!(count, 1);
+    assert_eq!(
+        ready,
+        vec![SrtReadyLeaf {
+            socket: 42,
+            key: LeafKey(9),
+            generation: 77,
+            writable: true,
+        }]
+    );
+}
+
+#[test]
+fn poll_leaves_ignores_unregistered_ready_socket() {
+    let ops = FakePollOps::default();
+    ops.push_wait(Vec::new(), vec![42, 43]);
+    let mut poller = SrtEgressPoller::with_ops(8, ops).unwrap();
+    let mut ready = Vec::new();
+
+    poller
+        .register_leaf(42, LeafKey(9), 77, SrtEgressInterest::WRITE)
+        .unwrap();
+    let count = poller.poll_leaves(25, &mut ready).unwrap();
+
+    assert_eq!(count, 1);
+    assert_eq!(ready[0].socket, 42);
 }
 
 #[test]
