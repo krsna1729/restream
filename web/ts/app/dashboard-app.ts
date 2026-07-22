@@ -162,7 +162,6 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
       : undefined,
   });
   configurePipelineSelectorPresentation({
-    legacyRenderEnabled: !pipelineV2Active,
     onPresentation: pipelineV2Active
       ? updateDashboardV2PipelineSelector
       : undefined,

@@ -1,124 +1,28 @@
 import {
-  escapeHtml,
-  getStatusColor,
   getUrlParam,
   setServerConfig,
   setUrlParam,
   writeSelectedPipelineHint,
 } from "../core/utils.js";
-import {
-  isOutputIntentStopped,
-  isOutputRunning,
-  isOutputRetrying,
-  isOutputUnexpectedlyDown,
-} from "../core/output-status.js";
 import { renderPipelineInfoColumn, renderOutsColumn } from "./pipeline-view/index.js";
 import { renderHealthBanner, renderServerMetrics } from "./metrics.js";
 import { state } from "../core/state.js";
-import type { PipelineView } from "../types.js";
 import { buildPipelineOperateSelectorModel } from "./pipeline-operate-view-model.js";
 import type { PipelineOperateSelectorModel } from "./pipeline-operate-view-model.js";
 
-let legacyPipelineSelectorRenderEnabled = true;
 let pipelineSelectorPresentationHook:
   ((model: PipelineOperateSelectorModel) => void) | null = null;
 
 export function configurePipelineSelectorPresentation(options: {
-  legacyRenderEnabled: boolean;
   onPresentation?: (model: PipelineOperateSelectorModel) => void;
 }): void {
-  legacyPipelineSelectorRenderEnabled = options.legacyRenderEnabled;
   pipelineSelectorPresentationHook = options.onPresentation || null;
-  const legacyContainer = document.getElementById("pipeline-selector-legacy");
-  if (legacyContainer) {
-    legacyContainer.hidden = !legacyPipelineSelectorRenderEnabled;
-  }
-  if (!legacyPipelineSelectorRenderEnabled) {
-    document.getElementById("pipelines")?.replaceChildren();
-  }
 }
 
 function setHtmlIfChanged(target: HTMLElement | null, html: string): boolean {
   if (!target || target.innerHTML === html) return false;
   target.innerHTML = html;
   return true;
-}
-
-function formatBitrate(kbps: number | null | undefined): string {
-  if (!Number.isFinite(kbps as number) || (kbps as number) < 0) return "--";
-  const value = kbps as number;
-  return value >= 1000
-    ? `${(value / 1000).toFixed(1)} Mb/s`
-    : `${value.toFixed(0)} Kb/s`;
-}
-
-function renderPipelinesList(selectedPipe: string | null): void {
-  const sortedPipelines = [...state.pipelines].sort((a, b) =>
-    a.name.localeCompare(b.name),
-  );
-  const pipelinesList = document.getElementById(
-    "pipelines",
-  ) as HTMLElement | null;
-  if (!pipelinesList) return;
-
-  if (pipelinesList.dataset.boundSelectPipeline !== "1") {
-    pipelinesList.dataset.boundSelectPipeline = "1";
-    pipelinesList.onclick = (e: MouseEvent) => {
-      const row = (e.target as Element).closest(
-        ".js-select-pipeline",
-      ) as HTMLElement | null;
-      if (!row?.dataset.pipelineId) return;
-      selectPipeline(row.dataset.pipelineId);
-    };
-  }
-
-  if (sortedPipelines.length === 0) {
-    setHtmlIfChanged(
-      pipelinesList,
-      '<li><div class="text-base-content/60 px-2 py-3 text-sm">No pipelines configured.</div></li>',
-    );
-    return;
-  }
-
-  const nextHtml = sortedPipelines
-    .map((p: PipelineView) => {
-      let outStatus = "off";
-      if (p.outs.some((o) => isOutputUnexpectedlyDown(o))) outStatus = "error";
-      else if (p.outs.some((o) => isOutputRetrying(o))) outStatus = "warning";
-      else if (p.outs.some((o) => o.status === "warning"))
-        outStatus = "warning";
-      else if (p.outs.some((o) => o.status === "on" || o.status === "running"))
-        outStatus = "on";
-
-      const inputColor = getStatusColor(p.input.status);
-      const outColor = getStatusColor(outStatus);
-      const selected =
-        p.id === selectedPipe
-          ? "bg-base-100 border-base-content/10 border"
-          : "border border-transparent";
-      const runningOutputs = p.outs.filter(isOutputRunning).length;
-      const outputSummary = `${runningOutputs}/${p.outs.length}`;
-      const inputRate = formatBitrate(p.stats.inputBitrateKbps);
-      const outputRate = formatBitrate(p.stats.outputBitrateKbps);
-
-      return `<li>
-                <button type="button" class="${selected} hover:bg-base-100 flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left js-select-pipeline" data-pipeline-id="${escapeHtml(p.id)}">
-                    <span class="mt-1 h-3 w-3 shrink-0 rounded-full" style="background: linear-gradient(90deg, ${inputColor}, ${inputColor} 45%, #242933 45%, #242933 55%, ${outColor} 55%)"></span>
-                    <span class="min-w-0 flex-1">
-                        <span class="block truncate text-sm font-semibold">${escapeHtml(p.name)}</span>
-                        <span class="text-base-content/60 mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs">
-                            <span>${escapeHtml(p.input.status)}</span>
-                            <span>${outputSummary} outputs</span>
-                            <span>${escapeHtml(inputRate)} in</span>
-                            <span>${escapeHtml(outputRate)} out</span>
-                        </span>
-                    </span>
-                </button>
-            </li>`;
-    })
-    .join("");
-  // Skip full list replacement when the 5s poll produced identical markup.
-  setHtmlIfChanged(pipelinesList, nextHtml);
 }
 
 function renderStatsColumn(selectedPipe: string | null): void {
@@ -186,7 +90,6 @@ function renderPipelines(): void {
   pipelineSelectorPresentationHook?.(
     buildPipelineOperateSelectorModel(state.pipelines, selectedPipe),
   );
-  if (legacyPipelineSelectorRenderEnabled) renderPipelinesList(selectedPipe);
   renderPipelineInfoColumn(selectedPipe);
   renderOutsColumn(selectedPipe);
   renderStatsColumn(selectedPipe);
@@ -206,14 +109,4 @@ function selectPipeline(id: string | null): void {
 // HTML-bound handler — keep accessible as a global
 window.selectPipeline = selectPipeline;
 
-export {
-  isOutputIntentStopped,
-  isOutputRunning,
-  isOutputRetrying,
-  isOutputUnexpectedlyDown,
-  renderPipelinesList,
-  renderStatsColumn,
-  renderPipelines,
-  renderMetrics,
-  selectPipeline,
-};
+export { renderStatsColumn, renderPipelines, renderMetrics, selectPipeline };

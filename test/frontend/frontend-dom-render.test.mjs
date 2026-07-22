@@ -156,23 +156,30 @@ async function flushAsyncWork() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-runCheck("renderPipelinesList skips identical sidebar rewrites", async () => {
+runCheck("renderPipelines publishes selector models to the v2 owner", async () => {
   const { document } = installFakeDom();
-  const pipelinesList = appendRoot(document, "ul", "pipelines");
+  appendRoot(document, "div", "dashboard-grid");
+  appendRoot(document, "div", "stats-col");
+  appendRoot(document, "div", "pipe-info-col");
+  appendRoot(document, "div", "outs-col");
 
   const render = await loadCompiledFrontendModule("features/render.js");
   const { state } = await loadCompiledFrontendModule("core/state.js");
 
   state.pipelines = [makePipeline()];
+  let presented = null;
 
-  render.renderPipelinesList(null);
-  const firstWriteCount = pipelinesList.stats.innerHTMLWrites;
-  const firstHandler = pipelinesList.onclick;
+  render.configurePipelineSelectorPresentation({
+    onPresentation: (model) => {
+      presented = model;
+    },
+  });
+  render.renderPipelines();
 
-  render.renderPipelinesList(null);
-
-  assert.equal(pipelinesList.stats.innerHTMLWrites, firstWriteCount);
-  assert.equal(pipelinesList.onclick, firstHandler);
+  assert.equal(presented.pipelines.length, 1);
+  assert.equal(presented.pipelines[0].id, "pipe-1");
+  assert.equal(document.getElementById("pipelines"), null);
+  render.configurePipelineSelectorPresentation({});
 });
 
 runCheck("renderStatsColumn skips identical empty-state rewrites", async () => {
@@ -1574,6 +1581,11 @@ runCheck(
     window.location.href = "http://localhost/?mode=pipeline";
     appendRoot(document, "div", "dashboard-grid");
     appendDashboardV2Roots(document);
+    const v2Loader = await loadCompiledFrontendModule("app/dashboard-v2-loader.js");
+    v2Loader.setDashboardV2PresentationScope({
+      overviewActive: false,
+      pipelineActive: false,
+    });
     const app = await loadCompiledFrontendModule("app/dashboard-app.js");
     const deps = await loadCompiledFrontendModule(
       "features/pipeline-dependencies.js",

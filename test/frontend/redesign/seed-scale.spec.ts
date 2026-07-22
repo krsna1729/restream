@@ -160,13 +160,8 @@ test("seed: default v2 replaces Overview while delegating operator actions @desk
   const pipelineSelector = page.locator("#dashboard-v2-pipeline-selector-root");
   await expect(pipelineSelector).toBeVisible();
   await expect(pipelineSelector.getByText("Pipelines")).toBeVisible();
-  await expect(page.locator("#pipeline-selector-legacy")).toBeHidden();
-  expect(
-    await page.locator("#pipelines").evaluate((node) => ({
-      childCount: node.childElementCount,
-      text: node.textContent?.trim() ?? "",
-    })),
-  ).toEqual({ childCount: 0, text: "" });
+  await expect(page.locator("#pipeline-selector-legacy")).toHaveCount(0);
+  await expect(page.locator("#pipelines")).toHaveCount(0);
   await selectPipelineInV2Selector(
     pipelineSelector,
     "pipe-retrying",

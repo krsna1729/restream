@@ -102,6 +102,7 @@ export class FakeElement {
   constructor(tagName = "div", ownerDocument = null) {
     this.tagName = String(tagName).toUpperCase();
     this.ownerDocument = ownerDocument;
+    this.nodeType = 1;
     this.children = [];
     this.parentNode = null;
     this.dataset = {};
@@ -351,6 +352,7 @@ export class FakeDocument {
   constructor() {
     this.title = "";
     this.hidden = false;
+    this.nodeType = 9;
     this.stats = {
       createElementCalls: 0,
       innerHTMLWrites: 0,
@@ -398,6 +400,8 @@ export function installFakeDom() {
   const documentStub = new FakeDocument();
   const windowStub = {
     __RESTREAM_BASE_PATH__: "",
+    HTMLElement: FakeElement,
+    HTMLIFrameElement: class FakeIFrameElement extends FakeElement {},
     location: {
       href: "http://localhost/",
     },
@@ -411,6 +415,7 @@ export function installFakeDom() {
     addEventListener() {},
     removeEventListener() {},
   };
+  documentStub.defaultView = windowStub;
 
   Object.defineProperty(globalThis, "document", {
     value: documentStub,
