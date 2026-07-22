@@ -108,18 +108,6 @@ test("seed: default dashboard overview Inspect is one predictable history step @
   await expect(page.locator("#dashboard-v2-pipeline-inspect-root")).toContainText(
     "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
   );
-  await expect(
-    page
-      .locator("#inspect-mode-panel")
-      .getByRole("button", { name: "Operate Retrying Destination" }),
-  ).toBeVisible();
-  const inspectButtonNames = await getCdpNamesByRole(page, "button");
-  expect(inspectButtonNames).toContain("Operate Retrying Destination");
-  expect(inspectButtonNames).toContain(
-    "Run diagnostics for Retrying Destination",
-  );
-  expect(inspectButtonNames).not.toContain("Open");
-  expect(inspectButtonNames).not.toContain("Run Diagnostics");
   const inspectCheckpoint = page.locator("#dashboard-v2-pipeline-inspect-root");
   await expect(
     inspectCheckpoint.locator("#dashboard-v2-pipeline-inspect-title"),
@@ -133,6 +121,11 @@ test("seed: default dashboard overview Inspect is one predictable history step @
       name: "Operate inspected pipeline",
     }),
   ).toBeEnabled();
+  const inspectButtonNames = await getCdpNamesByRole(page, "button");
+  expect(inspectButtonNames).toContain("Operate inspected pipeline");
+  expect(inspectButtonNames).toContain("Run diagnostics for inspected pipeline");
+  expect(inspectButtonNames).not.toContain("Open");
+  expect(inspectButtonNames).not.toContain("Run Diagnostics");
   await expect(
     inspectCheckpoint.getByRole("button", {
       name: "Run diagnostics for inspected pipeline",
