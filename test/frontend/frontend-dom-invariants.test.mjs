@@ -190,6 +190,7 @@ test("status route body uses the v2-owned renderer", async () => {
     routerSource,
     /document\.getElementById\("status-mode-content"\)/,
   );
+  assert.doesNotMatch(routerSource, /legacyBodyId/);
   assert.doesNotMatch(routerSource, /id="status-versions"/);
   assert.doesNotMatch(routerSource, /refresh-status-btn/);
   assert.match(routerSource, /renderDashboardV2StatusBody/);

@@ -21,7 +21,6 @@ import { renderDashboardV2SettingsBody } from "../../features/settings/index.js"
 import {
   renderDashboardV2MediaBody,
   resetMediaLibraryShellState,
-  setMediaLibraryContainerId,
 } from "../../features/media-library.js";
 import {
   clearDashboardV2IncidentsBody,
@@ -59,8 +58,6 @@ type NavigationOptions = {
 let currentMode: DashboardMode | null = null;
 let currentPipelineView: PipelineWorkspaceView | null = null;
 let settingsMounted = false;
-let inspectPanelShellHtml: string | null = null;
-let controlPanelShellHtml: string | null = null;
 let dashboardModePresentationSync:
   | ((location: DashboardLocation) => void)
   | null = null;
@@ -76,44 +73,36 @@ type DashboardV2RouteBodyMode =
   | "status";
 
 interface DashboardV2RouteBodyConfig {
-  readonly legacyBodyId: string;
   readonly mode: DashboardV2RouteBodyMode;
   readonly v2HostId: string;
 }
 
 const DASHBOARD_V2_ROUTE_BODIES: readonly DashboardV2RouteBodyConfig[] = [
   {
-    legacyBodyId: "inspect-mode-content",
     mode: "pipeline-inspect",
     v2HostId: "dashboard-v2-pipeline-inspect-content",
   },
   {
-    legacyBodyId: "control-mode-content",
     mode: "pipeline-monitor",
     v2HostId: "dashboard-v2-control-room-content",
   },
   {
-    legacyBodyId: "incidents-mode-content",
     mode: "incidents",
     v2HostId: "dashboard-v2-incidents-content",
   },
   {
-    legacyBodyId: "telemetry-mode-content",
     mode: "telemetry",
     v2HostId: "dashboard-v2-telemetry-content",
   },
   {
-    legacyBodyId: "media-mode-content",
     mode: "media",
     v2HostId: "dashboard-v2-media-content",
   },
   {
-    legacyBodyId: "settings-mode-content",
     mode: "settings",
     v2HostId: "dashboard-v2-settings-content",
   },
   {
-    legacyBodyId: "status-mode-content",
     mode: "status",
     v2HostId: "dashboard-v2-status-content",
   },
@@ -182,9 +171,9 @@ function clearDormantRouteBodies(options: {
 }): void {
   const { activeMode } = options;
   for (const config of DASHBOARD_V2_ROUTE_BODIES) {
-    const clearId =
-      activeMode === config.mode ? config.legacyBodyId : config.v2HostId;
-    document.getElementById(clearId)?.replaceChildren();
+    if (activeMode !== config.mode) {
+      document.getElementById(config.v2HostId)?.replaceChildren();
+    }
     document.getElementById(config.v2HostId)?.toggleAttribute(
       "hidden",
       activeMode !== config.mode,
@@ -200,45 +189,6 @@ function configureDashboardV2RouteBodyTargets(
 ): void {
   const activeMode = dashboardV2RouteBodyMode(mode, pipelineView);
   clearDormantRouteBodies({ activeMode });
-  setMediaLibraryContainerId(
-    dashboardV2RouteBodyConfig("media").v2HostId,
-  );
-}
-
-function snapshotPanelShell(panelId: string): string | null {
-  const panel = document.getElementById(panelId);
-  return panel ? panel.innerHTML : null;
-}
-
-function restorePanelShell(panelId: string, html: string | null): void {
-  if (html === null) return;
-  const panel = document.getElementById(panelId);
-  if (!panel) return;
-  if (
-    panel.childElementCount > 1 ||
-    (panel.firstElementChild &&
-      !panel.firstElementChild.id.startsWith("dashboard-v2-"))
-  )
-    return;
-  panel.innerHTML = html;
-}
-
-function restorePipelineWorkspaceShell(pipelineView: PipelineWorkspaceView): void {
-  if (pipelineView === "inspect") {
-    restorePanelShell("inspect-mode-panel", inspectPanelShellHtml);
-  }
-  if (pipelineView === "monitor") {
-    restorePanelShell("control-mode-panel", controlPanelShellHtml);
-  }
-}
-
-function unmountInactiveV2PipelineWorkspace(
-  previousMode: DashboardMode | null,
-): void {
-  if (currentMode === "pipeline") return;
-  if (previousMode !== null && previousMode !== "pipeline") return;
-  inspectPanelShellHtml ??= snapshotPanelShell("inspect-mode-panel");
-  controlPanelShellHtml ??= snapshotPanelShell("control-mode-panel");
 }
 
 function unmountInactiveV2HeavyRoute(previousMode: DashboardMode | null): void {
@@ -251,15 +201,6 @@ function unmountInactiveV2HeavyRoute(previousMode: DashboardMode | null): void {
   )
     return;
   if (previousMode === currentMode) return;
-  const contentIdByMode: Partial<Record<DashboardMode, string>> = {
-    incidents: "incidents-mode-content",
-    telemetry: "telemetry-mode-content",
-    media: "media-mode-content",
-    settings: "settings-mode-content",
-    status: "status-mode-content",
-  };
-  const contentId = contentIdByMode[previousMode];
-  if (contentId) document.getElementById(contentId)?.replaceChildren();
   if (previousMode === "media") resetMediaLibraryShellState();
   if (previousMode === "settings") settingsMounted = false;
 }
@@ -320,7 +261,6 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
     panel?.classList.toggle("hidden", name !== mode);
   }
   unmountInactiveV2HeavyRoute(previousMode);
-  unmountInactiveV2PipelineWorkspace(previousMode);
   syncPipelineWorkspaceShell(mode, activePipelineView);
 
   let activeModeButton: HTMLButtonElement | null = null;
@@ -360,12 +300,10 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
     summary.textContent = `Dashboard · ${taskSummary}`;
   }
   if (mode === "pipeline" && activePipelineView === "inspect") {
-    restorePipelineWorkspaceShell(activePipelineView);
     renderDashboardV2PipelineInspectBody(
       dashboardV2RouteBodyConfig("pipeline-inspect").v2HostId,
     );
   } else if (mode === "pipeline" && activePipelineView === "monitor") {
-    restorePipelineWorkspaceShell(activePipelineView);
     renderDashboardV2ControlRoomBody(
       dashboardV2RouteBodyConfig("pipeline-monitor").v2HostId,
     );

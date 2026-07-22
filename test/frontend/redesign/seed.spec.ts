@@ -145,8 +145,7 @@ test("seed: default v2 mounts Settings body in the v2-owned route host @desktop"
   await expect(
     page.locator("#dashboard-v2-settings-root #settings-mode-content"),
   ).toHaveCount(0);
-  await expect(page.locator("#settings-mode-panel > #settings-mode-content")).toHaveCount(1);
-  await expect(page.locator("#settings-mode-panel > #settings-mode-content > *")).toHaveCount(0);
+  await expect(page.locator("#settings-mode-panel > #settings-mode-content")).toHaveCount(0);
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
     "Dashboard · Server configuration",
   );
@@ -279,10 +278,7 @@ test("seed: default v2 mounts Settings body in the v2-owned route host @desktop"
   await page.goto("/?mode=media");
   await expect(page.locator("#media-mode-panel")).toBeVisible();
   await expect(page.locator("#dashboard-v2-settings-root")).toBeHidden();
-  const hiddenSettingsChildCount = await page
-    .locator("#settings-mode-content")
-    .evaluate((node) => node.childElementCount);
-  expect(hiddenSettingsChildCount).toBe(0);
+  await expect(page.locator("#settings-mode-content")).toHaveCount(0);
   await expect(page.locator("#dashboard-v2-media-title")).toBeVisible();
   await expect(
     page.locator("#dashboard-v2-media-content").getByRole("heading", {
@@ -304,10 +300,7 @@ test("seed: default v2 mounts Settings body in the v2-owned route host @desktop"
   await page.goto("/?mode=status");
   await expect(page.locator("#dashboard-v2-status-title")).toBeVisible();
   await expect(page.locator("#dashboard-v2-media-root")).toBeHidden();
-  const hiddenMediaChildCount = await page
-    .locator("#media-mode-content")
-    .evaluate((node) => node.childElementCount);
-  expect(hiddenMediaChildCount).toBe(0);
+  await expect(page.locator("#media-mode-content")).toHaveCount(0);
   await expect(page.locator("#dashboard-v2-status-root")).toContainText(
     "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
   );
@@ -651,7 +644,6 @@ test("seed: default dashboard mounts route bodies in v2-owned hosts @desktop", a
     {
       hostId: "dashboard-v2-pipeline-inspect-content",
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying",
-      legacyBodyId: "inspect-mode-content",
       nodeBudget: 9_000,
       panelId: "inspect-mode-panel",
       routeKey: "pipeline-inspect",
@@ -661,7 +653,6 @@ test("seed: default dashboard mounts route bodies in v2-owned hosts @desktop", a
     {
       hostId: "dashboard-v2-control-room-content",
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying",
-      legacyBodyId: "control-mode-content",
       nodeBudget: 13_500,
       panelId: "control-mode-panel",
       routeKey: "pipeline-monitor",
@@ -671,7 +662,6 @@ test("seed: default dashboard mounts route bodies in v2-owned hosts @desktop", a
     {
       hostId: "dashboard-v2-media-content",
       href: "/?mode=media",
-      legacyBodyId: "media-mode-content",
       nodeBudget: 11_500,
       panelId: "media-mode-panel",
       routeKey: "media",
@@ -681,7 +671,6 @@ test("seed: default dashboard mounts route bodies in v2-owned hosts @desktop", a
     {
       hostId: "dashboard-v2-settings-content",
       href: "/?mode=settings",
-      legacyBodyId: "settings-mode-content",
       nodeBudget: 14_750,
       panelId: "settings-mode-panel",
       routeKey: "settings",
@@ -691,7 +680,6 @@ test("seed: default dashboard mounts route bodies in v2-owned hosts @desktop", a
     {
       hostId: "dashboard-v2-status-content",
       href: "/?mode=status",
-      legacyBodyId: "status-mode-content",
       nodeBudget: 16_500,
       panelId: "status-mode-panel",
       routeKey: "status",
@@ -701,7 +689,6 @@ test("seed: default dashboard mounts route bodies in v2-owned hosts @desktop", a
     {
       hostId: "dashboard-v2-incidents-content",
       href: "/?mode=incidents",
-      legacyBodyId: "incidents-mode-content",
       nodeBudget: 18_500,
       panelId: "incidents-mode-panel",
       routeKey: "incidents",
@@ -711,7 +698,6 @@ test("seed: default dashboard mounts route bodies in v2-owned hosts @desktop", a
     {
       hostId: "dashboard-v2-telemetry-content",
       href: "/?mode=telemetry",
-      legacyBodyId: "telemetry-mode-content",
       nodeBudget: 21_500,
       panelId: "telemetry-mode-panel",
       routeKey: "telemetry",
@@ -726,7 +712,7 @@ test("seed: default dashboard mounts route bodies in v2-owned hosts @desktop", a
 
   const routeMetrics: Array<{
     href: string;
-    legacyEmpty: boolean;
+    legacyAbsent: boolean;
     nodeBudget: number;
     nodeCount: number;
     noLegacyInsideV2: boolean;
@@ -749,15 +735,11 @@ test("seed: default dashboard mounts route bodies in v2-owned hosts @desktop", a
       route.href,
     ).toBeVisible();
     await expect(
-      page.locator(`#${route.rootId} #${route.legacyBodyId}`),
+      page.locator(`#${route.rootId} [id$="-mode-content"]`),
       route.href,
     ).toHaveCount(0);
     await expect(
-      page.locator(`#${route.panelId} > #${route.legacyBodyId}`),
-      route.href,
-    ).toHaveCount(1);
-    await expect(
-      page.locator(`#${route.panelId} > #${route.legacyBodyId} > *`),
+      page.locator(`#${route.panelId} > [id$="-mode-content"]`),
       route.href,
     ).toHaveCount(0);
     const statusTexts = await getCdpStatusTexts(page);
@@ -766,7 +748,7 @@ test("seed: default dashboard mounts route bodies in v2-owned hosts @desktop", a
     expect(nodeCount, route.href).toBeLessThan(route.nodeBudget);
     routeMetrics.push({
       href: route.href,
-      legacyEmpty: true,
+      legacyAbsent: true,
       nodeBudget: route.nodeBudget,
       nodeCount,
       noLegacyInsideV2: true,
@@ -821,7 +803,6 @@ async function expectStaleRouteCompletionIgnored(
       telemetryDelayMs?: number;
     };
     href: string;
-    legacyBodyId: string;
     readySelector: string;
     rootId: string;
     routeKey: string;
@@ -847,17 +828,14 @@ async function expectStaleRouteCompletionIgnored(
   await page.waitForTimeout(delayMs + 250);
 
   const domCounts = await page.evaluate(
-    ({ legacyBodyId, rootId }) => {
-      const legacyBody = document.getElementById(legacyBodyId);
+    ({ rootId }) => {
       const v2Root = document.getElementById(rootId);
       return {
-        legacyChildCount: legacyBody?.childElementCount ?? 0,
-        legacyTextLength: legacyBody?.textContent?.trim().length ?? 0,
+        legacyBodyCount: document.querySelectorAll('[id$="-mode-content"]').length,
         v2RootChildCount: v2Root?.childElementCount ?? 0,
       };
     },
     {
-      legacyBodyId: route.legacyBodyId,
       rootId: route.rootId,
     },
   );
@@ -870,11 +848,10 @@ async function expectStaleRouteCompletionIgnored(
     ),
     routeKey: route.routeKey,
   };
-  expect(metric.legacyChildCount, route.routeKey).toBe(0);
-  expect(metric.legacyTextLength, route.routeKey).toBe(0);
+  expect(metric.legacyBodyCount, route.routeKey).toBe(0);
   expect(metric.v2RootChildCount, route.routeKey).toBe(0);
   expect(metric.overviewStatusAnnounced, route.routeKey).toBe(true);
-  await expect(page.locator(`#${route.legacyBodyId}`)).not.toContainText(
+  await expect(page.locator("body")).not.toContainText(
     route.staleText,
   );
   console.info(`default-v2-stale-route-guard-metrics=${JSON.stringify(metric)}`);
@@ -892,23 +869,19 @@ async function waitForBrowserWork(page: Page): Promise<void> {
 async function expectInactiveRouteEmpty(
   page: Page,
   route: {
-    legacyBodyId: string;
     rootId: string;
     routeKey: string;
   },
 ): Promise<void> {
   const domCounts = await page.evaluate(
-    ({ legacyBodyId, rootId }) => {
-      const legacyBody = document.getElementById(legacyBodyId);
+    ({ rootId }) => {
       const v2Root = document.getElementById(rootId);
       return {
-        legacyChildCount: legacyBody?.childElementCount ?? 0,
-        legacyTextLength: legacyBody?.textContent?.trim().length ?? 0,
+        legacyBodyCount: document.querySelectorAll('[id$="-mode-content"]').length,
         v2RootChildCount: v2Root?.childElementCount ?? 0,
       };
     },
     {
-      legacyBodyId: route.legacyBodyId,
       rootId: route.rootId,
     },
   );
@@ -921,8 +894,7 @@ async function expectInactiveRouteEmpty(
     ),
     routeKey: route.routeKey,
   };
-  expect(metric.legacyChildCount, route.routeKey).toBe(0);
-  expect(metric.legacyTextLength, route.routeKey).toBe(0);
+  expect(metric.legacyBodyCount, route.routeKey).toBe(0);
   expect(metric.v2RootChildCount, route.routeKey).toBe(0);
   expect(metric.overviewStatusAnnounced, route.routeKey).toBe(true);
   console.info(`default-v2-secondary-stale-guard-metrics=${JSON.stringify(metric)}`);
@@ -934,7 +906,6 @@ test("seed: default v2 ignores stale Media completions after tab navigation @des
   await expectStaleRouteCompletionIgnored(page, {
     delay: { mediaDelayMs: 700 },
     href: "/?mode=media",
-    legacyBodyId: "media-mode-content",
     readySelector: "#dashboard-v2-media-root",
     rootId: "dashboard-v2-media-root",
     routeKey: "media",
@@ -948,7 +919,6 @@ test("seed: default v2 ignores stale Incidents completions after tab navigation 
   await expectStaleRouteCompletionIgnored(page, {
     delay: { incidentsDelayMs: 700 },
     href: "/?mode=incidents",
-    legacyBodyId: "incidents-mode-content",
     readySelector: "#dashboard-v2-incidents-root",
     rootId: "dashboard-v2-incidents-root",
     routeKey: "incidents",
@@ -962,7 +932,6 @@ test("seed: default v2 ignores stale Telemetry completions after tab navigation 
   await expectStaleRouteCompletionIgnored(page, {
     delay: { telemetryDelayMs: 700 },
     href: "/?mode=telemetry",
-    legacyBodyId: "telemetry-mode-content",
     readySelector: "#dashboard-v2-telemetry-root",
     rootId: "dashboard-v2-telemetry-root",
     routeKey: "telemetry",
@@ -1000,7 +969,6 @@ test("seed: default v2 ignores stale Telemetry stage detail after tab navigation
   await responsePromise;
   await waitForBrowserWork(page);
   await expectInactiveRouteEmpty(page, {
-    legacyBodyId: "telemetry-mode-content",
     rootId: "dashboard-v2-telemetry-root",
     routeKey: "telemetry-stage-detail",
   });
@@ -1039,7 +1007,6 @@ test("seed: default v2 ignores stale Media delete completion after tab navigatio
   await responsePromise;
   await waitForBrowserWork(page);
   await expectInactiveRouteEmpty(page, {
-    legacyBodyId: "media-mode-content",
     rootId: "dashboard-v2-media-root",
     routeKey: "media-delete",
   });
@@ -1115,7 +1082,6 @@ test("seed: default v2 ignores stale Monitor input promotion after tab navigatio
   await responsePromise;
   await waitForBrowserWork(page);
   await expectInactiveRouteEmpty(page, {
-    legacyBodyId: "control-mode-content",
     rootId: "dashboard-v2-control-room-root",
     routeKey: "monitor-promote",
   });
@@ -1162,7 +1128,6 @@ test("seed: default v2 ignores stale Monitor URL save after tab navigation @desk
   await responsePromise;
   await waitForBrowserWork(page);
   await expectInactiveRouteEmpty(page, {
-    legacyBodyId: "control-mode-content",
     rootId: "dashboard-v2-control-room-root",
     routeKey: "monitor-url-save",
   });

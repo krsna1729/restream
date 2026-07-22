@@ -17,7 +17,5 @@ test("seed: status route body is owned by the v2 renderer @desktop", async ({
   await expect(status.locator("#status-route-summary")).toContainText(
     "Status loaded for seeded",
   );
-  await expect(
-    page.locator("#status-mode-panel > #status-mode-content > *"),
-  ).toHaveCount(0);
+  await expect(page.locator("#status-mode-content")).toHaveCount(0);
 });

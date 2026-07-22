@@ -21,7 +21,5 @@ test("seed: settings route body is owned by the v2 renderer @desktop", async ({
       '[data-settings-v2-disclosure-body="dashboard-password-section"]',
     ),
   ).toBeAttached();
-  await expect(
-    page.locator("#settings-mode-panel > #settings-mode-content > *"),
-  ).toHaveCount(0);
+  await expect(page.locator("#settings-mode-content")).toHaveCount(0);
 });

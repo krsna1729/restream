@@ -16,7 +16,5 @@ test("seed: media route body is owned by the v2 renderer @desktop", async ({
   await expect(media.locator("#media-library-results-summary")).toContainText(
     "media file",
   );
-  await expect(
-    page.locator("#media-mode-panel > #media-mode-content > *"),
-  ).toHaveCount(0);
+  await expect(page.locator("#media-mode-content")).toHaveCount(0);
 });

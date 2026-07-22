@@ -378,17 +378,21 @@ test.describe('HLS Player — DOM rendering', () => {
         await login(page);
     });
 
-    test('player container exists in DOM but is hidden until pipeline selected', async ({ page }) => {
-        const playerElem = page.locator('#video-player');
-        await expect(playerElem).toBeAttached();
-        await expect(playerElem).toBeEmpty();
-        const parentCol = page.locator('#pipe-info-col');
-        await expect(parentCol).toHaveClass(/hidden/);
+    test('v2 preview host replaces the legacy global video container', async ({ page }) => {
+        await page.goto('/?mode=pipeline');
+        await expect(page.locator('#video-player')).toHaveCount(0);
+        await expect(page.locator('#pipe-info-col')).toHaveClass(/hidden/);
+        await expect(page.locator('#dashboard-v2-pipeline-input-status-root')).toBeAttached();
+        await expect(page.locator('[data-role="dashboard-v2-input-preview"]')).toHaveCount(0);
     });
 
     test('renderInputPreview creates video element and overlay', async ({ page }) => {
         const result = await page.evaluate(async () => {
-            const container = document.getElementById('video-player');
+            const root = document.getElementById('dashboard-v2-pipeline-input-status-root');
+            if (!root) return { error: 'no v2 status root' };
+            const container = document.createElement('div');
+            container.dataset.role = 'dashboard-v2-input-preview';
+            root.appendChild(container);
             if (!container) return { error: 'no container' };
 
             const pipe = {
@@ -459,7 +463,11 @@ test.describe('HLS Player — DOM rendering', () => {
 
     test('renderInputPreview shows message when pipeline has no key', async ({ page }) => {
         const result = await page.evaluate(async () => {
-            const container = document.getElementById('video-player');
+            const root = document.getElementById('dashboard-v2-pipeline-input-status-root');
+            if (!root) return { error: 'no v2 status root' };
+            const container = document.createElement('div');
+            container.dataset.role = 'dashboard-v2-input-preview';
+            root.appendChild(container);
             if (!container) return { error: 'no container' };
 
             const pipe = {
@@ -509,7 +517,11 @@ test.describe('HLS Player — DOM rendering', () => {
 
     test('clearInputPreview removes video and cleans up', async ({ page }) => {
         const result = await page.evaluate(async () => {
-            const container = document.getElementById('video-player');
+            const root = document.getElementById('dashboard-v2-pipeline-input-status-root');
+            if (!root) return { error: 'no v2 status root' };
+            const container = document.createElement('div');
+            container.dataset.role = 'dashboard-v2-input-preview';
+            root.appendChild(container);
             if (!container) return { error: 'no container' };
 
             const pipe = {
@@ -545,7 +557,6 @@ test.describe('HLS Player — DOM rendering', () => {
 
             const { renderInputPreview, clearInputPreview } = await import('/js/features/input-preview.js');
 
-            // Don't set previewSrc before — let renderInputPreview set it
             renderInputPreview(container, pipe);
 
             const videoBefore = container.querySelector('video');
@@ -571,7 +582,11 @@ test.describe('HLS Player — DOM rendering', () => {
 
     test('renderInputPreview is idempotent for same pipeline', async ({ page }) => {
         const result = await page.evaluate(async () => {
-            const container = document.getElementById('video-player');
+            const root = document.getElementById('dashboard-v2-pipeline-input-status-root');
+            if (!root) return { error: 'no v2 status root' };
+            const container = document.createElement('div');
+            container.dataset.role = 'dashboard-v2-input-preview';
+            root.appendChild(container);
             if (!container) return { error: 'no container' };
 
             const pipe = {
