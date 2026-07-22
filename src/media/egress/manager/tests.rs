@@ -19,6 +19,16 @@ fn spec(id: &str) -> OutputSpec {
     }
 }
 
+fn sink_spec(id: &str, generation: u64) -> OutputSpec {
+    OutputSpec {
+        id: OutputId::new(id),
+        generation,
+        feed: FeedId::new("feed-1"),
+        protocol: ProtocolSpec::Sink,
+        policy: LeafPolicy::default(),
+    }
+}
+
 #[test]
 fn config_rejects_zero_shards() {
     assert_eq!(
@@ -206,6 +216,57 @@ fn remove_command_is_idempotent_after_first_enqueue() {
     assert_eq!(duplicate, Ok(ManagerCommandOutcome::AlreadyRemoved));
     assert!(manager.desired_output(&output_id).is_none());
     assert_eq!(manager.command_depth(shard_id), 2);
+}
+
+#[test]
+fn sink_spec_uses_common_lifecycle_command_contract() {
+    let mut manager = manager(4);
+    let first = sink_spec("out-sink-lifecycle", 2);
+    let duplicate = sink_spec("out-sink-lifecycle", 2);
+    let stale = sink_spec("out-sink-lifecycle", 1);
+    let updated = sink_spec("out-sink-lifecycle", 3);
+    let output_id = first.id.clone();
+    let shard_id = manager.assign_spec(&first);
+
+    assert_eq!(
+        manager.apply_command(EgressCommand::Add(first)),
+        Ok(ManagerCommandOutcome::Enqueued { shard_id })
+    );
+    assert_eq!(
+        manager.apply_command(EgressCommand::Update(duplicate)),
+        Ok(ManagerCommandOutcome::AlreadyCurrent { shard_id })
+    );
+    assert_eq!(
+        manager.apply_command(EgressCommand::Update(stale)),
+        Ok(ManagerCommandOutcome::IgnoredStale { shard_id })
+    );
+    assert_eq!(
+        manager.apply_command(EgressCommand::Update(updated)),
+        Ok(ManagerCommandOutcome::Enqueued { shard_id })
+    );
+    assert_eq!(
+        manager.desired_output(&output_id),
+        Some(&DesiredOutput {
+            id: output_id.clone(),
+            generation: 3,
+            shard_id,
+        })
+    );
+    assert_eq!(
+        manager.apply_command(EgressCommand::Remove(output_id.clone())),
+        Ok(ManagerCommandOutcome::Enqueued { shard_id })
+    );
+    assert_eq!(
+        manager.apply_command(EgressCommand::Remove(output_id.clone())),
+        Ok(ManagerCommandOutcome::AlreadyRemoved)
+    );
+    assert!(manager.desired_output(&output_id).is_none());
+    assert_eq!(
+        manager.apply_command(EgressCommand::Shutdown),
+        Ok(ManagerCommandOutcome::Broadcast {
+            shard_count: NonZeroU32::new(4).unwrap()
+        })
+    );
 }
 
 #[test]
