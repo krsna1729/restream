@@ -5,7 +5,7 @@ import { openSeededDashboard } from "./fixtures";
 test("seed: media route body is owned by the v2 renderer @desktop", async ({
   page,
 }) => {
-  await openSeededDashboard(page, "mixed-health", "/?mode=media&ui=v2", {
+  await openSeededDashboard(page, "mixed-health", "/?mode=media", {
     expectOverviewReady: false,
   });
 

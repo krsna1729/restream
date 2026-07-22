@@ -15,7 +15,7 @@ import {
   tabUntilFocused,
 } from "./seed-helpers";
 
-test("seed: ui=v2 replaces Overview while delegating operator actions @desktop", async ({
+test("seed: default v2 replaces Overview while delegating operator actions @desktop", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -40,7 +40,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
       shellErrors.push(message.text());
     }
   });
-  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2", {
+  await openSeededDashboard(page, "mixed-health", "/?mode=overview", {
     outputControlDelayMs: 300,
     pipelineControlDelayMs: 300,
     settingsResponse: (settings) => ({
@@ -104,7 +104,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     }),
   });
 
-  await expect(page).toHaveURL(/\?mode=overview&ui=v2$/);
+  await expect(page).toHaveURL(/\?mode=overview$/);
   await page.waitForTimeout(100);
   expect(pageErrors).toEqual([]);
   expect(shellErrors).toEqual([]);
@@ -121,7 +121,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     loaded: true,
     rootHidden: false,
     rootMarkup: expect.stringContaining("dashboard-v2-overview"),
-    search: "?mode=overview&ui=v2",
+    search: "?mode=overview",
   });
   const v2Overview = page.locator("#dashboard-v2-overview");
   await expect(
@@ -155,7 +155,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await v2Overview
     .getByRole("button", { name: "Operate Retrying Destination", exact: true })
     .click();
-  await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
+  await expect(page).toHaveURL(/mode=pipeline/);
   await expect(page.locator("#dashboard-grid")).toBeVisible();
   const pipelineSelector = page.locator("#dashboard-v2-pipeline-selector-root");
   await expect(pipelineSelector).toBeVisible();
@@ -529,7 +529,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(page.locator("#edit-pipe-modal")).toBeVisible();
 });
 
-test("ui=v2 overview pipeline table supports large-fleet search @desktop", async ({
+test("default v2 overview pipeline table supports large-fleet search @desktop", async ({
   page,
 }) => {
   await page.goto("/login");
@@ -758,7 +758,7 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
   expect(await getCdpNodeCount(page)).toBeLessThan(3_000);
 });
 
-test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async ({
+test("default v2 output cards keep 125-output refreshes patch-only @desktop", async ({
   page,
 }) => {
   await page.goto("/login");
@@ -910,7 +910,7 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
   expect(result.live.childList).toBe(0);
 });
 
-test("ui=v2 pipeline selector supports search under long lists @desktop", async ({
+test("default v2 pipeline selector supports search under long lists @desktop", async ({
   page,
 }) => {
   await page.goto("/login");
@@ -1055,7 +1055,7 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
   );
 });
 
-test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", async ({
+test("default v2 pipeline details placeholder makes convergence explicit @desktop", async ({
   page,
 }) => {
   await page.goto("/login");
@@ -1140,13 +1140,13 @@ test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", a
   await expect(header).toBeHidden();
 });
 
-test("ui=v2 keeps failed recording mutation context in the pipeline header @desktop", async ({
+test("default v2 keeps failed recording mutation context in the pipeline header @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "mixed-health",
-    "/?mode=pipeline&view=operate&p=pipe-healthy&ui=v2",
+    "/?mode=pipeline&view=operate&p=pipe-healthy",
     {
       expectOverviewReady: false,
       failRecordingControl: "recording target disk is full",
@@ -1189,13 +1189,13 @@ test("ui=v2 keeps failed recording mutation context in the pipeline header @desk
   await cdp.detach();
 });
 
-test("ui=v2 keeps failed file-ingest mutation context in the pipeline header @desktop", async ({
+test("default v2 keeps failed file-ingest mutation context in the pipeline header @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "mixed-health",
-    "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+    "/?mode=pipeline&view=operate&p=pipe-retrying",
     {
       expectOverviewReady: false,
       failFileIngestControl: "file source disappeared before ingest start",
@@ -1258,13 +1258,13 @@ test("ui=v2 keeps failed file-ingest mutation context in the pipeline header @de
   await cdp.detach();
 });
 
-test("ui=v2 keeps failed output mutation context on the output card @desktop", async ({
+test("default v2 keeps failed output mutation context on the output card @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "mixed-health",
-    "/?mode=pipeline&view=operate&p=pipe-healthy&ui=v2",
+    "/?mode=pipeline&view=operate&p=pipe-healthy",
     {
       expectOverviewReady: false,
       failOutputControl: "destination refused stop command",
@@ -1305,13 +1305,13 @@ test("ui=v2 keeps failed output mutation context on the output card @desktop", a
   await cdp.detach();
 });
 
-test("ui=v2 output action menus are keyboard-dismissable @desktop", async ({
+test("default v2 output action menus are keyboard-dismissable @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "mixed-health",
-    "/?mode=pipeline&view=operate&p=pipe-healthy&ui=v2",
+    "/?mode=pipeline&view=operate&p=pipe-healthy",
     { expectOverviewReady: false },
   );
 
@@ -1361,7 +1361,7 @@ test("ui=v2 output action menus are keyboard-dismissable @desktop", async ({
   await expect(more).toHaveAttribute("aria-expanded", "false");
 });
 
-test("ui=v2 output destinations support search and state filters @desktop", async ({
+test("default v2 output destinations support search and state filters @desktop", async ({
   page,
 }) => {
   await page.goto("/login");

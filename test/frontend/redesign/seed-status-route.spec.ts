@@ -5,7 +5,7 @@ import { openSeededDashboard } from "./fixtures";
 test("seed: status route body is owned by the v2 renderer @desktop", async ({
   page,
 }) => {
-  await openSeededDashboard(page, "mixed-health", "/?mode=status&ui=v2", {
+  await openSeededDashboard(page, "mixed-health", "/?mode=status", {
     expectOverviewReady: false,
   });
 
