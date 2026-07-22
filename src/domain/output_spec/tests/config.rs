@@ -139,3 +139,24 @@ fn capability_validation_rejects_explicit_h265_for_legacy_rtmp() {
 
     assert_eq!(error, OutputConfigError::UnsupportedCodecForProtocol);
 }
+
+#[test]
+fn sink_capabilities_accept_source_codecs() {
+    let capabilities = ProtocolCapabilities {
+        protocol: EgressProtocol::Sink,
+        rtmp_mode: None,
+    };
+
+    assert!(
+        OutputConfig::source()
+            .with_video_codec(OutputVideoCodec::H264)
+            .validate_capabilities(capabilities)
+            .is_ok()
+    );
+    assert!(
+        OutputConfig::source()
+            .with_video_codec(OutputVideoCodec::Hevc)
+            .validate_capabilities(capabilities)
+            .is_ok()
+    );
+}

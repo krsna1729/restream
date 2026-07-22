@@ -3,6 +3,7 @@ pub enum EgressProtocol {
     Rtmp,
     Srt,
     Hls,
+    Sink,
     Unknown,
 }
 
@@ -12,6 +13,7 @@ pub enum OutputUrlScheme {
     Rtmps,
     Srt,
     Hls,
+    Sink,
     Http,
     Https,
     Unknown,
@@ -28,6 +30,7 @@ impl OutputUrlScheme {
             Some("rtmps") => Self::Rtmps,
             Some("srt") => Self::Srt,
             Some("hls") => Self::Hls,
+            Some("sink") => Self::Sink,
             Some("http") => Self::Http,
             Some("https") => Self::Https,
             _ => Self::Unknown,
@@ -55,6 +58,7 @@ impl OutputUrlScheme {
             Self::Rtmp | Self::Rtmps => EgressProtocol::Rtmp,
             Self::Srt => EgressProtocol::Srt,
             Self::Hls | Self::Http | Self::Https => EgressProtocol::Hls,
+            Self::Sink => EgressProtocol::Sink,
             Self::Unknown => EgressProtocol::Unknown,
         }
     }
@@ -74,6 +78,7 @@ impl EgressProtocol {
             Self::Rtmp => "rtmp",
             Self::Srt => "srt",
             Self::Hls => "hls",
+            Self::Sink => "sink",
             Self::Unknown => "unknown",
         }
     }

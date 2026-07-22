@@ -60,6 +60,38 @@ async fn local_hls_output_is_accepted_by_api() {
 }
 
 #[tokio::test]
+async fn sink_output_is_accepted_by_api() {
+    let (app, pool) = test_app().await;
+    let cookie = login(&app).await;
+
+    db::create_pipeline(&pool, "p_sink", "P", "key_sink", None, None)
+        .await
+        .unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/pipelines/p_sink/outputs",
+            &cookie,
+            Some(r#"{"name":"Discard","url":" SINK://LOCAL/blackhole ","config":{"video":{"mode":"source","codec":"h265"},"audio":{"mode":"all"}}}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let json = body_json(resp).await;
+    let output_id = json["output"]["id"].as_str().unwrap();
+    assert_eq!(json["output"]["url"], "sink://local/blackhole");
+
+    let stored = db::get_output(&pool, "p_sink", output_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.url, "sink://local/blackhole");
+}
+
+#[tokio::test]
 async fn output_urls_are_parsed_normalized_and_host_required() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;

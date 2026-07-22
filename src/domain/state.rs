@@ -222,6 +222,8 @@ pub enum EgressPhase {
     Publishing,
     /// Connected and actively sending media.
     Sending,
+    /// Sink output is consuming and discarding media through the fabric.
+    Discarding,
     /// HLS output is segmenting locally.
     Segmenting,
     /// HLS output is uploading playlist or segment objects.
@@ -245,6 +247,7 @@ impl EgressPhase {
             Self::ConnectingApp => "connecting_app",
             Self::Publishing => "publishing",
             Self::Sending => "sending",
+            Self::Discarding => "discarding",
             Self::Segmenting => "segmenting",
             Self::Uploading => "uploading",
             Self::Retrying => "retrying",
@@ -258,7 +261,10 @@ impl EgressPhase {
     }
 
     pub fn is_active(&self) -> bool {
-        matches!(self, Self::Sending | Self::Segmenting | Self::Uploading)
+        matches!(
+            self,
+            Self::Sending | Self::Discarding | Self::Segmenting | Self::Uploading
+        )
     }
 }
 
@@ -279,6 +285,7 @@ impl From<&str> for EgressPhase {
             "connecting_app" | "connectingApp" => Self::ConnectingApp,
             "publishing" => Self::Publishing,
             "sending" => Self::Sending,
+            "discarding" => Self::Discarding,
             "segmenting" => Self::Segmenting,
             "uploading" => Self::Uploading,
             "retrying" => Self::Retrying,
@@ -540,6 +547,7 @@ mod tests {
             ("connecting_app", EgressPhase::ConnectingApp),
             ("publishing", EgressPhase::Publishing),
             ("sending", EgressPhase::Sending),
+            ("discarding", EgressPhase::Discarding),
             ("segmenting", EgressPhase::Segmenting),
             ("uploading", EgressPhase::Uploading),
             ("retrying", EgressPhase::Retrying),
@@ -555,6 +563,7 @@ mod tests {
         assert!(EgressPhase::Stopped.is_terminal());
         assert!(!EgressPhase::Sending.is_terminal());
         assert!(EgressPhase::Sending.is_active());
+        assert!(EgressPhase::Discarding.is_active());
         assert!(!EgressPhase::Retrying.is_active());
     }
 

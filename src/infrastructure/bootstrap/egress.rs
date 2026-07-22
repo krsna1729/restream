@@ -250,6 +250,16 @@ impl EgressTask {
                     )
                     .await;
                 }
+                OutputUrlScheme::Sink => {
+                    self.engine
+                        .update_egress_phase_if_current(
+                            &self.output_id,
+                            &self.registration,
+                            EgressPhase::Discarding,
+                        )
+                        .await;
+                    self.registration.cancel_token.cancelled().await;
+                }
                 OutputUrlScheme::Hls | OutputUrlScheme::Http | OutputUrlScheme::Https => {
                     let (store, already_running) =
                         self.engine.ensure_hls_segmenter(&self.pipeline_id).await;

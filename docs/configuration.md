@@ -196,6 +196,7 @@ Supported routing behavior:
 | `rtmps://...` | Native RTMPS egress through the RTMP path with TLS before handshake |
 | `srt://...` | Native SRT MPEG-TS egress; percent-encoded characters in the `streamid` query parameter are decoded automatically |
 | `hls://...` | Starts the pipeline's local in-memory HLS segmenter |
+| `sink://...` | Discards media through the egress fabric for diagnostics, soak tests, and capacity measurement |
 | `http://...`, `https://...` | Starts the local MPEG-TS segmenter and uploads segments/playlist with HTTP PUT |
 
 Any other prefix is rejected during validation. The served preview HLS path is

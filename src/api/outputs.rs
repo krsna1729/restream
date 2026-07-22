@@ -54,7 +54,7 @@ pub fn is_supported_output_url(url: &str) -> bool {
     OutputUrlScheme::from_url(url).is_supported_output()
 }
 
-pub const OUTPUT_URL_SCHEME_ERROR: &str = "Invalid URL scheme. Supported schemes are rtmp://, rtmps://, srt://, hls://, http://, and https://";
+pub const OUTPUT_URL_SCHEME_ERROR: &str = "Invalid URL scheme. Supported schemes are rtmp://, rtmps://, srt://, hls://, sink://, http://, and https://";
 pub const MONITORING_URL_SCHEME_ERROR: &str =
     "Invalid monitoring URL scheme. Supported schemes are http://, https://, and srt://";
 pub const OUTPUT_URL_PARSE_ERROR: &str = "Output URL must be a valid absolute URL with a host";

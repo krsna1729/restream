@@ -304,6 +304,7 @@ URL behavior:
 | `rtmps://` | RTMPS with TLS before the RTMP handshake |
 | `srt://` | SRT/MPEG-TS |
 | `hls://` | Local in-memory HLS segmenter |
+| `sink://` | Fabric sink output that discards media after egress accounting |
 | `http://` | HLS HTTP PUT upload |
 | `https://` | HLS HTTP PUT upload |
 

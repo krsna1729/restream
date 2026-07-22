@@ -154,6 +154,11 @@ impl ProtocolCapabilities {
                 _,
                 VideoCodecKind::H264 | VideoCodecKind::Hevc
             ) | (EgressProtocol::Hls, _, VideoCodecKind::H264)
+                | (
+                    EgressProtocol::Sink,
+                    _,
+                    VideoCodecKind::H264 | VideoCodecKind::Hevc | VideoCodecKind::Unknown,
+                )
         )
     }
 
