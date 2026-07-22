@@ -174,13 +174,6 @@ function dashboardV2RouteBodyConfig(
   return config;
 }
 
-function routeBodyTargetId(
-  activeMode: DashboardV2RouteBodyMode | null,
-  config: DashboardV2RouteBodyConfig,
-): string {
-  return activeMode === config.mode ? config.v2HostId : config.legacyBodyId;
-}
-
 function clearDormantRouteBodies(options: {
   readonly activeMode: DashboardV2RouteBodyMode | null;
 }): void {
@@ -206,19 +199,13 @@ function configureDashboardV2RouteBodyTargets(
   const activeMode = dashboardV2RouteBodyMode(mode, pipelineView);
   clearDormantRouteBodies({ activeMode });
   setPipelineInspectorContainerId(
-    routeBodyTargetId(
-      activeMode,
-      dashboardV2RouteBodyConfig("pipeline-inspect"),
-    ),
+    dashboardV2RouteBodyConfig("pipeline-inspect").v2HostId,
   );
   setControlRoomContainerId(
-    routeBodyTargetId(
-      activeMode,
-      dashboardV2RouteBodyConfig("pipeline-monitor"),
-    ),
+    dashboardV2RouteBodyConfig("pipeline-monitor").v2HostId,
   );
   setMediaLibraryContainerId(
-    routeBodyTargetId(activeMode, dashboardV2RouteBodyConfig("media")),
+    dashboardV2RouteBodyConfig("media").v2HostId,
   );
 }
 
@@ -401,7 +388,6 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
                   : "Runtime status";
     summary.textContent = `Dashboard · ${taskSummary}`;
   }
-  const activeV2BodyMode = dashboardV2RouteBodyMode(mode, activePipelineView);
   if (mode === "pipeline" && activePipelineView === "inspect") {
     restorePipelineWorkspaceShell(activePipelineView);
     renderPipelineInspector();
@@ -415,45 +401,25 @@ function applyMode(mode: DashboardMode, pipelineView: PipelineWorkspaceView | nu
   }));
   renderIncidentsMode({
     active: mode === "incidents",
-    containerId: routeBodyTargetId(
-      activeV2BodyMode,
-      dashboardV2RouteBodyConfig("incidents"),
-    ),
+    containerId: dashboardV2RouteBodyConfig("incidents").v2HostId,
     pipelines: pipelineOptions,
     navigateToPipeline: (pipelineId) => {
       selectPipeline(pipelineId);
       setDashboardMode("pipeline");
     },
-    v2Active: activeV2BodyMode === "incidents",
+    v2Active: mode === "incidents",
   });
   renderEngineerTelemetryMode({
     active: mode === "telemetry",
-    containerId: routeBodyTargetId(
-      activeV2BodyMode,
-      dashboardV2RouteBodyConfig("telemetry"),
-    ),
+    containerId: dashboardV2RouteBodyConfig("telemetry").v2HostId,
     pipelines: pipelineOptions,
   });
 
   if (mode === "settings") {
-    renderSettingsMode(
-      routeBodyTargetId(
-        activeV2BodyMode,
-        dashboardV2RouteBodyConfig("settings"),
-      ),
-    );
+    renderSettingsMode(dashboardV2RouteBodyConfig("settings").v2HostId);
   } else if (mode === "status") {
-    renderStatusMode(
-      routeBodyTargetId(
-        activeV2BodyMode,
-        dashboardV2RouteBodyConfig("status"),
-      ),
-    );
+    renderStatusMode(dashboardV2RouteBodyConfig("status").v2HostId);
   } else if (mode === "media") {
-    const mediaContentId = routeBodyTargetId(
-      activeV2BodyMode,
-      dashboardV2RouteBodyConfig("media"),
-    );
     const mediaShellMissing = !mediaLibraryShellMountedInCurrentContainer();
     if (previousMode !== "media" || mediaShellMissing) {
       requestDetailedMetricsRefresh();
