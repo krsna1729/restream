@@ -19,7 +19,7 @@ use crate::media::egress::lifecycle::LeafLifecycle;
 
 /// Counters and gauges for one egress shard, updated locally and published
 /// on a configurable cadence.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ShardMetrics {
     pub shard_id: Option<ShardId>,
 
@@ -41,6 +41,10 @@ pub struct ShardMetrics {
 
     // --- Command channel ---
     pub command_depth: u32,
+    pub commands_processed: u64,
+
+    pub timers_processed: u64,
+    pub pending_timers: u32,
 
     // --- Feed wakes ---
     /// Number of wakeups that found new feed data.
@@ -50,6 +54,7 @@ pub struct ShardMetrics {
 
     // --- Loop statistics ---
     pub loop_iterations: u64,
+    pub media_ticks: u64,
     /// Sum of loop durations for latency percentile computation (Phase 3).
     pub loop_duration_sum_us: u64,
 

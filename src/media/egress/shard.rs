@@ -6,6 +6,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::media::egress::command::{EgressCommand, OutputId, ShardId};
+use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::timer::TimerWheel;
 
 mod group;
@@ -64,7 +65,7 @@ impl EgressShardConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EgressShardSnapshot {
     pub shard_id: ShardId,
     pub loop_iterations: u64,
@@ -75,6 +76,7 @@ pub struct EgressShardSnapshot {
     pub last_progress_at: Option<Instant>,
     pub stopped: bool,
     pub panicked: bool,
+    pub metrics: ShardMetrics,
 }
 
 impl EgressShardSnapshot {
@@ -89,6 +91,7 @@ impl EgressShardSnapshot {
             last_progress_at: Some(Instant::now()),
             stopped: false,
             panicked: false,
+            metrics: ShardMetrics::new(shard_id),
         }
     }
 }
@@ -193,6 +196,7 @@ fn run_shard_thread<B: EgressShardBackend>(
             receiver,
             backend: &mut backend,
             timers: TimerWheel::new(),
+            metrics: ShardMetrics::new(shard_id),
             snapshot: Arc::clone(&snapshot),
         };
         runtime.run();
@@ -210,6 +214,7 @@ struct EgressShardRuntime<'a, B: EgressShardBackend> {
     receiver: Receiver<EgressCommand>,
     backend: &'a mut B,
     timers: TimerWheel<OutputId>,
+    metrics: ShardMetrics,
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
 }
 
@@ -217,6 +222,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
     fn run(&mut self) {
         let mut running = true;
         while running {
+            let loop_started_at = Instant::now();
             let mut processed = self.process_command_batch(&mut running);
             let mut timers_processed = self.process_timer_batch(&mut running);
             if running && processed == 0 && timers_processed == 0 {
@@ -226,7 +232,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 }
             }
             self.backend.on_media_tick();
-            self.record_iteration(processed, timers_processed);
+            self.record_iteration(loop_started_at, processed, timers_processed);
         }
         self.backend.on_shutdown();
     }
@@ -307,18 +313,34 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         }
     }
 
-    fn record_iteration(&self, commands_processed: usize, timers_processed: usize) {
-        let mut snapshot = self.snapshot.lock().unwrap();
-        snapshot.loop_iterations = snapshot.loop_iterations.saturating_add(1);
-        snapshot.commands_processed = snapshot
+    fn record_iteration(
+        &mut self,
+        loop_started_at: Instant,
+        commands_processed: usize,
+        timers_processed: usize,
+    ) {
+        self.metrics
+            .record_loop_iteration(loop_started_at.elapsed());
+        self.metrics.commands_processed = self
+            .metrics
             .commands_processed
             .saturating_add(commands_processed as u64);
-        snapshot.timers_processed = snapshot
+        self.metrics.timers_processed = self
+            .metrics
             .timers_processed
             .saturating_add(timers_processed as u64);
+        self.metrics.pending_timers = u32::try_from(self.timers.len()).unwrap_or(u32::MAX);
+        self.metrics.media_ticks = self.metrics.media_ticks.saturating_add(1);
+        self.metrics.collected_at = Some(Instant::now());
+
+        let mut snapshot = self.snapshot.lock().unwrap();
+        snapshot.loop_iterations = self.metrics.loop_iterations;
+        snapshot.commands_processed = self.metrics.commands_processed;
+        snapshot.timers_processed = self.metrics.timers_processed;
         snapshot.pending_timers = self.timers.len();
-        snapshot.media_ticks = snapshot.media_ticks.saturating_add(1);
-        snapshot.last_progress_at = Some(Instant::now());
+        snapshot.media_ticks = self.metrics.media_ticks;
+        snapshot.last_progress_at = self.metrics.collected_at;
+        snapshot.metrics = self.metrics.clone();
     }
 }
 
