@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 
+use std::ffi::CString;
+use std::fmt;
 use std::os::raw::{c_int, c_void};
 
 use super::socket::last_srt_error;
-use super::sys::{SRTO_SNDSYN, SRTSOCKET, srt_setsockflag};
+use super::sys::{SRTO_SNDSYN, SRTO_STREAMID, SRTSOCKET, srt_setsockflag, srt_setsockopt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SrtEgressSocketConfig {
@@ -33,6 +35,18 @@ impl SrtEgressSocketError {
     }
 }
 
+impl fmt::Display for SrtEgressSocketError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "failed to set {}: {} ({})",
+            self.option, self.message, self.code
+        )
+    }
+}
+
+impl std::error::Error for SrtEgressSocketError {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SrtEgressSendMode {
     LegacyBlocking,
@@ -52,6 +66,34 @@ pub(crate) fn configure_connected_srt_egress_socket(
     mode: SrtEgressSendMode,
 ) -> Result<(), SrtEgressSocketError> {
     configure_connected_srt_egress_socket_with(socket, mode, LibSrtSocketOps)
+}
+
+pub(crate) fn apply_srt_egress_stream_id(
+    socket: SRTSOCKET,
+    stream_id: &str,
+) -> Result<(), SrtEgressSocketError> {
+    apply_srt_egress_stream_id_with(socket, stream_id, LibSrtSocketOps)
+}
+
+fn apply_srt_egress_stream_id_with<O>(
+    socket: SRTSOCKET,
+    stream_id: &str,
+    ops: O,
+) -> Result<(), SrtEgressSocketError>
+where
+    O: SrtSocketOps,
+{
+    if stream_id.is_empty() {
+        return Ok(());
+    }
+    let stream_id = CString::new(stream_id).map_err(|_| {
+        SrtEgressSocketError::new(
+            "SRTO_STREAMID",
+            0,
+            "stream ID contains null bytes".to_string(),
+        )
+    })?;
+    ops.set_bytes(socket, SRTO_STREAMID, "SRTO_STREAMID", stream_id.as_bytes())
 }
 
 fn configure_connected_srt_egress_socket_with<O>(
@@ -96,6 +138,14 @@ trait SrtSocketOps {
         option: c_int,
         value: c_int,
     ) -> Result<(), SrtEgressSocketError>;
+
+    fn set_bytes(
+        &self,
+        socket: SRTSOCKET,
+        option: c_int,
+        option_name: &'static str,
+        value: &[u8],
+    ) -> Result<(), SrtEgressSocketError>;
 }
 
 struct LibSrtSocketOps;
@@ -124,89 +174,35 @@ impl SrtSocketOps for LibSrtSocketOps {
         let (code, message) = last_srt_error();
         Err(SrtEgressSocketError::new("SRTO_SNDSYN", code, message))
     }
+
+    fn set_bytes(
+        &self,
+        socket: SRTSOCKET,
+        option: c_int,
+        option_name: &'static str,
+        value: &[u8],
+    ) -> Result<(), SrtEgressSocketError> {
+        // SAFETY: Category 8 - FFI boundary. `socket` is a live libsrt socket
+        // handle. `value` points to initialized bytes that stay alive for the
+        // duration of the call, and `value.len()` is the exact option length.
+        let result = unsafe {
+            srt_setsockopt(
+                socket,
+                0,
+                option,
+                value.as_ptr() as *const c_void,
+                value.len() as c_int,
+            )
+        };
+        if result >= 0 {
+            return Ok(());
+        }
+
+        let (code, message) = last_srt_error();
+        Err(SrtEgressSocketError::new(option_name, code, message))
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    #[derive(Clone, Default)]
-    struct FakeSocketOps {
-        calls: Rc<RefCell<Vec<(SRTSOCKET, c_int, c_int)>>>,
-        fail: bool,
-    }
-
-    impl SrtSocketOps for FakeSocketOps {
-        fn set_flag(
-            &self,
-            socket: SRTSOCKET,
-            option: c_int,
-            value: c_int,
-        ) -> Result<(), SrtEgressSocketError> {
-            self.calls.borrow_mut().push((socket, option, value));
-            if self.fail {
-                return Err(SrtEgressSocketError::new(
-                    "SRTO_SNDSYN",
-                    4321,
-                    "fake error".to_string(),
-                ));
-            }
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn egress_socket_config_disables_synchronous_send() {
-        let ops = FakeSocketOps::default();
-
-        configure_srt_egress_socket_with(42, SrtEgressSocketConfig::NONBLOCKING_SEND, ops.clone())
-            .unwrap();
-
-        assert_eq!(ops.calls.borrow().as_slice(), &[(42, SRTO_SNDSYN, 0)]);
-    }
-
-    #[test]
-    fn egress_socket_config_surfaces_option_failure() {
-        let ops = FakeSocketOps {
-            fail: true,
-            ..FakeSocketOps::default()
-        };
-
-        let error =
-            configure_srt_egress_socket_with(42, SrtEgressSocketConfig::NONBLOCKING_SEND, ops)
-                .expect_err("socket setup should fail");
-
-        assert_eq!(error.option, "SRTO_SNDSYN");
-        assert_eq!(error.code, 4321);
-    }
-
-    #[test]
-    fn fabric_connected_socket_disables_synchronous_send() {
-        let ops = FakeSocketOps::default();
-
-        configure_connected_srt_egress_socket_with(
-            42,
-            SrtEgressSendMode::FabricNonblocking,
-            ops.clone(),
-        )
-        .unwrap();
-
-        assert_eq!(ops.calls.borrow().as_slice(), &[(42, SRTO_SNDSYN, 0)]);
-    }
-
-    #[test]
-    fn legacy_connected_socket_preserves_existing_send_mode() {
-        let ops = FakeSocketOps::default();
-
-        configure_connected_srt_egress_socket_with(
-            42,
-            SrtEgressSendMode::LegacyBlocking,
-            ops.clone(),
-        )
-        .unwrap();
-
-        assert!(ops.calls.borrow().is_empty());
-    }
-}
+#[path = "egress_socket_tests.rs"]
+mod tests;

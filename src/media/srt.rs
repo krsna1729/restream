@@ -1,6 +1,8 @@
 //! Native SRT ingest and egress via raw `libsrt` FFI bindings.
 
-use std::os::raw::{c_int, c_void};
+use std::os::raw::c_int;
+#[cfg(test)]
+use std::os::raw::c_void;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -101,7 +103,8 @@ pub(crate) use srt_egress_sender::SrtMessageSender;
 #[cfg(test)]
 pub(crate) use srt_egress_sender::SrtSendResult;
 pub(crate) use srt_egress_socket::{
-    SrtEgressSendMode, SrtEgressSocketError, configure_connected_srt_egress_socket,
+    SrtEgressSendMode, SrtEgressSocketError, apply_srt_egress_stream_id,
+    configure_connected_srt_egress_socket,
 };
 #[cfg(test)]
 use srt_monitor::{audio_codec_id, monitor_listener_socket, read_udp_socket_stats, video_codec_id};

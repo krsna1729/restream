@@ -2,9 +2,9 @@ use super::srt_crypto::{apply_srt_crypto_socket, srt_crypto_from_url};
 use super::srt_url::parse_srt_egress_url;
 use super::*;
 use super::{
-    SrtEgressMuxerPortClaim, bind_srt_egress_muxer_port, claim_srt_egress_muxer_port,
-    connected_srt_local_port, resolve_srt_egress_host as resolve_host, set_srt_reuseaddr,
-    to_libc_sockaddr,
+    SrtEgressMuxerPortClaim, apply_srt_egress_stream_id, bind_srt_egress_muxer_port,
+    claim_srt_egress_muxer_port, connected_srt_local_port, resolve_srt_egress_host as resolve_host,
+    set_srt_reuseaddr, to_libc_sockaddr,
 };
 use crate::secret_display::redact_url;
 
@@ -128,34 +128,10 @@ pub async fn start_srt_egress(
             }
 
             if !streamid.is_empty() {
-                let streamid_c = match std::ffi::CString::new(streamid.as_str()) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        error!("Stream ID contains null bytes");
-                        // SAFETY: Valid group socket, clean up on invalid streamid.
-                        unsafe {
-                            srt_close(client_sock);
-                        }
-                        return Err("stream ID contains null bytes".to_string());
-                    }
-                };
-                // SAFETY: Sets SRTO_STREAMID on a valid group socket with a
-                // correctly-sized NUL-terminated C string.
-                unsafe {
-                    check_srt_option_result(
-                        "SRTO_STREAMID",
-                        srt_setsockopt(
-                            client_sock,
-                            0,
-                            SRTO_STREAMID,
-                            streamid_c.as_ptr() as *const c_void,
-                            streamid.len() as c_int,
-                        ),
-                    )
-                }
-                .inspect_err(|_| unsafe {
+                apply_srt_egress_stream_id(client_sock, &streamid).inspect_err(|_| unsafe {
                     srt_close(client_sock);
-                })?;
+                })
+                .map_err(|error| error.to_string())?;
             }
 
             let connect_error = {
@@ -239,28 +215,10 @@ pub async fn start_srt_egress(
             }
 
             if !streamid.is_empty() {
-                let streamid_c = match std::ffi::CString::new(streamid.as_str()) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        error!("Invalid stream ID (contains null byte)");
-                        // SAFETY: Valid socket, clean up on invalid streamid.
-                        unsafe {
-                            srt_close(client_sock);
-                        }
-                        return Err("stream ID contains null bytes".to_string());
-                    }
-                };
-                // SAFETY: Sets SRTO_STREAMID on a valid socket with a
-                // correctly-sized NUL-terminated C string.
-                unsafe {
-                    srt_setsockopt(
-                        client_sock,
-                        0,
-                        SRTO_STREAMID,
-                        streamid_c.as_ptr() as *const c_void,
-                        streamid.len() as c_int,
-                    );
-                }
+                apply_srt_egress_stream_id(client_sock, &streamid).inspect_err(|_| unsafe {
+                    srt_close(client_sock);
+                })
+                .map_err(|error| error.to_string())?;
             }
 
             let muxer_port_claim = reuse_local_srt_egress_port
