@@ -48,7 +48,7 @@ pub use feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 pub use lifecycle::LeafLifecycle;
 pub use manager::{
     DesiredOutput, EgressManager, EgressManagerCommandError, EgressManagerConfig,
-    EgressManagerConfigError, ManagerCommandOutcome,
+    EgressManagerConfigError, EgressManagerDispatchError, ManagerCommandOutcome,
 };
 pub use policy::{LeafLimits, LeafPolicy, RetryState, WorkBudget};
 pub use shard::{

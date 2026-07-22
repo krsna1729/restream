@@ -93,21 +93,54 @@ impl EgressManager {
         &mut self,
         command: EgressCommand,
     ) -> Result<ManagerCommandOutcome, EgressManagerCommandError> {
+        self.dispatch_command(command, |_, _| Ok(())).map_err(
+            |error: EgressManagerDispatchError<()>| match error {
+                EgressManagerDispatchError::Command(command_error) => command_error,
+                EgressManagerDispatchError::Dispatch { .. } => {
+                    unreachable!("infallible dispatch failed")
+                }
+            },
+        )
+    }
+
+    pub fn dispatch_command<E, F>(
+        &mut self,
+        command: EgressCommand,
+        mut dispatch: F,
+    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<E>>
+    where
+        F: FnMut(ShardId, EgressCommand) -> Result<(), E>,
+    {
         match command {
-            EgressCommand::Add(spec) | EgressCommand::Update(spec) => self.apply_spec(spec),
-            EgressCommand::Remove(output_id) => self.apply_remove(output_id),
+            EgressCommand::Add(spec) => {
+                self.dispatch_spec(EgressCommand::Add(spec.clone()), spec, dispatch)
+            }
+            EgressCommand::Update(spec) => {
+                self.dispatch_spec(EgressCommand::Update(spec.clone()), spec, dispatch)
+            }
+            EgressCommand::Remove(output_id) => self.dispatch_remove(output_id, dispatch),
             EgressCommand::DrainShard(shard_id) => {
-                self.reserve_command_slot(shard_id)?;
+                self.check_command_slot(shard_id)
+                    .map_err(EgressManagerDispatchError::Command)?;
+                dispatch(shard_id, EgressCommand::DrainShard(shard_id))
+                    .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
+                self.reserve_command_slot(shard_id)
+                    .map_err(EgressManagerDispatchError::Command)?;
                 Ok(ManagerCommandOutcome::Enqueued { shard_id })
             }
-            EgressCommand::Shutdown => self.apply_shutdown(),
+            EgressCommand::Shutdown => self.dispatch_shutdown(dispatch),
         }
     }
 
-    fn apply_spec(
+    fn dispatch_spec<E, F>(
         &mut self,
+        command: EgressCommand,
         spec: OutputSpec,
-    ) -> Result<ManagerCommandOutcome, EgressManagerCommandError> {
+        mut dispatch: F,
+    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<E>>
+    where
+        F: FnMut(ShardId, EgressCommand) -> Result<(), E>,
+    {
         let shard_id = self.assign_spec(&spec);
         if let Some(current) = self.desired.get(&spec.id) {
             if spec.generation < current.generation {
@@ -122,7 +155,12 @@ impl EgressManager {
             }
         }
 
-        self.reserve_command_slot(shard_id)?;
+        self.check_command_slot(shard_id)
+            .map_err(EgressManagerDispatchError::Command)?;
+        dispatch(shard_id, command)
+            .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
+        self.reserve_command_slot(shard_id)
+            .map_err(EgressManagerDispatchError::Command)?;
         let desired = DesiredOutput {
             id: spec.id.clone(),
             generation: spec.generation,
@@ -132,28 +170,50 @@ impl EgressManager {
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     }
 
-    fn apply_remove(
+    fn dispatch_remove<E, F>(
         &mut self,
         output_id: OutputId,
-    ) -> Result<ManagerCommandOutcome, EgressManagerCommandError> {
+        mut dispatch: F,
+    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<E>>
+    where
+        F: FnMut(ShardId, EgressCommand) -> Result<(), E>,
+    {
         let Some(current) = self.desired.get(&output_id) else {
             return Ok(ManagerCommandOutcome::AlreadyRemoved);
         };
         let shard_id = current.shard_id;
-        self.reserve_command_slot(shard_id)?;
+        self.check_command_slot(shard_id)
+            .map_err(EgressManagerDispatchError::Command)?;
+        dispatch(shard_id, EgressCommand::Remove(output_id.clone()))
+            .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
+        self.reserve_command_slot(shard_id)
+            .map_err(EgressManagerDispatchError::Command)?;
         self.desired.remove(&output_id);
         Ok(ManagerCommandOutcome::Enqueued { shard_id })
     }
 
-    fn apply_shutdown(&mut self) -> Result<ManagerCommandOutcome, EgressManagerCommandError> {
+    fn dispatch_shutdown<E, F>(
+        &mut self,
+        mut dispatch: F,
+    ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<E>>
+    where
+        F: FnMut(ShardId, EgressCommand) -> Result<(), E>,
+    {
         if self.shutting_down {
             return Ok(ManagerCommandOutcome::AlreadyShuttingDown);
         }
         for shard_index in 0..self.config.shard_count.get() {
-            self.check_command_slot(ShardId::new(shard_index))?;
+            self.check_command_slot(ShardId::new(shard_index))
+                .map_err(EgressManagerDispatchError::Command)?;
         }
         for shard_index in 0..self.config.shard_count.get() {
-            self.reserve_command_slot(ShardId::new(shard_index))?;
+            let shard_id = ShardId::new(shard_index);
+            dispatch(shard_id, EgressCommand::Shutdown)
+                .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
+        }
+        for shard_index in 0..self.config.shard_count.get() {
+            self.reserve_command_slot(ShardId::new(shard_index))
+                .map_err(EgressManagerDispatchError::Command)?;
         }
         self.shutting_down = true;
         Ok(ManagerCommandOutcome::Broadcast {
@@ -200,6 +260,12 @@ pub enum ManagerCommandOutcome {
 pub enum EgressManagerCommandError {
     UnknownShard { shard_id: ShardId },
     CommandChannelFull { shard_id: ShardId },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EgressManagerDispatchError<E> {
+    Command(EgressManagerCommandError),
+    Dispatch { shard_id: ShardId, source: E },
 }
 
 pub fn assign_output_to_shard(output_id: &OutputId, shard_count: NonZeroU32) -> ShardId {
@@ -520,5 +586,99 @@ mod tests {
                 shard_id: ShardId::new(1)
             })
         );
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum SendFailure {
+        Closed,
+    }
+
+    #[test]
+    fn failed_add_dispatch_preserves_manager_state() {
+        let mut manager = manager(4);
+        let output_spec = spec("out-dispatch-add");
+        let output_id = output_spec.id.clone();
+        let expected_shard = manager.assign_spec(&output_spec);
+
+        let result =
+            manager.dispatch_command(EgressCommand::Add(output_spec), |shard_id, command| {
+                assert_eq!(shard_id, expected_shard);
+                assert!(matches!(command, EgressCommand::Add(_)));
+                Err(SendFailure::Closed)
+            });
+
+        assert_eq!(
+            result,
+            Err(EgressManagerDispatchError::Dispatch {
+                shard_id: expected_shard,
+                source: SendFailure::Closed,
+            })
+        );
+        assert!(manager.desired_output(&output_id).is_none());
+        assert_eq!(manager.command_depth(expected_shard), 0);
+    }
+
+    #[test]
+    fn failed_remove_dispatch_preserves_desired_output() {
+        let mut manager = manager(4);
+        let output_spec = spec("out-dispatch-remove");
+        let output_id = output_spec.id.clone();
+        let expected_shard = manager.assign_spec(&output_spec);
+
+        assert!(matches!(
+            manager.apply_command(EgressCommand::Add(output_spec.clone())),
+            Ok(ManagerCommandOutcome::Enqueued { .. })
+        ));
+        let result = manager.dispatch_command(
+            EgressCommand::Remove(output_id.clone()),
+            |shard_id, command| {
+                assert_eq!(shard_id, expected_shard);
+                assert!(matches!(command, EgressCommand::Remove(_)));
+                Err(SendFailure::Closed)
+            },
+        );
+
+        assert_eq!(
+            result,
+            Err(EgressManagerDispatchError::Dispatch {
+                shard_id: expected_shard,
+                source: SendFailure::Closed,
+            })
+        );
+        assert_eq!(
+            manager.desired_output(&output_id),
+            Some(&DesiredOutput {
+                id: output_id,
+                generation: 1,
+                shard_id: expected_shard,
+            })
+        );
+        assert_eq!(manager.command_depth(expected_shard), 1);
+    }
+
+    #[test]
+    fn failed_shutdown_dispatch_preserves_shutdown_state() {
+        let mut manager = manager(3);
+
+        let result = manager.dispatch_command(EgressCommand::Shutdown, |shard_id, command| {
+            assert!(matches!(command, EgressCommand::Shutdown));
+            if shard_id == ShardId::new(1) {
+                Err(SendFailure::Closed)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(
+            result,
+            Err(EgressManagerDispatchError::Dispatch {
+                shard_id: ShardId::new(1),
+                source: SendFailure::Closed,
+            })
+        );
+        assert!(!manager.shutting_down);
+        assert_eq!(manager.command_depth(ShardId::new(0)), 0);
+        assert_eq!(manager.command_depth(ShardId::new(1)), 0);
+        assert_eq!(manager.command_depth(ShardId::new(2)), 0);
     }
 }

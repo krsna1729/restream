@@ -118,7 +118,7 @@ pub struct OutputSpec {
 /// plane must not block indefinitely on the command channel; an overload
 /// condition is surfaced as an operator-visible error and reconciliation
 /// retries desired state.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum EgressCommand {
     /// Start or reuse a leaf for this output specification.
     Add(OutputSpec),
