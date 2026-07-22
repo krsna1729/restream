@@ -37,6 +37,11 @@ mod socket;
 mod srt_crypto;
 #[path = "srt_egress.rs"]
 mod srt_egress;
+#[path = "srt/egress_engine.rs"]
+mod srt_egress_engine;
+#[cfg(test)]
+#[path = "srt/egress_engine_tests.rs"]
+mod srt_egress_engine_tests;
 #[path = "srt/egress_poller.rs"]
 mod srt_egress_poller;
 #[cfg(test)]
