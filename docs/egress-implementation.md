@@ -688,6 +688,11 @@ Current branch status:
   and 4 shards (47.4%), so the remaining CPU gap versus legacy is
   per-message path cost, not shard overhead; attribution belongs to the
   Phase 7 perf sweep.
+- Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
+  fault.output-stall passed with a permanently stalled sink isolated beside
+  32 healthy siblings while SRT outputs ran fabric-owned. This is
+  mixed-ownership isolation; a pure-fabric stalled-SRT-destination live
+  variant remains listed under live tests.
 
 ### Removal targets
 
