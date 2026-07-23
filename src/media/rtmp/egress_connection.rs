@@ -2,8 +2,11 @@ use std::io;
 use std::time::Duration;
 
 use bytes::Bytes;
-use rml_rtmp::sessions::{ClientSession, ClientSessionConfig, ClientSessionResult};
+use rml_rtmp::sessions::{
+    ClientSession, ClientSessionConfig, ClientSessionEvent, ClientSessionResult, PublishRequestType,
+};
 use tokio_util::sync::CancellationToken;
+use tracing::error;
 
 use super::egress_transport::{RtmpEgressStream, RtmpUrlParts, connect_rtmp_egress_stream};
 use super::egress_write::write_rtmp_pending_bytes;
@@ -25,6 +28,11 @@ pub(super) struct RtmpEgressSession {
     session: ClientSession,
     connect_config: ClientSessionConfig,
     initial_results: Vec<ClientSessionResult>,
+}
+
+pub(super) enum InitialServerResultError {
+    Parse,
+    Dispatch,
 }
 
 impl RtmpEgressConnection {
@@ -102,9 +110,58 @@ impl RtmpEgressSession {
         Ok(())
     }
 
-    pub(super) fn into_legacy_parts(
-        self,
-    ) -> (RtmpUrlParts, RtmpEgressStream, Vec<u8>, ClientSession) {
-        (self.parts, self.socket, self.remaining, self.session)
+    pub(super) async fn handle_initial_server_results(
+        &mut self,
+    ) -> Result<(), InitialServerResultError> {
+        if self.remaining.is_empty() {
+            return Ok(());
+        }
+        let results = self
+            .session
+            .handle_input(&self.remaining)
+            .map_err(|_| InitialServerResultError::Parse)?;
+        self.handle_server_results(results)
+            .await
+            .map_err(|_| InitialServerResultError::Dispatch)
+    }
+
+    async fn handle_server_results(
+        &mut self,
+        results: Vec<ClientSessionResult>,
+    ) -> Result<(), &'static str> {
+        for result in results {
+            match result {
+                ClientSessionResult::OutboundResponse(packet) => {
+                    write_rtmp_pending_bytes(&mut self.socket, Bytes::from(packet.bytes))
+                        .await
+                        .map_err(|_| "Socket write error")?;
+                }
+                ClientSessionResult::RaisedEvent(event) => match event {
+                    ClientSessionEvent::ConnectionRequestAccepted => {
+                        let packet = match self.session.request_publishing(
+                            self.parts.stream_key.clone(),
+                            PublishRequestType::Live,
+                        ) {
+                            Ok(ClientSessionResult::OutboundResponse(packet)) => packet,
+                            _ => return Err("Failed to build publish request"),
+                        };
+                        write_rtmp_pending_bytes(&mut self.socket, Bytes::from(packet.bytes))
+                            .await
+                            .map_err(|_| "Socket write error")?;
+                    }
+                    ClientSessionEvent::ConnectionRequestRejected { description } => {
+                        error!("Connection request rejected: {}", description);
+                        return Err("Connection request rejected");
+                    }
+                    _ => {}
+                },
+                ClientSessionResult::UnhandleableMessageReceived(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn into_legacy_parts(self) -> (RtmpUrlParts, RtmpEgressStream, ClientSession) {
+        (self.parts, self.socket, self.session)
     }
 }

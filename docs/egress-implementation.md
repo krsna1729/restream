@@ -698,8 +698,9 @@ Current branch status:
   the explicit connection engine.
 - The explicit RTMP connection engine now owns socket establishment, the
   cancellable client handshake, client-session initialization, and the initial
-  connection exchange; the legacy egress task still owns publish handling while
-  TCP readiness and incremental TLS remain future engine work.
+  connection exchange including initial server-result dispatch; the legacy
+  egress task still owns publish handling while TCP readiness and incremental
+  TLS remain future engine work.
 - The legacy RTMP sender remains the runtime owner. Phase 5 has not yet
   introduced TCP readiness polling, moved the hot media publish loop onto
   pending state, added incremental TLS, or provided a default/opt-in runtime

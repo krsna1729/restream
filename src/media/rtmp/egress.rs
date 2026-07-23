@@ -5,11 +5,9 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use rml_rtmp::sessions::{
-    ClientSession, ClientSessionEvent, ClientSessionResult, PublishRequestType,
-};
+use rml_rtmp::sessions::{ClientSessionEvent, ClientSessionResult, PublishRequestType};
 use rml_rtmp::time::RtmpTimestamp;
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{error, info};
 
 use crate::domain::output_spec::RtmpOutputMode;
@@ -21,7 +19,7 @@ use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 use crate::media::startup_policy;
 use crate::secret_display::redact_url;
 
-use super::egress_connection::RtmpEgressConnection;
+use super::egress_connection::{InitialServerResultError, RtmpEgressConnection};
 use super::egress_metadata::{
     output_ring_video_codec_kind, resolved_output_audio_tracks, rtmp_publish_metadata,
     validate_rtmp_output_audio_tracks,
@@ -207,25 +205,20 @@ pub async fn start_rtmp_egress(
         egress_error!("connect_app", error);
         return;
     }
-    let (parts, mut socket, remaining, mut session) = session_ready.into_legacy_parts();
+    if let Err(error) = session_ready.handle_initial_server_results().await {
+        match error {
+            InitialServerResultError::Parse => {
+                egress_error!("connect_app", "failed to parse connect response");
+            }
+            InitialServerResultError::Dispatch => {
+                egress_error!("connect_app", "failed to handle connect response");
+            }
+        }
+        return;
+    }
+    let (parts, mut socket, mut session) = session_ready.into_legacy_parts();
 
     let mut buffer = vec![0u8; 4096];
-    if !remaining.is_empty() {
-        let results = match session.handle_input(&remaining) {
-            Ok(r) => r,
-            Err(_) => {
-                egress_error!("connect_app", "failed to parse connect response");
-                return;
-            }
-        };
-        if handle_client_results(results, &mut socket, &mut session, &parts.stream_key)
-            .await
-            .is_err()
-        {
-            egress_error!("connect_app", "failed to handle connect response");
-            return;
-        }
-    }
 
     let (egress_bytes_sent, egress_metrics, egress_last_progress_ms) = {
         engine
@@ -707,44 +700,4 @@ pub async fn start_rtmp_egress(
             }
         }
     }
-}
-
-async fn handle_client_results<S>(
-    results: Vec<ClientSessionResult>,
-    socket: &mut S,
-    session: &mut ClientSession,
-    stream_key: &str,
-) -> Result<(), &'static str>
-where
-    S: AsyncWrite + Unpin,
-{
-    for res in results {
-        match res {
-            ClientSessionResult::OutboundResponse(pkt) => {
-                write_rtmp_pending_bytes(socket, Bytes::from(pkt.bytes))
-                    .await
-                    .map_err(|_| "Socket write error")?;
-            }
-            ClientSessionResult::RaisedEvent(event) => match event {
-                ClientSessionEvent::ConnectionRequestAccepted => {
-                    let pub_pkt = match session
-                        .request_publishing(stream_key.to_string(), PublishRequestType::Live)
-                    {
-                        Ok(ClientSessionResult::OutboundResponse(p)) => p,
-                        _ => return Err("Failed to build publish request"),
-                    };
-                    write_rtmp_pending_bytes(socket, Bytes::from(pub_pkt.bytes))
-                        .await
-                        .map_err(|_| "Socket write error")?;
-                }
-                ClientSessionEvent::ConnectionRequestRejected { description } => {
-                    error!("Connection request rejected: {}", description);
-                    return Err("Connection request rejected");
-                }
-                _ => {}
-            },
-            ClientSessionResult::UnhandleableMessageReceived(_) => {}
-        }
-    }
-    Ok(())
 }
