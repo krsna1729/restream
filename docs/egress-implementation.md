@@ -696,6 +696,10 @@ Current branch status:
   first runtime proof. The in-loop server control-response and publish-request
   paths still use direct writes until client-session result dispatch moves into
   the explicit connection engine.
+- The explicit RTMP connection engine now owns socket establishment and the
+  cancellable client handshake; the legacy egress task still owns session
+  initialization and publication while TCP readiness and incremental TLS remain
+  future engine work.
 - The legacy RTMP sender remains the runtime owner. Phase 5 has not yet
   introduced TCP readiness polling, moved the hot media publish loop onto
   pending state, added incremental TLS, or provided a default/opt-in runtime

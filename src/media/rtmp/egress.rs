@@ -21,6 +21,7 @@ use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 use crate::media::startup_policy;
 use crate::secret_display::redact_url;
 
+use super::egress_connection::RtmpEgressConnection;
 use super::egress_metadata::{
     output_ring_video_codec_kind, resolved_output_audio_tracks, rtmp_publish_metadata,
     validate_rtmp_output_audio_tracks,
@@ -31,17 +32,14 @@ use super::egress_packets::{
     should_send_startup_audio_sequence_header, startup_video_sequence_header,
     validate_rtmp_output_audio_packet_track, video_sequence_header_for_keyframe,
 };
-use super::egress_transport::{connect_rtmp_egress_stream, parse_rtmp_url, rtmp_sender_quality};
+use super::egress_transport::{parse_rtmp_url, rtmp_sender_quality};
 use super::egress_write::write_rtmp_pending_bytes;
 use super::enhanced::{
     cache_hevc_parameter_sets, enhanced_rtmp_connect_packet,
     raw_packet_starts_with_hevc_parameter_set,
 };
 use super::flv::{FlvVideoPacketKind, classify_flv_video_packet};
-use super::handshake::perform_client_handshake;
 use super::timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
-
-const RTMP_EGRESS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn start_rtmp_egress(
     output_id: String,
@@ -161,6 +159,8 @@ pub async fn start_rtmp_egress(
 
     egress_phase!(EgressPhase::Connecting);
     egress_target_addr!(format!("{}:{}", parts.host, parts.port));
+    let target_host = parts.host.clone();
+    let target_port = parts.port;
     info!(
         "[rtmp-egress] Connecting to {}:{} via {} (app: {}, key: {})",
         parts.host,
@@ -170,13 +170,13 @@ pub async fn start_rtmp_egress(
         parts.stream_key
     );
 
-    let mut socket =
-        match connect_rtmp_egress_stream(&parts, engine.config.rtmp_stream_buffer_bytes).await {
+    let mut connection =
+        match RtmpEgressConnection::connect(parts, engine.config.rtmp_stream_buffer_bytes).await {
             Ok(s) => s,
             Err(e) => {
                 error!(
                     "[rtmp-egress] Connection failed to {}:{}: {:?}",
-                    parts.host, parts.port, e
+                    target_host, target_port, e
                 );
                 egress_error!("connect", e.to_string());
                 return;
@@ -185,22 +185,15 @@ pub async fn start_rtmp_egress(
 
     // Perform handshake
     egress_phase!(EgressPhase::Handshaking);
-    let remaining = match tokio::time::timeout(
-        RTMP_EGRESS_HANDSHAKE_TIMEOUT,
-        perform_client_handshake(&mut socket, &cancel_token),
-    )
-    .await
-    {
-        Ok(Ok(remaining)) => remaining,
-        Ok(Err(error)) => {
-            egress_error!("handshake", error);
-            return;
-        }
-        Err(_) => {
-            egress_error!("handshake", "RTMP egress handshake timed out");
-            return;
-        }
-    };
+    if let Err(error) = connection.perform_handshake(&cancel_token).await {
+        egress_error!("handshake", error);
+        return;
+    }
+    let RtmpEgressConnection {
+        parts,
+        mut socket,
+        remaining,
+    } = connection;
 
     // Initialize ClientSession with tcUrl for MediaMTX compatibility
     let mut config = ClientSessionConfig::new();

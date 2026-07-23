@@ -4,6 +4,7 @@
 //! The public entry points remain re-exported here for callers.
 
 mod egress;
+mod egress_connection;
 mod egress_metadata;
 mod egress_packets;
 mod egress_transport;
