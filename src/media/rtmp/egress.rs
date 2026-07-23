@@ -184,14 +184,16 @@ pub async fn start_rtmp_egress(
         egress_error!("handshake", error);
         return;
     }
-    let mut session_ready =
-        match connection.initialize_client_session(engine.config.rtmp_egress_chunk_size) {
-            Ok(session_ready) => session_ready,
-            Err(error) => {
-                egress_error!("session", error);
-                return;
-            }
-        };
+    let mut session_ready = match connection.initialize_client_session(
+        engine.config.rtmp_egress_chunk_size,
+        engine.config.egress_fabric.max_pending_bytes,
+    ) {
+        Ok(session_ready) => session_ready,
+        Err(error) => {
+            egress_error!("session", error);
+            return;
+        }
+    };
     if session_ready.write_initial_results().await.is_err() {
         egress_error!("session", "failed to write session init");
         return;

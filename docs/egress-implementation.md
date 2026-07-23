@@ -693,8 +693,9 @@ Current branch status:
   behavior, and the legacy session-init, connect-request, session-result,
   publish metadata, cached, deferred, refreshed, steady-state media, and live
   control write paths use one queue that transfers from connection startup into
-  the live egress loop. It is not yet a capacity-accounted reactor across
-  readiness visits. Client-session result dispatch remains in the legacy egress
+  the live egress loop. Queue admission now enforces
+  `RESTREAM_EGRESS_MAX_PENDING_BYTES` for those application-owned bytes. It is
+  not yet a readiness-driven reactor across visits. Client-session result dispatch remains in the legacy egress
   task until it can move with its lifecycle semantics into the explicit
   connection engine.
 - The explicit RTMP connection engine now owns socket establishment, the

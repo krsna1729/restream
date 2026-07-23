@@ -62,6 +62,7 @@ impl RtmpEgressConnection {
     pub(super) fn initialize_client_session(
         self,
         chunk_size: u32,
+        max_pending_bytes: usize,
     ) -> Result<RtmpEgressSession, String> {
         let mut config = ClientSessionConfig::new();
         let scheme = if self.parts.tls { "rtmps" } else { "rtmp" };
@@ -81,7 +82,7 @@ impl RtmpEgressConnection {
             session,
             connect_config,
             initial_results,
-            write_queue: RtmpWriteQueue::default(),
+            write_queue: RtmpWriteQueue::new(max_pending_bytes),
         })
     }
 }

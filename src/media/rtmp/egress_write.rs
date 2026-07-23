@@ -9,20 +9,47 @@ pub(crate) enum RtmpWriteAdvanceError {
     BeyondPending { written: usize, pending: usize },
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RtmpWriteQueueError {
+    PendingCapacityExceeded {
+        pending: usize,
+        additional: usize,
+        max_pending: usize,
+    },
+}
+
+#[derive(Debug)]
 pub(crate) struct RtmpWriteQueue {
     chunks: VecDeque<Bytes>,
     front_offset: usize,
     pending_bytes: usize,
+    max_pending_bytes: usize,
 }
 
 impl RtmpWriteQueue {
-    pub(crate) fn push(&mut self, bytes: Bytes) {
-        if bytes.is_empty() {
-            return;
+    pub(crate) fn new(max_pending_bytes: usize) -> Self {
+        Self {
+            chunks: VecDeque::new(),
+            front_offset: 0,
+            pending_bytes: 0,
+            max_pending_bytes,
         }
-        self.pending_bytes = self.pending_bytes.saturating_add(bytes.len());
+    }
+
+    pub(crate) fn try_push(&mut self, bytes: Bytes) -> Result<(), RtmpWriteQueueError> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        if bytes.len() > self.max_pending_bytes.saturating_sub(self.pending_bytes) {
+            return Err(RtmpWriteQueueError::PendingCapacityExceeded {
+                pending: self.pending_bytes,
+                additional: bytes.len(),
+                max_pending: self.max_pending_bytes,
+            });
+        }
+        self.pending_bytes += bytes.len();
         self.chunks.push_back(bytes);
+        Ok(())
     }
 
     pub(crate) fn front_chunk(&self) -> Option<&[u8]> {
@@ -66,6 +93,12 @@ impl RtmpWriteQueue {
     }
 }
 
+impl Default for RtmpWriteQueue {
+    fn default() -> Self {
+        Self::new(usize::MAX)
+    }
+}
+
 pub(crate) async fn write_rtmp_pending_bytes<S>(
     socket: &mut S,
     queue: &mut RtmpWriteQueue,
@@ -75,7 +108,12 @@ where
     S: AsyncWrite + Unpin,
 {
     let pending_before = queue.pending_bytes();
-    queue.push(bytes);
+    queue.try_push(bytes).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::WouldBlock,
+            format!("RTMP pending write limit reached: {error:?}"),
+        )
+    })?;
     let total = queue.pending_bytes().saturating_sub(pending_before);
 
     while !queue.is_empty() {
@@ -142,8 +180,8 @@ mod tests {
     #[test]
     fn rtmp_write_queue_advances_across_packet_boundaries() {
         let mut queue = RtmpWriteQueue::default();
-        queue.push(Bytes::from_static(b"abc"));
-        queue.push(Bytes::from_static(b"de"));
+        queue.try_push(Bytes::from_static(b"abc")).unwrap();
+        queue.try_push(Bytes::from_static(b"de")).unwrap();
 
         assert_eq!(queue.pending_bytes(), 5);
         assert_eq!(queue.front_chunk(), Some(&b"abc"[..]));
@@ -165,7 +203,7 @@ mod tests {
     fn rtmp_write_queue_ignores_empty_chunks() {
         let mut queue = RtmpWriteQueue::default();
 
-        queue.push(Bytes::new());
+        queue.try_push(Bytes::new()).unwrap();
 
         assert!(queue.is_empty());
         assert_eq!(queue.front_chunk(), None);
@@ -174,7 +212,7 @@ mod tests {
     #[test]
     fn rtmp_write_queue_rejects_advancing_past_pending_bytes() {
         let mut queue = RtmpWriteQueue::default();
-        queue.push(Bytes::from_static(b"abc"));
+        queue.try_push(Bytes::from_static(b"abc")).unwrap();
 
         let error = queue.advance(4).unwrap_err();
 
@@ -183,6 +221,25 @@ mod tests {
             RtmpWriteAdvanceError::BeyondPending {
                 written: 4,
                 pending: 3
+            }
+        );
+        assert_eq!(queue.pending_bytes(), 3);
+        assert_eq!(queue.front_chunk(), Some(&b"abc"[..]));
+    }
+
+    #[test]
+    fn rtmp_write_queue_rejects_packet_that_exceeds_pending_capacity() {
+        let mut queue = RtmpWriteQueue::new(4);
+        queue.try_push(Bytes::from_static(b"abc")).unwrap();
+
+        let error = queue.try_push(Bytes::from_static(b"de")).unwrap_err();
+
+        assert_eq!(
+            error,
+            RtmpWriteQueueError::PendingCapacityExceeded {
+                pending: 3,
+                additional: 2,
+                max_pending: 4,
             }
         );
         assert_eq!(queue.pending_bytes(), 3);
@@ -215,5 +272,21 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::WriteZero);
         assert!(writer.bytes.is_empty());
         assert_eq!(queue.pending_bytes(), 3);
+    }
+
+    #[tokio::test]
+    async fn rtmp_pending_write_rejects_new_bytes_when_capacity_is_full() {
+        let mut writer = PartialWriter::with_max_write(usize::MAX);
+        let mut queue = RtmpWriteQueue::new(3);
+        queue.try_push(Bytes::from_static(b"abc")).unwrap();
+
+        let error = write_rtmp_pending_bytes(&mut writer, &mut queue, Bytes::from_static(b"d"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(writer.bytes.is_empty());
+        assert_eq!(queue.pending_bytes(), 3);
+        assert_eq!(queue.front_chunk(), Some(&b"abc"[..]));
     }
 }

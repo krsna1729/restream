@@ -245,6 +245,7 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
             "RESTREAM_EGRESS_VISIT_MAX_UNITS",
             "RESTREAM_EGRESS_VISIT_MAX_BYTES",
             "RESTREAM_EGRESS_VISIT_MAX_US",
+            "RESTREAM_EGRESS_MAX_PENDING_BYTES",
         ],
         || {
             let fabric = EgressFabricConfig::from_env();
@@ -274,6 +275,7 @@ fn egress_fabric_config_loads_and_clamps_env() {
             ("RESTREAM_EGRESS_VISIT_MAX_UNITS", "0"),
             ("RESTREAM_EGRESS_VISIT_MAX_BYTES", "1"),
             ("RESTREAM_EGRESS_VISIT_MAX_US", "0"),
+            ("RESTREAM_EGRESS_MAX_PENDING_BYTES", "999999999"),
         ],
         || {
             let fabric = EgressFabricConfig::from_env();
@@ -288,6 +290,7 @@ fn egress_fabric_config_loads_and_clamps_env() {
             assert_eq!(fabric.visit_max_units, 1);
             assert_eq!(fabric.visit_max_bytes, 188);
             assert_eq!(fabric.visit_max_us, 1);
+            assert_eq!(fabric.max_pending_bytes, 16 * 1024 * 1024);
         },
     );
 }

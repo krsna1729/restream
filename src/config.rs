@@ -46,6 +46,7 @@ pub struct EgressFabricConfig {
     pub visit_max_units: usize,
     pub visit_max_bytes: usize,
     pub visit_max_us: u64,
+    pub max_pending_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +93,7 @@ impl Default for EgressFabricConfig {
             visit_max_units: 32,
             visit_max_bytes: 256 * 1024,
             visit_max_us: 2_000,
+            max_pending_bytes: 256 * 1024,
         }
     }
 }
@@ -154,6 +156,11 @@ impl EgressFabricConfig {
                 .clamp(188, 16 * 1024 * 1024),
             visit_max_us: env_u64("RESTREAM_EGRESS_VISIT_MAX_US", defaults.visit_max_us)
                 .clamp(1, 1_000_000),
+            max_pending_bytes: env_usize(
+                "RESTREAM_EGRESS_MAX_PENDING_BYTES",
+                defaults.max_pending_bytes,
+            )
+            .clamp(1, 16 * 1024 * 1024),
         }
     }
 
@@ -603,6 +610,7 @@ impl AppConfig {
                 "visitMaxUnits": self.egress_fabric.visit_max_units,
                 "visitMaxBytes": self.egress_fabric.visit_max_bytes,
                 "visitMaxUs": self.egress_fabric.visit_max_us,
+                "maxPendingBytes": self.egress_fabric.max_pending_bytes,
             },
             "paths": {
                 "db": self.db_path,
