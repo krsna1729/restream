@@ -793,8 +793,11 @@ Current branch status:
   a destination input through the existing input gate, standby GOP cache, and
   timestamp mapper without activating the backend yet.
 - Runtime graph projection now renders reserved recirculation outputs as
-  output-to-target-input edges so the planned topology is operator-visible
-  before backend activation.
+  output-to-target-input edges, including runtime output status, target
+  address, and byte progress when the recirculation output is active.
+- API lifecycle tests now cover create, target update, start, status/progress,
+  stop, delete, runtime cancellation, and persisted row removal for
+  `pipeline://` outputs.
 
 ### Proof
 
