@@ -20,6 +20,7 @@ use crate::secret_display::redact_url;
 use super::egress_connection::{
     InitialServerResultError, RtmpEgressConnection, RtmpSessionError, RtmpSessionEvent,
 };
+use super::egress_engine::{RtmpMediaAction, RtmpMediaEncoder};
 use super::egress_metadata::{
     output_ring_video_codec_kind, resolved_output_audio_tracks, rtmp_publish_metadata,
     validate_rtmp_output_audio_tracks,
@@ -254,7 +255,8 @@ pub async fn start_rtmp_egress(
     let mut timestamp_guard = RtmpTimestampGuard::new();
     // Per-egress reusable conversion buffers avoid per-frame allocation and cross-task contention.
     let mut video_buf = Vec::<u8>::new();
-    let mut audio_buf = Vec::<u8>::new();
+    let mut media_encoder = RtmpMediaEncoder::new(enhanced_hevc_video, Vec::new());
+    let mut media_actions = Vec::with_capacity(2);
     // Pre-allocated burst buffer — declared outside the loop so capacity
     // is retained across bursts instead of re-allocating per burst.
     let mut packets: Vec<Arc<MediaPacket>> = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
@@ -481,6 +483,29 @@ pub async fn start_rtmp_egress(
                                 // entire publish as video-only.
                                 continue;
                             }
+                            media_actions.clear();
+                            media_encoder.encode(&packet, &mut media_actions);
+                            for action in media_actions.drain(..) {
+                                let RtmpMediaAction::Audio { payload, timestamp } = action else {
+                                    continue;
+                                };
+                                match session.publish_audio_data(payload, timestamp, false).await {
+                                    Ok(sent_bytes) => {
+                                        if let Some(ref counter) = egress_bytes_sent {
+                                            counter.fetch_add(sent_bytes, Ordering::Relaxed);
+                                        }
+                                        if let Some(ref metrics) = egress_metrics {
+                                            metrics.record_out(sent_bytes);
+                                        }
+                                        burst_made_progress = true;
+                                    }
+                                    Err(_) => {
+                                        error!("Failed to build RTMP audio publish packet");
+                                        egress_error!("send", "failed to write RTMP audio packet");
+                                    }
+                                }
+                            }
+                            continue;
                         }
                         let mut ts = timestamp_guard.packet_timestamp(&packet);
                         let payload = if packet.format == PayloadFormat::Raw {
@@ -586,10 +611,7 @@ pub async fn start_rtmp_egress(
                                     }
                                     Bytes::copy_from_slice(&video_buf)
                                 }
-                                MediaType::Audio => {
-                                    codec::audio_for_rtmp_into(&packet.payload, &mut audio_buf);
-                                    Bytes::copy_from_slice(&audio_buf)
-                                }
+                                MediaType::Audio => unreachable!("audio packets continue above"),
                             }
                         } else {
                             if packet.media_type == MediaType::Video
@@ -625,7 +647,7 @@ pub async fn start_rtmp_egress(
                                     .publish_video_data(payload, ts, can_be_dropped)
                                     .await
                             }
-                            MediaType::Audio => session.publish_audio_data(payload, ts, false).await,
+                            MediaType::Audio => unreachable!("audio packets continue above"),
                         };
                         match sent_bytes {
                             Ok(sent_bytes) => {
