@@ -770,13 +770,16 @@ Current branch status:
 
 - `pipeline://` and `recirculate://` are recognized as recirculation schemes
   and classified under the planned pipeline protocol.
-- The API rejects those URLs with a not-runnable-yet error until topology
-  validation, target input ownership, and the in-process backend are complete.
+- The API parses reserved recirculation URLs, asks the application service to
+  validate topology and target input ownership, then rejects valid candidates
+  with a not-runnable-yet error until the in-process backend is complete.
 - A pure application validator now parses typed recirculation targets and
   rejects direct and obvious indirect pipeline cycles before runtime backend
   ownership is enabled.
 - Target input ownership validation rejects missing, cross-pipeline, disabled,
   or selected inputs before a recirculation backend can claim the target.
+- Application-level recirculation validation now owns the output/input lookups
+  and maps workflow failures to service errors, keeping HTTP handlers thin.
 - Runtime graph projection now renders reserved recirculation outputs as
   output-to-target-input edges so the planned topology is operator-visible
   before backend activation.

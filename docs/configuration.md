@@ -208,12 +208,12 @@ Supported routing behavior:
 | `srt://...` | Native SRT MPEG-TS egress; percent-encoded characters in the `streamid` query parameter are decoded automatically |
 | `hls://...` | Starts the pipeline's local in-memory HLS segmenter |
 | `sink://...` | Discards media through the egress fabric for diagnostics, soak tests, and capacity measurement |
-| `pipeline://...`, `recirculate://...` | Reserved for in-process pipeline recirculation; rejected until Phase 6a topology validation and backend ownership are complete |
+| `pipeline://...`, `recirculate://...` | Reserved for in-process pipeline recirculation; candidate topology and target input are validated, then rejected until backend ownership is complete |
 | `http://...`, `https://...` | Starts the local MPEG-TS segmenter and uploads segments/playlist with HTTP PUT |
 
 Any other prefix is rejected during validation. Reserved recirculation URLs are
-recognized and rejected with a not-runnable-yet error until the backend is
-complete. The served preview HLS path is
+recognized, checked for cycles and target-input ownership, and rejected with a
+not-runnable-yet error until the backend is complete. The served preview HLS path is
 fragmented MP4 (`init.mp4` + `.m4s`), but HTTP/HTTPS HLS upload intentionally
 stays on MPEG-TS for ingest compatibility. For HTTP/HTTPS HLS upload,
 segment upload URLs are derived from the playlist target: a `file=` query

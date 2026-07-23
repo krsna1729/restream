@@ -6,6 +6,7 @@ use sqlx::SqlitePool;
 
 use crate::api::AppServices;
 use crate::application::pipeline_inputs::PipelineInputService;
+use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
     AgentService, AuthService, FileIngestService, HealthService, IngestService, LogService,
     MediaLibraryService, OutputService, PipelineService, SettingsService,
@@ -31,12 +32,18 @@ impl<'pool> SqliteServiceFactory<'pool> {
     pub fn compose(&self) -> AppServices {
         let pipeline_service = self.pipeline_service();
         let output_service = self.output_service();
+        let pipeline_input_service = self.pipeline_input_service(pipeline_service.clone());
+        let recirculation_service = RecirculationService::with_services(
+            output_service.clone(),
+            pipeline_input_service.clone(),
+        );
         let ingest_service = self.ingest_service();
         let settings_service =
             self.settings_service_with(pipeline_service.clone(), output_service.clone());
 
         AppServices {
-            pipeline_input_service: self.pipeline_input_service(pipeline_service.clone()),
+            pipeline_input_service,
+            recirculation_service,
             auth_service: self.auth_service(),
             settings_service,
             health_service: self.health_service(),

@@ -16,7 +16,7 @@ use std::{sync::Arc, time::Duration};
 use crate::api_view_models;
 
 use crate::domain::output_spec::{
-    OutputConfig, OutputProtocolConfig, OutputUrlScheme, ProtocolCapabilities,
+    OutputConfig, OutputProtocolConfig, OutputUrlScheme, ProtocolCapabilities, RecirculationTarget,
 };
 
 use crate::domain::state::DesiredOutputState;
@@ -298,11 +298,9 @@ fn output_state_response(
 
 type ValidationResponse = Box<Response>;
 
-// Validate and canonicalize output mutations at the HTTP boundary so services
-// only ever see normalized absolute URLs and supported config choices.
-fn validate_output_payload(
+fn validate_output_payload_fields(
     payload: &OutputPayload,
-) -> Result<ValidatedOutputPayload, ValidationResponse> {
+) -> Result<OutputConfig, ValidationResponse> {
     if let Some(response) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
         return Err(Box::new(response));
     }
@@ -331,6 +329,13 @@ fn validate_output_payload(
         return Err(Box::new(bad_request(CUSTOM_OUTPUT_ENCODING_ERROR)));
     }
 
+    Ok(output_config)
+}
+
+fn validate_output_transport(
+    payload: &OutputPayload,
+    output_config: OutputConfig,
+) -> Result<ValidatedOutputPayload, ValidationResponse> {
     // Normalize once at the API boundary so downstream services only receive
     // absolute URLs in a canonical host/scheme form.
     let Some(url) = normalize_output_url(&payload.url) else {
@@ -360,6 +365,46 @@ fn validate_output_payload(
         url,
         monitoring_url,
     })
+}
+
+// Validate and canonicalize output mutations at the HTTP boundary so services
+// only ever see normalized absolute URLs and supported config choices.
+fn validate_output_payload(
+    payload: &OutputPayload,
+) -> Result<ValidatedOutputPayload, ValidationResponse> {
+    let output_config = validate_output_payload_fields(payload)?;
+    validate_output_transport(payload, output_config)
+}
+
+async fn validate_output_payload_for_pipeline(
+    state: &AppState,
+    source_pipeline_id: &str,
+    payload: &OutputPayload,
+) -> Result<ValidatedOutputPayload, ValidationResponse> {
+    if matches!(
+        OutputUrlScheme::from_url(&payload.url),
+        OutputUrlScheme::Pipeline | OutputUrlScheme::Recirculate
+    ) {
+        let _output_config = validate_output_payload_fields(payload)?;
+        validate_reserved_recirculation_candidate(state, source_pipeline_id, &payload.url).await?;
+        return Err(Box::new(bad_request(PIPELINE_OUTPUT_RESERVED_ERROR)));
+    }
+
+    validate_output_payload(payload)
+}
+
+async fn validate_reserved_recirculation_candidate(
+    state: &AppState,
+    source_pipeline_id: &str,
+    url: &str,
+) -> Result<(), ValidationResponse> {
+    let target =
+        RecirculationTarget::parse(url).map_err(|error| Box::new(bad_request(error.message())))?;
+    state
+        .recirculation_service
+        .validate_output_candidate(source_pipeline_id, &target)
+        .await
+        .map_err(|error| Box::new(ApiError::from(error).into_response()))
 }
 
 /// Fetches and summarizes lightweight YouTube watch-page metadata for output
@@ -411,7 +456,8 @@ pub async fn outputs_create_handler(
         return Ok(response);
     }
 
-    let validated = match validate_output_payload(&payload) {
+    let validated = match validate_output_payload_for_pipeline(&state, &pipeline_id, &payload).await
+    {
         Ok(validated) => validated,
         Err(response) => return Ok(*response),
     };
@@ -450,7 +496,8 @@ pub async fn outputs_update_handler(
         return Ok(response);
     }
 
-    let validated = match validate_output_payload(&payload) {
+    let validated = match validate_output_payload_for_pipeline(&state, &pipeline_id, &payload).await
+    {
         Ok(validated) => validated,
         Err(response) => return Ok(*response),
     };
