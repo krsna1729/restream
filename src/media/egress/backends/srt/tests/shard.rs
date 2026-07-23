@@ -93,6 +93,23 @@ impl SrtSocketConnector for FakeSocketConnector {
     }
 }
 
+#[derive(Default)]
+struct FakeResolveCompletionSource {
+    completions: Vec<SrtResolvedConnect>,
+}
+
+impl FakeResolveCompletionSource {
+    fn with(completions: Vec<SrtResolvedConnect>) -> Self {
+        Self { completions }
+    }
+}
+
+impl SrtResolveCompletionSource for FakeResolveCompletionSource {
+    fn drain_resolved(&mut self, resolved: &mut Vec<SrtResolvedConnect>) {
+        resolved.append(&mut self.completions);
+    }
+}
+
 fn fabric_connect_config(peer_addrs: &[std::net::SocketAddr]) -> SrtFabricEgressConnectConfig<'_> {
     SrtFabricEgressConnectConfig::plaintext(peer_addrs, "publish:key", 1500, None)
 }
@@ -426,6 +443,86 @@ fn srt_shard_backend_complete_pending_connect_rejects_missing_output() {
     );
 
     assert_eq!(result, Err(SrtPendingConnectError::Missing));
+    assert!(connector_handle.calls().is_empty());
+}
+
+#[test]
+fn srt_shard_backend_media_tick_completes_resolved_connect() {
+    let peer_addrs = peer_addrs();
+    let poller = FakeReadinessPoller::default();
+    let poller_handle = poller.clone();
+    let configurator = FakeSocketConfigurator::default();
+    let configurator_handle = configurator.clone();
+    let connector = FakeSocketConnector::returning(42);
+    let connector_handle = connector.clone();
+    let mut backend = SrtShardBackend::with_runtime_components(
+        poller,
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+        configurator,
+        connector,
+        FakeResolveCompletionSource::with(vec![SrtResolvedConnect {
+            output_id: OutputId::new("out-a"),
+            generation: 7,
+            peer_addrs: peer_addrs.clone(),
+        }]),
+    );
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-a",
+        7,
+        ProtocolSpec::Srt {
+            url: "srt://primary:9000?streamid=publish%3Akey".to_string(),
+        },
+    )));
+
+    backend.on_media_tick();
+
+    assert!(backend.pending_connect(&OutputId::new("out-a")).is_none());
+    assert_eq!(
+        connector_handle.calls(),
+        vec![FakeConnectCall {
+            peer_addrs,
+            stream_id: "publish:key".to_string(),
+            connect_timeout_ms: 10000,
+        }]
+    );
+    assert_eq!(
+        configurator_handle.calls(),
+        vec![(42, SrtEgressSendMode::FabricNonblocking)]
+    );
+    assert_eq!(
+        poller_handle.registered(),
+        vec![(42, LeafKey(0), 7, SrtEgressInterest::WRITE)]
+    );
+}
+
+#[test]
+fn srt_shard_backend_media_tick_ignores_stale_resolved_connect() {
+    let connector = FakeSocketConnector::returning(42);
+    let connector_handle = connector.clone();
+    let mut backend = SrtShardBackend::with_runtime_components(
+        FakeReadinessPoller::default(),
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+        FakeSocketConfigurator::default(),
+        connector,
+        FakeResolveCompletionSource::with(vec![SrtResolvedConnect {
+            output_id: OutputId::new("out-a"),
+            generation: 6,
+            peer_addrs: peer_addrs(),
+        }]),
+    );
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-a",
+        7,
+        ProtocolSpec::Srt {
+            url: "srt://primary:9000?streamid=publish:key".to_string(),
+        },
+    )));
+
+    backend.on_media_tick();
+
+    assert!(backend.pending_connect(&OutputId::new("out-a")).is_some());
     assert!(connector_handle.calls().is_empty());
 }
 

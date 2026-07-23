@@ -37,6 +37,13 @@ pub(crate) enum SrtPendingConnectError {
     Connect(SrtBackendConnectError),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SrtResolvedConnect {
+    pub(crate) output_id: OutputId,
+    pub(crate) generation: u64,
+    pub(crate) peer_addrs: Vec<std::net::SocketAddr>,
+}
+
 pub(crate) struct SrtFabricLeaf<T>
 where
     T: SrtMessageSender,
@@ -116,6 +123,10 @@ pub(crate) trait SrtSocketConnector {
     fn connect(&mut self, config: SrtFabricEgressConnectConfig<'_>) -> Result<SRTSOCKET, String>;
 }
 
+pub(crate) trait SrtResolveCompletionSource {
+    fn drain_resolved(&mut self, resolved: &mut Vec<SrtResolvedConnect>);
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct NativeSrtSocketConnector;
 
@@ -123,6 +134,13 @@ impl SrtSocketConnector for NativeSrtSocketConnector {
     fn connect(&mut self, config: SrtFabricEgressConnectConfig<'_>) -> Result<SRTSOCKET, String> {
         connect_fabric_srt_egress_socket(config)
     }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct NoopSrtResolveCompletionSource;
+
+impl SrtResolveCompletionSource for NoopSrtResolveCompletionSource {
+    fn drain_resolved(&mut self, _resolved: &mut Vec<SrtResolvedConnect>) {}
 }
 
 impl SrtReadinessPoller for SrtFabricPoller {
@@ -149,13 +167,21 @@ impl SrtReadinessPoller for SrtFabricPoller {
     }
 }
 
-pub(crate) struct SrtShardBackend<P, C = NativeSrtSocketConfigurator>
-where
+pub(crate) struct SrtShardBackend<
+    P,
+    C = NativeSrtSocketConfigurator,
+    K = NativeSrtSocketConnector,
+    R = NoopSrtResolveCompletionSource,
+> where
     P: SrtReadinessPoller,
     C: SrtSocketConfigurator,
+    K: SrtSocketConnector,
+    R: SrtResolveCompletionSource,
 {
     poller: P,
     socket_configurator: C,
+    socket_connector: K,
+    resolve_completions: R,
     feed: TsFeed,
     budget: WorkBudget,
     leaves: Vec<Option<NativeSrtLeaf>>,
@@ -176,7 +202,13 @@ struct PendingSrtConnect {
     connect_spec: SrtFabricEgressConnectSpec,
 }
 
-impl<P> SrtShardBackend<P, NativeSrtSocketConfigurator>
+impl<P>
+    SrtShardBackend<
+        P,
+        NativeSrtSocketConfigurator,
+        NativeSrtSocketConnector,
+        NoopSrtResolveCompletionSource,
+    >
 where
     P: SrtReadinessPoller,
 {
@@ -185,7 +217,7 @@ where
     }
 }
 
-impl<P, C> SrtShardBackend<P, C>
+impl<P, C> SrtShardBackend<P, C, NativeSrtSocketConnector, NoopSrtResolveCompletionSource>
 where
     P: SrtReadinessPoller,
     C: SrtSocketConfigurator,
@@ -196,9 +228,37 @@ where
         budget: WorkBudget,
         socket_configurator: C,
     ) -> Self {
+        Self::with_runtime_components(
+            poller,
+            feed,
+            budget,
+            socket_configurator,
+            NativeSrtSocketConnector,
+            NoopSrtResolveCompletionSource,
+        )
+    }
+}
+
+impl<P, C, K, R> SrtShardBackend<P, C, K, R>
+where
+    P: SrtReadinessPoller,
+    C: SrtSocketConfigurator,
+    K: SrtSocketConnector,
+    R: SrtResolveCompletionSource,
+{
+    pub(crate) fn with_runtime_components(
+        poller: P,
+        feed: TsFeed,
+        budget: WorkBudget,
+        socket_configurator: C,
+        socket_connector: K,
+        resolve_completions: R,
+    ) -> Self {
         Self {
             poller,
             socket_configurator,
+            socket_connector,
+            resolve_completions,
             feed,
             budget,
             leaves: Vec::new(),
@@ -233,14 +293,14 @@ where
         Ok(key)
     }
 
-    pub(crate) fn add_resolved_socket_with<K>(
+    pub(crate) fn add_resolved_socket_with<T>(
         &mut self,
         common: LeafCommon,
         config: SrtFabricEgressConnectConfig<'_>,
-        mut connector: K,
+        mut connector: T,
     ) -> Result<LeafKey, SrtBackendConnectError>
     where
-        K: SrtSocketConnector,
+        T: SrtSocketConnector,
     {
         let socket = connector
             .connect(config)
@@ -249,15 +309,15 @@ where
             .map_err(SrtBackendConnectError::Add)
     }
 
-    pub(crate) fn complete_pending_connect_with<K>(
+    pub(crate) fn complete_pending_connect_with<T>(
         &mut self,
         output_id: &OutputId,
         generation: u64,
         peer_addrs: &[std::net::SocketAddr],
-        connector: K,
+        connector: T,
     ) -> Result<LeafKey, SrtPendingConnectError>
     where
-        K: SrtSocketConnector,
+        T: SrtSocketConnector,
     {
         let Some(pending) = self.pending_connects.remove(output_id) else {
             return Err(SrtPendingConnectError::Missing);
@@ -269,6 +329,27 @@ where
         let config = pending.connect_spec.connect_config(peer_addrs, None);
         self.add_resolved_socket_with(pending.common, config, connector)
             .map_err(SrtPendingConnectError::Connect)
+    }
+
+    fn complete_pending_connect(
+        &mut self,
+        output_id: &OutputId,
+        generation: u64,
+        peer_addrs: &[std::net::SocketAddr],
+    ) -> Result<LeafKey, SrtPendingConnectError> {
+        let Some(pending) = self.pending_connects.remove(output_id) else {
+            return Err(SrtPendingConnectError::Missing);
+        };
+        if pending.common.generation != generation {
+            self.pending_connects.insert(output_id.clone(), pending);
+            return Err(SrtPendingConnectError::Stale);
+        }
+        let config = pending.connect_spec.connect_config(peer_addrs, None);
+        let socket = self.socket_connector.connect(config).map_err(|error| {
+            SrtPendingConnectError::Connect(SrtBackendConnectError::Connect(error))
+        })?;
+        self.add_connected_socket(pending.common, socket)
+            .map_err(|error| SrtPendingConnectError::Connect(SrtBackendConnectError::Add(error)))
     }
 
     fn add_leaf(
@@ -388,10 +469,12 @@ where
     }
 }
 
-impl<P, C> EgressShardBackend for SrtShardBackend<P, C>
+impl<P, C, K, R> EgressShardBackend for SrtShardBackend<P, C, K, R>
 where
     P: SrtReadinessPoller + Send + 'static,
     C: SrtSocketConfigurator + Send + 'static,
+    K: SrtSocketConnector + Send + 'static,
+    R: SrtResolveCompletionSource + Send + 'static,
 {
     fn on_command(
         &mut self,
@@ -420,6 +503,18 @@ where
             EgressShardCommandEffect::ScheduleReady { count: 1 }
         } else {
             EgressShardCommandEffect::Continue
+        }
+    }
+
+    fn on_media_tick(&mut self) {
+        let mut resolved = Vec::new();
+        self.resolve_completions.drain_resolved(&mut resolved);
+        for completion in resolved {
+            let _ = self.complete_pending_connect(
+                &completion.output_id,
+                completion.generation,
+                &completion.peer_addrs,
+            );
         }
     }
 
