@@ -17,36 +17,9 @@ pub(crate) struct SrtFabricEgressConnectConfig<'a> {
     muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
 }
 
-#[cfg(test)]
 impl<'a> SrtFabricEgressConnectConfig<'a> {
-    pub(crate) fn plaintext(
-        peer_addrs: &'a [SocketAddr],
-        stream_id: &'a str,
-        connect_timeout_ms: u64,
-        muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
-    ) -> Self {
-        Self {
-            peer_addrs,
-            stream_id,
-            crypto: None,
-            connect_timeout_ms,
-            muxer_port_claim,
-        }
-    }
-
-    pub(crate) fn peer_addrs(&self) -> &[SocketAddr] {
-        self.peer_addrs
-    }
-
-    pub(crate) fn stream_id(&self) -> &str {
-        self.stream_id
-    }
-
-    pub(crate) fn connect_timeout_ms(&self) -> u64 {
-        self.connect_timeout_ms
-    }
-
-    pub(in crate::media::srt) fn with_crypto(
+    #[cfg(test)]
+    pub(in crate::media::srt) fn new(
         peer_addrs: &'a [SocketAddr],
         stream_id: &'a str,
         crypto: Option<&'a SrtCryptoConfig>,
@@ -60,6 +33,37 @@ impl<'a> SrtFabricEgressConnectConfig<'a> {
             connect_timeout_ms,
             muxer_port_claim,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn plaintext(
+        peer_addrs: &'a [SocketAddr],
+        stream_id: &'a str,
+        connect_timeout_ms: u64,
+        muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
+    ) -> Self {
+        Self::new(
+            peer_addrs,
+            stream_id,
+            None,
+            connect_timeout_ms,
+            muxer_port_claim,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn peer_addrs(&self) -> &[SocketAddr] {
+        self.peer_addrs
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stream_id(&self) -> &str {
+        self.stream_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn connect_timeout_ms(&self) -> u64 {
+        self.connect_timeout_ms
     }
 }
 

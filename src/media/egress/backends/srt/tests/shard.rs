@@ -1,7 +1,7 @@
 use super::super::*;
 use super::support::{FakeReadinessPoller, common, feed, shared_sender, shared_sender_recording};
-use crate::media::egress::command::{EgressCommand, OutputId};
-use crate::media::egress::policy::WorkBudget;
+use crate::media::egress::command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec};
+use crate::media::egress::policy::{LeafPolicy, WorkBudget};
 use crate::media::egress::scheduler::LeafKey;
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::srt::{
@@ -102,6 +102,16 @@ fn peer_addrs() -> Vec<std::net::SocketAddr> {
         "127.0.0.1:9000".parse().unwrap(),
         "127.0.0.2:9001".parse().unwrap(),
     ]
+}
+
+fn output_spec(id: &str, generation: u64, protocol: ProtocolSpec) -> OutputSpec {
+    OutputSpec {
+        id: OutputId::new(id),
+        generation,
+        feed: FeedId::new("feed-srt"),
+        protocol,
+        policy: LeafPolicy::default(),
+    }
 }
 
 #[test]
@@ -225,6 +235,105 @@ fn srt_shard_backend_add_resolved_socket_returns_add_error_after_connect() {
         vec![(42, SrtEgressSendMode::FabricNonblocking)]
     );
     assert!(poller_handle.registered().is_empty());
+}
+
+#[test]
+fn srt_shard_backend_add_srt_command_queues_pending_connect() {
+    let mut backend = SrtShardBackend::new(
+        FakeReadinessPoller::default(),
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    );
+
+    let effect = backend.on_command(EgressCommand::Add(output_spec(
+        "out-a",
+        7,
+        ProtocolSpec::Srt {
+            url: "srt://primary:9000?streamid=publish%3Akey&bond=backup:9001".to_string(),
+        },
+    )));
+
+    let pending = backend
+        .pending_connect(&OutputId::new("out-a"))
+        .expect("SRT Add must queue a pending connect");
+    assert_eq!(effect, EgressShardCommandEffect::Continue);
+    assert_eq!(pending.common.output_id.as_str(), "out-a");
+    assert_eq!(pending.common.generation, 7);
+    assert_eq!(
+        pending.connect_spec.peer_hosts(),
+        &["primary:9000".to_string(), "backup:9001".to_string()]
+    );
+    assert_eq!(pending.connect_spec.stream_id(), "publish:key");
+}
+
+#[test]
+fn srt_shard_backend_ignores_non_srt_add_command() {
+    let mut backend = SrtShardBackend::new(
+        FakeReadinessPoller::default(),
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    );
+
+    let effect = backend.on_command(EgressCommand::Add(output_spec(
+        "out-a",
+        7,
+        ProtocolSpec::Sink,
+    )));
+
+    assert_eq!(effect, EgressShardCommandEffect::Continue);
+    assert!(backend.pending_connect(&OutputId::new("out-a")).is_none());
+}
+
+#[test]
+fn srt_shard_backend_update_srt_command_replaces_pending_connect() {
+    let mut backend = SrtShardBackend::new(
+        FakeReadinessPoller::default(),
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    );
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-a",
+        7,
+        ProtocolSpec::Srt {
+            url: "srt://old:9000?streamid=publish:old".to_string(),
+        },
+    )));
+
+    backend.on_command(EgressCommand::Update(output_spec(
+        "out-a",
+        8,
+        ProtocolSpec::Srt {
+            url: "srt://new:9000?streamid=publish:new".to_string(),
+        },
+    )));
+
+    let pending = backend
+        .pending_connect(&OutputId::new("out-a"))
+        .expect("SRT Update must replace pending connect");
+    assert_eq!(pending.common.generation, 8);
+    assert_eq!(pending.connect_spec.peer_hosts(), &["new:9000".to_string()]);
+    assert_eq!(pending.connect_spec.stream_id(), "publish:new");
+}
+
+#[test]
+fn srt_shard_backend_remove_command_clears_pending_connect() {
+    let mut backend = SrtShardBackend::new(
+        FakeReadinessPoller::default(),
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    );
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-a",
+        7,
+        ProtocolSpec::Srt {
+            url: "srt://primary:9000?streamid=publish:key".to_string(),
+        },
+    )));
+
+    let effect = backend.on_command(EgressCommand::Remove(OutputId::new("out-a")));
+
+    assert_eq!(effect, EgressShardCommandEffect::Continue);
+    assert!(backend.pending_connect(&OutputId::new("out-a")).is_none());
 }
 
 #[test]

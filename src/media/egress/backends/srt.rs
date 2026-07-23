@@ -3,17 +3,17 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::media::egress::backend::{ProtocolEngine, Readiness};
-use crate::media::egress::command::{EgressCommand, OutputId};
+use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::leaf::LeafCommon;
-use crate::media::egress::policy::WorkBudget;
+use crate::media::egress::policy::{LeafLimits, WorkBudget};
 use crate::media::egress::scheduler::{LeafKey, VisitDecision};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::srt::{
     SRTSOCKET, SrtEgressEngine, SrtEgressInterest, SrtEgressPollError, SrtEgressSendMode,
-    SrtFabricEgressConnectConfig, SrtFabricPoller, SrtMessageSender, SrtReadyLeaf,
-    connect_fabric_srt_egress_socket, srt_fabric_message_sender,
+    SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec, SrtFabricPoller, SrtMessageSender,
+    SrtReadyLeaf, connect_fabric_srt_egress_socket, srt_fabric_message_sender,
 };
 
 mod add_error;
@@ -155,12 +155,18 @@ where
     output_sockets: HashMap<OutputId, SrtLeafSocket>,
     ready: VecDeque<SrtReadyLeaf>,
     poll_buffer: Vec<SrtReadyLeaf>,
+    pending_connects: HashMap<OutputId, PendingSrtConnect>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SrtLeafSocket {
     key: LeafKey,
     socket: SRTSOCKET,
+}
+
+struct PendingSrtConnect {
+    common: LeafCommon,
+    connect_spec: SrtFabricEgressConnectSpec,
 }
 
 impl<P> SrtShardBackend<P, NativeSrtSocketConfigurator>
@@ -192,6 +198,7 @@ where
             output_sockets: HashMap::new(),
             ready: VecDeque::new(),
             poll_buffer: Vec::new(),
+            pending_connects: HashMap::new(),
         }
     }
 
@@ -259,10 +266,40 @@ where
     }
 
     fn remove_leaf_by_output(&mut self, output_id: &OutputId) -> bool {
+        self.pending_connects.remove(output_id);
         let Some(socket_ref) = self.output_sockets.remove(output_id) else {
             return false;
         };
         self.remove_leaf_socket(socket_ref)
+    }
+
+    fn queue_pending_srt_connect(&mut self, spec: OutputSpec, target_url: &str) {
+        let output_id = spec.id.clone();
+        let common = LeafCommon::new(
+            spec.id,
+            spec.generation,
+            spec.feed,
+            LeafLimits::from_policy(&spec.policy),
+        );
+        let connect_spec = SrtFabricEgressConnectSpec::from_url(
+            target_url,
+            duration_millis_u64(spec.policy.connect_timeout),
+        );
+        if connect_spec.peer_hosts().is_empty() {
+            return;
+        }
+        self.pending_connects.insert(
+            output_id,
+            PendingSrtConnect {
+                common,
+                connect_spec,
+            },
+        );
+    }
+
+    #[cfg(test)]
+    fn pending_connect(&self, output_id: &OutputId) -> Option<&PendingSrtConnect> {
+        self.pending_connects.get(output_id)
     }
 
     fn remove_leaf_socket(&mut self, socket_ref: SrtLeafSocket) -> bool {
@@ -331,8 +368,16 @@ where
         &mut self,
         command: crate::media::egress::command::EgressCommand,
     ) -> EgressShardCommandEffect {
-        if let EgressCommand::Remove(output_id) = command {
-            self.remove_leaf_by_output(&output_id);
+        match command {
+            EgressCommand::Add(spec) | EgressCommand::Update(spec) => {
+                if let ProtocolSpec::Srt { url } = spec.protocol.clone() {
+                    self.queue_pending_srt_connect(spec, &url);
+                }
+            }
+            EgressCommand::Remove(output_id) => {
+                self.remove_leaf_by_output(&output_id);
+            }
+            EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {}
         }
         EgressShardCommandEffect::Continue
     }
@@ -366,6 +411,10 @@ where
             }
         }
     }
+}
+
+fn duration_millis_u64(duration: std::time::Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 #[cfg(test)]

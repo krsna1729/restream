@@ -96,8 +96,8 @@ pub use srt_egress::start_srt_egress;
 #[cfg(test)]
 use srt_egress_connect::to_libc_sockaddr;
 pub(crate) use srt_egress_connect::{
-    SrtFabricEgressConnectConfig, claim_srt_egress_muxer_port, connect_fabric_srt_egress_socket,
-    resolve_host as resolve_srt_egress_host,
+    SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec, claim_srt_egress_muxer_port,
+    connect_fabric_srt_egress_socket, resolve_host as resolve_srt_egress_host,
 };
 pub(crate) use srt_egress_engine::SrtEgressEngine;
 pub(crate) use srt_egress_poller::{SrtEgressInterest, SrtEgressPollError, SrtReadyLeaf};
