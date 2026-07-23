@@ -776,6 +776,10 @@ Current branch status:
 - The media runtime claims the target pipeline input, forwards source feed
   packets through the in-process publisher after the target input is selected,
   records egress byte progress, and releases the input claim on cancellation.
+- The in-process publisher clones only the packet shell for the same-format
+  path and preserves the shared `Bytes` payload allocation when publishing into
+  the target input ring. This proves scoped zero payload copying for the
+  publisher path; broader cost comparison with loopback remains pending.
 - The API admits only the initial same-format path for recirculation: source
   video with automatic codec selection and passthrough audio. Presets, explicit
   codec conversion, and audio selection/transforms are rejected before runtime
@@ -806,7 +810,9 @@ Current branch status:
 - incompatible formats fail visibly before media is consumed;
 - target backpressure stalls only the recirculation leaf, not unrelated leaves;
 - removal releases target input ownership and feed cursors;
-- zero-copy or bounded-copy behavior is measured and documented;
+- publisher tests prove the same-format path preserves shared payload buffers
+  while cloning only bounded packet metadata;
+- zero-copy or bounded-copy behavior is measured and documented end to end;
 - UI/API integration tests cover create, update, disable, delete, status, and
   graph rendering.
 

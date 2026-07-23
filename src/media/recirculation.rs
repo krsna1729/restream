@@ -228,6 +228,20 @@ mod tests {
     use crate::media::packet::PayloadFormat;
 
     fn packet(media_type: MediaType, dts: i64, is_keyframe: bool) -> Arc<MediaPacket> {
+        packet_with_payload(
+            media_type,
+            dts,
+            is_keyframe,
+            Bytes::from_static(&[1, 2, 3, 4]),
+        )
+    }
+
+    fn packet_with_payload(
+        media_type: MediaType,
+        dts: i64,
+        is_keyframe: bool,
+        payload: Bytes,
+    ) -> Arc<MediaPacket> {
         Arc::new(MediaPacket {
             media_type,
             format: PayloadFormat::Raw,
@@ -235,7 +249,7 @@ mod tests {
             track_index: 0,
             pts: dts,
             dts,
-            payload: Bytes::from_static(&[1, 2, 3, 4]),
+            payload,
         })
     }
 
@@ -255,15 +269,20 @@ mod tests {
         let ring = RingBuffer::new(16);
         let registration = registration(Arc::new(InputPacketGate::active()), i64::MIN);
         let mut publisher = RecirculationInputPublisher::default();
-
-        let outcome = publisher.publish(
-            &[
-                packet(MediaType::Video, 10, true),
-                packet(MediaType::Audio, 12, false),
-            ],
-            &ring,
-            &registration,
+        let video = packet_with_payload(
+            MediaType::Video,
+            10,
+            true,
+            Bytes::from(vec![0x11, 0x12, 0x13, 0x14]),
         );
+        let audio = packet_with_payload(
+            MediaType::Audio,
+            12,
+            false,
+            Bytes::from(vec![0x21, 0x22, 0x23, 0x24]),
+        );
+
+        let outcome = publisher.publish(&[video.clone(), audio.clone()], &ring, &registration);
 
         assert_eq!(outcome, RecirculationPublishOutcome { units: 2, bytes: 8 });
         assert_eq!(registration.last_forwarded_dts.load(Ordering::Acquire), 12);
@@ -271,6 +290,10 @@ mod tests {
         let second = ring.read_at(1).unwrap();
         assert_eq!(first.dts, 10);
         assert_eq!(second.dts, 12);
+        assert_eq!(first.payload.as_ptr(), video.payload.as_ptr());
+        assert_eq!(first.payload.len(), video.payload.len());
+        assert_eq!(second.payload.as_ptr(), audio.payload.as_ptr());
+        assert_eq!(second.payload.len(), audio.payload.len());
     }
 
     #[test]
