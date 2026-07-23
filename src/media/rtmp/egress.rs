@@ -26,15 +26,11 @@ use super::egress_metadata::{
     validate_rtmp_output_audio_tracks,
 };
 use super::egress_packets::{
-    cache_h264_parameter_sets, h264_sps_nalu, resolve_deferred_audio_sequence_header,
-    rtmp_video_packet_can_be_dropped, should_defer_audio_until_video_ready,
+    h264_sps_nalu, resolve_deferred_audio_sequence_header, should_defer_audio_until_video_ready,
     should_send_startup_audio_sequence_header, startup_video_sequence_header,
-    validate_rtmp_output_audio_packet_track, video_sequence_header_for_keyframe,
+    validate_rtmp_output_audio_packet_track,
 };
 use super::egress_transport::parse_rtmp_url;
-use super::enhanced::{cache_hevc_parameter_sets, raw_packet_starts_with_hevc_parameter_set};
-use super::flv::{FlvVideoPacketKind, classify_flv_video_packet};
-use super::timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
 
 pub async fn start_rtmp_egress(
     output_id: String,
@@ -236,7 +232,7 @@ pub async fn start_rtmp_egress(
     };
 
     let mut is_publishing = false;
-    let mut raw_video_parameter_sets = ring_buffer
+    let raw_video_parameter_sets = ring_buffer
         .video_parameter_sets()
         .map(|parameter_sets| parameter_sets.to_vec())
         .unwrap_or_default();
@@ -252,10 +248,7 @@ pub async fn start_rtmp_egress(
     let mut video_ready = false;
     let mut audio_sequence_header_sent = false;
     let mut deferred_audio_sequence_header: Option<Bytes> = None;
-    let mut timestamp_guard = RtmpTimestampGuard::new();
-    // Per-egress reusable conversion buffers avoid per-frame allocation and cross-task contention.
-    let mut video_buf = Vec::<u8>::new();
-    let mut media_encoder = RtmpMediaEncoder::new(enhanced_hevc_video, Vec::new());
+    let mut media_encoder = RtmpMediaEncoder::new(enhanced_hevc_video, raw_video_parameter_sets);
     let mut media_actions = Vec::with_capacity(2);
     // Pre-allocated burst buffer — declared outside the loop so capacity
     // is retained across bursts instead of re-allocating per burst.
@@ -405,6 +398,7 @@ pub async fn start_rtmp_egress(
                                     } else {
                                         audio_sh
                                     };
+                                    media_encoder.set_startup_video_config(last_sent_video_config.clone());
                                     is_publishing = true;
                                 }
                     }
@@ -507,161 +501,27 @@ pub async fn start_rtmp_egress(
                             }
                             continue;
                         }
-                        let mut ts = timestamp_guard.packet_timestamp(&packet);
-                        let payload = if packet.format == PayloadFormat::Raw {
-                            match packet.media_type {
-                                MediaType::Video => {
-                                    if enhanced_hevc_video {
-                                        cache_hevc_parameter_sets(
-                                            &packet.payload,
-                                            &mut raw_video_parameter_sets,
-                                        );
-                                    } else {
-                                        cache_h264_parameter_sets(
-                                            &packet.payload,
-                                            &mut raw_video_parameter_sets,
-                                        );
-                                        if raw_packet_starts_with_hevc_parameter_set(&packet.payload)
-                                        {
-                                            error!(
-                                                "[rtmp-egress] H.265 packet on Raw RTMP path \
-                                                 for output {} — dropping until hevc_to_h264 \
-                                                 stage is ready",
-                                                output_id
-                                            );
-                                            continue;
-                                        }
-                                    }
-                                    if !video_ready && !packet.is_keyframe {
-                                        continue;
-                                    }
-                                    if packet.is_keyframe
-                                        && let Some((seq_hdr, new_config)) =
-                                            video_sequence_header_for_keyframe(
-                                                enhanced_hevc_video,
-                                                &packet.payload,
-                                                &raw_video_parameter_sets,
-                                            )
-                                    {
-                                            let config_changed = match (
-                                                &last_sent_video_config,
-                                                &new_config,
-                                            ) {
-                                                (None, Some(_)) => true,
-                                                (Some(old), Some(new)) => old != new,
-                                                _ => false,
-                                            };
-                                            if config_changed {
-                                                let sequence_header_ts =
-                                                    refreshed_video_sequence_header_timestamp(ts);
-                                                if session
-                                                    .publish_video_data(
-                                                        seq_hdr,
-                                                        sequence_header_ts,
-                                                        false,
-                                                    )
-                                                    .await
-                                                    .is_err()
-                                                {
-                                                    egress_error!(
-                                                        "send",
-                                                        "failed to write refreshed video sequence header"
-                                                    );
-                                                    return;
-                                                }
-                                                if sequence_header_ts.value == ts.value {
-                                                    ts = RtmpTimestamp::new(
-                                                        timestamp_guard
-                                                            .enforce_ms(
-                                                                MediaType::Video,
-                                                                sequence_header_ts.value as i64,
-                                                            )
-                                                            as u32,
-                                                    );
-                                                }
-                                                last_sent_video_config = new_config;
-                                            }
-                                            video_ready = true;
-                                    }
-                                    if !video_ready {
-                                        continue;
-                                    }
-                                    let composition_time_ms =
-                                        (packet.pts - packet.dts).clamp(
-                                            -8_388_608,
-                                            8_388_607,
-                                        ) as i32;
-                                    let wrote_video = if enhanced_hevc_video {
-                                        codec::hevc_video_for_enhanced_rtmp_with_composition_into(
-                                            &packet.payload,
-                                            packet.is_keyframe,
-                                            composition_time_ms,
-                                            &mut video_buf,
-                                        )
-                                    } else {
-                                        codec::video_for_rtmp_with_composition_into(
-                                            &packet.payload,
-                                            packet.is_keyframe,
-                                            composition_time_ms,
-                                            &mut video_buf,
-                                        )
-                                    };
-                                    if !wrote_video {
-                                        continue;
-                                    }
-                                    Bytes::copy_from_slice(&video_buf)
-                                }
-                                MediaType::Audio => unreachable!("audio packets continue above"),
-                            }
-                        } else {
-                            if packet.media_type == MediaType::Video
-                                && !video_ready
-                                && let Some(kind) = classify_flv_video_packet(&packet.payload)
-                            {
-                                match kind {
-                                    FlvVideoPacketKind::SequenceHeader => {}
-                                    FlvVideoPacketKind::Keyframe => {}
-                                    FlvVideoPacketKind::Interframe => continue,
-                                }
-                            } else if packet.media_type == MediaType::Video
-                                && !video_ready
-                                && !packet.is_keyframe
-                            {
+                        media_actions.clear();
+                        media_encoder.encode(&packet, &mut media_actions);
+                        video_ready = media_encoder.video_ready();
+                        for action in media_actions.drain(..) {
+                            let RtmpMediaAction::Video { payload, timestamp, can_be_dropped } = action else {
                                 continue;
-                            }
-                            packet.payload.clone()
-                        };
-                        let sent_bytes = match packet.media_type {
-                            MediaType::Video => {
-                                if !video_ready
-                                    && !matches!(
-                                        classify_flv_video_packet(&packet.payload),
-                                        Some(FlvVideoPacketKind::SequenceHeader)
-                                    )
-                                {
-                                    video_ready = true;
+                            };
+                            match session.publish_video_data(payload, timestamp, can_be_dropped).await {
+                                Ok(sent_bytes) => {
+                                    if let Some(ref counter) = egress_bytes_sent {
+                                        counter.fetch_add(sent_bytes, Ordering::Relaxed);
+                                    }
+                                    if let Some(ref metrics) = egress_metrics {
+                                        metrics.record_out(sent_bytes);
+                                    }
+                                    burst_made_progress = true;
                                 }
-                                let can_be_dropped =
-                                    rtmp_video_packet_can_be_dropped(&payload, packet.is_keyframe);
-                                session
-                                    .publish_video_data(payload, ts, can_be_dropped)
-                                    .await
-                            }
-                            MediaType::Audio => unreachable!("audio packets continue above"),
-                        };
-                        match sent_bytes {
-                            Ok(sent_bytes) => {
-                                if let Some(ref counter) = egress_bytes_sent {
-                                    counter.fetch_add(sent_bytes, Ordering::Relaxed);
+                                Err(_) => {
+                                    error!("Failed to build RTMP video publish packet");
+                                    egress_error!("send", "failed to write RTMP video packet");
                                 }
-                                if let Some(ref m) = egress_metrics {
-                                    m.record_out(sent_bytes);
-                                }
-                                burst_made_progress = true;
-                            }
-                            _ => {
-                                error!("Failed to build publish data packet or get OutboundResponse");
-                                egress_error!("send", "failed to build RTMP publish packet");
                             }
                         }
                     }

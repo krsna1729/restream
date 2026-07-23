@@ -54,6 +54,14 @@ impl RtmpMediaEncoder {
         }
     }
 
+    pub(super) fn set_startup_video_config(&mut self, config: Option<Vec<u8>>) {
+        self.last_video_config = config;
+    }
+
+    pub(super) fn video_ready(&self) -> bool {
+        self.video_ready
+    }
+
     fn encode_video(&mut self, packet: &MediaPacket, actions: &mut Vec<RtmpMediaAction>) {
         let mut timestamp = self.timestamp_guard.packet_timestamp(packet);
         let payload = match packet.format {
@@ -87,7 +95,9 @@ impl RtmpMediaEncoder {
                                 as u32,
                         );
                     }
+                    self.video_ready = true;
                     self.last_video_config = config;
+                } else if packet.is_keyframe {
                     self.video_ready = true;
                 }
                 if !self.video_ready {

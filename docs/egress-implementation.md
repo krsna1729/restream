@@ -709,10 +709,10 @@ Current branch status:
   still owns prepared-media lookup, output status, and outer lifecycle while
   TCP readiness, shard registration, and incremental TLS remain future engine
   work.
-- The legacy audio publish path now uses a dedicated RTMP media encoder for
-  Raw/FLV payload framing and timestamp guarding while retaining the existing
-  startup-header policy in its adapter. Video migration and `RingFeed` budget
-  ownership remain future work.
+- Legacy audio and video publication now use a dedicated RTMP media encoder
+  for Raw/FLV framing, keyframe gating, decoder-config refresh, composition
+  offsets, and timestamp guarding while retaining startup-header policy in its
+  adapter. `RingFeed` budget ownership remains future work.
 - The legacy RTMP sender remains the runtime owner. Phase 5 has not yet
   introduced TCP readiness polling, moved the hot media publish loop onto
   pending state, added incremental TLS, or provided a default/opt-in runtime
