@@ -284,6 +284,18 @@ existing quality evidence conventions.
 Do not begin architecture tuning without a baseline artifact that includes
 healthy-control and bad-neighbor variants.
 
+Current branch status:
+
+- The deterministic workload manifest lives at
+  `test/harness/baselines/egress-phase0/manifest.json` with five shapes:
+  healthy RTMP fan-out, healthy SRT fan-out (legacy 512-sender cap recorded
+  as a known architectural failure at target scale), mixed fan-out,
+  bad-neighbor (stalled output beside healthy siblings), and reconnect storm.
+- Baseline artifacts are recorded per host class beside the manifest;
+  captures at reduced scale are valid for that host class, and target-scale
+  captures require a 1,000-output-capable host running the same manifest
+  rows.
+
 ## Phase 1: Common contracts and deterministic model
 
 ### Objective

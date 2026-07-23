@@ -1,0 +1,17 @@
+{
+  "workload": "w1-healthy-rtmp",
+  "commit": "c6753304843af7cf41fd36c97381f7fa437c8e1e",
+  "date": "2026-07-23",
+  "host": "WSL2, 6 CPUs, 12GB RAM",
+  "mode": "ramp-family --no-netns",
+  "env": { "RAMP_FAMILY_CONFIGS": "srt-rtmp-src", "N_OUTPUTS": "100" },
+  "egressOwner": "legacy (RESTREAM_EGRESS_FABRIC unset)",
+  "result": {
+    "outputs": 100,
+    "cpuPctAtFull": 10.0,
+    "rssKbAtFull": 119520,
+    "rssDeltaKb": 38424,
+    "perOutputKb": 384
+  },
+  "deviations": "netns unavailable in sandbox (unshare blocked); reduced scale per host class"
+}

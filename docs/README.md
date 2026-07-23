@@ -113,6 +113,7 @@ above remain the better way to learn the system.
 - [MIT license](../LICENSE.md)
 - [Third-party component manifest](../distribution/THIRD_PARTY_COMPONENTS.md)
 - [Harness manifest README](../test/harness/README.md)
+- [Phase 0 egress baseline workloads](../test/harness/baselines/egress-phase0/README.md)
 
 ### Product, contributor, and operator documents
 

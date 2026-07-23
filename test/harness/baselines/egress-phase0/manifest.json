@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "purpose": "Phase 0 egress baseline workload manifest (docs/egress-implementation.md). Deterministic shapes for comparing legacy egress against the fabric during rollout. Record artifacts beside this manifest per host class.",
+  "invocation": "scripts/build/bench-harness.sh && scripts/build/resource-limit.sh target/bench/test_harness <mode> (with the env rows below)",
+  "metrics": "scale.csv columns: config,step,label,cpu_pct,rss_kb,ffmpeg_n,ffmpeg_rss_kb,total_rss_kb; summary.txt records rss_delta_kb and per_output_kb per config",
+  "workloads": [
+    {
+      "id": "w1-healthy-rtmp",
+      "shape": "1 SRT ingest fanned out to N healthy RTMP outputs against a mediamtx sink",
+      "mode": "ramp-family",
+      "env": {
+        "RAMP_FAMILY_CONFIGS": "srt-rtmp-src",
+        "N_OUTPUTS": "<scale>",
+        "WORK_DIR": ".local/artifacts/egress-phase0/w1"
+      },
+      "targetScale": 1000,
+      "hostScaleNote": "Record the largest N this host sustains with all outputs advancing; 6-CPU/12GB WSL hosts record at N=100."
+    },
+    {
+      "id": "w2-healthy-srt",
+      "shape": "1 SRT ingest fanned out to N healthy SRT outputs against a mediamtx sink",
+      "mode": "ramp-family",
+      "env": {
+        "RAMP_FAMILY_CONFIGS": "srt-srt-src",
+        "N_OUTPUTS": "<scale>",
+        "WORK_DIR": ".local/artifacts/egress-phase0/w2"
+      },
+      "targetScale": 1000,
+      "knownFailure": "Legacy SRT egress caps concurrent sender threads at 512 (src/media/engine_registries.rs sender_semaphore). N=1000 on the legacy path is recorded as an architectural failure, not a host limitation; the fabric must remove this cap.",
+      "hostScaleNote": "6-CPU/12GB WSL hosts record at N=100."
+    },
+    {
+      "id": "w3-mixed",
+      "shape": "RTMP-heavy mixed fan-out approximating the recorded 1,140 RTMP + 60 SRT production shape",
+      "mode": "ramp-family",
+      "env": {
+        "RAMP_FAMILY_CONFIGS": "srt-rtmp-src,srt-srt-src",
+        "N_OUTPUTS": "<scale>",
+        "WORK_DIR": ".local/artifacts/egress-phase0/w3"
+      },
+      "targetScale": 1200,
+      "hostScaleNote": "Both configs run sequentially in one process lifetime; per-config scale.csv rows keep the protocols attributable."
+    },
+    {
+      "id": "w4-bad-neighbor",
+      "shape": "healthy siblings share a pipeline with one stalled (non-reading) output; measures healthy progress and teardown behavior beside a dead destination",
+      "mode": "fault.output-stall",
+      "env": {
+        "FAULT_OUTPUT_STALL_SIBLINGS": "<healthy-count>",
+        "WORK_DIR": ".local/artifacts/egress-phase0/w4"
+      },
+      "targetScale": 998,
+      "hostScaleNote": "6-CPU/12GB WSL hosts record at 32 siblings. The 998-healthy-plus-throttled variant additionally requires a rate-limited sink; the deterministic shard-thread analog is recorded in src/media/egress/shard/tests/leaf_isolation.rs."
+    },
+    {
+      "id": "w5-reconnect-storm",
+      "shape": "at least 25 percent of outputs lose their destination together and retry under admission limits",
+      "mode": "fault.egress-retry",
+      "env": {
+        "WORK_DIR": ".local/artifacts/egress-phase0/w5"
+      },
+      "targetScale": 250,
+      "hostScaleNote": "The mode exercises sink disappearance and retry-budget behavior; scale the output count with the host class."
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "workload": "w4-bad-neighbor",
+  "commit": "c6753304843af7cf41fd36c97381f7fa437c8e1e",
+  "date": "2026-07-23",
+  "host": "WSL2, 6 CPUs, 12GB RAM",
+  "mode": "fault.output-stall --no-netns",
+  "env": { "FAULT_OUTPUT_STALL_SIBLINGS": "32" },
+  "egressOwner": "legacy (RESTREAM_EGRESS_FABRIC unset)",
+  "result": {
+    "passed": true,
+    "siblingOutputs": 32,
+    "healthySiblingBitrateKbps": 6048,
+    "note": "healthy siblings kept advancing bytes at full bitrate beside a permanently stalled RTMP sink; stalled output classified without poisoning siblings"
+  },
+  "deviations": "netns unavailable in sandbox; 32 siblings per host class vs 998 target"
+}
