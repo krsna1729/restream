@@ -140,7 +140,16 @@ impl ApiOutputStatus {
     }
 
     pub(crate) fn has_progress(&self) -> bool {
-        self.bytes_out > 0 || self.metrics.bytes_out > 0 || self.metrics.packets_out > 0
+        self.bytes_out > 0
+            || self.metrics.bytes_out > 0
+            || self.metrics.packets_out > 0
+            || self.has_sink_discard_progress()
+    }
+
+    fn has_sink_discard_progress(&self) -> bool {
+        self.protocol.as_deref() == Some("sink")
+            && self.phase == "discarding"
+            && self.last_progress_at.is_some()
     }
 
     pub(crate) fn failure_phase_is_empty(&self) -> bool {
