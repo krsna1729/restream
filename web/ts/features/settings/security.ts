@@ -9,7 +9,6 @@ import {
 } from "../../core/api.js";
 import { state } from "../../core/state.js";
 import { escapeHtml, showErrorAlert } from "../../core/utils.js";
-import { settingsV2Active } from "./presentation-mode.js";
 
 const AUTH_ATTEMPT_VISIBLE_LIMIT = 8;
 let lastRateLimitAttemptCount = 0;
@@ -248,7 +247,7 @@ function renderRateLimitAttempts(attempts: readonly RateLimitAttempt[]): void {
     showToggle && !authAttemptsExpanded
       ? shownAttempts.slice(0, AUTH_ATTEMPT_VISIBLE_LIMIT)
       : shownAttempts;
-  const resetActionsVisible = !settingsV2Active() || authResetActionsExpanded;
+  const resetActionsVisible = authResetActionsExpanded;
   const resetActionsToggle = document.getElementById(
     "auth-reset-actions-toggle",
   ) as HTMLButtonElement | null;
@@ -258,7 +257,7 @@ function renderRateLimitAttempts(attempts: readonly RateLimitAttempt[]): void {
   const resetHeading = document.getElementById(
     "auth-attempts-reset-heading",
   ) as HTMLTableCellElement | null;
-  resetActionsToggle?.classList.toggle("hidden", !settingsV2Active());
+  resetActionsToggle?.classList.remove("hidden");
   resetActionsToggle?.setAttribute(
     "aria-expanded",
     authResetActionsExpanded ? "true" : "false",

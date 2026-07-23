@@ -134,7 +134,7 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
   const telemetryV2Active = location.mode === "telemetry";
   const statusV2Active = location.mode === "status";
   const mediaV2Active = location.mode === "media";
-  const settingsV2Active = location.mode === "settings";
+  const settingsActive = location.mode === "settings";
 
   setDashboardV2PresentationScope({
     overviewActive: overviewV2Active,
@@ -145,7 +145,7 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
     telemetryActive: telemetryV2Active,
     statusActive: statusV2Active,
     mediaActive: mediaV2Active,
-    settingsActive: settingsV2Active,
+    settingsActive,
   });
 
   configureOverviewPresentation({
@@ -208,10 +208,9 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
     onPresentation: mediaV2Active ? updateDashboardV2MediaCheckpoint : undefined,
   });
   configureSettingsCheckpointPresentation({
-    onPresentation: settingsV2Active
+    onPresentation: settingsActive
       ? updateDashboardV2SettingsCheckpoint
       : undefined,
-    v2Active: settingsV2Active,
   });
 }
 

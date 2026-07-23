@@ -295,6 +295,9 @@ test("settings route body uses the v2-owned renderer", async () => {
   assert.doesNotMatch(routerSource, /renderSettingsPanel/);
   assert.doesNotMatch(settingsSource, /renderSettingsPanel/);
   assert.doesNotMatch(settingsSource, /v2RouteBody/);
+  assert.doesNotMatch(settingsSource, /v2Active/);
+  assert.doesNotMatch(settingsSource, /settingsV2Active/);
+  assert.doesNotMatch(settingsSource, /configureSettingsV2Presentation/);
   assert.doesNotMatch(settingsSource, /settingsRouteBody = "legacy"/);
   assert.match(routerSource, /renderDashboardV2SettingsBody/);
   assert.match(
@@ -308,6 +311,24 @@ test("settings route body uses the v2-owned renderer", async () => {
   assert.match(settingsSource, /renderSettingsRoute\(container, \{ routeChrome: false \}\)/);
   assert.match(settingsSource, /container\.dataset\.settingsRouteBody = "v2"/);
   assert.match(settingsSource, /mountSettingsV2Disclosures\(container\)/);
+
+  const settingsFiles = await sourceFilesUnder(
+    new URL("../../web/ts/features/settings/", import.meta.url),
+  );
+  const presentationModeReferences = [];
+  await Promise.all(
+    settingsFiles.map(async (fileUrl) => {
+      const source = await readFile(fileUrl, "utf8");
+      if (source.includes("presentation-mode")) {
+        presentationModeReferences.push(fileUrl.pathname);
+      }
+    }),
+  );
+  assert.deepEqual(
+    presentationModeReferences.sort(),
+    [],
+    "settings modules must not retain a separate v2 presentation-mode seam",
+  );
 });
 
 test("media route body uses the v2-owned renderer", async () => {

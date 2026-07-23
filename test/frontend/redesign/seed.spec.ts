@@ -281,10 +281,13 @@ test("seed: default v2 mounts Settings body in the v2-owned route host @desktop"
   await expect(page.locator("#settings-mode-content")).toHaveCount(0);
   await expect(page.locator("#dashboard-v2-media-title")).toBeVisible();
   await expect(
-    page.locator("#dashboard-v2-media-content").getByRole("heading", {
-      name: "Media Library",
-    }),
+    page.locator(
+      '#dashboard-v2-media-root #dashboard-v2-media-content[data-dashboard-v2-owned-route-body="media"]',
+    ),
   ).toBeVisible();
+  await expect(
+    page.locator("#dashboard-v2-media-content #media-library-results-summary"),
+  ).toHaveText("1 media file total · 0 recordings · 1 source file");
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
     "Dashboard · Recordings and source files",
   );

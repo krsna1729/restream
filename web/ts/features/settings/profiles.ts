@@ -1,7 +1,6 @@
 import { patchConfig, type TranscodeProfile, type TranscodeProfiles } from "../../core/api.js";
 import { state } from "../../core/state.js";
 import { showErrorAlert } from "../../core/utils.js";
-import { settingsV2Active } from "./presentation-mode.js";
 
 const BUILT_IN_PROFILE_ORDER = [
   "h264",
@@ -265,9 +264,7 @@ export function addTranscodeProfile(): void {
     nextName = `new_profile_${suffix}`;
     suffix += 1;
   }
-  if (settingsV2Active()) {
-    profileTuningRowsExpanded.add(nextName);
-  }
+  profileTuningRowsExpanded.add(nextName);
   const div = document.createElement("div");
   div.innerHTML = renderProfileRow(nextName, {
     preset: "ultrafast",

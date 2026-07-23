@@ -56,6 +56,9 @@ test(
     assert.match(container.innerHTML, /data-settings-action="save-server-name"/);
     assert.match(container.innerHTML, /value="Synthetic Restream"/);
     assert.match(container.innerHTML, /id="settings-route-summary"/);
+
+    assert.match(container.innerHTML, /id="settings-account-actions-toggle"/);
+    assert.match(container.innerHTML, /id="settings-logout-btn"/);
   },
 );
 

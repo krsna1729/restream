@@ -32,11 +32,6 @@ import {
   settingsRateLimitPresentation,
   syncDashboardPasswordPrompt,
 } from "./security.js";
-import {
-  configureSettingsV2Presentation,
-  settingsV2Active,
-} from "./presentation-mode.js";
-
 const SETTINGS_SECTION_COUNT = 5;
 
 let settingsCheckpointCallback:
@@ -144,11 +139,8 @@ export async function loadSettings({
 
 export function configureSettingsCheckpointPresentation(options: {
   onPresentation?: (model: SettingsCheckpointModel | null) => void;
-  v2Active?: boolean;
   onStateChange?: (model: SettingsCheckpointModel | null) => void;
 }): void {
-  const v2Active = options.v2Active === true;
-  configureSettingsV2Presentation({ active: v2Active });
   settingsCheckpointCallback = options.onPresentation || options.onStateChange || null;
   if (settingsCheckpointCallback) publishSettingsCheckpoint();
 }
@@ -307,8 +299,8 @@ function syncSettingsAccountActions(container: ParentNode = document): void {
     "#settings-logout-btn",
   );
   const expanded = toggle?.getAttribute("aria-expanded") === "true";
-  toggle?.classList.toggle("hidden", !settingsV2Active());
-  logoutButton?.classList.toggle("hidden", settingsV2Active() && !expanded);
+  toggle?.classList.remove("hidden");
+  logoutButton?.classList.toggle("hidden", !expanded);
   if (toggle) {
     toggle.textContent = expanded ? "Hide account actions" : "Show account actions";
   }
