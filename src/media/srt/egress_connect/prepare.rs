@@ -1,38 +1,15 @@
-#[cfg(test)]
 use std::net::SocketAddr;
 
 use crate::media::srt::srt_crypto::{SrtCryptoConfig, srt_crypto_from_url};
 use crate::media::srt::srt_url::parse_srt_egress_url;
 
-#[cfg(test)]
 use super::{SrtEgressMuxerPortClaim, SrtFabricEgressConnectConfig};
 
 #[derive(Clone)]
 pub(crate) struct SrtFabricEgressConnectSpec {
     peer_hosts: Vec<String>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the pending SRT connect driver consumes the prepared stream ID in the next Phase 4 slice"
-        )
-    )]
     stream_id: String,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the pending SRT connect driver consumes URL crypto in the next Phase 4 slice"
-        )
-    )]
     crypto: Option<SrtCryptoConfig>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the pending SRT connect driver consumes connect timeout in the next Phase 4 slice"
-        )
-    )]
     connect_timeout_ms: u64,
 }
 
@@ -55,7 +32,6 @@ impl SrtFabricEgressConnectSpec {
         &self.peer_hosts
     }
 
-    #[cfg(test)]
     pub(crate) fn connect_config<'a>(
         &'a self,
         peer_addrs: &'a [SocketAddr],

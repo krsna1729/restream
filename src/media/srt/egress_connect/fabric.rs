@@ -18,7 +18,6 @@ pub(crate) struct SrtFabricEgressConnectConfig<'a> {
 }
 
 impl<'a> SrtFabricEgressConnectConfig<'a> {
-    #[cfg(test)]
     pub(in crate::media::srt) fn new(
         peer_addrs: &'a [SocketAddr],
         stream_id: &'a str,

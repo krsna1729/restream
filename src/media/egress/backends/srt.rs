@@ -30,6 +30,13 @@ pub(crate) enum SrtBackendConnectError {
     Add(SrtBackendAddError),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SrtPendingConnectError {
+    Missing,
+    Stale,
+    Connect(SrtBackendConnectError),
+}
+
 pub(crate) struct SrtFabricLeaf<T>
 where
     T: SrtMessageSender,
@@ -240,6 +247,28 @@ where
             .map_err(SrtBackendConnectError::Connect)?;
         self.add_connected_socket(common, socket)
             .map_err(SrtBackendConnectError::Add)
+    }
+
+    pub(crate) fn complete_pending_connect_with<K>(
+        &mut self,
+        output_id: &OutputId,
+        generation: u64,
+        peer_addrs: &[std::net::SocketAddr],
+        connector: K,
+    ) -> Result<LeafKey, SrtPendingConnectError>
+    where
+        K: SrtSocketConnector,
+    {
+        let Some(pending) = self.pending_connects.remove(output_id) else {
+            return Err(SrtPendingConnectError::Missing);
+        };
+        if pending.common.generation != generation {
+            self.pending_connects.insert(output_id.clone(), pending);
+            return Err(SrtPendingConnectError::Stale);
+        }
+        let config = pending.connect_spec.connect_config(peer_addrs, None);
+        self.add_resolved_socket_with(pending.common, config, connector)
+            .map_err(SrtPendingConnectError::Connect)
     }
 
     fn add_leaf(

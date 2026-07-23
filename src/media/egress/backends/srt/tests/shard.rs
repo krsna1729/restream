@@ -337,6 +337,99 @@ fn srt_shard_backend_remove_command_clears_pending_connect() {
 }
 
 #[test]
+fn srt_shard_backend_complete_pending_connect_registers_resolved_socket() {
+    let peer_addrs = peer_addrs();
+    let poller = FakeReadinessPoller::default();
+    let poller_handle = poller.clone();
+    let configurator = FakeSocketConfigurator::default();
+    let configurator_handle = configurator.clone();
+    let connector = FakeSocketConnector::returning(42);
+    let connector_handle = connector.clone();
+    let mut backend = SrtShardBackend::with_socket_configurator(
+        poller,
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+        configurator,
+    );
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-a",
+        7,
+        ProtocolSpec::Srt {
+            url: "srt://primary:9000?streamid=publish%3Akey".to_string(),
+        },
+    )));
+
+    let key = backend
+        .complete_pending_connect_with(&OutputId::new("out-a"), 7, &peer_addrs, connector)
+        .unwrap();
+
+    assert_eq!(key, LeafKey(0));
+    assert!(backend.pending_connect(&OutputId::new("out-a")).is_none());
+    assert_eq!(
+        connector_handle.calls(),
+        vec![FakeConnectCall {
+            peer_addrs,
+            stream_id: "publish:key".to_string(),
+            connect_timeout_ms: 10000,
+        }]
+    );
+    assert_eq!(
+        configurator_handle.calls(),
+        vec![(42, SrtEgressSendMode::FabricNonblocking)]
+    );
+    assert_eq!(
+        poller_handle.registered(),
+        vec![(42, LeafKey(0), 7, SrtEgressInterest::WRITE)]
+    );
+}
+
+#[test]
+fn srt_shard_backend_complete_pending_connect_rejects_stale_generation() {
+    let connector = FakeSocketConnector::returning(42);
+    let connector_handle = connector.clone();
+    let mut backend = SrtShardBackend::new(
+        FakeReadinessPoller::default(),
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    );
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-a",
+        7,
+        ProtocolSpec::Srt {
+            url: "srt://primary:9000?streamid=publish:key".to_string(),
+        },
+    )));
+
+    let result =
+        backend.complete_pending_connect_with(&OutputId::new("out-a"), 6, &peer_addrs(), connector);
+
+    assert_eq!(result, Err(SrtPendingConnectError::Stale));
+    assert!(backend.pending_connect(&OutputId::new("out-a")).is_some());
+    assert!(connector_handle.calls().is_empty());
+}
+
+#[test]
+fn srt_shard_backend_complete_pending_connect_rejects_missing_output() {
+    let connector = FakeSocketConnector::returning(42);
+    let connector_handle = connector.clone();
+    let mut backend = SrtShardBackend::new(
+        FakeReadinessPoller::default(),
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    );
+
+    let result = backend.complete_pending_connect_with(
+        &OutputId::new("out-missing"),
+        7,
+        &peer_addrs(),
+        connector,
+    );
+
+    assert_eq!(result, Err(SrtPendingConnectError::Missing));
+    assert!(connector_handle.calls().is_empty());
+}
+
+#[test]
 fn srt_shard_backend_rejects_socket_setup_failure_before_registering_leaf() {
     let poller = FakeReadinessPoller::default();
     let poller_handle = poller.clone();
