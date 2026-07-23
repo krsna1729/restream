@@ -725,6 +725,10 @@ Current branch status:
   leaf. A `RingFeed` media engine is therefore introduced only together with
   its nonblocking TCP leaf and startup snapshot, not as an unused standalone
   abstraction.
+- `RtmpFabricStartup` now assembles that immutable snapshot after output-ring
+  preparation. It preserves empty-source behavior and H.264/AAC startup
+  gating, while the legacy sender remains the sole runtime owner until the TCP
+  leaf accepts the snapshot.
 
 ### RTMPS
 

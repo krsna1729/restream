@@ -22,6 +22,15 @@ mod timestamps;
 pub use egress::start_rtmp_egress;
 pub use listener::{start_rtmp_server, start_rtmp_server_on};
 
+pub(crate) use egress_metadata::{
+    output_ring_video_codec_kind, resolved_output_audio_tracks, rtmp_publish_metadata,
+    validate_rtmp_output_audio_tracks,
+};
+pub(crate) use egress_packets::{
+    h264_sps_nalu, should_defer_audio_until_video_ready, should_send_startup_audio_sequence_header,
+    startup_video_sequence_header,
+};
+
 #[cfg(test)]
 #[path = "rtmp/tests.rs"]
 mod tests;
@@ -51,17 +60,12 @@ use crate::media::packet::{MediaPacket, PayloadFormat};
 use crate::media::security::IngestSecurityService;
 
 #[cfg(test)]
-use egress_metadata::{
-    RTMP_METADATA_VIDEO_CODEC_ID_HEVC, resolved_output_audio_tracks, rtmp_publish_metadata,
-    validate_rtmp_output_audio_tracks,
-};
+use egress_metadata::RTMP_METADATA_VIDEO_CODEC_ID_HEVC;
 #[cfg(test)]
 use egress_packets::{
     cache_h264_parameter_sets, h264_sequence_header_for_keyframe,
     resolve_deferred_audio_sequence_header, rtmp_output_waits_for_video,
-    rtmp_video_packet_can_be_dropped, rtmp_warmup_ready, should_defer_audio_until_video_ready,
-    should_send_startup_audio_sequence_header, startup_video_sequence_header,
-    validate_rtmp_output_audio_packet_track,
+    rtmp_video_packet_can_be_dropped, rtmp_warmup_ready, validate_rtmp_output_audio_packet_track,
 };
 #[cfg(test)]
 use egress_transport::parse_rtmp_url;

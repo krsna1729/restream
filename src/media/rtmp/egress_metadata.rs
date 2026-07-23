@@ -8,7 +8,7 @@ use std::sync::Arc;
 const RTMP_METADATA_VIDEO_CODEC_ID_AVC: u32 = 7;
 pub(super) const RTMP_METADATA_VIDEO_CODEC_ID_HEVC: u32 = u32::from_be_bytes(*b"hvc1");
 
-pub(super) async fn resolved_output_audio_tracks(
+pub(crate) async fn resolved_output_audio_tracks(
     engine: &MediaEngine,
     pipeline_id: &str,
     ring_buffer: &Arc<RingBuffer>,
@@ -36,7 +36,7 @@ pub(super) async fn resolved_output_audio_tracks(
         .unwrap_or_default()
 }
 
-pub(super) async fn output_ring_video_codec_kind(
+pub(crate) async fn output_ring_video_codec_kind(
     engine: &MediaEngine,
     pipeline_id: &str,
     output_ring: &RingBuffer,
@@ -58,7 +58,7 @@ pub(super) async fn output_ring_video_codec_kind(
         .unwrap_or(VideoCodecKind::Unknown)
 }
 
-pub(super) fn validate_rtmp_output_audio_tracks(audio_tracks: &[AudioMeta]) -> Result<(), String> {
+pub(crate) fn validate_rtmp_output_audio_tracks(audio_tracks: &[AudioMeta]) -> Result<(), String> {
     if audio_tracks.len() > 1 {
         return Err(format!(
             "RTMP output supports exactly one audio track, but this output resolved to {} tracks. Choose subset, downmix, or remap audio routing.",
@@ -68,7 +68,7 @@ pub(super) fn validate_rtmp_output_audio_tracks(audio_tracks: &[AudioMeta]) -> R
     Ok(())
 }
 
-pub(super) async fn rtmp_publish_metadata(
+pub(crate) async fn rtmp_publish_metadata(
     engine: &MediaEngine,
     pipeline_id: &str,
     output_ring: &Arc<RingBuffer>,
