@@ -85,13 +85,13 @@ fn fabric_config<'a>(
     crypto: Option<&'a SrtCryptoConfig>,
     muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
 ) -> SrtFabricEgressConnectConfig<'a> {
-    SrtFabricEgressConnectConfig {
+    SrtFabricEgressConnectConfig::with_crypto(
         peer_addrs,
-        stream_id: "publish:key",
+        "publish:key",
         crypto,
-        connect_timeout_ms: 1500,
+        1500,
         muxer_port_claim,
-    }
+    )
 }
 
 #[test]

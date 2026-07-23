@@ -9,16 +9,61 @@ use super::{
     connect_bonded_srt_egress_socket, connect_single_srt_egress_socket,
 };
 
-pub(in crate::media::srt) struct SrtFabricEgressConnectConfig<'a> {
-    pub(in crate::media::srt) peer_addrs: &'a [SocketAddr],
-    pub(in crate::media::srt) stream_id: &'a str,
-    pub(in crate::media::srt) crypto: Option<&'a SrtCryptoConfig>,
-    pub(in crate::media::srt) connect_timeout_ms: u64,
-    pub(in crate::media::srt) muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
+pub(crate) struct SrtFabricEgressConnectConfig<'a> {
+    peer_addrs: &'a [SocketAddr],
+    stream_id: &'a str,
+    crypto: Option<&'a SrtCryptoConfig>,
+    connect_timeout_ms: u64,
+    muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
 }
 
-#[allow(dead_code)]
-pub(in crate::media::srt) fn connect_fabric_srt_egress_socket(
+#[cfg(test)]
+impl<'a> SrtFabricEgressConnectConfig<'a> {
+    pub(crate) fn plaintext(
+        peer_addrs: &'a [SocketAddr],
+        stream_id: &'a str,
+        connect_timeout_ms: u64,
+        muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
+    ) -> Self {
+        Self {
+            peer_addrs,
+            stream_id,
+            crypto: None,
+            connect_timeout_ms,
+            muxer_port_claim,
+        }
+    }
+
+    pub(crate) fn peer_addrs(&self) -> &[SocketAddr] {
+        self.peer_addrs
+    }
+
+    pub(crate) fn stream_id(&self) -> &str {
+        self.stream_id
+    }
+
+    pub(crate) fn connect_timeout_ms(&self) -> u64 {
+        self.connect_timeout_ms
+    }
+
+    pub(in crate::media::srt) fn with_crypto(
+        peer_addrs: &'a [SocketAddr],
+        stream_id: &'a str,
+        crypto: Option<&'a SrtCryptoConfig>,
+        connect_timeout_ms: u64,
+        muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
+    ) -> Self {
+        Self {
+            peer_addrs,
+            stream_id,
+            crypto,
+            connect_timeout_ms,
+            muxer_port_claim,
+        }
+    }
+}
+
+pub(crate) fn connect_fabric_srt_egress_socket(
     config: SrtFabricEgressConnectConfig<'_>,
 ) -> Result<SRTSOCKET, String> {
     connect_fabric_srt_egress_socket_with(config, LibSrtFabricConnectOps)

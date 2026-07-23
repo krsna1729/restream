@@ -12,7 +12,8 @@ use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::srt::{
     SRTSOCKET, SrtEgressEngine, SrtEgressInterest, SrtEgressPollError, SrtEgressSendMode,
-    SrtFabricPoller, SrtMessageSender, SrtReadyLeaf, srt_fabric_message_sender,
+    SrtFabricEgressConnectConfig, SrtFabricPoller, SrtMessageSender, SrtReadyLeaf,
+    connect_fabric_srt_egress_socket, srt_fabric_message_sender,
 };
 
 mod add_error;
@@ -22,6 +23,12 @@ pub(crate) use add_error::SrtBackendAddError;
 pub(crate) use socket_config::{NativeSrtSocketConfigurator, SrtSocketConfigurator};
 
 type NativeSrtLeaf = SrtFabricLeaf<Box<dyn SrtMessageSender + Send>>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SrtBackendConnectError {
+    Connect(String),
+    Add(SrtBackendAddError),
+}
 
 pub(crate) struct SrtFabricLeaf<T>
 where
@@ -96,6 +103,19 @@ pub(crate) trait SrtReadinessPoller {
         timeout_ms: i64,
         ready: &mut Vec<SrtReadyLeaf>,
     ) -> Result<usize, SrtEgressPollError>;
+}
+
+pub(crate) trait SrtSocketConnector {
+    fn connect(&mut self, config: SrtFabricEgressConnectConfig<'_>) -> Result<SRTSOCKET, String>;
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct NativeSrtSocketConnector;
+
+impl SrtSocketConnector for NativeSrtSocketConnector {
+    fn connect(&mut self, config: SrtFabricEgressConnectConfig<'_>) -> Result<SRTSOCKET, String> {
+        connect_fabric_srt_egress_socket(config)
+    }
 }
 
 impl SrtReadinessPoller for SrtFabricPoller {
@@ -197,6 +217,22 @@ where
             self.remove_leaf_socket(previous);
         }
         Ok(key)
+    }
+
+    pub(crate) fn add_resolved_socket_with<K>(
+        &mut self,
+        common: LeafCommon,
+        config: SrtFabricEgressConnectConfig<'_>,
+        mut connector: K,
+    ) -> Result<LeafKey, SrtBackendConnectError>
+    where
+        K: SrtSocketConnector,
+    {
+        let socket = connector
+            .connect(config)
+            .map_err(SrtBackendConnectError::Connect)?;
+        self.add_connected_socket(common, socket)
+            .map_err(SrtBackendConnectError::Add)
     }
 
     fn add_leaf(
