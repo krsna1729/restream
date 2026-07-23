@@ -780,6 +780,10 @@ Current branch status:
   path and preserves the shared `Bytes` payload allocation when publishing into
   the target input ring. This proves scoped zero payload copying for the
   publisher path; broader cost comparison with loopback remains pending.
+- Target-side buffering follows the existing pipeline input `RingBuffer`
+  contract: a slow or absent target reader cannot block the recirculation
+  publisher, retained packets stay capped by ring capacity, and lagging readers
+  recover through the normal overrun/fast-forward path.
 - The API admits only the initial same-format path for recirculation: source
   video with automatic codec selection and passthrough audio. Presets, explicit
   codec conversion, and audio selection/transforms are rejected before runtime
@@ -808,7 +812,8 @@ Current branch status:
 - direct and indirect topology loops are rejected deterministically;
 - compatible pipeline-to-pipeline media advances without a network socket;
 - incompatible formats fail visibly before media is consumed;
-- target backpressure stalls only the recirculation leaf, not unrelated leaves;
+- target reader lag uses bounded ring overwrite semantics and does not block
+  the recirculation publisher;
 - removal releases target input ownership and feed cursors;
 - publisher tests prove the same-format path preserves shared payload buffers
   while cloning only bounded packet metadata;

@@ -297,6 +297,36 @@ mod tests {
     }
 
     #[test]
+    fn recirculation_publisher_keeps_target_ring_bounded_when_reader_lags() {
+        let ring = RingBuffer::new(2);
+        let registration = registration(Arc::new(InputPacketGate::active()), i64::MIN);
+        let mut publisher = RecirculationInputPublisher::default();
+
+        let outcome = publisher.publish(
+            &[
+                packet(MediaType::Video, 10, true),
+                packet(MediaType::Audio, 20, false),
+                packet(MediaType::Video, 30, false),
+                packet(MediaType::Audio, 40, false),
+            ],
+            &ring,
+            &registration,
+        );
+
+        assert_eq!(
+            outcome,
+            RecirculationPublishOutcome {
+                units: 4,
+                bytes: 16
+            }
+        );
+        assert_eq!(ring.get_write_idx(), 4);
+        assert_eq!(ring.fill_and_capacity(), (2, 2));
+        assert_eq!(ring.read_at(2).unwrap().dts, 30);
+        assert_eq!(ring.read_at(3).unwrap().dts, 40);
+    }
+
+    #[test]
     fn recirculation_publisher_replays_standby_gop_on_promotion() {
         let ring = RingBuffer::new(16);
         let gate = Arc::new(InputPacketGate::standby());
