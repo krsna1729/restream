@@ -92,6 +92,44 @@ async fn sink_output_is_accepted_by_api() {
 }
 
 #[tokio::test]
+async fn pipeline_recirculation_rejects_media_transforms() {
+    let (app, pool) = test_app().await;
+    let cookie = login(&app).await;
+
+    db::create_pipeline(&pool, "p_pipe_src", "Source", "key_pipe_src", None, None)
+        .await
+        .unwrap();
+    db::create_pipeline(&pool, "p_pipe_tgt", "Target", "key_pipe_tgt", None, None)
+        .await
+        .unwrap();
+    db::create_pipeline_input(&pool, "backup", "p_pipe_tgt", "Backup", "key_pipe_backup")
+        .await
+        .unwrap();
+
+    for config in [
+        r#"{"video":{"mode":"preset","preset":"720p"},"audio":{"mode":"all"}}"#,
+        r#"{"video":{"mode":"source","codec":"h264"},"audio":{"mode":"all"}}"#,
+        r#"{"video":{"mode":"source"},"audio":{"mode":"selectTracks","tracks":[0]}}"#,
+    ] {
+        let body = format!(
+            r#"{{"name":"Recirc","url":"pipeline://p_pipe_tgt/backup","config":{config}}}"#
+        );
+        let resp = app
+            .clone()
+            .oneshot(auth_req(
+                "POST",
+                "/api/v1/pipelines/p_pipe_src/outputs",
+                &cookie,
+                Some(&body),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
 async fn output_urls_are_parsed_normalized_and_host_required() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;

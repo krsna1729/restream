@@ -51,6 +51,22 @@ fn output_config_is_custom_output_reflects_video_selector() {
 }
 
 #[test]
+fn output_config_source_passthrough_matches_same_format_path_only() {
+    assert!(OutputConfig::default().is_source_passthrough());
+    assert!(!OutputConfig::preset("720p").is_source_passthrough());
+    assert!(
+        !OutputConfig::source()
+            .with_video_codec(OutputVideoCodec::H264)
+            .is_source_passthrough()
+    );
+    assert!(
+        !OutputConfig::source()
+            .with_audio(AudioRouting::SelectTracks { tracks: vec![0] })
+            .is_source_passthrough()
+    );
+}
+
+#[test]
 fn output_config_defaults_missing_protocol_to_auto_legacy_rtmp() {
     let value = serde_json::json!({
         "video": {"mode": "source"},

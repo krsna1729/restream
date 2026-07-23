@@ -776,6 +776,10 @@ Current branch status:
 - The media runtime claims the target pipeline input, forwards source feed
   packets through the in-process publisher after the target input is selected,
   records egress byte progress, and releases the input claim on cancellation.
+- The API admits only the initial same-format path for recirculation: source
+  video with automatic codec selection and passthrough audio. Presets, explicit
+  codec conversion, and audio selection/transforms are rejected before runtime
+  startup.
 - A pure application validator now parses typed recirculation targets and
   rejects direct and obvious indirect pipeline cycles before runtime backend
   ownership is enabled.

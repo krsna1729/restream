@@ -64,6 +64,8 @@ pub const CUSTOM_OUTPUT_ENCODING_ERROR: &str =
     "Custom output encoding is not available yet; choose source or a preset encoding";
 pub const OUTPUT_PROTOCOL_CONFIG_ERROR: &str =
     "RTMP protocol settings require an RTMP or RTMPS output URL";
+pub const PIPELINE_OUTPUT_CONFIG_ERROR: &str =
+    "Pipeline recirculation outputs must use source video and passthrough audio";
 const YOUTUBE_MONITORING_TIMEOUT: Duration = Duration::from_secs(5);
 const YOUTUBE_MONITORING_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const YOUTUBE_MONITORING_MAX_BYTES: usize = 512 * 1024;
@@ -378,11 +380,22 @@ async fn validate_output_payload_for_pipeline(
         OutputUrlScheme::Pipeline
     ) {
         let output_config = validate_output_payload_fields(payload)?;
+        validate_pipeline_recirculation_config(&output_config)?;
         validate_reserved_recirculation_candidate(state, source_pipeline_id, &payload.url).await?;
         return validate_output_transport(payload, output_config);
     }
 
     validate_output_payload(payload)
+}
+
+fn validate_pipeline_recirculation_config(
+    output_config: &OutputConfig,
+) -> Result<(), ValidationResponse> {
+    if output_config.is_source_passthrough() {
+        Ok(())
+    } else {
+        Err(Box::new(bad_request(PIPELINE_OUTPUT_CONFIG_ERROR)))
+    }
 }
 
 async fn validate_reserved_recirculation_candidate(

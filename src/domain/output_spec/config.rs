@@ -72,6 +72,10 @@ impl OutputConfig {
         self.video.is_custom()
     }
 
+    pub fn is_source_passthrough(&self) -> bool {
+        self.video.is_source_auto() && matches!(self.audio, AudioRouting::Passthrough)
+    }
+
     pub fn validate_capabilities(
         &self,
         capabilities: ProtocolCapabilities,
