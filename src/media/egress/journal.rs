@@ -28,12 +28,18 @@
 //! ## Wake coalescing
 //!
 //! One `AtomicBool` wake-pending flag per `(FeedId, shard)` pair.  Protocol:
-//! 1. Publisher sets the flag with `Release` after every push.
-//! 2. Shard calls `WakeGate::take` (AcqRel) before sleeping.
+//! 1. Publisher calls `WakeGate::notify` (AcqRel swap) after every push; when
+//!    it returns `true` the flag transitioned from clear to set and the
+//!    publisher **must** deliver one wake through the shard's wake mechanism
+//!    (command channel or native poller interrupt).  A `false` return means a
+//!    wake is already outstanding and delivery is coalesced away.
+//! 2. Shard calls `WakeGate::take` (AcqRel) when it wakes or before sleeping.
 //! 3. Shard **re-reads** the feed head after clearing the flag.
 //!
-//! If the publisher advances between steps 2 and 3, the shard observes the
-//! new head before sleeping, so no wakeup is lost.
+//! Lost-wakeup safety rests on the delivery primitive, not on flag/head load
+//! ordering: every clear-to-set transition delivers exactly one wake, so a
+//! shard that sleeps with unconsumed data always has a delivery in flight.
+//! `tests/egress_feed_wake_loom.rs` model-checks this seam.
 //!
 //! ## Retention
 //!
@@ -166,12 +172,17 @@ fn retention_snapshot(ring: &RingBuffer) -> FeedRetentionSnapshot {
 /// Coalescing wake gate: at most one outstanding notification per consumer.
 ///
 /// ### Protocol
-/// 1. Publisher calls [`notify`](WakeGate::notify) after every push (`Release`).
-/// 2. Shard calls [`take`](WakeGate::take) before sleeping (`AcqRel`) — returns
-///    `true` if a notification was pending (consumed atomically).
-/// 3. Shard **must** re-read the feed head after `take` to close the ABA
-///    window: if the publisher advanced between `take` and the re-read, the
-///    shard observes new data instead of sleeping.
+/// 1. Publisher calls [`notify`](WakeGate::notify) after every push (`AcqRel`
+///    swap).  A `true` return is a clear-to-set transition: the publisher must
+///    deliver exactly one wake through the shard's wake mechanism.  `false`
+///    means a wake is already outstanding — delivery is coalesced away.
+/// 2. Shard calls [`take`](WakeGate::take) when woken or before sleeping
+///    (`AcqRel`) — returns `true` if a notification was pending.
+/// 3. Shard **must** re-read the feed head after `take` so data published
+///    since the delivered wake is drained in the same visit.
+///
+/// Lost-wakeup safety comes from pairing every clear-to-set transition with
+/// one delivered wake; `tests/egress_feed_wake_loom.rs` model-checks the seam.
 #[derive(Debug, Default)]
 pub struct WakeGate {
     pending: AtomicBool,
@@ -184,10 +195,13 @@ impl WakeGate {
         }
     }
 
-    /// Mark that new data is available.  Idempotent — does not count calls.
+    /// Mark that new data is available.  Returns `true` when the flag
+    /// transitioned from clear to set — the caller must then deliver one wake
+    /// to the consumer.  Returns `false` when a wake is already outstanding.
     #[inline]
-    pub fn notify(&self) {
-        self.pending.store(true, Ordering::Release);
+    #[must_use = "a true return obligates the caller to deliver a wake"]
+    pub fn notify(&self) -> bool {
+        !self.pending.swap(true, Ordering::AcqRel)
     }
 
     /// Clear the pending flag; returns `true` if it was set.

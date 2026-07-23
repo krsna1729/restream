@@ -337,6 +337,17 @@ Use a model checker or Loom where shared command wakeups, shutdown flags, or
 feed wake coalescing involve atomics. Keep the shard's mutable hot state
 single-thread-owned so the model surface remains small.
 
+Current branch status:
+
+- The feed-wake coalescing seam is loom-proven
+  (`tests/egress_feed_wake_loom.rs`, wired into the concurrency gate).
+  `WakeGate::notify` now returns whether the flag transitioned clear-to-set,
+  obligating the publisher to deliver exactly one wake through the shard's
+  wake primitive; lost-wakeup safety rests on that delivery pairing, and the
+  model checks the planned publish/clear/republish interleaving plus
+  concurrent-publisher coalescing. Shard shutdown and command handoff use
+  `std::sync::mpsc` channels, which need no additional model surface.
+
 ### Exit gate
 
 The common scheduler and lifecycle must pass all isolation tests with no real

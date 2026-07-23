@@ -11,30 +11,35 @@ use tokio_util::sync::CancellationToken;
 fn wake_gate_set_and_take() {
     let gate = WakeGate::new();
     assert!(!gate.take());
-    gate.notify();
+    assert!(gate.notify());
     assert!(gate.is_pending());
     assert!(gate.take());
     assert!(!gate.take());
 }
 
+/// Only the clear-to-set transition obligates a wake delivery; repeats
+/// coalesce until the consumer takes the flag.
 #[test]
-fn wake_gate_idempotent_notify() {
+fn wake_gate_coalesces_repeat_notifies() {
     let gate = WakeGate::new();
-    gate.notify();
-    gate.notify();
-    gate.notify();
+    assert!(gate.notify());
+    assert!(!gate.notify());
+    assert!(!gate.notify());
     assert!(gate.take());
     assert!(!gate.take());
+    // After the consumer drains, the next notify transitions again.
+    assert!(gate.notify());
 }
 
-/// ABA-window safety: notify between take and re-read must leave data visible.
+/// ABA-window safety: notify between take and re-read must leave data visible
+/// and deliver a fresh wake.
 #[test]
 fn wake_gate_aba_window() {
     let gate = WakeGate::new();
     // Shard about to sleep: takes the flag (false → nothing pending yet).
     assert!(!gate.take());
-    // Publisher pushes AFTER shard cleared flag.
-    gate.notify();
+    // Publisher pushes AFTER shard cleared flag — transition delivers a wake.
+    assert!(gate.notify());
     // Shard re-reads feed head and must see new data — the flag is set.
     assert!(gate.is_pending());
     // Next cycle: shard takes it.
@@ -267,11 +272,13 @@ fn ring_feed_many_leaf_cursors_share_payload_storage() {
 fn wake_gate_coalesces_one_publication_per_shard() {
     let shard_gates: Vec<WakeGate> = (0..1_000).map(|_| WakeGate::new()).collect();
 
-    for gate in &shard_gates {
-        gate.notify();
-        gate.notify();
-    }
+    let deliveries: usize = shard_gates
+        .iter()
+        .map(|gate| usize::from(gate.notify()) + usize::from(gate.notify()))
+        .sum();
 
+    // Two publications coalesce to exactly one delivered wake per shard gate.
+    assert_eq!(deliveries, 1_000);
     assert_eq!(
         shard_gates.iter().filter(|gate| gate.is_pending()).count(),
         1_000
