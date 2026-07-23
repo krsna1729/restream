@@ -130,6 +130,127 @@ async fn pipeline_recirculation_rejects_media_transforms() {
 }
 
 #[tokio::test]
+async fn pipeline_recirculation_output_lifecycle_uses_api_status_and_cleanup() {
+    let (app, pool, engine) = test_app_with_engine().await;
+    let cookie = login(&app).await;
+
+    db::create_pipeline(&pool, "p_life_src", "Source", "key_life_src", None, None)
+        .await
+        .unwrap();
+    db::create_pipeline(&pool, "p_life_tgt", "Target", "key_life_tgt", None, None)
+        .await
+        .unwrap();
+    db::create_pipeline_input(&pool, "backup-a", "p_life_tgt", "Backup A", "key_life_a")
+        .await
+        .unwrap();
+    db::create_pipeline_input(&pool, "backup-b", "p_life_tgt", "Backup B", "key_life_b")
+        .await
+        .unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/pipelines/p_life_src/outputs",
+            &cookie,
+            Some(r#"{"name":"Recirc","url":"pipeline://p_life_tgt/backup-a","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let json = body_json(resp).await;
+    let output_id = json["output"]["id"].as_str().unwrap().to_string();
+    assert_eq!(json["output"]["url"], "pipeline://p_life_tgt/backup-a");
+    assert_eq!(json["output"]["desiredState"], "stopped");
+
+    let uri = format!("/api/v1/pipelines/p_life_src/outputs/{output_id}");
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "PATCH",
+            &uri,
+            &cookie,
+            Some(r#"{"name":"Recirc B","url":"pipeline://p_life_tgt/backup-b","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["output"]["name"], "Recirc B");
+    assert_eq!(json["output"]["url"], "pipeline://p_life_tgt/backup-b");
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            &format!("/api/v1/pipelines/p_life_src/outputs/{output_id}/start"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["desiredState"], "running");
+
+    let token = engine
+        .register_egress(&output_id, "p_life_src", "pipeline://p_life_tgt/backup-b")
+        .await;
+    engine
+        .update_egress_target_addr(&output_id, "pipeline://p_life_tgt/backup-b".to_string())
+        .await;
+    engine
+        .update_egress_phase(&output_id, EgressPhase::Sending)
+        .await;
+    engine.record_egress_progress(&output_id, 256).await;
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            &format!("/api/v1/pipelines/p_life_src/outputs/{output_id}/status"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let status = body_json(resp).await;
+    assert_eq!(status["status"], "running");
+    assert_eq!(status["phase"], "sending");
+    assert_eq!(status["targetAddr"], "pipeline://p_life_tgt/backup-b");
+    assert_eq!(status["bytesOut"], 256);
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            &format!("/api/v1/pipelines/p_life_src/outputs/{output_id}/stop"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["desiredState"], "stopped");
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req("DELETE", &uri, &cookie, None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(token.is_cancelled());
+    assert!(
+        db::get_output(&pool, "p_life_src", &output_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn output_urls_are_parsed_normalized_and_host_required() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;
