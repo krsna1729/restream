@@ -1,6 +1,6 @@
 use super::backend::{EngineProgress, Interest, ProtocolFailure, Readiness};
 use super::command::{FeedId, OutputId};
-use super::feed::FeedCursor;
+use super::feed::{EgressFeed, FeedCursor};
 use super::leaf::LeafCommon;
 use super::policy::{LeafLimits, WorkBudget};
 use super::scheduler::VisitDecision;
@@ -94,9 +94,12 @@ fn suspends_when_engine_needs_readiness() {
 }
 
 #[test]
-fn closes_and_records_overrun_when_feed_is_lost() {
+fn resynchronizes_and_records_overrun_instead_of_closing() {
     let feed = FakeFeed::new();
+    feed.push(bytes::Bytes::from_static(b"sync"), true);
+    let sync_point = feed.latest_sync_point().expect("keyframe was pushed");
     let mut common = common(2);
+    common.cursor = FeedCursor::new(0, 999); // stale position past the overrun boundary
     let mut engine = FakeEngine::new(vec![EngineScript::FeedOverrun]);
     let mut transport = FakeTransport::default();
 
@@ -115,8 +118,38 @@ fn closes_and_records_overrun_when_feed_is_lost() {
         panic!("expected visit");
     };
     assert!(matches!(outcome.progress, EngineProgress::FeedOverrun));
-    assert_eq!(outcome.decision, VisitDecision::Close);
+    // Overrun resynchronizes in place: the connection and retry budget are
+    // preserved instead of cycling through a reconnect for a transient
+    // overrun, per the architecture's resync-at-sync-point requirement.
+    assert_eq!(outcome.decision, VisitDecision::Continue);
     assert_eq!(common.progress.overrun_count, 1);
+    assert_eq!(common.cursor, sync_point);
+}
+
+#[test]
+fn resync_falls_back_to_oldest_sequence_without_a_sync_point() {
+    let feed = FakeFeed::new();
+    let mut common = common(2);
+    common.cursor = FeedCursor::new(0, 999);
+    let mut engine = FakeEngine::new(vec![EngineScript::FeedOverrun]);
+    let mut transport = FakeTransport::default();
+
+    let result = EngineVisit {
+        generation: 2,
+        common: &mut common,
+        engine: &mut engine,
+        transport: &mut transport,
+        readiness: Readiness::WRITABLE,
+        feed: &feed,
+        budget: budget(),
+    }
+    .run();
+
+    assert!(matches!(result, EngineVisitResult::Visited(_)));
+    assert_eq!(
+        common.cursor,
+        FeedCursor::new(feed.epoch(), feed.oldest_sequence())
+    );
 }
 
 #[test]

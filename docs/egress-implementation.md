@@ -694,13 +694,23 @@ Current branch status:
   them, and bootstrap populates the handles from the output's egress
   registration — fabric outputs now report progress through the same
   `/api/v1/engine/health` surface as legacy.
-- Live-path defect found and fixed by the crypto-matrix gate: the fabric
-  connected sockets but never delivered media, because nothing on the live
-  path scheduled ready work (visits only ran from deterministic test
-  drivers). `FeedWake` now schedules a ready visit so publication wakes pump
-  the poll-and-visit chain; a shard-thread regression test proves a
-  connected leaf sends after a wake. Earlier ramp captures measured
-  resources but not delivery and are re-recorded after this fix.
+- Live-path defects found and fixed by the crypto-matrix gate:
+  1. `FeedWake` now schedules a ready visit (previously nothing on the live
+     path ever pumped the poll-and-visit chain; deterministic tests drove
+     visits directly and masked the gap).
+  2. `on_ready` now removes a leaf on `VisitDecision::Close` instead of
+     silently dropping the decision, which otherwise leaked a
+     connected-but-dead socket that stayed registered and never revisited.
+  3. `EngineProgress::FeedOverrun` now resynchronizes the leaf's cursor to
+     the feed's latest sync point (or oldest retained sequence) in place
+     instead of closing the connection, satisfying the architecture's
+     "feed overrun and reconnect at a sync point" proof requirement and
+     avoiding a connect/overrun/close cycle for a transient overrun — the
+     live gate's failure pattern (sockets connected, zero `packetsOut`, all
+     stalled) is consistent with an SRT connect-handshake delay long enough
+     for the shared TS ring to wrap past retention before the first visit.
+  Earlier ramp captures measured resources but not delivery and are
+  re-recorded after these fixes.
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
   fault.output-stall passed with a permanently stalled sink isolated beside
   32 healthy siblings while SRT outputs ran fabric-owned. This is

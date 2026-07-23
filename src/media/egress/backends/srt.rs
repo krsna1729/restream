@@ -469,11 +469,31 @@ where
     where
         T: SrtSocketConnector,
     {
-        let socket = connector
+        let output_id = common.output_id.clone();
+        let result = connector
             .connect(config)
-            .map_err(SrtBackendConnectError::Connect)?;
-        self.add_connected_socket(common, socket)
-            .map_err(SrtBackendConnectError::Add)
+            .map_err(SrtBackendConnectError::Connect)
+            .and_then(|socket| {
+                self.add_connected_socket(common, socket)
+                    .map_err(SrtBackendConnectError::Add)
+            });
+        match &result {
+            Ok(key) => {
+                tracing::info!(
+                    output_id = %output_id,
+                    leaf_key = key.0,
+                    "srt fabric leaf connected"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    output_id = %output_id,
+                    error = ?error,
+                    "srt fabric leaf connect failed"
+                );
+            }
+        }
+        result
     }
 
     pub(crate) fn complete_pending_connect_with<T>(
@@ -657,11 +677,17 @@ where
         }
     }
 
-    fn visit_one_ready_leaf(&mut self) -> Option<VisitDecision> {
+    /// Visit the next ready leaf.  Returns the output ID alongside the
+    /// decision so the caller can remove a closed leaf: closing is otherwise
+    /// silently dropped, leaking a connected-but-dead socket and stalling
+    /// the output forever (PeerClosed/Failed after the shared FeedOverrun
+    /// path now resynchronizes in place instead of closing).
+    fn visit_one_ready_leaf(&mut self) -> Option<(OutputId, VisitDecision)> {
         let event = self.ready.pop_front()?;
         let budget = self.budget;
         let feed = &self.feed;
         let leaf = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)?;
+        let output_id = leaf.common().output_id.clone();
         let result = leaf.visit_ready(
             event.generation,
             Readiness {
@@ -672,10 +698,11 @@ where
             budget,
         );
 
-        match result {
-            EngineVisitResult::StaleGeneration => Some(VisitDecision::Suspend),
-            EngineVisitResult::Visited(outcome) => Some(outcome.decision),
-        }
+        let decision = match result {
+            EngineVisitResult::StaleGeneration => VisitDecision::Suspend,
+            EngineVisitResult::Visited(outcome) => outcome.decision,
+        };
+        Some((output_id, decision))
     }
 }
 
@@ -709,10 +736,15 @@ where
             self.poll_ready();
         }
 
-        if matches!(self.visit_one_ready_leaf(), Some(VisitDecision::Continue)) {
-            EgressShardCommandEffect::ScheduleReady { count: 1 }
-        } else {
-            EgressShardCommandEffect::Continue
+        match self.visit_one_ready_leaf() {
+            Some((_, VisitDecision::Continue)) => {
+                EgressShardCommandEffect::ScheduleReady { count: 1 }
+            }
+            Some((output_id, VisitDecision::Close)) => {
+                self.remove_leaf_by_output(&output_id);
+                EgressShardCommandEffect::Continue
+            }
+            _ => EgressShardCommandEffect::Continue,
         }
     }
 
