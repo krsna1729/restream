@@ -712,3 +712,112 @@ fn srt_shard_backend_shutdown_deregisters_before_closing_leaves() {
     assert_eq!(*probe.closed.lock().unwrap(), 1);
     assert_eq!(events.lock().unwrap().as_slice(), &["remove", "close"]);
 }
+
+/// Test-local sender whose native backlog is settable from outside the
+/// boxed transport, so sweeps can observe scripted decline sequences.
+#[derive(Clone, Default)]
+struct SharedBacklogSender {
+    backlog: Arc<Mutex<Option<crate::media::srt::NativeSendBacklog>>>,
+}
+
+impl SrtMessageSender for SharedBacklogSender {
+    fn send_message(&mut self, message: &Bytes) -> crate::media::srt::SrtSendResult {
+        crate::media::srt::SrtSendResult::Accepted {
+            bytes: message.len(),
+        }
+    }
+
+    fn close(&mut self, _reason: crate::media::egress::backend::CloseReason) {}
+
+    fn native_send_backlog(&mut self) -> Option<crate::media::srt::NativeSendBacklog> {
+        *self.backlog.lock().unwrap()
+    }
+}
+
+/// Stall-driven recovery: a leaf whose native sender buffer holds data
+/// without declining past the no-progress deadline is closed by the sweep,
+/// deregistered from the poller, and leaves no socket mapping behind.
+#[test]
+fn stall_sweep_closes_leaf_with_stuck_native_backlog() {
+    use crate::media::srt::NativeSendBacklog;
+    use std::time::Instant;
+
+    let poller = FakeReadinessPoller::default();
+    let poller_handle = poller.clone();
+    let mut backend = SrtShardBackend::with_socket_configurator(
+        poller,
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+        FakeSocketConfigurator::default(),
+    );
+
+    let sender = SharedBacklogSender::default();
+    *sender.backlog.lock().unwrap() = Some(NativeSendBacklog {
+        bytes: 4_096,
+        packets: 3,
+        ms: 500,
+    });
+    let leaf = SrtFabricLeaf::new(
+        common(7),
+        Box::new(sender) as Box<dyn SrtMessageSender + Send>,
+    );
+    let deadline = leaf.common().limits.max_backpressure_duration;
+    backend.add_leaf(42, leaf).unwrap();
+
+    // First sweep: backpressured, within the deadline — nothing closes.
+    let start = Instant::now();
+    backend.sweep_stalled_leaves(start);
+    assert_eq!(backend.output_sockets.len(), 1);
+
+    // Past the no-progress deadline with no native decline: closed and
+    // deregistered.
+    backend.sweep_stalled_leaves(start + deadline + Duration::from_secs(2));
+    assert!(backend.output_sockets.is_empty());
+    assert_eq!(poller_handle.removed(), vec![42]);
+}
+
+/// The sweep leaves healthy leaves alone: a declining native backlog keeps
+/// resetting the stall clock, so the leaf survives sweeps far past the
+/// original deadline.
+#[test]
+fn stall_sweep_spares_leaf_with_draining_native_backlog() {
+    use crate::media::srt::NativeSendBacklog;
+    use std::time::Instant;
+
+    let poller = FakeReadinessPoller::default();
+    let mut backend = SrtShardBackend::with_socket_configurator(
+        poller,
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+        FakeSocketConfigurator::default(),
+    );
+
+    let sender = SharedBacklogSender::default();
+    let backlog_handle = sender.backlog.clone();
+    *backlog_handle.lock().unwrap() = Some(NativeSendBacklog {
+        bytes: 10_000,
+        packets: 8,
+        ms: 500,
+    });
+    let leaf = SrtFabricLeaf::new(
+        common(7),
+        Box::new(sender) as Box<dyn SrtMessageSender + Send>,
+    );
+    let deadline = leaf.common().limits.max_backpressure_duration;
+    backend.add_leaf(42, leaf).unwrap();
+
+    let start = Instant::now();
+    backend.sweep_stalled_leaves(start);
+
+    // Backlog declines before each sweep: the leaf keeps making native
+    // progress and survives well past the original deadline.
+    for step in 1..=3u64 {
+        *backlog_handle.lock().unwrap() = Some(NativeSendBacklog {
+            bytes: 10_000 - step * 2_000,
+            packets: 8,
+            ms: 500,
+        });
+        backend.sweep_stalled_leaves(start + deadline * step as u32);
+    }
+    assert_eq!(backend.output_sockets.len(), 1);
+}

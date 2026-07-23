@@ -676,8 +676,18 @@ Current branch status:
   `SrtFabricLeaf::observe_stall` counts a declining native backlog as
   protocol progress so slow native drain reads as backpressure while a
   non-declining native buffer past the no-progress deadline reads as
-  stalled. Driving recovery from this classification inside the shard visit
-  loop is the remaining runtime step.
+  stalled.
+- Recovery is driven from that classification on the shard thread: a
+  once-per-second stall sweep in the SRT backend's media tick closes every
+  stalled leaf with `CloseReason::NoProgress`, deregisters its poller entry,
+  and releases the socket mapping, so reconnection flows through the
+  application retry policy (SRT recovery is reconnect-only). Deterministic
+  tests prove a stuck native backlog closes at the deadline while a
+  declining backlog keeps the leaf alive indefinitely.
+- Shard-count datapoint: at N=100 the fabric measures identical CPU with 2
+  and 4 shards (47.4%), so the remaining CPU gap versus legacy is
+  per-message path cost, not shard overhead; attribution belongs to the
+  Phase 7 perf sweep.
 
 ### Removal targets
 

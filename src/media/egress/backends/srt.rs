@@ -354,6 +354,7 @@ pub(crate) struct SrtShardBackend<
     ready: VecDeque<SrtReadyLeaf>,
     poll_buffer: Vec<SrtReadyLeaf>,
     pending_connects: HashMap<OutputId, PendingSrtConnect>,
+    last_stall_sweep: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -431,6 +432,7 @@ where
             ready: VecDeque::new(),
             poll_buffer: Vec::new(),
             pending_connects: HashMap::new(),
+            last_stall_sweep: None,
         }
     }
 
@@ -612,6 +614,48 @@ where
         self.leaves.get_mut(key.0).and_then(Option::as_mut)
     }
 
+    /// Minimum interval between stall sweeps: the native bstats probe is one
+    /// FFI call per leaf, so the sweep runs at human-observable cadence, not
+    /// per media tick.
+    const STALL_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// Close every leaf whose combined application and native pending state
+    /// has made no progress within the no-progress deadline.  Closed leaves
+    /// surface as terminated outputs; the application retry policy owns
+    /// reconnection (SRT recovery capability is reconnect-only).
+    fn sweep_stalled_leaves(&mut self, now: Instant) {
+        if self
+            .last_stall_sweep
+            .is_some_and(|last| now.saturating_duration_since(last) < Self::STALL_SWEEP_INTERVAL)
+        {
+            return;
+        }
+        self.last_stall_sweep = Some(now);
+
+        let stalled: Vec<OutputId> = self
+            .output_sockets
+            .iter()
+            .filter_map(|(output_id, socket_ref)| {
+                let leaf = self.leaves.get_mut(socket_ref.key.0)?.as_mut()?;
+                (leaf.observe_stall(now) == LeafStallClass::Stalled).then(|| output_id.clone())
+            })
+            .collect();
+
+        for output_id in stalled {
+            let Some(socket_ref) = self.output_sockets.remove(&output_id) else {
+                continue;
+            };
+            let _ = self.poller.remove(socket_ref.socket);
+            if let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) {
+                let mut leaf = leaf;
+                leaf.engine.close(
+                    &mut leaf.transport,
+                    crate::media::egress::backend::CloseReason::NoProgress,
+                );
+            }
+        }
+    }
+
     fn visit_one_ready_leaf(&mut self) -> Option<VisitDecision> {
         let event = self.ready.pop_front()?;
         let budget = self.budget;
@@ -681,6 +725,7 @@ where
                 &completion.peer_addrs,
             );
         }
+        self.sweep_stalled_leaves(Instant::now());
     }
 
     fn on_shutdown(&mut self) {
