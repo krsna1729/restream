@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 
 use crate::media::egress::backend::{ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
@@ -125,6 +126,30 @@ pub(crate) trait SrtSocketConnector {
 
 pub(crate) trait SrtResolveCompletionSource {
     fn drain_resolved(&mut self, resolved: &mut Vec<SrtResolvedConnect>);
+}
+
+#[derive(Debug)]
+pub(crate) struct SrtResolveCompletionQueue {
+    receiver: Receiver<SrtResolvedConnect>,
+}
+
+pub(crate) fn srt_resolve_completion_queue(
+    capacity: usize,
+) -> (SyncSender<SrtResolvedConnect>, SrtResolveCompletionQueue) {
+    let (sender, receiver) = mpsc::sync_channel(capacity);
+    (sender, SrtResolveCompletionQueue { receiver })
+}
+
+impl SrtResolveCompletionSource for SrtResolveCompletionQueue {
+    fn drain_resolved(&mut self, resolved: &mut Vec<SrtResolvedConnect>) {
+        loop {
+            match self.receiver.try_recv() {
+                Ok(completion) => resolved.push(completion),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default)]

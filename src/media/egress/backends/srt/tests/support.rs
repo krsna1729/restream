@@ -6,7 +6,8 @@ use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::policy::{LeafLimits, WorkBudget};
 use crate::media::egress::scheduler::LeafKey;
 use crate::media::srt::{
-    SRTSOCKET, SrtEgressInterest, SrtEgressPollError, SrtMessageSender, SrtReadyLeaf, SrtSendResult,
+    SRTSOCKET, SrtEgressInterest, SrtEgressPollError, SrtEgressSendMode, SrtEgressSocketError,
+    SrtFabricEgressConnectConfig, SrtMessageSender, SrtReadyLeaf, SrtSendResult,
 };
 use crate::media::ts_chunk_ring::TsChunkRing;
 use bytes::Bytes;
@@ -135,6 +136,104 @@ impl SrtReadinessPoller for FakeReadinessPoller {
             ready.push(event);
         }
         Ok(ready.len())
+    }
+}
+
+#[derive(Clone, Default)]
+pub(super) struct FakeSocketConfigurator {
+    calls: Arc<Mutex<Vec<(SRTSOCKET, SrtEgressSendMode)>>>,
+    fail: bool,
+}
+
+impl FakeSocketConfigurator {
+    pub(super) fn failing() -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            fail: true,
+        }
+    }
+
+    pub(super) fn calls(&self) -> Vec<(SRTSOCKET, SrtEgressSendMode)> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl SrtSocketConfigurator for FakeSocketConfigurator {
+    fn configure_connected(
+        &mut self,
+        socket: SRTSOCKET,
+        mode: SrtEgressSendMode,
+    ) -> Result<(), SrtEgressSocketError> {
+        self.calls.lock().unwrap().push((socket, mode));
+        if self.fail {
+            return Err(SrtEgressSocketError {
+                option: "SRTO_SNDSYN",
+                code: 1234,
+                message: "fake socket setup failure".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct FakeSocketConnector {
+    socket: Result<SRTSOCKET, String>,
+    calls: Arc<Mutex<Vec<FakeConnectCall>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct FakeConnectCall {
+    pub(super) peer_addrs: Vec<std::net::SocketAddr>,
+    pub(super) stream_id: String,
+    pub(super) connect_timeout_ms: u64,
+}
+
+impl FakeSocketConnector {
+    pub(super) fn returning(socket: SRTSOCKET) -> Self {
+        Self {
+            socket: Ok(socket),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub(super) fn failing(error: &str) -> Self {
+        Self {
+            socket: Err(error.to_string()),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub(super) fn calls(&self) -> Vec<FakeConnectCall> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl SrtSocketConnector for FakeSocketConnector {
+    fn connect(&mut self, config: SrtFabricEgressConnectConfig<'_>) -> Result<SRTSOCKET, String> {
+        self.calls.lock().unwrap().push(FakeConnectCall {
+            peer_addrs: config.peer_addrs().to_vec(),
+            stream_id: config.stream_id().to_string(),
+            connect_timeout_ms: config.connect_timeout_ms(),
+        });
+        self.socket.clone()
+    }
+}
+
+#[derive(Default)]
+pub(super) struct FakeResolveCompletionSource {
+    completions: Vec<SrtResolvedConnect>,
+}
+
+impl FakeResolveCompletionSource {
+    pub(super) fn with(completions: Vec<SrtResolvedConnect>) -> Self {
+        Self { completions }
+    }
+}
+
+impl SrtResolveCompletionSource for FakeResolveCompletionSource {
+    fn drain_resolved(&mut self, resolved: &mut Vec<SrtResolvedConnect>) {
+        resolved.append(&mut self.completions);
     }
 }
 

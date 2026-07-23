@@ -1,114 +1,18 @@
 use super::super::*;
-use super::support::{FakeReadinessPoller, common, feed, shared_sender, shared_sender_recording};
+use super::support::{
+    FakeConnectCall, FakeReadinessPoller, FakeResolveCompletionSource, FakeSocketConfigurator,
+    FakeSocketConnector, common, feed, shared_sender, shared_sender_recording,
+};
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::policy::{LeafPolicy, WorkBudget};
 use crate::media::egress::scheduler::LeafKey;
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::srt::{
-    SRTSOCKET, SrtEgressInterest, SrtEgressSendMode, SrtEgressSocketError,
-    SrtFabricEgressConnectConfig, SrtReadyLeaf,
+    SrtEgressInterest, SrtEgressSendMode, SrtFabricEgressConnectConfig, SrtReadyLeaf,
 };
 use bytes::Bytes;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-#[derive(Clone, Default)]
-struct FakeSocketConfigurator {
-    calls: Arc<Mutex<Vec<(SRTSOCKET, SrtEgressSendMode)>>>,
-    fail: bool,
-}
-
-impl FakeSocketConfigurator {
-    fn failing() -> Self {
-        Self {
-            calls: Arc::new(Mutex::new(Vec::new())),
-            fail: true,
-        }
-    }
-
-    fn calls(&self) -> Vec<(SRTSOCKET, SrtEgressSendMode)> {
-        self.calls.lock().unwrap().clone()
-    }
-}
-
-impl SrtSocketConfigurator for FakeSocketConfigurator {
-    fn configure_connected(
-        &mut self,
-        socket: SRTSOCKET,
-        mode: SrtEgressSendMode,
-    ) -> Result<(), SrtEgressSocketError> {
-        self.calls.lock().unwrap().push((socket, mode));
-        if self.fail {
-            return Err(SrtEgressSocketError {
-                option: "SRTO_SNDSYN",
-                code: 1234,
-                message: "fake socket setup failure".to_owned(),
-            });
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone)]
-struct FakeSocketConnector {
-    socket: Result<SRTSOCKET, String>,
-    calls: Arc<Mutex<Vec<FakeConnectCall>>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FakeConnectCall {
-    peer_addrs: Vec<std::net::SocketAddr>,
-    stream_id: String,
-    connect_timeout_ms: u64,
-}
-
-impl FakeSocketConnector {
-    fn returning(socket: SRTSOCKET) -> Self {
-        Self {
-            socket: Ok(socket),
-            calls: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    fn failing(error: &str) -> Self {
-        Self {
-            socket: Err(error.to_string()),
-            calls: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    fn calls(&self) -> Vec<FakeConnectCall> {
-        self.calls.lock().unwrap().clone()
-    }
-}
-
-impl SrtSocketConnector for FakeSocketConnector {
-    fn connect(&mut self, config: SrtFabricEgressConnectConfig<'_>) -> Result<SRTSOCKET, String> {
-        self.calls.lock().unwrap().push(FakeConnectCall {
-            peer_addrs: config.peer_addrs().to_vec(),
-            stream_id: config.stream_id().to_string(),
-            connect_timeout_ms: config.connect_timeout_ms(),
-        });
-        self.socket.clone()
-    }
-}
-
-#[derive(Default)]
-struct FakeResolveCompletionSource {
-    completions: Vec<SrtResolvedConnect>,
-}
-
-impl FakeResolveCompletionSource {
-    fn with(completions: Vec<SrtResolvedConnect>) -> Self {
-        Self { completions }
-    }
-}
-
-impl SrtResolveCompletionSource for FakeResolveCompletionSource {
-    fn drain_resolved(&mut self, resolved: &mut Vec<SrtResolvedConnect>) {
-        resolved.append(&mut self.completions);
-    }
-}
 
 fn fabric_connect_config(peer_addrs: &[std::net::SocketAddr]) -> SrtFabricEgressConnectConfig<'_> {
     SrtFabricEgressConnectConfig::plaintext(peer_addrs, "publish:key", 1500, None)
@@ -489,6 +393,85 @@ fn srt_shard_backend_media_tick_completes_resolved_connect() {
     assert_eq!(
         configurator_handle.calls(),
         vec![(42, SrtEgressSendMode::FabricNonblocking)]
+    );
+    assert_eq!(
+        poller_handle.registered(),
+        vec![(42, LeafKey(0), 7, SrtEgressInterest::WRITE)]
+    );
+}
+
+#[test]
+fn srt_resolve_completion_queue_drains_ready_results_without_waiting() {
+    let (sender, mut queue) = srt_resolve_completion_queue(4);
+    sender
+        .try_send(SrtResolvedConnect {
+            output_id: OutputId::new("out-a"),
+            generation: 7,
+            peer_addrs: peer_addrs(),
+        })
+        .unwrap();
+    sender
+        .try_send(SrtResolvedConnect {
+            output_id: OutputId::new("out-b"),
+            generation: 8,
+            peer_addrs: vec!["127.0.0.3:9002".parse().unwrap()],
+        })
+        .unwrap();
+
+    let mut resolved = Vec::new();
+    queue.drain_resolved(&mut resolved);
+    queue.drain_resolved(&mut resolved);
+
+    assert_eq!(
+        resolved
+            .iter()
+            .map(|completion| completion.output_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["out-a", "out-b"]
+    );
+}
+
+#[test]
+fn srt_shard_backend_media_tick_drains_resolve_completion_queue() {
+    let peer_addrs = peer_addrs();
+    let (sender, queue) = srt_resolve_completion_queue(4);
+    sender
+        .try_send(SrtResolvedConnect {
+            output_id: OutputId::new("out-a"),
+            generation: 7,
+            peer_addrs: peer_addrs.clone(),
+        })
+        .unwrap();
+    let poller = FakeReadinessPoller::default();
+    let poller_handle = poller.clone();
+    let connector = FakeSocketConnector::returning(42);
+    let connector_handle = connector.clone();
+    let mut backend = SrtShardBackend::with_runtime_components(
+        poller,
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+        FakeSocketConfigurator::default(),
+        connector,
+        queue,
+    );
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-a",
+        7,
+        ProtocolSpec::Srt {
+            url: "srt://primary:9000?streamid=publish%3Akey".to_string(),
+        },
+    )));
+
+    backend.on_media_tick();
+
+    assert!(backend.pending_connect(&OutputId::new("out-a")).is_none());
+    assert_eq!(
+        connector_handle.calls(),
+        vec![FakeConnectCall {
+            peer_addrs,
+            stream_id: "publish:key".to_string(),
+            connect_timeout_ms: 10000,
+        }]
     );
     assert_eq!(
         poller_handle.registered(),
