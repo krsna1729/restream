@@ -1,6 +1,11 @@
 //! Centralized application configuration.
 //! Reads environment variables once at startup and stores them in a typed struct.
 
+use std::num::NonZeroU32;
+use std::time::Duration;
+
+use crate::media::egress::policy::WorkBudget;
+use crate::media::egress::shard::EgressShardConfig;
 use crate::planner::BackendPolicy;
 
 /// Default location for media-library files relative to the process working directory.
@@ -26,6 +31,21 @@ pub struct RuntimeTuning {
     pub output_retry_base_ms: u64,
     pub output_retry_max_ms: u64,
     pub hls_idle_timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EgressFabricConfig {
+    pub enabled: bool,
+    pub shards: u32,
+    pub command_channel_capacity: usize,
+    pub command_batch_budget: usize,
+    pub readiness_batch_budget: usize,
+    pub timer_batch_budget: usize,
+    pub idle_wait_ms: u64,
+    pub srt_poller_max_events: usize,
+    pub visit_max_units: usize,
+    pub visit_max_bytes: usize,
+    pub visit_max_us: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +78,24 @@ impl Default for RuntimeTuning {
     }
 }
 
+impl Default for EgressFabricConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            shards: 4,
+            command_channel_capacity: 1024,
+            command_batch_budget: 32,
+            readiness_batch_budget: 64,
+            timer_batch_budget: 64,
+            idle_wait_ms: 1,
+            srt_poller_max_events: 1024,
+            visit_max_units: 32,
+            visit_max_bytes: 256 * 1024,
+            visit_max_us: 2_000,
+        }
+    }
+}
+
 impl RuntimeTuning {
     pub(crate) fn session_prune_every_ticks(&self) -> u64 {
         let ticks = 3_600_000u64.div_ceil(self.reconciler_interval_ms);
@@ -77,11 +115,81 @@ impl RuntimeTuning {
     }
 }
 
+impl EgressFabricConfig {
+    pub fn from_env() -> Self {
+        let defaults = Self::default();
+        Self {
+            enabled: env_bool("RESTREAM_EGRESS_FABRIC").unwrap_or(defaults.enabled),
+            shards: env_u32("RESTREAM_EGRESS_SHARDS", defaults.shards).clamp(1, 1024),
+            command_channel_capacity: env_usize(
+                "RESTREAM_EGRESS_COMMAND_CAPACITY",
+                defaults.command_channel_capacity,
+            )
+            .clamp(1, 65_536),
+            command_batch_budget: env_usize(
+                "RESTREAM_EGRESS_COMMAND_BATCH",
+                defaults.command_batch_budget,
+            )
+            .clamp(1, 4096),
+            readiness_batch_budget: env_usize(
+                "RESTREAM_EGRESS_READY_BATCH",
+                defaults.readiness_batch_budget,
+            )
+            .clamp(1, 4096),
+            timer_batch_budget: env_usize(
+                "RESTREAM_EGRESS_TIMER_BATCH",
+                defaults.timer_batch_budget,
+            )
+            .clamp(1, 4096),
+            idle_wait_ms: env_u64("RESTREAM_EGRESS_IDLE_WAIT_MS", defaults.idle_wait_ms)
+                .clamp(1, 1_000),
+            srt_poller_max_events: env_usize(
+                "RESTREAM_EGRESS_SRT_POLLER_MAX_EVENTS",
+                defaults.srt_poller_max_events,
+            )
+            .clamp(1, 65_536),
+            visit_max_units: env_usize("RESTREAM_EGRESS_VISIT_MAX_UNITS", defaults.visit_max_units)
+                .clamp(1, 4096),
+            visit_max_bytes: env_usize("RESTREAM_EGRESS_VISIT_MAX_BYTES", defaults.visit_max_bytes)
+                .clamp(188, 16 * 1024 * 1024),
+            visit_max_us: env_u64("RESTREAM_EGRESS_VISIT_MAX_US", defaults.visit_max_us)
+                .clamp(1, 1_000_000),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn shard_count(&self) -> NonZeroU32 {
+        NonZeroU32::new(self.shards).expect("egress fabric shard count is clamped nonzero")
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn shard_config(&self) -> EgressShardConfig {
+        EgressShardConfig::new(
+            self.command_channel_capacity,
+            self.command_batch_budget,
+            self.readiness_batch_budget,
+            self.timer_batch_budget,
+            Duration::from_millis(self.idle_wait_ms),
+        )
+        .expect("egress fabric shard config is clamped nonzero")
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn work_budget(&self) -> WorkBudget {
+        WorkBudget::new(
+            self.visit_max_units,
+            self.visit_max_bytes,
+            Duration::from_micros(self.visit_max_us),
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub ports: ServerPorts,
     pub http_bind_addr: String,
     pub tuning: RuntimeTuning,
+    pub egress_fabric: EgressFabricConfig,
     pub tokio_runtime: TokioRuntimeConfig,
     pub db_path: String,
     pub media_dir: String,
@@ -285,6 +393,7 @@ impl Default for AppConfig {
             ports,
             http_bind_addr: "127.0.0.1".to_string(),
             tuning,
+            egress_fabric: EgressFabricConfig::default(),
             tokio_runtime,
             db_path: ".restream/data/restream.db".to_string(),
             media_dir: DEFAULT_MEDIA_DIR.to_string(),
@@ -334,6 +443,7 @@ impl AppConfig {
         let http_bind_addr =
             std::env::var("RESTREAM_HTTP_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
         let tuning = RuntimeTuning::from_env();
+        let egress_fabric = EgressFabricConfig::from_env();
         let tokio_runtime = TokioRuntimeConfig::from_env();
         let db_path = std::env::var("RESTREAM_DB_PATH")
             .unwrap_or_else(|_| ".restream/data/restream.db".to_string());
@@ -422,6 +532,7 @@ impl AppConfig {
             ports,
             http_bind_addr,
             tuning,
+            egress_fabric,
             tokio_runtime,
             db_path,
             media_dir,
@@ -479,6 +590,19 @@ impl AppConfig {
             "tokio": {
                 "workerThreads": self.tokio_runtime.worker_threads,
                 "maxBlockingThreads": self.tokio_runtime.max_blocking_threads,
+            },
+            "egressFabric": {
+                "enabled": self.egress_fabric.enabled,
+                "shards": self.egress_fabric.shards,
+                "commandChannelCapacity": self.egress_fabric.command_channel_capacity,
+                "commandBatchBudget": self.egress_fabric.command_batch_budget,
+                "readinessBatchBudget": self.egress_fabric.readiness_batch_budget,
+                "timerBatchBudget": self.egress_fabric.timer_batch_budget,
+                "idleWaitMs": self.egress_fabric.idle_wait_ms,
+                "srtPollerMaxEvents": self.egress_fabric.srt_poller_max_events,
+                "visitMaxUnits": self.egress_fabric.visit_max_units,
+                "visitMaxBytes": self.egress_fabric.visit_max_bytes,
+                "visitMaxUs": self.egress_fabric.visit_max_us,
             },
             "paths": {
                 "db": self.db_path,

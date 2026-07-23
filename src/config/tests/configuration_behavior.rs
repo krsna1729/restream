@@ -1,9 +1,9 @@
 use std::sync::Mutex;
 
 use super::{
-    AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, RuntimeTuning, ServerPorts,
-    TokioRuntimeConfig, backend_policy_from_env, default_tokio_worker_threads,
-    derive_external_ffmpeg_permits,
+    AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
+    RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
+    default_tokio_worker_threads, derive_external_ffmpeg_permits,
 };
 use crate::planner::BackendPolicy;
 
@@ -230,6 +230,69 @@ fn runtime_tuning_is_loaded_by_config_module() {
 }
 
 #[test]
+fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
+    with_env_overlay(
+        &[],
+        &[
+            "RESTREAM_EGRESS_FABRIC",
+            "RESTREAM_EGRESS_SHARDS",
+            "RESTREAM_EGRESS_COMMAND_CAPACITY",
+            "RESTREAM_EGRESS_COMMAND_BATCH",
+            "RESTREAM_EGRESS_READY_BATCH",
+            "RESTREAM_EGRESS_TIMER_BATCH",
+            "RESTREAM_EGRESS_IDLE_WAIT_MS",
+            "RESTREAM_EGRESS_SRT_POLLER_MAX_EVENTS",
+            "RESTREAM_EGRESS_VISIT_MAX_UNITS",
+            "RESTREAM_EGRESS_VISIT_MAX_BYTES",
+            "RESTREAM_EGRESS_VISIT_MAX_US",
+        ],
+        || {
+            let fabric = EgressFabricConfig::from_env();
+            assert_eq!(fabric, EgressFabricConfig::default());
+            assert!(!fabric.enabled);
+            assert_eq!(fabric.shard_count().get(), 4);
+            assert_eq!(fabric.shard_config().command_channel_capacity().get(), 1024);
+            let budget = fabric.work_budget();
+            assert_eq!(budget.max_units, 32);
+            assert_eq!(budget.max_bytes, 256 * 1024);
+        },
+    );
+}
+
+#[test]
+fn egress_fabric_config_loads_and_clamps_env() {
+    with_env_vars(
+        &[
+            ("RESTREAM_EGRESS_FABRIC", "true"),
+            ("RESTREAM_EGRESS_SHARDS", "0"),
+            ("RESTREAM_EGRESS_COMMAND_CAPACITY", "0"),
+            ("RESTREAM_EGRESS_COMMAND_BATCH", "0"),
+            ("RESTREAM_EGRESS_READY_BATCH", "0"),
+            ("RESTREAM_EGRESS_TIMER_BATCH", "0"),
+            ("RESTREAM_EGRESS_IDLE_WAIT_MS", "0"),
+            ("RESTREAM_EGRESS_SRT_POLLER_MAX_EVENTS", "0"),
+            ("RESTREAM_EGRESS_VISIT_MAX_UNITS", "0"),
+            ("RESTREAM_EGRESS_VISIT_MAX_BYTES", "1"),
+            ("RESTREAM_EGRESS_VISIT_MAX_US", "0"),
+        ],
+        || {
+            let fabric = EgressFabricConfig::from_env();
+            assert!(fabric.enabled);
+            assert_eq!(fabric.shards, 1);
+            assert_eq!(fabric.command_channel_capacity, 1);
+            assert_eq!(fabric.command_batch_budget, 1);
+            assert_eq!(fabric.readiness_batch_budget, 1);
+            assert_eq!(fabric.timer_batch_budget, 1);
+            assert_eq!(fabric.idle_wait_ms, 1);
+            assert_eq!(fabric.srt_poller_max_events, 1);
+            assert_eq!(fabric.visit_max_units, 1);
+            assert_eq!(fabric.visit_max_bytes, 188);
+            assert_eq!(fabric.visit_max_us, 1);
+        },
+    );
+}
+
+#[test]
 fn tokio_runtime_config_tracks_cpu_limits_and_overrides() {
     assert_eq!(default_tokio_worker_threads(1), 1);
     assert_eq!(default_tokio_worker_threads(2), 2);
@@ -364,6 +427,8 @@ fn effective_summary_covers_runtime_knobs_without_secret_values() {
         summary["tokio"]["maxBlockingThreads"],
         config.tokio_runtime.max_blocking_threads
     );
+    assert_eq!(summary["egressFabric"]["enabled"], false);
+    assert_eq!(summary["egressFabric"]["shards"], 4);
     assert_eq!(summary["paths"]["ffmpegBin"], "/usr/bin/ffmpeg");
     assert_eq!(summary["backendPolicy"]["internalHlsPreview"], false);
     assert_eq!(
