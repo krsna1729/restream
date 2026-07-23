@@ -29,6 +29,7 @@
 pub mod backend;
 pub mod backends;
 pub mod command;
+pub(crate) mod factory;
 pub mod feed;
 pub mod journal;
 pub mod leaf;
