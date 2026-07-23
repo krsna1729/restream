@@ -203,7 +203,6 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
   });
   configureStatusCheckpointPresentation({
     onPresentation: statusV2Active ? updateDashboardV2StatusCheckpoint : undefined,
-    v2Active: statusV2Active,
   });
   configureMediaCheckpointPresentation({
     onPresentation: mediaV2Active ? updateDashboardV2MediaCheckpoint : undefined,

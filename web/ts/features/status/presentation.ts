@@ -31,10 +31,7 @@ const STATUS_SECTION_NAV = [
   },
 ] as const;
 
-export function statusExportActionsHtml(options: {
-  expanded: boolean;
-  v2Active: boolean;
-}): string {
+export function statusExportActionsHtml(options: { expanded: boolean }): string {
   const actions = `
             <div class="flex flex-wrap gap-2">
                 <button type="button" class="btn btn-sm btn-outline" id="download-status-btn">Download status report</button>
@@ -42,7 +39,6 @@ export function statusExportActionsHtml(options: {
                 <button type="button" class="btn btn-sm btn-outline" id="download-sbom-btn">Download SBOM file</button>
                 <button type="button" class="btn btn-sm btn-outline" id="copy-sbom-btn">Copy SBOM file</button>
             </div>`;
-  if (!options.v2Active) return actions;
   return `
         <section class="border-base-content/10 bg-base-100 rounded-2xl border p-4 shadow-sm" aria-label="Status export actions">
             <div class="flex flex-wrap items-start justify-between gap-3">

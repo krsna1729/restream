@@ -110,13 +110,10 @@ const statusAdvancedSectionsExpanded = new Set<string>();
 let statusCheckpointCallback:
   | ((model: StatusCheckpointModel | null) => void)
   | null = null;
-let statusV2PresentationActive = false;
 
 export function configureStatusCheckpointPresentation(options: {
   readonly onPresentation?: (model: StatusCheckpointModel | null) => void;
-  readonly v2Active?: boolean;
 }): void {
-  statusV2PresentationActive = options.v2Active === true;
   statusCheckpointCallback = options.onPresentation ?? null;
   if (!statusCheckpointCallback) return;
   statusCheckpointCallback(buildStatusCheckpointModel());
@@ -269,25 +266,17 @@ function advancedSectionActionLabel(
   return `${action} ${detailName} details`;
 }
 
-function statusV2Active(): boolean {
-  return statusV2PresentationActive;
-}
-
 function advancedSection(
   id: string,
   title: string,
   summary: string,
   rows: string,
 ): string {
-  const expanded = !statusV2Active() || statusAdvancedSectionsExpanded.has(id);
+  const expanded = statusAdvancedSectionsExpanded.has(id);
   if (expanded) {
     const hideLabel = advancedSectionActionLabel("Hide", title);
     return `${section(id, title, rows)}
-      ${
-        statusV2Active()
-          ? `<button type="button" class="btn btn-xs btn-outline mt-2" data-status-advanced-section="${escapeHtml(id)}" aria-label="${escapeHtml(hideLabel)}" aria-expanded="true">Hide ${escapeHtml(title)} details</button>`
-          : ""
-      }`;
+      <button type="button" class="btn btn-xs btn-outline mt-2" data-status-advanced-section="${escapeHtml(id)}" aria-label="${escapeHtml(hideLabel)}" aria-expanded="true">Hide ${escapeHtml(title)} details</button>`;
   }
   const showLabel = advancedSectionActionLabel("Show", title);
   return `<section id="${escapeHtml(id)}" class="scroll-mt-24">
@@ -916,7 +905,6 @@ function renderStatusSnapshot(): void {
     renderProcessLog(processLogs, search, statusLogSearchQuery),
     statusExportActionsHtml({
       expanded: statusExportActionsExpanded,
-      v2Active: statusV2Active(),
     }),
   ].join("");
   bindActions(data, sbomEndpoint);

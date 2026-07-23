@@ -211,6 +211,7 @@ test("status route body uses the v2-owned renderer", async () => {
     /export function renderDashboardV2StatusBody\(\s*container: HTMLElement,\s*\): Promise<void>/,
   );
   assert.match(statusSource, /container\.dataset\.statusRouteBody = "v2"/);
+  assert.doesNotMatch(statusSource, /v2Active/);
 });
 
 test("pipeline inspect route body uses the v2-owned renderer", async () => {
