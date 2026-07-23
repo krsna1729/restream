@@ -216,7 +216,7 @@ pub async fn start_rtmp_egress(
         }
         return;
     }
-    let (parts, mut socket, mut session) = session_ready.into_legacy_parts();
+    let (parts, mut socket, mut session, mut write_queue) = session_ready.into_legacy_parts();
 
     let mut buffer = vec![0u8; 4096];
 
@@ -287,7 +287,11 @@ pub async fn start_rtmp_egress(
                 for r in results {
                     match r {
                         ClientSessionResult::OutboundResponse(pkt) => {
-                            if write_rtmp_pending_bytes(&mut socket, Bytes::from(pkt.bytes))
+                            if write_rtmp_pending_bytes(
+                                &mut socket,
+                                &mut write_queue,
+                                Bytes::from(pkt.bytes),
+                            )
                                 .await
                                 .is_err()
                             {
@@ -308,6 +312,7 @@ pub async fn start_rtmp_egress(
                                     };
                                     if write_rtmp_pending_bytes(
                                         &mut socket,
+                                        &mut write_queue,
                                         Bytes::from(pub_pkt.bytes),
                                     )
                                     .await
@@ -329,7 +334,11 @@ pub async fn start_rtmp_egress(
                                     .await
                                         && let Ok(ClientSessionResult::OutboundResponse(p)) =
                                             session.publish_metadata(&metadata)
-                                        && write_rtmp_pending_bytes(&mut socket, Bytes::from(p.bytes))
+                                        && write_rtmp_pending_bytes(
+                                            &mut socket,
+                                            &mut write_queue,
+                                            Bytes::from(p.bytes),
+                                        )
                                             .await
                                             .is_err()
                                     {
@@ -383,7 +392,11 @@ pub async fn start_rtmp_egress(
                                                 false,
                                             )
                                     {
-                                        if write_rtmp_pending_bytes(&mut socket, Bytes::from(p.bytes))
+                                        if write_rtmp_pending_bytes(
+                                            &mut socket,
+                                            &mut write_queue,
+                                            Bytes::from(p.bytes),
+                                        )
                                         .await
                                         .is_err()
                                         {
@@ -417,7 +430,11 @@ pub async fn start_rtmp_egress(
                                                 false,
                                             )
                                     {
-                                        if write_rtmp_pending_bytes(&mut socket, Bytes::from(p.bytes))
+                                        if write_rtmp_pending_bytes(
+                                            &mut socket,
+                                            &mut write_queue,
+                                            Bytes::from(p.bytes),
+                                        )
                                         .await
                                         .is_err()
                                         {
@@ -502,7 +519,11 @@ pub async fn start_rtmp_egress(
                                         false,
                                     )
                             {
-                                if write_rtmp_pending_bytes(&mut socket, Bytes::from(p.bytes))
+                                if write_rtmp_pending_bytes(
+                                    &mut socket,
+                                    &mut write_queue,
+                                    Bytes::from(p.bytes),
+                                )
                                     .await
                                     .is_err()
                                 {
@@ -577,8 +598,9 @@ pub async fn start_rtmp_egress(
                                                     sequence_header_ts,
                                                     false,
                                                 ) && write_rtmp_pending_bytes(
-                                                    &mut socket,
-                                                    Bytes::from(p.bytes),
+                                                &mut socket,
+                                                &mut write_queue,
+                                                Bytes::from(p.bytes),
                                                 )
                                                 .await
                                                 .is_err()
@@ -673,7 +695,11 @@ pub async fn start_rtmp_egress(
                         match pkt {
                             Ok(ClientSessionResult::OutboundResponse(p)) => {
                                 let sent_bytes = p.bytes.len() as u64;
-                                if write_rtmp_pending_bytes(&mut socket, Bytes::from(p.bytes))
+                                if write_rtmp_pending_bytes(
+                                    &mut socket,
+                                    &mut write_queue,
+                                    Bytes::from(p.bytes),
+                                )
                                     .await
                                     .is_err()
                                 {

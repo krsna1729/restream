@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 use super::egress_transport::{RtmpEgressStream, RtmpUrlParts, connect_rtmp_egress_stream};
-use super::egress_write::write_rtmp_pending_bytes;
+use super::egress_write::{RtmpWriteQueue, write_rtmp_pending_bytes};
 use super::enhanced::enhanced_rtmp_connect_packet;
 use super::handshake::perform_client_handshake;
 
@@ -28,6 +28,7 @@ pub(super) struct RtmpEgressSession {
     session: ClientSession,
     connect_config: ClientSessionConfig,
     initial_results: Vec<ClientSessionResult>,
+    write_queue: RtmpWriteQueue,
 }
 
 pub(super) enum InitialServerResultError {
@@ -80,6 +81,7 @@ impl RtmpEgressConnection {
             session,
             connect_config,
             initial_results,
+            write_queue: RtmpWriteQueue::default(),
         })
     }
 }
@@ -88,7 +90,12 @@ impl RtmpEgressSession {
     pub(super) async fn write_initial_results(&mut self) -> io::Result<()> {
         for result in self.initial_results.drain(..) {
             if let ClientSessionResult::OutboundResponse(packet) = result {
-                write_rtmp_pending_bytes(&mut self.socket, Bytes::from(packet.bytes)).await?;
+                write_rtmp_pending_bytes(
+                    &mut self.socket,
+                    &mut self.write_queue,
+                    Bytes::from(packet.bytes),
+                )
+                .await?;
             }
         }
         Ok(())
@@ -104,7 +111,7 @@ impl RtmpEgressSession {
         } else {
             packet.bytes
         };
-        write_rtmp_pending_bytes(&mut self.socket, Bytes::from(bytes))
+        write_rtmp_pending_bytes(&mut self.socket, &mut self.write_queue, Bytes::from(bytes))
             .await
             .map_err(|_| "failed to write connect request".to_string())?;
         Ok(())
@@ -132,9 +139,13 @@ impl RtmpEgressSession {
         for result in results {
             match result {
                 ClientSessionResult::OutboundResponse(packet) => {
-                    write_rtmp_pending_bytes(&mut self.socket, Bytes::from(packet.bytes))
-                        .await
-                        .map_err(|_| "Socket write error")?;
+                    write_rtmp_pending_bytes(
+                        &mut self.socket,
+                        &mut self.write_queue,
+                        Bytes::from(packet.bytes),
+                    )
+                    .await
+                    .map_err(|_| "Socket write error")?;
                 }
                 ClientSessionResult::RaisedEvent(event) => match event {
                     ClientSessionEvent::ConnectionRequestAccepted => {
@@ -145,9 +156,13 @@ impl RtmpEgressSession {
                             Ok(ClientSessionResult::OutboundResponse(packet)) => packet,
                             _ => return Err("Failed to build publish request"),
                         };
-                        write_rtmp_pending_bytes(&mut self.socket, Bytes::from(packet.bytes))
-                            .await
-                            .map_err(|_| "Socket write error")?;
+                        write_rtmp_pending_bytes(
+                            &mut self.socket,
+                            &mut self.write_queue,
+                            Bytes::from(packet.bytes),
+                        )
+                        .await
+                        .map_err(|_| "Socket write error")?;
                     }
                     ClientSessionEvent::ConnectionRequestRejected { description } => {
                         error!("Connection request rejected: {}", description);
@@ -161,7 +176,14 @@ impl RtmpEgressSession {
         Ok(())
     }
 
-    pub(super) fn into_legacy_parts(self) -> (RtmpUrlParts, RtmpEgressStream, ClientSession) {
-        (self.parts, self.socket, self.session)
+    pub(super) fn into_legacy_parts(
+        self,
+    ) -> (
+        RtmpUrlParts,
+        RtmpEgressStream,
+        ClientSession,
+        RtmpWriteQueue,
+    ) {
+        (self.parts, self.socket, self.session, self.write_queue)
     }
 }

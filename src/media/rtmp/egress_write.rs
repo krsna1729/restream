@@ -66,13 +66,17 @@ impl RtmpWriteQueue {
     }
 }
 
-pub(crate) async fn write_rtmp_pending_bytes<S>(socket: &mut S, bytes: Bytes) -> io::Result<usize>
+pub(crate) async fn write_rtmp_pending_bytes<S>(
+    socket: &mut S,
+    queue: &mut RtmpWriteQueue,
+    bytes: Bytes,
+) -> io::Result<usize>
 where
     S: AsyncWrite + Unpin,
 {
-    let mut queue = RtmpWriteQueue::default();
+    let pending_before = queue.pending_bytes();
     queue.push(bytes);
-    let total = queue.pending_bytes();
+    let total = queue.pending_bytes().saturating_sub(pending_before);
 
     while !queue.is_empty() {
         let Some(chunk) = queue.front_chunk() else {
@@ -188,10 +192,12 @@ mod tests {
     #[tokio::test]
     async fn rtmp_pending_write_preserves_bytes_across_partial_socket_writes() {
         let mut writer = PartialWriter::with_max_write(2);
+        let mut queue = RtmpWriteQueue::default();
 
-        let written = write_rtmp_pending_bytes(&mut writer, Bytes::from_static(b"abcde"))
-            .await
-            .unwrap();
+        let written =
+            write_rtmp_pending_bytes(&mut writer, &mut queue, Bytes::from_static(b"abcde"))
+                .await
+                .unwrap();
 
         assert_eq!(written, 5);
         assert_eq!(writer.bytes, b"abcde");
@@ -200,12 +206,14 @@ mod tests {
     #[tokio::test]
     async fn rtmp_pending_write_rejects_zero_byte_socket_writes() {
         let mut writer = PartialWriter::with_max_write(0);
+        let mut queue = RtmpWriteQueue::default();
 
-        let error = write_rtmp_pending_bytes(&mut writer, Bytes::from_static(b"abc"))
+        let error = write_rtmp_pending_bytes(&mut writer, &mut queue, Bytes::from_static(b"abc"))
             .await
             .unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::WriteZero);
         assert!(writer.bytes.is_empty());
+        assert_eq!(queue.pending_bytes(), 3);
     }
 }
