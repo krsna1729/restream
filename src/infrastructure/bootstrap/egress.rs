@@ -15,6 +15,8 @@ use crate::application::reconcile::{
 use crate::config::RuntimeTuning;
 use crate::domain::output_spec::OutputUrlScheme;
 use crate::domain::state::{DesiredOutputState, EgressPhase};
+use crate::media::egress::journal::TsFeed;
+use crate::media::egress::{EgressCommand, FeedId, OutputSpec};
 use crate::media::engine::MediaEngine;
 use crate::secret_display::redact_url;
 
@@ -151,8 +153,15 @@ impl EgressReconciler {
             "output job started",
         );
 
+        let url_scheme = OutputUrlScheme::from_url(&output.url);
         let prepared = crate::application::egress::prepare_output_ring(&self.engine, output).await;
-        let encoding = output.stage_encoding_label();
+        let use_srt_fabric =
+            self.engine.config.egress_fabric.enabled && matches!(url_scheme, OutputUrlScheme::Srt);
+        let encoding = if use_srt_fabric {
+            prepared.media_stage_key.kind.to_string()
+        } else {
+            output.stage_encoding_label()
+        };
         let registration = self
             .engine
             .register_egress_attempt_with_meta(
@@ -178,6 +187,27 @@ impl EgressReconciler {
         )
         .await;
 
+        let srt_fabric = if use_srt_fabric {
+            let feed = crate::application::egress::prepare_srt_fabric_feed(
+                &self.engine,
+                output,
+                &prepared,
+                registration.attempt_id,
+            )
+            .await;
+            Some(SrtFabricTask {
+                spec: crate::application::egress::srt_fabric_output_spec(
+                    output,
+                    registration.attempt_id,
+                    feed.feed_id.clone(),
+                ),
+                feed_id: feed.feed_id,
+                feed: feed.feed,
+            })
+        } else {
+            None
+        };
+
         let task = EgressTask {
             output_id: output.id.clone(),
             pipeline_id: output.pipeline_id.clone(),
@@ -193,9 +223,17 @@ impl EgressReconciler {
             tuning: self.tuning,
             correlation_id,
             job_id,
+            srt_fabric,
         };
         tokio::spawn(task.run());
     }
+}
+
+#[derive(Clone)]
+struct SrtFabricTask {
+    feed_id: FeedId,
+    feed: Arc<TsFeed>,
+    spec: OutputSpec,
 }
 
 struct EgressTask {
@@ -213,6 +251,7 @@ struct EgressTask {
     tuning: RuntimeTuning,
     correlation_id: String,
     job_id: String,
+    srt_fabric: Option<SrtFabricTask>,
 }
 
 impl EgressTask {
@@ -239,16 +278,20 @@ impl EgressTask {
                     .await;
                 }
                 OutputUrlScheme::Srt => {
-                    crate::media::srt::start_srt_egress(
-                        self.output_id.clone(),
-                        self.pipeline_id.clone(),
-                        self.encoding.clone(),
-                        self.url.clone(),
-                        self.ring.clone(),
-                        self.engine.clone(),
-                        self.registration.clone(),
-                    )
-                    .await;
+                    if let Some(fabric) = self.srt_fabric.as_ref().cloned() {
+                        self.run_srt_fabric(fabric).await;
+                    } else {
+                        crate::media::srt::start_srt_egress(
+                            self.output_id.clone(),
+                            self.pipeline_id.clone(),
+                            self.encoding.clone(),
+                            self.url.clone(),
+                            self.ring.clone(),
+                            self.engine.clone(),
+                            self.registration.clone(),
+                        )
+                        .await;
+                    }
                 }
                 OutputUrlScheme::Sink => {
                     crate::media::egress::backends::sink::start_sink_egress(
@@ -409,6 +452,68 @@ impl EgressTask {
         } else {
             self.engine.clear_egress_retry_state(&self.output_id).await;
         }
+    }
+
+    async fn run_srt_fabric(&self, fabric: SrtFabricTask) {
+        match self
+            .engine
+            .retain_srt_fabric_runtime(fabric.feed_id.clone(), fabric.feed.as_ref())
+            .await
+        {
+            Ok(_) => {}
+            Err(error) => {
+                self.engine
+                    .record_egress_error_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        "srt_fabric_ensure",
+                        format!("{error:?}"),
+                    )
+                    .await;
+                return;
+            }
+        }
+
+        match self
+            .engine
+            .dispatch_srt_fabric_command(&fabric.feed_id, EgressCommand::Add(fabric.spec.clone()))
+            .await
+        {
+            Ok(_) => {
+                self.engine
+                    .update_egress_phase_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        EgressPhase::Sending,
+                    )
+                    .await;
+            }
+            Err(error) => {
+                let _ = self
+                    .engine
+                    .release_srt_fabric_runtime(&fabric.feed_id)
+                    .await;
+                self.engine
+                    .record_egress_error_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        "srt_fabric_dispatch",
+                        format!("{error:?}"),
+                    )
+                    .await;
+                return;
+            }
+        }
+
+        self.registration.cancel_token.cancelled().await;
+        let _ = self
+            .engine
+            .dispatch_srt_fabric_command(&fabric.feed_id, EgressCommand::Remove(fabric.spec.id))
+            .await;
+        let _ = self
+            .engine
+            .release_srt_fabric_runtime(&fabric.feed_id)
+            .await;
     }
 
     async fn reject_unsupported_url(&self) {

@@ -410,6 +410,14 @@ impl TsFeed {
         }
     }
 
+    pub fn clone_reader(&self) -> Self {
+        Self {
+            ring: self.ring.clone(),
+            epoch: self.epoch.clone(),
+            cached_oldest: AtomicU64::new(self.cached_oldest.load(Ordering::Relaxed)),
+        }
+    }
+
     fn refresh_oldest(&self) -> u64 {
         let oldest = oldest_retained_sequence(&self.ring);
         self.cached_oldest.store(oldest, Ordering::Relaxed);

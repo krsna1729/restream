@@ -198,5 +198,6 @@ impl MediaEngine {
                 token.cancel();
             }
         }
+        self.shutdown_all_srt_fabric_runtimes().await;
     }
 }

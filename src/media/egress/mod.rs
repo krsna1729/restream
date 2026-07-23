@@ -37,6 +37,7 @@ pub mod lifecycle;
 pub mod manager;
 pub mod metrics;
 pub mod policy;
+pub(crate) mod runtime;
 pub mod scheduler;
 pub mod shard;
 pub mod supervisor;

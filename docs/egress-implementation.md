@@ -576,6 +576,19 @@ Retain protocol-specific behavior in the SRT engine:
 Use shared `TsChunkRing` or its feed adapter as immutable message storage. The
 leaf must not copy chunks into a `VecDeque<u8>` or private stream backlog.
 
+Current branch status:
+
+- `RESTREAM_EGRESS_FABRIC` remains disabled by default.
+- SRT output preparation now builds a shared `TsFeed` from the existing
+  `TsChunkRing` muxer assignment.
+- `MediaEngine` owns SRT fabric runtimes by `FeedId`, dispatches add/remove
+  commands through the common manager and shard group, tears down a feed runtime
+  when its final active fabric output stops, and still drains all remaining SRT
+  fabric runtimes during engine-wide task cancellation.
+- Bootstrap routes SRT outputs through this fabric path only when
+  `RESTREAM_EGRESS_FABRIC` is enabled; the legacy `start_srt_egress` path
+  remains the default.
+
 ### Native buffer accounting
 
 Define and validate SRT native sender-buffer ceilings. A leaf is considered

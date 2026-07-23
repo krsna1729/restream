@@ -18,6 +18,8 @@ use tokio_util::sync::CancellationToken;
 use crate::domain::stage::StageKey;
 use crate::events::EventLog;
 use crate::media::avio::MemoryQueue;
+use crate::media::egress::FeedId;
+use crate::media::egress::runtime::EgressFabricRuntime;
 use crate::media::engine::{
     ActiveEgress, ActiveIngest, EgressRetryState, RecentEgressOutcome, RecentIngestOutcome,
 };
@@ -93,6 +95,38 @@ impl EgressRegistry {
             queues: TokioRwLock::new(HashMap::new()),
             recent: TokioRwLock::new(HashMap::new()),
             retry: TokioRwLock::new(HashMap::new()),
+        }
+    }
+}
+
+pub(crate) struct SrtFabricRegistry {
+    pub(crate) runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub(crate) active_outputs: HashMap<FeedId, u64>,
+}
+
+impl SrtFabricRegistry {
+    fn new() -> Self {
+        Self {
+            runtimes: HashMap::new(),
+            active_outputs: HashMap::new(),
+        }
+    }
+}
+
+pub struct FabricRegistry {
+    pub(crate) srt: TokioMutex<SrtFabricRegistry>,
+}
+
+impl Default for FabricRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FabricRegistry {
+    pub fn new() -> Self {
+        Self {
+            srt: TokioMutex::new(SrtFabricRegistry::new()),
         }
     }
 }

@@ -9,6 +9,7 @@ pub mod codec;
 pub mod egress;
 pub mod engine;
 mod engine_egress;
+mod engine_egress_fabric;
 pub mod engine_hls;
 mod engine_ingest;
 mod engine_ingest_metadata;
