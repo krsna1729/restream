@@ -892,3 +892,44 @@ fn feed_wake_drives_connected_leaf_to_send_on_shard_thread() {
     assert!(bytes_out.load(std::sync::atomic::Ordering::Relaxed) >= sends[0].len() as u64);
     assert!(last_progress_ms.load(std::sync::atomic::Ordering::Relaxed) > 0);
 }
+
+/// `on_ready` must remove a leaf that closes (peer closed, failed) instead
+/// of silently dropping the decision — otherwise the socket stays
+/// registered and connected while never being revisited, permanently
+/// stalling the output with zero delivered bytes.
+#[test]
+fn on_ready_removes_leaf_on_close_decision() {
+    let poller = FakeReadinessPoller::default();
+    let poller_handle = poller.clone();
+    let mut backend = SrtShardBackend::with_socket_configurator(
+        poller,
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+        FakeSocketConfigurator::default(),
+    );
+
+    struct PeerClosedSender;
+    impl SrtMessageSender for PeerClosedSender {
+        fn send_message(&mut self, _message: &Bytes) -> crate::media::srt::SrtSendResult {
+            crate::media::srt::SrtSendResult::PeerClosed
+        }
+        fn close(&mut self, _reason: crate::media::egress::backend::CloseReason) {}
+    }
+
+    let leaf = SrtFabricLeaf::new(
+        common(7),
+        Box::new(PeerClosedSender) as Box<dyn SrtMessageSender + Send>,
+    );
+    let key = backend.add_leaf(42, leaf).unwrap();
+    poller_handle.push_ready(SrtReadyLeaf {
+        socket: 42,
+        key,
+        generation: 7,
+        writable: true,
+    });
+
+    backend.on_ready();
+
+    assert!(backend.output_sockets.is_empty());
+    assert_eq!(poller_handle.removed(), vec![42]);
+}

@@ -750,6 +750,23 @@ Current branch status:
      younger than the grace window regardless of liveness signals, giving
      the async fabric-runtime registration time to land before a stage
      becomes sweep-eligible.
+- **Known open issue (as of `023e450a`):** the shared TS muxer stage now
+  survives for fabric-only SRT outputs (confirmed live: the muxer's
+  `ts_shared_muxer` reader no longer deregisters early, unlike every prior
+  attempt), but `srt-crypto-matrix` under `RESTREAM_EGRESS_FABRIC=srt`
+  still stalls at the same 10/20 with zero `packetsOut`. All ten SRT
+  sockets connect successfully (`[srt] egress config` fires for each), so
+  the remaining gap is somewhere between "muxer is alive and producing"
+  and "a fabric leaf visits and sends" — not yet isolated. Six real,
+  independently verified defects were found and fixed in this
+  investigation (delivery driver not scheduling ready work, `on_ready`
+  leaking closed leaves, overrun closing instead of resyncing, a
+  lost-wakeup race in the feed watcher, and two liveness gaps in
+  `sweep_unused_stages`); each is covered by a deterministic unit or
+  regression test independent of this live gate. The rollout default
+  remains `off`/opt-in until live delivery is confirmed — do not flip
+  `EgressRolloutMode` default to `Srt` on the strength of the unit tests
+  alone.
   Earlier ramp captures measured resources but not delivery and are
   re-recorded after these fixes.
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
