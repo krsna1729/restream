@@ -782,6 +782,9 @@ Current branch status:
   and maps workflow failures to service errors, keeping HTTP handlers thin.
 - The fabric command model now has a typed pipeline protocol spec carrying the
   target pipeline/input identity for the eventual in-process backend.
+- A media-layer recirculation publisher seam can now publish feed packets into
+  a destination input through the existing input gate, standby GOP cache, and
+  timestamp mapper without activating the backend yet.
 - Runtime graph projection now renders reserved recirculation outputs as
   output-to-target-input edges so the planned topology is operator-visible
   before backend activation.

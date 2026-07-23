@@ -34,6 +34,7 @@ pub mod mpegts;
 pub mod packet;
 pub mod pipe_metrics;
 pub mod profiles;
+pub mod recirculation;
 pub mod recording;
 pub mod ring_buffer;
 pub mod rtmp;
