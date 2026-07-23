@@ -37,6 +37,7 @@ impl SrtMessageSender for FakeSender {
 pub(super) struct SharedFakeSender {
     sends: Arc<Mutex<Vec<Bytes>>>,
     closed: Arc<Mutex<u32>>,
+    events: Option<Arc<Mutex<Vec<&'static str>>>>,
 }
 
 impl SrtMessageSender for SharedFakeSender {
@@ -48,6 +49,9 @@ impl SrtMessageSender for SharedFakeSender {
     }
 
     fn close(&mut self, _reason: CloseReason) {
+        if let Some(events) = &self.events {
+            events.lock().unwrap().push("close");
+        }
         let mut closed = self.closed.lock().unwrap();
         *closed = closed.saturating_add(1);
     }
@@ -67,16 +71,31 @@ pub(super) struct FakeReadinessPoller {
 #[derive(Default)]
 struct FakeReadinessState {
     registered: Vec<(SRTSOCKET, LeafKey, u64, SrtEgressInterest)>,
+    removed: Vec<SRTSOCKET>,
     ready: VecDeque<SrtReadyLeaf>,
+    events: Option<Arc<Mutex<Vec<&'static str>>>>,
 }
 
 impl FakeReadinessPoller {
+    pub(super) fn with_events(events: Arc<Mutex<Vec<&'static str>>>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(FakeReadinessState {
+                events: Some(events),
+                ..FakeReadinessState::default()
+            })),
+        }
+    }
+
     pub(super) fn push_ready(&self, event: SrtReadyLeaf) {
         self.inner.lock().unwrap().ready.push_back(event);
     }
 
     pub(super) fn registered(&self) -> Vec<(SRTSOCKET, LeafKey, u64, SrtEgressInterest)> {
         self.inner.lock().unwrap().registered.clone()
+    }
+
+    pub(super) fn removed(&self) -> Vec<SRTSOCKET> {
+        self.inner.lock().unwrap().removed.clone()
     }
 }
 
@@ -96,7 +115,12 @@ impl SrtReadinessPoller for FakeReadinessPoller {
         Ok(())
     }
 
-    fn remove(&mut self, _socket: SRTSOCKET) -> Result<(), SrtEgressPollError> {
+    fn remove(&mut self, socket: SRTSOCKET) -> Result<(), SrtEgressPollError> {
+        let mut state = self.inner.lock().unwrap();
+        state.removed.push(socket);
+        if let Some(events) = &state.events {
+            events.lock().unwrap().push("remove");
+        }
         Ok(())
     }
 
@@ -131,12 +155,21 @@ pub(super) fn budget() -> WorkBudget {
 }
 
 pub(super) fn shared_sender() -> SharedSenderProbe {
+    shared_sender_with_events(None)
+}
+
+pub(super) fn shared_sender_recording(events: Arc<Mutex<Vec<&'static str>>>) -> SharedSenderProbe {
+    shared_sender_with_events(Some(events))
+}
+
+fn shared_sender_with_events(events: Option<Arc<Mutex<Vec<&'static str>>>>) -> SharedSenderProbe {
     let sends = Arc::new(Mutex::new(Vec::new()));
     let closed = Arc::new(Mutex::new(0));
     SharedSenderProbe {
         sender: SharedFakeSender {
             sends: Arc::clone(&sends),
             closed: Arc::clone(&closed),
+            events,
         },
         sends,
         closed,

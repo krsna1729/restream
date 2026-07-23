@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use crate::media::egress::backend::{ProtocolEngine, Readiness};
+use crate::media::egress::command::{EgressCommand, OutputId};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::policy::WorkBudget;
@@ -131,8 +132,15 @@ where
     feed: TsFeed,
     budget: WorkBudget,
     leaves: Vec<Option<NativeSrtLeaf>>,
+    output_sockets: HashMap<OutputId, SrtLeafSocket>,
     ready: VecDeque<SrtReadyLeaf>,
     poll_buffer: Vec<SrtReadyLeaf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SrtLeafSocket {
+    key: LeafKey,
+    socket: SRTSOCKET,
 }
 
 impl<P> SrtShardBackend<P, NativeSrtSocketConfigurator>
@@ -161,6 +169,7 @@ where
             feed,
             budget,
             leaves: Vec::new(),
+            output_sockets: HashMap::new(),
             ready: VecDeque::new(),
             poll_buffer: Vec::new(),
         }
@@ -178,8 +187,15 @@ where
         self.poller
             .register_leaf(socket, key, common.generation, SrtEgressInterest::WRITE)
             .map_err(SrtBackendAddError::Poller)?;
+        let output_id = common.output_id.clone();
         let leaf = srt_fabric_leaf_from_socket(common, socket);
         self.leaves.push(Some(leaf));
+        if let Some(previous) = self
+            .output_sockets
+            .insert(output_id, SrtLeafSocket { key, socket })
+        {
+            self.remove_leaf_socket(previous);
+        }
         Ok(key)
     }
 
@@ -189,6 +205,7 @@ where
         leaf: NativeSrtLeaf,
     ) -> Result<LeafKey, SrtEgressPollError> {
         let key = LeafKey(self.leaves.len());
+        let output_id = leaf.common.output_id.clone();
         self.poller.register_leaf(
             socket,
             key,
@@ -196,7 +213,33 @@ where
             SrtEgressInterest::WRITE,
         )?;
         self.leaves.push(Some(leaf));
+        if let Some(previous) = self
+            .output_sockets
+            .insert(output_id, SrtLeafSocket { key, socket })
+        {
+            self.remove_leaf_socket(previous);
+        }
         Ok(key)
+    }
+
+    fn remove_leaf_by_output(&mut self, output_id: &OutputId) -> bool {
+        let Some(socket_ref) = self.output_sockets.remove(output_id) else {
+            return false;
+        };
+        self.remove_leaf_socket(socket_ref)
+    }
+
+    fn remove_leaf_socket(&mut self, socket_ref: SrtLeafSocket) -> bool {
+        let _ = self.poller.remove(socket_ref.socket);
+        let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) else {
+            return false;
+        };
+        let mut leaf = leaf;
+        leaf.engine.close(
+            &mut leaf.transport,
+            crate::media::egress::backend::CloseReason::Removed,
+        );
+        true
     }
 
     fn poll_ready(&mut self) {
@@ -250,8 +293,11 @@ where
 {
     fn on_command(
         &mut self,
-        _command: crate::media::egress::command::EgressCommand,
+        command: crate::media::egress::command::EgressCommand,
     ) -> EgressShardCommandEffect {
+        if let EgressCommand::Remove(output_id) = command {
+            self.remove_leaf_by_output(&output_id);
+        }
         EgressShardCommandEffect::Continue
     }
 
@@ -268,8 +314,15 @@ where
     }
 
     fn on_shutdown(&mut self) {
-        for leaf in &mut self.leaves {
-            if let Some(leaf) = leaf.as_mut() {
+        let sockets: Vec<_> = self
+            .output_sockets
+            .drain()
+            .map(|(_, socket_ref)| socket_ref)
+            .collect();
+        for socket_ref in sockets {
+            let _ = self.poller.remove(socket_ref.socket);
+            if let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) {
+                let mut leaf = leaf;
                 leaf.engine.close(
                     &mut leaf.transport,
                     crate::media::egress::backend::CloseReason::ShardShutdown,
