@@ -2,7 +2,7 @@ use std::sync::Mutex;
 
 use super::{
     AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
-    RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
+    EgressRolloutMode, RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
     default_tokio_worker_threads, derive_external_ffmpeg_permits,
 };
 use crate::planner::BackendPolicy;
@@ -250,7 +250,8 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
         || {
             let fabric = EgressFabricConfig::from_env();
             assert_eq!(fabric, EgressFabricConfig::default());
-            assert!(!fabric.enabled);
+            assert_eq!(fabric.rollout, EgressRolloutMode::Off);
+            assert!(!fabric.rollout.routes_srt());
             assert_eq!(fabric.shard_count().get(), 4);
             assert_eq!(fabric.shard_config().command_channel_capacity().get(), 1024);
             let budget = fabric.work_budget();
@@ -279,7 +280,7 @@ fn egress_fabric_config_loads_and_clamps_env() {
         ],
         || {
             let fabric = EgressFabricConfig::from_env();
-            assert!(fabric.enabled);
+            assert_eq!(fabric.rollout, EgressRolloutMode::Srt);
             assert_eq!(fabric.shards, 1);
             assert_eq!(fabric.command_channel_capacity, 1);
             assert_eq!(fabric.command_batch_budget, 1);
@@ -293,6 +294,50 @@ fn egress_fabric_config_loads_and_clamps_env() {
             assert_eq!(fabric.max_pending_bytes, 16 * 1024 * 1024);
         },
     );
+}
+
+#[test]
+fn egress_rollout_mode_parses_protocol_selection_and_legacy_booleans() {
+    let cases = [
+        ("off", EgressRolloutMode::Off),
+        ("0", EgressRolloutMode::Off),
+        ("false", EgressRolloutMode::Off),
+        ("srt", EgressRolloutMode::Srt),
+        ("1", EgressRolloutMode::Srt),
+        ("true", EgressRolloutMode::Srt),
+        ("rtmp", EgressRolloutMode::Rtmp),
+        ("all", EgressRolloutMode::All),
+        ("shadow-metrics", EgressRolloutMode::ShadowMetrics),
+        ("SRT", EgressRolloutMode::Srt),
+    ];
+    for (value, expected) in cases {
+        with_env_vars(&[("RESTREAM_EGRESS_FABRIC", value)], || {
+            assert_eq!(EgressFabricConfig::from_env().rollout, expected, "{value}");
+        });
+    }
+    // Unknown values fall back to the safe default rather than guessing.
+    with_env_vars(&[("RESTREAM_EGRESS_FABRIC", "bogus")], || {
+        assert_eq!(
+            EgressFabricConfig::from_env().rollout,
+            EgressRolloutMode::Off
+        );
+    });
+}
+
+#[test]
+fn egress_rollout_mode_routing_is_protocol_selective() {
+    assert!(!EgressRolloutMode::Off.routes_srt());
+    assert!(!EgressRolloutMode::Off.routes_rtmp());
+    assert!(EgressRolloutMode::Srt.routes_srt());
+    assert!(!EgressRolloutMode::Srt.routes_rtmp());
+    assert!(!EgressRolloutMode::Rtmp.routes_srt());
+    assert!(EgressRolloutMode::Rtmp.routes_rtmp());
+    assert!(EgressRolloutMode::All.routes_srt());
+    assert!(EgressRolloutMode::All.routes_rtmp());
+    // Shadow mode is active for calculations but never owns a connection.
+    assert!(EgressRolloutMode::ShadowMetrics.is_active());
+    assert!(!EgressRolloutMode::ShadowMetrics.routes_srt());
+    assert!(!EgressRolloutMode::ShadowMetrics.routes_rtmp());
 }
 
 #[test]

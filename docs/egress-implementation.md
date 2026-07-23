@@ -969,6 +969,16 @@ shadow-metrics
 Only one runtime owns a given output. `shadow-metrics` may instantiate model or
 assignment calculations, but must not establish duplicate network connections.
 
+Current branch status:
+
+- `RESTREAM_EGRESS_FABRIC` now parses the full protocol-selective mode set
+  (`off`, `srt`, `rtmp`, `all`, `shadow-metrics`) as `EgressRolloutMode`,
+  with legacy boolean spellings mapping to their historical meanings
+  (`true` routes SRT only) and unknown values falling back to `off`.
+  Routing helpers are protocol-selective and shadow mode is active without
+  routing; bootstrap SRT gating uses `routes_srt()`. RTMP routing consumes
+  `routes_rtmp()` once the Phase 5 fabric runtime exists.
+
 Integrate:
 
 - desired output reconciliation;

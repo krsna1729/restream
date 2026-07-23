@@ -155,8 +155,8 @@ impl EgressReconciler {
 
         let url_scheme = OutputUrlScheme::from_url(&output.url);
         let prepared = crate::application::egress::prepare_output_ring(&self.engine, output).await;
-        let use_srt_fabric =
-            self.engine.config.egress_fabric.enabled && matches!(url_scheme, OutputUrlScheme::Srt);
+        let use_srt_fabric = self.engine.config.egress_fabric.rollout.routes_srt()
+            && matches!(url_scheme, OutputUrlScheme::Srt);
         let encoding = if use_srt_fabric {
             prepared.media_stage_key.kind.to_string()
         } else {
