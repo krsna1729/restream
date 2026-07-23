@@ -4,12 +4,13 @@ use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use crate::media::egress::backend::{ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::leaf::LeafCommon;
-use crate::media::egress::policy::{LeafLimits, WorkBudget};
+use crate::media::egress::policy::{LeafLimits, LeafStallClass, WorkBudget, classify_stall};
 use crate::media::egress::scheduler::{LeafKey, VisitDecision};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
@@ -102,6 +103,11 @@ where
     common: LeafCommon,
     engine: SrtEgressEngine<T>,
     transport: T,
+    /// Native backlog observed at the previous stall check; a decline means
+    /// the peer acknowledged data (native progress) even without new sends.
+    last_native_backlog_bytes: u64,
+    /// Anchor for stall aging before any progress has been recorded.
+    observed_since: Instant,
 }
 
 impl<T> SrtFabricLeaf<T>
@@ -113,6 +119,8 @@ where
             common,
             engine: SrtEgressEngine::default(),
             transport,
+            last_native_backlog_bytes: 0,
+            observed_since: Instant::now(),
         }
     }
 
@@ -139,6 +147,31 @@ where
             app_pending_bytes: self.engine.pending_message_bytes(),
             native_backlog: self.transport.native_send_backlog(),
         }
+    }
+
+    /// Classify the send path from combined application and native pending
+    /// state.  A declining native backlog counts as protocol progress (the
+    /// peer acknowledged data), so a leaf draining slowly through libsrt is
+    /// backpressured rather than stalled; a leaf whose native buffer holds
+    /// data without any decline past the no-progress deadline is stalled.
+    pub(crate) fn observe_stall(&mut self, now: Instant) -> LeafStallClass {
+        let pressure = self.pressure();
+        let native_bytes = pressure.native_backlog.map_or(0, |backlog| backlog.bytes);
+        if native_bytes < self.last_native_backlog_bytes {
+            self.common.progress.last_protocol_progress = Some(now);
+        }
+        self.last_native_backlog_bytes = native_bytes;
+
+        let last_progress = self
+            .common
+            .progress
+            .last_byte_progress
+            .into_iter()
+            .chain(self.common.progress.last_protocol_progress)
+            .max()
+            .unwrap_or(self.observed_since);
+        let age = now.saturating_duration_since(last_progress);
+        classify_stall(pressure.pending_bytes(), age, &self.common.limits)
     }
 
     pub(crate) fn visit_ready(

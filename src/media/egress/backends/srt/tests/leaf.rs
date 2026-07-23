@@ -84,3 +84,52 @@ fn leaf_pressure_counts_native_backlog_beyond_app_pending() {
     assert_eq!(pressure.pending_bytes(), 1_316 * 8);
     assert!(pressure.is_backpressured());
 }
+
+/// Stall classification per the native-buffer accounting rule: a declining
+/// native backlog is protocol progress (peer acknowledged data), so slow
+/// native drain reads as backpressured; a native buffer that holds data
+/// without declining past the no-progress deadline reads as stalled.
+#[test]
+fn observe_stall_uses_native_drain_as_progress() {
+    use crate::media::srt::NativeSendBacklog;
+    use std::time::{Duration, Instant};
+
+    let deadline = leaf(3).common().limits.max_backpressure_duration;
+    let mut leaf = leaf(3);
+    let start = Instant::now();
+
+    // Saturated native buffer, no progress recorded yet.
+    leaf.transport_mut().native_backlog = Some(NativeSendBacklog {
+        bytes: 10_000,
+        packets: 8,
+        ms: 40,
+    });
+    assert_eq!(leaf.observe_stall(start), LeafStallClass::Backpressured);
+
+    // Backlog declines: native progress resets the stall clock even though
+    // the application sent nothing new.
+    leaf.transport_mut().native_backlog = Some(NativeSendBacklog {
+        bytes: 6_000,
+        packets: 5,
+        ms: 25,
+    });
+    let near_deadline = start + deadline - Duration::from_millis(1);
+    assert_eq!(
+        leaf.observe_stall(near_deadline),
+        LeafStallClass::Backpressured
+    );
+
+    // No further decline: the clock runs from the last native drain and the
+    // leaf crosses into stalled after the full deadline.
+    assert_eq!(
+        leaf.observe_stall(near_deadline + deadline),
+        LeafStallClass::Stalled
+    );
+
+    // Peer fully drains and nothing is pending anywhere: idle.
+    leaf.transport_mut().native_backlog = Some(NativeSendBacklog::default());
+    assert_eq!(
+        leaf.observe_stall(near_deadline + deadline),
+        LeafStallClass::Idle
+    );
+}

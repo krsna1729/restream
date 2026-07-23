@@ -656,8 +656,14 @@ Current branch status:
   `SrtFabricLeaf::pressure` combines retained application bytes with native
   backlog: a leaf with a drained application queue but a saturated native
   buffer is classified backpressured, and both byte sources charge the leaf
-  memory envelope. Feeding this classification into the shared no-progress
-  deadline policy is the remaining accounting step.
+  memory envelope.
+- Stall classification is shared policy: `classify_stall` splits idle,
+  backpressured, and stalled by combined pending bytes and progress age, and
+  `SrtFabricLeaf::observe_stall` counts a declining native backlog as
+  protocol progress so slow native drain reads as backpressure while a
+  non-declining native buffer past the no-progress deadline reads as
+  stalled. Driving recovery from this classification inside the shard visit
+  loop is the remaining runtime step.
 
 ### Removal targets
 

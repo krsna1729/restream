@@ -201,6 +201,39 @@ impl LeafLimits {
 }
 
 // ---------------------------------------------------------------------------
+// Stall classification
+// ---------------------------------------------------------------------------
+
+/// Send-path health for one leaf, derived from combined pending state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeafStallClass {
+    /// Nothing waiting anywhere on the send path.
+    Idle,
+    /// Data is waiting but the most recent progress is within the deadline.
+    Backpressured,
+    /// Data is waiting and no progress has occurred within
+    /// `max_backpressure_duration` — the leaf needs recovery.
+    Stalled,
+}
+
+/// Classify a leaf's send path from its total pending bytes (application
+/// plus native transport buffers) and the age of its most recent progress
+/// of any kind (bytes sent, protocol event, or native buffer drain).
+pub fn classify_stall(
+    pending_bytes: u64,
+    age_since_progress: Duration,
+    limits: &LeafLimits,
+) -> LeafStallClass {
+    if pending_bytes == 0 {
+        return LeafStallClass::Idle;
+    }
+    if age_since_progress >= limits.max_backpressure_duration {
+        return LeafStallClass::Stalled;
+    }
+    LeafStallClass::Backpressured
+}
+
+// ---------------------------------------------------------------------------
 // WorkBudget — per-visit resource envelope
 // ---------------------------------------------------------------------------
 
@@ -336,5 +369,25 @@ mod tests {
         let limits = LeafLimits::from_policy(&policy);
         assert_eq!(limits.max_pending_bytes, 512 * 1024);
         assert_eq!(limits.max_lag_units, 500);
+    }
+
+    #[test]
+    fn classify_stall_splits_idle_backpressured_stalled() {
+        let limits = LeafLimits {
+            max_backpressure_duration: Duration::from_secs(15),
+            ..LeafLimits::default()
+        };
+        assert_eq!(
+            classify_stall(0, Duration::from_secs(3600), &limits),
+            LeafStallClass::Idle
+        );
+        assert_eq!(
+            classify_stall(1, Duration::from_secs(14), &limits),
+            LeafStallClass::Backpressured
+        );
+        assert_eq!(
+            classify_stall(1, Duration::from_secs(15), &limits),
+            LeafStallClass::Stalled
+        );
     }
 }
