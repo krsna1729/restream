@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 
 // ── audio_tracks Arc<Vec<AudioMeta>> semantics ────────────────────
 
@@ -140,7 +141,11 @@ async fn sweep_unused_stages_retains_active_readers() {
     let engine = MediaEngine::new();
     let key = "pipeline:stage-sweep".to_string();
     let cancel = CancellationToken::new();
-    let stage = Arc::new(TsChunkRing::new(16, cancel));
+    let mut stage = TsChunkRing::new(16, cancel);
+    // Past the sweep's new-stage grace window so the reader signal is what
+    // the assertions below are actually exercising.
+    stage.created_at -= Duration::from_secs(10);
+    let stage = Arc::new(stage);
 
     let _reader =
         crate::media::ring_buffer::Reader::new("sweep-test".to_string(), stage.ring.clone());
@@ -177,7 +182,9 @@ async fn sweep_unused_stages_retains_stage_with_live_fabric_consumer_and_no_read
     let engine = MediaEngine::new();
     let key = "pipeline:stage-fabric-sweep".to_string();
     let cancel = CancellationToken::new();
-    let stage = Arc::new(TsChunkRing::new(16, cancel));
+    let mut stage = TsChunkRing::new(16, cancel);
+    stage.created_at -= Duration::from_secs(10);
+    let stage = Arc::new(stage);
 
     engine
         .stages
@@ -208,5 +215,31 @@ async fn sweep_unused_stages_retains_stage_with_live_fabric_consumer_and_no_read
     assert!(
         !engine.stages.ts_muxers.read().await.contains_key(&key),
         "stage must be swept once its fabric consumer is gone and it still has no readers"
+    );
+}
+
+/// The grace window itself: a freshly created stage (no reader yet, no
+/// fabric consumer registered yet — the exact gap between
+/// `prepare_srt_fabric_feed` creating the stage and the async task that
+/// creates the fabric runtime registering `active_outputs`) must survive a
+/// sweep, since neither liveness signal has had a chance to attach.
+#[tokio::test]
+async fn sweep_unused_stages_exempts_brand_new_stage_from_both_liveness_checks() {
+    let engine = MediaEngine::new();
+    let key = "pipeline:stage-brand-new".to_string();
+    let cancel = CancellationToken::new();
+    let stage = Arc::new(TsChunkRing::new(16, cancel)); // created_at = now
+
+    engine
+        .stages
+        .ts_muxers
+        .write()
+        .await
+        .insert(key.clone(), stage);
+
+    engine.sweep_unused_stages().await;
+    assert!(
+        engine.stages.ts_muxers.read().await.contains_key(&key),
+        "a stage younger than the grace window must survive even with no reader and no fabric consumer"
     );
 }

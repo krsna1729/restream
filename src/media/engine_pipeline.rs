@@ -186,6 +186,13 @@ impl MediaEngine {
         }
     }
 
+    /// New stages are exempt from the unused-stage sweep for this long. A
+    /// legacy consumer registers a `Reader` synchronously at creation, but a
+    /// fabric consumer's liveness marker (`fabric.srt.active_outputs`) is
+    /// only set later, from the async task that creates the fabric runtime
+    /// — a reconcile tick can land in that gap and see neither signal.
+    const UNUSED_STAGE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
     pub async fn sweep_unused_stages(&self) {
         // Liveness has two independent signals: legacy consumers register a
         // `Reader` on the ring (tracked in `stage.ring.readers`), while
@@ -204,6 +211,10 @@ impl MediaEngine {
 
         let mut stages = self.stages.ts_muxers.write().await;
         stages.retain(|key, stage| {
+            if stage.created_at.elapsed() < Self::UNUSED_STAGE_GRACE {
+                return true;
+            }
+
             let has_readers = if let Ok(mut readers) = stage.ring.readers.lock() {
                 readers.retain(|reader| reader.upgrade().is_some());
                 !readers.is_empty()

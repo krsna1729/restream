@@ -740,6 +740,16 @@ Current branch status:
      (`fabric.srt.active_outputs`, keyed by `FeedId`) before sweeping a
      stage, so a fabric-only consumer counts as "in use" the same as a
      legacy reader.
+  6. Even with fix 5, the sweep can still land in the gap between a fabric
+     stage's creation (`prepare_srt_fabric_feed`, synchronous) and
+     `active_outputs` registration (`retain_srt_fabric_runtime`, inside the
+     spawned egress task — asynchronous and strictly later). A reconcile
+     tick landing in that window sees neither the reader signal nor the
+     fabric signal. Fixed with a 5-second grace window on `TsChunkRing`
+     (new `created_at` field): `sweep_unused_stages` exempts any stage
+     younger than the grace window regardless of liveness signals, giving
+     the async fabric-runtime registration time to land before a stage
+     becomes sweep-eligible.
   Earlier ramp captures measured resources but not delivery and are
   re-recorded after these fixes.
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
