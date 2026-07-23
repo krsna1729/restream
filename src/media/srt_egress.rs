@@ -1,10 +1,10 @@
 use super::srt_crypto::{apply_srt_crypto_socket, srt_crypto_from_url};
+use super::srt_egress_connect::{SrtSingleEgressConnectConfig, connect_single_srt_egress_socket};
 use super::srt_url::parse_srt_egress_url;
 use super::*;
 use super::{
-    SrtEgressMuxerPortClaim, apply_srt_egress_stream_id, bind_srt_egress_muxer_port,
-    claim_srt_egress_muxer_port, connected_srt_local_port, resolve_srt_egress_host as resolve_host,
-    set_srt_reuseaddr, to_libc_sockaddr,
+    apply_srt_egress_stream_id, claim_srt_egress_muxer_port,
+    resolve_srt_egress_host as resolve_host, to_libc_sockaddr,
 };
 use crate::secret_display::redact_url;
 
@@ -128,10 +128,11 @@ pub async fn start_srt_egress(
             }
 
             if !streamid.is_empty() {
-                apply_srt_egress_stream_id(client_sock, &streamid).inspect_err(|_| unsafe {
-                    srt_close(client_sock);
-                })
-                .map_err(|error| error.to_string())?;
+                apply_srt_egress_stream_id(client_sock, &streamid)
+                    .inspect_err(|_| unsafe {
+                        srt_close(client_sock);
+                    })
+                    .map_err(|error| error.to_string())?;
             }
 
             let connect_error = {
@@ -188,88 +189,25 @@ pub async fn start_srt_egress(
             srt_set_highbitrate_opts(client_sock);
             srt_log_effective_opts(client_sock, "egress-bonded");
         } else {
-            // SAFETY: srt_create_socket creates a new SRT socket handle.
-            // The returned handle is closed on all exit paths below
-            // (connection failure, cancel, sender exit).
-            // Single connection (original path)
-            client_sock = unsafe { srt_create_socket() };
-            if client_sock < 0 {
-                error!("Failed to create socket");
-                return Err("failed to create socket".to_string());
-            }
-            srt_set_connect_timeout(client_sock, srt_connect_timeout_ms);
-            srt_set_highbitrate_opts(client_sock);
-            if let Err(error) = set_srt_reuseaddr(client_sock) {
-                unsafe {
-                    srt_close(client_sock);
-                }
-                return Err(error);
-            }
-            if let Some(crypto) = &url_crypto
-                && let Err(error) = apply_srt_crypto_socket(client_sock, crypto)
-            {
-                unsafe {
-                    srt_close(client_sock);
-                }
-                return Err(error);
-            }
-
-            if !streamid.is_empty() {
-                apply_srt_egress_stream_id(client_sock, &streamid).inspect_err(|_| unsafe {
-                    srt_close(client_sock);
-                })
-                .map_err(|error| error.to_string())?;
-            }
-
             let muxer_port_claim = reuse_local_srt_egress_port
                 .then(|| claim_srt_egress_muxer_port(&srt_egress_muxer_port));
-            if let Some(port) = muxer_port_claim
-                .as_ref()
-                .and_then(SrtEgressMuxerPortClaim::bind_port)
-                && let Err(error) = bind_srt_egress_muxer_port(client_sock, port)
-            {
-                unsafe {
-                    srt_close(client_sock);
+            client_sock = match connect_single_srt_egress_socket(SrtSingleEgressConnectConfig {
+                peer_addr: addr,
+                stream_id: &streamid,
+                crypto: url_crypto.as_ref(),
+                connect_timeout_ms: srt_connect_timeout_ms,
+                muxer_port_claim,
+            }) {
+                Ok(socket) => socket,
+                Err(error) => {
+                    if error == "connection failed" {
+                        error!("Connection failed to {}", redact_url(&target_url));
+                    }
+                    return Err(error);
                 }
-                return Err(error);
-            }
-
-            let sin = to_sockaddr_in(addr);
-
-            // SAFETY: srt_connect opens a connection to the target address.
-            // sin is a correctly-sized sockaddr_in; client_sock is valid.
-            let conn_res = unsafe {
-                srt_connect(
-                    client_sock,
-                    &sin,
-                    std::mem::size_of::<sockaddr_in>() as c_int,
-                )
             };
-            if conn_res < 0 {
-                error!("Connection failed to {}", redact_url(&target_url));
-                // SAFETY: Valid socket, clean up on connection failure.
-                unsafe {
-                    srt_close(client_sock);
-                }
-                return Err("connection failed".to_string());
-            }
-
-            match connected_srt_local_port(client_sock) {
-                Ok(port)
-                    if muxer_port_claim
-                        .is_some_and(|claim| claim.record_first_connected_port(port)) =>
-                {
-                    info!(
-                        port,
-                        "[srt-egress] Reusing local UDP muxer port for compatible egress sockets"
-                    );
-                }
-                Ok(_) => {}
-                Err(error) => warn!(err = %error, "[srt-egress] connected without recording reusable muxer port"),
-            }
 
             info!("Connected to {}", redact_url(&target_url));
-            srt_log_effective_opts(client_sock, "egress");
         }
         Ok(client_sock)
     })

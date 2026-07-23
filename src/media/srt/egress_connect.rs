@@ -7,6 +7,13 @@ use super::sys::{
     SRTO_REUSEADDR, SRTSOCKET, sockaddr_in, srt_bind, srt_getsockname, srt_setsockopt,
 };
 
+#[path = "egress_connect/single.rs"]
+mod single;
+
+pub(in crate::media::srt) use single::{
+    SrtSingleEgressConnectConfig, connect_single_srt_egress_socket,
+};
+
 pub(crate) async fn resolve_host(host_port: &str) -> Option<SocketAddr> {
     match host_port.parse::<SocketAddr>() {
         Ok(a) => Some(a),

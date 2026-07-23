@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 use std::sync::atomic::AtomicBool;
 #[cfg(test)]
 use tokio::sync::Notify;
-use tracing::{error, info, warn};
+#[cfg(test)]
+use tracing::warn;
+use tracing::{error, info};
 
 use crate::domain::state::EgressPhase;
 use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
@@ -84,8 +86,7 @@ use socket::{
 };
 use socket::{
     add_srt_group_quality, check_srt_option_result, check_sysctl_limits, srt_group_summary,
-    srt_log_effective_opts, srt_set_highbitrate_opts, to_sockaddr_in,
-    try_acquire_srt_sender_permit,
+    srt_log_effective_opts, srt_set_highbitrate_opts, try_acquire_srt_sender_permit,
 };
 #[cfg(test)]
 use srt_crypto::apply_srt_crypto_socket;
@@ -93,9 +94,7 @@ use srt_crypto::apply_srt_crypto_socket;
 use srt_crypto::srt_crypto_from_url;
 pub use srt_egress::start_srt_egress;
 pub(crate) use srt_egress_connect::{
-    SrtEgressMuxerPortClaim, bind_srt_egress_muxer_port, claim_srt_egress_muxer_port,
-    connected_srt_local_port, resolve_host as resolve_srt_egress_host, set_srt_reuseaddr,
-    to_libc_sockaddr,
+    claim_srt_egress_muxer_port, resolve_host as resolve_srt_egress_host, to_libc_sockaddr,
 };
 pub(crate) use srt_egress_engine::SrtEgressEngine;
 pub(crate) use srt_egress_poller::{SrtEgressInterest, SrtEgressPollError, SrtReadyLeaf};
