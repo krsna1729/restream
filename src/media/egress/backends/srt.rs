@@ -20,6 +20,7 @@ use crate::media::srt::{
 };
 
 mod add_error;
+pub(crate) mod resolve_runtime;
 mod socket_config;
 
 pub(crate) use add_error::SrtBackendAddError;
