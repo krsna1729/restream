@@ -19,6 +19,14 @@ fn protocol_from_url_classifies_known_outputs() {
         EgressProtocol::Sink
     );
     assert_eq!(
+        EgressProtocol::from_url("pipeline://target/input"),
+        EgressProtocol::Pipeline
+    );
+    assert_eq!(
+        EgressProtocol::from_url("recirculate://target/input"),
+        EgressProtocol::Pipeline
+    );
+    assert_eq!(
         EgressProtocol::from_url("https://example/hls"),
         EgressProtocol::Hls
     );
@@ -88,6 +96,14 @@ fn output_url_scheme_from_url_covers_every_variant_and_malformed_input() {
         OutputUrlScheme::Sink
     );
     assert_eq!(
+        OutputUrlScheme::from_url("pipeline://target/input"),
+        OutputUrlScheme::Pipeline
+    );
+    assert_eq!(
+        OutputUrlScheme::from_url("recirculate://target/input"),
+        OutputUrlScheme::Recirculate
+    );
+    assert_eq!(
         OutputUrlScheme::from_url("http://example/out"),
         OutputUrlScheme::Http
     );
@@ -111,12 +127,14 @@ fn output_url_scheme_from_url_covers_every_variant_and_malformed_input() {
 }
 
 #[test]
-fn output_url_scheme_is_supported_output_is_false_only_for_unknown() {
+fn output_url_scheme_supports_runnable_outputs_only() {
     assert!(OutputUrlScheme::Rtmp.is_supported_output());
     assert!(OutputUrlScheme::Rtmps.is_supported_output());
     assert!(OutputUrlScheme::Srt.is_supported_output());
     assert!(OutputUrlScheme::Hls.is_supported_output());
     assert!(OutputUrlScheme::Sink.is_supported_output());
+    assert!(!OutputUrlScheme::Pipeline.is_supported_output());
+    assert!(!OutputUrlScheme::Recirculate.is_supported_output());
     assert!(OutputUrlScheme::Http.is_supported_output());
     assert!(OutputUrlScheme::Https.is_supported_output());
     assert!(!OutputUrlScheme::Unknown.is_supported_output());
@@ -159,6 +177,20 @@ fn output_url_scheme_family_and_protocol_classification_is_exhaustive() {
             false,
             false,
             EgressProtocol::Sink,
+        ),
+        (
+            OutputUrlScheme::Pipeline,
+            false,
+            false,
+            false,
+            EgressProtocol::Pipeline,
+        ),
+        (
+            OutputUrlScheme::Recirculate,
+            false,
+            false,
+            false,
+            EgressProtocol::Pipeline,
         ),
         (
             OutputUrlScheme::Http,
@@ -208,12 +240,14 @@ fn egress_protocol_is_rtmp_and_as_str_cover_every_variant() {
     assert!(!EgressProtocol::Srt.is_rtmp());
     assert!(!EgressProtocol::Hls.is_rtmp());
     assert!(!EgressProtocol::Sink.is_rtmp());
+    assert!(!EgressProtocol::Pipeline.is_rtmp());
     assert!(!EgressProtocol::Unknown.is_rtmp());
 
     assert_eq!(EgressProtocol::Rtmp.as_str(), "rtmp");
     assert_eq!(EgressProtocol::Srt.as_str(), "srt");
     assert_eq!(EgressProtocol::Hls.as_str(), "hls");
     assert_eq!(EgressProtocol::Sink.as_str(), "sink");
+    assert_eq!(EgressProtocol::Pipeline.as_str(), "pipeline");
     assert_eq!(EgressProtocol::Unknown.as_str(), "unknown");
 }
 

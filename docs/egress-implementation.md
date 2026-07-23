@@ -766,6 +766,13 @@ The backend may start with a same-format path only. Any transcoding or
 container conversion required between pipelines belongs in normal media stages,
 not hidden inside the recirculation egress backend.
 
+Current branch status:
+
+- `pipeline://` and `recirculate://` are recognized as recirculation schemes
+  and classified under the planned pipeline protocol.
+- The API rejects those URLs with a not-runnable-yet error until topology
+  validation, target input ownership, and the in-process backend are complete.
+
 ### Proof
 
 - direct and indirect topology loops are rejected deterministically;

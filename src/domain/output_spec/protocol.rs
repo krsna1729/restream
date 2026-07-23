@@ -4,6 +4,7 @@ pub enum EgressProtocol {
     Srt,
     Hls,
     Sink,
+    Pipeline,
     Unknown,
 }
 
@@ -14,6 +15,8 @@ pub enum OutputUrlScheme {
     Srt,
     Hls,
     Sink,
+    Pipeline,
+    Recirculate,
     Http,
     Https,
     Unknown,
@@ -31,6 +34,8 @@ impl OutputUrlScheme {
             Some("srt") => Self::Srt,
             Some("hls") => Self::Hls,
             Some("sink") => Self::Sink,
+            Some("pipeline") => Self::Pipeline,
+            Some("recirculate") => Self::Recirculate,
             Some("http") => Self::Http,
             Some("https") => Self::Https,
             _ => Self::Unknown,
@@ -38,7 +43,7 @@ impl OutputUrlScheme {
     }
 
     pub fn is_supported_output(self) -> bool {
-        !matches!(self, Self::Unknown)
+        !matches!(self, Self::Pipeline | Self::Recirculate | Self::Unknown)
     }
 
     pub fn supports_monitoring(self) -> bool {
@@ -59,6 +64,7 @@ impl OutputUrlScheme {
             Self::Srt => EgressProtocol::Srt,
             Self::Hls | Self::Http | Self::Https => EgressProtocol::Hls,
             Self::Sink => EgressProtocol::Sink,
+            Self::Pipeline | Self::Recirculate => EgressProtocol::Pipeline,
             Self::Unknown => EgressProtocol::Unknown,
         }
     }
@@ -79,6 +85,7 @@ impl EgressProtocol {
             Self::Srt => "srt",
             Self::Hls => "hls",
             Self::Sink => "sink",
+            Self::Pipeline => "pipeline",
             Self::Unknown => "unknown",
         }
     }

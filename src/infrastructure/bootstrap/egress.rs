@@ -367,7 +367,9 @@ impl EgressTask {
                         self.registration.cancel_token.cancelled().await;
                     }
                 }
-                OutputUrlScheme::Unknown => {}
+                OutputUrlScheme::Pipeline
+                | OutputUrlScheme::Recirculate
+                | OutputUrlScheme::Unknown => {}
             }
         })
         .catch_unwind()
