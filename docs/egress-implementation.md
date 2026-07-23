@@ -688,9 +688,13 @@ Current branch status:
   `RingBuffer` as a `RingFeed`, so the control plane can share the same
   sequence-cursor feed contract used by the common fabric before runtime
   ownership moves off the legacy sender task.
+- RTMP pending-write state now has a bounded queue that preserves packet
+  boundaries across partial writes and accounts remaining application bytes;
+  the legacy connect-request write path uses it as the first runtime proof.
 - The legacy RTMP sender remains the runtime owner. Phase 5 has not yet
-  introduced TCP readiness polling, partial-write state, incremental TLS, or a
-  default/opt-in runtime switch for RTMP or RTMPS.
+  introduced TCP readiness polling, moved media/control writes onto pending
+  state, added incremental TLS, or provided a default/opt-in runtime switch for
+  RTMP or RTMPS.
 
 ### RTMPS
 

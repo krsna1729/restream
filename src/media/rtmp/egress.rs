@@ -32,6 +32,7 @@ use super::egress_packets::{
     validate_rtmp_output_audio_packet_track, video_sequence_header_for_keyframe,
 };
 use super::egress_transport::{connect_rtmp_egress_stream, parse_rtmp_url, rtmp_sender_quality};
+use super::egress_write::write_rtmp_pending_bytes;
 use super::enhanced::{
     cache_hevc_parameter_sets, enhanced_rtmp_connect_packet,
     raw_packet_starts_with_hevc_parameter_set,
@@ -247,7 +248,10 @@ pub async fn start_rtmp_egress(
     } else {
         conn_pkt.bytes
     };
-    if socket.write_all(&conn_bytes).await.is_err() {
+    if write_rtmp_pending_bytes(&mut socket, Bytes::from(conn_bytes))
+        .await
+        .is_err()
+    {
         egress_error!("connect_app", "failed to write connect request");
         return;
     }

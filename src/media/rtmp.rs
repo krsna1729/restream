@@ -7,6 +7,7 @@ mod egress;
 mod egress_metadata;
 mod egress_packets;
 mod egress_transport;
+pub(crate) mod egress_write;
 mod enhanced;
 mod flv;
 mod handshake;
