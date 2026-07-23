@@ -695,7 +695,10 @@ Current branch status:
   control write paths use one queue that transfers from connection startup into
   the live egress loop. Queue admission now enforces
   `RESTREAM_EGRESS_MAX_PENDING_BYTES` for those application-owned bytes. It is
-  not yet a readiness-driven reactor across visits. Client-session result dispatch remains in the legacy egress
+  not yet a readiness-driven reactor across visits. The queue now also has a
+  transport-agnostic nonblocking drain primitive that preserves partial offsets
+  and yields on byte, unit, or deadline exhaustion; the legacy Tokio task does
+  not yet drive that primitive from a TCP poller. Client-session result dispatch remains in the legacy egress
   task until it can move with its lifecycle semantics into the explicit
   connection engine.
 - The explicit RTMP connection engine now owns socket establishment, the
