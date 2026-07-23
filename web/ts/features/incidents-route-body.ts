@@ -19,7 +19,6 @@ export function renderDashboardV2IncidentsBody(
     navigateToPipeline: options.navigateToPipeline,
     pipelines: options.pipelines,
     routeChrome: false,
-    v2Active: true,
   });
   const container = document.getElementById(containerId);
   if (container) container.dataset.incidentsRouteBody = "v2";

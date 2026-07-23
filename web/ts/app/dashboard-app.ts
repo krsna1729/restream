@@ -200,7 +200,6 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
     onPresentation: telemetryV2Active
       ? updateDashboardV2TelemetryCheckpoint
       : undefined,
-    v2Active: telemetryV2Active,
   });
   configureStatusCheckpointPresentation({
     onPresentation: statusV2Active ? updateDashboardV2StatusCheckpoint : undefined,

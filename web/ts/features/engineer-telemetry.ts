@@ -57,13 +57,10 @@ let telemetryHostSettingsExpanded = false;
 let telemetryCheckpointCallback:
   | ((model: TelemetryCheckpointModel | null) => void)
   | null = null;
-let telemetryV2PresentationActive = false;
 
 export function configureTelemetryCheckpointPresentation(options: {
   readonly onPresentation?: (model: TelemetryCheckpointModel | null) => void;
-  readonly v2Active?: boolean;
 }): void {
-  telemetryV2PresentationActive = options.v2Active === true;
   telemetryCheckpointCallback = options.onPresentation ?? null;
   if (!telemetryCheckpointCallback || !viewOptions?.active) {
     telemetryCheckpointCallback?.(null);
@@ -126,17 +123,13 @@ function renderHostSettings(settings: HostSettingRow[] | undefined): string {
   </div>`;
 }
 
-function telemetryV2Active(): boolean {
-  return telemetryV2PresentationActive;
-}
-
 function renderHostSettingsSection(health: HealthData | null): string {
   const rows = health?.hostSettings || [];
   const healthLabel = health?.status
     ? `health ${escapeHtml(health.status)}`
     : "health unavailable";
   const rowLabel = pluralize(rows.length, "host setting");
-  const expanded = !telemetryV2Active() || telemetryHostSettingsExpanded;
+  const expanded = telemetryHostSettingsExpanded;
   if (expanded) {
     return `<section class="border-base-content/10 bg-base-200 rounded-lg border p-4" aria-label="Host settings">
       <div class="flex flex-wrap items-center justify-between gap-2">
@@ -144,11 +137,7 @@ function renderHostSettingsSection(health: HealthData | null): string {
           <h2 class="font-semibold">Host settings</h2>
           <p class="text-base-content/60 mt-1 text-xs">${escapeHtml(rowLabel)} · ${healthLabel}</p>
         </div>
-        ${
-          telemetryV2Active()
-            ? `<button id="telemetry-host-settings-toggle" type="button" class="btn btn-xs btn-outline" aria-label="Hide telemetry host settings" aria-expanded="true">Hide host settings</button>`
-            : `<span class="text-base-content/50 text-xs">${healthLabel}</span>`
-        }
+        <button id="telemetry-host-settings-toggle" type="button" class="btn btn-xs btn-outline" aria-label="Hide telemetry host settings" aria-expanded="true">Hide host settings</button>
       </div>
       ${renderHostSettings(health?.hostSettings)}
     </section>`;
@@ -548,7 +537,7 @@ export function renderEngineerTelemetryHtml(
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h2 class="font-semibold">Stage detail</h2>
           ${
-            stage && telemetryV2Active()
+            stage
               ? `<button id="telemetry-stage-detail-hide" type="button" class="btn btn-xs btn-outline" aria-label="Hide stage details for ${escapeHtml(stage.stageKey)}">Hide stage details</button>`
               : ""
           }

@@ -37,7 +37,6 @@ interface IncidentsViewOptions {
   pipelines: IncidentPipelineOption[];
   navigateToPipeline: (pipelineId: string) => void;
   routeChrome?: boolean;
-  v2Active?: boolean;
 }
 
 const INCIDENT_REFRESH_MS = 5_000;
@@ -223,10 +222,6 @@ function normalizeSearch(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function incidentsV2Active(): boolean {
-  return viewOptions?.v2Active === true;
-}
-
 function alertSearchText(alert: OperatorAlert): string {
   return [
     alert.id,
@@ -262,7 +257,7 @@ function eventSearchText(event: LifecycleEvent): string {
 
 function renderAlert(alert: OperatorAlert): string {
   const detailKey = `alert:${alert.id}`;
-  const detailExpanded = !incidentsV2Active() || incidentAlertDetailsExpanded.has(detailKey);
+  const detailExpanded = incidentAlertDetailsExpanded.has(detailKey);
   const detailLabel = `${detailExpanded ? "Hide" : "Show"} alert details for ${alert.title}`;
   const pipelineActionLabel = alert.pipelineId
     ? incidentPipelineActionLabel(alert.pipelineId)
@@ -279,11 +274,7 @@ function renderAlert(alert: OperatorAlert): string {
       <span class="badge ${severityTone(alert.severity)}">${escapeHtml(alert.severity)}</span>
     </div>
     <p class="mt-3 text-sm">${escapeHtml(alert.cause)}</p>
-    ${
-      incidentsV2Active()
-        ? `<button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-label="${escapeHtml(detailLabel)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>`
-        : ""
-    }
+    <button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-label="${escapeHtml(detailLabel)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>
     ${
       detailExpanded
         ? `${evidence ? `<details class="mt-3 text-sm"><summary class="cursor-pointer font-medium">Evidence</summary><ul class="mt-2 list-disc space-y-1 pl-5">${evidence}</ul></details>` : ""}
@@ -300,7 +291,7 @@ function renderAlert(alert: OperatorAlert): string {
 function renderAlertGroup(group: AlertGroup): string {
   if (group.alerts.length === 1) return renderAlert(group.alerts[0]);
   const detailKey = `group:${group.id}`;
-  const detailExpanded = !incidentsV2Active() || incidentAlertDetailsExpanded.has(detailKey);
+  const detailExpanded = incidentAlertDetailsExpanded.has(detailKey);
   const pipelineActionLabel = group.pipelineId
     ? incidentPipelineActionLabel(group.pipelineId)
     : "";
@@ -360,11 +351,7 @@ function renderAlertGroup(group: AlertGroup): string {
           : ""
       }
     </div>
-    ${
-      incidentsV2Active()
-        ? `<button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-label="${escapeHtml(detailLabel)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>`
-        : ""
-    }
+    <button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-label="${escapeHtml(detailLabel)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>
     ${
       detailExpanded
         ? `${sampleOutputs.length ? `<details class="mt-3 text-sm"><summary class="cursor-pointer font-medium">Affected outputs</summary><div class="mt-2 flex flex-wrap gap-1">${sampleOutputs.map((id) => `<code class="bg-base-200 rounded px-1.5 py-1 text-xs">${escapeHtml(id)}</code>`).join("")}${remainingOutputs ? `<span class="text-base-content/60 px-1.5 py-1 text-xs">+${remainingOutputs} more</span>` : ""}</div></details>` : ""}
