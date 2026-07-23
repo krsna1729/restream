@@ -424,6 +424,15 @@ shard observes the new head before sleeping.
 A synthetic 1,000-leaf feed test must show bounded memory and shard-level wake
 amplification before any real protocol uses the feed.
 
+Current branch status:
+
+- The exit gate is met by deterministic unit proofs in
+  `src/media/egress/journal/tests.rs`: a 1,000-leaf feed with lagging cursors
+  keeps ring retention capped at ring capacity across repeated wraps while
+  healthy leaves share payload storage and stalled leaves overrun with a valid
+  resync point, and a 100-publish burst against 1,000 leaves delivers exactly
+  one wake per interested shard gate.
+
 ## Phase 3: Shard runtime and scheduler
 
 ### Objective

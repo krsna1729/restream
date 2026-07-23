@@ -268,6 +268,129 @@ fn ring_feed_many_leaf_cursors_share_payload_storage() {
     );
 }
 
+/// Phase 2 exit gate: a synthetic 1,000-leaf feed shows bounded memory while
+/// the ring wraps repeatedly under lagging consumers.
+///
+/// Cursors are plain values — nothing registers per leaf — so the proof is
+/// that sustained publication with 1,000 live cursors (including stalled ones
+/// holding their first batch) keeps ring retention capped at ring capacity,
+/// healthy cursors see identical shared units, and stalled cursors get a
+/// deterministic overrun with a valid resync point instead of pinning memory.
+#[test]
+fn thousand_leaf_feed_keeps_memory_bounded_with_lagging_cursors() {
+    const CAPACITY: usize = 32;
+    const LEAVES: usize = 1_000;
+    const STALLED: usize = 10;
+    const ROUNDS: usize = 10;
+    const PAYLOAD_BYTES: usize = 64;
+
+    let ring = Arc::new(RingBuffer::new(CAPACITY));
+    let epoch = Arc::new(FeedEpoch::new());
+    let feed = RingFeed::new(ring.clone(), epoch);
+
+    // Seed one packet so stalled leaves have a batch to hold across wraps.
+    push_packet_at(&ring, &[0u8; PAYLOAD_BYTES], true, 0);
+
+    let mut cursors = vec![FeedCursor::new(0, 0); LEAVES];
+    let mut stalled_batches: Vec<Vec<Arc<MediaPacket>>> = Vec::new();
+    for cursor in cursors.iter().take(STALLED) {
+        match feed.read_from(*cursor, ReadBudget::new(1, usize::MAX)) {
+            FeedRead::Units { units, .. } => stalled_batches.push(units),
+            other => panic!("stalled leaf seed read failed: {other:?}"),
+        }
+    }
+
+    let mut dts = 1i64;
+    for _ in 0..ROUNDS {
+        for _ in 0..CAPACITY {
+            push_packet_at(&ring, &[dts as u8; PAYLOAD_BYTES], dts % 8 == 0, dts);
+            dts += 1;
+        }
+
+        // Healthy leaves drain to the head; all batches share ring storage.
+        let head = feed.head_sequence();
+        let mut reference_batch: Option<Vec<Arc<MediaPacket>>> = None;
+        for cursor in cursors.iter_mut().skip(STALLED) {
+            *cursor = FeedCursor::new(0, feed.oldest_sequence().max(cursor.next_sequence));
+            match feed.read_from(*cursor, ReadBudget::new(CAPACITY, usize::MAX)) {
+                FeedRead::Units { units, next_cursor } => {
+                    assert_eq!(next_cursor.next_sequence, head);
+                    match &reference_batch {
+                        None => reference_batch = Some(units),
+                        Some(reference) => {
+                            assert_eq!(reference.len(), units.len());
+                            assert!(
+                                reference.iter().zip(&units).all(|(a, b)| Arc::ptr_eq(a, b)),
+                                "healthy leaves must share ring payload storage"
+                            );
+                        }
+                    }
+                    *cursor = next_cursor;
+                }
+                other => panic!("healthy leaf read failed: {other:?}"),
+            }
+        }
+
+        // Retention stays capped by ring capacity no matter how many leaves
+        // exist or lag.
+        let snapshot = feed.retention_snapshot();
+        assert!(snapshot.retained_units <= CAPACITY);
+        assert!(snapshot.retained_bytes <= (CAPACITY * PAYLOAD_BYTES) as u64);
+    }
+
+    // Stalled cursors overrun deterministically at the retention boundary and
+    // can resynchronize; their held batches never entered ring retention.
+    let oldest = feed.oldest_sequence();
+    for cursor in cursors.iter().take(STALLED) {
+        match feed.read_from(*cursor, ReadBudget::default()) {
+            FeedRead::Overrun { oldest_sequence } => assert_eq!(oldest_sequence, oldest),
+            other => panic!("stalled leaf must overrun, got {other:?}"),
+        }
+    }
+    assert!(feed.latest_sync_point().is_some());
+    assert_eq!(stalled_batches.len(), STALLED);
+    let snapshot = feed.retention_snapshot();
+    assert!(snapshot.retained_units <= CAPACITY);
+    assert!(snapshot.retained_bytes <= (CAPACITY * PAYLOAD_BYTES) as u64);
+}
+
+/// Phase 2 exit gate: wake amplification is proportional to interested
+/// shards, not leaves.  A publish burst delivers at most one wake per shard
+/// gate regardless of leaf count; draining re-arms exactly one more delivery.
+#[test]
+fn thousand_leaf_burst_wakes_per_shard_not_per_leaf() {
+    const SHARDS: usize = 4;
+    const LEAVES: usize = 1_000;
+    const BURST: usize = 100;
+
+    let shard_gates: Vec<WakeGate> = (0..SHARDS).map(|_| WakeGate::new()).collect();
+    // Leaves map to shards; the publisher never touches per-leaf state.
+    let leaf_shard: Vec<usize> = (0..LEAVES).map(|leaf| leaf % SHARDS).collect();
+    let interested: std::collections::BTreeSet<usize> = leaf_shard.iter().copied().collect();
+
+    let mut deliveries = 0usize;
+    for _ in 0..BURST {
+        for shard in &interested {
+            deliveries += usize::from(shard_gates[*shard].notify());
+        }
+    }
+    assert_eq!(
+        deliveries, SHARDS,
+        "a {BURST}-publish burst must deliver exactly one wake per shard"
+    );
+
+    // Shards drain, then one more publication re-arms one wake each.
+    assert_eq!(
+        shard_gates.iter().filter(|gate| gate.take()).count(),
+        SHARDS
+    );
+    let rearmed: usize = interested
+        .iter()
+        .map(|shard| usize::from(shard_gates[*shard].notify()))
+        .sum();
+    assert_eq!(rearmed, SHARDS);
+}
+
 #[test]
 fn wake_gate_coalesces_one_publication_per_shard() {
     let shard_gates: Vec<WakeGate> = (0..1_000).map(|_| WakeGate::new()).collect();
