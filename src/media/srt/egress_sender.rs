@@ -7,8 +7,22 @@ use crate::media::egress::backend::CloseReason;
 
 use super::socket::last_srt_error;
 use super::sys::{
-    SRT_EASYNCSND, SRT_ECONNLOST, SRT_ENOCONN, SRT_ESCLOSED, SRTSOCKET, srt_close, srt_send,
+    SRT_EASYNCSND, SRT_ECONNLOST, SRT_ENOCONN, SRT_ESCLOSED, SRTSOCKET, SrtTraceBStats,
+    srt_bistats, srt_close, srt_send,
 };
+
+/// Native libsrt sender-buffer occupancy for one socket.
+///
+/// The fabric charges these bytes against the leaf's memory envelope in
+/// addition to the engine's retained application message: a leaf whose
+/// application queue is drained but whose native buffer is saturated is
+/// backpressured, not idle.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct NativeSendBacklog {
+    pub bytes: u64,
+    pub packets: u32,
+    pub ms: u32,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SrtSendFailure {
@@ -28,6 +42,13 @@ pub(crate) enum SrtSendResult {
 pub(crate) trait SrtMessageSender {
     fn send_message(&mut self, message: &Bytes) -> SrtSendResult;
     fn close(&mut self, reason: CloseReason);
+
+    /// Instantaneous native sender-buffer occupancy, when the transport has
+    /// one.  `None` means the transport exposes no native buffer (fakes,
+    /// closed sockets) and only application pending state applies.
+    fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
+        None
+    }
 }
 
 impl<T> SrtMessageSender for Box<T>
@@ -40,6 +61,10 @@ where
 
     fn close(&mut self, reason: CloseReason) {
         (**self).close(reason);
+    }
+
+    fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
+        (**self).native_send_backlog()
     }
 }
 
@@ -92,12 +117,19 @@ where
             let _ = self.ops.close(socket);
         }
     }
+
+    fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
+        self.socket.and_then(|socket| self.ops.send_backlog(socket))
+    }
 }
 
 pub(super) trait SrtSendOps {
     fn send(&self, socket: SRTSOCKET, message: &Bytes) -> c_int;
     fn close(&self, socket: SRTSOCKET) -> c_int;
     fn error(&self) -> (c_int, String);
+
+    /// Instantaneous send-buffer occupancy; `None` when unavailable.
+    fn send_backlog(&self, socket: SRTSOCKET) -> Option<NativeSendBacklog>;
 }
 
 #[derive(Debug)]
@@ -120,6 +152,24 @@ impl SrtSendOps for LibSrtSendOps {
 
     fn error(&self) -> (c_int, String) {
         last_srt_error()
+    }
+
+    fn send_backlog(&self, socket: SRTSOCKET) -> Option<NativeSendBacklog> {
+        // SAFETY: Category 8 - FFI boundary. `SrtTraceBStats` is a repr(C)
+        // plain-data struct, so the zeroed value is valid; `socket` is a live
+        // libsrt socket owned by this sender and libsrt fills the struct.
+        // clear=0 keeps counters intact; instantaneous=1 asks only for
+        // current buffer occupancy without a full stats sweep.
+        let mut stats: SrtTraceBStats = unsafe { std::mem::zeroed() };
+        let result = unsafe { srt_bistats(socket, &mut stats, 0, 1) };
+        if result < 0 {
+            return None;
+        }
+        Some(NativeSendBacklog {
+            bytes: stats.byte_snd_buf.max(0) as u64,
+            packets: stats.pkt_snd_buf.max(0) as u32,
+            ms: stats.ms_snd_buf.max(0) as u32,
+        })
     }
 }
 

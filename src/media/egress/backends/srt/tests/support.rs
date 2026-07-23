@@ -6,8 +6,9 @@ use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::policy::{LeafLimits, WorkBudget};
 use crate::media::egress::scheduler::LeafKey;
 use crate::media::srt::{
-    SRTSOCKET, SrtEgressInterest, SrtEgressPollError, SrtEgressSendMode, SrtEgressSocketError,
-    SrtFabricEgressConnectConfig, SrtMessageSender, SrtReadyLeaf, SrtSendResult,
+    NativeSendBacklog, SRTSOCKET, SrtEgressInterest, SrtEgressPollError, SrtEgressSendMode,
+    SrtEgressSocketError, SrtFabricEgressConnectConfig, SrtMessageSender, SrtReadyLeaf,
+    SrtSendResult,
 };
 use crate::media::ts_chunk_ring::TsChunkRing;
 use bytes::Bytes;
@@ -20,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 pub(super) struct FakeSender {
     sends: Vec<Bytes>,
     closed: u32,
+    pub(super) native_backlog: Option<NativeSendBacklog>,
 }
 
 impl SrtMessageSender for FakeSender {
@@ -32,6 +34,10 @@ impl SrtMessageSender for FakeSender {
 
     fn close(&mut self, _reason: CloseReason) {
         self.closed = self.closed.saturating_add(1);
+    }
+
+    fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
+        self.native_backlog
     }
 }
 

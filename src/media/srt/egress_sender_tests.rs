@@ -3,7 +3,7 @@ use bytes::Bytes;
 use super::srt_egress_sender::*;
 use super::sys::{SRT_EASYNCSND, SRT_ECONNLOST, SRT_ENOCONN, SRT_ESCLOSED};
 use crate::media::egress::backend::CloseReason;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::os::raw::c_int;
 use std::rc::Rc;
@@ -14,6 +14,7 @@ struct FakeSendOps {
     closes: Rc<RefCell<Vec<i32>>>,
     results: Rc<RefCell<VecDeque<c_int>>>,
     errors: Rc<RefCell<VecDeque<(c_int, String)>>>,
+    backlog: Rc<Cell<Option<NativeSendBacklog>>>,
 }
 
 impl FakeSendOps {
@@ -39,6 +40,7 @@ impl Default for FakeSendOps {
             closes: Rc::new(RefCell::new(Vec::new())),
             results: Rc::new(RefCell::new(VecDeque::new())),
             errors: Rc::new(RefCell::new(VecDeque::new())),
+            backlog: Rc::new(Cell::new(None)),
         }
     }
 }
@@ -63,6 +65,34 @@ impl SrtSendOps for FakeSendOps {
             .pop_front()
             .unwrap_or((-1, "native send failed".to_string()))
     }
+
+    fn send_backlog(&self, _socket: i32) -> Option<NativeSendBacklog> {
+        self.backlog.get()
+    }
+}
+
+#[test]
+fn native_sender_reports_native_backlog_while_socket_is_open() {
+    let ops = FakeSendOps::default();
+    ops.backlog.set(Some(NativeSendBacklog {
+        bytes: 8_192,
+        packets: 6,
+        ms: 120,
+    }));
+    let mut sender = SrtNativeMessageSender::with_ops(7, ops.clone());
+
+    assert_eq!(
+        sender.native_send_backlog(),
+        Some(NativeSendBacklog {
+            bytes: 8_192,
+            packets: 6,
+            ms: 120,
+        })
+    );
+
+    // After close the socket is gone: no native buffer to account.
+    sender.close(CloseReason::Removed);
+    assert_eq!(sender.native_send_backlog(), None);
 }
 
 #[test]

@@ -101,9 +101,9 @@ pub(crate) use srt_egress_connect::{
 };
 pub(crate) use srt_egress_engine::SrtEgressEngine;
 pub(crate) use srt_egress_poller::{SrtEgressInterest, SrtEgressPollError, SrtReadyLeaf};
-pub(crate) use srt_egress_sender::SrtMessageSender;
 #[cfg(test)]
 pub(crate) use srt_egress_sender::SrtSendResult;
+pub(crate) use srt_egress_sender::{NativeSendBacklog, SrtMessageSender};
 pub(crate) use srt_egress_socket::{
     SrtEgressSendMode, SrtEgressSocketError, apply_srt_egress_stream_id,
     configure_connected_srt_egress_socket,

@@ -14,10 +14,32 @@ use crate::media::egress::scheduler::{LeafKey, VisitDecision};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::srt::{
-    SRTSOCKET, SrtEgressEngine, SrtEgressInterest, SrtEgressPollError, SrtEgressSendMode,
-    SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec, SrtFabricPoller, SrtMessageSender,
-    SrtReadyLeaf, connect_fabric_srt_egress_socket, srt_fabric_message_sender,
+    NativeSendBacklog, SRTSOCKET, SrtEgressEngine, SrtEgressInterest, SrtEgressPollError,
+    SrtEgressSendMode, SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec, SrtFabricPoller,
+    SrtMessageSender, SrtReadyLeaf, connect_fabric_srt_egress_socket, srt_fabric_message_sender,
 };
+
+/// Combined application and native pending state for one SRT fabric leaf.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SrtLeafPressure {
+    pub app_pending_bytes: usize,
+    pub native_backlog: Option<NativeSendBacklog>,
+}
+
+impl SrtLeafPressure {
+    /// Bytes charged against the leaf memory envelope: retained application
+    /// message plus unacknowledged native sender-buffer bytes.
+    pub(crate) fn pending_bytes(&self) -> u64 {
+        self.app_pending_bytes as u64 + self.native_backlog.map_or(0, |backlog| backlog.bytes)
+    }
+
+    /// True when data is waiting anywhere on the send path.  A leaf with a
+    /// drained application queue but a saturated native buffer is
+    /// backpressured, not idle.
+    pub(crate) fn is_backpressured(&self) -> bool {
+        self.pending_bytes() > 0
+    }
+}
 
 mod add_error;
 pub(crate) mod resolve_runtime;
@@ -100,6 +122,23 @@ where
 
     pub(crate) fn pending_message_bytes(&self) -> usize {
         self.engine.pending_message_bytes()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transport_mut(&mut self) -> &mut T {
+        &mut self.transport
+    }
+
+    /// Combined backpressure state per the architecture's native-buffer
+    /// accounting rule: a leaf is backpressured when either the engine
+    /// retains an application message or the native libsrt sender buffer
+    /// holds unacknowledged data.  Removing the application queue while
+    /// permitting unlimited native buffering does not count as progress.
+    pub(crate) fn pressure(&mut self) -> SrtLeafPressure {
+        SrtLeafPressure {
+            app_pending_bytes: self.engine.pending_message_bytes(),
+            native_backlog: self.transport.native_send_backlog(),
+        }
     }
 
     pub(crate) fn visit_ready(

@@ -60,3 +60,27 @@ fn srt_visit_continue_decision_requests_requeue() {
     assert!(!requeue_after_srt_visit(VisitDecision::Suspend));
     assert!(!requeue_after_srt_visit(VisitDecision::Close));
 }
+
+/// Native-buffer accounting: a leaf whose application queue is drained but
+/// whose native libsrt sender buffer still holds unacknowledged bytes is
+/// backpressured, and those bytes count toward the leaf memory envelope.
+#[test]
+fn leaf_pressure_counts_native_backlog_beyond_app_pending() {
+    let mut leaf = leaf(3);
+
+    // Nothing anywhere: idle.
+    let pressure = leaf.pressure();
+    assert_eq!(pressure.pending_bytes(), 0);
+    assert!(!pressure.is_backpressured());
+
+    // App queue drained, native buffer saturated: still backpressured.
+    leaf.transport_mut().native_backlog = Some(crate::media::srt::NativeSendBacklog {
+        bytes: 1_316 * 8,
+        packets: 8,
+        ms: 40,
+    });
+    let pressure = leaf.pressure();
+    assert_eq!(pressure.app_pending_bytes, 0);
+    assert_eq!(pressure.pending_bytes(), 1_316 * 8);
+    assert!(pressure.is_backpressured());
+}

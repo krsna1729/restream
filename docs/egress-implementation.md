@@ -647,6 +647,18 @@ backpressured or stalled based on both application pending state and native SRT
 progress. An implementation that removes `MemoryQueue` but permits unlimited
 libsrt buffering does not satisfy the architecture.
 
+Current branch status:
+
+- The native sender-buffer ceiling is set pre-connect on every SRT egress
+  socket (`DESIRED_SRT_BUF` in `src/media/srt/socket.rs`).
+- The fabric transport now exposes instantaneous native sender-buffer
+  occupancy (`NativeSendBacklog` via `srt_bistats`), and
+  `SrtFabricLeaf::pressure` combines retained application bytes with native
+  backlog: a leaf with a drained application queue but a saturated native
+  buffer is classified backpressured, and both byte sources charge the leaf
+  memory envelope. Feeding this classification into the shared no-progress
+  deadline policy is the remaining accounting step.
+
 ### Removal targets
 
 After fabric SRT reaches parity, remove egress use of:

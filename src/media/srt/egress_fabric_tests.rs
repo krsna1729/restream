@@ -46,6 +46,10 @@ impl SrtSendOps for FakeSendOps {
     fn error(&self) -> (c_int, String) {
         (-1, "unused fake error".to_string())
     }
+
+    fn send_backlog(&self, _socket: SRTSOCKET) -> Option<NativeSendBacklog> {
+        None
+    }
 }
 
 impl Default for SrtNativeMessageSender<FakeSendOps> {
