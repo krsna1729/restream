@@ -361,9 +361,10 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
 
     fn process_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
         match command {
-            // The wake's only job was to end the sleep; the gate is cleared
-            // and the feed drained by the normal per-iteration media tick.
-            EgressCommand::FeedWake => EgressShardCommandEffect::Continue,
+            // A wake both ends the sleep and schedules ready work: backends
+            // drain feeds from ready visits, so the wake must pump the
+            // poll-and-visit chain, not just the media tick.
+            EgressCommand::FeedWake => EgressShardCommandEffect::ScheduleReady { count: 1 },
             EgressCommand::DrainShard(target) if target != self.shard_id => {
                 EgressShardCommandEffect::Continue
             }

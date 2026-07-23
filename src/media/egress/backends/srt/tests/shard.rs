@@ -821,3 +821,61 @@ fn stall_sweep_spares_leaf_with_draining_native_backlog() {
     }
     assert_eq!(backend.output_sockets.len(), 1);
 }
+
+/// Live-path regression: a connected leaf on a real shard thread must send
+/// once a feed wake arrives.  The wake schedules ready work, ready work
+/// polls the readiness backend, and the visit drains the feed — without this
+/// chain the fabric connects sockets but never delivers media (the failure
+/// observed live as zero packetsOut on every fabric SRT output).
+#[test]
+fn feed_wake_drives_connected_leaf_to_send_on_shard_thread() {
+    use crate::media::egress::command::ShardId;
+    use crate::media::egress::shard::{EgressShardConfig, EgressShardHandle};
+    use std::time::Instant;
+
+    let poller = FakeReadinessPoller::default();
+    let probe = shared_sender();
+    let mut backend = SrtShardBackend::with_socket_configurator(
+        poller.clone(),
+        feed([
+            Bytes::from_static(b"payload-1"),
+            Bytes::from_static(b"payload-2"),
+        ]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+        FakeSocketConfigurator::default(),
+    );
+    let leaf = SrtFabricLeaf::new(
+        common(7),
+        Box::new(probe.sender) as Box<dyn SrtMessageSender + Send>,
+    );
+    let key = backend.add_leaf(42, leaf).unwrap();
+    poller.push_ready(SrtReadyLeaf {
+        socket: 42,
+        key,
+        generation: 7,
+        writable: true,
+    });
+
+    // Long idle wait: without the wake-to-ready chain the shard would sleep
+    // and the sends assertion below would time out.
+    let config = EgressShardConfig::new(64, 8, 8, 8, Duration::from_secs(5)).unwrap();
+    let handle = EgressShardHandle::spawn(ShardId::new(0), config, backend);
+
+    handle.deliver_feed_wake().unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if !probe.sends.lock().unwrap().is_empty() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "feed wake did not drive the connected leaf to send"
+        );
+        std::thread::yield_now();
+    }
+
+    handle.shutdown_and_join();
+    let sends = probe.sends.lock().unwrap();
+    assert_eq!(&*sends[0], b"payload-1".as_slice());
+}

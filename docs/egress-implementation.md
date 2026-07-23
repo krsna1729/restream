@@ -688,6 +688,13 @@ Current branch status:
   and 4 shards (47.4%), so the remaining CPU gap versus legacy is
   per-message path cost, not shard overhead; attribution belongs to the
   Phase 7 perf sweep.
+- Live-path defect found and fixed by the crypto-matrix gate: the fabric
+  connected sockets but never delivered media, because nothing on the live
+  path scheduled ready work (visits only ran from deterministic test
+  drivers). `FeedWake` now schedules a ready visit so publication wakes pump
+  the poll-and-visit chain; a shard-thread regression test proves a
+  connected leaf sends after a wake. Earlier ramp captures measured
+  resources but not delivery and are re-recorded after this fix.
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
   fault.output-stall passed with a permanently stalled sink isolated beside
   32 healthy siblings while SRT outputs ran fabric-owned. This is
