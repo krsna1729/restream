@@ -278,7 +278,7 @@ impl EgressShardBackend for TimerBackend {
                 condvar.notify_all();
                 EgressShardCommandEffect::Continue
             }
-            EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {
+            EgressCommand::FeedWake | EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {
                 condvar.notify_all();
                 EgressShardCommandEffect::Continue
             }
@@ -388,6 +388,7 @@ fn command_label(command: &EgressCommand) -> String {
         EgressCommand::Add(spec) => format!("add:{}", spec.id.as_str()),
         EgressCommand::Update(spec) => format!("update:{}", spec.id.as_str()),
         EgressCommand::Remove(id) => format!("remove:{}", id.as_str()),
+        EgressCommand::FeedWake => "feed-wake".to_string(),
         EgressCommand::DrainShard(shard_id) => format!("drain:{}", shard_id.index()),
         EgressCommand::Shutdown => "shutdown".to_string(),
     }

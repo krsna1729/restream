@@ -102,6 +102,8 @@ impl EgressRegistry {
 pub(crate) struct SrtFabricRegistry {
     pub(crate) runtimes: HashMap<FeedId, EgressFabricRuntime>,
     pub(crate) active_outputs: HashMap<FeedId, u64>,
+    /// One publication watcher per feed runtime; aborted on release.
+    pub(crate) feed_watchers: HashMap<FeedId, tokio::task::JoinHandle<()>>,
 }
 
 impl SrtFabricRegistry {
@@ -109,6 +111,7 @@ impl SrtFabricRegistry {
         Self {
             runtimes: HashMap::new(),
             active_outputs: HashMap::new(),
+            feed_watchers: HashMap::new(),
         }
     }
 }

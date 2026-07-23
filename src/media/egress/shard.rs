@@ -7,6 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::media::egress::command::{EgressCommand, OutputId, ShardId};
+use crate::media::egress::journal::WakeGate;
 use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::timer::TimerWheel;
 
@@ -147,11 +148,36 @@ pub enum EgressShardSendError {
     Closed,
 }
 
+/// Publisher-side handle that delivers coalesced feed wakes to one shard.
+#[derive(Debug, Clone)]
+pub struct FeedWakeHandle {
+    gate: Arc<WakeGate>,
+    sender: SyncSender<EgressCommand>,
+}
+
+impl FeedWakeHandle {
+    /// Send [`EgressCommand::FeedWake`] only on the gate's clear-to-set
+    /// transition, so at most one wake is in flight per shard.
+    pub fn deliver(&self) -> Result<(), EgressShardSendError> {
+        if self.gate.notify() {
+            return self
+                .sender
+                .try_send(EgressCommand::FeedWake)
+                .map_err(|err| match err {
+                    TrySendError::Full(_) => EgressShardSendError::Full,
+                    TrySendError::Disconnected(_) => EgressShardSendError::Closed,
+                });
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct EgressShardHandle {
     shard_id: ShardId,
     sender: SyncSender<EgressCommand>,
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
+    wake_gate: Arc<WakeGate>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -164,15 +190,48 @@ impl EgressShardHandle {
         let (sender, receiver) = mpsc::sync_channel(config.command_channel_capacity.get());
         let snapshot = Arc::new(Mutex::new(EgressShardSnapshot::new(shard_id)));
         let thread_snapshot = Arc::clone(&snapshot);
+        let wake_gate = Arc::new(WakeGate::new());
+        let thread_wake_gate = Arc::clone(&wake_gate);
         let join = thread::Builder::new()
             .name(format!("egress-{shard_id}"))
-            .spawn(move || run_shard_thread(shard_id, config, receiver, backend, thread_snapshot))
+            .spawn(move || {
+                run_shard_thread(
+                    shard_id,
+                    config,
+                    receiver,
+                    backend,
+                    thread_snapshot,
+                    thread_wake_gate,
+                )
+            })
             .expect("spawn egress shard thread");
         Self {
             shard_id,
             sender,
             snapshot,
+            wake_gate,
             join: Some(join),
+        }
+    }
+
+    /// The coalescing wake gate for this shard.  A publisher-side watcher
+    /// calls `notify()` and sends [`EgressCommand::FeedWake`] only on the
+    /// clear-to-set transition; the shard clears the gate before draining.
+    pub fn wake_gate(&self) -> Arc<WakeGate> {
+        Arc::clone(&self.wake_gate)
+    }
+
+    /// Deliver a coalesced feed wake: send the command only when the gate
+    /// transitioned from clear to set, so at most one wake is in flight.
+    pub fn deliver_feed_wake(&self) -> Result<(), EgressShardSendError> {
+        self.feed_wake_handle().deliver()
+    }
+
+    /// A cloneable delivery handle for publisher-side feed watchers.
+    pub fn feed_wake_handle(&self) -> FeedWakeHandle {
+        FeedWakeHandle {
+            gate: Arc::clone(&self.wake_gate),
+            sender: self.sender.clone(),
         }
     }
 
@@ -206,6 +265,7 @@ fn run_shard_thread<B: EgressShardBackend>(
     receiver: Receiver<EgressCommand>,
     mut backend: B,
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
+    wake_gate: Arc<WakeGate>,
 ) {
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         let mut runtime = EgressShardRuntime {
@@ -217,6 +277,7 @@ fn run_shard_thread<B: EgressShardBackend>(
             timers: TimerWheel::new(),
             metrics: ShardMetrics::new(shard_id),
             snapshot: Arc::clone(&snapshot),
+            wake_gate,
         };
         runtime.run();
     }));
@@ -236,6 +297,7 @@ struct EgressShardRuntime<'a, B: EgressShardBackend> {
     timers: TimerWheel<OutputId>,
     metrics: ShardMetrics,
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
+    wake_gate: Arc<WakeGate>,
 }
 
 impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
@@ -255,6 +317,9 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                     timers_processed = self.process_timer_batch(&mut running);
                 }
             }
+            // Clear the wake gate before draining so a publish landing after
+            // this point re-arms exactly one wake delivery (loom-proven seam).
+            self.wake_gate.take();
             self.backend.on_media_tick();
             self.record_iteration(loop_started_at, processed, timers_processed);
         }
@@ -296,6 +361,9 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
 
     fn process_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
         match command {
+            // The wake's only job was to end the sleep; the gate is cleared
+            // and the feed drained by the normal per-iteration media tick.
+            EgressCommand::FeedWake => EgressShardCommandEffect::Continue,
             EgressCommand::DrainShard(target) if target != self.shard_id => {
                 EgressShardCommandEffect::Continue
             }

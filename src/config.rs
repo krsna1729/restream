@@ -143,7 +143,7 @@ impl Default for EgressFabricConfig {
             command_batch_budget: 32,
             readiness_batch_budget: 64,
             timer_batch_budget: 64,
-            idle_wait_ms: 1,
+            idle_wait_ms: 25,
             srt_poller_max_events: 1024,
             visit_max_units: 32,
             visit_max_bytes: 256 * 1024,

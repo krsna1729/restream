@@ -445,6 +445,12 @@ impl TsFeed {
     pub fn limit_status(&self, limits: &FeedLimits) -> FeedLimitStatus {
         limits.evaluate(self.retention_snapshot())
     }
+
+    /// The inner ring's publish notifier, used by feed watchers to bridge
+    /// publications into coalesced shard wake deliveries.
+    pub fn notify_handle(&self) -> Arc<tokio::sync::Notify> {
+        self.ring.get_notify()
+    }
 }
 
 impl std::fmt::Debug for TsFeed {

@@ -38,6 +38,10 @@ impl EgressFabricRuntime {
         self.manager.dispatch_to_group(command, &self.group)
     }
 
+    pub(crate) fn feed_wake_handles(&self) -> Vec<crate::media::egress::shard::FeedWakeHandle> {
+        self.group.feed_wake_handles()
+    }
+
     #[cfg(test)]
     pub(crate) fn snapshots(&self) -> Vec<EgressShardSnapshot> {
         self.group.snapshots()
@@ -107,6 +111,7 @@ mod tests {
                 EgressCommand::Add(spec) => format!("add:{}", spec.id),
                 EgressCommand::Update(spec) => format!("update:{}", spec.id),
                 EgressCommand::Remove(output_id) => format!("remove:{output_id}"),
+                EgressCommand::FeedWake => "feed-wake".to_string(),
                 EgressCommand::DrainShard(shard_id) => format!("drain:{shard_id}"),
                 EgressCommand::Shutdown => "shutdown".to_string(),
             };

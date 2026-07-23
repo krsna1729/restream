@@ -124,6 +124,9 @@ impl EgressManager {
                 self.dispatch_spec(EgressCommand::Update(spec.clone()), spec, dispatch)
             }
             EgressCommand::Remove(output_id) => self.dispatch_remove(output_id, dispatch),
+            // Feed wakes are delivered per shard by the feed watcher, not
+            // routed through manager assignment.
+            EgressCommand::FeedWake => Ok(ManagerCommandOutcome::Ignored),
             EgressCommand::DrainShard(shard_id) => {
                 self.check_command_slot(shard_id)
                     .map_err(EgressManagerDispatchError::Command)?;
@@ -364,6 +367,9 @@ pub enum ManagerCommandOutcome {
     },
     AlreadyRemoved,
     AlreadyShuttingDown,
+    /// The command is not routed through manager assignment (feed wakes are
+    /// delivered per shard by the feed watcher).
+    Ignored,
     Replayed {
         shard_id: ShardId,
         output_count: usize,

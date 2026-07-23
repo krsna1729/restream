@@ -654,7 +654,7 @@ where
             EgressCommand::Remove(output_id) => {
                 self.remove_leaf_by_output(&output_id);
             }
-            EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {}
+            EgressCommand::FeedWake | EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {}
         }
         EgressShardCommandEffect::Continue
     }

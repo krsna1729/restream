@@ -642,9 +642,15 @@ Current branch status:
 - First live fabric proof at host scale (wsl-6cpu-12gb, N=100 healthy SRT
   outputs, `w2-fabric` capture): all outputs healthy on the fabric runtime
   with per-output RSS 1,500KB versus legacy 3,426KB (2.3x lower). CPU was
-  57.0% versus legacy 41.7%; the regression is attributed to the 1ms
-  idle-wait shard polling loop — wiring the proven WakeGate delivery into
-  shard sleep is the next runtime step and re-measurement gate.
+  57.0% versus legacy 41.7%; the regression was attributed to the 1ms
+  idle-wait shard polling loop.
+- Feed-wake delivery is now wired end to end: a per-feed watcher bridges the
+  ring's publish notifier into coalesced `FeedWake` commands through one
+  `WakeGate` per shard (`FeedWakeHandle`), the shard clears its gate before
+  each drain, and the idle wait default rose from 1ms to 25ms since sleep
+  now ends on delivery rather than polling. Watchers abort on runtime
+  release and engine shutdown. Re-measuring the w2-fabric capture is the
+  outstanding evidence step.
 
 ### Native buffer accounting
 

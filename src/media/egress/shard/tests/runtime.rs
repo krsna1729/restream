@@ -372,3 +372,70 @@ fn repeated_shard_group_startup_shutdown_joins_every_thread() {
         assert_eq!(shard_one.state().shutdowns, 1);
     }
 }
+
+/// Feed-wake delivery ends the idle sleep promptly: with a long idle wait,
+/// media ticks only advance when the shard is woken, and a coalesced
+/// `deliver_feed_wake` produces a tick well before the idle timeout.
+#[test]
+fn feed_wake_delivery_ends_idle_sleep_promptly() {
+    use std::sync::{Arc, Condvar, Mutex};
+
+    #[derive(Clone, Default)]
+    struct TickProbe {
+        inner: Arc<(Mutex<u64>, Condvar)>,
+    }
+
+    struct TickBackend {
+        probe: TickProbe,
+    }
+
+    impl EgressShardBackend for TickBackend {
+        fn on_command(&mut self, _command: EgressCommand) -> EgressShardCommandEffect {
+            EgressShardCommandEffect::Continue
+        }
+
+        fn on_media_tick(&mut self) {
+            let (lock, condvar) = &*self.probe.inner;
+            *lock.lock().unwrap() += 1;
+            condvar.notify_all();
+        }
+    }
+
+    let idle_wait = Duration::from_secs(5);
+    let config = EgressShardConfig::new(16, 4, 4, 4, idle_wait).unwrap();
+    let probe = TickProbe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        config,
+        TickBackend {
+            probe: probe.clone(),
+        },
+    );
+
+    // Let the startup iterations drain into the idle sleep.
+    std::thread::sleep(Duration::from_millis(200));
+    let ticks_before = *probe.inner.0.lock().unwrap();
+
+    let delivered_at = Instant::now();
+    handle.deliver_feed_wake().unwrap();
+
+    let (lock, condvar) = &*probe.inner;
+    let guard = lock.lock().unwrap();
+    let (guard, timeout) = condvar
+        .wait_timeout_while(guard, Duration::from_secs(2), |ticks| {
+            *ticks <= ticks_before
+        })
+        .unwrap();
+    assert!(
+        !timeout.timed_out(),
+        "wake did not end the idle sleep: {} ticks before and after",
+        *guard
+    );
+    drop(guard);
+    assert!(
+        delivered_at.elapsed() < idle_wait,
+        "tick arrived only after the idle timeout — wake was lost"
+    );
+
+    handle.shutdown_and_join();
+}

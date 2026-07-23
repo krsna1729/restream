@@ -132,6 +132,9 @@ pub enum EgressCommand {
     Update(OutputSpec),
     /// Close and remove the leaf with this output ID.
     Remove(OutputId),
+    /// Coalesced notification that the shard's feed may have new data; the
+    /// shard clears its wake gate and drains within normal budgets.
+    FeedWake,
     /// Stop accepting new assignments and begin draining this shard.
     DrainShard(ShardId),
     /// Shut down the entire fabric manager.
@@ -144,7 +147,9 @@ impl EgressCommand {
         match self {
             EgressCommand::Add(s) | EgressCommand::Update(s) => Some(&s.id),
             EgressCommand::Remove(id) => Some(id),
-            EgressCommand::DrainShard(_) | EgressCommand::Shutdown => None,
+            EgressCommand::FeedWake | EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {
+                None
+            }
         }
     }
 

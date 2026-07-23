@@ -47,7 +47,23 @@ impl MediaEngine {
                     .expect("egress fabric manager config is clamped nonzero");
             let runtime = EgressFabricRuntime::new(manager_config, group)
                 .map_err(SrtFabricEnsureError::Runtime)?;
+
+            // Bridge feed publications into coalesced shard wakes: one
+            // watcher per feed runtime, one gate per shard, at most one
+            // outstanding wake per (feed, shard).
+            let wake_handles = runtime.feed_wake_handles();
+            let notify = feed.notify_handle();
+            let watcher = tokio::spawn(async move {
+                loop {
+                    notify.notified().await;
+                    for handle in &wake_handles {
+                        let _ = handle.deliver();
+                    }
+                }
+            });
+
             registry.runtimes.insert(feed_id.clone(), runtime);
+            registry.feed_watchers.insert(feed_id.clone(), watcher);
             true
         };
 
@@ -83,6 +99,9 @@ impl MediaEngine {
                 return false;
             }
             registry.active_outputs.remove(feed_id);
+            if let Some(watcher) = registry.feed_watchers.remove(feed_id) {
+                watcher.abort();
+            }
             registry.runtimes.remove(feed_id)
         };
 
@@ -122,6 +141,9 @@ impl MediaEngine {
         let runtimes = {
             let mut registry = self.fabric.srt.lock().await;
             registry.active_outputs.clear();
+            for watcher in registry.feed_watchers.drain() {
+                watcher.1.abort();
+            }
             std::mem::take(&mut registry.runtimes)
         };
         let count = runtimes.len();

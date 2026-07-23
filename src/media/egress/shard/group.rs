@@ -55,6 +55,13 @@ impl EgressShardGroup {
         Ok(Self { handles })
     }
 
+    pub fn feed_wake_handles(&self) -> Vec<super::FeedWakeHandle> {
+        self.handles
+            .iter()
+            .map(|handle| handle.feed_wake_handle())
+            .collect()
+    }
+
     pub fn shard_count(&self) -> usize {
         self.handles.len()
     }

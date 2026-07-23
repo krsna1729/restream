@@ -176,7 +176,10 @@ fn resolve_request_from_command(command: &EgressCommand) -> Option<SrtResolveReq
         EgressCommand::Add(spec) | EgressCommand::Update(spec) => {
             resolve_request_from_output_spec(spec)
         }
-        EgressCommand::Remove(_) | EgressCommand::DrainShard(_) | EgressCommand::Shutdown => None,
+        EgressCommand::Remove(_)
+        | EgressCommand::FeedWake
+        | EgressCommand::DrainShard(_)
+        | EgressCommand::Shutdown => None,
     }
 }
 
