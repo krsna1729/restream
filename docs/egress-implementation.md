@@ -692,7 +692,8 @@ Current branch status:
   boundaries across partial writes and accounts remaining application bytes;
   direct partial-write and zero-write socket tests prove its behavior, and the
   legacy session-init, connect-request, session-result, publish metadata, and
-  cached startup sequence-header write paths use it as the first runtime proof.
+  cached, deferred, or refreshed sequence-header write paths use it as the
+  first runtime proof.
 - The legacy RTMP sender remains the runtime owner. Phase 5 has not yet
   introduced TCP readiness polling, moved the hot media publish loop onto
   pending state, added incremental TLS, or provided a default/opt-in runtime

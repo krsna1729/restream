@@ -551,7 +551,10 @@ pub async fn start_rtmp_egress(
                                         false,
                                     )
                             {
-                                if socket.write_all(&p.bytes).await.is_err() {
+                                if write_rtmp_pending_bytes(&mut socket, Bytes::from(p.bytes))
+                                    .await
+                                    .is_err()
+                                {
                                     egress_error!(
                                         "send",
                                         "failed to write deferred audio sequence header"
@@ -622,7 +625,12 @@ pub async fn start_rtmp_egress(
                                                     seq_hdr,
                                                     sequence_header_ts,
                                                     false,
-                                                ) && socket.write_all(&p.bytes).await.is_err()
+                                                ) && write_rtmp_pending_bytes(
+                                                    &mut socket,
+                                                    Bytes::from(p.bytes),
+                                                )
+                                                .await
+                                                .is_err()
                                                 {
                                                     egress_error!(
                                                         "send",
