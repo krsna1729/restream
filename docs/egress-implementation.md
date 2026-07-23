@@ -775,6 +775,8 @@ Current branch status:
 - A pure application validator now parses typed recirculation targets and
   rejects direct and obvious indirect pipeline cycles before runtime backend
   ownership is enabled.
+- Target input ownership validation rejects missing, cross-pipeline, disabled,
+  or selected inputs before a recirculation backend can claim the target.
 
 ### Proof
 

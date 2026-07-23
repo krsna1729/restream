@@ -1,11 +1,39 @@
 use crate::application::models::Output;
 use crate::domain::output_spec::RecirculationTarget;
+use crate::domain::pipeline_input::PipelineInput;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecirculationTopologyError {
     DirectCycle,
     IndirectCycle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecirculationTargetInputError {
+    Missing,
+    WrongPipeline,
+    Disabled,
+    Selected,
+}
+
+pub fn validate_recirculation_target_input(
+    target: &RecirculationTarget,
+    input: Option<&PipelineInput>,
+) -> Result<(), RecirculationTargetInputError> {
+    let Some(input) = input else {
+        return Err(RecirculationTargetInputError::Missing);
+    };
+    if input.pipeline_id != target.pipeline_id() {
+        return Err(RecirculationTargetInputError::WrongPipeline);
+    }
+    if !input.enabled {
+        return Err(RecirculationTargetInputError::Disabled);
+    }
+    if input.selected {
+        return Err(RecirculationTargetInputError::Selected);
+    }
+    Ok(())
 }
 
 pub fn validate_recirculation_topology(
@@ -57,6 +85,7 @@ fn recirculation_edges(outputs: &[Output]) -> HashMap<&str, Vec<String>> {
 mod tests {
     use super::*;
     use crate::domain::output_spec::OutputConfig;
+    use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole};
     use crate::domain::state::DesiredOutputState;
 
     fn output(source_pipeline: &str, id: &str, url: &str) -> Output {
@@ -68,6 +97,18 @@ mod tests {
             monitoring_url: None,
             desired_state: DesiredOutputState::Running,
             config: OutputConfig::source(),
+        }
+    }
+
+    fn input(pipeline_id: &str, input_id: &str) -> PipelineInput {
+        PipelineInput {
+            id: input_id.to_string(),
+            pipeline_id: pipeline_id.to_string(),
+            label: input_id.to_string(),
+            stream_key: format!("sk_{input_id}"),
+            role: PipelineInputRole::Backup,
+            enabled: true,
+            selected: false,
         }
     }
 
@@ -99,6 +140,61 @@ mod tests {
         let target = RecirculationTarget::parse("pipeline://pipe-b/input-backup").unwrap();
 
         let result = validate_recirculation_topology("pipe-a", &target, &outputs);
+
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn recirculation_target_input_rejects_missing_input() {
+        let target = RecirculationTarget::parse("pipeline://pipe-b/input-backup").unwrap();
+
+        let result = validate_recirculation_target_input(&target, None);
+
+        assert_eq!(result, Err(RecirculationTargetInputError::Missing));
+    }
+
+    #[test]
+    fn recirculation_target_input_rejects_cross_pipeline_input() {
+        let target = RecirculationTarget::parse("pipeline://pipe-b/input-backup").unwrap();
+        let input = input("pipe-c", "input-backup");
+
+        let result = validate_recirculation_target_input(&target, Some(&input));
+
+        assert_eq!(result, Err(RecirculationTargetInputError::WrongPipeline));
+    }
+
+    #[test]
+    fn recirculation_target_input_rejects_disabled_input() {
+        let target = RecirculationTarget::parse("pipeline://pipe-b/input-backup").unwrap();
+        let input = PipelineInput {
+            enabled: false,
+            ..input("pipe-b", "input-backup")
+        };
+
+        let result = validate_recirculation_target_input(&target, Some(&input));
+
+        assert_eq!(result, Err(RecirculationTargetInputError::Disabled));
+    }
+
+    #[test]
+    fn recirculation_target_input_rejects_selected_input() {
+        let target = RecirculationTarget::parse("pipeline://pipe-b/input-backup").unwrap();
+        let input = PipelineInput {
+            selected: true,
+            ..input("pipe-b", "input-backup")
+        };
+
+        let result = validate_recirculation_target_input(&target, Some(&input));
+
+        assert_eq!(result, Err(RecirculationTargetInputError::Selected));
+    }
+
+    #[test]
+    fn recirculation_target_input_accepts_enabled_unselected_target() {
+        let target = RecirculationTarget::parse("pipeline://pipe-b/input-backup").unwrap();
+        let input = input("pipe-b", "input-backup");
+
+        let result = validate_recirculation_target_input(&target, Some(&input));
 
         assert_eq!(result, Ok(()));
     }
