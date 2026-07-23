@@ -752,8 +752,7 @@ where
     for res in results {
         match res {
             ClientSessionResult::OutboundResponse(pkt) => {
-                socket
-                    .write_all(&pkt.bytes)
+                write_rtmp_pending_bytes(socket, Bytes::from(pkt.bytes))
                     .await
                     .map_err(|_| "Socket write error")?;
             }
@@ -765,8 +764,7 @@ where
                         Ok(ClientSessionResult::OutboundResponse(p)) => p,
                         _ => return Err("Failed to build publish request"),
                     };
-                    socket
-                        .write_all(&pub_pkt.bytes)
+                    write_rtmp_pending_bytes(socket, Bytes::from(pub_pkt.bytes))
                         .await
                         .map_err(|_| "Socket write error")?;
                 }
