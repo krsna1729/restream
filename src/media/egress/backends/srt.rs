@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
+use std::thread::{self, JoinHandle};
 
 use crate::media::egress::backend::{ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
@@ -42,7 +44,32 @@ pub(crate) enum SrtPendingConnectError {
 pub(crate) struct SrtResolvedConnect {
     pub(crate) output_id: OutputId,
     pub(crate) generation: u64,
-    pub(crate) peer_addrs: Vec<std::net::SocketAddr>,
+    pub(crate) peer_addrs: Vec<SocketAddr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SrtResolveRequest {
+    pub(crate) output_id: OutputId,
+    pub(crate) generation: u64,
+    pub(crate) peer_hosts: Vec<String>,
+}
+
+impl SrtResolveRequest {
+    pub(crate) fn new(output_id: OutputId, generation: u64, peer_hosts: Vec<String>) -> Self {
+        Self {
+            output_id,
+            generation,
+            peer_hosts,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SrtResolveWorkerError {
+    EmptyPeerList,
+    ResolveFailed { host: String },
+    CompletionQueueFull,
+    CompletionQueueClosed,
 }
 
 pub(crate) struct SrtFabricLeaf<T>
@@ -138,6 +165,46 @@ pub(crate) fn srt_resolve_completion_queue(
 ) -> (SyncSender<SrtResolvedConnect>, SrtResolveCompletionQueue) {
     let (sender, receiver) = mpsc::sync_channel(capacity);
     (sender, SrtResolveCompletionQueue { receiver })
+}
+
+pub(crate) fn spawn_srt_resolve_worker(
+    request: SrtResolveRequest,
+    completion_sender: SyncSender<SrtResolvedConnect>,
+) -> JoinHandle<Result<(), SrtResolveWorkerError>> {
+    thread::spawn(move || resolve_srt_peer_hosts(request, completion_sender))
+}
+
+fn resolve_srt_peer_hosts(
+    request: SrtResolveRequest,
+    completion_sender: SyncSender<SrtResolvedConnect>,
+) -> Result<(), SrtResolveWorkerError> {
+    if request.peer_hosts.is_empty() {
+        return Err(SrtResolveWorkerError::EmptyPeerList);
+    }
+
+    let mut peer_addrs = Vec::with_capacity(request.peer_hosts.len());
+    for host in &request.peer_hosts {
+        let addr = resolve_srt_peer_host(host)
+            .ok_or_else(|| SrtResolveWorkerError::ResolveFailed { host: host.clone() })?;
+        peer_addrs.push(addr);
+    }
+
+    completion_sender
+        .try_send(SrtResolvedConnect {
+            output_id: request.output_id,
+            generation: request.generation,
+            peer_addrs,
+        })
+        .map_err(|error| match error {
+            TrySendError::Full(_) => SrtResolveWorkerError::CompletionQueueFull,
+            TrySendError::Disconnected(_) => SrtResolveWorkerError::CompletionQueueClosed,
+        })
+}
+
+fn resolve_srt_peer_host(host: &str) -> Option<SocketAddr> {
+    host.parse::<SocketAddr>()
+        .ok()
+        .or_else(|| host.to_socket_addrs().ok()?.next())
 }
 
 impl SrtResolveCompletionSource for SrtResolveCompletionQueue {
