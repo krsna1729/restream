@@ -680,6 +680,18 @@ the new reactor. Benchmark changes around `ChunkSerializer` and TLS separately.
 The first RTMP migration should optimize ownership neutrality and correctness,
 not claim an allocator win. Performance tuning follows after parity.
 
+Current branch status:
+
+- RTMP and RTMPS can now be represented as typed fabric output specs that
+  preserve the destination URL and record whether the scheme requires TLS.
+- RTMP fabric feed preparation wraps the already prepared terminal
+  `RingBuffer` as a `RingFeed`, so the control plane can share the same
+  sequence-cursor feed contract used by the common fabric before runtime
+  ownership moves off the legacy sender task.
+- The legacy RTMP sender remains the runtime owner. Phase 5 has not yet
+  introduced TCP readiness polling, partial-write state, incremental TLS, or a
+  default/opt-in runtime switch for RTMP or RTMPS.
+
 ### RTMPS
 
 Drive TLS incrementally:
