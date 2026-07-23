@@ -5,9 +5,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use rml_rtmp::sessions::{ClientSessionEvent, ClientSessionResult, PublishRequestType};
 use rml_rtmp::time::RtmpTimestamp;
-use tokio::io::AsyncReadExt;
 use tracing::{error, info};
 
 use crate::domain::output_spec::RtmpOutputMode;
@@ -19,7 +17,9 @@ use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 use crate::media::startup_policy;
 use crate::secret_display::redact_url;
 
-use super::egress_connection::{InitialServerResultError, RtmpEgressConnection};
+use super::egress_connection::{
+    InitialServerResultError, RtmpEgressConnection, RtmpSessionError, RtmpSessionEvent,
+};
 use super::egress_metadata::{
     output_ring_video_codec_kind, resolved_output_audio_tracks, rtmp_publish_metadata,
     validate_rtmp_output_audio_tracks,
@@ -30,8 +30,7 @@ use super::egress_packets::{
     should_send_startup_audio_sequence_header, startup_video_sequence_header,
     validate_rtmp_output_audio_packet_track, video_sequence_header_for_keyframe,
 };
-use super::egress_transport::{parse_rtmp_url, rtmp_sender_quality};
-use super::egress_write::write_rtmp_pending_bytes;
+use super::egress_transport::parse_rtmp_url;
 use super::enhanced::{cache_hevc_parameter_sets, raw_packet_starts_with_hevc_parameter_set};
 use super::flv::{FlvVideoPacketKind, classify_flv_video_packet};
 use super::timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
@@ -218,7 +217,7 @@ pub async fn start_rtmp_egress(
         }
         return;
     }
-    let (parts, mut socket, mut session, mut write_queue) = session_ready.into_legacy_parts();
+    let mut session = session_ready;
 
     let mut buffer = vec![0u8; 4096];
 
@@ -263,15 +262,15 @@ pub async fn start_rtmp_egress(
     loop {
         tokio::select! {
             _ = cancel_token.cancelled() => {
-                let _ = session.stop_publishing();
+                session.stop_publishing();
                 break;
             }
             _ = tcp_stats_interval.tick() => {
-                let quality = rtmp_sender_quality(&socket, &mut previous_tcp_bytes);
+                let quality = session.sender_quality(&mut previous_tcp_bytes);
                 egress_quality!(quality);
             }
             // Read from server to handle acknowledgements, status codes, pings
-            res = socket.read(&mut buffer) => {
+            res = session.read(&mut buffer) => {
                 let n = match res {
                     Ok(n) if n > 0 => n,
                     _ => {
@@ -279,52 +278,24 @@ pub async fn start_rtmp_egress(
                         break;
                     }
                 };
-                let results = match session.handle_input(&buffer[..n]) {
+                let results = match session.handle_server_input(&buffer[..n]).await {
                     Ok(r) => r,
-                    Err(e) => {
-                        egress_error!("send", format!("{:?}", e));
+                    Err(RtmpSessionError::ConnectionRejected(description)) => {
+                        error!("Connection rejected: {description}");
+                        egress_error!("connect_app", description);
+                        return;
+                    }
+                    Err(error) => {
+                        egress_error!("send", error.to_string());
                         break;
                     }
                 };
-                for r in results {
-                    match r {
-                        ClientSessionResult::OutboundResponse(pkt) => {
-                            if write_rtmp_pending_bytes(
-                                &mut socket,
-                                &mut write_queue,
-                                Bytes::from(pkt.bytes),
-                            )
-                                .await
-                                .is_err()
-                            {
-                                egress_error!("session", "failed to write RTMP control response");
-                                return;
-                            }
+                for event in results {
+                    match event {
+                        RtmpSessionEvent::ConnectionRequestAccepted => {
+                            egress_phase!(EgressPhase::Publishing);
                         }
-                        ClientSessionResult::RaisedEvent(event) => {
-                            match event {
-                                ClientSessionEvent::ConnectionRequestAccepted => {
-                                    egress_phase!(EgressPhase::Publishing);
-                                    let pub_pkt = match session.request_publishing(parts.stream_key.clone(), PublishRequestType::Live) {
-                                        Ok(ClientSessionResult::OutboundResponse(p)) => p,
-                                        _ => {
-                                            egress_error!("publishing", "failed to build publish request");
-                                            return;
-                                        }
-                                    };
-                                    if write_rtmp_pending_bytes(
-                                        &mut socket,
-                                        &mut write_queue,
-                                        Bytes::from(pub_pkt.bytes),
-                                    )
-                                    .await
-                                    .is_err()
-                                    {
-                                        egress_error!("publishing", "failed to write publish request");
-                                        return;
-                                    }
-                                }
-                                ClientSessionEvent::PublishRequestAccepted => {
+                        RtmpSessionEvent::PublishRequestAccepted => {
                                     info!("Stream publishing accepted on target");
                                     egress_phase!(EgressPhase::Sending);
                                     if let Some(metadata) = rtmp_publish_metadata(
@@ -334,15 +305,7 @@ pub async fn start_rtmp_egress(
                                         output_audio_track.as_ref(),
                                     )
                                     .await
-                                        && let Ok(ClientSessionResult::OutboundResponse(p)) =
-                                            session.publish_metadata(&metadata)
-                                        && write_rtmp_pending_bytes(
-                                            &mut socket,
-                                            &mut write_queue,
-                                            Bytes::from(p.bytes),
-                                        )
-                                            .await
-                                            .is_err()
+                                        && session.publish_metadata(&metadata).await.is_err()
                                     {
                                         egress_error!("send", "failed to write RTMP metadata");
                                         return;
@@ -386,29 +349,20 @@ pub async fn start_rtmp_egress(
                                         enhanced_hevc_video,
                                     );
                                     let mut sent_startup_video_sequence_header = false;
-                                    if let Some(vsh) = video_sh
-                                        && let Ok(ClientSessionResult::OutboundResponse(p)) =
-                                            session.publish_video_data(
-                                                vsh,
-                                                RtmpTimestamp::new(0),
-                                                false,
-                                            )
-                                    {
-                                        if write_rtmp_pending_bytes(
-                                            &mut socket,
-                                            &mut write_queue,
-                                            Bytes::from(p.bytes),
-                                        )
-                                        .await
-                                        .is_err()
+                                    if let Some(vsh) = video_sh {
+                                        if session
+                                            .publish_video_data(vsh, RtmpTimestamp::new(0), false)
+                                            .await
+                                            .is_ok()
                                         {
+                                            sent_startup_video_sequence_header = true;
+                                        } else {
                                             egress_error!(
                                                 "send",
                                                 "failed to write video sequence header"
                                             );
                                             return;
                                         }
-                                        sent_startup_video_sequence_header = true;
                                     }
                                     if sent_startup_video_sequence_header {
                                         if enhanced_hevc_video {
@@ -420,33 +374,29 @@ pub async fn start_rtmp_egress(
                                             last_sent_video_config = h264_sps_nalu(&parameter_sets);
                                         }
                                     }
-                                    if let Some(ref ash) = audio_sh
+                                    if let Some(ash) = audio_sh.as_ref()
                                         && should_send_startup_audio_sequence_header(
                                             video_ready,
                                             reader.current_ring(),
                                         )
-                                        && let Ok(ClientSessionResult::OutboundResponse(p)) =
-                                            session.publish_audio_data(
+                                    {
+                                        if session
+                                            .publish_audio_data(
                                                 ash.clone(),
                                                 RtmpTimestamp::new(0),
                                                 false,
                                             )
-                                    {
-                                        if write_rtmp_pending_bytes(
-                                            &mut socket,
-                                            &mut write_queue,
-                                            Bytes::from(p.bytes),
-                                        )
-                                        .await
-                                        .is_err()
+                                            .await
+                                            .is_ok()
                                         {
+                                            audio_sequence_header_sent = true;
+                                        } else {
                                             egress_error!(
                                                 "send",
                                                 "failed to write audio sequence header"
                                             );
                                             return;
                                         }
-                                        audio_sequence_header_sent = true;
                                     }
                                     deferred_audio_sequence_header = if audio_sequence_header_sent {
                                         None
@@ -455,15 +405,6 @@ pub async fn start_rtmp_egress(
                                     };
                                     is_publishing = true;
                                 }
-                                ClientSessionEvent::ConnectionRequestRejected { description } => {
-                                    error!("Connection rejected: {}", description);
-                                    egress_error!("connect_app", description);
-                                    return;
-                                }
-                                _ => {}
-                            }
-                        }
-                        ClientSessionResult::UnhandleableMessageReceived(_) => {}
                     }
                 }
             }
@@ -514,18 +455,13 @@ pub async fn start_rtmp_egress(
                                         deferred_audio_sequence_header.as_ref(),
                                         output_audio_track.as_ref(),
                                     )
-                                && let Ok(ClientSessionResult::OutboundResponse(p)) =
-                                    session.publish_audio_data(
+                            {
+                                if session
+                                    .publish_audio_data(
                                         sequence_header,
                                         RtmpTimestamp::new(0),
                                         false,
                                     )
-                            {
-                                if write_rtmp_pending_bytes(
-                                    &mut socket,
-                                    &mut write_queue,
-                                    Bytes::from(p.bytes),
-                                )
                                     .await
                                     .is_err()
                                 {
@@ -593,19 +529,14 @@ pub async fn start_rtmp_egress(
                                             if config_changed {
                                                 let sequence_header_ts =
                                                     refreshed_video_sequence_header_timestamp(ts);
-                                                if let Ok(ClientSessionResult::OutboundResponse(
-                                                    p,
-                                                )) = session.publish_video_data(
-                                                    seq_hdr,
-                                                    sequence_header_ts,
-                                                    false,
-                                                ) && write_rtmp_pending_bytes(
-                                                &mut socket,
-                                                &mut write_queue,
-                                                Bytes::from(p.bytes),
-                                                )
-                                                .await
-                                                .is_err()
+                                                if session
+                                                    .publish_video_data(
+                                                        seq_hdr,
+                                                        sequence_header_ts,
+                                                        false,
+                                                    )
+                                                    .await
+                                                    .is_err()
                                                 {
                                                     egress_error!(
                                                         "send",
@@ -678,7 +609,7 @@ pub async fn start_rtmp_egress(
                             }
                             packet.payload.clone()
                         };
-                        let pkt = match packet.media_type {
+                        let sent_bytes = match packet.media_type {
                             MediaType::Video => {
                                 if !video_ready
                                     && !matches!(
@@ -690,24 +621,14 @@ pub async fn start_rtmp_egress(
                                 }
                                 let can_be_dropped =
                                     rtmp_video_packet_can_be_dropped(&payload, packet.is_keyframe);
-                                session.publish_video_data(payload, ts, can_be_dropped)
-                            }
-                            MediaType::Audio => session.publish_audio_data(payload, ts, false),
-                        };
-                        match pkt {
-                            Ok(ClientSessionResult::OutboundResponse(p)) => {
-                                let sent_bytes = p.bytes.len() as u64;
-                                if write_rtmp_pending_bytes(
-                                    &mut socket,
-                                    &mut write_queue,
-                                    Bytes::from(p.bytes),
-                                )
+                                session
+                                    .publish_video_data(payload, ts, can_be_dropped)
                                     .await
-                                    .is_err()
-                                {
-                                    egress_error!("send", "failed to write media packet");
-                                    return;
-                                }
+                            }
+                            MediaType::Audio => session.publish_audio_data(payload, ts, false).await,
+                        };
+                        match sent_bytes {
+                            Ok(sent_bytes) => {
                                 if let Some(ref counter) = egress_bytes_sent {
                                     counter.fetch_add(sent_bytes, Ordering::Relaxed);
                                 }

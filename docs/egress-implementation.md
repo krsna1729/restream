@@ -701,11 +701,12 @@ Current branch status:
   not yet drive that primitive from a TCP poller. Client-session result dispatch remains in the legacy egress
   task until it can move with its lifecycle semantics into the explicit
   connection engine.
-- The explicit RTMP connection engine now owns socket establishment, the
-  cancellable client handshake, client-session initialization, and the initial
-  connection exchange including initial server-result dispatch; the legacy
-  egress task still owns publish handling while TCP readiness and incremental
-  TLS remain future engine work.
+- The explicit RTMP session driver now owns socket establishment, the
+  cancellable client handshake, client-session initialization, all server-result
+  dispatch, publish-request issuance, and bounded control/media wire writes.
+  The legacy egress task still owns prepared-media lookup, output status, and
+  outer lifecycle while TCP readiness, shard registration, and incremental TLS
+  remain future engine work.
 - The legacy RTMP sender remains the runtime owner. Phase 5 has not yet
   introduced TCP readiness polling, moved the hot media publish loop onto
   pending state, added incremental TLS, or provided a default/opt-in runtime
