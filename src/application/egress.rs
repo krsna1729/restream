@@ -2,7 +2,9 @@
 //! into the runtime ring and transcoder wiring owned by the media engine.
 
 use crate::application::models::Output;
-use crate::domain::output_spec::{EgressProtocol, OutputUrlScheme, VideoCodecKind};
+use crate::domain::output_spec::{
+    EgressProtocol, OutputUrlScheme, RecirculationTarget, VideoCodecKind,
+};
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::egress::journal::{FeedEpoch, TsFeed};
 use crate::media::egress::policy::LeafPolicy;
@@ -180,6 +182,24 @@ pub fn srt_fabric_output_spec(output: &Output, generation: u64, feed_id: FeedId)
     }
 }
 
+pub fn recirculation_fabric_output_spec(
+    output: &Output,
+    generation: u64,
+    feed_id: FeedId,
+    target: &RecirculationTarget,
+) -> OutputSpec {
+    OutputSpec {
+        id: OutputId::new(output.id.clone()),
+        generation,
+        feed: feed_id,
+        protocol: ProtocolSpec::Pipeline {
+            target_pipeline_id: target.pipeline_id().to_string(),
+            target_input_id: target.input_id().to_string(),
+        },
+        policy: LeafPolicy::default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,8 +313,39 @@ mod tests {
                 assert_eq!(url, "srt://localhost:9000?mode=caller");
             }
             crate::media::egress::ProtocolSpec::Rtmp { .. }
-            | crate::media::egress::ProtocolSpec::Sink => {
+            | crate::media::egress::ProtocolSpec::Sink
+            | crate::media::egress::ProtocolSpec::Pipeline { .. } => {
                 panic!("SRT fabric spec must carry the SRT protocol")
+            }
+        }
+    }
+
+    #[test]
+    fn recirculation_fabric_output_spec_uses_target_identity() {
+        let output = test_output(
+            "pipe-source",
+            OutputConfig::source(),
+            "pipeline://pipe-target/input-backup",
+        );
+        let target = RecirculationTarget::parse(&output.url).unwrap();
+        let spec =
+            recirculation_fabric_output_spec(&output, 9, FeedId::new("feed-source"), &target);
+
+        assert_eq!(spec.id.as_str(), "pipe-source-out");
+        assert_eq!(spec.generation, 9);
+        assert_eq!(spec.feed.as_str(), "feed-source");
+        match spec.protocol {
+            crate::media::egress::ProtocolSpec::Pipeline {
+                target_pipeline_id,
+                target_input_id,
+            } => {
+                assert_eq!(target_pipeline_id, "pipe-target");
+                assert_eq!(target_input_id, "input-backup");
+            }
+            crate::media::egress::ProtocolSpec::Rtmp { .. }
+            | crate::media::egress::ProtocolSpec::Srt { .. }
+            | crate::media::egress::ProtocolSpec::Sink => {
+                panic!("recirculation spec must carry the pipeline protocol")
             }
         }
     }

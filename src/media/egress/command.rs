@@ -87,6 +87,10 @@ pub enum ProtocolSpec {
     Srt { url: String },
     /// Discard prepared media while exercising the common fabric path.
     Sink,
+    Pipeline {
+        target_pipeline_id: String,
+        target_input_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -206,5 +210,26 @@ mod tests {
         let cmd = EgressCommand::DrainShard(ShardId::new(0));
         assert!(cmd.output_id().is_none());
         assert!(cmd.generation().is_none());
+    }
+
+    #[test]
+    fn pipeline_protocol_spec_carries_target_identity() {
+        let spec = ProtocolSpec::Pipeline {
+            target_pipeline_id: "pipe-target".to_string(),
+            target_input_id: "input-backup".to_string(),
+        };
+
+        match spec {
+            ProtocolSpec::Pipeline {
+                target_pipeline_id,
+                target_input_id,
+            } => {
+                assert_eq!(target_pipeline_id, "pipe-target");
+                assert_eq!(target_input_id, "input-backup");
+            }
+            ProtocolSpec::Rtmp { .. } | ProtocolSpec::Srt { .. } | ProtocolSpec::Sink => {
+                panic!("pipeline protocol spec should keep recirculation target identity")
+            }
+        }
     }
 }

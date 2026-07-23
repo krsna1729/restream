@@ -780,6 +780,8 @@ Current branch status:
   or selected inputs before a recirculation backend can claim the target.
 - Application-level recirculation validation now owns the output/input lookups
   and maps workflow failures to service errors, keeping HTTP handlers thin.
+- The fabric command model now has a typed pipeline protocol spec carrying the
+  target pipeline/input identity for the eventual in-process backend.
 - Runtime graph projection now renders reserved recirculation outputs as
   output-to-target-input edges so the planned topology is operator-visible
   before backend activation.
