@@ -190,7 +190,6 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
     onPresentation: controlRoomV2Active
       ? updateDashboardV2ControlRoomCheckpoint
       : undefined,
-    v2Active: controlRoomV2Active,
   });
   configureIncidentsCheckpointPresentation({
     onPresentation: incidentsV2Active

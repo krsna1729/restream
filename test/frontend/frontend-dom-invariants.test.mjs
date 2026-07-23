@@ -279,6 +279,7 @@ test("pipeline monitor route body uses the v2-owned renderer", async () => {
   assert.match(routeBodySource, /setControlRoomContainerId\(containerId\)/);
   assert.match(routeBodySource, /renderControlRoom\(\)/);
   assert.match(routeBodySource, /container\.dataset\.controlRoomRouteBody = "v2"/);
+  assert.doesNotMatch(routeBodySource, /v2Active/);
 });
 
 test("settings route body uses the v2-owned renderer", async () => {
