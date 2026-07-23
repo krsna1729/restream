@@ -307,11 +307,9 @@ pub async fn start_rtmp_egress(
     let mut audio_sequence_header_sent = false;
     let mut deferred_audio_sequence_header: Option<Bytes> = None;
     let mut timestamp_guard = RtmpTimestampGuard::new();
-    // Per-egress reusable conversion buffers — avoids per-frame Vec allocation.
-    // Each task owns its own buffer; no sharing, no contention with transcoder.
+    // Per-egress reusable conversion buffers avoid per-frame allocation and cross-task contention.
     let mut video_buf = Vec::<u8>::new();
     let mut audio_buf = Vec::<u8>::new();
-
     // Pre-allocated burst buffer — declared outside the loop so capacity
     // is retained across bursts instead of re-allocating per burst.
     let mut packets: Vec<Arc<MediaPacket>> = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
@@ -717,21 +715,23 @@ pub async fn start_rtmp_egress(
                                     rtmp_video_packet_can_be_dropped(&payload, packet.is_keyframe);
                                 session.publish_video_data(payload, ts, can_be_dropped)
                             }
-                            MediaType::Audio => {
-                                session.publish_audio_data(payload, ts, false)
-                            }
+                            MediaType::Audio => session.publish_audio_data(payload, ts, false),
                         };
                         match pkt {
                             Ok(ClientSessionResult::OutboundResponse(p)) => {
-                                if socket.write_all(&p.bytes).await.is_err() {
+                                let sent_bytes = p.bytes.len() as u64;
+                                if write_rtmp_pending_bytes(&mut socket, Bytes::from(p.bytes))
+                                    .await
+                                    .is_err()
+                                {
                                     egress_error!("send", "failed to write media packet");
                                     return;
                                 }
                                 if let Some(ref counter) = egress_bytes_sent {
-                                    counter.fetch_add(p.bytes.len() as u64, Ordering::Relaxed);
+                                    counter.fetch_add(sent_bytes, Ordering::Relaxed);
                                 }
                                 if let Some(ref m) = egress_metrics {
-                                    m.record_out(p.bytes.len() as u64);
+                                    m.record_out(sent_bytes);
                                 }
                                 burst_made_progress = true;
                             }
