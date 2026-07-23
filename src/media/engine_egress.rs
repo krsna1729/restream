@@ -479,6 +479,27 @@ impl MediaEngine {
         .is_some()
     }
 
+    pub async fn record_egress_discard_progress_if_current(
+        &self,
+        output_id: &str,
+        registration: &EgressRegistration,
+    ) -> bool {
+        self.with_current_egress(output_id, registration, |egress| {
+            egress
+                .last_progress_ms
+                .store(Self::now_epoch_ms(), Ordering::Relaxed);
+            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::Discarding;
+            *egress
+                .failure_phase
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = None;
+            *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            egress.last_error_ms.store(0, Ordering::Relaxed);
+        })
+        .await
+        .is_some()
+    }
+
     pub async fn egress_has_recorded_progress(&self, output_id: &str) -> bool {
         let egresses = self.egresses.active.read().await;
         egresses

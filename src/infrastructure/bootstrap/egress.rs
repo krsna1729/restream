@@ -251,14 +251,13 @@ impl EgressTask {
                     .await;
                 }
                 OutputUrlScheme::Sink => {
-                    self.engine
-                        .update_egress_phase_if_current(
-                            &self.output_id,
-                            &self.registration,
-                            EgressPhase::Discarding,
-                        )
-                        .await;
-                    self.registration.cancel_token.cancelled().await;
+                    crate::media::egress::backends::sink::start_sink_egress(
+                        self.output_id.clone(),
+                        self.ring.clone(),
+                        self.engine.clone(),
+                        self.registration.clone(),
+                    )
+                    .await;
                 }
                 OutputUrlScheme::Hls | OutputUrlScheme::Http | OutputUrlScheme::Https => {
                     let (store, already_running) =

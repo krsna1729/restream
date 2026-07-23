@@ -462,3 +462,29 @@ async fn egress_has_recorded_progress_only_after_progress_update() {
 
     assert!(engine.egress_has_recorded_progress("out-1").await);
 }
+
+#[tokio::test]
+async fn sink_discard_progress_marks_active_without_network_bytes() {
+    let engine = MediaEngine::new();
+    let registration = engine
+        .register_egress_attempt("sink-1", "pipe-1", "sink://local/discard", None)
+        .await;
+    engine
+        .record_egress_error_if_current("sink-1", &registration, "discard", "temporary stall")
+        .await;
+
+    assert!(
+        engine
+            .record_egress_discard_progress_if_current("sink-1", &registration)
+            .await
+    );
+
+    let snapshot = test_health_snapshot(&engine, &["pipe-1".to_string()], &HashMap::new()).await;
+    let output = &snapshot["pipelines"]["pipe-1"]["outputs"]["sink-1"];
+    assert_eq!(output["protocol"], "sink");
+    assert_eq!(output["phase"], "discarding");
+    assert_eq!(output["totalSize"], 0);
+    assert!(output["failurePhase"].is_null());
+    assert!(output["lastError"].is_null());
+    assert!(!output["lastProgressAt"].is_null());
+}
