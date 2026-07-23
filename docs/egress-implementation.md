@@ -717,6 +717,14 @@ Current branch status:
   introduced TCP readiness polling, moved the hot media publish loop onto
   pending state, added incremental TLS, or provided a default/opt-in runtime
   switch for RTMP or RTMPS.
+- The fabric handoff must carry an immutable RTMP startup snapshot from the
+  application adapter into the media backend: selected audio-track metadata,
+  publish metadata, cached or synthesized sequence headers, codec mode, and
+  raw video parameter sets. The connection-local engine must not query
+  `MediaEngine`, output registries, or application services while visiting a
+  leaf. A `RingFeed` media engine is therefore introduced only together with
+  its nonblocking TCP leaf and startup snapshot, not as an unused standalone
+  abstraction.
 
 ### RTMPS
 
