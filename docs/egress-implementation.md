@@ -692,10 +692,10 @@ Current branch status:
   boundaries across partial writes and accounts remaining application bytes;
   direct partial-write and zero-write socket tests prove its behavior, and the
   legacy session-init, connect-request, session-result, publish metadata, and
-  cached, deferred, refreshed, and steady-state media write paths use it as the
-  first runtime proof. The in-loop server control-response and publish-request
-  paths still use direct writes until client-session result dispatch moves into
-  the explicit connection engine.
+  cached, deferred, refreshed, steady-state media, and live control write paths
+  use it as the first runtime proof. Client-session result dispatch remains in
+  the legacy egress task until it can move with its lifecycle semantics into the
+  explicit connection engine.
 - The explicit RTMP connection engine now owns socket establishment, the
   cancellable client handshake, client-session initialization, and the initial
   connection exchange including initial server-result dispatch; the legacy

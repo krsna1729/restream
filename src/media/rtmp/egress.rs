@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use rml_rtmp::sessions::{ClientSessionEvent, ClientSessionResult, PublishRequestType};
 use rml_rtmp::time::RtmpTimestamp;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tracing::{error, info};
 
 use crate::domain::output_spec::RtmpOutputMode;
@@ -287,7 +287,10 @@ pub async fn start_rtmp_egress(
                 for r in results {
                     match r {
                         ClientSessionResult::OutboundResponse(pkt) => {
-                            if socket.write_all(&pkt.bytes).await.is_err() {
+                            if write_rtmp_pending_bytes(&mut socket, Bytes::from(pkt.bytes))
+                                .await
+                                .is_err()
+                            {
                                 egress_error!("session", "failed to write RTMP control response");
                                 return;
                             }
@@ -303,7 +306,13 @@ pub async fn start_rtmp_egress(
                                             return;
                                         }
                                     };
-                                    if socket.write_all(&pub_pkt.bytes).await.is_err() {
+                                    if write_rtmp_pending_bytes(
+                                        &mut socket,
+                                        Bytes::from(pub_pkt.bytes),
+                                    )
+                                    .await
+                                    .is_err()
+                                    {
                                         egress_error!("publishing", "failed to write publish request");
                                         return;
                                     }
