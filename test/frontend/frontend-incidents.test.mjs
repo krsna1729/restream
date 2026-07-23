@@ -294,8 +294,10 @@ test(
     });
 
     assert.equal(container.dataset.incidentsRouteBody, "v2");
-    assert.match(container.innerHTML, /Incidents|incident snapshots/);
+    assert.match(container.innerHTML, /aria-label="Incident rollup"/);
+    assert.match(container.innerHTML, /id="incidents-route-summary"/);
     assert.match(container.innerHTML, /aria-label="Search incidents and events"/);
+    assert.doesNotMatch(container.innerHTML, /<h1[^>]*>Incidents<\/h1>/);
     assert.doesNotMatch(container.innerHTML, /\son[a-z]+\s*=/i);
   },
 );

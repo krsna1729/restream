@@ -326,16 +326,23 @@ function bindSettingsPanelActions(container: HTMLElement): void {
     });
 }
 
-function renderSettingsRoute(container: HTMLElement): void {
+function renderSettingsRoute(
+  container: HTMLElement,
+  options: { readonly routeChrome?: boolean } = {},
+): void {
   const serverNameValue = escapeHtml(effectiveServerName());
-  container.innerHTML = `
-        <div class="dashboard-page-shell">
-            <div class="flex flex-wrap items-end justify-between gap-3">
+  const routeChrome = options.routeChrome ?? true;
+  const routeHeader = routeChrome
+    ? `<div class="flex flex-wrap items-end justify-between gap-3">
                 <div>
                     <h1 class="dashboard-title">Settings</h1>
                     <p class="dashboard-subtitle">Server, security, and encoding configuration.</p>
                 </div>
-            </div>
+            </div>`
+    : "";
+  container.innerHTML = `
+        <div class="dashboard-page-shell">
+            ${routeHeader}
             ${settingsNavHtml("settings-admin-nav")}
             <p id="settings-route-summary" class="text-base-content/60 text-sm" role="status" aria-live="polite"></p>
 
@@ -644,7 +651,7 @@ function renderSettingsRoute(container: HTMLElement): void {
 }
 
 export function renderDashboardV2SettingsBody(container: HTMLElement): void {
-  renderSettingsRoute(container);
+  renderSettingsRoute(container, { routeChrome: false });
 }
 
 export {

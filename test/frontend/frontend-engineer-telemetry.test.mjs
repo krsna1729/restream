@@ -336,6 +336,10 @@ test(
     assert.equal(container.dataset.telemetryRouteBody, "v2");
     assert.match(container.innerHTML, /Engineer telemetry|Telemetry/);
     assert.match(container.innerHTML, /aria-label="Search telemetry items"/);
+    assert.doesNotMatch(
+      container.innerHTML,
+      /<h1[^>]*>Engineer telemetry<\/h1>/,
+    );
     assert.doesNotMatch(container.innerHTML, /\son[a-z]+\s*=/i);
   },
 );

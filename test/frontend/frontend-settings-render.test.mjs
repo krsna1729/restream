@@ -52,6 +52,7 @@ test(
 
     assert.equal(container.dataset.settingsRouteBody, "v2");
     assert.doesNotMatch(container.innerHTML, /\son[a-z]+\s*=/i);
+    assert.doesNotMatch(container.innerHTML, /<h1[^>]*>Settings<\/h1>/);
     assert.match(container.innerHTML, /data-settings-action="save-server-name"/);
     assert.match(container.innerHTML, /value="Synthetic Restream"/);
     assert.match(container.innerHTML, /id="settings-route-summary"/);

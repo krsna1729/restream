@@ -7,11 +7,7 @@ export function renderDashboardV2StatusBody(
   if (!container.querySelector("#status-versions")) {
     container.innerHTML = `
       <div class="dashboard-page-shell">
-        <div class="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 class="dashboard-title">Status</h1>
-            <p class="dashboard-subtitle">Runtime build, native libraries, and system details.</p>
-          </div>
+        <div class="flex flex-wrap items-center justify-end gap-3">
           <button type="button" class="btn btn-sm btn-outline" id="refresh-status-btn" aria-label="Refresh status data">Refresh</button>
         </div>
         <section class="dashboard-section p-5">

@@ -304,7 +304,7 @@ test("settings route body uses the v2-owned renderer", async () => {
     settingsSource,
     /export function renderDashboardV2SettingsBody\(container: HTMLElement\): void/,
   );
-  assert.match(settingsSource, /renderSettingsRoute\(container\)/);
+  assert.match(settingsSource, /renderSettingsRoute\(container, \{ routeChrome: false \}\)/);
   assert.match(settingsSource, /container\.dataset\.settingsRouteBody = "v2"/);
   assert.match(settingsSource, /mountSettingsV2Disclosures\(container\)/);
 });
@@ -360,7 +360,9 @@ test("incidents route body uses the v2-owned renderer", async () => {
   );
   assert.match(routeBodySource, /container\.dataset\.incidentsRouteBody = "v2"/);
   assert.match(routeBodySource, /renderIncidentsMode\(\{\s*active: true,/);
+  assert.match(routeBodySource, /routeChrome: false/);
   assert.match(routeBodySource, /v2Active: true/);
+  assert.doesNotMatch(incidentsSource, /suppressV2RouteChrome/);
   assert.match(incidentsSource, /export function clearIncidentsMode\(\): void/);
 });
 
@@ -390,6 +392,8 @@ test("telemetry route body uses the v2-owned renderer", async () => {
   );
   assert.match(routeBodySource, /container\.dataset\.telemetryRouteBody = "v2"/);
   assert.match(routeBodySource, /renderEngineerTelemetryMode\(\{\s*active: true,/);
+  assert.match(routeBodySource, /routeChrome: false/);
+  assert.doesNotMatch(telemetrySource, /suppressV2RouteChrome/);
   assert.match(
     telemetrySource,
     /export function clearEngineerTelemetryMode\(\): void/,

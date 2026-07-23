@@ -32,5 +32,6 @@ test(
     assert.doesNotMatch(container.innerHTML, /\son[a-z]+\s*=/i);
     assert.match(container.innerHTML, /id="status-versions"/);
     assert.match(container.innerHTML, /aria-label="Refresh status data"/);
+    assert.doesNotMatch(container.innerHTML, /<h1[^>]*>Status<\/h1>/);
   },
 );

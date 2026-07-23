@@ -36,6 +36,7 @@ interface IncidentsViewOptions {
   containerId?: string;
   pipelines: IncidentPipelineOption[];
   navigateToPipeline: (pipelineId: string) => void;
+  routeChrome?: boolean;
   v2Active?: boolean;
 }
 
@@ -533,6 +534,9 @@ export function renderIncidentsHtml(
   pipelines: IncidentPipelineOption[],
   pipelineId: string,
   searchQuery = "",
+  renderOptions: {
+    readonly routeChrome?: boolean;
+  } = {},
 ): string {
   const search = normalizeSearch(searchQuery);
   const allAlerts = data.alerts?.alerts || [];
@@ -578,7 +582,7 @@ export function renderIncidentsHtml(
   const eventCaption = showEventToggle
     ? `${pluralize(visibleEvents.length, "event")} shown of ${events.length}. Search to isolate lifecycle evidence or show all when reviewing the full timeline.`
     : "";
-  const options = [
+  const pipelineOptions = [
     `<option value="">All pipelines</option>`,
     ...pipelines.map(
       (pipeline) =>
@@ -600,12 +604,16 @@ export function renderIncidentsHtml(
       ? `${pluralize(alertGroups.length, "alert group")} · ${pluralize(events.length, "event")} match "${searchQuery.trim()}"`
       : `${pluralize(alertGroups.length, "alert group")} · ${pluralize(events.length, "event")} visible`
     : `Loading incident matches · ${scopeLabel}`;
+  const routeChrome = renderOptions.routeChrome ?? true;
+  const routeHeader = routeChrome
+    ? `<header class="flex flex-wrap items-end justify-between gap-3">
+      <div><h1 class="text-lg font-semibold">Incidents</h1><p class="text-base-content/60 mt-1 text-sm">Current alerts and recent lifecycle evidence from authoritative snapshots.</p></div>
+      <div class="flex items-center gap-2"><select id="incidents-pipeline-filter" class="select select-sm" aria-label="Filter incidents by pipeline">${pipelineOptions}</select><button id="incidents-refresh-btn" type="button" class="btn btn-sm btn-outline" aria-label="Refresh incident data">Refresh</button></div>
+    </header>`
+    : `<div class="flex flex-wrap items-center justify-end gap-2"><select id="incidents-pipeline-filter" class="select select-sm" aria-label="Filter incidents by pipeline">${pipelineOptions}</select><button id="incidents-refresh-btn" type="button" class="btn btn-sm btn-outline" aria-label="Refresh incident data">Refresh</button></div>`;
 
   return `<div class="mx-auto max-w-7xl space-y-4">
-    <header class="flex flex-wrap items-end justify-between gap-3">
-      <div><h1 class="text-lg font-semibold">Incidents</h1><p class="text-base-content/60 mt-1 text-sm">Current alerts and recent lifecycle evidence from authoritative snapshots.</p></div>
-      <div class="flex items-center gap-2"><select id="incidents-pipeline-filter" class="select select-sm" aria-label="Filter incidents by pipeline">${options}</select><button id="incidents-refresh-btn" type="button" class="btn btn-sm btn-outline" aria-label="Refresh incident data">Refresh</button></div>
-    </header>
+    ${routeHeader}
     <p id="incidents-route-summary" class="text-base-content/60 text-sm" role="status" aria-live="polite">${escapeHtml(summaryText)}</p>
     <div class="flex flex-wrap items-end gap-3">
       <label class="form-control w-full max-w-md">
@@ -765,25 +773,9 @@ function paintIncidents(containerId = incidentsScope.current()): void {
     viewOptions.pipelines,
     selectedPipelineId,
     incidentSearchQuery,
+    { routeChrome: viewOptions.routeChrome },
   );
-  suppressV2RouteChrome(root);
   bindIncidentControls();
-}
-
-function suppressV2RouteChrome(root: HTMLElement): void {
-  if (
-    typeof root.matches !== "function" ||
-    !root.matches("[data-dashboard-v2-owned-route-body]")
-  )
-    return;
-  root
-    .querySelectorAll<HTMLElement>(
-      ":scope > div > header:first-child h1, :scope > div > header:first-child p",
-    )
-    .forEach((element) => {
-      element.hidden = true;
-      element.setAttribute("aria-hidden", "true");
-    });
 }
 
 export async function refreshIncidents(force = false): Promise<void> {

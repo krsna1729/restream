@@ -334,6 +334,13 @@ async function refreshMediaLibraryIfCurrent(
 function mountMediaShell(container: HTMLElement): void {
   if (mediaShellMounted && document.getElementById("media-library-root"))
     return;
+  const routeChrome = container.dataset.mediaRouteBody !== "v2";
+  const routeHeader = routeChrome
+    ? `<div>
+                    <h1 class="dashboard-title">Media Library</h1>
+                    <p class="dashboard-subtitle">Recordings and file-ingest sources from the configured media directory.</p>
+                </div>`
+    : "";
   container.innerHTML = `<div class="space-y-4" id="media-library-root">
         <div class="grid gap-3 md:grid-cols-3">
             <section class="dashboard-stat-card">
@@ -350,10 +357,7 @@ function mountMediaShell(container: HTMLElement): void {
         </div>
         <section class="dashboard-section">
             <div class="dashboard-section-header">
-                <div>
-                    <h1 class="dashboard-title">Media Library</h1>
-                    <p class="dashboard-subtitle">Recordings and file-ingest sources from the configured media directory.</p>
-                </div>
+                ${routeHeader}
                 <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
                     <label class="input input-sm input-bordered flex min-w-56 max-w-80 flex-1 items-center gap-2">
                         <span class="text-base-content/50 text-xs font-semibold uppercase">Search</span>

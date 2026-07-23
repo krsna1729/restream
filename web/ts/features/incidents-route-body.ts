@@ -18,6 +18,7 @@ export function renderDashboardV2IncidentsBody(
     containerId,
     navigateToPipeline: options.navigateToPipeline,
     pipelines: options.pipelines,
+    routeChrome: false,
     v2Active: true,
   });
   const container = document.getElementById(containerId);

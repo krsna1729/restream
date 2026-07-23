@@ -47,5 +47,6 @@ test(
     assert.match(container.innerHTML, /id="media-library-root"/);
     assert.match(container.innerHTML, /aria-label="Search media library"/);
     assert.match(container.innerHTML, /aria-label="Upload media file"/);
+    assert.doesNotMatch(container.innerHTML, /<h1[^>]*>Media Library<\/h1>/);
   },
 );

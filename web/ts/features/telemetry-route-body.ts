@@ -16,6 +16,7 @@ export function renderDashboardV2TelemetryBody(
     active: true,
     containerId,
     pipelines: options.pipelines,
+    routeChrome: false,
   });
   const container = document.getElementById(containerId);
   if (container) container.dataset.telemetryRouteBody = "v2";

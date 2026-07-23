@@ -160,15 +160,6 @@
     );
   }
 
-  [data-dashboard-v2-owned-route-body] > .dashboard-page-shell > .flex:first-child > div:first-child {
-    display: none;
-  }
-
-  [data-dashboard-v2-owned-route-body] > .dashboard-title:first-child,
-  [data-dashboard-v2-owned-route-body] > h1:first-child,
-  [data-dashboard-v2-owned-route-body] > p[role="status"]:first-of-type {
-    display: none;
-  }
 }
 
 #dashboard-v2-operate-panel {
