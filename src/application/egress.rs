@@ -4,8 +4,9 @@
 use crate::application::models::Output;
 use crate::domain::output_spec::{EgressProtocol, OutputUrlScheme, VideoCodecKind};
 use crate::domain::stage::{StageKey, StageKind};
-use crate::media::egress::FeedId;
 use crate::media::egress::journal::{FeedEpoch, TsFeed};
+use crate::media::egress::policy::LeafPolicy;
+use crate::media::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::engine::MediaEngine;
 use crate::media::ring_buffer::RingBuffer;
 use crate::planner::PlannedOutput;
@@ -167,6 +168,18 @@ pub async fn prepare_srt_fabric_feed(
     }
 }
 
+pub fn srt_fabric_output_spec(output: &Output, generation: u64, feed_id: FeedId) -> OutputSpec {
+    OutputSpec {
+        id: OutputId::new(output.id.clone()),
+        generation,
+        feed: feed_id,
+        protocol: ProtocolSpec::Srt {
+            url: output.url.clone(),
+        },
+        policy: LeafPolicy::default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +274,29 @@ mod tests {
         assert_eq!(first_feed.feed_id, second_feed.feed_id);
         assert_ne!(first_feed.feed_id, third_feed.feed_id);
         assert_eq!(first_feed.feed.head_sequence(), 0);
+    }
+
+    #[test]
+    fn srt_fabric_output_spec_uses_output_identity_and_prepared_feed() {
+        let output = test_output(
+            "pipe-srt-fabric-spec",
+            OutputConfig::source(),
+            "srt://localhost:9000?mode=caller",
+        );
+        let spec = srt_fabric_output_spec(&output, 7, FeedId::new("feed-srt-source"));
+
+        assert_eq!(spec.id.as_str(), "pipe-srt-fabric-spec-out");
+        assert_eq!(spec.generation, 7);
+        assert_eq!(spec.feed.as_str(), "feed-srt-source");
+        match spec.protocol {
+            crate::media::egress::ProtocolSpec::Srt { url } => {
+                assert_eq!(url, "srt://localhost:9000?mode=caller");
+            }
+            crate::media::egress::ProtocolSpec::Rtmp { .. }
+            | crate::media::egress::ProtocolSpec::Sink => {
+                panic!("SRT fabric spec must carry the SRT protocol")
+            }
+        }
     }
 
     #[tokio::test]
