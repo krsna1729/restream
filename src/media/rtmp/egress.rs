@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use rml_rtmp::sessions::{
-    ClientSession, ClientSessionConfig, ClientSessionEvent, ClientSessionResult, PublishRequestType,
+    ClientSession, ClientSessionEvent, ClientSessionResult, PublishRequestType,
 };
 use rml_rtmp::time::RtmpTimestamp;
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -34,10 +34,7 @@ use super::egress_packets::{
 };
 use super::egress_transport::{parse_rtmp_url, rtmp_sender_quality};
 use super::egress_write::write_rtmp_pending_bytes;
-use super::enhanced::{
-    cache_hevc_parameter_sets, enhanced_rtmp_connect_packet,
-    raw_packet_starts_with_hevc_parameter_set,
-};
+use super::enhanced::{cache_hevc_parameter_sets, raw_packet_starts_with_hevc_parameter_set};
 use super::flv::{FlvVideoPacketKind, classify_flv_video_packet};
 use super::timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
 
@@ -189,67 +186,28 @@ pub async fn start_rtmp_egress(
         egress_error!("handshake", error);
         return;
     }
-    let RtmpEgressConnection {
-        parts,
-        mut socket,
-        remaining,
-    } = connection;
-
-    // Initialize ClientSession with tcUrl for MediaMTX compatibility
-    let mut config = ClientSessionConfig::new();
-    let scheme = if parts.tls { "rtmps" } else { "rtmp" };
-    config.tc_url = Some(format!(
-        "{}://{}:{}/{}",
-        scheme, parts.host, parts.port, parts.app
-    ));
-    config.chunk_size = engine.config.rtmp_egress_chunk_size;
-    let connect_config = config.clone();
-    let (mut session, initial_results) = match ClientSession::new(config) {
-        Ok(s) => s,
-        Err(e) => {
-            egress_error!("session", format!("{:?}", e));
-            return;
-        }
-    };
-
-    for res in initial_results {
-        if let ClientSessionResult::OutboundResponse(pkt) = res
-            && write_rtmp_pending_bytes(&mut socket, Bytes::from(pkt.bytes))
-                .await
-                .is_err()
-        {
-            egress_error!("session", "failed to write session init");
-            return;
-        }
-    }
-
-    // Request connection
-    egress_phase!(EgressPhase::ConnectingApp);
-    let conn_pkt = match session.request_connection(parts.app.clone()) {
-        Ok(ClientSessionResult::OutboundResponse(p)) => p,
-        _ => {
-            egress_error!("connect_app", "failed to build connect request");
-            return;
-        }
-    };
-    let conn_bytes = if enhanced_rtmp_connect {
-        match enhanced_rtmp_connect_packet(&connect_config, &parts.app) {
-            Ok(bytes) => bytes,
+    let mut session_ready =
+        match connection.initialize_client_session(engine.config.rtmp_egress_chunk_size) {
+            Ok(session_ready) => session_ready,
             Err(error) => {
-                egress_error!("connect_app", error);
+                egress_error!("session", error);
                 return;
             }
-        }
-    } else {
-        conn_pkt.bytes
-    };
-    if write_rtmp_pending_bytes(&mut socket, Bytes::from(conn_bytes))
-        .await
-        .is_err()
-    {
-        egress_error!("connect_app", "failed to write connect request");
+        };
+    if session_ready.write_initial_results().await.is_err() {
+        egress_error!("session", "failed to write session init");
         return;
     }
+
+    egress_phase!(EgressPhase::ConnectingApp);
+    if let Err(error) = session_ready
+        .request_connection(enhanced_rtmp_connect)
+        .await
+    {
+        egress_error!("connect_app", error);
+        return;
+    }
+    let (parts, mut socket, remaining, mut session) = session_ready.into_legacy_parts();
 
     let mut buffer = vec![0u8; 4096];
     if !remaining.is_empty() {

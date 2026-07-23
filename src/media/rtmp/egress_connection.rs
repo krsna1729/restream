@@ -1,9 +1,13 @@
 use std::io;
 use std::time::Duration;
 
+use bytes::Bytes;
+use rml_rtmp::sessions::{ClientSession, ClientSessionConfig, ClientSessionResult};
 use tokio_util::sync::CancellationToken;
 
 use super::egress_transport::{RtmpEgressStream, RtmpUrlParts, connect_rtmp_egress_stream};
+use super::egress_write::write_rtmp_pending_bytes;
+use super::enhanced::enhanced_rtmp_connect_packet;
 use super::handshake::perform_client_handshake;
 
 const RTMP_EGRESS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -12,6 +16,15 @@ pub(super) struct RtmpEgressConnection {
     pub(super) parts: RtmpUrlParts,
     pub(super) socket: RtmpEgressStream,
     pub(super) remaining: Vec<u8>,
+}
+
+pub(super) struct RtmpEgressSession {
+    parts: RtmpUrlParts,
+    socket: RtmpEgressStream,
+    remaining: Vec<u8>,
+    session: ClientSession,
+    connect_config: ClientSessionConfig,
+    initial_results: Vec<ClientSessionResult>,
 }
 
 impl RtmpEgressConnection {
@@ -35,5 +48,63 @@ impl RtmpEgressConnection {
         .await
         .map_err(|_| "RTMP egress handshake timed out".to_string())??;
         Ok(())
+    }
+
+    pub(super) fn initialize_client_session(
+        self,
+        chunk_size: u32,
+    ) -> Result<RtmpEgressSession, String> {
+        let mut config = ClientSessionConfig::new();
+        let scheme = if self.parts.tls { "rtmps" } else { "rtmp" };
+        config.tc_url = Some(format!(
+            "{}://{}:{}/{}",
+            scheme, self.parts.host, self.parts.port, self.parts.app
+        ));
+        config.chunk_size = chunk_size;
+        let connect_config = config.clone();
+        let (session, initial_results) =
+            ClientSession::new(config).map_err(|error| format!("{error:?}"))?;
+
+        Ok(RtmpEgressSession {
+            parts: self.parts,
+            socket: self.socket,
+            remaining: self.remaining,
+            session,
+            connect_config,
+            initial_results,
+        })
+    }
+}
+
+impl RtmpEgressSession {
+    pub(super) async fn write_initial_results(&mut self) -> io::Result<()> {
+        for result in self.initial_results.drain(..) {
+            if let ClientSessionResult::OutboundResponse(packet) = result {
+                write_rtmp_pending_bytes(&mut self.socket, Bytes::from(packet.bytes)).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) async fn request_connection(&mut self, enhanced: bool) -> Result<(), String> {
+        let packet = match self.session.request_connection(self.parts.app.clone()) {
+            Ok(ClientSessionResult::OutboundResponse(packet)) => packet,
+            _ => return Err("failed to build connect request".to_string()),
+        };
+        let bytes = if enhanced {
+            enhanced_rtmp_connect_packet(&self.connect_config, &self.parts.app)?
+        } else {
+            packet.bytes
+        };
+        write_rtmp_pending_bytes(&mut self.socket, Bytes::from(bytes))
+            .await
+            .map_err(|_| "failed to write connect request".to_string())?;
+        Ok(())
+    }
+
+    pub(super) fn into_legacy_parts(
+        self,
+    ) -> (RtmpUrlParts, RtmpEgressStream, Vec<u8>, ClientSession) {
+        (self.parts, self.socket, self.remaining, self.session)
     }
 }
