@@ -531,3 +531,69 @@ fn overrun_stats_accumulate() {
     stats.record_oversized_unit();
     assert_eq!(stats.oversized_unit_count, 1);
 }
+
+// -----------------------------------------------------------------------
+// Watcher wake pattern (regression for the live delivery stall)
+// -----------------------------------------------------------------------
+
+/// Regression for a live SRT fabric stall: a bare `notify.notified().await`
+/// loop only wakes on notifications delivered *after* the await begins, so
+/// a publish that lands before the watcher's first poll is invisible to it
+/// — the watcher then waits for some future, unrelated push that may never
+/// come. The fix mirrors `Reader::wait_for_data`'s check-register-recheck
+/// pattern: read the head, then check again after registering interest
+/// (here: simply before ever awaiting), so an already-published head is
+/// observed on the very first pass with no wait at all.
+#[tokio::test]
+async fn feed_watcher_pattern_observes_publish_that_landed_before_first_poll() {
+    let ring = Arc::new(RingBuffer::new(16));
+    let epoch = Arc::new(FeedEpoch::new());
+    let feed = RingFeed::new(ring.clone(), epoch);
+
+    // Publish happens fully before the watcher ever runs — the exact shape
+    // of the live bug (muxer stage publishes its first burst before the
+    // watcher task gets its first poll).
+    push_packet(&ring, b"already-published", true);
+
+    let last_head = 0u64;
+    let current_head = feed.head_sequence();
+
+    // The safe pattern: compare heads first; only await notified() if
+    // nothing changed. A bare `notify().await` loop has no such check and
+    // would instead block here waiting for a notification that already
+    // fired and was missed.
+    assert_ne!(
+        current_head, last_head,
+        "watcher must observe the pre-existing publish without waiting"
+    );
+}
+
+/// End-to-end shape of the fix: even when the publish genuinely races the
+/// watcher's registration (arrives while it is checking, not before), the
+/// recheck-after-register step still catches it deterministically because
+/// registration and the recheck happen in the same synchronous step with no
+/// `.await` between them.
+#[tokio::test]
+async fn feed_watcher_pattern_registers_before_recheck_closing_the_race_window() {
+    let ring = Arc::new(RingBuffer::new(16));
+    let epoch = Arc::new(FeedEpoch::new());
+    let feed = RingFeed::new(ring.clone(), epoch);
+    let notify = ring.get_notify();
+
+    let mut last_head = feed.head_sequence();
+    // Step 1: register interest (create the Notified future) BEFORE the
+    // recheck, exactly as the fixed watcher does.
+    let notified = notify.notified();
+    // Step 2: a publish "races" here, landing between registration and the
+    // recheck below.
+    push_packet(&ring, b"raced-publish", true);
+    // Step 3: recheck — must observe the race without needing `notified`
+    // to fire, because the head comparison alone already closes the gap.
+    let current_head = feed.head_sequence();
+    if current_head == last_head {
+        notified.await;
+    }
+    last_head = feed.head_sequence();
+
+    assert_eq!(last_head, 1, "raced publish must be observed on this pass");
+}

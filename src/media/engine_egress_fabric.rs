@@ -1,5 +1,6 @@
 use crate::media::egress::command::{EgressCommand, FeedId};
 use crate::media::egress::factory::{SrtFabricShardGroupError, spawn_srt_fabric_shard_group};
+use crate::media::egress::feed::EgressFeed;
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
@@ -52,16 +53,36 @@ impl MediaEngine {
             // watcher per feed runtime, one gate per shard, at most one
             // outstanding wake per (feed, shard).
             let wake_handles = runtime.feed_wake_handles();
-            let notify = feed.notify_handle();
+            // Clone the reader side (shared ring + epoch) rather than only
+            // the Notify handle: `notify_waiters()` only wakes waiters that
+            // were already polling `.notified()` at the moment it fires, so
+            // a bare `notify.notified().await` loop can miss the publish
+            // that happens between loop iterations. Following the same
+            // check-register-recheck-then-await pattern as
+            // `Reader::wait_for_data` (src/media/ring_buffer/reader.rs)
+            // closes that window: the head is read again after registering
+            // interest, so a publish landing in the gap is still observed
+            // this iteration instead of being lost until some later push.
+            let watcher_feed = feed.clone_reader();
+            let notify = watcher_feed.notify_handle();
+            let watcher_feed_id = feed_id.clone();
             let watcher = tokio::spawn(async move {
+                tracing::info!(feed_id = %watcher_feed_id, shard_count = wake_handles.len(), "srt fabric wake watcher started");
+                let mut last_head = watcher_feed.head_sequence();
                 loop {
-                    notify.notified().await;
+                    let notified = notify.notified();
+                    let current_head = watcher_feed.head_sequence();
+                    if current_head == last_head {
+                        notified.await;
+                    }
+                    last_head = watcher_feed.head_sequence();
                     for handle in &wake_handles {
                         let _ = handle.deliver();
                     }
                 }
             });
 
+            tracing::info!(feed_id = %feed_id, "srt fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);
             registry.feed_watchers.insert(feed_id.clone(), watcher);
             true

@@ -709,8 +709,23 @@ Current branch status:
      live gate's failure pattern (sockets connected, zero `packetsOut`, all
      stalled) is consistent with an SRT connect-handshake delay long enough
      for the shared TS ring to wrap past retention before the first visit.
-  Earlier ramp captures measured resources but not delivery and are
-  re-recorded after these fixes.
+  4. Root cause of the persisting stall after fixes 1-3: the feed watcher
+     used a bare `notify.notified().await` loop, which only wakes on
+     notifications delivered *after* the await begins — `notify_waiters()`
+     wakes only waiters already polling at the moment it fires. A publish
+     landing before the watcher's first poll (the muxer stage's first burst
+     racing runtime creation) was invisible to it, and the watcher then
+     waited on some unrelated future push. Fixed by mirroring
+     `Reader::wait_for_data`'s check-register-recheck pattern: read the
+     feed head, register interest, read the head again, and only await if
+     nothing changed — closing the exact race window a bare notify loop
+     leaves open.
+  Confirmed by a legacy-path control run of the same srt-crypto-matrix
+  scenario without the fabric flag, which passed cleanly (20/20, then
+  60/60 on a later pipeline) — isolating all four defects to the fabric
+  wake-delivery path rather than the test scenario itself. Earlier ramp
+  captures measured resources but not delivery and are re-recorded after
+  these fixes.
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
   fault.output-stall passed with a permanently stalled sink isolated beside
   32 healthy siblings while SRT outputs ran fabric-owned. This is
