@@ -4,6 +4,8 @@
 use crate::application::models::Output;
 use crate::domain::output_spec::{EgressProtocol, OutputUrlScheme, VideoCodecKind};
 use crate::domain::stage::{StageKey, StageKind};
+use crate::media::egress::FeedId;
+use crate::media::egress::journal::{FeedEpoch, TsFeed};
 use crate::media::engine::MediaEngine;
 use crate::media::ring_buffer::RingBuffer;
 use crate::planner::PlannedOutput;
@@ -17,6 +19,12 @@ pub struct PreparedOutput {
     pub media_stage_key: StageKey,
     /// Terminal graph stage reported in dependency status.
     pub terminal_stage_key: StageKey,
+}
+
+pub struct PreparedSrtFabricFeed {
+    pub feed_id: FeedId,
+    pub feed: Arc<TsFeed>,
+    pub muxer_stage_key: String,
 }
 
 /// Prepare the output ring and graph terminal stage for dependency tracking.
@@ -137,6 +145,28 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
     }
 }
 
+pub async fn prepare_srt_fabric_feed(
+    engine: &Arc<MediaEngine>,
+    output: &Output,
+    prepared: &PreparedOutput,
+    attempt_id: u64,
+) -> PreparedSrtFabricFeed {
+    let encoding = prepared.media_stage_key.kind.to_string();
+    let muxer_stage_key = engine
+        .assign_srt_egress_muxer_stage(&output.pipeline_id, &encoding, &output.id, attempt_id)
+        .await;
+    let shared_muxer = engine
+        .get_or_create_ts_muxer_stage(&output.pipeline_id, &muxer_stage_key, prepared.ring.clone())
+        .await;
+    let feed_id = FeedId::new(format!("srt:{}:{muxer_stage_key}", output.pipeline_id));
+
+    PreparedSrtFabricFeed {
+        feed_id,
+        feed: Arc::new(TsFeed::new(&shared_muxer, Arc::new(FeedEpoch::new()))),
+        muxer_stage_key,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +174,7 @@ mod tests {
     use crate::domain::output_spec::{OutputConfig, RtmpOutputMode};
     use crate::domain::stage::StageKind;
     use crate::domain::state::DesiredOutputState;
+    use crate::media::egress::EgressFeed;
     use crate::media::metadata::VideoMeta;
 
     fn test_output(pipeline_id: &str, config: OutputConfig, url: &str) -> Output {
@@ -184,6 +215,52 @@ mod tests {
             prepared.terminal_stage_key,
             StageKey::new("pipe-source", StageKind::source())
         );
+    }
+
+    #[tokio::test]
+    async fn prepare_srt_fabric_feed_uses_shared_muxer_assignment_identity() {
+        let engine = Arc::new(MediaEngine::new_with_config(Arc::new(crate::AppConfig {
+            srt_egress_muxer_max_outputs_per_shard: 2,
+            srt_egress_muxer_max_shards: 8,
+            ..Default::default()
+        })));
+        let mut first = test_output(
+            "pipe-srt-fabric-feed",
+            OutputConfig::source(),
+            "srt://example:9000",
+        );
+        first.id = "out-1".to_string();
+        let mut second = test_output(
+            "pipe-srt-fabric-feed",
+            OutputConfig::source(),
+            "srt://example:9001",
+        );
+        second.id = "out-2".to_string();
+        let mut third = test_output(
+            "pipe-srt-fabric-feed",
+            OutputConfig::source(),
+            "srt://example:9002",
+        );
+        third.id = "out-3".to_string();
+
+        let first_prepared = prepare_output_ring(&engine, &first).await;
+        let second_prepared = prepare_output_ring(&engine, &second).await;
+        let third_prepared = prepare_output_ring(&engine, &third).await;
+
+        let first_feed = prepare_srt_fabric_feed(&engine, &first, &first_prepared, 1).await;
+        let second_feed = prepare_srt_fabric_feed(&engine, &second, &second_prepared, 1).await;
+        let third_feed = prepare_srt_fabric_feed(&engine, &third, &third_prepared, 1).await;
+
+        assert_eq!(first_feed.muxer_stage_key, "source:srt-mux-shard:0");
+        assert_eq!(second_feed.muxer_stage_key, "source:srt-mux-shard:0");
+        assert_eq!(third_feed.muxer_stage_key, "source:srt-mux-shard:1");
+        assert_eq!(
+            first_feed.feed_id.as_str(),
+            "srt:pipe-srt-fabric-feed:source:srt-mux-shard:0"
+        );
+        assert_eq!(first_feed.feed_id, second_feed.feed_id);
+        assert_ne!(first_feed.feed_id, third_feed.feed_id);
+        assert_eq!(first_feed.feed.head_sequence(), 0);
     }
 
     #[tokio::test]
