@@ -495,6 +495,25 @@ native-hang replacement.
 The fake backend must run the full same-shard and cross-shard isolation matrix
 on actual shard threads with deterministic bounded completion.
 
+Current branch status — the gate is met by deterministic fake-backend tests on
+real shard threads (`src/media/egress/shard/tests/`), recorded here per
+matrix row:
+
+| Matrix row | Proof |
+|---|---|
+| Headline: healthy population + one blocked + one throttled, same shard | `leaf_isolation::healthy_population_progresses_beside_blocked_and_throttled_leaves_same_shard` |
+| Headline cross-shard control | `leaf_isolation::healthy_shard_unaffected_by_blocked_and_throttled_leaves_on_other_shard` |
+| Blocked leaf leaves runnable set, same/cross shard | `leaf_isolation::blocked_leaf_*` |
+| Slow leaf cannot starve neighbors | `sink::slow_sink_leaf_does_not_starve_network_leaf_on_same_shard_thread` |
+| Command flood does not starve media or ready work | `runtime::command_batch_budget_*` |
+| Timer flood does not starve media or removal | `runtime::timer_batch_budget_*` |
+| Readiness flood does not starve removal or shutdown | `runtime::readiness_batch_budget_*`, `group_supervision::ready_flood_on_one_shard_does_not_starve_another_shard_command` |
+| Stale or removed-output timers are ignored | `runtime::stale_timer_generation_is_ignored_on_shard_thread`, `runtime::removed_output_timer_is_ignored_on_shard_thread` |
+| Command queue saturation is visible and converges | `group::manager_dispatch_to_group_converges_after_shard_queue_full` |
+| Shard panic contained; only its outputs replayed | `group_supervision::shard_group_contains_panic_to_assigned_shard`, `group::manager_replays_only_replaced_shard_outputs_after_panic` |
+| Stalled heartbeat warns without replacement | `group_supervision::stalled_shard_heartbeat_does_not_trigger_panic_replacement` |
+| No thread leak across repeated startup/shutdown | `runtime::repeated_shard_group_startup_shutdown_joins_every_thread` |
+
 ## Phase 4a: Sink backend
 
 ### Objective
