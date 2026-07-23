@@ -690,8 +690,9 @@ Current branch status:
   ownership moves off the legacy sender task.
 - RTMP pending-write state now has a bounded queue that preserves packet
   boundaries across partial writes and accounts remaining application bytes;
-  the legacy connect-request and session-result write paths use it as the
-  first runtime proof.
+  direct partial-write and zero-write socket tests prove its behavior, and the
+  legacy session-init, connect-request, and session-result write paths use it
+  as the first runtime proof.
 - The legacy RTMP sender remains the runtime owner. Phase 5 has not yet
   introduced TCP readiness polling, moved the hot media publish loop onto
   pending state, added incremental TLS, or provided a default/opt-in runtime

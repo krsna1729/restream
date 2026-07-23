@@ -221,7 +221,9 @@ pub async fn start_rtmp_egress(
 
     for res in initial_results {
         if let ClientSessionResult::OutboundResponse(pkt) = res
-            && socket.write_all(&pkt.bytes).await.is_err()
+            && write_rtmp_pending_bytes(&mut socket, Bytes::from(pkt.bytes))
+                .await
+                .is_err()
         {
             egress_error!("session", "failed to write session init");
             return;

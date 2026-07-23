@@ -97,6 +97,43 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    #[derive(Default)]
+    struct PartialWriter {
+        bytes: Vec<u8>,
+        max_write: usize,
+    }
+
+    impl PartialWriter {
+        fn with_max_write(max_write: usize) -> Self {
+            Self {
+                bytes: Vec::new(),
+                max_write,
+            }
+        }
+    }
+
+    impl AsyncWrite for PartialWriter {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let written = buf.len().min(self.max_write);
+            self.bytes.extend_from_slice(&buf[..written]);
+            Poll::Ready(Ok(written))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
 
     #[test]
     fn rtmp_write_queue_advances_across_packet_boundaries() {
@@ -146,5 +183,29 @@ mod tests {
         );
         assert_eq!(queue.pending_bytes(), 3);
         assert_eq!(queue.front_chunk(), Some(&b"abc"[..]));
+    }
+
+    #[tokio::test]
+    async fn rtmp_pending_write_preserves_bytes_across_partial_socket_writes() {
+        let mut writer = PartialWriter::with_max_write(2);
+
+        let written = write_rtmp_pending_bytes(&mut writer, Bytes::from_static(b"abcde"))
+            .await
+            .unwrap();
+
+        assert_eq!(written, 5);
+        assert_eq!(writer.bytes, b"abcde");
+    }
+
+    #[tokio::test]
+    async fn rtmp_pending_write_rejects_zero_byte_socket_writes() {
+        let mut writer = PartialWriter::with_max_write(0);
+
+        let error = write_rtmp_pending_bytes(&mut writer, Bytes::from_static(b"abc"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::WriteZero);
+        assert!(writer.bytes.is_empty());
     }
 }
