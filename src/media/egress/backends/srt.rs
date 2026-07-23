@@ -557,7 +557,8 @@ where
             spec.generation,
             spec.feed,
             LeafLimits::from_policy(&spec.policy),
-        );
+        )
+        .with_progress_sink(spec.progress.clone());
         let connect_spec = SrtFabricEgressConnectSpec::from_url(
             target_url,
             duration_millis_u64(spec.policy.connect_timeout),

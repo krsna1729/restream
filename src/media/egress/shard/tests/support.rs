@@ -351,6 +351,7 @@ pub(super) fn output_spec(id: &str) -> OutputSpec {
             tls: false,
         },
         policy: LeafPolicy::default(),
+        progress: Default::default(),
     }
 }
 

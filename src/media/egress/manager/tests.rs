@@ -16,6 +16,7 @@ fn spec(id: &str) -> OutputSpec {
             tls: false,
         },
         policy: LeafPolicy::default(),
+        progress: Default::default(),
     }
 }
 
@@ -26,6 +27,7 @@ fn sink_spec(id: &str, generation: u64) -> OutputSpec {
         feed: FeedId::new("feed-1"),
         protocol: ProtocolSpec::Sink,
         policy: LeafPolicy::default(),
+        progress: Default::default(),
     }
 }
 

@@ -154,6 +154,7 @@ mod tests {
             feed: FeedId::new("feed-1"),
             protocol: ProtocolSpec::Sink,
             policy: LeafPolicy::default(),
+            progress: Default::default(),
         }
     }
 

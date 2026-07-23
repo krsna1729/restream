@@ -195,12 +195,26 @@ impl EgressReconciler {
                 registration.attempt_id,
             )
             .await;
+            let mut spec = crate::application::egress::srt_fabric_output_spec(
+                output,
+                registration.attempt_id,
+                feed.feed_id.clone(),
+            );
+            if let Some(sink) = self
+                .engine
+                .with_active_egress(&output.id, |egress| {
+                    crate::media::egress::leaf::EgressProgressSink {
+                        bytes_sent: Some(egress.bytes_sent.clone()),
+                        last_progress_ms: Some(egress.last_progress_ms.clone()),
+                        ..Default::default()
+                    }
+                })
+                .await
+            {
+                spec.progress = sink;
+            }
             Some(SrtFabricTask {
-                spec: crate::application::egress::srt_fabric_output_spec(
-                    output,
-                    registration.attempt_id,
-                    feed.feed_id.clone(),
-                ),
+                spec,
                 feed_id: feed.feed_id,
                 feed: feed.feed,
             })

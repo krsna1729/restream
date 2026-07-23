@@ -32,6 +32,7 @@ fn output_spec(id: &str, generation: u64, protocol: ProtocolSpec) -> OutputSpec 
         feed: FeedId::new("feed-srt"),
         protocol,
         policy: LeafPolicy::default(),
+        progress: Default::default(),
     }
 }
 
@@ -844,8 +845,15 @@ fn feed_wake_drives_connected_leaf_to_send_on_shard_thread() {
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
         FakeSocketConfigurator::default(),
     );
+    let bytes_out = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let last_progress_ms = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let sink = crate::media::egress::leaf::EgressProgressSink {
+        bytes_sent: Some(bytes_out.clone()),
+        last_progress_ms: Some(last_progress_ms.clone()),
+        ..Default::default()
+    };
     let leaf = SrtFabricLeaf::new(
-        common(7),
+        common(7).with_progress_sink(sink),
         Box::new(probe.sender) as Box<dyn SrtMessageSender + Send>,
     );
     let key = backend.add_leaf(42, leaf).unwrap();
@@ -878,4 +886,9 @@ fn feed_wake_drives_connected_leaf_to_send_on_shard_thread() {
     handle.shutdown_and_join();
     let sends = probe.sends.lock().unwrap();
     assert_eq!(&*sends[0], b"payload-1".as_slice());
+
+    // Status publication: the shard published progress into the
+    // application-side counters without any app-thread involvement.
+    assert!(bytes_out.load(std::sync::atomic::Ordering::Relaxed) >= sends[0].len() as u64);
+    assert!(last_progress_ms.load(std::sync::atomic::Ordering::Relaxed) > 0);
 }

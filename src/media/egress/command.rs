@@ -112,6 +112,8 @@ pub struct OutputSpec {
     pub protocol: ProtocolSpec,
     /// Operational policy: timeouts, limits, retry bounds.
     pub policy: crate::media::egress::policy::LeafPolicy,
+    /// Application status counters the shard publishes progress into.
+    pub progress: crate::media::egress::leaf::EgressProgressSink,
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +184,7 @@ mod tests {
                 tls: false,
             },
             policy: LeafPolicy::default(),
+            progress: Default::default(),
         }
     }
 

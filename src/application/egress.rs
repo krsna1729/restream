@@ -179,6 +179,7 @@ pub fn srt_fabric_output_spec(output: &Output, generation: u64, feed_id: FeedId)
             url: output.url.clone(),
         },
         policy: LeafPolicy::default(),
+        progress: Default::default(),
     }
 }
 
@@ -197,6 +198,7 @@ pub fn recirculation_fabric_output_spec(
             target_input_id: target.input_id().to_string(),
         },
         policy: LeafPolicy::default(),
+        progress: Default::default(),
     }
 }
 

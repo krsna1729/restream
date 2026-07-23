@@ -55,6 +55,12 @@ fn apply_progress_to_common(common: &mut LeafCommon, progress: &EngineProgress) 
     match progress {
         EngineProgress::Progress { bytes, units, .. } => {
             common.progress.record_send(*bytes, *units);
+            if *bytes > 0 || *units > 0 {
+                let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                common
+                    .progress_sink
+                    .record_sent(*bytes as u64, *units as u64, now_ms);
+            }
             common.schedule.mark_serviced();
             VisitDecision::Continue
         }

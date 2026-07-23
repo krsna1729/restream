@@ -125,6 +125,7 @@ pub fn rtmp_fabric_output_spec(output: &Output, generation: u64, feed_id: FeedId
             ),
         },
         policy: LeafPolicy::default(),
+        progress: Default::default(),
     }
 }
 

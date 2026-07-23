@@ -101,6 +101,7 @@ fn output_spec(id: &str, feed: &FeedId) -> OutputSpec {
         feed: feed.clone(),
         protocol: ProtocolSpec::Sink,
         policy: LeafPolicy::default(),
+        progress: Default::default(),
     }
 }
 

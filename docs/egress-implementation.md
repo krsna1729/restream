@@ -688,6 +688,12 @@ Current branch status:
   and 4 shards (47.4%), so the remaining CPU gap versus legacy is
   per-message path cost, not shard overhead; attribution belongs to the
   Phase 7 perf sweep.
+- Status publication is wired: `EgressProgressSink` carries lock-free
+  application counter handles (`bytesOut`, last-progress stamp) on
+  `LeafCommon`, the common visit path records every progress result into
+  them, and bootstrap populates the handles from the output's egress
+  registration — fabric outputs now report progress through the same
+  `/api/v1/engine/health` surface as legacy.
 - Live-path defect found and fixed by the crypto-matrix gate: the fabric
   connected sockets but never delivered media, because nothing on the live
   path scheduled ready work (visits only ran from deterministic test

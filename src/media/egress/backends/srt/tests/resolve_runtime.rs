@@ -18,6 +18,7 @@ fn output_spec(id: &str, generation: u64, protocol: ProtocolSpec) -> OutputSpec 
         feed: FeedId::new("feed-srt"),
         protocol,
         policy: LeafPolicy::default(),
+        progress: Default::default(),
     }
 }
 

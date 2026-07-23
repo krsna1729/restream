@@ -164,6 +164,54 @@ pub struct LeafCommon {
     /// Application bytes currently pending on this leaf (headers + payload
     /// retained but not yet accepted by the transport).
     pub pending_application_bytes: usize,
+    /// Lock-free handles to the application's output status counters; the
+    /// shard thread publishes progress here without locks or allocation.
+    pub progress_sink: EgressProgressSink,
+}
+
+/// Lock-free publication of leaf progress into application-visible output
+/// status.  Every handle is an optional shared atomic so fakes and tests can
+/// omit them; recording is a handful of relaxed atomic adds and stores.
+#[derive(Clone, Default)]
+pub struct EgressProgressSink {
+    /// Total bytes sent for the output (status `bytesOut` source).
+    pub bytes_sent: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Stage metrics byte counter.
+    pub metrics_bytes_out: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Stage metrics packet counter.
+    pub metrics_packets_out: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Wall-clock milliseconds of the most recent progress.
+    pub last_progress_ms: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+}
+
+impl std::fmt::Debug for EgressProgressSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EgressProgressSink")
+            .field("bytes_sent", &self.bytes_sent.is_some())
+            .field("metrics", &self.metrics_bytes_out.is_some())
+            .field("last_progress_ms", &self.last_progress_ms.is_some())
+            .finish()
+    }
+}
+
+impl EgressProgressSink {
+    /// Record `bytes` sent across `units` transport messages.
+    #[inline]
+    pub fn record_sent(&self, bytes: u64, units: u64, now_ms: u64) {
+        use std::sync::atomic::Ordering;
+        if let Some(counter) = &self.bytes_sent {
+            counter.fetch_add(bytes, Ordering::Relaxed);
+        }
+        if let Some(counter) = &self.metrics_bytes_out {
+            counter.fetch_add(bytes, Ordering::Relaxed);
+        }
+        if let Some(counter) = &self.metrics_packets_out {
+            counter.fetch_add(units, Ordering::Relaxed);
+        }
+        if let Some(stamp) = &self.last_progress_ms {
+            stamp.store(now_ms, Ordering::Relaxed);
+        }
+    }
 }
 
 impl LeafCommon {
@@ -181,7 +229,14 @@ impl LeafCommon {
             progress: ProgressState::new(),
             limits,
             pending_application_bytes: 0,
+            progress_sink: EgressProgressSink::default(),
         }
+    }
+
+    /// Attach the application-side progress sink for status publication.
+    pub fn with_progress_sink(mut self, sink: EgressProgressSink) -> Self {
+        self.progress_sink = sink;
+        self
     }
 
     /// Returns `true` if this event's generation matches the leaf's current
