@@ -1,0 +1,1 @@
+srt-srt-src,rss_delta_kb=142040,per_output_kb=1420,ffmpeg_n=0,ffmpeg_rss_kb=0

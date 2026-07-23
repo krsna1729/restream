@@ -649,8 +649,10 @@ Current branch status:
   `WakeGate` per shard (`FeedWakeHandle`), the shard clears its gate before
   each drain, and the idle wait default rose from 1ms to 25ms since sleep
   now ends on delivery rather than polling. Watchers abort on runtime
-  release and engine shutdown. Re-measuring the w2-fabric capture is the
-  outstanding evidence step.
+  release and engine shutdown. Re-measurement (`w2-fabric-wake` capture)
+  shows CPU 47.4% versus 57.0% under polling and RSS 1,420KB per output
+  (2.4x below legacy); the remaining 14% CPU gap versus legacy runs with 4
+  shards for 100 outputs and is gated on the Phase 7 shard-count sweep.
 
 ### Native buffer accounting
 
