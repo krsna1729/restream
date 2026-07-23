@@ -5,7 +5,6 @@ import type { ResourceMapNode, ResourceMapSnapshot } from "../../core/api-types.
 import type { renderGraphInto } from "../graph.js";
 import {
   formatBytes,
-  pipelineInspectV2Active,
   renderGraphIntoShellSlot,
   selectedPipeline,
 } from "./view-helpers.js";
@@ -51,23 +50,18 @@ export function resourceSummaryGroupsHtml(snapshot: ResourceMapSnapshot): string
   const processCards = cards.slice(0, 3);
   const pipelineCards = cards.slice(3);
   return `<div class="grid gap-3 lg:grid-cols-2">
-    ${resourceSummaryGroupHtml("Process Metrics", "Measured on the restream process/runtime.", processCards)}
-    ${resourceSummaryGroupHtml(scopeKind === "pipeline" ? "Pipeline Attribution" : "Runtime Attribution", "Derived or attributed to active pipeline resources.", pipelineCards)}
+    ${resourceSummaryGroupHtml("Process Metrics", processCards)}
+    ${resourceSummaryGroupHtml(scopeKind === "pipeline" ? "Pipeline Attribution" : "Runtime Attribution", pipelineCards)}
   </div>`;
 }
 
 function resourceSummaryGroupHtml(
   title: string,
-  subtitle: string,
   cards: ResourceSummaryCard[],
 ): string {
-  const subtitleHtml = pipelineInspectV2Active()
-    ? ""
-    : `<div class="text-base-content/55 text-xs">${escapeHtml(subtitle)}</div>`;
   return `<section class="dashboard-section bg-base-100/35 p-3">
     <div class="mb-2">
       <div class="text-sm font-semibold">${escapeHtml(title)}</div>
-      ${subtitleHtml}
     </div>
     <div class="grid gap-2 sm:grid-cols-3 lg:grid-cols-1 2xl:grid-cols-3">
       ${cards

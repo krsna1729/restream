@@ -13,33 +13,22 @@ async function login(page: Page): Promise<void> {
     await page.waitForURL('**/');
 }
 
-// v2 is the default dashboard UI; these specs exercise the legacy player DOM
-// (#pipelines, #pipe-info-col, #video-player, etc.) specifically, so pin the
-// UI version explicitly rather than relying on whatever the default happens
-// to be. Only "v1"/"v2" are recognized values that get written to the
-// persisted localStorage preference (see resolveDashboardUiVersion in
-// dashboard-v2-loader.ts); any other value only takes effect for the current
-// navigation and does NOT persist, so a later bare page.goto('/') elsewhere
-// in the same test would silently fall back to the v2 default again.
-async function loginToLegacyDashboard(page: Page): Promise<void> {
+async function loginToDashboard(page: Page): Promise<void> {
     await login(page);
-    await page.goto('/?ui=v1');
-}
-
-async function openPipelineWorkspace(page: Page): Promise<void> {
-    const tab = page.locator('#workspace-tab-pipeline');
-    await expect(tab).toBeVisible();
-    await tab.click();
+    await page.goto('/?mode=overview');
 }
 
 async function selectPipelineForWorkspace(
     page: Page,
+    pipelineId: string,
     pipelineName: string,
 ): Promise<void> {
-    await openPipelineWorkspace(page);
-    const pipeline = page.locator('#pipelines li', { hasText: pipelineName });
-    await expect(pipeline).toBeVisible({ timeout: 10000 });
-    await pipeline.click();
+    await page.goto('/?mode=pipeline');
+    await selectPipelineInV2Selector(
+        page.locator('#dashboard-v2-pipeline-selector-root'),
+        pipelineId,
+        pipelineName,
+    );
 }
 
 async function selectPipelineInV2Selector(
@@ -104,11 +93,6 @@ async function expectPreviewPlayback(video: Locator): Promise<void> {
     });
 }
 
-// Shared by the legacy (#video-player) and v2
-// (#dashboard-v2-pipeline-input-status-root) alternate-audio tests: both
-// containers mount the same renderInputPreview() component from
-// web/ts/features/input-preview.ts, so the audio-track picker markup and
-// behavior are identical — only the surrounding container differs.
 async function verifyAlternateAudioTrackSwitch(
     page: Page,
     previewContainer: Locator,
@@ -394,17 +378,22 @@ test.describe('HLS Player — DOM rendering', () => {
         await login(page);
     });
 
-    test('player container exists in DOM but is hidden until pipeline selected', async ({ page }) => {
-        const playerElem = page.locator('#video-player');
-        await expect(playerElem).toBeAttached();
-        await expect(playerElem).toBeEmpty();
-        const parentCol = page.locator('#pipe-info-col');
-        await expect(parentCol).toHaveClass(/hidden/);
+    test('v2 preview host replaces the legacy global video container', async ({ page }) => {
+        await page.goto('/?mode=pipeline');
+        await expect(page.locator('#video-player')).toHaveCount(0);
+        await expect(page.locator('#dashboard-v2-operate-panel')).toBeVisible();
+        await expect(page.locator('[data-dashboard-v2-operate-detail-shell]')).toBeVisible();
+        await expect(page.locator('#dashboard-v2-pipeline-input-status-root')).toBeAttached();
+        await expect(page.locator('[data-role="dashboard-v2-input-preview"]')).toHaveCount(0);
     });
 
     test('renderInputPreview creates video element and overlay', async ({ page }) => {
         const result = await page.evaluate(async () => {
-            const container = document.getElementById('video-player');
+            const root = document.getElementById('dashboard-v2-pipeline-input-status-root');
+            if (!root) return { error: 'no v2 status root' };
+            const container = document.createElement('div');
+            container.dataset.role = 'dashboard-v2-input-preview';
+            root.appendChild(container);
             if (!container) return { error: 'no container' };
 
             const pipe = {
@@ -475,7 +464,11 @@ test.describe('HLS Player — DOM rendering', () => {
 
     test('renderInputPreview shows message when pipeline has no key', async ({ page }) => {
         const result = await page.evaluate(async () => {
-            const container = document.getElementById('video-player');
+            const root = document.getElementById('dashboard-v2-pipeline-input-status-root');
+            if (!root) return { error: 'no v2 status root' };
+            const container = document.createElement('div');
+            container.dataset.role = 'dashboard-v2-input-preview';
+            root.appendChild(container);
             if (!container) return { error: 'no container' };
 
             const pipe = {
@@ -525,7 +518,11 @@ test.describe('HLS Player — DOM rendering', () => {
 
     test('clearInputPreview removes video and cleans up', async ({ page }) => {
         const result = await page.evaluate(async () => {
-            const container = document.getElementById('video-player');
+            const root = document.getElementById('dashboard-v2-pipeline-input-status-root');
+            if (!root) return { error: 'no v2 status root' };
+            const container = document.createElement('div');
+            container.dataset.role = 'dashboard-v2-input-preview';
+            root.appendChild(container);
             if (!container) return { error: 'no container' };
 
             const pipe = {
@@ -561,7 +558,6 @@ test.describe('HLS Player — DOM rendering', () => {
 
             const { renderInputPreview, clearInputPreview } = await import('/js/features/input-preview.js');
 
-            // Don't set previewSrc before — let renderInputPreview set it
             renderInputPreview(container, pipe);
 
             const videoBefore = container.querySelector('video');
@@ -587,7 +583,11 @@ test.describe('HLS Player — DOM rendering', () => {
 
     test('renderInputPreview is idempotent for same pipeline', async ({ page }) => {
         const result = await page.evaluate(async () => {
-            const container = document.getElementById('video-player');
+            const root = document.getElementById('dashboard-v2-pipeline-input-status-root');
+            if (!root) return { error: 'no v2 status root' };
+            const container = document.createElement('div');
+            container.dataset.role = 'dashboard-v2-input-preview';
+            root.appendChild(container);
             if (!container) return { error: 'no container' };
 
             const pipe = {
@@ -655,10 +655,9 @@ test.describe('HLS Player — integration', () => {
         await expect(page.locator('body')).toBeVisible();
     });
 
-    test('dashboard has video-player container (hidden by default)', async ({ page }) => {
-        const playerContainer = page.locator('#video-player');
-        await expect(playerContainer).toBeAttached();
-        await expect(playerContainer).toBeEmpty();
+    test('dashboard owns preview through the v2 input status host', async ({ page }) => {
+        await expect(page.locator('#video-player')).toHaveCount(0);
+        await expect(page.locator('#dashboard-v2-pipeline-input-status-root')).toBeAttached();
     });
 
     test('health endpoint is reachable', async ({ page }) => {
@@ -752,7 +751,7 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test.beforeEach(async ({ page }) => {
-        await loginToLegacyDashboard(page);
+        await loginToDashboard(page);
     });
 
     test('HLS playlist is served for active pipeline', async ({ page }) => {
@@ -821,24 +820,24 @@ test.describe.serial('HLS Player — live playback', () => {
         await page.request.delete(`/api/v1/pipelines/${pipeId}`);
     });
 
-    test('ui=v1 (legacy): select pipeline and click Play preview triggers HLS load', async ({ page }) => {
-        await openPipelineWorkspace(page);
-        const pipelineItem = page.locator('#pipelines li', {
-            hasText: livePipelineName,
-        });
-        await expect(pipelineItem).toBeVisible({ timeout: 10000 });
-        await pipelineItem.click();
+    test('default v2 preview triggers HLS load', async ({ page }) => {
+        await page.goto('/?mode=pipeline');
+        const pipelineSelector = page.locator('#dashboard-v2-pipeline-selector-root');
+        await selectPipelineInV2Selector(
+            pipelineSelector,
+            livePipelineId,
+            livePipelineName,
+        );
 
-        const pipeInfoCol = page.locator('#pipe-info-col');
-        await expect(pipeInfoCol).toBeVisible();
-
-        const videoPlayer = page.locator('#video-player');
+        const inputStatus = page.locator('#dashboard-v2-pipeline-input-status-root');
+        const videoPlayer = inputStatus.locator('[data-role="dashboard-v2-input-preview"]');
         await expect(videoPlayer).toBeVisible();
+        await expect(page.locator('#video-player')).toHaveCount(0);
 
         const video = videoPlayer.locator('video[data-role="input-preview-video"]');
         await expect(video).toBeAttached();
 
-        const playBtn = videoPlayer.locator('button', { hasText: 'Play preview' });
+        const playBtn = videoPlayer.getByRole('button', { name: /Play (input )?preview/ });
         await expect(playBtn).toBeVisible();
         await playBtn.click();
 
@@ -854,7 +853,7 @@ test.describe.serial('HLS Player — live playback', () => {
         }
     });
 
-    test('ui=v2: mounts the complete HLS player in React and loads preview media', async ({ page }) => {
+    test('v2 mounts the complete HLS player in React and loads preview media', async ({ page }) => {
         const standbyPipelineName = `PlaywrightHlsStandby_${Date.now()}`;
         const standbyResponse = await page.request.post('/api/v1/pipelines', {
             data: {
@@ -864,7 +863,7 @@ test.describe.serial('HLS Player — live playback', () => {
         });
         expect(standbyResponse.ok()).toBe(true);
         const standbyPipelineId = (await standbyResponse.json()).pipeline.id;
-        await page.goto('/?mode=pipeline&ui=v2');
+        await page.goto('/?mode=pipeline');
 
         const pipelineSelector = page.locator('#dashboard-v2-pipeline-selector-root');
         await selectPipelineInV2Selector(
@@ -878,7 +877,7 @@ test.describe.serial('HLS Player — live playback', () => {
             '[data-role="dashboard-v2-input-preview"]',
         );
         await expect(previewPlayer).toBeVisible();
-        await expect(page.locator('#video-player')).toBeHidden();
+        await expect(page.locator('#video-player')).toHaveCount(0);
 
         const video = previewPlayer.locator(
             'video[data-role="input-preview-video"]',
@@ -921,24 +920,31 @@ test.describe.serial('HLS Player — live playback', () => {
         await page.request.delete(`/api/v1/pipelines/${standbyPipelineId}`);
     });
 
-    test('video starts playback after clicking Play preview', async ({ page }) => {
-        await openPipelineWorkspace(page);
-        const pipelineItem = page.locator('#pipelines li', {
-            hasText: livePipelineName,
-        });
-        await pipelineItem.click();
+    test('default v2 video starts playback after clicking Play preview', async ({ page }) => {
+        await page.goto('/?mode=pipeline');
+        const pipelineSelector = page.locator('#dashboard-v2-pipeline-selector-root');
+        await selectPipelineInV2Selector(
+            pipelineSelector,
+            livePipelineId,
+            livePipelineName,
+        );
 
-        const playBtn = page.locator('#video-player button', { hasText: 'Play preview' });
+        const previewPlayer = page
+            .locator('#dashboard-v2-pipeline-input-status-root')
+            .locator('[data-role="dashboard-v2-input-preview"]');
+        const playBtn = previewPlayer.getByRole('button', { name: /Play (input )?preview/ });
         await expect(playBtn).toBeVisible({ timeout: 5000 });
 
         await playBtn.click();
 
-        const video = page.locator('video[data-role="input-preview-video"]');
+        const video = previewPlayer.locator('video[data-role="input-preview-video"]');
         await expect(video).toBeAttached();
         await expectPreviewPlayback(video);
     });
 
     test('HLS playlist advances media sequence while streaming', async ({ page }) => {
+        test.setTimeout(60_000);
+
         const getSeq = async (): Promise<number> => {
             for (let attempt = 1; attempt <= 20; attempt++) {
                 const resp = await page.request.get(`/hls/${livePipelineId}/index.m3u8`);
@@ -987,17 +993,22 @@ test.describe.serial('HLS Player — live playback', () => {
         const outputId = outputJson.output.id;
         await ctx.dispose();
 
-        await page.goto('/');
-        await openPipelineWorkspace(page);
-        const pipelineItem = page.locator('#pipelines li', { hasText: livePipelineName });
-        await pipelineItem.click();
+        await page.goto('/?mode=pipeline');
+        await selectPipelineInV2Selector(
+            page.locator('#dashboard-v2-pipeline-selector-root'),
+            livePipelineId,
+            livePipelineName,
+        );
 
-        const outputRow = page.locator('#outputs-list > div', { hasText: 'E2E-Egress-Test' }).first();
-        const startBtn = outputRow.locator('button[data-action="toggle-output"]', { hasText: 'Start' });
+        const outputOverview = page.locator('#dashboard-v2-pipeline-output-overview-root');
+        const outputRow = outputOverview
+            .locator('article', { hasText: 'E2E-Egress-Test' })
+            .first();
+        const startBtn = outputRow.getByRole('button', { name: 'Start E2E-Egress-Test' });
         await expect(startBtn).toBeVisible({ timeout: 10000 });
         await startBtn.click();
 
-        const stopBtn = outputRow.locator('button[data-action="toggle-output"]', { hasText: 'Stop' });
+        const stopBtn = outputRow.getByRole('button', { name: 'Stop E2E-Egress-Test' });
         await expect(stopBtn).toBeVisible({ timeout: 15000 });
 
         const delCtx = await request.newContext({ baseURL: TEST_BASE_URL });
@@ -1007,11 +1018,7 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test('settings persistence validation', async ({ page }) => {
-        await openPipelineWorkspace(page);
-        const pipelineItem = page.locator('#pipelines li', { hasText: livePipelineName });
-        await expect(pipelineItem).toBeVisible({ timeout: 10000 });
-
-        await page.locator('#workspace-tab-settings').click();
+        await page.goto('/?mode=settings');
         const serverNameInput = page.locator('#settings-server-name');
         await expect(serverNameInput).toBeVisible();
 
@@ -1026,7 +1033,7 @@ test.describe.serial('HLS Player — live playback', () => {
 
         await page.goto('/');
         await expect(page.locator('button', { hasText: `Restream: ${newName}` })).toBeVisible({ timeout: 10000 });
-        await page.locator('#workspace-tab-settings').click();
+        await page.goto('/?mode=settings');
         await expect(serverNameInput).toHaveValue(newName);
 
         await serverNameInput.fill(originalName);
@@ -1035,14 +1042,16 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test('diagnostics modal auditing', async ({ page }) => {
-        await selectPipelineForWorkspace(page, livePipelineName);
+        await selectPipelineForWorkspace(page, livePipelineId, livePipelineName);
         await page.locator('#pipeline-workspace-tab-inspect').click();
 
         const select = page.locator('#inspect-pipeline-select');
         await expect(select).toBeVisible();
         await select.selectOption({ value: livePipelineId });
 
-        const runDiagBtn = page.locator('#inspect-open-diagnostics-btn');
+        const runDiagBtn = page
+            .locator('#dashboard-v2-pipeline-inspect-root')
+            .getByRole('button', { name: 'Diagnostics' });
         await expect(runDiagBtn).toBeVisible();
         await expect(runDiagBtn).toBeEnabled();
         await runDiagBtn.click();
@@ -1062,7 +1071,7 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test('Control Room input HLS preview player verification', async ({ page }) => {
-        await selectPipelineForWorkspace(page, livePipelineName);
+        await selectPipelineForWorkspace(page, livePipelineId, livePipelineName);
         await page.locator('#pipeline-workspace-tab-monitor').click();
 
         const select = page.locator('#control-room-pipeline-select');
@@ -1158,7 +1167,7 @@ test.describe.serial('HLS Player — alternate audio preview', () => {
     });
 
     test.beforeEach(async ({ page }) => {
-        await loginToLegacyDashboard(page);
+        await loginToDashboard(page);
     });
 
     test('master playlist advertises alternate audio renditions', async ({ page }) => {
@@ -1172,18 +1181,8 @@ test.describe.serial('HLS Player — alternate audio preview', () => {
         expect((playlist.match(/#EXT-X-MEDIA:TYPE=AUDIO/g) || []).length).toBe(16);
     });
 
-    test('ui=v1 (legacy): browser preview loads video and switches alternate audio tracks', async ({ page }) => {
-        await openPipelineWorkspace(page);
-        const pipelineItem = page.locator('#pipelines li', { hasText: pipelineName });
-        await expect(pipelineItem).toBeVisible({ timeout: 10000 });
-        await pipelineItem.click();
-
-        const videoPlayer = page.locator('#video-player');
-        await verifyAlternateAudioTrackSwitch(page, videoPlayer, pipelineId);
-    });
-
-    test('ui=v2: browser preview loads video and switches alternate audio tracks', async ({ page }) => {
-        await page.goto('/?mode=pipeline&ui=v2');
+    test('default v2 browser preview loads video and switches alternate audio tracks', async ({ page }) => {
+        await page.goto('/?mode=pipeline');
         const pipelineSelector = page.locator('#dashboard-v2-pipeline-selector-root');
         await selectPipelineInV2Selector(pipelineSelector, pipelineId, pipelineName);
 

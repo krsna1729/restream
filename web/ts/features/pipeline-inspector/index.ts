@@ -22,7 +22,6 @@ import {
   inspectFaultCandidates,
   inspectProbeBlockers,
   inspectSuggestedNextStep,
-  pipelineInspectV2Active,
   selectedPipeline,
   setForceRuntimeScope,
 } from "./view-helpers.js";
@@ -867,6 +866,3 @@ export {
   renderGraphIntoShellSlot,
   syncPipelineInspectorVisibility,
 } from "./graph.js";
-export { pipelineInspectV2Active } from "./view-helpers.js";
-
-

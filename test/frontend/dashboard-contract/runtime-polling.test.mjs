@@ -19,7 +19,7 @@ test("dashboard steady-state polling avoids repeated settings fetches", async ()
   const summaryMetricsUrl = "/metrics/system?view=summary";
   const { document, window } = installFakeDom();
   window.location.href = "http://localhost/?mode=overview";
-  appendRoot(document, "div", "dashboard-grid");
+  appendRoot(document, "div", "dashboard-v2-operate-panel");
 
   const requests = [];
   globalThis.fetch = async (url) => {

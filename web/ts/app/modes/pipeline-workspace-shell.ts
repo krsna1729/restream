@@ -1,7 +1,7 @@
 import type {
   DashboardMode,
   PipelineWorkspaceView,
-} from "../core/pipeline-workspace.js";
+} from "../../core/pipeline-workspace.js";
 
 function scrollPipelineTabIntoView(tab: HTMLButtonElement | null): void {
   if (!tab || typeof tab.scrollIntoView !== "function") return;
@@ -34,7 +34,7 @@ export function syncPipelineWorkspaceShell(
   scrollPipelineTabIntoView(activeViewButton);
 
   const panels: Record<PipelineWorkspaceView, HTMLElement | null> = {
-    operate: document.getElementById("dashboard-grid"),
+    operate: document.getElementById("dashboard-v2-operate-panel"),
     inspect: document.getElementById("inspect-mode-panel"),
     monitor: document.getElementById("control-mode-panel"),
   };

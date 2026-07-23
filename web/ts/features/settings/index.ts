@@ -32,7 +32,6 @@ import {
   settingsRateLimitPresentation,
   syncDashboardPasswordPrompt,
 } from "./security.js";
-
 const SETTINGS_SECTION_COUNT = 5;
 
 let settingsCheckpointCallback:
@@ -46,6 +45,53 @@ interface SettingsDisclosureConfig {
   readonly title: string;
 }
 
+type RateLimitResetScope = "all" | "ip" | "username";
+
+const SETTINGS_DISCLOSURES: readonly SettingsDisclosureConfig[] = [
+  {
+    id: "recording-settings-section",
+    title: "Recording",
+    summary: "Retention policy for completed MPEG-TS to MP4 conversions.",
+    ariaLabel: "Recording settings",
+  },
+  {
+    id: "dashboard-password-section",
+    title: "Dashboard Password",
+    summary: "Change the dashboard login password.",
+    ariaLabel: "Dashboard password settings",
+  },
+  {
+    id: "ingest-security-section",
+    title: "Ingest Security",
+    summary: "Failure thresholds, ban window, and tracked IP limits.",
+    ariaLabel: "Ingest security settings",
+  },
+  {
+    id: "auth-attempts-section",
+    title: "Authentication Attempts",
+    summary: "Recent login and publish failures with optional reset actions.",
+    ariaLabel: "Authentication attempt settings",
+  },
+  {
+    id: "srt-settings-section",
+    title: "Global SRT Ingest",
+    summary: "Default encryption policy for SRT publishers.",
+    ariaLabel: "Global SRT ingest settings",
+  },
+  {
+    id: "backend-policy-section",
+    title: "Transcoding Backend",
+    summary: "Backend selection for newly started transcoding stages.",
+    ariaLabel: "Transcoding backend settings",
+  },
+  {
+    id: "transcode-profiles-section",
+    title: "Transcode Profiles",
+    summary: "Encoder presets used by HEVC/H.264 and resolution workflows.",
+    ariaLabel: "Transcode profile settings",
+  },
+];
+
 function needsFullSettingsConfig(): boolean {
   return (
     (state.config as any)?.ingestSecurity === undefined ||
@@ -53,6 +99,10 @@ function needsFullSettingsConfig(): boolean {
     (state.config as any)?.srtIngest === undefined ||
     (state.config as any)?.backendPolicy === undefined
   );
+}
+
+function effectiveServerName(): string {
+  return state.config?.serverName?.trim() || "Restream";
 }
 
 async function ensureFullSettingsConfig(): Promise<void> {
@@ -72,7 +122,7 @@ export async function loadSettings({
   const nameInput = document.getElementById(
     "settings-server-name",
   ) as HTMLInputElement | null;
-  if (nameInput) nameInput.value = state.config?.serverName || "";
+  if (nameInput) nameInput.value = effectiveServerName();
   const hostInput = document.getElementById(
     "settings-ingest-host",
   ) as HTMLInputElement | null;
@@ -107,16 +157,6 @@ function pluralize(
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function settingsV2Active(): boolean {
-  const toggle = document.getElementById("dashboard-ui-v2-toggle");
-  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
-  try {
-    return new URLSearchParams(window.location.search).get("ui") === "v2";
-  } catch (_err) {
-    return false;
-  }
-}
-
 function countConfiguredProfiles(): number {
   const list = document.getElementById("transcode-profiles-list");
   if (!list) {
@@ -128,7 +168,7 @@ function countConfiguredProfiles(): number {
 
 function settingsSummaryText(): string {
   const rateLimit = settingsRateLimitPresentation();
-  const serverName = state.config?.serverName || "server";
+  const serverName = effectiveServerName();
   return `${serverName} settings · ${pluralize(SETTINGS_SECTION_COUNT, "section")} · ${pluralize(countConfiguredProfiles(), "profile")} · ${pluralize(rateLimit.totalCount, "auth attempt")}`;
 }
 
@@ -143,7 +183,7 @@ function buildSettingsCheckpointModel(): SettingsCheckpointModel {
         ? `${rateLimit.bannedCount} authentication attempt${rateLimit.bannedCount === 1 ? " is" : "s are"} currently banned; review the table before resetting global limits.`
         : "Configuration sections stay grouped by operational concern; use the section rail before editing dense forms.",
     metrics: [
-      { label: "Server", value: state.config?.serverName || "server" },
+      { label: "Server", value: effectiveServerName() },
       {
         label: "Security",
         value: rateLimit.bannedCount
@@ -217,54 +257,8 @@ function bindSettingsSectionJump(container: HTMLElement): void {
     });
 }
 
-function applySettingsV2Disclosure(container: HTMLElement): void {
-  if (!settingsV2Active()) return;
-  const disclosures: readonly SettingsDisclosureConfig[] = [
-    {
-      id: "recording-settings-section",
-      title: "Recording",
-      summary: "Retention policy for completed MPEG-TS to MP4 conversions.",
-      ariaLabel: "Recording settings",
-    },
-    {
-      id: "dashboard-password-section",
-      title: "Dashboard Password",
-      summary: "Change the dashboard login password.",
-      ariaLabel: "Dashboard password settings",
-    },
-    {
-      id: "ingest-security-section",
-      title: "Ingest Security",
-      summary: "Failure thresholds, ban window, and tracked IP limits.",
-      ariaLabel: "Ingest security settings",
-    },
-    {
-      id: "auth-attempts-section",
-      title: "Authentication Attempts",
-      summary: "Recent login and publish failures with optional reset actions.",
-      ariaLabel: "Authentication attempt settings",
-    },
-    {
-      id: "srt-settings-section",
-      title: "Global SRT Ingest",
-      summary: "Default encryption policy for SRT publishers.",
-      ariaLabel: "Global SRT ingest settings",
-    },
-    {
-      id: "backend-policy-section",
-      title: "Transcoding Backend",
-      summary: "Backend selection for newly started transcoding stages.",
-      ariaLabel: "Transcoding backend settings",
-    },
-    {
-      id: "transcode-profiles-section",
-      title: "Transcode Profiles",
-      summary: "Encoder presets used by HEVC/H.264 and resolution workflows.",
-      ariaLabel: "Transcode profile settings",
-    },
-  ];
-
-  for (const disclosure of disclosures) {
+function mountSettingsV2Disclosures(container: HTMLElement): void {
+  for (const disclosure of SETTINGS_DISCLOSURES) {
     const body = container.querySelector<HTMLElement>(`#${disclosure.id}`);
     if (!body || body.closest("[data-settings-v2-disclosure]")) continue;
     const wrapper = document.createElement("details");
@@ -287,6 +281,16 @@ function applySettingsV2Disclosure(container: HTMLElement): void {
   }
 }
 
+function settingsResetScope(value: string | undefined): RateLimitResetScope {
+  switch (value) {
+    case "ip":
+    case "username":
+      return value;
+    default:
+      return "all";
+  }
+}
+
 function syncSettingsAccountActions(container: ParentNode = document): void {
   const toggle = container.querySelector<HTMLButtonElement>(
     "#settings-account-actions-toggle",
@@ -295,8 +299,8 @@ function syncSettingsAccountActions(container: ParentNode = document): void {
     "#settings-logout-btn",
   );
   const expanded = toggle?.getAttribute("aria-expanded") === "true";
-  toggle?.classList.toggle("hidden", !settingsV2Active());
-  logoutButton?.classList.toggle("hidden", settingsV2Active() && !expanded);
+  toggle?.classList.remove("hidden");
+  logoutButton?.classList.toggle("hidden", !expanded);
   if (toggle) {
     toggle.textContent = expanded ? "Hide account actions" : "Show account actions";
   }
@@ -314,15 +318,23 @@ function bindSettingsPanelActions(container: HTMLElement): void {
     });
 }
 
-export function renderSettingsPanel(container: HTMLElement): void {
-  container.innerHTML = `
-        <div class="dashboard-page-shell">
-            <div class="flex flex-wrap items-end justify-between gap-3">
+function renderSettingsRoute(
+  container: HTMLElement,
+  options: { readonly routeChrome?: boolean } = {},
+): void {
+  const serverNameValue = escapeHtml(effectiveServerName());
+  const routeChrome = options.routeChrome ?? true;
+  const routeHeader = routeChrome
+    ? `<div class="flex flex-wrap items-end justify-between gap-3">
                 <div>
                     <h1 class="dashboard-title">Settings</h1>
                     <p class="dashboard-subtitle">Server, security, and encoding configuration.</p>
                 </div>
-            </div>
+            </div>`
+    : "";
+  container.innerHTML = `
+        <div class="dashboard-page-shell">
+            ${routeHeader}
             ${settingsNavHtml("settings-admin-nav")}
             <p id="settings-route-summary" class="text-base-content/60 text-sm" role="status" aria-live="polite"></p>
 
@@ -335,7 +347,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     <div class="max-w-2xl space-y-2">
                         <label for="settings-server-name" class="text-sm font-medium">Server Name</label>
                         <div class="flex flex-wrap items-center gap-2">
-                            <input type="text" id="settings-server-name" class="input input-sm min-w-0 flex-1" placeholder="Name" aria-label="Server name" />
+                            <input type="text" id="settings-server-name" class="input input-sm min-w-0 flex-1" placeholder="Name" aria-label="Server name" value="${serverNameValue}" />
                             <button class="btn btn-accent btn-sm" data-settings-action="save-server-name" aria-label="Save server name">Save</button>
                             <span id="server-name-saved" class="text-success hidden text-sm">Saved</span>
                         </div>
@@ -567,7 +579,8 @@ export function renderSettingsPanel(container: HTMLElement): void {
             </section>
         </div>`;
 
-  applySettingsV2Disclosure(container);
+  container.dataset.settingsRouteBody = "v2";
+  mountSettingsV2Disclosures(container);
   syncSettingsAccountActions(container);
   bindSettingsSectionJump(container);
   bindSettingsPanelActions(container);
@@ -599,7 +612,10 @@ export function renderSettingsPanel(container: HTMLElement): void {
         void refreshRateLimitState();
         break;
       case "reset-rate-limits":
-        void resetRateLimitStateFromUi(button.dataset.scope as any, button.dataset.ip);
+        void resetRateLimitStateFromUi(
+          settingsResetScope(button.dataset.scope),
+          button.dataset.ip,
+        );
         break;
       case "save-recording-settings":
         void saveRecordingSettings();
@@ -624,6 +640,10 @@ export function renderSettingsPanel(container: HTMLElement): void {
 
   void loadSettings({ embedded: true });
   updateSettingsSummary();
+}
+
+export function renderDashboardV2SettingsBody(container: HTMLElement): void {
+  renderSettingsRoute(container, { routeChrome: false });
 }
 
 export {

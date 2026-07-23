@@ -87,7 +87,7 @@
   }
 
   #dashboard-v2-root .btn-accent.btn-outline,
-  #dashboard-grid .btn-accent.btn-outline,
+  #dashboard-v2-operate-panel .btn-accent.btn-outline,
   [data-dashboard-v2-owned-route-body] .btn-accent.btn-outline {
     --dashboard-v2-outline-accent: color-mix(
       in oklab,
@@ -102,7 +102,7 @@
   }
 
   #dashboard-v2-root .btn-accent.btn-outline:disabled,
-  #dashboard-grid .btn-accent.btn-outline:disabled,
+  #dashboard-v2-operate-panel .btn-accent.btn-outline:disabled,
   [data-dashboard-v2-owned-route-body] .btn-accent.btn-outline:disabled {
     --dashboard-v2-disabled-outline: color-mix(
       in oklab,
@@ -160,38 +160,40 @@
     );
   }
 
-  [data-dashboard-v2-owned-route-body] > .dashboard-page-shell > .flex:first-child > div:first-child {
-    display: none;
-  }
-
-  [data-dashboard-v2-owned-route-body] > .dashboard-title:first-child,
-  [data-dashboard-v2-owned-route-body] > h1:first-child,
-  [data-dashboard-v2-owned-route-body] > p[role="status"]:first-of-type {
-    display: none;
-  }
 }
 
-#dashboard-grid {
+#dashboard-v2-operate-panel {
   grid-template-columns: minmax(0, 1fr);
+}
+
+[data-dashboard-v2-operate-detail-shell],
+[data-dashboard-v2-operate-output-shell] {
+  display: none;
+}
+
+[data-dashboard-v2-operate-detail-shell]:has(
+    #dashboard-v2-pipeline-header-root:not([hidden])
+  ),
+[data-dashboard-v2-operate-output-shell]:has(
+    #dashboard-v2-pipeline-output-overview-root:not([hidden])
+  ) {
+  display: block;
 }
 
 .dashboard-scrollbar {
   scrollbar-width: thin;
 }
 
-.dashboard-action-menu {
-  max-height: min(28rem, calc(100vh - 8rem));
-  overflow-y: auto;
-}
-
 @media (min-width: 768px) {
-  #dashboard-grid {
+  #dashboard-v2-operate-panel {
     grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr);
   }
 }
 
 @media (min-width: 1280px) {
-  #dashboard-grid.has-selected-pipeline {
+  #dashboard-v2-operate-panel:has(
+      #dashboard-v2-pipeline-input-status-root:not([hidden])
+    ) {
     grid-template-columns:
       minmax(14rem, 18rem) minmax(26rem, 1.2fr)
       minmax(20rem, 0.8fr);
@@ -199,11 +201,11 @@
 }
 
 @media (max-width: 767px) {
-  #dashboard-grid {
+  #dashboard-v2-operate-panel {
     padding: 1rem;
   }
 
-  #dashboard-grid > div {
+  #dashboard-v2-operate-panel > div {
     max-width: none;
     min-width: 0;
   }

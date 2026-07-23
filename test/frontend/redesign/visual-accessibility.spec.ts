@@ -182,7 +182,7 @@ test.describe("desktop accessibility contract @desktop", () => {
   }
 });
 
-test("axe/cdp: ui=v2 Operate preserves contrast and semantic landmarks", async ({
+test("axe/cdp: default dashboard Operate preserves contrast and semantic landmarks", async ({
   page,
 }) => {
   await page.clock.setFixedTime(FIXED_TIME);
@@ -190,7 +190,7 @@ test("axe/cdp: ui=v2 Operate preserves contrast and semantic landmarks", async (
   await openSeededDashboard(
     page,
     "chaos-recovery",
-    "/?mode=pipeline&view=operate&p=pipe-flapping&ui=v2",
+    "/?mode=pipeline&view=operate&p=pipe-flapping",
     { expectOverviewReady: false },
   );
 
@@ -200,7 +200,7 @@ test("axe/cdp: ui=v2 Operate preserves contrast and semantic landmarks", async (
     }),
   ).toBeVisible();
   const results = await new AxeBuilder({ page })
-    .include("#dashboard-grid")
+    .include("#dashboard-v2-operate-panel")
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();
   const blocking = results.violations.filter(
@@ -237,66 +237,66 @@ test("axe/cdp: ui=v2 Operate preserves contrast and semantic landmarks", async (
   );
 });
 
-test("cdp: ui=v2 route heading outlines stay operator-clean @desktop", async ({
+test("cdp: default dashboard route heading outlines stay operator-clean @desktop", async ({
   page,
 }) => {
   await page.clock.setFixedTime(FIXED_TIME);
   await page.emulateMedia({ reducedMotion: "reduce" });
   const routes = [
     {
-      href: "/?mode=overview&ui=v2",
+      href: "/?mode=overview",
       readySelector: "#dashboard-v2-overview",
       topHeading: "Fleet overview",
     },
     {
-      href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+      href: "/?mode=pipeline&view=operate&p=pipe-retrying",
       readySelector: "#dashboard-v2-pipeline-header-root",
       topHeading: "Retrying Destination",
     },
     {
-      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying",
       checkpointActionRoot: "#dashboard-v2-pipeline-inspect-root",
       checkpointHeading: "Retrying Destination",
       readySelector: "#dashboard-v2-pipeline-inspect-root",
       topHeading: "Pipeline inspect",
     },
     {
-      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying",
       checkpointActionRoot: "#dashboard-v2-control-room-root",
       checkpointHeading: "Retrying Destination",
       readySelector: "#dashboard-v2-control-room-root",
       topHeading: "Control Room",
     },
     {
-      href: "/?mode=media&ui=v2",
+      href: "/?mode=media",
       checkpointActionRoot: "#dashboard-v2-media-root",
       checkpointHeading: "Media",
       readySelector: "#media-library-results-summary",
       topHeading: "Media Library",
     },
     {
-      href: "/?mode=settings&ui=v2",
+      href: "/?mode=settings",
       checkpointActionRoot: "#dashboard-v2-settings-root",
       checkpointHeading: "Settings",
       readySelector: "#dashboard-v2-settings-root",
       topHeading: "Settings",
     },
     {
-      href: "/?mode=status&ui=v2",
+      href: "/?mode=status",
       checkpointActionRoot: "#dashboard-v2-status-root",
       checkpointHeading: "Status",
       readySelector: "#dashboard-v2-status-root",
       topHeading: "Status",
     },
     {
-      href: "/?mode=incidents&ui=v2",
+      href: "/?mode=incidents",
       checkpointActionRoot: "#dashboard-v2-incidents-root",
       checkpointHeading: "Incidents",
       readySelector: "#dashboard-v2-incidents-root",
       topHeading: "Incidents",
     },
     {
-      href: "/?mode=telemetry&ui=v2",
+      href: "/?mode=telemetry",
       checkpointActionRoot: "#dashboard-v2-telemetry-root",
       checkpointHeading: "Engineer telemetry",
       readySelector: "#dashboard-v2-telemetry-root",
@@ -394,46 +394,46 @@ test("cdp: ui=v2 route heading outlines stay operator-clean @desktop", async ({
   }
 });
 
-test("cdp: ui=v2 wayfinding and next-step controls keep sturdy targets @desktop", async ({
+test("cdp: default dashboard wayfinding and next-step controls keep sturdy targets @desktop", async ({
   page,
 }) => {
   await page.clock.setFixedTime(FIXED_TIME);
   await page.emulateMedia({ reducedMotion: "reduce" });
   const routes = [
     {
-      href: "/?mode=overview&ui=v2",
+      href: "/?mode=overview",
       readySelector: "#dashboard-v2-overview",
     },
     {
-      href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+      href: "/?mode=pipeline&view=operate&p=pipe-retrying",
       readySelector: "#dashboard-v2-pipeline-header-root",
     },
     {
-      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying",
       readySelector: "#dashboard-v2-pipeline-inspect-root",
     },
     {
-      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying",
       readySelector: "#dashboard-v2-control-room-root",
     },
     {
-      href: "/?mode=media&ui=v2",
+      href: "/?mode=media",
       readySelector: "#media-library-results-summary",
     },
     {
-      href: "/?mode=settings&ui=v2",
+      href: "/?mode=settings",
       readySelector: "#dashboard-v2-settings-root",
     },
     {
-      href: "/?mode=status&ui=v2",
+      href: "/?mode=status",
       readySelector: "#dashboard-v2-status-root",
     },
     {
-      href: "/?mode=incidents&ui=v2",
+      href: "/?mode=incidents",
       readySelector: "#dashboard-v2-incidents-root",
     },
     {
-      href: "/?mode=telemetry&ui=v2",
+      href: "/?mode=telemetry",
       readySelector: "#dashboard-v2-telemetry-root",
     },
   ] as const;
@@ -452,7 +452,6 @@ test("cdp: ui=v2 wayfinding and next-step controls keep sturdy targets @desktop"
         "#skip-to-dashboard-main",
         "#workspace-mode-bar [role='tab']",
         "#pipeline-workspace-view-bar:not(.hidden) [role='tab']",
-        "label[for='dashboard-ui-v2-toggle']",
         "button[aria-label^='Add a new pipeline']",
         "button[aria-label^='Open restream']",
         "button[aria-label^='Operate ']",
@@ -497,70 +496,70 @@ test("cdp: ui=v2 wayfinding and next-step controls keep sturdy targets @desktop"
   }
 });
 
-test("axe/cdp: ui=v2 routes expose named controls without serious accessibility findings @desktop", async ({
+test("axe/cdp: default dashboard routes expose named controls without serious accessibility findings @desktop", async ({
   page,
 }) => {
   await page.clock.setFixedTime(FIXED_TIME);
   await page.emulateMedia({ reducedMotion: "reduce" });
   const routes = [
     {
-      href: "/?mode=overview&ui=v2",
+      href: "/?mode=overview",
       maxVisibleDashboardElements: 220,
       maxVisibleControls: 22,
       maxVisibleTextChars: 1500,
       readySelector: "#dashboard-v2-overview",
     },
     {
-      href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+      href: "/?mode=pipeline&view=operate&p=pipe-retrying",
       maxVisibleDashboardElements: 180,
       maxVisibleControls: 28,
       maxVisibleTextChars: 1400,
       readySelector: "#dashboard-v2-pipeline-header-root",
     },
     {
-      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying",
       maxVisibleDashboardElements: 180,
       maxVisibleControls: 22,
       maxVisibleTextChars: 1700,
       readySelector: "#dashboard-v2-pipeline-inspect-root",
     },
     {
-      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying",
       maxVisibleDashboardElements: 130,
       maxVisibleControls: 30,
       maxVisibleTextChars: 1400,
       readySelector: "#dashboard-v2-control-room-root",
     },
     {
-      href: "/?mode=media&ui=v2",
+      href: "/?mode=media",
       maxVisibleDashboardElements: 100,
       maxVisibleControls: 18,
       maxVisibleTextChars: 1000,
       readySelector: "#media-library-results-summary",
     },
     {
-      href: "/?mode=settings&ui=v2",
+      href: "/?mode=settings",
       maxVisibleDashboardElements: 140,
       maxVisibleControls: 26,
       maxVisibleTextChars: 1600,
       readySelector: "#dashboard-v2-settings-root",
     },
     {
-      href: "/?mode=status&ui=v2",
+      href: "/?mode=status",
       maxVisibleDashboardElements: 130,
       maxVisibleControls: 22,
       maxVisibleTextChars: 1600,
       readySelector: "#dashboard-v2-status-root",
     },
     {
-      href: "/?mode=incidents&ui=v2",
+      href: "/?mode=incidents",
       maxVisibleDashboardElements: 110,
       maxVisibleControls: 20,
       maxVisibleTextChars: 1300,
       readySelector: "#dashboard-v2-incidents-root",
     },
     {
-      href: "/?mode=telemetry&ui=v2",
+      href: "/?mode=telemetry",
       maxVisibleDashboardElements: 160,
       maxVisibleControls: 18,
       maxVisibleTextChars: 1600,

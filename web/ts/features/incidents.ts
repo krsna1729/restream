@@ -36,6 +36,7 @@ interface IncidentsViewOptions {
   containerId?: string;
   pipelines: IncidentPipelineOption[];
   navigateToPipeline: (pipelineId: string) => void;
+  routeChrome?: boolean;
 }
 
 const INCIDENT_REFRESH_MS = 5_000;
@@ -221,16 +222,6 @@ function normalizeSearch(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function incidentsV2Active(): boolean {
-  const toggle = document.getElementById("dashboard-ui-v2-toggle");
-  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
-  try {
-    return new URLSearchParams(window.location.search).get("ui") === "v2";
-  } catch (_err) {
-    return false;
-  }
-}
-
 function alertSearchText(alert: OperatorAlert): string {
   return [
     alert.id,
@@ -266,7 +257,7 @@ function eventSearchText(event: LifecycleEvent): string {
 
 function renderAlert(alert: OperatorAlert): string {
   const detailKey = `alert:${alert.id}`;
-  const detailExpanded = !incidentsV2Active() || incidentAlertDetailsExpanded.has(detailKey);
+  const detailExpanded = incidentAlertDetailsExpanded.has(detailKey);
   const detailLabel = `${detailExpanded ? "Hide" : "Show"} alert details for ${alert.title}`;
   const pipelineActionLabel = alert.pipelineId
     ? incidentPipelineActionLabel(alert.pipelineId)
@@ -283,11 +274,7 @@ function renderAlert(alert: OperatorAlert): string {
       <span class="badge ${severityTone(alert.severity)}">${escapeHtml(alert.severity)}</span>
     </div>
     <p class="mt-3 text-sm">${escapeHtml(alert.cause)}</p>
-    ${
-      incidentsV2Active()
-        ? `<button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-label="${escapeHtml(detailLabel)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>`
-        : ""
-    }
+    <button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-label="${escapeHtml(detailLabel)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>
     ${
       detailExpanded
         ? `${evidence ? `<details class="mt-3 text-sm"><summary class="cursor-pointer font-medium">Evidence</summary><ul class="mt-2 list-disc space-y-1 pl-5">${evidence}</ul></details>` : ""}
@@ -304,7 +291,7 @@ function renderAlert(alert: OperatorAlert): string {
 function renderAlertGroup(group: AlertGroup): string {
   if (group.alerts.length === 1) return renderAlert(group.alerts[0]);
   const detailKey = `group:${group.id}`;
-  const detailExpanded = !incidentsV2Active() || incidentAlertDetailsExpanded.has(detailKey);
+  const detailExpanded = incidentAlertDetailsExpanded.has(detailKey);
   const pipelineActionLabel = group.pipelineId
     ? incidentPipelineActionLabel(group.pipelineId)
     : "";
@@ -364,11 +351,7 @@ function renderAlertGroup(group: AlertGroup): string {
           : ""
       }
     </div>
-    ${
-      incidentsV2Active()
-        ? `<button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-label="${escapeHtml(detailLabel)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>`
-        : ""
-    }
+    <button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-label="${escapeHtml(detailLabel)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>
     ${
       detailExpanded
         ? `${sampleOutputs.length ? `<details class="mt-3 text-sm"><summary class="cursor-pointer font-medium">Affected outputs</summary><div class="mt-2 flex flex-wrap gap-1">${sampleOutputs.map((id) => `<code class="bg-base-200 rounded px-1.5 py-1 text-xs">${escapeHtml(id)}</code>`).join("")}${remainingOutputs ? `<span class="text-base-content/60 px-1.5 py-1 text-xs">+${remainingOutputs} more</span>` : ""}</div></details>` : ""}
@@ -538,6 +521,9 @@ export function renderIncidentsHtml(
   pipelines: IncidentPipelineOption[],
   pipelineId: string,
   searchQuery = "",
+  renderOptions: {
+    readonly routeChrome?: boolean;
+  } = {},
 ): string {
   const search = normalizeSearch(searchQuery);
   const allAlerts = data.alerts?.alerts || [];
@@ -583,7 +569,7 @@ export function renderIncidentsHtml(
   const eventCaption = showEventToggle
     ? `${pluralize(visibleEvents.length, "event")} shown of ${events.length}. Search to isolate lifecycle evidence or show all when reviewing the full timeline.`
     : "";
-  const options = [
+  const pipelineOptions = [
     `<option value="">All pipelines</option>`,
     ...pipelines.map(
       (pipeline) =>
@@ -605,12 +591,16 @@ export function renderIncidentsHtml(
       ? `${pluralize(alertGroups.length, "alert group")} · ${pluralize(events.length, "event")} match "${searchQuery.trim()}"`
       : `${pluralize(alertGroups.length, "alert group")} · ${pluralize(events.length, "event")} visible`
     : `Loading incident matches · ${scopeLabel}`;
+  const routeChrome = renderOptions.routeChrome ?? true;
+  const routeHeader = routeChrome
+    ? `<header class="flex flex-wrap items-end justify-between gap-3">
+      <div><h1 class="text-lg font-semibold">Incidents</h1><p class="text-base-content/60 mt-1 text-sm">Current alerts and recent lifecycle evidence from authoritative snapshots.</p></div>
+      <div class="flex items-center gap-2"><select id="incidents-pipeline-filter" class="select select-sm" aria-label="Filter incidents by pipeline">${pipelineOptions}</select><button id="incidents-refresh-btn" type="button" class="btn btn-sm btn-outline" aria-label="Refresh incident data">Refresh</button></div>
+    </header>`
+    : `<div class="flex flex-wrap items-center justify-end gap-2"><select id="incidents-pipeline-filter" class="select select-sm" aria-label="Filter incidents by pipeline">${pipelineOptions}</select><button id="incidents-refresh-btn" type="button" class="btn btn-sm btn-outline" aria-label="Refresh incident data">Refresh</button></div>`;
 
   return `<div class="mx-auto max-w-7xl space-y-4">
-    <header class="flex flex-wrap items-end justify-between gap-3">
-      <div><h1 class="text-lg font-semibold">Incidents</h1><p class="text-base-content/60 mt-1 text-sm">Current alerts and recent lifecycle evidence from authoritative snapshots.</p></div>
-      <div class="flex items-center gap-2"><select id="incidents-pipeline-filter" class="select select-sm" aria-label="Filter incidents by pipeline">${options}</select><button id="incidents-refresh-btn" type="button" class="btn btn-sm btn-outline" aria-label="Refresh incident data">Refresh</button></div>
-    </header>
+    ${routeHeader}
     <p id="incidents-route-summary" class="text-base-content/60 text-sm" role="status" aria-live="polite">${escapeHtml(summaryText)}</p>
     <div class="flex flex-wrap items-end gap-3">
       <label class="form-control w-full max-w-md">
@@ -770,25 +760,9 @@ function paintIncidents(containerId = incidentsScope.current()): void {
     viewOptions.pipelines,
     selectedPipelineId,
     incidentSearchQuery,
+    { routeChrome: viewOptions.routeChrome },
   );
-  suppressV2RouteChrome(root);
   bindIncidentControls();
-}
-
-function suppressV2RouteChrome(root: HTMLElement): void {
-  if (
-    typeof root.matches !== "function" ||
-    !root.matches("[data-dashboard-v2-owned-route-body]")
-  )
-    return;
-  root
-    .querySelectorAll<HTMLElement>(
-      ":scope > div > header:first-child h1, :scope > div > header:first-child p",
-    )
-    .forEach((element) => {
-      element.hidden = true;
-      element.setAttribute("aria-hidden", "true");
-    });
 }
 
 export async function refreshIncidents(force = false): Promise<void> {
@@ -856,4 +830,11 @@ export function renderIncidentsMode(options: IncidentsViewOptions): void {
   }
   paintIncidents();
   void refreshIncidents();
+}
+
+export function clearIncidentsMode(): void {
+  if (!viewOptions || viewOptions.active === false) return;
+  incidentsScope.invalidate();
+  viewOptions = { ...viewOptions, active: false };
+  incidentsCheckpointCallback?.(null);
 }

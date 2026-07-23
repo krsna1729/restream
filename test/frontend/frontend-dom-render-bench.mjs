@@ -102,33 +102,30 @@ function snapshotStats(stats) {
   return { ...stats };
 }
 
-function naiveRender(outputsList, pipe) {
-  outputsList.innerHTML = pipe.outs
-    .map(
-      (output) => `
-        <div class="card">
-          <div class="name">${output.name}</div>
-          <code>${output.url}</code>
-          <div class="metrics">${output.time}|${output.totalSize}|${output.bitrateKbps}|${output.status}</div>
-        </div>`,
-    )
-    .join("");
-}
-
 async function runOptimizedBenchmark(outputCount, iterations, mutateTelemetry) {
   const { document } = installFakeDom();
   appendRoot(document, "div", "outs-col");
-  const outputsList = appendRoot(document, "div", "outputs-list");
 
-  const pipelineView = await loadCompiledFrontendModule("features/pipeline-view/index.js");
+  const outputList = await loadCompiledFrontendModule("features/pipeline-output-list.js");
+  const pipelineDeps = await loadCompiledFrontendModule(
+    "features/pipeline-dependencies.js",
+  );
   const { state } = await loadCompiledFrontendModule("core/state.js");
   const pipeline = makePipeline(outputCount);
   state.pipelines = [pipeline];
+  let publicationCount = 0;
+  let lastCardCount = 0;
 
-  pipelineView.setPipelineViewDependencies({
+  pipelineDeps.setPipelineViewDependencies({
     isOutputToggleBusy: () => false,
   });
-  pipelineView.renderOutsColumn("pipe-1");
+  outputList.configurePipelineOutputOverviewPresentation({
+    onPresentation: (model) => {
+      publicationCount += 1;
+      lastCardCount = model?.cards.length ?? 0;
+    },
+  });
+  outputList.renderOutsColumn("pipe-1");
   const before = snapshotStats(document.stats);
 
   for (let iteration = 0; iteration < iterations; iteration += 1) {
@@ -139,25 +136,26 @@ async function runOptimizedBenchmark(outputCount, iterations, mutateTelemetry) {
         output.bitrateKbps += 25;
       }
     }
-    pipelineView.renderOutsColumn("pipe-1");
+    outputList.renderOutsColumn("pipe-1");
   }
 
+  outputList.configurePipelineOutputOverviewPresentation({});
   return {
-    listInnerHTMLWrites: outputsList.stats.innerHTMLWrites,
-    cards: outputsList.children.length,
+    publications: publicationCount,
+    cards: lastCardCount,
     stats: diffStats(document.stats, before),
   };
 }
 
-function runNaiveBenchmark(outputCount, iterations, mutateTelemetry) {
-  const { document } = installFakeDom();
-  const outputsList = appendRoot(document, "div", "outputs-list");
+async function runNaiveBenchmark(outputCount, iterations, mutateTelemetry) {
+  const { buildPipelineOutputOverviewModel } = await loadCompiledFrontendModule(
+    "features/pipeline-operate-view-model.js",
+  );
   const pipeline = makePipeline(outputCount);
+  let publications = 0;
+  let cards = 0;
 
-  naiveRender(outputsList, pipeline);
-  const before = snapshotStats(document.stats);
-
-  for (let iteration = 0; iteration < iterations; iteration += 1) {
+  for (let iteration = 0; iteration <= iterations; iteration += 1) {
     if (mutateTelemetry) {
       for (const output of pipeline.outs) {
         output.time += 5_000;
@@ -165,13 +163,12 @@ function runNaiveBenchmark(outputCount, iterations, mutateTelemetry) {
         output.bitrateKbps += 25;
       }
     }
-    naiveRender(outputsList, pipeline);
+    const model = buildPipelineOutputOverviewModel([pipeline], pipeline.id, [], true);
+    publications += 1;
+    cards = model?.cards.length ?? 0;
   }
 
-  return {
-    listInnerHTMLWrites: outputsList.stats.innerHTMLWrites,
-    stats: diffStats(document.stats, before),
-  };
+  return { publications, cards };
 }
 
 async function main() {
@@ -189,14 +186,14 @@ async function main() {
       iterations,
       mutateTelemetry,
     );
-    const naive = runNaiveBenchmark(outputCount, iterations, mutateTelemetry);
+    const naive = await runNaiveBenchmark(outputCount, iterations, mutateTelemetry);
 
     console.log(`\nScenario: ${label} / ${outputCount} outputs / ${iterations} refreshes`);
     console.log(
-      `  optimized: list innerHTML writes=${optimized.listInnerHTMLWrites}, createElement=${optimized.stats.createElementCalls}, appendChild=${optimized.stats.appendChildCalls}, remove=${optimized.stats.removeCalls}, clearedChildren=${optimized.stats.clearedChildren}, textWrites=${optimized.stats.textWrites}, innerHTMLWrites=${optimized.stats.innerHTMLWrites}, cards=${optimized.cards}`,
+      `  optimized: publications=${optimized.publications}, createElement=${optimized.stats.createElementCalls}, appendChild=${optimized.stats.appendChildCalls}, remove=${optimized.stats.removeCalls}, clearedChildren=${optimized.stats.clearedChildren}, textWrites=${optimized.stats.textWrites}, innerHTMLWrites=${optimized.stats.innerHTMLWrites}, cards=${optimized.cards}`,
     );
     console.log(
-      `  naive:     list innerHTML writes=${naive.listInnerHTMLWrites}, createElement=${naive.stats.createElementCalls}, appendChild=${naive.stats.appendChildCalls}, remove=${naive.stats.removeCalls}, clearedChildren=${naive.stats.clearedChildren}, textWrites=${naive.stats.textWrites}, innerHTMLWrites=${naive.stats.innerHTMLWrites}`,
+      `  expanded:  publications=${naive.publications}, cards=${naive.cards}`,
     );
   }
 }

@@ -15,7 +15,7 @@ import {
   tabUntilFocused,
 } from "./seed-helpers";
 
-test("seed: ui=v2 replaces Overview while delegating operator actions @desktop", async ({
+test("seed: default v2 replaces Overview while delegating operator actions @desktop", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -30,17 +30,17 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     }) as typeof window.open;
   });
   const pageErrors: string[] = [];
-  const seamErrors: string[] = [];
+  const shellErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("console", (message) => {
     if (
       message.type() === "error" &&
-      message.text().includes("Unable to start the dashboard v2 experiment")
+      message.text().includes("Unable to start the dashboard v2 shell")
     ) {
-      seamErrors.push(message.text());
+      shellErrors.push(message.text());
     }
   });
-  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2", {
+  await openSeededDashboard(page, "mixed-health", "/?mode=overview", {
     outputControlDelayMs: 300,
     pipelineControlDelayMs: 300,
     settingsResponse: (settings) => ({
@@ -104,10 +104,10 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     }),
   });
 
-  await expect(page).toHaveURL(/\?mode=overview&ui=v2$/);
+  await expect(page).toHaveURL(/\?mode=overview$/);
   await page.waitForTimeout(100);
   expect(pageErrors).toEqual([]);
-  expect(seamErrors).toEqual([]);
+  expect(shellErrors).toEqual([]);
   expect(
     await page.evaluate(() => ({
       loaded: performance
@@ -121,7 +121,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     loaded: true,
     rootHidden: false,
     rootMarkup: expect.stringContaining("dashboard-v2-overview"),
-    search: "?mode=overview&ui=v2",
+    search: "?mode=overview",
   });
   const v2Overview = page.locator("#dashboard-v2-overview");
   await expect(
@@ -139,13 +139,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(
     v2Overview.getByRole("heading", { name: "Restream Activity" }),
   ).toBeVisible();
-  await expect(page.locator("#overview-mode-content")).toBeHidden();
-  expect(
-    await page.locator("#overview-mode-content").evaluate((node) => ({
-      childCount: node.childElementCount,
-      text: node.textContent?.trim() ?? "",
-    })),
-  ).toEqual({ childCount: 0, text: "" });
+  await expect(page.locator("#overview-mode-content")).toHaveCount(0);
 
   await v2Overview
     .getByRole("button", { name: "Add a new pipeline", exact: true })
@@ -155,18 +149,13 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await v2Overview
     .getByRole("button", { name: "Operate Retrying Destination", exact: true })
     .click();
-  await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
-  await expect(page.locator("#dashboard-grid")).toBeVisible();
+  await expect(page).toHaveURL(/mode=pipeline/);
+  await expect(page.locator("#dashboard-v2-operate-panel")).toBeVisible();
   const pipelineSelector = page.locator("#dashboard-v2-pipeline-selector-root");
   await expect(pipelineSelector).toBeVisible();
   await expect(pipelineSelector.getByText("Pipelines")).toBeVisible();
-  await expect(page.locator("#pipeline-selector-legacy")).toBeHidden();
-  expect(
-    await page.locator("#pipelines").evaluate((node) => ({
-      childCount: node.childElementCount,
-      text: node.textContent?.trim() ?? "",
-    })),
-  ).toEqual({ childCount: 0, text: "" });
+  await expect(page.locator("#pipeline-selector-legacy")).toHaveCount(0);
+  await expect(page.locator("#pipelines")).toHaveCount(0);
   await selectPipelineInV2Selector(
     pipelineSelector,
     "pipe-retrying",
@@ -188,9 +177,9 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(fileInputStatus).toContainText("MP4");
   await expect(fileInputStatus).toContainText("1.0 MiB");
   await expect(fileInputStatus).toContainText("Sparse source GOP detected");
-  await expect(page.locator("#file-source-section")).toBeHidden();
-  await expect(page.locator("#record-pipe-btn")).toBeHidden();
-  await expect(page.locator("#file-ingest-pipe-btn")).toBeHidden();
+  await expect(page.locator("#file-source-section")).toHaveCount(0);
+  await expect(page.locator("#record-pipe-btn")).toHaveCount(0);
+  await expect(page.locator("#file-ingest-pipe-btn")).toHaveCount(0);
   const startFile = pipelineHeader.getByRole("button", {
     name: "Start file ingest for Retrying Destination",
   });
@@ -260,10 +249,9 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   ).toBeVisible();
   await expect(outputOverview).toContainText("Retrying");
   await expect(outputOverview).toContainText("Retrying Output");
-  await expect(page.locator("#pipeline-output-overview-legacy")).toBeHidden();
-  await expect(page.locator("#outs-col > h2")).toBeHidden();
-  await expect(page.locator("#outputs-list")).toBeHidden();
-  await expect(page.locator("#add-out-btn")).toBeHidden();
+  await expect(page.locator("#pipeline-output-overview-legacy")).toHaveCount(0);
+  await expect(page.locator("#outputs-list")).toHaveCount(0);
+  await expect(page.locator("#add-out-btn")).toHaveCount(0);
   const openRetryingOutputActions = async () => {
     await outputOverview
       .getByRole("button", { name: "More output actions for Retrying Output" })
@@ -373,7 +361,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     /Healthy Program/,
   );
   await expect(page).toHaveURL(/p=pipe-healthy/);
-  await expect(page.locator("#pipe-name")).toHaveText("Healthy Program");
+  await expect(page.locator("#pipe-name")).toHaveCount(0);
   await expect(pipelineHeader).toBeVisible();
   await expect(
     pipelineHeader.getByRole("heading", { name: "Healthy Program" }),
@@ -395,18 +383,20 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
       "Inspect graph for Healthy Program",
       "Diagnose Healthy Program",
       "Edit pipeline Healthy Program",
+      "Open history for Healthy Program",
+      "Delete pipeline Healthy Program",
     ]),
   );
   expect(healthyHeaderButtonNames).not.toEqual(
     expect.arrayContaining(["Record", "Graph", "Diagnose", "Edit"]),
   );
   expect(healthyHeaderButtonNames).not.toContain("Pipeline actions");
-  await expect(page.locator("#pipeline-header-legacy-identity")).toBeHidden();
-  await expect(page.locator("#graph-pipe-btn")).toBeHidden();
-  await expect(page.locator("#diagnose-pipe-btn")).toBeHidden();
-  await expect(page.locator("#edit-pipe-action-item")).toBeHidden();
-  await expect(page.locator("#pipeline-header-legacy-actions")).toBeHidden();
-  await expect(page.locator("#record-pipe-btn")).toBeHidden();
+  await expect(page.locator("#pipeline-header-legacy-identity")).toHaveCount(0);
+  await expect(page.locator("#graph-pipe-btn")).toHaveCount(0);
+  await expect(page.locator("#diagnose-pipe-btn")).toHaveCount(0);
+  await expect(page.locator("#edit-pipe-action-item")).toHaveCount(0);
+  await expect(page.locator("#pipeline-header-legacy-actions")).toHaveCount(0);
+  await expect(page.locator("#record-pipe-btn")).toHaveCount(0);
   const inputStatus = page.locator("#dashboard-v2-pipeline-input-status-root");
   await expect(inputStatus).toBeVisible();
   await expect(
@@ -422,10 +412,10 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   ).toBeVisible();
   await expect(inputStatus.getByText("Video", { exact: true })).toBeVisible();
   await expect(inputStatus).toContainText("1920×1080");
-  await expect(page.locator("#publisher-meta")).toBeHidden();
-  await expect(page.locator("#pipeline-input-legacy-traffic")).toBeHidden();
-  await expect(page.locator("#pipeline-input-legacy-video")).toBeHidden();
-  await expect(page.locator("#video-player")).toBeHidden();
+  await expect(page.locator("#publisher-meta")).toHaveCount(0);
+  await expect(page.locator("#pipeline-input-legacy-traffic")).toHaveCount(0);
+  await expect(page.locator("#pipeline-input-legacy-video")).toHaveCount(0);
+  await expect(page.locator("#video-player")).toHaveCount(0);
   const previewPlayer = inputStatus.locator(
     '[data-role="dashboard-v2-input-preview"]',
   );
@@ -436,23 +426,11 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     }),
   ).toBeVisible();
   expect(await getCdpNamesByRole(page, "button")).not.toContain("Play preview");
-  await expect(page.locator("#input-stats")).toBeHidden();
+  await expect(page.locator("#input-stats")).toHaveCount(0);
   await expect(
     page.locator("#pipeline-input-legacy-audio-heading"),
-  ).toBeHidden();
-  await expect(page.locator("#input-audio-tracks")).toBeHidden();
-  expect(
-    await page.locator("#input-audio-tracks").evaluate((node) => ({
-      childCount: node.childElementCount,
-      text: node.textContent?.trim() ?? "",
-    })),
-  ).toEqual({ childCount: 0, text: "" });
-  expect(
-    await page.locator("#video-player").evaluate((node) => ({
-      childCount: node.childElementCount,
-      text: node.textContent?.trim() ?? "",
-    })),
-  ).toEqual({ childCount: 0, text: "" });
+  ).toHaveCount(0);
+  await expect(page.locator("#input-audio-tracks")).toHaveCount(0);
   expect(await getCdpNodeCount(page)).toBeLessThan(5_200);
   await expect(inputStatus.getByText("Audio", { exact: true })).toBeVisible();
   await expect(inputStatus.getByText("ENG", { exact: true })).toBeVisible();
@@ -485,8 +463,8 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     inputStatus.getByText("Program Audio", { exact: true }),
   ).toBeVisible();
   await expect(inputStatus.getByText("Discarded label")).toHaveCount(0);
-  await expect(page.locator("#stream-key-section")).toBeHidden();
-  await expect(page.locator("#ingest-url-section")).toBeHidden();
+  await expect(page.locator("#stream-key-section")).toHaveCount(0);
+  await expect(page.locator("#ingest-url-section")).toHaveCount(0);
   const primaryInput = inputStatus.locator("article").filter({
     has: page.getByRole("heading", { name: "Primary", exact: true }),
   });
@@ -529,7 +507,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(page.locator("#edit-pipe-modal")).toBeVisible();
 });
 
-test("ui=v2 overview pipeline table supports large-fleet search @desktop", async ({
+test("default v2 overview pipeline table supports large-fleet search @desktop", async ({
   page,
 }) => {
   await page.goto("/login");
@@ -758,7 +736,7 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
   expect(await getCdpNodeCount(page)).toBeLessThan(3_000);
 });
 
-test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async ({
+test("default v2 output cards keep 125-output refreshes patch-only @desktop", async ({
   page,
 }) => {
   await page.goto("/login");
@@ -910,7 +888,7 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
   expect(result.live.childList).toBe(0);
 });
 
-test("ui=v2 pipeline selector supports search under long lists @desktop", async ({
+test("default v2 pipeline selector supports search under long lists @desktop", async ({
   page,
 }) => {
   await page.goto("/login");
@@ -1055,7 +1033,7 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
   );
 });
 
-test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", async ({
+test("default v2 pipeline details placeholder makes convergence explicit @desktop", async ({
   page,
 }) => {
   await page.goto("/login");
@@ -1140,13 +1118,47 @@ test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", a
   await expect(header).toBeHidden();
 });
 
-test("ui=v2 keeps failed recording mutation context in the pipeline header @desktop", async ({
+test("default v2 Operate no-selection state is owned by the pipeline header placeholder @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "mixed-health",
-    "/?mode=pipeline&view=operate&p=pipe-healthy&ui=v2",
+    "/?mode=pipeline&view=operate",
+    { expectOverviewReady: false },
+  );
+
+  await expect(page.locator("#stats-col")).toHaveCount(0);
+  await expect(page.locator("#stats-table")).toHaveCount(0);
+  await expect(
+    page.locator("[data-dashboard-v2-operate-detail-shell]"),
+  ).toBeVisible();
+  await expect(
+    page.locator("[data-dashboard-v2-operate-output-shell]"),
+  ).toBeHidden();
+  await expect(
+    page.locator("#dashboard-v2-pipeline-details-placeholder-title"),
+  ).toHaveText("Select a pipeline");
+  await expect(
+    page.locator("#dashboard-v2-pipeline-header-root"),
+  ).toContainText(
+    "Pipeline details, ingest preview, outputs, and controls appear here.",
+  );
+  await expect(
+    page.locator("#dashboard-v2-pipeline-input-status-root"),
+  ).toBeHidden();
+  await expect(
+    page.locator("#dashboard-v2-pipeline-output-overview-root"),
+  ).toBeHidden();
+});
+
+test("default v2 keeps failed recording mutation context in the pipeline header @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=operate&p=pipe-healthy",
     {
       expectOverviewReady: false,
       failRecordingControl: "recording target disk is full",
@@ -1189,13 +1201,13 @@ test("ui=v2 keeps failed recording mutation context in the pipeline header @desk
   await cdp.detach();
 });
 
-test("ui=v2 keeps failed file-ingest mutation context in the pipeline header @desktop", async ({
+test("default v2 keeps failed file-ingest mutation context in the pipeline header @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "mixed-health",
-    "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+    "/?mode=pipeline&view=operate&p=pipe-retrying",
     {
       expectOverviewReady: false,
       failFileIngestControl: "file source disappeared before ingest start",
@@ -1258,13 +1270,13 @@ test("ui=v2 keeps failed file-ingest mutation context in the pipeline header @de
   await cdp.detach();
 });
 
-test("ui=v2 keeps failed output mutation context on the output card @desktop", async ({
+test("default v2 keeps failed output mutation context on the output card @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "mixed-health",
-    "/?mode=pipeline&view=operate&p=pipe-healthy&ui=v2",
+    "/?mode=pipeline&view=operate&p=pipe-healthy",
     {
       expectOverviewReady: false,
       failOutputControl: "destination refused stop command",
@@ -1305,13 +1317,13 @@ test("ui=v2 keeps failed output mutation context on the output card @desktop", a
   await cdp.detach();
 });
 
-test("ui=v2 output action menus are keyboard-dismissable @desktop", async ({
+test("default v2 output action menus are keyboard-dismissable @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "mixed-health",
-    "/?mode=pipeline&view=operate&p=pipe-healthy&ui=v2",
+    "/?mode=pipeline&view=operate&p=pipe-healthy",
     { expectOverviewReady: false },
   );
 
@@ -1361,7 +1373,7 @@ test("ui=v2 output action menus are keyboard-dismissable @desktop", async ({
   await expect(more).toHaveAttribute("aria-expanded", "false");
 });
 
-test("ui=v2 output destinations support search and state filters @desktop", async ({
+test("default v2 output destinations support search and state filters @desktop", async ({
   page,
 }) => {
   await page.goto("/login");

@@ -5,6 +5,20 @@ import {
   loadCompiledFrontendModule,
 } from "../support/helpers/fake-dom.mjs";
 
+function appendRoot(document, tagName, id) {
+  const element = document.createElement(tagName);
+  element.id = id;
+  document.body.appendChild(element);
+  return element;
+}
+
+function jsonResponse(data) {
+  return new Response(JSON.stringify(data), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 test("incidents escape evidence, sort critical first, and distinguish loading/error/empty", async () => {
   installFakeDom();
   const { renderIncidentsHtml } = await loadCompiledFrontendModule(
@@ -246,3 +260,44 @@ test("incident pipeline selection starts a fresh scoped request while the fleet 
   assert.match(root.innerHTML, /Final A/);
   assert.doesNotMatch(root.innerHTML, /Stale A|Scope B/);
 });
+
+test(
+  "renderDashboardV2IncidentsBody owns the incidents route body",
+  { concurrency: false },
+  async () => {
+    const { document } = installFakeDom();
+    const container = appendRoot(
+      document,
+      "div",
+      "dashboard-v2-incidents-content",
+    );
+    globalThis.fetch = async (url) => {
+      const href = String(url);
+      if (href === "/api/v1/overview") {
+        return jsonResponse({ degradedPipelines: 0, failedOutputs: 0 });
+      }
+      if (href === "/api/v1/alerts") {
+        return jsonResponse({ generatedAt: "", alerts: [] });
+      }
+      if (href.startsWith("/api/v1/events")) {
+        return jsonResponse({ generatedAt: "", count: 0, events: [] });
+      }
+      throw new Error(`Unexpected fetch: ${href}`);
+    };
+
+    const routeBody = await loadCompiledFrontendModule(
+      "features/incidents-route-body.js",
+    );
+    routeBody.renderDashboardV2IncidentsBody(container.id, {
+      pipelines: [{ id: "p1", name: "Program" }],
+      navigateToPipeline() {},
+    });
+
+    assert.equal(container.dataset.incidentsRouteBody, "v2");
+    assert.match(container.innerHTML, /aria-label="Incident rollup"/);
+    assert.match(container.innerHTML, /id="incidents-route-summary"/);
+    assert.match(container.innerHTML, /aria-label="Search incidents and events"/);
+    assert.doesNotMatch(container.innerHTML, /<h1[^>]*>Incidents<\/h1>/);
+    assert.doesNotMatch(container.innerHTML, /\son[a-z]+\s*=/i);
+  },
+);

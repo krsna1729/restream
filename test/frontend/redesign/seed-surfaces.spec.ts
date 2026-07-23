@@ -14,10 +14,10 @@ import {
   tabUntilFocused,
 } from "./seed-helpers";
 
-test("seed: ui=v2 Media search announces filtered result counts @desktop", async ({
+test("seed: default v2 Media search announces filtered result counts @desktop", async ({
   page,
 }) => {
-  await openSeededDashboard(page, "mixed-health", "/?mode=media&ui=v2", {
+  await openSeededDashboard(page, "mixed-health", "/?mode=media", {
     expectOverviewReady: false,
   });
 
@@ -170,10 +170,10 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
 });
 
-test("seed: ui=v2 Media bounds dense libraries until requested @desktop", async ({
+test("seed: default v2 Media bounds dense libraries until requested @desktop", async ({
   page,
 }) => {
-  await openSeededDashboard(page, "mixed-health", "/?mode=media&ui=v2", {
+  await openSeededDashboard(page, "mixed-health", "/?mode=media", {
     expectOverviewReady: false,
     mediaResponse: () => ({
       files: [
@@ -278,10 +278,10 @@ test("seed: ui=v2 Media bounds dense libraries until requested @desktop", async 
   expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
 });
 
-test("seed: ui=v2 Status announces loaded build and activity summary @desktop", async ({
+test("seed: default v2 Status announces loaded build and activity summary @desktop", async ({
   page,
 }) => {
-  await openSeededDashboard(page, "mixed-health", "/?mode=status&ui=v2", {
+  await openSeededDashboard(page, "mixed-health", "/?mode=status", {
     expectOverviewReady: false,
   });
 
@@ -491,10 +491,10 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   await expect(page).toHaveURL(/#status-native-section$/);
 });
 
-test("seed: ui=v2 Status bounds dense process logs until requested @desktop", async ({
+test("seed: default v2 Status bounds dense process logs until requested @desktop", async ({
   page,
 }) => {
-  await openSeededDashboard(page, "mixed-health", "/?mode=status&ui=v2", {
+  await openSeededDashboard(page, "mixed-health", "/?mode=status", {
     expectOverviewReady: false,
     logsResponse: () => ({
       logs: Array.from({ length: 35 }, (_, index) => ({
@@ -569,10 +569,10 @@ test("seed: ui=v2 Status bounds dense process logs until requested @desktop", as
   expect(await getCdpNodeCount(page)).toBeLessThan(10_000);
 });
 
-test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", async ({
+test("seed: default v2 Incidents announces scoped alert and event counts @desktop", async ({
   page,
 }) => {
-  await openSeededDashboard(page, "mixed-health", "/?mode=incidents&ui=v2", {
+  await openSeededDashboard(page, "mixed-health", "/?mode=incidents", {
     expectOverviewReady: false,
   });
 
@@ -745,10 +745,10 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
 });
 
-test("seed: ui=v2 Incidents bounds dense alert and event lists until requested @desktop", async ({
+test("seed: default v2 Incidents bounds dense alert and event lists until requested @desktop", async ({
   page,
 }) => {
-  await openSeededDashboard(page, "mixed-health", "/?mode=incidents&ui=v2", {
+  await openSeededDashboard(page, "mixed-health", "/?mode=incidents", {
     expectOverviewReady: false,
     alertsResponse: () => ({
       generatedAt: "2026-07-14T06:30:00Z",
@@ -870,10 +870,10 @@ test("seed: ui=v2 Incidents bounds dense alert and event lists until requested @
   expect(await getCdpNodeCount(page)).toBeLessThan(11_000);
 });
 
-test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop", async ({
+test("seed: default v2 Telemetry announces scoped engine and pipeline counts @desktop", async ({
   page,
 }) => {
-  await openSeededDashboard(page, "mixed-health", "/?mode=telemetry&ui=v2", {
+  await openSeededDashboard(page, "mixed-health", "/?mode=telemetry", {
     expectOverviewReady: false,
   });
 
@@ -1051,10 +1051,10 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
 });
 
-test("seed: ui=v2 Telemetry bounds dense stage and egress lists until requested @desktop", async ({
+test("seed: default v2 Telemetry bounds dense stage and egress lists until requested @desktop", async ({
   page,
 }) => {
-  await openSeededDashboard(page, "mixed-health", "/?mode=telemetry&ui=v2", {
+  await openSeededDashboard(page, "mixed-health", "/?mode=telemetry", {
     expectOverviewReady: false,
     pipelineTelemetryResponse: (pipelineId, telemetry) => {
       if (pipelineId !== "pipe-retrying") return telemetry;
@@ -1161,13 +1161,13 @@ test("seed: ui=v2 Telemetry bounds dense stage and egress lists until requested 
   expect(await getCdpNodeCount(page)).toBeLessThan(8_500);
 });
 
-test("seed: ui=v2 Operate stays inside the viewport across breakpoints", async ({
+test("seed: default v2 Operate stays inside the viewport across breakpoints", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "chaos-recovery",
-    "/?mode=pipeline&view=operate&p=pipe-flapping&ui=v2",
+    "/?mode=pipeline&view=operate&p=pipe-flapping",
     { expectOverviewReady: false },
   );
 
@@ -1195,13 +1195,13 @@ test("seed: ui=v2 Operate stays inside the viewport across breakpoints", async (
   expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
 });
 
-test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", async ({
+test("seed: default v2 surfaces harness-derived chaos recovery states @desktop", async ({
   page,
 }) => {
   await openSeededDashboard(
     page,
     "chaos-recovery",
-    "/?mode=pipeline&view=operate&p=pipe-grace&ui=v2",
+    "/?mode=pipeline&view=operate&p=pipe-grace",
     { expectOverviewReady: false },
   );
 
@@ -1221,7 +1221,7 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
   await expect(outputOverview).toContainText("Grace-preserved Output");
   await expect(outputOverview).toContainText("Running");
 
-  await page.goto("/?mode=pipeline&view=operate&p=pipe-hls-timeout&ui=v2");
+  await page.goto("/?mode=pipeline&view=operate&p=pipe-hls-timeout");
   await expect(
     pipelineHeader.getByRole("heading", { name: "HLS Timeout Recovery" }),
   ).toBeVisible();
@@ -1229,7 +1229,7 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
   await expect(outputOverview).toContainText("Retrying");
   await expect(outputOverview).toContainText("Retry in 8s");
 
-  await page.goto("/?mode=pipeline&view=operate&p=pipe-flapping&ui=v2");
+  await page.goto("/?mode=pipeline&view=operate&p=pipe-flapping");
   await expect(
     pipelineHeader.getByRole("heading", { name: "Recovered Sink Flap" }),
   ).toBeVisible();
@@ -1288,7 +1288,7 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
   await expect(outputOverview).toContainText("Flapping");
   await expect(outputOverview).toContainText("4 recent failures");
 
-  await page.goto("/?mode=pipeline&view=operate&p=pipe-stall&ui=v2");
+  await page.goto("/?mode=pipeline&view=operate&p=pipe-stall");
   await expect(
     pipelineHeader.getByRole("heading", { name: "Stalled Sink Isolation" }),
   ).toBeVisible();
@@ -1336,7 +1336,7 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
     outputOverview.getByRole("heading", { name: "Healthy sibling 01" }),
   ).not.toBeVisible();
 
-  await page.goto("/?mode=pipeline&view=operate&p=pipe-retry-budget&ui=v2");
+  await page.goto("/?mode=pipeline&view=operate&p=pipe-retry-budget");
   await expect(
     pipelineHeader.getByRole("heading", { name: "Retry Budget Exhausted" }),
   ).toBeVisible();

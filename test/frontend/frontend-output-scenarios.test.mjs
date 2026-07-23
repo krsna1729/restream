@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
 
-import {
-  assertHidden,
-  assertVisible,
-  requireElement,
-  runDomScenarioMatrix,
-} from "../support/helpers/ui-scenario-harness.mjs";
+import { runDomScenarioMatrix } from "../support/helpers/ui-scenario-harness.mjs";
 
 function makeOutput(overrides = {}) {
   return {
@@ -92,85 +87,45 @@ function makePipeline(overrides = {}) {
   };
 }
 
-function appendRoot(document, tagName, id) {
-  const element = document.createElement(tagName);
-  element.id = id;
-  document.body.appendChild(element);
-  return element;
-}
-
-function metricValue(metrics, key) {
-  const pill = requireElement(
-    metrics,
-    `[data-metric-key="${key}"]`,
-    `Expected metric pill ${key}`,
-  );
-  return requireElement(
-    pill,
-    '[data-role="metric-value"]',
-    `Expected metric value for ${key}`,
-  ).textContent;
+function requireModel(model) {
+  assert.ok(model, "Expected a pipeline output overview model");
+  return model;
 }
 
 runDomScenarioMatrix({
   suite: "output scenario matrix",
-  setupDom({ document }) {
-    appendRoot(document, "div", "outs-col");
-    const outputsList = appendRoot(document, "div", "outputs-list");
-    return { outputsList };
-  },
   async loadModules({ loadCompiledFrontendModule }) {
-    const outputList = await loadCompiledFrontendModule(
-      "features/pipeline-output-list.js",
+    const { buildPipelineOutputOverviewModel } = await loadCompiledFrontendModule(
+      "features/pipeline-operate-view-model.js",
     );
-    const pipelineDeps = await loadCompiledFrontendModule(
-      "features/pipeline-dependencies.js",
-    );
-    const { state } = await loadCompiledFrontendModule("core/state.js");
-
-    pipelineDeps.setPipelineViewDependencies({
-      isOutputToggleBusy: () => false,
-    });
 
     return {
-      renderOutsColumn: outputList.renderOutsColumn,
-      state,
+      buildModel: (pipeline) =>
+        requireModel(buildPipelineOutputOverviewModel([pipeline], pipeline.id)),
     };
   },
   scenarios: [
     {
-      name: "healthy running output renders uptime, throughput, and monitor action",
-      async run({ dom, renderOutsColumn, state }) {
-        state.pipelines = [makePipeline()];
+      name: "healthy running output projects uptime, throughput, and monitor action",
+      async run({ buildModel }) {
+        const card = buildModel(makePipeline()).cards[0];
 
-        renderOutsColumn("pipe-1");
-
-        const card = requireElement(dom.outputsList, '[data-output-key="pipe-1:out-1"]');
-        const dot = requireElement(card, '[data-role="status-dot"]');
-        const toggle = requireElement(card, '[data-role="toggle-output"]');
-        const metrics = requireElement(card, '[data-role="output-metrics"]');
-        const error = requireElement(card, '[data-role="output-error"]');
-        const monitorItem = requireElement(
-          card,
-          '[data-role="monitor-output"]',
-        ).parentNode;
-
-        assert.match(dot.className, /status-primary/);
-        assert.equal(dot.getAttribute("aria-hidden"), "true");
-        assert.equal(dot.getAttribute("aria-label"), null);
-        assert.equal(toggle.textContent, "Stop");
-        assert.equal(metricValue(metrics, "up"), "0:00:15");
-        assert.equal(metricValue(metrics, "cfg"), "source");
-        assert.equal(metricValue(metrics, "sent"), "2.0 MB");
-        assert.equal(metricValue(metrics, "rate"), "1.5 Mb/s");
-        assertHidden(error);
-        assertVisible(monitorItem);
+        assert.deepEqual(card.status, {
+          label: "Running",
+          tone: "success",
+          detail: "Delivering media",
+        });
+        assert.equal(card.controlLabel, "Stop");
+        assert.equal(card.uptimeLabel, "0:00:15");
+        assert.equal(card.encodingLabel, "source");
+        assert.equal(card.rateLabel, "1.5 Mb/s");
+        assert.equal(card.monitorAvailable, true);
       },
     },
     {
       name: "retrying output keeps stop intent visible and surfaces retry countdown",
-      async run({ dom, renderOutsColumn, state }) {
-        state.pipelines = [
+      async run({ buildModel }) {
+        const card = buildModel(
           makePipeline({
             outs: [
               makeOutput({
@@ -186,55 +141,37 @@ runDomScenarioMatrix({
               }),
             ],
           }),
-        ];
+        ).cards[0];
 
-        renderOutsColumn("pipe-1");
-
-        const card = requireElement(dom.outputsList, '[data-output-key="pipe-1:out-1"]');
-        const dot = requireElement(card, '[data-role="status-dot"]');
-        const toggle = requireElement(card, '[data-role="toggle-output"]');
-        const metrics = requireElement(card, '[data-role="output-metrics"]');
-        const error = requireElement(card, '[data-role="output-error"]');
-        const deleteButton = requireElement(card, '[data-role="delete-output"]');
-
-        assert.match(dot.className, /status-warning/);
-        assert.equal(toggle.textContent, "Stop");
-        assert.equal(metricValue(metrics, "issue"), "6s");
-        assertVisible(error);
-        assert.equal(error.textContent, "connection reset by peer");
-        assert.equal(deleteButton.disabled, true);
+        assert.deepEqual(card.status, {
+          label: "Retrying",
+          tone: "warning",
+          detail: "Retry in 6s",
+        });
+        assert.equal(card.controlLabel, "Stop");
+        assert.equal(card.deleteDisabled, true);
       },
     },
     {
-      name: "flapping output shows recovered-but-unstable status without an error banner",
-      async run({ dom, renderOutsColumn, state }) {
-        state.pipelines = [
+      name: "flapping output shows recovered-but-unstable status",
+      async run({ buildModel }) {
+        const card = buildModel(
           makePipeline({
-            outs: [
-              makeOutput({
-                flapping: true,
-                recentFailureCount: 4,
-              }),
-            ],
+            outs: [makeOutput({ flapping: true, recentFailureCount: 4 })],
           }),
-        ];
+        ).cards[0];
 
-        renderOutsColumn("pipe-1");
-
-        const card = requireElement(dom.outputsList, '[data-output-key="pipe-1:out-1"]');
-        const dot = requireElement(card, '[data-role="status-dot"]');
-        const metrics = requireElement(card, '[data-role="output-metrics"]');
-        const error = requireElement(card, '[data-role="output-error"]');
-
-        assert.match(dot.className, /status-warning/);
-        assert.equal(metricValue(metrics, "issue"), "4x");
-        assertHidden(error);
+        assert.deepEqual(card.status, {
+          label: "Flapping",
+          tone: "warning",
+          detail: "4 recent failures",
+        });
       },
     },
     {
       name: "stalled output surfaces progress age without pretending it is healthy",
-      async run({ dom, renderOutsColumn, state }) {
-        state.pipelines = [
+      async run({ buildModel }) {
+        const card = buildModel(
           makePipeline({
             outs: [
               makeOutput({
@@ -245,22 +182,19 @@ runDomScenarioMatrix({
               }),
             ],
           }),
-        ];
+        ).cards[0];
 
-        renderOutsColumn("pipe-1");
-
-        const card = requireElement(dom.outputsList, '[data-output-key="pipe-1:out-1"]');
-        const dot = requireElement(card, '[data-role="status-dot"]');
-        const metrics = requireElement(card, '[data-role="output-metrics"]');
-
-        assert.match(dot.className, /status-warning/);
-        assert.equal(metricValue(metrics, "issue"), "27s");
+        assert.deepEqual(card.status, {
+          label: "Stalled",
+          tone: "warning",
+          detail: "No progress for 27s",
+        });
       },
     },
     {
       name: "stopped output flips to start and enables delete while hiding monitor-only affordances",
-      async run({ dom, renderOutsColumn, state }) {
-        state.pipelines = [
+      async run({ buildModel }) {
+        const card = buildModel(
           makePipeline({
             outs: [
               makeOutput({
@@ -273,27 +207,18 @@ runDomScenarioMatrix({
               }),
             ],
           }),
-        ];
+        ).cards[0];
 
-        renderOutsColumn("pipe-1");
-
-        const card = requireElement(dom.outputsList, '[data-output-key="pipe-1:out-1"]');
-        const dot = requireElement(card, '[data-role="status-dot"]');
-        const toggle = requireElement(card, '[data-role="toggle-output"]');
-        const metrics = requireElement(card, '[data-role="output-metrics"]');
-        const deleteButton = requireElement(card, '[data-role="delete-output"]');
-        const monitorItem = requireElement(
-          card,
-          '[data-role="monitor-output"]',
-        ).parentNode;
-
-        assert.match(dot.className, /status-neutral/);
-        assert.equal(toggle.textContent, "Start");
-        assert.equal(metricValue(metrics, "cfg"), "source");
-        assert.equal(metrics.querySelector('[data-metric-key="up"]'), null);
-        assert.equal(metrics.querySelector('[data-metric-key="rate"]'), null);
-        assert.equal(deleteButton.disabled, false);
-        assertHidden(monitorItem);
+        assert.deepEqual(card.status, {
+          label: "Stopped",
+          tone: "neutral",
+          detail: "Stopped by operator",
+        });
+        assert.equal(card.controlLabel, "Start");
+        assert.equal(card.uptimeLabel, null);
+        assert.equal(card.rateLabel, "--");
+        assert.equal(card.deleteDisabled, false);
+        assert.equal(card.monitorAvailable, false);
       },
     },
   ],

@@ -36,6 +36,11 @@ let mediaCheckpointCallback:
 
 const MEDIA_SECTION_VISIBLE_LIMIT = 8;
 
+interface DashboardV2MediaBodyRender {
+  readonly needsDashboardRuntimeRefresh: boolean;
+  readonly rendered: Promise<void> | null;
+}
+
 function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
@@ -129,16 +134,6 @@ function isNativelyPlayable(file: MediaFile): boolean {
   return probe.canPlayType(contentType).trim() !== "";
 }
 
-function mediaV2Active(): boolean {
-  const toggle = document.getElementById("dashboard-ui-v2-toggle");
-  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
-  try {
-    return new URLSearchParams(window.location.search).get("ui") === "v2";
-  } catch (_err) {
-    return false;
-  }
-}
-
 function mediaRowSecondaryActions(
   file: MediaFile,
   safeName: string,
@@ -147,7 +142,6 @@ function mediaRowSecondaryActions(
 ): string {
   const buttons = `<button class="btn btn-xs btn-outline shrink-0 js-rename-media" data-filename="${safeName}" aria-label="Rename ${safeName}">Rename</button>
         <button class="btn btn-xs btn-error btn-outline shrink-0 js-delete-media" data-filename="${safeName}" aria-label="Delete ${safeName}" ${deleteDisabled}>Delete</button>`;
-  if (!mediaV2Active()) return `${downloadActions}${buttons}`;
   const expanded = mediaActionRowsExpanded.has(file.name);
   return `<div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
         <button class="btn btn-xs btn-outline js-media-row-actions" type="button" data-filename="${safeName}" aria-expanded="${expanded ? "true" : "false"}" aria-label="${expanded ? "Hide" : "Show"} media actions for ${safeName}">${expanded ? "Hide actions" : "More actions"}</button>
@@ -326,6 +320,13 @@ async function refreshMediaLibraryIfCurrent(
 function mountMediaShell(container: HTMLElement): void {
   if (mediaShellMounted && document.getElementById("media-library-root"))
     return;
+  const routeChrome = container.dataset.mediaRouteBody !== "v2";
+  const routeHeader = routeChrome
+    ? `<div>
+                    <h1 class="dashboard-title">Media Library</h1>
+                    <p class="dashboard-subtitle">Recordings and file-ingest sources from the configured media directory.</p>
+                </div>`
+    : "";
   container.innerHTML = `<div class="space-y-4" id="media-library-root">
         <div class="grid gap-3 md:grid-cols-3">
             <section class="dashboard-stat-card">
@@ -342,10 +343,7 @@ function mountMediaShell(container: HTMLElement): void {
         </div>
         <section class="dashboard-section">
             <div class="dashboard-section-header">
-                <div>
-                    <h1 class="dashboard-title">Media Library</h1>
-                    <p class="dashboard-subtitle">Recordings and file-ingest sources from the configured media directory.</p>
-                </div>
+                ${routeHeader}
                 <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
                     <label class="input input-sm input-bordered flex min-w-56 max-w-80 flex-1 items-center gap-2">
                         <span class="text-base-content/50 text-xs font-semibold uppercase">Search</span>
@@ -413,6 +411,13 @@ export function resetMediaLibraryShellState(): void {
   lastRecordingsSignature = "";
   lastSourcesSignature = "";
   mediaActionRowsExpanded.clear();
+}
+
+export function mediaLibraryShellMountedInCurrentContainer(): boolean {
+  return (
+    mediaShellMounted &&
+    document.getElementById(mediaLibraryScope.current()) !== null
+  );
 }
 
 function attachMediaActions(container: HTMLElement): void {
@@ -717,4 +722,24 @@ export async function renderMediaLibraryMode({
   } finally {
     mediaRefreshInFlight = null;
   }
+}
+
+export function renderDashboardV2MediaBody(
+  container: HTMLElement,
+  options: { readonly routeChanged: boolean },
+): DashboardV2MediaBodyRender {
+  container.dataset.mediaRouteBody = "v2";
+  setMediaLibraryContainerId(container.id);
+  const mediaShellMissing = !mediaLibraryShellMountedInCurrentContainer();
+  if (options.routeChanged || mediaShellMissing) {
+    return {
+      needsDashboardRuntimeRefresh: true,
+      rendered: renderMediaLibraryMode({ force: mediaShellMissing }),
+    };
+  }
+  refreshMediaLibraryMetricsOnly();
+  return {
+    needsDashboardRuntimeRefresh: false,
+    rendered: null,
+  };
 }

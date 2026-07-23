@@ -10,18 +10,6 @@ import {
 } from "../support/helpers/fake-dom.mjs";
 import { resolveFrontendModulesDir } from "../support/helpers/frontend-module-loader.mjs";
 
-function makeStorage() {
-  const data = new Map();
-  return {
-    getItem(key) {
-      return data.has(key) ? data.get(key) : null;
-    },
-    setItem(key, value) {
-      data.set(key, String(value));
-    },
-  };
-}
-
 async function flushAsyncWork() {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -32,7 +20,7 @@ test("compiled dashboard bootstrap remains idempotent", async () => {
   window.location.href = "http://localhost/?mode=pipeline";
 
   const dashboardGrid = document.createElement("div");
-  dashboardGrid.id = "dashboard-grid";
+  dashboardGrid.id = "dashboard-v2-operate-panel";
   document.body.appendChild(dashboardGrid);
   for (const id of [
     "dashboard-v2-root",
@@ -57,81 +45,41 @@ test("compiled dashboard bootstrap remains idempotent", async () => {
   assert.equal(window.setDashboardMode, firstSetDashboardMode);
 });
 
-test("dashboard v2 loader resolves URL overrides and saved preference", async () => {
+test("compiled dashboard no longer exposes v2 experiment switches", async () => {
   installFakeDom();
-  const loader = await loadCompiledFrontendModule("app/dashboard-v2-loader.js");
-  const storage = makeStorage();
+  const [entrySource, loader] = await Promise.all([
+    readFile(
+      new URL("../../public/js/app/dashboard-entry.js", import.meta.url),
+      "utf8",
+    ),
+    loadCompiledFrontendModule("app/dashboard-v2-loader.js"),
+  ]);
 
-  assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
-    true,
-  );
-  assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview&ui=v2", storage),
-    true,
-  );
-  assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
-    true,
-  );
-  assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview&ui=v1", storage),
-    false,
-  );
-  assert.equal(loader.dashboardV2ExperimentEnabled("?ui=V2", storage), false);
+  assert.equal("dashboardV2ExperimentEnabled" in loader, false);
+  assert.equal("startDashboardV2Experiment" in loader, false);
+  assert.doesNotMatch(entrySource, /startDashboardV2Experiment/);
 });
 
-test("dashboard UI version toggle persists changes and updates the URL", async () => {
-  const { document, window } = installFakeDom();
-  const loader = await loadCompiledFrontendModule("app/dashboard-v2-loader.js");
-  const storage = makeStorage();
-  const toggle = document.createElement("input");
-  toggle.id = "dashboard-ui-v2-toggle";
-  toggle.type = "checkbox";
-  document.body.appendChild(toggle);
-
-  window.location.href = "http://localhost/?mode=overview";
-  let replacedUrl = "";
-  let reloads = 0;
-  const history = {
-    replaceState(_state, _title, url) {
-      replacedUrl = String(url);
-    },
-  };
-
-  loader.initDashboardUiVersionToggle({
-    document,
-    history,
-    location: window.location,
-    reload: () => {
-      reloads += 1;
-    },
-    search: "?mode=overview",
-    storage,
-  });
-
-  assert.equal(toggle.checked, true);
-  toggle.checked = false;
-  toggle.dispatchEvent({ type: "change" });
-
-  assert.equal(reloads, 1);
-  assert.equal(replacedUrl, "http://localhost/?mode=overview");
-  assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
-    false,
+test("compiled dashboard no longer exposes a UI version toggle", async () => {
+  const indexHtml = await readFile(
+    new URL("../../public/index.html", import.meta.url),
+    "utf8",
   );
 
-  window.location.href = replacedUrl;
-  replacedUrl = "";
-  toggle.checked = true;
-  toggle.dispatchEvent({ type: "change" });
+  assert.doesNotMatch(indexHtml, /dashboard-ui-v2-toggle/);
+  assert.doesNotMatch(indexHtml, /Use dashboard UI v2/);
+});
 
-  assert.equal(reloads, 2);
-  assert.equal(replacedUrl, "http://localhost/?mode=overview&ui=v2");
-  assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
-    true,
+test("compiled dashboard requires v2 bundles instead of falling back to legacy", async () => {
+  const loaderSource = await readFile(
+    new URL("../../public/js/app/dashboard-v2-loader.js", import.meta.url),
+    "utf8",
   );
+
+  assert.doesNotMatch(loaderSource, /isOptionalNodeBundleMiss/);
+  assert.doesNotMatch(loaderSource, /ERR_MODULE_NOT_FOUND/);
+  assert.match(loaderSource, /Unable to start the dashboard v2 shell/);
+  assert.match(loaderSource, /Unable to start the dashboard v2 checkpoints/);
 });
 
 test("compiled dashboard keeps the default React seam in a bounded bundle", async () => {

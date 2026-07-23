@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
 
-import {
-  assertHidden,
-  assertVisible,
-  requireElement,
-  runDomScenarioMatrix,
-} from "../support/helpers/ui-scenario-harness.mjs";
+import { runDomScenarioMatrix } from "../support/helpers/ui-scenario-harness.mjs";
 
 function makeOutput(overrides = {}) {
   return {
@@ -102,46 +97,6 @@ function appendRoot(document, tagName, id) {
 
 function setupPipelineInfoDom(document) {
   appendRoot(document, "div", "pipe-info-col");
-  appendRoot(document, "div", "pipe-name");
-  appendRoot(document, "button", "pipe-history-btn");
-  appendRoot(document, "button", "file-ingest-pipe-btn");
-  appendRoot(document, "button", "record-pipe-btn");
-  appendRoot(document, "button", "graph-pipe-btn");
-  appendRoot(document, "button", "diagnose-pipe-btn");
-  appendRoot(document, "button", "edit-pipe-btn");
-  appendRoot(document, "button", "delete-pipe-btn");
-  appendRoot(document, "div", "input-time");
-
-  appendRoot(document, "section", "file-source-section");
-  appendRoot(document, "span", "file-source-inline");
-  appendRoot(document, "details", "file-source-details");
-  appendRoot(document, "div", "file-source-container");
-  appendRoot(document, "div", "file-source-size");
-  appendRoot(document, "div", "file-source-modified");
-  appendRoot(document, "div", "file-source-loop");
-  appendRoot(document, "div", "file-source-start-time");
-  appendRoot(document, "div", "file-source-optimization");
-  appendRoot(document, "div", "file-source-video-codec");
-  appendRoot(document, "div", "file-source-fps");
-  appendRoot(document, "div", "file-source-duration");
-  appendRoot(document, "div", "file-source-gop");
-  appendRoot(document, "div", "file-source-gop-warning");
-
-  appendRoot(document, "section", "stream-key-section");
-  appendRoot(document, "code", "stream-key-inline");
-  appendRoot(document, "button", "stream-key-copy-btn");
-  appendRoot(document, "section", "ingest-url-section");
-  appendRoot(document, "button", "ingest-url-copy-btn");
-  appendRoot(document, "div", "ingest-url-surface");
-  appendRoot(document, "code", "ingest-url");
-  appendRoot(document, "div", "ingest-url-details");
-  appendRoot(document, "div", "ingest-details-grid");
-
-  appendRoot(document, "div", "video-player");
-  const statsShell = appendRoot(document, "div", "stats-shell");
-  const inputStats = document.createElement("div");
-  inputStats.id = "input-stats";
-  statsShell.appendChild(inputStats);
 }
 
 async function flushAsyncWork() {
@@ -163,12 +118,23 @@ runDomScenarioMatrix({
 
     pipelineDeps.setPipelineViewDependencies({
       refreshDashboard: async () => {},
-      openDiagnosticsModal: () => {},
-      openGraphExplorer: () => {},
-      openPipelineHistoryModal: () => {},
+    });
+    const headerModels = [];
+    pipelineView.configurePipelineHeaderPresentation({
+      onPresentation: (model) => {
+        headerModels.push(model);
+      },
+    });
+    const inputModels = [];
+    pipelineView.configurePipelineInputStatusPresentation({
+      onPresentation: (model) => {
+        inputModels.push(model);
+      },
     });
 
     return {
+      headerModels,
+      inputModels,
       renderPipelineInfoColumn: pipelineView.renderPipelineInfoColumn,
       state,
     };
@@ -176,7 +142,7 @@ runDomScenarioMatrix({
   scenarios: [
     {
       name: "probe pending live input shows a probing badge and keeps diagnostics available",
-      async run({ document, renderPipelineInfoColumn, state }) {
+      async run({ headerModels, inputModels, renderPipelineInfoColumn, state }) {
         globalThis.fetch = undefined;
         state.pipelines = [
           makePipeline({
@@ -192,20 +158,18 @@ runDomScenarioMatrix({
 
         renderPipelineInfoColumn("pipe-1");
 
-        const publisherMeta = requireElement(document, "#publisher-meta");
-        const diagnoseButton = requireElement(document, "#diagnose-pipe-btn");
-        const inputStats = requireElement(document, "#input-stats");
-        const player = requireElement(document, "#video-player");
+        const header = headerModels.at(-1);
+        const inputStatus = inputModels.at(-1);
 
-        assert.match(publisherMeta.innerHTML, /Probing/);
-        assert.equal(diagnoseButton.disabled, false);
-        assertVisible(inputStats);
-        assertVisible(player);
+        assert.equal(inputStatus.status.label, "Probing");
+        assert.equal(inputStatus.previewEnabled, true);
+        assert.equal(inputStatus.metricGroups.length, 2);
+        assert.equal(header.canDiagnose, true);
       },
     },
     {
       name: "offline failure state surfaces last failure context and disables live-only actions",
-      async run({ document, renderPipelineInfoColumn, state }) {
+      async run({ headerModels, inputModels, renderPipelineInfoColumn, state }) {
         globalThis.fetch = undefined;
         state.pipelines = [
           makePipeline({
@@ -224,22 +188,21 @@ runDomScenarioMatrix({
 
         renderPipelineInfoColumn("pipe-1");
 
-        const publisherMeta = requireElement(document, "#publisher-meta");
-        const diagnoseButton = requireElement(document, "#diagnose-pipe-btn");
-        const recordButton = requireElement(document, "#record-pipe-btn");
-        const inputStats = requireElement(document, "#input-stats");
-        const player = requireElement(document, "#video-player");
+        const header = headerModels.at(-1);
+        const inputStatus = inputModels.at(-1);
 
-        assert.match(publisherMeta.innerHTML, /Last failure/);
-        assert.equal(diagnoseButton.disabled, true);
-        assert.equal(recordButton.disabled, true);
-        assertHidden(inputStats);
-        assertHidden(player);
+        assert.equal(inputStatus.status.label, "Input offline");
+        assert.equal(inputStatus.status.tone, "error");
+        assert.match(inputStatus.status.detail, /connection reset by peer/);
+        assert.equal(inputStatus.previewEnabled, false);
+        assert.equal(inputStatus.metricGroups.length, 0);
+        assert.equal(header.canDiagnose, false);
+        assert.equal(header.recordingControl.disabled, true);
       },
     },
     {
       name: "file source analysis shows sparse GOP warnings without manual dashboard inspection",
-      async run({ document, renderPipelineInfoColumn, state }) {
+      async run({ headerModels, inputModels, renderPipelineInfoColumn, state }) {
         globalThis.fetch = async (url) => {
           const href = String(url);
           if (href === "/api/v1/media") {
@@ -299,29 +262,29 @@ runDomScenarioMatrix({
         renderPipelineInfoColumn("pipe-1");
         await flushAsyncWork();
 
-        const fileSourceSection = requireElement(document, "#file-source-section");
-        const streamKeySection = requireElement(document, "#stream-key-section");
-        const warning = requireElement(document, "#file-source-gop-warning");
-        const ingestButton = requireElement(document, "#file-ingest-pipe-btn");
-
-        assertVisible(fileSourceSection);
-        assertHidden(streamKeySection);
-        assert.equal(ingestButton.textContent, "Start File");
-        assert.equal(requireElement(document, "#file-source-container").textContent, "MPEG-TS");
-        assert.equal(requireElement(document, "#file-source-loop").textContent, "Enabled");
-        assert.equal(requireElement(document, "#file-source-start-time").textContent, "00:00:05");
-        assert.equal(
-          requireElement(document, "#file-source-optimization").textContent,
-          "Enabled (2s GOP)",
+        const header = headerModels.at(-1);
+        const inputStatus = inputModels.at(-1);
+        const details = new Map(
+          inputStatus.fileSource.details.map((detail) => [
+            detail.key,
+            detail.value,
+          ]),
         );
-        assert.equal(requireElement(document, "#file-source-gop").textContent, "avg 3.0s | max 6.0s");
-        assertVisible(warning);
-        assert.match(warning.textContent, /Sparse source GOP detected/);
+
+        assert.equal(header.fileIngestControl?.label, "Start File");
+        assert.equal(inputStatus.liveSource, null);
+        assert.equal(inputStatus.fileSource.filename, "session-recording.ts");
+        assert.equal(details.get("container"), "MPEG-TS");
+        assert.equal(details.get("loop"), "Enabled");
+        assert.equal(details.get("start"), "00:00:05");
+        assert.equal(details.get("optimization"), "Enabled (2s GOP)");
+        assert.equal(details.get("gop"), "avg 3.0s | max 6.0s");
+        assert.match(inputStatus.fileSource.warning, /Sparse source GOP detected/);
       },
     },
     {
       name: "recording lock keeps edit disabled while live-source ingest controls remain available",
-      async run({ document, renderPipelineInfoColumn, state }) {
+      async run({ headerModels, inputModels, renderPipelineInfoColumn, state }) {
         globalThis.fetch = undefined;
         state.pipelines = [
           makePipeline({
@@ -339,18 +302,19 @@ runDomScenarioMatrix({
 
         renderPipelineInfoColumn("pipe-1");
 
-        const editButton = requireElement(document, "#edit-pipe-btn");
-        const streamKeySection = requireElement(document, "#stream-key-section");
-        const ingestUrlSection = requireElement(document, "#ingest-url-section");
-        const streamKeyCopy = requireElement(document, "#stream-key-copy-btn");
-        const ingestCopy = requireElement(document, "#ingest-url-copy-btn");
+        const header = headerModels.at(-1);
+        const inputStatus = inputModels.at(-1);
+        const rtmpProtocol = inputStatus.liveSource.protocols.find(
+          ({ id }) => id === "rtmp",
+        );
 
-        assert.equal(editButton.disabled, true);
-        assert.match(editButton.title, /Stop recording before editing/);
-        assertVisible(streamKeySection);
-        assertVisible(ingestUrlSection);
-        assert.equal(streamKeyCopy.disabled, false);
-        assert.equal(ingestCopy.disabled, false);
+        assert.equal(header.canEdit, false);
+        assert.match(header.editDisabledReason, /Stop recording before editing/);
+        assert.equal(inputStatus.fileSource, null);
+        assert.equal(inputStatus.liveSource.pipelineId, "pipe-1");
+        assert.equal(inputStatus.liveSource.streamKeyLabel, "stream-key");
+        assert.equal(rtmpProtocol.selected, true);
+        assert.equal(rtmpProtocol.urlLabel, "rtmp://example.com/live/stream-key");
       },
     },
   ],

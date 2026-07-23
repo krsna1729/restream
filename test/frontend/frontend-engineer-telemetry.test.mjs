@@ -5,6 +5,20 @@ import {
   loadCompiledFrontendModule,
 } from "../support/helpers/fake-dom.mjs";
 
+function appendRoot(document, tagName, id) {
+  const element = document.createElement(tagName);
+  element.id = id;
+  document.body.appendChild(element);
+  return element;
+}
+
+function jsonResponse(data) {
+  return new Response(JSON.stringify(data), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 test("telemetry renders zero/null ring values, escapes labels, and distinguishes loading", async () => {
   installFakeDom();
   const { renderEngineerTelemetryHtml } = await loadCompiledFrontendModule(
@@ -80,8 +94,8 @@ test("telemetry renders zero/null ring values, escapes labels, and distinguishes
   assert.match(html, /View video &lt;bad&gt; telemetry details/);
   assert.match(html, /1 counter · raw values in Stage detail/);
   assert.doesNotMatch(html, /packetsIn[\s\S]*0/);
-  assert.match(html, /Kernel receive buffer ceiling/);
-  assert.match(html, /25 MiB/);
+  assert.match(html, /Show host settings/);
+  assert.doesNotMatch(html, /Kernel receive buffer ceiling|25 MiB/);
   assert.match(
     html,
     /Telemetry loaded · 0 ingests · 1 stage · 0 egresses · 1 reader · Pipe &lt;bad&gt;/,
@@ -274,3 +288,58 @@ test("telemetry starts a new pipeline request and ignores the stale selection", 
   assert.match(root.innerHTML, /final-a-reader/);
   assert.doesNotMatch(root.innerHTML, /stale-a-reader|scope-b-reader/);
 });
+
+test(
+  "renderDashboardV2TelemetryBody owns the telemetry route body",
+  { concurrency: false },
+  async () => {
+    const { document } = installFakeDom();
+    const container = appendRoot(
+      document,
+      "div",
+      "dashboard-v2-telemetry-content",
+    );
+    globalThis.fetch = async (url) => {
+      const href = String(url);
+      if (href === "/api/v1/engine/telemetry") {
+        return jsonResponse({
+          generatedAt: "",
+          ingests: [],
+          stages: [],
+          egresses: [],
+          activeTranscoderBuffers: 0,
+        });
+      }
+      if (href === "/api/v1/engine/health?view=summary") {
+        return jsonResponse({ status: "ready", hostSettings: [] });
+      }
+      if (href === "/api/v1/pipelines/p1/telemetry") {
+        return jsonResponse({
+          generatedAt: "",
+          pipelineId: "p1",
+          ingest: null,
+          sourceRing: null,
+          stages: [],
+          egresses: [],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${href}`);
+    };
+
+    const routeBody = await loadCompiledFrontendModule(
+      "features/telemetry-route-body.js",
+    );
+    routeBody.renderDashboardV2TelemetryBody(container.id, {
+      pipelines: [{ id: "p1", name: "Program" }],
+    });
+
+    assert.equal(container.dataset.telemetryRouteBody, "v2");
+    assert.match(container.innerHTML, /Engineer telemetry|Telemetry/);
+    assert.match(container.innerHTML, /aria-label="Search telemetry items"/);
+    assert.doesNotMatch(
+      container.innerHTML,
+      /<h1[^>]*>Engineer telemetry<\/h1>/,
+    );
+    assert.doesNotMatch(container.innerHTML, /\son[a-z]+\s*=/i);
+  },
+);

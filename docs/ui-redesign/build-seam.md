@@ -43,9 +43,9 @@ and moving every primary route body into a v2-owned host.
 
 ## Contract
 
-- `public/js/app/dashboard-entry.js` remains the stable embedded entry and
-  dynamically selects the dashboard UI. With no stored or query override, the
-  loader now resolves to v2; `ui=legacy` remains the explicit fallback.
+- `public/js/app/dashboard-entry.js` remains the stable embedded entry and now
+  always boots the v2 dashboard. UI-version storage and query overrides are
+  intentionally ignored after cutover.
 - `?mode=overview&ui=v2` preserves the canonical Overview location and loads
   `public/js/app/dashboard-v2-entry.js` dynamically. Dense route bodies for
   Pipeline Inspect, Pipeline Monitor, Media, Settings, Status, Incidents, and

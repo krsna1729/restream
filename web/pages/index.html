@@ -169,7 +169,7 @@
               data-dashboard-mode="pipeline"
               role="tab"
               aria-selected="false"
-              aria-controls="dashboard-grid"
+              aria-controls="dashboard-v2-operate-panel"
               tabindex="-1"
             >
               Pipeline
@@ -242,19 +242,6 @@
           role="status"
           aria-live="polite"
         ></div>
-        <label
-          class="border-base-content/15 bg-base-200/60 text-base-content/75 ml-auto inline-flex min-h-9 items-center gap-2 rounded-full border px-3 text-xs font-medium"
-          for="dashboard-ui-v2-toggle"
-          title="Remember this dashboard UI version in this browser"
-        >
-          <span>UI v2</span>
-          <input
-            id="dashboard-ui-v2-toggle"
-            type="checkbox"
-            class="toggle toggle-xs toggle-accent"
-            aria-label="Use dashboard UI v2"
-          />
-        </label>
       </div>
     </section>
 
@@ -275,7 +262,7 @@
           data-pipeline-workspace-view="operate"
           role="tab"
           aria-selected="true"
-          aria-controls="dashboard-grid"
+          aria-controls="dashboard-v2-operate-panel"
           tabindex="0"
         >
           Operate
@@ -1087,7 +1074,6 @@
         class="min-h-0 flex-1 overflow-auto px-4 py-3"
       >
         <div id="dashboard-v2-root" class="mx-auto mb-4 max-w-7xl" hidden></div>
-        <div id="overview-mode-content" class="mx-auto max-w-7xl"></div>
       </section>
 
       <section
@@ -1101,7 +1087,6 @@
           class="mx-auto max-w-7xl"
           hidden
         ></div>
-        <div id="incidents-mode-content" class="mx-auto max-w-7xl"></div>
       </section>
 
       <section
@@ -1115,7 +1100,6 @@
           class="mx-auto max-w-7xl"
           hidden
         ></div>
-        <div id="telemetry-mode-content" class="mx-auto max-w-7xl"></div>
       </section>
 
       <section
@@ -1125,7 +1109,6 @@
         class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
       >
         <div id="dashboard-v2-control-room-root" hidden></div>
-        <div id="control-mode-content" class="mx-auto max-w-7xl"></div>
       </section>
 
       <section
@@ -1135,7 +1118,6 @@
         class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
       >
         <div id="dashboard-v2-pipeline-inspect-root" hidden></div>
-        <div id="inspect-mode-content" class="mx-auto flex w-full flex-col gap-4"></div>
       </section>
 
       <section
@@ -1149,7 +1131,6 @@
           class="mx-auto max-w-7xl"
           hidden
         ></div>
-        <div id="media-mode-content" class="mx-auto max-w-7xl"></div>
       </section>
 
       <section
@@ -1163,7 +1144,6 @@
           class="w-full"
           hidden
         ></div>
-        <div id="settings-mode-content" class="w-full"></div>
       </section>
 
       <section
@@ -1177,11 +1157,10 @@
           class="mx-auto max-w-7xl"
           hidden
         ></div>
-        <div id="status-mode-content" class="w-full"></div>
       </section>
 
       <div
-        id="dashboard-grid"
+        id="dashboard-v2-operate-panel"
         role="tabpanel"
         aria-labelledby="pipeline-workspace-tab-operate"
         class="mx-auto grid hidden min-h-0 w-full max-w-7xl flex-1 gap-4 p-4"
@@ -1192,29 +1171,12 @@
           class="border-base-content/10 bg-base-200 w-full max-w-[18rem] overflow-y-auto rounded-lg border"
         >
           <div id="dashboard-v2-pipeline-selector-root" hidden></div>
-          <div id="pipeline-selector-legacy">
-            <div
-              class="border-base-content/10 flex items-center justify-between gap-2 border-b px-4 py-3"
-            >
-              <h2 class="text-base-content/70 text-sm font-semibold uppercase">
-                Pipelines
-              </h2>
-              <button
-                class="btn btn-xs btn-accent btn-outline"
-                id="add-pipe-btn"
-                onclick="addPipeBtn()"
-              >
-                Add
-              </button>
-            </div>
-            <ul class="menu w-full gap-1 p-2" id="pipelines"></ul>
-          </div>
         </div>
 
         <!-- Middle Column -->
         <div
-          class="border-base-content/10 bg-base-200 hidden overflow-y-auto rounded-lg border p-4"
-          id="pipe-info-col"
+          class="border-base-content/10 bg-base-200 overflow-y-auto rounded-lg border p-4"
+          data-dashboard-v2-operate-detail-shell
         >
           <div>
             <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
@@ -1223,441 +1185,17 @@
                 class="min-w-0 flex-1"
                 hidden
               ></div>
-              <div
-                id="pipeline-header-legacy-identity"
-                class="min-w-0 flex-1 max-sm:w-full max-sm:flex-none"
-              >
-                <h1
-                  class="whitespace-normal text-lg font-semibold leading-tight"
-                  id="pipe-name"
-                ></h1>
-              </div>
-              <div class="flex shrink-0 items-center gap-2 max-sm:w-full max-sm:flex-wrap">
-                <button
-                  class="btn btn-xs btn-accent btn-outline hidden"
-                  id="file-ingest-pipe-btn"
-                >
-                  Start File
-                </button>
-                <button
-                  class="btn btn-xs btn-accent btn-outline"
-                  id="record-pipe-btn"
-                >
-                  Record
-                </button>
-                <button
-                  class="btn btn-xs btn-accent btn-outline"
-                  id="graph-pipe-btn"
-                >
-                  Graph
-                </button>
-                <button
-                  class="btn btn-xs btn-accent btn-outline"
-                  id="diagnose-pipe-btn"
-                >
-                  Diagnose
-                </button>
-                <div class="dropdown dropdown-end" id="pipeline-header-legacy-actions">
-                  <button
-                    type="button"
-                    tabindex="0"
-                    class="btn btn-xs btn-outline"
-                    aria-label="Pipeline actions"
-                  >
-                    More
-                  </button>
-                  <ul
-                    tabindex="0"
-                    class="dropdown-content menu dashboard-action-menu bg-base-100 border-base-content/10 z-20 mt-2 w-40 rounded-lg border p-1 shadow"
-                  >
-                    <li>
-                      <button type="button" id="pipe-history-btn">
-                        History
-                      </button>
-                    </li>
-                    <li id="edit-pipe-action-item">
-                      <button
-                        type="button"
-                        id="edit-pipe-btn"
-                        onclick="editPipeBtn()"
-                      >
-                        Edit
-                      </button>
-                    </li>
-                    <li>
-                      <button
-                        type="button"
-                        id="delete-pipe-btn"
-                        class="text-error"
-                        onclick="deletePipeBtn()"
-                      >
-                        Delete
-                      </button>
-                    </li>
-                  </ul>
-                </div>
-              </div>
             </div>
-            <span class="badge hidden" id="input-time"></span>
-
             <div id="dashboard-v2-pipeline-input-status-root" hidden></div>
-
-            <div class="mb-3 text-center" id="video-player">
-              <!-- TODO: add player -->
-            </div>
-
-            <div id="input-stats">
-              <h2
-                id="pipeline-input-legacy-traffic-heading"
-                class="text-base-content/70 text-sm font-semibold uppercase"
-              >
-                Stats
-              </h2>
-              <div
-                id="pipeline-input-legacy-traffic"
-                class="stats border-base-content/10 bg-base-100 mt-1 border"
-              >
-                <div class="stat p-3">
-                  <div class="stat-title">Input Bitrate</div>
-                  <div class="stat-value text-sm" id="input-total-bw"></div>
-                </div>
-
-                <div class="stat p-3">
-                  <div class="stat-title">Output Bitrate</div>
-                  <div class="stat-value text-sm" id="output-total-bw"></div>
-                </div>
-
-                <div class="stat p-3">
-                  <div class="stat-title">Readers</div>
-                  <div class="stat-value text-sm" id="input-reader-count"></div>
-                </div>
-
-                <div class="stat p-3">
-                  <div class="stat-title">Outputs</div>
-                  <div class="stat-value text-sm" id="input-output-count"></div>
-                </div>
-              </div>
-
-              <h2
-                id="pipeline-input-legacy-video-heading"
-                class="text-base-content/70 mt-3 text-sm font-semibold uppercase"
-              >
-                Video
-              </h2>
-              <div
-                id="pipeline-input-legacy-video"
-                class="stats border-base-content/10 bg-base-100 mt-1 border"
-              >
-                <div class="stat p-3">
-                  <div class="stat-title">Codec</div>
-                  <div class="stat-value text-sm" id="input-video-codec"></div>
-                </div>
-
-                <div class="stat p-3">
-                  <div class="stat-title">Resolution</div>
-                  <div
-                    class="stat-value text-sm"
-                    id="input-video-resolution"
-                  ></div>
-                </div>
-
-                <div class="stat p-3">
-                  <div class="stat-title">FPS</div>
-                  <div class="stat-value text-sm" id="input-video-fps"></div>
-                </div>
-
-                <div class="stat p-3">
-                  <div class="stat-title">Profile</div>
-                  <div
-                    class="stat-value text-sm"
-                    id="input-video-profile"
-                  ></div>
-                </div>
-
-                <div class="stat p-3">
-                  <div class="stat-title">Level</div>
-                  <div class="stat-value text-sm" id="input-video-level"></div>
-                </div>
-
-                <div class="stat hidden p-3" id="input-video-pid-stat">
-                  <div class="stat-title">PID</div>
-                  <div class="stat-value text-sm" id="input-video-pid"></div>
-                </div>
-
-                <div class="stat hidden p-3" id="input-video-selection-stat">
-                  <div class="stat-title">Track Selection</div>
-                  <div
-                    class="stat-value text-sm"
-                    id="input-video-selection"
-                  ></div>
-                </div>
-              </div>
-
-              <h2
-                id="pipeline-input-legacy-audio-heading"
-                class="text-base-content/70 mt-3 text-sm font-semibold uppercase"
-              >
-                Audio
-              </h2>
-              <div id="input-audio-tracks" class="mt-1 space-y-1"></div>
-            </div>
-            <div class="divider"></div>
-            <div class="space-y-3">
-              <section
-                id="file-source-section"
-                class="border-base-content/10 bg-base-100 hidden rounded-lg border p-4"
-              >
-                <div class="flex items-center gap-2">
-                  <span class="text-base-content/75 text-sm font-semibold"
-                    >Source File:</span
-                  >
-                  <span
-                    id="file-source-inline"
-                    class="text-base-content/90 min-w-0 flex-1 truncate text-sm"
-                  ></span>
-                </div>
-                <div
-                  id="file-source-gop-warning"
-                  class="alert alert-warning mt-3 hidden py-2 text-sm"
-                ></div>
-                <details id="file-source-details" class="mt-3">
-                  <summary
-                    class="text-base-content/70 cursor-pointer text-sm font-medium"
-                  >
-                    File Details
-                  </summary>
-                  <div
-                    class="mt-3 grid gap-3 text-sm sm:grid-cols-2"
-                    id="file-source-details-grid"
-                  >
-                    <div>
-                      <div class="text-base-content/60 text-xs uppercase">
-                        Container
-                      </div>
-                      <div id="file-source-container" class="mt-1">--</div>
-                    </div>
-                    <div>
-                      <div class="text-base-content/60 text-xs uppercase">
-                        Size
-                      </div>
-                      <div id="file-source-size" class="mt-1">--</div>
-                    </div>
-                    <div>
-                      <div class="text-base-content/60 text-xs uppercase">
-                        Modified
-                      </div>
-                      <div id="file-source-modified" class="mt-1">--</div>
-                    </div>
-                    <div>
-                      <div class="text-base-content/60 text-xs uppercase">
-                        Loop
-                      </div>
-                      <div id="file-source-loop" class="mt-1">--</div>
-                    </div>
-                    <div>
-                      <div class="text-base-content/60 text-xs uppercase">
-                        Start Offset
-                      </div>
-                      <div id="file-source-start-time" class="mt-1">--</div>
-                    </div>
-                    <div>
-                      <div class="text-base-content/60 text-xs uppercase">
-                        Live Optimized
-                      </div>
-                      <div id="file-source-optimization" class="mt-1">--</div>
-                    </div>
-                    <div>
-                      <div class="text-base-content/60 text-xs uppercase">
-                        Video Codec
-                      </div>
-                      <div id="file-source-video-codec" class="mt-1">--</div>
-                    </div>
-                    <div>
-                      <div class="text-base-content/60 text-xs uppercase">
-                        Frame Rate
-                      </div>
-                      <div id="file-source-fps" class="mt-1">--</div>
-                    </div>
-                    <div>
-                      <div class="text-base-content/60 text-xs uppercase">
-                        Duration
-                      </div>
-                      <div id="file-source-duration" class="mt-1">--</div>
-                    </div>
-                    <div>
-                      <div class="text-base-content/60 text-xs uppercase">
-                        GOP
-                      </div>
-                      <div id="file-source-gop" class="mt-1">--</div>
-                    </div>
-                  </div>
-                </details>
-              </section>
-
-              <section
-                id="stream-key-section"
-                class="border-base-content/10 bg-base-100 rounded-lg border p-4"
-              >
-                <div class="flex items-center gap-2">
-                  <span class="text-base-content/75 text-sm font-semibold"
-                    >Key:</span
-                  >
-                  <code
-                    id="stream-key-inline"
-                    class="text-base-content/90 min-w-0 flex-1 truncate font-mono text-sm"
-                  ></code>
-                  <button
-                    type="button"
-                    id="stream-key-copy-btn"
-                    class="btn btn-sm btn-accent btn-outline shrink-0"
-                  >
-                    Copy Key
-                  </button>
-                </div>
-              </section>
-
-              <section
-                id="ingest-url-section"
-                class="border-base-content/10 bg-base-100 rounded-lg border p-4"
-              >
-                <div class="flex flex-wrap items-center gap-2">
-                  <span
-                    class="text-base-content/75 mr-auto text-sm font-semibold"
-                    >Publish URL</span
-                  >
-                  <div
-                    role="group"
-                    aria-label="Ingest protocol selector"
-                    class="flex gap-2"
-                  >
-                    <button
-                      type="button"
-                      id="ingest-protocol-rtmp"
-                      data-protocol="rtmp"
-                      class="btn btn-sm border-base-content/10 bg-base-100/70 text-base-content/80 hover:bg-base-100 min-w-20 rounded-lg px-4 shadow-none"
-                    >
-                      RTMP
-                    </button>
-                    <button
-                      type="button"
-                      id="ingest-protocol-srt"
-                      data-protocol="srt"
-                      class="btn btn-sm border-base-content/10 bg-base-100/70 text-base-content/80 hover:bg-base-100 min-w-20 rounded-lg px-4 shadow-none"
-                    >
-                      SRT
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    id="ingest-url-copy-btn"
-                    class="btn btn-sm btn-outline btn-accent"
-                    aria-label="Copy ingest URL"
-                  >
-                    Copy URL
-                  </button>
-                </div>
-
-                <div
-                  id="ingest-url-surface"
-                  class="border-base-content/10 bg-base-200 mt-3 hidden rounded-lg border px-4 py-3"
-                >
-                  <code
-                    class="text-base-content/90 block font-mono text-[0.98rem] leading-7 break-all"
-                    id="ingest-url"
-                    data-copy=""
-                  ></code>
-                </div>
-
-                <div
-                  id="ingest-url-details"
-                  class="border-base-content/10 bg-base-200 mt-3 hidden rounded-lg border p-3"
-                >
-                  <div
-                    id="ingest-url-details-heading"
-                    class="text-base-content/60 text-xs font-semibold"
-                  >
-                    Operator Fields
-                  </div>
-                  <p
-                    id="ingest-url-details-note"
-                    class="text-base-content/60 mt-1 hidden text-xs leading-5"
-                  ></p>
-                  <div
-                    id="ingest-details-grid"
-                    class="mt-3 grid gap-2 sm:grid-cols-2"
-                  ></div>
-                </div>
-              </section>
-            </div>
           </div>
         </div>
 
         <!-- Right Column -->
         <div
-          class="border-base-content/10 bg-base-200 hidden w-full min-w-0 overflow-y-auto rounded-lg border p-4 xl:min-w-[24rem]"
-          id="outs-col"
+          class="border-base-content/10 bg-base-200 w-full min-w-0 overflow-y-auto rounded-lg border p-4 xl:min-w-[24rem]"
+          data-dashboard-v2-operate-output-shell
         >
-          <h2 class="text-base-content/70 mb-3 text-sm font-semibold uppercase">
-            Outputs
-          </h2>
           <div id="dashboard-v2-pipeline-output-overview-root" hidden></div>
-          <div id="pipeline-output-overview-legacy">
-            <div id="outputs-summary" class="mb-3"></div>
-            <div id="outputs-focus-list" class="mb-3 space-y-2"></div>
-          </div>
-          <div
-            id="outputs-list-toolbar"
-            class="mb-3 hidden items-center justify-between gap-2"
-          >
-            <div
-              id="outputs-list-caption"
-              class="text-base-content/60 text-xs"
-            ></div>
-            <button
-              type="button"
-              id="outputs-toggle-full-list"
-              class="btn btn-xs btn-outline"
-            >
-              Show all
-            </button>
-          </div>
-          <div class="space-y-3" id="outputs-list"></div>
-          <div class="mt-5 w-full text-center">
-            <button
-              class="btn btn-sm btn-accent btn-outline"
-              id="add-out-btn"
-              onclick="addOutBtn()"
-            >
-              Add Output
-            </button>
-          </div>
-        </div>
-
-        <!-- Stats Column -->
-        <div
-          class="border-base-content/10 bg-base-200 hidden overflow-y-auto rounded-lg border p-4"
-          id="stats-col"
-        >
-          <div class="overflow-x-auto">
-            <table class="table">
-              <!-- head -->
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Name</th>
-                  <th>Bitrate (Mb/s)</th>
-                  <th>Codec</th>
-                  <th>Size</th>
-                  <th>FPS</th>
-                  <th>Trk</th>
-                  <th>Codec</th>
-                  <th>Ch</th>
-                  <th>Freq</th>
-                </tr>
-              </thead>
-              <tbody id="stats-table"></tbody>
-            </table>
-          </div>
         </div>
       </div>
     </main>

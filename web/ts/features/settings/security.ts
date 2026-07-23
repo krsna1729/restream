@@ -97,16 +97,6 @@ function normalizeSettingsSearch(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function settingsV2Active(): boolean {
-  const toggle = document.getElementById("dashboard-ui-v2-toggle");
-  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
-  try {
-    return new URLSearchParams(window.location.search).get("ui") === "v2";
-  } catch (_err) {
-    return false;
-  }
-}
-
 function formatRateLimitScope(scope: string): string {
   switch (scope) {
     case "dashboard-login":
@@ -257,7 +247,7 @@ function renderRateLimitAttempts(attempts: readonly RateLimitAttempt[]): void {
     showToggle && !authAttemptsExpanded
       ? shownAttempts.slice(0, AUTH_ATTEMPT_VISIBLE_LIMIT)
       : shownAttempts;
-  const resetActionsVisible = !settingsV2Active() || authResetActionsExpanded;
+  const resetActionsVisible = authResetActionsExpanded;
   const resetActionsToggle = document.getElementById(
     "auth-reset-actions-toggle",
   ) as HTMLButtonElement | null;
@@ -267,7 +257,7 @@ function renderRateLimitAttempts(attempts: readonly RateLimitAttempt[]): void {
   const resetHeading = document.getElementById(
     "auth-attempts-reset-heading",
   ) as HTMLTableCellElement | null;
-  resetActionsToggle?.classList.toggle("hidden", !settingsV2Active());
+  resetActionsToggle?.classList.remove("hidden");
   resetActionsToggle?.setAttribute(
     "aria-expanded",
     authResetActionsExpanded ? "true" : "false",

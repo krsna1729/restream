@@ -104,6 +104,24 @@ export function DashboardV2PipelineHeader({
           >
             Edit
           </button>
+          <button
+            aria-label={`Open history for ${model.name}`}
+            className="btn btn-xs btn-outline"
+            onClick={() => actions.openHistory(model.id, model.name)}
+            type="button"
+          >
+            History
+          </button>
+          <button
+            aria-label={`Delete pipeline ${model.name}`}
+            className="btn btn-xs btn-outline text-error"
+            disabled={!model.canDelete}
+            onClick={() => actions.deletePipeline(model.id)}
+            title={model.deleteTitle}
+            type="button"
+          >
+            Delete
+          </button>
         </div>
       </div>
       {model.lifecycleMessages.length ? (
@@ -127,8 +145,10 @@ export function DashboardV2PipelineHeader({
 }
 
 export function DashboardV2PipelineDetailsPlaceholderCard({
+  actions,
   model,
 }: {
+  actions: DashboardV2PipelineHeaderActions;
   model: DashboardV2PipelineDetailsPlaceholder;
 }): React.JSX.Element {
   return (
@@ -151,6 +171,15 @@ export function DashboardV2PipelineDetailsPlaceholderCard({
           <p className="text-base-content/65 mt-1 max-w-2xl text-sm">
             {model.message}
           </p>
+          {model.actionLabel ? (
+            <button
+              className="btn btn-sm btn-accent btn-outline mt-4"
+              onClick={actions.addPipeline}
+              type="button"
+            >
+              {model.actionLabel}
+            </button>
+          ) : null}
         </div>
       </div>
     </section>

@@ -1,18 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  FakeElement,
-  installFakeDom,
-  loadCompiledFrontendModule,
-} from "../support/helpers/fake-dom.mjs";
-
-function appendRoot(document, tagName, id) {
-  const element = document.createElement(tagName);
-  element.id = id;
-  document.body.appendChild(element);
-  return element;
-}
+import { installFakeDom, loadCompiledFrontendModule } from "../support/helpers/fake-dom.mjs";
 
 async function flushAsyncWork() {
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -22,10 +11,6 @@ async function flushAsyncWork() {
 test("overview activity uses a restream-scoped log stream after the initial snapshot and pauses it while hidden", async () => {
   const { document, window } = installFakeDom();
   window.location.href = "http://localhost/?mode=overview";
-
-  appendRoot(document, "div", "overview-mode-content");
-  appendRoot(document, "div", "overview-mode-panel");
-  appendRoot(document, "div", "dashboard-grid");
 
   const requests = [];
   globalThis.fetch = async (url) => {
@@ -93,25 +78,31 @@ test("overview activity uses a restream-scoped log stream after the initial snap
     configurable: true,
   });
 
-  const modes = await loadCompiledFrontendModule("app/modes.js");
+  const overviewMode = await loadCompiledFrontendModule("app/modes/overview.js");
   const { state } = await loadCompiledFrontendModule("core/state.js");
   state.pipelines = [];
   state.metrics = {};
+  const presentations = [];
 
-  modes.renderDashboardModes();
+  overviewMode.configureOverviewPresentation({
+    onPresentation: (presentation) => {
+      presentations.push(presentation);
+    },
+  });
+  overviewMode.renderOverview();
   await flushAsyncWork();
 
   assert.deepEqual(requests, [
     "/api/v1/logs?scope=restream&limit=24&order=desc",
   ]);
   assert.equal(streams.length, 1);
-  const overview = document.getElementById("overview-mode-content");
-  const settledOverviewWrites = overview.stats.innerHTMLWrites;
-  modes.renderDashboardModes();
+  assert.equal(document.getElementById("overview-mode-content"), null);
+  const settledPresentationCount = presentations.length;
+  overviewMode.renderOverview();
   assert.equal(
-    overview.stats.innerHTMLWrites,
-    settledOverviewWrites,
-    "an unchanged runtime refresh must keep the Overview subtree mounted",
+    presentations.length,
+    settledPresentationCount + 1,
+    "an unchanged runtime refresh must publish a fresh v2 presentation without legacy DOM",
   );
 
   const overviewActivityStream = streams.find(
@@ -137,15 +128,18 @@ test("overview activity uses a restream-scoped log stream after the initial snap
 
   await flushAsyncWork();
 
-  assert.ok(overview instanceof FakeElement);
-  assert.match(overview.innerHTML, /Server Task Exit/);
+  assert.ok(
+    /task exited unexpectedly/.test(
+      JSON.stringify(presentations.at(-1).activityBursts),
+    ),
+  );
 
   document.hidden = true;
-  modes.syncOverviewActivityStream();
+  overviewMode.syncOverviewActivityStream();
   assert.equal(overviewActivityStream.closed, true);
 
   document.hidden = false;
-  modes.syncOverviewActivityStream();
+  overviewMode.syncOverviewActivityStream();
 
   const resumedOverviewActivityStream = streams.find(
     (stream) =>
@@ -158,7 +152,7 @@ test("overview activity uses a restream-scoped log stream after the initial snap
   );
 
   document.hidden = true;
-  modes.syncOverviewActivityStream();
+  overviewMode.syncOverviewActivityStream();
   Object.defineProperty(globalThis, "EventSource", {
     value: class ThrowingEventSource {
       constructor() {
@@ -172,16 +166,16 @@ test("overview activity uses a restream-scoped log stream after the initial snap
   Date.now = () => fakeNow;
   document.hidden = false;
 
-  modes.syncOverviewActivityStream();
+  overviewMode.syncOverviewActivityStream();
   fakeNow += 15_001;
-  modes.syncOverviewActivityStream();
+  overviewMode.syncOverviewActivityStream();
   await flushAsyncWork();
 
   assert.deepEqual(requests, [
     "/api/v1/logs?scope=restream&limit=24&order=desc",
     "/api/v1/logs?scope=restream&limit=24&order=desc",
   ]);
-  modes.syncOverviewActivityStream();
+  overviewMode.syncOverviewActivityStream();
   await flushAsyncWork();
   assert.deepEqual(
     requests,

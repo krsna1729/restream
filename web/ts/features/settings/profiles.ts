@@ -52,10 +52,6 @@ function effectiveTranscodeProfiles(): TranscodeProfiles {
   return DEFAULT_PROFILES;
 }
 
-function settingsV2Active(): boolean {
-  return Boolean(document.getElementById("dashboard-v2-host"));
-}
-
 function profileNumber(row: HTMLElement, selector: string, dataKey: keyof HTMLElement["dataset"]): number {
   const input = row.querySelector<HTMLInputElement>(selector);
   const raw = input ? input.value.trim() : row.dataset[dataKey] || "";
@@ -268,9 +264,7 @@ export function addTranscodeProfile(): void {
     nextName = `new_profile_${suffix}`;
     suffix += 1;
   }
-  if (settingsV2Active()) {
-    profileTuningRowsExpanded.add(nextName);
-  }
+  profileTuningRowsExpanded.add(nextName);
   const div = document.createElement("div");
   div.innerHTML = renderProfileRow(nextName, {
     preset: "ultrafast",

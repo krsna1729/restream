@@ -5,7 +5,6 @@ import {
   inspectFaultCandidates,
   inspectProbeBlockers,
   inspectSuggestedNextStep,
-  pipelineInspectV2Active,
 } from "./view-helpers.js";
 import {
   resourceDetailPanelHtml,
@@ -110,11 +109,10 @@ export function renderDiagnostics(pipe: PipelineView | null): void {
     focusSummary.textContent = `Inspection focus · ${blockers.length ? `${pluralize(blockers.length, "blocker")} before active probes` : "ready for active probes"} · ${pluralize(faultCandidates.length, "fault candidate")} · ${suggestedNextStep}`;
   }
 
-  if (pipelineInspectV2Active()) {
-    const detailLabel = `${
-      inspectProbeDetailsExpanded ? "Hide" : "Show"
-    } probe details for ${pipe.name}`;
-    container.innerHTML = `<section class="border-base-content/10 bg-base-100/35 rounded-lg border p-3">
+  const detailLabel = `${
+    inspectProbeDetailsExpanded ? "Hide" : "Show"
+  } probe details for ${pipe.name}`;
+  container.innerHTML = `<section class="border-base-content/10 bg-base-100/35 rounded-lg border p-3">
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div class="dashboard-kicker">Probe plan</div>
@@ -138,29 +136,12 @@ export function renderDiagnostics(pipe: PipelineView | null): void {
             : ""
         }
       </section>`;
-    document
-      .getElementById("inspect-probe-details-toggle")
-      ?.addEventListener("click", () => {
-        inspectProbeDetailsExpanded = !inspectProbeDetailsExpanded;
-        renderDiagnostics(pipe);
-      });
-    return;
-  }
-
-  container.innerHTML = `<div class="grid gap-3 md:grid-cols-3">
-        <div class="dashboard-stat-card-compact">
-            <div class="dashboard-kicker">Probe Readiness</div>
-            <div class="mt-2 text-sm">${blockerText}</div>
-        </div>
-        <div class="dashboard-stat-card-compact">
-            <div class="dashboard-kicker">Fault Candidates</div>
-            <div class="mt-2 text-sm">${faultText}</div>
-        </div>
-        <div class="dashboard-stat-card-compact">
-            <div class="dashboard-kicker">Suggested Next Step</div>
-            <div class="mt-2 text-sm">${suggestedNextStep}</div>
-        </div>
-    </div>`;
+  document
+    .getElementById("inspect-probe-details-toggle")
+    ?.addEventListener("click", () => {
+      inspectProbeDetailsExpanded = !inspectProbeDetailsExpanded;
+      renderDiagnostics(pipe);
+    });
 }
 
 export function renderInspectorResourceDetails(
@@ -181,9 +162,7 @@ export function renderInspectorResourceDetails(
   }
   const detailHtml = resourceDetailPanelHtml(resourceMap, pipe);
   const resourceDetailsLabel = `${inspectResourceDetailsExpanded ? "Hide" : "Show"} resource details for ${pipe.name}`;
-  const resourceDetailPanel = !pipelineInspectV2Active()
-    ? detailHtml
-    : `<section class="border-base-content/10 bg-base-100/35 rounded-lg border p-3">
+  const resourceDetailPanel = `<section class="border-base-content/10 bg-base-100/35 rounded-lg border p-3">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div>
             <div class="text-sm font-semibold">Resource detail tables</div>

@@ -14,8 +14,7 @@ const previewControllers = new WeakMap<HTMLElement, AbortController>();
 // The audio-track picker menu is portal'd to document.body (so it can escape
 // clipped/overflow-hidden preview containers), which detaches it from
 // playerElem's own subtree. Track it per playerElem so clearing one preview
-// instance (e.g. a hidden legacy #video-player while v2 owns the route)
-// cannot also destroy another concurrently-mounted instance's open menu.
+// instance cannot also destroy another concurrently-mounted instance's open menu.
 const audioPickerMenus = new WeakMap<HTMLElement, HTMLElement>();
 export function buildInputPreviewUrl(pipelineId: string): string {
   return withBasePath(`/hls/${encodeURIComponent(pipelineId)}/master.m3u8`);

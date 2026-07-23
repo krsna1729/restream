@@ -53,6 +53,8 @@ export interface PipelineOperateHeaderModel {
   readonly diagnoseDisabledReason?: string;
   readonly canEdit: boolean;
   readonly editDisabledReason?: string;
+  readonly canDelete: boolean;
+  readonly deleteTitle: string;
   readonly recordingControl: PipelineOperateLifecycleControlModel;
   readonly fileIngestControl: PipelineOperateLifecycleControlModel | null;
   readonly lifecycleMessages: readonly PipelineOperateLifecycleMessage[];
@@ -426,6 +428,7 @@ export function buildPipelineOperateHeaderModel(
   );
   const fileIngestRunning = Boolean(fileIngest?.running);
   const fileIngestPending = controls.fileIngestIntent !== null;
+  const canDelete = !pipeline.outs.some((output) => output.status !== "off");
   const lifecycleMessages: PipelineOperateLifecycleMessage[] = [];
   if (controls.recordingError) {
     lifecycleMessages.push({
@@ -464,6 +467,8 @@ export function buildPipelineOperateHeaderModel(
     editDisabledReason: recordingActive
       ? "Stop recording before editing"
       : undefined,
+    canDelete,
+    deleteTitle: canDelete ? "" : "Stop all outputs before deleting the pipeline",
     recordingControl: {
       label: recordingPending
         ? controls.recordingIntent === "starting"

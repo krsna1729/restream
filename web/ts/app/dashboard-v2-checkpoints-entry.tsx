@@ -18,6 +18,10 @@ import type {
   DashboardV2StatusActions,
   DashboardV2TelemetryActions,
 } from "./dashboard-v2-loader.js";
+import {
+  dashboardV2RouteBodyConfig,
+  type DashboardV2RouteBodyConfig,
+} from "./dashboard-v2-route-bodies.js";
 
 interface DashboardV2CheckpointMetric {
   readonly label: string;
@@ -34,8 +38,7 @@ type DashboardV2CheckpointAction = readonly [
 
 interface DashboardV2CheckpointCardProps {
   readonly actions: readonly DashboardV2CheckpointAction[];
-  readonly bodyHostId: string;
-  readonly bodyRouteKey: string;
+  readonly routeBody: DashboardV2RouteBodyConfig;
   readonly className?: string;
   readonly focusLabel: string;
   readonly focusTitle: string;
@@ -61,8 +64,7 @@ function toneBadgeClass(tone: string): string {
 
 function DashboardV2CheckpointCard({
   actions,
-  bodyHostId,
-  bodyRouteKey,
+  routeBody,
   className = "",
   focusLabel,
   focusTitle,
@@ -151,9 +153,9 @@ function DashboardV2CheckpointCard({
         </p>
       </div>
       <div
-        id={bodyHostId}
+        id={routeBody.hostId}
         className="mt-4 min-w-0"
-        data-dashboard-v2-owned-route-body={bodyRouteKey}
+        data-dashboard-v2-owned-route-body={routeBody.mode}
       />
     </section>
   );
@@ -189,8 +191,6 @@ function DashboardV2PipelineInspectCheckpoint({
           "Run diagnostics for inspected pipeline",
         ],
       ]}
-      bodyHostId="dashboard-v2-pipeline-inspect-content"
-      bodyRouteKey="pipeline-inspect"
       className="border-info/25 bg-info/5"
       focusLabel={model.focusLabel}
       focusTitle="Inspection focus"
@@ -207,6 +207,7 @@ function DashboardV2PipelineInspectCheckpoint({
       statusTone={model.statusTone}
       summary={model.summary}
       title={model.title}
+      routeBody={dashboardV2RouteBodyConfig("pipeline-inspect")}
     />
   );
 }
@@ -232,8 +233,6 @@ function DashboardV2ControlRoomCheckpoint({
           "Operate monitored pipeline",
         ],
       ]}
-      bodyHostId="dashboard-v2-control-room-content"
-      bodyRouteKey="pipeline-monitor"
       className="border-accent/25 bg-accent/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Monitor focus"
@@ -250,6 +249,7 @@ function DashboardV2ControlRoomCheckpoint({
       statusTone={model.statusTone}
       summary={model.summary}
       title={model.title}
+      routeBody={dashboardV2RouteBodyConfig("pipeline-monitor")}
     />
   );
 }
@@ -272,8 +272,6 @@ function DashboardV2IncidentsCheckpoint({
           "Open telemetry from incidents",
         ],
       ]}
-      bodyHostId="dashboard-v2-incidents-content"
-      bodyRouteKey="incidents"
       className="border-error/25 bg-error/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Incident focus"
@@ -290,6 +288,7 @@ function DashboardV2IncidentsCheckpoint({
       statusTone={model.statusTone}
       summary={model.summary}
       title={model.title}
+      routeBody={dashboardV2RouteBodyConfig("incidents")}
     />
   );
 }
@@ -312,8 +311,6 @@ function DashboardV2TelemetryCheckpoint({
           "Open status from telemetry",
         ],
       ]}
-      bodyHostId="dashboard-v2-telemetry-content"
-      bodyRouteKey="telemetry"
       className="border-secondary/25 bg-secondary/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Telemetry focus"
@@ -330,6 +327,7 @@ function DashboardV2TelemetryCheckpoint({
       statusTone={model.statusTone}
       summary={model.summary}
       title={model.title}
+      routeBody={dashboardV2RouteBodyConfig("telemetry")}
     />
   );
 }
@@ -352,8 +350,6 @@ function DashboardV2StatusCheckpoint({
           "Open telemetry from status",
         ],
       ]}
-      bodyHostId="dashboard-v2-status-content"
-      bodyRouteKey="status"
       className="border-neutral/25 bg-base-200/50 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Status focus"
@@ -370,6 +366,7 @@ function DashboardV2StatusCheckpoint({
       statusTone={model.statusTone}
       summary={model.summary}
       title={model.title}
+      routeBody={dashboardV2RouteBodyConfig("status")}
     />
   );
 }
@@ -392,8 +389,6 @@ function DashboardV2MediaCheckpoint({
           "Open overview from media",
         ],
       ]}
-      bodyHostId="dashboard-v2-media-content"
-      bodyRouteKey="media"
       className="border-primary/25 bg-primary/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Media focus"
@@ -410,6 +405,7 @@ function DashboardV2MediaCheckpoint({
       statusTone={model.statusTone}
       summary={model.summary}
       title={model.title}
+      routeBody={dashboardV2RouteBodyConfig("media")}
     />
   );
 }
@@ -432,8 +428,6 @@ function DashboardV2SettingsCheckpoint({
           "Open status from settings",
         ],
       ]}
-      bodyHostId="dashboard-v2-settings-content"
-      bodyRouteKey="settings"
       className="border-warning/25 bg-warning/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Settings focus"
@@ -450,6 +444,7 @@ function DashboardV2SettingsCheckpoint({
       statusTone={model.statusTone}
       summary={model.summary}
       title={model.title}
+      routeBody={dashboardV2RouteBodyConfig("settings")}
     />
   );
 }
