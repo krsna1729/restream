@@ -13,6 +13,7 @@ Instructions for AI coding agents in this repository.
 - [Hot-Path Rules](#hot-path-rules)
 - [Testing](#testing)
 - [Autonomous Quality Loops](#autonomous-quality-loops)
+- [Merge Strategy](#merge-strategy)
 - [Operational Guidance](#operational-guidance)
 - [Key References](#key-references)
 
@@ -191,6 +192,20 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
   `RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock`.
 - Loops skip (never kill) media processes they did not start.
 - Backlog items are tier-tagged; do not attempt items above your model tier.
+
+## Merge Strategy
+
+- Default to squash-and-merge for ordinary feature, cleanup, UI, CI-fix, and
+  agent-authored PRs where the branch history mostly records how the work
+  converged.
+- Use rebase-and-merge when the PR commits are intentionally curated,
+  independently reviewable, and useful as future history, such as phased
+  architecture or media-pipeline migrations.
+- Use a merge commit only when preserving branch topology matters, such as a
+  long-running integration branch or coordinated subsystem branch.
+- Rule of thumb: squash when the PR history is "how we got there"; rebase when
+  the commits are "the design of the change"; merge when the branch shape itself
+  is important.
 
 ## Operational Guidance
 
