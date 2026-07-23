@@ -777,6 +777,9 @@ Current branch status:
   ownership is enabled.
 - Target input ownership validation rejects missing, cross-pipeline, disabled,
   or selected inputs before a recirculation backend can claim the target.
+- Runtime graph projection now renders reserved recirculation outputs as
+  output-to-target-input edges so the planned topology is operator-visible
+  before backend activation.
 
 ### Proof
 

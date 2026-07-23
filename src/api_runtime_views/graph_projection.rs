@@ -216,6 +216,16 @@ pub(super) fn processing_graph_packetizer_details(
     })
 }
 
+pub(super) fn processing_graph_recirculation_target_details(
+    pipeline_id: &str,
+    input_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "pipelineId": pipeline_id,
+        "inputId": input_id,
+    })
+}
+
 pub(super) fn processing_graph_json(
     generated_at: String,
     pipeline_id: &str,
