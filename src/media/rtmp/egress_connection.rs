@@ -30,6 +30,7 @@ pub(super) struct RtmpEgressSession {
     socket: RtmpEgressStream,
     remaining: Vec<u8>,
     core: RtmpSessionCore,
+    write_queue: RtmpWriteQueue,
 }
 
 struct RtmpSessionCore {
@@ -37,7 +38,6 @@ struct RtmpSessionCore {
     session: ClientSession,
     connect_config: ClientSessionConfig,
     initial_results: Vec<ClientSessionResult>,
-    write_queue: RtmpWriteQueue,
 }
 
 pub(super) enum InitialServerResultError {
@@ -128,16 +128,16 @@ impl RtmpEgressConnection {
                 session,
                 connect_config,
                 initial_results,
-                write_queue: RtmpWriteQueue::new(max_pending_bytes),
             },
+            write_queue: RtmpWriteQueue::new(max_pending_bytes),
         })
     }
 }
 
 impl RtmpEgressSession {
     pub(super) async fn write_initial_results(&mut self) -> io::Result<()> {
-        self.core
-            .queue_initial_results()
+        let packets = self.core.take_initial_packets();
+        self.queue_packets(packets)
             .map_err(|error| io::Error::other(error.to_string()))?;
         self.flush_pending()
             .await
@@ -145,7 +145,9 @@ impl RtmpEgressSession {
     }
 
     pub(super) async fn request_connection(&mut self, enhanced: bool) -> Result<(), String> {
-        self.core.request_connection(enhanced)?;
+        let packet = self.core.request_connection(enhanced)?;
+        self.queue_packet(packet)
+            .map_err(|error| error.to_string())?;
         self.flush_pending()
             .await
             .map_err(|error| error.to_string())?;
@@ -159,14 +161,17 @@ impl RtmpEgressSession {
             return Ok(());
         }
         let remaining = std::mem::take(&mut self.remaining);
-        self.core
-            .handle_server_input(&remaining)
-            .map_err(|error| match error {
-                RtmpSessionError::Protocol(_) => InitialServerResultError::Parse,
-                RtmpSessionError::Pending(_)
-                | RtmpSessionError::Socket(_)
-                | RtmpSessionError::ConnectionRejected(_) => InitialServerResultError::Dispatch,
-            })?;
+        let (packets, _) =
+            self.core
+                .handle_server_input(&remaining)
+                .map_err(|error| match error {
+                    RtmpSessionError::Protocol(_) => InitialServerResultError::Parse,
+                    RtmpSessionError::Pending(_)
+                    | RtmpSessionError::Socket(_)
+                    | RtmpSessionError::ConnectionRejected(_) => InitialServerResultError::Dispatch,
+                })?;
+        self.queue_packets(packets)
+            .map_err(|_| InitialServerResultError::Dispatch)?;
         self.flush_pending()
             .await
             .map(|_| ())
@@ -197,7 +202,8 @@ impl RtmpEgressSession {
         &mut self,
         input: &[u8],
     ) -> Result<Vec<RtmpSessionEvent>, RtmpSessionError> {
-        let events = self.core.handle_server_input(input)?;
+        let (packets, events) = self.core.handle_server_input(input)?;
+        self.queue_packets(packets)?;
         self.flush_pending().await?;
         Ok(events)
     }
@@ -206,7 +212,8 @@ impl RtmpEgressSession {
         &mut self,
         metadata: &StreamMetadata,
     ) -> Result<(), RtmpSessionError> {
-        self.core.publish_metadata(metadata)?;
+        let packet = self.core.publish_metadata(metadata)?;
+        self.queue_packet(packet)?;
         self.flush_pending().await
     }
 
@@ -216,9 +223,10 @@ impl RtmpEgressSession {
         timestamp: RtmpTimestamp,
         can_be_dropped: bool,
     ) -> Result<u64, RtmpSessionError> {
-        let bytes = self
+        let (packet, bytes) = self
             .core
             .publish_video_data(payload, timestamp, can_be_dropped)?;
+        self.queue_packet(packet)?;
         self.flush_pending().await?;
         Ok(bytes)
     }
@@ -229,32 +237,47 @@ impl RtmpEgressSession {
         timestamp: RtmpTimestamp,
         can_be_dropped: bool,
     ) -> Result<u64, RtmpSessionError> {
-        let bytes = self
+        let (packet, bytes) = self
             .core
             .publish_audio_data(payload, timestamp, can_be_dropped)?;
+        self.queue_packet(packet)?;
         self.flush_pending().await?;
         Ok(bytes)
     }
 
     async fn flush_pending(&mut self) -> Result<(), RtmpSessionError> {
-        flush_rtmp_pending_bytes(&mut self.socket, &mut self.core.write_queue)
+        flush_rtmp_pending_bytes(&mut self.socket, &mut self.write_queue)
             .await
             .map_err(RtmpSessionError::Socket)
+    }
+
+    fn queue_packet(&mut self, bytes: Bytes) -> Result<(), RtmpSessionError> {
+        self.write_queue
+            .try_push(bytes)
+            .map_err(RtmpSessionError::Pending)
+    }
+
+    fn queue_packets(&mut self, packets: Vec<Bytes>) -> Result<(), RtmpSessionError> {
+        for packet in packets {
+            self.queue_packet(packet)?;
+        }
+        Ok(())
     }
 }
 
 impl RtmpSessionCore {
-    fn queue_initial_results(&mut self) -> Result<(), RtmpSessionError> {
+    fn take_initial_packets(&mut self) -> Vec<Bytes> {
         let initial_results = std::mem::take(&mut self.initial_results);
-        for result in initial_results {
-            if let ClientSessionResult::OutboundResponse(packet) = result {
-                self.queue_packet(Bytes::from(packet.bytes))?;
-            }
-        }
-        Ok(())
+        initial_results
+            .into_iter()
+            .filter_map(|result| match result {
+                ClientSessionResult::OutboundResponse(packet) => Some(Bytes::from(packet.bytes)),
+                _ => None,
+            })
+            .collect()
     }
 
-    fn request_connection(&mut self, enhanced: bool) -> Result<(), String> {
+    fn request_connection(&mut self, enhanced: bool) -> Result<Bytes, String> {
         let packet = match self.session.request_connection(self.parts.app.clone()) {
             Ok(ClientSessionResult::OutboundResponse(packet)) => packet,
             _ => return Err("failed to build connect request".to_string()),
@@ -264,8 +287,7 @@ impl RtmpSessionCore {
         } else {
             packet.bytes
         };
-        self.queue_packet(Bytes::from(bytes))
-            .map_err(|error| error.to_string())
+        Ok(Bytes::from(bytes))
     }
 
     fn stop_publishing(&mut self) {
@@ -275,16 +297,17 @@ impl RtmpSessionCore {
     fn handle_server_input(
         &mut self,
         input: &[u8],
-    ) -> Result<Vec<RtmpSessionEvent>, RtmpSessionError> {
+    ) -> Result<(Vec<Bytes>, Vec<RtmpSessionEvent>), RtmpSessionError> {
         let results = self
             .session
             .handle_input(input)
             .map_err(|_| RtmpSessionError::Protocol("failed to parse server response"))?;
+        let mut packets = Vec::new();
         let mut events = Vec::new();
         for result in results {
             match result {
                 ClientSessionResult::OutboundResponse(packet) => {
-                    self.queue_packet(Bytes::from(packet.bytes))?;
+                    packets.push(Bytes::from(packet.bytes));
                 }
                 ClientSessionResult::RaisedEvent(event) => match event {
                     ClientSessionEvent::ConnectionRequestAccepted => {
@@ -299,7 +322,7 @@ impl RtmpSessionCore {
                                 ));
                             }
                         };
-                        self.queue_packet(Bytes::from(packet.bytes))?;
+                        packets.push(Bytes::from(packet.bytes));
                         events.push(RtmpSessionEvent::ConnectionRequestAccepted);
                     }
                     ClientSessionEvent::PublishRequestAccepted => {
@@ -313,15 +336,15 @@ impl RtmpSessionCore {
                 ClientSessionResult::UnhandleableMessageReceived(_) => {}
             }
         }
-        Ok(events)
+        Ok((packets, events))
     }
 
-    fn publish_metadata(&mut self, metadata: &StreamMetadata) -> Result<(), RtmpSessionError> {
+    fn publish_metadata(&mut self, metadata: &StreamMetadata) -> Result<Bytes, RtmpSessionError> {
         let packet = self
             .session
             .publish_metadata(metadata)
             .map_err(|_| RtmpSessionError::Protocol("failed to build RTMP metadata"))?;
-        self.queue_result(packet).map(|_| ())
+        self.packet_from_result(packet).map(|(packet, _)| packet)
     }
 
     fn publish_video_data(
@@ -329,12 +352,12 @@ impl RtmpSessionCore {
         payload: Bytes,
         timestamp: RtmpTimestamp,
         can_be_dropped: bool,
-    ) -> Result<u64, RtmpSessionError> {
+    ) -> Result<(Bytes, u64), RtmpSessionError> {
         let packet = self
             .session
             .publish_video_data(payload, timestamp, can_be_dropped)
             .map_err(|_| RtmpSessionError::Protocol("failed to build RTMP video packet"))?;
-        self.queue_result(packet)
+        self.packet_from_result(packet)
     }
 
     fn publish_audio_data(
@@ -342,15 +365,18 @@ impl RtmpSessionCore {
         payload: Bytes,
         timestamp: RtmpTimestamp,
         can_be_dropped: bool,
-    ) -> Result<u64, RtmpSessionError> {
+    ) -> Result<(Bytes, u64), RtmpSessionError> {
         let packet = self
             .session
             .publish_audio_data(payload, timestamp, can_be_dropped)
             .map_err(|_| RtmpSessionError::Protocol("failed to build RTMP audio packet"))?;
-        self.queue_result(packet)
+        self.packet_from_result(packet)
     }
 
-    fn queue_result(&mut self, result: ClientSessionResult) -> Result<u64, RtmpSessionError> {
+    fn packet_from_result(
+        &mut self,
+        result: ClientSessionResult,
+    ) -> Result<(Bytes, u64), RtmpSessionError> {
         let ClientSessionResult::OutboundResponse(packet) = result else {
             return Err(RtmpSessionError::Protocol(
                 "RTMP operation returned no outbound packet",
@@ -358,13 +384,6 @@ impl RtmpSessionCore {
         };
         let bytes = u64::try_from(packet.bytes.len())
             .map_err(|_| RtmpSessionError::Protocol("RTMP packet length overflow"))?;
-        self.queue_packet(Bytes::from(packet.bytes))?;
-        Ok(bytes)
-    }
-
-    fn queue_packet(&mut self, bytes: Bytes) -> Result<(), RtmpSessionError> {
-        self.write_queue
-            .try_push(bytes)
-            .map_err(RtmpSessionError::Pending)
+        Ok((Bytes::from(packet.bytes), bytes))
     }
 }

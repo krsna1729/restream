@@ -703,8 +703,9 @@ Current branch status:
   cancellable client handshake, client-session initialization, all server-result
   dispatch, publish-request issuance, and bounded control/media wire writes.
   Its socket-independent core owns `ClientSession`, RTMP startup and media
-  serialization, and bounded pending-wire admission; the Tokio adapter owns
-  TCP/TLS reads, socket flushing, and sender telemetry. The legacy egress task
+  serialization, and ordered outbound packet production; the Tokio adapter
+  owns TCP/TLS reads, bounded pending-wire admission, socket flushing, and
+  sender telemetry. The legacy egress task
   still owns prepared-media lookup, output status, and outer lifecycle while
   TCP readiness, shard registration, and incremental TLS remain future engine
   work.
