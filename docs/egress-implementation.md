@@ -637,8 +637,14 @@ Current branch status:
   when its final active fabric output stops, and still drains all remaining SRT
   fabric runtimes during engine-wide task cancellation.
 - Bootstrap routes SRT outputs through this fabric path only when
-  `RESTREAM_EGRESS_FABRIC` is enabled; the legacy `start_srt_egress` path
+  `RESTREAM_EGRESS_FABRIC` routes SRT; the legacy `start_srt_egress` path
   remains the default.
+- First live fabric proof at host scale (wsl-6cpu-12gb, N=100 healthy SRT
+  outputs, `w2-fabric` capture): all outputs healthy on the fabric runtime
+  with per-output RSS 1,500KB versus legacy 3,426KB (2.3x lower). CPU was
+  57.0% versus legacy 41.7%; the regression is attributed to the 1ms
+  idle-wait shard polling loop — wiring the proven WakeGate delivery into
+  shard sleep is the next runtime step and re-measurement gate.
 
 ### Native buffer accounting
 
