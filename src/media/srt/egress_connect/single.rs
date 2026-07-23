@@ -10,7 +10,10 @@ use crate::media::srt::socket::{
 };
 use crate::media::srt::srt_crypto::{SrtCryptoConfig, apply_srt_crypto_socket};
 use crate::media::srt::sys::{SRTSOCKET, sockaddr_in, srt_close, srt_connect};
-use crate::media::srt::{apply_srt_egress_stream_id, srt_log_effective_opts};
+use crate::media::srt::{
+    SrtEgressSendMode, SrtEgressSocketError, apply_srt_egress_stream_id,
+    configure_connected_srt_egress_socket, srt_log_effective_opts,
+};
 use tracing::{info, warn};
 
 pub(in crate::media::srt) struct SrtSingleEgressConnectConfig<'a> {
@@ -18,6 +21,7 @@ pub(in crate::media::srt) struct SrtSingleEgressConnectConfig<'a> {
     pub(in crate::media::srt) stream_id: &'a str,
     pub(in crate::media::srt) crypto: Option<&'a SrtCryptoConfig>,
     pub(in crate::media::srt) connect_timeout_ms: u64,
+    pub(in crate::media::srt) send_mode: SrtEgressSendMode,
     pub(in crate::media::srt) muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
 }
 
@@ -67,6 +71,10 @@ where
         ops.close(socket);
         return Err(error);
     }
+    if let Err(error) = ops.configure_connected_socket(socket, config.send_mode) {
+        ops.close(socket);
+        return Err(error.to_string());
+    }
 
     if let Some(claim) = muxer_port_claim {
         match ops.connected_local_port(socket) {
@@ -98,6 +106,11 @@ trait SrtSingleConnectOps {
     fn apply_stream_id(&mut self, socket: SRTSOCKET, stream_id: &str) -> Result<(), String>;
     fn bind_muxer_port(&mut self, socket: SRTSOCKET, port: u16) -> Result<(), String>;
     fn connect(&mut self, socket: SRTSOCKET, peer_addr: SocketAddr) -> Result<(), String>;
+    fn configure_connected_socket(
+        &mut self,
+        socket: SRTSOCKET,
+        mode: SrtEgressSendMode,
+    ) -> Result<(), SrtEgressSocketError>;
     fn connected_local_port(&mut self, socket: SRTSOCKET) -> Result<u16, String>;
     fn log_effective_opts(&mut self, socket: SRTSOCKET);
 }
@@ -163,6 +176,14 @@ impl SrtSingleConnectOps for LibSrtSingleConnectOps {
         }
     }
 
+    fn configure_connected_socket(
+        &mut self,
+        socket: SRTSOCKET,
+        mode: SrtEgressSendMode,
+    ) -> Result<(), SrtEgressSocketError> {
+        configure_connected_srt_egress_socket(socket, mode)
+    }
+
     fn connected_local_port(&mut self, socket: SRTSOCKET) -> Result<u16, String> {
         connected_srt_local_port(socket)
     }
@@ -171,6 +192,10 @@ impl SrtSingleConnectOps for LibSrtSingleConnectOps {
         srt_log_effective_opts(socket, "egress");
     }
 }
+
+#[cfg(test)]
+#[path = "single_test_support.rs"]
+mod test_support;
 
 #[cfg(test)]
 #[path = "single_tests.rs"]

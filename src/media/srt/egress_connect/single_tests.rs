@@ -1,129 +1,6 @@
+use super::test_support::{Event, FailStep, FakeSingleConnectOps};
 use super::*;
-use std::cell::RefCell;
 use std::sync::Mutex;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Event {
-    Create,
-    Timeout(SRTSOCKET, u64),
-    HighBitrate(SRTSOCKET),
-    ReuseAddr(SRTSOCKET),
-    Crypto(SRTSOCKET),
-    StreamId(SRTSOCKET, String),
-    Bind(SRTSOCKET, u16),
-    Connect(SRTSOCKET, SocketAddr),
-    LocalPort(SRTSOCKET),
-    Log(SRTSOCKET),
-    Close(SRTSOCKET),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FailStep {
-    ReuseAddr,
-    Crypto,
-    StreamId,
-    Bind,
-    Connect,
-}
-
-struct FakeSingleConnectOps {
-    events: RefCell<Vec<Event>>,
-    fail_step: Option<FailStep>,
-    socket: SRTSOCKET,
-    local_port: u16,
-}
-
-impl FakeSingleConnectOps {
-    fn new() -> Self {
-        Self {
-            events: RefCell::new(Vec::new()),
-            fail_step: None,
-            socket: 42,
-            local_port: 41000,
-        }
-    }
-
-    fn failing(fail_step: FailStep) -> Self {
-        Self {
-            fail_step: Some(fail_step),
-            ..Self::new()
-        }
-    }
-}
-
-impl SrtSingleConnectOps for &FakeSingleConnectOps {
-    fn create_socket(&mut self) -> Result<SRTSOCKET, String> {
-        self.events.borrow_mut().push(Event::Create);
-        Ok(self.socket)
-    }
-
-    fn close(&mut self, socket: SRTSOCKET) {
-        self.events.borrow_mut().push(Event::Close(socket));
-    }
-
-    fn set_connect_timeout(&mut self, socket: SRTSOCKET, timeout_ms: u64) {
-        self.events
-            .borrow_mut()
-            .push(Event::Timeout(socket, timeout_ms));
-    }
-
-    fn set_highbitrate_opts(&mut self, socket: SRTSOCKET) {
-        self.events.borrow_mut().push(Event::HighBitrate(socket));
-    }
-
-    fn set_reuseaddr(&mut self, socket: SRTSOCKET) -> Result<(), String> {
-        self.events.borrow_mut().push(Event::ReuseAddr(socket));
-        if self.fail_step == Some(FailStep::ReuseAddr) {
-            return Err("reuseaddr failed".to_string());
-        }
-        Ok(())
-    }
-
-    fn apply_crypto(&mut self, socket: SRTSOCKET, _crypto: &SrtCryptoConfig) -> Result<(), String> {
-        self.events.borrow_mut().push(Event::Crypto(socket));
-        if self.fail_step == Some(FailStep::Crypto) {
-            return Err("crypto failed".to_string());
-        }
-        Ok(())
-    }
-
-    fn apply_stream_id(&mut self, socket: SRTSOCKET, stream_id: &str) -> Result<(), String> {
-        self.events
-            .borrow_mut()
-            .push(Event::StreamId(socket, stream_id.to_string()));
-        if self.fail_step == Some(FailStep::StreamId) {
-            return Err("stream id failed".to_string());
-        }
-        Ok(())
-    }
-
-    fn bind_muxer_port(&mut self, socket: SRTSOCKET, port: u16) -> Result<(), String> {
-        self.events.borrow_mut().push(Event::Bind(socket, port));
-        if self.fail_step == Some(FailStep::Bind) {
-            return Err("bind failed".to_string());
-        }
-        Ok(())
-    }
-
-    fn connect(&mut self, socket: SRTSOCKET, peer_addr: SocketAddr) -> Result<(), String> {
-        self.events
-            .borrow_mut()
-            .push(Event::Connect(socket, peer_addr));
-        if self.fail_step == Some(FailStep::Connect) {
-            return Err("connect failed".to_string());
-        }
-        Ok(())
-    }
-
-    fn connected_local_port(&mut self, socket: SRTSOCKET) -> Result<u16, String> {
-        self.events.borrow_mut().push(Event::LocalPort(socket));
-        Ok(self.local_port)
-    }
-
-    fn log_effective_opts(&mut self, socket: SRTSOCKET) {
-        self.events.borrow_mut().push(Event::Log(socket));
-    }
-}
 
 fn peer_addr() -> SocketAddr {
     "127.0.0.1:9000".parse().unwrap()
@@ -137,7 +14,15 @@ fn connect_config<'a>(
         stream_id: "publish:key",
         crypto: None,
         connect_timeout_ms: 1500,
+        send_mode: SrtEgressSendMode::LegacyBlocking,
         muxer_port_claim,
+    }
+}
+
+fn fabric_connect_config() -> SrtSingleEgressConnectConfig<'static> {
+    SrtSingleEgressConnectConfig {
+        send_mode: SrtEgressSendMode::FabricNonblocking,
+        ..connect_config(None)
     }
 }
 
@@ -167,6 +52,7 @@ fn single_socket_connect_records_first_local_port_after_connect() {
             Event::ReuseAddr(42),
             Event::StreamId(42, "publish:key".to_string()),
             Event::Connect(42, peer_addr()),
+            Event::Configure(42, SrtEgressSendMode::LegacyBlocking),
             Event::LocalPort(42),
             Event::Log(42),
         ]
@@ -193,6 +79,7 @@ fn single_socket_connect_binds_reused_muxer_port_before_connecting() {
             Event::StreamId(42, "publish:key".to_string()),
             Event::Bind(42, 40000),
             Event::Connect(42, peer_addr()),
+            Event::Configure(42, SrtEgressSendMode::LegacyBlocking),
             Event::LocalPort(42),
             Event::Log(42),
         ]
@@ -282,4 +169,20 @@ fn single_socket_connect_closes_socket_and_does_not_record_port_when_connect_fai
     let events = ops.events.borrow();
     assert!(events.contains(&Event::Connect(42, peer_addr())));
     assert_eq!(events.last(), Some(&Event::Close(42)));
+}
+
+#[test]
+fn single_socket_connect_applies_fabric_send_mode_after_connect_and_closes_on_failure() {
+    let ops = FakeSingleConnectOps::failing(FailStep::Configure);
+
+    let result = connect_single_srt_egress_socket_with(fabric_connect_config(), &ops);
+
+    assert_eq!(
+        result,
+        Err("failed to set SRTO_SNDSYN: configure failed (1234)".to_string())
+    );
+    let events = ops.events.borrow();
+    assert_eq!(events.last(), Some(&Event::Close(42)));
+    assert!(events.contains(&Event::Configure(42, SrtEgressSendMode::FabricNonblocking)));
+    assert!(!events.contains(&Event::LocalPort(42)));
 }

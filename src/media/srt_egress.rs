@@ -196,6 +196,7 @@ pub async fn start_srt_egress(
                 stream_id: &streamid,
                 crypto: url_crypto.as_ref(),
                 connect_timeout_ms: srt_connect_timeout_ms,
+                send_mode: SrtEgressSendMode::LegacyBlocking,
                 muxer_port_claim,
             }) {
                 Ok(socket) => socket,
