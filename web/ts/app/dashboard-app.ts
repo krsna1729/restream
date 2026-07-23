@@ -207,7 +207,6 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
   });
   configureMediaCheckpointPresentation({
     onPresentation: mediaV2Active ? updateDashboardV2MediaCheckpoint : undefined,
-    v2Active: mediaV2Active,
   });
   configureSettingsCheckpointPresentation({
     onPresentation: settingsV2Active

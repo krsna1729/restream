@@ -33,7 +33,6 @@ const mediaLibraryScope = new RenderScope("media-mode-content");
 let mediaCheckpointCallback:
   | ((model: MediaCheckpointModel | null) => void)
   | null = null;
-let mediaV2PresentationActive = false;
 
 const MEDIA_SECTION_VISIBLE_LIMIT = 8;
 
@@ -135,10 +134,6 @@ function isNativelyPlayable(file: MediaFile): boolean {
   return probe.canPlayType(contentType).trim() !== "";
 }
 
-function mediaV2Active(): boolean {
-  return mediaV2PresentationActive;
-}
-
 function mediaRowSecondaryActions(
   file: MediaFile,
   safeName: string,
@@ -147,7 +142,6 @@ function mediaRowSecondaryActions(
 ): string {
   const buttons = `<button class="btn btn-xs btn-outline shrink-0 js-rename-media" data-filename="${safeName}" aria-label="Rename ${safeName}">Rename</button>
         <button class="btn btn-xs btn-error btn-outline shrink-0 js-delete-media" data-filename="${safeName}" aria-label="Delete ${safeName}" ${deleteDisabled}>Delete</button>`;
-  if (!mediaV2Active()) return `${downloadActions}${buttons}`;
   const expanded = mediaActionRowsExpanded.has(file.name);
   return `<div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
         <button class="btn btn-xs btn-outline js-media-row-actions" type="button" data-filename="${safeName}" aria-expanded="${expanded ? "true" : "false"}" aria-label="${expanded ? "Hide" : "Show"} media actions for ${safeName}">${expanded ? "Hide actions" : "More actions"}</button>
@@ -303,16 +297,8 @@ function publishMediaCheckpoint(files: MediaFile[]): void {
 
 export function configureMediaCheckpointPresentation(options: {
   onPresentation?: (model: MediaCheckpointModel | null) => void;
-  v2Active?: boolean;
 }): void {
-  const nextV2PresentationActive = options.v2Active === true;
-  const presentationModeChanged =
-    mediaV2PresentationActive !== nextV2PresentationActive;
-  mediaV2PresentationActive = nextV2PresentationActive;
   mediaCheckpointCallback = options.onPresentation || null;
-  if (presentationModeChanged) {
-    resetMediaLibraryShellState();
-  }
   if (mediaCheckpointCallback) {
     mediaCheckpointCallback(buildMediaCheckpointModel(lastMediaFiles));
   }

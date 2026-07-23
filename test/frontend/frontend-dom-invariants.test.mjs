@@ -332,6 +332,7 @@ test("media route body uses the v2-owned renderer", async () => {
   assert.match(mediaSource, /setMediaLibraryContainerId\(container\.id\)/);
   assert.match(mediaSource, /mediaLibraryShellMountedInCurrentContainer\(\)/);
   assert.match(mediaSource, /refreshMediaLibraryMetricsOnly\(\)/);
+  assert.doesNotMatch(mediaSource, /v2Active/);
 });
 
 test("incidents route body uses the v2-owned renderer", async () => {
