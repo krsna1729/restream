@@ -305,14 +305,13 @@ URL behavior:
 | `srt://` | SRT/MPEG-TS |
 | `hls://` | Local in-memory HLS segmenter |
 | `sink://` | Fabric sink output that discards media after egress accounting |
-| `pipeline://` / `recirculate://` | Reserved for Phase 6a in-process pipeline recirculation; candidate topology and target input are validated, then rejected until the backend is complete |
+| `pipeline://` | In-process pipeline recirculation; candidate topology and target input are validated before the output starts |
 | `http://` | HLS HTTP PUT upload |
 | `https://` | HLS HTTP PUT upload |
 
 Any other prefix is rejected during validation with a `400 Bad Request`.
-Reserved recirculation URLs are parsed and checked for cycles and target-input
-ownership before the API returns the specific not-runnable-yet error instead
-of accepting them as live outputs.
+Pipeline recirculation URLs are parsed and checked for cycles and target-input
+ownership before the output can start.
 HTTP/HTTPS HLS upload uses one shared local segmenter per pipeline, PUTs each
 new `seg<N>.ts`, then PUTs the playlist URL.
 

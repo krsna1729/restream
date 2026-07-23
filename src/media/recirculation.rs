@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
+use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
+use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
+use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::engine::IngestRegistration;
+use crate::media::engine::{EgressRegistration, MediaEngine};
 use crate::media::input_gate::{InputForwardState, InputPacketBoundary, InputTimestampMapper};
 use crate::media::packet::{MediaPacket, MediaType};
-use crate::media::ring_buffer::RingBuffer;
+use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 use crate::media::standby_gop::StandbyGopCache;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -87,13 +91,137 @@ impl RecirculationInputPublisher {
     }
 }
 
+pub async fn start_pipeline_recirculation(
+    output_id: String,
+    source_ring: Arc<RingBuffer>,
+    target_pipeline_id: String,
+    target_input_id: String,
+    engine: Arc<MediaEngine>,
+    egress_registration: EgressRegistration,
+) {
+    let Some(input_registration) = engine
+        .try_register_pipeline_input_attempt(
+            &target_pipeline_id,
+            &target_input_id,
+            &format!("pipeline:{output_id}"),
+            "pipeline",
+            false,
+        )
+        .await
+    else {
+        engine
+            .record_egress_error_if_current(
+                &output_id,
+                &egress_registration,
+                "recirculation_input_claim",
+                format!("target input {target_pipeline_id}/{target_input_id} is already active"),
+            )
+            .await;
+        return;
+    };
+
+    let target_ring = engine.get_or_create_pipeline(&target_pipeline_id).await;
+    let feed = RingFeed::new(source_ring.clone(), Arc::new(FeedEpoch::new()));
+    let mut cursor = FeedCursor::new(feed.epoch(), feed.head_sequence());
+    let mut publisher = RecirculationInputPublisher::default();
+    let mut wake_reader = Reader::new_live(format!("pipeline_egress:{output_id}"), source_ring);
+
+    engine
+        .update_egress_target_addr_if_current(
+            &output_id,
+            &egress_registration,
+            format!("pipeline://{target_pipeline_id}/{target_input_id}"),
+        )
+        .await;
+
+    loop {
+        tokio::select! {
+            _ = egress_registration.cancel_token.cancelled() => break,
+            _ = input_registration.cancel_token.cancelled() => break,
+            _ = wake_reader.wait_for_data() => {
+                drive_recirculation_until_blocked(
+                    RecirculationDriver {
+                        output_id: &output_id,
+                        egress_registration: &egress_registration,
+                        engine: &engine,
+                        feed: &feed,
+                        target_ring: &target_ring,
+                        input_registration: &input_registration,
+                        cursor: &mut cursor,
+                        publisher: &mut publisher,
+                    }
+                )
+                .await;
+                wake_reader.sync_read_idx(cursor.next_sequence as usize);
+            }
+        }
+    }
+
+    engine
+        .unregister_ingest_if_current(&target_pipeline_id, &input_registration)
+        .await;
+}
+
+struct RecirculationDriver<'a> {
+    output_id: &'a str,
+    egress_registration: &'a EgressRegistration,
+    engine: &'a MediaEngine,
+    feed: &'a RingFeed,
+    target_ring: &'a RingBuffer,
+    input_registration: &'a IngestRegistration,
+    cursor: &'a mut FeedCursor,
+    publisher: &'a mut RecirculationInputPublisher,
+}
+
+async fn drive_recirculation_until_blocked(driver: RecirculationDriver<'_>) {
+    loop {
+        match driver.feed.read_from(
+            *driver.cursor,
+            ReadBudget::new(MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES),
+        ) {
+            FeedRead::Units { units, next_cursor } => {
+                *driver.cursor = next_cursor;
+                let outcome =
+                    driver
+                        .publisher
+                        .publish(&units, driver.target_ring, driver.input_registration);
+                if outcome.units == 0 {
+                    continue;
+                }
+                if !driver
+                    .engine
+                    .record_egress_progress_if_current(
+                        driver.output_id,
+                        driver.egress_registration,
+                        outcome.bytes as u64,
+                    )
+                    .await
+                {
+                    break;
+                }
+            }
+            FeedRead::Empty => break,
+            FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
+                if let Some(sync_cursor) = driver.feed.latest_sync_point() {
+                    *driver.cursor = sync_cursor;
+                } else {
+                    *driver.cursor =
+                        FeedCursor::new(driver.feed.epoch(), driver.feed.head_sequence());
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicI64, Ordering};
+    use std::time::Duration;
 
     use arc_swap::ArcSwapOption;
     use bytes::Bytes;
+    use tokio::time::timeout;
     use tokio_util::sync::CancellationToken;
 
     use crate::media::input_gate::InputPacketGate;
@@ -180,5 +308,63 @@ mod tests {
         assert_eq!(second.dts, 111);
         assert_eq!(third.dts, 121);
         assert_eq!(registration.last_forwarded_dts.load(Ordering::Acquire), 121);
+    }
+
+    #[tokio::test]
+    async fn start_pipeline_recirculation_claims_target_input_and_publishes_after_selection() {
+        let engine = Arc::new(MediaEngine::new());
+        let source_ring = engine.get_or_create_pipeline("pipe-source").await;
+        let target_ring = engine.get_or_create_pipeline("pipe-target").await;
+        let egress_registration = engine
+            .register_egress_attempt(
+                "out-pipeline",
+                "pipe-source",
+                "pipeline://pipe-target/input-backup",
+                None,
+            )
+            .await;
+
+        let task = tokio::spawn(start_pipeline_recirculation(
+            "out-pipeline".to_string(),
+            source_ring.clone(),
+            "pipe-target".to_string(),
+            "input-backup".to_string(),
+            engine.clone(),
+            egress_registration.clone(),
+        ));
+        timeout(Duration::from_secs(1), async {
+            while engine.connected_input_count("pipe-target").await == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            engine
+                .select_pipeline_input("pipe-target", "input-backup")
+                .await
+        );
+
+        source_ring.push((*packet(MediaType::Video, 10, true)).clone());
+        timeout(Duration::from_secs(1), async {
+            while target_ring.get_write_idx() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let forwarded = target_ring.read_at(0).unwrap();
+        assert!(forwarded.is_keyframe);
+        assert_eq!(forwarded.dts, 10);
+        assert_eq!(engine.egress_bytes("out-pipeline").await, 4);
+
+        egress_registration.cancel_token.cancel();
+        timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(engine.connected_input_count("pipe-target").await, 0);
+        engine.unregister_egress("out-pipeline").await;
     }
 }

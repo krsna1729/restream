@@ -367,9 +367,32 @@ impl EgressTask {
                         self.registration.cancel_token.cancelled().await;
                     }
                 }
-                OutputUrlScheme::Pipeline
-                | OutputUrlScheme::Recirculate
-                | OutputUrlScheme::Unknown => {}
+                OutputUrlScheme::Pipeline => {
+                    match crate::domain::output_spec::RecirculationTarget::parse(&self.url) {
+                        Ok(target) => {
+                            crate::media::recirculation::start_pipeline_recirculation(
+                                self.output_id.clone(),
+                                self.ring.clone(),
+                                target.pipeline_id().to_string(),
+                                target.input_id().to_string(),
+                                self.engine.clone(),
+                                self.registration.clone(),
+                            )
+                            .await;
+                        }
+                        Err(error) => {
+                            self.engine
+                                .record_egress_error_if_current(
+                                    &self.output_id,
+                                    &self.registration,
+                                    "recirculation_target_parse",
+                                    error.message(),
+                                )
+                                .await;
+                        }
+                    }
+                }
+                OutputUrlScheme::Unknown => {}
             }
         })
         .catch_unwind()

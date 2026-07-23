@@ -153,6 +153,10 @@ impl ProtocolCapabilities {
                 EgressProtocol::Srt,
                 _,
                 VideoCodecKind::H264 | VideoCodecKind::Hevc
+            ) | (
+                EgressProtocol::Pipeline,
+                _,
+                VideoCodecKind::H264 | VideoCodecKind::Hevc | VideoCodecKind::Unknown,
             ) | (EgressProtocol::Hls, _, VideoCodecKind::H264)
                 | (
                     EgressProtocol::Sink,

@@ -459,7 +459,7 @@ mod tests {
     fn recirculation_topology_rejects_indirect_cycle() {
         let outputs = vec![
             output("pipe-b", "b-to-c", "pipeline://pipe-c/input-backup"),
-            output("pipe-c", "c-to-a", "recirculate://pipe-a/input-backup"),
+            output("pipe-c", "c-to-a", "pipeline://pipe-a/input-backup"),
         ];
         let target = RecirculationTarget::parse("pipeline://pipe-b/input-backup").unwrap();
 

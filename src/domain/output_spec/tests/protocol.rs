@@ -25,10 +25,6 @@ fn protocol_from_url_classifies_known_outputs() {
         EgressProtocol::Pipeline
     );
     assert_eq!(
-        EgressProtocol::from_url("recirculate://target/input"),
-        EgressProtocol::Pipeline
-    );
-    assert_eq!(
         EgressProtocol::from_url("https://example/hls"),
         EgressProtocol::Hls
     );
@@ -102,10 +98,6 @@ fn output_url_scheme_from_url_covers_every_variant_and_malformed_input() {
         OutputUrlScheme::Pipeline
     );
     assert_eq!(
-        OutputUrlScheme::from_url("recirculate://target/input"),
-        OutputUrlScheme::Recirculate
-    );
-    assert_eq!(
         OutputUrlScheme::from_url("http://example/out"),
         OutputUrlScheme::Http
     );
@@ -129,14 +121,13 @@ fn output_url_scheme_from_url_covers_every_variant_and_malformed_input() {
 }
 
 #[test]
-fn output_url_scheme_supports_runnable_outputs_only() {
+fn output_url_scheme_supports_runnable_outputs() {
     assert!(OutputUrlScheme::Rtmp.is_supported_output());
     assert!(OutputUrlScheme::Rtmps.is_supported_output());
     assert!(OutputUrlScheme::Srt.is_supported_output());
     assert!(OutputUrlScheme::Hls.is_supported_output());
     assert!(OutputUrlScheme::Sink.is_supported_output());
-    assert!(!OutputUrlScheme::Pipeline.is_supported_output());
-    assert!(!OutputUrlScheme::Recirculate.is_supported_output());
+    assert!(OutputUrlScheme::Pipeline.is_supported_output());
     assert!(OutputUrlScheme::Http.is_supported_output());
     assert!(OutputUrlScheme::Https.is_supported_output());
     assert!(!OutputUrlScheme::Unknown.is_supported_output());
@@ -182,13 +173,6 @@ fn output_url_scheme_family_and_protocol_classification_is_exhaustive() {
         ),
         (
             OutputUrlScheme::Pipeline,
-            false,
-            false,
-            false,
-            EgressProtocol::Pipeline,
-        ),
-        (
-            OutputUrlScheme::Recirculate,
             false,
             false,
             false,
@@ -263,14 +247,6 @@ fn video_codec_kind_is_hevc_is_true_only_for_hevc() {
 #[test]
 fn recirculation_target_parses_pipeline_and_input_identity() {
     let target = RecirculationTarget::parse("pipeline://pipe-b/input-secondary").unwrap();
-
-    assert_eq!(target.pipeline_id(), "pipe-b");
-    assert_eq!(target.input_id(), "input-secondary");
-}
-
-#[test]
-fn recirculation_target_accepts_alias_scheme() {
-    let target = RecirculationTarget::parse("recirculate://pipe-b/input-secondary").unwrap();
 
     assert_eq!(target.pipeline_id(), "pipe-b");
     assert_eq!(target.input_id(), "input-secondary");

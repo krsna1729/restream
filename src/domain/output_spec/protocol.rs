@@ -18,7 +18,6 @@ pub enum OutputUrlScheme {
     Hls,
     Sink,
     Pipeline,
-    Recirculate,
     Http,
     Https,
     Unknown,
@@ -37,7 +36,6 @@ impl OutputUrlScheme {
             Some("hls") => Self::Hls,
             Some("sink") => Self::Sink,
             Some("pipeline") => Self::Pipeline,
-            Some("recirculate") => Self::Recirculate,
             Some("http") => Self::Http,
             Some("https") => Self::Https,
             _ => Self::Unknown,
@@ -45,7 +43,7 @@ impl OutputUrlScheme {
     }
 
     pub fn is_supported_output(self) -> bool {
-        !matches!(self, Self::Pipeline | Self::Recirculate | Self::Unknown)
+        !matches!(self, Self::Unknown)
     }
 
     pub fn supports_monitoring(self) -> bool {
@@ -66,7 +64,7 @@ impl OutputUrlScheme {
             Self::Srt => EgressProtocol::Srt,
             Self::Hls | Self::Http | Self::Https => EgressProtocol::Hls,
             Self::Sink => EgressProtocol::Sink,
-            Self::Pipeline | Self::Recirculate => EgressProtocol::Pipeline,
+            Self::Pipeline => EgressProtocol::Pipeline,
             Self::Unknown => EgressProtocol::Unknown,
         }
     }
@@ -105,7 +103,7 @@ impl RecirculationTarget {
             url::Url::parse(url.trim()).map_err(|_| RecirculationTargetParseError::MalformedUrl)?;
         let scheme = OutputUrlScheme::from_url(parsed.as_str());
         match scheme {
-            OutputUrlScheme::Pipeline | OutputUrlScheme::Recirculate => {}
+            OutputUrlScheme::Pipeline => {}
             OutputUrlScheme::Rtmp
             | OutputUrlScheme::Rtmps
             | OutputUrlScheme::Srt
@@ -155,9 +153,7 @@ impl RecirculationTargetParseError {
     pub const fn message(self) -> &'static str {
         match self {
             Self::MalformedUrl => "recirculation URL must be a valid absolute URL",
-            Self::UnsupportedScheme => {
-                "recirculation URL scheme must be pipeline:// or recirculate://"
-            }
+            Self::UnsupportedScheme => "recirculation URL scheme must be pipeline://",
             Self::MissingPipeline => "recirculation URL must include a target pipeline",
             Self::MissingInput => "recirculation URL must include a target input",
         }

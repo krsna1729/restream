@@ -748,7 +748,7 @@ The configuration must reject or clearly gate:
 
 ### Work
 
-Add a `Pipeline` or `Recirculate` protocol spec and backend that:
+Add a `Pipeline` protocol spec and backend that:
 
 - consumes source feed units through the common egress leaf and scheduler;
 - hands media to the target input through an in-process adapter, not a socket;
@@ -768,11 +768,14 @@ not hidden inside the recirculation egress backend.
 
 Current branch status:
 
-- `pipeline://` and `recirculate://` are recognized as recirculation schemes
-  and classified under the planned pipeline protocol.
-- The API parses reserved recirculation URLs, asks the application service to
-  validate topology and target input ownership, then rejects valid candidates
-  with a not-runnable-yet error until the in-process backend is complete.
+- `pipeline://` is recognized as the canonical recirculation scheme and
+  classified under the pipeline protocol.
+- The API parses recirculation URLs, asks the application service to validate
+  topology and target input ownership, and accepts valid candidates for runtime
+  startup.
+- The media runtime claims the target pipeline input, forwards source feed
+  packets through the in-process publisher after the target input is selected,
+  records egress byte progress, and releases the input claim on cancellation.
 - A pure application validator now parses typed recirculation targets and
   rejects direct and obvious indirect pipeline cycles before runtime backend
   ownership is enabled.

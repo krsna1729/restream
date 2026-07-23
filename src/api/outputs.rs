@@ -54,9 +54,7 @@ pub fn is_supported_output_url(url: &str) -> bool {
     OutputUrlScheme::from_url(url).is_supported_output()
 }
 
-pub const OUTPUT_URL_SCHEME_ERROR: &str = "Invalid URL scheme. Supported schemes are rtmp://, rtmps://, srt://, hls://, sink://, http://, and https://";
-pub const PIPELINE_OUTPUT_RESERVED_ERROR: &str =
-    "Pipeline recirculation outputs are reserved for Phase 6a and are not runnable yet";
+pub const OUTPUT_URL_SCHEME_ERROR: &str = "Invalid URL scheme. Supported schemes are rtmp://, rtmps://, srt://, hls://, sink://, pipeline://, http://, and https://";
 pub const MONITORING_URL_SCHEME_ERROR: &str =
     "Invalid monitoring URL scheme. Supported schemes are http://, https://, and srt://";
 pub const OUTPUT_URL_PARSE_ERROR: &str = "Output URL must be a valid absolute URL with a host";
@@ -339,12 +337,6 @@ fn validate_output_transport(
     // Normalize once at the API boundary so downstream services only receive
     // absolute URLs in a canonical host/scheme form.
     let Some(url) = normalize_output_url(&payload.url) else {
-        if matches!(
-            OutputUrlScheme::from_url(&payload.url),
-            OutputUrlScheme::Pipeline | OutputUrlScheme::Recirculate
-        ) {
-            return Err(Box::new(bad_request(PIPELINE_OUTPUT_RESERVED_ERROR)));
-        }
         return Err(Box::new(bad_request(OUTPUT_URL_PARSE_ERROR)));
     };
     if matches!(output_config.protocol, OutputProtocolConfig::Rtmp { .. })
@@ -383,11 +375,11 @@ async fn validate_output_payload_for_pipeline(
 ) -> Result<ValidatedOutputPayload, ValidationResponse> {
     if matches!(
         OutputUrlScheme::from_url(&payload.url),
-        OutputUrlScheme::Pipeline | OutputUrlScheme::Recirculate
+        OutputUrlScheme::Pipeline
     ) {
-        let _output_config = validate_output_payload_fields(payload)?;
+        let output_config = validate_output_payload_fields(payload)?;
         validate_reserved_recirculation_candidate(state, source_pipeline_id, &payload.url).await?;
-        return Err(Box::new(bad_request(PIPELINE_OUTPUT_RESERVED_ERROR)));
+        return validate_output_transport(payload, output_config);
     }
 
     validate_output_payload(payload)
@@ -754,11 +746,11 @@ mod tests {
     }
 
     #[test]
-    fn validate_output_payload_rejects_reserved_pipeline_recirculation_urls() {
-        let response = validate_output_payload(&test_output_payload("pipeline://pipe-b/input-1"))
-            .expect_err("pipeline recirculation is not runnable yet");
+    fn validate_output_payload_accepts_pipeline_recirculation_urls() {
+        let validated = validate_output_payload(&test_output_payload("pipeline://pipe-b/input-1"))
+            .expect("pipeline recirculation is a supported output URL");
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(validated.url, "pipeline://pipe-b/input-1");
     }
 
     #[test]
