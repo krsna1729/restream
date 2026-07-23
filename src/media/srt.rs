@@ -93,8 +93,10 @@ use srt_crypto::apply_srt_crypto_socket;
 #[cfg(test)]
 use srt_crypto::srt_crypto_from_url;
 pub use srt_egress::start_srt_egress;
+#[cfg(test)]
+use srt_egress_connect::to_libc_sockaddr;
 pub(crate) use srt_egress_connect::{
-    claim_srt_egress_muxer_port, resolve_host as resolve_srt_egress_host, to_libc_sockaddr,
+    claim_srt_egress_muxer_port, resolve_host as resolve_srt_egress_host,
 };
 pub(crate) use srt_egress_engine::SrtEgressEngine;
 pub(crate) use srt_egress_poller::{SrtEgressInterest, SrtEgressPollError, SrtReadyLeaf};

@@ -1,11 +1,11 @@
-use super::srt_crypto::{apply_srt_crypto_socket, srt_crypto_from_url};
-use super::srt_egress_connect::{SrtSingleEgressConnectConfig, connect_single_srt_egress_socket};
+use super::srt_crypto::srt_crypto_from_url;
+use super::srt_egress_connect::{
+    SrtBondedEgressConnectConfig, SrtSingleEgressConnectConfig, connect_bonded_srt_egress_socket,
+    connect_single_srt_egress_socket,
+};
 use super::srt_url::parse_srt_egress_url;
 use super::*;
-use super::{
-    apply_srt_egress_stream_id, claim_srt_egress_muxer_port,
-    resolve_srt_egress_host as resolve_host, to_libc_sockaddr,
-};
+use super::{claim_srt_egress_muxer_port, resolve_srt_egress_host as resolve_host};
 use crate::secret_display::redact_url;
 
 // SRT Egress Client
@@ -96,98 +96,18 @@ pub async fn start_srt_egress(
     let connect_result = tokio::task::spawn_blocking(move || -> Result<SRTSOCKET, String> {
         let client_sock: SRTSOCKET;
         if use_bonding {
-            // Create a bonding group (backup mode: one active, failover to next)
-            // SAFETY: srt_create_group creates a bonding group socket.
-            // SRT_GTYPE_BACKUP configures active/passive failover mode.
-            // The returned handle is closed on all exit paths below.
-            client_sock = unsafe { srt_create_group(SRT_GTYPE_BACKUP) };
-            if client_sock < 0 {
-                error!("Failed to create bonding group");
-                return Err("failed to create bonding group".to_string());
-            }
-
-            // Passphrase/PBKEYLEN/ENFORCEDENCRYPTION and StreamID are
-            // group-wide settings in libsrt bonding: they must be applied to
-            // the group socket itself via srt_setsockopt, not smuggled into
-            // a per-member SRT_SOCKOPT_CONFIG. libsrt's per-member config
-            // object rejects both option families outright (see
-            // SRT_SocketOptionObject::add in socketconfig.cpp, which has no
-            // case for SRTO_PASSPHRASE, SRTO_PBKEYLEN, or SRTO_STREAMID and
-            // falls through to `return false`), so applying them there
-            // always failed the connect attempt with a misleading "Success
-            // (0)" error (srt_config_add's failure path does not populate
-            // the thread-local last-error state that check_srt_option_result
-            // reads).
-            if let Some(crypto) = &url_crypto
-                && let Err(error) = apply_srt_crypto_socket(client_sock, crypto)
-            {
-                unsafe {
-                    srt_close(client_sock);
-                }
-                return Err(error);
-            }
-
-            if !streamid.is_empty() {
-                apply_srt_egress_stream_id(client_sock, &streamid)
-                    .inspect_err(|_| unsafe {
-                        srt_close(client_sock);
-                    })
-                    .map_err(|error| error.to_string())?;
-            }
-
-            let connect_error = {
-                let mut members: Vec<SrtGroupMemberConfig> = Vec::new();
-                for (i, &peer_addr) in all_addrs.iter().enumerate() {
-                    let (peer_storage, addrlen) = to_libc_sockaddr(peer_addr);
-                    // SAFETY: srt_prepare_endpoint creates a group member
-                    // descriptor from a sockaddr. The peer_storage is
-                    // stack-allocated and valid for this call.
-                    let mut member = unsafe {
-                        srt_prepare_endpoint(
-                            std::ptr::null(),
-                            &peer_storage as *const _ as *const libc::sockaddr,
-                            addrlen,
-                        )
-                    };
-                    member.weight = if i == 0 { 1 } else { 0 };
-                    members.push(member);
-                }
-
-                // SAFETY: srt_connect_group opens all member connections.
-                // members is a correctly sized Vec of SrtGroupMemberConfig.
-                // On failure, client_sock is cleaned up.
-                let conn_res = unsafe {
-                    srt_connect_group(client_sock, members.as_mut_ptr(), members.len() as c_int)
-                };
-                if conn_res < 0 {
-                    // SAFETY: srt_getlasterror_str returns a thread-local
-                    // static string valid until the next SRT call.
-                    let err = unsafe { std::ffi::CStr::from_ptr(srt_getlasterror_str()) };
-                    let message = format!("bonded connection failed: {}", err.to_string_lossy());
-                    error!(
-                        "[srt-egress] Bonded connection failed: {}",
-                        err.to_string_lossy()
-                    );
-                    // SAFETY: Clean up group socket on connection failure.
-                    unsafe {
-                        srt_close(client_sock);
-                    }
-                    Some(message)
-                } else {
-                    None
-                }
-            };
-            if let Some(message) = connect_error {
-                return Err(message);
-            }
+            client_sock = connect_bonded_srt_egress_socket(SrtBondedEgressConnectConfig {
+                peer_addrs: &all_addrs,
+                stream_id: &streamid,
+                crypto: url_crypto.as_ref(),
+                send_mode: SrtEgressSendMode::LegacyBlocking,
+            })?;
 
             info!(
                 "[srt-egress] Bonded connection ({} links) to {}",
                 all_addrs.len(),
                 redact_url(&target_url)
             );
-            srt_set_highbitrate_opts(client_sock);
-            srt_log_effective_opts(client_sock, "egress-bonded");
         } else {
             let muxer_port_claim = reuse_local_srt_egress_port
                 .then(|| claim_srt_egress_muxer_port(&srt_egress_muxer_port));

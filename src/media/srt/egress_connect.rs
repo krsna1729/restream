@@ -7,9 +7,14 @@ use super::sys::{
     SRTO_REUSEADDR, SRTSOCKET, sockaddr_in, srt_bind, srt_getsockname, srt_setsockopt,
 };
 
+#[path = "egress_connect/bonded.rs"]
+mod bonded;
 #[path = "egress_connect/single.rs"]
 mod single;
 
+pub(in crate::media::srt) use bonded::{
+    SrtBondedEgressConnectConfig, connect_bonded_srt_egress_socket,
+};
 pub(in crate::media::srt) use single::{
     SrtSingleEgressConnectConfig, connect_single_srt_egress_socket,
 };
