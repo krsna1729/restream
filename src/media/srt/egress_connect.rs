@@ -9,11 +9,17 @@ use super::sys::{
 
 #[path = "egress_connect/bonded.rs"]
 mod bonded;
+#[path = "egress_connect/fabric.rs"]
+mod fabric;
 #[path = "egress_connect/single.rs"]
 mod single;
 
 pub(in crate::media::srt) use bonded::{
     SrtBondedEgressConnectConfig, connect_bonded_srt_egress_socket,
+};
+#[allow(unused_imports)]
+pub(in crate::media::srt) use fabric::{
+    SrtFabricEgressConnectConfig, connect_fabric_srt_egress_socket,
 };
 pub(in crate::media::srt) use single::{
     SrtSingleEgressConnectConfig, connect_single_srt_egress_socket,
