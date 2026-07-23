@@ -187,6 +187,21 @@ impl MediaEngine {
     }
 
     pub async fn sweep_unused_stages(&self) {
+        // Liveness has two independent signals: legacy consumers register a
+        // `Reader` on the ring (tracked in `stage.ring.readers`), while
+        // fabric consumers read via `EgressFeed::read_from` and never
+        // register one. A stage feeding only fabric outputs would otherwise
+        // look permanently unused and get cancelled on the next reconcile
+        // tick regardless of how recently it started.
+        let active_fabric_feeds: std::collections::HashSet<String> = {
+            let registry = self.fabric.srt.lock().await;
+            registry
+                .active_outputs
+                .keys()
+                .map(|feed_id| feed_id.as_str().to_string())
+                .collect()
+        };
+
         let mut stages = self.stages.ts_muxers.write().await;
         stages.retain(|key, stage| {
             let has_readers = if let Ok(mut readers) = stage.ring.readers.lock() {
@@ -195,8 +210,9 @@ impl MediaEngine {
             } else {
                 false
             };
+            let has_fabric_consumer = active_fabric_feeds.contains(&format!("srt:{key}"));
 
-            if !has_readers {
+            if !has_readers && !has_fabric_consumer {
                 debug!("Sweeping unused TS muxer stage: {}", key);
                 stage.cancel.cancel();
                 false

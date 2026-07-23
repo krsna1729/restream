@@ -723,9 +723,25 @@ Current branch status:
   Confirmed by a legacy-path control run of the same srt-crypto-matrix
   scenario without the fabric flag, which passed cleanly (20/20, then
   60/60 on a later pipeline) — isolating all four defects to the fabric
-  wake-delivery path rather than the test scenario itself. Earlier ramp
-  captures measured resources but not delivery and are re-recorded after
-  these fixes.
+  wake-delivery path rather than the test scenario itself.
+  5. Actual root cause of the still-persisting stall after fixes 1-4: an
+     unrelated background sweep, `MediaEngine::sweep_unused_stages`
+     (`src/media/engine_pipeline.rs`), runs every reconcile tick and cancels
+     any shared TS muxer stage whose ring has zero registered `Reader`
+     instances — a legacy-only liveness signal. Fabric consumes a feed via
+     `EgressFeed::read_from` (direct cursor reads), which never registers a
+     `Reader`, so any muxer stage feeding fabric-only SRT outputs looked
+     permanently unused and was cancelled by the very first reconcile tick,
+     starving every leaf sharing that feed before a single byte flowed —
+     independent of and upstream from every fix above. Confirmed live via a
+     one-shot diagnostic showing the muxer's reader registering then
+     deregistering ~23ms later with the self-cancel log firing on loop exit.
+     Fixed by also checking `MediaEngine`'s live SRT fabric runtimes
+     (`fabric.srt.active_outputs`, keyed by `FeedId`) before sweeping a
+     stage, so a fabric-only consumer counts as "in use" the same as a
+     legacy reader.
+  Earlier ramp captures measured resources but not delivery and are
+  re-recorded after these fixes.
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
   fault.output-stall passed with a permanently stalled sink isolated beside
   32 healthy siblings while SRT outputs ran fabric-owned. This is
