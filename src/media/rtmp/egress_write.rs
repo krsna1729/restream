@@ -169,19 +169,13 @@ where
     Ok(RtmpPendingDrain::Drained { bytes, units })
 }
 
-pub(super) async fn write_rtmp_pending_bytes(
+pub(super) async fn flush_rtmp_pending_bytes(
     socket: &mut RtmpEgressStream,
     queue: &mut RtmpWriteQueue,
-    bytes: Bytes,
-) -> io::Result<usize> {
-    let pending_before = queue.pending_bytes();
-    queue.try_push(bytes).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::WouldBlock,
-            format!("RTMP pending write limit reached: {error:?}"),
-        )
-    })?;
-    let total = queue.pending_bytes().saturating_sub(pending_before);
+) -> io::Result<()> {
+    if queue.pending_bytes() == 0 {
+        return Ok(());
+    }
 
     match socket {
         RtmpEgressStream::Plain(stream) => {
@@ -200,7 +194,7 @@ pub(super) async fn write_rtmp_pending_bytes(
         RtmpEgressStream::Tls(_) => drain_rtmp_pending_bytes_async(socket, queue).await?,
     }
 
-    Ok(total)
+    Ok(())
 }
 
 impl RtmpWriteTransport for TcpStream {

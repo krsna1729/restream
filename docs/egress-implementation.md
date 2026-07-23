@@ -698,15 +698,16 @@ Current branch status:
   not yet a readiness-driven reactor across visits. The queue now also has a
   transport-agnostic nonblocking drain primitive that preserves partial offsets
   and yields on byte, unit, or deadline exhaustion; the legacy Tokio task does
-  not yet drive that primitive from a TCP poller. Client-session result dispatch remains in the legacy egress
-  task until it can move with its lifecycle semantics into the explicit
-  connection engine.
+  not yet drive that primitive from a TCP poller.
 - The explicit RTMP session driver now owns socket establishment, the
   cancellable client handshake, client-session initialization, all server-result
   dispatch, publish-request issuance, and bounded control/media wire writes.
-  The legacy egress task still owns prepared-media lookup, output status, and
-  outer lifecycle while TCP readiness, shard registration, and incremental TLS
-  remain future engine work.
+  Its socket-independent core owns `ClientSession`, RTMP startup and media
+  serialization, and bounded pending-wire admission; the Tokio adapter owns
+  TCP/TLS reads, socket flushing, and sender telemetry. The legacy egress task
+  still owns prepared-media lookup, output status, and outer lifecycle while
+  TCP readiness, shard registration, and incremental TLS remain future engine
+  work.
 - The legacy RTMP sender remains the runtime owner. Phase 5 has not yet
   introduced TCP readiness polling, moved the hot media publish loop onto
   pending state, added incremental TLS, or provided a default/opt-in runtime
