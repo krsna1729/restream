@@ -1,4 +1,6 @@
-use crate::domain::output_spec::{EgressProtocol, OutputUrlScheme, VideoCodecKind};
+use crate::domain::output_spec::{
+    EgressProtocol, OutputUrlScheme, RecirculationTarget, VideoCodecKind,
+};
 
 #[test]
 fn protocol_from_url_classifies_known_outputs() {
@@ -256,4 +258,30 @@ fn video_codec_kind_is_hevc_is_true_only_for_hevc() {
     assert!(!VideoCodecKind::H264.is_hevc());
     assert!(VideoCodecKind::Hevc.is_hevc());
     assert!(!VideoCodecKind::Unknown.is_hevc());
+}
+
+#[test]
+fn recirculation_target_parses_pipeline_and_input_identity() {
+    let target = RecirculationTarget::parse("pipeline://pipe-b/input-secondary").unwrap();
+
+    assert_eq!(target.pipeline_id(), "pipe-b");
+    assert_eq!(target.input_id(), "input-secondary");
+}
+
+#[test]
+fn recirculation_target_accepts_alias_scheme() {
+    let target = RecirculationTarget::parse("recirculate://pipe-b/input-secondary").unwrap();
+
+    assert_eq!(target.pipeline_id(), "pipe-b");
+    assert_eq!(target.input_id(), "input-secondary");
+}
+
+#[test]
+fn recirculation_target_rejects_missing_input_identity() {
+    let error = RecirculationTarget::parse("pipeline://pipe-b").unwrap_err();
+
+    assert_eq!(
+        error.message(),
+        "recirculation URL must include a target input"
+    );
 }

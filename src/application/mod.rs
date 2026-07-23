@@ -9,6 +9,7 @@ pub mod ingest_security;
 pub mod models;
 pub mod pipeline_inputs;
 pub mod ports;
+pub mod recirculation;
 pub mod reconcile;
 pub mod recording;
 pub mod services;

@@ -15,7 +15,10 @@ pub use config::{
     ResolvedOutputVideo,
 };
 pub use encoding::{OutputEncodingSpec, StagePresetSpec};
-pub use protocol::{EgressProtocol, OutputProtocolConfig, OutputUrlScheme, RtmpOutputMode};
+pub use protocol::{
+    EgressProtocol, OutputProtocolConfig, OutputUrlScheme, RecirculationTarget,
+    RecirculationTargetParseError, RtmpOutputMode,
+};
 pub use video::{OutputVideoCodec, OutputVideoConfig, VideoCodecKind, VideoSelector};
 
 #[cfg(test)]

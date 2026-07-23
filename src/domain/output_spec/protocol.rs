@@ -1,3 +1,5 @@
+use crate::domain::ids::PipelineId;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EgressProtocol {
     Rtmp,
@@ -87,6 +89,77 @@ impl EgressProtocol {
             Self::Sink => "sink",
             Self::Pipeline => "pipeline",
             Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecirculationTarget {
+    pipeline_id: PipelineId,
+    input_id: String,
+}
+
+impl RecirculationTarget {
+    pub fn parse(url: &str) -> Result<Self, RecirculationTargetParseError> {
+        let parsed =
+            url::Url::parse(url.trim()).map_err(|_| RecirculationTargetParseError::MalformedUrl)?;
+        let scheme = OutputUrlScheme::from_url(parsed.as_str());
+        match scheme {
+            OutputUrlScheme::Pipeline | OutputUrlScheme::Recirculate => {}
+            OutputUrlScheme::Rtmp
+            | OutputUrlScheme::Rtmps
+            | OutputUrlScheme::Srt
+            | OutputUrlScheme::Hls
+            | OutputUrlScheme::Sink
+            | OutputUrlScheme::Http
+            | OutputUrlScheme::Https
+            | OutputUrlScheme::Unknown => {
+                return Err(RecirculationTargetParseError::UnsupportedScheme);
+            }
+        }
+        let pipeline_id = parsed
+            .host_str()
+            .filter(|value| !value.is_empty())
+            .map(PipelineId::new)
+            .ok_or(RecirculationTargetParseError::MissingPipeline)?;
+        let input_id = parsed
+            .path_segments()
+            .and_then(|mut segments| segments.find(|segment| !segment.is_empty()))
+            .map(str::to_string)
+            .ok_or(RecirculationTargetParseError::MissingInput)?;
+
+        Ok(Self {
+            pipeline_id,
+            input_id,
+        })
+    }
+
+    pub fn pipeline_id(&self) -> &str {
+        self.pipeline_id.as_str()
+    }
+
+    pub fn input_id(&self) -> &str {
+        &self.input_id
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecirculationTargetParseError {
+    MalformedUrl,
+    UnsupportedScheme,
+    MissingPipeline,
+    MissingInput,
+}
+
+impl RecirculationTargetParseError {
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::MalformedUrl => "recirculation URL must be a valid absolute URL",
+            Self::UnsupportedScheme => {
+                "recirculation URL scheme must be pipeline:// or recirculate://"
+            }
+            Self::MissingPipeline => "recirculation URL must include a target pipeline",
+            Self::MissingInput => "recirculation URL must include a target input",
         }
     }
 }

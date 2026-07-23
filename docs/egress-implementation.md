@@ -772,6 +772,9 @@ Current branch status:
   and classified under the planned pipeline protocol.
 - The API rejects those URLs with a not-runnable-yet error until topology
   validation, target input ownership, and the in-process backend are complete.
+- A pure application validator now parses typed recirculation targets and
+  rejects direct and obvious indirect pipeline cycles before runtime backend
+  ownership is enabled.
 
 ### Proof
 
