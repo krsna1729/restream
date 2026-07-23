@@ -185,7 +185,6 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
     onPresentation: pipelineInspectV2Active
       ? updateDashboardV2PipelineInspectCheckpoint
       : undefined,
-    v2Active: pipelineInspectV2Active,
   });
   configureControlRoomCheckpointPresentation({
     onPresentation: controlRoomV2Active

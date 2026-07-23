@@ -886,23 +886,19 @@ test("inspector keeps processing graph for large-output pipelines", async () => 
   );
   assert.match(
     resourceDetails.innerHTML,
+    /Show resource details for Large Pipeline/,
+  );
+  assert.match(
+    resourceDetails.innerHTML,
+    /aria-expanded="false"/,
+  );
+  assert.doesNotMatch(
+    resourceDetails.innerHTML,
     /FFmpeg workers/,
   );
-  assert.match(
-    resourceDetails.innerHTML,
-    /table table-sm/,
-  );
-  assert.match(
+  assert.doesNotMatch(
     resourceDetails.innerHTML,
     /video:720p/,
-  );
-  assert.match(
-    resourceDetails.innerHTML,
-    /12\.3%/,
-  );
-  assert.match(
-    resourceDetails.innerHTML,
-    /64\.0 MiB/,
   );
   assert.doesNotMatch(
     resourceDetails.innerHTML,

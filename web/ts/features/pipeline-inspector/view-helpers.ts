@@ -66,18 +66,6 @@ export function formatPercentage(pct: number | null | undefined): string {
   return `${pct.toFixed(1)}%`;
 }
 
-let pipelineInspectV2PresentationActive = false;
-
-export function configurePipelineInspectV2Presentation(options: {
-  readonly active: boolean;
-}): void {
-  pipelineInspectV2PresentationActive = options.active;
-}
-
-export function pipelineInspectV2Active(): boolean {
-  return pipelineInspectV2PresentationActive;
-}
-
 export function inspectFaultCandidates(pipe: PipelineView): OutputView[] {
   return pipe.outs.filter(
     (output) =>

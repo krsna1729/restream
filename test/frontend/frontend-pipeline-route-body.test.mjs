@@ -17,11 +17,6 @@ test("renderDashboardV2PipelineInspectBody owns the inspect route body", async (
   const routeBody = await loadCompiledFrontendModule(
     "features/pipeline-inspect-route-body.js",
   );
-  const inspector = await loadCompiledFrontendModule(
-    "features/pipeline-inspector/index.js",
-  );
-  inspector.configurePipelineInspectCheckpointPresentation({ v2Active: true });
-
   routeBody.renderDashboardV2PipelineInspectBody(container.id);
 
   assert.equal(container.dataset.pipelineInspectRouteBody, "v2");

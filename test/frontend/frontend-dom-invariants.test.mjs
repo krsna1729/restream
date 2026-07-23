@@ -253,6 +253,7 @@ test("pipeline inspect route body uses the v2-owned renderer", async () => {
   assert.doesNotMatch(shellSource, /inspect-route-summary/);
   assert.doesNotMatch(shellSource, /inspect-open-pipeline-btn/);
   assert.doesNotMatch(shellSource, /inspect-open-diagnostics-btn/);
+  assert.doesNotMatch(routeBodySource, /v2Active/);
 });
 
 test("pipeline monitor route body uses the v2-owned renderer", async () => {
