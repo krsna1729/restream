@@ -908,6 +908,15 @@ Current branch status:
   preparation. It preserves empty-source behavior and H.264/AAC startup
   gating, while the legacy sender remains the sole runtime owner until the TCP
   leaf accepts the snapshot.
+- A TCP readiness backend now exists: `src/media/egress/backends/tcp.rs`
+  wraps a real Linux `epoll` instance per shard (via `libc`, since a TCP fd
+  has no native poller of its own, unlike libsrt's socket type), mirroring
+  `src/media/srt/egress_poller.rs`'s generation-tagged registration shape
+  and `Ops`-trait fake-ability. Registration, deregistration, stale-fd
+  reuse, and error/hangup surfacing are proven both against a fake `Ops`
+  implementation and against a real kernel epoll instance using connected
+  `AF_UNIX` socketpairs (no live network needed). Not yet wired into a
+  shard backend or connection engine — that is the next slice.
 
 ### RTMPS
 
