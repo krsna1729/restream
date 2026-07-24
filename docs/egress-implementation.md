@@ -826,8 +826,23 @@ Current branch status:
   still cannot monopolize the shard past its budget. Proven by two new
   deterministic tests: a generous budget sends a 3-fragment unit in one
   visit, and a tight budget still stops after exactly one fragment,
-  leaving the rest for the next visit. Live re-measurement of the CPU
-  regression follows.
+  leaving the rest for the next visit.
+  **Live re-measurement (`w2-fabric-batched` capture, N=100) shows
+  batching barely moved CPU** (149% vs 158% pre-batching, ~6% better,
+  still 3.6x legacy's 41.7%), which reframes the bottleneck: batching
+  reduces shard wake/poll/schedule overhead per unit, but not the *number*
+  of `srt_send()` syscalls, which stays fixed at roughly
+  `unit_bytes / MAX_SRT_MESSAGE_PAYLOAD` regardless of how many happen per
+  scheduler visit — a 74KB keyframe is still ~57 separate syscalls.
+  Syscall-transition cost, not scheduling overhead, appears to dominate.
+  The next lever is raising SRT's configured message-size ceiling to
+  shrink the fragment *count* itself, not just how fragments are
+  scheduled — that needs dedicated SRT-configuration investigation and is
+  Phase 7 tuning territory, not a quick follow-up. `EgressRolloutMode`
+  default stays `Off` until fragment count (not just visit batching) comes
+  down. RSS remains favorable throughout (2,575KB vs legacy's 3,426KB per
+  output); correctness held (`srt-crypto-matrix` still passes cleanly with
+  batching applied).
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
   fault.output-stall passed with a permanently stalled sink isolated beside
   32 healthy siblings while SRT outputs ran fabric-owned. This is
