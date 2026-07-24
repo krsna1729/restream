@@ -93,7 +93,7 @@ pub(crate) fn should_defer_audio_until_video_ready(
     !video_ready && rtmp_output_waits_for_video(ring_buffer)
 }
 
-pub(super) fn resolve_deferred_audio_sequence_header(
+pub(crate) fn resolve_deferred_audio_sequence_header(
     cached_sequence_header: Option<&Bytes>,
     output_audio_track: Option<&AudioMeta>,
 ) -> Option<Bytes> {
@@ -136,7 +136,7 @@ pub(super) fn video_sequence_header_for_keyframe(
     }
 }
 
-pub(super) fn validate_rtmp_output_audio_packet_track(track_index: u32) -> Result<(), String> {
+pub(crate) fn validate_rtmp_output_audio_packet_track(track_index: u32) -> Result<(), String> {
     if track_index != 0 {
         return Err(format!(
             "RTMP output requires a single routed audio track, but observed track index {} on the output ring. Choose subset, downmix, or remap audio routing.",

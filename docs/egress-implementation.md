@@ -1031,21 +1031,39 @@ Current branch status:
   state machine (`src/media/rtmp/egress_connection.rs`, widened from
   `pub(super)` to `pub(crate)` so both the legacy Tokio adapter and the
   fabric engine drive the same protocol calls) instead of duplicating
-  connect/publish-request logic. `RtmpFabricState` now has three states:
-  `Handshaking` → `Negotiating` (a `SessionNegotiation` driver bounded to at
-  most one read or one write syscall per `advance()` call, matching the
-  handshake driver's per-visit discipline) → `PublishAccepted { core }`.
-  Proven end to end against a real `rml_rtmp::sessions::ServerSession` peer
-  that auto-accepts the connect and publish requests (not a hand-rolled byte
-  fixture), plus a peer-closes-mid-negotiation failure-path test. Media
-  publishing (draining `RingFeed` into `publish_video_data`/
-  `publish_audio_data`) is deliberately deferred rather than rushed: the
-  legacy path's per-packet dispatch (`src/media/rtmp/egress.rs`) carries
-  substantial warmup, sequence-header, and codec-edge nuance beyond wire
-  framing, and folding it into a non-blocking engine deserves its own
-  focused pass rather than being cut into this slice. Not yet wired into a
-  shard backend (leaf registration, poller integration, `RtmpFabricStartup`
-  snapshot handoff) — that is the next slice after media publishing.
+  connect/publish-request logic. Proven end to end against a real
+  `rml_rtmp::sessions::ServerSession` peer that auto-accepts the connect and
+  publish requests (not a hand-rolled byte fixture), plus a
+  peer-closes-mid-negotiation failure-path test.
+- Media publishing now also runs through the fabric engine.
+  `RtmpFabricState` has four states: `Handshaking` → `Negotiating` (bounded
+  to at most one read or one write syscall per `advance()` call) →
+  `Publishing` (a `MediaPublisher` driver that batches multiple feed units
+  and their wire packets into one visit, bounded by the visit's
+  `WorkBudget` — mirroring the SRT fabric engine's fragment batching, which
+  exists precisely because one-wake-per-unit caused a measured CPU
+  regression; see Phase 4 status above). `MediaPublisher` reuses
+  `RtmpMediaEncoder`'s existing pure per-packet encoding (sequence-header
+  refresh, keyframe gating, timestamp guarding — `src/media/rtmp/egress_engine.rs`,
+  widened to `pub(crate)`) and `RtmpSessionCore`'s pure packet-building
+  calls, so the wire-framing logic is identical to the legacy path rather
+  than reimplemented. A new `RtmpPublishStartup` type
+  (`src/media/egress/backends/rtmp.rs`) mirrors
+  `crate::application::egress_rtmp_fabric::RtmpFabricStartup`'s fields
+  without the media engine depending on the application layer directly —
+  the application assembles the immutable startup snapshot (querying
+  `MediaEngine`, output registries, and ring state) and converts it into
+  this media-owned type before constructing the leaf; the connection-local
+  engine itself never queries anything beyond its own fields, preserving
+  the architecture's "no engine/registry queries from a leaf visit" rule.
+  Proven end to end: a real `rml_rtmp::sessions::ServerSession` peer
+  auto-accepts connect/publish and then keeps reading until it observes a
+  `VideoDataReceived` event for a raw H.264 keyframe pushed through a real
+  `RingBuffer`/`RingFeed` — confirming the engine's encoded bytes parse as
+  a valid RTMP video message on the wire, not just that bytes were sent.
+  Not yet wired into a shard backend (leaf registration, poller
+  integration, `RtmpFabricStartup` snapshot handoff at the application
+  layer) — that is the next slice.
 
 ### RTMPS
 

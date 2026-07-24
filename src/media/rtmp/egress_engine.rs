@@ -12,7 +12,7 @@ use super::flv::{FlvVideoPacketKind, classify_flv_video_packet};
 use super::timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum RtmpMediaAction {
+pub(crate) enum RtmpMediaAction {
     Video {
         payload: Bytes,
         timestamp: RtmpTimestamp,
@@ -24,7 +24,7 @@ pub(super) enum RtmpMediaAction {
     },
 }
 
-pub(super) struct RtmpMediaEncoder {
+pub(crate) struct RtmpMediaEncoder {
     enhanced_hevc: bool,
     video_ready: bool,
     raw_parameter_sets: Vec<u8>,
@@ -35,7 +35,7 @@ pub(super) struct RtmpMediaEncoder {
 }
 
 impl RtmpMediaEncoder {
-    pub(super) fn new(enhanced_hevc: bool, raw_parameter_sets: Vec<u8>) -> Self {
+    pub(crate) fn new(enhanced_hevc: bool, raw_parameter_sets: Vec<u8>) -> Self {
         Self {
             enhanced_hevc,
             video_ready: false,
@@ -47,18 +47,18 @@ impl RtmpMediaEncoder {
         }
     }
 
-    pub(super) fn encode(&mut self, packet: &MediaPacket, actions: &mut Vec<RtmpMediaAction>) {
+    pub(crate) fn encode(&mut self, packet: &MediaPacket, actions: &mut Vec<RtmpMediaAction>) {
         match packet.media_type {
             MediaType::Video => self.encode_video(packet, actions),
             MediaType::Audio => self.encode_audio(packet, actions),
         }
     }
 
-    pub(super) fn set_startup_video_config(&mut self, config: Option<Vec<u8>>) {
+    pub(crate) fn set_startup_video_config(&mut self, config: Option<Vec<u8>>) {
         self.last_video_config = config;
     }
 
-    pub(super) fn video_ready(&self) -> bool {
+    pub(crate) fn video_ready(&self) -> bool {
         self.video_ready
     }
 
