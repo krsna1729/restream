@@ -71,6 +71,7 @@ pulp = { version = "0.22", features = ["x86-v4"] }
 wide = "1.5"
 proptest = "1"
 loom = { version = "0.7", features = ["checkpoint"] }
+rcgen = "0.14.8"
 
 [[bin]]
 name = "restream-mcp"

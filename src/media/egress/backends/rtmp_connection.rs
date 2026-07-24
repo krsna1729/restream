@@ -25,9 +25,10 @@
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::sync::Arc;
 
 use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::{ClientConnection, StreamOwned};
+use tokio_rustls::rustls::{ClientConfig, ClientConnection, StreamOwned};
 
 use crate::media::egress::backend::Interest;
 use crate::media::rtmp::rustls_client_config;
@@ -43,9 +44,21 @@ impl RtmpConnection {
     }
 
     pub(crate) fn tls(stream: TcpStream, host: &str) -> Result<Self, String> {
+        Self::tls_with_config(stream, host, rustls_client_config())
+    }
+
+    /// Same as [`Self::tls`] but with an explicit `ClientConfig` — the
+    /// production path always uses `rustls_client_config()`'s
+    /// webpki-roots-trusting config; tests use this to substitute a
+    /// verifier that trusts a locally generated test certificate instead.
+    pub(crate) fn tls_with_config(
+        stream: TcpStream,
+        host: &str,
+        config: Arc<ClientConfig>,
+    ) -> Result<Self, String> {
         let server_name = ServerName::try_from(host.to_string())
             .map_err(|_| format!("invalid RTMPS host name: {host}"))?;
-        let connection = ClientConnection::new(rustls_client_config(), server_name)
+        let connection = ClientConnection::new(config, server_name)
             .map_err(|error| format!("rustls client connection init failed: {error}"))?;
         Ok(Self::Tls(Box::new(StreamOwned::new(connection, stream))))
     }

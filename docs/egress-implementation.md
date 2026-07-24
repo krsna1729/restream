@@ -1173,14 +1173,20 @@ Current branch status:
   the exact same root-certificate trust store the legacy path uses)
   instead of rejecting RTMPS outputs outright.
 - Proven: `RtmpConnection`'s `Read`/`Write` delegation against a real
-  connected TCP pair, and — the specific bug this slice fixes —
-  `interest_hint` returning `wants_write() == true` for a freshly
-  constructed client `ClientConnection` before any I/O has happened
-  (proving it reflects `rustls`'s actual internal state, not a per-call
-  guess). **Not yet proven**: a full TLS handshake round-trip against a
-  real TLS server peer — this repository has no certificate-generation
-  dependency yet, and standing one up (e.g. `rcgen`) is a scoped follow-up
-  rather than something to add unreviewed as a side effect of this slice.
+  connected TCP pair; `interest_hint` returning `wants_write() == true`
+  for a freshly constructed client `ClientConnection` before any I/O has
+  happened (proving it reflects `rustls`'s actual internal state, not a
+  per-call guess); and — the full round-trip this was building toward —
+  a real handshake completing and application data flowing end to end
+  against a real `rustls::ServerConnection`, driven non-blocking through
+  `RtmpConnection` with the exact same WouldBlock-retry loop the fabric
+  engine uses. The test server presents a locally generated self-signed
+  certificate (`rcgen`, added as a dev-dependency for exactly this); the
+  test client trusts it via a verifier that still performs real
+  `rustls::crypto::verify_tls12_signature`/`verify_tls13_signature`
+  checks but skips chain-to-root validation (appropriate for a test cert
+  with no CA — the production path always uses `rustls_client_config()`'s
+  real webpki-roots trust store, unchanged by this test-only verifier).
 
 ### Proof
 
