@@ -767,6 +767,27 @@ Current branch status:
   remains `off`/opt-in until live delivery is confirmed — do not flip
   `EgressRolloutMode` default to `Srt` on the strength of the unit tests
   alone.
+  **Root cause narrowed further** by two additional live diagnostics: the
+  shared muxer's ring `write_idx` was confirmed growing steadily
+  (~34 units/s, matching source frame rate) for the entire run, and the
+  feed-wake watcher was confirmed delivering continuously (1,074
+  observations over one run, matching the muxer's production rate) — so
+  both the muxer-liveness fix and the wake-delivery fix are working
+  exactly as designed. With production and wake delivery both confirmed,
+  the remaining gap sits specifically in the path from "shard wakes and
+  calls `on_ready`" to "a byte reaches the peer": `SrtShardBackend::on_ready`
+  polls `SrtFabricPoller` (`src/media/srt/egress_poller.rs`, wrapping
+  libsrt's own `srt_epoll_*` family) non-blockingly and only visits a leaf
+  once that poll reports it writable. This SRT-epoll path is exercised
+  end-to-end only by the fabric egress code — legacy SRT egress never uses
+  `srt_epoll_*` at all (it sends on a dedicated blocking OS thread), so a
+  latent gap in the fabric's SRT-epoll registration or wait semantics for a
+  connecting-then-connected real socket (as opposed to the fake poller used
+  in unit tests) is the leading suspect for why registered, connected
+  sockets never report writable. Confirming this needs either instrumenting
+  `SrtFabricPoller::poll_leaves`/`register_leaf` directly against a live
+  socket, or an SRT-protocol-focused pass independent of the fabric
+  scheduling work already proven correct here.
   Earlier ramp captures measured resources but not delivery and are
   re-recorded after these fixes.
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
