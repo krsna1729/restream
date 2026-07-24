@@ -1,3 +1,4 @@
+pub mod rtmp;
 pub mod rtmp_handshake;
 pub mod sink;
 pub mod srt;

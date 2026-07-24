@@ -1017,8 +1017,23 @@ Current branch status:
   proven; the test's server thread now also carries a bounded read timeout
   as a permanent regression guard so a future reintroduction fails fast
   instead of hanging the suite again.
-  Not yet wired into a shard backend or connection engine — that is the
-  next slice.
+- A first `ProtocolEngine` implementation now exists:
+  `src/media/egress/backends/rtmp.rs`. `RtmpFabricEngine` drives connection
+  startup through a completed handshake by wrapping
+  `NonBlockingRtmpHandshake` in a small state enum
+  (`Handshaking` → `HandshakeDone { carried_over }`), returning
+  `EngineProgress::HandshakeComplete` through the *same* shard visit loop
+  (`ProtocolEngine::advance`) the SRT fabric engine uses — proven by
+  driving it end to end against a real TCP peer running `rml_rtmp`'s
+  synchronous server-side handshake, plus a peer-closes-mid-handshake
+  failure-path test. RTMP session negotiation (connect/publish requests)
+  and media publishing are deliberately deferred rather than rushed: the
+  `HandshakeDone` state carries over any post-handshake bytes so the next
+  slice can consume them, and reuse of `RtmpSessionCore`'s existing pure
+  `ClientSession` state machine (`src/media/rtmp/egress_connection.rs`) is
+  still the identified path — not yet implemented. Not yet wired into a
+  shard backend (leaf registration, poller integration, `RtmpFabricStartup`
+  snapshot handoff) — that is the next slice after session negotiation.
 
 ### RTMPS
 
