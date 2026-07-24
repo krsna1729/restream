@@ -790,8 +790,14 @@ Current branch status:
   from the exact offset after a `WouldBlock`. Proven by two deterministic
   tests: fragmenting and reassembling a >2×-oversized unit exactly, and
   resuming mid-fragmentation at the correct offset after a would-block.
-  Earlier ramp captures measured resources but not delivery and are
-  re-recorded after this fix; live re-validation follows.
+  **Live-validated (`544ed807`, `crypto-fabric16` capture):**
+  `srt-crypto-matrix` now passes cleanly under `RESTREAM_EGRESS_FABRIC=srt`
+  — every pipeline sub-case reports full output progress (20/20, 40/40,
+  60/60 across mixed RTMP/SRT scenarios), including encrypted SRT
+  transport variants. This closes the live-delivery gap: the fabric SRT
+  path delivers real media end to end. Earlier ramp captures (`w2-fabric`,
+  `w2-fabric-wake`, `w4-fabric`) predate this fix and are superseded;
+  re-record before citing their numbers.
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
   fault.output-stall passed with a permanently stalled sink isolated beside
   32 healthy siblings while SRT outputs ran fabric-owned. This is
