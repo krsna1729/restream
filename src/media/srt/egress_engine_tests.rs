@@ -427,3 +427,81 @@ fn large_feed_unit_resumes_at_the_correct_offset_after_would_block() {
     assert_eq!(sender.sent.last().unwrap().len(), 100);
     assert_eq!(cursor, FeedCursor::new(0, 1));
 }
+
+/// The CPU-regression fix: with a generous budget, multiple fragments of
+/// the same large unit are sent within ONE visit (one `advance()` call)
+/// instead of costing one scheduler cycle per fragment.
+#[test]
+fn generous_budget_batches_multiple_fragments_into_one_visit() {
+    let big_unit = Bytes::from(vec![3u8; MAX_SRT_MESSAGE_PAYLOAD * 3]);
+    let feed = feed_with_chunks([big_unit.clone()]);
+    let mut engine = SrtEgressEngine::<FakeSender>::default();
+    let mut sender = FakeSender::default(); // always Accepted { bytes: message.len() }
+    let mut cursor = FeedCursor::new(0, 0);
+    let generous_budget = WorkBudget::new(64, 1024 * 1024, Duration::from_secs(1));
+
+    let progress = engine.advance(
+        &mut sender,
+        Readiness::WRITABLE,
+        &feed,
+        &mut cursor,
+        generous_budget,
+    );
+
+    // All three fragments went out in this single visit.
+    assert!(matches!(
+        progress,
+        EngineProgress::Progress {
+            bytes,
+            units: 1,
+            ..
+        } if bytes == big_unit.len()
+    ));
+    assert_eq!(sender.sent.len(), 3);
+    assert!(
+        sender
+            .sent
+            .iter()
+            .all(|f| f.len() <= MAX_SRT_MESSAGE_PAYLOAD)
+    );
+    assert_eq!(cursor, FeedCursor::new(0, 1));
+    assert_eq!(engine.pending_message_bytes(), 0);
+}
+
+/// A tight byte budget still stops the loop mid-unit within one visit,
+/// leaving the rest for the next visit — the batching change does not
+/// bypass the visit budget.
+#[test]
+fn tight_byte_budget_stops_batching_mid_unit() {
+    let big_unit = Bytes::from(vec![5u8; MAX_SRT_MESSAGE_PAYLOAD * 3]);
+    let feed = feed_with_chunks([big_unit]);
+    let mut engine = SrtEgressEngine::<FakeSender>::default();
+    let mut sender = FakeSender::default();
+    let mut cursor = FeedCursor::new(0, 0);
+    // The budget check runs after a fragment is sent, so exactly one
+    // fragment goes out whenever max_bytes is at most one fragment's size:
+    // sending it reaches total_bytes == MAX_SRT_MESSAGE_PAYLOAD >= max_bytes
+    // and the loop stops before attempting a second fragment.
+    let tight_budget = WorkBudget::new(64, MAX_SRT_MESSAGE_PAYLOAD, Duration::from_secs(1));
+
+    let progress = engine.advance(
+        &mut sender,
+        Readiness::WRITABLE,
+        &feed,
+        &mut cursor,
+        tight_budget,
+    );
+
+    assert!(matches!(
+        progress,
+        EngineProgress::Progress {
+            bytes: MAX_SRT_MESSAGE_PAYLOAD,
+            units: 0,
+            ..
+        }
+    ));
+    assert_eq!(sender.sent.len(), 1);
+    assert_eq!(engine.pending_message_bytes(), MAX_SRT_MESSAGE_PAYLOAD * 2);
+    // Cursor has not advanced -- the unit is still in flight.
+    assert_eq!(cursor, FeedCursor::new(0, 1));
+}

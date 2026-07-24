@@ -817,9 +817,17 @@ Current branch status:
   for legacy) is attributed to connection-churn noise proportional to
   concurrency, not a data-integrity defect — worth confirming with a
   longer soak before the default flip regardless.
-  **Because of the CPU regression, the rollout default is not being
-  flipped yet.** Fragment-batching per visit is the next required step
-  before reconsidering `EgressRolloutMode` default `Srt`.
+  **Fragment-batching implemented.** `SrtEgressEngine::send_pending` now
+  loops sending successive `MAX_SRT_MESSAGE_PAYLOAD` fragments of the
+  pending unit within one visit, bounded by the visit's `WorkBudget`
+  (`max_bytes` and `deadline`) exactly like any other budget-respecting
+  engine work — a keyframe-sized unit now costs one to a few scheduler
+  cycles instead of dozens, while a single slow or always-writable leaf
+  still cannot monopolize the shard past its budget. Proven by two new
+  deterministic tests: a generous budget sends a 3-fragment unit in one
+  visit, and a tight budget still stops after exactly one fragment,
+  leaving the rest for the next visit. Live re-measurement of the CPU
+  regression follows.
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
   fault.output-stall passed with a permanently stalled sink isolated beside
   32 healthy siblings while SRT outputs ran fabric-owned. This is

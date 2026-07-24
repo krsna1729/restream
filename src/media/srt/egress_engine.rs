@@ -2,6 +2,7 @@
 
 use bytes::Bytes;
 use std::marker::PhantomData;
+use std::time::Instant;
 
 use crate::media::egress::backend::{
     CloseReason, EngineProgress, Interest, ProtocolEngine, ProtocolFailure, Readiness,
@@ -23,8 +24,10 @@ use super::srt_egress_sender::{SrtMessageSender, SrtSendResult};
 /// one call fails with SRT error 5009 ("Incorrect use of Message API");
 /// legacy never hits this because it re-chunks the byte stream to 1316 bytes
 /// on the way out regardless of original chunk boundaries. The engine
-/// fragments a retained unit into ≤1316-byte pieces here instead, sending
-/// one fragment per visit so a single visit's work stays bounded.
+/// fragments a retained unit into ≤1316-byte pieces here instead, sending as
+/// many fragments as the visit's budget allows (see `send_pending`) so a
+/// single visit's work stays bounded without costing one scheduler cycle per
+/// fragment.
 pub(super) const MAX_SRT_MESSAGE_PAYLOAD: usize = 1316;
 
 #[derive(Debug)]
@@ -78,35 +81,78 @@ impl<T> SrtEgressEngine<T> {
             .map_or(0, PendingSrtMessage::remaining_len)
     }
 
-    fn send_pending(&mut self, transport: &mut T) -> EngineProgress
+    /// Send as many `MAX_SRT_MESSAGE_PAYLOAD` fragments of the pending unit
+    /// as the budget allows in one visit, instead of exactly one. A single
+    /// fragment per visit is correct but costs a full wake/poll/visit cycle
+    /// per fragment — for a keyframe-sized unit (tens of KB) that is dozens
+    /// of cycles instead of one, which live measurement showed as a real
+    /// CPU regression (see `docs/egress-implementation.md` Phase 4 status).
+    /// Looping here amortizes that cost across one scheduler visit while
+    /// still respecting the visit's byte/deadline budget, so one slow or
+    /// always-writable leaf still cannot monopolize the shard.
+    fn send_pending(&mut self, transport: &mut T, budget: WorkBudget) -> EngineProgress
     where
         T: SrtMessageSender,
     {
-        let Some(pending) = self.pending.as_mut() else {
+        if self.pending.is_none() {
             return EngineProgress::Needs(Interest::WRITE);
-        };
+        }
 
-        let fragment = pending.next_fragment();
-        match transport.send_message(&fragment) {
-            SrtSendResult::Accepted { bytes } => {
-                pending.advance(bytes);
-                let done = pending.is_complete();
-                if done {
-                    self.pending = None;
-                }
-                EngineProgress::Progress {
-                    bytes,
-                    units: usize::from(done),
+        let mut total_bytes = 0usize;
+        loop {
+            let Some(pending) = self.pending.as_mut() else {
+                // Unit fully sent and cleared below; report what this visit
+                // transferred.
+                return EngineProgress::Progress {
+                    bytes: total_bytes,
+                    units: 1,
                     interest: Interest::WRITE,
+                };
+            };
+
+            let fragment = pending.next_fragment();
+            match transport.send_message(&fragment) {
+                SrtSendResult::Accepted { bytes } => {
+                    pending.advance(bytes);
+                    total_bytes += bytes;
+                    if pending.is_complete() {
+                        self.pending = None;
+                        return EngineProgress::Progress {
+                            bytes: total_bytes,
+                            units: 1,
+                            interest: Interest::WRITE,
+                        };
+                    }
+                    if total_bytes >= budget.max_bytes || Instant::now() >= budget.deadline {
+                        return EngineProgress::Progress {
+                            bytes: total_bytes,
+                            units: 0,
+                            interest: Interest::WRITE,
+                        };
+                    }
+                    // Budget allows another fragment: loop without
+                    // returning to the shard scheduler.
+                }
+                SrtSendResult::WouldBlock => {
+                    return if total_bytes > 0 {
+                        EngineProgress::Progress {
+                            bytes: total_bytes,
+                            units: 0,
+                            interest: Interest::WRITE,
+                        }
+                    } else {
+                        EngineProgress::Needs(Interest::WRITE)
+                    };
+                }
+                SrtSendResult::PeerClosed => return EngineProgress::PeerClosed,
+                SrtSendResult::Failed(failure) => {
+                    return EngineProgress::Failed(ProtocolFailure {
+                        reason: failure.reason,
+                        detail: failure.detail,
+                        retryable: failure.retryable,
+                    });
                 }
             }
-            SrtSendResult::WouldBlock => EngineProgress::Needs(Interest::WRITE),
-            SrtSendResult::PeerClosed => EngineProgress::PeerClosed,
-            SrtSendResult::Failed(failure) => EngineProgress::Failed(ProtocolFailure {
-                reason: failure.reason,
-                detail: failure.detail,
-                retryable: failure.retryable,
-            }),
         }
     }
 }
@@ -128,7 +174,7 @@ where
     ) -> EngineProgress {
         if self.pending.is_some() {
             return if readiness.writable {
-                self.send_pending(transport)
+                self.send_pending(transport, budget)
             } else {
                 EngineProgress::Needs(Interest::WRITE)
             };
@@ -150,7 +196,7 @@ where
         self.pending = Some(PendingSrtMessage::new(message));
 
         if readiness.writable {
-            self.send_pending(transport)
+            self.send_pending(transport, budget)
         } else {
             EngineProgress::Needs(Interest::WRITE)
         }
