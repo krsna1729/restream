@@ -137,11 +137,15 @@ fn writable_recovery_sends_pending_without_reading_next_feed_unit() {
     );
 
     assert!(matches!(first, EngineProgress::Needs(interest) if interest.writable));
+    // The retry completes the retained unit (it fits in one fragment), so it
+    // now correctly reports units: 1 — the engine fragments a unit into
+    // MAX_SRT_MESSAGE_PAYLOAD-sized sends and only counts the unit once its
+    // final fragment is accepted, on whichever visit that happens to be.
     assert!(matches!(
         second,
         EngineProgress::Progress {
             bytes: 3,
-            units: 0,
+            units: 1,
             ..
         }
     ));
@@ -277,4 +281,149 @@ fn srt_engine_uses_reconnect_resynchronization() {
         engine.recovery_capability(),
         RecoveryCapability::ReconnectOnly
     );
+}
+
+/// Regression: an SRT message-mode `srt_send()` call fails (SRT error 5009,
+/// "Incorrect use of Message API") when the payload exceeds the socket's
+/// configured message size. A single muxed TS feed unit (one chunk boundary
+/// from the shared muxer) can be much larger than that — a keyframe burst is
+/// commonly tens of KB — so the engine must fragment a retained unit into
+/// `MAX_SRT_MESSAGE_PAYLOAD`-sized pieces across multiple visits rather than
+/// handing the whole unit to one `srt_send()` call. Live evidence: this was
+/// the root cause of every SRT fabric output silently delivering zero bytes
+/// despite successful connects, confirmed wake delivery, and confirmed
+/// muxer production (see `docs/egress-implementation.md` Phase 4 status).
+#[test]
+fn large_feed_unit_is_fragmented_across_multiple_visits() {
+    let big_unit = Bytes::from(vec![7u8; MAX_SRT_MESSAGE_PAYLOAD * 2 + 500]);
+    let feed = feed_with_chunks([big_unit.clone()]);
+    let mut engine = SrtEgressEngine::<FakeSender>::default();
+    let mut sender = FakeSender::default(); // always Accepted { bytes: message.len() }
+    let mut cursor = FeedCursor::new(0, 0);
+
+    // Three visits: two full-size fragments, then the 500-byte remainder.
+    let first = engine.advance(
+        &mut sender,
+        Readiness::WRITABLE,
+        &feed,
+        &mut cursor,
+        budget(),
+    );
+    let second = engine.advance(
+        &mut sender,
+        Readiness::WRITABLE,
+        &feed,
+        &mut cursor,
+        budget(),
+    );
+    let third = engine.advance(
+        &mut sender,
+        Readiness::WRITABLE,
+        &feed,
+        &mut cursor,
+        budget(),
+    );
+
+    assert!(matches!(
+        first,
+        EngineProgress::Progress {
+            bytes: MAX_SRT_MESSAGE_PAYLOAD,
+            units: 0,
+            ..
+        }
+    ));
+    assert!(matches!(
+        second,
+        EngineProgress::Progress {
+            bytes: MAX_SRT_MESSAGE_PAYLOAD,
+            units: 0,
+            ..
+        }
+    ));
+    assert!(matches!(
+        third,
+        EngineProgress::Progress {
+            bytes: 500,
+            units: 1,
+            ..
+        }
+    ));
+
+    // The cursor only advances once the whole unit is consumed, and every
+    // fragment sent to the transport stays within the message-size limit.
+    assert_eq!(cursor, FeedCursor::new(0, 1));
+    assert!(
+        sender
+            .sent
+            .iter()
+            .all(|f| f.len() <= MAX_SRT_MESSAGE_PAYLOAD)
+    );
+    assert_eq!(
+        sender.sent.iter().map(Bytes::len).sum::<usize>(),
+        big_unit.len()
+    );
+    // Reassembling the sent fragments in order must reproduce the original
+    // unit exactly -- no bytes dropped, duplicated, or reordered.
+    let reassembled: Vec<u8> = sender.sent.iter().flat_map(|b| b.to_vec()).collect();
+    assert_eq!(reassembled, big_unit.to_vec());
+    assert_eq!(engine.pending_message_bytes(), 0);
+}
+
+/// A large unit that hits `WouldBlock` mid-fragmentation must resume from
+/// the exact byte offset on the next writable visit, not restart or skip.
+#[test]
+fn large_feed_unit_resumes_at_the_correct_offset_after_would_block() {
+    let big_unit = Bytes::from(vec![9u8; MAX_SRT_MESSAGE_PAYLOAD + 100]);
+    let feed = feed_with_chunks([big_unit.clone()]);
+    let mut engine = SrtEgressEngine::<FakeSender>::default();
+    let mut sender = FakeSender::with_outcomes([
+        SrtSendResult::Accepted {
+            bytes: MAX_SRT_MESSAGE_PAYLOAD,
+        },
+        SrtSendResult::WouldBlock,
+        SrtSendResult::Accepted { bytes: 100 },
+    ]);
+    let mut cursor = FeedCursor::new(0, 0);
+
+    let first = engine.advance(
+        &mut sender,
+        Readiness::WRITABLE,
+        &feed,
+        &mut cursor,
+        budget(),
+    );
+    let second = engine.advance(
+        &mut sender,
+        Readiness::WRITABLE,
+        &feed,
+        &mut cursor,
+        budget(),
+    );
+    let third = engine.advance(
+        &mut sender,
+        Readiness::WRITABLE,
+        &feed,
+        &mut cursor,
+        budget(),
+    );
+
+    assert!(matches!(
+        first,
+        EngineProgress::Progress {
+            bytes: MAX_SRT_MESSAGE_PAYLOAD,
+            units: 0,
+            ..
+        }
+    ));
+    assert!(matches!(second, EngineProgress::Needs(interest) if interest.writable));
+    assert!(matches!(
+        third,
+        EngineProgress::Progress {
+            bytes: 100,
+            units: 1,
+            ..
+        }
+    ));
+    assert_eq!(sender.sent.last().unwrap().len(), 100);
+    assert_eq!(cursor, FeedCursor::new(0, 1));
 }

@@ -13,9 +13,52 @@ use crate::media::egress::policy::WorkBudget;
 
 use super::srt_egress_sender::{SrtMessageSender, SrtSendResult};
 
+/// Maximum bytes per `srt_send()` call in message mode: 7 × 188-byte MPEG-TS
+/// packets, matching legacy SRT egress's fixed send buffer
+/// (`src/media/srt_egress.rs`) and libsrt's live-mode payload ceiling.
+///
+/// A muxed TS feed unit is one chunk boundary from the shared muxer
+/// (`src/media/srt/shared_muxer.rs`), which can span many packets — a
+/// keyframe burst is commonly tens of KB. Sending a unit larger than this in
+/// one call fails with SRT error 5009 ("Incorrect use of Message API");
+/// legacy never hits this because it re-chunks the byte stream to 1316 bytes
+/// on the way out regardless of original chunk boundaries. The engine
+/// fragments a retained unit into ≤1316-byte pieces here instead, sending
+/// one fragment per visit so a single visit's work stays bounded.
+pub(super) const MAX_SRT_MESSAGE_PAYLOAD: usize = 1316;
+
+#[derive(Debug)]
+struct PendingSrtMessage {
+    bytes: Bytes,
+    offset: usize,
+}
+
+impl PendingSrtMessage {
+    fn new(bytes: Bytes) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn next_fragment(&self) -> Bytes {
+        let end = (self.offset + MAX_SRT_MESSAGE_PAYLOAD).min(self.bytes.len());
+        self.bytes.slice(self.offset..end)
+    }
+
+    fn advance(&mut self, sent: usize) {
+        self.offset += sent;
+    }
+
+    fn is_complete(&self) -> bool {
+        self.offset >= self.bytes.len()
+    }
+
+    fn remaining_len(&self) -> usize {
+        self.bytes.len() - self.offset
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct SrtEgressEngine<T> {
-    pending: Option<Bytes>,
+    pending: Option<PendingSrtMessage>,
     _transport: PhantomData<fn() -> T>,
 }
 
@@ -30,23 +73,30 @@ impl<T> Default for SrtEgressEngine<T> {
 
 impl<T> SrtEgressEngine<T> {
     pub(crate) fn pending_message_bytes(&self) -> usize {
-        self.pending.as_ref().map_or(0, Bytes::len)
+        self.pending
+            .as_ref()
+            .map_or(0, PendingSrtMessage::remaining_len)
     }
 
     fn send_pending(&mut self, transport: &mut T) -> EngineProgress
     where
         T: SrtMessageSender,
     {
-        let Some(message) = self.pending.as_ref() else {
+        let Some(pending) = self.pending.as_mut() else {
             return EngineProgress::Needs(Interest::WRITE);
         };
 
-        match transport.send_message(message) {
+        let fragment = pending.next_fragment();
+        match transport.send_message(&fragment) {
             SrtSendResult::Accepted { bytes } => {
-                self.pending = None;
+                pending.advance(bytes);
+                let done = pending.is_complete();
+                if done {
+                    self.pending = None;
+                }
                 EngineProgress::Progress {
                     bytes,
-                    units: 0,
+                    units: usize::from(done),
                     interest: Interest::WRITE,
                 }
             }
@@ -97,19 +147,10 @@ where
             return EngineProgress::Needs(Interest::NONE);
         };
         *cursor = next_cursor;
-        self.pending = Some(message);
+        self.pending = Some(PendingSrtMessage::new(message));
 
         if readiness.writable {
-            match self.send_pending(transport) {
-                EngineProgress::Progress {
-                    bytes, interest, ..
-                } => EngineProgress::Progress {
-                    bytes,
-                    units: 1,
-                    interest,
-                },
-                other => other,
-            }
+            self.send_pending(transport)
         } else {
             EngineProgress::Needs(Interest::WRITE)
         }

@@ -767,29 +767,31 @@ Current branch status:
   remains `off`/opt-in until live delivery is confirmed — do not flip
   `EgressRolloutMode` default to `Srt` on the strength of the unit tests
   alone.
-  **Root cause narrowed further** by two additional live diagnostics: the
-  shared muxer's ring `write_idx` was confirmed growing steadily
-  (~34 units/s, matching source frame rate) for the entire run, and the
-  feed-wake watcher was confirmed delivering continuously (1,074
-  observations over one run, matching the muxer's production rate) — so
-  both the muxer-liveness fix and the wake-delivery fix are working
-  exactly as designed. With production and wake delivery both confirmed,
-  the remaining gap sits specifically in the path from "shard wakes and
-  calls `on_ready`" to "a byte reaches the peer": `SrtShardBackend::on_ready`
-  polls `SrtFabricPoller` (`src/media/srt/egress_poller.rs`, wrapping
-  libsrt's own `srt_epoll_*` family) non-blockingly and only visits a leaf
-  once that poll reports it writable. This SRT-epoll path is exercised
-  end-to-end only by the fabric egress code — legacy SRT egress never uses
-  `srt_epoll_*` at all (it sends on a dedicated blocking OS thread), so a
-  latent gap in the fabric's SRT-epoll registration or wait semantics for a
-  connecting-then-connected real socket (as opposed to the fake poller used
-  in unit tests) is the leading suspect for why registered, connected
-  sockets never report writable. Confirming this needs either instrumenting
-  `SrtFabricPoller::poll_leaves`/`register_leaf` directly against a live
-  socket, or an SRT-protocol-focused pass independent of the fabric
-  scheduling work already proven correct here.
+  **Root cause found and fixed.** Two further live diagnostics first
+  confirmed both the muxer-liveness and wake-delivery fixes work exactly as
+  designed (ring `write_idx` growing steadily at ~34 units/s; the wake
+  watcher delivering continuously at matching rate), then a raw
+  `srt_epoll_wait` diagnostic confirmed `SrtFabricPoller` correctly reports
+  registered sockets writable. The actual break was one layer deeper, in
+  the send itself: `srt_send()` failed with SRT error 5009 ("Incorrect use
+  of Message API") on every attempt, because the engine handed an entire
+  muxed TS feed unit — one chunk boundary from the shared muxer, which can
+  span tens of KB for a keyframe burst — to a single message-mode
+  `srt_send()` call. SRT's message API rejects a payload above its
+  configured message-size ceiling. Legacy SRT egress never hits this
+  because it re-chunks the byte stream into a fixed 1316-byte buffer
+  (`src/media/srt_egress.rs`) on the way out regardless of original chunk
+  boundaries — a re-chunking step the fabric engine had never reproduced.
+  Fixed in `src/media/srt/egress_engine.rs`: `SrtEgressEngine` now retains
+  a byte offset alongside a unit's `Bytes` and sends it as
+  `MAX_SRT_MESSAGE_PAYLOAD` (1316-byte) fragments across successive
+  visits, advancing the feed cursor and counting the unit only once its
+  final fragment is accepted — one bounded fragment per visit, resuming
+  from the exact offset after a `WouldBlock`. Proven by two deterministic
+  tests: fragmenting and reassembling a >2×-oversized unit exactly, and
+  resuming mid-fragmentation at the correct offset after a would-block.
   Earlier ramp captures measured resources but not delivery and are
-  re-recorded after these fixes.
+  re-recorded after this fix; live re-validation follows.
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
   fault.output-stall passed with a permanently stalled sink isolated beside
   32 healthy siblings while SRT outputs ran fabric-owned. This is
