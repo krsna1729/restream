@@ -1067,9 +1067,32 @@ Current branch status:
   `VideoDataReceived` event for a raw H.264 keyframe pushed through a real
   `RingBuffer`/`RingFeed` — confirming the engine's encoded bytes parse as
   a valid RTMP video message on the wire, not just that bytes were sent.
-  Not yet wired into a shard backend (leaf registration, poller
-  integration, `RtmpFabricStartup` snapshot handoff at the application
-  layer) — that is the next slice.
+- A shard backend now exists: `RtmpShardBackend`
+  (`src/media/egress/backends/rtmp_shard.rs`), mirroring `SrtShardBackend`'s
+  shape (leaf slab, ready queue, pending-connect map, generic over a
+  fake-able poller trait). It differs from the SRT shard in one
+  architecturally required way: SRT always registers write-only interest
+  (libsrt handles acknowledgement internally), but RTMP genuinely
+  alternates between wanting read and write readiness across handshake,
+  negotiation, and publishing — so `RtmpShardBackend` re-registers each
+  leaf's poller interest after every visit, translated from the `Interest`
+  the engine's last `EngineProgress` carried, instead of registering once
+  at connect time. DNS resolution runs on a dedicated worker thread with a
+  completion queue (mirroring SRT's resolve worker), separate from the
+  bounded blocking connect on the shard thread itself, because
+  `ToSocketAddrs` has no timeout of its own and could otherwise stall the
+  shard indefinitely. `RtmpPublishStartupSource` is a trait seam for
+  supplying each output's immutable `RtmpPublishStartup` snapshot; only an
+  empty-snapshot default exists so far — wiring a real, application-layer
+  source (fed from `prepare_rtmp_fabric_startup`) is the next slice, along
+  with actually registering `RtmpShardBackend` with the fabric manager
+  (`EgressManager`) so real outputs can use it. Proven end to end: a
+  shard-driven leaf (added via `on_command`, connected via
+  `complete_pending_connect`, then driven only through `on_ready` — the
+  same call path an `EgressManager`-owned shard loop would use) reaches
+  publish acceptance against a real `ServerSession` peer, confirming the
+  ready-queue and per-visit interest-reregistration logic actually drives
+  the engine to completion end to end, not just that a socket connects.
 
 ### RTMPS
 
