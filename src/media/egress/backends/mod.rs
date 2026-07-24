@@ -1,4 +1,5 @@
 pub mod rtmp;
+pub mod rtmp_connection;
 pub mod rtmp_handshake;
 pub mod rtmp_shard;
 pub mod rtmp_shard_resolve_runtime;

@@ -10,11 +10,12 @@
 //! `tcp_connect`) rather than an `.await`ed read/write loop.
 
 use std::io::{ErrorKind, Read, Write};
-use std::net::TcpStream;
 
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 
 use crate::media::egress::backend::{Interest, Readiness};
+
+use super::rtmp_connection::RtmpConnection;
 
 const HANDSHAKE_READ_BUFFER: usize = 4096;
 
@@ -81,7 +82,7 @@ impl NonBlockingRtmpHandshake {
     /// matching the fabric's bounded-work-per-visit contract.
     pub(crate) fn advance(
         &mut self,
-        stream: &mut TcpStream,
+        stream: &mut RtmpConnection,
         readiness: Readiness,
     ) -> HandshakeOutcome {
         // A pending write (including the final C2 response that accompanies
@@ -106,7 +107,7 @@ impl NonBlockingRtmpHandshake {
                     // is now ready to report.
                 }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                    return HandshakeOutcome::Pending(Interest::WRITE);
+                    return HandshakeOutcome::Pending(stream.interest_hint(Interest::WRITE));
                 }
                 Err(error) => return HandshakeOutcome::Failed(error.to_string()),
             }
@@ -125,7 +126,7 @@ impl NonBlockingRtmpHandshake {
             Ok(0) => HandshakeOutcome::Failed("peer closed during handshake".to_string()),
             Ok(n) => self.process_bytes(&buffer[..n]),
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                HandshakeOutcome::Pending(Interest::READ)
+                HandshakeOutcome::Pending(stream.interest_hint(Interest::READ))
             }
             Err(error) => HandshakeOutcome::Failed(error.to_string()),
         }

@@ -33,7 +33,7 @@ pub(crate) use egress_packets::{
     should_send_startup_audio_sequence_header, startup_video_sequence_header,
     validate_rtmp_output_audio_packet_track,
 };
-pub(crate) use egress_transport::{RtmpUrlParts, parse_rtmp_url};
+pub(crate) use egress_transport::{RtmpUrlParts, parse_rtmp_url, rustls_client_config};
 
 #[cfg(test)]
 #[path = "rtmp/tests.rs"]

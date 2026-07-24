@@ -18,7 +18,6 @@
 
 use std::collections::VecDeque;
 use std::io::{ErrorKind, Read, Write};
-use std::net::TcpStream;
 
 use bytes::Bytes;
 use rml_rtmp::sessions::StreamMetadata;
@@ -38,6 +37,7 @@ use crate::media::rtmp::{
     RtmpUrlParts, resolve_deferred_audio_sequence_header, validate_rtmp_output_audio_packet_track,
 };
 
+use super::rtmp_connection::RtmpConnection;
 use super::rtmp_handshake::{HandshakeOutcome, NonBlockingRtmpHandshake};
 
 const SESSION_READ_BUFFER: usize = 4096;
@@ -100,7 +100,11 @@ impl SessionNegotiation {
         })
     }
 
-    fn advance(&mut self, stream: &mut TcpStream, readiness: Readiness) -> SessionAdvanceOutcome {
+    fn advance(
+        &mut self,
+        stream: &mut RtmpConnection,
+        readiness: Readiness,
+    ) -> SessionAdvanceOutcome {
         if let Some(pending) = &mut self.pending_write {
             if !readiness.writable {
                 return SessionAdvanceOutcome::Pending(Interest::WRITE);
@@ -117,7 +121,7 @@ impl SessionNegotiation {
                     self.pending_write = None;
                 }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                    return SessionAdvanceOutcome::Pending(Interest::WRITE);
+                    return SessionAdvanceOutcome::Pending(stream.interest_hint(Interest::WRITE));
                 }
                 Err(error) => return SessionAdvanceOutcome::Failed(error.to_string()),
             }
@@ -178,7 +182,7 @@ impl SessionNegotiation {
                 SessionAdvanceOutcome::Pending(Interest::READ_WRITE)
             }
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                SessionAdvanceOutcome::Pending(Interest::READ)
+                SessionAdvanceOutcome::Pending(stream.interest_hint(Interest::READ))
             }
             Err(error) => SessionAdvanceOutcome::Failed(error.to_string()),
         }
@@ -351,7 +355,7 @@ impl MediaPublisher {
 
     fn advance(
         &mut self,
-        stream: &mut TcpStream,
+        stream: &mut RtmpConnection,
         readiness: Readiness,
         feed: &RingFeed,
         cursor: &mut FeedCursor,
@@ -382,7 +386,11 @@ impl MediaPublisher {
                         self.pending_write = None;
                     }
                     Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                        return Self::finish(total_bytes, total_units, Interest::WRITE);
+                        return Self::finish(
+                            total_bytes,
+                            total_units,
+                            stream.interest_hint(Interest::WRITE),
+                        );
                     }
                     Err(error) => {
                         return EngineProgress::Failed(ProtocolFailure {
@@ -500,7 +508,7 @@ impl RtmpFabricEngine {
 
 impl ProtocolEngine for RtmpFabricEngine {
     type Feed = RingFeed;
-    type Transport = TcpStream;
+    type Transport = RtmpConnection;
 
     fn advance(
         &mut self,

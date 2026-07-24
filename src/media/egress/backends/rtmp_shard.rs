@@ -18,7 +18,7 @@
 //! `EngineProgress` carried, rather than registering once at connect time.
 
 use std::collections::{HashMap, VecDeque};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::os::unix::io::RawFd;
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::thread::{self, JoinHandle};
@@ -35,8 +35,9 @@ use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::rtmp::parse_rtmp_url;
 
 use super::rtmp::{RtmpFabricEngine, RtmpPublishStartup};
+use super::rtmp_connection::RtmpConnection;
 use super::tcp::{TcpEgressInterest, TcpEgressPollError, TcpEgressPoller, TcpReadyLeaf};
-use super::tcp_connect::{TcpFabricConnectConfig, connect_fabric_tcp_egress_socket, raw_fd};
+use super::tcp_connect::{TcpFabricConnectConfig, connect_fabric_tcp_egress_socket};
 
 // ---------------------------------------------------------------------------
 // Publish-startup source
@@ -233,7 +234,7 @@ where
 struct RtmpFabricLeaf {
     common: LeafCommon,
     engine: RtmpFabricEngine,
-    transport: TcpStream,
+    transport: RtmpConnection,
 }
 
 impl RtmpFabricLeaf {
@@ -415,15 +416,7 @@ where
             return;
         }
 
-        if pending.parts.tls {
-            tracing::warn!(
-                output_id = %output_id,
-                "rtmp fabric leaf rejected: rtmps is not yet supported by the fabric engine"
-            );
-            return;
-        }
-
-        let stream = match connect_fabric_tcp_egress_socket(TcpFabricConnectConfig {
+        let tcp_stream = match connect_fabric_tcp_egress_socket(TcpFabricConnectConfig {
             peer_addr,
             connect_timeout: pending.connect_timeout,
         }) {
@@ -432,6 +425,17 @@ where
                 tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf connect failed");
                 return;
             }
+        };
+        let stream = if pending.parts.tls {
+            match RtmpConnection::tls(tcp_stream, &pending.parts.host) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf tls init failed");
+                    return;
+                }
+            }
+        } else {
+            RtmpConnection::plain(tcp_stream)
         };
 
         let Some(publish_startup) = self.startup_source.take_startup(output_id) else {
@@ -452,7 +456,7 @@ where
             }
         };
 
-        let fd = raw_fd(&stream);
+        let fd = stream.raw_fd();
         let key = LeafKey(self.leaves.len());
         if self
             .poller

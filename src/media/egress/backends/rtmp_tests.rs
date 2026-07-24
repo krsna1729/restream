@@ -5,7 +5,7 @@ use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
 };
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream as StdTcpStream};
+use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -17,7 +17,7 @@ fn test_parts() -> RtmpUrlParts {
 /// Real, synchronous `rml_rtmp` server-side peer that performs only the
 /// handshake, for tests that stop driving the client once the handshake
 /// completes (before any connect-request bytes are flushed).
-fn run_handshake_only_server_peer(mut stream: StdTcpStream) {
+fn run_handshake_only_server_peer(mut stream: TcpStream) {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
@@ -47,7 +47,7 @@ fn run_handshake_only_server_peer(mut stream: StdTcpStream) {
 /// mirroring the minimal subset of `src/media/rtmp/ingest.rs`'s real accept
 /// path needed to prove the fabric engine reaches `PublishAccepted` against
 /// an actual protocol state machine, not a hand-rolled byte fixture.
-fn run_full_server_peer(mut stream: StdTcpStream) {
+fn run_full_server_peer(mut stream: TcpStream) {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
@@ -136,7 +136,7 @@ fn run_full_server_peer(mut stream: StdTcpStream) {
 /// proving media bytes the client engine encoded and wrote actually parse as
 /// a valid RTMP video message on the wire, not just that bytes were sent.
 fn run_full_server_peer_until_video(
-    mut stream: StdTcpStream,
+    mut stream: TcpStream,
     video_tx: std::sync::mpsc::Sender<usize>,
 ) {
     stream
@@ -230,7 +230,7 @@ fn budget() -> WorkBudget {
 
 fn drive_to<F>(
     engine: &mut RtmpFabricEngine,
-    client_stream: &mut TcpStream,
+    client_stream: &mut RtmpConnection,
     feed: &RingFeed,
     cursor: &mut FeedCursor,
     mut is_done: F,
@@ -266,8 +266,9 @@ fn engine_reaches_handshake_complete_through_the_visit_loop() {
         run_handshake_only_server_peer(stream);
     });
 
-    let mut client_stream = TcpStream::connect(addr).unwrap();
+    let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
 
     let mut engine =
         RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
@@ -297,8 +298,9 @@ fn engine_reaches_publish_accepted_through_the_visit_loop() {
         run_full_server_peer(stream);
     });
 
-    let mut client_stream = TcpStream::connect(addr).unwrap();
+    let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
 
     let mut engine =
         RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
@@ -331,8 +333,9 @@ fn engine_reports_protocol_failure_when_peer_closes_mid_handshake() {
         drop(stream);
     });
 
-    let mut client_stream = TcpStream::connect(addr).unwrap();
+    let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
 
     let mut engine =
         RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
@@ -396,8 +399,9 @@ fn engine_reports_protocol_failure_when_peer_closes_mid_negotiation() {
         drop(stream);
     });
 
-    let mut client_stream = TcpStream::connect(addr).unwrap();
+    let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
 
     let mut engine =
         RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
@@ -440,8 +444,9 @@ fn engine_publishes_a_raw_keyframe_once_publish_is_accepted() {
         run_full_server_peer_until_video(stream, video_tx);
     });
 
-    let mut client_stream = TcpStream::connect(addr).unwrap();
+    let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
 
     let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
     let payload = Bytes::from_static(&[

@@ -1,6 +1,6 @@
 use super::*;
 use rml_rtmp::handshake::{Handshake as PeerHandshake, HandshakeProcessResult as PeerResult};
-use std::net::{TcpListener, TcpStream as StdTcpStream};
+use std::net::{TcpListener, TcpStream, TcpStream as StdTcpStream};
 use std::thread;
 use std::time::Duration;
 
@@ -41,7 +41,7 @@ fn run_server_peer(mut stream: StdTcpStream) {
     }
 }
 
-fn drive_to_completion(stream: &mut TcpStream) -> Vec<u8> {
+fn drive_to_completion(stream: &mut RtmpConnection) -> Vec<u8> {
     let mut client = NonBlockingRtmpHandshake::new_client().unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -72,8 +72,9 @@ fn client_handshake_completes_against_a_real_server_state_machine() {
         run_server_peer(stream);
     });
 
-    let mut client_stream = TcpStream::connect(addr).unwrap();
+    let client_stream = TcpStream::connect(addr).unwrap();
     client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
 
     let remaining = drive_to_completion(&mut client_stream);
 
@@ -89,13 +90,14 @@ fn advance_before_any_readiness_reports_pending_write_without_touching_the_socke
     let addr = listener.local_addr().unwrap();
     // Never accepted -- the client's first advance() must not block or
     // error just because nothing is listening on the read side yet.
-    let Ok(mut client_stream) = TcpStream::connect(addr) else {
+    let Ok(client_stream) = TcpStream::connect(addr) else {
         // Some platforms complete a loopback connect() only once accepted;
         // either way, an error here proves the point below doesn't apply --
         // skip gracefully.
         return;
     };
     client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
 
     let mut client = NonBlockingRtmpHandshake::new_client().unwrap();
     let outcome = client.advance(&mut client_stream, Readiness::default());

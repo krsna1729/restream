@@ -80,7 +80,7 @@ impl RtmpEgressStream {
     }
 }
 
-fn rustls_client_config() -> Arc<ClientConfig> {
+pub(crate) fn rustls_client_config() -> Arc<ClientConfig> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 

@@ -1136,6 +1136,52 @@ Drive TLS incrementally:
 - TLS close and error paths map to common lifecycle reasons;
 - no convenience API may spin internally without a bounded exit.
 
+Current branch status:
+
+- RTMPS now works through the fabric engine. `RtmpConnection`
+  (`src/media/egress/backends/rtmp_connection.rs`) wraps a non-blocking
+  `TcpStream` directly with `rustls::StreamOwned` — the same
+  `rustls::ClientConnection` state machine the legacy Tokio adapter drives
+  via `tokio_rustls`, here driven synchronously with no async runtime
+  involved. `rustls::Stream`/`StreamOwned`'s `Read`/`Write` impls already
+  interleave TLS handshake I/O with application data transparently,
+  surfacing `WouldBlock` exactly like a raw non-blocking socket, so
+  `NonBlockingRtmpHandshake`, `SessionNegotiation`, and `MediaPublisher`
+  needed no protocol-level changes — only their transport type changed
+  from `TcpStream` to `RtmpConnection`.
+- **The one real correctness gap this surfaced**: a blocked read or write
+  call does not necessarily mean *that same direction* is what unblocks
+  it. `rustls`'s internal `complete_io()` can need to `read_tls()` a
+  ServerHello in the middle of what the caller sees as a blocked
+  `write()` call; inferring "needs write" purely from "the write call
+  just blocked" (correct for plain TCP, where the two directions are
+  independent) would under-request interest for TLS and could leave the
+  poller only ever watching for writability while the connection is
+  actually waiting on a read that never arrives — a silent stall, not a
+  crash. `RtmpConnection::interest_hint` fixes this by asking
+  `rustls::ClientConnection::wants_read()`/`wants_write()` directly after
+  any blocked I/O, instead of guessing from the syscall that blocked;
+  every `WouldBlock` branch across the handshake, negotiation, and
+  publishing drivers now goes through it. Plain TCP's `interest_hint`
+  just returns the existing per-direction guess unchanged, so this is a
+  pure addition for TLS with no behavior change to the already-proven
+  plaintext path.
+- `RtmpShardBackend::complete_pending_connect` now branches on
+  `parts.tls`, wrapping the connected socket via
+  `RtmpConnection::tls(stream, &parts.host)` (reusing
+  `rustls_client_config()`, widened to `pub(crate)`, so the fabric shares
+  the exact same root-certificate trust store the legacy path uses)
+  instead of rejecting RTMPS outputs outright.
+- Proven: `RtmpConnection`'s `Read`/`Write` delegation against a real
+  connected TCP pair, and — the specific bug this slice fixes —
+  `interest_hint` returning `wants_write() == true` for a freshly
+  constructed client `ClientConnection` before any I/O has happened
+  (proving it reflects `rustls`'s actual internal state, not a per-call
+  guess). **Not yet proven**: a full TLS handshake round-trip against a
+  real TLS server peer — this repository has no certificate-generation
+  dependency yet, and standing one up (e.g. `rcgen`) is a scoped follow-up
+  rather than something to add unreviewed as a side effect of this slice.
+
 ### Proof
 
 Tests cover:
