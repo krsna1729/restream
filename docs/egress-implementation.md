@@ -986,10 +986,16 @@ Current branch status:
   wraps a real Linux `epoll` instance per shard (via `libc`, since a TCP fd
   has no native poller of its own, unlike libsrt's socket type), mirroring
   `src/media/srt/egress_poller.rs`'s generation-tagged registration shape
-  and `Ops`-trait fake-ability. Registration, deregistration, stale-fd
-  reuse, and error/hangup surfacing are proven both against a fake `Ops`
-  implementation and against a real kernel epoll instance using connected
-  `AF_UNIX` socketpairs (no live network needed).
+  and `Ops`-trait fake-ability. `TcpEgressInterest` now carries both
+  `readable` and `writable` (initially write-only, before the RTMP engine
+  needed to wait for handshake/session-negotiation server responses too),
+  so a leaf registers exactly the interest its current `ProtocolEngine`
+  state needs — matching the `Interest` type `ProtocolEngine::advance`
+  already returns. Registration, deregistration, stale-fd reuse, readable
+  and writable readiness, and error/hangup surfacing (on both directions)
+  are proven both against a fake `Ops` implementation and against a real
+  kernel epoll instance using connected `AF_UNIX` socketpairs (no live
+  network needed).
 - A non-blocking-after-connect TCP dial now exists:
   `src/media/egress/backends/tcp_connect.rs`, mirroring the SRT fabric's
   connect shape (`egress_connect/single.rs`) — a bounded blocking

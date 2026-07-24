@@ -16,11 +16,23 @@ use crate::media::egress::scheduler::LeafKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct TcpEgressInterest {
+    pub readable: bool,
     pub writable: bool,
 }
 
 impl TcpEgressInterest {
-    pub const WRITE: Self = Self { writable: true };
+    pub const READ: Self = Self {
+        readable: true,
+        writable: false,
+    };
+    pub const WRITE: Self = Self {
+        readable: false,
+        writable: true,
+    };
+    pub const READ_WRITE: Self = Self {
+        readable: true,
+        writable: true,
+    };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +40,7 @@ pub(crate) struct TcpReadyLeaf {
     pub fd: RawFd,
     pub key: LeafKey,
     pub generation: u64,
+    pub readable: bool,
     pub writable: bool,
 }
 
@@ -151,15 +164,18 @@ where
                 // pass (e.g. removed by another visit this same tick).
                 continue;
             };
+            let readable = (event.events & libc::EPOLLIN as u32) != 0;
             let writable = (event.events & libc::EPOLLOUT as u32) != 0;
             let errored = (event.events & (libc::EPOLLERR | libc::EPOLLHUP) as u32) != 0;
             ready.push(TcpReadyLeaf {
                 fd,
                 key: registered.key,
                 generation: registered.generation,
-                // Surface an error/hangup as writable so the engine's next
-                // visit observes the failure via a real send() rather than
-                // the poller silently dropping the event.
+                // Surface an error/hangup on both directions so the
+                // engine's next visit observes the failure via a real
+                // read() or send() rather than the poller silently
+                // dropping the event.
+                readable: readable || errored,
                 writable: writable || errored,
             });
         }
@@ -183,6 +199,9 @@ fn empty_event() -> libc::epoll_event {
 
 fn events_for(interest: TcpEgressInterest) -> u32 {
     let mut events = (libc::EPOLLERR | libc::EPOLLHUP) as u32;
+    if interest.readable {
+        events |= libc::EPOLLIN as u32;
+    }
     if interest.writable {
         events |= libc::EPOLLOUT as u32;
     }

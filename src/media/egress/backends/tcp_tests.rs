@@ -65,6 +65,57 @@ fn real_epoll_reports_hangup_as_writable_after_peer_closes() {
 }
 
 #[test]
+fn real_epoll_reports_readable_once_peer_writes() {
+    let (a, b) = socketpair();
+    let mut poller = TcpEgressPoller::new(4).unwrap();
+
+    poller
+        .register_leaf(a, LeafKey(0), 1, TcpEgressInterest::READ)
+        .unwrap();
+
+    let mut ready = Vec::new();
+    let count = poller.poll_leaves(50, &mut ready).unwrap();
+    assert_eq!(count, 0, "no data written yet, so no readable event");
+
+    unsafe {
+        libc::write(b, [1u8].as_ptr().cast(), 1);
+    }
+
+    let count = poller.poll_leaves(1_000, &mut ready).unwrap();
+    assert_eq!(count, 1);
+    assert!(ready[0].readable);
+    assert!(!ready[0].writable);
+
+    poller.remove(a).unwrap();
+    close_fd(a);
+    close_fd(b);
+}
+
+#[test]
+fn real_epoll_read_write_interest_reports_both_directions() {
+    let (a, b) = socketpair();
+    let mut poller = TcpEgressPoller::new(4).unwrap();
+
+    poller
+        .register_leaf(a, LeafKey(0), 1, TcpEgressInterest::READ_WRITE)
+        .unwrap();
+    unsafe {
+        libc::write(b, [1u8].as_ptr().cast(), 1);
+    }
+
+    let mut ready = Vec::new();
+    let count = poller.poll_leaves(1_000, &mut ready).unwrap();
+
+    assert_eq!(count, 1);
+    assert!(ready[0].readable);
+    assert!(ready[0].writable);
+
+    poller.remove(a).unwrap();
+    close_fd(a);
+    close_fd(b);
+}
+
+#[test]
 fn removed_fd_stops_producing_events() {
     let (a, b) = socketpair();
     let mut poller = TcpEgressPoller::new(4).unwrap();
