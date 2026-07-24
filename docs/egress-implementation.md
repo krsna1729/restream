@@ -798,6 +798,28 @@ Current branch status:
   path delivers real media end to end. Earlier ramp captures (`w2-fabric`,
   `w2-fabric-wake`, `w4-fabric`) predate this fix and are superseded;
   re-record before citing their numbers.
+  **Re-recorded `w2-fabric-confirmed` capture (wsl-6cpu-12gb, N=100) shows
+  a real CPU regression the earlier unconfirmed captures could not see**
+  (they were measuring a fabric that never actually sent anything): RSS is
+  1.4x lower than legacy (2,455KB vs 3,426KB per output) but CPU is 3.8x
+  *higher* (158% vs legacy's 41.7%). Root cause: fragmenting a large unit
+  sends at most `MAX_SRT_MESSAGE_PAYLOAD` (1316) bytes per shard visit —
+  one bounded fragment per visit — so a keyframe-sized unit (tens of KB)
+  now costs dozens of wake/poll/visit/send cycles instead of one,
+  multiplying per-unit scheduling overhead. This is architecturally
+  correct (bounded, budget-respecting) but unoptimized; sending multiple
+  fragments per visit within the existing `WorkBudget` should recover most
+  of this cost without reintroducing the oversized-message failure.
+  A separate isolated single-output run (same commit, `N_OUTPUTS=1`)
+  showed zero decode errors and a correct dimension spot-check, confirming
+  the fragmentation logic itself is correct; the 100-way ramp's elevated
+  mediamtx decode-error count (124 lines across 62/100 connections, vs 3
+  for legacy) is attributed to connection-churn noise proportional to
+  concurrency, not a data-integrity defect — worth confirming with a
+  longer soak before the default flip regardless.
+  **Because of the CPU regression, the rollout default is not being
+  flipped yet.** Fragment-batching per visit is the next required step
+  before reconsidering `EgressRolloutMode` default `Srt`.
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
   fault.output-stall passed with a permanently stalled sink isolated beside
   32 healthy siblings while SRT outputs ran fabric-owned. This is
