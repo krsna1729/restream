@@ -33,11 +33,39 @@ pub(super) struct RtmpEgressSession {
     write_queue: RtmpWriteQueue,
 }
 
-struct RtmpSessionCore {
+/// Pure, socket-independent RTMP client session state: owns `ClientSession`
+/// (the `rml_rtmp` protocol state machine) and produces outbound packet
+/// bytes without performing any I/O itself. Reused by both the legacy
+/// Tokio-adapted egress path (`RtmpEgressSession` below, which wraps I/O
+/// around each call) and the fabric's non-blocking engine
+/// (`src/media/egress/backends/rtmp.rs`, which drives the same calls from a
+/// readiness-polled shard visit instead of an `.await`ed loop).
+pub(crate) struct RtmpSessionCore {
     parts: RtmpUrlParts,
     session: ClientSession,
     connect_config: ClientSessionConfig,
     initial_results: Vec<ClientSessionResult>,
+}
+
+impl RtmpSessionCore {
+    pub(crate) fn new(parts: RtmpUrlParts, chunk_size: u32) -> Result<Self, String> {
+        let mut config = ClientSessionConfig::new();
+        let scheme = if parts.tls { "rtmps" } else { "rtmp" };
+        config.tc_url = Some(format!(
+            "{}://{}:{}/{}",
+            scheme, parts.host, parts.port, parts.app
+        ));
+        config.chunk_size = chunk_size;
+        let connect_config = config.clone();
+        let (session, initial_results) =
+            ClientSession::new(config).map_err(|error| format!("{error:?}"))?;
+        Ok(Self {
+            parts,
+            session,
+            connect_config,
+            initial_results,
+        })
+    }
 }
 
 pub(super) enum InitialServerResultError {
@@ -46,13 +74,13 @@ pub(super) enum InitialServerResultError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum RtmpSessionEvent {
+pub(crate) enum RtmpSessionEvent {
     ConnectionRequestAccepted,
     PublishRequestAccepted,
 }
 
 #[derive(Debug)]
-pub(super) enum RtmpSessionError {
+pub(crate) enum RtmpSessionError {
     Protocol(&'static str),
     Pending(RtmpWriteQueueError),
     Socket(io::Error),
@@ -109,26 +137,11 @@ impl RtmpEgressConnection {
         chunk_size: u32,
         max_pending_bytes: usize,
     ) -> Result<RtmpEgressSession, String> {
-        let mut config = ClientSessionConfig::new();
-        let scheme = if self.parts.tls { "rtmps" } else { "rtmp" };
-        config.tc_url = Some(format!(
-            "{}://{}:{}/{}",
-            scheme, self.parts.host, self.parts.port, self.parts.app
-        ));
-        config.chunk_size = chunk_size;
-        let connect_config = config.clone();
-        let (session, initial_results) =
-            ClientSession::new(config).map_err(|error| format!("{error:?}"))?;
-
+        let core = RtmpSessionCore::new(self.parts, chunk_size)?;
         Ok(RtmpEgressSession {
             socket: self.socket,
             remaining: self.remaining,
-            core: RtmpSessionCore {
-                parts: self.parts,
-                session,
-                connect_config,
-                initial_results,
-            },
+            core,
             write_queue: RtmpWriteQueue::new(max_pending_bytes),
         })
     }
@@ -266,7 +279,7 @@ impl RtmpEgressSession {
 }
 
 impl RtmpSessionCore {
-    fn take_initial_packets(&mut self) -> Vec<Bytes> {
+    pub(crate) fn take_initial_packets(&mut self) -> Vec<Bytes> {
         let initial_results = std::mem::take(&mut self.initial_results);
         initial_results
             .into_iter()
@@ -277,7 +290,7 @@ impl RtmpSessionCore {
             .collect()
     }
 
-    fn request_connection(&mut self, enhanced: bool) -> Result<Bytes, String> {
+    pub(crate) fn request_connection(&mut self, enhanced: bool) -> Result<Bytes, String> {
         let packet = match self.session.request_connection(self.parts.app.clone()) {
             Ok(ClientSessionResult::OutboundResponse(packet)) => packet,
             _ => return Err("failed to build connect request".to_string()),
@@ -290,11 +303,11 @@ impl RtmpSessionCore {
         Ok(Bytes::from(bytes))
     }
 
-    fn stop_publishing(&mut self) {
+    pub(crate) fn stop_publishing(&mut self) {
         let _ = self.session.stop_publishing();
     }
 
-    fn handle_server_input(
+    pub(crate) fn handle_server_input(
         &mut self,
         input: &[u8],
     ) -> Result<(Vec<Bytes>, Vec<RtmpSessionEvent>), RtmpSessionError> {
@@ -339,7 +352,10 @@ impl RtmpSessionCore {
         Ok((packets, events))
     }
 
-    fn publish_metadata(&mut self, metadata: &StreamMetadata) -> Result<Bytes, RtmpSessionError> {
+    pub(crate) fn publish_metadata(
+        &mut self,
+        metadata: &StreamMetadata,
+    ) -> Result<Bytes, RtmpSessionError> {
         let packet = self
             .session
             .publish_metadata(metadata)
@@ -347,7 +363,7 @@ impl RtmpSessionCore {
         self.packet_from_result(packet).map(|(packet, _)| packet)
     }
 
-    fn publish_video_data(
+    pub(crate) fn publish_video_data(
         &mut self,
         payload: Bytes,
         timestamp: RtmpTimestamp,
@@ -360,7 +376,7 @@ impl RtmpSessionCore {
         self.packet_from_result(packet)
     }
 
-    fn publish_audio_data(
+    pub(crate) fn publish_audio_data(
         &mut self,
         payload: Bytes,
         timestamp: RtmpTimestamp,

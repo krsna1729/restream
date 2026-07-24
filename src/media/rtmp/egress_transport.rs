@@ -18,12 +18,12 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 const RTMP_EGRESS_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const RTMP_EGRESS_TLS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-pub(super) struct RtmpUrlParts {
-    pub(super) host: String,
-    pub(super) port: u16,
-    pub(super) app: String,
-    pub(super) stream_key: String,
-    pub(super) tls: bool,
+pub(crate) struct RtmpUrlParts {
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) app: String,
+    pub(crate) stream_key: String,
+    pub(crate) tls: bool,
 }
 
 pub(super) enum RtmpEgressStream {
@@ -232,7 +232,7 @@ pub(super) fn rtmp_sender_quality(
 }
 
 // Standard RTMP URL parser helper
-pub(super) fn parse_rtmp_url(url: &str) -> Option<RtmpUrlParts> {
+pub(crate) fn parse_rtmp_url(url: &str) -> Option<RtmpUrlParts> {
     let tls = match OutputUrlScheme::from_url(url) {
         OutputUrlScheme::Rtmp => false,
         OutputUrlScheme::Rtmps => true,

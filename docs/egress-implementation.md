@@ -1020,20 +1020,32 @@ Current branch status:
 - A first `ProtocolEngine` implementation now exists:
   `src/media/egress/backends/rtmp.rs`. `RtmpFabricEngine` drives connection
   startup through a completed handshake by wrapping
-  `NonBlockingRtmpHandshake` in a small state enum
-  (`Handshaking` → `HandshakeDone { carried_over }`), returning
+  `NonBlockingRtmpHandshake` in a small state enum, returning
   `EngineProgress::HandshakeComplete` through the *same* shard visit loop
   (`ProtocolEngine::advance`) the SRT fabric engine uses — proven by
   driving it end to end against a real TCP peer running `rml_rtmp`'s
   synchronous server-side handshake, plus a peer-closes-mid-handshake
-  failure-path test. RTMP session negotiation (connect/publish requests)
-  and media publishing are deliberately deferred rather than rushed: the
-  `HandshakeDone` state carries over any post-handshake bytes so the next
-  slice can consume them, and reuse of `RtmpSessionCore`'s existing pure
-  `ClientSession` state machine (`src/media/rtmp/egress_connection.rs`) is
-  still the identified path — not yet implemented. Not yet wired into a
+  failure-path test.
+- RTMP session negotiation (connect/publish requests) now also runs through
+  the fabric engine, reusing `RtmpSessionCore`'s existing pure `ClientSession`
+  state machine (`src/media/rtmp/egress_connection.rs`, widened from
+  `pub(super)` to `pub(crate)` so both the legacy Tokio adapter and the
+  fabric engine drive the same protocol calls) instead of duplicating
+  connect/publish-request logic. `RtmpFabricState` now has three states:
+  `Handshaking` → `Negotiating` (a `SessionNegotiation` driver bounded to at
+  most one read or one write syscall per `advance()` call, matching the
+  handshake driver's per-visit discipline) → `PublishAccepted { core }`.
+  Proven end to end against a real `rml_rtmp::sessions::ServerSession` peer
+  that auto-accepts the connect and publish requests (not a hand-rolled byte
+  fixture), plus a peer-closes-mid-negotiation failure-path test. Media
+  publishing (draining `RingFeed` into `publish_video_data`/
+  `publish_audio_data`) is deliberately deferred rather than rushed: the
+  legacy path's per-packet dispatch (`src/media/rtmp/egress.rs`) carries
+  substantial warmup, sequence-header, and codec-edge nuance beyond wire
+  framing, and folding it into a non-blocking engine deserves its own
+  focused pass rather than being cut into this slice. Not yet wired into a
   shard backend (leaf registration, poller integration, `RtmpFabricStartup`
-  snapshot handoff) — that is the next slice after session negotiation.
+  snapshot handoff) — that is the next slice after media publishing.
 
 ### RTMPS
 

@@ -22,6 +22,7 @@ mod timestamps;
 pub use egress::start_rtmp_egress;
 pub use listener::{start_rtmp_server, start_rtmp_server_on};
 
+pub(crate) use egress_connection::{RtmpSessionCore, RtmpSessionError, RtmpSessionEvent};
 pub(crate) use egress_metadata::{
     output_ring_video_codec_kind, resolved_output_audio_tracks, rtmp_publish_metadata,
     validate_rtmp_output_audio_tracks,
@@ -30,6 +31,9 @@ pub(crate) use egress_packets::{
     h264_sps_nalu, should_defer_audio_until_video_ready, should_send_startup_audio_sequence_header,
     startup_video_sequence_header,
 };
+pub(crate) use egress_transport::RtmpUrlParts;
+#[cfg(test)]
+pub(crate) use egress_transport::parse_rtmp_url;
 
 #[cfg(test)]
 #[path = "rtmp/tests.rs"]
@@ -67,8 +71,6 @@ use egress_packets::{
     resolve_deferred_audio_sequence_header, rtmp_output_waits_for_video,
     rtmp_video_packet_can_be_dropped, rtmp_warmup_ready, validate_rtmp_output_audio_packet_track,
 };
-#[cfg(test)]
-use egress_transport::parse_rtmp_url;
 #[cfg(test)]
 use enhanced::{enhanced_rtmp_connect_packet, raw_packet_starts_with_hevc_parameter_set};
 #[cfg(test)]
