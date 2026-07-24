@@ -15,6 +15,7 @@ mod engine_ingest;
 mod engine_ingest_metadata;
 mod engine_pipeline;
 pub mod engine_registries;
+mod engine_rtmp_egress_fabric;
 mod engine_runtime;
 mod engine_snapshots;
 pub(crate) mod external_file_ingest;

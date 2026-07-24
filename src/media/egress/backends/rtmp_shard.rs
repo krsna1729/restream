@@ -64,6 +64,40 @@ impl RtmpPublishStartupSource for EmptyRtmpPublishStartupSource {
     }
 }
 
+/// Real source backed by a shared map: the application layer assembles
+/// `RtmpFabricStartup` (querying `MediaEngine`, output registries, and ring
+/// state), converts it to `RtmpPublishStartup`, and calls
+/// [`Self::set`] before dispatching `EgressCommand::Add` for that output —
+/// the shard thread only ever reads, via `take_startup`, never queries
+/// anything itself. One instance is shared (cloned) across every shard of a
+/// fabric runtime, since any output can land on any shard.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SharedRtmpPublishStartupSource {
+    pending: std::sync::Arc<std::sync::Mutex<HashMap<OutputId, RtmpPublishStartup>>>,
+}
+
+impl SharedRtmpPublishStartupSource {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn set(&self, output_id: OutputId, startup: RtmpPublishStartup) {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(output_id, startup);
+    }
+}
+
+impl RtmpPublishStartupSource for SharedRtmpPublishStartupSource {
+    fn take_startup(&mut self, output_id: &OutputId) -> Option<RtmpPublishStartup> {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(output_id)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Resolve worker
 // ---------------------------------------------------------------------------

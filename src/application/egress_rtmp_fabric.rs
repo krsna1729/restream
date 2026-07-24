@@ -36,6 +36,22 @@ pub struct RtmpFabricStartup {
     pub defer_audio_until_video_ready: bool,
 }
 
+impl From<RtmpFabricStartup> for crate::media::egress::backends::rtmp::RtmpPublishStartup {
+    fn from(startup: RtmpFabricStartup) -> Self {
+        Self {
+            enhanced_hevc_video: startup.enhanced_hevc_video,
+            raw_video_parameter_sets: startup.raw_video_parameter_sets,
+            output_audio_track: startup.output_audio_track,
+            publish_metadata: startup.publish_metadata,
+            startup_video_sequence_header: startup.startup_video_sequence_header,
+            startup_video_config: startup.startup_video_config,
+            startup_audio_sequence_header: startup.startup_audio_sequence_header,
+            deferred_audio_sequence_header: startup.deferred_audio_sequence_header,
+            defer_audio_until_video_ready: startup.defer_audio_until_video_ready,
+        }
+    }
+}
+
 pub fn prepare_rtmp_fabric_feed(prepared: &PreparedOutput) -> PreparedRtmpFabricFeed {
     let feed_id = FeedId::new(format!("rtmp:{}", prepared.media_stage_key));
 

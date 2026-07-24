@@ -15,7 +15,7 @@ use crate::application::reconcile::{
 use crate::config::RuntimeTuning;
 use crate::domain::output_spec::OutputUrlScheme;
 use crate::domain::state::{DesiredOutputState, EgressPhase};
-use crate::media::egress::journal::TsFeed;
+use crate::media::egress::journal::{RingFeed, TsFeed};
 use crate::media::egress::{EgressCommand, FeedId, OutputSpec};
 use crate::media::engine::MediaEngine;
 use crate::secret_display::redact_url;
@@ -187,6 +187,60 @@ impl EgressReconciler {
         )
         .await;
 
+        let use_rtmp_fabric = self.engine.config.egress_fabric.rollout.routes_rtmp()
+            && matches!(url_scheme, OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps);
+        let rtmp_fabric = if use_rtmp_fabric {
+            match crate::application::egress_rtmp_fabric::prepare_rtmp_fabric_startup(
+                &self.engine,
+                output,
+                &prepared,
+            )
+            .await
+            {
+                Ok(startup) => {
+                    let feed =
+                        crate::application::egress_rtmp_fabric::prepare_rtmp_fabric_feed(&prepared);
+                    let mut spec = crate::application::egress_rtmp_fabric::rtmp_fabric_output_spec(
+                        output,
+                        registration.attempt_id,
+                        feed.feed_id.clone(),
+                    );
+                    if let Some(sink) = self
+                        .engine
+                        .with_active_egress(&output.id, |egress| {
+                            crate::media::egress::leaf::EgressProgressSink {
+                                bytes_sent: Some(egress.bytes_sent.clone()),
+                                last_progress_ms: Some(egress.last_progress_ms.clone()),
+                                ..Default::default()
+                            }
+                        })
+                        .await
+                    {
+                        spec.progress = sink;
+                    }
+                    Some(RtmpFabricTask {
+                        spec,
+                        feed_id: feed.feed_id,
+                        feed: feed.feed,
+                        startup: startup.into(),
+                    })
+                }
+                Err(error) => {
+                    self.engine
+                        .record_egress_error_if_current(
+                            &output.id,
+                            &registration,
+                            "rtmp_fabric_startup",
+                            error,
+                        )
+                        .await;
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let srt_fabric = if use_srt_fabric {
             let feed = crate::application::egress::prepare_srt_fabric_feed(
                 &self.engine,
@@ -238,6 +292,7 @@ impl EgressReconciler {
             correlation_id,
             job_id,
             srt_fabric,
+            rtmp_fabric,
         };
         tokio::spawn(task.run());
     }
@@ -248,6 +303,14 @@ struct SrtFabricTask {
     feed_id: FeedId,
     feed: Arc<TsFeed>,
     spec: OutputSpec,
+}
+
+#[derive(Clone)]
+struct RtmpFabricTask {
+    feed_id: FeedId,
+    feed: Arc<RingFeed>,
+    spec: OutputSpec,
+    startup: crate::media::egress::backends::rtmp::RtmpPublishStartup,
 }
 
 struct EgressTask {
@@ -266,6 +329,7 @@ struct EgressTask {
     correlation_id: String,
     job_id: String,
     srt_fabric: Option<SrtFabricTask>,
+    rtmp_fabric: Option<RtmpFabricTask>,
 }
 
 impl EgressTask {
@@ -280,16 +344,20 @@ impl EgressTask {
         let panicked = std::panic::AssertUnwindSafe(async {
             match url_scheme {
                 OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps => {
-                    crate::media::rtmp::start_rtmp_egress(
-                        self.output_id.clone(),
-                        self.pipeline_id.clone(),
-                        self.url.clone(),
-                        self.ring.clone(),
-                        self.engine.clone(),
-                        self.registration.clone(),
-                        self.rtmp_mode,
-                    )
-                    .await;
+                    if let Some(fabric) = self.rtmp_fabric.as_ref().cloned() {
+                        self.run_rtmp_fabric(fabric).await;
+                    } else {
+                        crate::media::rtmp::start_rtmp_egress(
+                            self.output_id.clone(),
+                            self.pipeline_id.clone(),
+                            self.url.clone(),
+                            self.ring.clone(),
+                            self.engine.clone(),
+                            self.registration.clone(),
+                            self.rtmp_mode,
+                        )
+                        .await;
+                    }
                 }
                 OutputUrlScheme::Srt => {
                     if let Some(fabric) = self.srt_fabric.as_ref().cloned() {
@@ -552,6 +620,79 @@ impl EgressTask {
         let _ = self
             .engine
             .release_srt_fabric_runtime(&fabric.feed_id)
+            .await;
+    }
+
+    async fn run_rtmp_fabric(&self, fabric: RtmpFabricTask) {
+        match self
+            .engine
+            .retain_rtmp_fabric_runtime(fabric.feed_id.clone(), fabric.feed.as_ref())
+            .await
+        {
+            Ok(_) => {}
+            Err(error) => {
+                self.engine
+                    .record_egress_error_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        "rtmp_fabric_ensure",
+                        format!("{error:?}"),
+                    )
+                    .await;
+                return;
+            }
+        }
+
+        // Must land before the Add command: the shard thread reads this via
+        // RtmpPublishStartupSource::take_startup and never queries anything
+        // itself.
+        self.engine
+            .set_rtmp_publish_startup(
+                &fabric.feed_id,
+                fabric.spec.id.clone(),
+                fabric.startup.clone(),
+            )
+            .await;
+
+        match self
+            .engine
+            .dispatch_rtmp_fabric_command(&fabric.feed_id, EgressCommand::Add(fabric.spec.clone()))
+            .await
+        {
+            Ok(_) => {
+                self.engine
+                    .update_egress_phase_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        EgressPhase::Sending,
+                    )
+                    .await;
+            }
+            Err(error) => {
+                let _ = self
+                    .engine
+                    .release_rtmp_fabric_runtime(&fabric.feed_id)
+                    .await;
+                self.engine
+                    .record_egress_error_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        "rtmp_fabric_dispatch",
+                        format!("{error:?}"),
+                    )
+                    .await;
+                return;
+            }
+        }
+
+        self.registration.cancel_token.cancelled().await;
+        let _ = self
+            .engine
+            .dispatch_rtmp_fabric_command(&fabric.feed_id, EgressCommand::Remove(fabric.spec.id))
+            .await;
+        let _ = self
+            .engine
+            .release_rtmp_fabric_runtime(&fabric.feed_id)
             .await;
     }
 

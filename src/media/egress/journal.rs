@@ -287,6 +287,20 @@ impl RingFeed {
     pub fn limit_status(&self, limits: &FeedLimits) -> FeedLimitStatus {
         limits.evaluate(self.retention_snapshot())
     }
+
+    /// Clone the shared ring/epoch handles into a new, independent reader
+    /// over the same underlying data — mirrors [`TsFeed::clone_reader`].
+    pub fn clone_reader(&self) -> Self {
+        Self {
+            ring: self.ring.clone(),
+            epoch: self.epoch.clone(),
+            cached_oldest: AtomicU64::new(self.cached_oldest.load(Ordering::Relaxed)),
+        }
+    }
+
+    pub fn notify_handle(&self) -> Arc<tokio::sync::Notify> {
+        self.ring.get_notify()
+    }
 }
 
 impl std::fmt::Debug for RingFeed {

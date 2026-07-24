@@ -116,8 +116,32 @@ impl SrtFabricRegistry {
     }
 }
 
+pub(crate) struct RtmpFabricRegistry {
+    pub(crate) runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub(crate) active_outputs: HashMap<FeedId, u64>,
+    /// One publish-startup source per feed runtime, shared (cloned) across
+    /// that runtime's shards; the bootstrap path writes into it before
+    /// dispatching `EgressCommand::Add` for an output on that feed.
+    pub(crate) startup_sources:
+        HashMap<FeedId, crate::media::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource>,
+    /// One publication watcher per feed runtime; aborted on release.
+    pub(crate) feed_watchers: HashMap<FeedId, tokio::task::JoinHandle<()>>,
+}
+
+impl RtmpFabricRegistry {
+    fn new() -> Self {
+        Self {
+            runtimes: HashMap::new(),
+            active_outputs: HashMap::new(),
+            startup_sources: HashMap::new(),
+            feed_watchers: HashMap::new(),
+        }
+    }
+}
+
 pub struct FabricRegistry {
     pub(crate) srt: TokioMutex<SrtFabricRegistry>,
+    pub(crate) rtmp: TokioMutex<RtmpFabricRegistry>,
 }
 
 impl Default for FabricRegistry {
@@ -130,6 +154,7 @@ impl FabricRegistry {
     pub fn new() -> Self {
         Self {
             srt: TokioMutex::new(SrtFabricRegistry::new()),
+            rtmp: TokioMutex::new(RtmpFabricRegistry::new()),
         }
     }
 }

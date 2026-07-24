@@ -1,6 +1,7 @@
 pub mod rtmp;
 pub mod rtmp_handshake;
 pub mod rtmp_shard;
+pub mod rtmp_shard_resolve_runtime;
 pub mod sink;
 pub mod srt;
 pub mod tcp;

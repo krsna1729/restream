@@ -202,3 +202,81 @@ async fn srt_fabric_registry_shutdown_removes_and_joins_feed_runtime() {
     assert_eq!(probe.state().shutdowns, 1);
     assert!(missing.is_err());
 }
+
+#[tokio::test]
+async fn rtmp_fabric_registry_retains_native_runtime_once_per_feed() {
+    use crate::media::egress::journal::RingFeed;
+
+    let engine = MediaEngine::new();
+    let feed_id = FeedId::new("feed-engine-native-rtmp");
+    let feed = RingFeed::new(
+        Arc::new(crate::media::ring_buffer::RingBuffer::new(8)),
+        Arc::new(FeedEpoch::new()),
+    );
+
+    let first = engine
+        .retain_rtmp_fabric_runtime(feed_id.clone(), &feed)
+        .await;
+    let second = engine
+        .retain_rtmp_fabric_runtime(feed_id.clone(), &feed)
+        .await;
+    let snapshots = engine.rtmp_fabric_runtime_snapshots(&feed_id).await;
+
+    assert_eq!(first, Ok(true));
+    assert_eq!(second, Ok(false));
+    assert_eq!(snapshots.map(|snapshots| snapshots.len()), Some(4));
+    assert!(!engine.release_rtmp_fabric_runtime(&feed_id).await);
+    assert!(
+        engine
+            .rtmp_fabric_runtime_snapshots(&feed_id)
+            .await
+            .is_some()
+    );
+    assert!(engine.release_rtmp_fabric_runtime(&feed_id).await);
+    assert!(
+        engine
+            .rtmp_fabric_runtime_snapshots(&feed_id)
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn rtmp_fabric_publish_startup_is_readable_by_the_shard_backend() {
+    use crate::media::egress::backends::rtmp::RtmpPublishStartup;
+    use crate::media::egress::backends::rtmp_shard::RtmpPublishStartupSource;
+    use crate::media::egress::journal::RingFeed;
+
+    let engine = MediaEngine::new();
+    let feed_id = FeedId::new("feed-engine-rtmp-startup");
+    let feed = RingFeed::new(
+        Arc::new(crate::media::ring_buffer::RingBuffer::new(8)),
+        Arc::new(FeedEpoch::new()),
+    );
+
+    engine
+        .retain_rtmp_fabric_runtime(feed_id.clone(), &feed)
+        .await
+        .unwrap();
+
+    let output_id = OutputId::new("out-1");
+    let stored = engine
+        .set_rtmp_publish_startup(&feed_id, output_id.clone(), RtmpPublishStartup::default())
+        .await;
+    assert!(stored, "startup must be stored against a live runtime");
+
+    let mut source = {
+        let registry = engine.fabric.rtmp.lock().await;
+        registry.startup_sources.get(&feed_id).unwrap().clone()
+    };
+    assert!(
+        source.take_startup(&output_id).is_some(),
+        "the shard-side source must observe the startup written by the async caller"
+    );
+
+    engine.release_rtmp_fabric_runtime(&feed_id).await;
+    let missing = engine
+        .set_rtmp_publish_startup(&feed_id, output_id, RtmpPublishStartup::default())
+        .await;
+    assert!(!missing, "a released runtime must not accept new startups");
+}

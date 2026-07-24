@@ -1,11 +1,18 @@
 use std::num::NonZeroU32;
 
+use crate::media::egress::backends::rtmp_shard::{
+    RtmpReadinessPoller, SharedRtmpPublishStartupSource,
+};
+use crate::media::egress::backends::rtmp_shard_resolve_runtime::{
+    ResolvingRtmpShardBackendWithPoller, resolving_rtmp_shard_backend,
+};
 use crate::media::egress::backends::srt::SrtReadinessPoller;
 use crate::media::egress::backends::srt::resolve_runtime::{
     ResolvingNativeSrtShardBackend, ResolvingSrtShardBackendWithPoller, resolving_srt_shard_backend,
 };
+use crate::media::egress::backends::tcp::{TcpEgressPollError, TcpEgressPoller};
 use crate::media::egress::command::ShardId;
-use crate::media::egress::journal::TsFeed;
+use crate::media::egress::journal::{RingFeed, TsFeed};
 use crate::media::egress::policy::WorkBudget;
 use crate::media::egress::shard::{EgressShardConfig, EgressShardGroup, EgressShardGroupError};
 use crate::media::srt::{SrtEgressPollError, SrtFabricPoller};
@@ -92,6 +99,94 @@ where
             poller,
             feed_for(shard_id),
             budget,
+        ));
+    }
+    Ok(backends)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RtmpFabricShardGroupError<E> {
+    Backend(E),
+    Group(EgressShardGroupError),
+}
+
+#[allow(dead_code)]
+pub(crate) fn spawn_rtmp_fabric_shard_group<F>(
+    shard_count: NonZeroU32,
+    shard_config: EgressShardConfig,
+    poller_max_events: usize,
+    budget: WorkBudget,
+    chunk_size: u32,
+    startup_source: SharedRtmpPublishStartupSource,
+    feed_for: F,
+) -> Result<EgressShardGroup, RtmpFabricShardGroupError<TcpEgressPollError>>
+where
+    F: FnMut(ShardId) -> RingFeed,
+{
+    spawn_rtmp_fabric_shard_group_with_poller(
+        shard_count,
+        shard_config,
+        budget,
+        chunk_size,
+        startup_source,
+        feed_for,
+        |shard_id| {
+            let _ = shard_id;
+            TcpEgressPoller::new(poller_max_events)
+        },
+    )
+}
+
+fn spawn_rtmp_fabric_shard_group_with_poller<P, E, F, G>(
+    shard_count: NonZeroU32,
+    shard_config: EgressShardConfig,
+    budget: WorkBudget,
+    chunk_size: u32,
+    startup_source: SharedRtmpPublishStartupSource,
+    feed_for: F,
+    poller_for: G,
+) -> Result<EgressShardGroup, RtmpFabricShardGroupError<E>>
+where
+    P: RtmpReadinessPoller + Send + 'static,
+    F: FnMut(ShardId) -> RingFeed,
+    G: FnMut(ShardId) -> Result<P, E>,
+{
+    let backends = rtmp_fabric_shard_backends_with_poller(
+        shard_count,
+        budget,
+        chunk_size,
+        startup_source,
+        feed_for,
+        poller_for,
+    )
+    .map_err(RtmpFabricShardGroupError::Backend)?;
+    EgressShardGroup::spawn(shard_count, shard_config, backends)
+        .map_err(RtmpFabricShardGroupError::Group)
+}
+
+fn rtmp_fabric_shard_backends_with_poller<P, E, F, G>(
+    shard_count: NonZeroU32,
+    budget: WorkBudget,
+    chunk_size: u32,
+    startup_source: SharedRtmpPublishStartupSource,
+    mut feed_for: F,
+    mut poller_for: G,
+) -> Result<Vec<ResolvingRtmpShardBackendWithPoller<P, SharedRtmpPublishStartupSource>>, E>
+where
+    P: RtmpReadinessPoller,
+    F: FnMut(ShardId) -> RingFeed,
+    G: FnMut(ShardId) -> Result<P, E>,
+{
+    let mut backends = Vec::with_capacity(shard_count.get() as usize);
+    for shard_index in 0..shard_count.get() {
+        let shard_id = ShardId::new(shard_index);
+        let poller = poller_for(shard_id)?;
+        backends.push(resolving_rtmp_shard_backend(
+            poller,
+            feed_for(shard_id),
+            budget,
+            chunk_size,
+            startup_source.clone(),
         ));
     }
     Ok(backends)

@@ -1082,17 +1082,49 @@ Current branch status:
   bounded blocking connect on the shard thread itself, because
   `ToSocketAddrs` has no timeout of its own and could otherwise stall the
   shard indefinitely. `RtmpPublishStartupSource` is a trait seam for
-  supplying each output's immutable `RtmpPublishStartup` snapshot; only an
-  empty-snapshot default exists so far — wiring a real, application-layer
-  source (fed from `prepare_rtmp_fabric_startup`) is the next slice, along
-  with actually registering `RtmpShardBackend` with the fabric manager
-  (`EgressManager`) so real outputs can use it. Proven end to end: a
+  supplying each output's immutable `RtmpPublishStartup` snapshot;
+  `EmptyRtmpPublishStartupSource` (always empty) backs the isolated shard
+  tests, and `SharedRtmpPublishStartupSource` (a shared map, cloned across
+  a runtime's shards) backs the real path. Proven end to end: a
   shard-driven leaf (added via `on_command`, connected via
   `complete_pending_connect`, then driven only through `on_ready` — the
   same call path an `EgressManager`-owned shard loop would use) reaches
   publish acceptance against a real `ServerSession` peer, confirming the
   ready-queue and per-visit interest-reregistration logic actually drives
   the engine to completion end to end, not just that a socket connects.
+- The RTMP fabric is now wired end to end into live output startup,
+  mirroring the SRT fabric's shape exactly:
+  - `spawn_rtmp_fabric_shard_group` (`src/media/egress/factory.rs`) and
+    `retain_rtmp_fabric_runtime`/`dispatch_rtmp_fabric_command`/
+    `release_rtmp_fabric_runtime` (`src/media/engine_rtmp_egress_fabric.rs`,
+    backed by a new `RtmpFabricRegistry` in `engine_registries.rs`) reuse
+    the same protocol-agnostic `EgressFabricRuntime`/`EgressShardGroup`
+    the SRT fabric uses — neither type is SRT-specific, so no new runtime
+    type was needed, only a new shard backend.
+  - `RingFeed` gained `clone_reader`/`notify_handle` (mirroring `TsFeed`'s
+    existing methods of the same name) so the fabric's feed-wake watcher
+    pattern applies unchanged.
+  - `infrastructure/bootstrap/egress.rs` gains a `use_rtmp_fabric` branch
+    (`rollout.routes_rtmp() && url_scheme is Rtmp/Rtmps`) parallel to
+    `use_srt_fabric`: it assembles `RtmpFabricStartup` via the existing
+    `prepare_rtmp_fabric_startup`, converts it to the media-owned
+    `RtmpPublishStartup` (`From<RtmpFabricStartup>` in
+    `application/egress_rtmp_fabric.rs` — application depends on media,
+    not the reverse), writes it into the runtime's
+    `SharedRtmpPublishStartupSource` via the new
+    `MediaEngine::set_rtmp_publish_startup` *before* dispatching
+    `EgressCommand::Add` (the shard thread only ever reads it), and falls
+    back to the legacy `start_rtmp_egress` task when the rollout mode
+    doesn't route RTMP — same fallback shape as SRT, so `EgressRolloutMode`
+    staying `Off` by default leaves every existing behavior unchanged.
+  - Proven with `MediaEngine`-level integration tests mirroring the
+    existing SRT ones: retain-once-per-feed/release/shutdown lifecycle,
+    and that a startup snapshot written via `set_rtmp_publish_startup` is
+    actually observable by the shard-side `RtmpPublishStartupSource`
+    (not just stored in a registry no one reads).
+  - Reused `srt_poller_max_events` for the RTMP TCP poller's max-events
+    tuning rather than adding a duplicate config knob; split them later
+    if tuning needs diverge.
 
 ### RTMPS
 
