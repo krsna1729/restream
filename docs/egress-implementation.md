@@ -936,8 +936,19 @@ Current branch status:
   and `Ops`-trait fake-ability. Registration, deregistration, stale-fd
   reuse, and error/hangup surfacing are proven both against a fake `Ops`
   implementation and against a real kernel epoll instance using connected
-  `AF_UNIX` socketpairs (no live network needed). Not yet wired into a
-  shard backend or connection engine — that is the next slice.
+  `AF_UNIX` socketpairs (no live network needed).
+- A non-blocking-after-connect TCP dial now exists:
+  `src/media/egress/backends/tcp_connect.rs`, mirroring the SRT fabric's
+  connect shape (`egress_connect/single.rs`) — a bounded blocking
+  `connect_timeout` on the shard's dedicated OS thread (acceptable there
+  since it blocks only that shard's own leaves, not the process), then an
+  explicit switch to non-blocking mode. Proven against a real local
+  `TcpListener`: connects, confirms non-blocking reads return `WouldBlock`
+  immediately, registers the connected socket with `TcpEgressPoller` and
+  confirms it reports writable, and confirms `connect_timeout` bounds a
+  connect to an unroutable address (`TEST-NET-1`) rather than hanging. Not
+  yet wired into a shard backend or connection engine — that is the next
+  slice.
 
 ### RTMPS
 
