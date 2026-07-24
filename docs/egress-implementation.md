@@ -999,9 +999,26 @@ Current branch status:
   `TcpListener`: connects, confirms non-blocking reads return `WouldBlock`
   immediately, registers the connected socket with `TcpEgressPoller` and
   confirms it reports writable, and confirms `connect_timeout` bounds a
-  connect to an unroutable address (`TEST-NET-1`) rather than hanging. Not
-  yet wired into a shard backend or connection engine — that is the next
-  slice.
+  connect to an unroutable address (`TEST-NET-1`) rather than hanging.
+- A non-blocking client handshake now exists:
+  `src/media/egress/backends/rtmp_handshake.rs`, driving the same pure,
+  socket-independent `rml_rtmp::handshake::Handshake` state machine the
+  existing Tokio adapter uses (`src/media/rtmp/handshake.rs`), one bounded
+  non-blocking read or write per `advance()` call instead of an `.await`ed
+  loop. Proven against a real TCP peer running `rml_rtmp`'s own
+  synchronous server-side handshake on a background thread (no Tokio in
+  the test at all) — full C0/C1→S0/S1/S2→C2 round trip.
+  **Caught a real bug during that proof**: the handshake's "complete"
+  check ran *before* flushing the final pending write (C2), so the driver
+  reported completion having never actually sent C2 — the peer then
+  blocked forever waiting for bytes that were never written. The test
+  reproduced this as a genuine multi-hour hang (not a slow build) before
+  the fix reordered the check to flush any pending write first. Fixed and
+  proven; the test's server thread now also carries a bounded read timeout
+  as a permanent regression guard so a future reintroduction fails fast
+  instead of hanging the suite again.
+  Not yet wired into a shard backend or connection engine — that is the
+  next slice.
 
 ### RTMPS
 
