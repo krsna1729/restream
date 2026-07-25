@@ -601,6 +601,29 @@ and SRT already have (shard backend, factory spawn function, manager
 integration, `EgressTask::run` dispatch) — not a new design, just the
 already-proven pattern applied to the one backend that skipped it.
 
+**Traced the concrete implementation gap (`sonnet`-tier, not started):**
+Sink's rehome has one real design wrinkle SRT/RTMP don't: it has no
+socket and no poller at all. SRT always registers write interest and
+relies on `epoll`/`srt_epoll_wait` to report writability; RTMP's
+`EgressCommand::FeedWake` handler (`refresh_registrations_for_feed_wake`)
+only *widens poller interest* so the *next* real socket-readiness poll
+picks the leaf up. Sink has no socket-readiness poll to widen interest
+for — a sink leaf is conceptually always "writable" (discarding costs no
+I/O), so nothing except `EgressCommand::FeedWake` itself can ever tell a
+sink shard "new data exists, re-visit this leaf." A production
+`SinkShardBackend`'s `FeedWake` handler therefore needs to directly
+re-enqueue its leaves into the ready queue — not adjust registration
+state the way RTMP does — the one place this genuinely isn't just "copy
+the SRT/RTMP pattern." Everything else (real `LeafCommon` lifecycle,
+generation-checked `Add`/`Update`/`Remove`, a factory spawn function
+mirroring `spawn_rtmp_fabric_shard_group`, `EgressTask::run` dispatching
+to it instead of `start_sink_egress`) is the already-proven pattern.
+Given AGENTS.md requires deterministic tests, loom/proptest where
+feasible, and a live harness fault case for lifecycle/concurrency
+changes — not skipped here for lack of scope clarity, but because doing
+it properly needs a dedicated pass with room for that testing depth,
+not a rushed addition alongside everything else landed this session.
+
 ## Phase 4: SRT migration
 
 ### Objective
