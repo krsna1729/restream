@@ -1796,9 +1796,21 @@ benchmark-driven decisions) and why that tier fits.
    (`test/harness/baselines/rtmp-fabric-matrix/vps-6cpu-12gb-n1000/`):
    CPU avg 85.31% fabric vs 83.67% legacy (~1.02x, parity, within
    noise) — the N=10 capture's ~1.4x gap is gone; RSS avg 287,432KB
-   fabric vs 321,129KB legacy (fabric ~11% *lower*). CPU peak is still
-   elevated (130.78% vs 94.32%, ~1.39x) despite average parity — a new
-   open question (see below), not resolved by this capture. SRT at
+   fabric vs 321,129KB legacy (fabric ~11% *lower*). CPU peak was
+   elevated in this one capture (130.78% vs 94.32%, ~1.39x) despite
+   average parity; **resolved by two more re-runs** (same commit,
+   `vps-6cpu-12gb-n1000/legacy-run3.csv`/`fabric-run3.csv` — the other
+   rerun's raw CSVs weren't kept, only summarized here): run 2 was
+   legacy 96.07% peak vs fabric 110.83% peak (~1.15x); run 3 was
+   legacy 132.96% peak vs fabric 109.94% peak — **legacy's own peak
+   exceeded fabric's original "regression" number, with fabric peaking
+   *lower* than legacy that run**. Across all three runs: CPU avg mean
+   88.08% legacy vs 90.73% fabric (~1.03x), CPU peak mean 107.78%
+   legacy vs 117.18% fabric (~1.09x) — both close to parity, and the
+   per-run peak swings (94–133% legacy, 110–131% fabric) are host-level
+   sampling noise affecting both variants symmetrically, not an
+   RTMP-fabric-specific issue. This closes the CPU-peak open question
+   the first capture raised. SRT at
    N=500 (`.../srt-fabric-matrix/vps-6cpu-12gb-n500/`) — the highest
    scale at which legacy can even be compared, see below — CPU avg
    171.0% fabric vs 196.76% legacy (fabric ~13% *lower*), RSS avg
@@ -1847,14 +1859,19 @@ benchmark-driven decisions) and why that tier fits.
    finding.
    **This does not fully close the exit gate as originally scoped** —
    still missing: the mixed RTMP/RTMPS workload specifically (only
-   plain RTMP was run at N=1000; RTMPS at scale is untested), the
-   1,140 RTMP + 60 SRT *combined* workload shape, context-switch and
-   allocator-behavior instrumentation (only CPU/RSS were sampled), and
-   the RTMP CPU-peak question above. But the core question this gate
-   exists to answer — does the fabric path hold up, or beat, legacy at
-   real scale — now has a real, decisive answer for the shapes tested:
-   yes, and for SRT it does something legacy structurally cannot do at
-   any scale, cap raised or not.
+   plain RTMP was run at N=1000; RTMPS at scale is untested, and the
+   harness has no RTMPS output kind at all yet — `SweepOutputKind`
+   only has plain RTMP/SRT variants, so testing this needs new harness
+   infrastructure, not just a rescale), the 1,140 RTMP + 60 SRT
+   *combined* workload shape, and context-switch/allocator-behavior
+   instrumentation (only CPU/RSS were sampled). The RTMP CPU-peak
+   question is resolved (see above — three-run data shows it was
+   sampling noise symmetric across both variants, not a fabric issue).
+   But the core question this gate exists to answer — does the fabric
+   path hold up, or beat, legacy at real scale — now has a real,
+   decisive answer for the shapes tested: yes, and for SRT it does
+   something legacy structurally cannot do at any scale, cap raised or
+   not.
 
 ## Phase 6a: Pipeline recirculation backend
 
