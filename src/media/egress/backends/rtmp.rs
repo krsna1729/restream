@@ -18,6 +18,7 @@
 
 use std::collections::VecDeque;
 use std::io::{ErrorKind, Read, Write};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use rml_rtmp::sessions::StreamMetadata;
@@ -243,7 +244,19 @@ struct MediaPublisher {
     /// startup batch is never miscounted as feed progress.
     unit_in_flight: bool,
     actions: Vec<RtmpMediaAction>,
+    /// Units already pulled from the feed but not yet encoded. Refilled from
+    /// `feed.read_from` in bursts of up to `FEED_READ_BURST` units instead of
+    /// one `read_from` call (with its own `Vec` allocation and ring-atomic
+    /// traffic) per unit — matching the legacy Tokio path's up-to-32-packet
+    /// pull (`src/media/rtmp/egress.rs`) and avoiding the class of
+    /// per-unit-call overhead an earlier optimization already removed once
+    /// (see `docs/egress-implementation.md` Phase 5 status).
+    pending_units: VecDeque<Arc<MediaPacket>>,
 }
+
+/// Feed units pulled per `feed.read_from` refill once `pending_units` is
+/// empty. Matches the legacy RTMP egress path's burst size.
+const FEED_READ_BURST: usize = 32;
 
 impl MediaPublisher {
     fn new(mut core: RtmpSessionCore, startup: RtmpPublishStartup) -> Result<Self, String> {
@@ -290,6 +303,7 @@ impl MediaPublisher {
             pending_write: None,
             unit_in_flight: false,
             actions: Vec::with_capacity(2),
+            pending_units: VecDeque::new(),
         })
     }
 
@@ -485,28 +499,32 @@ impl MediaPublisher {
                 }
             }
 
-            match feed.read_from(*cursor, ReadBudget::new(1, budget.max_bytes)) {
-                FeedRead::Units { units, next_cursor } => {
-                    *cursor = next_cursor;
-                    let Some(packet) = units.into_iter().next() else {
-                        return Self::finish(total_bytes, total_units, Interest::READ);
-                    };
-                    if let Err(detail) = self.encode_unit(&packet) {
-                        return EngineProgress::Failed(ProtocolFailure {
-                            reason: "rtmp_media_encode",
-                            detail,
-                            retryable: true,
-                        });
+            if self.pending_units.is_empty() {
+                match feed.read_from(*cursor, ReadBudget::new(FEED_READ_BURST, budget.max_bytes)) {
+                    FeedRead::Units { units, next_cursor } => {
+                        *cursor = next_cursor;
+                        self.pending_units.extend(units);
                     }
-                    self.unit_in_flight = true;
-                }
-                FeedRead::Empty => {
-                    return Self::finish(total_bytes, total_units, Interest::READ);
-                }
-                FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
-                    return EngineProgress::FeedOverrun;
+                    FeedRead::Empty => {
+                        return Self::finish(total_bytes, total_units, Interest::READ);
+                    }
+                    FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
+                        return EngineProgress::FeedOverrun;
+                    }
                 }
             }
+
+            let Some(packet) = self.pending_units.pop_front() else {
+                return Self::finish(total_bytes, total_units, Interest::READ);
+            };
+            if let Err(detail) = self.encode_unit(&packet) {
+                return EngineProgress::Failed(ProtocolFailure {
+                    reason: "rtmp_media_encode",
+                    detail,
+                    retryable: true,
+                });
+            }
+            self.unit_in_flight = true;
         }
     }
 
@@ -570,6 +588,16 @@ impl RtmpFabricEngine {
     #[cfg(test)]
     pub(crate) fn is_publish_accepted(&self) -> bool {
         matches!(self.state, Some(RtmpFabricState::Publishing(_)))
+    }
+
+    /// Units already pulled from the feed into the `Publishing` state's
+    /// local buffer but not yet encoded — `None` outside `Publishing`.
+    #[cfg(test)]
+    pub(crate) fn publisher_pending_units_len(&self) -> Option<usize> {
+        match &self.state {
+            Some(RtmpFabricState::Publishing(publisher)) => Some(publisher.pending_units.len()),
+            _ => None,
+        }
     }
 }
 

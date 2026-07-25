@@ -1405,6 +1405,35 @@ reverting to the unconditional call and confirming the test fails
 (consecutive identical entries, e.g. two `WRITE`s in a row, appear in the
 observed sequence); restored and confirmed green.
 
+#### `MediaPublisher` read one feed unit per `feed.read_from` call
+
+The same hot-path audit's remaining RTMP-specific finding: `advance`
+called `feed.read_from(*cursor, ReadBudget::new(1, budget.max_bytes))` —
+exactly one unit per call, each with its own `Vec` allocation and
+ring-atomic traffic — while the legacy Tokio path pulls up to 32 packets
+per read into a reusable burst `Vec` (`src/media/rtmp/egress.rs`); the
+repository had previously measured about a 7% CPU improvement from
+retaining that burst allocation across iterations. `MediaPublisher` now
+carries a `pending_units: VecDeque<Arc<MediaPacket>>` buffer: when it's
+empty, one `feed.read_from` call requests up to `FEED_READ_BURST` (32,
+matching legacy) units and the whole batch is queued; each visit loop
+iteration then pops one unit off this local buffer instead of calling
+`feed.read_from` again, so the number of real feed reads (and their
+allocation/atomic cost) drops by up to 32x under sustained load, while
+per-unit encoding, counting, and budget behavior are all unchanged (only
+the source of the next unit changed, from "always the ring" to "the
+local buffer, refilled from the ring when empty").
+
+New test `advance_pulls_a_burst_of_feed_units_in_one_read_from_call`
+pushes 5 units into the ring, then calls `advance` once with writability
+blocked (`readiness.writable: false`) so the visit can pull from the
+feed but cannot flush anything past the first encoded unit — asserting
+`RtmpFabricEngine::publisher_pending_units_len()` (a `#[cfg(test)]`
+accessor into the `Publishing` state) reports exactly 4 units still
+buffered afterward. That is only possible if the single internal
+`read_from` call already pulled all 5 at once; the old one-unit-per-call
+code had no such buffer and could not have made this assertion true.
+
 ### RTMPS
 
 Drive TLS incrementally:

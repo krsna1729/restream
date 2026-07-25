@@ -700,6 +700,91 @@ fn advance_stops_draining_the_startup_batch_once_the_budget_is_exhausted() {
 }
 
 #[test]
+fn advance_pulls_a_burst_of_feed_units_in_one_read_from_call() {
+    // Regression test: `MediaPublisher` used to call `feed.read_from` once
+    // per feed unit (`ReadBudget::new(1, ..)`), each call carrying its own
+    // `Vec` allocation and ring-atomic traffic (the exact class of overhead
+    // an earlier RTMP optimization already removed once — see
+    // `docs/egress-implementation.md` Phase 5 status). It now pulls up to
+    // `FEED_READ_BURST` units into a local `pending_units` buffer per
+    // `read_from` call. Proven here by blocking the write side (readiness
+    // `writable: false`) so `advance` can pull from the feed but cannot
+    // flush anything: with 5 units already sitting in the ring before this
+    // one `advance` call, the single internal `read_from` must grab all 5
+    // at once (not just 1), leaving 4 still buffered in `pending_units`
+    // after the one unit this call manages to encode before hitting the
+    // write block.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (progress_tx, _progress_rx) = std::sync::mpsc::channel::<usize>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_full_server_peer_reporting_bytes_read(stream, progress_tx);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
+
+    let mut engine =
+        RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
+            .unwrap();
+    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8));
+    let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
+    let mut cursor = FeedCursor::new(0, 0);
+
+    drive_to(
+        &mut engine,
+        &mut client_stream,
+        &feed,
+        &mut cursor,
+        RtmpFabricEngine::is_publish_accepted,
+    );
+    assert!(engine.is_publish_accepted());
+    assert_eq!(engine.publisher_pending_units_len(), Some(0));
+
+    for i in 0..5u8 {
+        ring.push(crate::media::packet::MediaPacket {
+            media_type: crate::media::packet::MediaType::Video,
+            format: crate::media::packet::PayloadFormat::Raw,
+            is_keyframe: true,
+            track_index: 0,
+            pts: 100 + i as i64,
+            dts: 80 + i as i64,
+            payload: Bytes::from_static(&[
+                0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80, 0, 0, 0, 1, 0x68, 0xce,
+                0x06, 0xe2, 0, 0, 0, 1, 0x65, 0x88,
+            ]),
+        });
+    }
+
+    let progress = engine.advance(
+        &mut client_stream,
+        Readiness {
+            readable: false,
+            writable: false,
+        },
+        &feed,
+        &mut cursor,
+        budget(),
+    );
+    assert!(
+        matches!(progress, EngineProgress::Needs(_)),
+        "a write-blocked visit must report Needs, not Progress: {progress:?}"
+    );
+    assert_eq!(
+        engine.publisher_pending_units_len(),
+        Some(4),
+        "one read_from call must have pulled all 5 ring units into the local \
+         buffer; one was encoded before hitting the write block, 4 must remain \
+         buffered rather than requiring 4 more read_from calls"
+    );
+
+    drop(client_stream);
+    server.join().unwrap();
+}
+
+#[test]
 fn engine_detects_peer_close_during_steady_state_publishing() {
     // `run_full_server_peer` returns (and drops its socket, closing the
     // connection) immediately after accepting the publish request, without
