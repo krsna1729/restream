@@ -254,6 +254,63 @@ fn shard_driven_leaf_reaches_publish_accepted_against_a_real_peer() {
     server.join().unwrap();
 }
 
+#[test]
+fn shard_removes_the_leaf_once_the_peer_closes_after_publish_acceptance() {
+    // `run_accepting_server_peer` returns (and drops its socket, closing
+    // the connection) immediately after accepting the publish request.
+    // With an empty feed, nothing is ever queued to write, so only a read
+    // (the steady-state control-channel read fix) discovers the close;
+    // that must map to `VisitDecision::Close` and the shard must then
+    // actually remove the leaf from `output_sockets`/`leaves` -- proving
+    // the `Option<OutputId>` plumbing (only cloned on Close) still gets a
+    // real `OutputId` through to `remove_leaf_by_output` end to end.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_accepting_server_peer(stream, done_tx);
+    });
+
+    let mut backend =
+        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let output_id = OutputId::new("out-1");
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-1",
+        &format!("rtmp://{}/live/key", addr),
+        1,
+    )));
+    backend.complete_pending_connect(&output_id, 1, addr);
+
+    let publish_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < publish_deadline,
+            "leaf never reached publish acceptance"
+        );
+        if done_rx.try_recv().is_ok() {
+            break;
+        }
+        backend.on_ready();
+        thread::sleep(Duration::from_millis(1));
+    }
+    server.join().unwrap();
+
+    let removed_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < removed_deadline,
+            "leaf was never removed after the peer closed"
+        );
+        if !backend.output_sockets.contains_key(&output_id) {
+            break;
+        }
+        backend.on_ready();
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(backend.leaves.iter().all(Option::is_none));
+}
+
 /// Server peer that accepts connect/publish like [`run_accepting_server_peer`],
 /// signals `publish_tx` once publish is accepted, then keeps reading (with
 /// nothing further to send) and signals `video_tx` and returns on the first

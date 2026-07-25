@@ -743,7 +743,12 @@ where
     /// silently dropped, leaking a connected-but-dead socket and stalling
     /// the output forever (PeerClosed/Failed after the shared FeedOverrun
     /// path now resynchronizes in place instead of closing).
-    fn visit_one_ready_leaf(&mut self) -> Option<(OutputId, VisitDecision)> {
+    ///
+    /// `OutputId` wraps a `String`, so cloning it is a heap allocation; the
+    /// caller only ever uses it on `VisitDecision::Close` (to remove the
+    /// leaf), so it's only cloned then — every other visit (the overwhelming
+    /// majority in steady state) pays nothing for it.
+    fn visit_one_ready_leaf(&mut self) -> Option<(Option<OutputId>, VisitDecision)> {
         let event = self.ready.pop_front()?;
         let budget = WorkBudget::new(
             self.budget_max_units,
@@ -752,7 +757,6 @@ where
         );
         let feed = &self.feed;
         let leaf = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)?;
-        let output_id = leaf.common().output_id.clone();
         let result = leaf.visit_ready(
             event.generation,
             Readiness {
@@ -767,6 +771,8 @@ where
             EngineVisitResult::StaleGeneration => VisitDecision::Suspend,
             EngineVisitResult::Visited(outcome) => outcome.decision,
         };
+        let output_id =
+            matches!(decision, VisitDecision::Close).then(|| leaf.common().output_id.clone());
         Some((output_id, decision))
     }
 }
@@ -818,7 +824,7 @@ where
         }
 
         let outcome = self.visit_one_ready_leaf();
-        if let Some((output_id, VisitDecision::Close)) = &outcome {
+        if let Some((Some(output_id), VisitDecision::Close)) = &outcome {
             self.remove_leaf_by_output(output_id);
         }
 

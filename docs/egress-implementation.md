@@ -1434,6 +1434,38 @@ buffered afterward. That is only possible if the single internal
 `read_from` call already pulled all 5 at once; the old one-unit-per-call
 code had no such buffer and could not have made this assertion true.
 
+#### `OutputId` was cloned on every visit, not just on close
+
+Zero-cost audit finding: both `SrtShardBackend::visit_one_ready_leaf` and
+`RtmpShardBackend::visit_one_ready_leaf` cloned the visited leaf's
+`OutputId` (a heap-allocating `String` clone) unconditionally, on *every*
+visit, purely so the caller (`on_ready`) could look it up for removal —
+but that lookup only ever happens on `VisitDecision::Close`, a rare event
+compared to the `Continue`/`Suspend` decisions steady-state visits
+overwhelmingly produce. Both methods now return
+`Option<(Option<OutputId>, VisitDecision)>` and only construct the
+`OutputId` clone inside the branch that already knows `decision ==
+Close`; every other visit — including the `StaleGeneration` early return,
+which was cloning it even though that path is always `Suspend`, never
+`Close` — now allocates nothing for it. `on_ready` in both backends
+updated to match on `Some((Some(output_id), VisitDecision::Close))`
+instead of `Some((output_id, VisitDecision::Close))`.
+
+New test (RTMP) `shard_removes_the_leaf_once_the_peer_closes_after_publish_acceptance`
+drives a real shard-owned leaf to publish acceptance, lets the peer close
+its socket (the same close-detection path the steady-state control-read
+fix above proved), and asserts the shard actually removes the leaf from
+`output_sockets`/`leaves` afterward — proving a real `OutputId` still
+reaches `remove_leaf_by_output` end to end through the now-conditional
+clone. Verified as a real regression test by temporarily hard-coding the
+`Close` branch to return `None` instead of the clone and confirming the
+test fails (leaf never removed, deadline trips); restored and confirmed
+green. SRT's identical change is covered by the pre-existing
+`on_ready_removes_leaf_on_close_decision` test, which already exercises
+the Close-and-remove path and continues to pass unchanged. Full RTMP (29
+tests) and SRT (44 tests) backend suites, clippy, fmt, source-audit, and
+docs checks all pass.
+
 ### RTMPS
 
 Drive TLS incrementally:

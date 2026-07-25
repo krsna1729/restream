@@ -595,7 +595,12 @@ where
     /// match what the engine's returned progress says it needs next (unlike
     /// SRT's always-write registration, RTMP's interest genuinely changes
     /// across handshake/negotiation/publishing — see module docs).
-    fn visit_one_ready_leaf(&mut self) -> Option<(OutputId, VisitDecision)> {
+    ///
+    /// `OutputId` wraps a `String`, so cloning it is a heap allocation; the
+    /// caller only ever uses it on `VisitDecision::Close` (to remove the
+    /// leaf), so it's only cloned then — every other visit (the overwhelming
+    /// majority in steady state) pays nothing for it.
+    fn visit_one_ready_leaf(&mut self) -> Option<(Option<OutputId>, VisitDecision)> {
         let event = self.ready.pop_front()?;
         let budget = WorkBudget::new(
             self.budget_max_units,
@@ -604,7 +609,6 @@ where
         );
         let feed = &self.feed;
         let leaf = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)?;
-        let output_id = leaf.common.output_id.clone();
         let result = leaf.visit_ready(
             event.generation,
             Readiness {
@@ -616,11 +620,15 @@ where
         );
 
         let (progress, decision) = match result {
-            EngineVisitResult::StaleGeneration => return Some((output_id, VisitDecision::Suspend)),
+            EngineVisitResult::StaleGeneration => return Some((None, VisitDecision::Suspend)),
             EngineVisitResult::Visited(outcome) => (outcome.progress, outcome.decision),
         };
 
-        if !matches!(decision, VisitDecision::Close) {
+        if matches!(decision, VisitDecision::Close) {
+            return Some((Some(leaf.common.output_id.clone()), decision));
+        }
+
+        {
             let interest = tcp_interest(next_registration_interest(&progress));
             // `register_leaf` is an `epoll_ctl(EPOLL_CTL_MOD)` syscall; skip
             // it when the requested interest already matches what's
@@ -637,7 +645,7 @@ where
             }
         }
 
-        Some((output_id, decision))
+        Some((None, decision))
     }
 }
 
@@ -681,7 +689,7 @@ where
         }
 
         let outcome = self.visit_one_ready_leaf();
-        if let Some((output_id, VisitDecision::Close)) = &outcome {
+        if let Some((Some(output_id), VisitDecision::Close)) = &outcome {
             self.remove_leaf_by_output(output_id);
         }
 
