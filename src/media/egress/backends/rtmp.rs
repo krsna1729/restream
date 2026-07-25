@@ -307,6 +307,25 @@ impl MediaPublisher {
         })
     }
 
+    /// Application bytes queued for send but not yet accepted by the
+    /// transport: the remainder of any in-flight `pending_write` plus every
+    /// still-queued `current_batch` packet. Used to keep
+    /// `LeafCommon::pending_application_bytes` (`src/media/egress/leaf.rs`)
+    /// accurate for this leaf — previously always `0` for every RTMP leaf,
+    /// since nothing updated it (a hot-path audit finding: the common
+    /// pending-byte limit was believed to count "the wire packet" but
+    /// nothing actually wired it up at all, for any protocol). This covers
+    /// the base case (queued wire bytes); rustls-internal buffering for
+    /// RTMPS on top of this remains a separate, unaddressed refinement.
+    fn pending_bytes(&self) -> usize {
+        let pending_write_remaining = self
+            .pending_write
+            .as_ref()
+            .map_or(0, |pending| pending.remaining().len());
+        let queued_batch: usize = self.current_batch.iter().map(Bytes::len).sum();
+        pending_write_remaining + queued_batch
+    }
+
     /// Encode one feed unit into zero or more wire packets in
     /// `current_batch`. Mirrors the per-packet dispatch in
     /// `src/media/rtmp/egress.rs`'s media-write arm: deferred/gated audio,
@@ -583,6 +602,17 @@ impl RtmpFabricEngine {
     #[cfg(test)]
     pub(crate) fn is_handshake_done(&self) -> bool {
         !matches!(self.state, Some(RtmpFabricState::Handshaking(_)))
+    }
+
+    /// Application bytes currently queued for send on this leaf. `0` outside
+    /// `Publishing` (nothing is queued during handshake/negotiation beyond
+    /// their own tiny, immediately-flushed control messages, which this
+    /// intentionally does not track — see `MediaPublisher::pending_bytes`).
+    pub(crate) fn pending_application_bytes(&self) -> usize {
+        match &self.state {
+            Some(RtmpFabricState::Publishing(publisher)) => publisher.pending_bytes(),
+            _ => 0,
+        }
     }
 
     #[cfg(test)]

@@ -700,6 +700,96 @@ fn advance_stops_draining_the_startup_batch_once_the_budget_is_exhausted() {
 }
 
 #[test]
+fn pending_application_bytes_reflects_queued_wire_data_and_drains_to_zero() {
+    // Regression test: `LeafCommon::pending_application_bytes` was never
+    // updated for any RTMP leaf, always reading `0` regardless of how much
+    // encoded-but-unsent data was actually queued (a hot-path audit
+    // finding). `RtmpFabricEngine::pending_application_bytes` now reports
+    // the real total.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (progress_tx, progress_rx) = std::sync::mpsc::channel::<usize>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_full_server_peer_reporting_bytes_read(stream, progress_tx);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
+
+    let mut metadata = StreamMetadata::new();
+    metadata.video_width = Some(1920);
+    metadata.video_height = Some(1080);
+    metadata.encoder = Some("restream-test".repeat(8));
+    let startup = RtmpPublishStartup {
+        publish_metadata: Some(metadata),
+        startup_video_sequence_header: Some(Bytes::from(vec![0xAB; 256])),
+        startup_audio_sequence_header: Some(Bytes::from(vec![0xCD; 256])),
+        ..RtmpPublishStartup::default()
+    };
+    let mut engine = RtmpFabricEngine::new_client(test_parts(), 4096, false, startup).unwrap();
+    assert_eq!(
+        engine.pending_application_bytes(),
+        0,
+        "nothing is queued before Publishing exists"
+    );
+
+    let feed = dummy_feed();
+    let mut cursor = FeedCursor::new(0, 0);
+    drive_to(
+        &mut engine,
+        &mut client_stream,
+        &feed,
+        &mut cursor,
+        RtmpFabricEngine::is_publish_accepted,
+    );
+    assert!(engine.is_publish_accepted());
+
+    // `drive_to` stops the instant `advance` reports `HandshakeComplete`
+    // (the transition into `Publishing`), before that new state has ever
+    // been visited — so the whole startup batch (metadata + video + audio
+    // sequence headers) is still queued, entirely unwritten.
+    let queued = engine.pending_application_bytes();
+    assert!(
+        queued > 0,
+        "the freshly entered Publishing state must report its queued startup batch, got 0"
+    );
+
+    // Drive with generous readiness/budget until the peer confirms it
+    // received the full batch, then confirm the accounting drains back to
+    // zero along with it.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "engine never finished draining the startup batch"
+        );
+        let _ = engine.advance(
+            &mut client_stream,
+            Readiness::BOTH,
+            &feed,
+            &mut cursor,
+            budget(),
+        );
+        if let Ok(received) = progress_rx.try_recv()
+            && received >= queued
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        engine.pending_application_bytes(),
+        0,
+        "fully flushed batch must report zero pending bytes"
+    );
+
+    drop(client_stream);
+    server.join().unwrap();
+}
+
+#[test]
 fn advance_pulls_a_burst_of_feed_units_in_one_read_from_call() {
     // Regression test: `MediaPublisher` used to call `feed.read_from` once
     // per feed unit (`ReadBudget::new(1, ..)`), each call carrying its own

@@ -1527,6 +1527,40 @@ Current branch status:
   checks but skips chain-to-root validation (appropriate for a test cert
   with no CA — the production path always uses `rustls_client_config()`'s
   real webpki-roots trust store, unchanged by this test-only verifier).
+- **"plaintext and encrypted pending bytes count toward leaf limits"
+  above was aspirational, not implemented — for any protocol, not just
+  RTMPS.** Investigating the external review's "RTMPS pending-memory not
+  accounted" finding turned up something broader:
+  `LeafCommon::pending_application_bytes` (`src/media/egress/leaf.rs`),
+  the field `is_limit_exceeded()` reads, was never written by anything in
+  production — RTMP, RTMPS, or SRT — always `0`, and
+  `is_limit_exceeded()` itself is called nowhere outside its own unit
+  test. So the byte limit isn't "incomplete for TLS," it's inert for
+  every leaf. Fixed the base case: `MediaPublisher::pending_bytes()`
+  (`src/media/egress/backends/rtmp.rs`) sums the in-flight
+  `pending_write` remainder plus every still-queued `current_batch`
+  packet; `RtmpFabricEngine::pending_application_bytes()` exposes it
+  (`0` outside `Publishing`); `RtmpShardBackend::visit_one_ready_leaf`
+  writes it into `leaf.common.pending_application_bytes` after every
+  visit. New test
+  `pending_application_bytes_reflects_queued_wire_data_and_drains_to_zero`
+  seeds a startup batch, drives to `Publishing` (which — `drive_to`
+  stopping the instant `HandshakeComplete` fires — leaves the whole
+  batch queued and completely unwritten), asserts the reported pending
+  bytes are nonzero at that point, then drives to completion and asserts
+  it drains back to zero; verified as a real regression by temporarily
+  hard-coding `pending_bytes()` to always return `0` and confirming the
+  test fails, then restoring it. **Two things this does not do, left
+  open deliberately:** (1) it counts wire-level queued bytes, the same
+  thing plain TCP would count — it does not add rustls-internal
+  plaintext/encrypted buffer bytes on top for RTMPS specifically, so the
+  original finding's TLS-specific refinement is still outstanding; (2)
+  `is_limit_exceeded()` still has no caller anywhere — nothing acts on
+  an over-limit leaf yet (suspend? close? drop?). Wiring real enforcement
+  is a lifecycle change (AGENTS.md requires deterministic unit tests,
+  loom/proptest where feasible, and a live harness fault case for that
+  class of change) and needs its own deliberate design, not a rushed
+  addition alongside an accounting fix.
 
 ### Proof
 
