@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::media::egress::backend::{ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
@@ -348,7 +348,18 @@ pub(crate) struct SrtShardBackend<
     socket_connector: K,
     resolve_completions: R,
     feed: TsFeed,
-    budget: WorkBudget,
+    /// Per-visit limits. `WorkBudget::deadline` is an absolute `Instant`
+    /// computed at construction time — storing one `WorkBudget` and reusing
+    /// it for every visit (as this backend used to) makes `is_exhausted()`
+    /// permanently `true` once that one deadline passes, silently stopping
+    /// every leaf on this shard from reading or sending anything ever
+    /// again (found and fixed for `RtmpShardBackend`; this is the same bug
+    /// in the SRT shard — see `docs/egress-implementation.md` Phase 5
+    /// status). A fresh `WorkBudget` is constructed from these fields for
+    /// every visit instead (see `visit_one_ready_leaf`).
+    budget_max_units: usize,
+    budget_max_bytes: usize,
+    budget_window: Duration,
     leaves: Vec<Option<NativeSrtLeaf>>,
     output_sockets: HashMap<OutputId, SrtLeafSocket>,
     ready: VecDeque<SrtReadyLeaf>,
@@ -420,13 +431,16 @@ where
         socket_connector: K,
         resolve_completions: R,
     ) -> Self {
+        let budget_window = budget.deadline.saturating_duration_since(Instant::now());
         Self {
             poller,
             socket_configurator,
             socket_connector,
             resolve_completions,
             feed,
-            budget,
+            budget_max_units: budget.max_units,
+            budget_max_bytes: budget.max_bytes,
+            budget_window,
             leaves: Vec::new(),
             output_sockets: HashMap::new(),
             ready: VecDeque::new(),
@@ -684,7 +698,11 @@ where
     /// path now resynchronizes in place instead of closing).
     fn visit_one_ready_leaf(&mut self) -> Option<(OutputId, VisitDecision)> {
         let event = self.ready.pop_front()?;
-        let budget = self.budget;
+        let budget = WorkBudget::new(
+            self.budget_max_units,
+            self.budget_max_bytes,
+            self.budget_window,
+        );
         let feed = &self.feed;
         let leaf = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)?;
         let output_id = leaf.common().output_id.clone();

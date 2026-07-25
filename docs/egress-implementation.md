@@ -1150,15 +1150,22 @@ deterministic regression test plus the live harness genuinely completing
    `MediaPublisher::advance`'s exhaustion check runs *before* it ever
    reads the feed — so every leaf on the shard silently stopped reading or
    sending anything, forever, about 2ms after the shard started. Fixed in
-   `RtmpShardBackend` by storing the budget's parameters
-   (`max_units`/`max_bytes`/window) instead of the `WorkBudget` itself,
-   and constructing a fresh one (`WorkBudget::new(..)`, which computes a
-   new `Instant::now() + window` deadline) for every visit. **`SrtShardBackend`
-   has the identical bug and is not yet fixed** — SRT's live captures
-   happened not to expose it as starkly (SRT always registers write
-   interest, so a leaf kept getting *visited*, it just silently did
-   nothing productive once the budget went stale), but the same fix
-   belongs there.
+   both `RtmpShardBackend` and `SrtShardBackend` by storing the budget's
+   parameters (`max_units`/`max_bytes`/window) instead of the `WorkBudget`
+   itself, and constructing a fresh one (`WorkBudget::new(..)`, which
+   computes a new `Instant::now() + window` deadline) for every visit.
+   SRT's live captures happened not to expose this as starkly as RTMP's
+   did: SRT always registers write interest, so a leaf kept getting
+   *visited* even with a stale budget, it just silently lost the ability
+   to batch more than one fragment per visit once `is_exhausted()` went
+   permanently `true` (the check in `send_pending` runs *after* the first
+   fragment of a visit, not before) — degrading to the pre-batching-fix,
+   one-fragment-per-wake behavior the fragment-batching fix in Phase 4 was
+   specifically written to avoid. That means the stale budget plausibly
+   contributed to some of the CPU overhead in the recorded
+   `w2-fabric-confirmed` SRT capture (158% CPU, 3.8x legacy) above, though
+   this has not been re-measured live with the fix applied — flagged here,
+   not claimed as verified.
 2. **`EgressCommand::FeedWake` never reached `RtmpShardBackend::on_command`
    at all.** `EgressShardRuntime::process_command`
    (`src/media/egress/shard.rs`) intercepts `FeedWake` at the generic
