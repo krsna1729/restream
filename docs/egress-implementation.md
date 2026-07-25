@@ -894,6 +894,35 @@ Current branch status:
   with the fix applied; that re-measurement (repeating the
   `w2-fabric-batched`-style capture) is still needed before revising the
   `EgressRolloutMode` default-`Off` decision above.
+  **`SrtEgressEngine::advance` also read one feed unit per `feed.read_from`
+  call** (`ReadBudget::new(budget.max_units.min(1), ..)`), the same
+  one-unit-per-call shape the RTMP fabric engine had before its own
+  `FEED_READ_BURST` fix above — each call allocates a `Vec` and touches
+  ring atomics regardless of how many units are actually available. Fixed
+  identically: `SrtEgressEngine` now carries a `pending_units:
+  VecDeque<Bytes>` buffer, refilled from one `ReadBudget::new(FEED_READ_BURST,
+  ..)` call when both `pending` (the unit currently being fragmented) and
+  `pending_units` are empty; the existing one-unit-fragmented-per-visit
+  behavior in `send_pending` is unchanged, only where the next unit comes
+  from. New test `advance_pulls_a_burst_of_feed_units_in_one_read_from_call`
+  seeds 5 ring units, drives one non-writable visit (isolating the read
+  side — nothing gets sent), and asserts `pending_units_len() == 4`
+  afterward (one popped into `pending`, four still buffered) — only
+  possible if the one internal `read_from` call pulled all 5 at once.
+  This changed the cursor-advance behavior three existing tests asserted
+  on (the cursor now advances past every unit pulled into the buffer, not
+  just the one unit sent that visit, since buffered units are already
+  safely copied out of the ring as owned `Bytes`); updated
+  `sends_one_ts_message_and_advances_cursor_when_writable`,
+  `retains_one_message_when_sender_backpressures`, and renamed
+  `writable_recovery_sends_pending_without_reading_next_feed_unit` to
+  `writable_recovery_sends_pending_without_resending_the_buffered_next_unit`
+  (the invariant it actually protects — a blocked retry doesn't re-fetch
+  or re-send the *next* unit — still holds; only the cursor's numeric
+  value needed to move to 2). Verified as a real regression by temporarily
+  reverting the burst read to `ReadBudget::new(1, ..)` and confirming the
+  new test fails; restored and confirmed green. Full SRT test suite (263
+  tests), clippy, fmt, source-audit, and docs checks pass.
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
   fault.output-stall passed with a permanently stalled sink isolated beside
   32 healthy siblings while SRT outputs ran fabric-owned. This is
@@ -1684,7 +1713,18 @@ benchmark-driven decisions) and why that tier fits.
    as a real regression by temporarily removing the skip check and
    confirming the test fails (18 calls vs the expected 15, i.e. the
    redundant calls happened). Full RTMP suite (31 tests), clippy, fmt,
-   source-audit, and docs checks pass.
+   source-audit, and docs checks pass. **Update:** root access became
+   available on this host after the above was written (passwordless
+   `sudo`), which would unblock `perf` here after all by lowering
+   `kernel.perf_event_paranoid` — the "genuinely needs a different host"
+   framing above was accurate for the constraints known at the time, not
+   a permanent property of this environment; the `perf record` pass
+   itself still hasn't been run. Also landed without needing a profiler:
+   `SrtEgressEngine::advance` had the exact same one-unit-per-`read_from`-call
+   shape the RTMP fix above addressed (see Phase 4 status, "also read one
+   feed unit per `feed.read_from` call") — fixed identically with a
+   `pending_units` burst buffer, proven by a new test and three existing
+   tests updated for the new (still-safe) cursor-advance behavior.
 4. **RTMPS rustls-internal buffer accounting (rest of task #14) —
    `sonnet` for the accounting addition once a measurement approach is
    picked.** The wire-level base case is now wired

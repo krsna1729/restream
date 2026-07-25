@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use bytes::Bytes;
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::time::Instant;
 
@@ -29,6 +30,14 @@ use super::srt_egress_sender::{SrtMessageSender, SrtSendResult};
 /// single visit's work stays bounded without costing one scheduler cycle per
 /// fragment.
 pub(super) const MAX_SRT_MESSAGE_PAYLOAD: usize = 1316;
+
+/// Feed units pulled per `feed.read_from` refill once `pending_units` is
+/// empty and no unit is currently being fragmented. Matches the RTMP fabric
+/// engine's `FEED_READ_BURST` (`src/media/egress/backends/rtmp.rs`): reduces
+/// how often `feed.read_from` runs (each call allocates a `Vec` and touches
+/// ring atomics) without changing the existing one-unit-fragmented-per-visit
+/// behavior below.
+const FEED_READ_BURST: usize = 32;
 
 #[derive(Debug)]
 struct PendingSrtMessage {
@@ -62,6 +71,9 @@ impl PendingSrtMessage {
 #[derive(Debug)]
 pub(crate) struct SrtEgressEngine<T> {
     pending: Option<PendingSrtMessage>,
+    /// Units already pulled from the feed but not yet handed to `pending`
+    /// for fragmentation. See `FEED_READ_BURST`.
+    pending_units: VecDeque<Bytes>,
     _transport: PhantomData<fn() -> T>,
 }
 
@@ -69,6 +81,7 @@ impl<T> Default for SrtEgressEngine<T> {
     fn default() -> Self {
         Self {
             pending: None,
+            pending_units: VecDeque::new(),
             _transport: PhantomData,
         }
     }
@@ -79,6 +92,11 @@ impl<T> SrtEgressEngine<T> {
         self.pending
             .as_ref()
             .map_or(0, PendingSrtMessage::remaining_len)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_units_len(&self) -> usize {
+        self.pending_units.len()
     }
 
     /// Send as many `MAX_SRT_MESSAGE_PAYLOAD` fragments of the pending unit
@@ -180,19 +198,23 @@ where
             };
         }
 
-        let read_budget = ReadBudget::new(budget.max_units.min(1), budget.max_bytes);
-        let (units, next_cursor) = match feed.read_from(*cursor, read_budget) {
-            FeedRead::Units { units, next_cursor } => (units, next_cursor),
-            FeedRead::Empty => return EngineProgress::Needs(Interest::NONE),
-            FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
-                return EngineProgress::FeedOverrun;
+        if self.pending_units.is_empty() {
+            let read_budget = ReadBudget::new(FEED_READ_BURST, budget.max_bytes);
+            match feed.read_from(*cursor, read_budget) {
+                FeedRead::Units { units, next_cursor } => {
+                    *cursor = next_cursor;
+                    self.pending_units.extend(units);
+                }
+                FeedRead::Empty => return EngineProgress::Needs(Interest::NONE),
+                FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
+                    return EngineProgress::FeedOverrun;
+                }
             }
-        };
+        }
 
-        let Some(message) = units.into_iter().next() else {
+        let Some(message) = self.pending_units.pop_front() else {
             return EngineProgress::Needs(Interest::NONE);
         };
-        *cursor = next_cursor;
         self.pending = Some(PendingSrtMessage::new(message));
 
         if readiness.writable {

@@ -85,7 +85,11 @@ fn sends_one_ts_message_and_advances_cursor_when_writable() {
             ..
         }
     ));
-    assert_eq!(cursor, FeedCursor::new(0, 1));
+    // The cursor now advances past both ring units in one `read_from` burst
+    // (see `FEED_READ_BURST`), even though only the first is sent this
+    // visit — the second sits in `pending_units`, already copied out of the
+    // ring as an owned `Bytes`, not merely referenced.
+    assert_eq!(cursor, FeedCursor::new(0, 2));
     assert_eq!(sender.sent, vec![Bytes::from_static(b"abc")]);
     assert_eq!(engine.pending_message_bytes(), 0);
 }
@@ -106,13 +110,13 @@ fn retains_one_message_when_sender_backpressures() {
     );
 
     assert!(matches!(progress, EngineProgress::Needs(interest) if interest.writable));
-    assert_eq!(cursor, FeedCursor::new(0, 1));
+    assert_eq!(cursor, FeedCursor::new(0, 2));
     assert_eq!(sender.sent, vec![Bytes::from_static(b"abc")]);
     assert_eq!(engine.pending_message_bytes(), 3);
 }
 
 #[test]
-fn writable_recovery_sends_pending_without_reading_next_feed_unit() {
+fn writable_recovery_sends_pending_without_resending_the_buffered_next_unit() {
     let feed = feed_with_chunks([Bytes::from_static(b"abc"), Bytes::from_static(b"def")]);
     let mut engine = SrtEgressEngine::<FakeSender>::default();
     let mut sender = FakeSender::with_outcomes([
@@ -141,6 +145,9 @@ fn writable_recovery_sends_pending_without_reading_next_feed_unit() {
     // now correctly reports units: 1 — the engine fragments a unit into
     // MAX_SRT_MESSAGE_PAYLOAD-sized sends and only counts the unit once its
     // final fragment is accepted, on whichever visit that happens to be.
+    // Only "abc" is sent twice (the blocked attempt, then the successful
+    // retry) — "def" (buffered in `pending_units` since the first visit's
+    // burst read) is untouched until a further `advance()` call pops it.
     assert!(matches!(
         second,
         EngineProgress::Progress {
@@ -149,12 +156,60 @@ fn writable_recovery_sends_pending_without_reading_next_feed_unit() {
             ..
         }
     ));
-    assert_eq!(cursor, FeedCursor::new(0, 1));
+    assert_eq!(cursor, FeedCursor::new(0, 2));
     assert_eq!(
         sender.sent,
         vec![Bytes::from_static(b"abc"), Bytes::from_static(b"abc")]
     );
     assert_eq!(engine.pending_message_bytes(), 0);
+}
+
+#[test]
+fn advance_pulls_a_burst_of_feed_units_in_one_read_from_call() {
+    // Regression test: `advance` used to call `feed.read_from` requesting
+    // exactly one unit at a time (`budget.max_units.min(1)`), each call
+    // carrying its own `Vec` allocation and ring-atomic traffic -- the same
+    // class of overhead the RTMP fabric engine's analogous fix addressed
+    // (`src/media/egress/backends/rtmp.rs`, `FEED_READ_BURST`). It now
+    // pulls up to `FEED_READ_BURST` units into a local `pending_units`
+    // buffer per `read_from` call. Proven here with a non-writable visit
+    // (so nothing gets sent, isolating the read side): five ring units are
+    // available, one is popped into `pending` by this one `advance` call,
+    // and the other four must already be sitting in `pending_units` --
+    // only possible if the single internal `read_from` call grabbed all
+    // five at once.
+    let feed = feed_with_capacity(
+        8,
+        [
+            Bytes::from_static(b"1"),
+            Bytes::from_static(b"2"),
+            Bytes::from_static(b"3"),
+            Bytes::from_static(b"4"),
+            Bytes::from_static(b"5"),
+        ],
+    );
+    let mut engine = SrtEgressEngine::<FakeSender>::default();
+    let mut sender = FakeSender::default();
+    let mut cursor = FeedCursor::new(0, 0);
+
+    let progress = engine.advance(
+        &mut sender,
+        Readiness::default(),
+        &feed,
+        &mut cursor,
+        budget(),
+    );
+
+    assert!(matches!(progress, EngineProgress::Needs(interest) if interest.writable));
+    assert!(sender.sent.is_empty());
+    assert_eq!(cursor, FeedCursor::new(0, 5));
+    assert_eq!(engine.pending_message_bytes(), 1);
+    assert_eq!(
+        engine.pending_units_len(),
+        4,
+        "one read_from call must have pulled all 5 ring units into the local \
+         buffer; one became `pending`, 4 must remain buffered"
+    );
 }
 
 #[test]
