@@ -182,10 +182,19 @@ impl SrtSocketConfigurator for FakeSocketConfigurator {
     }
 }
 
+/// `(has_muxer_port_claim, muxer_port_claim_bind_port)` per `connect()` call.
+type MuxerPortClaims = Arc<Mutex<Vec<(bool, Option<u16>)>>>;
+
 #[derive(Clone)]
 pub(super) struct FakeSocketConnector {
     socket: Result<SRTSOCKET, String>,
     calls: Arc<Mutex<Vec<FakeConnectCall>>>,
+    // Recorded separately from `FakeConnectCall` (present/bind-port, one
+    // entry per `connect()` call) so the many existing `FakeConnectCall`
+    // literals across the SRT backend tests don't all need two new fields
+    // just for the small number of tests that care about the muxer-port
+    // claim (see `tests/muxer_port.rs`).
+    muxer_port_claims: MuxerPortClaims,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,6 +209,7 @@ impl FakeSocketConnector {
         Self {
             socket: Ok(socket),
             calls: Arc::new(Mutex::new(Vec::new())),
+            muxer_port_claims: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -207,11 +217,18 @@ impl FakeSocketConnector {
         Self {
             socket: Err(error.to_string()),
             calls: Arc::new(Mutex::new(Vec::new())),
+            muxer_port_claims: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     pub(super) fn calls(&self) -> Vec<FakeConnectCall> {
         self.calls.lock().unwrap().clone()
+    }
+
+    /// One `(has_muxer_port_claim, muxer_port_claim_bind_port)` pair per
+    /// `connect()` call, in order.
+    pub(super) fn muxer_port_claims(&self) -> Vec<(bool, Option<u16>)> {
+        self.muxer_port_claims.lock().unwrap().clone()
     }
 }
 
@@ -222,6 +239,10 @@ impl SrtSocketConnector for FakeSocketConnector {
             stream_id: config.stream_id().to_string(),
             connect_timeout_ms: config.connect_timeout_ms(),
         });
+        self.muxer_port_claims.lock().unwrap().push((
+            config.has_muxer_port_claim(),
+            config.muxer_port_claim_bind_port(),
+        ));
         self.socket.clone()
     }
 }

@@ -60,6 +60,7 @@ fn srt_fabric_shard_backends_build_one_backend_per_shard() {
             seen_for_poller.lock().unwrap().push(shard_id.index());
             Ok::<_, &'static str>(FakeSrtPoller)
         },
+        None,
     )
     .unwrap();
 
@@ -75,6 +76,7 @@ fn spawn_srt_fabric_shard_group_starts_requested_shards() {
         budget(),
         |_| feed(),
         |_| Ok::<_, &'static str>(FakeSrtPoller),
+        None,
     )
     .unwrap();
 
@@ -97,6 +99,7 @@ fn spawn_srt_fabric_shard_group_reports_poller_creation_error() {
             }
             Ok(FakeSrtPoller)
         },
+        None,
     );
 
     assert!(matches!(

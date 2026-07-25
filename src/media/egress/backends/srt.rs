@@ -3,6 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -17,7 +18,8 @@ use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::srt::{
     NativeSendBacklog, SRTSOCKET, SrtEgressEngine, SrtEgressInterest, SrtEgressPollError,
     SrtEgressSendMode, SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec, SrtFabricPoller,
-    SrtMessageSender, SrtReadyLeaf, connect_fabric_srt_egress_socket, srt_fabric_message_sender,
+    SrtMessageSender, SrtReadyLeaf, claim_srt_egress_muxer_port, connect_fabric_srt_egress_socket,
+    srt_fabric_message_sender,
 };
 
 /// Combined application and native pending state for one SRT fabric leaf.
@@ -366,6 +368,16 @@ pub(crate) struct SrtShardBackend<
     poll_buffer: Vec<SrtReadyLeaf>,
     pending_connects: HashMap<OutputId, PendingSrtConnect>,
     last_stall_sweep: Option<Instant>,
+    /// Shared local-UDP-port state for libsrt egress-multiplexer reuse,
+    /// mirroring the legacy path's `MediaEngine::srt_egress_muxer_port_handle`
+    /// (`src/media/engine_runtime.rs`) — the same `Arc<Mutex<Option<u16>>>` is
+    /// passed to both when the fabric runtime is constructed, so a socket
+    /// connected by either path can be reused by the other. Defaults to a
+    /// fresh, backend-local mutex with reuse disabled so every existing
+    /// constructor (tests included) keeps building unconfigured sockets
+    /// unless `with_srt_egress_muxer_port_reuse` opts in explicitly.
+    srt_egress_muxer_port: Arc<Mutex<Option<u16>>>,
+    reuse_local_srt_egress_port: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -447,7 +459,25 @@ where
             poll_buffer: Vec::new(),
             pending_connects: HashMap::new(),
             last_stall_sweep: None,
+            srt_egress_muxer_port: Arc::new(Mutex::new(None)),
+            reuse_local_srt_egress_port: false,
         }
+    }
+
+    /// Opts this backend's outbound SRT connects into the shared local-port
+    /// reuse `state` (see the field doc on `srt_egress_muxer_port`). Kept as
+    /// a separate builder step rather than a `with_runtime_components`
+    /// parameter so every existing constructor and test call site is
+    /// unaffected; only production wiring
+    /// (`resolving_srt_shard_backend_with_configurator`) calls this.
+    pub(crate) fn with_srt_egress_muxer_port_reuse(
+        mut self,
+        state: Arc<Mutex<Option<u16>>>,
+        enabled: bool,
+    ) -> Self {
+        self.srt_egress_muxer_port = state;
+        self.reuse_local_srt_egress_port = enabled;
+        self
     }
 
     pub(crate) fn add_connected_socket(
@@ -527,7 +557,18 @@ where
             self.pending_connects.insert(output_id.clone(), pending);
             return Err(SrtPendingConnectError::Stale);
         }
-        let config = pending.connect_spec.connect_config(peer_addrs, None);
+        // Clone the `Arc` into a local binding rather than borrowing
+        // `self.srt_egress_muxer_port` directly: the claim built from that
+        // borrow would otherwise still be alive (via `config`) at the
+        // `&mut self` call below, which the borrow checker rejects even
+        // though the two fields don't actually overlap.
+        let muxer_port_state = self.srt_egress_muxer_port.clone();
+        let muxer_port_claim = self
+            .reuse_local_srt_egress_port
+            .then(|| claim_srt_egress_muxer_port(&muxer_port_state));
+        let config = pending
+            .connect_spec
+            .connect_config(peer_addrs, muxer_port_claim);
         self.add_resolved_socket_with(pending.common, config, connector)
             .map_err(SrtPendingConnectError::Connect)
     }
@@ -545,7 +586,13 @@ where
             self.pending_connects.insert(output_id.clone(), pending);
             return Err(SrtPendingConnectError::Stale);
         }
-        let config = pending.connect_spec.connect_config(peer_addrs, None);
+        let muxer_port_state = self.srt_egress_muxer_port.clone();
+        let muxer_port_claim = self
+            .reuse_local_srt_egress_port
+            .then(|| claim_srt_egress_muxer_port(&muxer_port_state));
+        let config = pending
+            .connect_spec
+            .connect_config(peer_addrs, muxer_port_claim);
         let socket = self.socket_connector.connect(config).map_err(|error| {
             SrtPendingConnectError::Connect(SrtBackendConnectError::Connect(error))
         })?;

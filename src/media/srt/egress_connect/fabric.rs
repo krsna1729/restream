@@ -64,6 +64,18 @@ impl<'a> SrtFabricEgressConnectConfig<'a> {
     pub(crate) fn connect_timeout_ms(&self) -> u64 {
         self.connect_timeout_ms
     }
+
+    #[cfg(test)]
+    pub(crate) fn has_muxer_port_claim(&self) -> bool {
+        self.muxer_port_claim.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn muxer_port_claim_bind_port(&self) -> Option<u16> {
+        self.muxer_port_claim
+            .as_ref()
+            .and_then(SrtEgressMuxerPortClaim::bind_port)
+    }
 }
 
 pub(crate) fn connect_fabric_srt_egress_socket(

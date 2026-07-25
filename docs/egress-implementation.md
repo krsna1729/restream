@@ -843,6 +843,57 @@ Current branch status:
   down. RSS remains favorable throughout (2,575KB vs legacy's 3,426KB per
   output); correctness held (`srt-crypto-matrix` still passes cleanly with
   batching applied).
+  **Correction: the syscall-count framing above was incomplete — the fabric
+  path was also missing native UDP-multiplexer-port reuse entirely,
+  independent of fragment count.** A later external review of this branch
+  pointed out that `src/media/egress/backends/srt.rs`'s two connect call
+  sites (`complete_pending_connect_with`, `complete_pending_connect`) always
+  called `pending.connect_spec.connect_config(peer_addrs, None)` — passing
+  no muxer-port claim at all, unlike the legacy path
+  (`src/media/srt_egress.rs`), which passes
+  `reuse_local_srt_egress_port.then(|| claim_srt_egress_muxer_port(&srt_egress_muxer_port))`.
+  Without that claim, every fabric SRT socket binds its own local UDP port,
+  so libsrt cannot share one multiplexer (and its `RcvQ`/`SndQ` worker
+  threads) across sockets the way the legacy path does. This repository had
+  already measured that exact optimization's value independently of the
+  fabric work: at 60 legacy SRT outputs, port reuse took `RcvQ`/`SndQ`
+  thread counts from 61 to 2 each and total process CPU from 4.243 to 2.992
+  cores — a ~1.25-core saving. The `w2-fabric-batched` regression above
+  (149% fabric vs 41.7% legacy, ~107 percentage points) is the right order
+  of magnitude for this to be the dominant cause, not fragment count: both
+  paths call `srt_send()` at the same ~1316-byte granularity (the fabric's
+  `MAX_SRT_MESSAGE_PAYLOAD` matches the legacy re-chunk size), so raising
+  the message-size ceiling — the "next lever" this section previously
+  named — could only ever recover a single-digit percentage (a 74KB
+  keyframe goes from ~57 calls at 1316 bytes to ~51-52 at the documented
+  1456-byte SRT live-mode maximum), nowhere near the measured gap.
+  **Fixed:** `SrtShardBackend` now carries a shared
+  `Arc<Mutex<Option<u16>>>` (`srt_egress_muxer_port` field) and a
+  `reuse_local_srt_egress_port` flag, defaulting to a fresh mutex with reuse
+  disabled so every existing constructor and test is unaffected; a new
+  `with_srt_egress_muxer_port_reuse(state, enabled)` builder step opts a
+  backend in, and both connect call sites now build a real
+  `claim_srt_egress_muxer_port(&state)` claim when enabled instead of
+  passing `None`. Production wiring
+  (`MediaEngine::retain_srt_fabric_runtime` in
+  `src/media/engine_egress_fabric.rs`) passes the *same*
+  `Arc<Mutex<Option<u16>>>` the legacy path already shares via
+  `MediaEngine::srt_egress_muxer_port_handle()`, gated by the same
+  `srt_egress_reuse_local_port` config flag — so a socket connected by
+  either path can be reused by the other, matching legacy's process-wide
+  sharing semantics exactly rather than creating a second, fabric-only pool.
+  Four new tests (`backends/srt/tests/muxer_port.rs`) prove the claim
+  plumbing itself: reuse disabled passes no claim; reuse enabled with empty
+  shared state passes a `First` claim (present, no port yet); reuse enabled
+  with a pre-recorded port passes a `Reuse` claim carrying that exact port;
+  and the `complete_pending_connect` call site (driving
+  `self.socket_connector` instead of an injected connector — a distinct
+  code path from `complete_pending_connect_with`) is covered separately
+  since it has its own copy of the same claim-construction logic. This is
+  shard-level plumbing proof only — it does not yet re-measure live CPU/RSS
+  with the fix applied; that re-measurement (repeating the
+  `w2-fabric-batched`-style capture) is still needed before revising the
+  `EgressRolloutMode` default-`Off` decision above.
 - Bad-neighbor evidence with the SRT rollout active (`w4-fabric` capture):
   fault.output-stall passed with a permanently stalled sink isolated beside
   32 healthy siblings while SRT outputs ran fabric-owned. This is
@@ -1165,7 +1216,10 @@ deterministic regression test plus the live harness genuinely completing
    contributed to some of the CPU overhead in the recorded
    `w2-fabric-confirmed` SRT capture (158% CPU, 3.8x legacy) above, though
    this has not been re-measured live with the fix applied — flagged here,
-   not claimed as verified.
+   not claimed as verified. (A later fix, missing SRT UDP-multiplexer-port
+   reuse, turned out to be the higher-confidence primary cause of that same
+   regression — see the "Correction" paragraph under Phase 4's fragment-
+   batching status above.)
 2. **`EgressCommand::FeedWake` never reached `RtmpShardBackend::on_command`
    at all.** `EgressShardRuntime::process_command`
    (`src/media/egress/shard.rs`) intercepts `FeedWake` at the generic

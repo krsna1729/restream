@@ -35,12 +35,23 @@ impl MediaEngine {
             false
         } else {
             let config = &self.config.egress_fabric;
+            // Share the same local-UDP-port reuse state the legacy SRT
+            // egress path uses (`MediaEngine::srt_egress_muxer_port_handle`)
+            // so a socket connected by either path can be reused by the
+            // other, restoring the libsrt egress-multiplexer sharing the
+            // fabric path lost by always passing `None` here — see
+            // `docs/egress-implementation.md` Phase 4 status.
+            let srt_egress_muxer_port_reuse = self
+                .config
+                .srt_egress_reuse_local_port
+                .then(|| self.srt_egress_muxer_port_handle());
             let group = spawn_srt_fabric_shard_group(
                 config.shard_count(),
                 config.shard_config(),
                 config.srt_poller_max_events,
                 config.work_budget(),
                 |_| feed.clone_reader(),
+                srt_egress_muxer_port_reuse,
             )
             .map_err(SrtFabricEnsureError::Spawn)?;
             let manager_config =

@@ -1,4 +1,5 @@
 use std::num::NonZeroU32;
+use std::sync::{Arc, Mutex};
 
 use crate::media::egress::backends::rtmp_shard::{
     RtmpReadinessPoller, SharedRtmpPublishStartupSource,
@@ -30,6 +31,7 @@ pub(crate) fn spawn_srt_fabric_shard_group<F>(
     poller_max_events: usize,
     budget: WorkBudget,
     feed_for: F,
+    srt_egress_muxer_port_reuse: Option<Arc<Mutex<Option<u16>>>>,
 ) -> Result<EgressShardGroup, SrtFabricShardGroupError<SrtEgressPollError>>
 where
     F: FnMut(ShardId) -> TsFeed,
@@ -43,6 +45,7 @@ where
             let _ = shard_id;
             SrtFabricPoller::new(poller_max_events)
         },
+        srt_egress_muxer_port_reuse,
     )
 }
 
@@ -52,14 +55,21 @@ fn spawn_srt_fabric_shard_group_with_poller<P, E, F, G>(
     budget: WorkBudget,
     feed_for: F,
     poller_for: G,
+    srt_egress_muxer_port_reuse: Option<Arc<Mutex<Option<u16>>>>,
 ) -> Result<EgressShardGroup, SrtFabricShardGroupError<E>>
 where
     P: SrtReadinessPoller + Send + 'static,
     F: FnMut(ShardId) -> TsFeed,
     G: FnMut(ShardId) -> Result<P, E>,
 {
-    let backends = srt_fabric_shard_backends_with_poller(shard_count, budget, feed_for, poller_for)
-        .map_err(SrtFabricShardGroupError::Backend)?;
+    let backends = srt_fabric_shard_backends_with_poller(
+        shard_count,
+        budget,
+        feed_for,
+        poller_for,
+        srt_egress_muxer_port_reuse,
+    )
+    .map_err(SrtFabricShardGroupError::Backend)?;
     EgressShardGroup::spawn(shard_count, shard_config, backends)
         .map_err(SrtFabricShardGroupError::Group)
 }
@@ -70,14 +80,21 @@ pub(crate) fn srt_fabric_shard_backends<F>(
     poller_max_events: usize,
     budget: WorkBudget,
     feed_for: F,
+    srt_egress_muxer_port_reuse: Option<Arc<Mutex<Option<u16>>>>,
 ) -> Result<Vec<ResolvingNativeSrtShardBackend>, SrtEgressPollError>
 where
     F: FnMut(ShardId) -> TsFeed,
 {
-    srt_fabric_shard_backends_with_poller(shard_count, budget, feed_for, |shard_id| {
-        let _ = shard_id;
-        SrtFabricPoller::new(poller_max_events)
-    })
+    srt_fabric_shard_backends_with_poller(
+        shard_count,
+        budget,
+        feed_for,
+        |shard_id| {
+            let _ = shard_id;
+            SrtFabricPoller::new(poller_max_events)
+        },
+        srt_egress_muxer_port_reuse,
+    )
 }
 
 fn srt_fabric_shard_backends_with_poller<P, E, F, G>(
@@ -85,6 +102,7 @@ fn srt_fabric_shard_backends_with_poller<P, E, F, G>(
     budget: WorkBudget,
     mut feed_for: F,
     mut poller_for: G,
+    srt_egress_muxer_port_reuse: Option<Arc<Mutex<Option<u16>>>>,
 ) -> Result<Vec<ResolvingSrtShardBackendWithPoller<P>>, E>
 where
     P: SrtReadinessPoller,
@@ -99,6 +117,7 @@ where
             poller,
             feed_for(shard_id),
             budget,
+            srt_egress_muxer_port_reuse.clone(),
         ));
     }
     Ok(backends)

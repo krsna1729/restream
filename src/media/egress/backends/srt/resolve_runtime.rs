@@ -132,6 +132,7 @@ pub(crate) fn resolving_srt_shard_backend<P>(
     poller: P,
     feed: TsFeed,
     budget: WorkBudget,
+    srt_egress_muxer_port_reuse: Option<std::sync::Arc<std::sync::Mutex<Option<u16>>>>,
 ) -> ResolvingSrtShardBackend<
     SrtShardBackend<
         P,
@@ -143,7 +144,13 @@ pub(crate) fn resolving_srt_shard_backend<P>(
 where
     P: super::SrtReadinessPoller,
 {
-    resolving_srt_shard_backend_with_configurator(poller, feed, budget, NativeSrtSocketConfigurator)
+    resolving_srt_shard_backend_with_configurator(
+        poller,
+        feed,
+        budget,
+        NativeSrtSocketConfigurator,
+        srt_egress_muxer_port_reuse,
+    )
 }
 
 pub(crate) fn resolving_srt_shard_backend_with_configurator<P, C>(
@@ -151,6 +158,13 @@ pub(crate) fn resolving_srt_shard_backend_with_configurator<P, C>(
     feed: TsFeed,
     budget: WorkBudget,
     socket_configurator: C,
+    // Shared local-UDP-port reuse state for the libsrt egress multiplexer
+    // (see `SrtShardBackend::with_srt_egress_muxer_port_reuse`). `None`
+    // leaves reuse disabled (every existing test/no-config caller); `Some`
+    // is the same `Arc<Mutex<Option<u16>>>` the legacy SRT egress path
+    // shares via `MediaEngine::srt_egress_muxer_port_handle`, so a socket
+    // connected by either path can be reused by the other.
+    srt_egress_muxer_port_reuse: Option<std::sync::Arc<std::sync::Mutex<Option<u16>>>>,
 ) -> ResolvingSrtShardBackend<
     SrtShardBackend<P, C, NativeSrtSocketConnector, SrtResolveCompletionQueue>,
 >
@@ -160,7 +174,7 @@ where
 {
     let (completion_sender, completion_queue) =
         srt_resolve_completion_queue(SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY);
-    let backend = SrtShardBackend::with_runtime_components(
+    let mut backend = SrtShardBackend::with_runtime_components(
         poller,
         feed,
         budget,
@@ -168,6 +182,9 @@ where
         NativeSrtSocketConnector,
         completion_queue,
     );
+    if let Some(state) = srt_egress_muxer_port_reuse {
+        backend = backend.with_srt_egress_muxer_port_reuse(state, true);
+    }
     ResolvingSrtShardBackend::new(backend, SrtResolveWorkerSet::new(completion_sender))
 }
 
