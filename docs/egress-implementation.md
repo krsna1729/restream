@@ -894,6 +894,23 @@ Current branch status:
   with the fix applied; that re-measurement (repeating the
   `w2-fabric-batched`-style capture) is still needed before revising the
   `EgressRolloutMode` default-`Off` decision above.
+  **CPU/RSS re-measurement at scale done, decisively — but the default is
+  still correctly `Off` on a different, unresolved exit-gate criterion.**
+  The N=500/N=1000 captures recorded later in this phase (commit
+  `2dcd5c3b`, `srt-fabric-matrix/vps-6cpu-12gb-n500` and
+  `-n1000-fabric-only`, both with the muxer-port-reuse fix applied) *are*
+  that re-measurement: at N=500 fabric beats legacy on both CPU (171.0%
+  vs 196.76% avg, ~13% lower) and RSS (922,130KB vs 1,052,797KB avg,
+  ~12% lower), and at N=1000 fabric completes while legacy structurally
+  cannot (stalls permanently past its hardcoded 512-sender-thread cap).
+  The CPU-regression concern this section raised is closed. What still
+  gates the default flip is a different Phase 4 exit-gate criterion,
+  healthy-neighbor isolation: the "Proof" section below (live tests)
+  still lists a **pure-fabric** stalled-SRT-destination isolation test as
+  outstanding — only a mixed-ownership variant (`w4-fabric`: fabric SRT
+  alongside legacy RTMP) has been proven. Do not flip the default on the
+  strength of the CPU/RSS numbers alone until that pure-fabric isolation
+  case is run.
   **`SrtEgressEngine::advance` also read one feed unit per `feed.read_from`
   call** (`ReadBudget::new(budget.max_units.min(1), ..)`), the same
   one-unit-per-call shape the RTMP fabric engine had before its own
