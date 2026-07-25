@@ -235,6 +235,7 @@ async fn run() -> Result<(), String> {
             "backend-policy-matrix" => backend_policy_matrix().await,
             "srt-crypto-matrix" => srt_crypto_matrix().await,
             "rtmp-fabric-matrix" => rtmp_fabric_matrix().await,
+            "srt-fabric-matrix" => srt_fabric_matrix().await,
             other => Err(unknown_command_error(other)),
         }
     };

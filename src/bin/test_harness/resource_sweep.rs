@@ -34,7 +34,7 @@ mod branch_matrix;
 #[cfg(test)]
 pub(crate) use branch_matrix::selected_backend_policy_variants;
 pub(crate) use branch_matrix::{
-    backend_policy_matrix, branch_matrix, rtmp_fabric_matrix, srt_crypto_matrix,
+    backend_policy_matrix, branch_matrix, rtmp_fabric_matrix, srt_crypto_matrix, srt_fabric_matrix,
 };
 #[path = "resource_sweep/catalog.rs"]
 mod catalog;

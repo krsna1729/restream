@@ -1,0 +1,31 @@
+{
+  "workload": "egress-growth-source-srt (SRT source outputs, isolated lifecycle)",
+  "commit": "afc05ee7",
+  "date": "2026-07-25",
+  "host": "WSL2, 6 CPUs, 12GB RAM",
+  "mode": "srt-fabric-matrix",
+  "env": {
+    "SRT_FABRIC_MATRIX_SCENARIO": "egress-growth-source-srt",
+    "SRT_FABRIC_MATRIX_EGRESS_COUNT": "10 (default)"
+  },
+  "egressOwner": "legacy variant: per-output MemoryQueue + dedicated sender thread (RESTREAM_EGRESS_FABRIC unset). fabric variant: SrtShardBackend with native UDP multiplexer-port reuse (RESTREAM_EGRESS_FABRIC=srt).",
+  "result": {
+    "legacy": {
+      "outputs": 10,
+      "restreamCpuAvgPct": 14.76,
+      "restreamCpuPeakPct": 17.4,
+      "rssAvgKb": 92468.0,
+      "rssPeakKb": 93324
+    },
+    "fabric": {
+      "outputs": 10,
+      "restreamCpuAvgPct": 20.07,
+      "restreamCpuPeakPct": 32.66,
+      "rssAvgKb": 90058.67,
+      "rssPeakKb": 90912
+    }
+  },
+  "comparison": "First scripted, repeatable SRT fabric A/B (via the new srt-fabric-matrix harness mode, mirroring rtmp-fabric-matrix) taken after restoring native SRT UDP-multiplexer-port reuse (commit ff2ee507; docs/egress-implementation.md Phase 4 status). Fabric CPU (20.07% avg / 32.66% peak) still runs higher than legacy (14.76% avg / 17.4% peak) -- ~1.36x legacy CPU avg at this N=10 scale -- but RSS is actually *lower* for fabric (90,058.67KB vs 92,468KB, ~0.97x). This is a much smaller gap than the pre-fix w2-fabric-batched capture recorded at N=100 (fabric 149% vs legacy 41.7% CPU, ~3.6x), consistent with the muxer-port-reuse fix addressing a real, large-magnitude cost -- but the two captures are at different scales (N=10 vs N=100) and different measurement setups (this harness mode vs whatever ad-hoc process produced w2-fabric-batched), so the ratios are directionally comparable, not a rigorous before/after on identical conditions. Both variants delivered all 10 outputs to progress within timeout; zero error/decode lines in either mediamtx log.",
+  "scope": "This is a smoke-scale A/B (N=10, default SRT_FABRIC_MATRIX_EGRESS_COUNT), proving the fabric path works correctly under real live-process conditions with the muxer-port-reuse fix applied, and giving an early CPU/RSS read -- not the exhaustive 1,000+-output parity proof docs/egress-implementation.md Phase 5's exit gate ultimately requires before a default-mode flip, and not a controlled before/after of the muxer-port-reuse fix itself (that would need the same harness mode run against the pre-fix commit, which this capture does not do). Re-run with SRT_FABRIC_MATRIX_EGRESS_COUNT set higher (and ideally on a host provisioned for that scale, alongside RcvQ/SndQ native thread-count sampling, which this harness mode does not currently capture) for the full proof.",
+  "deviations": "Isolated lifecycle (one mediamtx+restream stack per variant, not shared); single measurement point per variant rather than a growth curve; reduced scale (10, not 1,000+) per host class, matching the same host-class caveat egress-phase0's and rtmp-fabric-matrix's own captures record; no native SRT thread-count (RcvQ/SndQ) sampling, only process-level CPU/RSS."
+}

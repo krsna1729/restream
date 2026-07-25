@@ -291,22 +291,74 @@ pub(crate) async fn backend_policy_matrix() -> Result<Value, String> {
 /// 1,000+-output parity proof `docs/egress-implementation.md` Phase 5's
 /// exit gate ultimately requires before a default-mode flip.
 pub(crate) async fn rtmp_fabric_matrix() -> Result<Value, String> {
-    let mut env =
-        BranchMatrixEnv::from_env_with_default_dir(".local/artifacts/rtmp-fabric-matrix")?;
-    let egress_count = env_usize("RTMP_FABRIC_MATRIX_EGRESS_COUNT", 10).max(1);
+    run_protocol_fabric_matrix(ProtocolFabricMatrixSpec {
+        mode: "rtmp-fabric-matrix",
+        default_dir: ".local/artifacts/rtmp-fabric-matrix",
+        count_env: "RTMP_FABRIC_MATRIX_EGRESS_COUNT",
+        scenario_env: "RTMP_FABRIC_MATRIX_SCENARIO",
+        default_scenario: "egress-growth-source-same",
+        fabric_value: "rtmp",
+    })
+    .await
+}
+
+/// A/B resource comparison for the SRT fabric, mirroring
+/// [`rtmp_fabric_matrix`] exactly (same shape, same isolation, same
+/// smoke-scale caveat) but routing `RESTREAM_EGRESS_FABRIC=srt` against the
+/// `egress-growth-source-srt` scenario instead. Exists to re-measure the SRT
+/// native-UDP-multiplexer-port-reuse fix
+/// (`docs/egress-implementation.md` Phase 4 status) against the previously
+/// recorded `w2-fabric-batched` regression capture — that capture predates
+/// the muxer-port-reuse fix and used a different, ad-hoc measurement setup
+/// (not this harness mode), so this is the first repeatable, scripted SRT
+/// fabric A/B.
+///
+/// `SRT_FABRIC_MATRIX_EGRESS_COUNT` (default 10) and
+/// `SRT_FABRIC_MATRIX_SCENARIO` (default `egress-growth-source-srt`) bound
+/// the run the same way the RTMP variant's env vars do.
+pub(crate) async fn srt_fabric_matrix() -> Result<Value, String> {
+    run_protocol_fabric_matrix(ProtocolFabricMatrixSpec {
+        mode: "srt-fabric-matrix",
+        default_dir: ".local/artifacts/srt-fabric-matrix",
+        count_env: "SRT_FABRIC_MATRIX_EGRESS_COUNT",
+        scenario_env: "SRT_FABRIC_MATRIX_SCENARIO",
+        default_scenario: "egress-growth-source-srt",
+        fabric_value: "srt",
+    })
+    .await
+}
+
+struct ProtocolFabricMatrixSpec {
+    mode: &'static str,
+    default_dir: &'static str,
+    count_env: &'static str,
+    scenario_env: &'static str,
+    default_scenario: &'static str,
+    fabric_value: &'static str,
+}
+
+/// Shared A/B driver behind [`rtmp_fabric_matrix`] and [`srt_fabric_matrix`]:
+/// the same named scenario run twice, once legacy (`RESTREAM_EGRESS_FABRIC`
+/// unset) and once fabric-routed, each in its own isolated mediamtx+restream
+/// stack, comparing CPU/RSS. A smoke-scale correctness + early resource
+/// read, not the exhaustive 1,000+-output parity proof Phase 5's exit gate
+/// ultimately requires before a default-mode flip.
+async fn run_protocol_fabric_matrix(spec: ProtocolFabricMatrixSpec) -> Result<Value, String> {
+    let mut env = BranchMatrixEnv::from_env_with_default_dir(spec.default_dir)?;
+    let egress_count = env_usize(spec.count_env, 10).max(1);
     env.resource.egress_counts = vec![egress_count];
     env.resource.ingest_counts = vec![1];
-    let scenario_name = std::env::var("RTMP_FABRIC_MATRIX_SCENARIO")
-        .unwrap_or_else(|_| "egress-growth-source-same".to_string());
+    let scenario_name =
+        std::env::var(spec.scenario_env).unwrap_or_else(|_| spec.default_scenario.to_string());
     let scenario = resource_egress_scenario(&scenario_name)
-        .ok_or_else(|| format!("unknown rtmp fabric matrix scenario: {scenario_name}"))?;
+        .ok_or_else(|| format!("unknown {} scenario: {scenario_name}", spec.mode))?;
 
     let parent_work_dir = env.resource.work_dir.clone();
     let variants: [(&str, Vec<(&'static str, String)>); 2] = [
         ("legacy", Vec::new()),
         (
             "fabric",
-            vec![("RESTREAM_EGRESS_FABRIC", "rtmp".to_string())],
+            vec![("RESTREAM_EGRESS_FABRIC", spec.fabric_value.to_string())],
         ),
     ];
 
@@ -322,7 +374,7 @@ pub(crate) async fn rtmp_fabric_matrix() -> Result<Value, String> {
         variant_resource.mediamtx_config = variant_resource.work_dir.join("mediamtx.yml");
         variant_resource.restream_db_path = variant_resource
             .work_dir
-            .join(format!("rtmp-fabric-matrix-{label}.db"));
+            .join(format!("{}-{label}.db", spec.mode));
         std::fs::create_dir_all(&variant_resource.work_dir).map_err(|e| e.to_string())?;
 
         let mut stack = None;
@@ -349,9 +401,9 @@ pub(crate) async fn rtmp_fabric_matrix() -> Result<Value, String> {
         }));
     }
 
-    let summary_json = parent_work_dir.join("rtmp-fabric-matrix-results.json");
+    let summary_json = parent_work_dir.join(format!("{}-results.json", spec.mode));
     let result = json!({
-        "mode": "rtmp-fabric-matrix",
+        "mode": spec.mode,
         "scenario": scenario.name,
         "egressCount": egress_count,
         "variants": runs,

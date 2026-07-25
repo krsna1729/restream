@@ -1614,16 +1614,29 @@ names the model tier per `AGENTS.md`'s "Operational Guidance" (`sonnet`
 for scoped fixes/tests, `opus` for architecture/lifecycle redesign or
 benchmark-driven decisions) and why that tier fits.
 
-1. **Live re-measurement of the SRT muxer-port-reuse fix — `opus`.**
-   The fix itself (shared `Arc<Mutex<Option<u16>>>` claim, plumbed
-   through `SrtShardBackend`) is committed and unit-proven, but its
-   actual CPU/RSS/thread-count effect has not been re-measured live.
-   Needs a `srt-fabric-matrix`-style capture (mirroring
-   `rtmp-fabric-matrix`) at the same scale as the existing
-   `w2-fabric-batched` regression capture, comparing `RcvQ`/`SndQ`
-   thread counts and process CPU before/after. Benchmark-driven,
-   requires interpreting live multi-process results against the
-   existing baseline — `opus` tier.
+1. **~~Live re-measurement of the SRT muxer-port-reuse fix~~ — done,
+   partially.** Added a real `srt-fabric-matrix` harness mode
+   (`src/bin/test_harness/resource_sweep/branch_matrix.rs`, mirroring
+   `rtmp-fabric-matrix` exactly via a shared `run_protocol_fabric_matrix`
+   driver) and ran it live at N=10 on this host: fabric CPU (20.07% avg
+   / 32.66% peak) vs legacy (14.76% avg / 17.4% peak) — ~1.36x, with
+   fabric RSS actually *below* legacy (90,058.67KB vs 92,468KB). Zero
+   errors in either mediamtx log; both variants delivered 10/10 outputs.
+   Recorded in `test/harness/baselines/srt-fabric-matrix/wsl-6cpu-12gb/`.
+   This is a real, large improvement in *ratio* over the pre-fix
+   `w2-fabric-batched` capture (fabric 149% vs legacy 41.7%, ~3.6x at
+   N=100) — consistent with the muxer-port-reuse fix addressing a real
+   cost — but it is **not a controlled before/after**: the two captures
+   differ in scale (N=10 vs N=100) and measurement setup (this harness
+   mode vs whatever ad-hoc process produced `w2-fabric-batched`), and
+   this harness mode does not sample native `RcvQ`/`SndQ` thread counts,
+   only process-level CPU/RSS. What's still missing, and still `opus`
+   tier (benchmark-driven, needs interpreting live results against a
+   controlled baseline): re-running `srt-fabric-matrix` against the
+   pre-fix commit on the same host for a true before/after at matched
+   scale, and adding thread-count sampling to the harness so the
+   `RcvQ`/`SndQ` claim itself (not just aggregate CPU) can be verified
+   directly.
 2. **RTMP feed/I/O readiness split (task #11) — `opus`.** Architectural:
    introduce an explicit wait-condition type (`Feed` / `Io(Interest)` /
    `FeedOrIo(Interest)` / `Timer`) so a feed wake can directly enqueue
