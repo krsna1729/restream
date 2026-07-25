@@ -945,6 +945,108 @@ Current branch status:
   32 healthy siblings while SRT outputs ran fabric-owned. This is
   mixed-ownership isolation; a pure-fabric stalled-SRT-destination live
   variant remains listed under live tests.
+- **Pure-fabric SRT bad-neighbor isolation: proven, and it surfaced a real,
+  significant correctness gap affecting both SRT and RTMP fabric, now
+  fixed.** Added `fault_srt_egress_dead_sink_isolation_under_many_outputs`
+  (`src/bin/test_harness/fault_recovery/egress.rs`, wired into
+  `fault.output-stall`): one SRT destination's target pipeline is deleted
+  mid-stream while N healthy SRT siblings, fed from the same source
+  pipeline and sharing the same local SRT muxer port, keep progressing —
+  the harness has no raw SRT listener to hold a connection open without
+  reading, so this uses a dead destination instead of a stalled one, but
+  it is an equally valid bad-neighbor shape (one of the Phase 0 baseline
+  manifest rows) and exercises the same isolation property.
+  **First run failed** (`retryPhaseOk=false`; the bad output stayed
+  `status: "stalled"`, `retrying: false`, `lastError: null` forever) —
+  not a harness bug. Root-caused via targeted `eprintln!` instrumentation
+  (`src/media/srt/egress_sender.rs`, removed after diagnosis) plus a
+  side-by-side legacy comparison (`fault_srt_egress_sink_disappear`,
+  pre-existing and passing under legacy in 1.0s, but *also* failing the
+  same way under `RESTREAM_EGRESS_FABRIC=srt`): **fabric leaf failures
+  were never surfaced to the application layer at all, for any fabric
+  protocol.** `run_srt_fabric`/`run_rtmp_fabric`
+  (`src/infrastructure/bootstrap/egress.rs`) only ever awaited
+  `self.registration.cancel_token.cancelled()` — which fires on an
+  explicit stop/reconfigure, never on the fabric closing a leaf out from
+  under it (peer closed, protocol failure, stall-sweep recovery, or a
+  connect attempt that never produces a leaf at all). The shared
+  retry/backoff bookkeeping at the bottom of `EgressTask::run()` — job
+  status, `next_output_retry_count`, `record_egress_error_if_current` —
+  only runs when the wrapper task *returns*, so it silently never ran for
+  fabric outputs; the output just sat at its last known status forever
+  instead of retrying. `RetryPolicy::record_failure`
+  (`src/media/egress/policy.rs`) was, in effect, dead code for every
+  fabric-routed output.
+  **Fixed** with `EgressProgressSink::terminated_unexpectedly`
+  (`src/media/egress/leaf.rs`): an `Arc<AtomicBool>`, `None` by default
+  (so every existing constructor/test is unaffected), set explicitly by
+  shard code — never via `Drop`, since `EgressProgressSink` is `Clone`
+  and cloned freely (application-side temporary, `LeafCommon`'s copy);
+  a Drop-based signal would fire on every clone's destruction, not just
+  the leaf's real end of life. Marked at exactly the sites that
+  previously discarded a failure silently:
+  - `SrtShardBackend`/`RtmpShardBackend`'s `on_ready` close-decision
+    branch (`VisitDecision::Close`, which — per `visit.rs` — is only
+    ever produced from `EngineProgress::PeerClosed`/`Failed`, never from
+    an explicit `EgressCommand::Remove`, so every close observed there
+    is unexpected by construction);
+  - both shards' `sweep_stalled_leaves` (no-progress recovery);
+  - `SrtShardBackend::complete_pending_connect`'s two connect-failure
+    branches (dial failure, poller-add failure) — previously `let _ =
+    self.complete_pending_connect(...)` in `on_media_tick` discarded the
+    `Err` outright, so a destination that never even connects left no
+    leaf, no error, and no retry, ever;
+  - `RtmpShardBackend::complete_pending_connect`'s four analogous
+    early-return branches (TCP connect, TLS init, missing publish
+    startup, engine init, poller registration).
+  Application side: a new `EgressTask::wait_for_stop_or_leaf_failure`
+  polls the flag (250ms) alongside `cancel_token.cancelled()` in both
+  `run_srt_fabric` and `run_rtmp_fabric`, calls
+  `record_egress_error_if_current` when it was the leaf (not
+  cancellation) that ended the wait, then falls through to the existing
+  Remove/release calls — the shared retry tail in `EgressTask::run()`
+  needed no changes at all.
+  **A second, independent gap surfaced during live verification**: fixing
+  the above made `srt-egress-sink-disappear` and the new isolation test
+  pass (both now transition to `retrying`/`failed` in ~0.5s, matching
+  legacy), but a third pre-existing test,
+  `srt-egress-retry-budget-exhausts` (dead sink from the start, never
+  connects), still failed — `status: "running"`, 0 bytes, forever, no
+  error. Traced to `LeafPolicy::default().connect_timeout` being a
+  hardcoded 10s (`src/media/egress/policy.rs`) that
+  `srt_fabric_output_spec` (`src/application/egress.rs`) used
+  unconditionally, completely ignoring
+  `AppConfig.srt_connect_timeout_ms`/`RESTREAM_SRT_CONNECT_TIMEOUT_MS` —
+  legacy SRT respects that env var, fabric silently didn't. (RTMP has no
+  equivalent divergence: legacy RTMP's connect timeout is itself a
+  hardcoded 10s constant, `RTMP_EGRESS_CONNECT_TIMEOUT` in
+  `egress_transport.rs`, which already matches fabric's default.) Fixed
+  by threading `connect_timeout: Duration` through
+  `srt_fabric_output_spec`, supplied by its one production caller
+  (`src/infrastructure/bootstrap/egress.rs`) from
+  `self.engine.config.srt_connect_timeout_ms`.
+  **Live-verified end to end**, binaries rebuilt from HEAD each time:
+  `fault.egress-retry` and `fault.output-stall` both pass fully under
+  `RESTREAM_EGRESS_FABRIC=srt` and `=all` (RTMP fabric leaf-failure path
+  exercised too) and unchanged under legacy (default, fabric off).
+  `srt-egress-sink-disappear`: 10.1s **FAIL** → 0.5s **PASS**.
+  `srt-egress-retry-budget-exhausts`: **FAIL** → **PASS**. New pure-fabric
+  isolation test: **PASS** at 6 and 12 siblings. Deterministic proof:
+  `src/media/egress/backends/srt/tests/leaf_termination.rs` — two new
+  tests exercise `sweep_stalled_leaves` directly (stalled leaf gets
+  marked, healthy leaf does not), verified as real regressions by
+  temporarily removing the `mark_terminated_unexpectedly()` call at the
+  sweep site and confirming the positive-case test fails, then restoring
+  it. Full `cargo test --lib` (1,864 tests), harness binary unit tests
+  (145), clippy, fmt, source-audit, and docs checks all pass.
+  **This directly unblocks part of the Phase 4/5/6 exit gates**: fabric
+  outputs now actually retry on failure, which "status and failure
+  reasons" integration (Phase 6, previously unstarted) depended on
+  without anyone having named it as a blocker. Bad-neighbor isolation
+  for pure-fabric SRT is now proven at the harness level (dead
+  destination, not stall — see the harness limitation noted above); the
+  Phase 4 exit gate's remaining unproven piece is narrower than before
+  this fix.
 
 ### Removal targets
 

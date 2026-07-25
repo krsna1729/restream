@@ -182,6 +182,17 @@ pub struct EgressProgressSink {
     pub metrics_packets_out: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     /// Wall-clock milliseconds of the most recent progress.
     pub last_progress_ms: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Set by shard code exactly once, only when this leaf is closed for a
+    /// reason the application task did not itself request (peer closed,
+    /// protocol failure, or no-progress/stall recovery) — never on an
+    /// explicit `EgressCommand::Remove` (normal stop/reconfigure, which the
+    /// application task already observes through its own cancellation).
+    /// The application-side fabric task (`run_srt_fabric`/`run_rtmp_fabric`
+    /// in `src/infrastructure/bootstrap/egress.rs`) polls this so it can
+    /// return and let the existing per-output retry/backoff bookkeeping run
+    /// — without it, a fabric leaf that fails never tells the application
+    /// layer, and the output silently sits stale instead of retrying.
+    pub terminated_unexpectedly: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl std::fmt::Debug for EgressProgressSink {
@@ -190,6 +201,10 @@ impl std::fmt::Debug for EgressProgressSink {
             .field("bytes_sent", &self.bytes_sent.is_some())
             .field("metrics", &self.metrics_bytes_out.is_some())
             .field("last_progress_ms", &self.last_progress_ms.is_some())
+            .field(
+                "terminated_unexpectedly",
+                &self.terminated_unexpectedly.is_some(),
+            )
             .finish()
     }
 }
@@ -210,6 +225,15 @@ impl EgressProgressSink {
         }
         if let Some(stamp) = &self.last_progress_ms {
             stamp.store(now_ms, Ordering::Relaxed);
+        }
+    }
+
+    /// Mark this leaf as unexpectedly terminated. See
+    /// `terminated_unexpectedly` for exactly when to call this.
+    #[inline]
+    pub fn mark_terminated_unexpectedly(&self) {
+        if let Some(flag) = &self.terminated_unexpectedly {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }

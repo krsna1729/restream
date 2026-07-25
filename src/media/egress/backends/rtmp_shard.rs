@@ -479,6 +479,12 @@ where
             return;
         }
 
+        // Any early return below means the application never sees a leaf
+        // at all for this attempt — nothing else will tell it the attempt
+        // died, so mark it the same way an established leaf's unexpected
+        // close does (see `EgressProgressSink::terminated_unexpectedly`).
+        let progress_sink = pending.common.progress_sink.clone();
+
         let tcp_stream = match connect_fabric_tcp_egress_socket(TcpFabricConnectConfig {
             peer_addr,
             connect_timeout: pending.connect_timeout,
@@ -486,6 +492,7 @@ where
             Ok(stream) => stream,
             Err(error) => {
                 tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf connect failed");
+                progress_sink.mark_terminated_unexpectedly();
                 return;
             }
         };
@@ -498,6 +505,7 @@ where
                 Ok(stream) => stream,
                 Err(error) => {
                     tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf tls init failed");
+                    progress_sink.mark_terminated_unexpectedly();
                     return;
                 }
             }
@@ -507,6 +515,7 @@ where
 
         let Some(publish_startup) = self.startup_source.take_startup(output_id) else {
             tracing::warn!(output_id = %output_id, "rtmp fabric leaf rejected: no publish startup available");
+            progress_sink.mark_terminated_unexpectedly();
             return;
         };
 
@@ -519,6 +528,7 @@ where
             Ok(engine) => engine,
             Err(error) => {
                 tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf init failed");
+                progress_sink.mark_terminated_unexpectedly();
                 return;
             }
         };
@@ -531,6 +541,7 @@ where
             .is_err()
         {
             tracing::warn!(output_id = %output_id, "rtmp fabric leaf poller registration failed");
+            progress_sink.mark_terminated_unexpectedly();
             return;
         }
 
@@ -615,6 +626,7 @@ where
             let _ = self.poller.remove(socket_ref.fd);
             if let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) {
                 let mut leaf = leaf;
+                leaf.common.progress_sink.mark_terminated_unexpectedly();
                 leaf.engine
                     .close(&mut leaf.transport, CloseReason::NoProgress);
             }
@@ -791,6 +803,16 @@ where
 
         let outcome = self.visit_one_ready_leaf();
         if let Some((Some(output_id), VisitDecision::Close)) = &outcome {
+            // `VisitDecision::Close` is only ever produced from
+            // `EngineProgress::PeerClosed`/`Failed` (see `visit.rs`) — an
+            // explicit `EgressCommand::Remove` never reaches this path — so
+            // every close observed here is unexpected from the
+            // application's point of view.
+            if let Some(socket_ref) = self.output_sockets.get(output_id)
+                && let Some(leaf) = self.leaves.get(socket_ref.key.0).and_then(Option::as_ref)
+            {
+                leaf.common.progress_sink.mark_terminated_unexpectedly();
+            }
             self.remove_leaf_by_output(output_id);
         }
 

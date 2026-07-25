@@ -205,12 +205,14 @@ impl EgressReconciler {
                         registration.attempt_id,
                         feed.feed_id.clone(),
                     );
+                    let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
                     if let Some(sink) = self
                         .engine
                         .with_active_egress(&output.id, |egress| {
                             crate::media::egress::leaf::EgressProgressSink {
                                 bytes_sent: Some(egress.bytes_sent.clone()),
                                 last_progress_ms: Some(egress.last_progress_ms.clone()),
+                                terminated_unexpectedly: Some(terminated.clone()),
                                 ..Default::default()
                             }
                         })
@@ -223,6 +225,7 @@ impl EgressReconciler {
                         feed_id: feed.feed_id,
                         feed: feed.feed,
                         startup: startup.into(),
+                        terminated,
                     })
                 }
                 Err(error) => {
@@ -253,13 +256,16 @@ impl EgressReconciler {
                 output,
                 registration.attempt_id,
                 feed.feed_id.clone(),
+                std::time::Duration::from_millis(self.engine.config.srt_connect_timeout_ms),
             );
+            let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
             if let Some(sink) = self
                 .engine
                 .with_active_egress(&output.id, |egress| {
                     crate::media::egress::leaf::EgressProgressSink {
                         bytes_sent: Some(egress.bytes_sent.clone()),
                         last_progress_ms: Some(egress.last_progress_ms.clone()),
+                        terminated_unexpectedly: Some(terminated.clone()),
                         ..Default::default()
                     }
                 })
@@ -271,6 +277,7 @@ impl EgressReconciler {
                 spec,
                 feed_id: feed.feed_id,
                 feed: feed.feed,
+                terminated,
             })
         } else {
             None
@@ -303,6 +310,13 @@ struct SrtFabricTask {
     feed_id: FeedId,
     feed: Arc<TsFeed>,
     spec: OutputSpec,
+    /// Set by the shard when the fabric closes this leaf for a reason the
+    /// application did not request (peer closed, protocol failure, or
+    /// stall recovery) — see `EgressProgressSink::terminated_unexpectedly`.
+    /// `run_srt_fabric` polls this so it can return and let the shared
+    /// retry/backoff bookkeeping in `EgressTask::run` run, exactly as it
+    /// does when the legacy per-output task's own I/O loop returns.
+    terminated: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -311,6 +325,8 @@ struct RtmpFabricTask {
     feed: Arc<RingFeed>,
     spec: OutputSpec,
     startup: crate::media::egress::backends::rtmp::RtmpPublishStartup,
+    /// See `SrtFabricTask::terminated`.
+    terminated: Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct EgressTask {
@@ -561,6 +577,30 @@ impl EgressTask {
         }
     }
 
+    /// Waits for either explicit cancellation (normal stop/reconfigure) or
+    /// the fabric marking this output's leaf as unexpectedly terminated
+    /// (peer closed, protocol failure, or stall recovery — see
+    /// `EgressProgressSink::terminated_unexpectedly`). Returns `true` only
+    /// for the unexpected-termination case, so the caller can surface it as
+    /// an error before falling through to the shared retry/backoff
+    /// bookkeeping in `EgressTask::run`. Polls rather than a wake-based
+    /// signal: this only runs once per output for as long as it's healthy,
+    /// nowhere near the packet-level hot path.
+    async fn wait_for_stop_or_leaf_failure(
+        &self,
+        terminated: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> bool {
+        loop {
+            if terminated.load(std::sync::atomic::Ordering::Relaxed) {
+                return true;
+            }
+            tokio::select! {
+                _ = self.registration.cancel_token.cancelled() => return false,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
+            }
+        }
+    }
+
     async fn run_srt_fabric(&self, fabric: SrtFabricTask) {
         match self
             .engine
@@ -612,7 +652,16 @@ impl EgressTask {
             }
         }
 
-        self.registration.cancel_token.cancelled().await;
+        if self.wait_for_stop_or_leaf_failure(&fabric.terminated).await {
+            self.engine
+                .record_egress_error_if_current(
+                    &self.output_id,
+                    &self.registration,
+                    "srt_fabric_leaf",
+                    "SRT fabric leaf terminated unexpectedly (peer closed, protocol failure, or stall recovery)",
+                )
+                .await;
+        }
         let _ = self
             .engine
             .dispatch_srt_fabric_command(&fabric.feed_id, EgressCommand::Remove(fabric.spec.id))
@@ -685,7 +734,16 @@ impl EgressTask {
             }
         }
 
-        self.registration.cancel_token.cancelled().await;
+        if self.wait_for_stop_or_leaf_failure(&fabric.terminated).await {
+            self.engine
+                .record_egress_error_if_current(
+                    &self.output_id,
+                    &self.registration,
+                    "rtmp_fabric_leaf",
+                    "RTMP fabric leaf terminated unexpectedly (peer closed, protocol failure, or stall recovery)",
+                )
+                .await;
+        }
         let _ = self
             .engine
             .dispatch_rtmp_fabric_command(&fabric.feed_id, EgressCommand::Remove(fabric.spec.id))

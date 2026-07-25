@@ -586,6 +586,11 @@ where
             self.pending_connects.insert(output_id.clone(), pending);
             return Err(SrtPendingConnectError::Stale);
         }
+        // A connect failure here means the application never sees a leaf at
+        // all — nothing else will tell it the attempt died, so mark it the
+        // same way an established leaf's unexpected close does (see
+        // `EgressProgressSink::terminated_unexpectedly`).
+        let progress_sink = pending.common.progress_sink.clone();
         let muxer_port_state = self.srt_egress_muxer_port.clone();
         let muxer_port_claim = self
             .reuse_local_srt_egress_port
@@ -594,10 +599,14 @@ where
             .connect_spec
             .connect_config(peer_addrs, muxer_port_claim);
         let socket = self.socket_connector.connect(config).map_err(|error| {
+            progress_sink.mark_terminated_unexpectedly();
             SrtPendingConnectError::Connect(SrtBackendConnectError::Connect(error))
         })?;
         self.add_connected_socket(pending.common, socket)
-            .map_err(|error| SrtPendingConnectError::Connect(SrtBackendConnectError::Add(error)))
+            .map_err(|error| {
+                progress_sink.mark_terminated_unexpectedly();
+                SrtPendingConnectError::Connect(SrtBackendConnectError::Add(error))
+            })
     }
 
     fn add_leaf(
@@ -730,6 +739,7 @@ where
             let _ = self.poller.remove(socket_ref.socket);
             if let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) {
                 let mut leaf = leaf;
+                leaf.common.progress_sink.mark_terminated_unexpectedly();
                 leaf.engine.close(
                     &mut leaf.transport,
                     crate::media::egress::backend::CloseReason::NoProgress,
@@ -825,6 +835,16 @@ where
 
         let outcome = self.visit_one_ready_leaf();
         if let Some((Some(output_id), VisitDecision::Close)) = &outcome {
+            // `VisitDecision::Close` is only ever produced from
+            // `EngineProgress::PeerClosed`/`Failed` (see `visit.rs`) — an
+            // explicit `EgressCommand::Remove` never reaches this path — so
+            // every close observed here is unexpected from the
+            // application's point of view.
+            if let Some(socket_ref) = self.output_sockets.get(output_id)
+                && let Some(leaf) = self.leaves.get(socket_ref.key.0).and_then(Option::as_ref)
+            {
+                leaf.common.progress_sink.mark_terminated_unexpectedly();
+            }
             self.remove_leaf_by_output(output_id);
         }
 

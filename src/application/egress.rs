@@ -170,7 +170,12 @@ pub async fn prepare_srt_fabric_feed(
     }
 }
 
-pub fn srt_fabric_output_spec(output: &Output, generation: u64, feed_id: FeedId) -> OutputSpec {
+pub fn srt_fabric_output_spec(
+    output: &Output,
+    generation: u64,
+    feed_id: FeedId,
+    connect_timeout: std::time::Duration,
+) -> OutputSpec {
     OutputSpec {
         id: OutputId::new(output.id.clone()),
         generation,
@@ -178,7 +183,10 @@ pub fn srt_fabric_output_spec(output: &Output, generation: u64, feed_id: FeedId)
         protocol: ProtocolSpec::Srt {
             url: output.url.clone(),
         },
-        policy: LeafPolicy::default(),
+        policy: LeafPolicy {
+            connect_timeout,
+            ..LeafPolicy::default()
+        },
         progress: Default::default(),
     }
 }
@@ -305,11 +313,20 @@ mod tests {
             OutputConfig::source(),
             "srt://localhost:9000?mode=caller",
         );
-        let spec = srt_fabric_output_spec(&output, 7, FeedId::new("feed-srt-source"));
+        let spec = srt_fabric_output_spec(
+            &output,
+            7,
+            FeedId::new("feed-srt-source"),
+            std::time::Duration::from_millis(3_000),
+        );
 
         assert_eq!(spec.id.as_str(), "pipe-srt-fabric-spec-out");
         assert_eq!(spec.generation, 7);
         assert_eq!(spec.feed.as_str(), "feed-srt-source");
+        assert_eq!(
+            spec.policy.connect_timeout,
+            std::time::Duration::from_millis(3_000)
+        );
         match spec.protocol {
             crate::media::egress::ProtocolSpec::Srt { url } => {
                 assert_eq!(url, "srt://localhost:9000?mode=caller");

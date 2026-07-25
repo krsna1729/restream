@@ -1,5 +1,7 @@
 use super::super::*;
-use super::resilience::{create_pipeline, observe_final_output, wait_for_sink_video_above};
+use super::resilience::{
+    create_pipeline, delete_pipeline_v1, observe_final_output, wait_for_sink_video_above,
+};
 
 pub(crate) fn effective_fault_output_stall_siblings(
     configured_siblings: usize,
@@ -506,6 +508,141 @@ async fn fault_rtmp_stalled_sink_isolation_under_many_outputs(
     }))
 }
 
+/// Pure-fabric SRT bad-neighbor isolation at scale: one SRT destination
+/// disappears mid-stream (its target pipeline is deleted) while N healthy
+/// SRT siblings, fed from the same source pipeline and sharing the same
+/// local SRT muxer port, keep progressing. Unlike
+/// `fault_rtmp_stalled_sink_isolation_under_many_outputs`, this drives a
+/// dead destination rather than a connected-but-non-reading one — the
+/// harness has no raw SRT listener to hold a connection open without
+/// reading, but a dead destination is an equally valid bad-neighbor shape
+/// (one of the Phase 0 baseline manifest rows) and, like a stalled peer,
+/// exercises the same isolation property: one leaf's failure must not slow
+/// or stop its shard siblings.
+async fn fault_srt_egress_dead_sink_isolation_under_many_outputs(
+    api: &RampApi,
+    ports: &TestPorts,
+    fixture_h264: &Path,
+    sibling_outputs: usize,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let sibling_outputs = sibling_outputs.max(1);
+    let pid = create_pipeline(api, "fault-egress-srt-isolation").await?;
+
+    let bad_sink_name = "srt-isolation-bad-sink".to_string();
+    let bad_sink_pid = create_pipeline(api, &bad_sink_name).await?;
+    let bad_oid = create_output(
+        api,
+        &pid,
+        "srt-isolation-bad",
+        &harness_srt_output_url(ports.srt, &bad_sink_name, HarnessSrtMode::Publish),
+        "source",
+    )
+    .await?;
+
+    let mut healthy_sink_pids = Vec::with_capacity(sibling_outputs);
+    let mut healthy_output_ids = Vec::with_capacity(sibling_outputs);
+    for index in 0..sibling_outputs {
+        let sink_name = format!("srt-isolation-healthy-sink-{index:02}");
+        let sink_pid = create_pipeline(api, &sink_name).await?;
+        let oid = create_output(
+            api,
+            &pid,
+            &format!("srt-isolation-healthy-{index:02}"),
+            &harness_srt_output_url(ports.srt, &sink_name, HarnessSrtMode::Publish),
+            "source",
+        )
+        .await?;
+        healthy_sink_pids.push(sink_pid);
+        healthy_output_ids.push(oid);
+    }
+
+    let mut pub_child = spawn_publisher(
+        fixture_h264,
+        &harness_srt_ffmpeg_url(
+            ports.srt,
+            "fault-egress-srt-isolation",
+            HarnessSrtMode::Publish,
+            None,
+        ),
+        "mpegts",
+        true,
+    )
+    .await?;
+    wait_for_api_input_live(api, &pid, timeout).await?;
+
+    start_output(api, &pid, &bad_oid).await?;
+    for output_id in &healthy_output_ids {
+        start_output(api, &pid, output_id).await?;
+    }
+
+    let accept_deadline = Instant::now() + Duration::from_secs(15);
+    let mut bad_sink_live = false;
+    let mut healthy_sinks_live = false;
+    while Instant::now() < accept_deadline && !(bad_sink_live && healthy_sinks_live) {
+        if let Ok(health) = api.get_json("/api/v1/engine/health").await {
+            bad_sink_live =
+                health["pipelines"][&bad_sink_pid]["input"]["status"].as_str() == Some("on");
+            healthy_sinks_live = healthy_sink_pids.iter().all(|sink_pid| {
+                health["pipelines"][sink_pid]["input"]["status"].as_str() == Some("on")
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    delete_pipeline_v1(api, &bad_sink_pid).await?;
+
+    let started = Instant::now();
+    let retry =
+        wait_for_output_retry_or_cleanup_observation(api, &pid, &bad_oid, Duration::from_secs(10))
+            .await;
+    let elapsed = started.elapsed();
+
+    let healthy_progress_result = wait_for_outputs_live_and_progressing(
+        api,
+        &pid,
+        &healthy_output_ids,
+        Duration::from_secs(25),
+    )
+    .await;
+
+    let final_bad_output = observe_final_output(api, &pid, &bad_oid).await;
+    let retry_phase_ok = output_retry_or_cleanup_phase_ok(&retry);
+
+    let passed =
+        bad_sink_live && healthy_sinks_live && retry_phase_ok && healthy_progress_result.is_ok();
+
+    println!(
+        "[fault] SRT dead sink isolation under sibling load: {} (siblings={} badSinkLive={} healthySinksLive={} retryPhaseOk={} healthyProgress={} {:.1}s)",
+        if passed { "PASS" } else { "FAIL" },
+        sibling_outputs,
+        bad_sink_live,
+        healthy_sinks_live,
+        retry_phase_ok,
+        healthy_progress_result.is_ok(),
+        elapsed.as_secs_f64(),
+    );
+
+    stop_mixed_outputs(api, &pid, std::slice::from_ref(&bad_oid)).await;
+    stop_mixed_outputs(api, &pid, &healthy_output_ids).await;
+    stop_child(&mut pub_child).await;
+
+    Ok(json!({
+        "test": "srt-egress-dead-sink-isolation-under-many-outputs",
+        "passed": passed,
+        "siblingOutputs": sibling_outputs,
+        "badOutputId": bad_oid,
+        "healthyOutputIds": healthy_output_ids,
+        "badSinkLive": bad_sink_live,
+        "healthySinksLive": healthy_sinks_live,
+        "retryPhaseOk": retry_phase_ok,
+        "elapsedMs": elapsed.as_millis(),
+        "healthyProgress": healthy_progress_result.as_ref().ok().cloned(),
+        "finalBadOutput": final_bad_output.status,
+        "healthyProgressError": healthy_progress_result.err(),
+    }))
+}
+
 pub(crate) async fn fault_egress_retry() -> Result<Value, String> {
     let work_dir = artifact_path("fault.egress-retry");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
@@ -606,10 +743,18 @@ pub(crate) async fn fault_output_stall() -> Result<Value, String> {
         timeout,
     )
     .await?;
+    let srt_isolation = fault_srt_egress_dead_sink_isolation_under_many_outputs(
+        &api,
+        &ports,
+        &fixture_h264,
+        sibling_outputs,
+        timeout,
+    )
+    .await?;
 
     stop_child(&mut child).await;
 
-    let tests = vec![stall_single, isolation];
+    let tests = vec![stall_single, isolation, srt_isolation];
     let passed = tests
         .iter()
         .all(|result| result["passed"].as_bool().unwrap_or(false));
