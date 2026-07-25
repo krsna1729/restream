@@ -2,7 +2,7 @@
   "workload": "w2-healthy-srt",
   "commit": "c6753304843af7cf41fd36c97381f7fa437c8e1e",
   "date": "2026-07-23",
-  "host": "WSL2, 6 CPUs, 12GB RAM",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
   "mode": "ramp-family --no-netns",
   "env": { "RAMP_FAMILY_CONFIGS": "srt-srt-src", "N_OUTPUTS": "100" },
   "egressOwner": "legacy (RESTREAM_EGRESS_FABRIC unset)",

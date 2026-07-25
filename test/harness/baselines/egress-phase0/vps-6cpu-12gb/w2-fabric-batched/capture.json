@@ -2,7 +2,7 @@
   "workload": "w2-healthy-srt (fabric runtime, fragment-batching applied)",
   "commit": "77ec197dcc54477add257e69068c97802b4cdebd",
   "date": "2026-07-24",
-  "host": "WSL2, 6 CPUs, 12GB RAM",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
   "mode": "ramp-family --no-netns",
   "env": { "RESTREAM_EGRESS_FABRIC": "srt", "RAMP_FAMILY_CONFIGS": "srt-srt-src", "N_OUTPUTS": "100" },
   "egressOwner": "fabric (EgressRolloutMode::Srt), batched fragment sending",

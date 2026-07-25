@@ -2,7 +2,7 @@
   "workload": "w2-healthy-srt (fabric runtime, CONFIRMED real delivery post-fragmentation-fix)",
   "commit": "4da79d0223f8bf2903fe95cc87ca346160582c6a",
   "date": "2026-07-24",
-  "host": "WSL2, 6 CPUs, 12GB RAM",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
   "mode": "ramp-family --no-netns",
   "env": { "RESTREAM_EGRESS_FABRIC": "srt", "RAMP_FAMILY_CONFIGS": "srt-srt-src", "N_OUTPUTS": "100" },
   "egressOwner": "fabric (EgressRolloutMode::Srt), confirmed delivering (mediamtx received real SRT sessions; dimension spot-check 1920x1080 matched)",

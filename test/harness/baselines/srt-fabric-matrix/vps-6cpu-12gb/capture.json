@@ -2,7 +2,7 @@
   "workload": "egress-growth-source-srt (SRT source outputs, isolated lifecycle)",
   "commit": "afc05ee7",
   "date": "2026-07-25",
-  "host": "WSL2, 6 CPUs, 12GB RAM",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
   "mode": "srt-fabric-matrix",
   "env": {
     "SRT_FABRIC_MATRIX_SCENARIO": "egress-growth-source-srt",

@@ -2,7 +2,7 @@
   "workload": "w4-bad-neighbor (fabric SRT rollout active)",
   "commit": "b8917e8c9e0b98165287eb81c658af2c9910d2e6",
   "date": "2026-07-23",
-  "host": "WSL2, 6 CPUs, 12GB RAM",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
   "mode": "fault.output-stall --no-netns",
   "env": { "RESTREAM_EGRESS_FABRIC": "srt", "FAULT_OUTPUT_STALL_SIBLINGS": "32" },
   "egressOwner": "mixed: SRT outputs on fabric, RTMP outputs legacy",

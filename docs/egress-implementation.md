@@ -639,7 +639,7 @@ Current branch status:
 - Bootstrap routes SRT outputs through this fabric path only when
   `RESTREAM_EGRESS_FABRIC` routes SRT; the legacy `start_srt_egress` path
   remains the default.
-- First live fabric proof at host scale (wsl-6cpu-12gb, N=100 healthy SRT
+- First live fabric proof at host scale (vps-6cpu-12gb, N=100 healthy SRT
   outputs, `w2-fabric` capture): all outputs healthy on the fabric runtime
   with per-output RSS 1,500KB versus legacy 3,426KB (2.3x lower). CPU was
   57.0% versus legacy 41.7%; the regression was attributed to the 1ms
@@ -798,7 +798,7 @@ Current branch status:
   path delivers real media end to end. Earlier ramp captures (`w2-fabric`,
   `w2-fabric-wake`, `w4-fabric`) predate this fix and are superseded;
   re-record before citing their numbers.
-  **Re-recorded `w2-fabric-confirmed` capture (wsl-6cpu-12gb, N=100) shows
+  **Re-recorded `w2-fabric-confirmed` capture (vps-6cpu-12gb, N=100) shows
   a real CPU regression the earlier unconfirmed captures could not see**
   (they were measuring a fabric that never actually sent anything): RSS is
   1.4x lower than legacy (2,455KB vs 3,426KB per output) but CPU is 3.8x
@@ -1322,7 +1322,7 @@ because it performed well but because it had already stopped working.
 The corrected capture (same scale, all three bugs fixed, confirmed via
 `mediamtx.log` showing continuous received data rather than one burst)
 shows fabric CPU genuinely higher than legacy — see
-`test/harness/baselines/rtmp-fabric-matrix/wsl-6cpu-12gb/capture.json`
+`test/harness/baselines/rtmp-fabric-matrix/vps-6cpu-12gb/capture.json`
 for the numbers. That is the expected, honest starting point (matching
 the SRT fabric's own pre-optimization story in Phase 4 above), not a
 regression from the invalid reading.
@@ -1651,7 +1651,7 @@ benchmark-driven decisions) and why that tier fits.
    / 32.66% peak) vs legacy (14.76% avg / 17.4% peak) — ~1.36x, with
    fabric RSS actually *below* legacy (90,058.67KB vs 92,468KB). Zero
    errors in either mediamtx log; both variants delivered 10/10 outputs.
-   Recorded in `test/harness/baselines/srt-fabric-matrix/wsl-6cpu-12gb/`.
+   Recorded in `test/harness/baselines/srt-fabric-matrix/vps-6cpu-12gb/`.
    This is a real, large improvement in *ratio* over the pre-fix
    `w2-fabric-batched` capture (fabric 149% vs legacy 41.7%, ~3.6x at
    N=100) — consistent with the muxer-port-reuse fix addressing a real
@@ -1689,7 +1689,7 @@ benchmark-driven decisions) and why that tier fits.
    (`srt-fabric-matrix` at `SRT_FABRIC_MATRIX_EGRESS_COUNT=30`), 18
    seconds sampled during the fabric variant's steady-state window,
    4,683 samples (~10.6B cycles). Result, full writeup in
-   `test/harness/baselines/srt-fabric-matrix/wsl-6cpu-12gb/perf-profile-summary.txt`:
+   `test/harness/baselines/srt-fabric-matrix/vps-6cpu-12gb/perf-profile-summary.txt`:
    **every `restream::*` symbol combined — the entire Rust fabric
    implementation — accounts for 0.74% of total sampled CPU cycles.**
    `TsFeed::read_from` 0.05%, `SrtEgressEngine::advance` 0.05%, the

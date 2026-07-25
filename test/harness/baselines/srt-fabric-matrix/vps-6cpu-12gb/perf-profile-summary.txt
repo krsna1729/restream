@@ -1,6 +1,6 @@
 # `perf record` capture: SRT fabric path under live load
 
-Captured 2026-07-25 on this host (WSL2, 6 CPUs, 12GB RAM), commit `6d7fb96b`.
+Captured 2026-07-25 on this host (KVM VPS, 6 CPUs, 12GB RAM), commit `6d7fb96b`.
 
 ## How this was captured
 

@@ -29,7 +29,7 @@ it is a Phase 4 exit criterion.
 
 ## Recorded artifacts
 
-Artifacts live in per-host-class subdirectories, e.g. `wsl-6cpu-12gb/`.
+Artifacts live in per-host-class subdirectories, e.g. `vps-6cpu-12gb/`.
 Each capture stores the harness `scale.csv` (columns: `config, step, label,
 cpu_pct, rss_kb, ffmpeg_n, ffmpeg_rss_kb, total_rss_kb`), `summary.txt`
 (per-config `rss_delta_kb` and `per_output_kb`), and a `capture.json` noting

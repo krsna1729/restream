@@ -37,7 +37,7 @@ Env knobs:
 
 ## Recorded artifacts
 
-Per-host-class subdirectories (e.g. `wsl-6cpu-12gb/`) each store
+Per-host-class subdirectories (e.g. `vps-6cpu-12gb/`) each store
 `results.json` (the full harness output), `legacy.csv`/`fabric.csv` (the
 per-variant resource-sweep rows), and `capture.json` (commit, date, scale,
 comparison, and deviations — same convention as

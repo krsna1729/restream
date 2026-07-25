@@ -2,7 +2,7 @@
   "workload": "w2-healthy-srt (fabric runtime)",
   "commit": "ef430eaacbcb170c85348456d1075139c37c8279",
   "date": "2026-07-23",
-  "host": "WSL2, 6 CPUs, 12GB RAM",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
   "mode": "ramp-family --no-netns",
   "env": { "RESTREAM_EGRESS_FABRIC": "srt", "RAMP_FAMILY_CONFIGS": "srt-srt-src", "N_OUTPUTS": "100" },
   "egressOwner": "fabric (EgressRolloutMode::Srt)",
