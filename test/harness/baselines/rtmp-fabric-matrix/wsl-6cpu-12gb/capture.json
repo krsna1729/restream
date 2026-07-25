@@ -1,0 +1,31 @@
+{
+  "workload": "egress-growth-source-same (RTMP source outputs, isolated lifecycle)",
+  "commit": "ab7c6f45bb9b75fdeec7f91585aa70650c30e80",
+  "date": "2026-07-25",
+  "host": "WSL2, 6 CPUs, 12GB RAM",
+  "mode": "rtmp-fabric-matrix",
+  "env": {
+    "RTMP_FABRIC_MATRIX_SCENARIO": "egress-growth-source-same",
+    "RTMP_FABRIC_MATRIX_EGRESS_COUNT": "10 (default)"
+  },
+  "egressOwner": "legacy variant: per-connection Tokio sender (RESTREAM_EGRESS_FABRIC unset). fabric variant: RtmpFabricEngine/RtmpShardBackend (RESTREAM_EGRESS_FABRIC=rtmp).",
+  "result": {
+    "legacy": {
+      "outputs": 10,
+      "restreamCpuAvgPct": 6.82,
+      "restreamCpuPeakPct": 7.77,
+      "rssAvgKb": 71802,
+      "rssPeakKb": 72724
+    },
+    "fabric": {
+      "outputs": 10,
+      "restreamCpuAvgPct": 6.98,
+      "restreamCpuPeakPct": 8.70,
+      "rssAvgKb": 71194.67,
+      "rssPeakKb": 71860
+    }
+  },
+  "comparison": "At N=10 RTMP-source outputs, fabric CPU (6.98% avg / 8.70% peak) and legacy CPU (6.82% avg / 7.77% peak) are within noise of each other -- roughly at parity, not the multi-x regression the SRT fabric showed pre-batching-fix (see egress-phase0/wsl-6cpu-12gb/w2-fabric-confirmed). RSS is essentially identical (fabric slightly lower). Both variants delivered all 10 outputs to progress within their timeout in both runs -- media correctness confirmed at this scale, not just started.",
+  "scope": "This is a smoke-scale A/B (N=10, default RTMP_FABRIC_MATRIX_EGRESS_COUNT), proving the fabric path works correctly under real live-process conditions (real mediamtx receiver, real ffmpeg publisher, real restream server) and giving an early CPU/RSS read -- not the exhaustive 1,000+-output parity proof docs/egress-implementation.md Phase 5's exit gate ultimately requires before a default-mode flip. Re-run with RTMP_FABRIC_MATRIX_EGRESS_COUNT set higher (and ideally on a host provisioned for that scale) for the full proof.",
+  "deviations": "Isolated lifecycle (one mediamtx+restream stack per variant, not shared); single measurement point per variant rather than a growth curve; reduced scale (10, not 1,000+) per host class, matching the same host-class caveat egress-phase0's own captures record."
+}

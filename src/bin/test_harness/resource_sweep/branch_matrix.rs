@@ -272,6 +272,95 @@ pub(crate) async fn backend_policy_matrix() -> Result<Value, String> {
     Ok(result)
 }
 
+/// A/B resource comparison for the RTMP fabric: the same RTMP-source
+/// workload run twice, once with the legacy per-connection sender (the
+/// default, `RESTREAM_EGRESS_FABRIC` unset) and once with the fabric routed
+/// (`RESTREAM_EGRESS_FABRIC=rtmp`), each in its own isolated
+/// mediamtx+restream stack. Mirrors `srt_crypto_matrix`'s shape, but varies
+/// `backend_policy_env` (already a generic env-var-override seam used by
+/// the backend-policy matrix) instead of SRT crypto, and calls
+/// `run_resource_egress_growth` directly for a single named scenario rather
+/// than `run_branch_matrix_variant`'s full branch-tagged scenario set,
+/// since RTMP-fabric parity is a two-way A/B, not a scenario sweep.
+///
+/// `RTMP_FABRIC_MATRIX_EGRESS_COUNT` (default 10) and
+/// `RTMP_FABRIC_MATRIX_SCENARIO` (default `egress-growth-source-same`)
+/// bound the run to a modest, bounded scale — a smoke-scale correctness +
+/// resource comparison proving the fabric path works and roughly where it
+/// stands under real live-process conditions, not the exhaustive
+/// 1,000+-output parity proof `docs/egress-implementation.md` Phase 5's
+/// exit gate ultimately requires before a default-mode flip.
+pub(crate) async fn rtmp_fabric_matrix() -> Result<Value, String> {
+    let mut env =
+        BranchMatrixEnv::from_env_with_default_dir(".local/artifacts/rtmp-fabric-matrix")?;
+    let egress_count = env_usize("RTMP_FABRIC_MATRIX_EGRESS_COUNT", 10).max(1);
+    env.resource.egress_counts = vec![egress_count];
+    env.resource.ingest_counts = vec![1];
+    let scenario_name = std::env::var("RTMP_FABRIC_MATRIX_SCENARIO")
+        .unwrap_or_else(|_| "egress-growth-source-same".to_string());
+    let scenario = resource_egress_scenario(&scenario_name)
+        .ok_or_else(|| format!("unknown rtmp fabric matrix scenario: {scenario_name}"))?;
+
+    let parent_work_dir = env.resource.work_dir.clone();
+    let variants: [(&str, Vec<(&'static str, String)>); 2] = [
+        ("legacy", Vec::new()),
+        (
+            "fabric",
+            vec![("RESTREAM_EGRESS_FABRIC", "rtmp".to_string())],
+        ),
+    ];
+
+    let mut runs = Vec::new();
+    for (label, backend_policy_env) in variants {
+        let mut variant_resource = env.resource.clone();
+        variant_resource.backend_policy_env = backend_policy_env;
+        variant_resource.work_dir = parent_work_dir.join(label);
+        variant_resource.summary_csv = variant_resource.work_dir.join("results.csv");
+        variant_resource.samples_jsonl = variant_resource.work_dir.join("samples.jsonl");
+        variant_resource.restream_log = variant_resource.work_dir.join("restream.log");
+        variant_resource.mediamtx_log = variant_resource.work_dir.join("mediamtx.log");
+        variant_resource.mediamtx_config = variant_resource.work_dir.join("mediamtx.yml");
+        variant_resource.restream_db_path = variant_resource
+            .work_dir
+            .join(format!("rtmp-fabric-matrix-{label}.db"));
+        std::fs::create_dir_all(&variant_resource.work_dir).map_err(|e| e.to_string())?;
+
+        let mut stack = None;
+        let mut retained_publishers = Vec::new();
+        let aggregates = run_resource_egress_growth(
+            &variant_resource,
+            &mut stack,
+            &mut retained_publishers,
+            &scenario.name,
+            sweep_configs()[scenario.config_index],
+            &scenario.output_kinds,
+        )
+        .await?;
+        write_resource_sweep_csv(&variant_resource.summary_csv, &aggregates)?;
+        runs.push(json!({
+            "variant": label,
+            "aggregates": aggregates.iter().map(resource_aggregate_json).collect::<Vec<_>>(),
+            "artifacts": {
+                "summaryCsv": variant_resource.summary_csv,
+                "samplesJsonl": variant_resource.samples_jsonl,
+                "restreamLog": variant_resource.restream_log,
+                "mediamtxLog": variant_resource.mediamtx_log,
+            },
+        }));
+    }
+
+    let summary_json = parent_work_dir.join("rtmp-fabric-matrix-results.json");
+    let result = json!({
+        "mode": "rtmp-fabric-matrix",
+        "scenario": scenario.name,
+        "egressCount": egress_count,
+        "variants": runs,
+    });
+    std::fs::write(&summary_json, serde_json::to_vec_pretty(&result).unwrap())
+        .map_err(|e| e.to_string())?;
+    Ok(result)
+}
+
 pub(crate) async fn srt_crypto_matrix() -> Result<Value, String> {
     let mut env = BranchMatrixEnv::from_env()?;
     env.srt_variants =

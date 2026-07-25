@@ -114,6 +114,7 @@ above remain the better way to learn the system.
 - [Third-party component manifest](../distribution/THIRD_PARTY_COMPONENTS.md)
 - [Harness manifest README](../test/harness/README.md)
 - [Phase 0 egress baseline workloads](../test/harness/baselines/egress-phase0/README.md)
+- [RTMP fabric A/B baseline](../test/harness/baselines/rtmp-fabric-matrix/README.md)
 
 ### Product, contributor, and operator documents
 

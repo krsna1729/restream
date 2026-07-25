@@ -1213,6 +1213,20 @@ Live tests cover:
 - output media integrity and advancing receiver bytes;
 - comparison with the recorded 1,140 RTMP plus 60 SRT workload.
 
+Current branch status: a first live A/B exists —
+`rtmp-fabric-matrix` (`src/bin/test_harness/resource_sweep/branch_matrix.rs`,
+recorded results in `test/harness/baselines/rtmp-fabric-matrix/`) runs the
+same RTMP-source workload through a real mediamtx receiver and real
+ffmpeg publisher twice, once legacy and once fabric-routed, each in its
+own isolated stack, and compares CPU/RSS. At the default N=10 scale on a
+6-CPU/12GB host: legacy 6.82% avg CPU / 71,802KB avg RSS vs fabric 6.98%
+avg CPU / 71,194KB avg RSS — within noise, not the multi-x CPU regression
+the SRT fabric showed before its fragment-batching fix (Phase 4 status
+above). Both variants delivered all 10 outputs to progress within timeout
+in both runs. This is a smoke-scale correctness + early resource read, not
+the 1,000+-output live-scale proof below — `RTMP_FABRIC_MATRIX_EGRESS_COUNT`
+controls the scale for a fuller run.
+
 ### Exit gate
 
 Fabric RTMP and RTMPS become default only after media correctness, tail progress,
