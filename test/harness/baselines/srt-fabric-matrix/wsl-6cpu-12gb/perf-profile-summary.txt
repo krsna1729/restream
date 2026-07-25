@@ -1,0 +1,77 @@
+# `perf record` capture: SRT fabric path under live load
+
+Captured 2026-07-25 on this host (WSL2, 6 CPUs, 12GB RAM), commit `6d7fb96b`.
+
+## How this was captured
+
+```sh
+sudo sysctl -w kernel.perf_event_paranoid=1   # temporary, reverted after
+sudo sysctl -w kernel.kptr_restrict=0         # temporary, reverted after
+SRT_FABRIC_MATRIX_EGRESS_COUNT=30 RESOURCE_SWEEP_SAMPLE_SECS=20 \
+  target/release/test_harness srt-fabric-matrix &
+# attached once the fabric variant's restream process appeared:
+perf record -o perf-srt-fabric.data -g -F 999 -p <fabric-restream-pid> -- sleep 18
+```
+
+`--profile bench` binary (optimized + debuginfo), 30 SRT egress outputs,
+18 seconds of sampling during the fabric variant's steady-state window
+(after the legacy variant had already run and exited). 4,683 samples,
+~10.6B cycles.
+
+## Result
+
+```
+perf report -i perf-srt-fabric.data --stdio --sort=overhead,symbol -g none
+```
+
+Sum of `Self%` across every `restream::*` symbol (the entire Rust fabric
+implementation: shard runtime, `SrtEgressEngine`, `SrtShardBackend`,
+`TsFeed::read_from`, `SrtMessageSender` impls, everything): **0.74%** of
+total sampled CPU cycles.
+
+Everything else is libsrt's own native protocol code (`srt::CUDT::*`,
+`srt::CSndQueue`/`CRcvQueue` worker threads, `srt::CChannel::sendto`/
+`recvfrom`) and the `sendmsg`/`recvmsg` syscalls those native calls make
+— `__libc_sendmsg` alone accounts for 35.89% Self time, `__libc_recvmsg`
+16.55%, both expected for a UDP-based protocol pushing real packets for
+30 concurrent outputs.
+
+Individual Rust-side symbols relevant to the hot-path audit's flagged
+allocation/dispatch concerns, all negligible:
+
+| Symbol | Self% |
+|---|---|
+| `TsFeed::read_from` | 0.05% |
+| `SrtEgressEngine::advance` | 0.05% |
+| `SrtEgressEngine::send_pending` | 0.04% |
+| `SrtNativeMessageSender::send_message` (the `SrtMessageSender` trait-object dispatch site) | 0.02% |
+| `SrtNativeMessageSender::native_send_backlog` | 0.02% |
+| `bytes::bytes::static_clone` | 0.03% |
+| `bytes::bytes_mut::shared_v_to_vec` | 0.01% |
+| `Vec<T>::drop` | 0.02% |
+
+## Conclusion for `docs/egress-implementation.md` task #12 remainder
+
+The hot-path audit's medium-confidence candidates —
+`Vec<Bytes>`/`Vec<Arc<MediaPacket>>` allocation per feed read,
+`SrtMessageSender` trait-object dispatch per fragment, `Bytes::slice()`
+refcount churn — do not show up as meaningful CPU consumers in this
+profile. They were correctly flagged as *unconfirmed* in the audit
+(needing profiling before implementation, per AGENTS.md's hot-path rule),
+and profiling now says: not worth implementing. The dominant costs
+(libsrt's own protocol machinery, UDP syscalls) are not something the
+Rust fabric layer's allocation patterns can meaningfully affect — they're
+inherent to running the SRT protocol over UDP at this output count.
+
+Not yet profiled: `poll_buffer.drain(..).collect()` under RTMP load
+specifically, and this same capture at a much higher output count (the
+1,000+-output Phase 5 exit-gate scale), where allocator/GC-adjacent
+costs could plausibly behave differently than at N=30. If that gate
+capture happens, re-running `perf record` alongside it would be the
+right time to double check this conclusion still holds, rather than
+assuming N=30 generalizes indefinitely.
+
+Raw capture (`perf-srt-fabric.data`, `perf-srt-fabric-top80.txt`) was not
+checked in (binary perf data and a noisy partially-unresolved-kernel-symbol
+dump aren't useful as committed artifacts); this summary is the
+durable record.

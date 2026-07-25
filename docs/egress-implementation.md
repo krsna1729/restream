@@ -1676,55 +1676,63 @@ benchmark-driven decisions) and why that tier fits.
    (what changes in `EngineProgress`, how `EgressShardBackend::on_ready`
    consumes the new wait condition, whether `Needs`/`Progress` still
    make sense as-is) before implementation.
-3. **Remaining hot-path allocation/dispatch (rest of task #12) —
-   `sonnet` per item, after a `perf record` pass identifies which
-   actually matter.** Candidates from the hot-path audit:
-   `Vec<Bytes>`/`Vec<Arc<MediaPacket>>` allocated per feed read even
-   when the caller only needs a few units; `poll_buffer.drain(..).collect()`
-   per poll cycle (attempted once already in this session and reverted
-   — the direct-field-borrow rewrite needed to avoid a temporary `Vec`
-   conflicts with the `leaf_mut`-style helper methods `poll_ready` calls
-   in its loop body, so it needs either inlining those lookups or a
-   different structural approach, not a blind swap); `SrtMessageSender`
-   trait-object dispatch per fragment; `Bytes::slice()` refcount churn
-   per SRT fragment. AGENTS.md requires benchmarking hot-path changes
-   before and after — profile first with `perf record` per thread
-   family (as the hot-path audit itself recommends) to confirm which of
-   these actually show up before spending implementation time; each
-   confirmed item is then an independently scoped, `sonnet`-sized fix
-   with its own before/after benchmark. **Checked in this session:**
-   `perf` is unusable in this sandbox
-   (`kernel.perf_event_paranoid` is `4`, the "disabled for everyone
-   without `CAP_PERFMON`" level, and changing it needs root the agent
-   doesn't have) — this profiling step genuinely needs a differently
-   provisioned host, confirming the earlier assessment rather than just
-   asserting it. One item *didn't* need profiling to justify, though,
-   because it's not "maybe helps," it's a proven duplicate syscall: on
-   the `EgressCommand::FeedWake` path specifically (fires far more often
-   than the shard's idle poll cycle — every publish, not every ~25ms),
-   `refresh_registrations_for_feed_wake` called `register_leaf` for
-   *every* connected leaf on *every* wake, even ones already
-   `READ_WRITE`-registered from a previous wake. Fixed with the same
-   skip-when-unchanged check `visit_one_ready_leaf` already uses; new
-   test `refresh_registrations_for_feed_wake_skips_leaves_already_read_write`
-   proves it (drives to publish acceptance, sends one `FeedWake` — must
-   register, since it's the first widen from the connect-time `WRITE` —
-   then three more, asserting the call count doesn't move), verified
-   as a real regression by temporarily removing the skip check and
-   confirming the test fails (18 calls vs the expected 15, i.e. the
-   redundant calls happened). Full RTMP suite (31 tests), clippy, fmt,
-   source-audit, and docs checks pass. **Update:** root access became
-   available on this host after the above was written (passwordless
-   `sudo`), which would unblock `perf` here after all by lowering
-   `kernel.perf_event_paranoid` — the "genuinely needs a different host"
-   framing above was accurate for the constraints known at the time, not
-   a permanent property of this environment; the `perf record` pass
-   itself still hasn't been run. Also landed without needing a profiler:
+3. **~~Remaining hot-path allocation/dispatch (rest of task #12)~~ —
+   profiled; the flagged candidates are not worth implementing.**
+   `perf` was initially unusable in this sandbox
+   (`kernel.perf_event_paranoid` was `4`, "disabled without
+   `CAP_PERFMON`", and changing it needs root); the agent later gained
+   passwordless `sudo` on this host mid-session, which unblocked it —
+   `kernel.perf_event_paranoid=1` and `kernel.kptr_restrict=0`
+   (temporarily; both reverted to their original values after) let
+   `perf record` attach to a live `restream` process. Captured a real
+   profile: `--profile bench` binary, 30 SRT egress outputs
+   (`srt-fabric-matrix` at `SRT_FABRIC_MATRIX_EGRESS_COUNT=30`), 18
+   seconds sampled during the fabric variant's steady-state window,
+   4,683 samples (~10.6B cycles). Result, full writeup in
+   `test/harness/baselines/srt-fabric-matrix/wsl-6cpu-12gb/perf-profile-summary.txt`:
+   **every `restream::*` symbol combined — the entire Rust fabric
+   implementation — accounts for 0.74% of total sampled CPU cycles.**
+   `TsFeed::read_from` 0.05%, `SrtEgressEngine::advance` 0.05%, the
+   `SrtMessageSender` trait-object dispatch site (`send_message`) 0.02%,
+   `Bytes`-allocation-related symbols under 0.05% combined. The
+   remaining >99% is libsrt's own native protocol code (`srt::CUDT::*`,
+   `CSndQueue`/`CRcvQueue` workers, `CChannel::sendto`/`recvfrom`) and
+   the `sendmsg`/`recvmsg` syscalls those calls make
+   (`__libc_sendmsg` alone: 35.89% self time; `__libc_recvmsg`: 16.55%)
+   — expected UDP protocol cost for 30 concurrent outputs, and not
+   something the Rust fabric layer's allocation patterns can affect.
+   **Conclusion:** the hot-path audit's medium-confidence candidates
+   (`Vec<Bytes>`/`Vec<Arc<MediaPacket>>` per-read allocation,
+   `SrtMessageSender` trait-object dispatch, `Bytes::slice()` refcount
+   churn) were correctly flagged as *unconfirmed* pending profiling —
+   profiling now says implementing them would not move the needle at
+   this scale (N=30). Not implementing them is the correct call here,
+   not an open item; see the summary doc for what would justify
+   revisiting this (a much higher output count, or profiling the RTMP
+   path specifically, neither done yet). `poll_buffer.drain(..).collect()`
+   was attempted once this session before the profiler was available
+   and reverted (the direct-field-borrow rewrite needed to avoid the
+   temporary `Vec` conflicts with the `leaf_mut`-style helper methods
+   `poll_ready` calls in its loop body) — given the SRT profile's
+   verdict on allocation-class costs generally, this is now deprioritized
+   rather than worth forcing through the borrow-checker fight.
+   Two items landed without needing a profiler at all, because they
+   weren't "maybe helps," they were proven duplicate syscalls: (a) on
+   the `EgressCommand::FeedWake` path (fires far more often than the
+   shard's idle poll cycle), `refresh_registrations_for_feed_wake`
+   called `register_leaf` for every connected leaf on every wake, even
+   ones already `READ_WRITE`-registered from a previous wake — fixed
+   with the same skip-when-unchanged check `visit_one_ready_leaf`
+   already uses, proven by
+   `refresh_registrations_for_feed_wake_skips_leaves_already_read_write`
+   (verified as a real regression: temporarily removing the skip made
+   the test fail, 18 calls vs an expected 15); and (b)
    `SrtEgressEngine::advance` had the exact same one-unit-per-`read_from`-call
-   shape the RTMP fix above addressed (see Phase 4 status, "also read one
-   feed unit per `feed.read_from` call") — fixed identically with a
-   `pending_units` burst buffer, proven by a new test and three existing
-   tests updated for the new (still-safe) cursor-advance behavior.
+   shape the RTMP fix above addressed — fixed identically with a
+   `pending_units` burst buffer, proven by a new test plus three
+   existing tests updated for the new (still-safe) cursor-advance
+   behavior. Full RTMP (31 tests) and SRT (263 tests) suites, clippy,
+   fmt, source-audit, and docs checks all pass on both.
 4. **RTMPS rustls-internal buffer accounting (rest of task #14) —
    `sonnet` for the accounting addition once a measurement approach is
    picked.** The wire-level base case is now wired
