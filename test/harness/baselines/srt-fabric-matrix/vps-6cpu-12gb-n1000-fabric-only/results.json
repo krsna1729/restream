@@ -1,0 +1,49 @@
+{
+  "aggregates": [
+    {
+      "activeTranscoderBuffersPeak": 0,
+      "anonymousPeakKb": 1626676,
+      "avioHwmPeakKb": 0,
+      "avioLenPeakKb": 0,
+      "egressMix": "srt-source",
+      "egressesPeak": 1000,
+      "ffmpegCpuAvgPct": 0.0,
+      "ffmpegCpuPeakPct": 0.0,
+      "ffmpegRssPeakKb": 0,
+      "ingestTypes": "h264-srt",
+      "ingestsPeak": 1,
+      "label": "1000-per-group",
+      "lifecycle": "isolated",
+      "outputs": 1000,
+      "pipelineCountPeak": 1,
+      "pipelines": 1,
+      "privateDirtyPeakKb": 1626676,
+      "pssPeakKb": 1661926,
+      "restreamCpuAvgPct": 207.13,
+      "restreamCpuPeakPct": 217.87,
+      "retainedPeakKb": 8139,
+      "rssAvgKb": 1672148.33,
+      "rssPeakKb": 1675316,
+      "sampleCount": 12,
+      "scenario": "egress-growth-source-srt",
+      "sharedCleanPeakKb": 15208,
+      "sourceRingPeakKb": 6443,
+      "stagesPeak": 0,
+      "totalCpuAvgPct": 207.13,
+      "totalCpuPeakPct": 217.87,
+      "transcode": "no",
+      "transcoderRingPeakKb": 0,
+      "tsmuxRingPeakKb": 1696,
+      "unattributedPeakKb": 1667312
+    }
+  ],
+  "artifacts": {
+    "mediamtxLog": ".local/artifacts/resource-sweep/mediamtx.log",
+    "restreamLog": ".local/artifacts/resource-sweep/restream.log",
+    "samplesJsonl": ".local/artifacts/resource-sweep/resource-sweep-samples.jsonl",
+    "summaryCsv": ".local/artifacts/resource-sweep/resource-sweep-results.csv",
+    "summaryJson": ".local/artifacts/resource-sweep/resource-sweep-results.json"
+  },
+  "lifecycle": "isolated",
+  "mode": "resource-sweep"
+}

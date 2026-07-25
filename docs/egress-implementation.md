@@ -1754,30 +1754,84 @@ benchmark-driven decisions) and why that tier fits.
    into TLS records yet. Neither is "the precise number," so whichever
    is picked needs to be documented as an estimate, not corrected later
    as if it were exact.
-5. **`is_limit_exceeded()` enforcement (also part of task #14) —
-   `opus`.** Currently unimplemented for every protocol: nothing calls
-   it, so no leaf is ever suspended or closed for exceeding its byte
-   budget regardless of what the accounting says. This is a lifecycle
-   change (per `AGENTS.md`: needs deterministic unit tests,
-   loom/proptest where feasible, and a live harness fault case for
-   recovery behavior) requiring a design decision this document does
-   not yet make: what happens to an over-limit leaf (suspend until it
-   drains? close and let retry reconnect? drop the oldest queued unit?),
-   and whether the answer should differ between a leaf backed by a slow
-   peer (recoverable) versus one that's actually stuck (not). Do this
-   after item 3's profiling pass, since a real fix here likely
-   interacts with whatever `WorkBudget`/backpressure changes come out
-   of it.
-6. **1,000+-output Phase 5 exit gate itself — `opus`.** The exit gate
-   above requires live media correctness, tail progress, CPU, RSS,
-   context switches, and allocator behavior at 1,000+ RTMP outputs
-   (mixed RTMP/RTMPS, matching the recorded 1,140 RTMP + 60 SRT
-   workload) matching or improving on legacy — only a smoke-scale N=10
-   capture exists today (`rtmp-fabric-matrix` above). Needs a host
-   provisioned for that scale and is the final gate before
-   `EgressRolloutMode` can default RTMP to the fabric path; do this
-   last, after items 1–5 land, since each of those could change the
-   numbers this capture would report.
+5. **~~`is_limit_exceeded()` enforcement~~ — implemented, by reusing a
+   design SRT already had rather than inventing a new one.** The
+   "design decision" this item worried about — what happens to an
+   over-limit leaf — turns out to already be answered:
+   `SrtShardBackend` has had a working answer since Phase 4,
+   `sweep_stalled_leaves`/`NativeSrtLeaf::observe_stall`
+   (`src/media/egress/backends/srt.rs`), just not wired to RTMP.
+   `classify_stall` (`src/media/egress/policy.rs`) is the actual
+   policy, and it's better than a bare byte-threshold: a leaf with
+   pending bytes is `Idle` (nothing pending), `Backpressured`
+   (pending, but progress within `LeafLimits::max_backpressure_duration`
+   — left alone, a slow-but-alive peer is fine), or `Stalled` (pending,
+   no progress for the deadline — closed, `CloseReason::NoProgress`,
+   and the application retry policy owns reconnection). RTMP now has
+   the identical mechanism: `RtmpFabricLeaf::observe_stall` (using
+   `common.pending_application_bytes`, wired up in the accounting fix
+   above, and `common.progress.last_byte_progress`/
+   `last_protocol_progress`, already updated generically by
+   `EngineVisit::run` → `apply_progress_to_common` for every protocol,
+   so no new tracking was needed) and
+   `RtmpShardBackend::sweep_stalled_leaves`, called from `on_media_tick`
+   at the same 1-second-minimum cadence SRT uses (RTMP has no native
+   transport backlog to probe via FFI, so it's actually simpler than
+   SRT's version — no throttle really needed, kept for symmetry). New
+   test `sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress`
+   drives two real leaves to `Publishing`, then deterministically sets
+   one's stall-relevant state (`pending_application_bytes`,
+   `observed_since` — both otherwise driven by real I/O timing that
+   would make a timing-based test slow and flaky) to simulate "stuck
+   for an hour with pending bytes" and the other to "pending bytes but
+   recent progress," and asserts the sweep closes only the stuck one.
+   Full RTMP suite (32 tests), clippy, fmt, source-audit, and docs
+   checks pass.
+6. **~~1,000+-output Phase 5 exit gate~~ — real-scale data now exists;
+   the result reverses the smoke-scale regression signal.** This host
+   turned out to already be capable enough (6 CPU, 12GB RAM KVM VPS —
+   see the host-label correction note; not WSL2 as earlier captures on
+   this same path wrongly said) to run genuine 1,000-output captures
+   without waiting for different hardware. RTMP at N=1000
+   (`test/harness/baselines/rtmp-fabric-matrix/vps-6cpu-12gb-n1000/`):
+   CPU avg 85.31% fabric vs 83.67% legacy (~1.02x, parity, within
+   noise) — the N=10 capture's ~1.4x gap is gone; RSS avg 287,432KB
+   fabric vs 321,129KB legacy (fabric ~11% *lower*). CPU peak is still
+   elevated (130.78% vs 94.32%, ~1.39x) despite average parity — a new
+   open question (see below), not resolved by this capture. SRT at
+   N=500 (`.../srt-fabric-matrix/vps-6cpu-12gb-n500/`) — the highest
+   scale at which legacy can even be compared, see below — CPU avg
+   171.0% fabric vs 196.76% legacy (fabric ~13% *lower*), RSS avg
+   922,130KB vs 1,052,797KB (fabric ~12% *lower*). Zero panics, zero
+   real errors in any capture; `mediamtx`'s "decode error" and
+   restream's "feed overrun: resynchronized" lines appear in *both*
+   variants proportional to output count (legacy shows more of them,
+   not fewer) — the pre-existing, documented, benign single-connection
+   ramp-up resync mechanism, not a fabric-introduced defect.
+   **Unplanned but decisive discovery**: legacy SRT egress has a
+   hardcoded semaphore capping concurrent sender threads at 512
+   (`src/media/srt_egress.rs:212`, already listed as a removal target
+   above) — confirmed live by running `srt-fabric-matrix` at
+   `SRT_FABRIC_MATRIX_EGRESS_COUNT=1000`: the legacy variant's output
+   count froze at 512/1000 and never advanced. Legacy cannot serve
+   1,000 concurrent SRT outputs *at all*, on any hardware — this isn't
+   a performance gap to close, it's a hard ceiling only the fabric
+   path removes. Confirmed fabric clears it directly: running the
+   fabric path alone (`resource-sweep --no-netns` with
+   `RESTREAM_EGRESS_FABRIC=srt`, since legacy failing aborts the
+   paired-variant matrix before the fabric side ever runs) reached
+   1,000/1,000 outputs cleanly in 43s
+   (`.../srt-fabric-matrix/vps-6cpu-12gb-n1000-fabric-only/`).
+   **This does not fully close the exit gate as originally scoped** —
+   still missing: the mixed RTMP/RTMPS workload specifically (only
+   plain RTMP was run at N=1000; RTMPS at scale is untested), the
+   1,140 RTMP + 60 SRT *combined* workload shape, context-switch and
+   allocator-behavior instrumentation (only CPU/RSS were sampled), and
+   the RTMP CPU-peak question above. But the core question this gate
+   exists to answer — does the fabric path hold up, or beat, legacy at
+   real scale — now has a real, decisive answer for the shapes tested:
+   yes, and for SRT it does something legacy structurally cannot do at
+   any scale.
 
 ## Phase 6a: Pipeline recirculation backend
 

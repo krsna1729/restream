@@ -255,6 +255,104 @@ fn shard_driven_leaf_reaches_publish_accepted_against_a_real_peer() {
 }
 
 #[test]
+fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
+    // `LeafCommon::pending_application_bytes` (wired up in
+    // `visit_one_ready_leaf`) used to mean nothing: nothing ever read it.
+    // `sweep_stalled_leaves` (mirroring `SrtShardBackend`'s identical
+    // mechanism) is what makes it actually enforce something: a leaf with
+    // pending bytes and no byte/protocol progress within
+    // `LeafLimits::max_backpressure_duration` gets closed. This test
+    // drives two real leaves to `Publishing` (real handshake/negotiation
+    // against `run_accepting_server_peer` peers), then directly sets each
+    // leaf's stall-relevant state (`pending_application_bytes`,
+    // `observed_since` — both otherwise driven by real I/O timing, which
+    // would make this test slow and flaky) to deterministically simulate
+    // "genuinely stuck for a long time" on one leaf and "healthy" on the
+    // other, and asserts the sweep closes only the stuck one.
+    let listener_a = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr_a = listener_a.local_addr().unwrap();
+    let (done_a_tx, done_a_rx) = std::sync::mpsc::channel::<()>();
+    let server_a = thread::spawn(move || {
+        let (stream, _) = listener_a.accept().unwrap();
+        run_accepting_server_peer(stream, done_a_tx);
+    });
+
+    let listener_b = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr_b = listener_b.local_addr().unwrap();
+    let (done_b_tx, done_b_rx) = std::sync::mpsc::channel::<()>();
+    let server_b = thread::spawn(move || {
+        let (stream, _) = listener_b.accept().unwrap();
+        run_accepting_server_peer(stream, done_b_tx);
+    });
+
+    let mut backend =
+        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let stuck_id = OutputId::new("stuck");
+    let healthy_id = OutputId::new("healthy");
+    backend.on_command(EgressCommand::Add(output_spec(
+        "stuck",
+        &format!("rtmp://{}/live/key", addr_a),
+        1,
+    )));
+    backend.complete_pending_connect(&stuck_id, 1, addr_a);
+    backend.on_command(EgressCommand::Add(output_spec(
+        "healthy",
+        &format!("rtmp://{}/live/key", addr_b),
+        1,
+    )));
+    backend.complete_pending_connect(&healthy_id, 1, addr_b);
+
+    let mut a_done = false;
+    let mut b_done = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "leaves never reached publish acceptance (a_done={a_done} b_done={b_done})"
+        );
+        a_done = a_done || done_a_rx.try_recv().is_ok();
+        b_done = b_done || done_b_rx.try_recv().is_ok();
+        if a_done && b_done {
+            break;
+        }
+        backend.on_ready();
+        thread::sleep(Duration::from_millis(1));
+    }
+    server_a.join().unwrap();
+    server_b.join().unwrap();
+
+    let now = std::time::Instant::now();
+    let long_ago = now - Duration::from_secs(3600);
+    {
+        let socket_ref = *backend.output_sockets.get(&stuck_id).unwrap();
+        let leaf = backend.leaves[socket_ref.key.0].as_mut().unwrap();
+        leaf.common.pending_application_bytes = 4096;
+        leaf.common.progress.last_byte_progress = None;
+        leaf.common.progress.last_protocol_progress = None;
+        leaf.observed_since = long_ago;
+    }
+    {
+        let socket_ref = *backend.output_sockets.get(&healthy_id).unwrap();
+        let leaf = backend.leaves[socket_ref.key.0].as_mut().unwrap();
+        leaf.common.pending_application_bytes = 4096;
+        leaf.common.progress.last_byte_progress = Some(now);
+        leaf.common.progress.last_protocol_progress = None;
+        leaf.observed_since = long_ago;
+    }
+
+    backend.sweep_stalled_leaves(now);
+
+    assert!(
+        !backend.output_sockets.contains_key(&stuck_id),
+        "a leaf with pending bytes and no progress for the deadline must be closed"
+    );
+    assert!(
+        backend.output_sockets.contains_key(&healthy_id),
+        "a leaf with recent byte progress must not be closed, even with the same pending bytes"
+    );
+}
+
+#[test]
 fn shard_removes_the_leaf_once_the_peer_closes_after_publish_acceptance() {
     // `run_accepting_server_peer` returns (and drops its socket, closing
     // the connection) immediately after accepting the publish request.

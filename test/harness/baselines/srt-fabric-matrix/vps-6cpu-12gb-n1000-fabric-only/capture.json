@@ -1,0 +1,26 @@
+{
+  "workload": "egress-growth-source-srt (SRT source outputs, isolated lifecycle)",
+  "commit": "bc404e50",
+  "date": "2026-07-25",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
+  "mode": "resource-sweep (fabric only -- RESTREAM_EGRESS_FABRIC=srt, RESOURCE_SWEEP_SCENARIOS=egress-growth-source-srt, RESOURCE_SWEEP_EGRESS_COUNTS=1000)",
+  "env": {
+    "RESOURCE_SWEEP_EGRESS_COUNTS": "1000",
+    "RESOURCE_SWEEP_SCENARIOS": "egress-growth-source-srt",
+    "RESTREAM_EGRESS_FABRIC": "srt"
+  },
+  "egressOwner": "fabric variant only: SrtShardBackend with native UDP multiplexer-port reuse.",
+  "result": {
+    "legacy": null,
+    "fabric": {
+      "outputs": 1000,
+      "restreamCpuAvgPct": 207.13,
+      "restreamCpuPeakPct": 217.87,
+      "rssAvgKb": 1672148.33,
+      "rssPeakKb": 1675316
+    }
+  },
+  "comparison": "No legacy number here by design: legacy SRT egress cannot run at N=1000 at all. Directly observed via the sibling srt-fabric-matrix harness mode at SRT_FABRIC_MATRIX_EGRESS_COUNT=1000: the legacy variant's output-creation progress froze at 512/1000 outputs and never advanced past it even after 30+ seconds (would have hit the harness's 240s timeout and failed the whole run, since the legacy and fabric variants run sequentially in one process and a legacy failure aborts before the fabric variant ever starts) -- confirming the hardcoded 512-sender-thread semaphore cap in src/media/srt_egress.rs:212 is a real, currently-hit ceiling, not just a theoretical one. This run instead targets the fabric path alone via the resource-sweep harness command with RESTREAM_EGRESS_FABRIC=srt, bypassing the matrix's paired-variant structure. Fabric reached 1000/1000 outputs cleanly in 43 seconds. mediamtx logged 2,002 'decode error' WARN lines and restream logged 1,276 'egress feed overrun: resynchronized' WARN lines -- both roughly proportional to output count versus the N=500 capture (762 and correspondingly fewer respectively), consistent with the same benign single-connection ramp-up resync mechanism, not a new failure mode at this scale. Zero panics, zero restream-side errors.",
+  "scope": "Proves fabric clears legacy's hard architectural ceiling, not a legacy-vs-fabric resource comparison (there is no legacy number to compare against at this scale). Pair with the sibling vps-6cpu-12gb-n500/ capture for the highest scale at which a fair CPU/RSS comparison is possible.",
+  "deviations": "Single host sample; no RcvQ/SndQ native thread-count sampling; --no-netns used (this harness mode defaults to a private network namespace, unlike the *-fabric-matrix commands, so --no-netns was passed explicitly for this run)."
+}

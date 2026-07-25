@@ -1,0 +1,31 @@
+{
+  "workload": "egress-growth-source-srt (SRT source outputs, isolated lifecycle)",
+  "commit": "bc404e50",
+  "date": "2026-07-25",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
+  "mode": "srt-fabric-matrix",
+  "env": {
+    "SRT_FABRIC_MATRIX_SCENARIO": "egress-growth-source-srt",
+    "SRT_FABRIC_MATRIX_EGRESS_COUNT": "500"
+  },
+  "egressOwner": "legacy variant: per-output MemoryQueue + dedicated sender thread (RESTREAM_EGRESS_FABRIC unset). fabric variant: SrtShardBackend with native UDP multiplexer-port reuse (RESTREAM_EGRESS_FABRIC=srt).",
+  "result": {
+    "legacy": {
+      "outputs": 500,
+      "restreamCpuAvgPct": 196.76,
+      "restreamCpuPeakPct": 201.81,
+      "rssAvgKb": 1052797.33,
+      "rssPeakKb": 1056124
+    },
+    "fabric": {
+      "outputs": 500,
+      "restreamCpuAvgPct": 171.0,
+      "restreamCpuPeakPct": 177.93,
+      "rssAvgKb": 922130.46,
+      "rssPeakKb": 924224
+    }
+  },
+  "comparison": "N=500 was chosen deliberately: legacy SRT egress has a hardcoded semaphore capping concurrent sender threads at 512 (src/media/srt_egress.rs:212, already documented as a removal target), so 500 is close to legacy's own architectural ceiling without exceeding it -- the highest scale at which a fair like-for-like comparison is even possible. At this scale the smoke-scale N=10/N=30 captures' fabric-is-worse signal fully reverses: fabric CPU avg is 171.0% vs legacy's 196.76% (~13% *lower*), and RSS avg is 922,130KB vs legacy's 1,052,797KB (~12% *lower*). Both variants delivered all 500 outputs to progress within timeout. mediamtx logged 'decode error' WARN lines in both variants (legacy 2,621, fabric 762) and restream logged 'egress feed overrun: leaf resynchronized' in both -- both are the pre-existing, documented, benign single-connection ramp-up resync mechanism (each new output's leaf briefly lags the shared ring during ramp before its first real visit catches it up), not a fabric-introduced regression -- legacy shows *more* of these warnings than fabric, not fewer.",
+  "scope": "The highest scale at which legacy and fabric can be fairly compared side by side, given legacy's own hard 512-output cap. See the sibling vps-6cpu-12gb-n1000-fabric-only/ directory for proof fabric clears that cap entirely (legacy cannot be run at N=1000 at all -- it stalls permanently at 512 and never reaches progress).",
+  "deviations": "Isolated lifecycle (one mediamtx+restream stack per variant, not shared); single measurement point per variant rather than a growth curve; single host sample, not a multi-run statistical distribution; no RcvQ/SndQ native thread-count sampling."
+}

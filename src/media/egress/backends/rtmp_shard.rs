@@ -22,13 +22,13 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::os::unix::io::RawFd;
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::media::egress::backend::{Interest, ProtocolEngine, Readiness};
+use crate::media::egress::backend::{CloseReason, Interest, ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::leaf::LeafCommon;
-use crate::media::egress::policy::{LeafLimits, WorkBudget};
+use crate::media::egress::policy::{LeafLimits, LeafStallClass, WorkBudget, classify_stall};
 use crate::media::egress::scheduler::{LeafKey, VisitDecision};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
@@ -245,6 +245,10 @@ struct RtmpFabricLeaf {
     /// batch), and re-registering an unchanged interest is a syscall that
     /// changes nothing.
     registered_interest: TcpEgressInterest,
+    /// Fallback "last progress" instant for `observe_stall` when a leaf has
+    /// never made any byte/protocol progress at all (e.g. still mid-connect
+    /// or mid-handshake) — mirrors `NativeSrtLeaf::observed_since`.
+    observed_since: Instant,
 }
 
 impl RtmpFabricLeaf {
@@ -265,6 +269,32 @@ impl RtmpFabricLeaf {
             budget,
         }
         .run()
+    }
+
+    /// Classify this leaf's send-path health from its pending application
+    /// bytes (`common.pending_application_bytes`, wired up per-visit by
+    /// `RtmpShardBackend::visit_one_ready_leaf`) and how long it's been
+    /// since the last byte/protocol progress. Mirrors
+    /// `NativeSrtLeaf::observe_stall` exactly (`src/media/egress/backends/srt.rs`)
+    /// — RTMP has no native transport backlog to probe, so this is simpler:
+    /// no FFI call, just the shared `classify_stall` on `common.progress`,
+    /// which every protocol already updates identically via
+    /// `EngineVisit::run`'s call to `apply_progress_to_common`.
+    fn observe_stall(&self, now: Instant) -> LeafStallClass {
+        let last_progress = self
+            .common
+            .progress
+            .last_byte_progress
+            .into_iter()
+            .chain(self.common.progress.last_protocol_progress)
+            .max()
+            .unwrap_or(self.observed_since);
+        let age = now.saturating_duration_since(last_progress);
+        classify_stall(
+            self.common.pending_application_bytes as u64,
+            age,
+            &self.common.limits,
+        )
     }
 }
 
@@ -341,6 +371,7 @@ pub(crate) struct RtmpShardBackend<
     ready: VecDeque<TcpReadyLeaf>,
     poll_buffer: Vec<TcpReadyLeaf>,
     pending_connects: HashMap<OutputId, PendingRtmpConnect>,
+    last_stall_sweep: Option<Instant>,
 }
 
 impl<P> RtmpShardBackend<P, NoopRtmpResolveCompletionSource, EmptyRtmpPublishStartupSource>
@@ -390,6 +421,7 @@ where
             ready: VecDeque::new(),
             poll_buffer: Vec::new(),
             pending_connects: HashMap::new(),
+            last_stall_sweep: None,
         }
     }
 
@@ -496,6 +528,7 @@ where
             engine,
             transport: stream,
             registered_interest: TcpEgressInterest::WRITE,
+            observed_since: Instant::now(),
         };
         self.leaves.push(Some(leaf));
         if let Some(previous) = self
@@ -530,6 +563,51 @@ where
 
     fn leaf_mut(&mut self, key: LeafKey) -> Option<&mut RtmpFabricLeaf> {
         self.leaves.get_mut(key.0).and_then(Option::as_mut)
+    }
+
+    /// Minimum interval between stall sweeps — no per-leaf FFI probe to
+    /// throttle here (unlike SRT's native bstats call), but there is no
+    /// reason to walk every leaf on every media tick either.
+    const STALL_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
+
+    /// Close every leaf whose pending application bytes have made no
+    /// byte/protocol progress within the no-progress deadline. Mirrors
+    /// `SrtShardBackend::sweep_stalled_leaves` exactly (same
+    /// `classify_stall` policy, same closed-leaves-retry-via-reconnect
+    /// contract) — this is what makes `LeafCommon::pending_application_bytes`
+    /// (wired up in `visit_one_ready_leaf`, `docs/egress-implementation.md`
+    /// Phase 5 status) actually mean something: previously nothing read it,
+    /// so a leaf that fell arbitrarily far behind a slow or wedged peer was
+    /// never closed for that reason alone.
+    fn sweep_stalled_leaves(&mut self, now: Instant) {
+        if self
+            .last_stall_sweep
+            .is_some_and(|last| now.saturating_duration_since(last) < Self::STALL_SWEEP_INTERVAL)
+        {
+            return;
+        }
+        self.last_stall_sweep = Some(now);
+
+        let stalled: Vec<OutputId> = self
+            .output_sockets
+            .iter()
+            .filter_map(|(output_id, socket_ref)| {
+                let leaf = self.leaves.get(socket_ref.key.0)?.as_ref()?;
+                (leaf.observe_stall(now) == LeafStallClass::Stalled).then(|| output_id.clone())
+            })
+            .collect();
+
+        for output_id in stalled {
+            let Some(socket_ref) = self.output_sockets.remove(&output_id) else {
+                continue;
+            };
+            let _ = self.poller.remove(socket_ref.fd);
+            if let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) {
+                let mut leaf = leaf;
+                leaf.engine
+                    .close(&mut leaf.transport, CloseReason::NoProgress);
+            }
+        }
     }
 
     /// Re-register every connected leaf's poller interest to `READ_WRITE`.
@@ -724,6 +802,7 @@ where
                 completion.peer_addr,
             );
         }
+        self.sweep_stalled_leaves(Instant::now());
     }
 
     fn on_shutdown(&mut self) {
