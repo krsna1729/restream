@@ -1606,6 +1606,86 @@ controls the scale for a fuller run.
 Fabric RTMP and RTMPS become default only after media correctness, tail progress,
 CPU, RSS, context switches, and allocator behavior match or improve on legacy.
 
+### Remaining Phase 5 work — plan
+
+Tracked items still open after the shard-liveness, muxer-port-reuse, and
+hot-path fixes above, in the order they should be picked up. Each entry
+names the model tier per `AGENTS.md`'s "Operational Guidance" (`sonnet`
+for scoped fixes/tests, `opus` for architecture/lifecycle redesign or
+benchmark-driven decisions) and why that tier fits.
+
+1. **Live re-measurement of the SRT muxer-port-reuse fix — `opus`.**
+   The fix itself (shared `Arc<Mutex<Option<u16>>>` claim, plumbed
+   through `SrtShardBackend`) is committed and unit-proven, but its
+   actual CPU/RSS/thread-count effect has not been re-measured live.
+   Needs a `srt-fabric-matrix`-style capture (mirroring
+   `rtmp-fabric-matrix`) at the same scale as the existing
+   `w2-fabric-batched` regression capture, comparing `RcvQ`/`SndQ`
+   thread counts and process CPU before/after. Benchmark-driven,
+   requires interpreting live multi-process results against the
+   existing baseline — `opus` tier.
+2. **RTMP feed/I/O readiness split (task #11) — `opus`.** Architectural:
+   introduce an explicit wait-condition type (`Feed` / `Io(Interest)` /
+   `FeedOrIo(Interest)` / `Timer`) so a feed wake can directly enqueue
+   feed-waiting leaves instead of bouncing through native poller
+   re-registration. Touches the `ProtocolEngine`/`EngineProgress`
+   contract shared by both RTMP and SRT backends — a redesign of a
+   cross-cutting interface, not a local fix. Needs its own design pass
+   (what changes in `EngineProgress`, how `EgressShardBackend::on_ready`
+   consumes the new wait condition, whether `Needs`/`Progress` still
+   make sense as-is) before implementation.
+3. **Remaining hot-path allocation/dispatch (rest of task #12) —
+   `sonnet` per item, after a `perf record` pass identifies which
+   actually matter.** Candidates from the hot-path audit:
+   `Vec<Bytes>`/`Vec<Arc<MediaPacket>>` allocated per feed read even
+   when the caller only needs a few units; `poll_buffer.drain(..).collect()`
+   per poll cycle (attempted once already in this session and reverted
+   — the direct-field-borrow rewrite needed to avoid a temporary `Vec`
+   conflicts with the `leaf_mut`-style helper methods `poll_ready` calls
+   in its loop body, so it needs either inlining those lookups or a
+   different structural approach, not a blind swap); `SrtMessageSender`
+   trait-object dispatch per fragment; `Bytes::slice()` refcount churn
+   per SRT fragment. AGENTS.md requires benchmarking hot-path changes
+   before and after — profile first with `perf record` per thread
+   family (as the hot-path audit itself recommends) to confirm which of
+   these actually show up before spending implementation time; each
+   confirmed item is then an independently scoped, `sonnet`-sized fix
+   with its own before/after benchmark.
+4. **RTMPS rustls-internal buffer accounting (rest of task #14) —
+   `sonnet` for the accounting addition once a measurement approach is
+   picked.** The wire-level base case is now wired
+   (`MediaPublisher::pending_bytes`); adding rustls-internal
+   plaintext/encrypted buffer bytes on top needs a way to query
+   `rustls::ClientConnection`'s internal buffer occupancy (no such
+   accessor is currently used in this codebase — check
+   `rustls::ConnectionCommon`'s public API for what it actually
+   exposes, e.g. `wants_write()`/write-buffer-size style hooks, before
+   assuming a specific mechanism).
+5. **`is_limit_exceeded()` enforcement (also part of task #14) —
+   `opus`.** Currently unimplemented for every protocol: nothing calls
+   it, so no leaf is ever suspended or closed for exceeding its byte
+   budget regardless of what the accounting says. This is a lifecycle
+   change (per `AGENTS.md`: needs deterministic unit tests,
+   loom/proptest where feasible, and a live harness fault case for
+   recovery behavior) requiring a design decision this document does
+   not yet make: what happens to an over-limit leaf (suspend until it
+   drains? close and let retry reconnect? drop the oldest queued unit?),
+   and whether the answer should differ between a leaf backed by a slow
+   peer (recoverable) versus one that's actually stuck (not). Do this
+   after item 3's profiling pass, since a real fix here likely
+   interacts with whatever `WorkBudget`/backpressure changes come out
+   of it.
+6. **1,000+-output Phase 5 exit gate itself — `opus`.** The exit gate
+   above requires live media correctness, tail progress, CPU, RSS,
+   context switches, and allocator behavior at 1,000+ RTMP outputs
+   (mixed RTMP/RTMPS, matching the recorded 1,140 RTMP + 60 SRT
+   workload) matching or improving on legacy — only a smoke-scale N=10
+   capture exists today (`rtmp-fabric-matrix` above). Needs a host
+   provisioned for that scale and is the final gate before
+   `EgressRolloutMode` can default RTMP to the fabric path; do this
+   last, after items 1–5 land, since each of those could change the
+   numbers this capture would report.
+
 ## Phase 6a: Pipeline recirculation backend
 
 ### Objective
