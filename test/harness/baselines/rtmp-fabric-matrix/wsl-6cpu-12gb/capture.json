@@ -1,6 +1,6 @@
 {
   "workload": "egress-growth-source-same (RTMP source outputs, isolated lifecycle)",
-  "commit": "recorded from the shard-liveness-fix commit on feat/egress-fabric (the one that rewrites this file)",
+  "commit": "cc491faf",
   "date": "2026-07-25",
   "host": "WSL2, 6 CPUs, 12GB RAM",
   "mode": "rtmp-fabric-matrix",
