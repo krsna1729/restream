@@ -585,6 +585,22 @@ Fabric sink is available through the same desired-output API as other output
 kinds and is safe to use in local, test, and staging environments. It does not
 become a substitute for live SRT or RTMP correctness evidence.
 
+**Correction — this was marked fully met; it is not.** `start_sink_egress`
+(`src/media/egress/backends/sink.rs`) is a plain per-output `tokio::spawn`
+task driven by `tokio::select!`/`Reader::wait_for_data()` — the exact
+one-task-per-output pattern this migration exists to replace. `SinkEngine`
+implements `ProtocolEngine` and is genuinely schedulable on a shard —
+proven by `SinkHarnessBackend` in `src/media/egress/shard/tests/sink.rs` —
+but that harness is test-only; there is no production `SinkShardBackend`
+wired into `EgressManager`/`EgressCommand` dispatch the way
+`SrtShardBackend`/`RtmpShardBackend` are. The earlier "same desired-output
+API" reading of this exit gate was too narrow: `ProtocolSpec::Sink` does
+reach the same API and command types, but nothing routes it onto actual
+shard OS threads. Real completion needs the same production wiring RTMP
+and SRT already have (shard backend, factory spawn function, manager
+integration, `EgressTask::run` dispatch) — not a new design, just the
+already-proven pattern applied to the one backend that skipped it.
+
 ## Phase 4: SRT migration
 
 ### Objective
