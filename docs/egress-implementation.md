@@ -1204,6 +1204,31 @@ it — the second-packet-after-idle scenario the original review pointed at
 directly. It fails without fix (1) or (2) (with either bug present, the
 5-second deadline in the test trips) and passes with all three fixed.
 
+4. **`SrtShardBackend::on_ready` could strand an already-ready leaf behind
+   a `WouldBlock` one.** Both backends' `on_ready` visit exactly one leaf
+   per call, then decide whether to re-schedule (`ScheduleReady`) or stop
+   (`Continue`) based on that one leaf's own outcome. SRT's version
+   originally only re-scheduled when the visited leaf itself reported
+   `VisitDecision::Continue` — it never checked whether the *ready queue
+   itself* still had entries left. When one poll batch reports two leaves
+   ready and the first one visited hits `WouldBlock`
+   (`VisitDecision::Suspend`, not `Continue`), the backend returned
+   `EgressShardCommandEffect::Continue` even though a second, genuinely
+   ready leaf was still sitting in `self.ready` — stranding it until the
+   next unrelated wake or poll cycle picked the queue back up. Fixed by
+   also re-scheduling whenever `self.ready` is non-empty after the visit,
+   mirroring the RTMP fix's shape (`requeue_after_rtmp_visit` /
+   `!self.ready.is_empty()`) exactly. New test
+   `on_ready_does_not_strand_a_second_ready_leaf_behind_a_would_block_leaf`
+   (`backends/srt/tests/shard.rs`) registers a `WouldBlock`-always leaf and
+   a healthy leaf as both ready in the same poll batch, asserts the first
+   `on_ready()` call reports `ScheduleReady` (not `Continue`) with the
+   healthy leaf still unsent, and that the *next* call actually delivers to
+   it. Same bug family as (1)-(3) above (per-visit local state read as
+   though it reflected shard-wide queue state), same root cause class, same
+   fix shape — not re-discovered independently, deliberately checked for
+   once the WorkBudget-reuse mirror in `SrtShardBackend` was fixed.
+
 **This also invalidated the first `rtmp-fabric-matrix` capture.** That
 capture (N=10, recorded before these fixes) showed fabric CPU/RSS at
 near-parity with legacy. With bug (1) in place, fabric leaves sent their

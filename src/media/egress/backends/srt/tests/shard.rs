@@ -569,6 +569,67 @@ fn srt_shard_backend_socket_setup_failure_preserves_existing_leaf() {
     assert_eq!(*probe.closed.lock().unwrap(), 0);
 }
 
+// A blocked leaf must not strand an already-ready neighbor behind it: one
+// poll batch reports both ready (blocked first), the first on_ready() call
+// must ask for another pass (ScheduleReady) instead of reporting Continue,
+// and the healthy leaf must be reached by the next call.
+struct WouldBlockSender;
+impl SrtMessageSender for WouldBlockSender {
+    fn send_message(&mut self, _message: &Bytes) -> crate::media::srt::SrtSendResult {
+        crate::media::srt::SrtSendResult::WouldBlock
+    }
+    fn close(&mut self, _reason: crate::media::egress::backend::CloseReason) {}
+}
+
+#[test]
+fn on_ready_does_not_strand_a_second_ready_leaf_behind_a_would_block_leaf() {
+    let poller = FakeReadinessPoller::default();
+    let poller_handle = poller.clone();
+    let mut backend = SrtShardBackend::new(
+        poller,
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    );
+    // `common()` hardcodes one OutputId; a second leaf needs a distinct one
+    // or `add_leaf` replaces (closes) the first via `output_sockets`.
+    let blocked_common = LeafCommon::new(
+        OutputId::new("out-srt-blocked"),
+        6,
+        FeedId::new("feed-srt"),
+        LeafLimits::default(),
+    );
+    let blocked_sender: Box<dyn SrtMessageSender + Send> = Box::new(WouldBlockSender);
+    let blocked = SrtFabricLeaf::new(blocked_common, blocked_sender);
+    let blocked_key = backend.add_leaf(41, blocked).unwrap();
+    let probe = shared_sender();
+    let healthy_key = backend
+        .add_leaf(42, SrtFabricLeaf::new(common(7), Box::new(probe.sender)))
+        .unwrap();
+
+    poller_handle.push_ready(SrtReadyLeaf {
+        socket: 41,
+        key: blocked_key,
+        generation: 6,
+        writable: true,
+    });
+    poller_handle.push_ready(SrtReadyLeaf {
+        socket: 42,
+        key: healthy_key,
+        generation: 7,
+        writable: true,
+    });
+
+    let effect = backend.on_ready();
+    assert_eq!(effect, EgressShardCommandEffect::ScheduleReady { count: 1 });
+    assert!(probe.sends.lock().unwrap().is_empty(), "not skipped yet");
+
+    backend.on_ready();
+    assert_eq!(
+        probe.sends.lock().unwrap().as_slice(),
+        &[Bytes::from_static(b"abc")]
+    );
+}
+
 #[test]
 fn srt_shard_backend_ready_event_visits_registered_leaf() {
     let poller = FakeReadinessPoller::default();

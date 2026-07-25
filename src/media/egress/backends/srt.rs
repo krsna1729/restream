@@ -749,20 +749,37 @@ where
         EgressShardCommandEffect::Continue
     }
 
+    /// Visit one ready leaf, then decide whether to ask for another
+    /// `on_ready` pass immediately.
+    ///
+    /// `poll_ready()` can enqueue several ready leaves from one poll — SRT
+    /// always registers write interest, so a single poll commonly finds
+    /// every leaf on the shard writable at once. If the leaf visited
+    /// *this* call suspends (would block) or closes, that alone must not
+    /// stop the shard from draining the rest of an already-nonempty
+    /// `self.ready` queue: those leaves were already reported ready and
+    /// would otherwise sit stranded until some unrelated future command
+    /// happened to touch this shard again. Requeuing whenever `self.ready`
+    /// is still nonempty (in addition to the existing "this leaf wants to
+    /// continue" case) fixes that: a blocked leaf never blocks its
+    /// already-ready neighbors. (Same bug, same fix, as
+    /// `RtmpShardBackend::on_ready` — see `docs/egress-implementation.md`
+    /// Phase 5 status.)
     fn on_ready(&mut self) -> EgressShardCommandEffect {
         if self.ready.is_empty() {
             self.poll_ready();
         }
 
-        match self.visit_one_ready_leaf() {
-            Some((_, VisitDecision::Continue)) => {
-                EgressShardCommandEffect::ScheduleReady { count: 1 }
-            }
-            Some((output_id, VisitDecision::Close)) => {
-                self.remove_leaf_by_output(&output_id);
-                EgressShardCommandEffect::Continue
-            }
-            _ => EgressShardCommandEffect::Continue,
+        let outcome = self.visit_one_ready_leaf();
+        if let Some((output_id, VisitDecision::Close)) = &outcome {
+            self.remove_leaf_by_output(output_id);
+        }
+
+        let leaf_wants_more = matches!(&outcome, Some((_, VisitDecision::Continue)));
+        if leaf_wants_more || !self.ready.is_empty() {
+            EgressShardCommandEffect::ScheduleReady { count: 1 }
+        } else {
+            EgressShardCommandEffect::Continue
         }
     }
 
