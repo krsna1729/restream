@@ -367,7 +367,7 @@ impl MediaPublisher {
         loop {
             if let Some(pending) = &mut self.pending_write {
                 if !readiness.writable {
-                    return Self::finish(total_bytes, total_units, Interest::WRITE);
+                    return Self::finish(total_bytes, total_units, Interest::READ_WRITE);
                 }
                 match stream.write(pending.remaining()) {
                     Ok(0) => {
@@ -381,15 +381,19 @@ impl MediaPublisher {
                         pending.offset += n;
                         total_bytes += n;
                         if !pending.is_complete() {
-                            return Self::finish(total_bytes, total_units, Interest::WRITE);
+                            return Self::finish(total_bytes, total_units, Interest::READ_WRITE);
                         }
                         self.pending_write = None;
                     }
                     Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                        let hint = stream.interest_hint(Interest::WRITE);
                         return Self::finish(
                             total_bytes,
                             total_units,
-                            stream.interest_hint(Interest::WRITE),
+                            Interest {
+                                readable: true,
+                                writable: hint.writable,
+                            },
                         );
                     }
                     Err(error) => {
@@ -414,15 +418,66 @@ impl MediaPublisher {
                 total_units += 1;
             }
 
+            // Steady-state publishing is otherwise write-only: nothing here
+            // ever calls `stream.read()` on the RTMP control channel, so the
+            // shard poller (whose registration mirrors whatever `Interest`
+            // this method returns — see `next_registration_interest` in
+            // `rtmp_shard.rs`) never watches this socket for readability once
+            // the initial batch is flushed. A server-sent Acknowledgement,
+            // WindowAckSize, or UserControl message, or the peer closing the
+            // connection, then goes undetected until the next write attempt
+            // happens to fail — not a crash, but a real steady-state gap
+            // (external review finding). Draining and feeding readable bytes
+            // through the same `RtmpSessionCore::handle_server_input` session
+            // negotiation already uses closes it: one bounded read per loop
+            // pass (converges once the kernel receive buffer is drained,
+            // matching `SessionNegotiation::advance`'s per-visit discipline),
+            // any reply packets (e.g. an Acknowledgement) get queued for the
+            // next write pass, and `Ok(0)` is treated as a real peer close
+            // instead of being silently missed.
+            if readiness.readable {
+                let mut buffer = [0u8; SESSION_READ_BUFFER];
+                match stream.read(&mut buffer) {
+                    Ok(0) => {
+                        return EngineProgress::Failed(ProtocolFailure {
+                            reason: "rtmp_control_read",
+                            detail: "peer closed connection".to_string(),
+                            retryable: true,
+                        });
+                    }
+                    Ok(n) => match self.core.handle_server_input(&buffer[..n]) {
+                        Ok((packets, _events)) => {
+                            self.current_batch.extend(packets);
+                            continue;
+                        }
+                        Err(error) => {
+                            return EngineProgress::Failed(ProtocolFailure {
+                                reason: "rtmp_control_input",
+                                detail: error.to_string(),
+                                retryable: true,
+                            });
+                        }
+                    },
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => {}
+                    Err(error) => {
+                        return EngineProgress::Failed(ProtocolFailure {
+                            reason: "rtmp_control_read",
+                            detail: error.to_string(),
+                            retryable: true,
+                        });
+                    }
+                }
+            }
+
             if budget.is_exhausted(total_units, total_bytes) {
-                return Self::finish(total_bytes, total_units, Interest::WRITE);
+                return Self::finish(total_bytes, total_units, Interest::READ_WRITE);
             }
 
             match feed.read_from(*cursor, ReadBudget::new(1, budget.max_bytes)) {
                 FeedRead::Units { units, next_cursor } => {
                     *cursor = next_cursor;
                     let Some(packet) = units.into_iter().next() else {
-                        return Self::finish(total_bytes, total_units, Interest::NONE);
+                        return Self::finish(total_bytes, total_units, Interest::READ);
                     };
                     if let Err(detail) = self.encode_unit(&packet) {
                         return EngineProgress::Failed(ProtocolFailure {
@@ -434,7 +489,7 @@ impl MediaPublisher {
                     self.unit_in_flight = true;
                 }
                 FeedRead::Empty => {
-                    return Self::finish(total_bytes, total_units, Interest::NONE);
+                    return Self::finish(total_bytes, total_units, Interest::READ);
                 }
                 FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
                     return EngineProgress::FeedOverrun;

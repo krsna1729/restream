@@ -494,3 +494,71 @@ fn engine_publishes_a_raw_keyframe_once_publish_is_accepted() {
 
     server.join().unwrap();
 }
+
+#[test]
+fn engine_detects_peer_close_during_steady_state_publishing() {
+    // `run_full_server_peer` returns (and drops its socket, closing the
+    // connection) immediately after accepting the publish request, without
+    // ever reading the client's subsequent media writes.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_full_server_peer(stream);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
+
+    let mut engine =
+        RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
+            .unwrap();
+    let feed = dummy_feed();
+    let mut cursor = FeedCursor::new(0, 0);
+
+    drive_to(
+        &mut engine,
+        &mut client_stream,
+        &feed,
+        &mut cursor,
+        RtmpFabricEngine::is_publish_accepted,
+    );
+    assert!(engine.is_publish_accepted());
+    server.join().unwrap();
+
+    // Steady-state publishing against an empty feed and an already-closed
+    // peer: nothing is ever queued to write, so a write call never runs to
+    // discover the close. Before the control-channel read fix, `advance`
+    // never called `stream.read()` once Publishing, and `Needs` interest
+    // dropped to `Interest::NONE`/`WRITE` — this loop would spin forever
+    // instead of observing the close. It must be discovered by reading.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "engine never detected the peer close"
+        );
+        let progress = engine.advance(
+            &mut client_stream,
+            Readiness::BOTH,
+            &feed,
+            &mut cursor,
+            budget(),
+        );
+        match progress {
+            EngineProgress::Failed(failure) => {
+                assert_eq!(failure.reason, "rtmp_control_read");
+                break;
+            }
+            EngineProgress::Needs(interest) => {
+                assert!(
+                    interest.readable,
+                    "an idle publishing leaf must stay read-registered: {interest:?}"
+                );
+                thread::sleep(Duration::from_millis(1));
+            }
+            other => panic!("unexpected progress: {other:?}"),
+        }
+    }
+}

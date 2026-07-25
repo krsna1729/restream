@@ -1244,6 +1244,50 @@ for the numbers. That is the expected, honest starting point (matching
 the SRT fabric's own pre-optimization story in Phase 4 above), not a
 regression from the invalid reading.
 
+#### Steady-state RTMP control-channel reads were missing
+
+A second, independent external audit flagged that `MediaPublisher::advance`
+(the Publishing-state engine, `src/media/egress/backends/rtmp.rs`) never
+called `stream.read()` at all once publishing started — it only wrote
+encoded media and returned `Interest::WRITE` (pending write) or
+`Interest::NONE` (feed idle), never `Interest::READ`. Since the shard
+poller's registration is derived directly from whatever `Interest` the
+engine returns (`next_registration_interest` in `rtmp_shard.rs`), an
+idle-feed publishing leaf was never even registered for socket readability.
+Consequences: a server-sent Acknowledgement/WindowAckSize/UserControl
+message went unprocessed, and a peer-initiated close could go undetected
+indefinitely against an idle feed (only a *write* attempt would ever
+observe it, and idle leaves have nothing queued to write). Not a crash —
+`SessionNegotiation` already proved the pattern is safe — but a real
+liveness/correctness gap the review compared unfavorably to the legacy
+Tokio path, which always selects on read and write together.
+
+Fixed by giving `MediaPublisher::advance` the same bounded, per-visit read
+step `SessionNegotiation::advance` already uses: when `readiness.readable`,
+issue one `stream.read()`, feed any bytes through the same
+`RtmpSessionCore::handle_server_input` both states share, queue any reply
+packets (e.g. an outbound Acknowledgement) into `current_batch` for the
+next write pass, and treat `Ok(0)` as a real peer close
+(`ProtocolFailure { reason: "rtmp_control_read", .. }`) instead of missing
+it. Every interest returned by this method now also carries `readable:
+true` — `Interest::WRITE` sites became `Interest::READ_WRITE`,
+`Interest::NONE` became `Interest::READ` — so an idle publishing leaf stays
+socket-read-registered the way the legacy path always was; widening
+interest is always safe under level-triggered epoll (an engine that
+doesn't need a direction just ignores readiness it didn't ask for), the
+same principle the FeedWake fix above relies on.
+
+New test `engine_detects_peer_close_during_steady_state_publishing`
+(`rtmp_tests.rs`) drives a real client engine to `Publishing` against a
+real `rml_rtmp` server peer that closes its socket immediately after
+accepting the publish request (before ever reading media), then keeps
+calling `advance` against an empty feed and asserts the engine reports
+`Failed { reason: "rtmp_control_read", .. }` within 5 seconds, with every
+intermediate `Needs` interest asserted `readable`. Without the fix this
+loop does not terminate (nothing ever triggers a write, so the close is
+never observed) and the test times out; with the fix it reliably ends in
+well under the deadline.
+
 ### RTMPS
 
 Drive TLS incrementally:
