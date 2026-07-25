@@ -1373,6 +1373,38 @@ temporarily reverting the fix and confirming the test fails (730 bytes
 observed by the peer in one visit against an expected 194); restored and
 confirmed green.
 
+#### `epoll_ctl` was called on every visit, even with an unchanged interest
+
+The hot-path audit that flagged the missing SRT multiplexer-port reuse
+above also flagged `RtmpShardBackend::visit_one_ready_leaf`: it called
+`register_leaf` (an `epoll_ctl(EPOLL_CTL_MOD)` syscall) after every
+non-`Close` visit, unconditionally, even when the interest it was about
+to register was identical to what was already registered — a wasted
+syscall on the hot path any time consecutive visits of the same leaf
+report the same interest (common; e.g. several `Progress{interest:
+WRITE}` results in a row while draining a large batch). Fixed by giving
+`RtmpFabricLeaf` a `registered_interest: TcpEgressInterest` field
+tracking what the poller currently watches for that leaf's fd
+(initialized to `WRITE` at connect time, kept in sync by
+`refresh_registrations_for_feed_wake`'s `READ_WRITE` widening), and only
+calling `register_leaf` in `visit_one_ready_leaf` when the newly
+requested interest actually differs from it.
+
+New test `visit_one_ready_leaf_skips_reregistration_when_interest_is_unchanged`
+drives a real connection through handshake, negotiation, publish
+acceptance, an idle settle window, and a feed-wake-triggered publish
+(the same lifecycle `feed_wake_delivers_media_published_after_the_leaf_goes_idle`
+exercises) while recording every `register_leaf` call's interest through
+a `CountingPoller` wrapping the real `TcpEgressPoller`. Real socket
+timing is too noisy to assert an exact call count, so the test instead
+asserts the invariant that must hold regardless of timing if the skip
+logic works: the recorded interest sequence never contains two
+consecutive equal entries (if it did, a call was made that should have
+been skipped). Verified as a real regression test by temporarily
+reverting to the unconditional call and confirming the test fails
+(consecutive identical entries, e.g. two `WRITE`s in a row, appear in the
+observed sequence); restored and confirmed green.
+
 ### RTMPS
 
 Drive TLS incrementally:

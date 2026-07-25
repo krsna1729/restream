@@ -235,6 +235,16 @@ struct RtmpFabricLeaf {
     common: LeafCommon,
     engine: RtmpFabricEngine,
     transport: RtmpConnection,
+    /// What the poller is currently registered to watch for this leaf's fd.
+    /// `visit_one_ready_leaf` only calls `register_leaf` (an `epoll_ctl`
+    /// syscall) when the engine's next requested interest actually differs
+    /// from this — unlike SRT (always `WRITE`), RTMP's interest genuinely
+    /// changes across handshake/negotiation/publishing, but consecutive
+    /// visits commonly request the *same* interest as last time (e.g. two
+    /// `Progress{interest: WRITE}` results in a row while draining a large
+    /// batch), and re-registering an unchanged interest is a syscall that
+    /// changes nothing.
+    registered_interest: TcpEgressInterest,
 }
 
 impl RtmpFabricLeaf {
@@ -485,6 +495,7 @@ where
             common: pending.common,
             engine,
             transport: stream,
+            registered_interest: TcpEgressInterest::WRITE,
         };
         self.leaves.push(Some(leaf));
         if let Some(previous) = self
@@ -559,6 +570,7 @@ where
                 leaf.common.generation,
                 TcpEgressInterest::READ_WRITE,
             );
+            leaf.registered_interest = TcpEgressInterest::READ_WRITE;
         }
     }
 
@@ -610,9 +622,19 @@ where
 
         if !matches!(decision, VisitDecision::Close) {
             let interest = tcp_interest(next_registration_interest(&progress));
-            let _ = self
-                .poller
-                .register_leaf(event.fd, event.key, event.generation, interest);
+            // `register_leaf` is an `epoll_ctl(EPOLL_CTL_MOD)` syscall; skip
+            // it when the requested interest already matches what's
+            // registered (common across consecutive visits of the same
+            // leaf — e.g. several `Progress{interest: WRITE}` results in a
+            // row while draining a large batch).
+            if let Some(leaf) = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)
+                && leaf.registered_interest != interest
+            {
+                let _ = self
+                    .poller
+                    .register_leaf(event.fd, event.key, event.generation, interest);
+                leaf.registered_interest = interest;
+            }
         }
 
         Some((output_id, decision))
