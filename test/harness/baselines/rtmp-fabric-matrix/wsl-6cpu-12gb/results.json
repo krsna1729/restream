@@ -7,7 +7,7 @@
       "aggregates": [
         {
           "activeTranscoderBuffersPeak": 0,
-          "anonymousPeakKb": 47812,
+          "anonymousPeakKb": 46792,
           "avioHwmPeakKb": 0,
           "avioLenPeakKb": 0,
           "egressMix": "rtmp-source",
@@ -22,31 +22,31 @@
           "outputs": 10,
           "pipelineCountPeak": 1,
           "pipelines": 1,
-          "privateDirtyPeakKb": 47844,
-          "pssPeakKb": 69158,
-          "restreamCpuAvgPct": 6.82,
-          "restreamCpuPeakPct": 7.77,
-          "retainedPeakKb": 2684,
-          "rssAvgKb": 71802.0,
-          "rssPeakKb": 72724,
+          "privateDirtyPeakKb": 68172,
+          "pssPeakKb": 68994,
+          "restreamCpuAvgPct": 5.54,
+          "restreamCpuPeakPct": 6.83,
+          "retainedPeakKb": 2520,
+          "rssAvgKb": 71695.33,
+          "rssPeakKb": 72484,
           "sampleCount": 6,
           "scenario": "egress-growth-source-same",
-          "sharedCleanPeakKb": 4300,
-          "sourceRingPeakKb": 2684,
+          "sharedCleanPeakKb": 4192,
+          "sourceRingPeakKb": 2520,
           "stagesPeak": 0,
-          "totalCpuAvgPct": 6.82,
-          "totalCpuPeakPct": 7.77,
+          "totalCpuAvgPct": 5.54,
+          "totalCpuPeakPct": 6.83,
           "transcode": "no",
           "transcoderRingPeakKb": 0,
           "tsmuxRingPeakKb": 0,
-          "unattributedPeakKb": 70040
+          "unattributedPeakKb": 69997
         }
       ],
       "artifacts": {
-        "mediamtxLog": ".local/artifacts/rtmp-fabric-matrix/legacy/mediamtx.log",
-        "restreamLog": ".local/artifacts/rtmp-fabric-matrix/legacy/restream.log",
-        "samplesJsonl": ".local/artifacts/rtmp-fabric-matrix/legacy/samples.jsonl",
-        "summaryCsv": ".local/artifacts/rtmp-fabric-matrix/legacy/results.csv"
+        "mediamtxLog": ".local/artifacts/rtmp-fabric-matrix-final/legacy/mediamtx.log",
+        "restreamLog": ".local/artifacts/rtmp-fabric-matrix-final/legacy/restream.log",
+        "samplesJsonl": ".local/artifacts/rtmp-fabric-matrix-final/legacy/samples.jsonl",
+        "summaryCsv": ".local/artifacts/rtmp-fabric-matrix-final/legacy/results.csv"
       },
       "variant": "legacy"
     },
@@ -54,7 +54,7 @@
       "aggregates": [
         {
           "activeTranscoderBuffersPeak": 0,
-          "anonymousPeakKb": 46964,
+          "anonymousPeakKb": 49568,
           "avioHwmPeakKb": 0,
           "avioLenPeakKb": 0,
           "egressMix": "rtmp-source",
@@ -69,31 +69,31 @@
           "outputs": 10,
           "pipelineCountPeak": 1,
           "pipelines": 1,
-          "privateDirtyPeakKb": 46964,
-          "pssPeakKb": 68346,
-          "restreamCpuAvgPct": 6.98,
-          "restreamCpuPeakPct": 8.7,
-          "retainedPeakKb": 2520,
-          "rssAvgKb": 71194.67,
-          "rssPeakKb": 71860,
+          "privateDirtyPeakKb": 49600,
+          "pssPeakKb": 71650,
+          "restreamCpuAvgPct": 7.66,
+          "restreamCpuPeakPct": 8.78,
+          "retainedPeakKb": 2841,
+          "rssAvgKb": 74375.33,
+          "rssPeakKb": 75196,
           "sampleCount": 6,
           "scenario": "egress-growth-source-same",
-          "sharedCleanPeakKb": 4240,
-          "sourceRingPeakKb": 2520,
+          "sharedCleanPeakKb": 4272,
+          "sourceRingPeakKb": 2841,
           "stagesPeak": 0,
-          "totalCpuAvgPct": 6.98,
-          "totalCpuPeakPct": 8.7,
+          "totalCpuAvgPct": 7.66,
+          "totalCpuPeakPct": 8.78,
           "transcode": "no",
           "transcoderRingPeakKb": 0,
           "tsmuxRingPeakKb": 0,
-          "unattributedPeakKb": 69340
+          "unattributedPeakKb": 72409
         }
       ],
       "artifacts": {
-        "mediamtxLog": ".local/artifacts/rtmp-fabric-matrix/fabric/mediamtx.log",
-        "restreamLog": ".local/artifacts/rtmp-fabric-matrix/fabric/restream.log",
-        "samplesJsonl": ".local/artifacts/rtmp-fabric-matrix/fabric/samples.jsonl",
-        "summaryCsv": ".local/artifacts/rtmp-fabric-matrix/fabric/results.csv"
+        "mediamtxLog": ".local/artifacts/rtmp-fabric-matrix-final/fabric/mediamtx.log",
+        "restreamLog": ".local/artifacts/rtmp-fabric-matrix-final/fabric/restream.log",
+        "samplesJsonl": ".local/artifacts/rtmp-fabric-matrix-final/fabric/samples.jsonl",
+        "summaryCsv": ".local/artifacts/rtmp-fabric-matrix-final/fabric/results.csv"
       },
       "variant": "fabric"
     }

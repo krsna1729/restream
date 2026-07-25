@@ -363,8 +363,18 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         match command {
             // A wake both ends the sleep and schedules ready work: backends
             // drain feeds from ready visits, so the wake must pump the
-            // poll-and-visit chain, not just the media tick.
-            EgressCommand::FeedWake => EgressShardCommandEffect::ScheduleReady { count: 1 },
+            // poll-and-visit chain, not just the media tick. It must also
+            // still reach the backend's own `on_command`: a backend whose
+            // leaves can register for no I/O interest at all once their
+            // feed is fully drained (RTMP, unlike SRT's always-write
+            // registration) needs the wake itself to re-enqueue those
+            // leaves, since a bare `poll_leaves()` re-poll cannot discover
+            // readiness a leaf never registered for. SRT's backend treats
+            // `FeedWake` as a no-op today, so this is free for it.
+            EgressCommand::FeedWake => {
+                self.backend.on_command(EgressCommand::FeedWake);
+                EgressShardCommandEffect::ScheduleReady { count: 1 }
+            }
             EgressCommand::DrainShard(target) if target != self.shard_id => {
                 EgressShardCommandEffect::Continue
             }

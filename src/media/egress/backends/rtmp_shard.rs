@@ -315,7 +315,16 @@ pub(crate) struct RtmpShardBackend<
     resolve_completions: R,
     startup_source: S,
     feed: RingFeed,
-    budget: WorkBudget,
+    /// Per-visit limits. `WorkBudget::deadline` is an absolute `Instant`
+    /// computed at construction time — storing one `WorkBudget` and reusing
+    /// it for every visit (as this backend used to) makes `is_exhausted()`
+    /// permanently `true` once that one deadline passes, silently stopping
+    /// every leaf on this shard from reading or sending anything ever
+    /// again. A fresh `WorkBudget` is constructed from these fields for
+    /// every visit instead (see `visit_one_ready_leaf`).
+    budget_max_units: usize,
+    budget_max_bytes: usize,
+    budget_window: Duration,
     chunk_size: u32,
     leaves: Vec<Option<RtmpFabricLeaf>>,
     output_sockets: HashMap<OutputId, RtmpLeafSocket>,
@@ -354,12 +363,17 @@ where
         resolve_completions: R,
         startup_source: S,
     ) -> Self {
+        let budget_window = budget
+            .deadline
+            .saturating_duration_since(std::time::Instant::now());
         Self {
             poller,
             resolve_completions,
             startup_source,
             feed,
-            budget,
+            budget_max_units: budget.max_units,
+            budget_max_bytes: budget.max_bytes,
+            budget_window,
             chunk_size,
             leaves: Vec::new(),
             output_sockets: HashMap::new(),
@@ -507,6 +521,47 @@ where
         self.leaves.get_mut(key.0).and_then(Option::as_mut)
     }
 
+    /// Re-register every connected leaf's poller interest to `READ_WRITE`.
+    ///
+    /// A publishing leaf that has fully drained its feed reports
+    /// `EngineProgress::Needs(Interest::NONE)`, so its poller registration
+    /// stops watching for read or write readiness (see
+    /// `next_registration_interest`). Without this, a `FeedWake` — the
+    /// shard's only signal that new media may be available — would be a
+    /// silent no-op for that leaf: its epoll registration watches neither
+    /// direction, so no socket event ever fires for it again and it stops
+    /// sending forever even though the feed keeps growing.
+    ///
+    /// This widens the registration only; it deliberately does *not* push a
+    /// synthetic entry into `self.ready`. An earlier version did, and that
+    /// broke handshake/negotiation: those leaves always want *some* real
+    /// I/O, and `FeedWake` fires far more often than the shard's own idle
+    /// poll cycle, so a synthetic no-readiness event kept winning the race
+    /// to be visited before `poll_ready()` ever ran — starving every leaf
+    /// of the real epoll discovery it needed to make any progress at all.
+    /// Widening the registration is safe for every state (a leaf that only
+    /// needs one direction simply ignores the other), and the *next*
+    /// `on_ready()` call's real `poll_ready()` — not a synthetic event —
+    /// is what actually discovers the readiness and visits the leaf.
+    fn refresh_registrations_for_feed_wake(&mut self) {
+        let sockets: Vec<RtmpLeafSocket> = self.output_sockets.values().copied().collect();
+        for socket_ref in sockets {
+            let Some(leaf) = self
+                .leaves
+                .get_mut(socket_ref.key.0)
+                .and_then(Option::as_mut)
+            else {
+                continue;
+            };
+            let _ = self.poller.register_leaf(
+                socket_ref.fd,
+                socket_ref.key,
+                leaf.common.generation,
+                TcpEgressInterest::READ_WRITE,
+            );
+        }
+    }
+
     fn poll_ready(&mut self) {
         if self.poller.poll_leaves(0, &mut self.poll_buffer).is_err() {
             return;
@@ -530,7 +585,11 @@ where
     /// across handshake/negotiation/publishing — see module docs).
     fn visit_one_ready_leaf(&mut self) -> Option<(OutputId, VisitDecision)> {
         let event = self.ready.pop_front()?;
-        let budget = self.budget;
+        let budget = WorkBudget::new(
+            self.budget_max_units,
+            self.budget_max_bytes,
+            self.budget_window,
+        );
         let feed = &self.feed;
         let leaf = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)?;
         let output_id = leaf.common.output_id.clone();
@@ -576,25 +635,40 @@ where
             EgressCommand::Remove(output_id) => {
                 self.remove_leaf_by_output(&output_id);
             }
-            EgressCommand::FeedWake | EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {}
+            EgressCommand::FeedWake => self.refresh_registrations_for_feed_wake(),
+            EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {}
         }
         EgressShardCommandEffect::Continue
     }
 
+    /// Visit one ready leaf, then decide whether to ask for another
+    /// `on_ready` pass immediately.
+    ///
+    /// `poll_ready()` can enqueue several ready leaves from one poll; if
+    /// the leaf visited *this* call suspends (needs more I/O readiness) or
+    /// closes, that alone must not stop the shard from draining the rest
+    /// of an already-nonempty `self.ready` queue — those leaves were
+    /// already reported ready and would otherwise sit stranded until some
+    /// unrelated future command or feed wake happened to touch this shard
+    /// again. Requeuing whenever `self.ready` is still nonempty (in
+    /// addition to the existing "this leaf wants to continue" case) fixes
+    /// that: a blocked leaf never blocks its already-ready neighbors.
     fn on_ready(&mut self) -> EgressShardCommandEffect {
         if self.ready.is_empty() {
             self.poll_ready();
         }
 
-        match self.visit_one_ready_leaf() {
-            Some((_, decision)) if requeue_after_rtmp_visit(decision) => {
-                EgressShardCommandEffect::ScheduleReady { count: 1 }
-            }
-            Some((output_id, VisitDecision::Close)) => {
-                self.remove_leaf_by_output(&output_id);
-                EgressShardCommandEffect::Continue
-            }
-            _ => EgressShardCommandEffect::Continue,
+        let outcome = self.visit_one_ready_leaf();
+        if let Some((output_id, VisitDecision::Close)) = &outcome {
+            self.remove_leaf_by_output(output_id);
+        }
+
+        let leaf_wants_more =
+            matches!(&outcome, Some((_, decision)) if requeue_after_rtmp_visit(*decision));
+        if leaf_wants_more || !self.ready.is_empty() {
+            EgressShardCommandEffect::ScheduleReady { count: 1 }
+        } else {
+            EgressShardCommandEffect::Continue
         }
     }
 

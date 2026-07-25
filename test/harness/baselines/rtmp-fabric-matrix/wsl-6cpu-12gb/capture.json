@@ -1,6 +1,6 @@
 {
   "workload": "egress-growth-source-same (RTMP source outputs, isolated lifecycle)",
-  "commit": "ab7c6f45bb9b75fdeec7f91585aa70650c30e80",
+  "commit": "recorded from the shard-liveness-fix commit on feat/egress-fabric (the one that rewrites this file)",
   "date": "2026-07-25",
   "host": "WSL2, 6 CPUs, 12GB RAM",
   "mode": "rtmp-fabric-matrix",
@@ -12,20 +12,20 @@
   "result": {
     "legacy": {
       "outputs": 10,
-      "restreamCpuAvgPct": 6.82,
-      "restreamCpuPeakPct": 7.77,
-      "rssAvgKb": 71802,
-      "rssPeakKb": 72724
+      "restreamCpuAvgPct": 5.54,
+      "restreamCpuPeakPct": 6.83,
+      "rssAvgKb": 71695.33,
+      "rssPeakKb": 72484
     },
     "fabric": {
       "outputs": 10,
-      "restreamCpuAvgPct": 6.98,
-      "restreamCpuPeakPct": 8.70,
-      "rssAvgKb": 71194.67,
-      "rssPeakKb": 71860
+      "restreamCpuAvgPct": 7.66,
+      "restreamCpuPeakPct": 8.78,
+      "rssAvgKb": 74375.33,
+      "rssPeakKb": 75196
     }
   },
-  "comparison": "At N=10 RTMP-source outputs, fabric CPU (6.98% avg / 8.70% peak) and legacy CPU (6.82% avg / 7.77% peak) are within noise of each other -- roughly at parity, not the multi-x regression the SRT fabric showed pre-batching-fix (see egress-phase0/wsl-6cpu-12gb/w2-fabric-confirmed). RSS is essentially identical (fabric slightly lower). Both variants delivered all 10 outputs to progress within their timeout in both runs -- media correctness confirmed at this scale, not just started.",
-  "scope": "This is a smoke-scale A/B (N=10, default RTMP_FABRIC_MATRIX_EGRESS_COUNT), proving the fabric path works correctly under real live-process conditions (real mediamtx receiver, real ffmpeg publisher, real restream server) and giving an early CPU/RSS read -- not the exhaustive 1,000+-output parity proof docs/egress-implementation.md Phase 5's exit gate ultimately requires before a default-mode flip. Re-run with RTMP_FABRIC_MATRIX_EGRESS_COUNT set higher (and ideally on a host provisioned for that scale) for the full proof.",
+  "comparison": "Fabric CPU (7.66% avg / 8.78% peak) now runs genuinely higher than legacy (5.54% avg / 6.83% peak) -- fabric costs ~1.4x legacy CPU at this N=10 scale, RSS ~1.04x. This *replaces* an earlier capture at this same path that showed near-parity CPU (6.98% vs 6.82%): that capture was invalid. It was recorded before three shard-liveness bugs were found and fixed (see docs/egress-implementation.md Phase 5 status and the commit that replaced this file), the most severe of which made fabric leaves send an initial burst then go completely idle for the rest of the measurement window -- satisfying the harness's 'any bytes increased' progress check while doing almost no ongoing work, which made the fabric look artificially cheap. This capture is the first one taken after fixing all three bugs and confirming (via mediamtx receiving continuous data, not just an initial burst) that the fabric is actually doing its job for the full window.",
+  "scope": "This is a smoke-scale A/B (N=10, default RTMP_FABRIC_MATRIX_EGRESS_COUNT), proving the fabric path works correctly under real live-process conditions and giving an early CPU/RSS read -- not the exhaustive 1,000+-output parity proof docs/egress-implementation.md Phase 5's exit gate ultimately requires before a default-mode flip. Re-run with RTMP_FABRIC_MATRIX_EGRESS_COUNT set higher (and ideally on a host provisioned for that scale) for the full proof.",
   "deviations": "Isolated lifecycle (one mediamtx+restream stack per variant, not shared); single measurement point per variant rather than a growth curve; reduced scale (10, not 1,000+) per host class, matching the same host-class caveat egress-phase0's own captures record."
 }

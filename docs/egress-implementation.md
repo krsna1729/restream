@@ -1126,6 +1126,92 @@ Current branch status:
     tuning rather than adding a duplicate config knob; split them later
     if tuning needs diverge.
 
+#### Three shard-liveness bugs found and fixed after an external code review
+
+An external review of this branch (static analysis, no build available in
+that environment) flagged a specific, concrete liveness concern: once a
+publishing leaf fully drains its feed it reports
+`EngineProgress::Needs(Interest::NONE)`, and nothing seemed to re-wake it
+when new media arrived. Reproducing that live (running the first
+`rtmp-fabric-matrix` capture at a slightly larger scale) surfaced it
+immediately as a real hang, and chasing it down turned up two more bugs of
+increasing subtlety. All three are fixed; the fixes are covered by a new
+deterministic regression test plus the live harness genuinely completing
+(not just returning quickly — see below).
+
+1. **`WorkBudget` reused forever instead of per visit.**
+   `WorkBudget::deadline` is an absolute `Instant`, computed once in
+   `WorkBudget::new()`. Both `RtmpShardBackend` and (identically)
+   `SrtShardBackend` stored the `WorkBudget` passed at construction time in
+   a field and reused it, unchanged, for every visit for the shard's
+   entire lifetime — `let budget = self.budget;`. Once
+   `visit_max_us` (2,000μs by default) elapsed after the shard was
+   created, `budget.is_exhausted()` became permanently `true`, and
+   `MediaPublisher::advance`'s exhaustion check runs *before* it ever
+   reads the feed — so every leaf on the shard silently stopped reading or
+   sending anything, forever, about 2ms after the shard started. Fixed in
+   `RtmpShardBackend` by storing the budget's parameters
+   (`max_units`/`max_bytes`/window) instead of the `WorkBudget` itself,
+   and constructing a fresh one (`WorkBudget::new(..)`, which computes a
+   new `Instant::now() + window` deadline) for every visit. **`SrtShardBackend`
+   has the identical bug and is not yet fixed** — SRT's live captures
+   happened not to expose it as starkly (SRT always registers write
+   interest, so a leaf kept getting *visited*, it just silently did
+   nothing productive once the budget went stale), but the same fix
+   belongs there.
+2. **`EgressCommand::FeedWake` never reached `RtmpShardBackend::on_command`
+   at all.** `EgressShardRuntime::process_command`
+   (`src/media/egress/shard.rs`) intercepts `FeedWake` at the generic
+   runtime layer and returns `ScheduleReady` directly, without ever
+   calling `self.backend.on_command(command)` — so a backend-level fix to
+   `on_command`'s `FeedWake` arm is dead code in production regardless of
+   what it does. Fixed by having the runtime call
+   `self.backend.on_command(EgressCommand::FeedWake)` *in addition to*
+   scheduling ready work; SRT's backend already treats `FeedWake` as a
+   no-op, so this is free for it.
+3. **The first fix attempt for (2) introduced a new, subtler bug.**
+   The natural first fix was to have `RtmpShardBackend::on_command`'s
+   `FeedWake` arm push a synthetic no-readiness `TcpReadyLeaf` into the
+   ready queue for every idle leaf, so a stuck `Interest::NONE`-registered
+   leaf would get a visit. That is wrong: `FeedWake` fires far more often
+   than the shard's own idle poll cycle (every publish, not every ~25ms),
+   so the synthetic no-I/O event kept winning the race to be visited
+   *before* a real `poll_leaves()` ever ran — starving every leaf,
+   including ones still mid-handshake or mid-negotiation that always need
+   *some* real I/O, of the genuine epoll discovery required to make any
+   progress. Live-testing this version showed leaves connecting
+   (logged) and then never sending a single handshake byte
+   (`mediamtx.log` stayed completely empty). The correct fix instead
+   re-registers the poller interest for every connected leaf to
+   `READ_WRITE` on `FeedWake` — widening it is always safe, since an
+   engine that only needs one direction simply ignores readiness it
+   didn't ask for — and pushes nothing synthetic into the ready queue; the
+   *next* real `poll_leaves()` call is what actually discovers the
+   readiness and visits the leaf.
+
+New test: `feed_wake_delivers_media_published_after_the_leaf_goes_idle`
+(`rtmp_shard_tests.rs`) drains the feed, drives past publish acceptance,
+confirms nothing further happens with an empty feed, *then* publishes a
+new unit and delivers `FeedWake`, asserting the server actually receives
+it — the second-packet-after-idle scenario the original review pointed at
+directly. It fails without fix (1) or (2) (with either bug present, the
+5-second deadline in the test trips) and passes with all three fixed.
+
+**This also invalidated the first `rtmp-fabric-matrix` capture.** That
+capture (N=10, recorded before these fixes) showed fabric CPU/RSS at
+near-parity with legacy. With bug (1) in place, fabric leaves sent their
+startup burst, satisfied the harness's "did bytes increase" progress
+check, and then did almost no further work for the rest of the
+measurement window — making the fabric look artificially cheap, not
+because it performed well but because it had already stopped working.
+The corrected capture (same scale, all three bugs fixed, confirmed via
+`mediamtx.log` showing continuous received data rather than one burst)
+shows fabric CPU genuinely higher than legacy — see
+`test/harness/baselines/rtmp-fabric-matrix/wsl-6cpu-12gb/capture.json`
+for the numbers. That is the expected, honest starting point (matching
+the SRT fabric's own pre-optimization story in Phase 4 above), not a
+regression from the invalid reading.
+
 ### RTMPS
 
 Drive TLS incrementally:
