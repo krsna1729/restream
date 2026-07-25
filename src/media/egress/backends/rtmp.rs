@@ -365,6 +365,22 @@ impl MediaPublisher {
         let mut total_units = 0usize;
 
         loop {
+            // Checked at the top of every pass, not just before a feed read:
+            // `current_batch` (one encoded feed unit's wire packets — e.g. a
+            // large keyframe split across many small RTMP chunks) used to
+            // drain and write unconditionally once started, since the old
+            // single budget check only sat right before `feed.read_from`.
+            // One outsized unit could then fully flush in one visit,
+            // ignoring `budget.max_bytes`/the visit deadline and starving
+            // every other leaf on the shard for that visit's duration —
+            // exactly the per-visit fairness `WorkBudget` exists to bound.
+            // Cutting off here instead just defers the rest to the next
+            // visit (`Self::finish` reports `Progress` if any bytes/units
+            // already flowed this pass, which reschedules promptly).
+            if budget.is_exhausted(total_units, total_bytes) {
+                return Self::finish(total_bytes, total_units, Interest::READ_WRITE);
+            }
+
             if let Some(pending) = &mut self.pending_write {
                 if !readiness.writable {
                     return Self::finish(total_bytes, total_units, Interest::READ_WRITE);
@@ -467,10 +483,6 @@ impl MediaPublisher {
                         });
                     }
                 }
-            }
-
-            if budget.is_exhausted(total_units, total_bytes) {
-                return Self::finish(total_bytes, total_units, Interest::READ_WRITE);
             }
 
             match feed.read_from(*cursor, ReadBudget::new(1, budget.max_bytes)) {

@@ -1288,6 +1288,37 @@ loop does not terminate (nothing ever triggers a write, so the close is
 never observed) and the test times out; with the fix it reliably ends in
 well under the deadline.
 
+#### The visit budget was not enforced on the write side
+
+The same audit that flagged the missing control-channel reads also flagged
+that `MediaPublisher::advance`'s only `budget.is_exhausted` check sat
+immediately before `feed.read_from` — nowhere on the write side. Draining
+`current_batch` (one encoded feed unit's wire packets — e.g. a large
+keyframe split across several RTMP chunks, or the startup batch's
+metadata/sequence-header packets) and completing `pending_write` both loop
+back (`continue`) without ever consulting the budget, so a single
+outsized unit could fully flush in one visit regardless of
+`budget.max_bytes` or the visit deadline — the exact per-visit fairness
+`WorkBudget` exists to bound, monopolizing the shard thread and starving
+every other leaf on it for that visit's duration. Fixed by moving the
+check to the top of the loop, so it gates the write path the same way it
+already gated the read path; a leaf that gets cut off mid-batch reports
+`Progress` for whatever it already flushed (not `Needs`), which reschedules
+it promptly on the next visit instead of losing the partial work.
+
+New test
+`advance_stops_draining_the_startup_batch_once_the_budget_is_exhausted`
+seeds a startup batch with three queued packets (metadata, video sequence
+header, audio sequence header), drives to `Publishing`, then calls
+`advance` once with a budget that permits the first write but is exhausted
+immediately after (`max_bytes: 1`), and asserts — via a peer that reports
+its own running byte count, isolated to post-publish-acceptance traffic —
+that the peer received only what that one `advance` call reported as
+`Progress`, not the full batch. Verified as a real regression test by
+temporarily reverting the fix and confirming the test fails (730 bytes
+observed by the peer in one visit against an expected 194); restored and
+confirmed green.
+
 ### RTMPS
 
 Drive TLS incrementally:

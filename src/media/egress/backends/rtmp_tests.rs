@@ -217,6 +217,109 @@ fn run_full_server_peer_until_video(
     }
 }
 
+/// Real, synchronous server peer that completes handshake, connect, and
+/// publish negotiation, then keeps reading indefinitely (unlike
+/// [`run_full_server_peer`], which returns — and closes its socket —
+/// immediately after accepting the publish request), reporting the running
+/// total of bytes read after every read on `progress_tx`. Used to observe
+/// how much of a queued write batch one client `advance()` call actually
+/// flushes, without a peer-side close masking it as a write error.
+fn run_full_server_peer_reporting_bytes_read(
+    mut stream: TcpStream,
+    progress_tx: std::sync::mpsc::Sender<usize>,
+) {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    let mut handshake = PeerHandshake::new(rml_rtmp::handshake::PeerType::Server);
+    let mut buf = [0u8; 4096];
+    let remaining;
+    loop {
+        let n = stream.read(&mut buf).expect("server handshake read");
+        assert_ne!(n, 0);
+        match handshake.process_bytes(&buf[..n]).unwrap() {
+            PeerResult::InProgress { response_bytes } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+            }
+            PeerResult::Completed {
+                response_bytes,
+                remaining_bytes,
+            } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+                remaining = remaining_bytes;
+                break;
+            }
+        }
+    }
+
+    let config = ServerSessionConfig::new();
+    let (mut session, initial_results) = ServerSession::new(config).unwrap();
+    for result in initial_results {
+        if let ServerSessionResult::OutboundResponse(packet) = result {
+            stream.write_all(&packet.bytes).unwrap();
+        }
+    }
+
+    // Bytes read before publish acceptance are handshake/connect/publish
+    // negotiation traffic, not the caller's write batch under test — only
+    // count and report bytes read from this point on.
+    let mut total = 0usize;
+    let mut publish_accepted = false;
+    let mut pending_input = remaining;
+    loop {
+        if !pending_input.is_empty() {
+            if publish_accepted {
+                total += pending_input.len();
+                let _ = progress_tx.send(total);
+            }
+            let input = std::mem::take(&mut pending_input);
+            let results = session.handle_input(&input).unwrap();
+            for result in results {
+                match result {
+                    ServerSessionResult::OutboundResponse(packet) => {
+                        stream.write_all(&packet.bytes).unwrap();
+                    }
+                    ServerSessionResult::RaisedEvent(ServerSessionEvent::ConnectionRequested {
+                        request_id,
+                        ..
+                    }) => {
+                        for response in session.accept_request(request_id).unwrap() {
+                            if let ServerSessionResult::OutboundResponse(packet) = response {
+                                stream.write_all(&packet.bytes).unwrap();
+                            }
+                        }
+                    }
+                    ServerSessionResult::RaisedEvent(
+                        ServerSessionEvent::PublishStreamRequested { request_id, .. },
+                    ) => {
+                        for response in session.accept_request(request_id).unwrap() {
+                            if let ServerSessionResult::OutboundResponse(packet) = response {
+                                stream.write_all(&packet.bytes).unwrap();
+                            }
+                        }
+                        publish_accepted = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let n = match stream.read(&mut buf) {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+        if n == 0 {
+            return;
+        }
+        pending_input = buf[..n].to_vec();
+    }
+}
+
 fn dummy_feed() -> RingFeed {
     RingFeed::new(
         Arc::new(crate::media::ring_buffer::RingBuffer::new(4)),
@@ -492,6 +595,107 @@ fn engine_publishes_a_raw_keyframe_once_publish_is_accepted() {
         }
     }
 
+    server.join().unwrap();
+}
+
+#[test]
+fn advance_stops_draining_the_startup_batch_once_the_budget_is_exhausted() {
+    // Regression test: a `WorkBudget` that is already exhausted after the
+    // first queued wire packet must stop `advance` from draining the rest
+    // of `current_batch` in the same visit. The startup batch here queues
+    // three packets (metadata, video sequence header, audio sequence
+    // header) before any feed unit is ever read, so this exercises the
+    // write path directly — the budget check used to sit only right before
+    // `feed.read_from`, so a queued batch this size drained unconditionally
+    // in one visit regardless of `budget.max_bytes`.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (progress_tx, progress_rx) = std::sync::mpsc::channel::<usize>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_full_server_peer_reporting_bytes_read(stream, progress_tx);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
+
+    let mut metadata = StreamMetadata::new();
+    metadata.video_width = Some(1920);
+    metadata.video_height = Some(1080);
+    metadata.encoder = Some("restream-test".repeat(8));
+    let startup = RtmpPublishStartup {
+        publish_metadata: Some(metadata),
+        startup_video_sequence_header: Some(Bytes::from(vec![0xAB; 256])),
+        startup_audio_sequence_header: Some(Bytes::from(vec![0xCD; 256])),
+        ..RtmpPublishStartup::default()
+    };
+    let mut engine = RtmpFabricEngine::new_client(test_parts(), 4096, false, startup).unwrap();
+    let feed = dummy_feed();
+    let mut cursor = FeedCursor::new(0, 0);
+
+    drive_to(
+        &mut engine,
+        &mut client_stream,
+        &feed,
+        &mut cursor,
+        RtmpFabricEngine::is_publish_accepted,
+    );
+    assert!(engine.is_publish_accepted());
+
+    // A budget that allows the very first write but is exhausted the
+    // instant it reports any bytes back (`is_exhausted` is `consumed >=
+    // max`, so `max_bytes: 1` still permits one write from zero, then
+    // trips on the very next loop pass).
+    let tiny_budget = WorkBudget::new(usize::MAX, 1, Duration::from_secs(60));
+    let progress = engine.advance(
+        &mut client_stream,
+        Readiness::BOTH,
+        &feed,
+        &mut cursor,
+        tiny_budget,
+    );
+    let bytes_in_one_visit = match progress {
+        EngineProgress::Progress { bytes, .. } => bytes,
+        other => panic!("expected bounded progress from one visit, got {other:?}"),
+    };
+
+    // Give the peer a moment to actually receive whatever was sent, then
+    // confirm it did not receive the full three-packet batch in one go —
+    // the fix must have cut the visit off after (at most) one wire packet.
+    let received = progress_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("peer never received any bytes from the budgeted visit");
+    assert_eq!(
+        received, bytes_in_one_visit,
+        "peer-observed bytes must match what the single budgeted visit reported"
+    );
+
+    let full_batch_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < full_batch_deadline,
+            "engine never finished draining the rest of the startup batch"
+        );
+        let full_budget = WorkBudget::new(usize::MAX, usize::MAX, Duration::from_secs(60));
+        let _ = engine.advance(
+            &mut client_stream,
+            Readiness::BOTH,
+            &feed,
+            &mut cursor,
+            full_budget,
+        );
+        if let Ok(total) = progress_rx.try_recv() {
+            assert!(
+                total > bytes_in_one_visit,
+                "expected the remaining batch to flush across later visits"
+            );
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    drop(client_stream);
     server.join().unwrap();
 }
 
