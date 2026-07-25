@@ -1663,17 +1663,49 @@ benchmark-driven decisions) and why that tier fits.
    family (as the hot-path audit itself recommends) to confirm which of
    these actually show up before spending implementation time; each
    confirmed item is then an independently scoped, `sonnet`-sized fix
-   with its own before/after benchmark.
+   with its own before/after benchmark. **Checked in this session:**
+   `perf` is unusable in this sandbox
+   (`kernel.perf_event_paranoid` is `4`, the "disabled for everyone
+   without `CAP_PERFMON`" level, and changing it needs root the agent
+   doesn't have) — this profiling step genuinely needs a differently
+   provisioned host, confirming the earlier assessment rather than just
+   asserting it. One item *didn't* need profiling to justify, though,
+   because it's not "maybe helps," it's a proven duplicate syscall: on
+   the `EgressCommand::FeedWake` path specifically (fires far more often
+   than the shard's idle poll cycle — every publish, not every ~25ms),
+   `refresh_registrations_for_feed_wake` called `register_leaf` for
+   *every* connected leaf on *every* wake, even ones already
+   `READ_WRITE`-registered from a previous wake. Fixed with the same
+   skip-when-unchanged check `visit_one_ready_leaf` already uses; new
+   test `refresh_registrations_for_feed_wake_skips_leaves_already_read_write`
+   proves it (drives to publish acceptance, sends one `FeedWake` — must
+   register, since it's the first widen from the connect-time `WRITE` —
+   then three more, asserting the call count doesn't move), verified
+   as a real regression by temporarily removing the skip check and
+   confirming the test fails (18 calls vs the expected 15, i.e. the
+   redundant calls happened). Full RTMP suite (31 tests), clippy, fmt,
+   source-audit, and docs checks pass.
 4. **RTMPS rustls-internal buffer accounting (rest of task #14) —
    `sonnet` for the accounting addition once a measurement approach is
    picked.** The wire-level base case is now wired
    (`MediaPublisher::pending_bytes`); adding rustls-internal
    plaintext/encrypted buffer bytes on top needs a way to query
-   `rustls::ClientConnection`'s internal buffer occupancy (no such
-   accessor is currently used in this codebase — check
-   `rustls::ConnectionCommon`'s public API for what it actually
-   exposes, e.g. `wants_write()`/write-buffer-size style hooks, before
-   assuming a specific mechanism).
+   `rustls::ClientConnection`'s internal buffer occupancy. **Checked in
+   this session:** read `rustls` 0.23.41's actual public API
+   (`ConnectionCommon` in `conn.rs`) rather than assuming — it exposes
+   `set_buffer_limit(&mut self, limit: Option<usize>)` (a *setter* for
+   the cap on `sendable_plaintext`/`sendable_tls`, default 64KB) but no
+   getter for current occupancy at all. So there is no direct "how many
+   bytes are buffered right now" accessor to call; the two realistic
+   options are (a) call `set_buffer_limit` to a known cap and treat
+   "the next write returns a short count / would-block" as a coarse
+   "near the cap" signal rather than a precise byte count, or (b) track
+   plaintext bytes handed to `Connection::writer` ourselves on our side
+   of the API (we already know what we pass in) as an upper-bound
+   estimate, accepting it won't reflect exactly what rustls has encoded
+   into TLS records yet. Neither is "the precise number," so whichever
+   is picked needs to be documented as an estimate, not corrected later
+   as if it were exact.
 5. **`is_limit_exceeded()` enforcement (also part of task #14) —
    `opus`.** Currently unimplemented for every protocol: nothing calls
    it, so no leaf is ever suspended or closed for exceeding its byte

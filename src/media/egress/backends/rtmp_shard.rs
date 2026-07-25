@@ -564,6 +564,17 @@ where
             else {
                 continue;
             };
+            // `FeedWake` fires far more often than the shard's own idle poll
+            // cycle (every publish, not every ~25ms — see the doc comment
+            // above), so this loop runs a lot; skip the `epoll_ctl` syscall
+            // for any leaf that's already registered `READ_WRITE`, whether
+            // because a previous `FeedWake` already widened it or because
+            // it's actively publishing and already needs both directions.
+            // Same skip-when-unchanged reasoning as
+            // `visit_one_ready_leaf`'s `register_leaf` call.
+            if leaf.registered_interest == TcpEgressInterest::READ_WRITE {
+                continue;
+            }
             let _ = self.poller.register_leaf(
                 socket_ref.fd,
                 socket_ref.key,

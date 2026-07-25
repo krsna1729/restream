@@ -650,3 +650,76 @@ fn visit_one_ready_leaf_skips_reregistration_when_interest_is_unchanged() {
 
     server.join().unwrap();
 }
+
+#[test]
+fn refresh_registrations_for_feed_wake_skips_leaves_already_read_write() {
+    // Regression test: `FeedWake` fires far more often than the shard's own
+    // idle poll cycle (every publish, not every ~25ms), so
+    // `refresh_registrations_for_feed_wake` calling `register_leaf`
+    // unconditionally for every connected leaf on every `FeedWake` -- even
+    // one already registered `READ_WRITE` from a previous `FeedWake` -- is
+    // a wasted `epoll_ctl` syscall on a genuinely hot path.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_accepting_server_peer(stream, done_tx);
+    });
+
+    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
+    let register_calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let poller = CountingPoller {
+        inner: TcpEgressPoller::new(4).unwrap(),
+        register_calls: register_calls.clone(),
+    };
+    let mut backend = RtmpShardBackend::new(
+        poller,
+        RingFeed::new(ring, Arc::new(FeedEpoch::new())),
+        budget(),
+        4096,
+    );
+    let output_id = OutputId::new("out-1");
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-1",
+        &format!("rtmp://{}/live/key", addr),
+        1,
+    )));
+    backend.complete_pending_connect(&output_id, 1, addr);
+
+    let publish_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < publish_deadline,
+            "leaf never reached publish acceptance"
+        );
+        if done_rx.try_recv().is_ok() {
+            break;
+        }
+        backend.on_ready();
+        thread::sleep(Duration::from_millis(1));
+    }
+    server.join().unwrap();
+
+    // The first `FeedWake` widens the leaf's registration to `READ_WRITE`
+    // (it starts `WRITE`-registered at connect time, per
+    // `refresh_registrations_for_feed_wake`'s doc comment) -- that's a real
+    // change, so it must call `register_leaf`.
+    backend.on_command(EgressCommand::FeedWake);
+    let calls_after_first_wake = register_calls.lock().unwrap().len();
+    assert!(
+        calls_after_first_wake > 0,
+        "the first FeedWake must widen registration and call register_leaf"
+    );
+
+    // Every subsequent FeedWake with nothing else changing must be a no-op:
+    // the leaf is already READ_WRITE.
+    for _ in 0..3 {
+        backend.on_command(EgressCommand::FeedWake);
+    }
+    assert_eq!(
+        register_calls.lock().unwrap().len(),
+        calls_after_first_wake,
+        "repeated FeedWake calls must not re-register an already-READ_WRITE leaf"
+    );
+}
