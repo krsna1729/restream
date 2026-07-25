@@ -51,10 +51,10 @@ use config::{
 #[path = "resource_sweep/measurement.rs"]
 mod measurement;
 pub(super) use measurement::ffmpeg_children_stats;
+pub(crate) use measurement::read_proc_status_kb_checked;
 use measurement::{
     ResourceAggregate, ResourceScenarioMeta, csv_escape, read_proc_stat_ticks,
-    read_proc_status_kb_checked, resource_aggregate_json, sample_resource_window,
-    write_resource_sweep_csv,
+    resource_aggregate_json, sample_resource_window, write_resource_sweep_csv,
 };
 
 /// Live process stack shared by a resource-sweep sample.

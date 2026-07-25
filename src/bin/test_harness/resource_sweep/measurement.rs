@@ -322,7 +322,7 @@ fn read_proc_status_kb(pid: u32, key: &str) -> Result<u64, String> {
     Err(format!("{key} missing in /proc/{pid}/status"))
 }
 
-pub(super) fn read_proc_status_kb_checked(
+pub(crate) fn read_proc_status_kb_checked(
     pid: u32,
     key: &str,
     log_path: &Path,

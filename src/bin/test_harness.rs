@@ -223,6 +223,7 @@ async fn run() -> Result<(), String> {
             "preflight" => preflight_check().await,
             "fault.egress-retry" => fault_egress_retry().await,
             "fault.output-stall" => fault_output_stall().await,
+            "fault.srt-output-stall" => fault_srt_egress_stalled_destination().await,
             "fault.resilience" => fault_resilience().await,
             "file.live-edge" => file_live_edge().await,
             "signal.control" => signal_control().await,

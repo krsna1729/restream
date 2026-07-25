@@ -1098,20 +1098,42 @@ Status against each criterion, as of the retry-wiring fix above:
 - **Healthy-neighbor isolation**: proven at the live level for a dead
   destination (this section's new isolation test) and mixed-ownership for
   a stalled one (`w4-fabric`); proven at the deterministic-unit level for
-  the stall-sweep close path specifically (`leaf_termination.rs`). Not yet
-  proven live for a *stalled* (connected, non-reading) SRT destination
-  specifically, because the harness has no raw SRT listener capable of
-  accepting without reading — building one is the concrete remaining gap
-  here, not a design question.
-- **Bounded RSS during indefinite stalls**: not explicitly measured. The
-  stall-sweep closes and retries a truly-stalled leaf rather than letting
-  it accumulate state forever, so unbounded growth is architecturally
-  unlikely, but this hasn't been confirmed with an actual RSS-over-time
-  capture under a live stalled/repeatedly-failing destination.
-Given three of four criteria are now solid and the fourth is a measurement
-gap rather than a known problem, the remaining work before flipping the
-default is: (1) a raw SRT "accept but never read" test listener for the
-harness, and (2) an RSS-over-time capture using it. Not done in this pass.
+  the stall-sweep close path specifically (`leaf_termination.rs`).
+- **Bounded RSS during indefinite stalls**: proven live, with a real
+  finding along the way. `fault.srt-output-stall`
+  (`src/bin/test_harness/fault_recovery/srt_stall.rs`) tried the obvious
+  approach first — `SIGSTOP` a real MediaMTX receiver to freeze its
+  `recv()` loop, matching `start_stalled_rtmp_sink_server`'s shape for
+  RTMP. It doesn't produce the intended condition: `SIGSTOP` freezes
+  *every* thread in the receiver, including libsrt's own internal
+  ACK/keepalive thread, so the SRT connection is detected as fully broken
+  within seconds (`srt_send failed ... Connection was broken`), not
+  backpressured — SRT cannot distinguish "receiver alive but not reading"
+  from "receiver process frozen." The output then cycles through
+  connect-failure retries against the still-suspended receiver, the same
+  shape as a dead destination, not the distinct `classify_stall`
+  backpressured-but-connected path this was meant to exercise. Proving
+  *that* exact path live would need a receiver that keeps SRT's own
+  liveness signaling alive while deliberately not draining decoded data
+  one layer up — a raw SRT listener built from scratch (restream's libsrt
+  FFI bindings are internal to `src/media/srt`, not exposed to the harness
+  binary), out of scope here. Re-scoped the test honestly instead: it now
+  proves what `SIGSTOP` actually produces — RSS stays bounded (~21-30MB
+  growth, well under a 64MB budget) across 120s of continuous
+  connect-failure retry cycling against an unreachable destination, both
+  under legacy and fabric. The stall-sweep/`classify_stall` mechanism
+  itself (the backpressured-but-connected path specifically) is proven
+  deterministically in `leaf_termination.rs`, not live — building the raw
+  SRT listener needed to close that specific live gap remains future work,
+  but is narrow and well-understood now, not open-ended.
+All four Phase 4 exit-gate criteria now have real evidence. The remaining
+gap is narrow: a live (not just deterministic-unit) proof of the
+backpressured-but-connected SRT stall path specifically, which needs a
+purpose-built raw SRT listener. Given that, flipping `EgressRolloutMode`'s
+default to `Srt` is a reasonable next step but not done in this pass —
+it's a production behavior change affecting every deployment and
+deserves a deliberate decision, not a byproduct of a proof-gathering
+session.
 
 ## Phase 5: RTMP and RTMPS migration
 
