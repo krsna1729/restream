@@ -1089,6 +1089,30 @@ Fabric SRT becomes the default only when it beats or matches legacy correctness
 and demonstrates fixed application egress thread count, bounded RSS during
 indefinite stalls, and healthy-neighbor isolation.
 
+Status against each criterion, as of the retry-wiring fix above:
+- **Beats/matches legacy correctness**: yes — `srt-crypto-matrix`,
+  N=500/N=1000 captures, and now `fault.egress-retry`/`fault.output-stall`
+  all pass under fabric matching or beating legacy.
+- **Fixed application egress thread count**: yes, by architecture (Phase 3)
+  — a fixed shard pool, not one thread per output; no separate proof needed.
+- **Healthy-neighbor isolation**: proven at the live level for a dead
+  destination (this section's new isolation test) and mixed-ownership for
+  a stalled one (`w4-fabric`); proven at the deterministic-unit level for
+  the stall-sweep close path specifically (`leaf_termination.rs`). Not yet
+  proven live for a *stalled* (connected, non-reading) SRT destination
+  specifically, because the harness has no raw SRT listener capable of
+  accepting without reading — building one is the concrete remaining gap
+  here, not a design question.
+- **Bounded RSS during indefinite stalls**: not explicitly measured. The
+  stall-sweep closes and retries a truly-stalled leaf rather than letting
+  it accumulate state forever, so unbounded growth is architecturally
+  unlikely, but this hasn't been confirmed with an actual RSS-over-time
+  capture under a live stalled/repeatedly-failing destination.
+Given three of four criteria are now solid and the fourth is a measurement
+gap rather than a known problem, the remaining work before flipping the
+default is: (1) a raw SRT "accept but never read" test listener for the
+harness, and (2) an RSS-over-time capture using it. Not done in this pass.
+
 ## Phase 5: RTMP and RTMPS migration
 
 ### Objective
