@@ -1898,27 +1898,31 @@ benchmark-driven decisions) and why that tier fits.
    existing tests updated for the new (still-safe) cursor-advance
    behavior. Full RTMP (31 tests) and SRT (263 tests) suites, clippy,
    fmt, source-audit, and docs checks all pass on both.
-4. **RTMPS rustls-internal buffer accounting (rest of task #14) —
-   `sonnet` for the accounting addition once a measurement approach is
-   picked.** The wire-level base case is now wired
-   (`MediaPublisher::pending_bytes`); adding rustls-internal
-   plaintext/encrypted buffer bytes on top needs a way to query
-   `rustls::ClientConnection`'s internal buffer occupancy. **Checked in
-   this session:** read `rustls` 0.23.41's actual public API
-   (`ConnectionCommon` in `conn.rs`) rather than assuming — it exposes
-   `set_buffer_limit(&mut self, limit: Option<usize>)` (a *setter* for
-   the cap on `sendable_plaintext`/`sendable_tls`, default 64KB) but no
-   getter for current occupancy at all. So there is no direct "how many
-   bytes are buffered right now" accessor to call; the two realistic
-   options are (a) call `set_buffer_limit` to a known cap and treat
-   "the next write returns a short count / would-block" as a coarse
-   "near the cap" signal rather than a precise byte count, or (b) track
-   plaintext bytes handed to `Connection::writer` ourselves on our side
-   of the API (we already know what we pass in) as an upper-bound
-   estimate, accepting it won't reflect exactly what rustls has encoded
-   into TLS records yet. Neither is "the precise number," so whichever
-   is picked needs to be documented as an estimate, not corrected later
-   as if it were exact.
+4. **~~RTMPS rustls-internal buffer accounting~~ — implemented, option
+   (a) from the two picked out below.** Since rustls exposes no
+   occupancy getter (confirmed against rustls 0.23.41's actual public
+   API — `ConnectionCommon::set_buffer_limit` is a cap *setter* only),
+   `RtmpConnection::rustls_pending_bytes_estimate()`
+   (`src/media/egress/backends/rtmp_connection.rs`) returns rustls's own
+   default 64KB `sendable_plaintext`/`sendable_tls` cap whenever the
+   connection still `wants_write()` (has unflushed data), `0` otherwise
+   — a worst-case upper bound, explicitly documented as an estimate, not
+   an exact count. `RtmpShardBackend::visit_one_ready_leaf`
+   (`rtmp_shard.rs`) adds it to `pending_application_bytes` alongside
+   the existing wire-level count, so `LeafLimits::max_pending_bytes`
+   enforcement (`classify_stall`/`sweep_stalled_leaves`) can no longer
+   under-count a backpressured RTMPS leaf by an unbounded amount — the
+   hidden buffer's contribution is now capped at 64KB instead of
+   invisible. Proven by two new tests
+   (`rtmp_connection_tests.rs`): a plain connection always reports `0`;
+   a freshly constructed TLS connection reports `65536` before any I/O
+   (mirroring the existing `tls_connection_wants_write_before_any_io`
+   proof that `wants_write()` is true immediately, since a fresh client
+   has a queued ClientHello) — verified as a real regression by
+   temporarily hardcoding the `Tls` branch to return `0` and confirming
+   the positive-case test fails, then restoring it. Full `cargo test
+   --lib` (1,866 tests), clippy, fmt, source-audit, and docs checks
+   pass.
 5. **~~`is_limit_exceeded()` enforcement~~ — implemented, by reusing a
    design SRT already had rather than inventing a new one.** The
    "design decision" this item worried about — what happens to an

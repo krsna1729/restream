@@ -100,6 +100,27 @@ fn tls_connection_wants_write_before_any_io() {
 }
 
 #[test]
+fn plain_connection_never_reports_a_rustls_buffer_estimate() {
+    let (client, _server) = connected_pair();
+    let connection = RtmpConnection::plain(client);
+
+    assert_eq!(connection.rustls_pending_bytes_estimate(), 0);
+}
+
+/// Mirrors `tls_connection_wants_write_before_any_io`: a fresh client TLS
+/// connection wants to write its queued ClientHello, so the conservative
+/// estimate must be non-zero — proving the leaf-limit accounting can see
+/// rustls-internal buffering exists at all, not that it counts it exactly
+/// (rustls exposes no occupancy getter; see the method's own doc comment).
+#[test]
+fn tls_connection_reports_a_nonzero_rustls_buffer_estimate_before_any_io() {
+    let (client, _server) = connected_pair();
+    let connection = RtmpConnection::tls(client, "example.com").unwrap();
+
+    assert_eq!(connection.rustls_pending_bytes_estimate(), 64 * 1024);
+}
+
+#[test]
 fn tls_connection_raw_fd_matches_the_underlying_socket() {
     use std::os::unix::io::AsRawFd;
 

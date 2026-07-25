@@ -74,6 +74,34 @@ impl RtmpConnection {
         self.tcp_stream().as_raw_fd()
     }
 
+    /// Conservative estimate of rustls-internal buffered bytes not visible
+    /// to `MediaPublisher::pending_bytes()`. rustls exposes no occupancy
+    /// getter for its internal plaintext/TLS-record buffers —
+    /// `ConnectionCommon::set_buffer_limit` is the only related API, a cap
+    /// *setter* with no matching getter (checked against rustls 0.23.41's
+    /// actual public API; see `docs/egress-implementation.md` Phase 5
+    /// status). Returns rustls's own default 64KB `sendable_plaintext`/
+    /// `sendable_tls` cap whenever the connection still wants to write
+    /// (`wants_write()` — i.e. it is holding data this leaf hasn't
+    /// finished flushing), `0` otherwise. This is a worst-case upper bound
+    /// on the hidden buffer, not an exact occupancy count — the point is
+    /// keeping `LeafLimits::max_pending_bytes` enforcement from
+    /// under-counting a backpressured RTMPS leaf by an unbounded amount,
+    /// not precise accounting.
+    pub(crate) fn rustls_pending_bytes_estimate(&self) -> usize {
+        const RUSTLS_DEFAULT_BUFFER_LIMIT: usize = 64 * 1024;
+        match self {
+            Self::Plain(_) => 0,
+            Self::Tls(stream) => {
+                if stream.conn.wants_write() {
+                    RUSTLS_DEFAULT_BUFFER_LIMIT
+                } else {
+                    0
+                }
+            }
+        }
+    }
+
     pub(crate) fn shutdown(&self, how: Shutdown) -> io::Result<()> {
         self.tcp_stream().shutdown(how)
     }

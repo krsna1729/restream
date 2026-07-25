@@ -735,7 +735,10 @@ where
             EngineVisitResult::StaleGeneration => return Some((None, VisitDecision::Suspend)),
             EngineVisitResult::Visited(outcome) => (outcome.progress, outcome.decision),
         };
-        leaf.common.pending_application_bytes = leaf.engine.pending_application_bytes();
+        leaf.common.pending_application_bytes = leaf
+            .engine
+            .pending_application_bytes()
+            .saturating_add(leaf.transport.rustls_pending_bytes_estimate());
 
         if matches!(decision, VisitDecision::Close) {
             return Some((Some(leaf.common.output_id.clone()), decision));
