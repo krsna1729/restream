@@ -1,6 +1,6 @@
 {
   "workload": "egress-growth-source-srt (SRT source outputs, isolated lifecycle)",
-  "commit": "bc404e50",
+  "commit": "2dcd5c3b",
   "date": "2026-07-25",
   "host": "KVM VPS, 6 CPUs, 12GB RAM",
   "mode": "resource-sweep (fabric only -- RESTREAM_EGRESS_FABRIC=srt, RESOURCE_SWEEP_SCENARIOS=egress-growth-source-srt, RESOURCE_SWEEP_EGRESS_COUNTS=1000)",

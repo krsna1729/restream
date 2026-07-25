@@ -1822,6 +1822,29 @@ benchmark-driven decisions) and why that tier fits.
    paired-variant matrix before the fabric side ever runs) reached
    1,000/1,000 outputs cleanly in 43s
    (`.../srt-fabric-matrix/vps-6cpu-12gb-n1000-fabric-only/`).
+   **Follow-up: is 512 actually the ceiling, or just where the
+   semaphore happens to sit?** Tested directly by temporarily raising
+   `sender_semaphore`'s capacity from 512 to 2000
+   (`src/media/engine_registries.rs:459`, reverted immediately after —
+   never committed) and re-running `srt-fabric-matrix` at
+   `SRT_FABRIC_MATRIX_EGRESS_COUNT=1000`. Legacy *did* progress past
+   512 this time (647 at 10s, climbing to 925 by 240s), proving the
+   semaphore alone wasn't the only thing standing between legacy and
+   1,000 — but it still never reached 1,000 within the harness's 240s
+   timeout, and the whole run failed with real `connection failed`
+   errors on the remaining outputs (`restream::media::srt::srt_egress`
+   log: "Connection failed to srt://..."), not just slow progress.
+   Whatever the deeper limit is (ephemeral UDP port pressure from
+   legacy's lack of muxer-port sharing is the leading suspect —
+   `/proc/sys/net/ipv4/ip_local_port_range` gives ~28K ports on this
+   host, and legacy binds a fresh one per connection attempt including
+   retries — but this wasn't root-caused further, since fixing legacy's
+   scalability isn't in scope for this migration), the practical
+   conclusion is the same: the 512 cap isn't an arbitrary tunable
+   number blocking an otherwise-fine architecture, it's papering over a
+   real one-thread-per-output scaling wall that raising the number
+   doesn't fix. This strengthens rather than weakens the original
+   finding.
    **This does not fully close the exit gate as originally scoped** —
    still missing: the mixed RTMP/RTMPS workload specifically (only
    plain RTMP was run at N=1000; RTMPS at scale is untested), the
@@ -1831,7 +1854,7 @@ benchmark-driven decisions) and why that tier fits.
    exists to answer — does the fabric path hold up, or beat, legacy at
    real scale — now has a real, decisive answer for the shapes tested:
    yes, and for SRT it does something legacy structurally cannot do at
-   any scale.
+   any scale, cap raised or not.
 
 ## Phase 6a: Pipeline recirculation backend
 
