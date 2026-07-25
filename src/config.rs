@@ -289,6 +289,7 @@ pub struct AppConfig {
     pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
     pub secure_session_cookies: bool,
+    pub rtmps_extra_trust_roots_pem_path: Option<String>,
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -498,6 +499,7 @@ impl Default for AppConfig {
             use_internal_file_ingest: false,
             initial_admin_password: None,
             secure_session_cookies: false,
+            rtmps_extra_trust_roots_pem_path: None,
         }
     }
 }
@@ -566,6 +568,8 @@ impl AppConfig {
             std::env::var_os("RESTREAM_USE_INTERNAL_FILE_INGEST").is_some();
         let initial_admin_password = std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok();
         let secure_session_cookies = env_bool("RESTREAM_SECURE_SESSION_COOKIES").unwrap_or(false);
+        let rtmps_extra_trust_roots_pem_path =
+            std::env::var("RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM").ok();
 
         // Calculate external_ffmpeg_permits:
         let permits = if let Ok(value) = std::env::var("RESTREAM_EXTERNAL_FFMPEG_PERMITS")
@@ -632,6 +636,7 @@ impl AppConfig {
             use_internal_file_ingest,
             initial_admin_password,
             secure_session_cookies,
+            rtmps_extra_trust_roots_pem_path,
         }
     }
 
@@ -676,6 +681,7 @@ impl AppConfig {
                 "media": self.media_dir,
                 "logs": self.log_dir,
                 "ffmpegBin": self.ffmpeg_bin_path,
+                "rtmpsExtraTrustRootsPem": self.rtmps_extra_trust_roots_pem_path,
             },
             "logging": {
                 "retentionDays": self.log_retention_days,

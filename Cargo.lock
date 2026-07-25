@@ -2279,6 +2279,7 @@ dependencies = [
  "reqwest",
  "rml_rtmp",
  "rust-embed",
+ "rustls-pki-types",
  "scrypt",
  "serde",
  "serde_json",

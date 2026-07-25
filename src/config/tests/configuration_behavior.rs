@@ -456,6 +456,24 @@ fn initial_admin_password_is_loaded_by_config_module() {
 }
 
 #[test]
+fn rtmps_extra_trust_roots_pem_path_defaults_to_none_and_can_be_overridden() {
+    assert_eq!(AppConfig::default().rtmps_extra_trust_roots_pem_path, None);
+    with_env_vars(
+        &[(
+            "RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM",
+            "/etc/restream/rtmps-trust-roots.pem",
+        )],
+        || {
+            let config = AppConfig::from_env();
+            assert_eq!(
+                config.rtmps_extra_trust_roots_pem_path.as_deref(),
+                Some("/etc/restream/rtmps-trust-roots.pem")
+            );
+        },
+    );
+}
+
+#[test]
 fn effective_summary_covers_runtime_knobs_without_secret_values() {
     let config = AppConfig {
         srt_passphrase: Some("super-secret".to_string()),

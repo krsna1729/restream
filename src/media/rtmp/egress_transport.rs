@@ -13,6 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpSocket, TcpStream, lookup_host};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 const RTMP_EGRESS_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -91,9 +92,65 @@ pub(crate) fn rustls_client_config() -> Arc<ClientConfig> {
     )
 }
 
+/// Same trust store as [`rustls_client_config`] plus any CA certificates
+/// found in `extra_trust_roots_pem_path`, for private-CA RTMPS
+/// destinations (and, incidentally, for testing against a locally
+/// generated cert). Reads and parses the PEM file each call — this is only
+/// invoked once per shard-group spawn (RTMP fabric) or once per legacy
+/// RTMPS connection attempt, not on any packet-level hot path.
+pub(crate) fn rustls_client_config_with_extra_roots(
+    extra_trust_roots_pem_path: &str,
+) -> Result<Arc<ClientConfig>, String> {
+    let mut roots = RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    let certs = extra_trust_roots_from_pem_file(extra_trust_roots_pem_path)?;
+    let (added, _ignored) = roots.add_parsable_certificates(certs);
+    if added == 0 {
+        return Err(format!(
+            "RTMPS extra trust roots file {extra_trust_roots_pem_path} contained no usable certificates"
+        ));
+    }
+
+    Ok(Arc::new(
+        ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    ))
+}
+
+fn extra_trust_roots_from_pem_file(
+    path: &str,
+) -> Result<Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>, String> {
+    let certs: Vec<_> = tokio_rustls::rustls::pki_types::CertificateDer::pem_file_iter(path)
+        .map_err(|error| format!("failed to read RTMPS extra trust roots {path}: {error}"))?
+        .collect::<Result<_, _>>()
+        .map_err(|error| format!("failed to parse RTMPS extra trust roots {path}: {error}"))?;
+    if certs.is_empty() {
+        return Err(format!(
+            "RTMPS extra trust roots file {path} contained no certificates"
+        ));
+    }
+    Ok(certs)
+}
+
+/// Resolves the trust store to use for RTMPS connections: the default
+/// webpki-roots-only config when `extra_trust_roots_pem_path` is `None`
+/// (the overwhelmingly common case, unchanged cost), or that plus the
+/// configured extra CA certificates otherwise.
+pub(crate) fn resolve_rtmps_client_config(
+    extra_trust_roots_pem_path: Option<&str>,
+) -> Result<Arc<ClientConfig>, String> {
+    match extra_trust_roots_pem_path {
+        Some(path) => rustls_client_config_with_extra_roots(path),
+        None => Ok(rustls_client_config()),
+    }
+}
+
 pub(super) async fn connect_rtmp_egress_stream(
     parts: &RtmpUrlParts,
     buffer_size: usize,
+    extra_trust_roots_pem_path: Option<&str>,
 ) -> io::Result<RtmpEgressStream> {
     let tcp = tokio::time::timeout(RTMP_EGRESS_CONNECT_TIMEOUT, async {
         connect_tcp_with_options(parts, buffer_size).await
@@ -107,7 +164,9 @@ pub(super) async fn connect_rtmp_egress_stream(
 
     let server_name = ServerName::try_from(parts.host.clone())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid RTMPS host name"))?;
-    let connector = TlsConnector::from(rustls_client_config());
+    let client_config = resolve_rtmps_client_config(extra_trust_roots_pem_path)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let connector = TlsConnector::from(client_config);
     let tls = tokio::time::timeout(RTMP_EGRESS_TLS_TIMEOUT, connector.connect(server_name, tcp))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "RTMPS TLS handshake timed out"))??;
@@ -263,4 +322,86 @@ pub(crate) fn parse_rtmp_url(url: &str) -> Option<RtmpUrlParts> {
         stream_key,
         tls,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct ScratchDir(std::path::PathBuf);
+
+    impl ScratchDir {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "restream-rtmps-trust-roots-{name}-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn write(&self, file_name: &str, contents: &[u8]) -> std::path::PathBuf {
+            let path = self.0.join(file_name);
+            std::fs::write(&path, contents).unwrap();
+            path
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn self_signed_cert_pem() -> Vec<u8> {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        cert.cert.pem().into_bytes()
+    }
+
+    #[test]
+    fn resolve_rtmps_client_config_succeeds_with_no_override_configured() {
+        // No filesystem access is attempted for the `None` case; this just
+        // proves the default path still builds a usable config.
+        assert!(resolve_rtmps_client_config(None).is_ok());
+    }
+
+    #[test]
+    fn extra_trust_roots_from_pem_file_parses_the_configured_certificate() {
+        let dir = ScratchDir::new("adds-root");
+        let pem_path = dir.write("extra-root.pem", &self_signed_cert_pem());
+
+        let certs = extra_trust_roots_from_pem_file(pem_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(certs.len(), 1);
+    }
+
+    #[test]
+    fn rustls_client_config_with_extra_roots_succeeds_for_a_valid_certificate() {
+        let dir = ScratchDir::new("builds-config");
+        let pem_path = dir.write("extra-root.pem", &self_signed_cert_pem());
+
+        assert!(rustls_client_config_with_extra_roots(pem_path.to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn rustls_client_config_with_extra_roots_rejects_a_missing_file() {
+        let error = rustls_client_config_with_extra_roots("/nonexistent/rtmps-trust-roots.pem")
+            .unwrap_err();
+        assert!(
+            error.contains("failed to read"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn rustls_client_config_with_extra_roots_rejects_a_file_with_no_certificates() {
+        let dir = ScratchDir::new("no-certs");
+        let path = dir.write("not-a-cert.pem", b"this is not PEM data\n");
+
+        let error = rustls_client_config_with_extra_roots(path.to_str().unwrap()).unwrap_err();
+        assert!(
+            error.contains("no certificates"),
+            "unexpected error: {error}"
+        );
+    }
 }

@@ -1870,63 +1870,63 @@ benchmark-driven decisions) and why that tier fits.
    yes, and for SRT it does something legacy structurally cannot do at
    any scale, cap raised or not.
 
-   **RTMPS-at-scale is blocked on more than a harness rescale — traced
-   the actual gap (`sonnet`-tier, ~6 files, security-relevant, not yet
-   started):** `SweepOutputKind` only has plain RTMP/SRT variants
-   today, but the deeper blocker is that
-   `rustls_client_config()` (`src/media/rtmp/egress_transport.rs:83`)
-   builds its `RootCertStore` from `webpki_roots::TLS_SERVER_ROOTS`
-   only, with no override — so there is currently no way to point
-   restream's real RTMPS connect path at a self-signed harness
-   mediamtx cert. Fixing that is a real, opt-in production capability
-   (private-CA RTMPS destinations), not just a test shim, so it needs
-   care rather than a rushed harness-only hack. The concrete plan,
-   traced but not implemented:
-   1. Add `rtmps_extra_trust_roots_pem_path: Option<String>` to
-      `AppConfig` (`src/config.rs:253-292`), parsed via a new env var
-      in `AppConfig::from_env()` following the existing
-      `srt_passphrase`-style `std::env::var(...).ok()` pattern — store
-      a path, not raw bytes, consistent with how `config.rs` avoids
-      doing I/O during env parsing.
-   2. At startup (wherever `AppConfig` is consumed to build
-      `MediaEngine`), read and parse the PEM once into a cached
-      `Arc<rustls::ClientConfig>` alongside the default (webpki-only)
-      config, so neither path pays PEM-parse cost per connection.
-   3. Change `rustls_client_config()`'s signature to accept the
-      pre-built config (or an optional extra-roots slice) instead of
-      constructing `RootCertStore` fresh from only webpki roots on
-      every call.
-   4. Legacy path: thread the resolved config through
-      `connect_rtmp_egress_stream` (`egress_transport.rs:94/110`) from
-      its existing caller, `egress_connection.rs:114` — this path
-      already has engine/config access at connect time, so this is
-      mechanical.
-   5. Fabric path: shard threads are deliberately isolated from
-      config/registry access (the same invariant that governs
-      `EngineVisit::run` — a leaf visit may not touch registry/config
-      state). So the resolved `Arc<ClientConfig>` must be prepared at
-      the application layer in `prepare_rtmp_fabric_startup`
-      (`src/application/egress_rtmp_fabric.rs`) and threaded through
-      `RtmpFabricStartup` → `RtmpPublishStartup`, the same
-      startup-value-threading pattern already used for
-      `enhanced_hevc_video` this phase. `RtmpConnection::tls` and its
-      call site in `complete_pending_connect`
-      (`src/media/egress/backends/rtmp_shard.rs:486`) then take the
-      startup-supplied config instead of calling
-      `rustls_client_config()` internally.
-   6. Harness side, only after 1–5 land: add a `SweepOutputKind`
-      RTMPS variant, a mediamtx TLS listener (`rtmpEncryption`
-      cert/key), and a generated test cert. `rcgen = "0.14.8"` is
-      currently `[dev-dependencies]`-only (`Cargo.toml:74`) and not
-      visible to the `test_harness` `[[bin]]` target under plain
-      `cargo build --bin test_harness` — either move it to
-      `[dependencies]` or gate the cert-generation code behind a
-      feature flag scoped to the harness binary.
-   Not started because it's a real multi-file, security-relevant
-   change (trust-root handling) rather than a pure test-infra rescale,
-   and AGENTS.md's "no half-finished implementations" rule argues
-   against landing it partially across only one of the two connect
-   paths.
+   **RTMPS trust-root override — implemented (`sonnet`-tier).** The
+   real blocker behind "RTMPS-at-scale needs harness infrastructure"
+   turned out to be that `rustls_client_config()`
+   (`src/media/rtmp/egress_transport.rs`) built its `RootCertStore`
+   from `webpki_roots::TLS_SERVER_ROOTS` only, with no override — so
+   there was no way to point restream's real RTMPS connect path at a
+   private CA (or a self-signed harness cert). Landed as an opt-in
+   production capability, not a test-only shim:
+   - `AppConfig.rtmps_extra_trust_roots_pem_path: Option<String>`
+     (`src/config.rs`), read from `RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM`,
+     `None` by default (zero behavior change unless configured).
+   - `rustls_client_config_with_extra_roots(path)` and
+     `resolve_rtmps_client_config(Option<&str>)`
+     (`egress_transport.rs`) parse the PEM once (via
+     `rustls-pki-types`'s `CertificateDer::pem_file_iter`, added as a
+     direct `std`-featured dependency — `rustls-pemfile` wasn't
+     needed) and layer the extra roots on top of the same webpki set;
+     a missing file, unparseable PEM, or a PEM with no usable
+     certificates all return a descriptive `Err` rather than silently
+     falling back to webpki-only trust.
+   - Legacy path: `connect_rtmp_egress_stream` takes the resolved path
+     and threads it from `RtmpEgressConnection::connect` up to its
+     caller in `egress.rs`, which already has `engine.config` in
+     scope — no new plumbing layer needed.
+   - Fabric path: this is a process-wide value (same for every RTMPS
+     output), not a per-output one like `enhanced_hevc_video`, so it
+     does *not* need `RtmpFabricStartup`/`RtmpPublishStartup`
+     threading. It's resolved once and stored as a
+     `rtmps_client_config: Arc<ClientConfig>` field on
+     `RtmpShardBackend` (set at shard-group spawn time, mirroring how
+     `chunk_size` already flows through the same constructor chain:
+     `retain_rtmp_fabric_runtime` → `spawn_rtmp_fabric_shard_group` →
+     `rtmp_fabric_shard_backends_with_poller` →
+     `resolving_rtmp_shard_backend` → `RtmpShardBackend::with_runtime_components`).
+     `complete_pending_connect` calls
+     `RtmpConnection::tls_with_config(tcp_stream, host,
+     self.rtmps_client_config.clone())` instead of the bare `tls()` —
+     `tls_with_config` already existed (added for the RTMPS proof
+     test), so this was a one-line call-site change plus the
+     constructor threading.
+   - Proof: 5 new tests in `egress_transport.rs` covering
+     default-roots resolution, successful augmentation, a missing
+     file, and a PEM with no certificates — each verified as a real
+     regression by temporarily deleting the empty-certs check and
+     confirming the corresponding test fails (with a different, but
+     still failing, error path), then restoring it; plus a new
+     `AppConfig` env-var test. Full `cargo test --lib` (1,862 tests),
+     clippy, fmt, source-audit, and docs checks all pass.
+   - **Deliberately not done in this change**: the harness-side
+     `SweepOutputKind` RTMPS variant, mediamtx TLS listener, and
+     generated test cert needed to actually exercise this at scale.
+     `rcgen` is still `[dev-dependencies]`-only and not visible to the
+     `test_harness` `[[bin]]` target; moving it (or gating harness
+     cert generation behind a feature) is the next step if RTMPS-at-scale
+     testing is prioritized. Also not done: rustls-internal
+     plaintext/encrypted buffer accounting for the leaf byte-limit
+     (tracked separately, see the RTMPS accounting note above).
 
 ## Phase 6a: Pipeline recirculation backend
 

@@ -20,9 +20,12 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::os::unix::io::RawFd;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+use tokio_rustls::rustls::ClientConfig;
 
 use crate::media::egress::backend::{CloseReason, Interest, ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
@@ -366,6 +369,7 @@ pub(crate) struct RtmpShardBackend<
     budget_max_bytes: usize,
     budget_window: Duration,
     chunk_size: u32,
+    rtmps_client_config: Arc<ClientConfig>,
     leaves: Vec<Option<RtmpFabricLeaf>>,
     output_sockets: HashMap<OutputId, RtmpLeafSocket>,
     ready: VecDeque<TcpReadyLeaf>,
@@ -384,6 +388,7 @@ where
             feed,
             budget,
             chunk_size,
+            crate::media::rtmp::rustls_client_config(),
             NoopRtmpResolveCompletionSource,
             EmptyRtmpPublishStartupSource,
         )
@@ -401,6 +406,7 @@ where
         feed: RingFeed,
         budget: WorkBudget,
         chunk_size: u32,
+        rtmps_client_config: Arc<ClientConfig>,
         resolve_completions: R,
         startup_source: S,
     ) -> Self {
@@ -416,6 +422,7 @@ where
             budget_max_bytes: budget.max_bytes,
             budget_window,
             chunk_size,
+            rtmps_client_config,
             leaves: Vec::new(),
             output_sockets: HashMap::new(),
             ready: VecDeque::new(),
@@ -483,7 +490,11 @@ where
             }
         };
         let stream = if pending.parts.tls {
-            match RtmpConnection::tls(tcp_stream, &pending.parts.host) {
+            match RtmpConnection::tls_with_config(
+                tcp_stream,
+                &pending.parts.host,
+                self.rtmps_client_config.clone(),
+            ) {
                 Ok(stream) => stream,
                 Err(error) => {
                     tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf tls init failed");

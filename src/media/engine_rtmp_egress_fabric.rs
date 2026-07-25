@@ -18,6 +18,7 @@ use crate::media::engine::MediaEngine;
 pub(crate) enum RtmpFabricEnsureError {
     Spawn(RtmpFabricShardGroupError<TcpEgressPollError>),
     Runtime(EgressFabricRuntimeError),
+    TrustRoots(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,12 +39,17 @@ impl MediaEngine {
         } else {
             let config = &self.config.egress_fabric;
             let startup_source = SharedRtmpPublishStartupSource::new();
+            let rtmps_client_config = crate::media::rtmp::resolve_rtmps_client_config(
+                self.config.rtmps_extra_trust_roots_pem_path.as_deref(),
+            )
+            .map_err(RtmpFabricEnsureError::TrustRoots)?;
             let group = spawn_rtmp_fabric_shard_group(
                 config.shard_count(),
                 config.shard_config(),
                 config.srt_poller_max_events,
                 config.work_budget(),
                 self.config.rtmp_egress_chunk_size,
+                rtmps_client_config,
                 startup_source.clone(),
                 |_| feed.clone_reader(),
             )

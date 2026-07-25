@@ -49,6 +49,7 @@ fn add_command_spawns_a_resolve_worker_reaped_on_next_media_tick() {
         feed(),
         budget(),
         4096,
+        crate::media::rtmp::rustls_client_config(),
         EmptyRtmpPublishStartupSource,
     );
 
@@ -77,6 +78,7 @@ fn invalid_url_spawns_no_resolve_worker() {
         feed(),
         budget(),
         4096,
+        crate::media::rtmp::rustls_client_config(),
         EmptyRtmpPublishStartupSource,
     );
 
@@ -183,6 +185,7 @@ fn add_command_resolves_connects_and_reaches_publish_accepted_against_a_real_pee
         feed(),
         budget(),
         4096,
+        crate::media::rtmp::rustls_client_config(),
         EmptyRtmpPublishStartupSource,
     );
 

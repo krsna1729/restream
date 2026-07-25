@@ -161,18 +161,23 @@ pub async fn start_rtmp_egress(
         parts.stream_key
     );
 
-    let mut connection =
-        match RtmpEgressConnection::connect(parts, engine.config.rtmp_stream_buffer_bytes).await {
-            Ok(s) => s,
-            Err(e) => {
-                error!(
-                    "[rtmp-egress] Connection failed to {}:{}: {:?}",
-                    target_host, target_port, e
-                );
-                egress_error!("connect", e.to_string());
-                return;
-            }
-        };
+    let mut connection = match RtmpEgressConnection::connect(
+        parts,
+        engine.config.rtmp_stream_buffer_bytes,
+        engine.config.rtmps_extra_trust_roots_pem_path.as_deref(),
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            error!(
+                "[rtmp-egress] Connection failed to {}:{}: {:?}",
+                target_host, target_port, e
+            );
+            egress_error!("connect", e.to_string());
+            return;
+        }
+    };
 
     // Perform handshake
     egress_phase!(EgressPhase::Handshaking);

@@ -136,6 +136,7 @@ pub(crate) fn resolving_rtmp_shard_backend<P, S>(
     feed: RingFeed,
     budget: WorkBudget,
     chunk_size: u32,
+    rtmps_client_config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
     startup_source: S,
 ) -> ResolvingRtmpShardBackendWithPoller<P, S>
 where
@@ -149,6 +150,7 @@ where
         feed,
         budget,
         chunk_size,
+        rtmps_client_config,
         completion_queue,
         startup_source,
     );

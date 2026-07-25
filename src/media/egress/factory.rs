@@ -130,12 +130,14 @@ pub(crate) enum RtmpFabricShardGroupError<E> {
 }
 
 #[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_rtmp_fabric_shard_group<F>(
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
     poller_max_events: usize,
     budget: WorkBudget,
     chunk_size: u32,
+    rtmps_client_config: Arc<tokio_rustls::rustls::ClientConfig>,
     startup_source: SharedRtmpPublishStartupSource,
     feed_for: F,
 ) -> Result<EgressShardGroup, RtmpFabricShardGroupError<TcpEgressPollError>>
@@ -147,6 +149,7 @@ where
         shard_config,
         budget,
         chunk_size,
+        rtmps_client_config,
         startup_source,
         feed_for,
         |shard_id| {
@@ -156,11 +159,13 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_rtmp_fabric_shard_group_with_poller<P, E, F, G>(
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
     budget: WorkBudget,
     chunk_size: u32,
+    rtmps_client_config: Arc<tokio_rustls::rustls::ClientConfig>,
     startup_source: SharedRtmpPublishStartupSource,
     feed_for: F,
     poller_for: G,
@@ -174,6 +179,7 @@ where
         shard_count,
         budget,
         chunk_size,
+        rtmps_client_config,
         startup_source,
         feed_for,
         poller_for,
@@ -187,6 +193,7 @@ fn rtmp_fabric_shard_backends_with_poller<P, E, F, G>(
     shard_count: NonZeroU32,
     budget: WorkBudget,
     chunk_size: u32,
+    rtmps_client_config: Arc<tokio_rustls::rustls::ClientConfig>,
     startup_source: SharedRtmpPublishStartupSource,
     mut feed_for: F,
     mut poller_for: G,
@@ -205,6 +212,7 @@ where
             feed_for(shard_id),
             budget,
             chunk_size,
+            rtmps_client_config.clone(),
             startup_source.clone(),
         ));
     }

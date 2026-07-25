@@ -110,8 +110,13 @@ impl std::error::Error for RtmpSessionError {
 }
 
 impl RtmpEgressConnection {
-    pub(super) async fn connect(parts: RtmpUrlParts, buffer_size: usize) -> io::Result<Self> {
-        let socket = connect_rtmp_egress_stream(&parts, buffer_size).await?;
+    pub(super) async fn connect(
+        parts: RtmpUrlParts,
+        buffer_size: usize,
+        extra_trust_roots_pem_path: Option<&str>,
+    ) -> io::Result<Self> {
+        let socket =
+            connect_rtmp_egress_stream(&parts, buffer_size, extra_trust_roots_pem_path).await?;
         Ok(Self {
             parts,
             socket,
