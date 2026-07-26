@@ -2275,8 +2275,9 @@ benchmark-driven decisions) and why that tier fits.
      count together. That is a genuine, unimplemented tuning gap —
      `RESTREAM_EGRESS_SHARDS`'s default was never derived from
      `effective_cpus`, unlike every other concurrency knob in
-     `src/config.rs` — and it is exactly what task **M6 "Shard-count
-     tuning"** in the quality backlog already names as open. Measured
+     `src/config.rs` — and it is exactly what **Phase 7: Tuning and
+     legacy removal** (below, "Select the smallest efficient shard
+     configuration") already names as open, unstarted work. Measured
      signature of the resulting oversubscription: scheduler/futex-family
      kernel self-time (`try_to_wake_up`/`do_futex`/`schedule`/`futex_wake`/`futex_wait`)
      sums to 4.76% for fabric vs 3.85% for legacy, and `clock_gettime`/`[vdso]`
@@ -2299,8 +2300,8 @@ benchmark-driven decisions) and why that tier fits.
      diffing than a DSO/thread-level comparison gives. Left as the
      concrete next step — `RESTREAM_EGRESS_SHARDS` is already a live
      env var, so this is a re-run, not a design change, and the
-     natural place to start before any real M6 shard-count-tuning
-     design work.
+     natural place to start before Phase 7's shard-count-tuning design
+     work below.
 
    **RTMPS trust-root override — implemented (`sonnet`-tier).** The
    real blocker behind "RTMPS-at-scale needs harness infrastructure"
@@ -2645,6 +2646,24 @@ Select the smallest efficient shard configuration, remove obsolete code, and
 make the architecture the only egress path.
 
 ### Work
+
+**Starting evidence, already gathered (Phase 5's combined-workload profiling
+above, "The actual legacy-vs-fabric differential profile"):** at the
+default `RESTREAM_EGRESS_SHARDS=4`, `shards: 4` in `src/config.rs` is a
+flat constant never derived from `effective_cpus` the way
+`default_tokio_worker_threads` (`src/config.rs:316`) is — on a 6-CPU
+host that means 4 dedicated shard threads run *alongside* legacy's same
+2-worker tokio pool rather than the two being budgeted against one core
+count. A live legacy-vs-fabric `perf` comparison at 1,140 RTMP + 60 SRT
+outputs measured a resulting oversubscription signature (extra
+scheduler/futex wakeups, extra `clock_gettime` calls from
+`WorkBudget` deadline tracking) of about 2 percentage points of total
+CPU — real, but only a partial explanation of the ~12-23% CPU gap
+recorded in that phase's live captures. The natural first sweep point
+here is whether raising `RESTREAM_EGRESS_SHARDS` toward
+`effective_cpus` (already a live env var — no code change needed to
+test it) narrows or closes that gap before doing the full 1/2/4/6/8
+benchmark sweep below.
 
 Benchmark shard counts of 1, 2, 4, 6, and 8 where resources permit. Compare:
 
