@@ -2896,16 +2896,90 @@ Current branch status:
 
 Integrate:
 
-- desired output reconciliation;
+- ~~desired output reconciliation~~ (audited, already correct — see below);
 - status and failure reasons;
-- runtime resource map;
-- alerts for stalled shards, repeated resync, command overload, and retry
-  admission saturation;
-- diagnostic snapshots;
+- ~~runtime resource map~~ (done — see below);
+- ~~alerts for stalled shards, command overload~~ (done — see below;
+  repeated-resync and retry-admission-saturation alerts remain open, no
+  per-shard resync counter exists yet to derive them from);
+- ~~diagnostic snapshots~~ (done — see below);
 - ~~configuration validation~~ (done — `EgressFabricConfig::validate`, see
   above);
 - ~~graceful shutdown and shard draining~~ (done for RTMP and SRT, see
   above).
+
+**Desired output reconciliation — audited, no gap found.**
+`load_output_runtime_snapshot` (`src/application/reconcile.rs`) determines
+whether an output is currently active via
+`MediaEngine::has_active_egress`, which is purely
+`self.egresses.cancel_tokens.read().await.contains_key(output_id)` —
+backend-agnostic by construction, since `register_egress_attempt_with_meta`
+populates that same cancel-token map identically regardless of which
+fabric branch (or the legacy path) the bootstrap egress reconciler picks
+for a given output. `decide_output_start_action`/`decide_output_stop_action`
+only ever consume that boolean, with no protocol or backend awareness at
+all. No double-start or spurious-restart risk from fabric ownership;
+nothing to fix here.
+
+**Runtime resource map — implemented.** Before this,
+`api_runtime_views::resource_map::egress_node` modeled every SRT output
+as an app-owned `os_thread` and every other protocol as a `tokio_task` —
+the legacy one-thread/task-per-output assumption, wrong for any
+fabric-owned output (now the common case with the default flipped to
+`All`, see above): a fabric leaf runs on a *shared* shard thread it does
+not own exclusively, so the old accounting would double-count the same
+fixed shard pool once per output. `egress_node` now reads the `fabric`/
+`shardId` fields `egress_runtime_json` already produces (from the
+attribution work above) and reports `execution: "shard_thread"` with
+`threads.appOwned: 0` for fabric-owned outputs, leaving the legacy
+per-protocol accounting unchanged for anything still on the legacy path.
+The map also gained real per-shard nodes (`kind: "egress_shard"`, one
+per live fabric shard across all four protocol registries) and summary
+counters (`fabricShardThreadCount`, `fabricShardStalledCount`,
+`fabricShardPanickedCount`) — the first time the resource map reflects
+the fixed shard-thread count as an actual measured quantity rather than
+an inferred one. Proof: unit tests for `egress_node`'s fabric-vs-legacy
+branching in `resource_map_projection_tests.rs`.
+
+**Alerts — implemented for the two conditions real counters already
+exist for.** `EgressShardHeartbeat`/`EgressShardHealth` (`Healthy` /
+`Stalled` / `Stopped` / `Panicked`, `src/media/egress/shard/group.rs`)
+already computed shard health but had zero non-test callers anywhere in
+the running server — dead code outside `supervisor/tests.rs`. Wired it
+into production: `EgressFabricRuntime::heartbeat` (previously only
+`snapshots`, test-only) plus a non-test per-registry accessor
+(`{srt,rtmp,sink,pipeline}_fabric_shard_heartbeats`) and a combining
+`MediaEngine::egress_fabric_shard_statuses` (new
+`engine_egress_fabric_diagnostics.rs`) feed a new `egressFabricShards`
+array into `health_snapshot()` — which every existing alert-derivation
+caller (`/api/v1/alerts`, agent health, dashboard health) already
+consumes, so this reaches production for free. `derive_alerts`
+(`src/alerts.rs`) gained three new checks: Critical for a panicked
+shard, Warning for a stalled shard (progress-age past a 10s threshold —
+chosen well above the reconciler's 1s default tick so an ordinary idle
+gap between polls never misreports), and Warning for a shard's command
+channel at ≥80% of capacity (reusing `EgressShardHeartbeat`'s existing
+`command_depth`, now also carrying `command_capacity` — a new field
+added for this). Repeated-resync and retry-admission-saturation alerts
+from the original checklist are explicitly *not* implemented: no
+per-shard resync counter or retry-admission-saturation signal exists to
+derive them from honestly; inventing thresholds without a real counter
+behind them would be worse than leaving the gap documented. Proof: 5 new
+unit tests in `alerts_tests.rs` (healthy/stalled/panicked/
+over-threshold/under-threshold), verified as real regressions by
+disabling the panicked-shard branch locally and confirming its test
+fails, then restored.
+
+**Diagnostic snapshots — implemented, reusing the same wiring as
+alerts.** The four `#[cfg(test)]`-only `*_fabric_runtime_snapshots`
+accessors are unchanged (still test-only, still useful for tests that
+need the raw untransformed snapshot), but they are no longer the only
+way to see live shard state: `egressFabricShards` in `health_snapshot()`
+and the resource map's new `egress_shard` nodes are both real,
+authenticated, non-test production diagnostics surfaces
+(`/api/v1/alerts`, `/api/v1/engine/health`, `/api/v1/engine/resource-map`,
+`/api/v1/pipelines/{id}/diagnostics/*`) reachable by an operator or
+agent today, not just by test code calling into `MediaEngine` directly.
 
 Add operator-visible attribution:
 

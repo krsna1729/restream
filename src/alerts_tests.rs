@@ -795,3 +795,99 @@ fn stage_alerts_are_derived_without_pipeline_object() {
     assert_eq!(alerts[0].pipeline_id.as_deref(), Some("pipe3"));
     assert_eq!(alerts[0].stage_id.as_deref(), Some("video:720p"));
 }
+
+fn snapshot_with_fabric_shard(shard: serde_json::Value) -> serde_json::Value {
+    json!({
+        "generatedAt": "2026-06-25T00:00:00Z",
+        "srtListener": { "udpDrops": 0 },
+        "pipelines": {},
+        "egressFabricShards": [shard],
+    })
+}
+
+#[test]
+fn healthy_fabric_shard_yields_no_alert() {
+    let snap = snapshot_with_fabric_shard(json!({
+        "protocol": "rtmp",
+        "feedId": "feed-1",
+        "shardIndex": 0,
+        "state": "healthy",
+        "progressAgeMs": 5,
+        "commandDepth": 1,
+        "commandCapacity": 1024,
+    }));
+    assert!(derive_alerts(&snap).is_empty());
+}
+
+#[test]
+fn stalled_fabric_shard_yields_warning_alert() {
+    let snap = snapshot_with_fabric_shard(json!({
+        "protocol": "srt",
+        "feedId": "feed-2",
+        "shardIndex": 3,
+        "state": "stalled",
+        "progressAgeMs": 30_000,
+        "commandDepth": 0,
+        "commandCapacity": 1024,
+    }));
+
+    let alerts = derive_alerts(&snap);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].severity, Severity::Warning);
+    assert_eq!(alerts[0].scope, Scope::Engine);
+    assert_eq!(alerts[0].id, "engine:egress_fabric:srt:feed-2:3:stalled");
+    assert!(alerts[0].evidence.iter().any(|e| e.contains("30000")));
+}
+
+#[test]
+fn panicked_fabric_shard_yields_critical_alert() {
+    let snap = snapshot_with_fabric_shard(json!({
+        "protocol": "rtmp",
+        "feedId": "feed-3",
+        "shardIndex": 1,
+        "state": "panicked",
+        "commandDepth": 0,
+        "commandCapacity": 1024,
+    }));
+
+    let alerts = derive_alerts(&snap);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].severity, Severity::Critical);
+    assert_eq!(alerts[0].id, "engine:egress_fabric:rtmp:feed-3:1:panicked");
+}
+
+#[test]
+fn fabric_shard_command_channel_near_capacity_yields_warning_alert() {
+    let snap = snapshot_with_fabric_shard(json!({
+        "protocol": "sink",
+        "feedId": "feed-4",
+        "shardIndex": 2,
+        "state": "healthy",
+        "progressAgeMs": 5,
+        "commandDepth": 900,
+        "commandCapacity": 1000,
+    }));
+
+    let alerts = derive_alerts(&snap);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].severity, Severity::Warning);
+    assert_eq!(
+        alerts[0].id,
+        "engine:egress_fabric:sink:feed-4:2:command_overload"
+    );
+    assert!(alerts[0].evidence.iter().any(|e| e.contains("90.0%")));
+}
+
+#[test]
+fn fabric_shard_command_channel_below_threshold_yields_no_alert() {
+    let snap = snapshot_with_fabric_shard(json!({
+        "protocol": "pipeline",
+        "feedId": "feed-5",
+        "shardIndex": 0,
+        "state": "healthy",
+        "progressAgeMs": 5,
+        "commandDepth": 100,
+        "commandCapacity": 1000,
+    }));
+    assert!(derive_alerts(&snap).is_empty());
+}

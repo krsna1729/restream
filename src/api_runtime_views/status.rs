@@ -15,6 +15,11 @@ use crate::system_sampling::{
 const REQUIRED_RMEM_MAX: u64 = 26_214_400;
 const REQUIRED_WMEM_MAX: u64 = 8_388_608;
 
+/// A fabric shard genuinely idle between polls (nothing to send right now)
+/// is not the same as a stalled one — this must stay well above the
+/// reconciler's 1s default tick so ordinary idle gaps never misreport.
+const EGRESS_FABRIC_SHARD_STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
+
 fn nofile_limit_json(configured: u64, snapshot: NofileLimitSnapshot) -> serde_json::Value {
     match snapshot {
         NofileLimitSnapshot::Available { soft, hard } => serde_json::json!({
@@ -465,6 +470,12 @@ pub(crate) async fn health_snapshot(
     }
 
     let host_settings = sample_host_settings();
+    let egress_fabric_shards: Vec<serde_json::Value> = engine
+        .egress_fabric_shard_statuses(EGRESS_FABRIC_SHARD_STALL_AFTER)
+        .await
+        .iter()
+        .map(|status| status.to_json())
+        .collect();
     serde_json::json!({
         "generatedAt": chrono::Utc::now().to_rfc3339(),
         "status": "ready",
@@ -487,6 +498,7 @@ pub(crate) async fn health_snapshot(
             "udpRxQueuePeakBytes": rx_max,
             "udpDrops": drops,
         },
+        "egressFabricShards": egress_fabric_shards,
     })
 }
 

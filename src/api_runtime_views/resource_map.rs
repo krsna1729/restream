@@ -13,6 +13,10 @@ use std::collections::HashMap;
 
 const DEFAULT_TOP_N: usize = 25;
 const MAX_TOP_N: usize = 200;
+/// See the matching constant/comment in `status.rs` — kept as a separate
+/// constant here rather than shared, since resource_map and health_snapshot
+/// are independent read paths with no other coupling.
+const FABRIC_SHARD_STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResourceMapView {
@@ -357,15 +361,33 @@ fn egress_node(egress: &Value, avio_queues: &[Value]) -> Value {
     let len = queue.map(|q| number_field(q, "lenBytes")).unwrap_or(0);
     let capacity = queue.map(|q| number_field(q, "capacityBytes")).unwrap_or(0);
     let blocked = queue.map(|q| number_field(q, "blockedWrites")).unwrap_or(0);
+    // A fabric-owned output runs on a shared shard thread it does not own
+    // exclusively — attributing a whole app-owned OS thread to it here
+    // would double-count the same fixed shard pool once per output.
+    // Legacy SRT still spawns one sender thread per output; legacy RTMP
+    // stays on the shared tokio pool.
+    let is_fabric = egress
+        .get("fabric")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let execution = if is_fabric {
+        "shard_thread"
+    } else if protocol == "srt" {
+        "os_thread"
+    } else {
+        "tokio_task"
+    };
     json!({
         "id": output_id,
         "kind": "egress",
         "label": format!("{protocol} output"),
         "pipelineId": egress.get("pipelineId").cloned().unwrap_or(Value::Null),
-        "execution": if protocol == "srt" { "os_thread" } else { "tokio_task" },
+        "execution": execution,
+        "fabric": is_fabric,
+        "shardId": egress.get("shardId").cloned().unwrap_or(Value::Null),
         "memory": memory(len, "derived", "avio_egress_queue_len"),
         "threads": {
-            "appOwned": if protocol == "srt" { 1 } else { 0 },
+            "appOwned": if !is_fabric && protocol == "srt" { 1 } else { 0 },
             "childProcess": 0,
         },
         "status": egress.get("status").cloned().unwrap_or(Value::Null),
@@ -373,6 +395,31 @@ fn egress_node(egress: &Value, avio_queues: &[Value]) -> Value {
         "metrics": egress.get("metrics").cloned().unwrap_or_else(|| json!({})),
         "queue": queue.cloned().unwrap_or(Value::Null),
         "hotspots": queue_hotspots(len, capacity, blocked),
+    })
+}
+
+fn fabric_shard_node(
+    status: &crate::media::engine_egress_fabric_diagnostics::EgressFabricShardStatus,
+) -> Value {
+    json!({
+        "id": format!("fabric-shard:{}:{}:{}", status.protocol, status.feed_id, status.shard_index),
+        "kind": "egress_shard",
+        "label": format!("{} fabric shard {}", status.protocol, status.shard_index),
+        "execution": "shard_thread",
+        "protocol": status.protocol,
+        "feedId": status.feed_id,
+        "shardIndex": status.shard_index,
+        "state": status.state_str(),
+        "threads": { "appOwned": 1, "childProcess": 0 },
+        "memory": memory(0, "unmeasured", "fabric_shard"),
+        "metrics": {
+            "loopIterations": status.loop_iterations,
+            "mediaTicks": status.media_ticks,
+            "progressAgeMs": status.progress_age_ms,
+            "commandDepth": status.command_depth,
+            "commandCapacity": status.command_capacity,
+        },
+        "hotspots": if status.state_str() != "healthy" { vec![status.state_str()] } else { Vec::new() },
     })
 }
 
@@ -506,6 +553,19 @@ pub(crate) async fn resource_map(
         nodes.push(source_ring_node(&ring));
     }
 
+    // Shard threads are a global, fixed-size process resource shared across
+    // every pipeline's fabric-owned outputs — not owned by any one
+    // pipeline, so (like the runtime_process/child_process_group nodes
+    // above) they only make sense in the global view.
+    let fabric_shard_statuses = if pipeline_id.is_none() {
+        engine
+            .egress_fabric_shard_statuses(FABRIC_SHARD_STALL_AFTER)
+            .await
+    } else {
+        Vec::new()
+    };
+    nodes.extend(fabric_shard_statuses.iter().map(fabric_shard_node));
+
     nodes.extend(
         stages
             .iter()
@@ -591,6 +651,15 @@ pub(crate) async fn resource_map(
             "ingestCount": ingests.len(),
             "stageCount": stages.len(),
             "egressCount": egresses.len(),
+            "fabricShardThreadCount": fabric_shard_statuses.len(),
+            "fabricShardStalledCount": fabric_shard_statuses
+                .iter()
+                .filter(|status| status.state_str() == "stalled")
+                .count(),
+            "fabricShardPanickedCount": fabric_shard_statuses
+                .iter()
+                .filter(|status| status.state_str() == "panicked")
+                .count(),
         },
         "memoryAccounting": memory_accounting_response,
         "nodes": returned_nodes,

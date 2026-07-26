@@ -1,8 +1,12 @@
+use std::time::{Duration, Instant};
+
 use crate::media::egress::command::EgressCommand;
 use crate::media::egress::manager::{
     EgressManager, EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
 };
-use crate::media::egress::shard::{EgressShardGroup, EgressShardGroupError, EgressShardSnapshot};
+use crate::media::egress::shard::{
+    EgressShardGroup, EgressShardGroupError, EgressShardHeartbeat, EgressShardSnapshot,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EgressFabricRuntimeError {
@@ -45,6 +49,30 @@ impl EgressFabricRuntime {
     #[cfg(test)]
     pub(crate) fn snapshots(&self) -> Vec<EgressShardSnapshot> {
         self.group.snapshots()
+    }
+
+    /// Per-shard health for diagnostics and alerting. `stall_after` should
+    /// be tuned to the caller's own poll cadence, not a fixed constant —
+    /// too short flags healthy-but-quiet shards (nothing to send right
+    /// now) as stalled.
+    pub(crate) fn heartbeat(
+        &self,
+        now: Instant,
+        stall_after: Duration,
+    ) -> Vec<EgressShardHeartbeat> {
+        let command_capacity = self.manager.config().command_channel_capacity().get() as u32;
+        self.group
+            .snapshots()
+            .into_iter()
+            .map(|snapshot| {
+                EgressShardHeartbeat::from_snapshot_with_capacity(
+                    snapshot,
+                    now,
+                    stall_after,
+                    command_capacity,
+                )
+            })
+            .collect()
     }
 
     pub(crate) fn shutdown(self) -> Vec<EgressShardSnapshot> {

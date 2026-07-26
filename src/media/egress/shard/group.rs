@@ -135,6 +135,8 @@ pub struct EgressShardHeartbeat {
     pub loop_iterations: u64,
     pub media_ticks: u64,
     pub progress_age: Option<Duration>,
+    pub command_depth: u32,
+    pub command_capacity: u32,
 }
 
 impl EgressShardHeartbeat {
@@ -142,6 +144,20 @@ impl EgressShardHeartbeat {
         snapshot: EgressShardSnapshot,
         now: Instant,
         stall_after: Duration,
+    ) -> Self {
+        Self::from_snapshot_with_capacity(snapshot, now, stall_after, 0)
+    }
+
+    /// Same as [`Self::from_snapshot`], but also records the shard's
+    /// command-channel capacity so callers can derive a saturation ratio
+    /// (`command_depth as f64 / command_capacity as f64`) without a second
+    /// lookup. `command_capacity` of `0` means "unknown" (no capacity was
+    /// supplied), not "zero-capacity channel".
+    pub fn from_snapshot_with_capacity(
+        snapshot: EgressShardSnapshot,
+        now: Instant,
+        stall_after: Duration,
+        command_capacity: u32,
     ) -> Self {
         let progress_age = snapshot
             .last_progress_at
@@ -161,6 +177,8 @@ impl EgressShardHeartbeat {
             loop_iterations: snapshot.loop_iterations,
             media_ticks: snapshot.media_ticks,
             progress_age,
+            command_depth: snapshot.metrics.command_depth,
+            command_capacity,
         }
     }
 }

@@ -889,9 +889,30 @@ Query params:
       "status": "ok",
       "detail": "no cgroup CPU quota; scheduling is cpuset/host limited"
     }
+  ],
+  "egressFabricShards": [
+    {
+      "protocol": "rtmp",
+      "feedId": "pipe1:video:720p",
+      "shardIndex": 1,
+      "state": "healthy",
+      "loopIterations": 48213,
+      "mediaTicks": 9021,
+      "progressAgeMs": 12,
+      "commandDepth": 0,
+      "commandCapacity": 1024
+    }
   ]
 }
 ```
+
+`egressFabricShards` lists every live egress fabric shard across all four
+protocol registries (SRT, RTMP, sink, pipeline recirculation) — empty
+when no fabric-owned output is running. `state` is one of `healthy`,
+`stalled`, `stopped`, or `panicked`; `/api/v1/alerts` derives Warning
+alerts for `stalled` shards and shards whose `commandDepth` is at or
+above 80% of `commandCapacity`, and a Critical alert for `panicked`
+shards.
 
 See [Observability](observability.md) for field derivation, publisher quality,
 and diagnostic check details.
@@ -1236,9 +1257,21 @@ Query parameters:
 
 The summary contains measured process and child-process fields such as CPU,
 RSS, thread count, file descriptor count, child FFmpeg count, and active SRT
-sender thread permits. Nodes include execution ownership (`tokio_task`,
-`os_thread`, `child_process`, `shared`, or `process`) plus memory attribution
-with a confidence marker:
+sender thread permits, plus egress-fabric shard counters
+(`fabricShardThreadCount`, `fabricShardStalledCount`,
+`fabricShardPanickedCount`, global-scope only — a fabric shard thread is
+shared across every pipeline, not owned by one). Nodes include execution
+ownership (`tokio_task`, `os_thread`, `shard_thread`, `child_process`,
+`shared`, or `process`) plus memory attribution with a confidence marker.
+An egress output node's `execution` is `shard_thread` (not `os_thread`/
+`tokio_task`) when the output is fabric-owned (`fabric: true`) — it runs
+on a shared shard thread it doesn't exclusively own, so `threads.appOwned`
+is `0` for it even for protocols (SRT) whose legacy path spawns a
+dedicated sender thread per output. Global-scope responses also include
+one `egress_shard` node per live fabric shard (`state`: `healthy`,
+`stalled`, `stopped`, or `panicked`; see `egressFabricShards` under
+`/api/v1/engine/health` above for the same underlying data). The memory
+attribution confidence marker is one of:
 
 - `measured`: process RSS, child FFmpeg RSS, process thread/fd counts
 - `derived`: ring payload stats, AVIO queue lengths, stage/egress counters

@@ -156,6 +156,26 @@ impl MediaEngine {
             .map(EgressFabricRuntime::snapshots)
     }
 
+    /// Per-shard health across every live SRT fabric runtime, for
+    /// diagnostics and alerting — unlike `srt_fabric_runtime_snapshots`
+    /// above, this has real production callers (resource map, alerts) and
+    /// is not test-only.
+    pub(crate) async fn srt_fabric_shard_heartbeats(
+        &self,
+        stall_after: std::time::Duration,
+    ) -> Vec<(
+        FeedId,
+        Vec<crate::media::egress::shard::EgressShardHeartbeat>,
+    )> {
+        let now = std::time::Instant::now();
+        let registry = self.fabric.srt.lock().await;
+        registry
+            .runtimes
+            .iter()
+            .map(|(feed_id, runtime)| (feed_id.clone(), runtime.heartbeat(now, stall_after)))
+            .collect()
+    }
+
     #[cfg(test)]
     pub(crate) async fn shutdown_srt_fabric_runtime(
         &self,

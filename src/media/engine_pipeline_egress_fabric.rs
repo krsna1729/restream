@@ -160,6 +160,24 @@ impl MediaEngine {
             .map(EgressFabricRuntime::snapshots)
     }
 
+    /// Per-shard health across every live pipeline-recirculation fabric
+    /// runtime, for diagnostics and alerting.
+    pub(crate) async fn pipeline_fabric_shard_heartbeats(
+        &self,
+        stall_after: std::time::Duration,
+    ) -> Vec<(
+        FeedId,
+        Vec<crate::media::egress::shard::EgressShardHeartbeat>,
+    )> {
+        let now = std::time::Instant::now();
+        let registry = self.fabric.pipeline.lock().await;
+        registry
+            .runtimes
+            .iter()
+            .map(|(feed_id, runtime)| (feed_id.clone(), runtime.heartbeat(now, stall_after)))
+            .collect()
+    }
+
     pub(crate) async fn shutdown_all_pipeline_fabric_runtimes(&self) -> usize {
         let runtimes = {
             let mut registry = self.fabric.pipeline.lock().await;

@@ -10,6 +10,7 @@ pub mod egress;
 pub mod engine;
 mod engine_egress;
 mod engine_egress_fabric;
+pub(crate) mod engine_egress_fabric_diagnostics;
 pub mod engine_hls;
 mod engine_ingest;
 mod engine_ingest_metadata;
