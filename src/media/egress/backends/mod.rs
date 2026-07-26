@@ -1,3 +1,5 @@
+pub mod pipeline;
+pub mod pipeline_shard;
 pub mod rtmp;
 pub mod rtmp_connection;
 pub mod rtmp_handshake;

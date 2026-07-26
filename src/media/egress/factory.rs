@@ -1,6 +1,9 @@
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
+use crate::media::egress::backends::pipeline_shard::{
+    PipelineShardBackend, SharedPipelineTargetSource,
+};
 use crate::media::egress::backends::rtmp_shard::{
     RtmpReadinessPoller, SharedRtmpPublishStartupSource,
 };
@@ -238,6 +241,32 @@ where
     for shard_index in 0..shard_count.get() {
         let shard_id = ShardId::new(shard_index);
         backends.push(SinkShardBackend::new(feed_for(shard_id), budget));
+    }
+    EgressShardGroup::spawn(shard_count, shard_config, backends)
+}
+
+/// Spawns one [`PipelineShardBackend`] per shard, all bound to the same
+/// feed and sharing one [`SharedPipelineTargetSource`] — mirrors
+/// `spawn_sink_fabric_shard_group`, with the target source threaded
+/// through the same way RTMP threads its publish-startup source.
+pub(crate) fn spawn_pipeline_fabric_shard_group<F>(
+    shard_count: NonZeroU32,
+    shard_config: EgressShardConfig,
+    budget: WorkBudget,
+    target_source: SharedPipelineTargetSource,
+    mut feed_for: F,
+) -> Result<EgressShardGroup, EgressShardGroupError>
+where
+    F: FnMut(ShardId) -> RingFeed,
+{
+    let mut backends = Vec::with_capacity(shard_count.get() as usize);
+    for shard_index in 0..shard_count.get() {
+        let shard_id = ShardId::new(shard_index);
+        backends.push(PipelineShardBackend::new(
+            feed_for(shard_id),
+            budget,
+            target_source.clone(),
+        ));
     }
     EgressShardGroup::spawn(shard_count, shard_config, backends)
 }

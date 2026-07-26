@@ -156,10 +156,35 @@ impl SinkFabricRegistry {
     }
 }
 
+pub(crate) struct PipelineFabricRegistry {
+    pub(crate) runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub(crate) active_outputs: HashMap<FeedId, u64>,
+    /// One target source per feed runtime, shared (cloned) across that
+    /// runtime's shards — see `RtmpFabricRegistry::startup_sources` for
+    /// why this split exists (claiming the target input is async and
+    /// fallible, so it cannot happen on a shard thread).
+    pub(crate) target_sources:
+        HashMap<FeedId, crate::media::egress::backends::pipeline_shard::SharedPipelineTargetSource>,
+    /// One publication watcher per feed runtime; aborted on release.
+    pub(crate) feed_watchers: HashMap<FeedId, tokio::task::JoinHandle<()>>,
+}
+
+impl PipelineFabricRegistry {
+    fn new() -> Self {
+        Self {
+            runtimes: HashMap::new(),
+            active_outputs: HashMap::new(),
+            target_sources: HashMap::new(),
+            feed_watchers: HashMap::new(),
+        }
+    }
+}
+
 pub struct FabricRegistry {
     pub(crate) srt: TokioMutex<SrtFabricRegistry>,
     pub(crate) rtmp: TokioMutex<RtmpFabricRegistry>,
     pub(crate) sink: TokioMutex<SinkFabricRegistry>,
+    pub(crate) pipeline: TokioMutex<PipelineFabricRegistry>,
 }
 
 impl Default for FabricRegistry {
@@ -174,6 +199,7 @@ impl FabricRegistry {
             srt: TokioMutex::new(SrtFabricRegistry::new()),
             rtmp: TokioMutex::new(RtmpFabricRegistry::new()),
             sink: TokioMutex::new(SinkFabricRegistry::new()),
+            pipeline: TokioMutex::new(PipelineFabricRegistry::new()),
         }
     }
 }

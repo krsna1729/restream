@@ -382,3 +382,129 @@ async fn sink_fabric_registry_dispatches_add_and_the_shard_discards_published_un
 
     engine.release_sink_fabric_runtime(&feed_id).await;
 }
+
+#[tokio::test]
+async fn pipeline_fabric_registry_retains_runtime_once_per_feed() {
+    use crate::media::egress::journal::RingFeed;
+
+    let engine = MediaEngine::new();
+    let feed_id = FeedId::new("feed-engine-pipeline");
+    let feed = RingFeed::new(
+        Arc::new(crate::media::ring_buffer::RingBuffer::new(8)),
+        Arc::new(FeedEpoch::new()),
+    );
+
+    let first = engine
+        .retain_pipeline_fabric_runtime(feed_id.clone(), &feed)
+        .await;
+    let second = engine
+        .retain_pipeline_fabric_runtime(feed_id.clone(), &feed)
+        .await;
+    let snapshots = engine.pipeline_fabric_runtime_snapshots(&feed_id).await;
+
+    assert_eq!(first, Ok(true));
+    assert_eq!(second, Ok(false));
+    assert_eq!(snapshots.map(|snapshots| snapshots.len()), Some(4));
+    assert!(!engine.release_pipeline_fabric_runtime(&feed_id).await);
+    assert!(
+        engine
+            .pipeline_fabric_runtime_snapshots(&feed_id)
+            .await
+            .is_some()
+    );
+    assert!(engine.release_pipeline_fabric_runtime(&feed_id).await);
+    assert!(
+        engine
+            .pipeline_fabric_runtime_snapshots(&feed_id)
+            .await
+            .is_none()
+    );
+}
+
+/// End-to-end proof that a `Pipeline` output added through the same
+/// `EgressCommand::Add`/`dispatch_pipeline_fabric_command` path production
+/// code uses actually publishes real feed units into the claimed target
+/// ring on a real shard thread — closing the Phase 6a gap
+/// (`docs/egress-implementation.md`): recirculation used to run on a
+/// plain per-output `tokio::spawn` task, never the fabric.
+#[tokio::test]
+async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_the_target_ring() {
+    use crate::media::egress::backends::pipeline::PipelineTarget;
+    use crate::media::egress::journal::RingFeed;
+    use crate::media::egress::leaf::EgressProgressSink;
+    use crate::media::engine::IngestRegistration;
+    use crate::media::input_gate::InputPacketGate;
+    use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+    use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+    use tokio_util::sync::CancellationToken;
+
+    let engine = MediaEngine::new();
+    let feed_id = FeedId::new("feed-engine-pipeline-dispatch");
+    let source_ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8));
+    let feed = RingFeed::new(source_ring.clone(), Arc::new(FeedEpoch::new()));
+    let target_ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8));
+
+    engine
+        .retain_pipeline_fabric_runtime(feed_id.clone(), &feed)
+        .await
+        .unwrap();
+
+    let bytes_sent = Arc::new(AtomicU64::new(0));
+    let mut spec = output_spec("out-pipeline-1", &feed_id);
+    spec.protocol = ProtocolSpec::Pipeline {
+        target_pipeline_id: "target-pipeline".to_string(),
+        target_input_id: "target-input".to_string(),
+    };
+    spec.progress = EgressProgressSink {
+        bytes_sent: Some(bytes_sent.clone()),
+        ..Default::default()
+    };
+
+    let registration = IngestRegistration {
+        cancel_token: CancellationToken::new(),
+        attempt_id: 1,
+        input_id: "target-input".to_string(),
+        gate: Arc::new(InputPacketGate::active()),
+        last_forwarded_dts: Arc::new(AtomicI64::new(i64::MIN)),
+        preview_ring: Arc::new(arc_swap::ArcSwapOption::empty()),
+    };
+    let set = engine
+        .set_pipeline_target(
+            &feed_id,
+            spec.id.clone(),
+            PipelineTarget {
+                target_ring: target_ring.clone(),
+                input_registration: registration,
+            },
+        )
+        .await;
+    assert!(set, "target must be recorded against a live runtime");
+
+    engine
+        .dispatch_pipeline_fabric_command(&feed_id, EgressCommand::Add(spec))
+        .await
+        .unwrap();
+
+    source_ring.push(MediaPacket {
+        media_type: MediaType::Video,
+        format: PayloadFormat::Raw,
+        is_keyframe: true,
+        track_index: 0,
+        pts: 0,
+        dts: 0,
+        payload: bytes::Bytes::from_static(b"abcde"),
+    });
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while bytes_sent.load(Ordering::Relaxed) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "pipeline shard never published the unit into the target ring"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(bytes_sent.load(Ordering::Relaxed), 5);
+    assert_eq!(target_ring.read_at(0).unwrap().dts, 0);
+
+    engine.release_pipeline_fabric_runtime(&feed_id).await;
+}

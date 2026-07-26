@@ -201,5 +201,6 @@ impl MediaEngine {
         self.shutdown_all_srt_fabric_runtimes().await;
         self.shutdown_all_rtmp_fabric_runtimes().await;
         self.shutdown_all_sink_fabric_runtimes().await;
+        self.shutdown_all_pipeline_fabric_runtimes().await;
     }
 }

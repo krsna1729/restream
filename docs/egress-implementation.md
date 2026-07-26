@@ -2245,6 +2245,65 @@ Current branch status:
 - API lifecycle tests now cover create, target update, start, status/progress,
   stop, delete, runtime cancellation, and persisted row removal for
   `pipeline://` outputs.
+- **Rehomed onto the real fabric — the core Phase 6a gap this whole phase
+  existed to close.** Everything above was true, but ran on a plain
+  per-output `tokio::spawn` task
+  (`crate::media::recirculation::start_pipeline_recirculation`) — the
+  exact "second in-process routing system" the phase objective warns
+  against, not the fabric ownership model. `PipelineEngine`
+  (`src/media/egress/backends/pipeline.rs`) now wraps the *same*
+  `RecirculationInputPublisher` unchanged — timestamp mapping,
+  standby-GOP replay, input-gate handling are untouched, only what
+  drives `advance()` changes. `PipelineShardBackend`
+  (`src/media/egress/backends/pipeline_shard.rs`) follows the
+  `SinkShardBackend` template (no socket, no poller — see that module's
+  doc comment for why `EgressCommand::FeedWake` must directly re-enqueue
+  leaves there) with one real addition: claiming the target input is
+  async and fallible, so it cannot happen on a shard thread.
+  `PipelineTargetSource`/`SharedPipelineTargetSource` solve this the
+  same way RTMP's publish-startup snapshot does — the application layer
+  claims the target (`MediaEngine::try_register_pipeline_input_attempt`)
+  and calls `set_pipeline_target` before dispatching `EgressCommand::Add`;
+  the shard thread only ever reads. Full production wiring:
+  `spawn_pipeline_fabric_shard_group` (`factory.rs`),
+  `PipelineFabricRegistry` + `retain`/`dispatch`/`release_pipeline_fabric_runtime`
+  (`src/media/engine_pipeline_egress_fabric.rs`), and
+  `EgressTask::run_pipeline_fabric`
+  (`src/infrastructure/bootstrap/egress_task.rs` — `bootstrap/egress.rs`
+  was split into `egress.rs` (`EgressReconciler`/output start-up prep)
+  and `egress_task.rs` (`EgressTask`/the `run_*_fabric` methods) purely
+  to stay under the source-audit line cap after this addition, not a
+  module-boundary change), including the same
+  `terminated_unexpectedly`/`wait_for_stop_or_leaf_failure` retry wiring
+  every other fabric protocol has, plus releasing the claimed target
+  input (`unregister_ingest_if_current`) after `Remove`.
+  `start_pipeline_recirculation` remains as a fallback if
+  `pipeline_fabric` is ever `None`, matching every other protocol's
+  call-site shape, though every `Pipeline`-scheme output now builds one
+  in practice.
+- Proof: 2 shard-level tests (`pipeline_shard/tests.rs`) drive
+  `PipelineShardBackend` through `EgressShardHandle::spawn` on a real OS
+  thread — publishes into the target ring, and rejects an `Add` with no
+  claimed target. 2 engine-level tests
+  (`engine_tests/egress_fabric.rs`) exercise the full production
+  dispatch path: `retain`/`release` reference counting, and an
+  end-to-end `dispatch_pipeline_fabric_command(Add)` → real
+  `ring.push()` → the same wake-watcher task every other protocol uses
+  → real shard thread → real target ring, observed via the real
+  `EgressProgressSink` counters the application layer wires up. Caught
+  a real timing race while writing the first shard-level test: pushing
+  data immediately after `Add` can land before the shard thread even
+  processes the command, so the leaf's own initial enqueue (not
+  `FeedWake`) picks it up — silently not exercising the
+  `FeedWake`-is-the-only-signal path the test existed to prove. Fixed by
+  forcing the leaf idle first (matching the same pattern already used
+  for `sink_shard`'s equivalent test); verified as a real regression by
+  temporarily making `FeedWake` a no-op and confirming both
+  liveness-dependent tests fail. Live-verified end to end under
+  `RESTREAM_EGRESS_FABRIC=all` (`fault.output-stall`,
+  `fault.egress-retry`) after the file split, confirming no regression
+  across RTMP/SRT/Sink. Full `cargo test --lib` (1,877 tests), clippy,
+  fmt, source-audit, and docs checks all pass.
 
 ### Proof
 
@@ -2266,6 +2325,16 @@ Recirculation is user-facing only after topology validation, target-input
 ownership, bounded buffering, status publication, and rollback behavior are
 proven. The accepted implementation must be cheaper than routing through a
 loopback network output and input for the same compatible media path.
+
+Topology validation, target-input ownership, bounded buffering, status
+publication, and rollback (cancellation releases the claim) are all
+proven above, now on the real fabric rather than a parallel task-based
+implementation. **Not done**: an explicit, measured cost comparison
+against routing the same media through a loopback network output+input
+pair. The recirculation publisher's zero-copy behavior for the
+same-format path is proven in isolation (shared `Bytes` payload,
+bounded packet-shell cloning), which is suggestive but not the same as
+a head-to-head benchmark against loopback.
 
 ## Phase 6: Production integration and rollout
 

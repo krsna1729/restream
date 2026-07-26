@@ -14,6 +14,7 @@ pub mod engine_hls;
 mod engine_ingest;
 mod engine_ingest_metadata;
 mod engine_pipeline;
+mod engine_pipeline_egress_fabric;
 pub mod engine_registries;
 mod engine_rtmp_egress_fabric;
 mod engine_runtime;

@@ -225,6 +225,27 @@ pub fn sink_fabric_output_spec(output: &Output, generation: u64, feed_id: FeedId
     }
 }
 
+pub struct PreparedRecirculationFabricFeed {
+    pub feed_id: FeedId,
+    pub feed: Arc<RingFeed>,
+}
+
+/// Recirculation reads directly off the source output's own ring, same as
+/// sink and RTMP — no shared muxer stage to resolve.
+pub fn prepare_recirculation_fabric_feed(
+    output: &Output,
+    prepared: &PreparedOutput,
+) -> PreparedRecirculationFabricFeed {
+    let feed_id = FeedId::new(format!("pipeline:{}", output.id));
+    PreparedRecirculationFabricFeed {
+        feed_id,
+        feed: Arc::new(RingFeed::new(
+            prepared.ring.clone(),
+            Arc::new(FeedEpoch::new()),
+        )),
+    }
+}
+
 pub fn recirculation_fabric_output_spec(
     output: &Output,
     generation: u64,

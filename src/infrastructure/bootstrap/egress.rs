@@ -2,25 +2,25 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use futures_util::FutureExt as _;
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::application::models::{JobStatus, Output};
 use crate::application::reconcile::{
     OutputFailureWindow, OutputStartAction, OutputStopAction, decide_output_start_action,
-    decide_output_stop_action, load_output_runtime_snapshot, next_output_retry_count,
+    decide_output_stop_action, load_output_runtime_snapshot,
 };
 use crate::config::RuntimeTuning;
 use crate::domain::output_spec::OutputUrlScheme;
-use crate::domain::state::{DesiredOutputState, EgressPhase};
-use crate::media::egress::journal::{RingFeed, TsFeed};
-use crate::media::egress::{EgressCommand, FeedId, OutputSpec};
+use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
-use crate::secret_display::redact_url;
 
-type FailureTracker = Arc<Mutex<HashMap<String, (Instant, u32)>>>;
+#[path = "egress_task.rs"]
+mod egress_task;
+use egress_task::{EgressTask, PipelineFabricTask, RtmpFabricTask, SinkFabricTask, SrtFabricTask};
+
+pub(super) type FailureTracker = Arc<Mutex<HashMap<String, (Instant, u32)>>>;
 
 pub(super) struct EgressReconciler {
     engine: Arc<MediaEngine>,
@@ -316,6 +316,53 @@ impl EgressReconciler {
             None
         };
 
+        let use_pipeline_fabric = matches!(url_scheme, OutputUrlScheme::Pipeline);
+        let pipeline_fabric = if use_pipeline_fabric {
+            // A parse failure here just leaves `pipeline_fabric` `None` —
+            // the legacy fallback path re-parses the URL itself and
+            // records the same error, so nothing is lost by not
+            // duplicating that here.
+            match crate::domain::output_spec::RecirculationTarget::parse(&output.url) {
+                Ok(target) => {
+                    let feed = crate::application::egress::prepare_recirculation_fabric_feed(
+                        output, &prepared,
+                    );
+                    let mut spec = crate::application::egress::recirculation_fabric_output_spec(
+                        output,
+                        registration.attempt_id,
+                        feed.feed_id.clone(),
+                        &target,
+                    );
+                    let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    if let Some(sink) = self
+                        .engine
+                        .with_active_egress(&output.id, |egress| {
+                            crate::media::egress::leaf::EgressProgressSink {
+                                bytes_sent: Some(egress.bytes_sent.clone()),
+                                last_progress_ms: Some(egress.last_progress_ms.clone()),
+                                terminated_unexpectedly: Some(terminated.clone()),
+                                ..Default::default()
+                            }
+                        })
+                        .await
+                    {
+                        spec.progress = sink;
+                    }
+                    Some(PipelineFabricTask {
+                        spec,
+                        feed_id: feed.feed_id,
+                        feed: feed.feed,
+                        target_pipeline_id: target.pipeline_id().to_string(),
+                        target_input_id: target.input_id().to_string(),
+                        terminated,
+                    })
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
         let task = EgressTask {
             output_id: output.id.clone(),
             pipeline_id: output.pipeline_id.clone(),
@@ -334,592 +381,9 @@ impl EgressReconciler {
             srt_fabric,
             rtmp_fabric,
             sink_fabric,
+            pipeline_fabric,
         };
         tokio::spawn(task.run());
-    }
-}
-
-#[derive(Clone)]
-struct SrtFabricTask {
-    feed_id: FeedId,
-    feed: Arc<TsFeed>,
-    spec: OutputSpec,
-    /// Set by the shard when the fabric closes this leaf for a reason the
-    /// application did not request (peer closed, protocol failure, or
-    /// stall recovery) — see `EgressProgressSink::terminated_unexpectedly`.
-    /// `run_srt_fabric` polls this so it can return and let the shared
-    /// retry/backoff bookkeeping in `EgressTask::run` run, exactly as it
-    /// does when the legacy per-output task's own I/O loop returns.
-    terminated: Arc<std::sync::atomic::AtomicBool>,
-}
-
-#[derive(Clone)]
-struct RtmpFabricTask {
-    feed_id: FeedId,
-    feed: Arc<RingFeed>,
-    spec: OutputSpec,
-    startup: crate::media::egress::backends::rtmp::RtmpPublishStartup,
-    /// See `SrtFabricTask::terminated`.
-    terminated: Arc<std::sync::atomic::AtomicBool>,
-}
-
-#[derive(Clone)]
-struct SinkFabricTask {
-    feed_id: FeedId,
-    feed: Arc<RingFeed>,
-    spec: OutputSpec,
-    /// See `SrtFabricTask::terminated`.
-    terminated: Arc<std::sync::atomic::AtomicBool>,
-}
-
-struct EgressTask {
-    output_id: String,
-    pipeline_id: String,
-    encoding: String,
-    url: String,
-    rtmp_mode: crate::domain::output_spec::RtmpOutputMode,
-    ring: Arc<crate::media::ring_buffer::RingBuffer>,
-    terminal_stage_key: crate::domain::stage::StageKey,
-    registration: crate::media::engine::EgressRegistration,
-    engine: Arc<MediaEngine>,
-    pool: SqlitePool,
-    last_failed: FailureTracker,
-    tuning: RuntimeTuning,
-    correlation_id: String,
-    job_id: String,
-    srt_fabric: Option<SrtFabricTask>,
-    rtmp_fabric: Option<RtmpFabricTask>,
-    sink_fabric: Option<SinkFabricTask>,
-}
-
-impl EgressTask {
-    async fn run(self) {
-        let url_scheme = OutputUrlScheme::from_url(&self.url);
-        if !url_scheme.is_supported_output() {
-            self.reject_unsupported_url().await;
-            return;
-        }
-
-        let mut hls_persistent_registered = false;
-        let panicked = std::panic::AssertUnwindSafe(async {
-            match url_scheme {
-                OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps => {
-                    if let Some(fabric) = self.rtmp_fabric.as_ref().cloned() {
-                        self.run_rtmp_fabric(fabric).await;
-                    } else {
-                        crate::media::rtmp::start_rtmp_egress(
-                            self.output_id.clone(),
-                            self.pipeline_id.clone(),
-                            self.url.clone(),
-                            self.ring.clone(),
-                            self.engine.clone(),
-                            self.registration.clone(),
-                            self.rtmp_mode,
-                        )
-                        .await;
-                    }
-                }
-                OutputUrlScheme::Srt => {
-                    if let Some(fabric) = self.srt_fabric.as_ref().cloned() {
-                        self.run_srt_fabric(fabric).await;
-                    } else {
-                        crate::media::srt::start_srt_egress(
-                            self.output_id.clone(),
-                            self.pipeline_id.clone(),
-                            self.encoding.clone(),
-                            self.url.clone(),
-                            self.ring.clone(),
-                            self.engine.clone(),
-                            self.registration.clone(),
-                        )
-                        .await;
-                    }
-                }
-                OutputUrlScheme::Sink => {
-                    if let Some(fabric) = self.sink_fabric.as_ref().cloned() {
-                        self.run_sink_fabric(fabric).await;
-                    } else {
-                        crate::media::egress::backends::sink::start_sink_egress(
-                            self.output_id.clone(),
-                            self.ring.clone(),
-                            self.engine.clone(),
-                            self.registration.clone(),
-                        )
-                        .await;
-                    }
-                }
-                OutputUrlScheme::Hls | OutputUrlScheme::Http | OutputUrlScheme::Https => {
-                    let (store, already_running) =
-                        self.engine.ensure_hls_segmenter(&self.pipeline_id).await;
-                    if !already_running {
-                        let Some(hls_cancel) =
-                            self.engine.get_hls_cancel_token(&self.pipeline_id).await
-                        else {
-                            warn!(
-                                correlation_id = %self.correlation_id,
-                                pipeline_id = %self.pipeline_id,
-                                output_id = %self.output_id,
-                                "HLS segmenter token missing — skipping"
-                            );
-                            return;
-                        };
-                        let engine = self.engine.clone();
-                        let pipeline_id = self.pipeline_id.clone();
-                        let ring = self.ring.clone();
-                        let segmenter_store = store.clone();
-                        let stage_key = self.terminal_stage_key.clone();
-                        tokio::spawn(async move {
-                            crate::media::hls::start_hls_segmenter(
-                                pipeline_id.clone(),
-                                segmenter_store,
-                                ring,
-                                None,
-                                engine.clone(),
-                                hls_cancel,
-                                crate::media::hls::HlsSegmenterStart {
-                                    video_meta_override: None,
-                                    planned_stage_key: Some(stage_key),
-                                },
-                            )
-                            .await;
-                            engine.shutdown_hls_segmenter(&pipeline_id).await;
-                        });
-                    }
-                    self.engine
-                        .add_hls_persistent_consumer(&self.pipeline_id)
-                        .await;
-                    hls_persistent_registered = true;
-                    if matches!(url_scheme, OutputUrlScheme::Http | OutputUrlScheme::Https) {
-                        crate::media::hls_upload::start_hls_put_upload(
-                            crate::media::hls_upload::HlsUploadStart {
-                                output_id: self.output_id.clone(),
-                                pipeline_id: self.pipeline_id.clone(),
-                                target_url: self.url.clone(),
-                                terminal_stage_key: self.terminal_stage_key.clone(),
-                            },
-                            store,
-                            self.engine.clone(),
-                            self.registration.clone(),
-                        )
-                        .await;
-                    } else {
-                        self.engine
-                            .update_egress_phase_if_current(
-                                &self.output_id,
-                                &self.registration,
-                                EgressPhase::Segmenting,
-                            )
-                            .await;
-                        self.registration.cancel_token.cancelled().await;
-                    }
-                }
-                OutputUrlScheme::Pipeline => {
-                    match crate::domain::output_spec::RecirculationTarget::parse(&self.url) {
-                        Ok(target) => {
-                            crate::media::recirculation::start_pipeline_recirculation(
-                                self.output_id.clone(),
-                                self.ring.clone(),
-                                target.pipeline_id().to_string(),
-                                target.input_id().to_string(),
-                                self.engine.clone(),
-                                self.registration.clone(),
-                            )
-                            .await;
-                        }
-                        Err(error) => {
-                            self.engine
-                                .record_egress_error_if_current(
-                                    &self.output_id,
-                                    &self.registration,
-                                    "recirculation_target_parse",
-                                    error.message(),
-                                )
-                                .await;
-                        }
-                    }
-                }
-                OutputUrlScheme::Unknown => {}
-            }
-        })
-        .catch_unwind()
-        .await
-        .is_err();
-
-        if panicked {
-            error!(
-                correlation_id = %self.correlation_id,
-                output_id = %self.output_id,
-                pipeline_id = %self.pipeline_id,
-                event_class = "lifecycle",
-                event_type = "egress.failed",
-                failure_reason = "panic",
-                "panic in egress task"
-            );
-        }
-
-        let is_cancelled = self.registration.cancel_token.is_cancelled();
-        let had_progress = self
-            .engine
-            .egress_has_recorded_progress_if_current(&self.output_id, &self.registration)
-            .await;
-        let was_current = self
-            .engine
-            .unregister_egress_if_current(&self.output_id, &self.registration)
-            .await;
-        if hls_persistent_registered {
-            self.engine
-                .remove_hls_persistent_consumer(&self.pipeline_id)
-                .await;
-        }
-
-        let ended_at = chrono::Utc::now().to_rfc3339();
-        let job_status = if is_cancelled {
-            JobStatus::Stopped
-        } else {
-            JobStatus::Failed
-        };
-        let _ = crate::db::update_job(
-            &self.pool,
-            &self.job_id,
-            None,
-            Some(job_status),
-            Some(&ended_at),
-            Some(0),
-            None,
-        )
-        .await;
-
-        let retry_backoff = if was_current {
-            let mut last_failed = self.last_failed.lock().await;
-            if is_cancelled {
-                last_failed.remove(&self.output_id);
-            } else {
-                let retries = next_output_retry_count(
-                    last_failed
-                        .get(&self.output_id)
-                        .map(|(_, retries)| *retries),
-                    had_progress,
-                );
-                last_failed.insert(self.output_id.clone(), (Instant::now(), retries));
-            }
-            if is_cancelled {
-                None
-            } else {
-                last_failed
-                    .get(&self.output_id)
-                    .map(|(_, retries)| *retries)
-                    .and_then(|retries| {
-                        (retries < self.tuning.output_max_retries)
-                            .then_some((retries, self.tuning.output_backoff_ms(retries)))
-                    })
-            }
-        } else {
-            None
-        };
-        if let Some((retries, backoff_ms)) = retry_backoff {
-            self.engine
-                .update_egress_retry_state(&self.output_id, retries, backoff_ms, backoff_ms)
-                .await;
-        } else {
-            self.engine.clear_egress_retry_state(&self.output_id).await;
-        }
-    }
-
-    /// Waits for either explicit cancellation (normal stop/reconfigure) or
-    /// the fabric marking this output's leaf as unexpectedly terminated
-    /// (peer closed, protocol failure, or stall recovery — see
-    /// `EgressProgressSink::terminated_unexpectedly`). Returns `true` only
-    /// for the unexpected-termination case, so the caller can surface it as
-    /// an error before falling through to the shared retry/backoff
-    /// bookkeeping in `EgressTask::run`. Polls rather than a wake-based
-    /// signal: this only runs once per output for as long as it's healthy,
-    /// nowhere near the packet-level hot path.
-    async fn wait_for_stop_or_leaf_failure(
-        &self,
-        terminated: &std::sync::Arc<std::sync::atomic::AtomicBool>,
-    ) -> bool {
-        loop {
-            if terminated.load(std::sync::atomic::Ordering::Relaxed) {
-                return true;
-            }
-            tokio::select! {
-                _ = self.registration.cancel_token.cancelled() => return false,
-                _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
-            }
-        }
-    }
-
-    async fn run_srt_fabric(&self, fabric: SrtFabricTask) {
-        match self
-            .engine
-            .retain_srt_fabric_runtime(fabric.feed_id.clone(), fabric.feed.as_ref())
-            .await
-        {
-            Ok(_) => {}
-            Err(error) => {
-                self.engine
-                    .record_egress_error_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        "srt_fabric_ensure",
-                        format!("{error:?}"),
-                    )
-                    .await;
-                return;
-            }
-        }
-
-        match self
-            .engine
-            .dispatch_srt_fabric_command(&fabric.feed_id, EgressCommand::Add(fabric.spec.clone()))
-            .await
-        {
-            Ok(_) => {
-                self.engine
-                    .update_egress_phase_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        EgressPhase::Sending,
-                    )
-                    .await;
-            }
-            Err(error) => {
-                let _ = self
-                    .engine
-                    .release_srt_fabric_runtime(&fabric.feed_id)
-                    .await;
-                self.engine
-                    .record_egress_error_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        "srt_fabric_dispatch",
-                        format!("{error:?}"),
-                    )
-                    .await;
-                return;
-            }
-        }
-
-        if self.wait_for_stop_or_leaf_failure(&fabric.terminated).await {
-            self.engine
-                .record_egress_error_if_current(
-                    &self.output_id,
-                    &self.registration,
-                    "srt_fabric_leaf",
-                    "SRT fabric leaf terminated unexpectedly (peer closed, protocol failure, or stall recovery)",
-                )
-                .await;
-        }
-        let _ = self
-            .engine
-            .dispatch_srt_fabric_command(&fabric.feed_id, EgressCommand::Remove(fabric.spec.id))
-            .await;
-        let _ = self
-            .engine
-            .release_srt_fabric_runtime(&fabric.feed_id)
-            .await;
-    }
-
-    async fn run_rtmp_fabric(&self, fabric: RtmpFabricTask) {
-        match self
-            .engine
-            .retain_rtmp_fabric_runtime(fabric.feed_id.clone(), fabric.feed.as_ref())
-            .await
-        {
-            Ok(_) => {}
-            Err(error) => {
-                self.engine
-                    .record_egress_error_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        "rtmp_fabric_ensure",
-                        format!("{error:?}"),
-                    )
-                    .await;
-                return;
-            }
-        }
-
-        // Must land before the Add command: the shard thread reads this via
-        // RtmpPublishStartupSource::take_startup and never queries anything
-        // itself.
-        self.engine
-            .set_rtmp_publish_startup(
-                &fabric.feed_id,
-                fabric.spec.id.clone(),
-                fabric.startup.clone(),
-            )
-            .await;
-
-        match self
-            .engine
-            .dispatch_rtmp_fabric_command(&fabric.feed_id, EgressCommand::Add(fabric.spec.clone()))
-            .await
-        {
-            Ok(_) => {
-                self.engine
-                    .update_egress_phase_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        EgressPhase::Sending,
-                    )
-                    .await;
-            }
-            Err(error) => {
-                let _ = self
-                    .engine
-                    .release_rtmp_fabric_runtime(&fabric.feed_id)
-                    .await;
-                self.engine
-                    .record_egress_error_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        "rtmp_fabric_dispatch",
-                        format!("{error:?}"),
-                    )
-                    .await;
-                return;
-            }
-        }
-
-        if self.wait_for_stop_or_leaf_failure(&fabric.terminated).await {
-            self.engine
-                .record_egress_error_if_current(
-                    &self.output_id,
-                    &self.registration,
-                    "rtmp_fabric_leaf",
-                    "RTMP fabric leaf terminated unexpectedly (peer closed, protocol failure, or stall recovery)",
-                )
-                .await;
-        }
-        let _ = self
-            .engine
-            .dispatch_rtmp_fabric_command(&fabric.feed_id, EgressCommand::Remove(fabric.spec.id))
-            .await;
-        let _ = self
-            .engine
-            .release_rtmp_fabric_runtime(&fabric.feed_id)
-            .await;
-    }
-
-    async fn run_sink_fabric(&self, fabric: SinkFabricTask) {
-        match self
-            .engine
-            .retain_sink_fabric_runtime(fabric.feed_id.clone(), fabric.feed.as_ref())
-            .await
-        {
-            Ok(_) => {}
-            Err(error) => {
-                self.engine
-                    .record_egress_error_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        "sink_fabric_ensure",
-                        format!("{error:?}"),
-                    )
-                    .await;
-                return;
-            }
-        }
-
-        match self
-            .engine
-            .dispatch_sink_fabric_command(&fabric.feed_id, EgressCommand::Add(fabric.spec.clone()))
-            .await
-        {
-            Ok(_) => {
-                self.engine
-                    .update_egress_phase_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        EgressPhase::Discarding,
-                    )
-                    .await;
-            }
-            Err(error) => {
-                let _ = self
-                    .engine
-                    .release_sink_fabric_runtime(&fabric.feed_id)
-                    .await;
-                self.engine
-                    .record_egress_error_if_current(
-                        &self.output_id,
-                        &self.registration,
-                        "sink_fabric_dispatch",
-                        format!("{error:?}"),
-                    )
-                    .await;
-                return;
-            }
-        }
-
-        if self.wait_for_stop_or_leaf_failure(&fabric.terminated).await {
-            self.engine
-                .record_egress_error_if_current(
-                    &self.output_id,
-                    &self.registration,
-                    "sink_fabric_leaf",
-                    "sink fabric leaf terminated unexpectedly",
-                )
-                .await;
-        }
-        let _ = self
-            .engine
-            .dispatch_sink_fabric_command(&fabric.feed_id, EgressCommand::Remove(fabric.spec.id))
-            .await;
-        let _ = self
-            .engine
-            .release_sink_fabric_runtime(&fabric.feed_id)
-            .await;
-    }
-
-    async fn reject_unsupported_url(&self) {
-        let ended_at = chrono::Utc::now().to_rfc3339();
-        let _ = crate::db::update_job(
-            &self.pool,
-            &self.job_id,
-            None,
-            Some(JobStatus::Failed),
-            Some(&ended_at),
-            Some(0),
-            None,
-        )
-        .await;
-        let was_current = self
-            .engine
-            .unregister_egress_if_current(&self.output_id, &self.registration)
-            .await;
-        let retry_backoff = if was_current {
-            let mut last_failed = self.last_failed.lock().await;
-            let retries = next_output_retry_count(
-                last_failed
-                    .get(&self.output_id)
-                    .map(|(_, retries)| *retries),
-                false,
-            );
-            last_failed.insert(self.output_id.clone(), (Instant::now(), retries));
-            (retries < self.tuning.output_max_retries)
-                .then_some((retries, self.tuning.output_backoff_ms(retries)))
-        } else {
-            None
-        };
-        if let Some((retries, backoff_ms)) = retry_backoff {
-            self.engine
-                .update_egress_retry_state(&self.output_id, retries, backoff_ms, backoff_ms)
-                .await;
-        } else {
-            self.engine.clear_egress_retry_state(&self.output_id).await;
-        }
-        error!(
-            correlation_id = %self.correlation_id,
-            output_id = %self.output_id,
-            pipeline_id = %self.pipeline_id,
-            event_class = "lifecycle",
-            event_type = "egress.failed",
-            failure_reason = "unsupported_url_scheme",
-            url = %redact_url(&self.url),
-            "output rejected unsupported URL scheme",
-        );
     }
 }
 
