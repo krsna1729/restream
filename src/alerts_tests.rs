@@ -891,3 +891,50 @@ fn fabric_shard_command_channel_below_threshold_yields_no_alert() {
     }));
     assert!(derive_alerts(&snap).is_empty());
 }
+
+fn snapshot_with_retrying_output(
+    output_max_retries: u64,
+    retry_attempts: u64,
+) -> serde_json::Value {
+    json!({
+        "generatedAt": "2026-06-25T00:00:00Z",
+        "srtListener": { "udpDrops": 0 },
+        "tuning": { "outputMaxRetries": output_max_retries },
+        "pipelines": {
+            "pipe1": {
+                "input": { "status": "on", "readerMetrics": [] },
+                "outputs": {
+                    "out1": {
+                        "status": "retrying",
+                        "retryAttempts": retry_attempts,
+                        "retryBackoffMs": 5_000,
+                    }
+                }
+            }
+        }
+    })
+}
+
+#[test]
+fn retry_attempts_near_ceiling_yields_retry_admission_alert() {
+    let snap = snapshot_with_retrying_output(10, 8);
+
+    let alerts = derive_alerts(&snap);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].severity, Severity::Warning);
+    assert_eq!(alerts[0].scope, Scope::Output);
+    assert_eq!(
+        alerts[0].id,
+        "pipeline:pipe1:output:out1:retry_admission_saturation"
+    );
+    assert!(alerts[0].evidence.iter().any(|e| e.contains("8")));
+}
+
+#[test]
+fn retry_attempts_below_ceiling_yields_generic_not_running_alert() {
+    let snap = snapshot_with_retrying_output(10, 2);
+
+    let alerts = derive_alerts(&snap);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].id, "pipeline:pipe1:output:out1:not_running");
+}

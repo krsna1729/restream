@@ -76,6 +76,7 @@ const CAPACITY_WAIT_WARN_MS: u64 = 5_000;
 const SRT_RECV_BUFFER_WARN_PCT: f64 = 80.0;
 const SRT_RECV_BUFFER_CRITICAL_PCT: f64 = 95.0;
 const COMMAND_CHANNEL_OVERLOAD_WARN_PCT: f64 = 80.0;
+const RETRY_ADMISSION_WARN_PCT: u32 = 80;
 
 // ─── Derivation ──────────────────────────────────────────────────────────────
 
@@ -87,6 +88,10 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    let output_max_retries = snapshot["tuning"]["outputMaxRetries"]
+        .as_u64()
+        .unwrap_or(10);
 
     let mut alerts: Vec<Alert> = Vec::new();
 
@@ -324,6 +329,57 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                 for (output_id, output) in outputs {
                     let status = output.get("status").and_then(|v| v.as_str()).unwrap_or("");
                     if status != "running" {
+                        let retry_attempts = output.get("retryAttempts").and_then(|v| v.as_u64());
+                        // A "retrying" output with attempts near the configured
+                        // ceiling is a distinct, more urgent condition than an
+                        // ordinary backoff cycle — it's about to exhaust its
+                        // retry budget and give up, not just waiting out a
+                        // transient failure. Give it a specific alert instead
+                        // of the generic not_running one so an operator can
+                        // tell "still retrying normally" from "about to stop
+                        // retrying entirely."
+                        if status == "retrying"
+                            && let Some(attempts) = retry_attempts
+                            && output_max_retries > 0
+                            && attempts * 100
+                                >= output_max_retries * RETRY_ADMISSION_WARN_PCT as u64
+                        {
+                            let backoff_ms = output
+                                .get("retryBackoffMs")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            alerts.push(Alert {
+                                id: format!(
+                                    "pipeline:{}:output:{}:retry_admission_saturation",
+                                    pipeline_id, output_id
+                                ),
+                                severity: Severity::Warning,
+                                scope: Scope::Output,
+                                pipeline_id: Some(pipeline_id.clone()),
+                                stage_id: None,
+                                output_id: Some(output_id.clone()),
+                                title: format!(
+                                    "Output '{}' is close to exhausting its retry budget",
+                                    output_id
+                                ),
+                                cause: "The output has failed and retried repeatedly; once it \
+                                    reaches the configured retry ceiling it stops retrying and \
+                                    requires manual intervention to restart."
+                                    .into(),
+                                evidence: vec![format!(
+                                    "retryAttempts = {attempts} / outputMaxRetries = {output_max_retries}, retryBackoffMs = {backoff_ms}"
+                                )],
+                                recommended_action:
+                                    "Investigate why the destination keeps rejecting connections \
+                                    before the retry budget is exhausted, or raise RESTREAM_OUTPUT_MAX_RETRIES."
+                                        .into(),
+                                generated_at: generated_at.clone(),
+                                first_seen: None,
+                                last_seen: None,
+                            });
+                            continue;
+                        }
+
                         alerts.push(Alert {
                             id: format!(
                                 "pipeline:{}:output:{}:not_running",

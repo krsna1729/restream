@@ -902,7 +902,10 @@ Query params:
       "commandDepth": 0,
       "commandCapacity": 1024
     }
-  ]
+  ],
+  "tuning": {
+    "outputMaxRetries": 10
+  }
 }
 ```
 
@@ -912,7 +915,9 @@ when no fabric-owned output is running. `state` is one of `healthy`,
 `stalled`, `stopped`, or `panicked`; `/api/v1/alerts` derives Warning
 alerts for `stalled` shards and shards whose `commandDepth` is at or
 above 80% of `commandCapacity`, and a Critical alert for `panicked`
-shards.
+shards. `tuning.outputMaxRetries` mirrors `RESTREAM_OUTPUT_MAX_RETRIES`;
+`/api/v1/alerts` derives a Warning for any output whose `retryAttempts`
+(under `pipelines.<id>.outputs.<id>`) has reached 80% of that ceiling.
 
 See [Observability](observability.md) for field derivation, publisher quality,
 and diagnostic check details.

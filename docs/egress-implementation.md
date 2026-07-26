@@ -2899,8 +2899,8 @@ Integrate:
 - ~~desired output reconciliation~~ (audited, already correct — see below);
 - status and failure reasons;
 - ~~runtime resource map~~ (done — see below);
-- ~~alerts for stalled shards, command overload~~ (done — see below;
-  repeated-resync and retry-admission-saturation alerts remain open, no
+- ~~alerts for stalled shards, command overload, retry admission
+  saturation~~ (done — see below; repeated-resync alerts remain open, no
   per-shard resync counter exists yet to derive them from);
 - ~~diagnostic snapshots~~ (done — see below);
 - ~~configuration validation~~ (done — `EgressFabricConfig::validate`, see
@@ -2960,15 +2960,42 @@ chosen well above the reconciler's 1s default tick so an ordinary idle
 gap between polls never misreports), and Warning for a shard's command
 channel at ≥80% of capacity (reusing `EgressShardHeartbeat`'s existing
 `command_depth`, now also carrying `command_capacity` — a new field
-added for this). Repeated-resync and retry-admission-saturation alerts
-from the original checklist are explicitly *not* implemented: no
-per-shard resync counter or retry-admission-saturation signal exists to
-derive them from honestly; inventing thresholds without a real counter
-behind them would be worse than leaving the gap documented. Proof: 5 new
-unit tests in `alerts_tests.rs` (healthy/stalled/panicked/
-over-threshold/under-threshold), verified as real regressions by
-disabling the panicked-shard branch locally and confirming its test
-fails, then restored.
+added for this). Proof: 5 new unit tests in `alerts_tests.rs`
+(healthy/stalled/panicked/over-threshold/under-threshold), verified as
+real regressions by disabling the panicked-shard branch locally and
+confirming its test fails, then restored.
+
+**Retry-admission saturation — implemented as a follow-up, using data
+that already existed.** `apply_egress_retry_state_json`
+(`api_runtime_views/common.rs`) already put `retryAttempts`/
+`retrying`/`retryBackoffMs` on every retrying output, and
+`RuntimeTuning.output_max_retries` (the real configured ceiling,
+default 10) was already computed — it just wasn't in `health_snapshot`'s
+JSON, so `derive_alerts` (a pure function of that JSON, no config
+access) couldn't compare against it. Added a `tuning.outputMaxRetries`
+field to `health_snapshot()` and a new `derive_alerts` check: a
+`"retrying"` output whose `retryAttempts` has reached ≥80% of
+`outputMaxRetries` gets a specific "close to exhausting its retry
+budget" Warning instead of the generic `not_running` one — a real,
+config-relative signal, not a fabric-shard concept at all, wired
+without touching any hot-path leaf code. Proof: 2 new unit tests
+(near-ceiling fires the specific alert, below-ceiling still fires only
+the generic one), verified as a real regression by disabling the
+threshold check locally and confirming the near-ceiling test fails,
+then restored.
+
+**Repeated-resync alerts — investigated, left undone, and the reason is
+worth recording plainly.** `resync_count` exists per-leaf
+(`ProgressState`/`LeafMetrics`, `src/media/egress/leaf.rs` and
+`metrics.rs`) but is never aggregated to shard level and never reaches
+any snapshot or API surface at all today — not per-output, not
+per-shard. Closing this honestly needs new plumbing (a per-output or
+per-shard resync-rate export) added across all four protocol backends'
+hot leaf-visit paths, which AGENTS.md's Hot-Path Rules require
+benchmarking before and after — a real, separately-scoped piece of
+work, not a small addition alongside everything above. Inventing a
+threshold against data that isn't actually exported anywhere would be
+worse than leaving this open.
 
 **Diagnostic snapshots — implemented, reusing the same wiring as
 alerts.** The four `#[cfg(test)]`-only `*_fabric_runtime_snapshots`

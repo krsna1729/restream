@@ -499,6 +499,9 @@ pub(crate) async fn health_snapshot(
             "udpDrops": drops,
         },
         "egressFabricShards": egress_fabric_shards,
+        "tuning": {
+            "outputMaxRetries": engine.config.tuning.output_max_retries,
+        },
     })
 }
 
