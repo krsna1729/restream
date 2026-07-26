@@ -2202,13 +2202,29 @@ benchmark-driven decisions) and why that tier fits.
      leaf per packet, some of this churn is likely the same root cause
      rather than two independent findings — resolving the conversion
      duplication would plausibly shrink both numbers together.
-   **Deliberately not implemented in this pass**: both findings are
-   real architecture changes to the shared `ProtocolEngine`/leaf-state
-   contract (AGENTS.md requires a design pass before touching that,
-   not a rushed patch alongside a profiling writeup), and neither
-   blocks the fabric path from clearing this exit gate's correctness
-   bar — the CPU gap is a quantified, root-caused optimization
-   opportunity for a future phase, not an unexplained regression.
+   **Correction — this profile does not actually explain the
+   fabric-vs-legacy CPU gap, and saying so without checking was a
+   mistake worth naming.** Only the fabric variant was profiled; no
+   comparable legacy profile was captured. Checked afterward: legacy
+   has the *identical* one-encoder-per-output architecture —
+   `run_rtmp_egress` (`src/media/rtmp/egress.rs:256`) constructs one
+   `RtmpMediaEncoder` per output task, exactly mirroring
+   `RtmpFabricEngine`'s one-per-leaf encoder, and calls the same
+   `encode()` per packet per output. The redundant Annex-B→AVCC
+   conversion is therefore a pre-existing cost both variants pay
+   equally, not something fabric introduced — it cannot be what makes
+   fabric cost more CPU than legacy at this ratio. What this profile
+   *does* establish, honestly: a real, quantified breakdown of where
+   fabric's own CPU goes at this scale (useful on its own — it reverses
+   the N=30 "allocator churn isn't worth chasing" conclusion, and
+   flags a genuine shared-architecture inefficiency worth fixing
+   someday for its own sake, in both variants). What it does *not*
+   establish is why fabric is ~1.1-1.2x legacy's CPU at this specific
+   combined ratio — that requires a legacy-variant profile at the same
+   scale for a real differential, not yet captured. Left as the actual
+   next step if this gap is worth closing before a default-mode flip.
+   Neither finding blocks the fabric path from clearing this exit
+   gate's correctness bar on its own.
    Profile artifacts:
    `/tmp/mixed-fabric-matrix.perf.data` (not committed — regenerate
    with the same `sudo perf record -F 99 -g -p <fabric restream pid>`
