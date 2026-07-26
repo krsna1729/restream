@@ -2459,6 +2459,32 @@ benchmark-driven decisions) and why that tier fits.
      Phase 7 candidate, complementary to (not a replacement for) the
      shard-count tuning already documented there.
 
+   **Context-switch/allocator instrumentation — implemented, closing
+   the gap this whole phase's live captures kept flagging as
+   missing.** `sample_resource_window`
+   (`src/bin/test_harness/resource_sweep/measurement.rs`) previously
+   sampled only CPU and RSS. Added `voluntary_ctxt_switches`/
+   `nonvoluntary_ctxt_switches` (`/proc/<pid>/status`, diffed between
+   samples the same way CPU ticks already are, reported as
+   avg/peak-per-second) and peak thread count (`Threads:` in the same
+   file) to `ResourceSample`/`ResourceAggregate`, threaded through the
+   JSONL sample stream, the summary JSON, and the CSV writer — every
+   future `resource-sweep`/`*-fabric-matrix` capture now records these
+   by default, no flag needed. This is a direct, externally-observable
+   proxy for exactly the thread-topology and allocator-contention
+   findings above: live-verified at N=10 on this host, fabric already
+   shows both a higher peak thread count (20 vs legacy's 14 — the 6
+   dedicated shard threads landing on top of the shared 2-worker tokio
+   pool, exactly as read from the code) and a higher voluntary
+   context-switch rate (8.84/s vs 7.38/s) than legacy for the identical
+   RTMPS workload, without needing a `perf`/heaptrack pass to see it.
+   Full `cargo test --lib` (1,877 tests), the harness's own test suite,
+   clippy, fmt, source-audit, and docs checks all pass. Not done: wiring
+   this into the earlier phases' *recorded* baselines (the historical
+   captures throughout this document predate the field and were not
+   re-run) — it applies going forward, starting with Phase 7's shard
+   sweep.
+
 ## Phase 6a: Pipeline recirculation backend
 
 ### Objective
