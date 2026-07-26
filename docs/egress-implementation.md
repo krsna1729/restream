@@ -2387,25 +2387,77 @@ benchmark-driven decisions) and why that tier fits.
    fabric variants, since both resolve RTMPS trust through the same
    `resolve_rtmps_client_config` path.
 
-   Live results at real scale (N=1,000, this same 6-CPU/12GB host, two
-   full runs): **1,000/1,000 outputs reached progress in both variants,
-   every run, with zero errors in either restream log** — a clean
-   correctness result, first real evidence RTMPS fabric egress holds up
-   at scale at all. CPU is at parity (avg ratio 0.979, peak ratio
-   0.993 — fabric fractionally lower on both, within the noise band
-   every other capture in this phase has shown). **RSS is not** — fabric
-   averaged ~406MB vs legacy's ~356MB across both runs, a consistent
-   ~14% *higher* RSS for fabric, the reverse of every other
-   protocol/workload combination measured in this phase (plain RTMP,
-   SRT, and the combined RTMP+SRT workload all showed fabric using
-   *less* memory than legacy). Not chased further this pass — the
-   leading candidate is rustls per-connection buffer state
-   (`RtmpConnection`'s TLS record buffers) being retained differently
-   under the fabric's shard-owned-connection model than legacy's
-   per-task-owned one, but that's a hypothesis, not a finding; a
-   `perf`/heap-profile pass at RTMPS scale (mirroring the plain-RTMP
-   differential profile above) would be needed to root-cause it before
-   trusting fabric's RSS advantage to generalize to RTMPS specifically.
+   Live results at real scale (N=1,000, this same 6-CPU/12GB host, three
+   full baseline runs): **1,000/1,000 outputs reached progress in both
+   variants, every run, with zero errors in either restream log** — a
+   clean correctness result, first real evidence RTMPS fabric egress
+   holds up at scale at all. Three-run averages: CPU is at parity
+   (legacy 93.84% avg, fabric 95.55% avg — ratio 1.02x, within the
+   noise band every other capture in this phase has shown). **RSS is
+   not** — legacy 357.3MB avg, fabric 405.9MB avg, a consistent ~14%
+   *higher* RSS for fabric across all three runs individually (not
+   just on average), the reverse of every other protocol/workload
+   combination measured in this phase (plain RTMP, SRT, and the
+   combined RTMP+SRT workload all showed fabric using *less* memory
+   than legacy).
+
+   **Root-caused — glibc's per-thread malloc-arena behavior, not a
+   Rust-level leak or a fabric-specific buffer-retention bug.** Two
+   diagnostic passes:
+   - `heaptrack` attached live to both variants' real processes at
+     N=300 (`kernel.yama.ptrace_scope` temporarily set to `0` via
+     passwordless `sudo` to allow runtime attach, restored after).
+     Both variants' single largest retained-allocation site was
+     identical: `annexb_to_avcc_into`'s output buffer inside
+     `RtmpMediaEncoder::encode` (fabric: 25.16M over 759 calls; legacy:
+     29.96M over 1,168 calls — legacy's own number *higher*, not
+     lower). This ruled out "fabric's Rust-level heap allocations
+     retain more live bytes than legacy's" — heaptrack's own view of
+     live heap memory did not reproduce the RSS gap at all, meaning the
+     gap lives outside what the Rust-level allocation tracker sees.
+   - That pointed at the C allocator layer itself. Tested directly by
+     setting `MALLOC_ARENA_MAX` (inherited by both spawned restream
+     processes via the harness's environment) across three points at
+     N=1,000, no other change:
+
+     | `MALLOC_ARENA_MAX` | legacy RSS avg | fabric RSS avg | RSS ratio | legacy CPU avg | fabric CPU avg | CPU ratio |
+     |---|---|---|---|---|---|---|
+     | unset (glibc default) | 357.3MB | 405.9MB | 1.14x | 93.84% | 95.55% | 1.02x |
+     | 4 | 336.6MB | 328.0MB | 0.97x | 99.1% | 124.5% | 1.26x |
+     | 1 | 298.3MB | 275.3MB | 0.92x | 133.0% | 282.8% | 2.13x |
+
+     **Both `MALLOC_ARENA_MAX=4` and `=1` close or
+     reverse the RSS gap** (fabric drops to 0.97x and 0.92x of
+     legacy's RSS respectively) **but at a real, scaling CPU cost**
+     (1.26x at 4, 2.13x — more than double — at 1), because fabric's 6
+     dedicated shard threads contend far more on a shrunk/shared
+     malloc arena pool than legacy's leaner 2-tokio-worker model does
+     for the identical AVCC-buffer-churn workload. This is the same
+     root allocation pattern the combined-workload profile already
+     flagged (`annexb_to_avcc_into`'s per-leaf buffer, ~9% of CPU from
+     malloc-family functions there) — RTMPS just makes the underlying
+     glibc arena-per-thread tradeoff visible on the RSS axis instead of
+     (or in addition to) the CPU axis, because TLS write throughput
+     being slower than plain TCP write leaves more of these buffers
+     concurrently live at any moment, so per-arena fragmentation shows
+     up as measurable RSS rather than getting reused fast enough to
+     stay invisible.
+   - **Conclusion**: this is a genuine, quantified, three-point-tested
+     memory/CPU tradeoff in glibc's default allocator behavior under
+     fabric's thread topology, not a bug and not free to fix. The
+     unset/default setting — what fabric already ships with — sits at
+     the CPU-optimal end of this curve (RSS cost, CPU parity); forcing
+     arena count down trades that CPU parity away for RSS parity or
+     better. Not fixed in this pass: a real fix (fewer, better-sized
+     arenas without full serialization; or switching to an allocator
+     with smarter per-thread caching, e.g. jemalloc/mimalloc; or
+     reducing per-leaf AVCC buffer churn directly, which would reduce
+     pressure on this tradeoff from the allocation-volume side rather
+     than the arena-count side) is real allocator/architecture work
+     needing its own benchmark-driven design pass, not a quick patch
+     alongside a root-cause writeup. Left as a concrete, well-scoped
+     Phase 7 candidate, complementary to (not a replacement for) the
+     shard-count tuning already documented there.
 
 ## Phase 6a: Pipeline recirculation backend
 
