@@ -124,6 +124,10 @@ name = "rtmp_serializer"
 harness = false
 
 [[bench]]
+name = "recirculation_cost"
+harness = false
+
+[[bench]]
 name = "stage_metrics"
 harness = false
 
