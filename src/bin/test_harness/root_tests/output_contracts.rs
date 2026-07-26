@@ -31,7 +31,7 @@ fn ramp_json_dsl_carries_current_config_contract() {
 
 #[test]
 fn resource_egress_scenario_table_carries_branch_contract() {
-    assert_eq!(resource_egress_scenarios().len(), 10);
+    assert_eq!(resource_egress_scenarios().len(), 11);
     assert_eq!(
         resource_egress_scenarios()
             .iter()
@@ -81,16 +81,24 @@ fn resource_egress_scenario_table_carries_branch_contract() {
 #[test]
 fn sweep_output_kind_centralizes_urls_and_multi_audio_encoding() {
     assert_eq!(
-        SweepOutputKind::Rtmp720p.publish_url(1936, 8891, "out"),
+        SweepOutputKind::Rtmp720p.publish_url(1936, 1937, 8891, "out"),
         "rtmp://127.0.0.1:1936/live/out"
     );
     assert_eq!(
-        SweepOutputKind::Srt720p.publish_url(1936, 8891, "out"),
+        SweepOutputKind::Srt720p.publish_url(1936, 1937, 8891, "out"),
         "srt://127.0.0.1:8891?streamid=publish:out"
     );
     assert_eq!(
-        SweepOutputKind::Srt720p.read_url(1936, 8891, "out"),
+        SweepOutputKind::Srt720p.read_url(1936, 1937, 8891, "out"),
         "srt://127.0.0.1:8891?streamid=read:out&timeout=30000000"
+    );
+    assert_eq!(
+        SweepOutputKind::RtmpsSource.publish_url(1936, 1937, 8891, "out"),
+        "rtmps://127.0.0.1:1937/live/out"
+    );
+    assert_eq!(
+        SweepOutputKind::RtmpsSource.read_url(1936, 1937, 8891, "out"),
+        "rtmps://127.0.0.1:1937/live/out"
     );
     assert_eq!(SweepOutputKind::Rtmp720p.encoding(true), "720p+atrack:0");
     assert_eq!(SweepOutputKind::Srt720p.encoding(true), "720p+atrack:0,1");

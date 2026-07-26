@@ -171,6 +171,7 @@ fn srt_outputs_use_mediamtx_standard_stream_id() {
         restream_rtmp: 1935,
         restream_srt: 10080,
         mtx_rtmp: 1936,
+        mtx_rtmps: 1937,
         mtx_srt: 8891,
         mtx_api: 9997,
         sample_secs: 1,
@@ -183,6 +184,7 @@ fn srt_outputs_use_mediamtx_standard_stream_id() {
         no_cleanup: false,
         srt_crypto: HarnessSrtCrypto::plaintext(),
         backend_policy_env: Vec::new(),
+        rtmps_tls: None,
     };
     let output = MsrOutputSpec {
         ordinal: 20,

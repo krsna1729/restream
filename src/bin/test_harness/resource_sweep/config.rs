@@ -57,6 +57,7 @@ pub(super) struct ResourceSweepEnv {
     pub(super) restream_rtmp: u16,
     pub(super) restream_srt: u16,
     pub(super) mtx_rtmp: u16,
+    pub(super) mtx_rtmps: u16,
     pub(super) mtx_srt: u16,
     pub(super) mtx_api: u16,
     pub(super) sample_secs: u64,
@@ -69,6 +70,12 @@ pub(super) struct ResourceSweepEnv {
     pub(super) no_cleanup: bool,
     pub(super) srt_crypto: HarnessSrtCrypto,
     pub(super) backend_policy_env: Vec<(&'static str, String)>,
+    /// mediamtx RTMPS cert/key paths (`RESOURCE_SWEEP_RTMPS_CERT`/`_KEY`).
+    /// `None` (the default) keeps mediamtx's `rtmpEncryption: "no"` as
+    /// every other resource-sweep mode already expects; set both to run
+    /// mediamtx with `rtmpEncryption: "optional"` and the given self-signed
+    /// cert, letting the same RTMP port auto-detect plain RTMP vs RTMPS.
+    pub(super) rtmps_tls: Option<(PathBuf, PathBuf)>,
 }
 
 impl ResourceSweepEnv {
@@ -96,6 +103,7 @@ impl ResourceSweepEnv {
             restream_rtmp: ports.restream_rtmp,
             restream_srt: ports.restream_srt,
             mtx_rtmp: ports.mtx_rtmp,
+            mtx_rtmps: ports.mtx_rtmps,
             mtx_srt: ports.mtx_srt,
             mtx_api: ports.mtx_api,
             sample_secs: env_secs("RESOURCE_SWEEP_SAMPLE_SECS", 6),
@@ -110,6 +118,13 @@ impl ResourceSweepEnv {
                 .is_some_and(|v| v == "1"),
             srt_crypto: harness_srt_crypto_from_env(),
             backend_policy_env: Vec::new(),
+            rtmps_tls: match (
+                std::env::var_os("RESOURCE_SWEEP_RTMPS_CERT"),
+                std::env::var_os("RESOURCE_SWEEP_RTMPS_KEY"),
+            ) {
+                (Some(cert), Some(key)) => Some((PathBuf::from(cert), PathBuf::from(key))),
+                _ => None,
+            },
             work_dir,
         })
     }

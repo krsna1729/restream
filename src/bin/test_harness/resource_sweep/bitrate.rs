@@ -49,6 +49,7 @@ struct BitrateSweepEnv {
     restream_rtmp: u16,
     restream_srt: u16,
     mtx_rtmp: u16,
+    mtx_rtmps: u16,
     mtx_srt: u16,
     mtx_api: u16,
     stabilize_secs: u64,
@@ -80,6 +81,7 @@ impl BitrateSweepEnv {
             restream_rtmp: ports.restream_rtmp,
             restream_srt: ports.restream_srt,
             mtx_rtmp: ports.mtx_rtmp,
+            mtx_rtmps: ports.mtx_rtmps,
             mtx_srt: ports.mtx_srt,
             mtx_api: ports.mtx_api,
             stabilize_secs: env_secs("BITRATE_SWEEP_STABILIZE_SECS", 30),
@@ -390,13 +392,13 @@ fn bitrate_output_url(
     name: &str,
 ) -> (String, String) {
     (
-        kind.publish_url(env.mtx_rtmp, env.mtx_srt, name),
+        kind.publish_url(env.mtx_rtmp, env.mtx_rtmps, env.mtx_srt, name),
         kind.encoding(config.multi_audio).to_string(),
     )
 }
 
 fn bitrate_probe_url(env: &BitrateSweepEnv, kind: SweepOutputKind, name: &str) -> String {
-    kind.read_url(env.mtx_rtmp, env.mtx_srt, name)
+    kind.read_url(env.mtx_rtmp, env.mtx_rtmps, env.mtx_srt, name)
 }
 
 async fn sample_bitrate_window(

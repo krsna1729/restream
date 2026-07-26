@@ -238,6 +238,7 @@ async fn run() -> Result<(), String> {
             "rtmp-fabric-matrix" => rtmp_fabric_matrix().await,
             "srt-fabric-matrix" => srt_fabric_matrix().await,
             "mixed-fabric-matrix" => mixed_fabric_matrix().await,
+            "rtmps-fabric-matrix" => rtmps_fabric_matrix().await,
             other => Err(unknown_command_error(other)),
         }
     };

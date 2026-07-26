@@ -35,7 +35,7 @@ mod branch_matrix;
 pub(crate) use branch_matrix::selected_backend_policy_variants;
 pub(crate) use branch_matrix::{
     backend_policy_matrix, branch_matrix, mixed_fabric_matrix, rtmp_fabric_matrix,
-    srt_crypto_matrix, srt_fabric_matrix,
+    rtmps_fabric_matrix, srt_crypto_matrix, srt_fabric_matrix,
 };
 #[path = "resource_sweep/catalog.rs"]
 mod catalog;
@@ -173,10 +173,22 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
     cleanup_ramp_db(&env.restream_db_path);
     let mediamtx_log = std::fs::File::create(&env.mediamtx_log).map_err(|e| e.to_string())?;
     let mediamtx_err = mediamtx_log.try_clone().map_err(|e| e.to_string())?;
+    // mediamtx serves RTMPS on its own dedicated `rtmpsAddress` listener,
+    // separate from the plain `rtmpAddress` port — there is no same-port
+    // auto-detection despite `rtmpEncryption: "optional"`'s name.
+    let rtmp_tls_lines = match &env.rtmps_tls {
+        Some((cert, key)) => format!(
+            "rtmpEncryption: \"optional\"\nrtmpsAddress: :{}\nrtmpServerCert: {}\nrtmpServerKey: {}\n",
+            env.mtx_rtmps,
+            cert.display(),
+            key.display()
+        ),
+        None => "rtmpEncryption: \"no\"\n".to_string(),
+    };
     std::fs::write(
         &env.mediamtx_config,
         format!(
-            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nwriteQueueSize: 512\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
+            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nwriteQueueSize: 512\nrtmp: yes\nrtmpAddress: :{}\n{rtmp_tls_lines}rtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
             env.mtx_rtmp, env.mtx_srt, env.mtx_api
         ),
     )
@@ -673,7 +685,7 @@ fn resource_output_url(
     name: &str,
 ) -> (String, String) {
     (
-        kind.publish_url(env.mtx_rtmp, env.mtx_srt, name),
+        kind.publish_url(env.mtx_rtmp, env.mtx_rtmps, env.mtx_srt, name),
         kind.encoding(config.multi_audio).to_string(),
     )
 }

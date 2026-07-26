@@ -1841,7 +1841,9 @@ Live tests cover:
 - 998 healthy plus one non-reading and one throttled peer on one shard;
 - reconnect storm and handshake stall;
 - output media integrity and advancing receiver bytes;
-- comparison with the recorded 1,140 RTMP plus 60 SRT workload.
+- comparison with the recorded 1,140 RTMP plus 60 SRT workload;
+- 1,000 RTMPS-only outputs against a real TLS-terminating mediamtx
+  listener (see the RTMPS-at-scale writeup below).
 
 Current branch status: a first live A/B exists —
 `rtmp-fabric-matrix` (`src/bin/test_harness/resource_sweep/branch_matrix.rs`,
@@ -2351,15 +2353,59 @@ benchmark-driven decisions) and why that tier fits.
      still failing, error path), then restoring it; plus a new
      `AppConfig` env-var test. Full `cargo test --lib` (1,862 tests),
      clippy, fmt, source-audit, and docs checks all pass.
-   - **Deliberately not done in this change**: the harness-side
-     `SweepOutputKind` RTMPS variant, mediamtx TLS listener, and
-     generated test cert needed to actually exercise this at scale.
-     `rcgen` is still `[dev-dependencies]`-only and not visible to the
-     `test_harness` `[[bin]]` target; moving it (or gating harness
-     cert generation behind a feature) is the next step if RTMPS-at-scale
-     testing is prioritized. Also not done: rustls-internal
-     plaintext/encrypted buffer accounting for the leaf byte-limit
-     (tracked separately, see the RTMPS accounting note above).
+   - Also not done in this change: rustls-internal plaintext/encrypted
+     buffer accounting for the leaf byte-limit (tracked separately, see
+     the RTMPS accounting note above).
+
+   **RTMPS-at-scale harness infra and live capture — done.** Checked-in
+   fixture cert, not a Cargo dependency change: rather than moving
+   `rcgen` out of `[dev-dependencies]` (it's not visible to the
+   `test_harness` `[[bin]]` target under plain `cargo build`), generated
+   one self-signed cert+key with `openssl` (20-year validity, `CN=localhost`,
+   SAN `localhost`/`127.0.0.1`, explicit `CA:FALSE` — a `CA:TRUE` self-signed
+   cert used as both trust anchor and leaf is rejected by rustls with
+   `CaUsedAsEndEntity`, found live) and checked it in at
+   `test/fixtures/tls/mediamtx-rtmps-{cert,key}.pem`, following
+   AGENTS.md's "prefer checked-in fixtures over inline generation for
+   tests, benches, and harness runs" over a Cargo feature-gate approach.
+   Registered in `REQUIRED_CHECKED_IN_FIXTURES` and resolved via a new
+   `restream::test_fixtures::rtmps_harness_cert_fixture()`. mediamtx
+   serves RTMPS on its own dedicated `rtmpsAddress` listener (confirmed
+   live — `rtmpEncryption: "optional"` does *not* enable same-port
+   auto-detection on `rtmpAddress` despite the name; a real TLS
+   handshake against the plain port silently reset every time),
+   requiring a new `mtx_rtmps` port allocated in the harness's port
+   defaults. New `SweepOutputKind::RtmpsSource` (`publish_url`/`read_url`
+   gained an `rtmps_port` parameter, threaded through every call site
+   including `bitrate.rs`), a new `egress-growth-source-rtmps` scenario,
+   `ResourceSweepEnv.rtmps_tls: Option<(cert, key)>` (default `None`,
+   zero behavior change for every other resource-sweep mode), and a new
+   `rtmps-fabric-matrix` harness mode (`rtmps_fabric_matrix`,
+   `RTMPS_FABRIC_MATRIX_EGRESS_COUNT`) that — unlike
+   `run_protocol_fabric_matrix` — applies
+   `RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM` to *both* the legacy and
+   fabric variants, since both resolve RTMPS trust through the same
+   `resolve_rtmps_client_config` path.
+
+   Live results at real scale (N=1,000, this same 6-CPU/12GB host, two
+   full runs): **1,000/1,000 outputs reached progress in both variants,
+   every run, with zero errors in either restream log** — a clean
+   correctness result, first real evidence RTMPS fabric egress holds up
+   at scale at all. CPU is at parity (avg ratio 0.979, peak ratio
+   0.993 — fabric fractionally lower on both, within the noise band
+   every other capture in this phase has shown). **RSS is not** — fabric
+   averaged ~406MB vs legacy's ~356MB across both runs, a consistent
+   ~14% *higher* RSS for fabric, the reverse of every other
+   protocol/workload combination measured in this phase (plain RTMP,
+   SRT, and the combined RTMP+SRT workload all showed fabric using
+   *less* memory than legacy). Not chased further this pass — the
+   leading candidate is rustls per-connection buffer state
+   (`RtmpConnection`'s TLS record buffers) being retained differently
+   under the fabric's shard-owned-connection model than legacy's
+   per-task-owned one, but that's a hypothesis, not a finding; a
+   `perf`/heap-profile pass at RTMPS scale (mirroring the plain-RTMP
+   differential profile above) would be needed to root-cause it before
+   trusting fabric's RSS advantage to generalize to RTMPS specifically.
 
 ## Phase 6a: Pipeline recirculation backend
 

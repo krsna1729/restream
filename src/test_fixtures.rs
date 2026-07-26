@@ -114,6 +114,11 @@ pub const REQUIRED_CHECKED_IN_FIXTURES: &[&str] = &[
     // MediaMTX sink configuration fixture used by integration harnesses for
     // deterministic local RTMP/SRT/HLS sink behavior.
     "test/harness/mediamtx-sink.yml",
+    // Self-signed cert+key for harness RTMPS coverage: mediamtx's RTMP-over-TLS
+    // server cert, trusted by restream's egress client via
+    // RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM. 20-year validity, CN=localhost.
+    "test/fixtures/tls/mediamtx-rtmps-cert.pem",
+    "test/fixtures/tls/mediamtx-rtmps-key.pem",
 ];
 
 fn repo_root() -> PathBuf {
@@ -142,6 +147,18 @@ pub fn canonical_h265_ts_fixture() -> Result<PathBuf, String> {
 
 pub fn sparse_gop_mp4_fixture() -> Result<PathBuf, String> {
     checked_in_fixture("test/fixtures/media-library/sparse-gop-5s.mp4")
+}
+
+/// Self-signed cert+key pair (`CN=localhost`, SAN `localhost`/`127.0.0.1`,
+/// 20-year validity) for harness RTMPS coverage. mediamtx uses it as its
+/// RTMP-over-TLS server cert; restream's egress client trusts it via
+/// `RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM` pointed at the same cert file —
+/// RTMPS here is server-authenticated TLS only, so no client cert is needed.
+pub fn rtmps_harness_cert_fixture() -> Result<(PathBuf, PathBuf), String> {
+    Ok((
+        checked_in_fixture("test/fixtures/tls/mediamtx-rtmps-cert.pem")?,
+        checked_in_fixture("test/fixtures/tls/mediamtx-rtmps-key.pem")?,
+    ))
 }
 
 pub fn canonical_ts_fixture(codec: &str) -> Result<PathBuf, String> {
