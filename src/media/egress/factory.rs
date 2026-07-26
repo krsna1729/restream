@@ -7,6 +7,7 @@ use crate::media::egress::backends::rtmp_shard::{
 use crate::media::egress::backends::rtmp_shard_resolve_runtime::{
     ResolvingRtmpShardBackendWithPoller, resolving_rtmp_shard_backend,
 };
+use crate::media::egress::backends::sink_shard::SinkShardBackend;
 use crate::media::egress::backends::srt::SrtReadinessPoller;
 use crate::media::egress::backends::srt::resolve_runtime::{
     ResolvingNativeSrtShardBackend, ResolvingSrtShardBackendWithPoller, resolving_srt_shard_backend,
@@ -217,6 +218,28 @@ where
         ));
     }
     Ok(backends)
+}
+
+/// Spawns one [`SinkShardBackend`] per shard, all bound to the same feed —
+/// mirrors `spawn_rtmp_fabric_shard_group`/`spawn_srt_fabric_shard_group`,
+/// simplified: sink leaves have no socket and no poller (see
+/// `sink_shard.rs`'s module doc), so there is no per-shard readiness poller
+/// to construct or thread through.
+pub(crate) fn spawn_sink_fabric_shard_group<F>(
+    shard_count: NonZeroU32,
+    shard_config: EgressShardConfig,
+    budget: WorkBudget,
+    mut feed_for: F,
+) -> Result<EgressShardGroup, EgressShardGroupError>
+where
+    F: FnMut(ShardId) -> RingFeed,
+{
+    let mut backends = Vec::with_capacity(shard_count.get() as usize);
+    for shard_index in 0..shard_count.get() {
+        let shard_id = ShardId::new(shard_index);
+        backends.push(SinkShardBackend::new(feed_for(shard_id), budget));
+    }
+    EgressShardGroup::spawn(shard_count, shard_config, backends)
 }
 
 #[cfg(test)]

@@ -139,9 +139,27 @@ impl RtmpFabricRegistry {
     }
 }
 
+pub(crate) struct SinkFabricRegistry {
+    pub(crate) runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub(crate) active_outputs: HashMap<FeedId, u64>,
+    /// One publication watcher per feed runtime; aborted on release.
+    pub(crate) feed_watchers: HashMap<FeedId, tokio::task::JoinHandle<()>>,
+}
+
+impl SinkFabricRegistry {
+    fn new() -> Self {
+        Self {
+            runtimes: HashMap::new(),
+            active_outputs: HashMap::new(),
+            feed_watchers: HashMap::new(),
+        }
+    }
+}
+
 pub struct FabricRegistry {
     pub(crate) srt: TokioMutex<SrtFabricRegistry>,
     pub(crate) rtmp: TokioMutex<RtmpFabricRegistry>,
+    pub(crate) sink: TokioMutex<SinkFabricRegistry>,
 }
 
 impl Default for FabricRegistry {
@@ -155,6 +173,7 @@ impl FabricRegistry {
         Self {
             srt: TokioMutex::new(SrtFabricRegistry::new()),
             rtmp: TokioMutex::new(RtmpFabricRegistry::new()),
+            sink: TokioMutex::new(SinkFabricRegistry::new()),
         }
     }
 }

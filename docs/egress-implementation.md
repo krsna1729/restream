@@ -585,44 +585,67 @@ Fabric sink is available through the same desired-output API as other output
 kinds and is safe to use in local, test, and staging environments. It does not
 become a substitute for live SRT or RTMP correctness evidence.
 
-**Correction — this was marked fully met; it is not.** `start_sink_egress`
-(`src/media/egress/backends/sink.rs`) is a plain per-output `tokio::spawn`
-task driven by `tokio::select!`/`Reader::wait_for_data()` — the exact
-one-task-per-output pattern this migration exists to replace. `SinkEngine`
-implements `ProtocolEngine` and is genuinely schedulable on a shard —
-proven by `SinkHarnessBackend` in `src/media/egress/shard/tests/sink.rs` —
-but that harness is test-only; there is no production `SinkShardBackend`
-wired into `EgressManager`/`EgressCommand` dispatch the way
-`SrtShardBackend`/`RtmpShardBackend` are. The earlier "same desired-output
-API" reading of this exit gate was too narrow: `ProtocolSpec::Sink` does
-reach the same API and command types, but nothing routes it onto actual
-shard OS threads. Real completion needs the same production wiring RTMP
-and SRT already have (shard backend, factory spawn function, manager
-integration, `EgressTask::run` dispatch) — not a new design, just the
-already-proven pattern applied to the one backend that skipped it.
+**Correction, then fixed — this was marked fully met; it was not, and now
+is.** `start_sink_egress` (`src/media/egress/backends/sink.rs`) was a
+plain per-output `tokio::spawn` task driven by
+`tokio::select!`/`Reader::wait_for_data()` — the exact one-task-per-output
+pattern this migration exists to replace. `SinkEngine` implements
+`ProtocolEngine` and was genuinely schedulable on a shard — proven by
+`SinkHarnessBackend` in `src/media/egress/shard/tests/sink.rs` — but that
+harness was test-only; nothing routed `ProtocolSpec::Sink` onto real
+shard OS threads. The earlier "same desired-output API" reading of this
+exit gate was too narrow: reaching the same API and command types is not
+the same as running on the fabric.
 
-**Traced the concrete implementation gap (`sonnet`-tier, not started):**
-Sink's rehome has one real design wrinkle SRT/RTMP don't: it has no
-socket and no poller at all. SRT always registers write interest and
-relies on `epoll`/`srt_epoll_wait` to report writability; RTMP's
-`EgressCommand::FeedWake` handler (`refresh_registrations_for_feed_wake`)
-only *widens poller interest* so the *next* real socket-readiness poll
-picks the leaf up. Sink has no socket-readiness poll to widen interest
-for — a sink leaf is conceptually always "writable" (discarding costs no
-I/O), so nothing except `EgressCommand::FeedWake` itself can ever tell a
-sink shard "new data exists, re-visit this leaf." A production
-`SinkShardBackend`'s `FeedWake` handler therefore needs to directly
-re-enqueue its leaves into the ready queue — not adjust registration
-state the way RTMP does — the one place this genuinely isn't just "copy
-the SRT/RTMP pattern." Everything else (real `LeafCommon` lifecycle,
-generation-checked `Add`/`Update`/`Remove`, a factory spawn function
-mirroring `spawn_rtmp_fabric_shard_group`, `EgressTask::run` dispatching
-to it instead of `start_sink_egress`) is the already-proven pattern.
-Given AGENTS.md requires deterministic tests, loom/proptest where
-feasible, and a live harness fault case for lifecycle/concurrency
-changes — not skipped here for lack of scope clarity, but because doing
-it properly needs a dedicated pass with room for that testing depth,
-not a rushed addition alongside everything else landed this session.
+**Implemented.** A real production `SinkShardBackend`
+(`src/media/egress/backends/sink_shard.rs`) now exists, following the
+already-proven RTMP/SRT shard-backend shape (`LeafCommon` lifecycle,
+generation-checked `Add`/`Update`/`Remove`, `EngineVisit::run` for shared
+progress/generation handling) with one genuine design difference: a sink
+leaf has no socket and no poller at all. SRT always registers write
+interest and relies on `epoll`/`srt_epoll_wait` to report writability;
+RTMP's `EgressCommand::FeedWake` handler only *widens poller interest* so
+the *next* real socket-readiness poll picks the leaf up. Sink has no
+socket-readiness poll to widen interest for — a sink leaf is
+conceptually always "writable" (discarding costs no I/O), so
+`EgressCommand::FeedWake` is its *only* readiness signal.
+`SinkShardBackend::on_command`'s `FeedWake` arm therefore directly
+re-enqueues every leaf into the ready queue (`enqueue_all_leaves`)
+instead of adjusting registration state, and `on_media_tick` drains the
+ready queue every tick regardless, so a missed or coalesced wake costs
+one extra tick of latency, not correctness.
+
+Application-layer wiring mirrors RTMP/SRT exactly:
+`prepare_sink_fabric_feed`/`sink_fabric_output_spec`
+(`src/application/egress.rs` — simpler than SRT's, since sink reads
+directly off the output's own ring with no shared muxer stage to
+resolve), `spawn_sink_fabric_shard_group`
+(`src/media/egress/factory.rs`), a `SinkFabricRegistry` and
+`retain_sink_fabric_runtime`/`dispatch_sink_fabric_command`/`release_sink_fabric_runtime`
+(`src/media/engine_sink_egress_fabric.rs`, registered in
+`FabricRegistry`), and `EgressTask::run_sink_fabric`
+(`src/infrastructure/bootstrap/egress.rs`) — including the same
+`terminated_unexpectedly`/`wait_for_stop_or_leaf_failure` retry wiring
+RTMP/SRT leaves use, so a sink leaf that fails is retried like any other
+fabric output rather than sitting silently stale (`start_sink_egress`
+remains as a fallback if `sink_fabric` is ever `None`, matching the
+SRT/RTMP call-site shape, though in practice every `Sink`-scheme output
+now builds one).
+
+Proof: 3 new shard-level tests (`sink_shard/tests.rs`) drive
+`SinkShardBackend` through `EgressShardHandle::spawn` on a real OS
+thread — discards a published unit, discards a unit published *after*
+the leaf goes idle (the `FeedWake`-is-the-only-signal path specifically),
+and stops discarding after `Remove`; verified as real regressions by
+temporarily making `FeedWake` a no-op and confirming both liveness-
+dependent tests fail. 2 new engine-level integration tests
+(`engine_tests/egress_fabric.rs`) exercise the full production registry
+path: `retain`/`release` reference counting, and an end-to-end
+`dispatch_sink_fabric_command(Add)` → real `ring.push()` → the same
+production wake-watcher task RTMP/SRT use → real shard thread →
+observed via the real `EgressProgressSink` counters the application
+layer wires up. Full `cargo test --lib` (1,871 tests), clippy, fmt,
+source-audit, and docs checks all pass.
 
 ## Phase 4: SRT migration
 

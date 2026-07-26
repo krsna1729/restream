@@ -6,7 +6,7 @@ use crate::domain::output_spec::{
     EgressProtocol, OutputUrlScheme, RecirculationTarget, VideoCodecKind,
 };
 use crate::domain::stage::{StageKey, StageKind};
-use crate::media::egress::journal::{FeedEpoch, TsFeed};
+use crate::media::egress::journal::{FeedEpoch, RingFeed, TsFeed};
 use crate::media::egress::policy::LeafPolicy;
 use crate::media::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::engine::MediaEngine;
@@ -187,6 +187,40 @@ pub fn srt_fabric_output_spec(
             connect_timeout,
             ..LeafPolicy::default()
         },
+        progress: Default::default(),
+    }
+}
+
+pub struct PreparedSinkFabricFeed {
+    pub feed_id: FeedId,
+    pub feed: Arc<RingFeed>,
+}
+
+/// Sink reads directly off the output's own ring the same way RTMP does —
+/// no shared muxer stage to resolve (that's an SRT-specific concept, for
+/// coalescing multiple SRT egress leaves onto one TS byte stream), so
+/// unlike `prepare_srt_fabric_feed` this needs no engine calls at all.
+pub fn prepare_sink_fabric_feed(
+    output: &Output,
+    prepared: &PreparedOutput,
+) -> PreparedSinkFabricFeed {
+    let feed_id = FeedId::new(format!("sink:{}", output.id));
+    PreparedSinkFabricFeed {
+        feed_id,
+        feed: Arc::new(RingFeed::new(
+            prepared.ring.clone(),
+            Arc::new(FeedEpoch::new()),
+        )),
+    }
+}
+
+pub fn sink_fabric_output_spec(output: &Output, generation: u64, feed_id: FeedId) -> OutputSpec {
+    OutputSpec {
+        id: OutputId::new(output.id.clone()),
+        generation,
+        feed: feed_id,
+        protocol: ProtocolSpec::Sink,
+        policy: LeafPolicy::default(),
         progress: Default::default(),
     }
 }

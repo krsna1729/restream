@@ -283,6 +283,39 @@ impl EgressReconciler {
             None
         };
 
+        let use_sink_fabric = matches!(url_scheme, OutputUrlScheme::Sink);
+        let sink_fabric = if use_sink_fabric {
+            let feed = crate::application::egress::prepare_sink_fabric_feed(output, &prepared);
+            let mut spec = crate::application::egress::sink_fabric_output_spec(
+                output,
+                registration.attempt_id,
+                feed.feed_id.clone(),
+            );
+            let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            if let Some(sink) = self
+                .engine
+                .with_active_egress(&output.id, |egress| {
+                    crate::media::egress::leaf::EgressProgressSink {
+                        bytes_sent: Some(egress.bytes_sent.clone()),
+                        last_progress_ms: Some(egress.last_progress_ms.clone()),
+                        terminated_unexpectedly: Some(terminated.clone()),
+                        ..Default::default()
+                    }
+                })
+                .await
+            {
+                spec.progress = sink;
+            }
+            Some(SinkFabricTask {
+                spec,
+                feed_id: feed.feed_id,
+                feed: feed.feed,
+                terminated,
+            })
+        } else {
+            None
+        };
+
         let task = EgressTask {
             output_id: output.id.clone(),
             pipeline_id: output.pipeline_id.clone(),
@@ -300,6 +333,7 @@ impl EgressReconciler {
             job_id,
             srt_fabric,
             rtmp_fabric,
+            sink_fabric,
         };
         tokio::spawn(task.run());
     }
@@ -329,6 +363,15 @@ struct RtmpFabricTask {
     terminated: Arc<std::sync::atomic::AtomicBool>,
 }
 
+#[derive(Clone)]
+struct SinkFabricTask {
+    feed_id: FeedId,
+    feed: Arc<RingFeed>,
+    spec: OutputSpec,
+    /// See `SrtFabricTask::terminated`.
+    terminated: Arc<std::sync::atomic::AtomicBool>,
+}
+
 struct EgressTask {
     output_id: String,
     pipeline_id: String,
@@ -346,6 +389,7 @@ struct EgressTask {
     job_id: String,
     srt_fabric: Option<SrtFabricTask>,
     rtmp_fabric: Option<RtmpFabricTask>,
+    sink_fabric: Option<SinkFabricTask>,
 }
 
 impl EgressTask {
@@ -392,13 +436,17 @@ impl EgressTask {
                     }
                 }
                 OutputUrlScheme::Sink => {
-                    crate::media::egress::backends::sink::start_sink_egress(
-                        self.output_id.clone(),
-                        self.ring.clone(),
-                        self.engine.clone(),
-                        self.registration.clone(),
-                    )
-                    .await;
+                    if let Some(fabric) = self.sink_fabric.as_ref().cloned() {
+                        self.run_sink_fabric(fabric).await;
+                    } else {
+                        crate::media::egress::backends::sink::start_sink_egress(
+                            self.output_id.clone(),
+                            self.ring.clone(),
+                            self.engine.clone(),
+                            self.registration.clone(),
+                        )
+                        .await;
+                    }
                 }
                 OutputUrlScheme::Hls | OutputUrlScheme::Http | OutputUrlScheme::Https => {
                     let (store, already_running) =
@@ -751,6 +799,77 @@ impl EgressTask {
         let _ = self
             .engine
             .release_rtmp_fabric_runtime(&fabric.feed_id)
+            .await;
+    }
+
+    async fn run_sink_fabric(&self, fabric: SinkFabricTask) {
+        match self
+            .engine
+            .retain_sink_fabric_runtime(fabric.feed_id.clone(), fabric.feed.as_ref())
+            .await
+        {
+            Ok(_) => {}
+            Err(error) => {
+                self.engine
+                    .record_egress_error_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        "sink_fabric_ensure",
+                        format!("{error:?}"),
+                    )
+                    .await;
+                return;
+            }
+        }
+
+        match self
+            .engine
+            .dispatch_sink_fabric_command(&fabric.feed_id, EgressCommand::Add(fabric.spec.clone()))
+            .await
+        {
+            Ok(_) => {
+                self.engine
+                    .update_egress_phase_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        EgressPhase::Discarding,
+                    )
+                    .await;
+            }
+            Err(error) => {
+                let _ = self
+                    .engine
+                    .release_sink_fabric_runtime(&fabric.feed_id)
+                    .await;
+                self.engine
+                    .record_egress_error_if_current(
+                        &self.output_id,
+                        &self.registration,
+                        "sink_fabric_dispatch",
+                        format!("{error:?}"),
+                    )
+                    .await;
+                return;
+            }
+        }
+
+        if self.wait_for_stop_or_leaf_failure(&fabric.terminated).await {
+            self.engine
+                .record_egress_error_if_current(
+                    &self.output_id,
+                    &self.registration,
+                    "sink_fabric_leaf",
+                    "sink fabric leaf terminated unexpectedly",
+                )
+                .await;
+        }
+        let _ = self
+            .engine
+            .dispatch_sink_fabric_command(&fabric.feed_id, EgressCommand::Remove(fabric.spec.id))
+            .await;
+        let _ = self
+            .engine
+            .release_sink_fabric_runtime(&fabric.feed_id)
             .await;
     }
 

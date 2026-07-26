@@ -280,3 +280,105 @@ async fn rtmp_fabric_publish_startup_is_readable_by_the_shard_backend() {
         .await;
     assert!(!missing, "a released runtime must not accept new startups");
 }
+
+#[tokio::test]
+async fn sink_fabric_registry_retains_runtime_once_per_feed() {
+    use crate::media::egress::journal::RingFeed;
+
+    let engine = MediaEngine::new();
+    let feed_id = FeedId::new("feed-engine-sink");
+    let feed = RingFeed::new(
+        Arc::new(crate::media::ring_buffer::RingBuffer::new(8)),
+        Arc::new(FeedEpoch::new()),
+    );
+
+    let first = engine
+        .retain_sink_fabric_runtime(feed_id.clone(), &feed)
+        .await;
+    let second = engine
+        .retain_sink_fabric_runtime(feed_id.clone(), &feed)
+        .await;
+    let snapshots = engine.sink_fabric_runtime_snapshots(&feed_id).await;
+
+    assert_eq!(first, Ok(true));
+    assert_eq!(second, Ok(false));
+    assert_eq!(snapshots.map(|snapshots| snapshots.len()), Some(4));
+    assert!(!engine.release_sink_fabric_runtime(&feed_id).await);
+    assert!(
+        engine
+            .sink_fabric_runtime_snapshots(&feed_id)
+            .await
+            .is_some()
+    );
+    assert!(engine.release_sink_fabric_runtime(&feed_id).await);
+    assert!(
+        engine
+            .sink_fabric_runtime_snapshots(&feed_id)
+            .await
+            .is_none()
+    );
+}
+
+/// End-to-end proof that a `Sink` output added through the same
+/// `EgressCommand::Add`/`dispatch_sink_fabric_command` path production
+/// code uses actually discards real feed units on a real shard thread —
+/// closing the Phase 4a gap (`docs/egress-implementation.md`): `Sink` used
+/// to reach this registry's API surface without ever routing onto shard
+/// OS threads.
+#[tokio::test]
+async fn sink_fabric_registry_dispatches_add_and_the_shard_discards_published_units() {
+    use crate::media::egress::journal::RingFeed;
+    use crate::media::egress::leaf::EgressProgressSink;
+    use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let engine = MediaEngine::new();
+    let feed_id = FeedId::new("feed-engine-sink-dispatch");
+    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8));
+    let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
+
+    engine
+        .retain_sink_fabric_runtime(feed_id.clone(), &feed)
+        .await
+        .unwrap();
+
+    let bytes_sent = Arc::new(AtomicU64::new(0));
+    let mut spec = output_spec("out-sink-1", &feed_id);
+    spec.progress = EgressProgressSink {
+        bytes_sent: Some(bytes_sent.clone()),
+        ..Default::default()
+    };
+    engine
+        .dispatch_sink_fabric_command(&feed_id, EgressCommand::Add(spec))
+        .await
+        .unwrap();
+
+    // `retain_sink_fabric_runtime` already spawned a wake watcher for this
+    // feed (mirroring `retain_srt_fabric_runtime`/`retain_rtmp_fabric_runtime`)
+    // that delivers `EgressCommand::FeedWake` to every shard on publish —
+    // `EgressManager::dispatch` treats a manually-dispatched `FeedWake` as a
+    // no-op (`ManagerCommandOutcome::Ignored`), so the push below must go
+    // through the same production path the watcher observes, not a second
+    // manual dispatch.
+    ring.push(MediaPacket {
+        media_type: MediaType::Video,
+        format: PayloadFormat::Raw,
+        is_keyframe: true,
+        track_index: 0,
+        pts: 0,
+        dts: 0,
+        payload: bytes::Bytes::from_static(b"abcde"),
+    });
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while bytes_sent.load(Ordering::Relaxed) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "sink shard never discarded the published unit"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(bytes_sent.load(Ordering::Relaxed), 5);
+
+    engine.release_sink_fabric_runtime(&feed_id).await;
+}
