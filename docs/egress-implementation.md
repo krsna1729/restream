@@ -2100,6 +2100,55 @@ benchmark-driven decisions) and why that tier fits.
    real scale — now has a real, decisive answer for the shapes tested:
    yes, and for SRT it does something legacy structurally cannot do at
    any scale, cap raised or not.
+7. **The 1,140 RTMP + 60 SRT combined workload shape — done, and it
+   surfaces a real (not noise) CPU gap the single-protocol captures
+   didn't.** `resource-sweep`'s existing scenario catalog
+   (`resource_egress_scenarios.json`) already defines mixed-kind
+   scenarios (`egress-growth-source-mixed`, etc.), but
+   `run_protocol_fabric_matrix`'s A/B driver applies one output count
+   uniformly to every kind in a scenario — it cannot reproduce this
+   baseline's ~19:1 ratio. Added a new `mixed-fabric-matrix` harness
+   mode (`resource_sweep/branch_matrix.rs`'s `mixed_fabric_matrix`,
+   backed by a new `run_resource_egress_ratio` in `resource_sweep.rs`
+   that creates an independent count per kind against one shared
+   pipeline/publisher instead of the shared growth loop's uniform
+   count) — `MIXED_FABRIC_MATRIX_RTMP_COUNT`/`_SRT_COUNT` control the
+   two counts independently, run once each as legacy and
+   `RESTREAM_EGRESS_FABRIC=all`. Ran three full legacy/fabric pairs at
+   `RTMP_COUNT=1140, SRT_COUNT=60` (`.local/artifacts/mixed-fabric-matrix-run{1,2}/`,
+   run 3 at `.local/artifacts/mixed-fabric-matrix/`) on this same
+   6-CPU/12GB host. All three runs: 1,200/1,200 outputs reached
+   progress in both variants every time; fabric reached full progress
+   in 4-16s across all three runs, legacy took 4-39s (legacy hit 36
+   real `Connection failed` SRT errors in run 1 and 4 in run 3, all
+   self-recovered via the application retry policy; fabric had 0 real
+   errors across all three runs, one benign self-recovered
+   `SrtEgressEngine` leaf-retry `WARN` in run 2 — the
+   `terminated_unexpectedly` fix from earlier in this phase visibly
+   doing its job). Resource averages across the three runs: **CPU is
+   higher on fabric at this ratio, consistently, not sampling
+   noise** — avg 131.7% fabric vs 117.2% legacy (~1.12x), peak 161.4%
+   fabric vs 130.9% legacy (~1.23x, and the widest single-run peak gap,
+   195.25% vs 129.65% in run 1, is the largest gap of any capture in
+   this phase). RSS runs the other way: fabric averaged 415.3MB vs
+   legacy 487.6MB (~15% *lower*), consistent across all three runs.
+   **Conclusion, stated plainly rather than rounded to a pass**: the
+   fabric path reliably delivers this exact combined ratio with fewer
+   real connection errors and lower memory than legacy, but it costs
+   more CPU at this specific mix than either protocol showed in
+   isolation (RTMP alone was parity at N=1000; SRT alone was ~13%
+   *lower* CPU than legacy at N=500) — the two protocols' shard work
+   compounds under one combined workload in a way neither single-protocol
+   capture surfaced. This is not disqualifying (fabric still clears
+   ~2x more real connection failures and a meaningfully smaller memory
+   footprint), but it is a genuine open cost, not a closed question:
+   worth a profiler pass at this specific combined ratio before
+   treating "match or improve on legacy" as satisfied for the combined
+   shape specifically. Context-switch/allocator instrumentation is
+   still not sampled by this harness mode (same gap as the
+   single-protocol captures above) and RTMPS-at-scale is still
+   untested (blocked on the same harness cert-generation gap noted
+   below).
 
    **RTMPS trust-root override — implemented (`sonnet`-tier).** The
    real blocker behind "RTMPS-at-scale needs harness infrastructure"

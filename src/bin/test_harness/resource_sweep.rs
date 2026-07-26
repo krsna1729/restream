@@ -34,7 +34,8 @@ mod branch_matrix;
 #[cfg(test)]
 pub(crate) use branch_matrix::selected_backend_policy_variants;
 pub(crate) use branch_matrix::{
-    backend_policy_matrix, branch_matrix, rtmp_fabric_matrix, srt_crypto_matrix, srt_fabric_matrix,
+    backend_policy_matrix, branch_matrix, mixed_fabric_matrix, rtmp_fabric_matrix,
+    srt_crypto_matrix, srt_fabric_matrix,
 };
 #[path = "resource_sweep/catalog.rs"]
 mod catalog;
@@ -512,6 +513,84 @@ async fn run_resource_egress_growth(
         stop_child(&mut local_stack.as_mut().unwrap().mediamtx).await;
     }
     Ok(out)
+}
+
+/// Like [`run_resource_egress_growth`] but with an independent output count
+/// per kind instead of one count applied uniformly to every kind — needed to
+/// reproduce an asymmetric mix (e.g. the recorded 1,140 RTMP plus 60 SRT
+/// baseline, ~19:1) that the uniform-count growth loop cannot express.
+/// Creates all outputs against one shared pipeline/publisher, waits for all
+/// of them to progress, then samples once (no growth checkpoints).
+async fn run_resource_egress_ratio(
+    env: &ResourceSweepEnv,
+    stack: &mut Option<ResourceSweepStack>,
+    scenario_name: &str,
+    config: SweepConfig,
+    rtmp_count: usize,
+    srt_count: usize,
+) -> Result<ResourceAggregate, String> {
+    let local_only = env.lifecycle == ResourceSweepLifecycle::Isolated;
+    let mut local_stack = if local_only {
+        Some(start_resource_sweep_stack(env).await?)
+    } else {
+        None
+    };
+    let active = if local_only {
+        local_stack.as_mut().unwrap()
+    } else {
+        ensure_resource_stack(env, stack).await?
+    };
+    let stream_key = format!("resource-{scenario_name}");
+    let pipeline_id = create_resource_pipeline(&active.api, scenario_name, &stream_key).await?;
+    let mut publisher = spawn_resource_publisher(env, config, &stream_key)?;
+    wait_for_api_input_live(&active.api, &pipeline_id, Duration::from_secs(45)).await?;
+
+    let mut output_ids = Vec::new();
+    for (kind, count) in [
+        (SweepOutputKind::RtmpSource, rtmp_count),
+        (SweepOutputKind::SrtSource, srt_count),
+    ] {
+        for index in 1..=count {
+            let name = format!("{scenario_name}-{}-{index}", kind.label());
+            let (url, encoding) = resource_output_url(env, config, kind, &name);
+            let output_id = create_output_with_rtmp_mode(
+                &active.api,
+                &pipeline_id,
+                &name,
+                &url,
+                &encoding,
+                kind.rtmp_mode(),
+            )
+            .await?;
+            start_output(&active.api, &pipeline_id, &output_id).await?;
+            output_ids.push(output_id);
+        }
+    }
+
+    let progress_timeout = resource_output_progress_timeout(output_ids.len());
+    wait_for_outputs_progress(&active.api, &pipeline_id, &output_ids, progress_timeout).await?;
+    let aggregate = sample_resource_window(
+        env,
+        active,
+        ResourceScenarioMeta {
+            scenario: scenario_name,
+            label: format!("rtmp{rtmp_count}-srt{srt_count}"),
+            pipelines: 1,
+            outputs: output_ids.len(),
+            ingest_types: config.name.to_string(),
+            egress_mix: format!("rtmpSource:{rtmp_count},srtSource:{srt_count}"),
+            transcode: "no",
+        },
+    )
+    .await?;
+
+    stop_child(&mut publisher).await;
+    delete_resource_pipeline(&active.api, &pipeline_id).await;
+    if local_only {
+        stop_child(&mut local_stack.as_mut().unwrap().restream).await;
+        stop_child(&mut local_stack.as_mut().unwrap().mediamtx).await;
+    }
+    Ok(aggregate)
 }
 
 pub(crate) async fn create_resource_pipeline(

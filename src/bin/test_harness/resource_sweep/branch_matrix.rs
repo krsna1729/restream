@@ -413,6 +413,88 @@ async fn run_protocol_fabric_matrix(spec: ProtocolFabricMatrixSpec) -> Result<Va
     Ok(result)
 }
 
+/// Live proof for Phase 5's exit gate: the *combined* RTMP+SRT workload
+/// shape recorded as the Phase 0 baseline manifest — "1,140 RTMP plus 60
+/// SRT" (`docs/egress-implementation.md`) — rather than either protocol
+/// measured in isolation. [`run_protocol_fabric_matrix`] always applies one
+/// output count uniformly to every kind in a scenario, so it cannot
+/// reproduce this baseline's ~19:1 ratio; this driver creates the two
+/// counts independently against one shared pipeline/publisher via
+/// `run_resource_egress_ratio`, then compares legacy against
+/// `RESTREAM_EGRESS_FABRIC=all` once at the target scale.
+///
+/// `MIXED_FABRIC_MATRIX_RTMP_COUNT` (default 19) and
+/// `MIXED_FABRIC_MATRIX_SRT_COUNT` (default 1) default to the same ratio as
+/// the recorded baseline at a smoke-safe scale; set both higher (e.g. 1140
+/// and 60) for a full-scale capture.
+pub(crate) async fn mixed_fabric_matrix() -> Result<Value, String> {
+    let env = BranchMatrixEnv::from_env_with_default_dir(".local/artifacts/mixed-fabric-matrix")?;
+    let rtmp_count = env_usize("MIXED_FABRIC_MATRIX_RTMP_COUNT", 19).max(1);
+    let srt_count = env_usize("MIXED_FABRIC_MATRIX_SRT_COUNT", 1).max(1);
+    let config = sweep_configs()[1];
+
+    let parent_work_dir = env.resource.work_dir.clone();
+    let variants: [(&str, Vec<(&'static str, String)>); 2] = [
+        ("legacy", Vec::new()),
+        (
+            "fabric",
+            vec![("RESTREAM_EGRESS_FABRIC", "all".to_string())],
+        ),
+    ];
+
+    let mut runs = Vec::new();
+    for (label, backend_policy_env) in variants {
+        let mut variant_resource = env.resource.clone();
+        variant_resource.backend_policy_env = backend_policy_env;
+        variant_resource.work_dir = parent_work_dir.join(label);
+        variant_resource.summary_csv = variant_resource.work_dir.join("results.csv");
+        variant_resource.samples_jsonl = variant_resource.work_dir.join("samples.jsonl");
+        variant_resource.restream_log = variant_resource.work_dir.join("restream.log");
+        variant_resource.mediamtx_log = variant_resource.work_dir.join("mediamtx.log");
+        variant_resource.mediamtx_config = variant_resource.work_dir.join("mediamtx.yml");
+        variant_resource.restream_db_path = variant_resource
+            .work_dir
+            .join(format!("mixed-fabric-matrix-{label}.db"));
+        std::fs::create_dir_all(&variant_resource.work_dir).map_err(|e| e.to_string())?;
+
+        let mut stack = None;
+        let aggregate = run_resource_egress_ratio(
+            &variant_resource,
+            &mut stack,
+            "egress-growth-mixed-ratio",
+            config,
+            rtmp_count,
+            srt_count,
+        )
+        .await?;
+        write_resource_sweep_csv(
+            &variant_resource.summary_csv,
+            std::slice::from_ref(&aggregate),
+        )?;
+        runs.push(json!({
+            "variant": label,
+            "aggregate": resource_aggregate_json(&aggregate),
+            "artifacts": {
+                "summaryCsv": variant_resource.summary_csv,
+                "samplesJsonl": variant_resource.samples_jsonl,
+                "restreamLog": variant_resource.restream_log,
+                "mediamtxLog": variant_resource.mediamtx_log,
+            },
+        }));
+    }
+
+    let summary_json = parent_work_dir.join("mixed-fabric-matrix-results.json");
+    let result = json!({
+        "mode": "mixed-fabric-matrix",
+        "rtmpCount": rtmp_count,
+        "srtCount": srt_count,
+        "variants": runs,
+    });
+    std::fs::write(&summary_json, serde_json::to_vec_pretty(&result).unwrap())
+        .map_err(|e| e.to_string())?;
+    Ok(result)
+}
+
 pub(crate) async fn srt_crypto_matrix() -> Result<Value, String> {
     let mut env = BranchMatrixEnv::from_env()?;
     env.srt_variants =
