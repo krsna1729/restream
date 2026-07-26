@@ -76,6 +76,16 @@ pub async fn run_app(config: Arc<AppConfig>) {
         summary = %config.effective_summary(),
         "effective startup configuration",
     );
+    for warning in config
+        .egress_fabric
+        .validate(crate::system_sampling::effective_cpu_count())
+    {
+        warn!(
+            event_class = "lifecycle",
+            event_type = "restream.config.warning",
+            "{warning}",
+        );
+    }
 
     db::reset_running_jobs(&pool, &chrono::Utc::now().to_rfc3339())
         .await

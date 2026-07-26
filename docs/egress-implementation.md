@@ -2824,6 +2824,36 @@ Current branch status:
     backlog), so they're low-priority, likely near-trivial follow-ups
     if ever needed — the pattern is now proven twice (RTMP, SRT) and
     would be a small, low-risk mechanical port if it ever matters.
+- **Configuration validation — implemented as
+  `EgressFabricConfig::validate(effective_cpus)`.** Before this,
+  `EgressFabricConfig::from_env` only ever clamped individual fields to
+  their own valid ranges; nothing checked whether a *combination* of
+  individually-valid values was still a real misconfiguration. `validate`
+  is a pure function returning `Vec<String>` (never fatal — a bad
+  combination should be fixable by adjusting env vars and restarting, not
+  a reason to refuse to start) checking four cross-field cases:
+  `max_pending_bytes` smaller than `visit_max_bytes` (a single visit can
+  hand a leaf more bytes than the pending limit allows, so
+  backpressure/stall detection can trigger under normal operation);
+  `shards` more than 4x the host's effective CPU count (more shard
+  threads than cores costs CPU without buying throughput, per the
+  Phase 5/7 shard-count findings); `drain_timeout_ms` under 50ms (too
+  short for a leaf to get a real chance to flush before being
+  force-closed); and `command_batch_budget` larger than
+  `command_channel_capacity` (the batch budget can never be reached — a
+  full channel drain always empties before hitting it). `run_app`
+  (`src/infrastructure/bootstrap/mod.rs`) calls `validate` once at
+  startup, right after the existing "effective startup configuration"
+  log line, and logs each warning as
+  `event_type = "restream.config.warning"`. Proof: 2 new unit tests in
+  `src/config/tests/configuration_behavior.rs` — one confirming the
+  default config is silent, one confirming all four checks fire together
+  on a deliberately conflicting config. Verified as a real regression:
+  disabling the first check locally dropped the flagged-warning count
+  from 4 to 3, confirming the test actually exercises the logic rather
+  than trivially passing. Full `cargo test --lib` (1,888 tests), clippy
+  (default and `mcp-server,mcp-http-backend` features), fmt,
+  source-audit, and docs checks all pass.
 
 Integrate:
 
@@ -2833,8 +2863,10 @@ Integrate:
 - alerts for stalled shards, repeated resync, command overload, and retry
   admission saturation;
 - diagnostic snapshots;
-- configuration validation;
-- graceful shutdown and shard draining.
+- ~~configuration validation~~ (done — `EgressFabricConfig::validate`, see
+  above);
+- ~~graceful shutdown and shard draining~~ (done for RTMP and SRT, see
+  above).
 
 Add operator-visible attribution:
 

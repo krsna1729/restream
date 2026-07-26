@@ -236,6 +236,54 @@ impl EgressFabricConfig {
         NonZeroU32::new(self.shards).expect("egress fabric shard count is clamped nonzero")
     }
 
+    /// Cross-field sanity checks the per-field clamps in `from_env` can't
+    /// express on their own — every value here already passed its own
+    /// clamp, but a *combination* of individually-valid values can still be
+    /// a real misconfiguration. Returns human-readable warnings; callers
+    /// log them at startup. Never fatal — a client should be able to fix
+    /// these by adjusting env vars and restarting, not have the process
+    /// refuse to start over a value it could simply warn about.
+    pub(crate) fn validate(&self, effective_cpus: usize) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        if self.max_pending_bytes < self.visit_max_bytes {
+            warnings.push(format!(
+                "RESTREAM_EGRESS_MAX_PENDING_BYTES ({}) is smaller than RESTREAM_EGRESS_VISIT_MAX_BYTES ({}) \
+                 — a single visit can hand a leaf more pending bytes than the limit allows, so backpressure/\
+                 stall detection may trigger even under normal operation",
+                self.max_pending_bytes, self.visit_max_bytes
+            ));
+        }
+
+        let effective_cpus = u32::try_from(effective_cpus.max(1)).unwrap_or(u32::MAX);
+        if self.shards > effective_cpus.saturating_mul(4) {
+            warnings.push(format!(
+                "RESTREAM_EGRESS_SHARDS ({}) is more than 4x this host's effective CPU count ({effective_cpus}) \
+                 — more shard threads than cores usually costs CPU without buying throughput \
+                 (see docs/egress-implementation.md Phase 5/7's shard-count findings)",
+                self.shards
+            ));
+        }
+
+        if self.drain_timeout_ms < 50 {
+            warnings.push(format!(
+                "RESTREAM_EGRESS_DRAIN_TIMEOUT_MS ({}) is under 50ms — most leaves will not get a real \
+                 chance to flush queued bytes before being force-closed on shutdown or removal",
+                self.drain_timeout_ms
+            ));
+        }
+
+        if self.command_batch_budget > self.command_channel_capacity {
+            warnings.push(format!(
+                "RESTREAM_EGRESS_COMMAND_BATCH ({}) is larger than RESTREAM_EGRESS_COMMAND_CAPACITY ({}) \
+                 — the batch budget can never be reached, a full channel drain always empties before hitting it",
+                self.command_batch_budget, self.command_channel_capacity
+            ));
+        }
+
+        warnings
+    }
+
     #[allow(dead_code)]
     pub(crate) fn shard_config(&self) -> EgressShardConfig {
         EgressShardConfig::new(

@@ -300,6 +300,35 @@ fn egress_fabric_config_loads_and_clamps_env() {
 }
 
 #[test]
+fn egress_fabric_config_validate_is_silent_for_sane_defaults() {
+    assert_eq!(
+        EgressFabricConfig::default().validate(6),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn egress_fabric_config_validate_flags_cross_field_issues() {
+    let fabric = EgressFabricConfig {
+        max_pending_bytes: 100,
+        visit_max_bytes: 1_000,
+        shards: 32,
+        drain_timeout_ms: 10,
+        command_channel_capacity: 4,
+        command_batch_budget: 8,
+        ..EgressFabricConfig::default()
+    };
+
+    let warnings = fabric.validate(4);
+
+    assert_eq!(warnings.len(), 4, "warnings: {warnings:#?}");
+    assert!(warnings[0].contains("RESTREAM_EGRESS_MAX_PENDING_BYTES"));
+    assert!(warnings[1].contains("RESTREAM_EGRESS_SHARDS"));
+    assert!(warnings[2].contains("RESTREAM_EGRESS_DRAIN_TIMEOUT_MS"));
+    assert!(warnings[3].contains("RESTREAM_EGRESS_COMMAND_BATCH"));
+}
+
+#[test]
 fn egress_rollout_mode_parses_protocol_selection_and_legacy_booleans() {
     let cases = [
         ("off", EgressRolloutMode::Off),
