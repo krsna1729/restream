@@ -136,9 +136,10 @@ impl EgressRolloutMode {
 
 impl Default for EgressFabricConfig {
     fn default() -> Self {
+        let effective_cpus = crate::system_sampling::effective_cpu_count();
         Self {
             rollout: EgressRolloutMode::Off,
-            shards: 4,
+            shards: default_egress_fabric_shards(effective_cpus),
             command_channel_capacity: 1024,
             command_batch_budget: 32,
             readiness_batch_budget: 64,
@@ -320,6 +321,20 @@ fn default_tokio_worker_threads(effective_cpus: usize) -> usize {
     } else {
         effective_cpus.div_ceil(3).clamp(2, 8)
     }
+}
+
+/// Egress fabric shard threads scale with host cores instead of a flat
+/// constant. A live legacy-vs-fabric `perf` comparison at a combined
+/// 1,140 RTMP + 60 SRT workload (`docs/egress-implementation.md` Phase 5)
+/// measured the previous flat default of 4 costing fabric ~12% more avg
+/// CPU and ~23% more peak CPU than legacy on a 6-CPU host; raising the
+/// shard count toward the host's own core count (matching
+/// `effective_cpus` rather than the fixed constant) closed the avg-CPU
+/// gap entirely (fabric ~2% *below* legacy) and shrank the peak gap to
+/// ~3.5%, across three repeated live captures at each of shards=2, 4,
+/// and 6 — while preserving fabric's ~12-15% lower RSS throughout.
+fn default_egress_fabric_shards(effective_cpus: usize) -> u32 {
+    effective_cpus.clamp(2, 8) as u32
 }
 
 fn env_bool(name: &str) -> Option<bool> {

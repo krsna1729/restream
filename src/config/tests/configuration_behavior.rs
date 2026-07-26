@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use super::{
     AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
     EgressRolloutMode, RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
-    default_tokio_worker_threads, derive_external_ffmpeg_permits,
+    default_egress_fabric_shards, default_tokio_worker_threads, derive_external_ffmpeg_permits,
 };
 use crate::planner::BackendPolicy;
 
@@ -252,7 +252,10 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
             assert_eq!(fabric, EgressFabricConfig::default());
             assert_eq!(fabric.rollout, EgressRolloutMode::Off);
             assert!(!fabric.rollout.routes_srt());
-            assert_eq!(fabric.shard_count().get(), 4);
+            assert_eq!(
+                fabric.shard_count().get(),
+                default_egress_fabric_shards(crate::system_sampling::effective_cpu_count())
+            );
             assert_eq!(fabric.shard_config().command_channel_capacity().get(), 1024);
             let budget = fabric.work_budget();
             assert_eq!(budget.max_units, 32);
@@ -347,6 +350,12 @@ fn tokio_runtime_config_tracks_cpu_limits_and_overrides() {
     assert_eq!(default_tokio_worker_threads(6), 2);
     assert_eq!(default_tokio_worker_threads(12), 4);
     assert_eq!(default_tokio_worker_threads(64), 8);
+
+    assert_eq!(default_egress_fabric_shards(1), 2);
+    assert_eq!(default_egress_fabric_shards(2), 2);
+    assert_eq!(default_egress_fabric_shards(6), 6);
+    assert_eq!(default_egress_fabric_shards(12), 8);
+    assert_eq!(default_egress_fabric_shards(64), 8);
 
     with_env_vars(
         &[
@@ -494,7 +503,10 @@ fn effective_summary_covers_runtime_knobs_without_secret_values() {
         config.tokio_runtime.max_blocking_threads
     );
     assert_eq!(summary["egressFabric"]["enabled"], false);
-    assert_eq!(summary["egressFabric"]["shards"], 4);
+    assert_eq!(
+        summary["egressFabric"]["shards"],
+        config.egress_fabric.shards
+    );
     assert_eq!(summary["paths"]["ffmpegBin"], "/usr/bin/ffmpeg");
     assert_eq!(summary["backendPolicy"]["internalHlsPreview"], false);
     assert_eq!(

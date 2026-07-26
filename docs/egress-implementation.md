@@ -2647,23 +2647,60 @@ make the architecture the only egress path.
 
 ### Work
 
-**Starting evidence, already gathered (Phase 5's combined-workload profiling
-above, "The actual legacy-vs-fabric differential profile"):** at the
-default `RESTREAM_EGRESS_SHARDS=4`, `shards: 4` in `src/config.rs` is a
-flat constant never derived from `effective_cpus` the way
-`default_tokio_worker_threads` (`src/config.rs:316`) is — on a 6-CPU
-host that means 4 dedicated shard threads run *alongside* legacy's same
-2-worker tokio pool rather than the two being budgeted against one core
-count. A live legacy-vs-fabric `perf` comparison at 1,140 RTMP + 60 SRT
-outputs measured a resulting oversubscription signature (extra
-scheduler/futex wakeups, extra `clock_gettime` calls from
-`WorkBudget` deadline tracking) of about 2 percentage points of total
-CPU — real, but only a partial explanation of the ~12-23% CPU gap
-recorded in that phase's live captures. The natural first sweep point
-here is whether raising `RESTREAM_EGRESS_SHARDS` toward
-`effective_cpus` (already a live env var — no code change needed to
-test it) narrows or closes that gap before doing the full 1/2/4/6/8
-benchmark sweep below.
+**Shard-count default derived from `effective_cpus` — done, and it
+closes almost all of Phase 5's measured CPU gap.** Starting evidence
+was Phase 5's combined-workload profiling above ("The actual
+legacy-vs-fabric differential profile"): `shards: 4` in `src/config.rs`
+was a flat constant never derived from `effective_cpus` the way
+`default_tokio_worker_threads` (`src/config.rs:316`) is, so on this
+6-CPU host 4 dedicated shard threads ran *alongside* legacy's same
+2-worker tokio pool instead of the two being budgeted against one core
+count. Ran the natural first sweep this note called for: three live
+`mixed-fabric-matrix` captures (1,140 RTMP + 60 SRT, legacy vs fabric)
+at each of `RESTREAM_EGRESS_SHARDS=2`, `4`, and `6` (9 live captures
+total, same host, same procedure as Phase 5's other live runs).
+Fabric-vs-legacy CPU ratio moved monotonically with shard count:
+
+| shards | avg CPU ratio (fabric/legacy) | peak CPU ratio | RSS ratio |
+|---|---|---|---|
+| 2 | 1.047 | 1.131 | 0.885 |
+| 4 (old default) | 1.123 | 1.233 | 0.852 |
+| 6 (host core count) | 0.983 | 1.035 | 0.874 |
+
+At `shards=6` fabric's average CPU is *below* legacy's (ratio 0.983),
+peak CPU is within ~3.5% instead of ~23%, and the RSS advantage
+(~12-15% lower than legacy throughout) is unaffected — it was never
+traded away for the CPU improvement. Implemented:
+`default_egress_fabric_shards(effective_cpus)` (`src/config.rs`,
+next to `default_tokio_worker_threads`) returns
+`effective_cpus.clamp(2, 8)`, and `EgressFabricConfig::default()` now
+calls it the same way `TokioRuntimeConfig::default()` already calls
+`default_tokio_worker_threads`. `RESTREAM_EGRESS_SHARDS` still
+overrides it explicitly, so this is a default-value change only, fully
+reversible without a code change. Fixed five tests that hardcoded the
+old flat default (`src/config/tests/configuration_behavior.rs`,
+`src/media/engine_tests/egress_fabric.rs`) to read the actual
+configured value instead. Documented in `docs/configuration.md`'s
+config table. Full `cargo test --lib` (1,877 tests), clippy, fmt,
+source-audit, and docs checks all pass; live-verified the new default
+resolves to `6` on this host via `/api/v1/engine/telemetry`'s
+`egressFabric.shards` field at real startup.
+
+**What this does not close**: the ~2pp scheduler/futex/`clock_gettime`
+signature from Phase 5's differential profile was captured at the old
+`shards=4` default and was never re-profiled at `shards=6` — the
+`mixed-fabric-matrix` CPU/RSS numbers above are live measurements, not
+a repeat `perf` capture, so there's no updated symbol-level breakdown
+confirming *why* `shards=6` closes the gap (more parallelism headroom
+is the obvious hypothesis, not yet confirmed at the instruction level).
+Also unresolved: this sweep used single per-shard-count final captures
+layered onto the existing 3-run baseline at `shards=4`, not the full
+1/2/4/6/8 sweep with context-switch/allocator instrumentation Phase 7
+originally specified below — `shards=8` and `shards=1` are still
+unmeasured, and this host's 6-core ceiling means `shards=6` and
+`effective_cpus.clamp(2, 8)` are indistinguishable here; a host with
+more cores would be needed to see whether the clamp's upper bound of 8
+is itself well-chosen or arbitrary.
 
 Benchmark shard counts of 1, 2, 4, 6, and 8 where resources permit. Compare:
 

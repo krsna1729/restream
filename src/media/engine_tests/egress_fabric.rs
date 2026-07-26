@@ -145,7 +145,10 @@ async fn srt_fabric_registry_retains_native_runtime_once_per_feed() {
 
     assert_eq!(first, Ok(true));
     assert_eq!(second, Ok(false));
-    assert_eq!(snapshots.map(|snapshots| snapshots.len()), Some(4));
+    assert_eq!(
+        snapshots.map(|snapshots| snapshots.len()),
+        Some(engine.config.egress_fabric.shard_count().get() as usize)
+    );
     assert!(!engine.release_srt_fabric_runtime(&feed_id).await);
     assert!(
         engine
@@ -180,7 +183,7 @@ async fn srt_fabric_registry_shutdown_helper_removes_and_joins_retained_runtime(
             .shutdown_srt_fabric_runtime(&feed_id)
             .await
             .map(|snapshots| snapshots.len()),
-        Some(4)
+        Some(engine.config.egress_fabric.shard_count().get() as usize)
     );
 }
 
@@ -224,7 +227,10 @@ async fn rtmp_fabric_registry_retains_native_runtime_once_per_feed() {
 
     assert_eq!(first, Ok(true));
     assert_eq!(second, Ok(false));
-    assert_eq!(snapshots.map(|snapshots| snapshots.len()), Some(4));
+    assert_eq!(
+        snapshots.map(|snapshots| snapshots.len()),
+        Some(engine.config.egress_fabric.shard_count().get() as usize)
+    );
     assert!(!engine.release_rtmp_fabric_runtime(&feed_id).await);
     assert!(
         engine
@@ -302,7 +308,10 @@ async fn sink_fabric_registry_retains_runtime_once_per_feed() {
 
     assert_eq!(first, Ok(true));
     assert_eq!(second, Ok(false));
-    assert_eq!(snapshots.map(|snapshots| snapshots.len()), Some(4));
+    assert_eq!(
+        snapshots.map(|snapshots| snapshots.len()),
+        Some(engine.config.egress_fabric.shard_count().get() as usize)
+    );
     assert!(!engine.release_sink_fabric_runtime(&feed_id).await);
     assert!(
         engine
@@ -404,7 +413,10 @@ async fn pipeline_fabric_registry_retains_runtime_once_per_feed() {
 
     assert_eq!(first, Ok(true));
     assert_eq!(second, Ok(false));
-    assert_eq!(snapshots.map(|snapshots| snapshots.len()), Some(4));
+    assert_eq!(
+        snapshots.map(|snapshots| snapshots.len()),
+        Some(engine.config.egress_fabric.shard_count().get() as usize)
+    );
     assert!(!engine.release_pipeline_fabric_runtime(&feed_id).await);
     assert!(
         engine
