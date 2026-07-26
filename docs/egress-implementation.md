@@ -2779,18 +2779,51 @@ Current branch status:
     not just by unit tests calling `on_command` directly.
   - Full `cargo test --lib` (1,882 tests), clippy, fmt, source-audit,
     and docs checks all pass.
-  - **Not done in this pass**: SRT, Sink, and Pipeline still close
-    immediately on `Remove`/`Shutdown`/`DrainShard` — Sink and Pipeline
-    have nothing meaningful to flush (Sink discards, Pipeline's
-    recirculation publish is a synchronous in-process ring push, not a
-    network write with a backlog), so they're low-priority, likely
-    near-trivial follow-ups if ever needed. SRT is the one that
-    matters: it has the same kind of native send-buffer backlog RTMP
-    does (`classify_stall`'s pending-bytes concept already exists for
-    it, `src/media/egress/backends/srt.rs`), so it should get the
-    identical treatment as a focused follow-up, mirroring
-    `begin_graceful_close`/`sweep_draining_leaves` exactly rather than
-    re-designing.
+  - **SRT — done as the immediate follow-up, mirroring RTMP's mechanism
+    exactly rather than redesigning.** `SrtFabricLeaf` gained the same
+    `draining_since`/`draining_reason` fields; `SrtShardBackend` gained
+    the same `drain_timeout` field and `with_drain_timeout` builder.
+    `begin_graceful_close`/`sweep_draining_leaves` are structurally
+    identical to RTMP's, with one adaptation: SRT has no
+    `LeafCommon.pending_application_bytes` equivalent wired from
+    visits, so "has this leaf flushed?" reads
+    `SrtLeafPressure::is_backpressured()` directly (already-existing
+    combined application-queue-plus-native-libsrt-backlog accounting,
+    the same source `classify_stall`/`observe_stall` already used) —
+    same semantics, different accessor. `Remove`/`DrainShard`/`Shutdown`
+    route through `begin_graceful_close` identically to RTMP.
+    `remove_leaf_socket`/`remove_leaf_by_output` gained the same
+    `CloseReason` parameter threading. Extracted into a new
+    `srt_drain.rs` (mirroring `rtmp_shard_drain_tests.rs`'s split)
+    since adding this to `srt.rs` directly would have pushed it to
+    1,049 lines, over the source-audit cap.
+    Production wiring: `drain_timeout` threads from
+    `EgressFabricConfig::drain_timeout_ms` through
+    `spawn_srt_fabric_shard_group` → `resolving_srt_shard_backend` →
+    `SrtShardBackend::with_drain_timeout`, the same path RTMP already
+    used.
+    Proof: 4 new deterministic unit tests in
+    `src/media/egress/backends/srt/tests/drain.rs`, following this
+    module's existing fake-sender convention (`leaf_termination.rs`'s
+    `NeverDrainsSender` pattern — SRT sockets are native FFI, not
+    fakeable at the OS level the way RTMP's tests fake a TCP peer) with
+    a `ControllableSender` whose native backlog a test can flip live.
+    Verified as real regressions: reverting `begin_graceful_close`'s
+    deferred branch locally caught 3 of the 4 new tests failing, then
+    restored. Live proof: a real SRT output flowing through the fabric
+    against a real mediamtx receiver, `SIGTERM`'d mid-stream —
+    shutdown completed in ~665ms (same order as RTMP's ~660ms, both
+    well inside the 3s budget) and mediamtx logged the identical clean
+    `closed: EOF`, not a reset.
+    Full `cargo test --lib` (1,886 tests), clippy, fmt, source-audit,
+    and docs checks all pass.
+  - **Not done**: Sink and Pipeline still close immediately on
+    `Remove`/`Shutdown`/`DrainShard`. Both have nothing meaningful to
+    flush (Sink discards; Pipeline's recirculation publish is a
+    synchronous in-process ring push, not a network write with a
+    backlog), so they're low-priority, likely near-trivial follow-ups
+    if ever needed — the pattern is now proven twice (RTMP, SRT) and
+    would be a small, low-risk mechanical port if it ever matters.
 
 Integrate:
 

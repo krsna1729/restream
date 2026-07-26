@@ -61,6 +61,7 @@ fn srt_fabric_shard_backends_build_one_backend_per_shard() {
             Ok::<_, &'static str>(FakeSrtPoller)
         },
         None,
+        EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
     )
     .unwrap();
 

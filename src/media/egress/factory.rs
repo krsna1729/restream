@@ -72,6 +72,7 @@ where
         feed_for,
         poller_for,
         srt_egress_muxer_port_reuse,
+        shard_config.drain_timeout(),
     )
     .map_err(SrtFabricShardGroupError::Backend)?;
     EgressShardGroup::spawn(shard_count, shard_config, backends)
@@ -98,15 +99,18 @@ where
             SrtFabricPoller::new(poller_max_events)
         },
         srt_egress_muxer_port_reuse,
+        EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn srt_fabric_shard_backends_with_poller<P, E, F, G>(
     shard_count: NonZeroU32,
     budget: WorkBudget,
     mut feed_for: F,
     mut poller_for: G,
     srt_egress_muxer_port_reuse: Option<Arc<Mutex<Option<u16>>>>,
+    drain_timeout: std::time::Duration,
 ) -> Result<Vec<ResolvingSrtShardBackendWithPoller<P>>, E>
 where
     P: SrtReadinessPoller,
@@ -122,6 +126,7 @@ where
             feed_for(shard_id),
             budget,
             srt_egress_muxer_port_reuse.clone(),
+            drain_timeout,
         ));
     }
     Ok(backends)

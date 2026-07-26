@@ -110,6 +110,20 @@ where
     last_native_backlog_bytes: u64,
     /// Anchor for stall aging before any progress has been recorded.
     observed_since: Instant,
+    /// Set when this leaf has been asked to close (via `Remove`,
+    /// `DrainShard`, or `Shutdown`) but still had queued send-path bytes at
+    /// that moment — mirrors `RtmpFabricLeaf::draining_since`
+    /// (`rtmp_shard.rs`) exactly. While `Some`, the leaf stays registered
+    /// and visited normally so it can flush that backlog (application
+    /// message plus native libsrt sender buffer, see
+    /// `SrtLeafPressure::pending_bytes`); it is force-closed once either
+    /// `pending_bytes()` reaches zero or this instant is more than the
+    /// backend's drain timeout in the past.
+    draining_since: Option<Instant>,
+    /// The reason to report once a draining leaf actually closes, recorded
+    /// at the moment draining started so the real cause survives to the
+    /// eventual close call.
+    draining_reason: Option<crate::media::egress::backend::CloseReason>,
 }
 
 impl<T> SrtFabricLeaf<T>
@@ -123,6 +137,8 @@ where
             transport,
             last_native_backlog_bytes: 0,
             observed_since: Instant::now(),
+            draining_since: None,
+            draining_reason: None,
         }
     }
 
@@ -378,6 +394,12 @@ pub(crate) struct SrtShardBackend<
     /// unless `with_srt_egress_muxer_port_reuse` opts in explicitly.
     srt_egress_muxer_port: Arc<Mutex<Option<u16>>>,
     reuse_local_srt_egress_port: bool,
+    /// Bound on how long a leaf may stay in `draining_since` before it is
+    /// force-closed regardless of remaining pending send-path bytes.
+    /// Mirrors `RtmpShardBackend::drain_timeout` exactly. Defaults to
+    /// `EgressShardConfig::DEFAULT_DRAIN_TIMEOUT`; tests use
+    /// `with_drain_timeout` for fast, deterministic timing.
+    drain_timeout: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -461,7 +483,17 @@ where
             last_stall_sweep: None,
             srt_egress_muxer_port: Arc::new(Mutex::new(None)),
             reuse_local_srt_egress_port: false,
+            drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
         }
+    }
+
+    /// Override the per-leaf drain deadline. Production threads the
+    /// configured `EgressFabricConfig::drain_timeout_ms` through the shard
+    /// factory; tests use it for fast, deterministic timing instead of the
+    /// constructor's multi-second default.
+    pub(crate) fn with_drain_timeout(mut self, drain_timeout: Duration) -> Self {
+        self.drain_timeout = drain_timeout;
+        self
     }
 
     /// Opts this backend's outbound SRT connects into the shared local-port
@@ -499,7 +531,10 @@ where
             .output_sockets
             .insert(output_id, SrtLeafSocket { key, socket })
         {
-            self.remove_leaf_socket(previous);
+            self.remove_leaf_socket(
+                previous,
+                crate::media::egress::backend::CloseReason::Removed,
+            );
         }
         Ok(key)
     }
@@ -627,7 +662,10 @@ where
             .output_sockets
             .insert(output_id, SrtLeafSocket { key, socket })
         {
-            self.remove_leaf_socket(previous);
+            self.remove_leaf_socket(
+                previous,
+                crate::media::egress::backend::CloseReason::Removed,
+            );
         }
         Ok(key)
     }
@@ -637,7 +675,10 @@ where
         let Some(socket_ref) = self.output_sockets.remove(output_id) else {
             return false;
         };
-        self.remove_leaf_socket(socket_ref)
+        self.remove_leaf_socket(
+            socket_ref,
+            crate::media::egress::backend::CloseReason::Removed,
+        )
     }
 
     fn queue_pending_srt_connect(&mut self, spec: OutputSpec, target_url: &str) {
@@ -670,16 +711,17 @@ where
         self.pending_connects.get(output_id)
     }
 
-    fn remove_leaf_socket(&mut self, socket_ref: SrtLeafSocket) -> bool {
+    fn remove_leaf_socket(
+        &mut self,
+        socket_ref: SrtLeafSocket,
+        reason: crate::media::egress::backend::CloseReason,
+    ) -> bool {
         let _ = self.poller.remove(socket_ref.socket);
         let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) else {
             return false;
         };
         let mut leaf = leaf;
-        leaf.engine.close(
-            &mut leaf.transport,
-            crate::media::egress::backend::CloseReason::Removed,
-        );
+        leaf.engine.close(&mut leaf.transport, reason);
         true
     }
 
@@ -722,6 +764,7 @@ where
             return;
         }
         self.last_stall_sweep = Some(now);
+        self.sweep_draining_leaves(now);
 
         let stalled: Vec<OutputId> = self
             .output_sockets
@@ -781,6 +824,28 @@ where
             EngineVisitResult::StaleGeneration => VisitDecision::Suspend,
             EngineVisitResult::Visited(outcome) => outcome.decision,
         };
+
+        // A draining leaf (see `begin_graceful_close`) that has now flushed
+        // everything it had queued closes right here — no need to wait for
+        // the next `sweep_draining_leaves` tick. One still stuck past its
+        // deadline force-closes the same way, so a peer that stops reading
+        // mid-drain can't hang this leaf open forever. Mirrors
+        // `RtmpShardBackend::visit_one_ready_leaf` exactly.
+        if let Some(draining_since) = leaf.draining_since {
+            let flushed = !leaf.pressure().is_backpressured();
+            let expired = draining_since.elapsed() >= self.drain_timeout;
+            if flushed || expired {
+                let reason = leaf
+                    .draining_reason
+                    .unwrap_or(crate::media::egress::backend::CloseReason::Removed);
+                let output_id = leaf.common().output_id.clone();
+                if let Some(socket_ref) = self.output_sockets.remove(&output_id) {
+                    self.remove_leaf_socket(socket_ref, reason);
+                }
+                return Some((None, VisitDecision::Suspend));
+            }
+        }
+
         let output_id =
             matches!(decision, VisitDecision::Close).then(|| leaf.common().output_id.clone());
         Some((output_id, decision))
@@ -805,9 +870,30 @@ where
                 }
             }
             EgressCommand::Remove(output_id) => {
-                self.remove_leaf_by_output(&output_id);
+                self.begin_graceful_close(
+                    &output_id,
+                    crate::media::egress::backend::CloseReason::Removed,
+                );
             }
-            EgressCommand::FeedWake | EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {}
+            EgressCommand::FeedWake => {}
+            // Both mean "every leaf here should close, gracefully" —
+            // `DrainShard` for future shard-count reconfiguration (the
+            // shard itself keeps running afterward), `Shutdown` because the
+            // whole process is going down (the shard-runtime layer keeps
+            // this shard's loop alive long enough to let leaves flush; see
+            // `EgressShardRuntime::run`'s drain window in `shard.rs`).
+            // Mirrors `RtmpShardBackend::on_command` exactly.
+            EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {
+                let output_ids: Vec<OutputId> = self.output_sockets.keys().cloned().collect();
+                let reason = if matches!(command, EgressCommand::Shutdown) {
+                    crate::media::egress::backend::CloseReason::ShardShutdown
+                } else {
+                    crate::media::egress::backend::CloseReason::Removed
+                };
+                for output_id in output_ids {
+                    self.begin_graceful_close(&output_id, reason);
+                }
+            }
         }
         EgressShardCommandEffect::Continue
     }
@@ -891,6 +977,9 @@ where
 fn duration_millis_u64(duration: std::time::Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
+
+#[path = "srt_drain.rs"]
+mod srt_drain;
 
 #[cfg(test)]
 mod tests;

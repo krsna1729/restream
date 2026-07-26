@@ -133,6 +133,7 @@ pub(crate) fn resolving_srt_shard_backend<P>(
     feed: TsFeed,
     budget: WorkBudget,
     srt_egress_muxer_port_reuse: Option<std::sync::Arc<std::sync::Mutex<Option<u16>>>>,
+    drain_timeout: std::time::Duration,
 ) -> ResolvingSrtShardBackend<
     SrtShardBackend<
         P,
@@ -150,6 +151,7 @@ where
         budget,
         NativeSrtSocketConfigurator,
         srt_egress_muxer_port_reuse,
+        drain_timeout,
     )
 }
 
@@ -165,6 +167,7 @@ pub(crate) fn resolving_srt_shard_backend_with_configurator<P, C>(
     // shares via `MediaEngine::srt_egress_muxer_port_handle`, so a socket
     // connected by either path can be reused by the other.
     srt_egress_muxer_port_reuse: Option<std::sync::Arc<std::sync::Mutex<Option<u16>>>>,
+    drain_timeout: std::time::Duration,
 ) -> ResolvingSrtShardBackend<
     SrtShardBackend<P, C, NativeSrtSocketConnector, SrtResolveCompletionQueue>,
 >
@@ -181,7 +184,8 @@ where
         socket_configurator,
         NativeSrtSocketConnector,
         completion_queue,
-    );
+    )
+    .with_drain_timeout(drain_timeout);
     if let Some(state) = srt_egress_muxer_port_reuse {
         backend = backend.with_srt_egress_muxer_port_reuse(state, true);
     }
