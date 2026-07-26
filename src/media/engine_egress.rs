@@ -224,6 +224,8 @@ impl MediaEngine {
                 terminal_stage_key,
                 output_name: output_name.unwrap_or("").to_string(),
                 encoding: encoding.unwrap_or("").to_string(),
+                is_fabric: false,
+                shard_id: None,
             },
         );
 
@@ -234,6 +236,25 @@ impl MediaEngine {
                 output_id: output_id.to_string(),
             });
         registration
+    }
+
+    /// Records fabric-versus-legacy ownership and shard assignment for an
+    /// already-registered output. Kept as a separate call rather than a
+    /// `register_egress_attempt_with_meta` parameter because the routing
+    /// decision (and whether a fabric task actually started, as opposed to
+    /// falling back to legacy on a startup error) isn't known until after
+    /// registration in the bootstrap egress reconciler.
+    pub async fn set_egress_fabric_attribution(
+        &self,
+        output_id: &str,
+        is_fabric: bool,
+        shard_id: Option<u32>,
+    ) {
+        let mut egresses = self.egresses.active.write().await;
+        if let Some(egress) = egresses.get_mut(output_id) {
+            egress.is_fabric = is_fabric;
+            egress.shard_id = shard_id;
+        }
     }
 
     pub async fn register_egress(

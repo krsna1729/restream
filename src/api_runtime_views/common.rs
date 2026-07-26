@@ -43,6 +43,8 @@ pub(super) fn egress_runtime_json(
         "retryRemainingMs": serde_json::Value::Null,
         "quality": egress.quality.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "metrics": egress.metrics.snapshot(),
+        "fabric": egress.is_fabric,
+        "shardId": egress.shard_id,
     });
     if include_target_url {
         value["targetUrl"] = serde_json::Value::String(egress.target_url.clone());

@@ -106,6 +106,14 @@ pub struct ActiveEgress {
     pub terminal_stage_key: Option<StageKey>,
     pub output_name: String,
     pub encoding: String,
+    /// Whether this output is currently owned by the egress fabric runtime
+    /// rather than the legacy per-output task. Set once, right after
+    /// registration, from the same routing decision the bootstrap egress
+    /// reconciler already made — never inferred from `protocol`.
+    pub is_fabric: bool,
+    /// Fabric shard index this output is assigned to, when `is_fabric` is
+    /// true. `None` for legacy-owned outputs.
+    pub shard_id: Option<u32>,
 }
 
 #[derive(Debug, Clone)]

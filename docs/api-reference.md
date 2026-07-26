@@ -1315,6 +1315,8 @@ counters, egresses, and transcoder buffer count.
       "lastError": null,
       "lastErrorAt": null,
       "failurePhase": null,
+      "fabric": false,
+      "shardId": null,
       "quality": {
         "tcpCongestionAlgorithm": "cubic",
         "tcpRttMs": 12.4,

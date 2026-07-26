@@ -2854,6 +2854,37 @@ Current branch status:
   than trivially passing. Full `cargo test --lib` (1,888 tests), clippy
   (default and `mcp-server,mcp-http-backend` features), fmt,
   source-audit, and docs checks all pass.
+- **Fabric-versus-legacy and assigned-shard attribution — implemented on
+  `ActiveEgress` and threaded into the API.** Before this, `ActiveEgress`
+  (`src/media/engine.rs`) had no fabric-related fields at all, and the
+  only per-shard telemetry (`EgressShardSnapshot`,
+  `src/media/egress/shard.rs`) was reachable solely through four
+  `#[cfg(test)]`-only accessors keyed by `FeedId`, not `OutputId` — no
+  production code path could answer "is this specific output on the
+  fabric, and which shard?" `ActiveEgress` gained two plain fields,
+  `is_fabric: bool` and `shard_id: Option<u32>`, defaulted to
+  `false`/`None` at registration. `MediaEngine::set_egress_fabric_attribution`
+  is a small setter called once from the bootstrap egress reconciler
+  (`src/infrastructure/bootstrap/egress.rs::start()`) right after all
+  four fabric-task options (`rtmp_fabric`, `srt_fabric`, `sink_fabric`,
+  `pipeline_fabric`) are resolved — deliberately *after* resolution, not
+  from the earlier `use_*_fabric` routing booleans, so a fabric startup
+  error that falls back to the legacy path is correctly attributed as
+  legacy rather than fabric. Shard assignment reuses the existing pure
+  `egress::manager::assign_output_to_shard` hash (no new snapshot
+  round-trip needed — shard assignment is deterministic from
+  `OutputId` + shard count, not runtime state). `api_runtime_views::common::egress_runtime_json`
+  exposes both as `"fabric"` and `"shardId"` JSON keys, reaching every
+  consumer of that function (`health_snapshot`, the graph projection,
+  and telemetry) for free. Proof: 3 new unit tests in
+  `src/media/engine_tests/egress.rs` covering the legacy default, an
+  explicit fabric+shard assignment surfacing through
+  `health_snapshot`'s JSON, and a no-op call for an output that was
+  never registered. Verified as a real regression: temporarily making
+  the setter a no-op locally caught the fabric-assignment test failing,
+  then restored. Full `cargo test --lib` (1,891 tests), clippy (default
+  and `mcp-server,mcp-http-backend` features), fmt, source-audit, and
+  docs checks all pass.
 
 Integrate:
 
@@ -2870,12 +2901,13 @@ Integrate:
 
 Add operator-visible attribution:
 
-- output protocol and assigned shard;
+- ~~output protocol and assigned shard~~ (assigned shard done — see above;
+  protocol was already exposed);
 - lifecycle and progress age;
 - feed lag;
 - backpressure reason;
 - retry admission state;
-- fabric versus legacy ownership during rollout.
+- ~~fabric versus legacy ownership during rollout~~ (done — see above).
 
 ### Rollout order
 

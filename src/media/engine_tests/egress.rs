@@ -488,3 +488,44 @@ async fn sink_discard_progress_marks_active_without_network_bytes() {
     assert!(output["lastError"].is_null());
     assert!(!output["lastProgressAt"].is_null());
 }
+
+#[tokio::test]
+async fn egress_attribution_defaults_to_legacy_ownership() {
+    let engine = MediaEngine::new();
+    engine
+        .register_egress("out-1", "pipe-1", "rtmp://example.com/live/key")
+        .await;
+
+    let snapshot = test_health_snapshot(&engine, &["pipe-1".to_string()], &HashMap::new()).await;
+    let output = &snapshot["pipelines"]["pipe-1"]["outputs"]["out-1"];
+    assert_eq!(output["fabric"], false);
+    assert!(output["shardId"].is_null());
+}
+
+#[tokio::test]
+async fn egress_attribution_reflects_fabric_ownership_and_assigned_shard() {
+    let engine = MediaEngine::new();
+    engine
+        .register_egress("out-1", "pipe-1", "rtmp://example.com/live/key")
+        .await;
+
+    engine
+        .set_egress_fabric_attribution("out-1", true, Some(3))
+        .await;
+
+    let snapshot = test_health_snapshot(&engine, &["pipe-1".to_string()], &HashMap::new()).await;
+    let output = &snapshot["pipelines"]["pipe-1"]["outputs"]["out-1"];
+    assert_eq!(output["fabric"], true);
+    assert_eq!(output["shardId"], 3);
+}
+
+#[tokio::test]
+async fn egress_attribution_is_a_no_op_for_an_unregistered_output() {
+    let engine = MediaEngine::new();
+
+    // Must not panic when the output was never registered (or was already
+    // unregistered by the time the caller's fabric-routing decision lands).
+    engine
+        .set_egress_fabric_attribution("missing-output", true, Some(1))
+        .await;
+}
