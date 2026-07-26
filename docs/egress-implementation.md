@@ -2231,6 +2231,77 @@ benchmark-driven decisions) and why that tier fits.
    procedure against a live `mixed-fabric-matrix` run if revisiting
    this).
 
+   **The actual legacy-vs-fabric differential profile — captured, and
+   it points at thread topology, not abstraction overhead.** Same
+   procedure, same `RTMP_COUNT=1140, SRT_COUNT=60` scale, this time
+   `perf record -F 99 -g` attached to the *legacy* variant's process
+   for an 18s steady-state window (2,970 samples), compared directly
+   against a fresh same-run fabric capture (this run measured
+   legacy 129.72% / fabric 135.49% avg CPU — a much smaller gap than
+   the three-run average above, itself a reminder the differential has
+   real run-to-run spread and isn't a fixed multiplier).
+   - **Fabric's own code is not the problem — it's cheaper than
+     legacy's, not more expensive.** Self-time by DSO: legacy
+     `restream` 21.05% vs fabric `restream` 16.47%; legacy `libc`
+     18.60% vs fabric `libc` 15.24%; legacy kernel 59.41% vs fabric
+     kernel 66.83%. The `ReadyQueue`/`EgressCommand`
+     dispatch/`apply_progress_to_common` generation-check machinery
+     fabric added is *not* a bigger relative cost than legacy's
+     per-task `tokio::select!` async state machine — if anything the
+     opposite. So no, this isn't "abstractions we added" showing up as
+     the cost; the data says the opposite of that hypothesis.
+   - **Thread topology is the real, concrete, found difference — the
+     same category of gap as the SRT muxer-port-reuse miss.** Legacy's
+     RTMP path is plain tokio tasks sharing
+     `default_tokio_worker_threads(effective_cpus)`
+     (`src/config.rs:316`) — on this 6-CPU host that resolves to just
+     **2** tokio worker threads (`6.div_ceil(3) = 2`, clamped [2, 8]);
+     confirmed by the profile — `restream-tokio` alone carries 77.54%
+     of legacy's total self-time, meaning all 1,140 RTMP tasks'
+     `encode`/write work is serialized onto those 2 threads via tokio's
+     work-stealing scheduler. Fabric's RTMP shard count is a
+     **separate, hardcoded default of 4** (`shards: 4`,
+     `src/config.rs:141`, gated by `RESTREAM_EGRESS_SHARDS` but never
+     derived from `effective_cpus` the way the tokio worker count is)
+     — confirmed by the profile: 4 `egress-shard-*` threads carry
+     63.55% of fabric's total self-time between them, and fabric
+     *still* keeps its own 2-worker tokio pool alive underneath for
+     everything else (API, DB, feed-wake watchers — `restream-tokio`
+     is 12.10% of fabric's self-time, not zero). Net effect: on this
+     6-core host, fabric runs 4 dedicated shard threads *on top of* the
+     same 2 tokio workers legacy already uses (plus the SRT native
+     threads both variants share identically), rather than the shard
+     count and tokio worker count being budgeted against the same core
+     count together. That is a genuine, unimplemented tuning gap —
+     `RESTREAM_EGRESS_SHARDS`'s default was never derived from
+     `effective_cpus`, unlike every other concurrency knob in
+     `src/config.rs` — and it is exactly what task **M6 "Shard-count
+     tuning"** in the quality backlog already names as open. Measured
+     signature of the resulting oversubscription: scheduler/futex-family
+     kernel self-time (`try_to_wake_up`/`do_futex`/`schedule`/`futex_wake`/`futex_wait`)
+     sums to 4.76% for fabric vs 3.85% for legacy, and `clock_gettime`/`[vdso]`
+     time-checking (from `WorkBudget` deadline tracking running once per
+     shard visit rather than once per task) sums to 1.67% for fabric vs
+     0.65% for legacy — both real, both fabric-specific, but together
+     only ~2 percentage points of CPU, i.e. real contributors, not a
+     full explanation of the measured gap on their own.
+   - **Honest bottom line**: this differential profile does not
+     produce one smoking-gun cause the way the SRT muxer-port-reuse fix
+     did. It rules out "our added abstractions are expensive" (they're
+     not, by this data) and it identifies one concrete, unimplemented,
+     analogous tuning gap (shard count not derived from `effective_cpus`
+     the way every other concurrency default in `src/config.rs` is) with
+     a measurable but partial (~2pp) signature. The rest of the gap
+     between this ~2pp and the three-run average's ~12-23% is not
+     accounted for by this pass and would need either a controlled
+     `RESTREAM_EGRESS_SHARDS`-swept re-run (does raising shard count
+     toward `effective_cpus` close the gap?) or deeper per-symbol
+     diffing than a DSO/thread-level comparison gives. Left as the
+     concrete next step — `RESTREAM_EGRESS_SHARDS` is already a live
+     env var, so this is a re-run, not a design change, and the
+     natural place to start before any real M6 shard-count-tuning
+     design work.
+
    **RTMPS trust-root override — implemented (`sonnet`-tier).** The
    real blocker behind "RTMPS-at-scale needs harness infrastructure"
    turned out to be that `rustls_client_config()`
