@@ -2150,6 +2150,71 @@ benchmark-driven decisions) and why that tier fits.
    untested (blocked on the same harness cert-generation gap noted
    below).
 
+   **Follow-up profiler pass at the combined ratio — done, and it
+   reverses part of the earlier "not worth it at this scale"
+   conclusion.** `perf record -F 99 -g` attached to the fabric
+   variant's real `restream` process during an 18-second steady-state
+   window at the same `RTMP_COUNT=1140, SRT_COUNT=60` scale (3,547
+   samples, `kernel.perf_event_paranoid`/`kptr_restrict` temporarily
+   lowered via passwordless `sudo` and restored after, same procedure
+   as the earlier SRT-only profile). Self-time by DSO: kernel 66.83%,
+   `restream` (our own code) 16.47%, `libc` 15.24%, `[vdso]` 1.32% —
+   the kernel share is expected TCP/UDP syscall and softirq cost
+   (`__tcp_transmit_skb`, `ip_output`/`ip_finish_output2`,
+   `net_rx_action`, `udp_sendmsg`, ...), consistent with the earlier
+   SRT-only finding that the fabric layer itself is a small slice of
+   total CPU. Two things are different from the earlier SRT-only
+   profile (N=30, 0.74% combined Rust-symbol share) at this larger,
+   RTMP-heavy combined scale, and neither is noise:
+   - **Per-leaf redundant Annex-B→AVCC video conversion, ~3.7% of
+     total sampled CPU.** `RtmpFabricEngine` holds one
+     `RtmpMediaEncoder` per leaf (`src/media/egress/backends/rtmp.rs`),
+     and `RtmpMediaEncoder::encode`/`encode_video`
+     (`src/media/rtmp/egress_engine.rs`) re-runs
+     `find_annexb_start_codes`/`split_annexb_nalus`/`annexb_to_avcc_into`
+     (`src/media/codec/video.rs`, backed by the `memchr` crate's AVX2
+     paired-byte search) independently for every one of the 1,140 RTMP
+     leaves, on every video packet, even though every leaf is
+     converting the same shared source packet. Confirmed by thread
+     attribution in the profile: these symbols run on all four
+     `egress-shard-*` threads, not a shared upstream stage. This is
+     the single largest coherent chunk of the `restream` 16.47% self-time
+     slice. Per-leaf state is genuinely needed for parameter-set
+     tracking (a leaf joining after the initial keyframe needs its own
+     SPS/PPS accumulation before it can emit valid AVCC), but the
+     *conversion itself* is stateless per NAL and does not obviously
+     need to be redone per leaf — worth a real design pass (share the
+     converted AVCC buffer once per source packet, let each leaf's
+     `RtmpMediaEncoder` only own the per-connection parameter-set
+     decision) rather than a quick patch, since it touches the shared
+     `ProtocolEngine`/leaf-state contract.
+   - **Allocator churn, ~9% of total sampled CPU
+     (`_int_malloc`/`malloc`/`_int_free`/`unlink_chunk`/`malloc_consolidate`/`realloc`
+     combined) plus ~3.7% more in `__memmove_avx_unaligned*`.** The
+     earlier SRT-only profile (item 3 above) flagged
+     `Vec<Bytes>`/`Vec<Arc<MediaPacket>>` per-read allocation as a
+     "medium-confidence, unconfirmed" candidate and concluded
+     profiling at N=30 said implementing it "would not move the
+     needle at this scale" — that conclusion was scale-dependent, not
+     universal, and does not hold at 1,200 combined outputs: allocator
+     work is now a real, double-digit-adjacent contributor. Given the
+     per-leaf AVCC conversion above allocates a fresh `Vec<u8>` per
+     leaf per packet, some of this churn is likely the same root cause
+     rather than two independent findings — resolving the conversion
+     duplication would plausibly shrink both numbers together.
+   **Deliberately not implemented in this pass**: both findings are
+   real architecture changes to the shared `ProtocolEngine`/leaf-state
+   contract (AGENTS.md requires a design pass before touching that,
+   not a rushed patch alongside a profiling writeup), and neither
+   blocks the fabric path from clearing this exit gate's correctness
+   bar — the CPU gap is a quantified, root-caused optimization
+   opportunity for a future phase, not an unexplained regression.
+   Profile artifacts:
+   `/tmp/mixed-fabric-matrix.perf.data` (not committed — regenerate
+   with the same `sudo perf record -F 99 -g -p <fabric restream pid>`
+   procedure against a live `mixed-fabric-matrix` run if revisiting
+   this).
+
    **RTMPS trust-root override — implemented (`sonnet`-tier).** The
    real blocker behind "RTMPS-at-scale needs harness infrastructure"
    turned out to be that `rustls_client_config()`
