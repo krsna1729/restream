@@ -135,11 +135,11 @@ fn supervisor_replaces_panicked_shard_and_replays_only_its_outputs() {
 
     assert_eq!(
         replacement.commands(),
-        vec![format!("add:{panicked_output_id}")]
+        vec![format!("add:{panicked_output_id}"), "shutdown".to_string()]
     );
     assert_eq!(
         survivor.commands(),
-        vec![format!("add:{survivor_output_id}")]
+        vec![format!("add:{survivor_output_id}"), "shutdown".to_string()]
     );
     assert!(
         snapshots

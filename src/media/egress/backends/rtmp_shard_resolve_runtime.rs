@@ -138,6 +138,7 @@ pub(crate) fn resolving_rtmp_shard_backend<P, S>(
     chunk_size: u32,
     rtmps_client_config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
     startup_source: S,
+    drain_timeout: std::time::Duration,
 ) -> ResolvingRtmpShardBackendWithPoller<P, S>
 where
     P: RtmpReadinessPoller,
@@ -153,7 +154,8 @@ where
         rtmps_client_config,
         completion_queue,
         startup_source,
-    );
+    )
+    .with_drain_timeout(drain_timeout);
     ResolvingRtmpShardBackend::new(backend, RtmpResolveWorkerSet::new(completion_sender))
 }
 

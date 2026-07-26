@@ -821,3 +821,6 @@ fn refresh_registrations_for_feed_wake_skips_leaves_already_read_write() {
         "repeated FeedWake calls must not re-register an already-READ_WRITE leaf"
     );
 }
+
+#[path = "rtmp_shard_drain_tests.rs"]
+mod drain_tests;

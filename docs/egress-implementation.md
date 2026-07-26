@@ -2725,6 +2725,72 @@ Current branch status:
   Routing helpers are protocol-selective and shadow mode is active without
   routing; bootstrap SRT gating uses `routes_srt()`. RTMP routing consumes
   `routes_rtmp()` once the Phase 5 fabric runtime exists.
+- **Graceful shutdown and shard draining — implemented for RTMP, the
+  largest and riskiest of the "Integrate" bullets below, picked first
+  deliberately** (per AGENTS.md, a lifecycle change needing its own
+  proof rather than bundling with the smaller Phase 6 items). Before
+  this: `EgressCommand::Shutdown` made the shard runtime loop
+  (`EgressShardRuntime::run`, `src/media/egress/shard.rs`) stop on the
+  very next iteration — the backend's `on_command` never even saw
+  `Shutdown` — and every backend's `Remove`/`Shutdown` handling closed
+  the transport immediately regardless of
+  `LeafCommon::pending_application_bytes`, silently truncating
+  whatever a leaf still had queued but not yet on the wire.
+  Implemented as a shared, bounded drain window plus RTMP-specific
+  per-leaf draining:
+  - `EgressShardConfig` gained a `drain_timeout` (default 3s, real
+    `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` config knob, clamped
+    `1..=60_000`). On `Shutdown`, the shard runtime now forwards the
+    command to the backend once and keeps the loop running — still
+    servicing ready/timer work normally — until either everything goes
+    idle (nothing left to flush) or the deadline passes, whichever is
+    first; only then does it stop and call `on_shutdown()`, matching
+    the same forced-close fallback that already existed.
+  - `RtmpShardBackend` gained real per-leaf draining:
+    `begin_graceful_close` marks a leaf with nonzero
+    `pending_application_bytes` as draining (closing immediately if
+    there's nothing queued — the common case pays no delay).
+    `visit_one_ready_leaf` opportunistically closes a draining leaf the
+    moment it flushes, and `sweep_draining_leaves` (piggybacked on the
+    existing once-a-second stall-sweep throttle) is the bounded
+    backstop for a leaf that stops getting write readiness at all (a
+    peer that stops reading). `Remove`, `DrainShard`, and `Shutdown`
+    all route leaves through this same mechanism.
+  - Proof: 4 new deterministic unit tests in a new
+    `rtmp_shard_drain_tests.rs` (split out to stay under the
+    source-audit line cap) covering deferred-close-until-flushed,
+    immediate-close-when-nothing-queued, deadline-driven force-close,
+    and `Shutdown` marking every connected leaf — plus a new
+    shard-runtime-level test proving the loop genuinely stays alive
+    for real wall-clock time after `Shutdown` (using a backend that
+    never goes idle on its own, so the only way it can ever stop is
+    the bounded deadline actually firing). Every new test was verified
+    as a real regression: reverting the `shard.rs` runtime change or
+    the `sweep_draining_leaves` flush check locally and confirming the
+    corresponding test fails, then restoring it.
+  - Live proof: real RTMP output flowing through the fabric against a
+    real mediamtx receiver, `SIGTERM`'d mid-stream while media was
+    actively publishing. `restream.shutdown.completed` fired ~660ms
+    after the signal (well inside the 3s budget), and mediamtx logged
+    a clean `closed: EOF` on the egress connection — an orderly close,
+    not a reset — confirming the drain path is exercised by the real
+    production SIGTERM handler (`spawn_signal_watcher` →
+    `cancel_all_active_tasks` → `shutdown_all_rtmp_fabric_runtimes`),
+    not just by unit tests calling `on_command` directly.
+  - Full `cargo test --lib` (1,882 tests), clippy, fmt, source-audit,
+    and docs checks all pass.
+  - **Not done in this pass**: SRT, Sink, and Pipeline still close
+    immediately on `Remove`/`Shutdown`/`DrainShard` — Sink and Pipeline
+    have nothing meaningful to flush (Sink discards, Pipeline's
+    recirculation publish is a synchronous in-process ring push, not a
+    network write with a backlog), so they're low-priority, likely
+    near-trivial follow-ups if ever needed. SRT is the one that
+    matters: it has the same kind of native send-buffer backlog RTMP
+    does (`classify_stall`'s pending-bytes concept already exists for
+    it, `src/media/egress/backends/srt.rs`), so it should get the
+    identical treatment as a focused follow-up, mirroring
+    `begin_graceful_close`/`sweep_draining_leaves` exactly rather than
+    re-designing.
 
 Integrate:
 

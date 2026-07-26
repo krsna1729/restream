@@ -185,6 +185,7 @@ where
         chunk_size,
         rtmps_client_config,
         startup_source,
+        shard_config.drain_timeout(),
         feed_for,
         poller_for,
     )
@@ -193,12 +194,14 @@ where
         .map_err(RtmpFabricShardGroupError::Group)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rtmp_fabric_shard_backends_with_poller<P, E, F, G>(
     shard_count: NonZeroU32,
     budget: WorkBudget,
     chunk_size: u32,
     rtmps_client_config: Arc<tokio_rustls::rustls::ClientConfig>,
     startup_source: SharedRtmpPublishStartupSource,
+    drain_timeout: std::time::Duration,
     mut feed_for: F,
     mut poller_for: G,
 ) -> Result<Vec<ResolvingRtmpShardBackendWithPoller<P, SharedRtmpPublishStartupSource>>, E>
@@ -218,6 +221,7 @@ where
             chunk_size,
             rtmps_client_config.clone(),
             startup_source.clone(),
+            drain_timeout,
         ));
     }
     Ok(backends)

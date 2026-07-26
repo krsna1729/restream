@@ -4,7 +4,7 @@ use super::support::{
     output_spec,
 };
 use crate::media::egress::command::{EgressCommand, ShardId};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[test]
 fn config_rejects_zero_capacity_and_budget() {
@@ -217,6 +217,55 @@ fn readiness_batch_budget_allows_shutdown_during_ready_flood() {
     );
     assert!(snapshot.metrics.ready_depth > 0);
     assert!(snapshot.stopped);
+}
+
+#[test]
+fn shutdown_keeps_the_loop_alive_for_the_drain_window_instead_of_stopping_immediately() {
+    // Before the graceful-drain change, `Shutdown` made `process_command`
+    // return `Stop` directly — the loop exited on the very next iteration,
+    // and the backend never even saw the `Shutdown` command via
+    // `on_command`. `ReadyFloodBackend` never goes idle on its own, so the
+    // only way this shard can ever stop is the bounded drain deadline
+    // actually being enforced — proving the loop keeps servicing ready
+    // work for real wall-clock time after `Shutdown`, not zero.
+    let probe = Probe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        EgressShardConfig::new(16, 16, 2, 16, Duration::from_millis(10))
+            .unwrap()
+            .with_drain_timeout(Duration::from_millis(100)),
+        ReadyFloodBackend {
+            probe: probe.clone(),
+        },
+    );
+
+    assert_eq!(
+        handle.try_send(EgressCommand::Add(output_spec("out-ready-flood"))),
+        Ok(())
+    );
+    probe.wait_for_ready_events(2);
+    let ready_events_before_shutdown = probe.state().ready_events;
+
+    let shutdown_sent_at = Instant::now();
+    assert_eq!(handle.try_send(EgressCommand::Shutdown), Ok(()));
+    let snapshot = handle.shutdown_and_join();
+    let drain_elapsed = shutdown_sent_at.elapsed();
+
+    assert!(
+        probe.state().ready_events > ready_events_before_shutdown,
+        "the shard must keep processing ready work after Shutdown, not stop on the next iteration"
+    );
+    assert!(
+        drain_elapsed >= Duration::from_millis(50),
+        "a backend that never goes idle must be kept alive for close to the drain window \
+         (got {drain_elapsed:?}), not stopped immediately"
+    );
+    assert!(
+        drain_elapsed < Duration::from_secs(2),
+        "the drain deadline must still bound shutdown — a backend that never goes idle must \
+         not hang it forever (got {drain_elapsed:?})"
+    );
+    assert!(snapshot.stopped);
     assert!(!snapshot.panicked);
 }
 
@@ -241,7 +290,11 @@ fn readiness_batch_budget_allows_remove_during_ready_flood() {
 
     assert_eq!(
         probe.state().commands,
-        vec!["add:out-ready-remove", "remove:out-ready-remove"]
+        vec![
+            "add:out-ready-remove",
+            "remove:out-ready-remove",
+            "shutdown"
+        ]
     );
     assert!(probe.state().ready_events >= 2);
     assert!(snapshot.metrics.ready_depth > 0);
@@ -320,7 +373,11 @@ fn drain_for_other_shard_is_ignored_locally() {
     probe.wait_for_media_ticks(1);
     let snapshot = handle.shutdown_and_join();
 
-    assert!(probe.state().commands.is_empty());
+    // `DrainShard` for another shard is ignored locally, but this shard's
+    // own `Shutdown` now reaches the backend (see `run_shard_thread`'s
+    // graceful-drain change) — the other shard's drain command must not
+    // show up, but this shard's own shutdown command does.
+    assert_eq!(probe.state().commands, vec!["shutdown".to_string()]);
     assert_eq!(snapshot.shard_id, ShardId::new(1));
 }
 

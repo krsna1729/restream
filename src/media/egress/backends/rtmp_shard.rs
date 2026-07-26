@@ -252,6 +252,18 @@ struct RtmpFabricLeaf {
     /// never made any byte/protocol progress at all (e.g. still mid-connect
     /// or mid-handshake) — mirrors `NativeSrtLeaf::observed_since`.
     observed_since: Instant,
+    /// Set when this leaf has been asked to close (via `Remove`,
+    /// `DrainShard`, or `Shutdown`) but still had queued application bytes
+    /// at that moment. While `Some`, the leaf stays registered and visited
+    /// normally so it can flush that backlog; it is force-closed once
+    /// either `pending_application_bytes` reaches zero or this instant is
+    /// more than the backend's drain timeout in the past — whichever comes
+    /// first. `None` means "not closing" (the common case).
+    draining_since: Option<Instant>,
+    /// The reason to report once a draining leaf actually closes, recorded
+    /// at the moment draining started so the real cause (removed vs.
+    /// shutdown) survives to the eventual close call.
+    draining_reason: Option<CloseReason>,
 }
 
 impl RtmpFabricLeaf {
@@ -376,6 +388,11 @@ pub(crate) struct RtmpShardBackend<
     poll_buffer: Vec<TcpReadyLeaf>,
     pending_connects: HashMap<OutputId, PendingRtmpConnect>,
     last_stall_sweep: Option<Instant>,
+    /// Bound on how long a leaf may stay in `draining_since` before it is
+    /// force-closed regardless of remaining `pending_application_bytes`.
+    /// Defaults to `EgressShardConfig::DEFAULT_DRAIN_TIMEOUT`; tests use
+    /// `with_drain_timeout` for fast, deterministic timing.
+    drain_timeout: Duration,
 }
 
 impl<P> RtmpShardBackend<P, NoopRtmpResolveCompletionSource, EmptyRtmpPublishStartupSource>
@@ -429,7 +446,17 @@ where
             poll_buffer: Vec::new(),
             pending_connects: HashMap::new(),
             last_stall_sweep: None,
+            drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
         }
+    }
+
+    /// Override the per-leaf drain deadline. Production threads the
+    /// configured `EgressFabricConfig::drain_timeout_ms` through here (see
+    /// `resolving_rtmp_shard_backend`); tests use it for fast, deterministic
+    /// timing instead of the constructor's multi-second default.
+    pub(crate) fn with_drain_timeout(mut self, drain_timeout: Duration) -> Self {
+        self.drain_timeout = drain_timeout;
+        self
     }
 
     fn queue_pending_rtmp_connect(&mut self, spec: OutputSpec, target_url: &str) {
@@ -551,13 +578,15 @@ where
             transport: stream,
             registered_interest: TcpEgressInterest::WRITE,
             observed_since: Instant::now(),
+            draining_since: None,
+            draining_reason: None,
         };
         self.leaves.push(Some(leaf));
         if let Some(previous) = self
             .output_sockets
             .insert(output_id.clone(), RtmpLeafSocket { key, fd })
         {
-            self.remove_leaf_socket(previous);
+            self.remove_leaf_socket(previous, CloseReason::Removed);
         }
         tracing::info!(output_id = %output_id, leaf_key = key.0, "rtmp fabric leaf connected");
     }
@@ -567,20 +596,80 @@ where
         let Some(socket_ref) = self.output_sockets.remove(output_id) else {
             return false;
         };
-        self.remove_leaf_socket(socket_ref)
+        self.remove_leaf_socket(socket_ref, CloseReason::Removed)
     }
 
-    fn remove_leaf_socket(&mut self, socket_ref: RtmpLeafSocket) -> bool {
+    fn remove_leaf_socket(&mut self, socket_ref: RtmpLeafSocket, reason: CloseReason) -> bool {
         let _ = self.poller.remove(socket_ref.fd);
         let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) else {
             return false;
         };
         let mut leaf = leaf;
-        leaf.engine.close(
-            &mut leaf.transport,
-            crate::media::egress::backend::CloseReason::Removed,
-        );
+        leaf.engine.close(&mut leaf.transport, reason);
         true
+    }
+
+    /// Ask a leaf to close, gracefully if it still has application bytes
+    /// queued: rather than tearing down the transport immediately (losing
+    /// whatever `pending_application_bytes` hadn't reached the wire yet),
+    /// mark it draining so it keeps getting visited — and therefore keeps
+    /// writing — until either it flushes to zero or `drain_timeout` elapses
+    /// (checked in `visit_one_ready_leaf` and `sweep_draining_leaves`).
+    /// A leaf with nothing queued closes immediately; there is nothing to
+    /// wait for.
+    fn begin_graceful_close(&mut self, output_id: &OutputId, reason: CloseReason) {
+        self.pending_connects.remove(output_id);
+        let Some(socket_ref) = self.output_sockets.get(output_id).copied() else {
+            return;
+        };
+        let Some(leaf) = self
+            .leaves
+            .get_mut(socket_ref.key.0)
+            .and_then(Option::as_mut)
+        else {
+            return;
+        };
+        if leaf.common.pending_application_bytes == 0 {
+            self.output_sockets.remove(output_id);
+            self.remove_leaf_socket(socket_ref, reason);
+            return;
+        }
+        leaf.draining_since = Some(Instant::now());
+        leaf.draining_reason = Some(reason);
+    }
+
+    /// Close every draining leaf (see `begin_graceful_close`) that has
+    /// either fully flushed or been draining longer than `drain_timeout`.
+    /// The flush case here is a backstop, not the primary path — a leaf
+    /// getting real write readiness closes opportunistically the moment it
+    /// flushes, inside `visit_one_ready_leaf`, without waiting for this
+    /// once-a-second sweep. This is what actually bounds a leaf that stops
+    /// getting write readiness at all (a peer that stops reading): nothing
+    /// else will ever notice it again.
+    fn sweep_draining_leaves(&mut self, now: Instant) {
+        let expired: Vec<OutputId> = self
+            .output_sockets
+            .iter()
+            .filter_map(|(output_id, socket_ref)| {
+                let leaf = self.leaves.get(socket_ref.key.0)?.as_ref()?;
+                let draining_since = leaf.draining_since?;
+                let flushed = leaf.common.pending_application_bytes == 0;
+                let expired = now.saturating_duration_since(draining_since) >= self.drain_timeout;
+                (flushed || expired).then(|| output_id.clone())
+            })
+            .collect();
+        for output_id in expired {
+            let Some(socket_ref) = self.output_sockets.remove(&output_id) else {
+                continue;
+            };
+            let reason = self
+                .leaves
+                .get(socket_ref.key.0)
+                .and_then(Option::as_ref)
+                .and_then(|leaf| leaf.draining_reason)
+                .unwrap_or(CloseReason::Removed);
+            self.remove_leaf_socket(socket_ref, reason);
+        }
     }
 
     fn leaf_mut(&mut self, key: LeafKey) -> Option<&mut RtmpFabricLeaf> {
@@ -609,6 +698,7 @@ where
             return;
         }
         self.last_stall_sweep = Some(now);
+        self.sweep_draining_leaves(now);
 
         let stalled: Vec<OutputId> = self
             .output_sockets
@@ -740,6 +830,24 @@ where
             .pending_application_bytes()
             .saturating_add(leaf.transport.rustls_pending_bytes_estimate());
 
+        // A draining leaf (see `begin_graceful_close`) that has now flushed
+        // everything it had queued closes right here — no need to wait for
+        // the next `sweep_draining_leaves` tick. One still stuck past its
+        // deadline force-closes the same way, so a peer that stops reading
+        // mid-drain can't hang this leaf open forever.
+        if let Some(draining_since) = leaf.draining_since {
+            let flushed = leaf.common.pending_application_bytes == 0;
+            let expired = draining_since.elapsed() >= self.drain_timeout;
+            if flushed || expired {
+                let reason = leaf.draining_reason.unwrap_or(CloseReason::Removed);
+                let output_id = leaf.common.output_id.clone();
+                if let Some(socket_ref) = self.output_sockets.remove(&output_id) {
+                    self.remove_leaf_socket(socket_ref, reason);
+                }
+                return Some((None, VisitDecision::Suspend));
+            }
+        }
+
         if matches!(decision, VisitDecision::Close) {
             return Some((Some(leaf.common.output_id.clone()), decision));
         }
@@ -779,10 +887,26 @@ where
                 }
             }
             EgressCommand::Remove(output_id) => {
-                self.remove_leaf_by_output(&output_id);
+                self.begin_graceful_close(&output_id, CloseReason::Removed);
             }
             EgressCommand::FeedWake => self.refresh_registrations_for_feed_wake(),
-            EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {}
+            // Both mean "every leaf here should close, gracefully" —
+            // `DrainShard` for future shard-count reconfiguration (the
+            // shard itself keeps running afterward), `Shutdown` because the
+            // whole process is going down (the shard-runtime layer keeps
+            // this shard's loop alive long enough to let leaves flush; see
+            // `EgressShardRuntime::run`'s drain window in `shard.rs`).
+            EgressCommand::DrainShard(_) | EgressCommand::Shutdown => {
+                let output_ids: Vec<OutputId> = self.output_sockets.keys().cloned().collect();
+                let reason = if matches!(command, EgressCommand::Shutdown) {
+                    CloseReason::ShardShutdown
+                } else {
+                    CloseReason::Removed
+                };
+                for output_id in output_ids {
+                    self.begin_graceful_close(&output_id, reason);
+                }
+            }
         }
         EgressShardCommandEffect::Continue
     }

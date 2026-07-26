@@ -52,7 +52,10 @@ fn shard_group_contains_panic_to_assigned_shard() {
     assert!(panicked.stopped);
     assert!(!healthy.panicked);
     assert!(healthy.stopped);
-    assert_eq!(survivor.state().commands, vec!["add:out-survivor"]);
+    assert_eq!(
+        survivor.state().commands,
+        vec!["add:out-survivor", "shutdown"]
+    );
 }
 
 #[test]
@@ -99,7 +102,10 @@ fn panicked_shard_closes_command_path_without_stopping_other_shards() {
             source: EgressShardSendError::Closed,
         })
     );
-    assert_eq!(survivor.state().commands, vec!["add:out-survivor"]);
+    assert_eq!(
+        survivor.state().commands,
+        vec!["add:out-survivor", "shutdown"]
+    );
     assert!(snapshots.iter().any(|snapshot| {
         snapshot.shard_id == ShardId::new(0) && snapshot.panicked && snapshot.stopped
     }));
@@ -164,10 +170,17 @@ fn shard_group_replaces_only_panicked_shards() {
     survivor.wait_for_commands(2);
     let snapshots = group.shutdown_and_join();
 
-    assert_eq!(replacement.state().commands, vec!["add:out-replacement"]);
+    assert_eq!(
+        replacement.state().commands,
+        vec!["add:out-replacement", "shutdown"]
+    );
     assert_eq!(
         survivor.state().commands,
-        vec!["add:out-survivor-before", "add:out-survivor-after"]
+        vec![
+            "add:out-survivor-before",
+            "add:out-survivor-after",
+            "shutdown"
+        ]
     );
     assert!(
         snapshots
@@ -222,7 +235,10 @@ fn ready_flood_on_one_shard_does_not_starve_another_shard_command() {
         .find(|snapshot| snapshot.shard_id == ShardId::new(1))
         .unwrap();
     assert!(flooding.state().ready_events >= 2);
-    assert_eq!(survivor.state().commands, vec!["add:out-survivor"]);
+    assert_eq!(
+        survivor.state().commands,
+        vec!["add:out-survivor", "shutdown"]
+    );
     assert!(flooded_snapshot.metrics.ready_depth > 0);
     assert!(survivor_snapshot.commands_processed >= 1);
     assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
@@ -273,7 +289,10 @@ fn blocked_command_on_one_shard_does_not_starve_another_shard_command() {
         .iter()
         .find(|snapshot| snapshot.shard_id == ShardId::new(1))
         .unwrap();
-    assert_eq!(survivor.state().commands, vec!["add:out-survivor"]);
+    assert_eq!(
+        survivor.state().commands,
+        vec!["add:out-survivor", "shutdown"]
+    );
     assert!(blocked_snapshot.commands_processed >= 1);
     assert!(survivor_snapshot.commands_processed >= 1);
     assert!(snapshots.iter().all(|snapshot| snapshot.stopped));

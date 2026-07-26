@@ -47,6 +47,7 @@ pub struct EgressFabricConfig {
     pub visit_max_bytes: usize,
     pub visit_max_us: u64,
     pub max_pending_bytes: usize,
+    pub drain_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +151,8 @@ impl Default for EgressFabricConfig {
             visit_max_bytes: 256 * 1024,
             visit_max_us: 2_000,
             max_pending_bytes: 256 * 1024,
+            drain_timeout_ms: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT
+                .as_millis() as u64,
         }
     }
 }
@@ -220,6 +223,11 @@ impl EgressFabricConfig {
                 defaults.max_pending_bytes,
             )
             .clamp(1, 16 * 1024 * 1024),
+            drain_timeout_ms: env_u64(
+                "RESTREAM_EGRESS_DRAIN_TIMEOUT_MS",
+                defaults.drain_timeout_ms,
+            )
+            .clamp(1, 60_000),
         }
     }
 
@@ -238,6 +246,7 @@ impl EgressFabricConfig {
             Duration::from_millis(self.idle_wait_ms),
         )
         .expect("egress fabric shard config is clamped nonzero")
+        .with_drain_timeout(Duration::from_millis(self.drain_timeout_ms))
     }
 
     #[allow(dead_code)]
@@ -690,6 +699,7 @@ impl AppConfig {
                 "visitMaxBytes": self.egress_fabric.visit_max_bytes,
                 "visitMaxUs": self.egress_fabric.visit_max_us,
                 "maxPendingBytes": self.egress_fabric.max_pending_bytes,
+                "drainTimeoutMs": self.egress_fabric.drain_timeout_ms,
             },
             "paths": {
                 "db": self.db_path,

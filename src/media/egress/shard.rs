@@ -29,9 +29,15 @@ pub struct EgressShardConfig {
     readiness_batch_budget: NonZeroUsize,
     timer_batch_budget: NonZeroUsize,
     idle_wait: Duration,
+    drain_timeout: Duration,
 }
 
 impl EgressShardConfig {
+    /// Bound on how long `Shutdown` keeps the shard loop alive draining
+    /// leaves before forcing a close, when no explicit
+    /// [`Self::with_drain_timeout`] override is given.
+    pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
+
     pub fn new(
         command_channel_capacity: usize,
         command_batch_budget: usize,
@@ -53,7 +59,15 @@ impl EgressShardConfig {
             readiness_batch_budget,
             timer_batch_budget,
             idle_wait,
+            drain_timeout: Self::DEFAULT_DRAIN_TIMEOUT,
         })
+    }
+
+    /// Override the drain-on-shutdown deadline. Tests use this for fast,
+    /// deterministic timing; production leaves the constructor default.
+    pub fn with_drain_timeout(mut self, drain_timeout: Duration) -> Self {
+        self.drain_timeout = drain_timeout;
+        self
     }
 
     pub fn command_channel_capacity(self) -> NonZeroUsize {
@@ -74,6 +88,10 @@ impl EgressShardConfig {
 
     pub fn idle_wait(self) -> Duration {
         self.idle_wait
+    }
+
+    pub fn drain_timeout(self) -> Duration {
+        self.drain_timeout
     }
 }
 
@@ -278,6 +296,7 @@ fn run_shard_thread<B: EgressShardBackend>(
             metrics: ShardMetrics::new(shard_id),
             snapshot: Arc::clone(&snapshot),
             wake_gate,
+            draining_until: None,
         };
         runtime.run();
     }));
@@ -298,6 +317,13 @@ struct EgressShardRuntime<'a, B: EgressShardBackend> {
     metrics: ShardMetrics,
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
     wake_gate: Arc<WakeGate>,
+    /// Set once `Shutdown` is received; the loop keeps running (so leaves
+    /// with queued application bytes get a chance to flush and close
+    /// themselves gracefully — see backend-level draining in
+    /// e.g. `RtmpShardBackend`) until either everything goes idle or this
+    /// deadline passes, whichever comes first. `None` means "not shutting
+    /// down yet."
+    draining_until: Option<Instant>,
 }
 
 impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
@@ -316,12 +342,28 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 if running {
                     timers_processed = self.process_timer_batch(&mut running);
                 }
+                // Fully idle while draining: nothing left to flush, so stop
+                // now instead of waiting out the rest of the deadline.
+                if running
+                    && self.draining_until.is_some()
+                    && processed == 0
+                    && ready_processed == 0
+                    && timers_processed == 0
+                {
+                    running = false;
+                }
             }
             // Clear the wake gate before draining so a publish landing after
             // this point re-arms exactly one wake delivery (loom-proven seam).
             self.wake_gate.take();
             self.backend.on_media_tick();
             self.record_iteration(loop_started_at, processed, timers_processed);
+            if running
+                && let Some(deadline) = self.draining_until
+                && Instant::now() >= deadline
+            {
+                running = false;
+            }
         }
         self.backend.on_shutdown();
     }
@@ -378,7 +420,24 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             EgressCommand::DrainShard(target) if target != self.shard_id => {
                 EgressShardCommandEffect::Continue
             }
-            EgressCommand::Shutdown => EgressShardCommandEffect::Stop,
+            EgressCommand::Shutdown => {
+                // Forward to the backend, once, so it can mark every leaf
+                // for a graceful close (flush pending bytes, then close)
+                // instead of the shard thread stopping immediately and
+                // truncating whatever each leaf still had queued. A caller
+                // may send `Shutdown` more than once (e.g. a broadcast
+                // followed by `EgressShardGroup::shutdown_and_join`'s own
+                // send) — only the first actually starts the drain window
+                // and applies the backend's returned effect (e.g. a
+                // `ScheduleReady` to kick off draining visits promptly);
+                // later sends are no-ops.
+                if self.draining_until.is_none() {
+                    self.draining_until = Some(Instant::now() + self.config.drain_timeout());
+                    self.backend.on_command(EgressCommand::Shutdown)
+                } else {
+                    EgressShardCommandEffect::Continue
+                }
+            }
             command => self.backend.on_command(command),
         }
     }

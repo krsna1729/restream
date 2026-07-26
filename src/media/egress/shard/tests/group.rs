@@ -43,8 +43,11 @@ fn shard_group_starts_fixed_shards_and_routes_by_shard_id() {
     shard_one.wait_for_commands(1);
     let snapshots = group.shutdown_and_join();
 
-    assert_eq!(shard_zero.state().commands, vec!["add:out-zero"]);
-    assert_eq!(shard_one.state().commands, vec!["add:out-one"]);
+    assert_eq!(
+        shard_zero.state().commands,
+        vec!["add:out-zero", "shutdown"]
+    );
+    assert_eq!(shard_one.state().commands, vec!["add:out-one", "shutdown"]);
     assert_eq!(snapshots.len(), 2);
     assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
 }
@@ -102,8 +105,11 @@ fn manager_dispatch_to_group_routes_add_to_assigned_thread() {
             shard_id: ShardId::new(1)
         })
     );
-    assert!(shard_zero.state().commands.is_empty());
-    assert_eq!(shard_one.state().commands, vec![format!("add:{output_id}")]);
+    assert_eq!(shard_zero.state().commands, vec!["shutdown".to_string()]);
+    assert_eq!(
+        shard_one.state().commands,
+        vec![format!("add:{output_id}"), "shutdown".to_string()]
+    );
     assert_eq!(
         manager.desired_output(&output_id),
         Some(&DesiredOutput {
@@ -144,7 +150,7 @@ fn manager_dispatch_to_group_preserves_state_when_group_rejects_shard() {
     );
     assert!(manager.desired_output(&output_id).is_none());
     assert_eq!(manager.command_depth(ShardId::new(1)), 0);
-    assert!(shard_zero.state().commands.is_empty());
+    assert_eq!(shard_zero.state().commands, vec!["shutdown".to_string()]);
     assert_eq!(snapshots.len(), 1);
 }
 
@@ -271,7 +277,7 @@ fn manager_dispatch_to_group_rejects_new_assignments_to_draining_shard() {
     ));
     let snapshots = group.shutdown_and_join();
 
-    assert!(shard_one.state().commands.is_empty());
+    assert_eq!(shard_one.state().commands, vec!["shutdown".to_string()]);
     assert!(snapshots.iter().all(|snapshot| snapshot.stopped));
 }
 
@@ -317,7 +323,7 @@ fn shard_group_reports_unknown_shard_without_touching_live_shards() {
     );
     let snapshots = group.shutdown_and_join();
 
-    assert!(probe.state().commands.is_empty());
+    assert_eq!(probe.state().commands, vec!["shutdown".to_string()]);
     assert_eq!(snapshots.len(), 1);
 }
 
@@ -419,11 +425,11 @@ fn manager_replays_only_replaced_shard_outputs_after_panic() {
 
     assert_eq!(
         replacement.state().commands,
-        vec![format!("add:{panicked_output_id}")]
+        vec![format!("add:{panicked_output_id}"), "shutdown".to_string()]
     );
     assert_eq!(
         survivor.state().commands,
-        vec![format!("add:{survivor_output_id}")]
+        vec![format!("add:{survivor_output_id}"), "shutdown".to_string()]
     );
     assert!(
         snapshots
