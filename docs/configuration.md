@@ -37,7 +37,7 @@ in SQLite.
 | Media packet ring depth (source/ingest) | `1024` packets | `RESTREAM_RING_CAPACITY` |
 | Media packet ring depth (transcoder output) | `512` packets | `RESTREAM_TRANSCODER_RING_CAPACITY` (720p30 output ≈ 80 pkt/s → 512 slots ≈ 6.4 s jitter headroom; lower than source ring because I-frame payloads are large) |
 | Shared SRT TS ring depth | `256` chunks | `RESTREAM_TS_RING_CAPACITY` (SRT protocol's own send buffer absorbs network jitter; this ring only bridges muxer → socket write, typically sub-millisecond) |
-| Egress fabric rollout | Disabled | `RESTREAM_EGRESS_FABRIC` (`1`/`true`/`yes`/`on` enables the common fabric once protocol rollout wiring is active) |
+| Egress fabric rollout | `all` (SRT and RTMP/RTMPS both route through the fabric) | `RESTREAM_EGRESS_FABRIC` (`off`/`srt`/`rtmp`/`all`/`shadow-metrics`; legacy `1`/`true`/`yes`/`on` still map to `srt` for compatibility. Set to `off` to fall back to the pre-fabric per-output legacy path.) |
 | Egress fabric shard count | Derived from the effective CPU count (clamped `2..=8`) | `RESTREAM_EGRESS_SHARDS` (clamped to `1..=1024`) |
 | Egress fabric command capacity | `1024` commands per shard | `RESTREAM_EGRESS_COMMAND_CAPACITY` |
 | Egress fabric command batch | `32` commands per loop | `RESTREAM_EGRESS_COMMAND_BATCH` |

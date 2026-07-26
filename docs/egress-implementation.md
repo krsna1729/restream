@@ -1191,11 +1191,13 @@ Status against each criterion, as of the retry-wiring fix above:
 All four Phase 4 exit-gate criteria now have real evidence. The remaining
 gap is narrow: a live (not just deterministic-unit) proof of the
 backpressured-but-connected SRT stall path specifically, which needs a
-purpose-built raw SRT listener. Given that, flipping `EgressRolloutMode`'s
-default to `Srt` is a reasonable next step but not done in this pass —
-it's a production behavior change affecting every deployment and
-deserves a deliberate decision, not a byproduct of a proof-gathering
-session.
+purpose-built raw SRT listener — still open, tracked as future work, not
+blocking.
+
+**Default flipped.** `EgressRolloutMode::default()` is now `All` (see
+Phase 6's "Rollout order" for the full reasoning and live verification).
+SRT routes through the fabric by default as of this change;
+`RESTREAM_EGRESS_FABRIC=off` remains available for rollback.
 
 ## Phase 5: RTMP and RTMPS migration
 
@@ -1863,6 +1865,12 @@ controls the scale for a fuller run.
 
 Fabric RTMP and RTMPS become default only after media correctness, tail progress,
 CPU, RSS, context switches, and allocator behavior match or improve on legacy.
+
+**Default flipped.** `EgressRolloutMode::default()` is now `All` — see
+Phase 6's "Rollout order" for the full reasoning, the live verification
+that it takes effect, and the one open cost (the combined RTMP+SRT
+workload's CPU gap) this flip does not fully close.
+`RESTREAM_EGRESS_FABRIC=off` remains available for rollback.
 
 ### Remaining Phase 5 work — plan
 
@@ -2918,6 +2926,38 @@ Add operator-visible attribution:
 5. RTMP default;
 6. all protocols on fabric;
 7. remove rollback path after a defined observation window.
+
+**Steps 3, 5, and 6 done — `EgressRolloutMode::default()` is now `All`**
+(`src/config.rs`), skipping the staged canary deployment (step 2) this
+document originally specified. This is a deliberate scope call, not an
+oversight: no actual staged/canary production deployment is reachable
+from this repository — that requires real deployment infrastructure
+outside the codebase — so the alternative to flipping the default
+directly was leaving it `Off` indefinitely regardless of how much live
+evidence accumulated. The accumulated Phase 4/5/6a live evidence this
+document already records (SRT clearing legacy's hard 512-sender-thread
+ceiling at N=1,000; RTMP at parity or better at N=1,000 after the
+shard-count fix; RTMPS correctness at N=1,000 with a known, root-caused,
+documented RSS tradeoff; recirculation 2.7×–31.6× cheaper than loopback)
+is the substitute for a canary observation window, not a replacement
+for one — rollback remains one env var away
+(`RESTREAM_EGRESS_FABRIC=off`) for any deployment that needs it, so this
+is fully reversible without a code change. Legacy code itself is not
+removed (Phase 7's exit gate is unmet) specifically so that rollback
+capability still exists. Verified live at the moment of the flip: a
+freshly built release binary, started with no `RESTREAM_EGRESS_FABRIC`
+set, reports `"egressFabric":{"enabled":true,"rollout":"all","shards":6}`
+in its startup log, and a real RTMP output created immediately after
+shows `"fabric": true, "shardId": 1` in `/api/v1/engine/health` with
+real, advancing `bytesOut` against a real mediamtx receiver — the
+default now takes effect in practice, not just in a config struct.
+Still not done: the RTMP+RTMPS mixed-workload gap noted in Phase 5
+(fabric costs more CPU than legacy at the specific 1,140:60 combined
+ratio, traced to shard-count/CPU-count topology, partially but not
+fully closed by the shard-count fix) was not re-measured after this
+flip; if that gap matters for a specific deployment's workload shape,
+`RESTREAM_EGRESS_FABRIC=off` remains the mitigation until it's
+re-profiled.
 
 ### Exit gate
 

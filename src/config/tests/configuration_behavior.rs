@@ -250,8 +250,9 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
         || {
             let fabric = EgressFabricConfig::from_env();
             assert_eq!(fabric, EgressFabricConfig::default());
-            assert_eq!(fabric.rollout, EgressRolloutMode::Off);
-            assert!(!fabric.rollout.routes_srt());
+            assert_eq!(fabric.rollout, EgressRolloutMode::All);
+            assert!(fabric.rollout.routes_srt());
+            assert!(fabric.rollout.routes_rtmp());
             assert_eq!(
                 fabric.shard_count().get(),
                 default_egress_fabric_shards(crate::system_sampling::effective_cpu_count())
@@ -347,11 +348,11 @@ fn egress_rollout_mode_parses_protocol_selection_and_legacy_booleans() {
             assert_eq!(EgressFabricConfig::from_env().rollout, expected, "{value}");
         });
     }
-    // Unknown values fall back to the safe default rather than guessing.
+    // Unknown values fall back to the default rather than guessing.
     with_env_vars(&[("RESTREAM_EGRESS_FABRIC", "bogus")], || {
         assert_eq!(
             EgressFabricConfig::from_env().rollout,
-            EgressRolloutMode::Off
+            EgressRolloutMode::All
         );
     });
 }
@@ -531,7 +532,7 @@ fn effective_summary_covers_runtime_knobs_without_secret_values() {
         summary["tokio"]["maxBlockingThreads"],
         config.tokio_runtime.max_blocking_threads
     );
-    assert_eq!(summary["egressFabric"]["enabled"], false);
+    assert_eq!(summary["egressFabric"]["enabled"], true);
     assert_eq!(
         summary["egressFabric"]["shards"],
         config.egress_fabric.shards
