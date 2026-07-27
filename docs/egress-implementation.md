@@ -3309,6 +3309,57 @@ At least one production-equivalent canary must complete normal operation,
 configuration churn, destination failure, and graceful restart without legacy
 fallback.
 
+### Merge-readiness roadmap (2026-07-27 audit)
+
+The default remains `EgressRolloutMode::All`, but the branch is not ready to
+merge while its live proof is red. The current head (`9b4ce9a5`) has two
+independent failures: `fault.egress-retry` in the concurrency lifecycle gate,
+and `mixed.live.srt.h265.a2.bf2`, where 37 of 38 outputs progress and one RTMP
+fabric leaf terminates without recovery. Treat the latter as a fabric
+correctness regression until a controlled reproduction proves otherwise; the
+CI-contention theory is not a resolution.
+
+Work in this order:
+
+1. **Phase 5: reproduce and root-cause the RTMP leaf loss.** Use the existing
+   bounded diagnostic instrumentation only in a controlled harness run, reduce
+   the failing duplicate-output scenario to a deterministic test where
+   possible, then remove the temporary diagnostics. The fix must prove that a
+   leaf which is connected, has pending handshake or media bytes, and shares a
+   feed with a healthy sibling receives subsequent service and retries to
+   recovery rather than terminating permanently.
+2. **Phase 5/6: re-run the exact failed live-smoke matrix before another
+   default decision.** Require the previously failing
+   `mixed.live.srt.h265.a2.bf2` lane and the file-ingest-to-transcoded-RTMP
+   shape that motivated `5169e7f3` to pass with `RESTREAM_EGRESS_FABRIC=all`.
+   A retry that merely hides an initial loss is insufficient: every required
+   output must make sustained progress.
+3. **Phase 6: make the concurrency lifecycle gate reliable.** Classify the
+   `fault.egress-retry` failure as either a product regression or an explicitly
+   bounded test-timing issue. Keep the assertion meaningful; do not treat a
+   red gate as pre-existing until repeated controlled runs identify its owner
+   and a deterministic acceptance condition.
+4. **Phase 6: prove the production-equivalent canary.** Run normal operation,
+   configuration churn, destination failure, and graceful restart without a
+   legacy fallback. Keep the rollout default at `Off` until this proof and the
+   complete PR CI matrix are green; only then make a separately reviewed
+   default-flip commit.
+5. **Phase 4: close or explicitly defer the live SRT backpressured-but-
+   connected receiver proof.** A raw SRT listener that remains protocol-live
+   while withholding application reads is needed to exercise this path; the
+   current `SIGSTOP` case proves reconnect failure, not sustained
+   backpressure.
+6. **Phase 7: finish the controlled shard sweep.** Measure 1, 2, 4, 6, and 8
+   shards with CPU, RSS, context-switch, allocator, and tail-progress data.
+   Confirm the `effective_cpus.clamp(2, 8)` default on a host where the upper
+   bound is observable, rather than treating the current six-core result as
+   universal.
+7. **Phase 7: remove rollback-era duplication only after the observation
+   window.** Delete legacy RTMP tasks, legacy SRT feeder/queue/sender threads,
+   duplicate policy, and rollout compatibility paths; then update the
+   architecture, media-pipeline, performance, testing, concurrency, and
+   operator documentation to describe the single shipped ownership model.
+
 ## Phase 7: Tuning and legacy removal
 
 ### Objective
