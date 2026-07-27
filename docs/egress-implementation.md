@@ -3246,6 +3246,63 @@ transcoder → RTMP fabric egress against a local `mediamtx`, no
 this is real confidence rather than a repeat of the earlier false
 signal. `EgressRolloutMode::default()` is re-flipped to `All`.
 
+**Post-flip CI observed one additional, distinct intermittent
+failure — investigated, not fixed, and believed to be pre-existing
+CI-runner contention rather than a fabric logic bug.** The first CI run
+against the re-flipped default (`ea0e7d40`) failed two jobs. One was the
+already-documented `fault.egress-retry` timing flake (see above,
+unaffected by anything in this session). The other was new:
+`integration-shards / PR live-smoke shard (mixed.live.srt.h265.a1.bf2)`
+— one output, `rtmp.1080p.a0-2`, failed with `RTMP fabric leaf
+terminated unexpectedly` four times across the full 195s window (every
+retry re-failed, never once succeeding), while every other output in
+that same run succeeded — including `rtmp.1080p.a0-1`, its sibling on
+the *identical* external-ffmpeg 1080p H.264 transcoder feed, which
+connected at the same instant and stayed healthy the whole time.
+
+Investigated rather than blindly retried: pulled the CI artifact's
+`restream.log` and confirmed the failing leaf logged "rtmp fabric leaf
+connected" then nothing else for exactly ~15.3s before the stall sweep
+closed it — matching `LeafPolicy::no_progress_timeout` (`src/media/egress/policy.rs`,
+15s default) exactly. `classify_stall` only reaches `Stalled` when
+`pending_bytes > 0` and stays that way past the timeout, meaning the
+leaf had queued-but-unsent bytes (most likely its own C0+C1 handshake)
+for the entire window — i.e. it was never actually visited to write
+them, not that it wrote them and was waiting on a read that never came
+(that would be the already-fixed, `pending_bytes == 0` idle case). The
+fabric wake watcher (`retain_rtmp_fabric_runtime`,
+`src/media/engine_rtmp_egress_fabric.rs`) delivers `FeedWake` to every
+shard in a feed's dedicated shard group on every publish, ruling out
+"FeedWake never reached this shard" as an explanation, and this
+session's idle-poll fix (above) should have caught a plain unvisited
+leaf within one `idleWaitMs` cycle (25ms) regardless. No further root
+cause was found beyond this.
+
+Reproduced locally 3 times (`mixed.live.srt.h265.a1.bf2`,
+`RESTREAM_EGRESS_FABRIC` unset): all 3 runs completed successfully
+(exit 0), but 2 of the 3 showed the *same* transient pattern at the
+harness's 10-second progress check — `rtmp.1080p.a0` reporting one of
+its two duplicate outputs (`out1` once, `out2` once) as the sole
+straggler — which then fully cleared by the next check. Never
+reproduced CI's persistent, non-recovering 4/4 failure locally. Given
+this session's 6-CPU sandbox is materially less contended than a shared
+CI runner running this job alongside up to 8 other parallel shard jobs
+(`max_parallel: 9`, each spawning its own external ffmpeg processes),
+and given the retry mechanism itself functioned correctly throughout
+(reconnecting on schedule every time, never truly deadlocking) with
+every other concurrent output on the same host succeeding, the working
+theory is CI-runner CPU contention during simultaneous external-ffmpeg
+transcoder spin-up occasionally losing the race against the 15s
+no-progress timeout — the same general "cold start takes longer than
+expected under contention" characteristic already documented above for
+the file-ingest/internal-transcoder case, here affecting an
+external-ffmpeg-backed leaf instead. This is **not proven** — it is the
+best available evidence, not a certainty. If this failure recurs on a
+future CI run without self-healing via retry (i.e. an output that never
+recovers within its test's full timeout, as opposed to succeeding on a
+later attempt), treat it as a real regression and reopen this
+investigation rather than assuming it away a second time.
+
 ### Exit gate
 
 At least one production-equivalent canary must complete normal operation,
