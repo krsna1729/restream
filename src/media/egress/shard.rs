@@ -356,6 +356,28 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 if running {
                     timers_processed = self.process_timer_batch(&mut running);
                 }
+                let mut idle_poll_found_work = false;
+                if running && processed == 0 && ready_processed == 0 && timers_processed == 0 {
+                    // Nothing scheduled a readiness check this iteration (no
+                    // `FeedWake`, no self-perpetuating `ScheduleReady` from a
+                    // previous visit). A leaf waiting on real I/O readiness
+                    // that isn't feed-related — most commonly a handshake or
+                    // negotiation response — has no other way to ever be
+                    // rediscovered on an otherwise-quiet shard: `on_ready`'s
+                    // `poll_ready()` (the only thing that actually calls the
+                    // native poller) never runs unless something schedules
+                    // it, and a shard with one output and no active media
+                    // yet schedules nothing. This closes that gap by giving
+                    // every idle shard one real poller check per idle-wait
+                    // cycle, matching the cadence `RtmpShardBackend`'s
+                    // `FeedWake` handling doc comments already assume exists
+                    // ("the shard's own idle poll cycle").
+                    let effect = self.backend.on_ready();
+                    idle_poll_found_work = effect != EgressShardCommandEffect::Continue;
+                    if self.apply_effect(effect).stops_shard() {
+                        running = false;
+                    }
+                }
                 // Fully idle while draining: nothing left to flush, so stop
                 // now instead of waiting out the rest of the deadline.
                 if running
@@ -363,6 +385,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                     && processed == 0
                     && ready_processed == 0
                     && timers_processed == 0
+                    && !idle_poll_found_work
                 {
                     running = false;
                 }

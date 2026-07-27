@@ -3178,6 +3178,74 @@ deserves its own live re-verification (ideally against the same CI
 scenario matrix that caught the original regression) rather than being
 a byproduct of a bug-fix session.
 
+**The `on_media_tick` fix above was real but insufficient by itself —
+re-flipping the default to `All` on that fix alone reproduced the
+identical original failure 3/3 times on fresh automated reruns**, after
+two initial manual live checks had shown no error and been (wrongly)
+read as confirmation. That contradiction — 2 isolated passes vs. 3/3
+fresh failures with the same error — meant the earlier "it works"
+signal did not generalize, and the investigation reopened rather than
+assuming either result was noise.
+
+Re-instrumented with a second round of temporary diagnostic tracing and
+found the deeper gap: giving a freshly-connected leaf one guaranteed
+`ScheduleReady` (the first fix) gets it exactly one visit — enough to
+send the RTMP handshake (C0+C1) and register interest — but nothing
+schedules any *subsequent* `on_ready()` call unless some other, external
+event happens to trigger one. `EgressShardRuntime::run()`'s idle-wait
+branch only calls `on_ready()`/`poll_ready()` (the real native-poller
+check) when `ready_backlog` is already non-empty; a quiet, single-leaf
+shard that has nothing else scheduling wakes never re-polls, so the
+handshake response sitting in the OS socket receive buffer is never
+discovered. Eventually the peer's own timeout (mediamtx's ~30s) closes
+the connection, surfacing later as
+`ProtocolFailure { reason: "rtmp_session_negotiation", detail: "Broken
+pipe (os error 32)" }` — a different symptom from the original
+"terminated unexpectedly" stall-sweep close, but the same root
+class: `classify_stall` returns `Idle` whenever `pending_bytes == 0`
+regardless of how long ago progress happened, so a leaf that finished
+sending and is purely waiting to *read* is invisible to the stall-sweep
+close path too — it can only be discovered via a real I/O-readiness
+poll. Busy/multi-leaf shards never hit this because other leaves'
+activity incidentally triggers `on_ready()` (which itself does
+`if self.ready.is_empty() { self.poll_ready(); }`) often enough to paper
+over the gap; a quiet single-output shard has no such incidental
+trigger. This is the same class of gap already tracked as the deferred,
+opus-tier "split feed-readiness from I/O-readiness" backlog item — but
+closing the specific, narrow case (give every shard one real
+`on_ready()` poll per idle-wait cycle regardless of external triggers)
+did not require that full redesign.
+
+Fixed in `EgressShardRuntime::run()` (`src/media/egress/shard.rs`): the
+idle-wait branch now always calls `self.backend.on_ready()` once per
+idle cycle instead of only when `ready_backlog` is already non-empty,
+tracking whether that poll found real work so a shard that is mid-drain
+does not stop prematurely. Proof: new unit test
+`idle_shard_polls_on_ready_periodically_without_any_external_trigger`
+(`src/media/egress/shard/tests/runtime.rs`), verified as a real
+regression by temporarily sabotaging the new call and confirming the
+test fails, then restoring it.
+
+Verification bar before re-flipping the default: full local gate suite
+(`cargo test --lib`, clippy, fmt, source-audit, docs checks) plus
+`scripts/check/concurrency/contract.sh`. Across four `contract.sh`
+attempts, three failed for reasons unrelated to the code this fix
+touches — a `database is locked` SQLite contention error, the
+already-known `fault.egress-retry` 500ms timing flake (see above), and
+once a `fault.resilience` sub-case ("Rapid SRT publisher replacement
+preserves egress") that exercises SRT ingest reconnect-grace timing,
+not RTMP egress shard polling — and the fourth attempt's only failure
+was the same already-known `fault.egress-retry` flake. No attempt ever
+failed on the code path this fix changes. Combined with 5/5 clean,
+uncontended sequential reruns of the exact regression scenario
+(`mixed.asset.file.h264.a1.bf0`, no other heavy process running
+concurrently) and a live smoke check (file ingest → internal 720p
+transcoder → RTMP fabric egress against a local `mediamtx`, no
+`RESTREAM_EGRESS_FABRIC` override) showing sustained `fabric: true`,
+`status: running`, and `bytesOut` climbing continuously with no errors,
+this is real confidence rather than a repeat of the earlier false
+signal. `EgressRolloutMode::default()` is re-flipped to `All`.
+
 ### Exit gate
 
 At least one production-equivalent canary must complete normal operation,

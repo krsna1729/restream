@@ -497,3 +497,31 @@ fn feed_wake_delivery_ends_idle_sleep_promptly() {
 
     handle.shutdown_and_join();
 }
+
+#[test]
+fn idle_shard_polls_on_ready_periodically_without_any_external_trigger() {
+    // A leaf waiting on real I/O readiness that isn't feed-related (a
+    // handshake or negotiation response, most concretely) has no other way
+    // to ever be rediscovered on an otherwise-quiet shard: `on_ready` --
+    // the only thing that calls the native poller -- previously only ran
+    // when something scheduled it via `EgressShardCommandEffect::ScheduleReady`
+    // (a `FeedWake`, or a backend's own self-perpetuating request). A shard
+    // with nothing scheduling that ever, ever again, would sit registered
+    // but never actually polled. This proves the fix: `on_ready` now fires
+    // on every idle-wait cycle even with zero commands, zero timers, and
+    // zero feed activity -- no `Add`, no `FeedWake`, nothing at all sent to
+    // this shard.
+    let probe = Probe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        config(16, 2),
+        ProbeBackend {
+            probe: probe.clone(),
+        },
+    );
+
+    probe.wait_for_ready_events(3);
+
+    let snapshot = handle.shutdown_and_join();
+    assert!(snapshot.stopped);
+}
