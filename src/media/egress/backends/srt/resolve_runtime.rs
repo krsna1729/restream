@@ -117,9 +117,10 @@ where
         self.backend.on_ready()
     }
 
-    fn on_media_tick(&mut self) {
-        self.backend.on_media_tick();
+    fn on_media_tick(&mut self) -> EgressShardCommandEffect {
+        let effect = self.backend.on_media_tick();
         self.resolve_workers.reap_finished();
+        effect
     }
 
     fn on_shutdown(&mut self) {

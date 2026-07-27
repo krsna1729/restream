@@ -123,11 +123,12 @@ impl EgressShardBackend for ProbeBackend {
         EgressShardCommandEffect::Continue
     }
 
-    fn on_media_tick(&mut self) {
+    fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         let (lock, condvar) = &*self.probe.inner;
         let mut state = lock.lock().unwrap();
         state.media_ticks += 1;
         condvar.notify_all();
+        EgressShardCommandEffect::Continue
     }
 
     fn on_shutdown(&mut self) {
@@ -156,12 +157,12 @@ impl EgressShardBackend for ScriptBackend {
         }
     }
 
-    fn on_media_tick(&mut self) {
+    fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         match self {
-            Self::Blocking(_) => {}
+            Self::Blocking(_) => EgressShardCommandEffect::Continue,
             Self::Probe(backend) => backend.on_media_tick(),
-            Self::ReadyFlood(_) => {}
-            Self::Panic => {}
+            Self::ReadyFlood(_) => EgressShardCommandEffect::Continue,
+            Self::Panic => EgressShardCommandEffect::Continue,
         }
     }
 

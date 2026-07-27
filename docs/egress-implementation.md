@@ -3076,10 +3076,107 @@ Reverted by restoring `EgressRolloutMode::Off` as the default and the
 two test assertions that had been updated for `All`. The fabric code
 itself is untouched and fully available via `RESTREAM_EGRESS_FABRIC=all`
 (or `=rtmp`/`=srt` individually) for anyone who wants it — only the
-*default* reverted. The RTMP-fabric-leaf-under-file-ingest fault above
-is now a tracked, reproducible bug to root-cause before attempting the
-default flip again; until then, rollback-free defaults intentionally
-stay conservative.
+*default* reverted.
+
+**Root-caused and fixed — a genuine architectural gap, not a
+transient bug.** Reproduced the CI failure locally
+(`RESTREAM_EGRESS_FABRIC=all`, `scripts/harness/run.sh
+mixed.asset.file.h264.a1.bf0`) and added temporary diagnostic tracing
+inside `RtmpShardBackend` (a per-second heartbeat logging each leaf's
+`pending_application_bytes`/registered poller interest/stall
+classification, plus a log at the exact point a leaf gets force-closed)
+to get ground truth instead of guessing from the existing logs, which
+had no visibility into this path at all. The heartbeat showed the
+stuck leaf sitting with `pending_bytes=0`, `registered_interest=WRITE`
+(its *initial* registration from connect time), and `stall_class=Idle`
+for the entire ~53s window before being force-closed — meaning it was
+never visited even once after connecting, not stuck mid-handshake.
+
+Tracing why led to the real gap: `EgressShardRuntime::run()`
+(`src/media/egress/shard.rs`) only ever invokes a backend's `on_ready()`
+— the method that actually calls the native poller (`epoll_wait` for
+RTMP, libsrt's own poller for SRT) — when something has already
+scheduled ready work via `EgressShardCommandEffect::ScheduleReady`.
+`on_media_tick()`, where a leaf's async TCP connect resolves and gets
+registered with the poller (`complete_pending_connect`), had signature
+`fn on_media_tick(&mut self)` — it could not return an effect, so a
+freshly-connected leaf had no way to ask for its own first readiness
+check. The only thing that could ever schedule that check was an
+unrelated `EgressCommand::FeedWake`, fired only when *some* output on
+the shard publishes new media. For any live, continuously-publishing
+source the next wake is milliseconds away, so this gap was invisible —
+every live RTMP/SRT capture this whole migration's live evidence rests
+on used exactly that shape. A file-ingest source behind an internal
+(non-external-ffmpeg) transcoder cold-starting for the first time has a
+real, multi-second-to-a-minute gap before its first published unit;
+during that gap the newly-connected leaf sat completely inert (not
+even attempting its handshake, which needs no feed data at all) until
+the transcoder's first publish finally fired a wake — and by then the
+per-second stall sweep had usually already force-closed the leaf as
+"terminated unexpectedly" (`sweep_stalled_leaves`), producing the
+close-and-retry cycle the original CI failure showed. SRT has the
+identical `on_media_tick`/`complete_pending_connect` shape and was
+equally exposed, just not yet caught live.
+
+Fixed by changing `EgressShardBackend::on_media_tick`'s signature to
+return `EgressShardCommandEffect` (default `Continue`, matching every
+other lifecycle hook on the trait already). `RtmpShardBackend` and
+`SrtShardBackend`'s `on_media_tick` now return
+`ScheduleReady { count: 1 }` whenever `complete_pending_connect`
+(changed to report success) actually connects a leaf during that tick,
+giving it a guaranteed first look independent of any FeedWake. Updated
+all five real implementors (`rtmp_shard.rs`, `srt.rs`,
+`pipeline_shard.rs`, `sink_shard.rs`, and both DNS-resolve decorator
+wrappers, `rtmp_shard_resolve_runtime.rs`/`srt/resolve_runtime.rs`,
+which must propagate the inner backend's effect rather than discard it
+— the decorators sit directly in the production spawn chain) and four
+test-fake implementors to the new signature.
+
+Live-verified the fix in three steps against the same reproduction:
+- Before the fix: leaf silently stuck the whole window, then closed
+  with `"RTMP fabric leaf terminated unexpectedly"` around 53s,
+  retried, and (since the transcoder had warmed up by then) succeeded
+  almost immediately on the second attempt — matching the original CI
+  failure shape exactly.
+- After the fix, same run: no error at all — `phase=sending` the whole
+  time, first real progress landing close to the 60s test boundary
+  (once, just past it; once, just under it) — the false
+  close-and-retry cycle is gone.
+- Compared against the *legacy* (non-fabric) path for the identical
+  scenario: legacy itself reaches first progress at ~50s. This confirms
+  the ~50-60s delay is a shared, pre-existing internal-transcoder
+  cold-start characteristic of this specific scenario (file ingest,
+  internal video presets, first run) — not something the fabric
+  migration introduced — and that the fix closes the actual regression
+  (fabric no longer worse than legacy) even though a smaller residual
+  gap (fabric landing nearer the 60s boundary than legacy's 50s)
+  remains as a separate, non-blocking performance question, not a
+  correctness one.
+
+Proof: 2 new deterministic unit tests per protocol (RTMP:
+`rtmp_shard_media_tick_tests.rs`; SRT: `srt/tests/media_tick.rs`) —
+one asserting `on_media_tick` returns `ScheduleReady` after pushing a
+resolved connect through a real `RtmpResolveCompletionQueue`/
+`SrtResolveCompletionQueue`, one asserting it stays `Continue` when
+nothing resolved. Both verified as real regressions: temporarily
+reverting the `ScheduleReady` branch to always return `Continue`
+locally and confirming the positive-case test fails for each protocol,
+then restored. `rtmp_shard.rs` crossed the source-audit line cap while
+adding this (1002 lines); split the graceful-close/drain/stall-sweep
+methods into a new `rtmp_shard_drain.rs`, mirroring the existing
+`srt_drain.rs` split exactly. Full `cargo test --lib` (1,904 tests),
+clippy (default and `mcp-server,mcp-http-backend` features), fmt,
+source-audit, `scripts/check/concurrency/contract.sh` (required —
+this touches shard/leaf lifecycle code in `shard.rs`/`srt.rs`), and
+docs checks all pass.
+
+**Default left at `Off`.** The specific bug that motivated the revert
+is now fixed and proven, but re-flipping the default is a separate
+decision this pass does not make: the residual fabric-vs-legacy timing
+gap in this exact scenario is unresolved, and re-attempting the flip
+deserves its own live re-verification (ideally against the same CI
+scenario matrix that caught the original regression) rather than being
+a byproduct of a bug-fix session.
 
 ### Exit gate
 

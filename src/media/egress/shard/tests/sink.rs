@@ -138,13 +138,14 @@ impl EgressShardBackend for SinkHarnessBackend {
         EgressShardCommandEffect::Continue
     }
 
-    fn on_media_tick(&mut self) {
+    fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         for _ in 0..4 {
             let Some(key) = self.queue.dequeue_next() else {
-                return;
+                return EgressShardCommandEffect::Continue;
             };
             self.visit_ready_leaf(key);
         }
+        EgressShardCommandEffect::Continue
     }
 }
 

@@ -492,18 +492,23 @@ where
     /// registers the connected socket with the poller, and constructs the
     /// engine. Errors are logged and drop the pending connect; the retry
     /// policy at the application layer owns reconnection.
+    /// Returns `true` when a leaf actually became connected and registered
+    /// this call — the caller uses that to know whether it needs to give
+    /// the new leaf its first look at readiness (see `on_media_tick`'s doc
+    /// comment on the shard trait: nothing else will discover a fresh
+    /// leaf's I/O readiness on its own).
     fn complete_pending_connect(
         &mut self,
         output_id: &OutputId,
         generation: u64,
         peer_addr: SocketAddr,
-    ) {
+    ) -> bool {
         let Some(pending) = self.pending_connects.remove(output_id) else {
-            return;
+            return false;
         };
         if pending.common.generation != generation {
             self.pending_connects.insert(output_id.clone(), pending);
-            return;
+            return false;
         }
 
         // Any early return below means the application never sees a leaf
@@ -520,7 +525,7 @@ where
             Err(error) => {
                 tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf connect failed");
                 progress_sink.mark_terminated_unexpectedly();
-                return;
+                return false;
             }
         };
         let stream = if pending.parts.tls {
@@ -533,7 +538,7 @@ where
                 Err(error) => {
                     tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf tls init failed");
                     progress_sink.mark_terminated_unexpectedly();
-                    return;
+                    return false;
                 }
             }
         } else {
@@ -543,7 +548,7 @@ where
         let Some(publish_startup) = self.startup_source.take_startup(output_id) else {
             tracing::warn!(output_id = %output_id, "rtmp fabric leaf rejected: no publish startup available");
             progress_sink.mark_terminated_unexpectedly();
-            return;
+            return false;
         };
 
         let engine = match RtmpFabricEngine::new_client(
@@ -556,7 +561,7 @@ where
             Err(error) => {
                 tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf init failed");
                 progress_sink.mark_terminated_unexpectedly();
-                return;
+                return false;
             }
         };
 
@@ -569,7 +574,7 @@ where
         {
             tracing::warn!(output_id = %output_id, "rtmp fabric leaf poller registration failed");
             progress_sink.mark_terminated_unexpectedly();
-            return;
+            return false;
         }
 
         let leaf = RtmpFabricLeaf {
@@ -589,6 +594,7 @@ where
             self.remove_leaf_socket(previous, CloseReason::Removed);
         }
         tracing::info!(output_id = %output_id, leaf_key = key.0, "rtmp fabric leaf connected");
+        true
     }
 
     fn remove_leaf_by_output(&mut self, output_id: &OutputId) -> bool {
@@ -609,69 +615,6 @@ where
         true
     }
 
-    /// Ask a leaf to close, gracefully if it still has application bytes
-    /// queued: rather than tearing down the transport immediately (losing
-    /// whatever `pending_application_bytes` hadn't reached the wire yet),
-    /// mark it draining so it keeps getting visited — and therefore keeps
-    /// writing — until either it flushes to zero or `drain_timeout` elapses
-    /// (checked in `visit_one_ready_leaf` and `sweep_draining_leaves`).
-    /// A leaf with nothing queued closes immediately; there is nothing to
-    /// wait for.
-    fn begin_graceful_close(&mut self, output_id: &OutputId, reason: CloseReason) {
-        self.pending_connects.remove(output_id);
-        let Some(socket_ref) = self.output_sockets.get(output_id).copied() else {
-            return;
-        };
-        let Some(leaf) = self
-            .leaves
-            .get_mut(socket_ref.key.0)
-            .and_then(Option::as_mut)
-        else {
-            return;
-        };
-        if leaf.common.pending_application_bytes == 0 {
-            self.output_sockets.remove(output_id);
-            self.remove_leaf_socket(socket_ref, reason);
-            return;
-        }
-        leaf.draining_since = Some(Instant::now());
-        leaf.draining_reason = Some(reason);
-    }
-
-    /// Close every draining leaf (see `begin_graceful_close`) that has
-    /// either fully flushed or been draining longer than `drain_timeout`.
-    /// The flush case here is a backstop, not the primary path — a leaf
-    /// getting real write readiness closes opportunistically the moment it
-    /// flushes, inside `visit_one_ready_leaf`, without waiting for this
-    /// once-a-second sweep. This is what actually bounds a leaf that stops
-    /// getting write readiness at all (a peer that stops reading): nothing
-    /// else will ever notice it again.
-    fn sweep_draining_leaves(&mut self, now: Instant) {
-        let expired: Vec<OutputId> = self
-            .output_sockets
-            .iter()
-            .filter_map(|(output_id, socket_ref)| {
-                let leaf = self.leaves.get(socket_ref.key.0)?.as_ref()?;
-                let draining_since = leaf.draining_since?;
-                let flushed = leaf.common.pending_application_bytes == 0;
-                let expired = now.saturating_duration_since(draining_since) >= self.drain_timeout;
-                (flushed || expired).then(|| output_id.clone())
-            })
-            .collect();
-        for output_id in expired {
-            let Some(socket_ref) = self.output_sockets.remove(&output_id) else {
-                continue;
-            };
-            let reason = self
-                .leaves
-                .get(socket_ref.key.0)
-                .and_then(Option::as_ref)
-                .and_then(|leaf| leaf.draining_reason)
-                .unwrap_or(CloseReason::Removed);
-            self.remove_leaf_socket(socket_ref, reason);
-        }
-    }
-
     fn leaf_mut(&mut self, key: LeafKey) -> Option<&mut RtmpFabricLeaf> {
         self.leaves.get_mut(key.0).and_then(Option::as_mut)
     }
@@ -680,48 +623,6 @@ where
     /// throttle here (unlike SRT's native bstats call), but there is no
     /// reason to walk every leaf on every media tick either.
     const STALL_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
-
-    /// Close every leaf whose pending application bytes have made no
-    /// byte/protocol progress within the no-progress deadline. Mirrors
-    /// `SrtShardBackend::sweep_stalled_leaves` exactly (same
-    /// `classify_stall` policy, same closed-leaves-retry-via-reconnect
-    /// contract) — this is what makes `LeafCommon::pending_application_bytes`
-    /// (wired up in `visit_one_ready_leaf`, `docs/egress-implementation.md`
-    /// Phase 5 status) actually mean something: previously nothing read it,
-    /// so a leaf that fell arbitrarily far behind a slow or wedged peer was
-    /// never closed for that reason alone.
-    fn sweep_stalled_leaves(&mut self, now: Instant) {
-        if self
-            .last_stall_sweep
-            .is_some_and(|last| now.saturating_duration_since(last) < Self::STALL_SWEEP_INTERVAL)
-        {
-            return;
-        }
-        self.last_stall_sweep = Some(now);
-        self.sweep_draining_leaves(now);
-
-        let stalled: Vec<OutputId> = self
-            .output_sockets
-            .iter()
-            .filter_map(|(output_id, socket_ref)| {
-                let leaf = self.leaves.get(socket_ref.key.0)?.as_ref()?;
-                (leaf.observe_stall(now) == LeafStallClass::Stalled).then(|| output_id.clone())
-            })
-            .collect();
-
-        for output_id in stalled {
-            let Some(socket_ref) = self.output_sockets.remove(&output_id) else {
-                continue;
-            };
-            let _ = self.poller.remove(socket_ref.fd);
-            if let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) {
-                let mut leaf = leaf;
-                leaf.common.progress_sink.mark_terminated_unexpectedly();
-                leaf.engine
-                    .close(&mut leaf.transport, CloseReason::NoProgress);
-            }
-        }
-    }
 
     /// Re-register every connected leaf's poller interest to `READ_WRITE`.
     ///
@@ -952,17 +853,24 @@ where
         }
     }
 
-    fn on_media_tick(&mut self) {
+    fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         let mut resolved = Vec::new();
         self.resolve_completions.drain_resolved(&mut resolved);
+        let mut connected_any = false;
         for completion in resolved {
-            self.complete_pending_connect(
+            let connected = self.complete_pending_connect(
                 &completion.output_id,
                 completion.generation,
                 completion.peer_addr,
             );
+            connected_any |= connected;
         }
         self.sweep_stalled_leaves(Instant::now());
+        if connected_any {
+            EgressShardCommandEffect::ScheduleReady { count: 1 }
+        } else {
+            EgressShardCommandEffect::Continue
+        }
     }
 
     fn on_shutdown(&mut self) {
@@ -983,6 +891,9 @@ where
         }
     }
 }
+
+#[path = "rtmp_shard_drain.rs"]
+mod rtmp_shard_drain;
 
 #[cfg(test)]
 #[path = "rtmp_shard_tests.rs"]

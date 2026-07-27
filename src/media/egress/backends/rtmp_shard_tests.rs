@@ -824,3 +824,5 @@ fn refresh_registrations_for_feed_wake_skips_leaves_already_read_write() {
 
 #[path = "rtmp_shard_drain_tests.rs"]
 mod drain_tests;
+#[path = "rtmp_shard_media_tick_tests.rs"]
+mod media_tick_tests;

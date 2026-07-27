@@ -942,17 +942,26 @@ where
         }
     }
 
-    fn on_media_tick(&mut self) {
+    fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         let mut resolved = Vec::new();
         self.resolve_completions.drain_resolved(&mut resolved);
+        let mut connected_any = false;
         for completion in resolved {
-            let _ = self.complete_pending_connect(
-                &completion.output_id,
-                completion.generation,
-                &completion.peer_addrs,
-            );
+            let connected = self
+                .complete_pending_connect(
+                    &completion.output_id,
+                    completion.generation,
+                    &completion.peer_addrs,
+                )
+                .is_ok();
+            connected_any |= connected;
         }
         self.sweep_stalled_leaves(Instant::now());
+        if connected_any {
+            EgressShardCommandEffect::ScheduleReady { count: 1 }
+        } else {
+            EgressShardCommandEffect::Continue
+        }
     }
 
     fn on_shutdown(&mut self) {

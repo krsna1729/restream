@@ -451,10 +451,11 @@ fn feed_wake_delivery_ends_idle_sleep_promptly() {
             EgressShardCommandEffect::Continue
         }
 
-        fn on_media_tick(&mut self) {
+        fn on_media_tick(&mut self) -> EgressShardCommandEffect {
             let (lock, condvar) = &*self.probe.inner;
             *lock.lock().unwrap() += 1;
             condvar.notify_all();
+            EgressShardCommandEffect::Continue
         }
     }
 

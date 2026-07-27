@@ -247,8 +247,9 @@ where
         EgressShardCommandEffect::Continue
     }
 
-    fn on_media_tick(&mut self) {
+    fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         self.drain_ready_leaves();
+        EgressShardCommandEffect::Continue
     }
 
     fn on_shutdown(&mut self) {

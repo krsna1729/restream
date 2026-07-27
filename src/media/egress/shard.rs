@@ -141,7 +141,21 @@ pub trait EgressShardBackend: Send + 'static {
         EgressShardCommandEffect::Continue
     }
 
-    fn on_media_tick(&mut self) {}
+    /// A leaf whose async connect completes here (see `RtmpShardBackend`/
+    /// `SrtShardBackend`) has no independent way to discover its own fresh
+    /// I/O readiness: `on_ready`/`poll_ready` (the only path that actually
+    /// polls the native readiness backend) only ever runs when something
+    /// schedules ready work via the returned effect — nothing does that by
+    /// default just because a connect resolved. Without a backend
+    /// returning `ScheduleReady` here when it completes a connect, that
+    /// leaf sits registered but unvisited until an unrelated `FeedWake`
+    /// happens to arrive, which on a source with any real gap before its
+    /// first published unit (a cold-starting transcoder, a file ingest)
+    /// can be many seconds away even though the connection itself was
+    /// ready from the moment it completed.
+    fn on_media_tick(&mut self) -> EgressShardCommandEffect {
+        EgressShardCommandEffect::Continue
+    }
 
     fn on_shutdown(&mut self) {}
 }
@@ -356,7 +370,8 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             // Clear the wake gate before draining so a publish landing after
             // this point re-arms exactly one wake delivery (loom-proven seam).
             self.wake_gate.take();
-            self.backend.on_media_tick();
+            let media_tick_effect = self.backend.on_media_tick();
+            self.apply_effect(media_tick_effect);
             self.record_iteration(loop_started_at, processed, timers_processed);
             if running
                 && let Some(deadline) = self.draining_until
