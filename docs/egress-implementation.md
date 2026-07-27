@@ -1194,10 +1194,12 @@ backpressured-but-connected SRT stall path specifically, which needs a
 purpose-built raw SRT listener — still open, tracked as future work, not
 blocking.
 
-**Default flipped.** `EgressRolloutMode::default()` is now `All` (see
-Phase 6's "Rollout order" for the full reasoning and live verification).
-SRT routes through the fabric by default as of this change;
-`RESTREAM_EGRESS_FABRIC=off` remains available for rollback.
+**Default flip attempted, then reverted** — see Phase 6's "Rollout
+order" for the full story: CI's own live-scenario gate caught a real
+RTMP fabric regression under a workload shape this session's captures
+never exercised, so `EgressRolloutMode::default()` is back to `Off`.
+SRT itself is not implicated by that finding; `RESTREAM_EGRESS_FABRIC=srt`
+remains available for anyone who wants SRT-fabric-by-default today.
 
 ## Phase 5: RTMP and RTMPS migration
 
@@ -1866,11 +1868,14 @@ controls the scale for a fuller run.
 Fabric RTMP and RTMPS become default only after media correctness, tail progress,
 CPU, RSS, context switches, and allocator behavior match or improve on legacy.
 
-**Default flipped.** `EgressRolloutMode::default()` is now `All` — see
-Phase 6's "Rollout order" for the full reasoning, the live verification
-that it takes effect, and the one open cost (the combined RTMP+SRT
-workload's CPU gap) this flip does not fully close.
-`RESTREAM_EGRESS_FABRIC=off` remains available for rollback.
+**Not met — a default-flip attempt found a real gap here.** See Phase
+6's "Rollout order" for the full story: CI's `Internal media backend
+smoke` gate caught the RTMP fabric leaf terminating and never
+recovering under a file-ingest-to-transcoded-RTMP-720p shape, a
+correctness failure this phase's live captures (all live-RTMP- or
+live-SRT-sourced) never exercised. `EgressRolloutMode::default()` is
+back to `Off`; this exit gate is genuinely unmet until that specific
+regression is root-caused and re-verified live.
 
 ### Remaining Phase 5 work — plan
 
@@ -3028,37 +3033,53 @@ Add operator-visible attribution:
 6. all protocols on fabric;
 7. remove rollback path after a defined observation window.
 
-**Steps 3, 5, and 6 done — `EgressRolloutMode::default()` is now `All`**
+**Attempted, then reverted — `EgressRolloutMode::default()` is back to
+`Off`.** Steps 3, 5, and 6 were briefly flipped to `All`
 (`src/config.rs`), skipping the staged canary deployment (step 2) this
-document originally specified. This is a deliberate scope call, not an
-oversight: no actual staged/canary production deployment is reachable
-from this repository — that requires real deployment infrastructure
-outside the codebase — so the alternative to flipping the default
-directly was leaving it `Off` indefinitely regardless of how much live
-evidence accumulated. The accumulated Phase 4/5/6a live evidence this
-document already records (SRT clearing legacy's hard 512-sender-thread
-ceiling at N=1,000; RTMP at parity or better at N=1,000 after the
-shard-count fix; RTMPS correctness at N=1,000 with a known, root-caused,
-documented RSS tradeoff; recirculation 2.7×–31.6× cheaper than loopback)
-is the substitute for a canary observation window, not a replacement
-for one — rollback remains one env var away
-(`RESTREAM_EGRESS_FABRIC=off`) for any deployment that needs it, so this
-is fully reversible without a code change. Legacy code itself is not
-removed (Phase 7's exit gate is unmet) specifically so that rollback
-capability still exists. Verified live at the moment of the flip: a
-freshly built release binary, started with no `RESTREAM_EGRESS_FABRIC`
-set, reports `"egressFabric":{"enabled":true,"rollout":"all","shards":6}`
-in its startup log, and a real RTMP output created immediately after
-shows `"fabric": true, "shardId": 1` in `/api/v1/engine/health` with
-real, advancing `bytesOut` against a real mediamtx receiver — the
-default now takes effect in practice, not just in a config struct.
-Still not done: the RTMP+RTMPS mixed-workload gap noted in Phase 5
-(fabric costs more CPU than legacy at the specific 1,140:60 combined
-ratio, traced to shard-count/CPU-count topology, partially but not
-fully closed by the shard-count fix) was not re-measured after this
-flip; if that gap matters for a specific deployment's workload shape,
-`RESTREAM_EGRESS_FABRIC=off` remains the mitigation until it's
-re-profiled.
+document originally specified, on the reasoning that the accumulated
+Phase 4/5/6a live evidence (SRT clearing legacy's hard
+512-sender-thread ceiling at N=1,000; RTMP at parity or better at
+N=1,000 after the shard-count fix; RTMPS correctness at N=1,000 with a
+known, root-caused RSS tradeoff; recirculation 2.7×–31.6× cheaper than
+loopback) was a reasonable substitute for a canary window that no
+staged production deployment in this repository could provide.
+
+**CI's own live-scenario gates caught a real regression this
+reasoning missed.** The next scheduled CI run (`Internal media backend
+smoke`, scenario `mixed.asset.file.h264.a1.bf0`, a file-ingest source
+feeding a transcoded RTMP 720p output) failed with a genuine, persistent
+fault: the RTMP fabric leaf terminated
+(`lastError = "RTMP fabric leaf terminated unexpectedly (peer closed,
+protocol failure, or stall recovery)"`) and the output never recovered
+— 0/1 outputs progressing for the entire 60-second timeout, not a
+transient blip. None of this session's live captures exercised this
+specific shape (a file/asset-sourced ingest transcoded into RTMP
+egress); every prior RTMP fabric measurement used a live RTMP- or
+SRT-sourced ingest. This is exactly why the exit gate below requires a
+canary, not benchmark evidence alone — a canary would have caught this
+before default-flip, a resource-focused A/B sweep did not.
+
+A separate, smaller finding surfaced investigating this: the
+`fault.egress-retry` concurrency-lifecycle test (specifically its
+retry-budget-exhaustion sub-case, which polls for a terminal `failed`
+state then asserts it stays failed 500ms later) flakes intermittently
+under real host-timing variance regardless of fabric-vs-legacy routing
+— reproduced locally failing on the SRT variant with the default back
+at `Off`, after having failed on the RTMP variant with the default at
+`All`. This looks like a pre-existing timing-sensitivity in the test's
+500ms assumption, not something this session's changes introduced, and
+is left as a known flake rather than chased further here — it did not
+block the decision to revert, which rests on the RTMP-fabric-leaf
+finding above.
+
+Reverted by restoring `EgressRolloutMode::Off` as the default and the
+two test assertions that had been updated for `All`. The fabric code
+itself is untouched and fully available via `RESTREAM_EGRESS_FABRIC=all`
+(or `=rtmp`/`=srt` individually) for anyone who wants it — only the
+*default* reverted. The RTMP-fabric-leaf-under-file-ingest fault above
+is now a tracked, reproducible bug to root-cause before attempting the
+default flip again; until then, rollback-free defaults intentionally
+stay conservative.
 
 ### Exit gate
 

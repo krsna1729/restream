@@ -139,7 +139,7 @@ impl Default for EgressFabricConfig {
     fn default() -> Self {
         let effective_cpus = crate::system_sampling::effective_cpu_count();
         Self {
-            rollout: EgressRolloutMode::All,
+            rollout: EgressRolloutMode::Off,
             shards: default_egress_fabric_shards(effective_cpus),
             command_channel_capacity: 1024,
             command_batch_budget: 32,
