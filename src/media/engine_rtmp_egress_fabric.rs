@@ -123,6 +123,11 @@ impl MediaEngine {
         command: EgressCommand,
     ) -> Result<ManagerCommandOutcome, RtmpFabricDispatchError> {
         let mut registry = self.fabric.rtmp.lock().await;
+        if let EgressCommand::Remove(output_id) = &command
+            && let Some(source) = registry.startup_sources.get(feed_id)
+        {
+            source.remove(output_id);
+        }
         let Some(runtime) = registry.runtimes.get_mut(feed_id) else {
             return Err(RtmpFabricDispatchError::MissingFeed {
                 feed_id: feed_id.clone(),

@@ -91,6 +91,13 @@ impl SharedRtmpPublishStartupSource {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(output_id, startup);
     }
+
+    pub(crate) fn remove(&self, output_id: &OutputId) {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(output_id);
+    }
 }
 
 impl RtmpPublishStartupSource for SharedRtmpPublishStartupSource {
@@ -98,7 +105,8 @@ impl RtmpPublishStartupSource for SharedRtmpPublishStartupSource {
         self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(output_id)
+            .get(output_id)
+            .cloned()
     }
 }
 
