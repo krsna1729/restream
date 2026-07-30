@@ -121,6 +121,79 @@ pub(super) async fn fault_rtmp_egress_sink_disappear(
     }))
 }
 
+pub(super) async fn fault_rtmp_egress_output_churn(
+    api: &RampApi,
+    ports: &TestPorts,
+    fixture_h264: &Path,
+    sink_port: u16,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let pid = create_pipeline(api, "fault-egress-churn").await?;
+    let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
+    let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
+
+    let sink_url_1 = format!("rtmp://127.0.0.1:{sink_port}/live/fault-churn-sink-1");
+    let oid_1 = create_output(api, &pid, "rtmp-churn-1", &sink_url_1, "source").await?;
+
+    let mut pub_child = spawn_publisher(
+        fixture_h264,
+        &format!("rtmp://127.0.0.1:{}/live/fault-egress-churn", ports.rtmp),
+        "flv",
+        false,
+    )
+    .await?;
+    wait_for_api_input_live(api, &pid, timeout).await?;
+
+    // 1. Start output 1 and wait for media frames
+    start_output(api, &pid, &oid_1).await?;
+    let output_1_started_frames = sink_metrics.video_count.load(Ordering::Relaxed);
+    let _ = wait_for_sink_video_above(&sink_metrics, output_1_started_frames + 9, timeout).await;
+
+    // 2. Add and start output 2 mid-stream while output 1 is running
+    let sink_url_2 = format!("rtmp://127.0.0.1:{sink_port}/live/fault-churn-sink-2");
+    let oid_2 = create_output(api, &pid, "rtmp-churn-2", &sink_url_2, "source").await?;
+    start_output(api, &pid, &oid_2).await?;
+    let output_2_started_frames = sink_metrics.video_count.load(Ordering::Relaxed);
+    let saw_output_2_data =
+        wait_for_sink_video_above(&sink_metrics, output_2_started_frames + 9, timeout).await;
+
+    // 3. Stop and delete output 1 mid-stream while output 2 continues running
+    let _ = api
+        .post_null(&format!("/api/v1/pipelines/{pid}/outputs/{oid_1}/stop"))
+        .await;
+    let _ = api
+        .delete_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid_1}"))
+        .await;
+
+    // 4. Verify output 2 continues making progress after output 1 teardown
+    let post_churn_started_frames = sink_metrics.video_count.load(Ordering::Relaxed);
+    let saw_post_churn_data =
+        wait_for_sink_video_above(&sink_metrics, post_churn_started_frames + 9, timeout).await;
+
+    // 5. Clean up output 2 and server
+    let _ = api
+        .post_null(&format!("/api/v1/pipelines/{pid}/outputs/{oid_2}/stop"))
+        .await;
+    let _ = api
+        .delete_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid_2}"))
+        .await;
+    stop_generalized_sink_server(sink_server);
+    stop_child(&mut pub_child).await;
+
+    let passed = saw_output_2_data && saw_post_churn_data;
+    println!(
+        "[fault] RTMP egress mid-stream output churn: {}",
+        if passed { "PASS" } else { "FAIL" }
+    );
+
+    Ok(json!({
+        "test": "rtmp-egress-output-churn",
+        "passed": passed,
+        "sawOutput2Data": saw_output_2_data,
+        "sawPostChurnData": saw_post_churn_data,
+    }))
+}
+
 pub(super) async fn fault_srt_egress_sink_disappear(
     api: &RampApi,
     ports: &TestPorts,
