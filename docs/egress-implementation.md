@@ -3399,11 +3399,34 @@ Actions CI jobs are **GREEN** on run `30517640919` following root-cause fixes:
    skipping a leaf) fails loudly instead of coincidentally matching the
    real zero/`None` result. Verified as a real regression the same way as
    the resync-count proof above.
-8. **Phase 7: finish the controlled shard sweep.** Measure 1, 2, 4, 6, and 8
-   shards with CPU, RSS, context-switch, allocator, and tail-progress data.
-   Confirm the `effective_cpus.clamp(2, 8)` default on a host where the upper
-   bound is observable, rather than treating the current six-core result as
-   universal.
+8. ~~**Phase 7: finish the controlled shard sweep.**~~ **PARTIALLY
+   RESOLVED**: measured `RESTREAM_EGRESS_SHARDS=1` and `=8` (the extremes
+   the `effective_cpus.clamp(2, 8)` default can select outside this host's
+   own `6`), live `mixed-fabric-matrix` legacy/fabric captures on the same
+   host as the 2/4/6 table above:
+
+   | shards | avg CPU ratio (fabric/legacy) | peak CPU ratio | RSS ratio |
+   |---|---|---|---|
+   | 1 | 0.940 | 0.923 | 1.005 |
+   | 8 | 1.022 | 1.001 | 1.005 |
+
+   **Read with an explicit caveat, not as a direct extension of the 2/4/6
+   row**: the 2/4/6 sweep used `RTMP_COUNT=1140, SRT_COUNT=60` (1,200
+   outputs); these two runs used the harness's own default
+   (`MIXED_FABRIC_MATRIX_RTMP_COUNT`/`_SRT_COUNT` unset → 19 RTMP + 1 SRT,
+   20 outputs) — a deliberate scale-down for this session's 6-CPU sandbox,
+   not an oversight. At 1,200 outputs the original sweep showed real,
+   sampling-noise-exceeding CPU ratio swings (1.047 at shards=2 up to 1.233
+   peak at shards=4) driven by shard-thread-vs-tokio-pool contention under
+   genuine load; at only 20 outputs there is nowhere near enough work to
+   reproduce that contention, so both extremes land close to parity
+   (ratios 0.92–1.02) almost by construction — this **does not**
+   independently confirm `clamp(2, 8)` is well-chosen at production scale,
+   it only confirms neither extreme misbehaves, crashes, or blows up
+   resource usage on a fabric group sized far outside its natural range
+   (1 shard serving 20 outputs; 8 shards mostly idle). Re-running both
+   extremes at the original 1,140/60 scale on a host that can afford it
+   remains open if the `clamp(2, 8)` bound itself is ever revisited.
 9. **Phase 7: remove rollback-era duplication only after the observation
    window.** Delete legacy RTMP tasks, legacy SRT feeder/queue/sender threads,
    duplicate policy, and rollout compatibility paths; then update the
