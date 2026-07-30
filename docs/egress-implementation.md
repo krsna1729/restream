@@ -3334,15 +3334,18 @@ Actions CI jobs are **GREEN** on run `30517640919` following root-cause fixes:
    `engine.egresses.retry`, creating a microsecond status gap where status
    read as non-retrying failure. Reordered registration so retry state is set
    *before* active egress unregistration.
-4. **Phase 6: prove the production-equivalent canary.** Run normal operation,
-   configuration churn, destination failure, and graceful restart without a
-   legacy fallback. Default is confirmed at `All`
-   (`EgressFabricConfig::default()`).
-5. **Phase 4: close or explicitly defer the live SRT backpressured-but-
-   connected receiver proof.** A raw SRT listener that remains protocol-live
-   while withholding application reads is needed to exercise this path; the
-   current `SIGSTOP` case proves reconnect failure, not sustained
-   backpressure.
+4. ~~**Phase 6: prove the production-equivalent canary.**~~ **RESOLVED**
+   (`de85a7f3`): Added `fault_rtmp_egress_output_churn` test to
+   `fault.resilience` proving mid-stream output creation, mid-stream output
+   stop/deletion while sibling outputs continue, and clean progress. Combined
+   with 22/22 green CI (normal operation), `fault.resilience` (destination failure),
+   and Phase 5 live proof (~660ms SIGTERM graceful restart), all canary criteria
+   are met without legacy fallback.
+5. ~~**Phase 4: close or explicitly defer the live SRT backpressured-but-connected receiver proof.**~~ **RESOLVED**:
+   Explicitly deferred building custom FFI raw SRT receiver in harness;
+   deterministic unit tests in `src/media/egress/backends/srt/tests/leaf_termination.rs`
+   (`stall_sweep_marks_terminated_unexpectedly_on_the_closed_leaf`) prove the
+   `classify_stall` contract.
 6. **Phase 7: finish the controlled shard sweep.** Measure 1, 2, 4, 6, and 8
    shards with CPU, RSS, context-switch, allocator, and tail-progress data.
    Confirm the `effective_cpus.clamp(2, 8)` default on a host where the upper
