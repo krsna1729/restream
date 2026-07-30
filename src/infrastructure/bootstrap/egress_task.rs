@@ -264,7 +264,34 @@ impl EgressTask {
             .engine
             .egress_has_recorded_progress_if_current(&self.output_id, &self.registration)
             .await;
-        let was_current = self
+
+        let retry_backoff = {
+            let mut last_failed = self.last_failed.lock().await;
+            if is_cancelled {
+                last_failed.remove(&self.output_id);
+                None
+            } else {
+                let retries = next_output_retry_count(
+                    last_failed
+                        .get(&self.output_id)
+                        .map(|(_, retries)| *retries),
+                    had_progress,
+                );
+                last_failed.insert(self.output_id.clone(), (Instant::now(), retries));
+                (retries < self.tuning.output_max_retries)
+                    .then_some((retries, self.tuning.output_backoff_ms(retries)))
+            }
+        };
+
+        if let Some((retries, backoff_ms)) = retry_backoff {
+            self.engine
+                .update_egress_retry_state(&self.output_id, retries, backoff_ms, backoff_ms)
+                .await;
+        } else {
+            self.engine.clear_egress_retry_state(&self.output_id).await;
+        }
+
+        let _was_current = self
             .engine
             .unregister_egress_if_current(&self.output_id, &self.registration)
             .await;
@@ -290,41 +317,6 @@ impl EgressTask {
             None,
         )
         .await;
-
-        let retry_backoff = if was_current {
-            let mut last_failed = self.last_failed.lock().await;
-            if is_cancelled {
-                last_failed.remove(&self.output_id);
-            } else {
-                let retries = next_output_retry_count(
-                    last_failed
-                        .get(&self.output_id)
-                        .map(|(_, retries)| *retries),
-                    had_progress,
-                );
-                last_failed.insert(self.output_id.clone(), (Instant::now(), retries));
-            }
-            if is_cancelled {
-                None
-            } else {
-                last_failed
-                    .get(&self.output_id)
-                    .map(|(_, retries)| *retries)
-                    .and_then(|retries| {
-                        (retries < self.tuning.output_max_retries)
-                            .then_some((retries, self.tuning.output_backoff_ms(retries)))
-                    })
-            }
-        } else {
-            None
-        };
-        if let Some((retries, backoff_ms)) = retry_backoff {
-            self.engine
-                .update_egress_retry_state(&self.output_id, retries, backoff_ms, backoff_ms)
-                .await;
-        } else {
-            self.engine.clear_egress_retry_state(&self.output_id).await;
-        }
     }
 
     /// Waits for either explicit cancellation (normal stop/reconfigure) or
