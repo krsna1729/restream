@@ -100,6 +100,19 @@ where
         self.last_stall_sweep = Some(now);
         self.sweep_draining_leaves(now);
 
+        let head_sequence = crate::media::egress::feed::EgressFeed::head_sequence(&self.feed);
+        for leaf in self.leaves.iter_mut().flatten() {
+            let lag_units = head_sequence.saturating_sub(leaf.common().cursor.next_sequence);
+            let reason = match leaf.observe_stall(now) {
+                LeafStallClass::Idle => None,
+                LeafStallClass::Backpressured => Some("backpressured"),
+                LeafStallClass::Stalled => Some("stalled"),
+            };
+            leaf.common()
+                .progress_sink
+                .record_backpressure_state(lag_units, reason);
+        }
+
         let stalled: Vec<OutputId> = self
             .output_sockets
             .iter()

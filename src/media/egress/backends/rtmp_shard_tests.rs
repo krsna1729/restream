@@ -603,108 +603,6 @@ fn feed_wake_delivers_media_published_after_the_leaf_goes_idle() {
     server.join().unwrap();
 }
 
-/// Proves `RtmpShardBackend::resync_count()` (read by
-/// `EgressShardRuntime::record_iteration` into `ShardMetrics::feed_resyncs`
-/// for the repeated-resync alert, `src/alerts.rs`) actually increments on a
-/// real feed overrun, not just on a synthetic `EngineProgress::FeedOverrun`
-/// constructed by hand. Pushes more packets than the ring's capacity onto
-/// the feed before the leaf's cursor (parked at its initial position since
-/// publish acceptance) ever reads one, forcing `feed.read_from` to report
-/// `FeedRead::Overrun` on the leaf's next visit.
-#[test]
-fn resync_count_increments_on_a_real_feed_overrun() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let (publish_tx, publish_rx) = std::sync::mpsc::channel::<()>();
-    let (video_tx, video_rx) = std::sync::mpsc::channel::<()>();
-    let server = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        run_accepting_server_peer_reporting_video_after_idle(stream, publish_tx, video_tx);
-    });
-
-    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
-    let mut backend = RtmpShardBackend::new(
-        TcpEgressPoller::new(4).unwrap(),
-        RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new())),
-        budget(),
-        4096,
-    );
-    let output_id = OutputId::new("out-1");
-    backend.on_command(EgressCommand::Add(output_spec(
-        "out-1",
-        &format!("rtmp://{}/live/key", addr),
-        1,
-    )));
-    backend.complete_pending_connect(&output_id, 1, addr);
-
-    let publish_deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        assert!(
-            std::time::Instant::now() < publish_deadline,
-            "leaf never reached publish acceptance"
-        );
-        if publish_rx.try_recv().is_ok() {
-            break;
-        }
-        backend.on_ready();
-        thread::sleep(Duration::from_millis(1));
-    }
-    assert_eq!(backend.resync_count(), 0);
-
-    // Drive a bit longer so the engine actually reaches its first feed
-    // read attempt (and settles into `Interest::NONE`, same as
-    // `feed_wake_delivers_media_published_after_the_leaf_goes_idle`)
-    // before the overrun is injected below.
-    let settle_deadline = std::time::Instant::now() + Duration::from_millis(200);
-    while std::time::Instant::now() < settle_deadline {
-        backend.on_ready();
-        thread::sleep(Duration::from_millis(1));
-    }
-
-    // Push more units than the ring retains (capacity 4) without ever
-    // letting the leaf's cursor advance, so its next read sees an overrun.
-    let payload = bytes::Bytes::from_static(&[
-        0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80, 0, 0, 0, 1, 0x68, 0xce, 0x06,
-        0xe2, 0, 0, 0, 1, 0x65, 0x88,
-    ]);
-    for i in 0..8 {
-        ring.push(crate::media::packet::MediaPacket {
-            media_type: crate::media::packet::MediaType::Video,
-            format: crate::media::packet::PayloadFormat::Raw,
-            is_keyframe: true,
-            track_index: 0,
-            pts: 100 + i,
-            dts: 80 + i,
-            payload: payload.clone(),
-        });
-    }
-    backend.on_command(EgressCommand::FeedWake);
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "feed overrun was never observed by the leaf"
-        );
-        if backend.resync_count() >= 1 {
-            break;
-        }
-        backend.on_ready();
-        thread::sleep(Duration::from_millis(1));
-    }
-    assert!(backend.resync_count() >= 1);
-
-    // Let the resynchronized leaf finish delivering whatever it resumed
-    // from so the server thread can exit cleanly.
-    let drain_deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while std::time::Instant::now() < drain_deadline && video_rx.try_recv().is_err() {
-        backend.on_ready();
-        thread::sleep(Duration::from_millis(1));
-    }
-
-    server.join().unwrap();
-}
-
 /// Wraps a real [`TcpEgressPoller`] and records every `register_leaf`
 /// interest, so tests can prove `visit_one_ready_leaf` skips the
 /// `epoll_ctl` syscall when the requested interest hasn't changed, without
@@ -924,6 +822,8 @@ fn refresh_registrations_for_feed_wake_skips_leaves_already_read_write() {
     );
 }
 
+#[path = "rtmp_shard_backpressure_tests.rs"]
+mod backpressure_tests;
 #[path = "rtmp_shard_drain_tests.rs"]
 mod drain_tests;
 #[path = "rtmp_shard_media_tick_tests.rs"]

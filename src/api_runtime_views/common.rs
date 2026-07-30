@@ -29,6 +29,11 @@ pub(super) fn egress_runtime_json(
         "uptimeSecs": egress.start_instant.elapsed().as_secs_f64(),
         "bytesOut": egress.bytes_sent.load(Ordering::Relaxed),
         "resyncCount": egress.resync_count.load(Ordering::Relaxed),
+        "feedLagUnits": egress.feed_lag_units.load(Ordering::Relaxed),
+        "backpressureReason": *egress
+            .backpressure_reason
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()),
         "lastProgressAt": MediaEngine::epoch_ms_to_rfc3339(last_progress_ms),
         "lastProgressAgeMs": (last_progress_ms > 0).then(|| now_ms.saturating_sub(last_progress_ms)),
         "lastError": egress.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone(),
@@ -83,6 +88,8 @@ pub(super) fn recent_egress_runtime_json(
         "uptimeSecs": outcome.uptime_secs,
         "bytesOut": outcome.bytes_sent,
         "resyncCount": outcome.resync_count,
+        "feedLagUnits": outcome.feed_lag_units,
+        "backpressureReason": outcome.backpressure_reason,
         "lastProgressAt": MediaEngine::epoch_ms_to_rfc3339(outcome.last_progress_ms),
         "lastProgressAgeMs": (outcome.last_progress_ms > 0).then(|| now_ms.saturating_sub(outcome.last_progress_ms)),
         "lastError": outcome.last_error,
@@ -302,6 +309,8 @@ mod tests {
             bytes_sent: 2048,
             last_progress_ms: 0,
             resync_count: 0,
+            feed_lag_units: 0,
+            backpressure_reason: None,
             last_error: Some("connection reset by peer".to_string()),
             last_error_ms: MediaEngine::now_epoch_ms(),
             failure_phase: Some("send".to_string()),
@@ -365,6 +374,8 @@ mod tests {
             is_fabric: true,
             shard_id: Some(2),
             resync_count: Arc::new(AtomicU64::new(3)),
+            feed_lag_units: Arc::new(AtomicU64::new(7)),
+            backpressure_reason: Arc::new(std::sync::Mutex::new(Some("backpressured"))),
         };
 
         let json = egress_runtime_json(&egress, true, true, None);
@@ -373,6 +384,8 @@ mod tests {
         assert_eq!(json["lastError"], "rtmp fabric leaf rejected");
         assert_eq!(json["failurePhase"], "rtmp_fabric_ensure");
         assert_eq!(json["resyncCount"], 3);
+        assert_eq!(json["feedLagUnits"], 7);
+        assert_eq!(json["backpressureReason"], "backpressured");
         assert!(json["lastProgressAgeMs"].as_u64().is_some());
     }
 }

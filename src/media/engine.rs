@@ -115,6 +115,13 @@ pub struct ActiveEgress {
     /// true. `None` for legacy-owned outputs.
     pub shard_id: Option<u32>,
     pub resync_count: Arc<AtomicU64>,
+    /// Feed units the leaf's cursor is currently behind the feed head.
+    /// Fabric outputs only; stays 0 for legacy-owned outputs, which have no
+    /// shared feed cursor to report against.
+    pub feed_lag_units: Arc<AtomicU64>,
+    /// Reason for the leaf's current send-path health (`None` when
+    /// idle/healthy). Fabric outputs only.
+    pub backpressure_reason: Arc<std::sync::Mutex<Option<&'static str>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +152,8 @@ pub struct RecentEgressOutcome {
     pub bytes_sent: u64,
     pub last_progress_ms: u64,
     pub resync_count: u64,
+    pub feed_lag_units: u64,
+    pub backpressure_reason: Option<&'static str>,
     pub last_error: Option<String>,
     pub last_error_ms: u64,
     pub failure_phase: Option<String>,

@@ -184,6 +184,16 @@ pub struct EgressProgressSink {
     pub last_progress_ms: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     /// Total resynchronizations / overruns for this leaf.
     pub resync_count: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Feed units the leaf's cursor is currently behind the feed head.
+    /// Updated once per second by the shard's stall sweep alongside
+    /// `backpressure_reason` (status `feedLagUnits` source).
+    pub feed_lag_units: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Human-readable reason for the leaf's current send-path health
+    /// (`None` when idle/healthy), classified from the same
+    /// `classify_stall` policy the stall sweep already uses to decide
+    /// whether to force-close the leaf (status `backpressureReason`
+    /// source).
+    pub backpressure_reason: Option<std::sync::Arc<std::sync::Mutex<Option<&'static str>>>>,
     /// Set by shard code exactly once, only when this leaf is closed for a
     /// reason the application task did not itself request (peer closed,
     /// protocol failure, or no-progress/stall recovery) — never on an
@@ -204,6 +214,8 @@ impl std::fmt::Debug for EgressProgressSink {
             .field("metrics", &self.metrics_bytes_out.is_some())
             .field("last_progress_ms", &self.last_progress_ms.is_some())
             .field("resync_count", &self.resync_count.is_some())
+            .field("feed_lag_units", &self.feed_lag_units.is_some())
+            .field("backpressure_reason", &self.backpressure_reason.is_some())
             .field(
                 "terminated_unexpectedly",
                 &self.terminated_unexpectedly.is_some(),
@@ -228,6 +240,22 @@ impl EgressProgressSink {
         }
         if let Some(stamp) = &self.last_progress_ms {
             stamp.store(now_ms, Ordering::Relaxed);
+        }
+    }
+
+    /// Record the leaf's current feed lag (in units behind the head) and
+    /// send-path health classification. Called once per second from the
+    /// shard's stall sweep for every live leaf, healthy or not, so a
+    /// recovered leaf's `backpressure_reason` clears back to `None`.
+    #[inline]
+    pub fn record_backpressure_state(&self, lag_units: u64, reason: Option<&'static str>) {
+        if let Some(counter) = &self.feed_lag_units {
+            counter.store(lag_units, std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Some(slot) = &self.backpressure_reason {
+            *slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = reason;
         }
     }
 

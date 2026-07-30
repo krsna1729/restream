@@ -3365,21 +3365,46 @@ Actions CI jobs are **GREEN** on run `30517640919` following root-cause fixes:
    `Warning`-severity `repeated_resync` alert once a shard's `resyncCount`
    reaches 5. Proof: a real-feed-overrun integration test
    (`resync_count_increments_on_a_real_feed_overrun`,
-   `rtmp_shard_tests.rs` — pushes more units than the ring retains onto a
-   real connected leaf and asserts the backend's counter advances) plus a
-   deterministic `visit.rs` unit test asserting the cross-thread counter
-   specifically (not just the pre-existing shard-local one). Both verified
-   as real regressions (temporarily disabling each call site and confirming
-   the corresponding test fails, then restored). `srt.rs` crossed the
-   source-audit line cap adding this; moved `sweep_stalled_leaves` into the
-   existing `srt_drain.rs` split alongside `begin_graceful_close`/
-   `sweep_draining_leaves`, mirroring `rtmp_shard.rs`/`rtmp_shard_drain.rs`.
-7. **Phase 7: finish the controlled shard sweep.** Measure 1, 2, 4, 6, and 8
+   `rtmp_shard_backpressure_tests.rs` — pushes more units than the ring
+   retains onto a real connected leaf and asserts the backend's counter
+   advances) plus a deterministic `visit.rs` unit test asserting the
+   cross-thread counter specifically (not just the pre-existing shard-local
+   one). Both verified as real regressions (temporarily disabling each call
+   site and confirming the corresponding test fails, then restored).
+   `srt.rs` crossed the source-audit line cap adding this; moved
+   `sweep_stalled_leaves` into the existing `srt_drain.rs` split alongside
+   `begin_graceful_close`/`sweep_draining_leaves`, mirroring
+   `rtmp_shard.rs`/`rtmp_shard_drain.rs`.
+7. ~~**Phase 6: status and failure-reason integration.**~~ **RESOLVED**:
+   `lastError`/`failurePhase`/`lastProgressAgeMs` already flowed to both
+   runtime JSON views from prior phase work; the remaining gap was per-leaf
+   feed lag and a human-readable backpressure reason. Both
+   `RtmpShardBackend`/`SrtShardBackend`'s once-a-second stall sweep
+   (`sweep_stalled_leaves`) now iterates every live leaf, not just leaves it
+   is about to force-close, computing `feed.head_sequence() -
+   leaf.cursor.next_sequence` (lag in feed units) and reusing the same
+   `classify_stall`/`LeafStallClass` result the sweep already computes to
+   decide force-close (`Idle` → no reason, `Backpressured` →
+   `"backpressured"`, `Stalled` → `"stalled"`) into a new
+   `EgressProgressSink::record_backpressure_state` call — mirroring
+   `record_overrun`'s cross-thread `Arc` pattern exactly (`feed_lag_units:
+   Arc<AtomicU64>`, `backpressure_reason: Arc<Mutex<Option<&'static str>>>`
+   on `ActiveEgress`). Surfaced as `feedLagUnits`/`backpressureReason` in
+   both `egress_runtime_json` and `recent_egress_runtime_json`. Proof: a
+   real-connected-leaf integration test
+   (`sweep_stalled_leaves_reports_feed_lag_and_backpressure_state_for_a_healthy_leaf`,
+   `rtmp_shard_backpressure_tests.rs`) asserting a freshly connected idle
+   leaf reports zero lag and no reason — seeded with sentinel values
+   (`u64::MAX`, `Some("unset")`) so a wiring regression (the sweep silently
+   skipping a leaf) fails loudly instead of coincidentally matching the
+   real zero/`None` result. Verified as a real regression the same way as
+   the resync-count proof above.
+8. **Phase 7: finish the controlled shard sweep.** Measure 1, 2, 4, 6, and 8
    shards with CPU, RSS, context-switch, allocator, and tail-progress data.
    Confirm the `effective_cpus.clamp(2, 8)` default on a host where the upper
    bound is observable, rather than treating the current six-core result as
    universal.
-8. **Phase 7: remove rollback-era duplication only after the observation
+9. **Phase 7: remove rollback-era duplication only after the observation
    window.** Delete legacy RTMP tasks, legacy SRT feeder/queue/sender threads,
    duplicate policy, and rollout compatibility paths; then update the
    architecture, media-pipeline, performance, testing, concurrency, and

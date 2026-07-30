@@ -227,6 +227,8 @@ impl MediaEngine {
                 is_fabric: false,
                 shard_id: None,
                 resync_count: Arc::new(AtomicU64::new(0)),
+                feed_lag_units: Arc::new(AtomicU64::new(0)),
+                backpressure_reason: Arc::new(std::sync::Mutex::new(None)),
             },
         );
 

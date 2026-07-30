@@ -29,6 +29,7 @@ use tokio_rustls::rustls::ClientConfig;
 
 use crate::media::egress::backend::{CloseReason, Interest, ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
+use crate::media::egress::feed::EgressFeed;
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::policy::{LeafLimits, LeafStallClass, WorkBudget, classify_stall};
