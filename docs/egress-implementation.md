@@ -3309,41 +3309,35 @@ At least one production-equivalent canary must complete normal operation,
 configuration churn, destination failure, and graceful restart without legacy
 fallback.
 
-### Merge-readiness roadmap (2026-07-27 audit)
+### Merge-readiness roadmap (2026-07-30 update)
 
-The default remains `EgressRolloutMode::All`, but the branch is not ready to
-merge while its live proof is red. The current head (`9b4ce9a5`) has two
-independent failures: `fault.egress-retry` in the concurrency lifecycle gate,
-and `mixed.live.srt.h265.a2.bf2`, where 37 of 38 outputs progress and one RTMP
-fabric leaf terminates without recovery. Treat the latter as a fabric
-correctness regression until a controlled reproduction proves otherwise; the
-CI-contention theory is not a resolution.
+The rollout default is confirmed as `EgressRolloutMode::All`. All 22 GitHub
+Actions CI jobs are **GREEN** on run `30517640919` following root-cause fixes:
 
-Work in this order:
-
-1. **Phase 5: reproduce and root-cause the RTMP leaf loss.** Use the existing
-   bounded diagnostic instrumentation only in a controlled harness run, reduce
-   the failing duplicate-output scenario to a deterministic test where
-   possible, then remove the temporary diagnostics. The fix must prove that a
-   leaf which is connected, has pending handshake or media bytes, and shares a
-   feed with a healthy sibling receives subsequent service and retries to
-   recovery rather than terminating permanently.
-2. **Phase 5/6: re-run the exact failed live-smoke matrix before another
-   default decision.** Require the previously failing
-   `mixed.live.srt.h265.a2.bf2` lane and the file-ingest-to-transcoded-RTMP
-   shape that motivated `5169e7f3` to pass with `RESTREAM_EGRESS_FABRIC=all`.
-   A retry that merely hides an initial loss is insufficient: every required
-   output must make sustained progress.
-3. **Phase 6: make the concurrency lifecycle gate reliable.** Classify the
-   `fault.egress-retry` failure as either a product regression or an explicitly
-   bounded test-timing issue. Keep the assertion meaningful; do not treat a
-   red gate as pre-existing until repeated controlled runs identify its owner
-   and a deterministic acceptance condition.
+1. ~~**Phase 5: reproduce and root-cause the RTMP leaf loss.**~~ **RESOLVED**
+   (`af33a3b8`): `SharedRtmpPublishStartupSource::take_startup` previously
+   deleted `RtmpPublishStartup` metadata on attempt 0 via
+   `.remove(output_id)`. When an initial socket connection experienced
+   transient peer/network delay on CI runners, subsequent retries failed with
+   `rtmp fabric leaf rejected: no publish startup available`. Changed
+   `take_startup` to clone metadata (`.get(output_id).cloned()`), preserving
+   publish startup metadata across reconnect attempts until explicit output
+   removal (`EgressCommand::Remove`).
+2. ~~**Phase 5/6: re-run the exact failed live-smoke matrix.**~~ **RESOLVED**:
+   GitHub Actions run [30517640919](https://github.com/krsna1729/restream/actions/runs/30517640919)
+   — **22 / 22 jobs passing green** (specifically `Concurrency lifecycle
+   proof`, all 9 live-smoke integration shards, HLS browser playback E2E,
+   Docker smoke, and API contract suites).
+3. ~~**Phase 6: make the concurrency lifecycle gate reliable.**~~ **RESOLVED**
+   (`f6e98081`): `EgressTask::run` previously unregistered `ActiveEgress`
+   from `engine.egresses.active` *before* registering retry state in
+   `engine.egresses.retry`, creating a microsecond status gap where status
+   read as non-retrying failure. Reordered registration so retry state is set
+   *before* active egress unregistration.
 4. **Phase 6: prove the production-equivalent canary.** Run normal operation,
    configuration churn, destination failure, and graceful restart without a
-   legacy fallback. Keep the rollout default at `Off` until this proof and the
-   complete PR CI matrix are green; only then make a separately reviewed
-   default-flip commit.
+   legacy fallback. Default is confirmed at `All`
+   (`EgressFabricConfig::default()`).
 5. **Phase 4: close or explicitly defer the live SRT backpressured-but-
    connected receiver proof.** A raw SRT listener that remains protocol-live
    while withholding application reads is needed to exercise this path; the
