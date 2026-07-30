@@ -74,22 +74,34 @@ impl EgressReconciler {
                     continue;
                 }
                 OutputStartAction::MarkFailed => {
-                    self.last_failed.lock().await.remove(&output.id);
-                    self.engine.clear_egress_retry_state(&output.id).await;
-                    warn!(
-                        correlation_id = %crate::logging::next_correlation_id("out"),
-                        output_id = %output.id,
-                        output_name = %output.name,
-                        max_retries = self.tuning.output_max_retries,
-                        "output exceeded max retries — marking failed",
-                    );
-                    let _ = crate::db::set_output_desired_state(
+                    match crate::db::set_output_desired_state(
                         &self.pool,
                         &output.pipeline_id,
                         &output.id,
                         DesiredOutputState::Failed,
                     )
-                    .await;
+                    .await
+                    {
+                        Ok(_) => {
+                            self.last_failed.lock().await.remove(&output.id);
+                            self.engine.clear_egress_retry_state(&output.id).await;
+                            warn!(
+                                correlation_id = %crate::logging::next_correlation_id("out"),
+                                output_id = %output.id,
+                                output_name = %output.name,
+                                max_retries = self.tuning.output_max_retries,
+                                "output exceeded max retries — marking failed",
+                            );
+                        }
+                        Err(err) => {
+                            warn!(
+                                correlation_id = %crate::logging::next_correlation_id("out"),
+                                output_id = %output.id,
+                                error = %err,
+                                "failed to set output desired state to failed in db; will retry on next tick",
+                            );
+                        }
+                    }
                     continue;
                 }
                 OutputStartAction::WaitRetry {
