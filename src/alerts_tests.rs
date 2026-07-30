@@ -938,3 +938,34 @@ fn retry_attempts_below_ceiling_yields_generic_not_running_alert() {
     assert_eq!(alerts.len(), 1);
     assert_eq!(alerts[0].id, "pipeline:pipe1:output:out1:not_running");
 }
+
+#[test]
+fn derive_alerts_triggers_warning_on_repeated_egress_resync() {
+    let snap = serde_json::json!({
+        "generatedAt": "2026-07-30T12:00:00Z",
+        "egressFabricShards": [
+            {
+                "protocol": "rtmp",
+                "feedId": "feed-1",
+                "shardIndex": 0,
+                "state": "healthy",
+                "loopIterations": 1000,
+                "mediaTicks": 500,
+                "progressAgeMs": 10,
+                "commandDepth": 0,
+                "commandCapacity": 128,
+                "resyncCount": 5
+            }
+        ]
+    });
+
+    let alerts = derive_alerts(&snap);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].severity, Severity::Warning);
+    assert_eq!(alerts[0].scope, Scope::Engine);
+    assert_eq!(
+        alerts[0].id,
+        "engine:egress_fabric:rtmp:feed-1:0:repeated_resync"
+    );
+    assert!(alerts[0].evidence.iter().any(|e| e.contains("5")));
+}

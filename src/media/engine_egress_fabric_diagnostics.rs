@@ -23,6 +23,7 @@ pub(crate) struct EgressFabricShardStatus {
     pub progress_age_ms: Option<u64>,
     pub command_depth: u32,
     pub command_capacity: u32,
+    pub resync_count: u64,
 }
 
 impl EgressFabricShardStatus {
@@ -41,6 +42,7 @@ impl EgressFabricShardStatus {
             progress_age_ms: heartbeat.progress_age.map(|age| age.as_millis() as u64),
             command_depth: heartbeat.command_depth,
             command_capacity: heartbeat.command_capacity,
+            resync_count: heartbeat.resync_count,
         }
     }
 
@@ -64,6 +66,7 @@ impl EgressFabricShardStatus {
             "progressAgeMs": self.progress_age_ms,
             "commandDepth": self.command_depth,
             "commandCapacity": self.command_capacity,
+            "resyncCount": self.resync_count,
         })
     }
 }

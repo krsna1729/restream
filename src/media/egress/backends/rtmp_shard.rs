@@ -401,6 +401,11 @@ pub(crate) struct RtmpShardBackend<
     /// Defaults to `EgressShardConfig::DEFAULT_DRAIN_TIMEOUT`; tests use
     /// `with_drain_timeout` for fast, deterministic timing.
     drain_timeout: Duration,
+    /// Total `EngineProgress::FeedOverrun` resynchronizations observed across
+    /// every leaf this backend has ever visited. Read by
+    /// `EgressShardRuntime::record_iteration` into `ShardMetrics::feed_resyncs`
+    /// for the repeated-resync alert (`derive_alerts`, `src/alerts.rs`).
+    resync_count: u64,
 }
 
 impl<P> RtmpShardBackend<P, NoopRtmpResolveCompletionSource, EmptyRtmpPublishStartupSource>
@@ -455,6 +460,7 @@ where
             pending_connects: HashMap::new(),
             last_stall_sweep: None,
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+            resync_count: 0,
         }
     }
 
@@ -734,6 +740,12 @@ where
             EngineVisitResult::StaleGeneration => return Some((None, VisitDecision::Suspend)),
             EngineVisitResult::Visited(outcome) => (outcome.progress, outcome.decision),
         };
+        if matches!(
+            progress,
+            crate::media::egress::backend::EngineProgress::FeedOverrun
+        ) {
+            self.resync_count = self.resync_count.saturating_add(1);
+        }
         leaf.common.pending_application_bytes = leaf
             .engine
             .pending_application_bytes()
@@ -788,6 +800,10 @@ where
     R: RtmpResolveCompletionSource + Send + 'static,
     S: RtmpPublishStartupSource + Send + 'static,
 {
+    fn resync_count(&self) -> u64 {
+        self.resync_count
+    }
+
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
         match command {
             EgressCommand::Add(spec) | EgressCommand::Update(spec) => {

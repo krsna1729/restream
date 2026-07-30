@@ -114,6 +114,7 @@ pub struct ActiveEgress {
     /// Fabric shard index this output is assigned to, when `is_fabric` is
     /// true. `None` for legacy-owned outputs.
     pub shard_id: Option<u32>,
+    pub resync_count: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +144,7 @@ pub struct RecentEgressOutcome {
     pub uptime_secs: f64,
     pub bytes_sent: u64,
     pub last_progress_ms: u64,
+    pub resync_count: u64,
     pub last_error: Option<String>,
     pub last_error_ms: u64,
     pub failure_phase: Option<String>,

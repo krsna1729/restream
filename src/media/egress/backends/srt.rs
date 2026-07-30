@@ -400,6 +400,10 @@ pub(crate) struct SrtShardBackend<
     /// `EgressShardConfig::DEFAULT_DRAIN_TIMEOUT`; tests use
     /// `with_drain_timeout` for fast, deterministic timing.
     drain_timeout: Duration,
+    /// Total `EngineProgress::FeedOverrun` resynchronizations observed
+    /// across every leaf this backend has ever visited. Mirrors
+    /// `RtmpShardBackend::resync_count` exactly.
+    resync_count: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -484,6 +488,7 @@ where
             srt_egress_muxer_port: Arc::new(Mutex::new(None)),
             reuse_local_srt_egress_port: false,
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+            resync_count: 0,
         }
     }
 
@@ -747,50 +752,6 @@ where
         self.leaves.get_mut(key.0).and_then(Option::as_mut)
     }
 
-    /// Minimum interval between stall sweeps: the native bstats probe is one
-    /// FFI call per leaf, so the sweep runs at human-observable cadence, not
-    /// per media tick.
-    const STALL_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-
-    /// Close every leaf whose combined application and native pending state
-    /// has made no progress within the no-progress deadline.  Closed leaves
-    /// surface as terminated outputs; the application retry policy owns
-    /// reconnection (SRT recovery capability is reconnect-only).
-    fn sweep_stalled_leaves(&mut self, now: Instant) {
-        if self
-            .last_stall_sweep
-            .is_some_and(|last| now.saturating_duration_since(last) < Self::STALL_SWEEP_INTERVAL)
-        {
-            return;
-        }
-        self.last_stall_sweep = Some(now);
-        self.sweep_draining_leaves(now);
-
-        let stalled: Vec<OutputId> = self
-            .output_sockets
-            .iter()
-            .filter_map(|(output_id, socket_ref)| {
-                let leaf = self.leaves.get_mut(socket_ref.key.0)?.as_mut()?;
-                (leaf.observe_stall(now) == LeafStallClass::Stalled).then(|| output_id.clone())
-            })
-            .collect();
-
-        for output_id in stalled {
-            let Some(socket_ref) = self.output_sockets.remove(&output_id) else {
-                continue;
-            };
-            let _ = self.poller.remove(socket_ref.socket);
-            if let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) {
-                let mut leaf = leaf;
-                leaf.common.progress_sink.mark_terminated_unexpectedly();
-                leaf.engine.close(
-                    &mut leaf.transport,
-                    crate::media::egress::backend::CloseReason::NoProgress,
-                );
-            }
-        }
-    }
-
     /// Visit the next ready leaf.  Returns the output ID alongside the
     /// decision so the caller can remove a closed leaf: closing is otherwise
     /// silently dropped, leaking a connected-but-dead socket and stalling
@@ -822,7 +783,15 @@ where
 
         let decision = match result {
             EngineVisitResult::StaleGeneration => VisitDecision::Suspend,
-            EngineVisitResult::Visited(outcome) => outcome.decision,
+            EngineVisitResult::Visited(outcome) => {
+                if matches!(
+                    outcome.progress,
+                    crate::media::egress::backend::EngineProgress::FeedOverrun
+                ) {
+                    self.resync_count = self.resync_count.saturating_add(1);
+                }
+                outcome.decision
+            }
         };
 
         // A draining leaf (see `begin_graceful_close`) that has now flushed
@@ -859,6 +828,10 @@ where
     K: SrtSocketConnector + Send + 'static,
     R: SrtResolveCompletionSource + Send + 'static,
 {
+    fn resync_count(&self) -> u64 {
+        self.resync_count
+    }
+
     fn on_command(
         &mut self,
         command: crate::media::egress::command::EgressCommand,

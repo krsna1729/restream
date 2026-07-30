@@ -89,6 +89,7 @@ fn apply_progress_to_common<F: EgressFeed>(
         }
         EngineProgress::FeedOverrun => {
             common.progress.record_overrun();
+            common.progress_sink.record_overrun();
             // Resynchronize in place rather than closing: the leaf keeps its
             // connection and retry budget, and resumes from a valid point
             // instead of cycling through reconnect for a transient overrun.

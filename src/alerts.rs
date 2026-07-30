@@ -26,6 +26,8 @@ impl Severity {
     }
 }
 
+const REPEATED_RESYNC_WARN_THRESHOLD: u64 = 5;
+
 // ─── Scope ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -745,6 +747,30 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     last_seen: None,
                 });
             }
+        }
+
+        let resync_count = shard
+            .get("resyncCount")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if resync_count >= REPEATED_RESYNC_WARN_THRESHOLD {
+            alerts.push(Alert {
+                id: format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:repeated_resync"),
+                severity: Severity::Warning,
+                scope: Scope::Engine,
+                pipeline_id: None,
+                stage_id: None,
+                output_id: None,
+                title: format!("Repeated egress resynchronizations detected ({shard_label})"),
+                cause: "The egress shard is experiencing repeated feed overruns and resynchronizing leaf cursors.".into(),
+                evidence: vec![format!(
+                    "resyncCount = {resync_count} (threshold {REPEATED_RESYNC_WARN_THRESHOLD})"
+                )],
+                recommended_action: "Check pipeline ring buffer capacity and downstream network bandwidth.".into(),
+                generated_at: generated_at.clone(),
+                first_seen: None,
+                last_seen: None,
+            });
         }
     }
 

@@ -182,6 +182,8 @@ pub struct EgressProgressSink {
     pub metrics_packets_out: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     /// Wall-clock milliseconds of the most recent progress.
     pub last_progress_ms: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Total resynchronizations / overruns for this leaf.
+    pub resync_count: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     /// Set by shard code exactly once, only when this leaf is closed for a
     /// reason the application task did not itself request (peer closed,
     /// protocol failure, or no-progress/stall recovery) — never on an
@@ -201,6 +203,7 @@ impl std::fmt::Debug for EgressProgressSink {
             .field("bytes_sent", &self.bytes_sent.is_some())
             .field("metrics", &self.metrics_bytes_out.is_some())
             .field("last_progress_ms", &self.last_progress_ms.is_some())
+            .field("resync_count", &self.resync_count.is_some())
             .field(
                 "terminated_unexpectedly",
                 &self.terminated_unexpectedly.is_some(),
@@ -225,6 +228,14 @@ impl EgressProgressSink {
         }
         if let Some(stamp) = &self.last_progress_ms {
             stamp.store(now_ms, Ordering::Relaxed);
+        }
+    }
+
+    /// Record a feed overrun / resynchronization event.
+    #[inline]
+    pub fn record_overrun(&self) {
+        if let Some(counter) = &self.resync_count {
+            counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
 

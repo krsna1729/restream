@@ -226,6 +226,7 @@ impl MediaEngine {
                 encoding: encoding.unwrap_or("").to_string(),
                 is_fabric: false,
                 shard_id: None,
+                resync_count: Arc::new(AtomicU64::new(0)),
             },
         );
 

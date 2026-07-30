@@ -158,6 +158,15 @@ pub trait EgressShardBackend: Send + 'static {
     }
 
     fn on_shutdown(&mut self) {}
+
+    /// Total `EngineProgress::FeedOverrun` resynchronizations this backend
+    /// has observed across every leaf it has ever visited. Read once per
+    /// loop iteration into `ShardMetrics::feed_resyncs` for the
+    /// repeated-resync alert; backends with no per-leaf feed cursor (e.g.
+    /// `PipelineShardBackend`, `SinkShardBackend`) keep the default of 0.
+    fn resync_count(&self) -> u64 {
+        0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -553,6 +562,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         self.metrics
             .observe_ready_depth(u32::try_from(self.ready_backlog.len()).unwrap_or(u32::MAX));
         self.metrics.media_ticks = self.metrics.media_ticks.saturating_add(1);
+        self.metrics.feed_resyncs = self.backend.resync_count();
         self.metrics.collected_at = Some(Instant::now());
 
         let mut snapshot = self.snapshot.lock().unwrap();

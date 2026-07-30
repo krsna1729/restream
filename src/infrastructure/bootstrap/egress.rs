@@ -224,6 +224,7 @@ impl EgressReconciler {
                             crate::media::egress::leaf::EgressProgressSink {
                                 bytes_sent: Some(egress.bytes_sent.clone()),
                                 last_progress_ms: Some(egress.last_progress_ms.clone()),
+                                resync_count: Some(egress.resync_count.clone()),
                                 terminated_unexpectedly: Some(terminated.clone()),
                                 ..Default::default()
                             }
@@ -277,6 +278,7 @@ impl EgressReconciler {
                     crate::media::egress::leaf::EgressProgressSink {
                         bytes_sent: Some(egress.bytes_sent.clone()),
                         last_progress_ms: Some(egress.last_progress_ms.clone()),
+                        resync_count: Some(egress.resync_count.clone()),
                         terminated_unexpectedly: Some(terminated.clone()),
                         ..Default::default()
                     }
@@ -310,6 +312,7 @@ impl EgressReconciler {
                     crate::media::egress::leaf::EgressProgressSink {
                         bytes_sent: Some(egress.bytes_sent.clone()),
                         last_progress_ms: Some(egress.last_progress_ms.clone()),
+                        resync_count: Some(egress.resync_count.clone()),
                         terminated_unexpectedly: Some(terminated.clone()),
                         ..Default::default()
                     }
@@ -352,6 +355,7 @@ impl EgressReconciler {
                             crate::media::egress::leaf::EgressProgressSink {
                                 bytes_sent: Some(egress.bytes_sent.clone()),
                                 last_progress_ms: Some(egress.last_progress_ms.clone()),
+                                resync_count: Some(egress.resync_count.clone()),
                                 terminated_unexpectedly: Some(terminated.clone()),
                                 ..Default::default()
                             }

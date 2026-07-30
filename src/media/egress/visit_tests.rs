@@ -100,6 +100,8 @@ fn resynchronizes_and_records_overrun_instead_of_closing() {
     let sync_point = feed.latest_sync_point().expect("keyframe was pushed");
     let mut common = common(2);
     common.cursor = FeedCursor::new(0, 999); // stale position past the overrun boundary
+    let resync_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    common.progress_sink.resync_count = Some(resync_count.clone());
     let mut engine = FakeEngine::new(vec![EngineScript::FeedOverrun]);
     let mut transport = FakeTransport::default();
 
@@ -124,6 +126,9 @@ fn resynchronizes_and_records_overrun_instead_of_closing() {
     assert_eq!(outcome.decision, VisitDecision::Continue);
     assert_eq!(common.progress.overrun_count, 1);
     assert_eq!(common.cursor, sync_point);
+    // Cross-thread counter (API/alerts path) must also advance, not just
+    // the shard-local `common.progress` counter.
+    assert_eq!(resync_count.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
 #[test]

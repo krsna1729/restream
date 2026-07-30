@@ -51,6 +51,8 @@ pub struct ShardMetrics {
     pub feed_wakes_useful: u64,
     /// Number of wakeups that found nothing new.
     pub feed_wakes_empty: u64,
+    /// Total leaf feed overruns / resynchronization events.
+    pub feed_resyncs: u64,
 
     // --- Loop statistics ---
     pub loop_iterations: u64,

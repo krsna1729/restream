@@ -3346,12 +3346,40 @@ Actions CI jobs are **GREEN** on run `30517640919` following root-cause fixes:
    deterministic unit tests in `src/media/egress/backends/srt/tests/leaf_termination.rs`
    (`stall_sweep_marks_terminated_unexpectedly_on_the_closed_leaf`) prove the
    `classify_stall` contract.
-6. **Phase 7: finish the controlled shard sweep.** Measure 1, 2, 4, 6, and 8
+6. ~~**Phase 6: repeated-resync alert.**~~ **RESOLVED**: the leaf-level
+   `EngineProgress::FeedOverrun` resync count now flows to both observability
+   surfaces. Per-output: `visit.rs`'s `FeedOverrun` handler calls
+   `common.progress_sink.record_overrun()` (a cross-thread `Arc<AtomicU64>`,
+   the same pattern `bytes_sent`/`last_progress_ms` already use) into
+   `ActiveEgress.resync_count`, surfaced as `resyncCount` in both
+   `egress_runtime_json` and `recent_egress_runtime_json`
+   (`src/api_runtime_views/common.rs`). Per-shard aggregate: both
+   `RtmpShardBackend`/`SrtShardBackend::visit_one_ready_leaf` now count
+   `FeedOverrun` outcomes into a backend-local `resync_count: u64`, exposed
+   via a new `EgressShardBackend::resync_count()` trait method (default `0`
+   for `PipelineShardBackend`/`SinkShardBackend`, which have no per-leaf feed
+   cursor) that `EgressShardRuntime::record_iteration` reads once per loop
+   iteration into `ShardMetrics::feed_resyncs` →
+   `EgressShardHeartbeat::resync_count` → `EgressFabricShardStatus`'s
+   `resyncCount` JSON field. `derive_alerts` (`src/alerts.rs`) raises a
+   `Warning`-severity `repeated_resync` alert once a shard's `resyncCount`
+   reaches 5. Proof: a real-feed-overrun integration test
+   (`resync_count_increments_on_a_real_feed_overrun`,
+   `rtmp_shard_tests.rs` — pushes more units than the ring retains onto a
+   real connected leaf and asserts the backend's counter advances) plus a
+   deterministic `visit.rs` unit test asserting the cross-thread counter
+   specifically (not just the pre-existing shard-local one). Both verified
+   as real regressions (temporarily disabling each call site and confirming
+   the corresponding test fails, then restored). `srt.rs` crossed the
+   source-audit line cap adding this; moved `sweep_stalled_leaves` into the
+   existing `srt_drain.rs` split alongside `begin_graceful_close`/
+   `sweep_draining_leaves`, mirroring `rtmp_shard.rs`/`rtmp_shard_drain.rs`.
+7. **Phase 7: finish the controlled shard sweep.** Measure 1, 2, 4, 6, and 8
    shards with CPU, RSS, context-switch, allocator, and tail-progress data.
    Confirm the `effective_cpus.clamp(2, 8)` default on a host where the upper
    bound is observable, rather than treating the current six-core result as
    universal.
-7. **Phase 7: remove rollback-era duplication only after the observation
+8. **Phase 7: remove rollback-era duplication only after the observation
    window.** Delete legacy RTMP tasks, legacy SRT feeder/queue/sender threads,
    duplicate policy, and rollout compatibility paths; then update the
    architecture, media-pipeline, performance, testing, concurrency, and

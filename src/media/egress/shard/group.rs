@@ -137,6 +137,7 @@ pub struct EgressShardHeartbeat {
     pub progress_age: Option<Duration>,
     pub command_depth: u32,
     pub command_capacity: u32,
+    pub resync_count: u64,
 }
 
 impl EgressShardHeartbeat {
@@ -179,6 +180,7 @@ impl EgressShardHeartbeat {
             progress_age,
             command_depth: snapshot.metrics.command_depth,
             command_capacity,
+            resync_count: snapshot.metrics.feed_resyncs,
         }
     }
 }
