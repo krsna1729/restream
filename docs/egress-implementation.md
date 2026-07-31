@@ -3959,26 +3959,28 @@ release rather than retaining two permanent architectures.
 
 ## Completion checklist
 
-**Status as of the default-rollout flip and Phase 6 diagnostics/alerts
-work**: most items below have real, specific evidence recorded inline
-in their respective phase sections above — this list is intentionally
-left unchecked rather than summarized into checkboxes, since several
-items are genuinely still open and a checkbox can't carry the nuance
-each phase section already does. Concretely still open, not done in
-this pass: legacy per-output threads/queues/sender tasks are not
-removed (deliberately — `RESTREAM_EGRESS_FABRIC=off` needs them for
-rollback until a real canary/observation window happens, which needs
-an actual staged deployment outside this repository); the shard-count
-sweep is missing its `1` and `8` endpoints (`2`/`4`/`6` are measured);
-the SRT backpressured-but-connected stall path's live (not just
-deterministic-unit) proof needs a purpose-built raw SRT listener,
-still future work; the mixed RTMP+RTMPS-at-scale combined workload
-(as opposed to RTMP+SRT, which is measured) is untested. Everything
-else on this list — bounded feeds, shard isolation, panic recovery,
-diagnostics, default shard count from real A/B evidence, sink and
-recirculation on the fabric, protocol-shared policy — has a specific
-proof recorded in its phase section; read those for the actual
-evidence rather than trusting a checkbox here.
+**Status as of the merge-readiness pass (2026-07-31)**: most items below
+have real, specific evidence recorded inline in their respective phase
+sections above — this list is intentionally left unchecked rather than
+summarized into checkboxes, since several items are genuinely still open
+and a checkbox can't carry the nuance each phase section already does.
+Concretely still open: legacy per-output threads/queues/sender tasks are
+not removed (deliberately — `RESTREAM_EGRESS_FABRIC=off` needs them for
+rollback until a real canary/observation window happens, which needs an
+actual staged deployment outside this repository); the shard-count sweep's
+`1` and `8` endpoints were measured but only at a reduced 20-output scale
+(sandbox CPU constraints), not the 1,140/60-output scale `2`/`4`/`6` used —
+re-running `1`/`8` at that full scale on a less-constrained host remains
+open; the SRT backpressured-but-connected stall path's live (not just
+deterministic-unit) proof needs a purpose-built raw SRT listener, still
+future work; the mixed RTMP+RTMPS-at-scale combined workload (as opposed to
+RTMP+SRT, which is measured) is untested. Everything else on this list —
+bounded feeds, shard isolation, panic recovery, diagnostics, default shard
+count from real A/B evidence, sink and recirculation on the fabric,
+protocol-shared policy, per-output/per-shard status and failure-reason
+observability, repeated-resync alerting — has a specific proof recorded in
+its phase section; read those for the actual evidence rather than trusting
+a checkbox here.
 
 The effort is complete only when:
 

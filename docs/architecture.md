@@ -70,7 +70,15 @@ Tokio tasks own non-blocking sockets, Axum, timers, reconciliation, native
 mux/demux work, and child-process pipe I/O. Work that can block independently
 of the async scheduler is isolated:
 
-- libsrt accept and send calls run at dedicated blocking boundaries;
+- libsrt accept calls run at dedicated blocking boundaries;
+- RTMP/RTMPS and SRT **egress** default to the egress fabric
+  (`RESTREAM_EGRESS_FABRIC`, default `all`): a small, CPU-derived pool of
+  dedicated shard OS threads, each multiplexing many outputs through native
+  non-blocking readiness polling (`epoll` for RTMP/RTMPS, libsrt's own
+  poller for SRT) instead of one OS thread per destination. Setting
+  `RESTREAM_EGRESS_FABRIC=off` falls back to the legacy path (one blocking
+  sender per output); see `docs/egress-implementation.md` for the full
+  design and rollout history;
 - in-process FFmpeg codec work runs on guarded OS threads;
 - recording uses a feeder task and a writer thread;
 - the default transcoder and file-ingest paths use managed FFmpeg child
@@ -78,8 +86,9 @@ of the async scheduler is isolated:
 
 Thread and process entry points tied to media lifecycle catch panics or child
 failures, surface status, and cancel their stage rather than terminating the
-server. SRT senders and external FFmpeg children also have admission controls;
-the canonical limits and environment parsing are in `src/config.rs`.
+server. Legacy-path SRT senders and external FFmpeg children also have
+admission controls; the canonical limits and environment parsing are in
+`src/config.rs`.
 
 The Tokio runtime is built in `src/main.rs`. Its resolved sizing uses the
 effective CPU limit and may be overridden by the documented runtime variables.
@@ -227,6 +236,7 @@ owns volatile inventory; these paths identify stable owners.
 | `src/media/engine.rs`, `src/media/engine_*` | Media lifecycle, reconciliation-facing state, snapshots |
 | `src/media/ring_buffer.rs`, `src/media/ts_chunk_ring.rs`, `src/media/avio.rs` | Bounded packet and byte transport |
 | `src/media/rtmp.rs`, `src/media/srt*.rs`, `src/media/mpegts.rs` | Protocol and container adapters |
+| `src/media/egress/` | Egress fabric: shard runtime/scheduler, protocol-neutral leaf lifecycle, RTMP/RTMPS/SRT/sink/pipeline backends. Default egress path (`RESTREAM_EGRESS_FABRIC=all`); see `docs/egress-implementation.md` |
 | `src/media/hls/`, `src/media/recording/` | HLS and recording lifecycle |
 | `src/media/transcoder.rs`, `src/media/external_transcoder.rs` | In-process and child-process transform backends |
 | `src/agent_core/`, `src/agent_backends/`, `src/agent_mcp/` | Agent contracts, backends, and MCP transport |

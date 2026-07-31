@@ -87,9 +87,17 @@ stays outside the shared stage:
 | Shared | Per destination |
 |---|---|
 | Video/audio transform output ring | Protocol connection and retry state |
-| SRT MPEG-TS packaging shard | Blocking sender and socket queue |
+| SRT MPEG-TS packaging shard | Per-destination socket queue |
 | Source packet ring | Independent reader position and lag counters |
 | HLS pipeline store | Request authorization and response transfer |
+
+Under the egress fabric default (`RESTREAM_EGRESS_FABRIC=all`; see
+`docs/egress-implementation.md`), RTMP/RTMPS and SRT egress additionally
+share a small, CPU-derived pool of shard OS threads across many
+destinations, each multiplexed through native non-blocking readiness
+polling rather than one blocking sender thread per destination — the
+legacy per-output blocking sender only exists under
+`RESTREAM_EGRESS_FABRIC=off`.
 
 Sharing must not couple destination failure domains. A stalled or failed
 destination can lose its own buffered data or restart without stopping the
