@@ -3488,9 +3488,9 @@ Actions CI jobs are **GREEN** on run `30517640919` following root-cause fixes:
     duplicate policy, and rollout compatibility paths; then update the
     architecture, media-pipeline, performance, testing, concurrency, and
     operator documentation to describe the single shipped ownership model.
-11. **In progress, not yet resolved: a deterministic (not contention-flavored)
-    per-leaf CI stall.** Re-running the corrected large-scale harness (item 9
-    above) surfaced a distinct failure from the previously-documented
+11. **Resolved: a deterministic (not contention-flavored) per-leaf CI
+    stall.** Re-running the corrected large-scale harness (item 9 above)
+    surfaced a distinct failure from the previously-documented
     probable-contention flake: one specific RTMP fabric output failed with
     `"terminated unexpectedly"` ~15-16s after *every* connect, across 5
     consecutive retries in a single Release run — 100% failure rate for
@@ -3501,20 +3501,48 @@ Actions CI jobs are **GREEN** on run `30517640919` following root-cause fixes:
     through empty to be refilled — this contradicts the "shard starves
     because `self.ready` never truly empties" theory used to justify the
     earlier idle-poll fix, meaning that theory needs re-examination too.
-    Also identified that `EngineVisit::run()`'s `StaleGeneration` path
-    (`src/media/egress/visit.rs`) skips resetting `schedule.enqueued`,
-    which would permanently exclude a leaf from re-discovery if reachable
-    — a real bug on its own if it fires, but doesn't obviously fit this
-    scenario's fresh-`Add`-per-retry pattern. Rather than ship a fix for
+    Also checked `EngineVisit::run()`'s `StaleGeneration` path
+    (`src/media/egress/visit.rs`), which skips resetting
+    `schedule.enqueued` — a real bug on its own if it fires, but ruled out
+    as the cause here by the CI evidence (`enqueued` stayed `false`
+    throughout, never got stuck `true`). Rather than ship a fix for
     unverified concurrency/lifecycle code, added temporary diagnostic
     tracing (`rtmp_shard.rs`/`rtmp_shard_drain.rs`, PR #103) — poll
     call/event counts, a `StaleGeneration` log line where none existed,
     and a per-second per-leaf heartbeat of
     `schedule.enqueued`/`registered_interest`/`pending_bytes` — to get
-    real ground truth from CI, which reproduces this reliably, before
-    touching any logic. **Follow-up work, not done in this pass**: read
-    the tracing once CI reproduces it, root-cause for real, implement and
-    prove a fix, then remove the temporary tracing.
+    real ground truth from CI, which reproduced this reliably (3
+    consecutive failures on the same output in one Release run).
+
+    **Root cause, found from the CI artifact log**: both
+    `visit_one_ready_leaf` and `refresh_registrations_for_feed_wake` in
+    `rtmp_shard.rs` discarded the `Result` of `self.poller.register_leaf(..)`
+    (an `epoll_ctl` syscall wrapper) via `let _ = ...` and updated
+    `leaf.registered_interest` unconditionally regardless of whether the
+    syscall actually succeeded. When `register_leaf` fails (e.g. transient
+    `EBADF`/resource pressure on a CI runner), the leaf's tracked interest
+    permanently desyncs from the real kernel registration: the leaf
+    believes it's watching for the requested readiness forever, but the
+    kernel never delivers it, so `poll_ready()` never rediscovers the leaf
+    again. This exactly matched the CI evidence: `enqueued=false` forever,
+    `pending_bytes` frozen bit-for-bit (204, later 277) for 10+ seconds
+    despite `poll_ready()` running at ~50 calls/sec and finding real events
+    for every other leaf in the same shard.
+
+    **Fix**: both call sites now check the `Result` and treat a failed
+    re-registration as leaf-fatal — close the leaf so the existing
+    retry/reconnect path recovers it, instead of leaving it silently stuck
+    — mirroring how a failed *initial* registration at connect time is
+    already handled. Verified via sabotage-then-restore (revert to the old
+    discard-the-`Result` behavior, confirm two new regression tests fail
+    with the expected message, restore the fix, confirm they pass) rather
+    than relying on the CI reproduction alone. SRT's backend
+    (`src/media/egress/backends/srt.rs`) was checked and does not share
+    this bug: it has exactly one `register_leaf` call site (the initial
+    connect-time registration), which already propagates its `Result` via
+    `?`, and never re-registers afterward since SRT is always
+    write-registered (libsrt handles acknowledgement internally). The
+    temporary diagnostic tracing was removed once the fix was verified.
 
 ## Phase 7: Tuning and legacy removal
 
