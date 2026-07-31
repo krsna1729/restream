@@ -407,12 +407,6 @@ pub(crate) struct RtmpShardBackend<
     /// `EgressShardRuntime::record_iteration` into `ShardMetrics::feed_resyncs`
     /// for the repeated-resync alert (`derive_alerts`, `src/alerts.rs`).
     resync_count: u64,
-    // TEMP-DIAG4: counters for investigating a CI-observed deterministic
-    // per-leaf stall (same output fails ~15s after every connect, every
-    // retry). Remove once root-caused.
-    diag_poll_calls: u64,
-    diag_poll_events: u64,
-    diag_last_heartbeat: Option<Instant>,
 }
 
 impl<P> RtmpShardBackend<P, NoopRtmpResolveCompletionSource, EmptyRtmpPublishStartupSource>
@@ -468,9 +462,6 @@ where
             last_stall_sweep: None,
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
-            diag_poll_calls: 0,
-            diag_poll_events: 0,
-            diag_last_heartbeat: None,
         }
     }
 
@@ -672,6 +663,7 @@ where
     /// is what actually discovers the readiness and visits the leaf.
     fn refresh_registrations_for_feed_wake(&mut self) {
         let sockets: Vec<RtmpLeafSocket> = self.output_sockets.values().copied().collect();
+        let mut failed: Vec<OutputId> = Vec::new();
         for socket_ref in sockets {
             let Some(leaf) = self
                 .leaves
@@ -691,39 +683,53 @@ where
             if leaf.registered_interest == TcpEgressInterest::READ_WRITE {
                 continue;
             }
-            let _ = self.poller.register_leaf(
-                socket_ref.fd,
-                socket_ref.key,
-                leaf.common.generation,
-                TcpEgressInterest::READ_WRITE,
-            );
+            // See the matching fix in `visit_one_ready_leaf`: discarding
+            // this Result and updating `registered_interest` unconditionally
+            // would desync tracked state from the real kernel registration
+            // on failure, permanently starving the leaf.
+            if self
+                .poller
+                .register_leaf(
+                    socket_ref.fd,
+                    socket_ref.key,
+                    leaf.common.generation,
+                    TcpEgressInterest::READ_WRITE,
+                )
+                .is_err()
+            {
+                if let Some((output_id, _)) =
+                    self.output_sockets.iter().find(|(_, s)| **s == socket_ref)
+                {
+                    failed.push(output_id.clone());
+                }
+                continue;
+            }
             leaf.registered_interest = TcpEgressInterest::READ_WRITE;
+        }
+        for output_id in failed {
+            tracing::warn!(
+                output_id = %output_id,
+                "rtmp fabric leaf feed-wake re-registration failed; closing for retry"
+            );
+            if let Some(socket_ref) = self.output_sockets.get(&output_id)
+                && let Some(leaf) = self.leaves.get(socket_ref.key.0).and_then(Option::as_ref)
+            {
+                leaf.common.progress_sink.mark_terminated_unexpectedly();
+            }
+            self.remove_leaf_by_output(&output_id);
         }
     }
 
     fn poll_ready(&mut self) {
-        self.diag_poll_calls = self.diag_poll_calls.saturating_add(1);
         if self.poller.poll_leaves(0, &mut self.poll_buffer).is_err() {
             return;
         }
         let events: Vec<_> = self.poll_buffer.drain(..).collect();
-        self.diag_poll_events = self.diag_poll_events.saturating_add(events.len() as u64);
         for event in events {
             let Some(leaf) = self.leaf_mut(event.key) else {
-                tracing::info!(
-                    leaf_key = event.key.0,
-                    "TEMP-DIAG4 poll_ready: event for missing leaf slot"
-                );
                 continue;
             };
             if leaf.common.schedule.enqueued {
-                tracing::info!(
-                    output_id = %leaf.common.output_id,
-                    leaf_key = event.key.0,
-                    readable = event.readable,
-                    writable = event.writable,
-                    "TEMP-DIAG4 poll_ready: skipped, already enqueued"
-                );
                 continue;
             }
             leaf.common.schedule.enqueued = true;
@@ -760,17 +766,7 @@ where
         );
 
         let (progress, decision) = match result {
-            EngineVisitResult::StaleGeneration => {
-                tracing::info!(
-                    output_id = %leaf.common.output_id,
-                    leaf_key = event.key.0,
-                    event_generation = event.generation,
-                    common_generation = leaf.common.generation,
-                    enqueued_after = leaf.common.schedule.enqueued,
-                    "TEMP-DIAG4 visit hit StaleGeneration"
-                );
-                return Some((None, VisitDecision::Suspend));
-            }
+            EngineVisitResult::StaleGeneration => return Some((None, VisitDecision::Suspend)),
             EngineVisitResult::Visited(outcome) => (outcome.progress, outcome.decision),
         };
         if matches!(
@@ -816,9 +812,30 @@ where
             if let Some(leaf) = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)
                 && leaf.registered_interest != interest
             {
-                let _ = self
+                // Discarding this Result and updating `registered_interest`
+                // unconditionally would desync tracked state from the real
+                // kernel registration on failure: the leaf would believe
+                // it's watching (e.g.) writable readiness forever while the
+                // kernel never actually does, and would never be
+                // rediscovered by `poll_ready()` again — silent, permanent
+                // starvation, indistinguishable from a healthy idle leaf
+                // (the root cause of the recurring "RTMP fabric leaf
+                // terminated unexpectedly" CI flake). Treat a failed
+                // re-registration as leaf-fatal instead, same as a failed
+                // initial registration at connect time: close and let the
+                // existing retry/reconnect path recover it.
+                if self
                     .poller
-                    .register_leaf(event.fd, event.key, event.generation, interest);
+                    .register_leaf(event.fd, event.key, event.generation, interest)
+                    .is_err()
+                {
+                    tracing::warn!(
+                        output_id = %leaf.common.output_id,
+                        leaf_key = event.key.0,
+                        "rtmp fabric leaf re-registration failed; closing for retry"
+                    );
+                    return Some((Some(leaf.common.output_id.clone()), VisitDecision::Close));
+                }
                 leaf.registered_interest = interest;
             }
         }
@@ -888,10 +905,11 @@ where
 
         let outcome = self.visit_one_ready_leaf();
         if let Some((Some(output_id), VisitDecision::Close)) = &outcome {
-            // `VisitDecision::Close` is only ever produced from
-            // `EngineProgress::PeerClosed`/`Failed` (see `visit.rs`) — an
-            // explicit `EgressCommand::Remove` never reaches this path — so
-            // every close observed here is unexpected from the
+            // `VisitDecision::Close` here means either
+            // `EngineProgress::PeerClosed`/`Failed` (see `visit.rs`) or a
+            // failed poller re-registration inside `visit_one_ready_leaf`
+            // — an explicit `EgressCommand::Remove` never reaches this
+            // path — so every close observed here is unexpected from the
             // application's point of view.
             if let Some(socket_ref) = self.output_sockets.get(output_id)
                 && let Some(leaf) = self.leaves.get(socket_ref.key.0).and_then(Option::as_ref)
