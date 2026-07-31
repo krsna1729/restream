@@ -3427,11 +3427,94 @@ Actions CI jobs are **GREEN** on run `30517640919` following root-cause fixes:
    (1 shard serving 20 outputs; 8 shards mostly idle). Re-running both
    extremes at the original 1,140/60 scale on a host that can afford it
    remains open if the `clamp(2, 8)` bound itself is ever revisited.
-9. **Phase 7: remove rollback-era duplication only after the observation
-   window.** Delete legacy RTMP tasks, legacy SRT feeder/queue/sender threads,
-   duplicate policy, and rollout compatibility paths; then update the
-   architecture, media-pipeline, performance, testing, concurrency, and
-   operator documentation to describe the single shipped ownership model.
+9. ~~**Post-merge: verify the ceiling claim directly, not just cite it.**~~
+   **RESOLVED**: after #86 merged, ran the actual scale this migration is
+   supposed to enable rather than relying on the pre-merge sweep numbers
+   above. First attempt at 1,140 RTMP + 60 SRT reproduced the documented
+   near-parity numbers (fabric ~4.6% lower CPU, ~2% higher RSS) but didn't
+   stress anything — legacy's per-output-thread cost is SRT-specific
+   (`std::thread::spawn` in `src/media/srt_egress.rs`; RTMP was already
+   async even pre-fabric), and 60 SRT outputs is nowhere near the ceiling.
+   Re-ran SRT-heavy (500, then 600 SRT outputs) to target the actual
+   mechanism. Found and fixed a real bug this exposed: the harness's
+   `mixed_fabric_matrix`/`run_protocol_fabric_matrix` "legacy" variant
+   left `RESTREAM_EGRESS_FABRIC` unset rather than pinning it to `off`,
+   which relied on the pre-merge default — post-merge, an unset var now
+   resolves to `all`, so "legacy" was silently comparing fabric against
+   itself in every large-scale run this pass (including the 1,140/60 one
+   above, still valid since it happened to match already-known numbers,
+   but not verified independently). Fixed in `src/bin/test_harness/resource_sweep/branch_matrix.rs`.
+
+   **The corrected 600-SRT-output measurement is the real proof**:
+   legacy hit `src/media/srt_egress.rs`'s explicit
+   `try_acquire_srt_sender_permit` semaphore, hard-capped at 512
+   concurrent SRT sender OS threads — 540 `"SRT sender thread limit
+   reached"` capacity rejections logged (repeated retries against the
+   ~88 outputs past the cap), and the harness run **failed outright**
+   because legacy could never get all 601 outputs running. Fabric
+   reached 601/601 cleanly, with **lower** CPU (184.0% vs 190.3%, ~3%
+   lower) and **lower** RSS (981.8MB vs 1,092.5MB, ~10% lower) than
+   legacy's partial, capacity-rejecting attempt. This is the actual
+   benefit case for this migration: not a marginal CPU number at small
+   scale (where fabric's fixed per-shard-thread pool costs slightly
+   *more*, per the shard-sweep table above), but that legacy is
+   structurally incapable of serving output counts fabric handles
+   routinely, with no possible mitigation short of raising the 512
+   constant and accepting unbounded thread growth.
+
+   **`perf`-based root cause for the small-scale CPU delta**: profiled
+   both variants (`cycles:P` @ 199Hz, 20 RTMP outputs, 20s capture) —
+   fabric spent ~1.6x more on-CPU samples than legacy in the same
+   window. The profile attributes this to architecture, not new work:
+   legacy's `epoll_wait` runs on one shared tokio reactor thread;
+   fabric's runs independently on each of its (here, 6) dedicated
+   `egress-shard-N` threads, and `clock_gettime` calls (from
+   `WorkBudget` deadline checks and the once-a-second stall sweep) show
+   up on fabric's shard threads with no legacy equivalent. Per-packet
+   work (`memchr`/`memmove` RTMP chunk scanning) is the same total
+   work, just now spread across more independently-scheduled threads
+   instead of concentrated on one. RSS was not statistically different
+   between fabric on/off in a repeated (N=5) 50-output measurement —
+   confirming this is a CPU/syscall-frequency cost, not a memory one.
+   This is the same mechanism the deferred "split feed-readiness from
+   I/O-readiness" backlog item names; the fixed per-shard overhead
+   shrinks as a proportion of total CPU as output count grows (~19%
+   higher than legacy at 2 outputs, ~8% at 20, not statistically
+   distinguishable at 50 in a repeated N=5 measurement), consistent
+   with the corrected ceiling test showing fabric CPU *below* legacy
+   once real scale is reached.
+10. **Phase 7: remove rollback-era duplication only after the observation
+    window.** Delete legacy RTMP tasks, legacy SRT feeder/queue/sender threads,
+    duplicate policy, and rollout compatibility paths; then update the
+    architecture, media-pipeline, performance, testing, concurrency, and
+    operator documentation to describe the single shipped ownership model.
+11. **In progress, not yet resolved: a deterministic (not contention-flavored)
+    per-leaf CI stall.** Re-running the corrected large-scale harness (item 9
+    above) surfaced a distinct failure from the previously-documented
+    probable-contention flake: one specific RTMP fabric output failed with
+    `"terminated unexpectedly"` ~15-16s after *every* connect, across 5
+    consecutive retries in a single Release run — 100% failure rate for
+    that output's whole lifetime in the run, not an intermittent one-off.
+    Hand-re-derived the `on_ready()`/`poll_ready()` gating logic in
+    `rtmp_shard.rs`: `poll_ready()` is the only writer to `self.ready` and
+    is gated on `self.ready` being empty, so it must logically pass
+    through empty to be refilled — this contradicts the "shard starves
+    because `self.ready` never truly empties" theory used to justify the
+    earlier idle-poll fix, meaning that theory needs re-examination too.
+    Also identified that `EngineVisit::run()`'s `StaleGeneration` path
+    (`src/media/egress/visit.rs`) skips resetting `schedule.enqueued`,
+    which would permanently exclude a leaf from re-discovery if reachable
+    — a real bug on its own if it fires, but doesn't obviously fit this
+    scenario's fresh-`Add`-per-retry pattern. Rather than ship a fix for
+    unverified concurrency/lifecycle code, added temporary diagnostic
+    tracing (`rtmp_shard.rs`/`rtmp_shard_drain.rs`, PR #103) — poll
+    call/event counts, a `StaleGeneration` log line where none existed,
+    and a per-second per-leaf heartbeat of
+    `schedule.enqueued`/`registered_interest`/`pending_bytes` — to get
+    real ground truth from CI, which reproduces this reliably, before
+    touching any logic. **Follow-up work, not done in this pass**: read
+    the tracing once CI reproduces it, root-cause for real, implement and
+    prove a fix, then remove the temporary tracing.
 
 ## Phase 7: Tuning and legacy removal
 
