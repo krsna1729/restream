@@ -201,6 +201,11 @@ impl Reader {
         reader
     }
 
+    pub(crate) fn sync_read_idx(&mut self, read_idx: usize) {
+        self.read_idx = read_idx;
+        self.info.read_idx.store(read_idx, Ordering::Relaxed);
+    }
+
     pub fn pull(&mut self) -> Result<Option<Arc<MediaPacket>>, &'static str> {
         let write_idx = self.buffer.get_write_idx();
 

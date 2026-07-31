@@ -28,6 +28,12 @@ pub(super) fn egress_runtime_json(
         "terminalStage": egress.terminal_stage_key.as_ref().map(|k| k.to_string()),
         "uptimeSecs": egress.start_instant.elapsed().as_secs_f64(),
         "bytesOut": egress.bytes_sent.load(Ordering::Relaxed),
+        "resyncCount": egress.resync_count.load(Ordering::Relaxed),
+        "feedLagUnits": egress.feed_lag_units.load(Ordering::Relaxed),
+        "backpressureReason": *egress
+            .backpressure_reason
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()),
         "lastProgressAt": MediaEngine::epoch_ms_to_rfc3339(last_progress_ms),
         "lastProgressAgeMs": (last_progress_ms > 0).then(|| now_ms.saturating_sub(last_progress_ms)),
         "lastError": egress.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone(),
@@ -43,6 +49,8 @@ pub(super) fn egress_runtime_json(
         "retryRemainingMs": serde_json::Value::Null,
         "quality": egress.quality.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "metrics": egress.metrics.snapshot(),
+        "fabric": egress.is_fabric,
+        "shardId": egress.shard_id,
     });
     if include_target_url {
         value["targetUrl"] = serde_json::Value::String(egress.target_url.clone());
@@ -79,6 +87,9 @@ pub(super) fn recent_egress_runtime_json(
         "phase": outcome.phase.as_str(),
         "uptimeSecs": outcome.uptime_secs,
         "bytesOut": outcome.bytes_sent,
+        "resyncCount": outcome.resync_count,
+        "feedLagUnits": outcome.feed_lag_units,
+        "backpressureReason": outcome.backpressure_reason,
         "lastProgressAt": MediaEngine::epoch_ms_to_rfc3339(outcome.last_progress_ms),
         "lastProgressAgeMs": (outcome.last_progress_ms > 0).then(|| now_ms.saturating_sub(outcome.last_progress_ms)),
         "lastError": outcome.last_error,
@@ -297,6 +308,9 @@ mod tests {
             uptime_secs: 1.5,
             bytes_sent: 2048,
             last_progress_ms: 0,
+            resync_count: 0,
+            feed_lag_units: 0,
+            backpressure_reason: None,
             last_error: Some("connection reset by peer".to_string()),
             last_error_ms: MediaEngine::now_epoch_ms(),
             failure_phase: Some("send".to_string()),
@@ -321,5 +335,57 @@ mod tests {
 
         assert_eq!(stats["slots"], 0);
         assert_eq!(stats["avgPayloadBytes"], 0.0);
+    }
+
+    #[test]
+    fn egress_runtime_json_preserves_fabric_shard_and_failure_details() {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicU64;
+        use std::time::Instant;
+
+        let egress = ActiveEgress {
+            attempt_id: 1,
+            output_id: "out-fabric-1".to_string(),
+            pipeline_id: "pipe-1".to_string(),
+            protocol: "rtmp".to_string(),
+            target_url: "rtmp://example/live/key".to_string(),
+            target_addr: Arc::new(std::sync::Mutex::new(Some("127.0.0.1:1935".to_string()))),
+            status: EgressStatus::Running,
+            phase: Arc::new(std::sync::Mutex::new(EgressPhase::Sending)),
+            started_at: chrono::Utc::now().to_rfc3339(),
+            start_instant: Instant::now(),
+            bytes_sent: Arc::new(AtomicU64::new(1024)),
+            metrics: Arc::new(Default::default()),
+            last_progress_ms: Arc::new(AtomicU64::new(MediaEngine::now_epoch_ms())),
+            last_error: Arc::new(std::sync::Mutex::new(Some(
+                "rtmp fabric leaf rejected".to_string(),
+            ))),
+            last_error_ms: Arc::new(AtomicU64::new(MediaEngine::now_epoch_ms())),
+            failure_phase: Arc::new(std::sync::Mutex::new(Some(
+                "rtmp_fabric_ensure".to_string(),
+            ))),
+            quality: Arc::new(std::sync::Mutex::new(Default::default())),
+            prev_bytes_sent: AtomicU64::new(0),
+            prev_sample_time: std::sync::Mutex::new(Instant::now()),
+            bitrate_kbps: std::sync::Mutex::new(None),
+            terminal_stage_key: None,
+            output_name: "out-fabric-1".to_string(),
+            encoding: "source".to_string(),
+            is_fabric: true,
+            shard_id: Some(2),
+            resync_count: Arc::new(AtomicU64::new(3)),
+            feed_lag_units: Arc::new(AtomicU64::new(7)),
+            backpressure_reason: Arc::new(std::sync::Mutex::new(Some("backpressured"))),
+        };
+
+        let json = egress_runtime_json(&egress, true, true, None);
+        assert_eq!(json["fabric"], true);
+        assert_eq!(json["shardId"], 2);
+        assert_eq!(json["lastError"], "rtmp fabric leaf rejected");
+        assert_eq!(json["failurePhase"], "rtmp_fabric_ensure");
+        assert_eq!(json["resyncCount"], 3);
+        assert_eq!(json["feedLagUnits"], 7);
+        assert_eq!(json["backpressureReason"], "backpressured");
+        assert!(json["lastProgressAgeMs"].as_u64().is_some());
     }
 }

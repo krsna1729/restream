@@ -26,6 +26,8 @@ impl Severity {
     }
 }
 
+const REPEATED_RESYNC_WARN_THRESHOLD: u64 = 5;
+
 // ─── Scope ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -75,6 +77,8 @@ const LAG_SLOTS_WARN: u64 = 256;
 const CAPACITY_WAIT_WARN_MS: u64 = 5_000;
 const SRT_RECV_BUFFER_WARN_PCT: f64 = 80.0;
 const SRT_RECV_BUFFER_CRITICAL_PCT: f64 = 95.0;
+const COMMAND_CHANNEL_OVERLOAD_WARN_PCT: f64 = 80.0;
+const RETRY_ADMISSION_WARN_PCT: u32 = 80;
 
 // ─── Derivation ──────────────────────────────────────────────────────────────
 
@@ -86,6 +90,10 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    let output_max_retries = snapshot["tuning"]["outputMaxRetries"]
+        .as_u64()
+        .unwrap_or(10);
 
     let mut alerts: Vec<Alert> = Vec::new();
 
@@ -323,6 +331,57 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                 for (output_id, output) in outputs {
                     let status = output.get("status").and_then(|v| v.as_str()).unwrap_or("");
                     if status != "running" {
+                        let retry_attempts = output.get("retryAttempts").and_then(|v| v.as_u64());
+                        // A "retrying" output with attempts near the configured
+                        // ceiling is a distinct, more urgent condition than an
+                        // ordinary backoff cycle — it's about to exhaust its
+                        // retry budget and give up, not just waiting out a
+                        // transient failure. Give it a specific alert instead
+                        // of the generic not_running one so an operator can
+                        // tell "still retrying normally" from "about to stop
+                        // retrying entirely."
+                        if status == "retrying"
+                            && let Some(attempts) = retry_attempts
+                            && output_max_retries > 0
+                            && attempts * 100
+                                >= output_max_retries * RETRY_ADMISSION_WARN_PCT as u64
+                        {
+                            let backoff_ms = output
+                                .get("retryBackoffMs")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            alerts.push(Alert {
+                                id: format!(
+                                    "pipeline:{}:output:{}:retry_admission_saturation",
+                                    pipeline_id, output_id
+                                ),
+                                severity: Severity::Warning,
+                                scope: Scope::Output,
+                                pipeline_id: Some(pipeline_id.clone()),
+                                stage_id: None,
+                                output_id: Some(output_id.clone()),
+                                title: format!(
+                                    "Output '{}' is close to exhausting its retry budget",
+                                    output_id
+                                ),
+                                cause: "The output has failed and retried repeatedly; once it \
+                                    reaches the configured retry ceiling it stops retrying and \
+                                    requires manual intervention to restart."
+                                    .into(),
+                                evidence: vec![format!(
+                                    "retryAttempts = {attempts} / outputMaxRetries = {output_max_retries}, retryBackoffMs = {backoff_ms}"
+                                )],
+                                recommended_action:
+                                    "Investigate why the destination keeps rejecting connections \
+                                    before the retry budget is exhausted, or raise RESTREAM_OUTPUT_MAX_RETRIES."
+                                        .into(),
+                                generated_at: generated_at.clone(),
+                                first_seen: None,
+                                last_seen: None,
+                            });
+                            continue;
+                        }
+
                         alerts.push(Alert {
                             id: format!(
                                 "pipeline:{}:output:{}:not_running",
@@ -597,6 +656,121 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     });
                 }
             }
+        }
+    }
+
+    // ── Egress fabric shard checks ──────────────────────────────────────────
+
+    for shard in snapshot["egressFabricShards"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let protocol = shard.get("protocol").and_then(|v| v.as_str()).unwrap_or("");
+        let feed_id = shard.get("feedId").and_then(|v| v.as_str()).unwrap_or("");
+        let shard_index = shard
+            .get("shardIndex")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let state = shard.get("state").and_then(|v| v.as_str()).unwrap_or("");
+        let shard_label = format!("{protocol} fabric shard {shard_index} (feed {feed_id})");
+
+        match state {
+            "panicked" => {
+                alerts.push(Alert {
+                    id: format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:panicked"),
+                    severity: Severity::Critical,
+                    scope: Scope::Engine,
+                    pipeline_id: None,
+                    stage_id: None,
+                    output_id: None,
+                    title: format!("Egress fabric shard panicked ({shard_label})"),
+                    cause: "The shard's OS thread panicked and every output assigned to it lost its connection until the supervisor replaces the shard.".into(),
+                    evidence: vec![format!("state = panicked ({shard_label})")],
+                    recommended_action: "Check logs for the panic message and stack trace at the time this shard stopped; outputs on this shard will reconnect once the supervisor replaces it.".into(),
+                    generated_at: generated_at.clone(),
+                    first_seen: None,
+                    last_seen: None,
+                });
+            }
+            "stalled" => {
+                let progress_age_ms = shard.get("progressAgeMs").and_then(|v| v.as_u64());
+                let mut evidence = vec![format!("state = stalled ({shard_label})")];
+                if let Some(age) = progress_age_ms {
+                    evidence.push(format!("progressAgeMs = {age}"));
+                }
+                alerts.push(Alert {
+                    id: format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:stalled"),
+                    severity: Severity::Warning,
+                    scope: Scope::Engine,
+                    pipeline_id: None,
+                    stage_id: None,
+                    output_id: None,
+                    title: format!("Egress fabric shard has made no progress ({shard_label})"),
+                    cause: "The shard has produced no media ticks for longer than the stall threshold; every output assigned to it may be stuck.".into(),
+                    evidence,
+                    recommended_action: "Check whether this shard's assigned outputs have healthy destinations; a genuinely idle shard with no assigned outputs is expected to age past the threshold and is not itself a problem.".into(),
+                    generated_at: generated_at.clone(),
+                    first_seen: None,
+                    last_seen: None,
+                });
+            }
+            _ => {}
+        }
+
+        let command_depth = shard
+            .get("commandDepth")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let command_capacity = shard
+            .get("commandCapacity")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if command_capacity > 0 {
+            let occupancy_pct = command_depth as f64 / command_capacity as f64 * 100.0;
+            if occupancy_pct >= COMMAND_CHANNEL_OVERLOAD_WARN_PCT {
+                alerts.push(Alert {
+                    id: format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:command_overload"),
+                    severity: Severity::Warning,
+                    scope: Scope::Engine,
+                    pipeline_id: None,
+                    stage_id: None,
+                    output_id: None,
+                    title: format!("Egress fabric shard command channel near capacity ({shard_label})"),
+                    cause: "The shard's command channel (add/remove/update dispatch) is close to full; further commands risk being rejected until the shard catches up.".into(),
+                    evidence: vec![format!(
+                        "commandDepth = {command_depth} / commandCapacity = {command_capacity} ({occupancy_pct:.1}%)"
+                    )],
+                    recommended_action: "Reduce the rate of output add/remove/update churn against this shard, or raise RESTREAM_EGRESS_COMMAND_CAPACITY.".into(),
+                    generated_at: generated_at.clone(),
+                    first_seen: None,
+                    last_seen: None,
+                });
+            }
+        }
+
+        let resync_count = shard
+            .get("resyncCount")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if resync_count >= REPEATED_RESYNC_WARN_THRESHOLD {
+            alerts.push(Alert {
+                id: format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:repeated_resync"),
+                severity: Severity::Warning,
+                scope: Scope::Engine,
+                pipeline_id: None,
+                stage_id: None,
+                output_id: None,
+                title: format!("Repeated egress resynchronizations detected ({shard_label})"),
+                cause: "The egress shard is experiencing repeated feed overruns and resynchronizing leaf cursors.".into(),
+                evidence: vec![format!(
+                    "resyncCount = {resync_count} (threshold {REPEATED_RESYNC_WARN_THRESHOLD})"
+                )],
+                recommended_action: "Check pipeline ring buffer capacity and downstream network bandwidth.".into(),
+                generated_at: generated_at.clone(),
+                first_seen: None,
+                last_seen: None,
+            });
         }
     }
 

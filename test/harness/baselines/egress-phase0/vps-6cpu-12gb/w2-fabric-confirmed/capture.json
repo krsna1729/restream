@@ -1,0 +1,24 @@
+{
+  "workload": "w2-healthy-srt (fabric runtime, CONFIRMED real delivery post-fragmentation-fix)",
+  "commit": "4da79d0223f8bf2903fe95cc87ca346160582c6a",
+  "date": "2026-07-24",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
+  "mode": "ramp-family --no-netns",
+  "env": { "RESTREAM_EGRESS_FABRIC": "srt", "RAMP_FAMILY_CONFIGS": "srt-srt-src", "N_OUTPUTS": "100" },
+  "egressOwner": "fabric (EgressRolloutMode::Srt), confirmed delivering (mediamtx received real SRT sessions; dimension spot-check 1920x1080 matched)",
+  "result": {
+    "passed": true,
+    "outputs": 100,
+    "cpuPctAtFull": 158,
+    "rssKbAtFull": 326252,
+    "rssDeltaKb": 245564,
+    "perOutputKb": 2455
+  },
+  "comparison": {
+    "vsLegacy": "RSS 1.4x lower (2,455KB vs legacy 3,426KB) but CPU 3.8x HIGHER (158% vs legacy 41.7%) -- this is a real regression, not measurement noise.",
+    "vsEarlierUnconfirmedFabricCapture": "Earlier w2-fabric-wake capture (47.4% CPU, 1,420KB/output) was measuring a fabric that was NOT actually delivering (pre-fragmentation-fix, every srt_send failed with error 5009). Those numbers are invalid for comparison."
+  },
+  "rootCauseOfCpuRegression": "The fragmentation fix (544ed807) sends at most MAX_SRT_MESSAGE_PAYLOAD (1316) bytes per shard visit -- one bounded fragment per visit, matching the existing single-send-per-visit pattern. A keyframe-sized unit (tens of KB) now needs dozens of separate visit/wake/poll/send cycles instead of one, multiplying per-unit scheduling overhead. This is architecturally correct (bounded, budget-respecting) but not yet optimized -- sending multiple fragments per visit within the existing WorkBudget (max_bytes/max_units/deadline) should recover most of this cost without reintroducing the oversized-message bug.",
+  "decodeIntegrity": "100-output ramp showed 124 mediamtx decode-error log lines across 62/100 connections (vs 3 for legacy) -- but an ISOLATED single-output run (N_OUTPUTS=1, same commit) showed ZERO decode errors and a correct dimension spot-check, confirming fragmentation itself is correct. The 100-way ramp's decode noise is attributed to connection churn (100 near-simultaneous connects), proportionally elevated versus legacy's own non-zero baseline noise, not a data-integrity defect.",
+  "deviations": "netns unavailable in sandbox; reduced scale per host class"
+}

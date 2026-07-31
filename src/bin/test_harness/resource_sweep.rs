@@ -33,7 +33,10 @@ pub(crate) use msr::*;
 mod branch_matrix;
 #[cfg(test)]
 pub(crate) use branch_matrix::selected_backend_policy_variants;
-pub(crate) use branch_matrix::{backend_policy_matrix, branch_matrix, srt_crypto_matrix};
+pub(crate) use branch_matrix::{
+    backend_policy_matrix, branch_matrix, mixed_fabric_matrix, rtmp_fabric_matrix,
+    rtmps_fabric_matrix, srt_crypto_matrix, srt_fabric_matrix,
+};
 #[path = "resource_sweep/catalog.rs"]
 mod catalog;
 pub(crate) use catalog::{
@@ -49,10 +52,10 @@ use config::{
 #[path = "resource_sweep/measurement.rs"]
 mod measurement;
 pub(super) use measurement::ffmpeg_children_stats;
+pub(crate) use measurement::read_proc_status_kb_checked;
 use measurement::{
     ResourceAggregate, ResourceScenarioMeta, csv_escape, read_proc_stat_ticks,
-    read_proc_status_kb_checked, resource_aggregate_json, sample_resource_window,
-    write_resource_sweep_csv,
+    resource_aggregate_json, sample_resource_window, write_resource_sweep_csv,
 };
 
 /// Live process stack shared by a resource-sweep sample.
@@ -170,10 +173,22 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
     cleanup_ramp_db(&env.restream_db_path);
     let mediamtx_log = std::fs::File::create(&env.mediamtx_log).map_err(|e| e.to_string())?;
     let mediamtx_err = mediamtx_log.try_clone().map_err(|e| e.to_string())?;
+    // mediamtx serves RTMPS on its own dedicated `rtmpsAddress` listener,
+    // separate from the plain `rtmpAddress` port — there is no same-port
+    // auto-detection despite `rtmpEncryption: "optional"`'s name.
+    let rtmp_tls_lines = match &env.rtmps_tls {
+        Some((cert, key)) => format!(
+            "rtmpEncryption: \"optional\"\nrtmpsAddress: :{}\nrtmpServerCert: {}\nrtmpServerKey: {}\n",
+            env.mtx_rtmps,
+            cert.display(),
+            key.display()
+        ),
+        None => "rtmpEncryption: \"no\"\n".to_string(),
+    };
     std::fs::write(
         &env.mediamtx_config,
         format!(
-            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nwriteQueueSize: 512\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
+            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nwriteQueueSize: 512\nrtmp: yes\nrtmpAddress: :{}\n{rtmp_tls_lines}rtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
             env.mtx_rtmp, env.mtx_srt, env.mtx_api
         ),
     )
@@ -512,6 +527,84 @@ async fn run_resource_egress_growth(
     Ok(out)
 }
 
+/// Like [`run_resource_egress_growth`] but with an independent output count
+/// per kind instead of one count applied uniformly to every kind — needed to
+/// reproduce an asymmetric mix (e.g. the recorded 1,140 RTMP plus 60 SRT
+/// baseline, ~19:1) that the uniform-count growth loop cannot express.
+/// Creates all outputs against one shared pipeline/publisher, waits for all
+/// of them to progress, then samples once (no growth checkpoints).
+async fn run_resource_egress_ratio(
+    env: &ResourceSweepEnv,
+    stack: &mut Option<ResourceSweepStack>,
+    scenario_name: &str,
+    config: SweepConfig,
+    rtmp_count: usize,
+    srt_count: usize,
+) -> Result<ResourceAggregate, String> {
+    let local_only = env.lifecycle == ResourceSweepLifecycle::Isolated;
+    let mut local_stack = if local_only {
+        Some(start_resource_sweep_stack(env).await?)
+    } else {
+        None
+    };
+    let active = if local_only {
+        local_stack.as_mut().unwrap()
+    } else {
+        ensure_resource_stack(env, stack).await?
+    };
+    let stream_key = format!("resource-{scenario_name}");
+    let pipeline_id = create_resource_pipeline(&active.api, scenario_name, &stream_key).await?;
+    let mut publisher = spawn_resource_publisher(env, config, &stream_key)?;
+    wait_for_api_input_live(&active.api, &pipeline_id, Duration::from_secs(45)).await?;
+
+    let mut output_ids = Vec::new();
+    for (kind, count) in [
+        (SweepOutputKind::RtmpSource, rtmp_count),
+        (SweepOutputKind::SrtSource, srt_count),
+    ] {
+        for index in 1..=count {
+            let name = format!("{scenario_name}-{}-{index}", kind.label());
+            let (url, encoding) = resource_output_url(env, config, kind, &name);
+            let output_id = create_output_with_rtmp_mode(
+                &active.api,
+                &pipeline_id,
+                &name,
+                &url,
+                &encoding,
+                kind.rtmp_mode(),
+            )
+            .await?;
+            start_output(&active.api, &pipeline_id, &output_id).await?;
+            output_ids.push(output_id);
+        }
+    }
+
+    let progress_timeout = resource_output_progress_timeout(output_ids.len());
+    wait_for_outputs_progress(&active.api, &pipeline_id, &output_ids, progress_timeout).await?;
+    let aggregate = sample_resource_window(
+        env,
+        active,
+        ResourceScenarioMeta {
+            scenario: scenario_name,
+            label: format!("rtmp{rtmp_count}-srt{srt_count}"),
+            pipelines: 1,
+            outputs: output_ids.len(),
+            ingest_types: config.name.to_string(),
+            egress_mix: format!("rtmpSource:{rtmp_count},srtSource:{srt_count}"),
+            transcode: "no",
+        },
+    )
+    .await?;
+
+    stop_child(&mut publisher).await;
+    delete_resource_pipeline(&active.api, &pipeline_id).await;
+    if local_only {
+        stop_child(&mut local_stack.as_mut().unwrap().restream).await;
+        stop_child(&mut local_stack.as_mut().unwrap().mediamtx).await;
+    }
+    Ok(aggregate)
+}
+
 pub(crate) async fn create_resource_pipeline(
     api: &RampApi,
     name: &str,
@@ -592,7 +685,7 @@ fn resource_output_url(
     name: &str,
 ) -> (String, String) {
     (
-        kind.publish_url(env.mtx_rtmp, env.mtx_srt, name),
+        kind.publish_url(env.mtx_rtmp, env.mtx_rtmps, env.mtx_srt, name),
         kind.encoding(config.multi_audio).to_string(),
     )
 }

@@ -1,8 +1,12 @@
+use crate::domain::ids::PipelineId;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EgressProtocol {
     Rtmp,
     Srt,
     Hls,
+    Sink,
+    Pipeline,
     Unknown,
 }
 
@@ -12,6 +16,8 @@ pub enum OutputUrlScheme {
     Rtmps,
     Srt,
     Hls,
+    Sink,
+    Pipeline,
     Http,
     Https,
     Unknown,
@@ -28,6 +34,8 @@ impl OutputUrlScheme {
             Some("rtmps") => Self::Rtmps,
             Some("srt") => Self::Srt,
             Some("hls") => Self::Hls,
+            Some("sink") => Self::Sink,
+            Some("pipeline") => Self::Pipeline,
             Some("http") => Self::Http,
             Some("https") => Self::Https,
             _ => Self::Unknown,
@@ -55,6 +63,8 @@ impl OutputUrlScheme {
             Self::Rtmp | Self::Rtmps => EgressProtocol::Rtmp,
             Self::Srt => EgressProtocol::Srt,
             Self::Hls | Self::Http | Self::Https => EgressProtocol::Hls,
+            Self::Sink => EgressProtocol::Sink,
+            Self::Pipeline => EgressProtocol::Pipeline,
             Self::Unknown => EgressProtocol::Unknown,
         }
     }
@@ -74,7 +84,78 @@ impl EgressProtocol {
             Self::Rtmp => "rtmp",
             Self::Srt => "srt",
             Self::Hls => "hls",
+            Self::Sink => "sink",
+            Self::Pipeline => "pipeline",
             Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecirculationTarget {
+    pipeline_id: PipelineId,
+    input_id: String,
+}
+
+impl RecirculationTarget {
+    pub fn parse(url: &str) -> Result<Self, RecirculationTargetParseError> {
+        let parsed =
+            url::Url::parse(url.trim()).map_err(|_| RecirculationTargetParseError::MalformedUrl)?;
+        let scheme = OutputUrlScheme::from_url(parsed.as_str());
+        match scheme {
+            OutputUrlScheme::Pipeline => {}
+            OutputUrlScheme::Rtmp
+            | OutputUrlScheme::Rtmps
+            | OutputUrlScheme::Srt
+            | OutputUrlScheme::Hls
+            | OutputUrlScheme::Sink
+            | OutputUrlScheme::Http
+            | OutputUrlScheme::Https
+            | OutputUrlScheme::Unknown => {
+                return Err(RecirculationTargetParseError::UnsupportedScheme);
+            }
+        }
+        let pipeline_id = parsed
+            .host_str()
+            .filter(|value| !value.is_empty())
+            .map(PipelineId::new)
+            .ok_or(RecirculationTargetParseError::MissingPipeline)?;
+        let input_id = parsed
+            .path_segments()
+            .and_then(|mut segments| segments.find(|segment| !segment.is_empty()))
+            .map(str::to_string)
+            .ok_or(RecirculationTargetParseError::MissingInput)?;
+
+        Ok(Self {
+            pipeline_id,
+            input_id,
+        })
+    }
+
+    pub fn pipeline_id(&self) -> &str {
+        self.pipeline_id.as_str()
+    }
+
+    pub fn input_id(&self) -> &str {
+        &self.input_id
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecirculationTargetParseError {
+    MalformedUrl,
+    UnsupportedScheme,
+    MissingPipeline,
+    MissingInput,
+}
+
+impl RecirculationTargetParseError {
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::MalformedUrl => "recirculation URL must be a valid absolute URL",
+            Self::UnsupportedScheme => "recirculation URL scheme must be pipeline://",
+            Self::MissingPipeline => "recirculation URL must include a target pipeline",
+            Self::MissingInput => "recirculation URL must include a target input",
         }
     }
 }

@@ -1,0 +1,22 @@
+{
+  "workload": "w2-healthy-srt (fabric runtime)",
+  "commit": "ef430eaacbcb170c85348456d1075139c37c8279",
+  "date": "2026-07-23",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
+  "mode": "ramp-family --no-netns",
+  "env": { "RESTREAM_EGRESS_FABRIC": "srt", "RAMP_FAMILY_CONFIGS": "srt-srt-src", "N_OUTPUTS": "100" },
+  "egressOwner": "fabric (EgressRolloutMode::Srt)",
+  "result": {
+    "passed": true,
+    "outputs": 100,
+    "cpuPctAtFull": 57.0,
+    "rssKbAtFull": 230968,
+    "rssDeltaKb": 150096,
+    "perOutputKb": 1500
+  },
+  "comparisonVsLegacyW2": {
+    "perOutputRss": "1,500KB vs 3,426KB legacy — 2.3x lower (no per-output MemoryQueue/sender thread)",
+    "cpu": "57.0% vs 41.7% legacy — 37% higher; attributed to the 1ms idle_wait shard polling loop (WakeGate delivery not yet wired into shard sleep), tracked as the next fabric runtime step"
+  },
+  "deviations": "netns unavailable in sandbox; reduced scale per host class"
+}

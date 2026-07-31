@@ -1,0 +1,31 @@
+{
+  "workload": "egress-growth-source-same (RTMP source outputs, isolated lifecycle)",
+  "commit": "2dcd5c3b",
+  "date": "2026-07-25",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
+  "mode": "rtmp-fabric-matrix",
+  "env": {
+    "RTMP_FABRIC_MATRIX_SCENARIO": "egress-growth-source-same",
+    "RTMP_FABRIC_MATRIX_EGRESS_COUNT": "1000"
+  },
+  "egressOwner": "legacy variant: per-connection Tokio sender (RESTREAM_EGRESS_FABRIC unset). fabric variant: RtmpFabricEngine/RtmpShardBackend (RESTREAM_EGRESS_FABRIC=rtmp).",
+  "result": {
+    "legacy": {
+      "outputs": 1000,
+      "restreamCpuAvgPct": 83.67,
+      "restreamCpuPeakPct": 94.32,
+      "rssAvgKb": 321129.0,
+      "rssPeakKb": 327904
+    },
+    "fabric": {
+      "outputs": 1000,
+      "restreamCpuAvgPct": 85.31,
+      "restreamCpuPeakPct": 130.78,
+      "rssAvgKb": 287432.0,
+      "rssPeakKb": 289848
+    }
+  },
+  "comparison": "At real scale (N=1000, matching the Phase 5 exit gate's target order of magnitude), the smoke-scale N=10 capture's ~1.4x fabric CPU regression essentially disappears: CPU avg is 85.31% vs legacy's 83.67% (~1.02x, within noise), while RSS avg is actually 11% *lower* for fabric (287,432KB vs 321,129KB). The one open question this run surfaces: fabric's CPU *peak* is 130.78% vs legacy's 94.32% (~1.39x) despite average parity -- a burst somewhere during the run (most likely the ramp-up phase adding outputs one at a time) that the average smooths over. Both variants delivered all 1000 outputs to progress within timeout; zero error/decode lines in either mediamtx log; restream.log had no warnings or errors in either variant (an empty feed at this point in the ramp means no feed-overrun resync events, unlike the SRT captures at this scale).",
+  "scope": "Real-scale capture at the project's own target order of magnitude (docs/egress-implementation.md Phase 5 exit gate references 1,000+ healthy RTMP outputs) -- not the full mixed RTMP/RTMPS + bad-neighbor isolation matrix that exit gate ultimately requires, but a meaningful step up from the earlier N=10 smoke-scale capture at this same path (see the sibling vps-6cpu-12gb/ directory).",
+  "deviations": "Isolated lifecycle (one mediamtx+restream stack per variant, not shared); single measurement point per variant rather than a growth curve; single host sample, not a multi-run statistical distribution."
+}

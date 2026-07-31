@@ -1,140 +1,12 @@
-use super::srt_crypto::{apply_srt_crypto_socket, srt_crypto_from_url};
+use super::srt_crypto::srt_crypto_from_url;
+use super::srt_egress_connect::{
+    SrtBondedEgressConnectConfig, SrtSingleEgressConnectConfig, connect_bonded_srt_egress_socket,
+    connect_single_srt_egress_socket,
+};
 use super::srt_url::parse_srt_egress_url;
 use super::*;
+use super::{claim_srt_egress_muxer_port, resolve_srt_egress_host as resolve_host};
 use crate::secret_display::redact_url;
-
-async fn resolve_host(host_port: &str) -> Option<SocketAddr> {
-    match host_port.parse::<SocketAddr>() {
-        Ok(a) => Some(a),
-        Err(_) => tokio::net::lookup_host(host_port)
-            .await
-            .ok()
-            .and_then(|mut addrs| addrs.next()),
-    }
-}
-
-fn to_libc_sockaddr(addr: SocketAddr) -> (libc::sockaddr_storage, c_int) {
-    // SAFETY: zeroed() is valid for sockaddr_storage (all-zero is a
-    // valid uninitialized socket address). Raw pointer writes through
-    // a correctly-typed pointer (sockaddr_in or sockaddr_in6) cast
-    // from the storage reference. The family field is set first to
-    // identify the variant before any other field is written.
-    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
-    match addr {
-        SocketAddr::V4(v4) => {
-            let sin = &mut storage as *mut _ as *mut libc::sockaddr_in;
-            // SAFETY: sin is a valid pointer to the storage buffer cast
-            // to the correct sockaddr_in variant. The struct is zero-
-            // initialized above; we write all required fields.
-            unsafe {
-                (*sin).sin_family = libc::AF_INET as libc::sa_family_t;
-                (*sin).sin_port = v4.port().to_be();
-                (*sin).sin_addr.s_addr = u32::from_ne_bytes(v4.ip().octets());
-            }
-            (storage, std::mem::size_of::<libc::sockaddr_in>() as c_int)
-        }
-        SocketAddr::V6(v6) => {
-            let sin6 = &mut storage as *mut _ as *mut libc::sockaddr_in6;
-            // SAFETY: sin6 is a valid pointer to the storage buffer.
-            // AF_INET6 is set first to identify the variant; subsequent
-            // fields (port, addr) are written to the correct variant.
-            unsafe {
-                (*sin6).sin6_family = libc::AF_INET6 as libc::sa_family_t;
-                (*sin6).sin6_port = v6.port().to_be();
-                (*sin6).sin6_addr.s6_addr = v6.ip().octets();
-            }
-            (storage, std::mem::size_of::<libc::sockaddr_in6>() as c_int)
-        }
-    }
-}
-
-fn set_srt_reuseaddr(sock: SRTSOCKET) -> Result<(), String> {
-    let reuse: c_int = 1;
-    // SAFETY: SRTO_REUSEADDR is a pre-bind socket option. `reuse` is a valid
-    // c_int flag whose pointer stays live for the duration of the FFI call.
-    unsafe {
-        check_srt_option_result(
-            "SRTO_REUSEADDR",
-            srt_setsockopt(
-                sock,
-                0,
-                SRTO_REUSEADDR,
-                &reuse as *const _ as *const c_void,
-                std::mem::size_of::<c_int>() as c_int,
-            ),
-        )
-    }
-}
-
-fn bind_srt_egress_muxer_port(sock: SRTSOCKET, port: u16) -> Result<(), String> {
-    let sin = to_sockaddr_in(SocketAddr::from(([0, 0, 0, 0], port)));
-    // SAFETY: srt_bind binds a valid SRT socket to a stack-allocated IPv4
-    // sockaddr. SRTO_REUSEADDR was set before this call by the caller.
-    let result = unsafe { srt_bind(sock, &sin, std::mem::size_of::<sockaddr_in>() as c_int) };
-    if result >= 0 {
-        Ok(())
-    } else {
-        let (code, message) = last_srt_error();
-        Err(format!(
-            "failed to bind reusable SRT egress muxer port {port}: {message} ({code})"
-        ))
-    }
-}
-
-fn connected_srt_local_port(sock: SRTSOCKET) -> Result<u16, String> {
-    let mut sin: sockaddr_in = unsafe { std::mem::zeroed() };
-    let mut len = std::mem::size_of::<sockaddr_in>() as c_int;
-    // SAFETY: srt_getsockname writes the local IPv4 socket address into `sin`
-    // and updates `len`; both pointers are valid for the duration of the call.
-    let result = unsafe { srt_getsockname(sock, &mut sin, &mut len) };
-    if result >= 0 {
-        Ok(u16::from_be(sin.sin_port))
-    } else {
-        let (code, message) = last_srt_error();
-        Err(format!(
-            "failed to read reusable SRT egress muxer port: {message} ({code})"
-        ))
-    }
-}
-
-enum SrtEgressMuxerPortClaim<'a> {
-    First(std::sync::MutexGuard<'a, Option<u16>>),
-    Reuse(u16),
-}
-
-impl SrtEgressMuxerPortClaim<'_> {
-    fn bind_port(&self) -> Option<u16> {
-        match self {
-            SrtEgressMuxerPortClaim::First(_) => None,
-            SrtEgressMuxerPortClaim::Reuse(port) => Some(*port),
-        }
-    }
-
-    fn record_first_connected_port(self, port: u16) -> bool {
-        match self {
-            SrtEgressMuxerPortClaim::First(mut guard) => {
-                if guard.is_none() {
-                    *guard = Some(port);
-                    true
-                } else {
-                    false
-                }
-            }
-            SrtEgressMuxerPortClaim::Reuse(_) => false,
-        }
-    }
-}
-
-fn claim_srt_egress_muxer_port(
-    state: &std::sync::Mutex<Option<u16>>,
-) -> SrtEgressMuxerPortClaim<'_> {
-    let guard = state.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(port) = *guard {
-        SrtEgressMuxerPortClaim::Reuse(port)
-    } else {
-        SrtEgressMuxerPortClaim::First(guard)
-    }
-}
 
 // SRT Egress Client
 pub async fn start_srt_egress(
@@ -224,222 +96,39 @@ pub async fn start_srt_egress(
     let connect_result = tokio::task::spawn_blocking(move || -> Result<SRTSOCKET, String> {
         let client_sock: SRTSOCKET;
         if use_bonding {
-            // Create a bonding group (backup mode: one active, failover to next)
-            // SAFETY: srt_create_group creates a bonding group socket.
-            // SRT_GTYPE_BACKUP configures active/passive failover mode.
-            // The returned handle is closed on all exit paths below.
-            client_sock = unsafe { srt_create_group(SRT_GTYPE_BACKUP) };
-            if client_sock < 0 {
-                error!("Failed to create bonding group");
-                return Err("failed to create bonding group".to_string());
-            }
-
-            // Passphrase/PBKEYLEN/ENFORCEDENCRYPTION and StreamID are
-            // group-wide settings in libsrt bonding: they must be applied to
-            // the group socket itself via srt_setsockopt, not smuggled into
-            // a per-member SRT_SOCKOPT_CONFIG. libsrt's per-member config
-            // object rejects both option families outright (see
-            // SRT_SocketOptionObject::add in socketconfig.cpp, which has no
-            // case for SRTO_PASSPHRASE, SRTO_PBKEYLEN, or SRTO_STREAMID and
-            // falls through to `return false`), so applying them there
-            // always failed the connect attempt with a misleading "Success
-            // (0)" error (srt_config_add's failure path does not populate
-            // the thread-local last-error state that check_srt_option_result
-            // reads).
-            if let Some(crypto) = &url_crypto
-                && let Err(error) = apply_srt_crypto_socket(client_sock, crypto)
-            {
-                unsafe {
-                    srt_close(client_sock);
-                }
-                return Err(error);
-            }
-
-            if !streamid.is_empty() {
-                let streamid_c = match std::ffi::CString::new(streamid.as_str()) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        error!("Stream ID contains null bytes");
-                        // SAFETY: Valid group socket, clean up on invalid streamid.
-                        unsafe {
-                            srt_close(client_sock);
-                        }
-                        return Err("stream ID contains null bytes".to_string());
-                    }
-                };
-                // SAFETY: Sets SRTO_STREAMID on a valid group socket with a
-                // correctly-sized NUL-terminated C string.
-                unsafe {
-                    check_srt_option_result(
-                        "SRTO_STREAMID",
-                        srt_setsockopt(
-                            client_sock,
-                            0,
-                            SRTO_STREAMID,
-                            streamid_c.as_ptr() as *const c_void,
-                            streamid.len() as c_int,
-                        ),
-                    )
-                }
-                .inspect_err(|_| unsafe {
-                    srt_close(client_sock);
-                })?;
-            }
-
-            let connect_error = {
-                let mut members: Vec<SrtGroupMemberConfig> = Vec::new();
-                for (i, &peer_addr) in all_addrs.iter().enumerate() {
-                    let (peer_storage, addrlen) = to_libc_sockaddr(peer_addr);
-                    // SAFETY: srt_prepare_endpoint creates a group member
-                    // descriptor from a sockaddr. The peer_storage is
-                    // stack-allocated and valid for this call.
-                    let mut member = unsafe {
-                        srt_prepare_endpoint(
-                            std::ptr::null(),
-                            &peer_storage as *const _ as *const libc::sockaddr,
-                            addrlen,
-                        )
-                    };
-                    member.weight = if i == 0 { 1 } else { 0 };
-                    members.push(member);
-                }
-
-                // SAFETY: srt_connect_group opens all member connections.
-                // members is a correctly sized Vec of SrtGroupMemberConfig.
-                // On failure, client_sock is cleaned up.
-                let conn_res = unsafe {
-                    srt_connect_group(client_sock, members.as_mut_ptr(), members.len() as c_int)
-                };
-                if conn_res < 0 {
-                    // SAFETY: srt_getlasterror_str returns a thread-local
-                    // static string valid until the next SRT call.
-                    let err = unsafe { std::ffi::CStr::from_ptr(srt_getlasterror_str()) };
-                    let message = format!("bonded connection failed: {}", err.to_string_lossy());
-                    error!(
-                        "[srt-egress] Bonded connection failed: {}",
-                        err.to_string_lossy()
-                    );
-                    // SAFETY: Clean up group socket on connection failure.
-                    unsafe {
-                        srt_close(client_sock);
-                    }
-                    Some(message)
-                } else {
-                    None
-                }
-            };
-            if let Some(message) = connect_error {
-                return Err(message);
-            }
+            client_sock = connect_bonded_srt_egress_socket(SrtBondedEgressConnectConfig {
+                peer_addrs: &all_addrs,
+                stream_id: &streamid,
+                crypto: url_crypto.as_ref(),
+                send_mode: SrtEgressSendMode::LegacyBlocking,
+            })?;
 
             info!(
                 "[srt-egress] Bonded connection ({} links) to {}",
                 all_addrs.len(),
                 redact_url(&target_url)
             );
-            srt_set_highbitrate_opts(client_sock);
-            srt_log_effective_opts(client_sock, "egress-bonded");
         } else {
-            // SAFETY: srt_create_socket creates a new SRT socket handle.
-            // The returned handle is closed on all exit paths below
-            // (connection failure, cancel, sender exit).
-            // Single connection (original path)
-            client_sock = unsafe { srt_create_socket() };
-            if client_sock < 0 {
-                error!("Failed to create socket");
-                return Err("failed to create socket".to_string());
-            }
-            srt_set_connect_timeout(client_sock, srt_connect_timeout_ms);
-            srt_set_highbitrate_opts(client_sock);
-            if let Err(error) = set_srt_reuseaddr(client_sock) {
-                unsafe {
-                    srt_close(client_sock);
-                }
-                return Err(error);
-            }
-            if let Some(crypto) = &url_crypto
-                && let Err(error) = apply_srt_crypto_socket(client_sock, crypto)
-            {
-                unsafe {
-                    srt_close(client_sock);
-                }
-                return Err(error);
-            }
-
-            if !streamid.is_empty() {
-                let streamid_c = match std::ffi::CString::new(streamid.as_str()) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        error!("Invalid stream ID (contains null byte)");
-                        // SAFETY: Valid socket, clean up on invalid streamid.
-                        unsafe {
-                            srt_close(client_sock);
-                        }
-                        return Err("stream ID contains null bytes".to_string());
-                    }
-                };
-                // SAFETY: Sets SRTO_STREAMID on a valid socket with a
-                // correctly-sized NUL-terminated C string.
-                unsafe {
-                    srt_setsockopt(
-                        client_sock,
-                        0,
-                        SRTO_STREAMID,
-                        streamid_c.as_ptr() as *const c_void,
-                        streamid.len() as c_int,
-                    );
-                }
-            }
-
             let muxer_port_claim = reuse_local_srt_egress_port
                 .then(|| claim_srt_egress_muxer_port(&srt_egress_muxer_port));
-            if let Some(port) = muxer_port_claim
-                .as_ref()
-                .and_then(SrtEgressMuxerPortClaim::bind_port)
-                && let Err(error) = bind_srt_egress_muxer_port(client_sock, port)
-            {
-                unsafe {
-                    srt_close(client_sock);
+            client_sock = match connect_single_srt_egress_socket(SrtSingleEgressConnectConfig {
+                peer_addr: addr,
+                stream_id: &streamid,
+                crypto: url_crypto.as_ref(),
+                connect_timeout_ms: srt_connect_timeout_ms,
+                send_mode: SrtEgressSendMode::LegacyBlocking,
+                muxer_port_claim,
+            }) {
+                Ok(socket) => socket,
+                Err(error) => {
+                    if error == "connection failed" {
+                        error!("Connection failed to {}", redact_url(&target_url));
+                    }
+                    return Err(error);
                 }
-                return Err(error);
-            }
-
-            let sin = to_sockaddr_in(addr);
-
-            // SAFETY: srt_connect opens a connection to the target address.
-            // sin is a correctly-sized sockaddr_in; client_sock is valid.
-            let conn_res = unsafe {
-                srt_connect(
-                    client_sock,
-                    &sin,
-                    std::mem::size_of::<sockaddr_in>() as c_int,
-                )
             };
-            if conn_res < 0 {
-                error!("Connection failed to {}", redact_url(&target_url));
-                // SAFETY: Valid socket, clean up on connection failure.
-                unsafe {
-                    srt_close(client_sock);
-                }
-                return Err("connection failed".to_string());
-            }
-
-            match connected_srt_local_port(client_sock) {
-                Ok(port)
-                    if muxer_port_claim
-                        .is_some_and(|claim| claim.record_first_connected_port(port)) =>
-                {
-                    info!(
-                        port,
-                        "[srt-egress] Reusing local UDP muxer port for compatible egress sockets"
-                    );
-                }
-                Ok(_) => {}
-                Err(error) => warn!(err = %error, "[srt-egress] connected without recording reusable muxer port"),
-            }
 
             info!("Connected to {}", redact_url(&target_url));
-            srt_log_effective_opts(client_sock, "egress");
         }
         Ok(client_sock)
     })

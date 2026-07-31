@@ -223,6 +223,7 @@ async fn run() -> Result<(), String> {
             "preflight" => preflight_check().await,
             "fault.egress-retry" => fault_egress_retry().await,
             "fault.output-stall" => fault_output_stall().await,
+            "fault.srt-output-stall" => fault_srt_egress_stalled_destination().await,
             "fault.resilience" => fault_resilience().await,
             "file.live-edge" => file_live_edge().await,
             "signal.control" => signal_control().await,
@@ -234,6 +235,10 @@ async fn run() -> Result<(), String> {
             "branch-matrix" => branch_matrix().await,
             "backend-policy-matrix" => backend_policy_matrix().await,
             "srt-crypto-matrix" => srt_crypto_matrix().await,
+            "rtmp-fabric-matrix" => rtmp_fabric_matrix().await,
+            "srt-fabric-matrix" => srt_fabric_matrix().await,
+            "mixed-fabric-matrix" => mixed_fabric_matrix().await,
+            "rtmps-fabric-matrix" => rtmps_fabric_matrix().await,
             other => Err(unknown_command_error(other)),
         }
     };

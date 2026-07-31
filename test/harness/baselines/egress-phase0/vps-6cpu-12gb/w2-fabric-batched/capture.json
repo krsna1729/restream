@@ -1,0 +1,25 @@
+{
+  "workload": "w2-healthy-srt (fabric runtime, fragment-batching applied)",
+  "commit": "77ec197dcc54477add257e69068c97802b4cdebd",
+  "date": "2026-07-24",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
+  "mode": "ramp-family --no-netns",
+  "env": { "RESTREAM_EGRESS_FABRIC": "srt", "RAMP_FAMILY_CONFIGS": "srt-srt-src", "N_OUTPUTS": "100" },
+  "egressOwner": "fabric (EgressRolloutMode::Srt), batched fragment sending",
+  "result": {
+    "passed": true,
+    "outputs": 100,
+    "cpuPctAtFull": 149,
+    "rssKbAtFull": 338092,
+    "rssDeltaKb": 257532,
+    "perOutputKb": 2575
+  },
+  "comparison": {
+    "vsPreBatching": "CPU only improved 158% -> 149% (~6%), far short of hoped-for reduction",
+    "vsLegacy": "still 3.6x legacy CPU (149% vs 41.7%); RSS still 1.3x lower (2,575KB vs 3,426KB/output)"
+  },
+  "batchingBottleneckAnalysis": "The RESTREAM_EGRESS_VISIT_MAX_US default (2000us = 2ms) is the binding constraint, not visit_max_bytes (256KB, plenty of headroom). But the deeper reason batching barely helped: the fragment-batching change reduces shard wake/poll/schedule overhead per unit, not the NUMBER of srt_send() syscalls, which stays fixed at roughly unit_bytes/1316 regardless of how many happen per scheduler visit. For a 74KB keyframe that is still ~57 separate srt_send() calls; syscall-transition cost appears to dominate, not scheduling overhead. The real next lever is raising SRT's configured message-size ceiling (SRTO_PAYLOADSIZE or equivalent) to shrink the fragment COUNT itself, not just how fragments are scheduled -- this needs dedicated SRT-configuration investigation and is Phase 7 tuning territory, not a quick follow-up.",
+  "decodeIntegrity": "171 mediamtx decode-error lines in this churny 100-way ramp (vs 124 pre-batching, vs 3 for legacy) -- run-to-run churn variance, not attributed to a batching regression; srt-crypto-matrix (crypto-fabric17) passed cleanly with correctness spot-checks intact.",
+  "decision": "EgressRolloutMode default stays Off. Fragment count reduction (larger SRT message size) is required before CPU is competitive enough to reconsider the flip.",
+  "deviations": "netns unavailable in sandbox; reduced scale per host class"
+}

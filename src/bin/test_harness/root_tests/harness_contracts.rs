@@ -291,6 +291,38 @@ fn api_output_status_has_status_raw_status_phase() {
 }
 
 #[test]
+fn api_output_status_treats_sink_discard_timestamp_as_progress() {
+    let value = json!({
+        "outputId": "sink-1",
+        "protocol": "sink",
+        "status": "running",
+        "rawStatus": "running",
+        "phase": "discarding",
+        "bytesOut": 0,
+        "totalSize": 0,
+        "lastProgressAt": "2026-07-23T02:00:00Z",
+        "metrics": {
+            "bytesOut": 0,
+            "packetsOut": 0
+        }
+    });
+
+    let status = ApiOutputStatus::from_value("sink-1", &value).expect("typed output status");
+
+    assert!(status.has_progress());
+
+    let mut missing_progress = value;
+    missing_progress
+        .as_object_mut()
+        .expect("object")
+        .remove("lastProgressAt");
+    let status =
+        ApiOutputStatus::from_value("sink-1", &missing_progress).expect("typed output status");
+
+    assert!(!status.has_progress());
+}
+
+#[test]
 fn harness_fails_if_status_schema_drops_required_fields() {
     for missing_field in ["status", "rawStatus", "phase"] {
         let mut value = json!({

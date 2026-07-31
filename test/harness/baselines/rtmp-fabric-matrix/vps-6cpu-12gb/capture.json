@@ -1,0 +1,31 @@
+{
+  "workload": "egress-growth-source-same (RTMP source outputs, isolated lifecycle)",
+  "commit": "cc491faf",
+  "date": "2026-07-25",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
+  "mode": "rtmp-fabric-matrix",
+  "env": {
+    "RTMP_FABRIC_MATRIX_SCENARIO": "egress-growth-source-same",
+    "RTMP_FABRIC_MATRIX_EGRESS_COUNT": "10 (default)"
+  },
+  "egressOwner": "legacy variant: per-connection Tokio sender (RESTREAM_EGRESS_FABRIC unset). fabric variant: RtmpFabricEngine/RtmpShardBackend (RESTREAM_EGRESS_FABRIC=rtmp).",
+  "result": {
+    "legacy": {
+      "outputs": 10,
+      "restreamCpuAvgPct": 5.54,
+      "restreamCpuPeakPct": 6.83,
+      "rssAvgKb": 71695.33,
+      "rssPeakKb": 72484
+    },
+    "fabric": {
+      "outputs": 10,
+      "restreamCpuAvgPct": 7.66,
+      "restreamCpuPeakPct": 8.78,
+      "rssAvgKb": 74375.33,
+      "rssPeakKb": 75196
+    }
+  },
+  "comparison": "Fabric CPU (7.66% avg / 8.78% peak) now runs genuinely higher than legacy (5.54% avg / 6.83% peak) -- fabric costs ~1.4x legacy CPU at this N=10 scale, RSS ~1.04x. This *replaces* an earlier capture at this same path that showed near-parity CPU (6.98% vs 6.82%): that capture was invalid. It was recorded before three shard-liveness bugs were found and fixed (see docs/egress-implementation.md Phase 5 status and the commit that replaced this file), the most severe of which made fabric leaves send an initial burst then go completely idle for the rest of the measurement window -- satisfying the harness's 'any bytes increased' progress check while doing almost no ongoing work, which made the fabric look artificially cheap. This capture is the first one taken after fixing all three bugs and confirming (via mediamtx receiving continuous data, not just an initial burst) that the fabric is actually doing its job for the full window.",
+  "scope": "This is a smoke-scale A/B (N=10, default RTMP_FABRIC_MATRIX_EGRESS_COUNT), proving the fabric path works correctly under real live-process conditions and giving an early CPU/RSS read -- not the exhaustive 1,000+-output parity proof docs/egress-implementation.md Phase 5's exit gate ultimately requires before a default-mode flip. Re-run with RTMP_FABRIC_MATRIX_EGRESS_COUNT set higher (and ideally on a host provisioned for that scale) for the full proof.",
+  "deviations": "Isolated lifecycle (one mediamtx+restream stack per variant, not shared); single measurement point per variant rather than a growth curve; reduced scale (10, not 1,000+) per host class, matching the same host-class caveat egress-phase0's own captures record."
+}

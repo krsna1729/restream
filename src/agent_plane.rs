@@ -18,8 +18,7 @@ use crate::application::models::{Ingest, Output, Pipeline};
 use crate::domain::output_spec::{OutputConfig, OutputUrlScheme, ProtocolCapabilities};
 use crate::planner::{BackendPolicy, PlannedOutput, plan_pipeline_graph};
 
-const OUTPUT_URL_SCHEME_ERROR: &str =
-    "Supported schemes are rtmp://, rtmps://, srt://, hls://, http://, and https://";
+const OUTPUT_URL_SCHEME_ERROR: &str = "Supported schemes are rtmp://, rtmps://, srt://, hls://, sink://, pipeline://, http://, and https://";
 
 pub use catalog::{
     AgentCapabilities, capabilities, redaction_policy, route_catalog, schema_catalog,

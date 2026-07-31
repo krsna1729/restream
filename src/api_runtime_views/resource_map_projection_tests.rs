@@ -243,6 +243,28 @@ fn egress_node_uses_os_thread_only_for_srt_protocol() {
 }
 
 #[test]
+fn egress_node_uses_shard_thread_for_fabric_owned_outputs_regardless_of_protocol() {
+    let fabric_srt = egress_node(
+        &json!({"outputId": "o3", "protocol": "srt", "fabric": true, "shardId": 2}),
+        &[],
+    );
+    assert_eq!(fabric_srt["execution"], "shard_thread");
+    // A fabric-owned output shares a fixed shard thread — it must not also
+    // be counted as an app-owned OS thread the way legacy SRT is, or the
+    // resource map double-counts the same shared thread once per output.
+    assert_eq!(fabric_srt["threads"]["appOwned"], 0);
+    assert_eq!(fabric_srt["fabric"], true);
+    assert_eq!(fabric_srt["shardId"], 2);
+
+    let fabric_rtmp = egress_node(
+        &json!({"outputId": "o4", "protocol": "rtmp", "fabric": true, "shardId": 0}),
+        &[],
+    );
+    assert_eq!(fabric_rtmp["execution"], "shard_thread");
+    assert_eq!(fabric_rtmp["threads"]["appOwned"], 0);
+}
+
+#[test]
 fn egress_node_with_no_matching_queue_reports_zeroed_stats_and_no_hotspots() {
     let node = egress_node(
         &json!({"outputId": "missing-queue", "protocol": "rtmp"}),

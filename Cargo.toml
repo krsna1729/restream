@@ -20,6 +20,7 @@ mcp-core = []
 mcp-server = ["mcp-core"]
 mcp-http-backend = ["mcp-core"]
 mcp-embedded = ["mcp-core", "agent-plane"]
+egress-test-driver = []
 
 [dependencies]
 tokio = { version = "1.35", features = [
@@ -48,6 +49,7 @@ memchr = "2.7"
 tokio-stream = "0.1"
 rust-embed = "8"
 tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
+rustls-pki-types = { version = "1", features = ["std"] }
 webpki-roots = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 url = "2"
@@ -70,6 +72,7 @@ pulp = { version = "0.22", features = ["x86-v4"] }
 wide = "1.5"
 proptest = "1"
 loom = { version = "0.7", features = ["checkpoint"] }
+rcgen = "0.14.8"
 
 [[bin]]
 name = "restream-mcp"
@@ -118,6 +121,10 @@ harness = false
 
 [[bench]]
 name = "rtmp_serializer"
+harness = false
+
+[[bench]]
+name = "recirculation_cost"
 harness = false
 
 [[bench]]

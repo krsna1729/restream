@@ -186,17 +186,44 @@ impl MediaEngine {
         }
     }
 
+    /// New stages are exempt from the unused-stage sweep for this long. A
+    /// legacy consumer registers a `Reader` synchronously at creation, but a
+    /// fabric consumer's liveness marker (`fabric.srt.active_outputs`) is
+    /// only set later, from the async task that creates the fabric runtime
+    /// — a reconcile tick can land in that gap and see neither signal.
+    const UNUSED_STAGE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
     pub async fn sweep_unused_stages(&self) {
+        // Liveness has two independent signals: legacy consumers register a
+        // `Reader` on the ring (tracked in `stage.ring.readers`), while
+        // fabric consumers read via `EgressFeed::read_from` and never
+        // register one. A stage feeding only fabric outputs would otherwise
+        // look permanently unused and get cancelled on the next reconcile
+        // tick regardless of how recently it started.
+        let active_fabric_feeds: std::collections::HashSet<String> = {
+            let registry = self.fabric.srt.lock().await;
+            registry
+                .active_outputs
+                .keys()
+                .map(|feed_id| feed_id.as_str().to_string())
+                .collect()
+        };
+
         let mut stages = self.stages.ts_muxers.write().await;
         stages.retain(|key, stage| {
+            if stage.created_at.elapsed() < Self::UNUSED_STAGE_GRACE {
+                return true;
+            }
+
             let has_readers = if let Ok(mut readers) = stage.ring.readers.lock() {
                 readers.retain(|reader| reader.upgrade().is_some());
                 !readers.is_empty()
             } else {
                 false
             };
+            let has_fabric_consumer = active_fabric_feeds.contains(&format!("srt:{key}"));
 
-            if !has_readers {
+            if !has_readers && !has_fabric_consumer {
                 debug!("Sweeping unused TS muxer stage: {}", key);
                 stage.cancel.cancel();
                 false

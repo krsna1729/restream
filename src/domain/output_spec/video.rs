@@ -119,6 +119,15 @@ impl OutputVideoConfig {
         matches!(self, Self::Custom)
     }
 
+    pub fn is_source_auto(&self) -> bool {
+        matches!(
+            self,
+            Self::Source {
+                codec: OutputVideoCodec::Auto
+            }
+        )
+    }
+
     pub fn codec(&self) -> OutputVideoCodec {
         match self {
             Self::Source { codec } | Self::Preset { codec, .. } => *codec,

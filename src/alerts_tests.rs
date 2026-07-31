@@ -795,3 +795,177 @@ fn stage_alerts_are_derived_without_pipeline_object() {
     assert_eq!(alerts[0].pipeline_id.as_deref(), Some("pipe3"));
     assert_eq!(alerts[0].stage_id.as_deref(), Some("video:720p"));
 }
+
+fn snapshot_with_fabric_shard(shard: serde_json::Value) -> serde_json::Value {
+    json!({
+        "generatedAt": "2026-06-25T00:00:00Z",
+        "srtListener": { "udpDrops": 0 },
+        "pipelines": {},
+        "egressFabricShards": [shard],
+    })
+}
+
+#[test]
+fn healthy_fabric_shard_yields_no_alert() {
+    let snap = snapshot_with_fabric_shard(json!({
+        "protocol": "rtmp",
+        "feedId": "feed-1",
+        "shardIndex": 0,
+        "state": "healthy",
+        "progressAgeMs": 5,
+        "commandDepth": 1,
+        "commandCapacity": 1024,
+    }));
+    assert!(derive_alerts(&snap).is_empty());
+}
+
+#[test]
+fn stalled_fabric_shard_yields_warning_alert() {
+    let snap = snapshot_with_fabric_shard(json!({
+        "protocol": "srt",
+        "feedId": "feed-2",
+        "shardIndex": 3,
+        "state": "stalled",
+        "progressAgeMs": 30_000,
+        "commandDepth": 0,
+        "commandCapacity": 1024,
+    }));
+
+    let alerts = derive_alerts(&snap);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].severity, Severity::Warning);
+    assert_eq!(alerts[0].scope, Scope::Engine);
+    assert_eq!(alerts[0].id, "engine:egress_fabric:srt:feed-2:3:stalled");
+    assert!(alerts[0].evidence.iter().any(|e| e.contains("30000")));
+}
+
+#[test]
+fn panicked_fabric_shard_yields_critical_alert() {
+    let snap = snapshot_with_fabric_shard(json!({
+        "protocol": "rtmp",
+        "feedId": "feed-3",
+        "shardIndex": 1,
+        "state": "panicked",
+        "commandDepth": 0,
+        "commandCapacity": 1024,
+    }));
+
+    let alerts = derive_alerts(&snap);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].severity, Severity::Critical);
+    assert_eq!(alerts[0].id, "engine:egress_fabric:rtmp:feed-3:1:panicked");
+}
+
+#[test]
+fn fabric_shard_command_channel_near_capacity_yields_warning_alert() {
+    let snap = snapshot_with_fabric_shard(json!({
+        "protocol": "sink",
+        "feedId": "feed-4",
+        "shardIndex": 2,
+        "state": "healthy",
+        "progressAgeMs": 5,
+        "commandDepth": 900,
+        "commandCapacity": 1000,
+    }));
+
+    let alerts = derive_alerts(&snap);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].severity, Severity::Warning);
+    assert_eq!(
+        alerts[0].id,
+        "engine:egress_fabric:sink:feed-4:2:command_overload"
+    );
+    assert!(alerts[0].evidence.iter().any(|e| e.contains("90.0%")));
+}
+
+#[test]
+fn fabric_shard_command_channel_below_threshold_yields_no_alert() {
+    let snap = snapshot_with_fabric_shard(json!({
+        "protocol": "pipeline",
+        "feedId": "feed-5",
+        "shardIndex": 0,
+        "state": "healthy",
+        "progressAgeMs": 5,
+        "commandDepth": 100,
+        "commandCapacity": 1000,
+    }));
+    assert!(derive_alerts(&snap).is_empty());
+}
+
+fn snapshot_with_retrying_output(
+    output_max_retries: u64,
+    retry_attempts: u64,
+) -> serde_json::Value {
+    json!({
+        "generatedAt": "2026-06-25T00:00:00Z",
+        "srtListener": { "udpDrops": 0 },
+        "tuning": { "outputMaxRetries": output_max_retries },
+        "pipelines": {
+            "pipe1": {
+                "input": { "status": "on", "readerMetrics": [] },
+                "outputs": {
+                    "out1": {
+                        "status": "retrying",
+                        "retryAttempts": retry_attempts,
+                        "retryBackoffMs": 5_000,
+                    }
+                }
+            }
+        }
+    })
+}
+
+#[test]
+fn retry_attempts_near_ceiling_yields_retry_admission_alert() {
+    let snap = snapshot_with_retrying_output(10, 8);
+
+    let alerts = derive_alerts(&snap);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].severity, Severity::Warning);
+    assert_eq!(alerts[0].scope, Scope::Output);
+    assert_eq!(
+        alerts[0].id,
+        "pipeline:pipe1:output:out1:retry_admission_saturation"
+    );
+    assert!(alerts[0].evidence.iter().any(|e| e.contains("8")));
+}
+
+#[test]
+fn retry_attempts_below_ceiling_yields_generic_not_running_alert() {
+    let snap = snapshot_with_retrying_output(10, 2);
+
+    let alerts = derive_alerts(&snap);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].id, "pipeline:pipe1:output:out1:not_running");
+}
+
+#[test]
+fn derive_alerts_triggers_warning_on_repeated_egress_resync() {
+    let snap = serde_json::json!({
+        "generatedAt": "2026-07-30T12:00:00Z",
+        "egressFabricShards": [
+            {
+                "protocol": "rtmp",
+                "feedId": "feed-1",
+                "shardIndex": 0,
+                "state": "healthy",
+                "loopIterations": 1000,
+                "mediaTicks": 500,
+                "progressAgeMs": 10,
+                "commandDepth": 0,
+                "commandCapacity": 128,
+                "resyncCount": 5
+            }
+        ]
+    });
+
+    let alerts = derive_alerts(&snap);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].severity, Severity::Warning);
+    assert_eq!(alerts[0].scope, Scope::Engine);
+    assert_eq!(
+        alerts[0].id,
+        "engine:egress_fabric:rtmp:feed-1:0:repeated_resync"
+    );
+    assert!(alerts[0].evidence.iter().any(|e| e.contains("5")));
+}

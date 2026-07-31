@@ -11,8 +11,8 @@ use crate::domain::stage::StageKey;
 use crate::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
 pub(crate) use crate::media::engine_hls::hls_preview_registry_key;
 use crate::media::engine_registries::{
-    EgressRegistry, FileIngestRegistry, HlsRegistry, IngestRegistry, RecordingRegistry,
-    RuntimeInfra, StageRegistry,
+    EgressRegistry, FabricRegistry, FileIngestRegistry, HlsRegistry, IngestRegistry,
+    RecordingRegistry, RuntimeInfra, StageRegistry,
 };
 use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::ring_buffer::RingBuffer;
@@ -106,6 +106,22 @@ pub struct ActiveEgress {
     pub terminal_stage_key: Option<StageKey>,
     pub output_name: String,
     pub encoding: String,
+    /// Whether this output is currently owned by the egress fabric runtime
+    /// rather than the legacy per-output task. Set once, right after
+    /// registration, from the same routing decision the bootstrap egress
+    /// reconciler already made — never inferred from `protocol`.
+    pub is_fabric: bool,
+    /// Fabric shard index this output is assigned to, when `is_fabric` is
+    /// true. `None` for legacy-owned outputs.
+    pub shard_id: Option<u32>,
+    pub resync_count: Arc<AtomicU64>,
+    /// Feed units the leaf's cursor is currently behind the feed head.
+    /// Fabric outputs only; stays 0 for legacy-owned outputs, which have no
+    /// shared feed cursor to report against.
+    pub feed_lag_units: Arc<AtomicU64>,
+    /// Reason for the leaf's current send-path health (`None` when
+    /// idle/healthy). Fabric outputs only.
+    pub backpressure_reason: Arc<std::sync::Mutex<Option<&'static str>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +151,9 @@ pub struct RecentEgressOutcome {
     pub uptime_secs: f64,
     pub bytes_sent: u64,
     pub last_progress_ms: u64,
+    pub resync_count: u64,
+    pub feed_lag_units: u64,
+    pub backpressure_reason: Option<&'static str>,
     pub last_error: Option<String>,
     pub last_error_ms: u64,
     pub failure_phase: Option<String>,
@@ -161,6 +180,7 @@ pub struct EgressRegistration {
 pub struct MediaEngine {
     pub ingests: IngestRegistry,
     pub egresses: EgressRegistry,
+    pub fabric: FabricRegistry,
     pub recordings: RecordingRegistry,
     pub hls: HlsRegistry,
     pub file_ingests: FileIngestRegistry,
@@ -191,6 +211,7 @@ impl MediaEngine {
         Self {
             ingests: IngestRegistry::new(),
             egresses: EgressRegistry::new(),
+            fabric: FabricRegistry::new(),
             recordings: RecordingRegistry::new(),
             hls: HlsRegistry::new(),
             file_ingests: FileIngestRegistry::new(),

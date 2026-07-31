@@ -1,9 +1,9 @@
 use std::sync::Mutex;
 
 use super::{
-    AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, RuntimeTuning, ServerPorts,
-    TokioRuntimeConfig, backend_policy_from_env, default_tokio_worker_threads,
-    derive_external_ffmpeg_permits,
+    AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
+    EgressRolloutMode, RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
+    default_egress_fabric_shards, default_tokio_worker_threads, derive_external_ffmpeg_permits,
 };
 use crate::planner::BackendPolicy;
 
@@ -230,12 +230,162 @@ fn runtime_tuning_is_loaded_by_config_module() {
 }
 
 #[test]
+fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
+    with_env_overlay(
+        &[],
+        &[
+            "RESTREAM_EGRESS_FABRIC",
+            "RESTREAM_EGRESS_SHARDS",
+            "RESTREAM_EGRESS_COMMAND_CAPACITY",
+            "RESTREAM_EGRESS_COMMAND_BATCH",
+            "RESTREAM_EGRESS_READY_BATCH",
+            "RESTREAM_EGRESS_TIMER_BATCH",
+            "RESTREAM_EGRESS_IDLE_WAIT_MS",
+            "RESTREAM_EGRESS_SRT_POLLER_MAX_EVENTS",
+            "RESTREAM_EGRESS_VISIT_MAX_UNITS",
+            "RESTREAM_EGRESS_VISIT_MAX_BYTES",
+            "RESTREAM_EGRESS_VISIT_MAX_US",
+            "RESTREAM_EGRESS_MAX_PENDING_BYTES",
+        ],
+        || {
+            let fabric = EgressFabricConfig::from_env();
+            assert_eq!(fabric, EgressFabricConfig::default());
+            assert_eq!(fabric.rollout, EgressRolloutMode::All);
+            assert!(fabric.rollout.routes_srt());
+            assert!(fabric.rollout.routes_rtmp());
+            assert_eq!(
+                fabric.shard_count().get(),
+                default_egress_fabric_shards(crate::system_sampling::effective_cpu_count())
+            );
+            assert_eq!(fabric.shard_config().command_channel_capacity().get(), 1024);
+            let budget = fabric.work_budget();
+            assert_eq!(budget.max_units, 32);
+            assert_eq!(budget.max_bytes, 256 * 1024);
+        },
+    );
+}
+
+#[test]
+fn egress_fabric_config_loads_and_clamps_env() {
+    with_env_vars(
+        &[
+            ("RESTREAM_EGRESS_FABRIC", "true"),
+            ("RESTREAM_EGRESS_SHARDS", "0"),
+            ("RESTREAM_EGRESS_COMMAND_CAPACITY", "0"),
+            ("RESTREAM_EGRESS_COMMAND_BATCH", "0"),
+            ("RESTREAM_EGRESS_READY_BATCH", "0"),
+            ("RESTREAM_EGRESS_TIMER_BATCH", "0"),
+            ("RESTREAM_EGRESS_IDLE_WAIT_MS", "0"),
+            ("RESTREAM_EGRESS_SRT_POLLER_MAX_EVENTS", "0"),
+            ("RESTREAM_EGRESS_VISIT_MAX_UNITS", "0"),
+            ("RESTREAM_EGRESS_VISIT_MAX_BYTES", "1"),
+            ("RESTREAM_EGRESS_VISIT_MAX_US", "0"),
+            ("RESTREAM_EGRESS_MAX_PENDING_BYTES", "999999999"),
+        ],
+        || {
+            let fabric = EgressFabricConfig::from_env();
+            assert_eq!(fabric.rollout, EgressRolloutMode::Srt);
+            assert_eq!(fabric.shards, 1);
+            assert_eq!(fabric.command_channel_capacity, 1);
+            assert_eq!(fabric.command_batch_budget, 1);
+            assert_eq!(fabric.readiness_batch_budget, 1);
+            assert_eq!(fabric.timer_batch_budget, 1);
+            assert_eq!(fabric.idle_wait_ms, 1);
+            assert_eq!(fabric.srt_poller_max_events, 1);
+            assert_eq!(fabric.visit_max_units, 1);
+            assert_eq!(fabric.visit_max_bytes, 188);
+            assert_eq!(fabric.visit_max_us, 1);
+            assert_eq!(fabric.max_pending_bytes, 16 * 1024 * 1024);
+        },
+    );
+}
+
+#[test]
+fn egress_fabric_config_validate_is_silent_for_sane_defaults() {
+    assert_eq!(
+        EgressFabricConfig::default().validate(6),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn egress_fabric_config_validate_flags_cross_field_issues() {
+    let fabric = EgressFabricConfig {
+        max_pending_bytes: 100,
+        visit_max_bytes: 1_000,
+        shards: 32,
+        drain_timeout_ms: 10,
+        command_channel_capacity: 4,
+        command_batch_budget: 8,
+        ..EgressFabricConfig::default()
+    };
+
+    let warnings = fabric.validate(4);
+
+    assert_eq!(warnings.len(), 4, "warnings: {warnings:#?}");
+    assert!(warnings[0].contains("RESTREAM_EGRESS_MAX_PENDING_BYTES"));
+    assert!(warnings[1].contains("RESTREAM_EGRESS_SHARDS"));
+    assert!(warnings[2].contains("RESTREAM_EGRESS_DRAIN_TIMEOUT_MS"));
+    assert!(warnings[3].contains("RESTREAM_EGRESS_COMMAND_BATCH"));
+}
+
+#[test]
+fn egress_rollout_mode_parses_protocol_selection_and_legacy_booleans() {
+    let cases = [
+        ("off", EgressRolloutMode::Off),
+        ("0", EgressRolloutMode::Off),
+        ("false", EgressRolloutMode::Off),
+        ("srt", EgressRolloutMode::Srt),
+        ("1", EgressRolloutMode::Srt),
+        ("true", EgressRolloutMode::Srt),
+        ("rtmp", EgressRolloutMode::Rtmp),
+        ("all", EgressRolloutMode::All),
+        ("shadow-metrics", EgressRolloutMode::ShadowMetrics),
+        ("SRT", EgressRolloutMode::Srt),
+    ];
+    for (value, expected) in cases {
+        with_env_vars(&[("RESTREAM_EGRESS_FABRIC", value)], || {
+            assert_eq!(EgressFabricConfig::from_env().rollout, expected, "{value}");
+        });
+    }
+    // Unknown values fall back to the default rather than guessing.
+    with_env_vars(&[("RESTREAM_EGRESS_FABRIC", "bogus")], || {
+        assert_eq!(
+            EgressFabricConfig::from_env().rollout,
+            EgressRolloutMode::All
+        );
+    });
+}
+
+#[test]
+fn egress_rollout_mode_routing_is_protocol_selective() {
+    assert!(!EgressRolloutMode::Off.routes_srt());
+    assert!(!EgressRolloutMode::Off.routes_rtmp());
+    assert!(EgressRolloutMode::Srt.routes_srt());
+    assert!(!EgressRolloutMode::Srt.routes_rtmp());
+    assert!(!EgressRolloutMode::Rtmp.routes_srt());
+    assert!(EgressRolloutMode::Rtmp.routes_rtmp());
+    assert!(EgressRolloutMode::All.routes_srt());
+    assert!(EgressRolloutMode::All.routes_rtmp());
+    // Shadow mode is active for calculations but never owns a connection.
+    assert!(EgressRolloutMode::ShadowMetrics.is_active());
+    assert!(!EgressRolloutMode::ShadowMetrics.routes_srt());
+    assert!(!EgressRolloutMode::ShadowMetrics.routes_rtmp());
+}
+
+#[test]
 fn tokio_runtime_config_tracks_cpu_limits_and_overrides() {
     assert_eq!(default_tokio_worker_threads(1), 1);
     assert_eq!(default_tokio_worker_threads(2), 2);
     assert_eq!(default_tokio_worker_threads(6), 2);
     assert_eq!(default_tokio_worker_threads(12), 4);
     assert_eq!(default_tokio_worker_threads(64), 8);
+
+    assert_eq!(default_egress_fabric_shards(1), 2);
+    assert_eq!(default_egress_fabric_shards(2), 2);
+    assert_eq!(default_egress_fabric_shards(6), 6);
+    assert_eq!(default_egress_fabric_shards(12), 8);
+    assert_eq!(default_egress_fabric_shards(64), 8);
 
     with_env_vars(
         &[
@@ -345,6 +495,24 @@ fn initial_admin_password_is_loaded_by_config_module() {
 }
 
 #[test]
+fn rtmps_extra_trust_roots_pem_path_defaults_to_none_and_can_be_overridden() {
+    assert_eq!(AppConfig::default().rtmps_extra_trust_roots_pem_path, None);
+    with_env_vars(
+        &[(
+            "RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM",
+            "/etc/restream/rtmps-trust-roots.pem",
+        )],
+        || {
+            let config = AppConfig::from_env();
+            assert_eq!(
+                config.rtmps_extra_trust_roots_pem_path.as_deref(),
+                Some("/etc/restream/rtmps-trust-roots.pem")
+            );
+        },
+    );
+}
+
+#[test]
 fn effective_summary_covers_runtime_knobs_without_secret_values() {
     let config = AppConfig {
         srt_passphrase: Some("super-secret".to_string()),
@@ -363,6 +531,11 @@ fn effective_summary_covers_runtime_knobs_without_secret_values() {
     assert_eq!(
         summary["tokio"]["maxBlockingThreads"],
         config.tokio_runtime.max_blocking_threads
+    );
+    assert_eq!(summary["egressFabric"]["enabled"], true);
+    assert_eq!(
+        summary["egressFabric"]["shards"],
+        config.egress_fabric.shards
     );
     assert_eq!(summary["paths"]["ffmpegBin"], "/usr/bin/ffmpeg");
     assert_eq!(summary["backendPolicy"]["internalHlsPreview"], false);

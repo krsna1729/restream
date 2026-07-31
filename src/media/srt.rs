@@ -1,7 +1,8 @@
 //! Native SRT ingest and egress via raw `libsrt` FFI bindings.
 
-use std::net::SocketAddr;
-use std::os::raw::{c_int, c_void};
+use std::os::raw::c_int;
+#[cfg(test)]
+use std::os::raw::c_void;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -10,7 +11,9 @@ use std::time::{Duration, Instant};
 use std::sync::atomic::AtomicBool;
 #[cfg(test)]
 use tokio::sync::Notify;
-use tracing::{error, info, warn};
+#[cfg(test)]
+use tracing::warn;
+use tracing::{error, info};
 
 use crate::domain::state::EgressPhase;
 use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
@@ -37,6 +40,28 @@ mod socket;
 mod srt_crypto;
 #[path = "srt_egress.rs"]
 mod srt_egress;
+#[path = "srt/egress_connect.rs"]
+mod srt_egress_connect;
+#[path = "srt/egress_engine.rs"]
+mod srt_egress_engine;
+#[cfg(test)]
+#[path = "srt/egress_engine_tests.rs"]
+mod srt_egress_engine_tests;
+#[cfg(test)]
+#[path = "srt/egress_fabric_tests.rs"]
+mod srt_egress_fabric_tests;
+#[path = "srt/egress_poller.rs"]
+mod srt_egress_poller;
+#[cfg(test)]
+#[path = "srt/egress_poller_tests.rs"]
+mod srt_egress_poller_tests;
+#[path = "srt/egress_sender.rs"]
+mod srt_egress_sender;
+#[cfg(test)]
+#[path = "srt/egress_sender_tests.rs"]
+mod srt_egress_sender_tests;
+#[path = "srt/egress_socket.rs"]
+mod srt_egress_socket;
 #[path = "srt_monitor.rs"]
 mod srt_monitor;
 #[path = "srt_policy.rs"]
@@ -60,15 +85,29 @@ use socket::{
     summarize_group_members,
 };
 use socket::{
-    add_srt_group_quality, check_srt_option_result, check_sysctl_limits, last_srt_error,
-    srt_group_summary, srt_log_effective_opts, srt_set_highbitrate_opts, to_sockaddr_in,
-    try_acquire_srt_sender_permit,
+    add_srt_group_quality, check_srt_option_result, check_sysctl_limits, srt_group_summary,
+    srt_log_effective_opts, srt_set_highbitrate_opts, try_acquire_srt_sender_permit,
 };
 #[cfg(test)]
 use srt_crypto::apply_srt_crypto_socket;
 #[cfg(test)]
 use srt_crypto::srt_crypto_from_url;
 pub use srt_egress::start_srt_egress;
+#[cfg(test)]
+use srt_egress_connect::to_libc_sockaddr;
+pub(crate) use srt_egress_connect::{
+    SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec, claim_srt_egress_muxer_port,
+    connect_fabric_srt_egress_socket, resolve_host as resolve_srt_egress_host,
+};
+pub(crate) use srt_egress_engine::SrtEgressEngine;
+pub(crate) use srt_egress_poller::{SrtEgressInterest, SrtEgressPollError, SrtReadyLeaf};
+#[cfg(test)]
+pub(crate) use srt_egress_sender::SrtSendResult;
+pub(crate) use srt_egress_sender::{NativeSendBacklog, SrtMessageSender};
+pub(crate) use srt_egress_socket::{
+    SrtEgressSendMode, SrtEgressSocketError, apply_srt_egress_stream_id,
+    configure_connected_srt_egress_socket,
+};
 #[cfg(test)]
 use srt_monitor::{audio_codec_id, monitor_listener_socket, read_udp_socket_stats, video_codec_id};
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
@@ -87,6 +126,41 @@ pub use sys::{
     srt_getlasterror_str, srt_getsockname, srt_listen, srt_recv, srt_send, srt_setsockopt,
     srt_startup,
 };
+
+pub(crate) struct SrtFabricPoller(srt_egress_poller::SrtEgressPoller);
+
+impl SrtFabricPoller {
+    #[allow(dead_code)]
+    pub(crate) fn new(max_events: usize) -> Result<Self, SrtEgressPollError> {
+        srt_egress_poller::SrtEgressPoller::new(max_events).map(Self)
+    }
+
+    pub(crate) fn register_leaf(
+        &mut self,
+        socket: SRTSOCKET,
+        key: crate::media::egress::scheduler::LeafKey,
+        generation: u64,
+        interest: SrtEgressInterest,
+    ) -> Result<(), SrtEgressPollError> {
+        self.0.register_leaf(socket, key, generation, interest)
+    }
+
+    pub(crate) fn remove(&mut self, socket: SRTSOCKET) -> Result<(), SrtEgressPollError> {
+        self.0.remove(socket)
+    }
+
+    pub(crate) fn poll_leaves(
+        &mut self,
+        timeout_ms: i64,
+        ready: &mut Vec<SrtReadyLeaf>,
+    ) -> Result<usize, SrtEgressPollError> {
+        self.0.poll_leaves(timeout_ms, ready)
+    }
+}
+
+pub(crate) fn srt_fabric_message_sender(socket: SRTSOCKET) -> Box<dyn SrtMessageSender + Send> {
+    Box::new(srt_egress_sender::SrtNativeMessageSender::new(socket))
+}
 
 #[cfg(test)]
 use ingest::{

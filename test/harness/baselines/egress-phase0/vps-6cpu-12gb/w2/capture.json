@@ -1,0 +1,18 @@
+{
+  "workload": "w2-healthy-srt",
+  "commit": "c6753304843af7cf41fd36c97381f7fa437c8e1e",
+  "date": "2026-07-23",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
+  "mode": "ramp-family --no-netns",
+  "env": { "RAMP_FAMILY_CONFIGS": "srt-srt-src", "N_OUTPUTS": "100" },
+  "egressOwner": "legacy (RESTREAM_EGRESS_FABRIC unset)",
+  "result": {
+    "outputs": 100,
+    "cpuPctAtFull": 41.7,
+    "rssKbAtFull": 424012,
+    "rssDeltaKb": 342672,
+    "perOutputKb": 3426
+  },
+  "comparison": "legacy SRT per-output RSS is ~8.9x legacy RTMP (w1: 384KB/output); CPU 41.7% vs 10.0% at the same scale — the per-output MemoryQueue plus sender thread cost the fabric removes",
+  "deviations": "netns unavailable in sandbox (unshare blocked); reduced scale per host class; 512-sender legacy cap untested at this scale (100 < 512)"
+}

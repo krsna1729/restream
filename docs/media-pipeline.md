@@ -340,7 +340,16 @@ The per-packet format conversion (AVCC wrap, ADTS strip) is NOT shared between
 egress tasks. This is intentional: sharing would require synchronization and
 outweigh the ~700 ns per frame conversion cost. What IS shared is the far more
 expensive encode stage (CPU-bound, seconds of latency). This invariant is
-covered by `same_encoding_outputs_share_one_transcoder_stage` in engine tests.
+covered by `same_encoding_outputs_share_one_transcoder_stage` in engine tests,
+and holds regardless of egress routing.
+
+"Independent sender" above describes protocol/retry state ownership, not a
+literal OS thread per destination: under the egress fabric default
+(`RESTREAM_EGRESS_FABRIC=all`, see `docs/egress-implementation.md`), each
+output is a leaf serviced by a shared shard OS thread alongside other
+outputs, not a dedicated thread. Only the legacy path
+(`RESTREAM_EGRESS_FABRIC=off`) gives each destination its own blocking
+sender thread.
 
 Current measurements belong in the
 [quality baseline ledger](agent-guidance/quality/baselines.md). This guide owns

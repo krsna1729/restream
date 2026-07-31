@@ -1,6 +1,11 @@
 //! Centralized application configuration.
 //! Reads environment variables once at startup and stores them in a typed struct.
 
+use std::num::NonZeroU32;
+use std::time::Duration;
+
+use crate::media::egress::policy::WorkBudget;
+use crate::media::egress::shard::EgressShardConfig;
 use crate::planner::BackendPolicy;
 
 /// Default location for media-library files relative to the process working directory.
@@ -26,6 +31,23 @@ pub struct RuntimeTuning {
     pub output_retry_base_ms: u64,
     pub output_retry_max_ms: u64,
     pub hls_idle_timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EgressFabricConfig {
+    pub rollout: EgressRolloutMode,
+    pub shards: u32,
+    pub command_channel_capacity: usize,
+    pub command_batch_budget: usize,
+    pub readiness_batch_budget: usize,
+    pub timer_batch_budget: usize,
+    pub idle_wait_ms: u64,
+    pub srt_poller_max_events: usize,
+    pub visit_max_units: usize,
+    pub visit_max_bytes: usize,
+    pub visit_max_us: u64,
+    pub max_pending_bytes: usize,
+    pub drain_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +80,83 @@ impl Default for RuntimeTuning {
     }
 }
 
+/// Protocol-selective egress fabric rollout mode.
+///
+/// Exactly one runtime owns any given output: modes route whole protocols to
+/// the fabric while every other protocol stays on the legacy path.
+/// `ShadowMetrics` may instantiate model and assignment calculations but must
+/// never establish duplicate network connections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EgressRolloutMode {
+    Off,
+    Srt,
+    Rtmp,
+    All,
+    ShadowMetrics,
+}
+
+impl EgressRolloutMode {
+    fn parse(value: &str) -> Option<Self> {
+        // Legacy boolean spellings map to the historical behavior of the
+        // RESTREAM_EGRESS_FABRIC flag: enabling it routed SRT only.
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" | "0" | "false" | "no" => Some(Self::Off),
+            "srt" | "1" | "true" | "yes" => Some(Self::Srt),
+            "rtmp" => Some(Self::Rtmp),
+            "all" => Some(Self::All),
+            "shadow-metrics" | "shadow_metrics" => Some(Self::ShadowMetrics),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Srt => "srt",
+            Self::Rtmp => "rtmp",
+            Self::All => "all",
+            Self::ShadowMetrics => "shadow-metrics",
+        }
+    }
+
+    /// SRT outputs route to the fabric runtime.
+    pub fn routes_srt(self) -> bool {
+        matches!(self, Self::Srt | Self::All)
+    }
+
+    /// RTMP and RTMPS outputs route to the fabric runtime.
+    pub fn routes_rtmp(self) -> bool {
+        matches!(self, Self::Rtmp | Self::All)
+    }
+
+    /// Any fabric machinery (including shadow calculations) is active.
+    pub fn is_active(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+}
+
+impl Default for EgressFabricConfig {
+    fn default() -> Self {
+        let effective_cpus = crate::system_sampling::effective_cpu_count();
+        Self {
+            rollout: EgressRolloutMode::All,
+            shards: default_egress_fabric_shards(effective_cpus),
+            command_channel_capacity: 1024,
+            command_batch_budget: 32,
+            readiness_batch_budget: 64,
+            timer_batch_budget: 64,
+            idle_wait_ms: 25,
+            srt_poller_max_events: 1024,
+            visit_max_units: 32,
+            visit_max_bytes: 256 * 1024,
+            visit_max_us: 2_000,
+            max_pending_bytes: 256 * 1024,
+            drain_timeout_ms: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT
+                .as_millis() as u64,
+        }
+    }
+}
+
 impl RuntimeTuning {
     pub(crate) fn session_prune_every_ticks(&self) -> u64 {
         let ticks = 3_600_000u64.div_ceil(self.reconciler_interval_ms);
@@ -77,11 +176,143 @@ impl RuntimeTuning {
     }
 }
 
+impl EgressFabricConfig {
+    pub fn from_env() -> Self {
+        let defaults = Self::default();
+        Self {
+            rollout: std::env::var("RESTREAM_EGRESS_FABRIC")
+                .ok()
+                .and_then(|value| EgressRolloutMode::parse(&value))
+                .unwrap_or(defaults.rollout),
+            shards: env_u32("RESTREAM_EGRESS_SHARDS", defaults.shards).clamp(1, 1024),
+            command_channel_capacity: env_usize(
+                "RESTREAM_EGRESS_COMMAND_CAPACITY",
+                defaults.command_channel_capacity,
+            )
+            .clamp(1, 65_536),
+            command_batch_budget: env_usize(
+                "RESTREAM_EGRESS_COMMAND_BATCH",
+                defaults.command_batch_budget,
+            )
+            .clamp(1, 4096),
+            readiness_batch_budget: env_usize(
+                "RESTREAM_EGRESS_READY_BATCH",
+                defaults.readiness_batch_budget,
+            )
+            .clamp(1, 4096),
+            timer_batch_budget: env_usize(
+                "RESTREAM_EGRESS_TIMER_BATCH",
+                defaults.timer_batch_budget,
+            )
+            .clamp(1, 4096),
+            idle_wait_ms: env_u64("RESTREAM_EGRESS_IDLE_WAIT_MS", defaults.idle_wait_ms)
+                .clamp(1, 1_000),
+            srt_poller_max_events: env_usize(
+                "RESTREAM_EGRESS_SRT_POLLER_MAX_EVENTS",
+                defaults.srt_poller_max_events,
+            )
+            .clamp(1, 65_536),
+            visit_max_units: env_usize("RESTREAM_EGRESS_VISIT_MAX_UNITS", defaults.visit_max_units)
+                .clamp(1, 4096),
+            visit_max_bytes: env_usize("RESTREAM_EGRESS_VISIT_MAX_BYTES", defaults.visit_max_bytes)
+                .clamp(188, 16 * 1024 * 1024),
+            visit_max_us: env_u64("RESTREAM_EGRESS_VISIT_MAX_US", defaults.visit_max_us)
+                .clamp(1, 1_000_000),
+            max_pending_bytes: env_usize(
+                "RESTREAM_EGRESS_MAX_PENDING_BYTES",
+                defaults.max_pending_bytes,
+            )
+            .clamp(1, 16 * 1024 * 1024),
+            drain_timeout_ms: env_u64(
+                "RESTREAM_EGRESS_DRAIN_TIMEOUT_MS",
+                defaults.drain_timeout_ms,
+            )
+            .clamp(1, 60_000),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn shard_count(&self) -> NonZeroU32 {
+        NonZeroU32::new(self.shards).expect("egress fabric shard count is clamped nonzero")
+    }
+
+    /// Cross-field sanity checks the per-field clamps in `from_env` can't
+    /// express on their own — every value here already passed its own
+    /// clamp, but a *combination* of individually-valid values can still be
+    /// a real misconfiguration. Returns human-readable warnings; callers
+    /// log them at startup. Never fatal — a client should be able to fix
+    /// these by adjusting env vars and restarting, not have the process
+    /// refuse to start over a value it could simply warn about.
+    pub(crate) fn validate(&self, effective_cpus: usize) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        if self.max_pending_bytes < self.visit_max_bytes {
+            warnings.push(format!(
+                "RESTREAM_EGRESS_MAX_PENDING_BYTES ({}) is smaller than RESTREAM_EGRESS_VISIT_MAX_BYTES ({}) \
+                 — a single visit can hand a leaf more pending bytes than the limit allows, so backpressure/\
+                 stall detection may trigger even under normal operation",
+                self.max_pending_bytes, self.visit_max_bytes
+            ));
+        }
+
+        let effective_cpus = u32::try_from(effective_cpus.max(1)).unwrap_or(u32::MAX);
+        if self.shards > effective_cpus.saturating_mul(4) {
+            warnings.push(format!(
+                "RESTREAM_EGRESS_SHARDS ({}) is more than 4x this host's effective CPU count ({effective_cpus}) \
+                 — more shard threads than cores usually costs CPU without buying throughput \
+                 (see docs/egress-implementation.md Phase 5/7's shard-count findings)",
+                self.shards
+            ));
+        }
+
+        if self.drain_timeout_ms < 50 {
+            warnings.push(format!(
+                "RESTREAM_EGRESS_DRAIN_TIMEOUT_MS ({}) is under 50ms — most leaves will not get a real \
+                 chance to flush queued bytes before being force-closed on shutdown or removal",
+                self.drain_timeout_ms
+            ));
+        }
+
+        if self.command_batch_budget > self.command_channel_capacity {
+            warnings.push(format!(
+                "RESTREAM_EGRESS_COMMAND_BATCH ({}) is larger than RESTREAM_EGRESS_COMMAND_CAPACITY ({}) \
+                 — the batch budget can never be reached, a full channel drain always empties before hitting it",
+                self.command_batch_budget, self.command_channel_capacity
+            ));
+        }
+
+        warnings
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn shard_config(&self) -> EgressShardConfig {
+        EgressShardConfig::new(
+            self.command_channel_capacity,
+            self.command_batch_budget,
+            self.readiness_batch_budget,
+            self.timer_batch_budget,
+            Duration::from_millis(self.idle_wait_ms),
+        )
+        .expect("egress fabric shard config is clamped nonzero")
+        .with_drain_timeout(Duration::from_millis(self.drain_timeout_ms))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn work_budget(&self) -> WorkBudget {
+        WorkBudget::new(
+            self.visit_max_units,
+            self.visit_max_bytes,
+            Duration::from_micros(self.visit_max_us),
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub ports: ServerPorts,
     pub http_bind_addr: String,
     pub tuning: RuntimeTuning,
+    pub egress_fabric: EgressFabricConfig,
     pub tokio_runtime: TokioRuntimeConfig,
     pub db_path: String,
     pub media_dir: String,
@@ -116,6 +347,7 @@ pub struct AppConfig {
     pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
     pub secure_session_cookies: bool,
+    pub rtmps_extra_trust_roots_pem_path: Option<String>,
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -146,6 +378,20 @@ fn default_tokio_worker_threads(effective_cpus: usize) -> usize {
     } else {
         effective_cpus.div_ceil(3).clamp(2, 8)
     }
+}
+
+/// Egress fabric shard threads scale with host cores instead of a flat
+/// constant. A live legacy-vs-fabric `perf` comparison at a combined
+/// 1,140 RTMP + 60 SRT workload (`docs/egress-implementation.md` Phase 5)
+/// measured the previous flat default of 4 costing fabric ~12% more avg
+/// CPU and ~23% more peak CPU than legacy on a 6-CPU host; raising the
+/// shard count toward the host's own core count (matching
+/// `effective_cpus` rather than the fixed constant) closed the avg-CPU
+/// gap entirely (fabric ~2% *below* legacy) and shrank the peak gap to
+/// ~3.5%, across three repeated live captures at each of shards=2, 4,
+/// and 6 — while preserving fabric's ~12-15% lower RSS throughout.
+fn default_egress_fabric_shards(effective_cpus: usize) -> u32 {
+    effective_cpus.clamp(2, 8) as u32
 }
 
 fn env_bool(name: &str) -> Option<bool> {
@@ -285,6 +531,7 @@ impl Default for AppConfig {
             ports,
             http_bind_addr: "127.0.0.1".to_string(),
             tuning,
+            egress_fabric: EgressFabricConfig::default(),
             tokio_runtime,
             db_path: ".restream/data/restream.db".to_string(),
             media_dir: DEFAULT_MEDIA_DIR.to_string(),
@@ -324,6 +571,7 @@ impl Default for AppConfig {
             use_internal_file_ingest: false,
             initial_admin_password: None,
             secure_session_cookies: false,
+            rtmps_extra_trust_roots_pem_path: None,
         }
     }
 }
@@ -334,6 +582,7 @@ impl AppConfig {
         let http_bind_addr =
             std::env::var("RESTREAM_HTTP_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
         let tuning = RuntimeTuning::from_env();
+        let egress_fabric = EgressFabricConfig::from_env();
         let tokio_runtime = TokioRuntimeConfig::from_env();
         let db_path = std::env::var("RESTREAM_DB_PATH")
             .unwrap_or_else(|_| ".restream/data/restream.db".to_string());
@@ -391,6 +640,8 @@ impl AppConfig {
             std::env::var_os("RESTREAM_USE_INTERNAL_FILE_INGEST").is_some();
         let initial_admin_password = std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok();
         let secure_session_cookies = env_bool("RESTREAM_SECURE_SESSION_COOKIES").unwrap_or(false);
+        let rtmps_extra_trust_roots_pem_path =
+            std::env::var("RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM").ok();
 
         // Calculate external_ffmpeg_permits:
         let permits = if let Ok(value) = std::env::var("RESTREAM_EXTERNAL_FFMPEG_PERMITS")
@@ -422,6 +673,7 @@ impl AppConfig {
             ports,
             http_bind_addr,
             tuning,
+            egress_fabric,
             tokio_runtime,
             db_path,
             media_dir,
@@ -456,6 +708,7 @@ impl AppConfig {
             use_internal_file_ingest,
             initial_admin_password,
             secure_session_cookies,
+            rtmps_extra_trust_roots_pem_path,
         }
     }
 
@@ -480,11 +733,28 @@ impl AppConfig {
                 "workerThreads": self.tokio_runtime.worker_threads,
                 "maxBlockingThreads": self.tokio_runtime.max_blocking_threads,
             },
+            "egressFabric": {
+                "enabled": self.egress_fabric.rollout.is_active(),
+                "rollout": self.egress_fabric.rollout.as_str(),
+                "shards": self.egress_fabric.shards,
+                "commandChannelCapacity": self.egress_fabric.command_channel_capacity,
+                "commandBatchBudget": self.egress_fabric.command_batch_budget,
+                "readinessBatchBudget": self.egress_fabric.readiness_batch_budget,
+                "timerBatchBudget": self.egress_fabric.timer_batch_budget,
+                "idleWaitMs": self.egress_fabric.idle_wait_ms,
+                "srtPollerMaxEvents": self.egress_fabric.srt_poller_max_events,
+                "visitMaxUnits": self.egress_fabric.visit_max_units,
+                "visitMaxBytes": self.egress_fabric.visit_max_bytes,
+                "visitMaxUs": self.egress_fabric.visit_max_us,
+                "maxPendingBytes": self.egress_fabric.max_pending_bytes,
+                "drainTimeoutMs": self.egress_fabric.drain_timeout_ms,
+            },
             "paths": {
                 "db": self.db_path,
                 "media": self.media_dir,
                 "logs": self.log_dir,
                 "ffmpegBin": self.ffmpeg_bin_path,
+                "rtmpsExtraTrustRootsPem": self.rtmps_extra_trust_roots_pem_path,
             },
             "logging": {
                 "retentionDays": self.log_retention_days,

@@ -9,7 +9,7 @@ use super::{
 };
 
 #[derive(Clone)]
-pub(super) struct SrtCryptoConfig {
+pub(in crate::media::srt) struct SrtCryptoConfig {
     passphrase: String,
     pub(super) pbkeylen: c_int,
 }

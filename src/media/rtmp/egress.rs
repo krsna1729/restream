@@ -5,11 +5,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use rml_rtmp::sessions::{
-    ClientSession, ClientSessionConfig, ClientSessionEvent, ClientSessionResult, PublishRequestType,
-};
 use rml_rtmp::time::RtmpTimestamp;
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{error, info};
 
 use crate::domain::output_spec::RtmpOutputMode;
@@ -21,26 +17,20 @@ use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
 use crate::media::startup_policy;
 use crate::secret_display::redact_url;
 
+use super::egress_connection::{
+    InitialServerResultError, RtmpEgressConnection, RtmpSessionError, RtmpSessionEvent,
+};
+use super::egress_engine::{RtmpMediaAction, RtmpMediaEncoder};
 use super::egress_metadata::{
     output_ring_video_codec_kind, resolved_output_audio_tracks, rtmp_publish_metadata,
     validate_rtmp_output_audio_tracks,
 };
 use super::egress_packets::{
-    cache_h264_parameter_sets, h264_sps_nalu, resolve_deferred_audio_sequence_header,
-    rtmp_video_packet_can_be_dropped, should_defer_audio_until_video_ready,
+    h264_sps_nalu, resolve_deferred_audio_sequence_header, should_defer_audio_until_video_ready,
     should_send_startup_audio_sequence_header, startup_video_sequence_header,
-    validate_rtmp_output_audio_packet_track, video_sequence_header_for_keyframe,
+    validate_rtmp_output_audio_packet_track,
 };
-use super::egress_transport::{connect_rtmp_egress_stream, parse_rtmp_url, rtmp_sender_quality};
-use super::enhanced::{
-    cache_hevc_parameter_sets, enhanced_rtmp_connect_packet,
-    raw_packet_starts_with_hevc_parameter_set,
-};
-use super::flv::{FlvVideoPacketKind, classify_flv_video_packet};
-use super::handshake::perform_client_handshake;
-use super::timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
-
-const RTMP_EGRESS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+use super::egress_transport::parse_rtmp_url;
 
 pub async fn start_rtmp_egress(
     output_id: String,
@@ -160,6 +150,8 @@ pub async fn start_rtmp_egress(
 
     egress_phase!(EgressPhase::Connecting);
     egress_target_addr!(format!("{}:{}", parts.host, parts.port));
+    let target_host = parts.host.clone();
+    let target_port = parts.port;
     info!(
         "[rtmp-egress] Connecting to {}:{} via {} (app: {}, key: {})",
         parts.host,
@@ -169,106 +161,67 @@ pub async fn start_rtmp_egress(
         parts.stream_key
     );
 
-    let mut socket =
-        match connect_rtmp_egress_stream(&parts, engine.config.rtmp_stream_buffer_bytes).await {
-            Ok(s) => s,
-            Err(e) => {
-                error!(
-                    "[rtmp-egress] Connection failed to {}:{}: {:?}",
-                    parts.host, parts.port, e
-                );
-                egress_error!("connect", e.to_string());
-                return;
-            }
-        };
-
-    // Perform handshake
-    egress_phase!(EgressPhase::Handshaking);
-    let remaining = match tokio::time::timeout(
-        RTMP_EGRESS_HANDSHAKE_TIMEOUT,
-        perform_client_handshake(&mut socket, &cancel_token),
+    let mut connection = match RtmpEgressConnection::connect(
+        parts,
+        engine.config.rtmp_stream_buffer_bytes,
+        engine.config.rtmps_extra_trust_roots_pem_path.as_deref(),
     )
     .await
     {
-        Ok(Ok(remaining)) => remaining,
-        Ok(Err(error)) => {
-            egress_error!("handshake", error);
-            return;
-        }
-        Err(_) => {
-            egress_error!("handshake", "RTMP egress handshake timed out");
-            return;
-        }
-    };
-
-    // Initialize ClientSession with tcUrl for MediaMTX compatibility
-    let mut config = ClientSessionConfig::new();
-    let scheme = if parts.tls { "rtmps" } else { "rtmp" };
-    config.tc_url = Some(format!(
-        "{}://{}:{}/{}",
-        scheme, parts.host, parts.port, parts.app
-    ));
-    config.chunk_size = engine.config.rtmp_egress_chunk_size;
-    let connect_config = config.clone();
-    let (mut session, initial_results) = match ClientSession::new(config) {
         Ok(s) => s,
         Err(e) => {
-            egress_error!("session", format!("{:?}", e));
+            error!(
+                "[rtmp-egress] Connection failed to {}:{}: {:?}",
+                target_host, target_port, e
+            );
+            egress_error!("connect", e.to_string());
             return;
         }
     };
 
-    for res in initial_results {
-        if let ClientSessionResult::OutboundResponse(pkt) = res
-            && socket.write_all(&pkt.bytes).await.is_err()
-        {
-            egress_error!("session", "failed to write session init");
-            return;
-        }
+    // Perform handshake
+    egress_phase!(EgressPhase::Handshaking);
+    if let Err(error) = connection.perform_handshake(&cancel_token).await {
+        egress_error!("handshake", error);
+        return;
     }
-
-    // Request connection
-    egress_phase!(EgressPhase::ConnectingApp);
-    let conn_pkt = match session.request_connection(parts.app.clone()) {
-        Ok(ClientSessionResult::OutboundResponse(p)) => p,
-        _ => {
-            egress_error!("connect_app", "failed to build connect request");
+    let mut session_ready = match connection.initialize_client_session(
+        engine.config.rtmp_egress_chunk_size,
+        engine.config.egress_fabric.max_pending_bytes,
+    ) {
+        Ok(session_ready) => session_ready,
+        Err(error) => {
+            egress_error!("session", error);
             return;
         }
     };
-    let conn_bytes = if enhanced_rtmp_connect {
-        match enhanced_rtmp_connect_packet(&connect_config, &parts.app) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                egress_error!("connect_app", error);
-                return;
-            }
-        }
-    } else {
-        conn_pkt.bytes
-    };
-    if socket.write_all(&conn_bytes).await.is_err() {
-        egress_error!("connect_app", "failed to write connect request");
+    if session_ready.write_initial_results().await.is_err() {
+        egress_error!("session", "failed to write session init");
         return;
     }
 
-    let mut buffer = vec![0u8; 4096];
-    if !remaining.is_empty() {
-        let results = match session.handle_input(&remaining) {
-            Ok(r) => r,
-            Err(_) => {
-                egress_error!("connect_app", "failed to parse connect response");
-                return;
-            }
-        };
-        if handle_client_results(results, &mut socket, &mut session, &parts.stream_key)
-            .await
-            .is_err()
-        {
-            egress_error!("connect_app", "failed to handle connect response");
-            return;
-        }
+    egress_phase!(EgressPhase::ConnectingApp);
+    if let Err(error) = session_ready
+        .request_connection(enhanced_rtmp_connect)
+        .await
+    {
+        egress_error!("connect_app", error);
+        return;
     }
+    if let Err(error) = session_ready.handle_initial_server_results().await {
+        match error {
+            InitialServerResultError::Parse => {
+                egress_error!("connect_app", "failed to parse connect response");
+            }
+            InitialServerResultError::Dispatch => {
+                egress_error!("connect_app", "failed to handle connect response");
+            }
+        }
+        return;
+    }
+    let mut session = session_ready;
+
+    let mut buffer = vec![0u8; 4096];
 
     let (egress_bytes_sent, egress_metrics, egress_last_progress_ms) = {
         engine
@@ -284,7 +237,7 @@ pub async fn start_rtmp_egress(
     };
 
     let mut is_publishing = false;
-    let mut raw_video_parameter_sets = ring_buffer
+    let raw_video_parameter_sets = ring_buffer
         .video_parameter_sets()
         .map(|parameter_sets| parameter_sets.to_vec())
         .unwrap_or_default();
@@ -300,12 +253,8 @@ pub async fn start_rtmp_egress(
     let mut video_ready = false;
     let mut audio_sequence_header_sent = false;
     let mut deferred_audio_sequence_header: Option<Bytes> = None;
-    let mut timestamp_guard = RtmpTimestampGuard::new();
-    // Per-egress reusable conversion buffers — avoids per-frame Vec allocation.
-    // Each task owns its own buffer; no sharing, no contention with transcoder.
-    let mut video_buf = Vec::<u8>::new();
-    let mut audio_buf = Vec::<u8>::new();
-
+    let mut media_encoder = RtmpMediaEncoder::new(enhanced_hevc_video, raw_video_parameter_sets);
+    let mut media_actions = Vec::with_capacity(2);
     // Pre-allocated burst buffer — declared outside the loop so capacity
     // is retained across bursts instead of re-allocating per burst.
     let mut packets: Vec<Arc<MediaPacket>> = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
@@ -313,15 +262,15 @@ pub async fn start_rtmp_egress(
     loop {
         tokio::select! {
             _ = cancel_token.cancelled() => {
-                let _ = session.stop_publishing();
+                session.stop_publishing();
                 break;
             }
             _ = tcp_stats_interval.tick() => {
-                let quality = rtmp_sender_quality(&socket, &mut previous_tcp_bytes);
+                let quality = session.sender_quality(&mut previous_tcp_bytes);
                 egress_quality!(quality);
             }
             // Read from server to handle acknowledgements, status codes, pings
-            res = socket.read(&mut buffer) => {
+            res = session.read(&mut buffer) => {
                 let n = match res {
                     Ok(n) if n > 0 => n,
                     _ => {
@@ -329,38 +278,24 @@ pub async fn start_rtmp_egress(
                         break;
                     }
                 };
-                let results = match session.handle_input(&buffer[..n]) {
+                let results = match session.handle_server_input(&buffer[..n]).await {
                     Ok(r) => r,
-                    Err(e) => {
-                        egress_error!("send", format!("{:?}", e));
+                    Err(RtmpSessionError::ConnectionRejected(description)) => {
+                        error!("Connection rejected: {description}");
+                        egress_error!("connect_app", description);
+                        return;
+                    }
+                    Err(error) => {
+                        egress_error!("send", error.to_string());
                         break;
                     }
                 };
-                for r in results {
-                    match r {
-                        ClientSessionResult::OutboundResponse(pkt) => {
-                            if socket.write_all(&pkt.bytes).await.is_err() {
-                                egress_error!("session", "failed to write RTMP control response");
-                                return;
-                            }
+                for event in results {
+                    match event {
+                        RtmpSessionEvent::ConnectionRequestAccepted => {
+                            egress_phase!(EgressPhase::Publishing);
                         }
-                        ClientSessionResult::RaisedEvent(event) => {
-                            match event {
-                                ClientSessionEvent::ConnectionRequestAccepted => {
-                                    egress_phase!(EgressPhase::Publishing);
-                                    let pub_pkt = match session.request_publishing(parts.stream_key.clone(), PublishRequestType::Live) {
-                                        Ok(ClientSessionResult::OutboundResponse(p)) => p,
-                                        _ => {
-                                            egress_error!("publishing", "failed to build publish request");
-                                            return;
-                                        }
-                                    };
-                                    if socket.write_all(&pub_pkt.bytes).await.is_err() {
-                                        egress_error!("publishing", "failed to write publish request");
-                                        return;
-                                    }
-                                }
-                                ClientSessionEvent::PublishRequestAccepted => {
+                        RtmpSessionEvent::PublishRequestAccepted => {
                                     info!("Stream publishing accepted on target");
                                     egress_phase!(EgressPhase::Sending);
                                     if let Some(metadata) = rtmp_publish_metadata(
@@ -370,9 +305,7 @@ pub async fn start_rtmp_egress(
                                         output_audio_track.as_ref(),
                                     )
                                     .await
-                                        && let Ok(ClientSessionResult::OutboundResponse(p)) =
-                                            session.publish_metadata(&metadata)
-                                        && socket.write_all(&p.bytes).await.is_err()
+                                        && session.publish_metadata(&metadata).await.is_err()
                                     {
                                         egress_error!("send", "failed to write RTMP metadata");
                                         return;
@@ -416,22 +349,20 @@ pub async fn start_rtmp_egress(
                                         enhanced_hevc_video,
                                     );
                                     let mut sent_startup_video_sequence_header = false;
-                                    if let Some(vsh) = video_sh
-                                        && let Ok(ClientSessionResult::OutboundResponse(p)) =
-                                            session.publish_video_data(
-                                                vsh,
-                                                RtmpTimestamp::new(0),
-                                                false,
-                                            )
-                                    {
-                                        if socket.write_all(&p.bytes).await.is_err() {
+                                    if let Some(vsh) = video_sh {
+                                        if session
+                                            .publish_video_data(vsh, RtmpTimestamp::new(0), false)
+                                            .await
+                                            .is_ok()
+                                        {
+                                            sent_startup_video_sequence_header = true;
+                                        } else {
                                             egress_error!(
                                                 "send",
                                                 "failed to write video sequence header"
                                             );
                                             return;
                                         }
-                                        sent_startup_video_sequence_header = true;
                                     }
                                     if sent_startup_video_sequence_header {
                                         if enhanced_hevc_video {
@@ -443,43 +374,38 @@ pub async fn start_rtmp_egress(
                                             last_sent_video_config = h264_sps_nalu(&parameter_sets);
                                         }
                                     }
-                                    if let Some(ref ash) = audio_sh
+                                    if let Some(ash) = audio_sh.as_ref()
                                         && should_send_startup_audio_sequence_header(
                                             video_ready,
                                             reader.current_ring(),
                                         )
-                                        && let Ok(ClientSessionResult::OutboundResponse(p)) =
-                                            session.publish_audio_data(
+                                    {
+                                        if session
+                                            .publish_audio_data(
                                                 ash.clone(),
                                                 RtmpTimestamp::new(0),
                                                 false,
                                             )
-                                    {
-                                        if socket.write_all(&p.bytes).await.is_err() {
+                                            .await
+                                            .is_ok()
+                                        {
+                                            audio_sequence_header_sent = true;
+                                        } else {
                                             egress_error!(
                                                 "send",
                                                 "failed to write audio sequence header"
                                             );
                                             return;
                                         }
-                                        audio_sequence_header_sent = true;
                                     }
                                     deferred_audio_sequence_header = if audio_sequence_header_sent {
                                         None
                                     } else {
                                         audio_sh
                                     };
+                                    media_encoder.set_startup_video_config(last_sent_video_config.clone());
                                     is_publishing = true;
                                 }
-                                ClientSessionEvent::ConnectionRequestRejected { description } => {
-                                    error!("Connection rejected: {}", description);
-                                    egress_error!("connect_app", description);
-                                    return;
-                                }
-                                _ => {}
-                            }
-                        }
-                        ClientSessionResult::UnhandleableMessageReceived(_) => {}
                     }
                 }
             }
@@ -530,14 +456,16 @@ pub async fn start_rtmp_egress(
                                         deferred_audio_sequence_header.as_ref(),
                                         output_audio_track.as_ref(),
                                     )
-                                && let Ok(ClientSessionResult::OutboundResponse(p)) =
-                                    session.publish_audio_data(
+                            {
+                                if session
+                                    .publish_audio_data(
                                         sequence_header,
                                         RtmpTimestamp::new(0),
                                         false,
                                     )
-                            {
-                                if socket.write_all(&p.bytes).await.is_err() {
+                                    .await
+                                    .is_err()
+                                {
                                     egress_error!(
                                         "send",
                                         "failed to write deferred audio sequence header"
@@ -554,168 +482,51 @@ pub async fn start_rtmp_egress(
                                 // entire publish as video-only.
                                 continue;
                             }
-                        }
-                        let mut ts = timestamp_guard.packet_timestamp(&packet);
-                        let payload = if packet.format == PayloadFormat::Raw {
-                            match packet.media_type {
-                                MediaType::Video => {
-                                    if enhanced_hevc_video {
-                                        cache_hevc_parameter_sets(
-                                            &packet.payload,
-                                            &mut raw_video_parameter_sets,
-                                        );
-                                    } else {
-                                        cache_h264_parameter_sets(
-                                            &packet.payload,
-                                            &mut raw_video_parameter_sets,
-                                        );
-                                        if raw_packet_starts_with_hevc_parameter_set(&packet.payload)
-                                        {
-                                            error!(
-                                                "[rtmp-egress] H.265 packet on Raw RTMP path \
-                                                 for output {} — dropping until hevc_to_h264 \
-                                                 stage is ready",
-                                                output_id
-                                            );
-                                            continue;
+                            media_actions.clear();
+                            media_encoder.encode(&packet, &mut media_actions);
+                            for action in media_actions.drain(..) {
+                                let RtmpMediaAction::Audio { payload, timestamp } = action else {
+                                    continue;
+                                };
+                                match session.publish_audio_data(payload, timestamp, false).await {
+                                    Ok(sent_bytes) => {
+                                        if let Some(ref counter) = egress_bytes_sent {
+                                            counter.fetch_add(sent_bytes, Ordering::Relaxed);
                                         }
+                                        if let Some(ref metrics) = egress_metrics {
+                                            metrics.record_out(sent_bytes);
+                                        }
+                                        burst_made_progress = true;
                                     }
-                                    if !video_ready && !packet.is_keyframe {
-                                        continue;
+                                    Err(_) => {
+                                        error!("Failed to build RTMP audio publish packet");
+                                        egress_error!("send", "failed to write RTMP audio packet");
                                     }
-                                    if packet.is_keyframe
-                                        && let Some((seq_hdr, new_config)) =
-                                            video_sequence_header_for_keyframe(
-                                                enhanced_hevc_video,
-                                                &packet.payload,
-                                                &raw_video_parameter_sets,
-                                            )
-                                    {
-                                            let config_changed = match (
-                                                &last_sent_video_config,
-                                                &new_config,
-                                            ) {
-                                                (None, Some(_)) => true,
-                                                (Some(old), Some(new)) => old != new,
-                                                _ => false,
-                                            };
-                                            if config_changed {
-                                                let sequence_header_ts =
-                                                    refreshed_video_sequence_header_timestamp(ts);
-                                                if let Ok(ClientSessionResult::OutboundResponse(
-                                                    p,
-                                                )) = session.publish_video_data(
-                                                    seq_hdr,
-                                                    sequence_header_ts,
-                                                    false,
-                                                ) && socket.write_all(&p.bytes).await.is_err()
-                                                {
-                                                    egress_error!(
-                                                        "send",
-                                                        "failed to write refreshed video sequence header"
-                                                    );
-                                                    return;
-                                                }
-                                                if sequence_header_ts.value == ts.value {
-                                                    ts = RtmpTimestamp::new(
-                                                        timestamp_guard
-                                                            .enforce_ms(
-                                                                MediaType::Video,
-                                                                sequence_header_ts.value as i64,
-                                                            )
-                                                            as u32,
-                                                    );
-                                                }
-                                                last_sent_video_config = new_config;
-                                            }
-                                            video_ready = true;
-                                    }
-                                    if !video_ready {
-                                        continue;
-                                    }
-                                    let composition_time_ms =
-                                        (packet.pts - packet.dts).clamp(
-                                            -8_388_608,
-                                            8_388_607,
-                                        ) as i32;
-                                    let wrote_video = if enhanced_hevc_video {
-                                        codec::hevc_video_for_enhanced_rtmp_with_composition_into(
-                                            &packet.payload,
-                                            packet.is_keyframe,
-                                            composition_time_ms,
-                                            &mut video_buf,
-                                        )
-                                    } else {
-                                        codec::video_for_rtmp_with_composition_into(
-                                            &packet.payload,
-                                            packet.is_keyframe,
-                                            composition_time_ms,
-                                            &mut video_buf,
-                                        )
-                                    };
-                                    if !wrote_video {
-                                        continue;
-                                    }
-                                    Bytes::copy_from_slice(&video_buf)
-                                }
-                                MediaType::Audio => {
-                                    codec::audio_for_rtmp_into(&packet.payload, &mut audio_buf);
-                                    Bytes::copy_from_slice(&audio_buf)
                                 }
                             }
-                        } else {
-                            if packet.media_type == MediaType::Video
-                                && !video_ready
-                                && let Some(kind) = classify_flv_video_packet(&packet.payload)
-                            {
-                                match kind {
-                                    FlvVideoPacketKind::SequenceHeader => {}
-                                    FlvVideoPacketKind::Keyframe => {}
-                                    FlvVideoPacketKind::Interframe => continue,
-                                }
-                            } else if packet.media_type == MediaType::Video
-                                && !video_ready
-                                && !packet.is_keyframe
-                            {
+                            continue;
+                        }
+                        media_actions.clear();
+                        media_encoder.encode(&packet, &mut media_actions);
+                        video_ready = media_encoder.video_ready();
+                        for action in media_actions.drain(..) {
+                            let RtmpMediaAction::Video { payload, timestamp, can_be_dropped } = action else {
                                 continue;
-                            }
-                            packet.payload.clone()
-                        };
-                        let pkt = match packet.media_type {
-                            MediaType::Video => {
-                                if !video_ready
-                                    && !matches!(
-                                        classify_flv_video_packet(&packet.payload),
-                                        Some(FlvVideoPacketKind::SequenceHeader)
-                                    )
-                                {
-                                    video_ready = true;
+                            };
+                            match session.publish_video_data(payload, timestamp, can_be_dropped).await {
+                                Ok(sent_bytes) => {
+                                    if let Some(ref counter) = egress_bytes_sent {
+                                        counter.fetch_add(sent_bytes, Ordering::Relaxed);
+                                    }
+                                    if let Some(ref metrics) = egress_metrics {
+                                        metrics.record_out(sent_bytes);
+                                    }
+                                    burst_made_progress = true;
                                 }
-                                let can_be_dropped =
-                                    rtmp_video_packet_can_be_dropped(&payload, packet.is_keyframe);
-                                session.publish_video_data(payload, ts, can_be_dropped)
-                            }
-                            MediaType::Audio => {
-                                session.publish_audio_data(payload, ts, false)
-                            }
-                        };
-                        match pkt {
-                            Ok(ClientSessionResult::OutboundResponse(p)) => {
-                                if socket.write_all(&p.bytes).await.is_err() {
-                                    egress_error!("send", "failed to write media packet");
-                                    return;
+                                Err(_) => {
+                                    error!("Failed to build RTMP video publish packet");
+                                    egress_error!("send", "failed to write RTMP video packet");
                                 }
-                                if let Some(ref counter) = egress_bytes_sent {
-                                    counter.fetch_add(p.bytes.len() as u64, Ordering::Relaxed);
-                                }
-                                if let Some(ref m) = egress_metrics {
-                                    m.record_out(p.bytes.len() as u64);
-                                }
-                                burst_made_progress = true;
-                            }
-                            _ => {
-                                error!("Failed to build publish data packet or get OutboundResponse");
-                                egress_error!("send", "failed to build RTMP publish packet");
                             }
                         }
                     }
@@ -734,46 +545,4 @@ pub async fn start_rtmp_egress(
             }
         }
     }
-}
-
-async fn handle_client_results<S>(
-    results: Vec<ClientSessionResult>,
-    socket: &mut S,
-    session: &mut ClientSession,
-    stream_key: &str,
-) -> Result<(), &'static str>
-where
-    S: AsyncWrite + Unpin,
-{
-    for res in results {
-        match res {
-            ClientSessionResult::OutboundResponse(pkt) => {
-                socket
-                    .write_all(&pkt.bytes)
-                    .await
-                    .map_err(|_| "Socket write error")?;
-            }
-            ClientSessionResult::RaisedEvent(event) => match event {
-                ClientSessionEvent::ConnectionRequestAccepted => {
-                    let pub_pkt = match session
-                        .request_publishing(stream_key.to_string(), PublishRequestType::Live)
-                    {
-                        Ok(ClientSessionResult::OutboundResponse(p)) => p,
-                        _ => return Err("Failed to build publish request"),
-                    };
-                    socket
-                        .write_all(&pub_pkt.bytes)
-                        .await
-                        .map_err(|_| "Socket write error")?;
-                }
-                ClientSessionEvent::ConnectionRequestRejected { description } => {
-                    error!("Connection request rejected: {}", description);
-                    return Err("Connection request rejected");
-                }
-                _ => {}
-            },
-            ClientSessionResult::UnhandleableMessageReceived(_) => {}
-        }
-    }
-    Ok(())
 }

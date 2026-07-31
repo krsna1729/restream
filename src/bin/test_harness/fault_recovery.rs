@@ -2,6 +2,8 @@
 mod egress;
 #[path = "fault_recovery/resilience.rs"]
 mod resilience;
+#[path = "fault_recovery/srt_stall.rs"]
+mod srt_stall;
 
 #[cfg(test)]
 pub(crate) use egress::{
@@ -16,3 +18,4 @@ pub(crate) use resilience::{
     input_disconnect_cleared, observe_final_output, recovery, wait_for_output_running,
     wait_for_output_running_and_sink_video_above, wait_for_sink_video_above,
 };
+pub(crate) use srt_stall::fault_srt_egress_stalled_destination;

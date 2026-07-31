@@ -72,6 +72,10 @@ impl OutputConfig {
         self.video.is_custom()
     }
 
+    pub fn is_source_passthrough(&self) -> bool {
+        self.video.is_source_auto() && matches!(self.audio, AudioRouting::Passthrough)
+    }
+
     pub fn validate_capabilities(
         &self,
         capabilities: ProtocolCapabilities,
@@ -153,7 +157,16 @@ impl ProtocolCapabilities {
                 EgressProtocol::Srt,
                 _,
                 VideoCodecKind::H264 | VideoCodecKind::Hevc
+            ) | (
+                EgressProtocol::Pipeline,
+                _,
+                VideoCodecKind::H264 | VideoCodecKind::Hevc | VideoCodecKind::Unknown,
             ) | (EgressProtocol::Hls, _, VideoCodecKind::H264)
+                | (
+                    EgressProtocol::Sink,
+                    _,
+                    VideoCodecKind::H264 | VideoCodecKind::Hevc | VideoCodecKind::Unknown,
+                )
         )
     }
 

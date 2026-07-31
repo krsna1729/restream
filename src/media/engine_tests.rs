@@ -49,6 +49,8 @@ async fn test_health_summary_snapshot(engine: &MediaEngine) -> serde_json::Value
 
 #[path = "engine_tests/dependencies.rs"]
 mod dependency_tests;
+#[path = "engine_tests/egress_fabric.rs"]
+mod egress_fabric_tests;
 #[path = "engine_tests/egress.rs"]
 mod egress_tests;
 #[path = "engine_tests/graph.rs"]

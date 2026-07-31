@@ -18,6 +18,8 @@ use tokio_util::sync::CancellationToken;
 use crate::domain::stage::StageKey;
 use crate::events::EventLog;
 use crate::media::avio::MemoryQueue;
+use crate::media::egress::FeedId;
+use crate::media::egress::runtime::EgressFabricRuntime;
 use crate::media::engine::{
     ActiveEgress, ActiveIngest, EgressRetryState, RecentEgressOutcome, RecentIngestOutcome,
 };
@@ -93,6 +95,111 @@ impl EgressRegistry {
             queues: TokioRwLock::new(HashMap::new()),
             recent: TokioRwLock::new(HashMap::new()),
             retry: TokioRwLock::new(HashMap::new()),
+        }
+    }
+}
+
+pub(crate) struct SrtFabricRegistry {
+    pub(crate) runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub(crate) active_outputs: HashMap<FeedId, u64>,
+    /// One publication watcher per feed runtime; aborted on release.
+    pub(crate) feed_watchers: HashMap<FeedId, tokio::task::JoinHandle<()>>,
+}
+
+impl SrtFabricRegistry {
+    fn new() -> Self {
+        Self {
+            runtimes: HashMap::new(),
+            active_outputs: HashMap::new(),
+            feed_watchers: HashMap::new(),
+        }
+    }
+}
+
+pub(crate) struct RtmpFabricRegistry {
+    pub(crate) runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub(crate) active_outputs: HashMap<FeedId, u64>,
+    /// One publish-startup source per feed runtime, shared (cloned) across
+    /// that runtime's shards; the bootstrap path writes into it before
+    /// dispatching `EgressCommand::Add` for an output on that feed.
+    pub(crate) startup_sources:
+        HashMap<FeedId, crate::media::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource>,
+    /// One publication watcher per feed runtime; aborted on release.
+    pub(crate) feed_watchers: HashMap<FeedId, tokio::task::JoinHandle<()>>,
+}
+
+impl RtmpFabricRegistry {
+    fn new() -> Self {
+        Self {
+            runtimes: HashMap::new(),
+            active_outputs: HashMap::new(),
+            startup_sources: HashMap::new(),
+            feed_watchers: HashMap::new(),
+        }
+    }
+}
+
+pub(crate) struct SinkFabricRegistry {
+    pub(crate) runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub(crate) active_outputs: HashMap<FeedId, u64>,
+    /// One publication watcher per feed runtime; aborted on release.
+    pub(crate) feed_watchers: HashMap<FeedId, tokio::task::JoinHandle<()>>,
+}
+
+impl SinkFabricRegistry {
+    fn new() -> Self {
+        Self {
+            runtimes: HashMap::new(),
+            active_outputs: HashMap::new(),
+            feed_watchers: HashMap::new(),
+        }
+    }
+}
+
+pub(crate) struct PipelineFabricRegistry {
+    pub(crate) runtimes: HashMap<FeedId, EgressFabricRuntime>,
+    pub(crate) active_outputs: HashMap<FeedId, u64>,
+    /// One target source per feed runtime, shared (cloned) across that
+    /// runtime's shards — see `RtmpFabricRegistry::startup_sources` for
+    /// why this split exists (claiming the target input is async and
+    /// fallible, so it cannot happen on a shard thread).
+    pub(crate) target_sources:
+        HashMap<FeedId, crate::media::egress::backends::pipeline_shard::SharedPipelineTargetSource>,
+    /// One publication watcher per feed runtime; aborted on release.
+    pub(crate) feed_watchers: HashMap<FeedId, tokio::task::JoinHandle<()>>,
+}
+
+impl PipelineFabricRegistry {
+    fn new() -> Self {
+        Self {
+            runtimes: HashMap::new(),
+            active_outputs: HashMap::new(),
+            target_sources: HashMap::new(),
+            feed_watchers: HashMap::new(),
+        }
+    }
+}
+
+pub struct FabricRegistry {
+    pub(crate) srt: TokioMutex<SrtFabricRegistry>,
+    pub(crate) rtmp: TokioMutex<RtmpFabricRegistry>,
+    pub(crate) sink: TokioMutex<SinkFabricRegistry>,
+    pub(crate) pipeline: TokioMutex<PipelineFabricRegistry>,
+}
+
+impl Default for FabricRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FabricRegistry {
+    pub fn new() -> Self {
+        Self {
+            srt: TokioMutex::new(SrtFabricRegistry::new()),
+            rtmp: TokioMutex::new(RtmpFabricRegistry::new()),
+            sink: TokioMutex::new(SinkFabricRegistry::new()),
+            pipeline: TokioMutex::new(PipelineFabricRegistry::new()),
         }
     }
 }

@@ -13,6 +13,9 @@ pub(super) struct ResourceSample {
     pub(super) restream_cpu_pct: f64,
     pub(super) ffmpeg_cpu_pct: f64,
     pub(super) total_cpu_pct: f64,
+    pub(super) voluntary_ctxt_switches_per_sec: f64,
+    pub(super) nonvoluntary_ctxt_switches_per_sec: f64,
+    pub(super) thread_count: u64,
     pub(super) rss_kb: u64,
     pub(super) ffmpeg_count: u64,
     pub(super) ffmpeg_rss_kb: u64,
@@ -55,6 +58,11 @@ pub(super) struct ResourceAggregate {
     pub(super) ffmpeg_cpu_peak_pct: f64,
     pub(super) total_cpu_avg_pct: f64,
     pub(super) total_cpu_peak_pct: f64,
+    pub(super) voluntary_ctxt_switches_avg_per_sec: f64,
+    pub(super) voluntary_ctxt_switches_peak_per_sec: f64,
+    pub(super) nonvoluntary_ctxt_switches_avg_per_sec: f64,
+    pub(super) nonvoluntary_ctxt_switches_peak_per_sec: f64,
+    pub(super) thread_count_peak: u64,
     pub(super) rss_avg_kb: f64,
     pub(super) rss_peak_kb: u64,
     pub(super) ffmpeg_rss_peak_kb: u64,
@@ -107,6 +115,7 @@ pub(super) async fn sample_resource_window(
     let mut samples = Vec::new();
     let mut prev_ticks = read_proc_stat_ticks(stack.restream_pid)?;
     let mut prev_ffmpeg_ticks: HashMap<u32, u64> = HashMap::new();
+    let mut prev_ctxt = read_proc_ctxt_switches(stack.restream_pid)?;
     let mut prev_instant = Instant::now();
     let deadline = Instant::now() + Duration::from_secs(env.sample_secs);
     while Instant::now() < deadline {
@@ -129,9 +138,16 @@ pub(super) async fn sample_resource_window(
         }
         let ffmpeg_cpu_pct = 100.0 * ffmpeg_delta_ticks as f64 / clk_tck / interval_secs;
         let total_cpu_pct = restream_cpu_pct + ffmpeg_cpu_pct;
+        let ctxt = read_proc_ctxt_switches(stack.restream_pid)?;
+        let voluntary_ctxt_switches_per_sec =
+            ctxt.voluntary.saturating_sub(prev_ctxt.voluntary) as f64 / interval_secs;
+        let nonvoluntary_ctxt_switches_per_sec =
+            ctxt.nonvoluntary.saturating_sub(prev_ctxt.nonvoluntary) as f64 / interval_secs;
         prev_ticks = ticks;
         prev_ffmpeg_ticks = next_ffmpeg_ticks;
+        prev_ctxt = ctxt;
         prev_instant = now;
+        let thread_count = read_proc_status_kb(stack.restream_pid, "Threads").unwrap_or(0);
         let rss_kb = read_proc_status_kb_checked(stack.restream_pid, "VmRSS", &env.restream_log)?;
         let rollup = read_smaps_rollup(stack.restream_pid)?;
         let telemetry = stack.api.get_json("/api/v1/engine/telemetry").await?;
@@ -181,6 +197,9 @@ pub(super) async fn sample_resource_window(
             restream_cpu_pct,
             ffmpeg_cpu_pct,
             total_cpu_pct,
+            voluntary_ctxt_switches_per_sec,
+            nonvoluntary_ctxt_switches_per_sec,
+            thread_count,
             rss_kb,
             ffmpeg_count: ffmpeg.count,
             ffmpeg_rss_kb: ffmpeg.rss_kb,
@@ -233,6 +252,14 @@ pub(super) fn summarize_resource_samples(
     let restream_cpu_sum: f64 = samples.iter().map(|s| s.restream_cpu_pct).sum();
     let ffmpeg_cpu_sum: f64 = samples.iter().map(|s| s.ffmpeg_cpu_pct).sum();
     let total_cpu_sum: f64 = samples.iter().map(|s| s.total_cpu_pct).sum();
+    let voluntary_ctxt_sum: f64 = samples
+        .iter()
+        .map(|s| s.voluntary_ctxt_switches_per_sec)
+        .sum();
+    let nonvoluntary_ctxt_sum: f64 = samples
+        .iter()
+        .map(|s| s.nonvoluntary_ctxt_switches_per_sec)
+        .sum();
     let rss_sum: u64 = samples.iter().map(|s| s.rss_kb).sum();
     ResourceAggregate {
         scenario: meta.scenario.to_string(),
@@ -255,6 +282,25 @@ pub(super) fn summarize_resource_samples(
         ffmpeg_cpu_peak_pct: round2(samples.iter().map(|s| s.ffmpeg_cpu_pct).fold(0.0, f64::max)),
         total_cpu_avg_pct: round2(total_cpu_sum / samples.len().max(1) as f64),
         total_cpu_peak_pct: round2(samples.iter().map(|s| s.total_cpu_pct).fold(0.0, f64::max)),
+        voluntary_ctxt_switches_avg_per_sec: round2(
+            voluntary_ctxt_sum / samples.len().max(1) as f64,
+        ),
+        voluntary_ctxt_switches_peak_per_sec: round2(
+            samples
+                .iter()
+                .map(|s| s.voluntary_ctxt_switches_per_sec)
+                .fold(0.0, f64::max),
+        ),
+        nonvoluntary_ctxt_switches_avg_per_sec: round2(
+            nonvoluntary_ctxt_sum / samples.len().max(1) as f64,
+        ),
+        nonvoluntary_ctxt_switches_peak_per_sec: round2(
+            samples
+                .iter()
+                .map(|s| s.nonvoluntary_ctxt_switches_per_sec)
+                .fold(0.0, f64::max),
+        ),
+        thread_count_peak: samples.iter().map(|s| s.thread_count).max().unwrap_or(0),
         rss_avg_kb: round2(rss_sum as f64 / samples.len().max(1) as f64),
         rss_peak_kb: samples.iter().map(|s| s.rss_kb).max().unwrap_or(0),
         ffmpeg_rss_peak_kb: samples.iter().map(|s| s.ffmpeg_rss_kb).max().unwrap_or(0),
@@ -307,6 +353,26 @@ pub(super) fn read_proc_stat_ticks(pid: u32) -> Result<u64, String> {
     Ok(utime + stime)
 }
 
+/// Cumulative context-switch counters from `/proc/<pid>/status`, sampled and
+/// diffed the same way `read_proc_stat_ticks` diffs CPU ticks. Closes the
+/// "context-switch/allocator instrumentation" gap noted throughout Phase 5's
+/// live captures (`docs/egress-implementation.md`) — a directly observable
+/// proxy for the thread-topology/allocator-contention tradeoffs found there
+/// (more concurrently active OS threads doing the same work show up here as
+/// more switches, the same signature `perf`'s `try_to_wake_up`/`futex`
+/// self-time showed for the fabric variant specifically).
+struct ProcCtxtSwitches {
+    voluntary: u64,
+    nonvoluntary: u64,
+}
+
+fn read_proc_ctxt_switches(pid: u32) -> Result<ProcCtxtSwitches, String> {
+    Ok(ProcCtxtSwitches {
+        voluntary: read_proc_status_kb(pid, "voluntary_ctxt_switches").unwrap_or(0),
+        nonvoluntary: read_proc_status_kb(pid, "nonvoluntary_ctxt_switches").unwrap_or(0),
+    })
+}
+
 fn read_proc_status_kb(pid: u32, key: &str) -> Result<u64, String> {
     let status =
         std::fs::read_to_string(format!("/proc/{pid}/status")).map_err(|e| e.to_string())?;
@@ -322,7 +388,7 @@ fn read_proc_status_kb(pid: u32, key: &str) -> Result<u64, String> {
     Err(format!("{key} missing in /proc/{pid}/status"))
 }
 
-pub(super) fn read_proc_status_kb_checked(
+pub(crate) fn read_proc_status_kb_checked(
     pid: u32,
     key: &str,
     log_path: &Path,
@@ -411,6 +477,9 @@ fn resource_sample_json(sample: &ResourceSample) -> Value {
         "restreamCpuPct": sample.restream_cpu_pct,
         "ffmpegCpuPct": sample.ffmpeg_cpu_pct,
         "totalCpuPct": sample.total_cpu_pct,
+        "voluntaryCtxtSwitchesPerSec": sample.voluntary_ctxt_switches_per_sec,
+        "nonvoluntaryCtxtSwitchesPerSec": sample.nonvoluntary_ctxt_switches_per_sec,
+        "threadCount": sample.thread_count,
         "rssKb": sample.rss_kb,
         "ffmpegCount": sample.ffmpeg_count,
         "ffmpegRssKb": sample.ffmpeg_rss_kb,
@@ -453,6 +522,11 @@ pub(super) fn resource_aggregate_json(aggregate: &ResourceAggregate) -> Value {
         "ffmpegCpuPeakPct": aggregate.ffmpeg_cpu_peak_pct,
         "totalCpuAvgPct": aggregate.total_cpu_avg_pct,
         "totalCpuPeakPct": aggregate.total_cpu_peak_pct,
+        "voluntaryCtxtSwitchesAvgPerSec": aggregate.voluntary_ctxt_switches_avg_per_sec,
+        "voluntaryCtxtSwitchesPeakPerSec": aggregate.voluntary_ctxt_switches_peak_per_sec,
+        "nonvoluntaryCtxtSwitchesAvgPerSec": aggregate.nonvoluntary_ctxt_switches_avg_per_sec,
+        "nonvoluntaryCtxtSwitchesPeakPerSec": aggregate.nonvoluntary_ctxt_switches_peak_per_sec,
+        "threadCountPeak": aggregate.thread_count_peak,
         "rssAvgKb": aggregate.rss_avg_kb,
         "rssPeakKb": aggregate.rss_peak_kb,
         "ffmpegRssPeakKb": aggregate.ffmpeg_rss_peak_kb,
@@ -480,11 +554,11 @@ pub(super) fn write_resource_sweep_csv(
     rows: &[ResourceAggregate],
 ) -> Result<(), String> {
     let mut text = String::from(
-        "scenario,label,lifecycle,pipelines,outputs,ingest_types,egress_mix,transcode,sample_count,restream_cpu_avg_pct,restream_cpu_peak_pct,ffmpeg_cpu_avg_pct,ffmpeg_cpu_peak_pct,total_cpu_avg_pct,total_cpu_peak_pct,rss_avg_kb,rss_peak_kb,ffmpeg_rss_peak_kb,retained_peak_kb,source_ring_peak_kb,transcoder_ring_peak_kb,tsmux_ring_peak_kb,avio_len_peak_kb,avio_hwm_peak_kb,anonymous_peak_kb,private_dirty_peak_kb,shared_clean_peak_kb,pss_peak_kb,unattributed_peak_kb,active_transcoder_buffers_peak,ingests_peak,egresses_peak,stages_peak,pipeline_count_peak\n",
+        "scenario,label,lifecycle,pipelines,outputs,ingest_types,egress_mix,transcode,sample_count,restream_cpu_avg_pct,restream_cpu_peak_pct,ffmpeg_cpu_avg_pct,ffmpeg_cpu_peak_pct,total_cpu_avg_pct,total_cpu_peak_pct,voluntary_ctxt_switches_avg_per_sec,voluntary_ctxt_switches_peak_per_sec,nonvoluntary_ctxt_switches_avg_per_sec,nonvoluntary_ctxt_switches_peak_per_sec,thread_count_peak,rss_avg_kb,rss_peak_kb,ffmpeg_rss_peak_kb,retained_peak_kb,source_ring_peak_kb,transcoder_ring_peak_kb,tsmux_ring_peak_kb,avio_len_peak_kb,avio_hwm_peak_kb,anonymous_peak_kb,private_dirty_peak_kb,shared_clean_peak_kb,pss_peak_kb,unattributed_peak_kb,active_transcoder_buffers_peak,ingests_peak,egresses_peak,stages_peak,pipeline_count_peak\n",
     );
     for row in rows {
         text.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{:.2},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             csv_escape(&row.scenario),
             csv_escape(&row.label),
             csv_escape(&row.lifecycle),
@@ -500,6 +574,11 @@ pub(super) fn write_resource_sweep_csv(
             row.ffmpeg_cpu_peak_pct,
             row.total_cpu_avg_pct,
             row.total_cpu_peak_pct,
+            row.voluntary_ctxt_switches_avg_per_sec,
+            row.voluntary_ctxt_switches_peak_per_sec,
+            row.nonvoluntary_ctxt_switches_avg_per_sec,
+            row.nonvoluntary_ctxt_switches_peak_per_sec,
+            row.thread_count_peak,
             row.rss_avg_kb,
             row.rss_peak_kb,
             row.ffmpeg_rss_peak_kb,

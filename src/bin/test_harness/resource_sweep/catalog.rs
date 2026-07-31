@@ -17,6 +17,7 @@ pub(crate) enum SweepOutputKind {
     Srt720p,
     Rtmp1080p,
     Srt1080p,
+    RtmpsSource,
 }
 
 impl SweepOutputKind {
@@ -30,10 +31,17 @@ impl SweepOutputKind {
             Self::Srt720p => "srt.720p.a0",
             Self::Rtmp1080p => "rtmp.1080p.a0",
             Self::Srt1080p => "srt.1080p.a0",
+            Self::RtmpsSource => "rtmps-source",
         }
     }
 
-    pub(crate) fn publish_url(self, rtmp_port: u16, srt_port: u16, name: &str) -> String {
+    pub(crate) fn publish_url(
+        self,
+        rtmp_port: u16,
+        rtmps_port: u16,
+        srt_port: u16,
+        name: &str,
+    ) -> String {
         match self {
             Self::RtmpSource | Self::RtmpSourceDownmix | Self::Rtmp720p | Self::Rtmp1080p => {
                 format!("rtmp://127.0.0.1:{rtmp_port}/live/{name}")
@@ -41,10 +49,20 @@ impl SweepOutputKind {
             Self::SrtSource | Self::SrtSourceDownmix | Self::Srt720p | Self::Srt1080p => {
                 harness_srt_output_url(srt_port, name, HarnessSrtMode::Publish)
             }
+            // mediamtx serves RTMPS on its own dedicated `rtmpsAddress`
+            // listener, separate from the plain `rtmpAddress` port —
+            // there is no same-port auto-detection.
+            Self::RtmpsSource => format!("rtmps://127.0.0.1:{rtmps_port}/live/{name}"),
         }
     }
 
-    pub(crate) fn read_url(self, rtmp_port: u16, srt_port: u16, name: &str) -> String {
+    pub(crate) fn read_url(
+        self,
+        rtmp_port: u16,
+        rtmps_port: u16,
+        srt_port: u16,
+        name: &str,
+    ) -> String {
         match self {
             Self::RtmpSource | Self::RtmpSourceDownmix | Self::Rtmp720p | Self::Rtmp1080p => {
                 format!("rtmp://127.0.0.1:{rtmp_port}/live/{name}")
@@ -52,6 +70,7 @@ impl SweepOutputKind {
             Self::SrtSource | Self::SrtSourceDownmix | Self::Srt720p | Self::Srt1080p => {
                 harness_srt_output_url(srt_port, name, HarnessSrtMode::Read)
             }
+            Self::RtmpsSource => format!("rtmps://127.0.0.1:{rtmps_port}/live/{name}"),
         }
     }
 
@@ -59,7 +78,7 @@ impl SweepOutputKind {
         match (self, multi_audio) {
             (Self::RtmpSource, true) => "source+atrack:0",
             (Self::SrtSource, true) => "source+atrack:0,1",
-            (Self::RtmpSource | Self::SrtSource, false) => "source",
+            (Self::RtmpSource | Self::SrtSource | Self::RtmpsSource, false) => "source",
             (Self::RtmpSourceDownmix | Self::SrtSourceDownmix, _) => "source+downmix:0",
             (Self::Rtmp720p, true) => "720p+atrack:0",
             (Self::Srt720p, true) => "720p+atrack:0,1",
@@ -67,13 +86,14 @@ impl SweepOutputKind {
             (Self::Rtmp1080p, true) => "1080p+atrack:0",
             (Self::Srt1080p, true) => "1080p+atrack:0,1",
             (Self::Rtmp1080p | Self::Srt1080p, false) => "1080p",
+            (Self::RtmpsSource, true) => "source+atrack:0",
         }
     }
 
     pub(crate) const fn rtmp_mode(self) -> RtmpOutputMode {
         match self {
             Self::RtmpSource | Self::RtmpSourceDownmix => RtmpOutputMode::Enhanced,
-            Self::Rtmp720p | Self::Rtmp1080p => RtmpOutputMode::Legacy,
+            Self::Rtmp720p | Self::Rtmp1080p | Self::RtmpsSource => RtmpOutputMode::Legacy,
             Self::SrtSource | Self::SrtSourceDownmix | Self::Srt720p | Self::Srt1080p => {
                 RtmpOutputMode::Legacy
             }

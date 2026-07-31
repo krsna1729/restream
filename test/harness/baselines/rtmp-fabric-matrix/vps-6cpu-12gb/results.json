@@ -1,0 +1,101 @@
+{
+  "egressCount": 10,
+  "mode": "rtmp-fabric-matrix",
+  "scenario": "egress-growth-source-same",
+  "variants": [
+    {
+      "aggregates": [
+        {
+          "activeTranscoderBuffersPeak": 0,
+          "anonymousPeakKb": 46792,
+          "avioHwmPeakKb": 0,
+          "avioLenPeakKb": 0,
+          "egressMix": "rtmp-source",
+          "egressesPeak": 10,
+          "ffmpegCpuAvgPct": 0.0,
+          "ffmpegCpuPeakPct": 0.0,
+          "ffmpegRssPeakKb": 0,
+          "ingestTypes": "h264-srt",
+          "ingestsPeak": 1,
+          "label": "10-per-group",
+          "lifecycle": "isolated",
+          "outputs": 10,
+          "pipelineCountPeak": 1,
+          "pipelines": 1,
+          "privateDirtyPeakKb": 68172,
+          "pssPeakKb": 68994,
+          "restreamCpuAvgPct": 5.54,
+          "restreamCpuPeakPct": 6.83,
+          "retainedPeakKb": 2520,
+          "rssAvgKb": 71695.33,
+          "rssPeakKb": 72484,
+          "sampleCount": 6,
+          "scenario": "egress-growth-source-same",
+          "sharedCleanPeakKb": 4192,
+          "sourceRingPeakKb": 2520,
+          "stagesPeak": 0,
+          "totalCpuAvgPct": 5.54,
+          "totalCpuPeakPct": 6.83,
+          "transcode": "no",
+          "transcoderRingPeakKb": 0,
+          "tsmuxRingPeakKb": 0,
+          "unattributedPeakKb": 69997
+        }
+      ],
+      "artifacts": {
+        "mediamtxLog": ".local/artifacts/rtmp-fabric-matrix-final/legacy/mediamtx.log",
+        "restreamLog": ".local/artifacts/rtmp-fabric-matrix-final/legacy/restream.log",
+        "samplesJsonl": ".local/artifacts/rtmp-fabric-matrix-final/legacy/samples.jsonl",
+        "summaryCsv": ".local/artifacts/rtmp-fabric-matrix-final/legacy/results.csv"
+      },
+      "variant": "legacy"
+    },
+    {
+      "aggregates": [
+        {
+          "activeTranscoderBuffersPeak": 0,
+          "anonymousPeakKb": 49568,
+          "avioHwmPeakKb": 0,
+          "avioLenPeakKb": 0,
+          "egressMix": "rtmp-source",
+          "egressesPeak": 10,
+          "ffmpegCpuAvgPct": 0.0,
+          "ffmpegCpuPeakPct": 0.0,
+          "ffmpegRssPeakKb": 0,
+          "ingestTypes": "h264-srt",
+          "ingestsPeak": 1,
+          "label": "10-per-group",
+          "lifecycle": "isolated",
+          "outputs": 10,
+          "pipelineCountPeak": 1,
+          "pipelines": 1,
+          "privateDirtyPeakKb": 49600,
+          "pssPeakKb": 71650,
+          "restreamCpuAvgPct": 7.66,
+          "restreamCpuPeakPct": 8.78,
+          "retainedPeakKb": 2841,
+          "rssAvgKb": 74375.33,
+          "rssPeakKb": 75196,
+          "sampleCount": 6,
+          "scenario": "egress-growth-source-same",
+          "sharedCleanPeakKb": 4272,
+          "sourceRingPeakKb": 2841,
+          "stagesPeak": 0,
+          "totalCpuAvgPct": 7.66,
+          "totalCpuPeakPct": 8.78,
+          "transcode": "no",
+          "transcoderRingPeakKb": 0,
+          "tsmuxRingPeakKb": 0,
+          "unattributedPeakKb": 72409
+        }
+      ],
+      "artifacts": {
+        "mediamtxLog": ".local/artifacts/rtmp-fabric-matrix-final/fabric/mediamtx.log",
+        "restreamLog": ".local/artifacts/rtmp-fabric-matrix-final/fabric/restream.log",
+        "samplesJsonl": ".local/artifacts/rtmp-fabric-matrix-final/fabric/samples.jsonl",
+        "summaryCsv": ".local/artifacts/rtmp-fabric-matrix-final/fabric/results.csv"
+      },
+      "variant": "fabric"
+    }
+  ]
+}

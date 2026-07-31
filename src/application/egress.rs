@@ -2,8 +2,13 @@
 //! into the runtime ring and transcoder wiring owned by the media engine.
 
 use crate::application::models::Output;
-use crate::domain::output_spec::{EgressProtocol, OutputUrlScheme, VideoCodecKind};
+use crate::domain::output_spec::{
+    EgressProtocol, OutputUrlScheme, RecirculationTarget, VideoCodecKind,
+};
 use crate::domain::stage::{StageKey, StageKind};
+use crate::media::egress::journal::{FeedEpoch, RingFeed, TsFeed};
+use crate::media::egress::policy::LeafPolicy;
+use crate::media::egress::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::engine::MediaEngine;
 use crate::media::ring_buffer::RingBuffer;
 use crate::planner::PlannedOutput;
@@ -17,6 +22,12 @@ pub struct PreparedOutput {
     pub media_stage_key: StageKey,
     /// Terminal graph stage reported in dependency status.
     pub terminal_stage_key: StageKey,
+}
+
+pub struct PreparedSrtFabricFeed {
+    pub feed_id: FeedId,
+    pub feed: Arc<TsFeed>,
+    pub muxer_stage_key: String,
 }
 
 /// Prepare the output ring and graph terminal stage for dependency tracking.
@@ -137,6 +148,123 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
     }
 }
 
+pub async fn prepare_srt_fabric_feed(
+    engine: &Arc<MediaEngine>,
+    output: &Output,
+    prepared: &PreparedOutput,
+    attempt_id: u64,
+) -> PreparedSrtFabricFeed {
+    let encoding = prepared.media_stage_key.kind.to_string();
+    let muxer_stage_key = engine
+        .assign_srt_egress_muxer_stage(&output.pipeline_id, &encoding, &output.id, attempt_id)
+        .await;
+    let shared_muxer = engine
+        .get_or_create_ts_muxer_stage(&output.pipeline_id, &muxer_stage_key, prepared.ring.clone())
+        .await;
+    let feed_id = FeedId::new(format!("srt:{}:{muxer_stage_key}", output.pipeline_id));
+
+    PreparedSrtFabricFeed {
+        feed_id,
+        feed: Arc::new(TsFeed::new(&shared_muxer, Arc::new(FeedEpoch::new()))),
+        muxer_stage_key,
+    }
+}
+
+pub fn srt_fabric_output_spec(
+    output: &Output,
+    generation: u64,
+    feed_id: FeedId,
+    connect_timeout: std::time::Duration,
+) -> OutputSpec {
+    OutputSpec {
+        id: OutputId::new(output.id.clone()),
+        generation,
+        feed: feed_id,
+        protocol: ProtocolSpec::Srt {
+            url: output.url.clone(),
+        },
+        policy: LeafPolicy {
+            connect_timeout,
+            ..LeafPolicy::default()
+        },
+        progress: Default::default(),
+    }
+}
+
+pub struct PreparedSinkFabricFeed {
+    pub feed_id: FeedId,
+    pub feed: Arc<RingFeed>,
+}
+
+/// Sink reads directly off the output's own ring the same way RTMP does —
+/// no shared muxer stage to resolve (that's an SRT-specific concept, for
+/// coalescing multiple SRT egress leaves onto one TS byte stream), so
+/// unlike `prepare_srt_fabric_feed` this needs no engine calls at all.
+pub fn prepare_sink_fabric_feed(
+    output: &Output,
+    prepared: &PreparedOutput,
+) -> PreparedSinkFabricFeed {
+    let feed_id = FeedId::new(format!("sink:{}", output.id));
+    PreparedSinkFabricFeed {
+        feed_id,
+        feed: Arc::new(RingFeed::new(
+            prepared.ring.clone(),
+            Arc::new(FeedEpoch::new()),
+        )),
+    }
+}
+
+pub fn sink_fabric_output_spec(output: &Output, generation: u64, feed_id: FeedId) -> OutputSpec {
+    OutputSpec {
+        id: OutputId::new(output.id.clone()),
+        generation,
+        feed: feed_id,
+        protocol: ProtocolSpec::Sink,
+        policy: LeafPolicy::default(),
+        progress: Default::default(),
+    }
+}
+
+pub struct PreparedRecirculationFabricFeed {
+    pub feed_id: FeedId,
+    pub feed: Arc<RingFeed>,
+}
+
+/// Recirculation reads directly off the source output's own ring, same as
+/// sink and RTMP — no shared muxer stage to resolve.
+pub fn prepare_recirculation_fabric_feed(
+    output: &Output,
+    prepared: &PreparedOutput,
+) -> PreparedRecirculationFabricFeed {
+    let feed_id = FeedId::new(format!("pipeline:{}", output.id));
+    PreparedRecirculationFabricFeed {
+        feed_id,
+        feed: Arc::new(RingFeed::new(
+            prepared.ring.clone(),
+            Arc::new(FeedEpoch::new()),
+        )),
+    }
+}
+
+pub fn recirculation_fabric_output_spec(
+    output: &Output,
+    generation: u64,
+    feed_id: FeedId,
+    target: &RecirculationTarget,
+) -> OutputSpec {
+    OutputSpec {
+        id: OutputId::new(output.id.clone()),
+        generation,
+        feed: feed_id,
+        protocol: ProtocolSpec::Pipeline {
+            target_pipeline_id: target.pipeline_id().to_string(),
+            target_input_id: target.input_id().to_string(),
+        },
+        policy: LeafPolicy::default(),
+        progress: Default::default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +272,7 @@ mod tests {
     use crate::domain::output_spec::{OutputConfig, RtmpOutputMode};
     use crate::domain::stage::StageKind;
     use crate::domain::state::DesiredOutputState;
+    use crate::media::egress::EgressFeed;
     use crate::media::metadata::VideoMeta;
 
     fn test_output(pipeline_id: &str, config: OutputConfig, url: &str) -> Output {
@@ -184,6 +313,115 @@ mod tests {
             prepared.terminal_stage_key,
             StageKey::new("pipe-source", StageKind::source())
         );
+    }
+
+    #[tokio::test]
+    async fn prepare_srt_fabric_feed_uses_shared_muxer_assignment_identity() {
+        let engine = Arc::new(MediaEngine::new_with_config(Arc::new(crate::AppConfig {
+            srt_egress_muxer_max_outputs_per_shard: 2,
+            srt_egress_muxer_max_shards: 8,
+            ..Default::default()
+        })));
+        let mut first = test_output(
+            "pipe-srt-fabric-feed",
+            OutputConfig::source(),
+            "srt://example:9000",
+        );
+        first.id = "out-1".to_string();
+        let mut second = test_output(
+            "pipe-srt-fabric-feed",
+            OutputConfig::source(),
+            "srt://example:9001",
+        );
+        second.id = "out-2".to_string();
+        let mut third = test_output(
+            "pipe-srt-fabric-feed",
+            OutputConfig::source(),
+            "srt://example:9002",
+        );
+        third.id = "out-3".to_string();
+
+        let first_prepared = prepare_output_ring(&engine, &first).await;
+        let second_prepared = prepare_output_ring(&engine, &second).await;
+        let third_prepared = prepare_output_ring(&engine, &third).await;
+
+        let first_feed = prepare_srt_fabric_feed(&engine, &first, &first_prepared, 1).await;
+        let second_feed = prepare_srt_fabric_feed(&engine, &second, &second_prepared, 1).await;
+        let third_feed = prepare_srt_fabric_feed(&engine, &third, &third_prepared, 1).await;
+
+        assert_eq!(first_feed.muxer_stage_key, "source:srt-mux-shard:0");
+        assert_eq!(second_feed.muxer_stage_key, "source:srt-mux-shard:0");
+        assert_eq!(third_feed.muxer_stage_key, "source:srt-mux-shard:1");
+        assert_eq!(
+            first_feed.feed_id.as_str(),
+            "srt:pipe-srt-fabric-feed:source:srt-mux-shard:0"
+        );
+        assert_eq!(first_feed.feed_id, second_feed.feed_id);
+        assert_ne!(first_feed.feed_id, third_feed.feed_id);
+        assert_eq!(first_feed.feed.head_sequence(), 0);
+    }
+
+    #[test]
+    fn srt_fabric_output_spec_uses_output_identity_and_prepared_feed() {
+        let output = test_output(
+            "pipe-srt-fabric-spec",
+            OutputConfig::source(),
+            "srt://localhost:9000?mode=caller",
+        );
+        let spec = srt_fabric_output_spec(
+            &output,
+            7,
+            FeedId::new("feed-srt-source"),
+            std::time::Duration::from_millis(3_000),
+        );
+
+        assert_eq!(spec.id.as_str(), "pipe-srt-fabric-spec-out");
+        assert_eq!(spec.generation, 7);
+        assert_eq!(spec.feed.as_str(), "feed-srt-source");
+        assert_eq!(
+            spec.policy.connect_timeout,
+            std::time::Duration::from_millis(3_000)
+        );
+        match spec.protocol {
+            crate::media::egress::ProtocolSpec::Srt { url } => {
+                assert_eq!(url, "srt://localhost:9000?mode=caller");
+            }
+            crate::media::egress::ProtocolSpec::Rtmp { .. }
+            | crate::media::egress::ProtocolSpec::Sink
+            | crate::media::egress::ProtocolSpec::Pipeline { .. } => {
+                panic!("SRT fabric spec must carry the SRT protocol")
+            }
+        }
+    }
+
+    #[test]
+    fn recirculation_fabric_output_spec_uses_target_identity() {
+        let output = test_output(
+            "pipe-source",
+            OutputConfig::source(),
+            "pipeline://pipe-target/input-backup",
+        );
+        let target = RecirculationTarget::parse(&output.url).unwrap();
+        let spec =
+            recirculation_fabric_output_spec(&output, 9, FeedId::new("feed-source"), &target);
+
+        assert_eq!(spec.id.as_str(), "pipe-source-out");
+        assert_eq!(spec.generation, 9);
+        assert_eq!(spec.feed.as_str(), "feed-source");
+        match spec.protocol {
+            crate::media::egress::ProtocolSpec::Pipeline {
+                target_pipeline_id,
+                target_input_id,
+            } => {
+                assert_eq!(target_pipeline_id, "pipe-target");
+                assert_eq!(target_input_id, "input-backup");
+            }
+            crate::media::egress::ProtocolSpec::Rtmp { .. }
+            | crate::media::egress::ProtocolSpec::Srt { .. }
+            | crate::media::egress::ProtocolSpec::Sink => {
+                panic!("recirculation spec must carry the pipeline protocol")
+            }
+        }
     }
 
     #[tokio::test]

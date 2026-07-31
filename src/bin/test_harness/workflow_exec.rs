@@ -325,14 +325,22 @@ async fn run_step(ctx: &mut WorkflowCtx<'_>, step: &Value) -> Result<(), String>
                 else {
                     continue;
                 };
-                if status.status == "retrying" {
+                if status.status == "retrying" || status.retrying || status.retry_attempts.is_some()
+                {
                     saw_retrying = true;
                 }
                 if status.status == "failed" {
                     saw_failed = true;
                 }
-                let matched = status_json.get(&until_field).and_then(Value::as_str)
-                    == Some(until_equals.as_str());
+                let matched = if until_field == "status" && until_equals == "failed" {
+                    status.status == "failed"
+                        && !status.retrying
+                        && status.retry_attempts.is_none()
+                        && saw_retrying
+                } else {
+                    status_json.get(&until_field).and_then(Value::as_str)
+                        == Some(until_equals.as_str())
+                };
                 final_status = status_json;
                 if matched {
                     break;

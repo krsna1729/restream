@@ -5,7 +5,7 @@
 
 use super::graph_projection as api_view_models;
 use crate::application::models::Output;
-use crate::domain::output_spec::VideoCodecKind;
+use crate::domain::output_spec::{RecirculationTarget, VideoCodecKind};
 use crate::domain::stage::{StageKey, StageKind};
 use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
@@ -235,6 +235,7 @@ pub(crate) async fn processing_graph(
         .map(|video| VideoCodecKind::from_codec_name(&video.codec).is_hevc())
         .unwrap_or(false);
     let mut added_packetizers = std::collections::HashSet::new();
+    let mut added_recirculation_targets = std::collections::HashSet::new();
 
     for output in &pipeline_outputs {
         let egress = egresses.get(&output.id);
@@ -315,14 +316,42 @@ pub(crate) async fn processing_graph(
             }
             edges.push(api_view_models::processing_graph_edge(
                 mux_node_id,
-                output_node_id,
+                output_node_id.clone(),
                 "SRT send",
             ));
         } else {
             edges.push(api_view_models::processing_graph_edge(
                 terminal_node_id,
-                output_node_id,
+                output_node_id.clone(),
                 MediaEngine::source_to_egress_label(protocol),
+            ));
+        }
+
+        if let Ok(target) = RecirculationTarget::parse(&output.url) {
+            let target_node_id = recirculation_target_node_id(&target);
+            if added_recirculation_targets.insert(target_node_id.clone()) {
+                nodes.push(api_view_models::processing_graph_node(
+                    target_node_id.clone(),
+                    "recirculation_input",
+                    format!(
+                        "Recirculation input: {}/{}",
+                        target.pipeline_id(),
+                        target.input_id()
+                    ),
+                    false,
+                    Some(
+                        api_view_models::processing_graph_recirculation_target_details(
+                            target.pipeline_id(),
+                            target.input_id(),
+                        ),
+                    ),
+                    None,
+                ));
+            }
+            edges.push(api_view_models::processing_graph_edge(
+                output_node_id,
+                target_node_id,
+                "in-process recirculation",
             ));
         }
     }
@@ -372,5 +401,13 @@ pub(crate) async fn processing_graph(
         pipeline_id,
         nodes,
         edges,
+    )
+}
+
+fn recirculation_target_node_id(target: &RecirculationTarget) -> String {
+    format!(
+        "{}_input_{}",
+        target.pipeline_id(),
+        MediaEngine::graph_slug(target.input_id())
     )
 }

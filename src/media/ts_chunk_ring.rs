@@ -11,12 +11,20 @@ use tokio_util::sync::CancellationToken;
 pub struct TsChunkRing {
     pub ring: Arc<RingBuffer>,
     pub cancel: CancellationToken,
+    /// When this stage was created. `sweep_unused_stages` exempts stages
+    /// younger than a grace window: a fabric consumer registers its
+    /// liveness (`MediaEngine::fabric.srt.active_outputs`) asynchronously,
+    /// after the stage already exists, so a reconcile tick landing in that
+    /// gap must not treat "no reader yet" as "unused" and cancel it before
+    /// the consumer ever gets a chance to attach.
+    pub created_at: std::time::Instant,
 }
 
 impl TsChunkRing {
     pub fn new(capacity: usize, cancel: CancellationToken) -> Self {
         Self {
             ring: Arc::new(RingBuffer::new(capacity)),
+            created_at: std::time::Instant::now(),
             cancel,
         }
     }

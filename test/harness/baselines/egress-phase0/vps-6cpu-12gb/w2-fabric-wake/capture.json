@@ -1,0 +1,22 @@
+{
+  "workload": "w2-healthy-srt (fabric runtime, event-driven wakes)",
+  "commit": "344eef425cfc81551c1db68f39b0e57cce842052",
+  "date": "2026-07-23",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
+  "mode": "ramp-family --no-netns",
+  "env": { "RESTREAM_EGRESS_FABRIC": "srt", "RAMP_FAMILY_CONFIGS": "srt-srt-src", "N_OUTPUTS": "100" },
+  "egressOwner": "fabric (EgressRolloutMode::Srt, FeedWake delivery, idle_wait 25ms)",
+  "result": {
+    "passed": true,
+    "outputs": 100,
+    "cpuPctAtFull": 47.4,
+    "rssKbAtFull": 223248,
+    "rssDeltaKb": 142040,
+    "perOutputKb": 1420
+  },
+  "comparison": {
+    "vsFabricPolling": "CPU 47.4% vs 57.0% (event-driven wakes removed the 1ms polling cost); RSS 1,420KB vs 1,500KB per output",
+    "vsLegacy": "RSS 2.4x lower (1,420KB vs 3,426KB); CPU still 14% above legacy (47.4% vs 41.7%) with 4 shards for 100 outputs — shard-count tuning is a Phase 7 gate"
+  },
+  "deviations": "netns unavailable in sandbox; reduced scale per host class"
+}

@@ -1,8 +1,8 @@
 use super::super::resource_sweep::ffmpeg_children_stats;
 use super::super::*;
 use super::egress::{
-    fault_rtmp_egress_sink_disappear, fault_rtmp_egress_sink_stalls,
-    fault_srt_egress_sink_disappear,
+    fault_rtmp_egress_output_churn, fault_rtmp_egress_sink_disappear,
+    fault_rtmp_egress_sink_stalls, fault_srt_egress_sink_disappear,
 };
 
 pub(crate) async fn create_pipeline_with_stream_key(
@@ -378,6 +378,11 @@ pub(crate) async fn fault_resilience() -> Result<Value, String> {
     // ── 6. RTMP egress sink disappears ──────────────────────────────────
     results.push(
         fault_rtmp_egress_sink_disappear(&api, &ports, &fixture_h264, sink_port, timeout).await?,
+    );
+
+    // ── 6b. RTMP egress output mid-stream churn ─────────────────────────
+    results.push(
+        fault_rtmp_egress_output_churn(&api, &ports, &fixture_h264, sink_port, timeout).await?,
     );
 
     // ── 7. RTMP egress sink stops draining and surfaces stalled ─────────

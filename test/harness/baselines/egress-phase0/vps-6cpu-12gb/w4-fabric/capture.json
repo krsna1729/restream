@@ -1,0 +1,16 @@
+{
+  "workload": "w4-bad-neighbor (fabric SRT rollout active)",
+  "commit": "b8917e8c9e0b98165287eb81c658af2c9910d2e6",
+  "date": "2026-07-23",
+  "host": "KVM VPS, 6 CPUs, 12GB RAM",
+  "mode": "fault.output-stall --no-netns",
+  "env": { "RESTREAM_EGRESS_FABRIC": "srt", "FAULT_OUTPUT_STALL_SIBLINGS": "32" },
+  "egressOwner": "mixed: SRT outputs on fabric, RTMP outputs legacy",
+  "result": {
+    "passed": true,
+    "siblingOutputs": 32,
+    "note": "with the SRT fabric rollout active, a permanently stalled RTMP sink beside 32 healthy siblings was isolated and classified without poisoning the population; healthy delivery kept advancing"
+  },
+  "scope": "mixed-ownership isolation: proves fabric SRT coexists with a stalled legacy-owned output; a pure-fabric SRT stalled-destination variant needs an SRT-native stall fault mode",
+  "deviations": "netns unavailable in sandbox; 32 siblings per host class vs 998 target"
+}

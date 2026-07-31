@@ -16,7 +16,7 @@ use std::{sync::Arc, time::Duration};
 use crate::api_view_models;
 
 use crate::domain::output_spec::{
-    OutputConfig, OutputProtocolConfig, OutputUrlScheme, ProtocolCapabilities,
+    OutputConfig, OutputProtocolConfig, OutputUrlScheme, ProtocolCapabilities, RecirculationTarget,
 };
 
 use crate::domain::state::DesiredOutputState;
@@ -54,7 +54,7 @@ pub fn is_supported_output_url(url: &str) -> bool {
     OutputUrlScheme::from_url(url).is_supported_output()
 }
 
-pub const OUTPUT_URL_SCHEME_ERROR: &str = "Invalid URL scheme. Supported schemes are rtmp://, rtmps://, srt://, hls://, http://, and https://";
+pub const OUTPUT_URL_SCHEME_ERROR: &str = "Invalid URL scheme. Supported schemes are rtmp://, rtmps://, srt://, hls://, sink://, pipeline://, http://, and https://";
 pub const MONITORING_URL_SCHEME_ERROR: &str =
     "Invalid monitoring URL scheme. Supported schemes are http://, https://, and srt://";
 pub const OUTPUT_URL_PARSE_ERROR: &str = "Output URL must be a valid absolute URL with a host";
@@ -64,6 +64,8 @@ pub const CUSTOM_OUTPUT_ENCODING_ERROR: &str =
     "Custom output encoding is not available yet; choose source or a preset encoding";
 pub const OUTPUT_PROTOCOL_CONFIG_ERROR: &str =
     "RTMP protocol settings require an RTMP or RTMPS output URL";
+pub const PIPELINE_OUTPUT_CONFIG_ERROR: &str =
+    "Pipeline recirculation outputs must use source video and passthrough audio";
 const YOUTUBE_MONITORING_TIMEOUT: Duration = Duration::from_secs(5);
 const YOUTUBE_MONITORING_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const YOUTUBE_MONITORING_MAX_BYTES: usize = 512 * 1024;
@@ -296,11 +298,9 @@ fn output_state_response(
 
 type ValidationResponse = Box<Response>;
 
-// Validate and canonicalize output mutations at the HTTP boundary so services
-// only ever see normalized absolute URLs and supported config choices.
-fn validate_output_payload(
+fn validate_output_payload_fields(
     payload: &OutputPayload,
-) -> Result<ValidatedOutputPayload, ValidationResponse> {
+) -> Result<OutputConfig, ValidationResponse> {
     if let Some(response) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
         return Err(Box::new(response));
     }
@@ -329,6 +329,13 @@ fn validate_output_payload(
         return Err(Box::new(bad_request(CUSTOM_OUTPUT_ENCODING_ERROR)));
     }
 
+    Ok(output_config)
+}
+
+fn validate_output_transport(
+    payload: &OutputPayload,
+    output_config: OutputConfig,
+) -> Result<ValidatedOutputPayload, ValidationResponse> {
     // Normalize once at the API boundary so downstream services only receive
     // absolute URLs in a canonical host/scheme form.
     let Some(url) = normalize_output_url(&payload.url) else {
@@ -352,6 +359,57 @@ fn validate_output_payload(
         url,
         monitoring_url,
     })
+}
+
+// Validate and canonicalize output mutations at the HTTP boundary so services
+// only ever see normalized absolute URLs and supported config choices.
+fn validate_output_payload(
+    payload: &OutputPayload,
+) -> Result<ValidatedOutputPayload, ValidationResponse> {
+    let output_config = validate_output_payload_fields(payload)?;
+    validate_output_transport(payload, output_config)
+}
+
+async fn validate_output_payload_for_pipeline(
+    state: &AppState,
+    source_pipeline_id: &str,
+    payload: &OutputPayload,
+) -> Result<ValidatedOutputPayload, ValidationResponse> {
+    if matches!(
+        OutputUrlScheme::from_url(&payload.url),
+        OutputUrlScheme::Pipeline
+    ) {
+        let output_config = validate_output_payload_fields(payload)?;
+        validate_pipeline_recirculation_config(&output_config)?;
+        validate_reserved_recirculation_candidate(state, source_pipeline_id, &payload.url).await?;
+        return validate_output_transport(payload, output_config);
+    }
+
+    validate_output_payload(payload)
+}
+
+fn validate_pipeline_recirculation_config(
+    output_config: &OutputConfig,
+) -> Result<(), ValidationResponse> {
+    if output_config.is_source_passthrough() {
+        Ok(())
+    } else {
+        Err(Box::new(bad_request(PIPELINE_OUTPUT_CONFIG_ERROR)))
+    }
+}
+
+async fn validate_reserved_recirculation_candidate(
+    state: &AppState,
+    source_pipeline_id: &str,
+    url: &str,
+) -> Result<(), ValidationResponse> {
+    let target =
+        RecirculationTarget::parse(url).map_err(|error| Box::new(bad_request(error.message())))?;
+    state
+        .recirculation_service
+        .validate_output_candidate(source_pipeline_id, &target)
+        .await
+        .map_err(|error| Box::new(ApiError::from(error).into_response()))
 }
 
 /// Fetches and summarizes lightweight YouTube watch-page metadata for output
@@ -403,7 +461,8 @@ pub async fn outputs_create_handler(
         return Ok(response);
     }
 
-    let validated = match validate_output_payload(&payload) {
+    let validated = match validate_output_payload_for_pipeline(&state, &pipeline_id, &payload).await
+    {
         Ok(validated) => validated,
         Err(response) => return Ok(*response),
     };
@@ -442,7 +501,8 @@ pub async fn outputs_update_handler(
         return Ok(response);
     }
 
-    let validated = match validate_output_payload(&payload) {
+    let validated = match validate_output_payload_for_pipeline(&state, &pipeline_id, &payload).await
+    {
         Ok(validated) => validated,
         Err(response) => return Ok(*response),
     };
@@ -696,6 +756,14 @@ mod tests {
             .expect_err("RTMP settings should be rejected for SRT outputs");
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validate_output_payload_accepts_pipeline_recirculation_urls() {
+        let validated = validate_output_payload(&test_output_payload("pipeline://pipe-b/input-1"))
+            .expect("pipeline recirculation is a supported output URL");
+
+        assert_eq!(validated.url, "pipeline://pipe-b/input-1");
     }
 
     #[test]

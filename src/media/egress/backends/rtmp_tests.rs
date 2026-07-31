@@ -1,0 +1,943 @@
+use super::*;
+use crate::media::egress::journal::FeedEpoch;
+use rml_rtmp::handshake::{Handshake as PeerHandshake, HandshakeProcessResult as PeerResult};
+use rml_rtmp::sessions::{
+    ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
+};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+
+fn test_parts() -> RtmpUrlParts {
+    crate::media::rtmp::parse_rtmp_url("rtmp://127.0.0.1:1935/live/stream-key").unwrap()
+}
+
+/// Real, synchronous `rml_rtmp` server-side peer that performs only the
+/// handshake, for tests that stop driving the client once the handshake
+/// completes (before any connect-request bytes are flushed).
+fn run_handshake_only_server_peer(mut stream: TcpStream) {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut handshake = PeerHandshake::new(rml_rtmp::handshake::PeerType::Server);
+    let mut buf = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut buf).expect("server handshake read");
+        assert_ne!(n, 0);
+        match handshake.process_bytes(&buf[..n]).unwrap() {
+            PeerResult::InProgress { response_bytes } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+            }
+            PeerResult::Completed { response_bytes, .. } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+                return;
+            }
+        }
+    }
+}
+
+/// Real, synchronous `rml_rtmp` server-side peer: performs the handshake,
+/// then auto-accepts the connect and publish requests via `ServerSession`,
+/// mirroring the minimal subset of `src/media/rtmp/ingest.rs`'s real accept
+/// path needed to prove the fabric engine reaches `PublishAccepted` against
+/// an actual protocol state machine, not a hand-rolled byte fixture.
+fn run_full_server_peer(mut stream: TcpStream) {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    let mut handshake = PeerHandshake::new(rml_rtmp::handshake::PeerType::Server);
+    let mut buf = [0u8; 4096];
+    let remaining;
+    loop {
+        let n = stream.read(&mut buf).expect("server handshake read");
+        assert_ne!(n, 0);
+        match handshake.process_bytes(&buf[..n]).unwrap() {
+            PeerResult::InProgress { response_bytes } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+            }
+            PeerResult::Completed {
+                response_bytes,
+                remaining_bytes,
+            } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+                remaining = remaining_bytes;
+                break;
+            }
+        }
+    }
+
+    let config = ServerSessionConfig::new();
+    let (mut session, initial_results) = ServerSession::new(config).unwrap();
+    for result in initial_results {
+        if let ServerSessionResult::OutboundResponse(packet) = result {
+            stream.write_all(&packet.bytes).unwrap();
+        }
+    }
+
+    let mut publish_accepted = false;
+    let mut pending_input = remaining;
+    loop {
+        if !pending_input.is_empty() {
+            let input = std::mem::take(&mut pending_input);
+            let results = session.handle_input(&input).unwrap();
+            for result in results {
+                match result {
+                    ServerSessionResult::OutboundResponse(packet) => {
+                        stream.write_all(&packet.bytes).unwrap();
+                    }
+                    ServerSessionResult::RaisedEvent(ServerSessionEvent::ConnectionRequested {
+                        request_id,
+                        ..
+                    }) => {
+                        for response in session.accept_request(request_id).unwrap() {
+                            if let ServerSessionResult::OutboundResponse(packet) = response {
+                                stream.write_all(&packet.bytes).unwrap();
+                            }
+                        }
+                    }
+                    ServerSessionResult::RaisedEvent(
+                        ServerSessionEvent::PublishStreamRequested { request_id, .. },
+                    ) => {
+                        for response in session.accept_request(request_id).unwrap() {
+                            if let ServerSessionResult::OutboundResponse(packet) = response {
+                                stream.write_all(&packet.bytes).unwrap();
+                            }
+                        }
+                        publish_accepted = true;
+                    }
+                    _ => {}
+                }
+            }
+            if publish_accepted {
+                return;
+            }
+        }
+
+        let n = stream.read(&mut buf).expect("server session read");
+        assert_ne!(n, 0);
+        pending_input = buf[..n].to_vec();
+    }
+}
+
+/// Real, synchronous server peer that completes handshake, connect, and
+/// publish negotiation like [`run_full_server_peer`], then keeps reading and
+/// reports on `video_tx` once it observes a `VideoDataReceived` event —
+/// proving media bytes the client engine encoded and wrote actually parse as
+/// a valid RTMP video message on the wire, not just that bytes were sent.
+fn run_full_server_peer_until_video(
+    mut stream: TcpStream,
+    video_tx: std::sync::mpsc::Sender<usize>,
+) {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    let mut handshake = PeerHandshake::new(rml_rtmp::handshake::PeerType::Server);
+    let mut buf = [0u8; 4096];
+    let remaining;
+    loop {
+        let n = stream.read(&mut buf).expect("server handshake read");
+        assert_ne!(n, 0);
+        match handshake.process_bytes(&buf[..n]).unwrap() {
+            PeerResult::InProgress { response_bytes } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+            }
+            PeerResult::Completed {
+                response_bytes,
+                remaining_bytes,
+            } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+                remaining = remaining_bytes;
+                break;
+            }
+        }
+    }
+
+    let config = ServerSessionConfig::new();
+    let (mut session, initial_results) = ServerSession::new(config).unwrap();
+    for result in initial_results {
+        if let ServerSessionResult::OutboundResponse(packet) = result {
+            stream.write_all(&packet.bytes).unwrap();
+        }
+    }
+
+    let mut pending_input = remaining;
+    loop {
+        if !pending_input.is_empty() {
+            let input = std::mem::take(&mut pending_input);
+            let results = session.handle_input(&input).unwrap();
+            for result in results {
+                match result {
+                    ServerSessionResult::OutboundResponse(packet) => {
+                        stream.write_all(&packet.bytes).unwrap();
+                    }
+                    ServerSessionResult::RaisedEvent(ServerSessionEvent::ConnectionRequested {
+                        request_id,
+                        ..
+                    })
+                    | ServerSessionResult::RaisedEvent(
+                        ServerSessionEvent::PublishStreamRequested { request_id, .. },
+                    ) => {
+                        for response in session.accept_request(request_id).unwrap() {
+                            if let ServerSessionResult::OutboundResponse(packet) = response {
+                                stream.write_all(&packet.bytes).unwrap();
+                            }
+                        }
+                    }
+                    ServerSessionResult::RaisedEvent(ServerSessionEvent::VideoDataReceived {
+                        data,
+                        ..
+                    }) => {
+                        let _ = video_tx.send(data.len());
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let n = stream.read(&mut buf).expect("server session read");
+        assert_ne!(n, 0);
+        pending_input = buf[..n].to_vec();
+    }
+}
+
+/// Real, synchronous server peer that completes handshake, connect, and
+/// publish negotiation, then keeps reading indefinitely (unlike
+/// [`run_full_server_peer`], which returns — and closes its socket —
+/// immediately after accepting the publish request), reporting the running
+/// total of bytes read after every read on `progress_tx`. Used to observe
+/// how much of a queued write batch one client `advance()` call actually
+/// flushes, without a peer-side close masking it as a write error.
+fn run_full_server_peer_reporting_bytes_read(
+    mut stream: TcpStream,
+    progress_tx: std::sync::mpsc::Sender<usize>,
+) {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    let mut handshake = PeerHandshake::new(rml_rtmp::handshake::PeerType::Server);
+    let mut buf = [0u8; 4096];
+    let remaining;
+    loop {
+        let n = stream.read(&mut buf).expect("server handshake read");
+        assert_ne!(n, 0);
+        match handshake.process_bytes(&buf[..n]).unwrap() {
+            PeerResult::InProgress { response_bytes } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+            }
+            PeerResult::Completed {
+                response_bytes,
+                remaining_bytes,
+            } => {
+                if !response_bytes.is_empty() {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+                remaining = remaining_bytes;
+                break;
+            }
+        }
+    }
+
+    let config = ServerSessionConfig::new();
+    let (mut session, initial_results) = ServerSession::new(config).unwrap();
+    for result in initial_results {
+        if let ServerSessionResult::OutboundResponse(packet) = result {
+            stream.write_all(&packet.bytes).unwrap();
+        }
+    }
+
+    // Bytes read before publish acceptance are handshake/connect/publish
+    // negotiation traffic, not the caller's write batch under test — only
+    // count and report bytes read from this point on.
+    let mut total = 0usize;
+    let mut publish_accepted = false;
+    let mut pending_input = remaining;
+    loop {
+        if !pending_input.is_empty() {
+            if publish_accepted {
+                total += pending_input.len();
+                let _ = progress_tx.send(total);
+            }
+            let input = std::mem::take(&mut pending_input);
+            let results = session.handle_input(&input).unwrap();
+            for result in results {
+                match result {
+                    ServerSessionResult::OutboundResponse(packet) => {
+                        stream.write_all(&packet.bytes).unwrap();
+                    }
+                    ServerSessionResult::RaisedEvent(ServerSessionEvent::ConnectionRequested {
+                        request_id,
+                        ..
+                    }) => {
+                        for response in session.accept_request(request_id).unwrap() {
+                            if let ServerSessionResult::OutboundResponse(packet) = response {
+                                stream.write_all(&packet.bytes).unwrap();
+                            }
+                        }
+                    }
+                    ServerSessionResult::RaisedEvent(
+                        ServerSessionEvent::PublishStreamRequested { request_id, .. },
+                    ) => {
+                        for response in session.accept_request(request_id).unwrap() {
+                            if let ServerSessionResult::OutboundResponse(packet) = response {
+                                stream.write_all(&packet.bytes).unwrap();
+                            }
+                        }
+                        publish_accepted = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let n = match stream.read(&mut buf) {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+        if n == 0 {
+            return;
+        }
+        pending_input = buf[..n].to_vec();
+    }
+}
+
+fn dummy_feed() -> RingFeed {
+    RingFeed::new(
+        Arc::new(crate::media::ring_buffer::RingBuffer::new(4)),
+        Arc::new(FeedEpoch::new()),
+    )
+}
+
+fn budget() -> WorkBudget {
+    WorkBudget::new(8, 4096, Duration::from_millis(50))
+}
+
+fn drive_to<F>(
+    engine: &mut RtmpFabricEngine,
+    client_stream: &mut RtmpConnection,
+    feed: &RingFeed,
+    cursor: &mut FeedCursor,
+    mut is_done: F,
+) where
+    F: FnMut(&RtmpFabricEngine) -> bool,
+{
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "engine did not reach the expected state in time"
+        );
+        let progress = engine.advance(client_stream, Readiness::BOTH, feed, cursor, budget());
+        match progress {
+            EngineProgress::HandshakeComplete => {
+                if is_done(engine) {
+                    return;
+                }
+            }
+            EngineProgress::Needs(_) => thread::sleep(Duration::from_millis(1)),
+            EngineProgress::Failed(failure) => panic!("engine failed: {failure:?}"),
+            other => panic!("unexpected progress: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn engine_reaches_handshake_complete_through_the_visit_loop() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_handshake_only_server_peer(stream);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
+
+    let mut engine =
+        RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
+            .unwrap();
+    let feed = dummy_feed();
+    let mut cursor = FeedCursor::new(0, 0);
+
+    drive_to(
+        &mut engine,
+        &mut client_stream,
+        &feed,
+        &mut cursor,
+        RtmpFabricEngine::is_handshake_done,
+    );
+
+    assert!(engine.is_handshake_done());
+    assert!(!engine.is_publish_accepted());
+    server.join().unwrap();
+}
+
+#[test]
+fn engine_reaches_publish_accepted_through_the_visit_loop() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_full_server_peer(stream);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
+
+    let mut engine =
+        RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
+            .unwrap();
+    let feed = dummy_feed();
+    let mut cursor = FeedCursor::new(0, 0);
+
+    drive_to(
+        &mut engine,
+        &mut client_stream,
+        &feed,
+        &mut cursor,
+        RtmpFabricEngine::is_publish_accepted,
+    );
+
+    assert!(engine.is_publish_accepted());
+    server.join().unwrap();
+}
+
+#[test]
+fn engine_reports_protocol_failure_when_peer_closes_mid_handshake() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        // Read C0/C1 then close immediately without responding.
+        let mut buf = [0u8; 4096];
+        let mut stream = stream;
+        let _ = stream.read(&mut buf);
+        drop(stream);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
+
+    let mut engine =
+        RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
+            .unwrap();
+    let feed = dummy_feed();
+    let mut cursor = FeedCursor::new(0, 0);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(std::time::Instant::now() < deadline, "engine never failed");
+        let progress = engine.advance(
+            &mut client_stream,
+            Readiness::BOTH,
+            &feed,
+            &mut cursor,
+            budget(),
+        );
+        match progress {
+            EngineProgress::Failed(failure) => {
+                assert_eq!(failure.reason, "rtmp_handshake");
+                break;
+            }
+            EngineProgress::Needs(_) => thread::sleep(Duration::from_millis(1)),
+            other => panic!("unexpected progress before failure: {other:?}"),
+        }
+    }
+
+    server.join().unwrap();
+}
+
+#[test]
+fn engine_reports_protocol_failure_when_peer_closes_mid_negotiation() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut stream = stream;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut handshake = PeerHandshake::new(rml_rtmp::handshake::PeerType::Server);
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = stream.read(&mut buf).expect("server handshake read");
+            assert_ne!(n, 0);
+            match handshake.process_bytes(&buf[..n]).unwrap() {
+                PeerResult::InProgress { response_bytes } => {
+                    if !response_bytes.is_empty() {
+                        stream.write_all(&response_bytes).unwrap();
+                    }
+                }
+                PeerResult::Completed { response_bytes, .. } => {
+                    if !response_bytes.is_empty() {
+                        stream.write_all(&response_bytes).unwrap();
+                    }
+                    break;
+                }
+            }
+        }
+        // Handshake done, but close before responding to the connect request.
+        drop(stream);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
+
+    let mut engine =
+        RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
+            .unwrap();
+    let feed = dummy_feed();
+    let mut cursor = FeedCursor::new(0, 0);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(std::time::Instant::now() < deadline, "engine never failed");
+        let progress = engine.advance(
+            &mut client_stream,
+            Readiness::BOTH,
+            &feed,
+            &mut cursor,
+            budget(),
+        );
+        match progress {
+            EngineProgress::Failed(failure) => {
+                assert_eq!(failure.reason, "rtmp_session_negotiation");
+                break;
+            }
+            EngineProgress::HandshakeComplete | EngineProgress::Needs(_) => {
+                thread::sleep(Duration::from_millis(1));
+            }
+            other => panic!("unexpected progress before failure: {other:?}"),
+        }
+    }
+
+    server.join().unwrap();
+}
+
+#[test]
+fn engine_publishes_a_raw_keyframe_once_publish_is_accepted() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (video_tx, video_rx) = std::sync::mpsc::channel::<usize>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_full_server_peer_until_video(stream, video_tx);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
+
+    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
+    let payload = Bytes::from_static(&[
+        0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80, 0, 0, 0, 1, 0x68, 0xce, 0x06,
+        0xe2, 0, 0, 0, 1, 0x65, 0x88,
+    ]);
+    ring.push(crate::media::packet::MediaPacket {
+        media_type: crate::media::packet::MediaType::Video,
+        format: crate::media::packet::PayloadFormat::Raw,
+        is_keyframe: true,
+        track_index: 0,
+        pts: 100,
+        dts: 80,
+        payload,
+    });
+    let feed = RingFeed::new(ring, Arc::new(FeedEpoch::new()));
+
+    let mut engine =
+        RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
+            .unwrap();
+    let mut cursor = FeedCursor::new(0, 0);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "video was never received by the server peer"
+        );
+        if video_rx.try_recv().is_ok() {
+            break;
+        }
+        let progress = engine.advance(
+            &mut client_stream,
+            Readiness::BOTH,
+            &feed,
+            &mut cursor,
+            budget(),
+        );
+        match progress {
+            EngineProgress::Failed(failure) => panic!("engine failed: {failure:?}"),
+            EngineProgress::PeerClosed => panic!("peer closed unexpectedly"),
+            _ => thread::sleep(Duration::from_millis(1)),
+        }
+    }
+
+    server.join().unwrap();
+}
+
+#[test]
+fn advance_stops_draining_the_startup_batch_once_the_budget_is_exhausted() {
+    // Regression test: a `WorkBudget` that is already exhausted after the
+    // first queued wire packet must stop `advance` from draining the rest
+    // of `current_batch` in the same visit. The startup batch here queues
+    // three packets (metadata, video sequence header, audio sequence
+    // header) before any feed unit is ever read, so this exercises the
+    // write path directly — the budget check used to sit only right before
+    // `feed.read_from`, so a queued batch this size drained unconditionally
+    // in one visit regardless of `budget.max_bytes`.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (progress_tx, progress_rx) = std::sync::mpsc::channel::<usize>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_full_server_peer_reporting_bytes_read(stream, progress_tx);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
+
+    let mut metadata = StreamMetadata::new();
+    metadata.video_width = Some(1920);
+    metadata.video_height = Some(1080);
+    metadata.encoder = Some("restream-test".repeat(8));
+    let startup = RtmpPublishStartup {
+        publish_metadata: Some(metadata),
+        startup_video_sequence_header: Some(Bytes::from(vec![0xAB; 256])),
+        startup_audio_sequence_header: Some(Bytes::from(vec![0xCD; 256])),
+        ..RtmpPublishStartup::default()
+    };
+    let mut engine = RtmpFabricEngine::new_client(test_parts(), 4096, false, startup).unwrap();
+    let feed = dummy_feed();
+    let mut cursor = FeedCursor::new(0, 0);
+
+    drive_to(
+        &mut engine,
+        &mut client_stream,
+        &feed,
+        &mut cursor,
+        RtmpFabricEngine::is_publish_accepted,
+    );
+    assert!(engine.is_publish_accepted());
+
+    // A budget that allows the very first write but is exhausted the
+    // instant it reports any bytes back (`is_exhausted` is `consumed >=
+    // max`, so `max_bytes: 1` still permits one write from zero, then
+    // trips on the very next loop pass).
+    let tiny_budget = WorkBudget::new(usize::MAX, 1, Duration::from_secs(60));
+    let progress = engine.advance(
+        &mut client_stream,
+        Readiness::BOTH,
+        &feed,
+        &mut cursor,
+        tiny_budget,
+    );
+    let bytes_in_one_visit = match progress {
+        EngineProgress::Progress { bytes, .. } => bytes,
+        other => panic!("expected bounded progress from one visit, got {other:?}"),
+    };
+
+    // Give the peer a moment to actually receive whatever was sent, then
+    // confirm it did not receive the full three-packet batch in one go —
+    // the fix must have cut the visit off after (at most) one wire packet.
+    let received = progress_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("peer never received any bytes from the budgeted visit");
+    assert_eq!(
+        received, bytes_in_one_visit,
+        "peer-observed bytes must match what the single budgeted visit reported"
+    );
+
+    let full_batch_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < full_batch_deadline,
+            "engine never finished draining the rest of the startup batch"
+        );
+        let full_budget = WorkBudget::new(usize::MAX, usize::MAX, Duration::from_secs(60));
+        let _ = engine.advance(
+            &mut client_stream,
+            Readiness::BOTH,
+            &feed,
+            &mut cursor,
+            full_budget,
+        );
+        if let Ok(total) = progress_rx.try_recv() {
+            assert!(
+                total > bytes_in_one_visit,
+                "expected the remaining batch to flush across later visits"
+            );
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    drop(client_stream);
+    server.join().unwrap();
+}
+
+#[test]
+fn pending_application_bytes_reflects_queued_wire_data_and_drains_to_zero() {
+    // Regression test: `LeafCommon::pending_application_bytes` was never
+    // updated for any RTMP leaf, always reading `0` regardless of how much
+    // encoded-but-unsent data was actually queued (a hot-path audit
+    // finding). `RtmpFabricEngine::pending_application_bytes` now reports
+    // the real total.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (progress_tx, progress_rx) = std::sync::mpsc::channel::<usize>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_full_server_peer_reporting_bytes_read(stream, progress_tx);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
+
+    let mut metadata = StreamMetadata::new();
+    metadata.video_width = Some(1920);
+    metadata.video_height = Some(1080);
+    metadata.encoder = Some("restream-test".repeat(8));
+    let startup = RtmpPublishStartup {
+        publish_metadata: Some(metadata),
+        startup_video_sequence_header: Some(Bytes::from(vec![0xAB; 256])),
+        startup_audio_sequence_header: Some(Bytes::from(vec![0xCD; 256])),
+        ..RtmpPublishStartup::default()
+    };
+    let mut engine = RtmpFabricEngine::new_client(test_parts(), 4096, false, startup).unwrap();
+    assert_eq!(
+        engine.pending_application_bytes(),
+        0,
+        "nothing is queued before Publishing exists"
+    );
+
+    let feed = dummy_feed();
+    let mut cursor = FeedCursor::new(0, 0);
+    drive_to(
+        &mut engine,
+        &mut client_stream,
+        &feed,
+        &mut cursor,
+        RtmpFabricEngine::is_publish_accepted,
+    );
+    assert!(engine.is_publish_accepted());
+
+    // `drive_to` stops the instant `advance` reports `HandshakeComplete`
+    // (the transition into `Publishing`), before that new state has ever
+    // been visited — so the whole startup batch (metadata + video + audio
+    // sequence headers) is still queued, entirely unwritten.
+    let queued = engine.pending_application_bytes();
+    assert!(
+        queued > 0,
+        "the freshly entered Publishing state must report its queued startup batch, got 0"
+    );
+
+    // Drive with generous readiness/budget until the peer confirms it
+    // received the full batch, then confirm the accounting drains back to
+    // zero along with it.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "engine never finished draining the startup batch"
+        );
+        let _ = engine.advance(
+            &mut client_stream,
+            Readiness::BOTH,
+            &feed,
+            &mut cursor,
+            budget(),
+        );
+        if let Ok(received) = progress_rx.try_recv()
+            && received >= queued
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        engine.pending_application_bytes(),
+        0,
+        "fully flushed batch must report zero pending bytes"
+    );
+
+    drop(client_stream);
+    server.join().unwrap();
+}
+
+#[test]
+fn advance_pulls_a_burst_of_feed_units_in_one_read_from_call() {
+    // Regression test: `MediaPublisher` used to call `feed.read_from` once
+    // per feed unit (`ReadBudget::new(1, ..)`), each call carrying its own
+    // `Vec` allocation and ring-atomic traffic (the exact class of overhead
+    // an earlier RTMP optimization already removed once — see
+    // `docs/egress-implementation.md` Phase 5 status). It now pulls up to
+    // `FEED_READ_BURST` units into a local `pending_units` buffer per
+    // `read_from` call. Proven here by blocking the write side (readiness
+    // `writable: false`) so `advance` can pull from the feed but cannot
+    // flush anything: with 5 units already sitting in the ring before this
+    // one `advance` call, the single internal `read_from` must grab all 5
+    // at once (not just 1), leaving 4 still buffered in `pending_units`
+    // after the one unit this call manages to encode before hitting the
+    // write block.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (progress_tx, _progress_rx) = std::sync::mpsc::channel::<usize>();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_full_server_peer_reporting_bytes_read(stream, progress_tx);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
+
+    let mut engine =
+        RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
+            .unwrap();
+    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8));
+    let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
+    let mut cursor = FeedCursor::new(0, 0);
+
+    drive_to(
+        &mut engine,
+        &mut client_stream,
+        &feed,
+        &mut cursor,
+        RtmpFabricEngine::is_publish_accepted,
+    );
+    assert!(engine.is_publish_accepted());
+    assert_eq!(engine.publisher_pending_units_len(), Some(0));
+
+    for i in 0..5u8 {
+        ring.push(crate::media::packet::MediaPacket {
+            media_type: crate::media::packet::MediaType::Video,
+            format: crate::media::packet::PayloadFormat::Raw,
+            is_keyframe: true,
+            track_index: 0,
+            pts: 100 + i as i64,
+            dts: 80 + i as i64,
+            payload: Bytes::from_static(&[
+                0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80, 0, 0, 0, 1, 0x68, 0xce,
+                0x06, 0xe2, 0, 0, 0, 1, 0x65, 0x88,
+            ]),
+        });
+    }
+
+    let progress = engine.advance(
+        &mut client_stream,
+        Readiness {
+            readable: false,
+            writable: false,
+        },
+        &feed,
+        &mut cursor,
+        budget(),
+    );
+    assert!(
+        matches!(progress, EngineProgress::Needs(_)),
+        "a write-blocked visit must report Needs, not Progress: {progress:?}"
+    );
+    assert_eq!(
+        engine.publisher_pending_units_len(),
+        Some(4),
+        "one read_from call must have pulled all 5 ring units into the local \
+         buffer; one was encoded before hitting the write block, 4 must remain \
+         buffered rather than requiring 4 more read_from calls"
+    );
+
+    drop(client_stream);
+    server.join().unwrap();
+}
+
+#[test]
+fn engine_detects_peer_close_during_steady_state_publishing() {
+    // `run_full_server_peer` returns (and drops its socket, closing the
+    // connection) immediately after accepting the publish request, without
+    // ever reading the client's subsequent media writes.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_full_server_peer(stream);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = RtmpConnection::plain(client_stream);
+
+    let mut engine =
+        RtmpFabricEngine::new_client(test_parts(), 4096, false, RtmpPublishStartup::default())
+            .unwrap();
+    let feed = dummy_feed();
+    let mut cursor = FeedCursor::new(0, 0);
+
+    drive_to(
+        &mut engine,
+        &mut client_stream,
+        &feed,
+        &mut cursor,
+        RtmpFabricEngine::is_publish_accepted,
+    );
+    assert!(engine.is_publish_accepted());
+    server.join().unwrap();
+
+    // Steady-state publishing against an empty feed and an already-closed
+    // peer: nothing is ever queued to write, so a write call never runs to
+    // discover the close. Before the control-channel read fix, `advance`
+    // never called `stream.read()` once Publishing, and `Needs` interest
+    // dropped to `Interest::NONE`/`WRITE` — this loop would spin forever
+    // instead of observing the close. It must be discovered by reading.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "engine never detected the peer close"
+        );
+        let progress = engine.advance(
+            &mut client_stream,
+            Readiness::BOTH,
+            &feed,
+            &mut cursor,
+            budget(),
+        );
+        match progress {
+            EngineProgress::Failed(failure) => {
+                assert_eq!(failure.reason, "rtmp_control_read");
+                break;
+            }
+            EngineProgress::Needs(interest) => {
+                assert!(
+                    interest.readable,
+                    "an idle publishing leaf must stay read-registered: {interest:?}"
+                );
+                thread::sleep(Duration::from_millis(1));
+            }
+            other => panic!("unexpected progress: {other:?}"),
+        }
+    }
+}

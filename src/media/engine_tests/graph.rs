@@ -198,6 +198,75 @@ async fn processing_graph_routes_srt_egress_through_ts_mux() {
 }
 
 #[tokio::test]
+async fn processing_graph_shows_recirculation_target_input_edge() {
+    let engine = MediaEngine::new();
+    let pipeline_id = "pipeline-recirc-source";
+    engine
+        .try_register_ingest(pipeline_id, "recirc-source-key", "rtmp")
+        .await
+        .expect("source ingest should register");
+    let output = crate::application::models::Output {
+        id: "out-recirc".to_string(),
+        pipeline_id: pipeline_id.to_string(),
+        name: "Target input".to_string(),
+        url: "pipeline://pipeline-recirc-target/input-backup".to_string(),
+        monitoring_url: None,
+        desired_state: DesiredOutputState::Running,
+        config: crate::domain::output_spec::OutputConfig::source(),
+    };
+    engine
+        .register_egress(
+            "out-recirc",
+            pipeline_id,
+            "pipeline://pipeline-recirc-target/input-backup",
+        )
+        .await;
+    engine
+        .update_egress_target_addr(
+            "out-recirc",
+            "pipeline://pipeline-recirc-target/input-backup".to_string(),
+        )
+        .await;
+    engine
+        .update_egress_phase("out-recirc", EgressPhase::Sending)
+        .await;
+    engine.record_egress_progress("out-recirc", 512).await;
+
+    let graph = crate::api_runtime_views::processing_graph(&engine, pipeline_id, &[output]).await;
+    let nodes = graph["nodes"].as_array().unwrap();
+    let edges = graph["edges"].as_array().unwrap();
+
+    assert!(
+        nodes.iter().any(|node| {
+            node["id"] == "pipeline-recirc-target_input_input_backup"
+                && node["type"] == "recirculation_input"
+                && node["details"]["pipelineId"] == "pipeline-recirc-target"
+                && node["details"]["inputId"] == "input-backup"
+        }),
+        "recirculation output should expose its target pipeline input"
+    );
+    assert!(
+        nodes.iter().any(|node| {
+            node["id"] == "pipeline-recirc-source_output_out-recirc"
+                && node["active"] == true
+                && node["details"]["status"] == "running"
+                && node["details"]["phase"] == "sending"
+                && node["details"]["targetAddr"] == "pipeline://pipeline-recirc-target/input-backup"
+                && node["details"]["bytesOut"] == 512
+        }),
+        "recirculation output should expose runtime status and progress on the graph"
+    );
+    assert!(
+        edges.iter().any(|edge| {
+            edge["from"] == "pipeline-recirc-source_output_out-recirc"
+                && edge["to"] == "pipeline-recirc-target_input_input_backup"
+                && edge["label"] == "in-process recirculation"
+        }),
+        "recirculation output should render the planned pipeline-to-input edge"
+    );
+}
+
+#[tokio::test]
 async fn processing_graph_marks_failed_egress_inactive() {
     let engine = MediaEngine::new();
     let pipeline_id = "pipeline-failed-output-graph";

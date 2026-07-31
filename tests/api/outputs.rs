@@ -60,6 +60,197 @@ async fn local_hls_output_is_accepted_by_api() {
 }
 
 #[tokio::test]
+async fn sink_output_is_accepted_by_api() {
+    let (app, pool) = test_app().await;
+    let cookie = login(&app).await;
+
+    db::create_pipeline(&pool, "p_sink", "P", "key_sink", None, None)
+        .await
+        .unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/pipelines/p_sink/outputs",
+            &cookie,
+            Some(r#"{"name":"Discard","url":" SINK://LOCAL/blackhole ","config":{"video":{"mode":"source","codec":"h265"},"audio":{"mode":"all"}}}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let json = body_json(resp).await;
+    let output_id = json["output"]["id"].as_str().unwrap();
+    assert_eq!(json["output"]["url"], "sink://local/blackhole");
+
+    let stored = db::get_output(&pool, "p_sink", output_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.url, "sink://local/blackhole");
+}
+
+#[tokio::test]
+async fn pipeline_recirculation_rejects_media_transforms() {
+    let (app, pool) = test_app().await;
+    let cookie = login(&app).await;
+
+    db::create_pipeline(&pool, "p_pipe_src", "Source", "key_pipe_src", None, None)
+        .await
+        .unwrap();
+    db::create_pipeline(&pool, "p_pipe_tgt", "Target", "key_pipe_tgt", None, None)
+        .await
+        .unwrap();
+    db::create_pipeline_input(&pool, "backup", "p_pipe_tgt", "Backup", "key_pipe_backup")
+        .await
+        .unwrap();
+
+    for config in [
+        r#"{"video":{"mode":"preset","preset":"720p"},"audio":{"mode":"all"}}"#,
+        r#"{"video":{"mode":"source","codec":"h264"},"audio":{"mode":"all"}}"#,
+        r#"{"video":{"mode":"source"},"audio":{"mode":"selectTracks","tracks":[0]}}"#,
+    ] {
+        let body = format!(
+            r#"{{"name":"Recirc","url":"pipeline://p_pipe_tgt/backup","config":{config}}}"#
+        );
+        let resp = app
+            .clone()
+            .oneshot(auth_req(
+                "POST",
+                "/api/v1/pipelines/p_pipe_src/outputs",
+                &cookie,
+                Some(&body),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
+async fn pipeline_recirculation_output_lifecycle_uses_api_status_and_cleanup() {
+    let (app, pool, engine) = test_app_with_engine().await;
+    let cookie = login(&app).await;
+
+    db::create_pipeline(&pool, "p_life_src", "Source", "key_life_src", None, None)
+        .await
+        .unwrap();
+    db::create_pipeline(&pool, "p_life_tgt", "Target", "key_life_tgt", None, None)
+        .await
+        .unwrap();
+    db::create_pipeline_input(&pool, "backup-a", "p_life_tgt", "Backup A", "key_life_a")
+        .await
+        .unwrap();
+    db::create_pipeline_input(&pool, "backup-b", "p_life_tgt", "Backup B", "key_life_b")
+        .await
+        .unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/pipelines/p_life_src/outputs",
+            &cookie,
+            Some(r#"{"name":"Recirc","url":"pipeline://p_life_tgt/backup-a","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let json = body_json(resp).await;
+    let output_id = json["output"]["id"].as_str().unwrap().to_string();
+    assert_eq!(json["output"]["url"], "pipeline://p_life_tgt/backup-a");
+    assert_eq!(json["output"]["desiredState"], "stopped");
+
+    let uri = format!("/api/v1/pipelines/p_life_src/outputs/{output_id}");
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "PATCH",
+            &uri,
+            &cookie,
+            Some(r#"{"name":"Recirc B","url":"pipeline://p_life_tgt/backup-b","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["output"]["name"], "Recirc B");
+    assert_eq!(json["output"]["url"], "pipeline://p_life_tgt/backup-b");
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            &format!("/api/v1/pipelines/p_life_src/outputs/{output_id}/start"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["desiredState"], "running");
+
+    let token = engine
+        .register_egress(&output_id, "p_life_src", "pipeline://p_life_tgt/backup-b")
+        .await;
+    engine
+        .update_egress_target_addr(&output_id, "pipeline://p_life_tgt/backup-b".to_string())
+        .await;
+    engine
+        .update_egress_phase(&output_id, EgressPhase::Sending)
+        .await;
+    engine.record_egress_progress(&output_id, 256).await;
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            &format!("/api/v1/pipelines/p_life_src/outputs/{output_id}/status"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let status = body_json(resp).await;
+    assert_eq!(status["status"], "running");
+    assert_eq!(status["phase"], "sending");
+    assert_eq!(status["targetAddr"], "pipeline://p_life_tgt/backup-b");
+    assert_eq!(status["bytesOut"], 256);
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            &format!("/api/v1/pipelines/p_life_src/outputs/{output_id}/stop"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["desiredState"], "stopped");
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req("DELETE", &uri, &cookie, None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(token.is_cancelled());
+    assert!(
+        db::get_output(&pool, "p_life_src", &output_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn output_urls_are_parsed_normalized_and_host_required() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;

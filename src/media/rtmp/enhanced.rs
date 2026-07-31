@@ -73,6 +73,7 @@ pub(super) fn cache_hevc_parameter_sets(payload: &[u8], cache: &mut Vec<u8>) {
     }
 }
 
+#[cfg(test)]
 pub(super) fn raw_packet_starts_with_hevc_parameter_set(payload: &[u8]) -> bool {
     let Some(first_nalu) = codec::split_annexb_nalus(payload).first().copied() else {
         return false;

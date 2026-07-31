@@ -37,6 +37,21 @@ in SQLite.
 | Media packet ring depth (source/ingest) | `1024` packets | `RESTREAM_RING_CAPACITY` |
 | Media packet ring depth (transcoder output) | `512` packets | `RESTREAM_TRANSCODER_RING_CAPACITY` (720p30 output ≈ 80 pkt/s → 512 slots ≈ 6.4 s jitter headroom; lower than source ring because I-frame payloads are large) |
 | Shared SRT TS ring depth | `256` chunks | `RESTREAM_TS_RING_CAPACITY` (SRT protocol's own send buffer absorbs network jitter; this ring only bridges muxer → socket write, typically sub-millisecond) |
+| Egress fabric rollout | All protocols on fabric | `RESTREAM_EGRESS_FABRIC` (`off`/`srt`/`rtmp`/`all`/`shadow-metrics`; legacy `1`/`true`/`yes`/`on` still map to `srt` for compatibility. Set to `off` to fall back to the legacy per-output path. See `docs/egress-implementation.md` Phase 6 "Rollout order" for the full history: a real RTMP-fabric regression under a file-ingest workload was found and fixed, then a second, deeper idle-poll gap was found and fixed before re-flipping the default back to `all`.) |
+| Egress fabric shard count | Derived from the effective CPU count (clamped `2..=8`) | `RESTREAM_EGRESS_SHARDS` (clamped to `1..=1024`) |
+| Egress fabric command capacity | `1024` commands per shard | `RESTREAM_EGRESS_COMMAND_CAPACITY` |
+| Egress fabric command batch | `32` commands per loop | `RESTREAM_EGRESS_COMMAND_BATCH` |
+| Egress fabric readiness batch | `64` ready leaves per loop | `RESTREAM_EGRESS_READY_BATCH` |
+| Egress fabric timer batch | `64` timers per loop | `RESTREAM_EGRESS_TIMER_BATCH` |
+| Egress fabric idle wait | `1` ms | `RESTREAM_EGRESS_IDLE_WAIT_MS` |
+| SRT fabric poll events | `1024` events per shard poller | `RESTREAM_EGRESS_SRT_POLLER_MAX_EVENTS` |
+| Egress fabric visit units | `32` units per visit | `RESTREAM_EGRESS_VISIT_MAX_UNITS` |
+| Egress fabric visit bytes | `262144` bytes per visit | `RESTREAM_EGRESS_VISIT_MAX_BYTES` |
+| Egress fabric visit time | `2000` µs per visit | `RESTREAM_EGRESS_VISIT_MAX_US` |
+| Egress pending write limit | `262144` bytes per output | `RESTREAM_EGRESS_MAX_PENDING_BYTES` (application-owned protocol bytes; distinct from `RESTREAM_RTMP_STREAM_BUFFER_BYTES`, which configures the TCP socket buffers) |
+| Egress fabric drain timeout | `3000` ms | `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` (clamped `1..=60000`; on shutdown, how long a shard keeps running to let leaves with queued bytes flush before force-closing — currently drives real per-leaf draining for RTMP and SRT, see `docs/egress-implementation.md` Phase 6) |
+
+`EgressFabricConfig::validate` runs once at startup after per-field clamping and logs non-fatal `restream.config.warning` events for cross-field issues among the egress fabric settings above — e.g. `RESTREAM_EGRESS_MAX_PENDING_BYTES` smaller than `RESTREAM_EGRESS_VISIT_MAX_BYTES`, `RESTREAM_EGRESS_SHARDS` more than 4x the effective CPU count, `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` under 50ms, or `RESTREAM_EGRESS_COMMAND_BATCH` exceeding `RESTREAM_EGRESS_COMMAND_CAPACITY`. See `docs/egress-implementation.md` Phase 6.
 | SRT egress muxer max outputs per shard | `0` | `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` (disabled at `0`; when set, SRT egress creates a new shared TS muxer shard as each pipeline+encoding cohort crosses this many outputs) |
 | SRT egress muxer max shards | `64` | `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` (hard guardrail for dynamic SRT muxer sharding; once reached, new outputs are assigned to the least-loaded existing shard and a warning is emitted) |
 | SRT egress local-port reuse | Enabled | `RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT` (`0`/`false` disables reuse) |
@@ -196,9 +211,13 @@ Supported routing behavior:
 | `rtmps://...` | Native RTMPS egress through the RTMP path with TLS before handshake |
 | `srt://...` | Native SRT MPEG-TS egress; percent-encoded characters in the `streamid` query parameter are decoded automatically |
 | `hls://...` | Starts the pipeline's local in-memory HLS segmenter |
+| `sink://...` | Discards media through the egress fabric for diagnostics, soak tests, and capacity measurement |
+| `pipeline://...` | In-process pipeline recirculation; candidate topology and target input are validated before backend ownership starts |
 | `http://...`, `https://...` | Starts the local MPEG-TS segmenter and uploads segments/playlist with HTTP PUT |
 
-Any other prefix is rejected during validation. The served preview HLS path is
+Any other prefix is rejected during validation. Pipeline recirculation URLs are
+recognized and checked for cycles and target-input ownership before runtime
+backend ownership starts. The served preview HLS path is
 fragmented MP4 (`init.mp4` + `.m4s`), but HTTP/HTTPS HLS upload intentionally
 stays on MPEG-TS for ingest compatibility. For HTTP/HTTPS HLS upload,
 segment upload URLs are derived from the playlist target: a `file=` query

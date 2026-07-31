@@ -304,10 +304,14 @@ URL behavior:
 | `rtmps://` | RTMPS with TLS before the RTMP handshake |
 | `srt://` | SRT/MPEG-TS |
 | `hls://` | Local in-memory HLS segmenter |
+| `sink://` | Fabric sink output that discards media after egress accounting |
+| `pipeline://` | In-process pipeline recirculation; candidate topology and target input are validated before the output starts |
 | `http://` | HLS HTTP PUT upload |
 | `https://` | HLS HTTP PUT upload |
 
 Any other prefix is rejected during validation with a `400 Bad Request`.
+Pipeline recirculation URLs are parsed and checked for cycles and target-input
+ownership before the output can start.
 HTTP/HTTPS HLS upload uses one shared local segmenter per pipeline, PUTs each
 new `seg<N>.ts`, then PUTs the playlist URL.
 
@@ -885,9 +889,35 @@ Query params:
       "status": "ok",
       "detail": "no cgroup CPU quota; scheduling is cpuset/host limited"
     }
-  ]
+  ],
+  "egressFabricShards": [
+    {
+      "protocol": "rtmp",
+      "feedId": "pipe1:video:720p",
+      "shardIndex": 1,
+      "state": "healthy",
+      "loopIterations": 48213,
+      "mediaTicks": 9021,
+      "progressAgeMs": 12,
+      "commandDepth": 0,
+      "commandCapacity": 1024
+    }
+  ],
+  "tuning": {
+    "outputMaxRetries": 10
+  }
 }
 ```
+
+`egressFabricShards` lists every live egress fabric shard across all four
+protocol registries (SRT, RTMP, sink, pipeline recirculation) — empty
+when no fabric-owned output is running. `state` is one of `healthy`,
+`stalled`, `stopped`, or `panicked`; `/api/v1/alerts` derives Warning
+alerts for `stalled` shards and shards whose `commandDepth` is at or
+above 80% of `commandCapacity`, and a Critical alert for `panicked`
+shards. `tuning.outputMaxRetries` mirrors `RESTREAM_OUTPUT_MAX_RETRIES`;
+`/api/v1/alerts` derives a Warning for any output whose `retryAttempts`
+(under `pipelines.<id>.outputs.<id>`) has reached 80% of that ceiling.
 
 See [Observability](observability.md) for field derivation, publisher quality,
 and diagnostic check details.
@@ -1232,9 +1262,21 @@ Query parameters:
 
 The summary contains measured process and child-process fields such as CPU,
 RSS, thread count, file descriptor count, child FFmpeg count, and active SRT
-sender thread permits. Nodes include execution ownership (`tokio_task`,
-`os_thread`, `child_process`, `shared`, or `process`) plus memory attribution
-with a confidence marker:
+sender thread permits, plus egress-fabric shard counters
+(`fabricShardThreadCount`, `fabricShardStalledCount`,
+`fabricShardPanickedCount`, global-scope only — a fabric shard thread is
+shared across every pipeline, not owned by one). Nodes include execution
+ownership (`tokio_task`, `os_thread`, `shard_thread`, `child_process`,
+`shared`, or `process`) plus memory attribution with a confidence marker.
+An egress output node's `execution` is `shard_thread` (not `os_thread`/
+`tokio_task`) when the output is fabric-owned (`fabric: true`) — it runs
+on a shared shard thread it doesn't exclusively own, so `threads.appOwned`
+is `0` for it even for protocols (SRT) whose legacy path spawns a
+dedicated sender thread per output. Global-scope responses also include
+one `egress_shard` node per live fabric shard (`state`: `healthy`,
+`stalled`, `stopped`, or `panicked`; see `egressFabricShards` under
+`/api/v1/engine/health` above for the same underlying data). The memory
+attribution confidence marker is one of:
 
 - `measured`: process RSS, child FFmpeg RSS, process thread/fd counts
 - `derived`: ring payload stats, AVIO queue lengths, stage/egress counters
@@ -1311,6 +1353,8 @@ counters, egresses, and transcoder buffer count.
       "lastError": null,
       "lastErrorAt": null,
       "failurePhase": null,
+      "fabric": false,
+      "shardId": null,
       "quality": {
         "tcpCongestionAlgorithm": "cubic",
         "tcpRttMs": 12.4,

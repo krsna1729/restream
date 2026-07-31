@@ -6,14 +6,20 @@
 
 pub mod avio;
 pub mod codec;
+pub mod egress;
 pub mod engine;
 mod engine_egress;
+mod engine_egress_fabric;
+pub(crate) mod engine_egress_fabric_diagnostics;
 pub mod engine_hls;
 mod engine_ingest;
 mod engine_ingest_metadata;
 mod engine_pipeline;
+mod engine_pipeline_egress_fabric;
 pub mod engine_registries;
+mod engine_rtmp_egress_fabric;
 mod engine_runtime;
+mod engine_sink_egress_fabric;
 mod engine_snapshots;
 pub(crate) mod external_file_ingest;
 pub mod external_transcoder;
@@ -32,6 +38,7 @@ pub mod mpegts;
 pub mod packet;
 pub mod pipe_metrics;
 pub mod profiles;
+pub mod recirculation;
 pub mod recording;
 pub mod ring_buffer;
 pub mod rtmp;

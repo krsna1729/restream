@@ -51,6 +51,22 @@ fn output_config_is_custom_output_reflects_video_selector() {
 }
 
 #[test]
+fn output_config_source_passthrough_matches_same_format_path_only() {
+    assert!(OutputConfig::default().is_source_passthrough());
+    assert!(!OutputConfig::preset("720p").is_source_passthrough());
+    assert!(
+        !OutputConfig::source()
+            .with_video_codec(OutputVideoCodec::H264)
+            .is_source_passthrough()
+    );
+    assert!(
+        !OutputConfig::source()
+            .with_audio(AudioRouting::SelectTracks { tracks: vec![0] })
+            .is_source_passthrough()
+    );
+}
+
+#[test]
 fn output_config_defaults_missing_protocol_to_auto_legacy_rtmp() {
     let value = serde_json::json!({
         "video": {"mode": "source"},
@@ -138,4 +154,25 @@ fn capability_validation_rejects_explicit_h265_for_legacy_rtmp() {
     let error = config.validate_capabilities(capabilities).unwrap_err();
 
     assert_eq!(error, OutputConfigError::UnsupportedCodecForProtocol);
+}
+
+#[test]
+fn sink_capabilities_accept_source_codecs() {
+    let capabilities = ProtocolCapabilities {
+        protocol: EgressProtocol::Sink,
+        rtmp_mode: None,
+    };
+
+    assert!(
+        OutputConfig::source()
+            .with_video_codec(OutputVideoCodec::H264)
+            .validate_capabilities(capabilities)
+            .is_ok()
+    );
+    assert!(
+        OutputConfig::source()
+            .with_video_codec(OutputVideoCodec::Hevc)
+            .validate_capabilities(capabilities)
+            .is_ok()
+    );
 }

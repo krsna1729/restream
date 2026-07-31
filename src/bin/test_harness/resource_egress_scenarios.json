@@ -91,5 +91,12 @@
     "outputKinds": [
       "rtmpSource"
     ]
+  },
+  {
+    "name": "egress-growth-source-rtmps",
+    "configIndex": 1,
+    "outputKinds": [
+      "rtmpsSource"
+    ]
   }
 ]

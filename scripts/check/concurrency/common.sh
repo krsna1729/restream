@@ -3,7 +3,7 @@
 run_common_concurrency_checks() {
   local run_step_fn="$1"
 
-  for target in avio_loom input_selection_loom ring_migration_loom ts_chunk_ring_loom ts_muxer_stage_loom transcoder_stage_loom; do
+  for target in avio_loom egress_feed_wake_loom input_selection_loom ring_migration_loom ts_chunk_ring_loom ts_muxer_stage_loom transcoder_stage_loom; do
     "$run_step_fn" "loom-${target}" ./scripts/harness/loom-target.sh "$target"
   done
 

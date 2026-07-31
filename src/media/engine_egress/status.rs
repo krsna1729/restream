@@ -149,6 +149,12 @@ impl MediaEngine {
             uptime_secs: egress.start_instant.elapsed().as_secs_f64(),
             bytes_sent: egress.bytes_sent.load(Ordering::Relaxed),
             last_progress_ms: egress.last_progress_ms.load(Ordering::Relaxed),
+            resync_count: egress.resync_count.load(Ordering::Relaxed),
+            feed_lag_units: egress.feed_lag_units.load(Ordering::Relaxed),
+            backpressure_reason: *egress
+                .backpressure_reason
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
             last_error,
             last_error_ms: egress.last_error_ms.load(Ordering::Relaxed),
             failure_phase,

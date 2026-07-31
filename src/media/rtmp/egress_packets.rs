@@ -21,7 +21,7 @@ pub(super) fn cache_h264_parameter_sets(payload: &[u8], cache: &mut Vec<u8>) {
     }
 }
 
-pub(super) fn startup_video_sequence_header(
+pub(crate) fn startup_video_sequence_header(
     ring_buffer: &RingBuffer,
     ingest_sequence_header: Option<Bytes>,
     enhanced_hevc_video: bool,
@@ -77,7 +77,7 @@ pub(super) fn rtmp_warmup_ready(
             .any(|packet| packet.media_type == crate::media::packet::MediaType::Video)
 }
 
-pub(super) fn should_send_startup_audio_sequence_header(
+pub(crate) fn should_send_startup_audio_sequence_header(
     video_ready: bool,
     ring_buffer: &RingBuffer,
 ) -> bool {
@@ -86,14 +86,14 @@ pub(super) fn should_send_startup_audio_sequence_header(
         || ring_buffer.video_parameter_sets().is_some()
 }
 
-pub(super) fn should_defer_audio_until_video_ready(
+pub(crate) fn should_defer_audio_until_video_ready(
     video_ready: bool,
     ring_buffer: &RingBuffer,
 ) -> bool {
     !video_ready && rtmp_output_waits_for_video(ring_buffer)
 }
 
-pub(super) fn resolve_deferred_audio_sequence_header(
+pub(crate) fn resolve_deferred_audio_sequence_header(
     cached_sequence_header: Option<&Bytes>,
     output_audio_track: Option<&AudioMeta>,
 ) -> Option<Bytes> {
@@ -107,7 +107,7 @@ pub(super) fn resolve_deferred_audio_sequence_header(
     })
 }
 
-pub(super) fn h264_sps_nalu(payload: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn h264_sps_nalu(payload: &[u8]) -> Option<Vec<u8>> {
     codec::split_annexb_nalus(payload)
         .iter()
         .find(|nalu| !nalu.is_empty() && (nalu[0] & 0x1F) == 7)
@@ -136,7 +136,7 @@ pub(super) fn video_sequence_header_for_keyframe(
     }
 }
 
-pub(super) fn validate_rtmp_output_audio_packet_track(track_index: u32) -> Result<(), String> {
+pub(crate) fn validate_rtmp_output_audio_packet_track(track_index: u32) -> Result<(), String> {
     if track_index != 0 {
         return Err(format!(
             "RTMP output requires a single routed audio track, but observed track index {} on the output ring. Choose subset, downmix, or remap audio routing.",
