@@ -430,10 +430,10 @@ struct ProtocolFabricMatrixSpec {
 
 /// Shared A/B driver behind [`rtmp_fabric_matrix`] and [`srt_fabric_matrix`]:
 /// the same named scenario run twice, once legacy (`RESTREAM_EGRESS_FABRIC`
-/// unset) and once fabric-routed, each in its own isolated mediamtx+restream
-/// stack, comparing CPU/RSS. A smoke-scale correctness + early resource
-/// read, not the exhaustive 1,000+-output parity proof Phase 5's exit gate
-/// ultimately requires before a default-mode flip.
+/// pinned to `off`) and once fabric-routed, each in its own isolated
+/// mediamtx+restream stack, comparing CPU/RSS. A smoke-scale correctness +
+/// early resource read, not the exhaustive 1,000+-output parity proof Phase
+/// 5's exit gate ultimately requires before a default-mode flip.
 async fn run_protocol_fabric_matrix(spec: ProtocolFabricMatrixSpec) -> Result<Value, String> {
     let mut env = BranchMatrixEnv::from_env_with_default_dir(spec.default_dir)?;
     let egress_count = env_usize(spec.count_env, 10).max(1);
@@ -445,8 +445,15 @@ async fn run_protocol_fabric_matrix(spec: ProtocolFabricMatrixSpec) -> Result<Va
         .ok_or_else(|| format!("unknown {} scenario: {scenario_name}", spec.mode))?;
 
     let parent_work_dir = env.resource.work_dir.clone();
+    // Both variants pin an explicit value — see the identical fix and
+    // rationale in `mixed_fabric_matrix` below: an empty "legacy" override
+    // silently stopped meaning "off" once the default rollout flipped to
+    // `all`.
     let variants: [(&str, Vec<(&'static str, String)>); 2] = [
-        ("legacy", Vec::new()),
+        (
+            "legacy",
+            vec![("RESTREAM_EGRESS_FABRIC", "off".to_string())],
+        ),
         (
             "fabric",
             vec![("RESTREAM_EGRESS_FABRIC", spec.fabric_value.to_string())],
@@ -525,8 +532,19 @@ pub(crate) async fn mixed_fabric_matrix() -> Result<Value, String> {
     let config = sweep_configs()[1];
 
     let parent_work_dir = env.resource.work_dir.clone();
+    // Both variants pin an explicit value rather than leaving "legacy"'s
+    // override empty: an empty override means "inherit whatever the
+    // process environment (or EgressFabricConfig::default()) resolves
+    // to," which silently stopped meaning "off" the moment the default
+    // rollout flipped to `all` (see docs/egress-implementation.md Phase
+    // 6). An unset ambient `RESTREAM_EGRESS_FABRIC` in the caller's shell
+    // now made "legacy" actually run the fabric too, comparing fabric
+    // against itself.
     let variants: [(&str, Vec<(&'static str, String)>); 2] = [
-        ("legacy", Vec::new()),
+        (
+            "legacy",
+            vec![("RESTREAM_EGRESS_FABRIC", "off".to_string())],
+        ),
         (
             "fabric",
             vec![("RESTREAM_EGRESS_FABRIC", "all".to_string())],
