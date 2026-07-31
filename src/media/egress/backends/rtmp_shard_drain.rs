@@ -104,6 +104,19 @@ where
             leaf.common
                 .progress_sink
                 .record_backpressure_state(lag_units, reason);
+            // TEMP-DIAG4: per-second heartbeat for investigating a
+            // CI-observed deterministic per-leaf stall. Remove once
+            // root-caused.
+            tracing::info!(
+                output_id = %leaf.common.output_id,
+                pending_bytes = leaf.common.pending_application_bytes,
+                registered_interest = ?leaf.registered_interest,
+                enqueued = leaf.common.schedule.enqueued,
+                lag_units,
+                diag_poll_calls = self.diag_poll_calls,
+                diag_poll_events = self.diag_poll_events,
+                "TEMP-DIAG4 rtmp leaf heartbeat"
+            );
         }
 
         let stalled: Vec<OutputId> = self

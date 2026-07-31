@@ -407,6 +407,12 @@ pub(crate) struct RtmpShardBackend<
     /// `EgressShardRuntime::record_iteration` into `ShardMetrics::feed_resyncs`
     /// for the repeated-resync alert (`derive_alerts`, `src/alerts.rs`).
     resync_count: u64,
+    // TEMP-DIAG4: counters for investigating a CI-observed deterministic
+    // per-leaf stall (same output fails ~15s after every connect, every
+    // retry). Remove once root-caused.
+    diag_poll_calls: u64,
+    diag_poll_events: u64,
+    diag_last_heartbeat: Option<Instant>,
 }
 
 impl<P> RtmpShardBackend<P, NoopRtmpResolveCompletionSource, EmptyRtmpPublishStartupSource>
@@ -462,6 +468,9 @@ where
             last_stall_sweep: None,
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
+            diag_poll_calls: 0,
+            diag_poll_events: 0,
+            diag_last_heartbeat: None,
         }
     }
 
@@ -693,15 +702,28 @@ where
     }
 
     fn poll_ready(&mut self) {
+        self.diag_poll_calls = self.diag_poll_calls.saturating_add(1);
         if self.poller.poll_leaves(0, &mut self.poll_buffer).is_err() {
             return;
         }
         let events: Vec<_> = self.poll_buffer.drain(..).collect();
+        self.diag_poll_events = self.diag_poll_events.saturating_add(events.len() as u64);
         for event in events {
             let Some(leaf) = self.leaf_mut(event.key) else {
+                tracing::info!(
+                    leaf_key = event.key.0,
+                    "TEMP-DIAG4 poll_ready: event for missing leaf slot"
+                );
                 continue;
             };
             if leaf.common.schedule.enqueued {
+                tracing::info!(
+                    output_id = %leaf.common.output_id,
+                    leaf_key = event.key.0,
+                    readable = event.readable,
+                    writable = event.writable,
+                    "TEMP-DIAG4 poll_ready: skipped, already enqueued"
+                );
                 continue;
             }
             leaf.common.schedule.enqueued = true;
@@ -738,7 +760,17 @@ where
         );
 
         let (progress, decision) = match result {
-            EngineVisitResult::StaleGeneration => return Some((None, VisitDecision::Suspend)),
+            EngineVisitResult::StaleGeneration => {
+                tracing::info!(
+                    output_id = %leaf.common.output_id,
+                    leaf_key = event.key.0,
+                    event_generation = event.generation,
+                    common_generation = leaf.common.generation,
+                    enqueued_after = leaf.common.schedule.enqueued,
+                    "TEMP-DIAG4 visit hit StaleGeneration"
+                );
+                return Some((None, VisitDecision::Suspend));
+            }
             EngineVisitResult::Visited(outcome) => (outcome.progress, outcome.decision),
         };
         if matches!(
