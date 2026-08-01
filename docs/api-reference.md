@@ -911,7 +911,8 @@ Query params:
 
 `egressFabricShards` lists every live egress fabric shard across all four
 protocol registries (SRT, RTMP, sink, pipeline recirculation) — empty
-when no fabric-owned output is running. `state` is one of `healthy`,
+when no output is running (the egress fabric is the only egress path).
+`state` is one of `healthy`,
 `stalled`, `stopped`, or `panicked`; `/api/v1/alerts` derives Warning
 alerts for `stalled` shards and shards whose `commandDepth` is at or
 above 80% of `commandCapacity`, and a Critical alert for `panicked`
@@ -1268,11 +1269,10 @@ sender thread permits, plus egress-fabric shard counters
 shared across every pipeline, not owned by one). Nodes include execution
 ownership (`tokio_task`, `os_thread`, `shard_thread`, `child_process`,
 `shared`, or `process`) plus memory attribution with a confidence marker.
-An egress output node's `execution` is `shard_thread` (not `os_thread`/
-`tokio_task`) when the output is fabric-owned (`fabric: true`) — it runs
-on a shared shard thread it doesn't exclusively own, so `threads.appOwned`
-is `0` for it even for protocols (SRT) whose legacy path spawns a
-dedicated sender thread per output. Global-scope responses also include
+An egress output node's `execution` is always `shard_thread` (not
+`os_thread`/`tokio_task`) — every network egress output is fabric-owned,
+running on a shared shard thread it doesn't exclusively own, so
+`threads.appOwned` is `0` for it. Global-scope responses also include
 one `egress_shard` node per live fabric shard (`state`: `healthy`,
 `stalled`, `stopped`, or `panicked`; see `egressFabricShards` under
 `/api/v1/engine/health` above for the same underlying data). The memory
@@ -1353,8 +1353,8 @@ counters, egresses, and transcoder buffer count.
       "lastError": null,
       "lastErrorAt": null,
       "failurePhase": null,
-      "fabric": false,
-      "shardId": null,
+      "fabric": true,
+      "shardId": 1,
       "quality": {
         "tcpCongestionAlgorithm": "cubic",
         "tcpRttMs": 12.4,

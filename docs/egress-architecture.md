@@ -898,25 +898,19 @@ prove these invariants.
 
 ## Compatibility and migration
 
-The new fabric is introduced behind a rollout selector. Legacy and fabric
-outputs may coexist during migration, but one output must have exactly one
-owner.
+The fabric shipped behind a rollout selector, migrated SRT first (the
+existing per-leaf sender thread and byte queue were the largest structural
+limit), then RTMP once the common fabric was proven with a fake engine and
+live SRT load, then removed the legacy per-output path and the rollout
+selector entirely once both protocols shared the common lifecycle and
+policy, live parity and rollback gates passed, operational dashboards
+exposed fabric metrics, and the 1,000-plus-leaf isolation workload passed
+repeatedly. See `docs/egress-implementation.md` for the full migration
+record.
 
 The control plane, persisted output configuration, API contracts, stage keys,
-and canonical `MediaPacket` behavior remain stable. Migration changes runtime
-ownership and scheduling, not user-visible output identity.
-
-SRT should migrate first because the existing per-leaf sender thread and byte
-queue are the largest structural limit. RTMP migrates after the common fabric
-is proven with a fake engine and live SRT load.
-
-The legacy path is removed only after:
-
-- both RTMP and SRT use the common lifecycle and policy;
-- live parity and rollback gates pass;
-- all legacy thread and queue ownership is absent from production egress;
-- operational dashboards expose fabric metrics;
-- the 1,000-plus-leaf isolation workload passes repeatedly.
+and canonical `MediaPacket` behavior stayed stable throughout — migration
+changed runtime ownership and scheduling, not user-visible output identity.
 
 ## Tradeoffs
 

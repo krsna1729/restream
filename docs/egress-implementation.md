@@ -3660,13 +3660,19 @@ Choose the smallest shard count that meets acceptance with operational
 headroom. Do not introduce internal CPU affinity unless a separate A/B proof
 shows a consistent end-to-end win.
 
-Remove:
+Removed (see "Legacy removal" below for the full record):
 
 - legacy RTMP task-per-output ownership;
-- legacy SRT feeder, queue, sender thread, and sender semaphore;
-- duplicate retry and lifecycle policy;
-- compatibility metrics and rollout flags that no longer serve rollback;
-- tests that only exercise removed implementation details.
+- legacy SRT feeder, queue, and sender thread (the sender semaphore
+  stayed — it's shared with `src/media/srt/play.rs`, an unrelated
+  feature);
+- compatibility metrics and rollout flags that no longer served rollback;
+- tests that only exercised removed implementation details.
+
+(No duplicate retry/lifecycle policy needed removing: job-level retry
+was already the single shared mechanism both paths funneled into; the
+one real duplication was four now-dead `EgressPhase` variants the legacy
+protocol loops alone used to set.)
 
 Update:
 
@@ -3722,10 +3728,70 @@ properties, `EgressShardGroup::grow`/`shrink` id-density, and
 sequences (`src/media/egress/manager/tests.rs`,
 `src/media/egress/shard/tests/group.rs`, `src/media/egress/runtime.rs`).
 
+### Legacy removal
+
+Done, without the production canary/observation window earlier notes in
+this file said it was deliberately waiting for — an explicit, informed
+choice made after that tradeoff was raised, not an oversight. What was
+removed:
+
+- `src/media/rtmp/egress.rs` (the legacy per-output RTMP task loop,
+  `start_rtmp_egress`), `src/media/rtmp/egress_write.rs` (its write
+  queue), and `src/media/srt_egress.rs` (the legacy SRT feeder task,
+  `start_srt_egress`, with its `Arc<MemoryQueue>` send queue and
+  dedicated `std::thread::spawn` sender thread) — deleted entirely.
+- Within `src/media/rtmp/egress_connection.rs` and `egress_transport.rs`,
+  only the legacy-only pieces (the async Tokio socket wrapper and its
+  connect/TLS/TCP-option helpers). `RtmpSessionCore`/`RtmpSessionEvent`/
+  `RtmpSessionError` — the pure, socket-independent RTMP protocol state
+  machine — stayed, since the fabric backend depends on them directly.
+  This distinction mattered: an earlier pass misclassified the whole
+  file as legacy-only before real call sites were checked.
+- `EgressRolloutMode` and the `RESTREAM_EGRESS_FABRIC` env var
+  (`src/config.rs`), and the routing branches in
+  `src/infrastructure/bootstrap/egress.rs`/`egress_task.rs` that chose
+  between fabric and legacy per protocol. RTMP/RTMPS/SRT now always
+  attempt the fabric path.
+- The legacy egress-queue registration map (`EgressRegistries.queues`
+  and its four accessor methods) and the
+  `memoryAccounting.avioQueues.egressQueues` telemetry surface it fed —
+  nothing registered into it once the SRT feeder was gone.
+- Tests that only exercised removed implementation details: the legacy
+  connect-loop's pre-connect warmup gate, the legacy SRT
+  queue-registration race test, the `EgressRolloutMode` parsing/routing
+  matrix, `RtmpWriteQueue`'s own unit tests, and the harness's
+  `avioEgressQueues` residue-detection check.
+
+**Not removed, on purpose:** `RuntimeInfra.sender_semaphore` and
+`try_acquire_srt_sender_permit` look egress-specific but are shared with
+`src/media/srt/play.rs` (an unrelated SRT playback feature) — caught by
+checking real production callers before deleting, not by the file/module
+naming. `src/media/srt/egress_connect/{bonded,single}.rs` look legacy-only
+by name but are the connect implementation `fabric.rs` calls into
+directly — also kept.
+
+**Known gap introduced by this removal, not by the removal method:** the
+deleted legacy RTMP warmup-gate test proved `start_rtmp_egress` wouldn't
+dial out until its ring had data (avoiding MediaMTX dropping an idle
+publisher for inactivity). The fabric RTMP path has no equivalent gate
+today (`rtmp_warmup_ready`, also deleted, had no fabric caller) — this
+predates this removal (fabric has been the default path for a while), but
+is worth a follow-up if it ever surfaces as a real reconnect-storm
+symptom.
+
+Left as future cleanup, not required for correctness:
+`src/api_runtime_views/resource_map.rs`'s per-egress queue-length lookup
+and the now-single-valued `fabric`/`execution` branching in its
+`egress_node` — both already always resolved to the fabric case for
+fabric-owned outputs, so removing the legacy queue source didn't change
+their behavior, just made what was already dead input explicit.
+
 ### Exit gate
 
 No production network output uses a per-output application thread, private
 media queue, independent retry task, or protocol-specific lifecycle loop.
+This is now true unconditionally, not just under the fabric rollout
+default — there is no other path.
 
 ## Existing-code change map
 
