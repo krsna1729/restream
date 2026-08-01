@@ -298,6 +298,25 @@ impl EgressShardHandle {
         }
         self.snapshot()
     }
+
+    /// Send `Shutdown` but don't block on the shard thread's graceful
+    /// drain window (up to `EgressShardConfig::drain_timeout`) -- used by
+    /// `EgressShardGroup::shrink` (`EgressFabricRuntime::rescale`'s
+    /// scale-in path), which runs under the caller's shared per-protocol
+    /// registry lock. Blocking there would stall every other feed's
+    /// dispatch on that lock for however long this one shard takes to
+    /// drain. Dropping a `JoinHandle` without joining it is safe and
+    /// well-defined: the OS thread keeps running independently and
+    /// reclaims its own resources on exit; nothing here needs the join to
+    /// observe a panic either, since that's recorded in the shared
+    /// snapshot `Arc` the thread writes before it exits, not in the
+    /// `JoinHandle`'s `Result`. The final full-runtime shutdown path
+    /// (`EgressShardGroup::shutdown_and_join`) still joins inline, since
+    /// that IS the definitive "fully stopped" signal its callers wait for.
+    pub fn shutdown_detached(mut self) {
+        let _ = self.sender.send(EgressCommand::Shutdown);
+        self.join.take();
+    }
 }
 
 fn run_shard_thread<B: EgressShardBackend>(

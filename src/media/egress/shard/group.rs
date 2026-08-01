@@ -142,10 +142,17 @@ impl EgressShardGroup {
     /// draining any leaves it still owned per its own `Shutdown` handling
     /// (`EgressShardRuntime::run`'s drain window), it does not reassign
     /// them anywhere.
-    pub fn shrink(&mut self) -> Option<(ShardId, EgressShardSnapshot)> {
+    ///
+    /// Detaches rather than joins the shard thread (see
+    /// `EgressShardHandle::shutdown_detached`'s doc comment): the shard is
+    /// routable-unreachable immediately (removed from `handles` before
+    /// this returns), but its graceful drain continues in the background
+    /// rather than blocking this call for up to `drain_timeout`.
+    pub fn shrink(&mut self) -> Option<ShardId> {
         let handle = self.handles.pop()?;
         let shard_id = handle.shard_id();
-        Some((shard_id, handle.shutdown_and_join()))
+        handle.shutdown_detached();
+        Some(shard_id)
     }
 
     pub fn shutdown_and_join(self) -> Vec<EgressShardSnapshot> {

@@ -111,7 +111,7 @@ impl EgressFabricRuntime {
             }
         }
         while grow_error.is_none() && self.group.shard_count() > target {
-            let Some((shard_id, _snapshot)) = self.group.shrink() else {
+            let Some(shard_id) = self.group.shrink() else {
                 break;
             };
             touched.push(shard_id);

@@ -491,10 +491,9 @@ fn shrink_removes_and_shuts_down_the_highest_index_handle() {
     )
     .unwrap();
 
-    let (shard_id, snapshot) = group.shrink().expect("group had a shard to shrink");
+    let shard_id = group.shrink().expect("group had a shard to shrink");
 
     assert_eq!(shard_id, ShardId::new(1));
-    assert!(snapshot.stopped);
     assert_eq!(group.shard_count(), 1);
     // The removed shard's handle is gone: routing to it now fails instead
     // of silently succeeding against a dead thread.
@@ -502,6 +501,10 @@ fn shrink_removes_and_shuts_down_the_highest_index_handle() {
         group.try_send_to(shard_id, EgressCommand::FeedWake),
         Err(EgressShardGroupError::UnknownShard { shard_id: unknown }) if unknown == shard_id
     ));
+    // `shrink` detaches rather than joins (see `EgressShardHandle::shutdown_detached`),
+    // so the doomed shard's graceful drain runs in the background --
+    // poll instead of asserting synchronously.
+    doomed.wait_for_commands(1);
     assert_eq!(doomed.state().commands, vec!["shutdown".to_string()]);
 
     let snapshots = group.shutdown_and_join();
@@ -574,7 +577,7 @@ mod grow_shrink_proptests {
                         if expected_count == 0 {
                             prop_assert!(result.is_none());
                         } else {
-                            let (shard_id, _snapshot) = result.expect("expected a shard to shrink");
+                            let shard_id = result.expect("expected a shard to shrink");
                             prop_assert_eq!(shard_id, ShardId::new(expected_count as u32 - 1));
                             expected_count -= 1;
                         }
