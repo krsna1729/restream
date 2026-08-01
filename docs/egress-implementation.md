@@ -3677,6 +3677,51 @@ Update:
 - stage proof maps and runtime diagnostics;
 - operator configuration and release evidence.
 
+### Dynamic shard scaling (supersedes the fixed-shard-count sweep above)
+
+Rather than picking one fixed shard count at startup from CPU count alone
+(`default_egress_fabric_shards`, still the ceiling), the shard pool now
+scales live with the number of active outputs on a feed, bounded by that
+CPU ceiling:
+
+- `target_egress_fabric_shards(output_count, effective_cpus)`
+  (`src/config.rs`) is a pure function: `ceil(output_count / 128)` clamped
+  to `[1, default_egress_fabric_shards(effective_cpus)]`. A pipeline with a
+  handful of outputs no longer pays the fixed per-shard `epoll_wait`/
+  `clock_gettime` overhead of a full CPU-count-sized shard pool — the
+  motivating cost characterized above.
+- `assign_output_to_shard` (`src/media/egress/manager.rs`) is rendezvous
+  (highest-random-weight) hashing rather than `hash % shard_count`, so
+  changing `shard_count` remaps only the ~`1/shard_count` fraction of
+  outputs whose arg-max shard actually changed, not nearly all of them —
+  this is what makes resizing affordable.
+- `EgressFabricRuntime::rescale` (`src/media/egress/runtime.rs`) grows or
+  shrinks the shard group one shard at a time toward the target and calls
+  `EgressManager::rehome` to move only the outputs whose assignment
+  changed. It is event-driven — called by each of the four
+  `engine_*_egress_fabric.rs` dispatch paths right after every `Add`/
+  `Remove`, not on a background timer.
+- The feed-wake watcher spawned by each `retain_*_fabric_runtime` reads
+  wake handles through a shared `Arc<Mutex<Vec<FeedWakeHandle>>>`
+  (`EgressFabricRuntime::feed_wake_handles`) refreshed by `rescale`, so a
+  shard grown after the watcher starts still gets fast feed-wake delivery
+  instead of falling back to idle-poll only.
+- Protocol-specific one-shot resource claims had to be made safe against a
+  rehome moving an output to a different shard moments after creation:
+  `SharedPipelineTargetSource::take_target` changed from a destructive
+  `remove` to a non-destructive `get().cloned()` (matching
+  `SharedRtmpPublishStartupSource::take_startup`'s existing pattern),
+  since a rehome's fresh `Add` on the new shard needs the same target the
+  original shard's `Add` already consumed. The target is now released
+  explicitly on `EgressCommand::Remove` instead of implicitly on first use.
+
+Full unit and proptest coverage: `target_egress_fabric_shards` bounds and
+monotonicity, rendezvous hashing's range/determinism/bounded-remap
+properties, `EgressShardGroup::grow`/`shrink` id-density, and
+`EgressManager::rehome` consistency across arbitrary Add/Remove/Resize
+sequences (`src/media/egress/manager/tests.rs`,
+`src/media/egress/shard/tests/group.rs`, `src/media/egress/runtime.rs`).
+
 ### Exit gate
 
 No production network output uses a per-output application thread, private
