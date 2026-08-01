@@ -27,6 +27,7 @@ use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, RingBuffer};
 /// shard thread before the leaf is added, the same way RTMP's publish
 /// startup snapshot is (see `PipelineTargetSource`). `IngestRegistration`
 /// does not implement `Debug`, so neither type here derives it.
+#[derive(Clone)]
 pub(crate) struct PipelineTarget {
     pub(crate) target_ring: Arc<RingBuffer>,
     pub(crate) input_registration: IngestRegistration,

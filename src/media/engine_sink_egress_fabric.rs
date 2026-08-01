@@ -1,3 +1,4 @@
+use crate::media::egress::backends::sink_shard::SinkShardBackend;
 use crate::media::egress::command::{EgressCommand, FeedId};
 use crate::media::egress::factory::spawn_sink_fabric_shard_group;
 use crate::media::egress::feed::EgressFeed;
@@ -56,21 +57,37 @@ impl MediaEngine {
             // `sink_shard.rs`'s module doc), so this `FeedWake` delivery is
             // their *only* readiness signal, not just an interest-widening
             // hint the way it is for RTMP.
+            // Shared with `EgressFabricRuntime::rescale` -- see
+            // `RtmpFabricRegistry`'s identical comment in
+            // engine_rtmp_egress_fabric.rs for why a fixed snapshot here
+            // would leave a later-grown shard's leaves without the fast
+            // feed-wake path.
             let wake_handles = runtime.feed_wake_handles();
             let watcher_feed = feed.clone_reader();
             let notify = watcher_feed.notify_handle();
             let watcher_feed_id = feed_id.clone();
             let watcher = tokio::spawn(async move {
-                tracing::info!(feed_id = %watcher_feed_id, shard_count = wake_handles.len(), "sink fabric wake watcher started");
+                tracing::info!(feed_id = %watcher_feed_id, "sink fabric wake watcher started");
                 let mut last_head = watcher_feed.head_sequence();
+                // `last_head`'s pre-loop snapshot can already reflect data
+                // published before this task's first poll (e.g. scheduler
+                // delay from `EgressFabricRuntime::rescale`'s synchronous
+                // shard shutdowns) -- treating that as "already seen" would
+                // await a `notify_waiters()` wake that already fired with no
+                // registered waiter, hanging forever. `first_iteration`
+                // forces the first pass to always fall through to deliver
+                // instead of awaiting, regardless of what `last_head` reads.
+                let mut first_iteration = true;
                 loop {
                     let notified = notify.notified();
                     let current_head = watcher_feed.head_sequence();
-                    if current_head == last_head {
+                    if current_head == last_head && !first_iteration {
                         notified.await;
                     }
+                    first_iteration = false;
                     last_head = watcher_feed.head_sequence();
-                    for handle in &wake_handles {
+                    let handles = wake_handles.lock().unwrap().clone();
+                    for handle in &handles {
                         let _ = handle.deliver();
                     }
                 }
@@ -79,6 +96,7 @@ impl MediaEngine {
             tracing::info!(feed_id = %feed_id, "sink fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);
             registry.feed_watchers.insert(feed_id.clone(), watcher);
+            registry.feeds.insert(feed_id.clone(), feed.clone_reader());
             true
         };
 
@@ -93,14 +111,40 @@ impl MediaEngine {
         command: EgressCommand,
     ) -> Result<ManagerCommandOutcome, SinkFabricDispatchError> {
         let mut registry = self.fabric.sink.lock().await;
+        // Owned upfront (see `dispatch_rtmp_fabric_command`'s identical
+        // comment): disjoint from the `runtimes` borrow below, and no
+        // lingering reference into `registry` for `rescale` to hold.
+        let rescale_feed = registry.feeds.get(feed_id).map(|feed| feed.clone_reader());
         let Some(runtime) = registry.runtimes.get_mut(feed_id) else {
             return Err(SinkFabricDispatchError::MissingFeed {
                 feed_id: feed_id.clone(),
             });
         };
-        runtime
+        let outcome = runtime
             .dispatch(command)
-            .map_err(SinkFabricDispatchError::Dispatch)
+            .map_err(SinkFabricDispatchError::Dispatch)?;
+
+        if let Some(feed) = rescale_feed {
+            let config = &self.config.egress_fabric;
+            let shard_config = config.shard_config();
+            let budget = config.work_budget();
+            let effective_cpus = crate::system_sampling::effective_cpu_count();
+            let result = runtime.rescale(effective_cpus, shard_config, |_shard_id| {
+                Ok::<_, std::convert::Infallible>(SinkShardBackend::new(
+                    feed.clone_reader(),
+                    budget,
+                ))
+            });
+            match result {
+                Ok(touched) if !touched.is_empty() => {
+                    tracing::info!(feed_id = %feed_id, shards = ?touched, "sink fabric shard pool rescaled");
+                }
+                Ok(_) => {}
+                Err(error) => match error {},
+            }
+        }
+
+        Ok(outcome)
     }
 
     pub(crate) async fn release_sink_fabric_runtime(&self, feed_id: &FeedId) -> bool {
@@ -114,6 +158,7 @@ impl MediaEngine {
                 return false;
             }
             registry.active_outputs.remove(feed_id);
+            registry.feeds.remove(feed_id);
             if let Some(watcher) = registry.feed_watchers.remove(feed_id) {
                 watcher.abort();
             }
