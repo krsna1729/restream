@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::media::egress::backends::rtmp::RtmpPublishStartup;
 use crate::media::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource;
 use crate::media::egress::backends::rtmp_shard_resolve_runtime::resolving_rtmp_shard_backend;
@@ -164,41 +166,72 @@ impl MediaEngine {
                 feed_id: feed_id.clone(),
             });
         };
+
+        // `assign_output_to_shard` places an `Add` under whatever shard
+        // count is live right now. If rescale below is about to resize the
+        // pool anyway, dispatching first would place the output, then
+        // immediately rehome it -- for a connection-oriented protocol like
+        // RTMP that means tearing down and reconnecting a socket that was
+        // just established (surfaced by the live concurrency harness as a
+        // spurious extra reconnect right after a fresh output starts).
+        // Size the pool for an `Add` *before* dispatching it so it lands on
+        // its final shard the first time. `Remove` (and everything else)
+        // still rescales after: shrinking once an output count drops
+        // doesn't disturb anything live.
+        let mut rescale_inputs = rescale_inputs;
+        if matches!(command, EgressCommand::Add(_))
+            && let Some(inputs) = rescale_inputs.take()
+        {
+            self.rescale_rtmp_fabric(feed_id, runtime, inputs);
+        }
+
         let outcome = runtime
             .dispatch(command)
             .map_err(RtmpFabricDispatchError::Dispatch)?;
 
-        if let Some((startup_source, (feed, rtmps_client_config))) = rescale_inputs {
-            let config = &self.config.egress_fabric;
-            let shard_config = config.shard_config();
-            let budget = config.work_budget();
-            let chunk_size = self.config.rtmp_egress_chunk_size;
-            let poller_max_events = config.srt_poller_max_events;
-            let effective_cpus = crate::system_sampling::effective_cpu_count();
-            let result = runtime.rescale(effective_cpus, shard_config, |_shard_id| {
-                let poller = TcpEgressPoller::new(poller_max_events)?;
-                Ok::<_, TcpEgressPollError>(resolving_rtmp_shard_backend(
-                    poller,
-                    feed.clone_reader(),
-                    budget,
-                    chunk_size,
-                    rtmps_client_config.clone(),
-                    startup_source.clone(),
-                    shard_config.drain_timeout(),
-                ))
-            });
-            match result {
-                Ok(touched) if !touched.is_empty() => {
-                    tracing::info!(feed_id = %feed_id, shards = ?touched, "rtmp fabric shard pool rescaled");
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(feed_id = %feed_id, error = ?error, "rtmp fabric rescale failed to grow a shard");
-                }
-            }
+        if let Some(inputs) = rescale_inputs.take() {
+            self.rescale_rtmp_fabric(feed_id, runtime, inputs);
         }
 
         Ok(outcome)
+    }
+
+    fn rescale_rtmp_fabric(
+        &self,
+        feed_id: &FeedId,
+        runtime: &mut EgressFabricRuntime,
+        (startup_source, (feed, rtmps_client_config)): (
+            SharedRtmpPublishStartupSource,
+            (RingFeed, Arc<tokio_rustls::rustls::ClientConfig>),
+        ),
+    ) {
+        let config = &self.config.egress_fabric;
+        let shard_config = config.shard_config();
+        let budget = config.work_budget();
+        let chunk_size = self.config.rtmp_egress_chunk_size;
+        let poller_max_events = config.srt_poller_max_events;
+        let effective_cpus = crate::system_sampling::effective_cpu_count();
+        let result = runtime.rescale(effective_cpus, shard_config, |_shard_id| {
+            let poller = TcpEgressPoller::new(poller_max_events)?;
+            Ok::<_, TcpEgressPollError>(resolving_rtmp_shard_backend(
+                poller,
+                feed.clone_reader(),
+                budget,
+                chunk_size,
+                rtmps_client_config.clone(),
+                startup_source.clone(),
+                shard_config.drain_timeout(),
+            ))
+        });
+        match result {
+            Ok(touched) if !touched.is_empty() => {
+                tracing::info!(feed_id = %feed_id, shards = ?touched, "rtmp fabric shard pool rescaled");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(feed_id = %feed_id, error = ?error, "rtmp fabric rescale failed to grow a shard");
+            }
+        }
     }
 
     pub(crate) async fn release_rtmp_fabric_runtime(&self, feed_id: &FeedId) -> bool {

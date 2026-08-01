@@ -150,32 +150,53 @@ impl MediaEngine {
                 feed_id: feed_id.clone(),
             });
         };
+
+        // See `dispatch_rtmp_fabric_command`'s identical comment: size the
+        // pool for an `Add` before dispatching it so it lands on its final
+        // shard the first time, instead of connecting once and immediately
+        // getting rehomed onto a different shard.
+        let mut rescale_inputs = rescale_inputs;
+        if matches!(command, EgressCommand::Add(_))
+            && let Some(inputs) = rescale_inputs.take()
+        {
+            self.rescale_pipeline_fabric(feed_id, runtime, inputs);
+        }
+
         let outcome = runtime
             .dispatch(command)
             .map_err(PipelineFabricDispatchError::Dispatch)?;
 
-        if let Some((feed, target_source)) = rescale_inputs {
-            let config = &self.config.egress_fabric;
-            let shard_config = config.shard_config();
-            let budget = config.work_budget();
-            let effective_cpus = crate::system_sampling::effective_cpu_count();
-            let result = runtime.rescale(effective_cpus, shard_config, |_shard_id| {
-                Ok::<_, std::convert::Infallible>(PipelineShardBackend::new(
-                    feed.clone_reader(),
-                    budget,
-                    target_source.clone(),
-                ))
-            });
-            match result {
-                Ok(touched) if !touched.is_empty() => {
-                    tracing::info!(feed_id = %feed_id, shards = ?touched, "pipeline fabric shard pool rescaled");
-                }
-                Ok(_) => {}
-                Err(error) => match error {},
-            }
+        if let Some(inputs) = rescale_inputs.take() {
+            self.rescale_pipeline_fabric(feed_id, runtime, inputs);
         }
 
         Ok(outcome)
+    }
+
+    fn rescale_pipeline_fabric(
+        &self,
+        feed_id: &FeedId,
+        runtime: &mut EgressFabricRuntime,
+        (feed, target_source): (RingFeed, SharedPipelineTargetSource),
+    ) {
+        let config = &self.config.egress_fabric;
+        let shard_config = config.shard_config();
+        let budget = config.work_budget();
+        let effective_cpus = crate::system_sampling::effective_cpu_count();
+        let result = runtime.rescale(effective_cpus, shard_config, |_shard_id| {
+            Ok::<_, std::convert::Infallible>(PipelineShardBackend::new(
+                feed.clone_reader(),
+                budget,
+                target_source.clone(),
+            ))
+        });
+        match result {
+            Ok(touched) if !touched.is_empty() => {
+                tracing::info!(feed_id = %feed_id, shards = ?touched, "pipeline fabric shard pool rescaled");
+            }
+            Ok(_) => {}
+            Err(error) => match error {},
+        }
     }
 
     pub(crate) async fn release_pipeline_fabric_runtime(&self, feed_id: &FeedId) -> bool {

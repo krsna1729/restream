@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use crate::media::egress::command::{EgressCommand, FeedId};
 use crate::media::egress::factory::{SrtFabricShardGroupError, spawn_srt_fabric_shard_group};
 use crate::media::egress::feed::EgressFeed;
@@ -143,40 +145,61 @@ impl MediaEngine {
                 feed_id: feed_id.clone(),
             });
         };
+
+        // See `dispatch_rtmp_fabric_command`'s identical comment: size the
+        // pool for an `Add` before dispatching it so it lands on its final
+        // shard the first time, instead of connecting once and immediately
+        // getting rehomed onto a different shard.
+        let mut rescale_inputs = rescale_inputs;
+        if matches!(command, EgressCommand::Add(_))
+            && let Some(inputs) = rescale_inputs.take()
+        {
+            self.rescale_srt_fabric(feed_id, runtime, inputs);
+        }
+
         let outcome = runtime
             .dispatch(command)
             .map_err(SrtFabricDispatchError::Dispatch)?;
 
-        if let Some((feed, srt_egress_muxer_port_reuse)) = rescale_inputs {
-            let config = &self.config.egress_fabric;
-            let shard_config = config.shard_config();
-            let budget = config.work_budget();
-            let poller_max_events = config.srt_poller_max_events;
-            let effective_cpus = crate::system_sampling::effective_cpu_count();
-            let result = runtime.rescale(effective_cpus, shard_config, |_shard_id| {
-                let poller = crate::media::srt::SrtFabricPoller::new(poller_max_events)?;
-                Ok::<_, crate::media::srt::SrtEgressPollError>(
-                    crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
-                        poller,
-                        feed.clone_reader(),
-                        budget,
-                        srt_egress_muxer_port_reuse.clone(),
-                        shard_config.drain_timeout(),
-                    ),
-                )
-            });
-            match result {
-                Ok(touched) if !touched.is_empty() => {
-                    tracing::info!(feed_id = %feed_id, shards = ?touched, "srt fabric shard pool rescaled");
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(feed_id = %feed_id, error = ?error, "srt fabric rescale failed to grow a shard");
-                }
-            }
+        if let Some(inputs) = rescale_inputs.take() {
+            self.rescale_srt_fabric(feed_id, runtime, inputs);
         }
 
         Ok(outcome)
+    }
+
+    fn rescale_srt_fabric(
+        &self,
+        feed_id: &FeedId,
+        runtime: &mut EgressFabricRuntime,
+        (feed, srt_egress_muxer_port_reuse): (TsFeed, Option<Arc<Mutex<Option<u16>>>>),
+    ) {
+        let config = &self.config.egress_fabric;
+        let shard_config = config.shard_config();
+        let budget = config.work_budget();
+        let poller_max_events = config.srt_poller_max_events;
+        let effective_cpus = crate::system_sampling::effective_cpu_count();
+        let result = runtime.rescale(effective_cpus, shard_config, |_shard_id| {
+            let poller = crate::media::srt::SrtFabricPoller::new(poller_max_events)?;
+            Ok::<_, crate::media::srt::SrtEgressPollError>(
+                crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
+                    poller,
+                    feed.clone_reader(),
+                    budget,
+                    srt_egress_muxer_port_reuse.clone(),
+                    shard_config.drain_timeout(),
+                ),
+            )
+        });
+        match result {
+            Ok(touched) if !touched.is_empty() => {
+                tracing::info!(feed_id = %feed_id, shards = ?touched, "srt fabric shard pool rescaled");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(feed_id = %feed_id, error = ?error, "srt fabric rescale failed to grow a shard");
+            }
+        }
     }
 
     pub(crate) async fn release_srt_fabric_runtime(&self, feed_id: &FeedId) -> bool {
