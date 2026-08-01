@@ -35,7 +35,6 @@ pub struct RuntimeTuning {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EgressFabricConfig {
-    pub rollout: EgressRolloutMode,
     pub shards: u32,
     pub command_channel_capacity: usize,
     pub command_batch_budget: usize,
@@ -80,66 +79,10 @@ impl Default for RuntimeTuning {
     }
 }
 
-/// Protocol-selective egress fabric rollout mode.
-///
-/// Exactly one runtime owns any given output: modes route whole protocols to
-/// the fabric while every other protocol stays on the legacy path.
-/// `ShadowMetrics` may instantiate model and assignment calculations but must
-/// never establish duplicate network connections.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EgressRolloutMode {
-    Off,
-    Srt,
-    Rtmp,
-    All,
-    ShadowMetrics,
-}
-
-impl EgressRolloutMode {
-    fn parse(value: &str) -> Option<Self> {
-        // Legacy boolean spellings map to the historical behavior of the
-        // RESTREAM_EGRESS_FABRIC flag: enabling it routed SRT only.
-        match value.trim().to_ascii_lowercase().as_str() {
-            "off" | "0" | "false" | "no" => Some(Self::Off),
-            "srt" | "1" | "true" | "yes" => Some(Self::Srt),
-            "rtmp" => Some(Self::Rtmp),
-            "all" => Some(Self::All),
-            "shadow-metrics" | "shadow_metrics" => Some(Self::ShadowMetrics),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Srt => "srt",
-            Self::Rtmp => "rtmp",
-            Self::All => "all",
-            Self::ShadowMetrics => "shadow-metrics",
-        }
-    }
-
-    /// SRT outputs route to the fabric runtime.
-    pub fn routes_srt(self) -> bool {
-        matches!(self, Self::Srt | Self::All)
-    }
-
-    /// RTMP and RTMPS outputs route to the fabric runtime.
-    pub fn routes_rtmp(self) -> bool {
-        matches!(self, Self::Rtmp | Self::All)
-    }
-
-    /// Any fabric machinery (including shadow calculations) is active.
-    pub fn is_active(self) -> bool {
-        !matches!(self, Self::Off)
-    }
-}
-
 impl Default for EgressFabricConfig {
     fn default() -> Self {
         let effective_cpus = crate::system_sampling::effective_cpu_count();
         Self {
-            rollout: EgressRolloutMode::All,
             shards: default_egress_fabric_shards(effective_cpus),
             command_channel_capacity: 1024,
             command_batch_budget: 32,
@@ -180,10 +123,6 @@ impl EgressFabricConfig {
     pub fn from_env() -> Self {
         let defaults = Self::default();
         Self {
-            rollout: std::env::var("RESTREAM_EGRESS_FABRIC")
-                .ok()
-                .and_then(|value| EgressRolloutMode::parse(&value))
-                .unwrap_or(defaults.rollout),
             shards: env_u32("RESTREAM_EGRESS_SHARDS", defaults.shards).clamp(1, 1024),
             command_channel_capacity: env_usize(
                 "RESTREAM_EGRESS_COMMAND_CAPACITY",
@@ -762,8 +701,6 @@ impl AppConfig {
                 "maxBlockingThreads": self.tokio_runtime.max_blocking_threads,
             },
             "egressFabric": {
-                "enabled": self.egress_fabric.rollout.is_active(),
-                "rollout": self.egress_fabric.rollout.as_str(),
                 "shards": self.egress_fabric.shards,
                 "commandChannelCapacity": self.egress_fabric.command_channel_capacity,
                 "commandBatchBudget": self.egress_fabric.command_batch_budget,

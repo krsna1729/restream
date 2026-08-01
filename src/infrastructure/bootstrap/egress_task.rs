@@ -72,9 +72,7 @@ pub(super) struct PipelineFabricTask {
 pub(super) struct EgressTask {
     pub(super) output_id: String,
     pub(super) pipeline_id: String,
-    pub(super) encoding: String,
     pub(super) url: String,
-    pub(super) rtmp_mode: crate::domain::output_spec::RtmpOutputMode,
     pub(super) ring: Arc<crate::media::ring_buffer::RingBuffer>,
     pub(super) terminal_stage_key: crate::domain::stage::StageKey,
     pub(super) registration: crate::media::engine::EgressRegistration,
@@ -104,33 +102,11 @@ impl EgressTask {
                 OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps => {
                     if let Some(fabric) = self.rtmp_fabric.as_ref().cloned() {
                         self.run_rtmp_fabric(fabric).await;
-                    } else {
-                        crate::media::rtmp::start_rtmp_egress(
-                            self.output_id.clone(),
-                            self.pipeline_id.clone(),
-                            self.url.clone(),
-                            self.ring.clone(),
-                            self.engine.clone(),
-                            self.registration.clone(),
-                            self.rtmp_mode,
-                        )
-                        .await;
                     }
                 }
                 OutputUrlScheme::Srt => {
                     if let Some(fabric) = self.srt_fabric.as_ref().cloned() {
                         self.run_srt_fabric(fabric).await;
-                    } else {
-                        crate::media::srt::start_srt_egress(
-                            self.output_id.clone(),
-                            self.pipeline_id.clone(),
-                            self.encoding.clone(),
-                            self.url.clone(),
-                            self.ring.clone(),
-                            self.engine.clone(),
-                            self.registration.clone(),
-                        )
-                        .await;
                     }
                 }
                 OutputUrlScheme::Sink => {

@@ -167,8 +167,7 @@ impl EgressReconciler {
 
         let url_scheme = OutputUrlScheme::from_url(&output.url);
         let prepared = crate::application::egress::prepare_output_ring(&self.engine, output).await;
-        let use_srt_fabric = self.engine.config.egress_fabric.rollout.routes_srt()
-            && matches!(url_scheme, OutputUrlScheme::Srt);
+        let use_srt_fabric = matches!(url_scheme, OutputUrlScheme::Srt);
         let encoding = if use_srt_fabric {
             prepared.media_stage_key.kind.to_string()
         } else {
@@ -199,8 +198,7 @@ impl EgressReconciler {
         )
         .await;
 
-        let use_rtmp_fabric = self.engine.config.egress_fabric.rollout.routes_rtmp()
-            && matches!(url_scheme, OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps);
+        let use_rtmp_fabric = matches!(url_scheme, OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps);
         let rtmp_fabric = if use_rtmp_fabric {
             match crate::application::egress_rtmp_fabric::prepare_rtmp_fabric_startup(
                 &self.engine,
@@ -407,9 +405,7 @@ impl EgressReconciler {
         let task = EgressTask {
             output_id: output.id.clone(),
             pipeline_id: output.pipeline_id.clone(),
-            encoding,
             url: output.url.clone(),
-            rtmp_mode: output.config.rtmp_mode(),
             ring: prepared.ring,
             terminal_stage_key: prepared.terminal_stage_key,
             registration,

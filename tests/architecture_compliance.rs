@@ -492,16 +492,6 @@ fn app_state_hides_security_session_and_srt_internals() {
 
 #[test]
 fn god_file_extractions_keep_owned_helpers_out_of_protocol_roots() {
-    let srt_egress = include_str!("../src/media/srt_egress.rs");
-    assert!(
-        !srt_egress.contains("pub(super) fn parse_srt_egress_url"),
-        "SRT URL parsing should stay in the SRT URL helper module"
-    );
-    assert!(
-        !srt_egress.contains("struct SrtCryptoConfig"),
-        "SRT crypto option configuration should stay in the SRT crypto helper module"
-    );
-
     let rtmp = include_str!("../src/media/rtmp.rs");
     assert!(
         !rtmp.contains("struct RtmpTimestampGuard"),

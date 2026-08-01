@@ -2,7 +2,7 @@ use std::sync::Mutex;
 
 use super::{
     AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
-    EgressRolloutMode, RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
+    RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
     default_egress_fabric_shards, default_tokio_worker_threads, derive_external_ffmpeg_permits,
     target_egress_fabric_shards,
 };
@@ -235,7 +235,6 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
     with_env_overlay(
         &[],
         &[
-            "RESTREAM_EGRESS_FABRIC",
             "RESTREAM_EGRESS_SHARDS",
             "RESTREAM_EGRESS_COMMAND_CAPACITY",
             "RESTREAM_EGRESS_COMMAND_BATCH",
@@ -251,9 +250,6 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
         || {
             let fabric = EgressFabricConfig::from_env();
             assert_eq!(fabric, EgressFabricConfig::default());
-            assert_eq!(fabric.rollout, EgressRolloutMode::All);
-            assert!(fabric.rollout.routes_srt());
-            assert!(fabric.rollout.routes_rtmp());
             assert_eq!(
                 fabric.shard_count().get(),
                 default_egress_fabric_shards(crate::system_sampling::effective_cpu_count())
@@ -270,7 +266,6 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
 fn egress_fabric_config_loads_and_clamps_env() {
     with_env_vars(
         &[
-            ("RESTREAM_EGRESS_FABRIC", "true"),
             ("RESTREAM_EGRESS_SHARDS", "0"),
             ("RESTREAM_EGRESS_COMMAND_CAPACITY", "0"),
             ("RESTREAM_EGRESS_COMMAND_BATCH", "0"),
@@ -285,7 +280,6 @@ fn egress_fabric_config_loads_and_clamps_env() {
         ],
         || {
             let fabric = EgressFabricConfig::from_env();
-            assert_eq!(fabric.rollout, EgressRolloutMode::Srt);
             assert_eq!(fabric.shards, 1);
             assert_eq!(fabric.command_channel_capacity, 1);
             assert_eq!(fabric.command_batch_budget, 1);
@@ -328,50 +322,6 @@ fn egress_fabric_config_validate_flags_cross_field_issues() {
     assert!(warnings[1].contains("RESTREAM_EGRESS_SHARDS"));
     assert!(warnings[2].contains("RESTREAM_EGRESS_DRAIN_TIMEOUT_MS"));
     assert!(warnings[3].contains("RESTREAM_EGRESS_COMMAND_BATCH"));
-}
-
-#[test]
-fn egress_rollout_mode_parses_protocol_selection_and_legacy_booleans() {
-    let cases = [
-        ("off", EgressRolloutMode::Off),
-        ("0", EgressRolloutMode::Off),
-        ("false", EgressRolloutMode::Off),
-        ("srt", EgressRolloutMode::Srt),
-        ("1", EgressRolloutMode::Srt),
-        ("true", EgressRolloutMode::Srt),
-        ("rtmp", EgressRolloutMode::Rtmp),
-        ("all", EgressRolloutMode::All),
-        ("shadow-metrics", EgressRolloutMode::ShadowMetrics),
-        ("SRT", EgressRolloutMode::Srt),
-    ];
-    for (value, expected) in cases {
-        with_env_vars(&[("RESTREAM_EGRESS_FABRIC", value)], || {
-            assert_eq!(EgressFabricConfig::from_env().rollout, expected, "{value}");
-        });
-    }
-    // Unknown values fall back to the default rather than guessing.
-    with_env_vars(&[("RESTREAM_EGRESS_FABRIC", "bogus")], || {
-        assert_eq!(
-            EgressFabricConfig::from_env().rollout,
-            EgressRolloutMode::All
-        );
-    });
-}
-
-#[test]
-fn egress_rollout_mode_routing_is_protocol_selective() {
-    assert!(!EgressRolloutMode::Off.routes_srt());
-    assert!(!EgressRolloutMode::Off.routes_rtmp());
-    assert!(EgressRolloutMode::Srt.routes_srt());
-    assert!(!EgressRolloutMode::Srt.routes_rtmp());
-    assert!(!EgressRolloutMode::Rtmp.routes_srt());
-    assert!(EgressRolloutMode::Rtmp.routes_rtmp());
-    assert!(EgressRolloutMode::All.routes_srt());
-    assert!(EgressRolloutMode::All.routes_rtmp());
-    // Shadow mode is active for calculations but never owns a connection.
-    assert!(EgressRolloutMode::ShadowMetrics.is_active());
-    assert!(!EgressRolloutMode::ShadowMetrics.routes_srt());
-    assert!(!EgressRolloutMode::ShadowMetrics.routes_rtmp());
 }
 
 #[test]
@@ -533,7 +483,6 @@ fn effective_summary_covers_runtime_knobs_without_secret_values() {
         summary["tokio"]["maxBlockingThreads"],
         config.tokio_runtime.max_blocking_threads
     );
-    assert_eq!(summary["egressFabric"]["enabled"], true);
     assert_eq!(
         summary["egressFabric"]["shards"],
         config.egress_fabric.shards

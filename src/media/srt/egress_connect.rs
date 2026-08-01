@@ -25,6 +25,7 @@ pub(in crate::media::srt) use single::{
     SrtSingleEgressConnectConfig, connect_single_srt_egress_socket,
 };
 
+#[cfg(test)]
 pub(crate) async fn resolve_host(host_port: &str) -> Option<SocketAddr> {
     match host_port.parse::<SocketAddr>() {
         Ok(a) => Some(a),

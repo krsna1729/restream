@@ -13,6 +13,7 @@ pub(super) struct SrtCounterSnapshot {
     pub(super) sampled_at: Instant,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SrtSenderCounterSnapshot {
     pub(super) packets_sent_loss: u64,
@@ -100,6 +101,7 @@ pub(super) fn quality_from_stats(
     )
 }
 
+#[cfg(test)]
 pub(super) fn sender_quality_from_stats(
     stats: &SrtTraceBStats,
     previous: Option<SrtSenderCounterSnapshot>,
