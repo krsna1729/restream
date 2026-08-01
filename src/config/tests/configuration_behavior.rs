@@ -4,6 +4,7 @@ use super::{
     AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
     EgressRolloutMode, RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
     default_egress_fabric_shards, default_tokio_worker_threads, derive_external_ffmpeg_permits,
+    target_egress_fabric_shards,
 };
 use crate::planner::BackendPolicy;
 
@@ -548,4 +549,62 @@ fn effective_summary_covers_runtime_knobs_without_secret_values() {
     assert_eq!(summary["srt"]["pbkeylen"], 16);
     assert!(!summary.to_string().contains("super-secret"));
     assert!(!summary.to_string().contains("admin-secret"));
+}
+
+#[test]
+fn target_egress_fabric_shards_matches_known_cases() {
+    // Zero/low output counts always floor to 1 shard, regardless of how
+    // many CPUs are available -- there is nothing to shard yet.
+    assert_eq!(target_egress_fabric_shards(0, 8), 1);
+    assert_eq!(target_egress_fabric_shards(1, 8), 1);
+
+    // A handful of outputs on an 8-core host stays well under the CPU
+    // ceiling -- this is the exact gap task #11 didn't close: fewer
+    // outputs than one shard's OUTPUTS_PER_SHARD budget should not pay
+    // for `default_egress_fabric_shards(8) == 8` dedicated shard threads.
+    assert_eq!(target_egress_fabric_shards(38, 8), 1);
+
+    // Right at and just past the CPU ceiling's output budget
+    // (default_egress_fabric_shards(8) == 8, OUTPUTS_PER_SHARD == 128).
+    assert_eq!(target_egress_fabric_shards(8 * 128, 8), 8);
+    assert_eq!(target_egress_fabric_shards(8 * 128 + 1, 8), 8);
+
+    // Never exceeds the CPU-derived ceiling no matter how many outputs.
+    assert_eq!(target_egress_fabric_shards(1_000_000, 8), 8);
+
+    // A constrained 1-CPU host still gets the same
+    // default_egress_fabric_shards(1) == 2 ceiling once outputs justify it.
+    assert_eq!(target_egress_fabric_shards(0, 1), 1);
+    assert_eq!(target_egress_fabric_shards(1_000_000, 1), 2);
+}
+
+proptest::proptest! {
+    /// The output-count-aware target never leaves the CPU-derived range:
+    /// always at least one shard, never more than
+    /// `default_egress_fabric_shards(cpus)` would allow.
+    #[test]
+    fn target_egress_fabric_shards_stays_within_cpu_bounds(
+        outputs in 0usize..100_000,
+        cpus in 1usize..256,
+    ) {
+        let target = target_egress_fabric_shards(outputs, cpus);
+        let ceiling = default_egress_fabric_shards(cpus);
+        proptest::prop_assert!(target >= 1);
+        proptest::prop_assert!(target <= ceiling);
+    }
+
+    /// More outputs never demands *fewer* shards, for a fixed CPU count --
+    /// the formula must not be able to shrink the target out from under a
+    /// growing pipeline.
+    #[test]
+    fn target_egress_fabric_shards_is_monotonic_in_outputs(
+        cpus in 1usize..256,
+        smaller in 0usize..50_000,
+        delta in 0usize..50_000,
+    ) {
+        let larger = smaller + delta;
+        let target_small = target_egress_fabric_shards(smaller, cpus);
+        let target_large = target_egress_fabric_shards(larger, cpus);
+        proptest::prop_assert!(target_large >= target_small);
+    }
 }

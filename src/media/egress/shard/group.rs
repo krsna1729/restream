@@ -120,6 +120,34 @@ impl EgressShardGroup {
         replaced
     }
 
+    /// Add one shard at the next index, running `backend`. Used for
+    /// output-count-driven scale-out (`EgressFabricRuntime::rescale`) —
+    /// mirrors `replace_panicked`'s spawn shape, but appends a new handle
+    /// instead of replacing one in place.
+    pub fn grow<B: EgressShardBackend>(
+        &mut self,
+        config: EgressShardConfig,
+        backend: B,
+    ) -> ShardId {
+        let shard_id = ShardId::new(u32::try_from(self.handles.len()).unwrap_or(u32::MAX));
+        self.handles
+            .push(EgressShardHandle::spawn(shard_id, config, backend));
+        shard_id
+    }
+
+    /// Remove and gracefully shut down the highest-index shard, if any.
+    /// Used for output-count-driven scale-in. The caller is responsible
+    /// for rehoming whatever outputs were assigned to this shard
+    /// (`EgressManager::rehome`) — this only tears the shard thread down,
+    /// draining any leaves it still owned per its own `Shutdown` handling
+    /// (`EgressShardRuntime::run`'s drain window), it does not reassign
+    /// them anywhere.
+    pub fn shrink(&mut self) -> Option<(ShardId, EgressShardSnapshot)> {
+        let handle = self.handles.pop()?;
+        let shard_id = handle.shard_id();
+        Some((shard_id, handle.shutdown_and_join()))
+    }
+
     pub fn shutdown_and_join(self) -> Vec<EgressShardSnapshot> {
         self.handles
             .into_iter()

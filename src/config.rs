@@ -394,6 +394,34 @@ fn default_egress_fabric_shards(effective_cpus: usize) -> u32 {
     effective_cpus.clamp(2, 8) as u32
 }
 
+/// Outputs a single shard can carry before another shard is worth its
+/// fixed per-shard `epoll_wait`/`clock_gettime` overhead (see
+/// `default_egress_fabric_shards`'s doc comment). Chosen so this formula
+/// saturates at `default_egress_fabric_shards(effective_cpus)` right
+/// around 1,200 outputs on an 8-core host (`1200 / 8 = 150`... rounded
+/// down to a rounder, slightly more conservative number) — matching the
+/// scale the shard-count sweep above was actually measured at, rather
+/// than an unvalidated guess.
+const OUTPUTS_PER_SHARD: u32 = 128;
+
+/// Live, output-count-aware shard target for one egress fabric runtime
+/// (one instance per protocol per feed — see `EgressFabricRuntime`), used
+/// to rescale the shard pool as outputs are added/removed instead of
+/// paying for a fixed shard count picked once at startup. Pure function
+/// of (how many outputs this fabric runtime currently owns, how many CPUs
+/// the process has) — no lookup table, no cached classification: the
+/// CPU-derived ceiling is `default_egress_fabric_shards` unchanged, and
+/// output count only ever pushes the target *down* from that ceiling,
+/// never past it.
+pub(crate) fn target_egress_fabric_shards(output_count: usize, effective_cpus: usize) -> u32 {
+    let cpu_max = default_egress_fabric_shards(effective_cpus);
+    let by_outputs = u32::try_from(output_count)
+        .unwrap_or(u32::MAX)
+        .div_ceil(OUTPUTS_PER_SHARD)
+        .max(1);
+    by_outputs.clamp(1, cpu_max)
+}
+
 fn env_bool(name: &str) -> Option<bool> {
     std::env::var(name).ok().map(|value| {
         matches!(
