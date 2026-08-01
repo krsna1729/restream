@@ -10,7 +10,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::domain::stage::StageKey;
 use crate::domain::state::{EgressPhase, EgressStatus};
-use crate::media::avio::MemoryQueue;
 use crate::media::engine::{
     ActiveEgress, EgressRegistration, EgressRetryState, MediaEngine, RecentEgressOutcome,
 };
@@ -86,55 +85,6 @@ impl MediaEngine {
                 }
             } => {}
         }
-    }
-
-    pub async fn register_egress_queue(&self, output_id: &str, queue: Arc<MemoryQueue>) {
-        self.egresses
-            .queues
-            .write()
-            .await
-            .insert(output_id.to_string(), queue);
-    }
-
-    pub async fn register_egress_queue_if_current(
-        &self,
-        output_id: &str,
-        registration: &EgressRegistration,
-        queue: Arc<MemoryQueue>,
-    ) -> bool {
-        if self
-            .with_current_egress(output_id, registration, |_| ())
-            .await
-            .is_none()
-        {
-            return false;
-        }
-        self.egresses
-            .queues
-            .write()
-            .await
-            .insert(output_id.to_string(), queue);
-        true
-    }
-
-    pub async fn remove_egress_queue(&self, output_id: &str) {
-        self.egresses.queues.write().await.remove(output_id);
-    }
-
-    pub async fn remove_egress_queue_if_current(
-        &self,
-        output_id: &str,
-        registration: &EgressRegistration,
-    ) -> bool {
-        if self
-            .with_current_egress(output_id, registration, |_| ())
-            .await
-            .is_none()
-        {
-            return false;
-        }
-        self.egresses.queues.write().await.remove(output_id);
-        true
     }
 
     pub async fn update_egress_bytes(&self, output_id: &str, bytes: u64) {

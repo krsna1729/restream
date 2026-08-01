@@ -129,48 +129,6 @@ async fn stale_egress_error_cannot_poison_replacement_attempt() {
 }
 
 #[tokio::test]
-async fn stale_egress_queue_removal_cannot_drop_replacement_queue() {
-    let engine = MediaEngine::new();
-    let first = engine
-        .register_egress_attempt("out-race", "pipe-1", "srt://example.com:10080", None)
-        .await;
-    let first_queue = Arc::new(MemoryQueue::new());
-    assert!(
-        engine
-            .register_egress_queue_if_current("out-race", &first, first_queue)
-            .await
-    );
-    engine.unregister_egress("out-race").await;
-
-    let replacement = engine
-        .register_egress_attempt("out-race", "pipe-1", "srt://example.com:10081", None)
-        .await;
-    let replacement_queue = Arc::new(MemoryQueue::new());
-    assert!(
-        engine
-            .register_egress_queue_if_current("out-race", &replacement, replacement_queue.clone(),)
-            .await
-    );
-    assert!(
-        !engine
-            .remove_egress_queue_if_current("out-race", &first)
-            .await,
-        "stale cleanup must not remove the replacement queue"
-    );
-    assert!(Arc::ptr_eq(
-        &engine
-            .egresses
-            .queues
-            .read()
-            .await
-            .get("out-race")
-            .expect("replacement queue should stay registered")
-            .clone(),
-        &replacement_queue
-    ));
-}
-
-#[tokio::test]
 async fn egress_registration_stores_terminal_stage_key() {
     let engine = MediaEngine::new();
     let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));

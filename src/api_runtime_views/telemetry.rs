@@ -50,7 +50,6 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
     let runtimes = engine.stages.runtimes.read().await;
     let pipelines = engine.ingests.pipelines.read().await;
     let ts_muxers = engine.stages.ts_muxers.read().await;
-    let egress_queues = engine.egresses.queues.read().await;
     let stage_keys = stage_telemetry_keys(engine).await;
 
     // Fetch lifecycle snapshots for all registered stages.
@@ -145,29 +144,13 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
             )
         })
         .collect();
-    let avio_egress_queues: Vec<serde_json::Value> = egress_queues
-        .iter()
-        .map(|(output_id, queue)| {
-            let stats = queue.stats();
-            api_view_models::avio_egress_queue_json(
-                output_id,
-                stats.len,
-                stats.capacity,
-                stats.high_water_bytes,
-                stats.blocked_writes,
-                stats.blocked_write_us,
-            )
-        })
-        .collect();
     let avio_total_len_bytes: usize = avio_input_queues
         .iter()
-        .chain(avio_egress_queues.iter())
         .filter_map(|entry| entry["lenBytes"].as_u64())
         .map(|value| value as usize)
         .sum();
     let avio_total_capacity_bytes: usize = avio_input_queues
         .iter()
-        .chain(avio_egress_queues.iter())
         .filter_map(|entry| entry["capacityBytes"].as_u64())
         .map(|value| value as usize)
         .sum();
@@ -186,7 +169,6 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
             avio_total_len_bytes,
             avio_total_capacity_bytes,
             avio_input_queues,
-            avio_egress_queues,
         ),
     )
 }

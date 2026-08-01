@@ -177,11 +177,6 @@ fn output_cleanup_residue(
         if telemetry_egress_exists(telemetry, output_id) {
             residue.push(json!({"outputId": output_id, "surface": "engine.telemetry.egresses"}));
         }
-        if telemetry_egress_queue_exists(telemetry, output_id) {
-            residue.push(
-                json!({"outputId": output_id, "surface": "engine.telemetry.avioEgressQueues"}),
-            );
-        }
     }
     residue
 }
@@ -212,16 +207,6 @@ fn telemetry_egress_exists(telemetry: &Value, output_id: &str) -> bool {
     })
 }
 
-fn telemetry_egress_queue_exists(telemetry: &Value, output_id: &str) -> bool {
-    telemetry["memoryAccounting"]["avioEgressQueues"]
-        .as_array()
-        .is_some_and(|queues| {
-            queues
-                .iter()
-                .any(|queue| queue["outputId"] == output_id || queue["id"] == output_id)
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,14 +228,11 @@ mod tests {
         });
         let telemetry = json!({
             "egresses": [{"outputId": "out-2"}],
-            "memoryAccounting": {
-                "avioEgressQueues": [{"outputId": "out-1"}]
-            }
         });
 
         let residue = output_cleanup_residue("pipe-1", &output_ids, &settings, &health, &telemetry);
 
-        assert_eq!(residue.len(), 4);
+        assert_eq!(residue.len(), 3);
         assert!(
             residue
                 .iter()
@@ -266,11 +248,6 @@ mod tests {
                 .iter()
                 .any(|entry| entry["surface"] == "engine.telemetry.egresses")
         );
-        assert!(
-            residue
-                .iter()
-                .any(|entry| entry["surface"] == "engine.telemetry.avioEgressQueues")
-        );
     }
 
     #[test]
@@ -281,7 +258,7 @@ mod tests {
             &output_ids,
             &json!({"outputs": []}),
             &json!({"pipelines": {"pipe-1": {"outputs": {}}}}),
-            &json!({"egresses": [], "memoryAccounting": {"avioEgressQueues": []}}),
+            &json!({"egresses": []}),
         );
 
         assert!(residue.is_empty());
@@ -306,7 +283,7 @@ mod tests {
                     }
                 }
             }),
-            &json!({"egresses": [], "memoryAccounting": {"avioEgressQueues": []}}),
+            &json!({"egresses": []}),
         );
 
         assert!(residue.is_empty());
