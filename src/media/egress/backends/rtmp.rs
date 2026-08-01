@@ -151,6 +151,27 @@ impl SessionNegotiation {
                     {
                         self.publish_accepted = true;
                     }
+                    // `pending_write` is guaranteed `None` here (only ever
+                    // set from `outbound`, which is drained to a fresh
+                    // `pending_write` before this branch is ever reached —
+                    // see the loop above). So if the publish-accept response
+                    // needed no further packets queued (`outbound` still
+                    // empty after `extend`), completion is knowable in this
+                    // same call — report it directly instead of returning
+                    // `Pending(READ)` and relying on a *separate* future
+                    // call to notice `self.publish_accepted` was already
+                    // set. That extra call previously depended on the
+                    // poller happening to deliver one more (any) readiness
+                    // event after this one — true by luck under the old
+                    // per-visit registration timing, but not guaranteed,
+                    // and a narrower registration (e.g. read-only, exactly
+                    // what this call itself requests below) could
+                    // legitimately never fire again if the peer has nothing
+                    // further to send, stalling a fully-negotiated
+                    // connection indefinitely.
+                    if self.publish_accepted && self.outbound.is_empty() {
+                        return SessionAdvanceOutcome::PublishAccepted;
+                    }
                     let interest = if self.outbound.is_empty() {
                         Interest::READ
                     } else {
