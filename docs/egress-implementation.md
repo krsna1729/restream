@@ -1908,16 +1908,53 @@ benchmark-driven decisions) and why that tier fits.
    scale, and adding thread-count sampling to the harness so the
    `RcvQ`/`SndQ` claim itself (not just aggregate CPU) can be verified
    directly.
-2. **RTMP feed/I/O readiness split (task #11) — `opus`.** Architectural:
-   introduce an explicit wait-condition type (`Feed` / `Io(Interest)` /
-   `FeedOrIo(Interest)` / `Timer`) so a feed wake can directly enqueue
-   feed-waiting leaves instead of bouncing through native poller
-   re-registration. Touches the `ProtocolEngine`/`EngineProgress`
-   contract shared by both RTMP and SRT backends — a redesign of a
-   cross-cutting interface, not a local fix. Needs its own design pass
-   (what changes in `EngineProgress`, how `EgressShardBackend::on_ready`
-   consumes the new wait condition, whether `Needs`/`Progress` still
-   make sense as-is) before implementation.
+2. **~~RTMP feed/I/O readiness split (task #11)~~ — done.** Added
+   `WaitCondition` (`Feed` / `Io(Interest)` / `FeedOrIo(Interest)`,
+   `backend.rs`) replacing the bare `Interest` inside
+   `EngineProgress::Needs`/`Progress`, and `ScheduleState::wants_feed_wake`
+   (set from every visit's `WaitCondition` in `apply_progress_to_common`,
+   `visit.rs`). Both `RtmpShardBackend` and `SrtShardBackend`'s
+   `on_command(FeedWake)` now directly push feed-waiting leaves onto the
+   ready queue with **zero poller calls**, replacing RTMP's old
+   `refresh_registrations_for_feed_wake` (which widened registration to
+   `READ_WRITE` via a real `epoll_ctl` call, relying on a TCP socket being
+   almost always writable to manufacture a spurious epoll event as the
+   actual wake signal — its own doc comment turned out to be stale: RTMP's
+   `MediaPublisher::advance` already keeps `READ` registered on an empty
+   feed, so the widen call's only real effect was the spurious-event
+   trick) and SRT's old no-op `FeedWake` handling (which relied entirely on
+   the shard's forced `ScheduleReady{1}` and SRT's always-`WRITE`
+   registration to eventually rediscover it). Safe against the regression
+   a previous direct-enqueue attempt hit (leaves mid handshake/negotiation
+   winning a race against real I/O discovery): handshake/negotiation only
+   ever report `WaitCondition::Io(_)`, never `Feed`/`FeedOrIo`, so
+   `wants_feed_wake` is structurally `false` for them.
+
+   Along the way, root-caused and fixed a latent, pre-existing bug this
+   change surfaced: `SessionNegotiation::advance` (RTMP) set its internal
+   `publish_accepted` flag but only checked for completion on a *separate*
+   subsequent call, which depended on the poller happening to deliver one
+   more (any) readiness event afterward — true by luck under the old
+   registration timing, not guaranteed. Found via a byte-for-byte identical
+   negotiation-trace comparison between old and new code (proving the
+   `WaitCondition` refactor itself was behavior-neutral) isolating the
+   divergence to exactly this "one more lucky call" dependency. Fixed by
+   checking completion immediately instead of waiting for a follow-up
+   visit.
+
+   Verified: full test suite (1912 tests) green, plus new regression
+   tests (`feed_wake_enqueues_the_leaf_without_any_poller_call`,
+   `feed_wake_never_enqueues_a_handshaking_leaf`,
+   `wants_feed_wake_reflects_the_visit_outcomes_wait_condition`). Re-ran
+   this session's local repro for the shard-thread-oversubscription
+   contention flake (`mixed.live.srt.h265.a1.bf0`, 6-core box, 6 egress
+   shards + 4 concurrent transcodes) 5 times post-fix: 5/5 passed, versus
+   2/5 failures pre-fix in the same environment — consistent with removing
+   real per-wake `epoll_ctl`/`epoll_wait` overhead from the shard hot loop
+   giving each shard thread more actual visit throughput per unit of CPU
+   it gets scheduled, though this is not a controlled statistical
+   before/after (small sample, single host, no repeated-measure harness
+   run).
 3. **~~Remaining hot-path allocation/dispatch (rest of task #12)~~ —
    profiled; the flagged candidates are not worth implementing.**
    `perf` was initially unusable in this sandbox
