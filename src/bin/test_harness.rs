@@ -380,6 +380,29 @@ async fn api_smoke() -> Result<Value, String> {
 
 const CHILD_TERMINATION_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Bound on any single HTTP request the harness makes to a restream/mediamtx
+/// process under test. `reqwest::Client::new()` has no default request
+/// timeout, so a stalled/deadlocked server response previously hung the
+/// awaiting `.send().await` call forever — invisible to every caller-side
+/// deadline (`wait_for_http_ok`'s own retry loop, a scenario's
+/// `outputs-progress` budget, even the CI job's outer `timeout` command
+/// couldn't interrupt a single blocked `.await`) and, notably, invisible to
+/// this harness's own progress logging, since nothing prints while blocked
+/// inside one HTTP call. Every `reqwest::Client` this harness constructs
+/// must be built with this timeout so a stuck server produces a loud,
+/// bounded error instead of consuming an entire CI job's time budget in
+/// silence (see the nightly `srt-crypto-matrix` incident this was found
+/// investigating: ~46 minutes of complete silence between two harness-side
+/// log lines, well past any of the scenario's own per-pipeline deadlines).
+pub(crate) const HARNESS_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub(crate) fn harness_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(HARNESS_HTTP_REQUEST_TIMEOUT)
+        .build()
+        .expect("harness reqwest client")
+}
+
 async fn kill_and_wait_child(child: &mut Child, label: &str) -> Result<ExitStatus, String> {
     let pid = child
         .id()

@@ -179,7 +179,7 @@ pub(crate) struct RampApi {
 impl RampApi {
     pub(crate) fn new(http_port: u16) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: harness_http_client(),
             base_url: format!("http://127.0.0.1:{http_port}"),
             cookie: None,
         }

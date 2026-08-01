@@ -1,3 +1,4 @@
+use crate::harness_http_client;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -119,7 +120,7 @@ async fn fetch_mediamtx_path_snapshot(mtx_api: u16) -> Result<MediaMtxPathSnapsh
     const ITEMS_PER_PAGE: usize = 100;
     const MAX_PAGES: usize = 10_000;
 
-    let client = reqwest::Client::new();
+    let client = harness_http_client();
     let mut combined = MediaMtxPathSnapshot::default();
     let mut page = 0usize;
     let mut expected_item_count = None;
