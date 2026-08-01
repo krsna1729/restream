@@ -848,7 +848,7 @@ where
                     crate::media::egress::backend::CloseReason::Removed,
                 );
             }
-            EgressCommand::FeedWake => {}
+            EgressCommand::FeedWake => self.enqueue_feed_waiting_leaves(),
             // Both mean "every leaf here should close, gracefully" —
             // `DrainShard` for future shard-count reconfiguration (the
             // shard itself keeps running afterward), `Shutdown` because the

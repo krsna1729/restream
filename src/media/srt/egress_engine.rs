@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use crate::media::egress::backend::{
     CloseReason, EngineProgress, Interest, ProtocolEngine, ProtocolFailure, Readiness,
-    RecoveryCapability,
+    RecoveryCapability, WaitCondition,
 };
 use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::TsFeed;
@@ -113,7 +113,7 @@ impl<T> SrtEgressEngine<T> {
         T: SrtMessageSender,
     {
         if self.pending.is_none() {
-            return EngineProgress::Needs(Interest::WRITE);
+            return EngineProgress::Needs(WaitCondition::Io(Interest::WRITE));
         }
 
         let mut total_bytes = 0usize;
@@ -124,7 +124,7 @@ impl<T> SrtEgressEngine<T> {
                 return EngineProgress::Progress {
                     bytes: total_bytes,
                     units: 1,
-                    interest: Interest::WRITE,
+                    wait: WaitCondition::Io(Interest::WRITE),
                 };
             };
 
@@ -138,14 +138,14 @@ impl<T> SrtEgressEngine<T> {
                         return EngineProgress::Progress {
                             bytes: total_bytes,
                             units: 1,
-                            interest: Interest::WRITE,
+                            wait: WaitCondition::Io(Interest::WRITE),
                         };
                     }
                     if total_bytes >= budget.max_bytes || Instant::now() >= budget.deadline {
                         return EngineProgress::Progress {
                             bytes: total_bytes,
                             units: 0,
-                            interest: Interest::WRITE,
+                            wait: WaitCondition::Io(Interest::WRITE),
                         };
                     }
                     // Budget allows another fragment: loop without
@@ -156,10 +156,10 @@ impl<T> SrtEgressEngine<T> {
                         EngineProgress::Progress {
                             bytes: total_bytes,
                             units: 0,
-                            interest: Interest::WRITE,
+                            wait: WaitCondition::Io(Interest::WRITE),
                         }
                     } else {
-                        EngineProgress::Needs(Interest::WRITE)
+                        EngineProgress::Needs(WaitCondition::Io(Interest::WRITE))
                     };
                 }
                 SrtSendResult::PeerClosed => return EngineProgress::PeerClosed,
@@ -194,7 +194,7 @@ where
             return if readiness.writable {
                 self.send_pending(transport, budget)
             } else {
-                EngineProgress::Needs(Interest::WRITE)
+                EngineProgress::Needs(WaitCondition::Io(Interest::WRITE))
             };
         }
 
@@ -205,7 +205,7 @@ where
                     *cursor = next_cursor;
                     self.pending_units.extend(units);
                 }
-                FeedRead::Empty => return EngineProgress::Needs(Interest::NONE),
+                FeedRead::Empty => return EngineProgress::Needs(WaitCondition::Feed),
                 FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
                     return EngineProgress::FeedOverrun;
                 }
@@ -213,14 +213,14 @@ where
         }
 
         let Some(message) = self.pending_units.pop_front() else {
-            return EngineProgress::Needs(Interest::NONE);
+            return EngineProgress::Needs(WaitCondition::Feed);
         };
         self.pending = Some(PendingSrtMessage::new(message));
 
         if readiness.writable {
             self.send_pending(transport, budget)
         } else {
-            EngineProgress::Needs(Interest::WRITE)
+            EngineProgress::Needs(WaitCondition::Io(Interest::WRITE))
         }
     }
 

@@ -274,20 +274,25 @@ fn visit_one_ready_leaf_closes_the_leaf_when_reregistration_fails() {
     let _ = server;
 }
 
+/// Proves the new direct-enqueue `FeedWake` mechanism never touches the
+/// poller at all: drives a leaf to publish acceptance, lets it settle idle
+/// (empty feed, `wants_feed_wake` true from `FeedOrIo(READ)`), pushes a
+/// unit, then delivers `FeedWake` and asserts zero `register_leaf`/
+/// `poll_leaves` calls happen while the leaf still gets visited and the
+/// unit gets pulled from the feed. Replaces
+/// `refresh_registrations_for_feed_wake_skips_leaves_already_read_write`,
+/// which tested the old epoll_ctl-widening implementation this one
+/// replaces — this is a strictly stronger proof (zero calls, not just
+/// "not repeated").
 #[test]
-fn refresh_registrations_for_feed_wake_skips_leaves_already_read_write() {
-    // Regression test: `FeedWake` fires far more often than the shard's own
-    // idle poll cycle (every publish, not every ~25ms), so
-    // `refresh_registrations_for_feed_wake` calling `register_leaf`
-    // unconditionally for every connected leaf on every `FeedWake` -- even
-    // one already registered `READ_WRITE` from a previous `FeedWake` -- is
-    // a wasted `epoll_ctl` syscall on a genuinely hot path.
+fn feed_wake_enqueues_the_leaf_without_any_poller_call() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let (publish_tx, publish_rx) = std::sync::mpsc::channel::<()>();
+    let (video_tx, video_rx) = std::sync::mpsc::channel::<()>();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        run_accepting_server_peer(stream, done_tx);
+        run_accepting_server_peer_reporting_video_after_idle(stream, publish_tx, video_tx);
     });
 
     let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
@@ -298,7 +303,7 @@ fn refresh_registrations_for_feed_wake_skips_leaves_already_read_write() {
     };
     let mut backend = RtmpShardBackend::new(
         poller,
-        RingFeed::new(ring, Arc::new(FeedEpoch::new())),
+        RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new())),
         budget(),
         4096,
     );
@@ -316,59 +321,85 @@ fn refresh_registrations_for_feed_wake_skips_leaves_already_read_write() {
             std::time::Instant::now() < publish_deadline,
             "leaf never reached publish acceptance"
         );
-        if done_rx.try_recv().is_ok() {
+        if publish_rx.try_recv().is_ok() {
             break;
         }
         backend.on_ready();
         thread::sleep(Duration::from_millis(1));
     }
-    server.join().unwrap();
 
-    // The first `FeedWake` widens the leaf's registration to `READ_WRITE`
-    // (it starts `WRITE`-registered at connect time, per
-    // `refresh_registrations_for_feed_wake`'s doc comment) -- that's a real
-    // change, so it must call `register_leaf`.
-    backend.on_command(EgressCommand::FeedWake);
-    let calls_after_first_wake = register_calls.lock().unwrap().len();
-    assert!(
-        calls_after_first_wake > 0,
-        "the first FeedWake must widen registration and call register_leaf"
-    );
-
-    // Every subsequent FeedWake with nothing else changing must be a no-op:
-    // the leaf is already READ_WRITE.
-    for _ in 0..3 {
-        backend.on_command(EgressCommand::FeedWake);
+    let settle_deadline = std::time::Instant::now() + Duration::from_millis(200);
+    while std::time::Instant::now() < settle_deadline {
+        backend.on_ready();
+        thread::sleep(Duration::from_millis(1));
     }
+    assert!(video_rx.try_recv().is_err());
+
+    let calls_before_wake = register_calls.lock().unwrap().len();
+
+    let payload = bytes::Bytes::from_static(&[
+        0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80, 0, 0, 0, 1, 0x68, 0xce, 0x06,
+        0xe2, 0, 0, 0, 1, 0x65, 0x88,
+    ]);
+    ring.push(crate::media::packet::MediaPacket {
+        media_type: crate::media::packet::MediaType::Video,
+        format: crate::media::packet::PayloadFormat::Raw,
+        is_keyframe: true,
+        track_index: 0,
+        pts: 100,
+        dts: 80,
+        payload,
+    });
+    backend.on_command(EgressCommand::FeedWake);
     assert_eq!(
         register_calls.lock().unwrap().len(),
-        calls_after_first_wake,
-        "repeated FeedWake calls must not re-register an already-READ_WRITE leaf"
+        calls_before_wake,
+        "FeedWake's direct-enqueue path must not call register_leaf"
     );
+    assert!(
+        !backend.ready.is_empty(),
+        "FeedWake must directly enqueue the feed-waiting leaf"
+    );
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "media published after the leaf went idle was never delivered \
+             (feed-wake liveness regression)"
+        );
+        if video_rx.try_recv().is_ok() {
+            break;
+        }
+        backend.on_ready();
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    server.join().unwrap();
 }
 
-/// Same fix, same proof, for `refresh_registrations_for_feed_wake`'s
-/// `register_leaf` call: a failed widen-to-`READ_WRITE` must close the
-/// leaf instead of marking it `READ_WRITE` in tracked state while the
-/// kernel registration never actually changed.
+/// Regression proof for the failure mode a previous direct-enqueue attempt
+/// hit (see `enqueue_feed_waiting_leaves`'s doc comment): a leaf still mid
+/// handshake/negotiation only ever reports `WaitCondition::Io(_)` (pure
+/// I/O wait, never `Feed`/`FeedOrIo`), so `FeedWake` must never enqueue it
+/// — it stays discoverable only via real `poll_ready()`, exactly as
+/// before. Drives a connection up to (but not through) the handshake and
+/// hammers `FeedWake` throughout, asserting the leaf never gets enqueued.
 #[test]
-fn refresh_registrations_for_feed_wake_closes_the_leaf_when_reregistration_fails() {
+fn feed_wake_never_enqueues_a_handshaking_leaf() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    // Accept the connection and then do nothing further: the client leaf
+    // stays parked mid-handshake for the whole test, guaranteeing it never
+    // reaches a Feed/FeedOrIo wait condition.
     let server = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        run_accepting_server_peer(stream, done_tx);
+        let (_stream, _) = listener.accept().unwrap();
+        thread::sleep(Duration::from_secs(5));
     });
 
     let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
-    let should_fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let poller = FailingRegisterPoller {
-        inner: TcpEgressPoller::new(4).unwrap(),
-        should_fail: should_fail.clone(),
-    };
     let mut backend = RtmpShardBackend::new(
-        poller,
+        TcpEgressPoller::new(4).unwrap(),
         RingFeed::new(ring, Arc::new(FeedEpoch::new())),
         budget(),
         4096,
@@ -380,33 +411,18 @@ fn refresh_registrations_for_feed_wake_closes_the_leaf_when_reregistration_fails
         1,
     )));
     backend.complete_pending_connect(&output_id, 1, addr);
-    assert!(
-        backend.output_sockets.contains_key(&output_id),
-        "connect-time registration must succeed"
-    );
 
-    let publish_deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
+    // Give the connect a moment to land, then hammer FeedWake without ever
+    // driving on_ready — proving the direct-enqueue path itself (not luck
+    // in visit timing) is what excludes this leaf.
+    thread::sleep(Duration::from_millis(50));
+    for _ in 0..20 {
+        backend.on_command(EgressCommand::FeedWake);
         assert!(
-            std::time::Instant::now() < publish_deadline,
-            "leaf never reached publish acceptance"
+            backend.ready.is_empty(),
+            "a handshaking leaf must never be directly enqueued by FeedWake"
         );
-        if done_rx.try_recv().is_ok() {
-            break;
-        }
-        backend.on_ready();
-        thread::sleep(Duration::from_millis(1));
     }
-    server.join().unwrap();
 
-    // Handshake completed normally; now make the FeedWake-triggered widen
-    // to READ_WRITE fail specifically.
-    should_fail.store(true, std::sync::atomic::Ordering::Relaxed);
-    backend.on_command(EgressCommand::FeedWake);
-
-    assert!(
-        !backend.output_sockets.contains_key(&output_id),
-        "leaf must be removed after a failed FeedWake re-registration, \
-         not left with a stale registered_interest"
-    );
+    let _ = server;
 }

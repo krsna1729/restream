@@ -1,5 +1,5 @@
 use super::*;
-use crate::media::egress::backend::Readiness;
+use crate::media::egress::backend::{Readiness, WaitCondition};
 use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::egress::leaf::ProgressState;
 use crate::media::egress::lifecycle::{LeafLifecycle, LifecycleEvent, apply_event};
@@ -35,7 +35,7 @@ fn sink_discards_available_units_when_feed_has_data() {
         EngineProgress::Progress {
             bytes: 5,
             units: 2,
-            interest: Interest::NONE,
+            wait: WaitCondition::Feed,
         }
     ));
     assert_eq!(cursor, FeedCursor::new(0, 2));
@@ -71,7 +71,7 @@ fn sink_respects_visit_budget_when_discarding() {
         EngineProgress::Progress {
             bytes: 3,
             units: 1,
-            interest: Interest::NONE,
+            wait: WaitCondition::Feed,
         }
     ));
     assert_eq!(cursor, FeedCursor::new(0, 1));
@@ -110,7 +110,7 @@ fn sink_does_not_retain_ring_payload_after_discard_visit() {
         EngineProgress::Progress {
             bytes: 10,
             units: 1,
-            interest: Interest::NONE,
+            wait: WaitCondition::Feed,
         }
     ));
     assert_eq!(cursor, FeedCursor::new(0, 1));
@@ -171,7 +171,10 @@ fn sink_suspends_when_feed_is_empty() {
         budget(8, 1024),
     );
 
-    assert!(matches!(progress, EngineProgress::Needs(Interest::NONE)));
+    assert!(matches!(
+        progress,
+        EngineProgress::Needs(WaitCondition::Feed)
+    ));
     assert_eq!(cursor, FeedCursor::new(0, 0));
     assert_eq!(transport.stats(), SinkDiscardStats::default());
 }

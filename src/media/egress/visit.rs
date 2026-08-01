@@ -67,6 +67,14 @@ fn apply_progress_to_common<F: EgressFeed>(
     progress: &EngineProgress,
     feed: &F,
 ) -> VisitDecision {
+    common.schedule.wants_feed_wake = match progress {
+        EngineProgress::Progress { wait, .. } | EngineProgress::Needs(wait) => wait.wants_feed(),
+        EngineProgress::HandshakeComplete
+        | EngineProgress::FeedOverrun
+        | EngineProgress::PeerClosed
+        | EngineProgress::Failed(_)
+        | EngineProgress::Yield => false,
+    };
     match progress {
         EngineProgress::Progress { bytes, units, .. } => {
             common.progress.record_send(*bytes, *units);

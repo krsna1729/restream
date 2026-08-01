@@ -72,6 +72,48 @@ impl Interest {
 }
 
 // ---------------------------------------------------------------------------
+// WaitCondition
+// ---------------------------------------------------------------------------
+
+/// Why a protocol engine stopped making progress (or, for `Progress`, why it
+/// stopped *this visit* even though it made some). Distinguishes "waiting on
+/// new feed data" from "waiting on I/O readiness" so the fabric can wake a
+/// feed-waiting leaf directly (see `EgressShardBackend`'s `FeedWake`
+/// handling) instead of only through poller rediscovery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitCondition {
+    /// Nothing to do until the feed produces more units. No I/O interest is
+    /// needed — this leaf is not currently gated on the socket in any way.
+    Feed,
+    /// Needs the given I/O interest; the feed is not implicated (e.g. the
+    /// transport would block on a write already in flight, or a
+    /// handshake/negotiation sub-state-machine is waiting on a peer byte).
+    /// A feed wake must never enqueue a leaf in this state.
+    Io(Interest),
+    /// Needs the given I/O interest *and* would also make progress if new
+    /// feed data arrived (e.g. RTMP steady-state publishing with an empty
+    /// feed: still watching the control channel for reads, but a feed wake
+    /// should also re-drive it directly).
+    FeedOrIo(Interest),
+}
+
+impl WaitCondition {
+    /// The I/O interest to register with the poller for the next visit.
+    /// `Feed` alone means "no I/O interest needed" (`Interest::NONE`).
+    pub fn io_interest(self) -> Interest {
+        match self {
+            WaitCondition::Feed => Interest::NONE,
+            WaitCondition::Io(interest) | WaitCondition::FeedOrIo(interest) => interest,
+        }
+    }
+
+    /// Whether a feed wake should directly re-enqueue a leaf in this state.
+    pub fn wants_feed(self) -> bool {
+        matches!(self, WaitCondition::Feed | WaitCondition::FeedOrIo(_))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Close reason
 // ---------------------------------------------------------------------------
 
@@ -140,12 +182,13 @@ pub enum EngineProgress {
         bytes: usize,
         /// Media units consumed from the feed.
         units: usize,
-        /// I/O interests the engine needs before the *next* advance.
-        interest: Interest,
+        /// What the engine needs before the *next* advance can make more
+        /// progress.
+        wait: WaitCondition,
     },
-    /// No progress was possible; engine needs the given readiness before
-    /// it can advance again.
-    Needs(Interest),
+    /// No progress was possible; engine needs the given wait condition
+    /// satisfied before it can advance again.
+    Needs(WaitCondition),
     /// Application-level handshake completed successfully.
     HandshakeComplete,
     /// The leaf's feed cursor fell behind the oldest retained entry.

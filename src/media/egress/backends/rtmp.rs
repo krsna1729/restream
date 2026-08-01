@@ -26,7 +26,7 @@ use rml_rtmp::time::RtmpTimestamp;
 
 use crate::media::egress::backend::{
     CloseReason, EngineProgress, Interest, ProtocolEngine, ProtocolFailure, Readiness,
-    RecoveryCapability,
+    RecoveryCapability, WaitCondition,
 };
 use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::RingFeed;
@@ -432,12 +432,20 @@ impl MediaPublisher {
             // visit (`Self::finish` reports `Progress` if any bytes/units
             // already flowed this pass, which reschedules promptly).
             if budget.is_exhausted(total_units, total_bytes) {
-                return Self::finish(total_bytes, total_units, Interest::READ_WRITE);
+                return Self::finish(
+                    total_bytes,
+                    total_units,
+                    WaitCondition::FeedOrIo(Interest::READ_WRITE),
+                );
             }
 
             if let Some(pending) = &mut self.pending_write {
                 if !readiness.writable {
-                    return Self::finish(total_bytes, total_units, Interest::READ_WRITE);
+                    return Self::finish(
+                        total_bytes,
+                        total_units,
+                        WaitCondition::Io(Interest::READ_WRITE),
+                    );
                 }
                 match stream.write(pending.remaining()) {
                     Ok(0) => {
@@ -451,7 +459,11 @@ impl MediaPublisher {
                         pending.offset += n;
                         total_bytes += n;
                         if !pending.is_complete() {
-                            return Self::finish(total_bytes, total_units, Interest::READ_WRITE);
+                            return Self::finish(
+                                total_bytes,
+                                total_units,
+                                WaitCondition::Io(Interest::READ_WRITE),
+                            );
                         }
                         self.pending_write = None;
                     }
@@ -460,10 +472,10 @@ impl MediaPublisher {
                         return Self::finish(
                             total_bytes,
                             total_units,
-                            Interest {
+                            WaitCondition::Io(Interest {
                                 readable: true,
                                 writable: hint.writable,
-                            },
+                            }),
                         );
                     }
                     Err(error) => {
@@ -546,7 +558,11 @@ impl MediaPublisher {
                         self.pending_units.extend(units);
                     }
                     FeedRead::Empty => {
-                        return Self::finish(total_bytes, total_units, Interest::READ);
+                        return Self::finish(
+                            total_bytes,
+                            total_units,
+                            WaitCondition::FeedOrIo(Interest::READ),
+                        );
                     }
                     FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
                         return EngineProgress::FeedOverrun;
@@ -555,7 +571,11 @@ impl MediaPublisher {
             }
 
             let Some(packet) = self.pending_units.pop_front() else {
-                return Self::finish(total_bytes, total_units, Interest::READ);
+                return Self::finish(
+                    total_bytes,
+                    total_units,
+                    WaitCondition::FeedOrIo(Interest::READ),
+                );
             };
             if let Err(detail) = self.encode_unit(&packet) {
                 return EngineProgress::Failed(ProtocolFailure {
@@ -568,15 +588,11 @@ impl MediaPublisher {
         }
     }
 
-    fn finish(bytes: usize, units: usize, interest: Interest) -> EngineProgress {
+    fn finish(bytes: usize, units: usize, wait: WaitCondition) -> EngineProgress {
         if bytes > 0 || units > 0 {
-            EngineProgress::Progress {
-                bytes,
-                units,
-                interest,
-            }
+            EngineProgress::Progress { bytes, units, wait }
         } else {
-            EngineProgress::Needs(interest)
+            EngineProgress::Needs(wait)
         }
     }
 }
@@ -670,7 +686,7 @@ impl ProtocolEngine for RtmpFabricEngine {
                 match outcome {
                     HandshakeOutcome::Pending(interest) => {
                         self.state = Some(RtmpFabricState::Handshaking(handshake));
-                        EngineProgress::Needs(interest)
+                        EngineProgress::Needs(WaitCondition::Io(interest))
                     }
                     HandshakeOutcome::Complete { remaining } => {
                         let parts = self
@@ -712,7 +728,7 @@ impl ProtocolEngine for RtmpFabricEngine {
                 match outcome {
                     SessionAdvanceOutcome::Pending(interest) => {
                         self.state = Some(RtmpFabricState::Negotiating(negotiation));
-                        EngineProgress::Needs(interest)
+                        EngineProgress::Needs(WaitCondition::Io(interest))
                     }
                     SessionAdvanceOutcome::PublishAccepted => {
                         let publish_startup = self

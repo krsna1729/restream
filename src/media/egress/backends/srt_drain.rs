@@ -137,4 +137,45 @@ where
             }
         }
     }
+
+    /// Directly enqueue every connected leaf whose last `WaitCondition`
+    /// wants a feed wake (`Feed`/`FeedOrIo`) — set in
+    /// `apply_progress_to_common` (`visit.rs`) — without any poller call.
+    /// Mirrors `poll_ready()`'s push-with-dedup shape exactly (same
+    /// `enqueued` check and set), using `self.ready` directly instead of a
+    /// real `srt_epoll_wait()`.
+    ///
+    /// `SrtEgressEngine::advance` only ever reports `WaitCondition::Feed`
+    /// on an empty feed and `Io(Interest::WRITE)` everywhere else (a
+    /// pending message blocked on socket writability), so — unlike RTMP,
+    /// which has real handshake/negotiation `Io`-only states to keep
+    /// excluded — every SRT leaf this loop could possibly touch is exactly
+    /// the case a feed wake should re-drive. Before this method existed,
+    /// `FeedWake` was a no-op here (SRT relied entirely on being always
+    /// `WRITE`-registered plus the shard's forced `ScheduleReady{1}` making
+    /// the next real `poll_leaves()` rediscover it); this gives SRT the
+    /// same direct-enqueue latency improvement RTMP gets, at the cost of
+    /// doing real work per feed wake instead of none.
+    pub(super) fn enqueue_feed_waiting_leaves(&mut self) {
+        let sockets: Vec<SrtLeafSocket> = self.output_sockets.values().copied().collect();
+        for socket_ref in sockets {
+            let Some(leaf) = self
+                .leaves
+                .get_mut(socket_ref.key.0)
+                .and_then(Option::as_mut)
+            else {
+                continue;
+            };
+            if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
+                continue;
+            }
+            leaf.common.schedule.enqueued = true;
+            self.ready.push_back(SrtReadyLeaf {
+                socket: socket_ref.socket,
+                key: socket_ref.key,
+                generation: leaf.common.generation,
+                writable: false,
+            });
+        }
+    }
 }

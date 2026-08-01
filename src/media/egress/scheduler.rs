@@ -33,6 +33,18 @@ pub struct ScheduleState {
     pub deficit_bytes: usize,
     /// Instant of the most recent scheduler service visit.
     pub last_service_at: Option<Instant>,
+    /// `true` iff the most recent `EngineProgress`'s `WaitCondition` was
+    /// `Feed` or `FeedOrIo` — i.e. a feed wake should directly re-enqueue
+    /// this leaf. Set unconditionally from every visit outcome in
+    /// `apply_progress_to_common` (`visit.rs`); `false` for outcomes that
+    /// don't carry a wait condition at all (`HandshakeComplete`,
+    /// `FeedOverrun`, `PeerClosed`, `Failed`, `Yield`).
+    ///
+    /// Advisory only, not authoritative like `enqueued`: a feed-wake
+    /// direct-enqueue and a real poller-discovered enqueue both still
+    /// check `!enqueued` before pushing, so this flag being stale between
+    /// visits can never cause a double enqueue.
+    pub wants_feed_wake: bool,
 }
 
 impl ScheduleState {
@@ -41,6 +53,7 @@ impl ScheduleState {
             enqueued: false,
             deficit_bytes: 0,
             last_service_at: None,
+            wants_feed_wake: false,
         }
     }
 

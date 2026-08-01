@@ -1,5 +1,5 @@
 use super::*;
-use crate::media::egress::backend::Readiness;
+use crate::media::egress::backend::{Readiness, WaitCondition};
 use crate::media::egress::journal::{FeedEpoch, RingFeed};
 use crate::media::input_gate::InputPacketGate;
 use crate::media::packet::{MediaType, PayloadFormat};
@@ -94,5 +94,8 @@ fn pipeline_engine_reports_needs_when_the_feed_is_empty() {
         budget(),
     );
 
-    assert!(matches!(progress, EngineProgress::Needs(Interest::NONE)));
+    assert!(matches!(
+        progress,
+        EngineProgress::Needs(WaitCondition::Feed)
+    ));
 }
