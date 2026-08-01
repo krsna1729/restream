@@ -210,16 +210,8 @@ pub enum EgressPhase {
     /// Waiting for an upstream media stage to become ready.
     #[default]
     WaitingUpstream,
-    /// Resolving a remote host.
-    Resolving,
     /// Attempting to connect to the remote endpoint.
     Connecting,
-    /// RTMP handshake is in progress.
-    Handshaking,
-    /// RTMP application connection is in progress.
-    ConnectingApp,
-    /// RTMP publish request has been accepted and media publishing is active.
-    Publishing,
     /// Connected and actively sending media.
     Sending,
     /// Sink output is consuming and discarding media through the fabric.
@@ -241,11 +233,7 @@ impl EgressPhase {
         match self {
             Self::Starting => "starting",
             Self::WaitingUpstream => "waitingUpstream",
-            Self::Resolving => "resolving",
             Self::Connecting => "connecting",
-            Self::Handshaking => "handshaking",
-            Self::ConnectingApp => "connecting_app",
-            Self::Publishing => "publishing",
             Self::Sending => "sending",
             Self::Discarding => "discarding",
             Self::Segmenting => "segmenting",
@@ -279,11 +267,7 @@ impl From<&str> for EgressPhase {
         match s {
             "starting" => Self::Starting,
             "waitingUpstream" | "waiting_upstream" => Self::WaitingUpstream,
-            "resolving" => Self::Resolving,
             "connecting" => Self::Connecting,
-            "handshaking" => Self::Handshaking,
-            "connecting_app" | "connectingApp" => Self::ConnectingApp,
-            "publishing" => Self::Publishing,
             "sending" => Self::Sending,
             "discarding" => Self::Discarding,
             "segmenting" => Self::Segmenting,
@@ -541,11 +525,7 @@ mod tests {
         for (s, expected) in [
             ("starting", EgressPhase::Starting),
             ("waitingUpstream", EgressPhase::WaitingUpstream),
-            ("resolving", EgressPhase::Resolving),
             ("connecting", EgressPhase::Connecting),
-            ("handshaking", EgressPhase::Handshaking),
-            ("connecting_app", EgressPhase::ConnectingApp),
-            ("publishing", EgressPhase::Publishing),
             ("sending", EgressPhase::Sending),
             ("discarding", EgressPhase::Discarding),
             ("segmenting", EgressPhase::Segmenting),
