@@ -273,6 +273,10 @@ struct RtmpFabricLeaf {
     /// at the moment draining started so the real cause (removed vs.
     /// shutdown) survives to the eventual close call.
     draining_reason: Option<CloseReason>,
+    /// `(tcp_bytes_sent, sampled_at)` from the previous quality sample,
+    /// needed to compute `tcp_send_rate_mbps` as a two-sample delta —
+    /// mirrors `rtmp/ingest.rs`'s `previous_tcp_bytes` for the receive side.
+    previous_tcp_bytes: Option<(u64, Instant)>,
 }
 
 impl RtmpFabricLeaf {
@@ -319,6 +323,31 @@ impl RtmpFabricLeaf {
             age,
             &self.common.limits,
         )
+    }
+
+    /// Sample sender-side TCP quality (RTT, retransmits, cwnd, pacing rate,
+    /// congestion algorithm) for the once-per-second stall sweep — the same
+    /// `TCP_INFO`/`SO_MEMINFO` mechanism and cadence legacy RTMP egress used
+    /// for its own quality reporting, and the same conversion `rtmp/ingest.rs`
+    /// already uses on the receive side. Returns `None` when `TCP_INFO` is
+    /// unavailable (non-Linux, or the getsockopt call itself failed); the
+    /// caller should leave the previously published quality in place then.
+    fn sample_quality(
+        &mut self,
+        now: Instant,
+    ) -> Option<crate::media::snapshots::PublisherQuality> {
+        let stats =
+            crate::media::tcp_stats::collect_tcp_stats_by_fd(self.transport.raw_fd()).ok()?;
+        let send_rate = stats.tcp_bytes_sent.and_then(|bytes| {
+            let rate = self.previous_tcp_bytes.and_then(|(previous, sampled_at)| {
+                let elapsed = now.duration_since(sampled_at).as_secs_f64();
+                let delta = bytes.checked_sub(previous)?;
+                (elapsed > 0.0).then_some((delta as f64 * 8.0) / (elapsed * 1_000_000.0))
+            });
+            self.previous_tcp_bytes = Some((bytes, now));
+            rate
+        });
+        Some(stats.into_egress_quality(send_rate))
     }
 }
 
@@ -600,6 +629,7 @@ where
             observed_since: Instant::now(),
             draining_since: None,
             draining_reason: None,
+            previous_tcp_bytes: None,
         };
         self.leaves.push(Some(leaf));
         if let Some(previous) = self

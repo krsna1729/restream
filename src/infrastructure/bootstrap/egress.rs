@@ -221,12 +221,13 @@ impl EgressReconciler {
                         .with_active_egress(&output.id, |egress| {
                             crate::media::egress::leaf::EgressProgressSink {
                                 bytes_sent: Some(egress.bytes_sent.clone()),
+                                metrics: Some(egress.metrics.clone()),
                                 last_progress_ms: Some(egress.last_progress_ms.clone()),
                                 resync_count: Some(egress.resync_count.clone()),
                                 feed_lag_units: Some(egress.feed_lag_units.clone()),
                                 backpressure_reason: Some(egress.backpressure_reason.clone()),
+                                quality: Some(egress.quality.clone()),
                                 terminated_unexpectedly: Some(terminated.clone()),
-                                ..Default::default()
                             }
                         })
                         .await
@@ -277,12 +278,13 @@ impl EgressReconciler {
                 .with_active_egress(&output.id, |egress| {
                     crate::media::egress::leaf::EgressProgressSink {
                         bytes_sent: Some(egress.bytes_sent.clone()),
+                        metrics: Some(egress.metrics.clone()),
                         last_progress_ms: Some(egress.last_progress_ms.clone()),
                         resync_count: Some(egress.resync_count.clone()),
                         feed_lag_units: Some(egress.feed_lag_units.clone()),
                         backpressure_reason: Some(egress.backpressure_reason.clone()),
+                        quality: Some(egress.quality.clone()),
                         terminated_unexpectedly: Some(terminated.clone()),
-                        ..Default::default()
                     }
                 })
                 .await
@@ -313,6 +315,7 @@ impl EgressReconciler {
                 .with_active_egress(&output.id, |egress| {
                     crate::media::egress::leaf::EgressProgressSink {
                         bytes_sent: Some(egress.bytes_sent.clone()),
+                        metrics: Some(egress.metrics.clone()),
                         last_progress_ms: Some(egress.last_progress_ms.clone()),
                         resync_count: Some(egress.resync_count.clone()),
                         feed_lag_units: Some(egress.feed_lag_units.clone()),
@@ -358,6 +361,7 @@ impl EgressReconciler {
                         .with_active_egress(&output.id, |egress| {
                             crate::media::egress::leaf::EgressProgressSink {
                                 bytes_sent: Some(egress.bytes_sent.clone()),
+                                metrics: Some(egress.metrics.clone()),
                                 last_progress_ms: Some(egress.last_progress_ms.clone()),
                                 resync_count: Some(egress.resync_count.clone()),
                                 feed_lag_units: Some(egress.feed_lag_units.clone()),

@@ -217,6 +217,13 @@ remaining wedged in an active-but-stuck sender loop.
 
 ### Egress telemetry parity status
 
+This list describes the current, verified state. The `StageMetrics` output
+counters and both quality rows were silently unreachable for every
+fabric-owned output for a time after the egress fabric migration — the
+fabric never called the code that populates them — before being found by
+an explicit audit and fixed; see `docs/egress-implementation.md`'s Phase 7
+"Legacy removal" section for the full mechanism and what changed.
+
 Implemented egress parity:
 
 - protocol classification and resolved target address where available

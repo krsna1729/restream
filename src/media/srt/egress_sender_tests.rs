@@ -1,7 +1,7 @@
 use bytes::Bytes;
 
 use super::srt_egress_sender::*;
-use super::sys::{SRT_EASYNCSND, SRT_ECONNLOST, SRT_ENOCONN, SRT_ESCLOSED};
+use super::sys::{SRT_EASYNCSND, SRT_ECONNLOST, SRT_ENOCONN, SRT_ESCLOSED, SrtTraceBStats};
 use crate::media::egress::backend::CloseReason;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -68,6 +68,10 @@ impl SrtSendOps for FakeSendOps {
 
     fn send_backlog(&self, _socket: i32) -> Option<NativeSendBacklog> {
         self.backlog.get()
+    }
+
+    fn sender_quality_stats(&self, _socket: i32) -> Option<SrtTraceBStats> {
+        None
     }
 }
 

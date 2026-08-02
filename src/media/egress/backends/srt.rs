@@ -15,11 +15,12 @@ use crate::media::egress::policy::{LeafLimits, LeafStallClass, WorkBudget, class
 use crate::media::egress::scheduler::{LeafKey, VisitDecision};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
+use crate::media::snapshots::PublisherQuality;
 use crate::media::srt::{
     NativeSendBacklog, SRTSOCKET, SrtEgressEngine, SrtEgressInterest, SrtEgressPollError,
     SrtEgressSendMode, SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec, SrtFabricPoller,
-    SrtMessageSender, SrtReadyLeaf, claim_srt_egress_muxer_port, connect_fabric_srt_egress_socket,
-    srt_fabric_message_sender,
+    SrtMessageSender, SrtReadyLeaf, SrtSenderCounterSnapshot, claim_srt_egress_muxer_port,
+    connect_fabric_srt_egress_socket, srt_fabric_message_sender, srt_sender_quality_from_stats,
 };
 
 /// Combined application and native pending state for one SRT fabric leaf.
@@ -124,6 +125,9 @@ where
     /// at the moment draining started so the real cause survives to the
     /// eventual close call.
     draining_reason: Option<crate::media::egress::backend::CloseReason>,
+    /// Sender-side counters from the previous quality sample, needed to
+    /// compute per-second rates (loss/drop/retrans) on the next one.
+    quality_snapshot: Option<SrtSenderCounterSnapshot>,
 }
 
 impl<T> SrtFabricLeaf<T>
@@ -139,6 +143,7 @@ where
             observed_since: Instant::now(),
             draining_since: None,
             draining_reason: None,
+            quality_snapshot: None,
         }
     }
 
@@ -190,6 +195,19 @@ where
             .unwrap_or(self.observed_since);
         let age = now.saturating_duration_since(last_progress);
         classify_stall(pressure.pending_bytes(), age, &self.common.limits)
+    }
+
+    /// Sample sender-side connection quality (RTT, loss, retransmits,
+    /// bandwidth) from libsrt, for the once-per-second stall sweep — the
+    /// same `srt_bistats` mechanism and cadence legacy SRT egress used for
+    /// its own quality reporting. Returns `None` when the transport has no
+    /// native stats to offer (fakes, closed sockets); the caller should
+    /// leave the previously published quality in place in that case.
+    pub(crate) fn sample_quality(&mut self, now: Instant) -> Option<PublisherQuality> {
+        let stats = self.transport.sender_quality_stats()?;
+        let (quality, snapshot) = srt_sender_quality_from_stats(&stats, self.quality_snapshot, now);
+        self.quality_snapshot = Some(snapshot);
+        Some(quality)
     }
 
     pub(crate) fn visit_ready(

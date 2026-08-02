@@ -111,6 +111,9 @@ where
             leaf.common()
                 .progress_sink
                 .record_backpressure_state(lag_units, reason);
+            if let Some(quality) = leaf.sample_quality(now) {
+                leaf.common().progress_sink.record_quality(quality);
+            }
         }
 
         let stalled: Vec<OutputId> = self

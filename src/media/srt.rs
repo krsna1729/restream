@@ -115,8 +115,7 @@ use srt_monitor::{audio_codec_id, monitor_listener_socket, read_udp_socket_stats
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 #[cfg(test)]
 use srt_quality::{SrtCounterSnapshot, quality_from_stats as srt_quality_from_stats};
-#[cfg(test)]
-use srt_quality::{
+pub(crate) use srt_quality::{
     SrtSenderCounterSnapshot, sender_quality_from_stats as srt_sender_quality_from_stats,
 };
 #[cfg(test)]

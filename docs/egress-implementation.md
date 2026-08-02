@@ -3808,6 +3808,43 @@ and the now-single-valued `fabric`/`execution` branching in its
 fabric-owned outputs, so removing the legacy queue source didn't change
 their behavior, just made what was already dead input explicit.
 
+**A real, silent telemetry regression from the fabric migration itself
+(not this removal pass), found and fixed by an explicit parity audit
+after legacy removal made it safe to compare against `docs/observability.md`'s
+existing (and, it turned out, already-stale) claims.** Two of
+`ActiveEgress`'s fields were never wired into the fabric's leaf-progress
+path at all, so they silently stayed at their all-empty defaults for
+every fabric-owned RTMP/SRT/Sink/Pipeline-recirculation output, forever:
+- `metrics` (`StageMetrics` — `bytesOut`/`packetsOut`/`packetsPerSec` in
+  the status `metrics` block): `EgressProgressSink` carried two bare
+  `Arc<AtomicU64>` handles (`metrics_bytes_out`/`metrics_packets_out`)
+  that no construction site in `src/infrastructure/bootstrap/egress.rs`
+  ever populated — an `Arc<StageMetrics>`'s individual fields can't be
+  cloned out field-by-field, only the whole struct, so this was
+  structurally unreachable, not just an oversight at one call site. Fixed
+  by giving the sink an `Arc<StageMetrics>` directly (the same `Arc`
+  legacy egress tasks used to share and call `record_out` on) plus a new
+  `StageMetrics::record_out_batch`, wired at all four fabric construction
+  sites.
+- `quality` (`PublisherQuality` — RTT, loss, retransmits, native buffer
+  occupancy): the fabric shard sweeps never sampled it at all.
+  `sender_quality_from_stats`/`SrtSenderCounterSnapshot` in
+  `src/media/srt_quality.rs` existed but were `#[cfg(test)]`-only,
+  reachable from nowhere in production. Fixed by widening that visibility
+  to `pub(crate)`, adding `SrtMessageSender::sender_quality_stats`
+  (mirrors the existing `native_send_backlog`) so the SRT stall sweep can
+  sample `srt_bistats` once per second the same way legacy did, and adding
+  `TcpReceiverStats::into_egress_quality` plus a raw-fd
+  `collect_tcp_stats_by_fd` (RTMP's fabric leaf owns a non-Tokio socket,
+  so the existing Tokio-only `collect_tcp_stats` couldn't reach it) so the
+  RTMP stall sweep can sample `TCP_INFO` the same way.
+
+Neither gap broke a test or a build — both fields defaulted cleanly to
+`None`/zero, and `docs/observability.md`'s "Implemented egress parity"
+section already (incorrectly) claimed both worked. Found only by
+explicitly comparing what legacy used to publish against what the fabric
+actually calls, not by any failing gate.
+
 ### Exit gate
 
 No production network output uses a per-output application thread, private
