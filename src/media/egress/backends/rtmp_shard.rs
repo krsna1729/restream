@@ -340,9 +340,11 @@ impl RtmpFabricLeaf {
             crate::media::tcp_stats::collect_tcp_stats_by_fd(self.transport.raw_fd()).ok()?;
         let send_rate = stats.tcp_bytes_sent.and_then(|bytes| {
             let rate = self.previous_tcp_bytes.and_then(|(previous, sampled_at)| {
-                let elapsed = now.duration_since(sampled_at).as_secs_f64();
-                let delta = bytes.checked_sub(previous)?;
-                (elapsed > 0.0).then_some((delta as f64 * 8.0) / (elapsed * 1_000_000.0))
+                crate::media::tcp_stats::bytes_delta_rate_mbps(
+                    bytes,
+                    previous,
+                    now.duration_since(sampled_at).as_secs_f64(),
+                )
             });
             self.previous_tcp_bytes = Some((bytes, now));
             rate

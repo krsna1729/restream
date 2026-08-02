@@ -116,6 +116,22 @@ impl TcpReceiverStats {
     }
 }
 
+/// Throughput in Mbps from two cumulative byte-counter samples, for turning
+/// `TCP_INFO`'s `tcpi_bytes_sent`/`tcpi_bytes_received` (a running total, not
+/// a rate) into a per-second figure the same way `rtmp/ingest.rs`'s inline
+/// receive-side computation and `media::srt_quality::counter_rate`'s
+/// sender-side computation both already do. `None` when the counter went
+/// backward (a reset, not real regression — TCP byte counters do not wrap
+/// in practice) or the sample interval was zero or negative (clock not
+/// actually advancing between samples).
+pub fn bytes_delta_rate_mbps(current: u64, previous: u64, elapsed_seconds: f64) -> Option<f64> {
+    if elapsed_seconds <= 0.0 {
+        return None;
+    }
+    let delta = current.checked_sub(previous)?;
+    Some((delta as f64 * 8.0) / (elapsed_seconds * 1_000_000.0))
+}
+
 #[cfg(target_os = "linux")]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -777,6 +793,33 @@ mod tests {
         assert_eq!(quality.tcp_receive_rate_mbps, None);
         // A field with no SRT/RTP counterpart must stay untouched.
         assert_eq!(quality.srt_send_buf_bytes, None);
+    }
+
+    /// The gap this closes: `RtmpFabricLeaf::sample_quality`
+    /// (`egress/backends/rtmp_shard.rs`) computes `tcp_send_rate_mbps` from
+    /// two `TCP_INFO` samples the same way `rtmp/ingest.rs` computes
+    /// `tcp_receive_rate_mbps` — both now share this function, but before
+    /// the shared extraction the RTMP-egress side's copy of this exact math
+    /// had no dedicated test, unlike SRT's `counter_rate` (see
+    /// `srt_quality.rs`'s regression/zero-elapsed tests), which this
+    /// mirrors.
+    #[test]
+    fn bytes_delta_rate_mbps_computes_megabits_per_second() {
+        // 1,000,000 bytes over 1 second = 8 Mbps.
+        assert_eq!(bytes_delta_rate_mbps(1_000_000, 0, 1.0), Some(8.0));
+    }
+
+    #[test]
+    fn bytes_delta_rate_mbps_reports_none_when_counter_regresses() {
+        // A counter reset (new socket, restarted stat source) must not be
+        // misread as a negative or wrapped-around rate.
+        assert_eq!(bytes_delta_rate_mbps(100, 500, 2.0), None);
+    }
+
+    #[test]
+    fn bytes_delta_rate_mbps_reports_none_at_zero_or_negative_elapsed_seconds() {
+        assert_eq!(bytes_delta_rate_mbps(1_000, 500, 0.0), None);
+        assert_eq!(bytes_delta_rate_mbps(1_000, 500, -1.0), None);
     }
 
     #[cfg(target_os = "linux")]
