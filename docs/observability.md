@@ -158,7 +158,7 @@ Active native egresses appear in `pipelines[id].outputs`:
 | `retrying`, `retryAttempts`, `retryBackoffMs`, `nextRetryAt`, `retryRemainingMs` | Present while reconciler backoff is actively delaying the next automatic egress start. During this window the output `status` is promoted to `retrying` even though the preserved runtime phase remains `failed`. |
 | `quality` | Egress transport quality. RTMP/RTMPS expose sender-side `TCP_INFO`/`SO_MEMINFO`; SRT exposes sender-side `srt_bistats()` and bonded group member state when available. |
 | `endedAt`, `endedAgeMs` | Present on recent output snapshots after unregister/cleanup so operators can tell when the last classified egress state ended |
-| `fabric`, `shardId` | `true`/shard index when this output is owned by the egress fabric runtime (`RESTREAM_EGRESS_FABRIC`, default `all`); `false`/`null` for the legacy per-output path (`RESTREAM_EGRESS_FABRIC=off`) |
+| `fabric`, `shardId` | `true` and the owning shard index for every network egress output — the egress fabric runtime is now the only egress path |
 | `resyncCount` | Total feed resynchronizations for this leaf (see `docs/egress-implementation.md` Phase 6); a leaf that falls behind its retained feed window resyncs to the latest sync point in place rather than closing |
 | `feedLagUnits` | Feed units this leaf's cursor is currently behind the feed head; updated once per second by the shard's stall sweep for every live leaf, not just ones about to be force-closed |
 | `backpressureReason` | `null` when idle/healthy, `"backpressured"` when send-path bytes are queued but within the no-progress deadline, `"stalled"` when that deadline has passed (the same classification the stall sweep uses to decide force-close) |
@@ -216,6 +216,13 @@ failure and transitions through the normal retrying/backoff contract instead of
 remaining wedged in an active-but-stuck sender loop.
 
 ### Egress telemetry parity status
+
+This list describes the current, verified state. The `StageMetrics` output
+counters and both quality rows were silently unreachable for every
+fabric-owned output for a time after the egress fabric migration — the
+fabric never called the code that populates them — before being found by
+an explicit audit and fixed; see `docs/egress-implementation.md`'s Phase 7
+"Legacy removal" section for the full mechanism and what changed.
 
 Implemented egress parity:
 

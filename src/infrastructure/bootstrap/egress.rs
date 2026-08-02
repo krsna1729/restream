@@ -167,8 +167,7 @@ impl EgressReconciler {
 
         let url_scheme = OutputUrlScheme::from_url(&output.url);
         let prepared = crate::application::egress::prepare_output_ring(&self.engine, output).await;
-        let use_srt_fabric = self.engine.config.egress_fabric.rollout.routes_srt()
-            && matches!(url_scheme, OutputUrlScheme::Srt);
+        let use_srt_fabric = matches!(url_scheme, OutputUrlScheme::Srt);
         let encoding = if use_srt_fabric {
             prepared.media_stage_key.kind.to_string()
         } else {
@@ -199,8 +198,7 @@ impl EgressReconciler {
         )
         .await;
 
-        let use_rtmp_fabric = self.engine.config.egress_fabric.rollout.routes_rtmp()
-            && matches!(url_scheme, OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps);
+        let use_rtmp_fabric = matches!(url_scheme, OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps);
         let rtmp_fabric = if use_rtmp_fabric {
             match crate::application::egress_rtmp_fabric::prepare_rtmp_fabric_startup(
                 &self.engine,
@@ -223,12 +221,13 @@ impl EgressReconciler {
                         .with_active_egress(&output.id, |egress| {
                             crate::media::egress::leaf::EgressProgressSink {
                                 bytes_sent: Some(egress.bytes_sent.clone()),
+                                metrics: Some(egress.metrics.clone()),
                                 last_progress_ms: Some(egress.last_progress_ms.clone()),
                                 resync_count: Some(egress.resync_count.clone()),
                                 feed_lag_units: Some(egress.feed_lag_units.clone()),
                                 backpressure_reason: Some(egress.backpressure_reason.clone()),
+                                quality: Some(egress.quality.clone()),
                                 terminated_unexpectedly: Some(terminated.clone()),
-                                ..Default::default()
                             }
                         })
                         .await
@@ -279,12 +278,13 @@ impl EgressReconciler {
                 .with_active_egress(&output.id, |egress| {
                     crate::media::egress::leaf::EgressProgressSink {
                         bytes_sent: Some(egress.bytes_sent.clone()),
+                        metrics: Some(egress.metrics.clone()),
                         last_progress_ms: Some(egress.last_progress_ms.clone()),
                         resync_count: Some(egress.resync_count.clone()),
                         feed_lag_units: Some(egress.feed_lag_units.clone()),
                         backpressure_reason: Some(egress.backpressure_reason.clone()),
+                        quality: Some(egress.quality.clone()),
                         terminated_unexpectedly: Some(terminated.clone()),
-                        ..Default::default()
                     }
                 })
                 .await
@@ -315,6 +315,7 @@ impl EgressReconciler {
                 .with_active_egress(&output.id, |egress| {
                     crate::media::egress::leaf::EgressProgressSink {
                         bytes_sent: Some(egress.bytes_sent.clone()),
+                        metrics: Some(egress.metrics.clone()),
                         last_progress_ms: Some(egress.last_progress_ms.clone()),
                         resync_count: Some(egress.resync_count.clone()),
                         feed_lag_units: Some(egress.feed_lag_units.clone()),
@@ -340,9 +341,15 @@ impl EgressReconciler {
         let use_pipeline_fabric = matches!(url_scheme, OutputUrlScheme::Pipeline);
         let pipeline_fabric = if use_pipeline_fabric {
             // A parse failure here just leaves `pipeline_fabric` `None` —
-            // the legacy fallback path re-parses the URL itself and
-            // records the same error, so nothing is lost by not
-            // duplicating that here.
+            // `EgressTask::run`'s `OutputUrlScheme::Pipeline` arm re-parses
+            // the same `output.url` itself (pure function, identical input)
+            // and records the same error there, so nothing is lost by not
+            // duplicating that here. That arm's `Ok` branch is otherwise
+            // unreachable given this parse already succeeded whenever
+            // `pipeline_fabric` is `Some` — kept as a defensive fallback
+            // rather than an `unwrap_err()`, so a future refactor that
+            // breaks this coupling degrades to the working (if
+            // non-fabric) recirculation path instead of a panic.
             match crate::domain::output_spec::RecirculationTarget::parse(&output.url) {
                 Ok(target) => {
                     let feed = crate::application::egress::prepare_recirculation_fabric_feed(
@@ -360,6 +367,7 @@ impl EgressReconciler {
                         .with_active_egress(&output.id, |egress| {
                             crate::media::egress::leaf::EgressProgressSink {
                                 bytes_sent: Some(egress.bytes_sent.clone()),
+                                metrics: Some(egress.metrics.clone()),
                                 last_progress_ms: Some(egress.last_progress_ms.clone()),
                                 resync_count: Some(egress.resync_count.clone()),
                                 feed_lag_units: Some(egress.feed_lag_units.clone()),
@@ -407,9 +415,7 @@ impl EgressReconciler {
         let task = EgressTask {
             output_id: output.id.clone(),
             pipeline_id: output.pipeline_id.clone(),
-            encoding,
             url: output.url.clone(),
-            rtmp_mode: output.config.rtmp_mode(),
             ring: prepared.ring,
             terminal_stage_key: prepared.terminal_stage_key,
             registration,

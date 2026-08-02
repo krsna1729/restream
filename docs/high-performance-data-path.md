@@ -91,13 +91,11 @@ stays outside the shared stage:
 | Source packet ring | Independent reader position and lag counters |
 | HLS pipeline store | Request authorization and response transfer |
 
-Under the egress fabric default (`RESTREAM_EGRESS_FABRIC=all`; see
-`docs/egress-implementation.md`), RTMP/RTMPS and SRT egress additionally
-share a small, CPU-derived pool of shard OS threads across many
-destinations, each multiplexed through native non-blocking readiness
-polling rather than one blocking sender thread per destination — the
-legacy per-output blocking sender only exists under
-`RESTREAM_EGRESS_FABRIC=off`.
+Under the egress fabric (see `docs/egress-implementation.md`), RTMP/RTMPS
+and SRT egress additionally share a small, CPU-derived and output-count-
+scaled pool of shard OS threads across many destinations, each
+multiplexed through native non-blocking readiness polling rather than one
+blocking sender thread per destination.
 
 Sharing must not couple destination failure domains. A stalled or failed
 destination can lose its own buffered data or restart without stopping the

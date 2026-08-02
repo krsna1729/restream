@@ -70,6 +70,8 @@ mod output_progress;
 mod resource_sweep;
 #[path = "test_harness/sinks.rs"]
 mod sinks;
+#[path = "test_harness/srt_raw_sink.rs"]
+mod srt_raw_sink;
 #[path = "test_harness/srt_urls.rs"]
 mod srt_urls;
 #[path = "test_harness/suite.rs"]
@@ -94,6 +96,7 @@ pub(crate) use mode_specs::*;
 use output_progress::*;
 use resource_sweep::*;
 use sinks::*;
+use srt_raw_sink::*;
 use srt_urls::*;
 use suite::*;
 use workflow_exec::*;
@@ -223,7 +226,7 @@ async fn run() -> Result<(), String> {
             "preflight" => preflight_check().await,
             "fault.egress-retry" => fault_egress_retry().await,
             "fault.output-stall" => fault_output_stall().await,
-            "fault.srt-output-stall" => fault_srt_egress_stalled_destination().await,
+            "fault.srt-output-stall" => fault_srt_output_stall().await,
             "fault.resilience" => fault_resilience().await,
             "file.live-edge" => file_live_edge().await,
             "signal.control" => signal_control().await,
@@ -235,10 +238,6 @@ async fn run() -> Result<(), String> {
             "branch-matrix" => branch_matrix().await,
             "backend-policy-matrix" => backend_policy_matrix().await,
             "srt-crypto-matrix" => srt_crypto_matrix().await,
-            "rtmp-fabric-matrix" => rtmp_fabric_matrix().await,
-            "srt-fabric-matrix" => srt_fabric_matrix().await,
-            "mixed-fabric-matrix" => mixed_fabric_matrix().await,
-            "rtmps-fabric-matrix" => rtmps_fabric_matrix().await,
             other => Err(unknown_command_error(other)),
         }
     };
@@ -379,6 +378,29 @@ async fn api_smoke() -> Result<Value, String> {
 }
 
 const CHILD_TERMINATION_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Bound on any single HTTP request the harness makes to a restream/mediamtx
+/// process under test. `reqwest::Client::new()` has no default request
+/// timeout, so a stalled/deadlocked server response previously hung the
+/// awaiting `.send().await` call forever — invisible to every caller-side
+/// deadline (`wait_for_http_ok`'s own retry loop, a scenario's
+/// `outputs-progress` budget, even the CI job's outer `timeout` command
+/// couldn't interrupt a single blocked `.await`) and, notably, invisible to
+/// this harness's own progress logging, since nothing prints while blocked
+/// inside one HTTP call. Every `reqwest::Client` this harness constructs
+/// must be built with this timeout so a stuck server produces a loud,
+/// bounded error instead of consuming an entire CI job's time budget in
+/// silence (see the nightly `srt-crypto-matrix` incident this was found
+/// investigating: ~46 minutes of complete silence between two harness-side
+/// log lines, well past any of the scenario's own per-pipeline deadlines).
+pub(crate) const HARNESS_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub(crate) fn harness_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(HARNESS_HTTP_REQUEST_TIMEOUT)
+        .build()
+        .expect("harness reqwest client")
+}
 
 async fn kill_and_wait_child(child: &mut Child, label: &str) -> Result<ExitStatus, String> {
     let pid = child

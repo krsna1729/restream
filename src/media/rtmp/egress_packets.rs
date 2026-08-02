@@ -1,8 +1,5 @@
 //! RTMP egress startup headers and packet policy.
 
-#[cfg(test)]
-use std::sync::Arc;
-
 use bytes::Bytes;
 
 use crate::media::codec;
@@ -63,18 +60,6 @@ pub(super) fn rtmp_video_packet_can_be_dropped(payload: &[u8], is_keyframe: bool
             classify_flv_video_packet(payload),
             Some(FlvVideoPacketKind::Interframe)
         )
-}
-
-#[cfg(test)]
-pub(super) fn rtmp_warmup_ready(
-    ring_buffer: &RingBuffer,
-    packets: &[Arc<crate::media::packet::MediaPacket>],
-) -> bool {
-    !rtmp_output_waits_for_video(ring_buffer)
-        || ring_buffer.video_parameter_sets().is_some()
-        || packets
-            .iter()
-            .any(|packet| packet.media_type == crate::media::packet::MediaType::Video)
 }
 
 pub(crate) fn should_send_startup_audio_sequence_header(

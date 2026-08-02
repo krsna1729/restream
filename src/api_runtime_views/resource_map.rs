@@ -363,17 +363,18 @@ fn egress_node(egress: &Value, avio_queues: &[Value]) -> Value {
     let blocked = queue.map(|q| number_field(q, "blockedWrites")).unwrap_or(0);
     // A fabric-owned output runs on a shared shard thread it does not own
     // exclusively — attributing a whole app-owned OS thread to it here
-    // would double-count the same fixed shard pool once per output.
-    // Legacy SRT still spawns one sender thread per output; legacy RTMP
-    // stays on the shared tokio pool.
+    // would double-count the same fixed shard pool once per output. RTMP,
+    // RTMPS, SRT, sink discard, and pipeline recirculation are always
+    // fabric-owned; `is_fabric` is only ever false here for output types
+    // the fabric does not cover (HLS PUT upload), which run on the shared
+    // tokio pool like every other non-fabric async task in this process —
+    // there is no per-output OS thread left to attribute anywhere.
     let is_fabric = egress
         .get("fabric")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let execution = if is_fabric {
         "shard_thread"
-    } else if protocol == "srt" {
-        "os_thread"
     } else {
         "tokio_task"
     };
@@ -387,7 +388,7 @@ fn egress_node(egress: &Value, avio_queues: &[Value]) -> Value {
         "shardId": egress.get("shardId").cloned().unwrap_or(Value::Null),
         "memory": memory(len, "derived", "avio_egress_queue_len"),
         "threads": {
-            "appOwned": if !is_fabric && protocol == "srt" { 1 } else { 0 },
+            "appOwned": 0,
             "childProcess": 0,
         },
         "status": egress.get("status").cloned().unwrap_or(Value::Null),

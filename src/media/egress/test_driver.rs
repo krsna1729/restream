@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::media::egress::backend::{
     CloseReason, EngineProgress, Interest, ProtocolEngine, Readiness, RecoveryCapability,
+    WaitCondition,
 };
 use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::policy::WorkBudget;
@@ -202,14 +203,15 @@ pub struct FakeTransport {
 /// A scripted behavior for one `advance()` call.
 #[derive(Debug, Clone)]
 pub enum EngineScript {
-    /// Consume `units` units and `bytes` bytes; report residual interest.
+    /// Consume `units` units and `bytes` bytes; report the residual wait
+    /// condition.
     Progress {
         bytes: usize,
         units: usize,
-        interest: Interest,
+        wait: WaitCondition,
     },
-    /// Report that the transport needs readiness.
-    Needs(Interest),
+    /// Report that the transport needs the given wait condition satisfied.
+    Needs(WaitCondition),
     /// Signal handshake completion.
     HandshakeComplete,
     /// Report feed overrun.
@@ -264,14 +266,17 @@ impl<F: EgressFeed> FakeEngine<F> {
         let step = EngineScript::Progress {
             bytes: bytes_per_call,
             units: units_per_call,
-            interest: Interest::WRITE,
+            wait: WaitCondition::Io(Interest::WRITE),
         };
         Self::new(vec![step; 1024]) // large but bounded for tests
     }
 
     /// Create an engine that immediately reports WouldBlock.
     pub fn always_blocks() -> Self {
-        Self::new(vec![EngineScript::Needs(Interest::WRITE); 1024])
+        Self::new(vec![
+            EngineScript::Needs(WaitCondition::Io(Interest::WRITE));
+            1024
+        ])
     }
 }
 
@@ -290,18 +295,10 @@ impl<F: EgressFeed<Unit = Bytes>> ProtocolEngine for FakeEngine<F> {
         self.advance_calls += 1;
         let step = self.script.pop_front().unwrap_or(EngineScript::Yield);
         match step {
-            EngineScript::Progress {
-                bytes,
-                units,
-                interest,
-            } => {
+            EngineScript::Progress { bytes, units, wait } => {
                 transport.bytes_written += bytes;
                 cursor.next_sequence += units as u64;
-                EngineProgress::Progress {
-                    bytes,
-                    units,
-                    interest,
-                }
+                EngineProgress::Progress { bytes, units, wait }
             }
             EngineScript::Needs(i) => EngineProgress::Needs(i),
             EngineScript::HandshakeComplete => EngineProgress::HandshakeComplete,
@@ -458,9 +455,9 @@ mod tests {
             EngineScript::Progress {
                 bytes: 100,
                 units: 2,
-                interest: Interest::WRITE,
+                wait: WaitCondition::Io(Interest::WRITE),
             },
-            EngineScript::Needs(Interest::WRITE),
+            EngineScript::Needs(WaitCondition::Io(Interest::WRITE)),
         ]);
         let feed = FakeFeed::new();
         let mut transport = FakeTransport::default();
@@ -482,7 +479,7 @@ mod tests {
         let p2 = engine.advance(&mut transport, Readiness::WRITABLE, &feed, &mut cursor, b);
         assert!(matches!(
             p2,
-            EngineProgress::Needs(Interest { writable: true, .. })
+            EngineProgress::Needs(WaitCondition::Io(Interest { writable: true, .. }))
         ));
     }
 

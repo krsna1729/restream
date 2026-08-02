@@ -70,14 +70,37 @@ impl SharedPipelineTargetSource {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(output_id, target);
     }
+
+    /// Drop a claimed target once its output is genuinely removed (not
+    /// just moved between shards by `EgressFabricRuntime::rescale`, which
+    /// relies on `take_target` staying non-destructive) -- mirrors
+    /// `SharedRtmpPublishStartupSource::remove`, called from
+    /// `dispatch_pipeline_fabric_command` on `EgressCommand::Remove`.
+    pub(crate) fn remove(&self, output_id: &OutputId) {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(output_id);
+    }
 }
 
 impl PipelineTargetSource for SharedPipelineTargetSource {
+    // Non-destructive (peek + clone), matching
+    // `SharedRtmpPublishStartupSource::take_startup`: `EgressFabricRuntime::rescale`
+    // can move a just-added output to a different shard (Remove on the old
+    // shard, fresh Add on the new one) before it ever publishes, and a
+    // destructive take here would leave that second `Add` with nothing to
+    // claim -- the leaf would be silently rejected
+    // (`"pipeline fabric leaf rejected: no target available"`). The
+    // application layer, not the shard thread, owns releasing the claimed
+    // target input (see `PipelineEngine::close`'s doc comment), so leaving
+    // the entry in place until the output is genuinely removed is safe.
     fn take_target(&mut self, output_id: &OutputId) -> Option<PipelineTarget> {
         self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(output_id)
+            .get(output_id)
+            .cloned()
     }
 }
 

@@ -930,10 +930,10 @@ fn engine_detects_peer_close_during_steady_state_publishing() {
                 assert_eq!(failure.reason, "rtmp_control_read");
                 break;
             }
-            EngineProgress::Needs(interest) => {
+            EngineProgress::Needs(wait) => {
                 assert!(
-                    interest.readable,
-                    "an idle publishing leaf must stay read-registered: {interest:?}"
+                    wait.io_interest().readable,
+                    "an idle publishing leaf must stay read-registered: {wait:?}"
                 );
                 thread::sleep(Duration::from_millis(1));
             }

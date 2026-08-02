@@ -201,6 +201,14 @@
           },
           "purpose": "stalled sink/output fault behavior"
         },
+        "fault.srt-output-stall": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "SRT destinations that stop taking data: bounded RSS against a frozen receiver, and the backpressured-but-connected stall path against a raw undrained SRT listener"
+        },
         "fault.resilience": {
           "suiteDefault": true,
           "suiteOrder": 500,

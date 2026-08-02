@@ -273,6 +273,10 @@ struct RtmpFabricLeaf {
     /// at the moment draining started so the real cause (removed vs.
     /// shutdown) survives to the eventual close call.
     draining_reason: Option<CloseReason>,
+    /// `(tcp_bytes_sent, sampled_at)` from the previous quality sample,
+    /// needed to compute `tcp_send_rate_mbps` as a two-sample delta —
+    /// mirrors `rtmp/ingest.rs`'s `previous_tcp_bytes` for the receive side.
+    previous_tcp_bytes: Option<(u64, Instant)>,
 }
 
 impl RtmpFabricLeaf {
@@ -320,6 +324,33 @@ impl RtmpFabricLeaf {
             &self.common.limits,
         )
     }
+
+    /// Sample sender-side TCP quality (RTT, retransmits, cwnd, pacing rate,
+    /// congestion algorithm) for the once-per-second stall sweep — the same
+    /// `TCP_INFO`/`SO_MEMINFO` mechanism and cadence legacy RTMP egress used
+    /// for its own quality reporting, and the same conversion `rtmp/ingest.rs`
+    /// already uses on the receive side. Returns `None` when `TCP_INFO` is
+    /// unavailable (non-Linux, or the getsockopt call itself failed); the
+    /// caller should leave the previously published quality in place then.
+    fn sample_quality(
+        &mut self,
+        now: Instant,
+    ) -> Option<crate::media::snapshots::PublisherQuality> {
+        let stats =
+            crate::media::tcp_stats::collect_tcp_stats_by_fd(self.transport.raw_fd()).ok()?;
+        let send_rate = stats.tcp_bytes_sent.and_then(|bytes| {
+            let rate = self.previous_tcp_bytes.and_then(|(previous, sampled_at)| {
+                crate::media::tcp_stats::bytes_delta_rate_mbps(
+                    bytes,
+                    previous,
+                    now.duration_since(sampled_at).as_secs_f64(),
+                )
+            });
+            self.previous_tcp_bytes = Some((bytes, now));
+            rate
+        });
+        Some(stats.into_egress_quality(send_rate))
+    }
 }
 
 fn requeue_after_rtmp_visit(decision: VisitDecision) -> bool {
@@ -338,7 +369,7 @@ fn next_registration_interest(
 ) -> Interest {
     use crate::media::egress::backend::EngineProgress;
     match progress {
-        EngineProgress::Progress { interest, .. } | EngineProgress::Needs(interest) => *interest,
+        EngineProgress::Progress { wait, .. } | EngineProgress::Needs(wait) => wait.io_interest(),
         _ => Interest::READ_WRITE,
     }
 }
@@ -600,6 +631,7 @@ where
             observed_since: Instant::now(),
             draining_since: None,
             draining_reason: None,
+            previous_tcp_bytes: None,
         };
         self.leaves.push(Some(leaf));
         if let Some(previous) = self
@@ -639,29 +671,37 @@ where
     /// reason to walk every leaf on every media tick either.
     const STALL_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 
-    /// Re-register every connected leaf's poller interest to `READ_WRITE`.
+    /// Directly enqueue every connected leaf whose last `WaitCondition`
+    /// wants a feed wake (`Feed`/`FeedOrIo`) — set in
+    /// `apply_progress_to_common` (`visit.rs`) from its own most recent
+    /// `EngineProgress` — without any poller call.
     ///
-    /// A publishing leaf that has fully drained its feed reports
-    /// `EngineProgress::Needs(Interest::NONE)`, so its poller registration
-    /// stops watching for read or write readiness (see
-    /// `next_registration_interest`). Without this, a `FeedWake` — the
-    /// shard's only signal that new media may be available — would be a
-    /// silent no-op for that leaf: its epoll registration watches neither
-    /// direction, so no socket event ever fires for it again and it stops
-    /// sending forever even though the feed keeps growing.
+    /// Mirrors `poll_ready()`'s push-with-dedup shape exactly (same
+    /// `enqueued` check and set), using `self.ready` directly instead of a
+    /// real `epoll_wait()`. Replaces the previous `epoll_ctl`-widening
+    /// implementation of this method, which forced every leaf's
+    /// registration to `READ_WRITE` on the (mistaken — RTMP's steady-state
+    /// publisher always keeps at least `READ` registered, see
+    /// `MediaPublisher::advance`'s `FeedRead::Empty` handling) assumption
+    /// that a drained leaf's registration had gone empty; the *actual*
+    /// effect of that widening was manufacturing a spurious writable event
+    /// for the next real `epoll_wait()` to discover, since a TCP socket is
+    /// almost always writable — an indirect, syscall-costly wake signal
+    /// this replaces with a direct one.
     ///
-    /// This widens the registration only; it deliberately does *not* push a
-    /// synthetic entry into `self.ready`. An earlier version did, and that
-    /// broke handshake/negotiation: those leaves always want *some* real
-    /// I/O, and `FeedWake` fires far more often than the shard's own idle
-    /// poll cycle, so a synthetic no-readiness event kept winning the race
-    /// to be visited before `poll_ready()` ever ran — starving every leaf
-    /// of the real epoll discovery it needed to make any progress at all.
-    /// Widening the registration is safe for every state (a leaf that only
-    /// needs one direction simply ignores the other), and the *next*
-    /// `on_ready()` call's real `poll_ready()` — not a synthetic event —
-    /// is what actually discovers the readiness and visits the leaf.
-    fn refresh_registrations_for_feed_wake(&mut self) {
+    /// Safe against the regression an earlier direct-enqueue attempt hit
+    /// (documented in this method's prior history): that attempt pushed a
+    /// synthetic ready entry unconditionally, which starved
+    /// handshake/negotiation leaves — those always want *real* I/O, and a
+    /// synthetic no-readiness event kept winning the race to be visited
+    /// before `poll_ready()` ever ran. This can't happen here because
+    /// handshake/negotiation sub-state-machines only ever report
+    /// `WaitCondition::Io(_)` (see `RtmpFabricEngine::advance`'s
+    /// `Handshaking`/`Negotiating` arms), never `Feed`/`FeedOrIo`, so
+    /// `wants_feed_wake` is structurally `false` for them and this loop
+    /// never touches them — they remain discoverable only via real
+    /// `poll_ready()`, exactly as before.
+    fn enqueue_feed_waiting_leaves(&mut self) {
         let sockets: Vec<RtmpLeafSocket> = self.output_sockets.values().copied().collect();
         for socket_ref in sockets {
             let Some(leaf) = self
@@ -671,24 +711,17 @@ where
             else {
                 continue;
             };
-            // `FeedWake` fires far more often than the shard's own idle poll
-            // cycle (every publish, not every ~25ms — see the doc comment
-            // above), so this loop runs a lot; skip the `epoll_ctl` syscall
-            // for any leaf that's already registered `READ_WRITE`, whether
-            // because a previous `FeedWake` already widened it or because
-            // it's actively publishing and already needs both directions.
-            // Same skip-when-unchanged reasoning as
-            // `visit_one_ready_leaf`'s `register_leaf` call.
-            if leaf.registered_interest == TcpEgressInterest::READ_WRITE {
+            if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
                 continue;
             }
-            let _ = self.poller.register_leaf(
-                socket_ref.fd,
-                socket_ref.key,
-                leaf.common.generation,
-                TcpEgressInterest::READ_WRITE,
-            );
-            leaf.registered_interest = TcpEgressInterest::READ_WRITE;
+            leaf.common.schedule.enqueued = true;
+            self.ready.push_back(TcpReadyLeaf {
+                fd: socket_ref.fd,
+                key: socket_ref.key,
+                generation: leaf.common.generation,
+                readable: false,
+                writable: false,
+            });
         }
     }
 
@@ -784,9 +817,30 @@ where
             if let Some(leaf) = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)
                 && leaf.registered_interest != interest
             {
-                let _ = self
+                // Discarding this Result and updating `registered_interest`
+                // unconditionally would desync tracked state from the real
+                // kernel registration on failure: the leaf would believe
+                // it's watching (e.g.) writable readiness forever while the
+                // kernel never actually does, and would never be
+                // rediscovered by `poll_ready()` again — silent, permanent
+                // starvation, indistinguishable from a healthy idle leaf
+                // (the root cause of the recurring "RTMP fabric leaf
+                // terminated unexpectedly" CI flake). Treat a failed
+                // re-registration as leaf-fatal instead, same as a failed
+                // initial registration at connect time: close and let the
+                // existing retry/reconnect path recover it.
+                if self
                     .poller
-                    .register_leaf(event.fd, event.key, event.generation, interest);
+                    .register_leaf(event.fd, event.key, event.generation, interest)
+                    .is_err()
+                {
+                    tracing::warn!(
+                        output_id = %leaf.common.output_id,
+                        leaf_key = event.key.0,
+                        "rtmp fabric leaf re-registration failed; closing for retry"
+                    );
+                    return Some((Some(leaf.common.output_id.clone()), VisitDecision::Close));
+                }
                 leaf.registered_interest = interest;
             }
         }
@@ -815,7 +869,7 @@ where
             EgressCommand::Remove(output_id) => {
                 self.begin_graceful_close(&output_id, CloseReason::Removed);
             }
-            EgressCommand::FeedWake => self.refresh_registrations_for_feed_wake(),
+            EgressCommand::FeedWake => self.enqueue_feed_waiting_leaves(),
             // Both mean "every leaf here should close, gracefully" —
             // `DrainShard` for future shard-count reconfiguration (the
             // shard itself keeps running afterward), `Shutdown` because the
@@ -856,10 +910,11 @@ where
 
         let outcome = self.visit_one_ready_leaf();
         if let Some((Some(output_id), VisitDecision::Close)) = &outcome {
-            // `VisitDecision::Close` is only ever produced from
-            // `EngineProgress::PeerClosed`/`Failed` (see `visit.rs`) — an
-            // explicit `EgressCommand::Remove` never reaches this path — so
-            // every close observed here is unexpected from the
+            // `VisitDecision::Close` here means either
+            // `EngineProgress::PeerClosed`/`Failed` (see `visit.rs`) or a
+            // failed poller re-registration inside `visit_one_ready_leaf`
+            // — an explicit `EgressCommand::Remove` never reaches this
+            // path — so every close observed here is unexpected from the
             // application's point of view.
             if let Some(socket_ref) = self.output_sockets.get(output_id)
                 && let Some(leaf) = self.leaves.get(socket_ref.key.0).and_then(Option::as_ref)

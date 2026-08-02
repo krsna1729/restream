@@ -56,6 +56,11 @@ Use the narrowest proof that can actually catch the bug:
      `fault.output-stall` proves a connected RTMP sink that stops draining media
      surfaces `stalled` in both output status and health instead of looking
      healthy or failing immediately.
+     `fault.srt-output-stall` proves the SRT equivalents: bounded RSS while
+     retrying against a frozen receiver, and — against the harness's raw
+     undrained SRT listener (`src/bin/test_harness/srt_raw_sink.rs`) — the
+     backpressured-but-connected leaf being classified `backpressured`, then
+     `stalled`, then closed, while healthy siblings keep progressing.
      `recovery` also covers hung HLS PUT destinations timing out, surfacing
      retry/error state, recovering after the sink restarts, rapid same-pipeline
      SRT publisher replacement races, and repeated RTMP and SRT downstream sink
@@ -208,6 +213,7 @@ surface already covers it.
   - `kill_and_wait_child_terminates_spawned_process`
   - `fault.egress-retry`
   - `fault.output-stall`
+  - `fault.srt-output-stall`
   - `fault.resilience`
   - `recovery`
 

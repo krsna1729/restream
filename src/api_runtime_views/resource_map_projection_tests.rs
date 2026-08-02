@@ -232,10 +232,15 @@ fn top_nodes_truncate_to_zero_yields_empty_without_panicking() {
 }
 
 #[test]
-fn egress_node_uses_os_thread_only_for_srt_protocol() {
+fn egress_node_uses_tokio_task_for_non_fabric_output_types_regardless_of_protocol() {
+    // Every network-egress protocol (RTMP, RTMPS, SRT) is fabric-owned
+    // unconditionally now; `fabric: false`/absent only happens for output
+    // types the fabric does not cover (HLS PUT upload), which share the
+    // tokio pool like any other non-fabric async task — there is no
+    // per-output OS thread left to attribute for any protocol.
     let srt = egress_node(&json!({"outputId": "o1", "protocol": "srt"}), &[]);
-    assert_eq!(srt["execution"], "os_thread");
-    assert_eq!(srt["threads"]["appOwned"], 1);
+    assert_eq!(srt["execution"], "tokio_task");
+    assert_eq!(srt["threads"]["appOwned"], 0);
 
     let rtmp = egress_node(&json!({"outputId": "o2", "protocol": "rtmp"}), &[]);
     assert_eq!(rtmp["execution"], "tokio_task");
@@ -250,8 +255,8 @@ fn egress_node_uses_shard_thread_for_fabric_owned_outputs_regardless_of_protocol
     );
     assert_eq!(fabric_srt["execution"], "shard_thread");
     // A fabric-owned output shares a fixed shard thread — it must not also
-    // be counted as an app-owned OS thread the way legacy SRT is, or the
-    // resource map double-counts the same shared thread once per output.
+    // be counted as an app-owned OS thread, or the resource map
+    // double-counts the same shared thread once per output.
     assert_eq!(fabric_srt["threads"]["appOwned"], 0);
     assert_eq!(fabric_srt["fabric"], true);
     assert_eq!(fabric_srt["shardId"], 2);

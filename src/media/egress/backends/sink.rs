@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
 use crate::media::egress::backend::{
-    CloseReason, EngineProgress, Interest, ProtocolEngine, Readiness, RecoveryCapability,
+    CloseReason, EngineProgress, ProtocolEngine, Readiness, RecoveryCapability, WaitCondition,
 };
 use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::{FeedEpoch, RingFeed};
@@ -80,10 +80,10 @@ where
                 EngineProgress::Progress {
                     bytes,
                     units: unit_count,
-                    interest: Interest::NONE,
+                    wait: WaitCondition::Feed,
                 }
             }
-            FeedRead::Empty => EngineProgress::Needs(Interest::NONE),
+            FeedRead::Empty => EngineProgress::Needs(WaitCondition::Feed),
             FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
                 EngineProgress::FeedOverrun
             }

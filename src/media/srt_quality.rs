@@ -14,11 +14,11 @@ pub(super) struct SrtCounterSnapshot {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct SrtSenderCounterSnapshot {
-    pub(super) packets_sent_loss: u64,
-    pub(super) packets_sent_drop: u64,
-    pub(super) packets_sent_retrans: u64,
-    pub(super) sampled_at: Instant,
+pub(crate) struct SrtSenderCounterSnapshot {
+    pub(crate) packets_sent_loss: u64,
+    pub(crate) packets_sent_drop: u64,
+    pub(crate) packets_sent_retrans: u64,
+    pub(crate) sampled_at: Instant,
 }
 
 fn counter_rate(current: u64, previous: u64, elapsed_seconds: f64) -> Option<f64> {
@@ -100,7 +100,7 @@ pub(super) fn quality_from_stats(
     )
 }
 
-pub(super) fn sender_quality_from_stats(
+pub(crate) fn sender_quality_from_stats(
     stats: &SrtTraceBStats,
     previous: Option<SrtSenderCounterSnapshot>,
     sampled_at: Instant,

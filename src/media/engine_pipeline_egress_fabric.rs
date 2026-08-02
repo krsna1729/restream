@@ -1,5 +1,7 @@
 use crate::media::egress::backends::pipeline::PipelineTarget;
-use crate::media::egress::backends::pipeline_shard::SharedPipelineTargetSource;
+use crate::media::egress::backends::pipeline_shard::{
+    PipelineShardBackend, SharedPipelineTargetSource,
+};
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId};
 use crate::media::egress::factory::spawn_pipeline_fabric_shard_group;
 use crate::media::egress::feed::EgressFeed;
@@ -55,21 +57,37 @@ impl MediaEngine {
             // pattern as SRT/RTMP/sink (see `retain_sink_fabric_runtime`).
             // Pipeline leaves have no poller either, so this is their only
             // readiness signal too.
+            // Shared with `EgressFabricRuntime::rescale` -- see
+            // `RtmpFabricRegistry`'s identical comment in
+            // engine_rtmp_egress_fabric.rs for why a fixed snapshot here
+            // would leave a later-grown shard's leaves without the fast
+            // feed-wake path.
             let wake_handles = runtime.feed_wake_handles();
             let watcher_feed = feed.clone_reader();
             let notify = watcher_feed.notify_handle();
             let watcher_feed_id = feed_id.clone();
             let watcher = tokio::spawn(async move {
-                tracing::info!(feed_id = %watcher_feed_id, shard_count = wake_handles.len(), "pipeline fabric wake watcher started");
+                tracing::info!(feed_id = %watcher_feed_id, "pipeline fabric wake watcher started");
                 let mut last_head = watcher_feed.head_sequence();
+                // `last_head`'s pre-loop snapshot can already reflect data
+                // published before this task's first poll (e.g. scheduler
+                // delay from `EgressFabricRuntime::rescale`'s synchronous
+                // shard shutdowns) -- treating that as "already seen" would
+                // await a `notify_waiters()` wake that already fired with no
+                // registered waiter, hanging forever. `first_iteration`
+                // forces the first pass to always fall through to deliver
+                // instead of awaiting, regardless of what `last_head` reads.
+                let mut first_iteration = true;
                 loop {
                     let notified = notify.notified();
                     let current_head = watcher_feed.head_sequence();
-                    if current_head == last_head {
+                    if current_head == last_head && !first_iteration {
                         notified.await;
                     }
+                    first_iteration = false;
                     last_head = watcher_feed.head_sequence();
-                    for handle in &wake_handles {
+                    let handles = wake_handles.lock().unwrap().clone();
+                    for handle in &handles {
                         let _ = handle.deliver();
                     }
                 }
@@ -81,6 +99,7 @@ impl MediaEngine {
                 .target_sources
                 .insert(feed_id.clone(), target_source);
             registry.feed_watchers.insert(feed_id.clone(), watcher);
+            registry.feeds.insert(feed_id.clone(), feed.clone_reader());
             true
         };
 
@@ -113,14 +132,71 @@ impl MediaEngine {
         command: EgressCommand,
     ) -> Result<ManagerCommandOutcome, PipelineFabricDispatchError> {
         let mut registry = self.fabric.pipeline.lock().await;
+        if let EgressCommand::Remove(output_id) = &command
+            && let Some(source) = registry.target_sources.get(feed_id)
+        {
+            source.remove(output_id);
+        }
+        // Owned upfront (see `dispatch_rtmp_fabric_command`'s identical
+        // comment): disjoint from the `runtimes` borrow below, and no
+        // lingering reference into `registry` for `rescale` to hold.
+        let rescale_inputs = registry
+            .feeds
+            .get(feed_id)
+            .map(|feed| feed.clone_reader())
+            .zip(registry.target_sources.get(feed_id).cloned());
         let Some(runtime) = registry.runtimes.get_mut(feed_id) else {
             return Err(PipelineFabricDispatchError::MissingFeed {
                 feed_id: feed_id.clone(),
             });
         };
-        runtime
+
+        // See `dispatch_rtmp_fabric_command`'s identical comment: size the
+        // pool for an `Add` before dispatching it so it lands on its final
+        // shard the first time, instead of connecting once and immediately
+        // getting rehomed onto a different shard.
+        let mut rescale_inputs = rescale_inputs;
+        if matches!(command, EgressCommand::Add(_))
+            && let Some(inputs) = rescale_inputs.take()
+        {
+            self.rescale_pipeline_fabric(feed_id, runtime, inputs);
+        }
+
+        let outcome = runtime
             .dispatch(command)
-            .map_err(PipelineFabricDispatchError::Dispatch)
+            .map_err(PipelineFabricDispatchError::Dispatch)?;
+
+        if let Some(inputs) = rescale_inputs.take() {
+            self.rescale_pipeline_fabric(feed_id, runtime, inputs);
+        }
+
+        Ok(outcome)
+    }
+
+    fn rescale_pipeline_fabric(
+        &self,
+        feed_id: &FeedId,
+        runtime: &mut EgressFabricRuntime,
+        (feed, target_source): (RingFeed, SharedPipelineTargetSource),
+    ) {
+        let config = &self.config.egress_fabric;
+        let shard_config = config.shard_config();
+        let budget = config.work_budget();
+        let effective_cpus = crate::system_sampling::effective_cpu_count();
+        let result = runtime.rescale(effective_cpus, shard_config, |_shard_id| {
+            Ok::<_, std::convert::Infallible>(PipelineShardBackend::new(
+                feed.clone_reader(),
+                budget,
+                target_source.clone(),
+            ))
+        });
+        match result {
+            Ok(touched) if !touched.is_empty() => {
+                tracing::info!(feed_id = %feed_id, shards = ?touched, "pipeline fabric shard pool rescaled");
+            }
+            Ok(_) => {}
+            Err(error) => match error {},
+        }
     }
 
     pub(crate) async fn release_pipeline_fabric_runtime(&self, feed_id: &FeedId) -> bool {
@@ -135,6 +211,7 @@ impl MediaEngine {
             }
             registry.active_outputs.remove(feed_id);
             registry.target_sources.remove(feed_id);
+            registry.feeds.remove(feed_id);
             if let Some(watcher) = registry.feed_watchers.remove(feed_id) {
                 watcher.abort();
             }

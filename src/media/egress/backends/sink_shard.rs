@@ -12,10 +12,11 @@
 //! costs no I/O, so a leaf is always conceptually "writable." That means
 //! there is no epoll/`srt_epoll_wait`-style readiness source to fall back
 //! on — `EgressCommand::FeedWake` is the *only* signal this backend ever
-//! gets that new data might exist, so (unlike RTMP's
-//! `refresh_registrations_for_feed_wake`, which only widens poller
-//! interest) this backend's `FeedWake` handler must directly re-enqueue
-//! every leaf into the ready queue. `on_media_tick` then drains the ready
+//! gets that new data might exist. RTMP and SRT enqueue feed-waiting leaves
+//! directly on a wake too (`enqueue_feed_waiting_leaves`), but they can
+//! still fall back on a real poll for anything that wake missed; this
+//! backend cannot, so its `FeedWake` handler must re-enqueue every leaf
+//! into the ready queue. `on_media_tick` then drains the ready
 //! queue every tick regardless, so a missed or coalesced wake is not fatal
 //! — it just costs one extra tick of latency, the same tradeoff the
 //! poller-driven backends make against their own idle-poll cadence.

@@ -176,10 +176,12 @@ pub struct LeafCommon {
 pub struct EgressProgressSink {
     /// Total bytes sent for the output (status `bytesOut` source).
     pub bytes_sent: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
-    /// Stage metrics byte counter.
-    pub metrics_bytes_out: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
-    /// Stage metrics packet counter.
-    pub metrics_packets_out: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// The same `StageMetrics` block every other stage type shares (status
+    /// `metrics` source: `bytesOut`/`packetsOut`/`packetsPerSec`/etc.).
+    /// Legacy egress tasks shared this `Arc` directly and called
+    /// `record_out` per send; the fabric shares the identical `Arc` here
+    /// instead, so both surfaces stay driven by one counter set.
+    pub metrics: Option<std::sync::Arc<crate::media::stage_metrics::StageMetrics>>,
     /// Wall-clock milliseconds of the most recent progress.
     pub last_progress_ms: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     /// Total resynchronizations / overruns for this leaf.
@@ -194,6 +196,13 @@ pub struct EgressProgressSink {
     /// whether to force-close the leaf (status `backpressureReason`
     /// source).
     pub backpressure_reason: Option<std::sync::Arc<std::sync::Mutex<Option<&'static str>>>>,
+    /// Protocol-level connection quality (RTT, loss, retransmits, native
+    /// buffer occupancy — status `quality` source). Sampled once per second
+    /// by the shard's stall sweep, the same cadence and mechanism as
+    /// `backpressure_reason`, from whichever native stats source the
+    /// transport exposes (`srt_bistats` for SRT, `TCP_INFO` for RTMP).
+    pub quality:
+        Option<std::sync::Arc<std::sync::Mutex<crate::media::snapshots::PublisherQuality>>>,
     /// Set by shard code exactly once, only when this leaf is closed for a
     /// reason the application task did not itself request (peer closed,
     /// protocol failure, or no-progress/stall recovery) — never on an
@@ -211,11 +220,12 @@ impl std::fmt::Debug for EgressProgressSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EgressProgressSink")
             .field("bytes_sent", &self.bytes_sent.is_some())
-            .field("metrics", &self.metrics_bytes_out.is_some())
+            .field("metrics", &self.metrics.is_some())
             .field("last_progress_ms", &self.last_progress_ms.is_some())
             .field("resync_count", &self.resync_count.is_some())
             .field("feed_lag_units", &self.feed_lag_units.is_some())
             .field("backpressure_reason", &self.backpressure_reason.is_some())
+            .field("quality", &self.quality.is_some())
             .field(
                 "terminated_unexpectedly",
                 &self.terminated_unexpectedly.is_some(),
@@ -232,11 +242,8 @@ impl EgressProgressSink {
         if let Some(counter) = &self.bytes_sent {
             counter.fetch_add(bytes, Ordering::Relaxed);
         }
-        if let Some(counter) = &self.metrics_bytes_out {
-            counter.fetch_add(bytes, Ordering::Relaxed);
-        }
-        if let Some(counter) = &self.metrics_packets_out {
-            counter.fetch_add(units, Ordering::Relaxed);
+        if let Some(metrics) = &self.metrics {
+            metrics.record_out_batch(units, bytes);
         }
         if let Some(stamp) = &self.last_progress_ms {
             stamp.store(now_ms, Ordering::Relaxed);
@@ -256,6 +263,21 @@ impl EgressProgressSink {
             *slot
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = reason;
+        }
+    }
+
+    /// Record a freshly sampled protocol-level quality snapshot. Called once
+    /// per second from the shard's stall sweep, same cadence as
+    /// `record_backpressure_state`, whenever the transport has native stats
+    /// to offer (`None` from the sampler — a fake transport, or a socket
+    /// with no queryable native stats — leaves the previous value in place
+    /// rather than clobbering it with an empty snapshot).
+    #[inline]
+    pub fn record_quality(&self, quality: crate::media::snapshots::PublisherQuality) {
+        if let Some(slot) = &self.quality {
+            *slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = quality;
         }
     }
 
@@ -449,5 +471,61 @@ mod tests {
         assert_eq!(leaf.output_id().as_str(), "out-1");
         assert_eq!(leaf.generation(), 3);
         assert_eq!(leaf.lifecycle(), LeafLifecycle::Created);
+    }
+
+    /// The gap this closes: before `metrics` existed on `EgressProgressSink`,
+    /// no fabric-owned RTMP/SRT/Sink/Pipeline output ever incremented
+    /// `StageMetrics` at all — `record_sent` only touched `bytes_sent`, so
+    /// the `metrics` block in the output status API stayed all-zero forever
+    /// for fabric outputs, unlike every other stage type.
+    #[test]
+    fn record_sent_updates_bytes_sent_and_shared_stage_metrics() {
+        let bytes_sent = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let metrics = std::sync::Arc::new(crate::media::stage_metrics::StageMetrics::new());
+        let sink = EgressProgressSink {
+            bytes_sent: Some(bytes_sent.clone()),
+            metrics: Some(metrics.clone()),
+            ..EgressProgressSink::default()
+        };
+
+        sink.record_sent(1_200, 3, 42);
+        sink.record_sent(300, 1, 43);
+
+        assert_eq!(bytes_sent.load(std::sync::atomic::Ordering::Relaxed), 1_500);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.bytes_out, 1_500);
+        assert_eq!(snapshot.packets_out, 4);
+    }
+
+    /// The gap this closes: fabric egress never wrote to `ActiveEgress.quality`
+    /// at all — `record_quality` is the publication half of the fix (the SRT
+    /// and RTMP shard sweeps are the sampling half); this proves the sink
+    /// side lands a sampled snapshot correctly and leaves the previous value
+    /// alone when there is nothing new to publish.
+    #[test]
+    fn record_quality_publishes_into_the_shared_slot_and_leaves_it_alone_when_absent() {
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::media::snapshots::PublisherQuality::default(),
+        ));
+        let sink = EgressProgressSink {
+            quality: Some(slot.clone()),
+            ..EgressProgressSink::default()
+        };
+
+        sink.record_quality(crate::media::snapshots::PublisherQuality {
+            ms_rtt: Some(7.5),
+            ..Default::default()
+        });
+        assert_eq!(
+            slot.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .ms_rtt,
+            Some(7.5)
+        );
+
+        // No handle wired (fake/test sink with `quality: None`): recording
+        // must be a no-op, not a panic.
+        let no_quality_sink = EgressProgressSink::default();
+        no_quality_sink.record_quality(crate::media::snapshots::PublisherQuality::default());
     }
 }

@@ -1,27 +1,30 @@
 //! Native SRT ingest and egress via raw `libsrt` FFI bindings.
 
-use std::os::raw::c_int;
 #[cfg(test)]
-use std::os::raw::c_void;
+use std::os::raw::{c_int, c_void};
 use std::sync::Arc;
+#[cfg(test)]
 use std::sync::atomic::Ordering;
+#[cfg(test)]
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
 #[cfg(test)]
 use tokio::sync::Notify;
+use tracing::error;
 #[cfg(test)]
-use tracing::warn;
-use tracing::{error, info};
+use tracing::{info, warn};
 
-use crate::domain::state::EgressPhase;
-use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
-use crate::media::engine::{EgressRegistration, MediaEngine};
+use crate::media::engine::MediaEngine;
 use crate::media::ingest_auth::PipelineAccessAuthenticator;
+#[cfg(test)]
 use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, RingBuffer};
+#[cfg(test)]
 use crate::media::snapshots::PublisherQuality;
+#[cfg(test)]
 use crate::media::startup_policy;
+#[cfg(test)]
 use crate::media::ts_chunk_ring::TsChunkReader;
 
 #[path = "srt/ingest.rs"]
@@ -38,8 +41,6 @@ mod shared_muxer;
 mod socket;
 #[path = "srt/crypto.rs"]
 mod srt_crypto;
-#[path = "srt_egress.rs"]
-mod srt_egress;
 #[path = "srt/egress_connect.rs"]
 mod srt_egress_connect;
 #[path = "srt/egress_engine.rs"]
@@ -62,6 +63,9 @@ mod srt_egress_sender;
 mod srt_egress_sender_tests;
 #[path = "srt/egress_socket.rs"]
 mod srt_egress_socket;
+#[cfg(test)]
+#[path = "srt_egress_tests.rs"]
+mod srt_egress_tests;
 #[path = "srt_monitor.rs"]
 mod srt_monitor;
 #[path = "srt_policy.rs"]
@@ -81,24 +85,22 @@ pub(crate) use shared_muxer::start_shared_ts_muxer;
 pub use socket::{DESIRED_UDP_BUF, linked_srt_version, srt_set_connect_timeout};
 #[cfg(test)]
 use socket::{
-    SrtGroupSummary, enable_srt_group_connect, is_srt_group, streamid_from_getsockopt_buffer,
-    summarize_group_members,
+    SrtGroupSummary, add_srt_group_quality, enable_srt_group_connect, is_srt_group,
+    streamid_from_getsockopt_buffer, summarize_group_members, try_acquire_srt_sender_permit,
 };
 use socket::{
-    add_srt_group_quality, check_srt_option_result, check_sysctl_limits, srt_group_summary,
-    srt_log_effective_opts, srt_set_highbitrate_opts, try_acquire_srt_sender_permit,
+    check_srt_option_result, check_sysctl_limits, srt_log_effective_opts, srt_set_highbitrate_opts,
 };
 #[cfg(test)]
 use srt_crypto::apply_srt_crypto_socket;
 #[cfg(test)]
 use srt_crypto::srt_crypto_from_url;
-pub use srt_egress::start_srt_egress;
-#[cfg(test)]
-use srt_egress_connect::to_libc_sockaddr;
 pub(crate) use srt_egress_connect::{
     SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec, claim_srt_egress_muxer_port,
-    connect_fabric_srt_egress_socket, resolve_host as resolve_srt_egress_host,
+    connect_fabric_srt_egress_socket,
 };
+#[cfg(test)]
+use srt_egress_connect::{resolve_host, to_libc_sockaddr};
 pub(crate) use srt_egress_engine::SrtEgressEngine;
 pub(crate) use srt_egress_poller::{SrtEgressInterest, SrtEgressPollError, SrtReadyLeaf};
 #[cfg(test)]
@@ -113,7 +115,7 @@ use srt_monitor::{audio_codec_id, monitor_listener_socket, read_udp_socket_stats
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 #[cfg(test)]
 use srt_quality::{SrtCounterSnapshot, quality_from_stats as srt_quality_from_stats};
-use srt_quality::{
+pub(crate) use srt_quality::{
     SrtSenderCounterSnapshot, sender_quality_from_stats as srt_sender_quality_from_stats,
 };
 #[cfg(test)]

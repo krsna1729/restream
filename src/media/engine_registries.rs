@@ -75,7 +75,6 @@ pub struct EgressRegistry {
     pub cancel_tokens: TokioRwLock<HashMap<String, CancellationToken>>,
     pub next_attempt_id: AtomicU64,
     pub active: TokioRwLock<HashMap<String, ActiveEgress>>,
-    pub queues: TokioRwLock<HashMap<String, Arc<MemoryQueue>>>,
     pub recent: TokioRwLock<HashMap<String, RecentEgressOutcome>>,
     pub retry: TokioRwLock<HashMap<String, EgressRetryState>>,
 }
@@ -92,7 +91,6 @@ impl EgressRegistry {
             cancel_tokens: TokioRwLock::new(HashMap::new()),
             next_attempt_id: AtomicU64::new(1),
             active: TokioRwLock::new(HashMap::new()),
-            queues: TokioRwLock::new(HashMap::new()),
             recent: TokioRwLock::new(HashMap::new()),
             retry: TokioRwLock::new(HashMap::new()),
         }
@@ -104,6 +102,14 @@ pub(crate) struct SrtFabricRegistry {
     pub(crate) active_outputs: HashMap<FeedId, u64>,
     /// One publication watcher per feed runtime; aborted on release.
     pub(crate) feed_watchers: HashMap<FeedId, tokio::task::JoinHandle<()>>,
+    /// A dedicated reader per feed runtime, held only so
+    /// `EgressFabricRuntime::rescale` can mint a fresh reader for a shard
+    /// grown after startup — see `RtmpFabricRegistry::feeds`.
+    pub(crate) feeds: HashMap<FeedId, crate::media::egress::journal::TsFeed>,
+    /// The local-UDP-port reuse state passed to the initial
+    /// `spawn_srt_fabric_shard_group` call, reused identically for any
+    /// shard grown later.
+    pub(crate) srt_egress_muxer_port_reuse: HashMap<FeedId, Option<Arc<Mutex<Option<u16>>>>>,
 }
 
 impl SrtFabricRegistry {
@@ -112,6 +118,8 @@ impl SrtFabricRegistry {
             runtimes: HashMap::new(),
             active_outputs: HashMap::new(),
             feed_watchers: HashMap::new(),
+            feeds: HashMap::new(),
+            srt_egress_muxer_port_reuse: HashMap::new(),
         }
     }
 }
@@ -126,6 +134,18 @@ pub(crate) struct RtmpFabricRegistry {
         HashMap<FeedId, crate::media::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource>,
     /// One publication watcher per feed runtime; aborted on release.
     pub(crate) feed_watchers: HashMap<FeedId, tokio::task::JoinHandle<()>>,
+    /// A dedicated reader per feed runtime, held only so
+    /// `EgressFabricRuntime::rescale` can mint a fresh reader
+    /// (`RingFeed::clone_reader`) for a shard grown after startup — the
+    /// same construction the initial `spawn_rtmp_fabric_shard_group` call
+    /// used per shard, just invoked later. `RingFeed` isn't `Clone` (its
+    /// `cached_oldest` counter is per-reader), hence storing a dedicated
+    /// instance rather than reusing another reader.
+    pub(crate) feeds: HashMap<FeedId, crate::media::egress::journal::RingFeed>,
+    /// The RTMPS trust-root config resolved once at creation time
+    /// (`resolve_rtmps_client_config` parses PEM files — not something to
+    /// redo on every rescale call), reused for any shard grown later.
+    pub(crate) rtmps_client_configs: HashMap<FeedId, Arc<tokio_rustls::rustls::ClientConfig>>,
 }
 
 impl RtmpFabricRegistry {
@@ -135,6 +155,8 @@ impl RtmpFabricRegistry {
             active_outputs: HashMap::new(),
             startup_sources: HashMap::new(),
             feed_watchers: HashMap::new(),
+            feeds: HashMap::new(),
+            rtmps_client_configs: HashMap::new(),
         }
     }
 }
@@ -144,6 +166,7 @@ pub(crate) struct SinkFabricRegistry {
     pub(crate) active_outputs: HashMap<FeedId, u64>,
     /// One publication watcher per feed runtime; aborted on release.
     pub(crate) feed_watchers: HashMap<FeedId, tokio::task::JoinHandle<()>>,
+    pub(crate) feeds: HashMap<FeedId, crate::media::egress::journal::RingFeed>,
 }
 
 impl SinkFabricRegistry {
@@ -152,6 +175,7 @@ impl SinkFabricRegistry {
             runtimes: HashMap::new(),
             active_outputs: HashMap::new(),
             feed_watchers: HashMap::new(),
+            feeds: HashMap::new(),
         }
     }
 }
@@ -167,6 +191,7 @@ pub(crate) struct PipelineFabricRegistry {
         HashMap<FeedId, crate::media::egress::backends::pipeline_shard::SharedPipelineTargetSource>,
     /// One publication watcher per feed runtime; aborted on release.
     pub(crate) feed_watchers: HashMap<FeedId, tokio::task::JoinHandle<()>>,
+    pub(crate) feeds: HashMap<FeedId, crate::media::egress::journal::RingFeed>,
 }
 
 impl PipelineFabricRegistry {
@@ -176,6 +201,7 @@ impl PipelineFabricRegistry {
             active_outputs: HashMap::new(),
             target_sources: HashMap::new(),
             feed_watchers: HashMap::new(),
+            feeds: HashMap::new(),
         }
     }
 }

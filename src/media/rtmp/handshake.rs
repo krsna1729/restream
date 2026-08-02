@@ -1,8 +1,11 @@
 //! Shared RTMP client and server handshake state machines.
 
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+#[cfg(test)]
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+#[cfg(test)]
 use tokio_util::sync::CancellationToken;
 
 pub(super) async fn perform_server_handshake(
@@ -48,6 +51,7 @@ pub(super) async fn perform_server_handshake(
     }
 }
 
+#[cfg(test)]
 pub(super) async fn perform_client_handshake<S>(
     socket: &mut S,
     cancel_token: &CancellationToken,

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
 use crate::media::egress::backend::{
-    CloseReason, EngineProgress, Interest, ProtocolEngine, Readiness, RecoveryCapability,
+    CloseReason, EngineProgress, ProtocolEngine, Readiness, RecoveryCapability, WaitCondition,
 };
 use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::policy::WorkBudget;
@@ -27,6 +27,7 @@ use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, RingBuffer};
 /// shard thread before the leaf is added, the same way RTMP's publish
 /// startup snapshot is (see `PipelineTargetSource`). `IngestRegistration`
 /// does not implement `Debug`, so neither type here derives it.
+#[derive(Clone)]
 pub(crate) struct PipelineTarget {
     pub(crate) target_ring: Arc<RingBuffer>,
     pub(crate) input_registration: IngestRegistration,
@@ -89,10 +90,10 @@ where
                 EngineProgress::Progress {
                     bytes: outcome.bytes,
                     units: outcome.units,
-                    interest: Interest::NONE,
+                    wait: WaitCondition::Feed,
                 }
             }
-            FeedRead::Empty => EngineProgress::Needs(Interest::NONE),
+            FeedRead::Empty => EngineProgress::Needs(WaitCondition::Feed),
             FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
                 EngineProgress::FeedOverrun
             }

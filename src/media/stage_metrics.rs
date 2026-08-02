@@ -70,6 +70,12 @@ impl StageMetrics {
     }
 
     #[inline]
+    pub fn record_out_batch(&self, packets: u64, bytes: u64) {
+        self.packets_out.fetch_add(packets, Ordering::Relaxed);
+        self.bytes_out.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    #[inline]
     pub fn record_processing(&self, us: u64) {
         self.processing_us.fetch_add(us, Ordering::Relaxed);
     }
@@ -136,6 +142,22 @@ mod tests {
         assert_eq!(snap.bytes_in, 150);
         assert_eq!(snap.packets_out, 1);
         assert_eq!(snap.bytes_out, 30);
+    }
+
+    #[test]
+    fn record_out_batch_adds_packet_and_byte_counts_in_one_call() {
+        // The egress fabric's `EgressProgressSink::record_sent` uses this
+        // for the `metrics` field every other stage type already shares —
+        // before it existed, no fabric-owned RTMP/SRT/Sink output ever
+        // incremented `StageMetrics` at all (see `record_out_batch`'s call
+        // site in `src/media/egress/leaf.rs`).
+        let metrics = StageMetrics::new();
+        metrics.record_out_batch(3, 900);
+        metrics.record_out(50);
+
+        let snap = metrics.snapshot();
+        assert_eq!(snap.packets_out, 4);
+        assert_eq!(snap.bytes_out, 950);
     }
 
     #[test]

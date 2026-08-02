@@ -437,3 +437,156 @@ fn manager_replays_only_replaced_shard_outputs_after_panic() {
             .all(|snapshot| snapshot.stopped && !snapshot.panicked)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Dynamic shard scaling: grow / shrink
+// ---------------------------------------------------------------------------
+
+#[test]
+fn grow_spawns_one_handle_at_the_next_shard_id() {
+    let probe = Probe::default();
+    let mut group = EgressShardGroup::spawn(
+        NonZeroU32::new(1).unwrap(),
+        config(4, 4),
+        vec![ProbeBackend {
+            probe: probe.clone(),
+        }],
+    )
+    .unwrap();
+
+    let new_probe = Probe::default();
+    let shard_id = group.grow(
+        config(4, 4),
+        ProbeBackend {
+            probe: new_probe.clone(),
+        },
+    );
+
+    assert_eq!(shard_id, ShardId::new(1));
+    assert_eq!(group.shard_count(), 2);
+    assert_eq!(
+        group.try_send_to(shard_id, EgressCommand::Add(output_spec("out-grown"))),
+        Ok(())
+    );
+    new_probe.wait_for_commands(1);
+    let snapshots = group.shutdown_and_join();
+    assert_eq!(snapshots.len(), 2);
+}
+
+#[test]
+fn shrink_removes_and_shuts_down_the_highest_index_handle() {
+    let survivor = Probe::default();
+    let doomed = Probe::default();
+    let mut group = EgressShardGroup::spawn(
+        NonZeroU32::new(2).unwrap(),
+        config(4, 4),
+        vec![
+            ProbeBackend {
+                probe: survivor.clone(),
+            },
+            ProbeBackend {
+                probe: doomed.clone(),
+            },
+        ],
+    )
+    .unwrap();
+
+    let shard_id = group.shrink().expect("group had a shard to shrink");
+
+    assert_eq!(shard_id, ShardId::new(1));
+    assert_eq!(group.shard_count(), 1);
+    // The removed shard's handle is gone: routing to it now fails instead
+    // of silently succeeding against a dead thread.
+    assert!(matches!(
+        group.try_send_to(shard_id, EgressCommand::FeedWake),
+        Err(EgressShardGroupError::UnknownShard { shard_id: unknown }) if unknown == shard_id
+    ));
+    // `shrink` detaches rather than joins (see `EgressShardHandle::shutdown_detached`),
+    // so the doomed shard's graceful drain runs in the background --
+    // poll instead of asserting synchronously.
+    doomed.wait_for_commands(1);
+    assert_eq!(doomed.state().commands, vec!["shutdown".to_string()]);
+
+    let snapshots = group.shutdown_and_join();
+    assert_eq!(snapshots.len(), 1);
+}
+
+#[test]
+fn shrink_on_a_single_shard_group_leaves_it_empty() {
+    let probe = Probe::default();
+    let mut group = EgressShardGroup::spawn(
+        NonZeroU32::new(1).unwrap(),
+        config(4, 4),
+        vec![ProbeBackend { probe }],
+    )
+    .unwrap();
+
+    let shrunk = group.shrink();
+    assert!(shrunk.is_some());
+    assert_eq!(group.shard_count(), 0);
+    assert!(group.shrink().is_none());
+
+    let snapshots = group.shutdown_and_join();
+    assert!(snapshots.is_empty());
+}
+
+mod grow_shrink_proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[derive(Debug, Clone, Copy)]
+    enum GrowShrinkOp {
+        Grow,
+        Shrink,
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        /// Arbitrary interleavings of grow/shrink from a small starting
+        /// group never panic, `shard_count()` always matches the net
+        /// effect of the sequence, and every surviving handle's `ShardId`
+        /// stays exactly `0..shard_count()` with no gaps or duplicates.
+        #[test]
+        fn grow_shrink_sequences_keep_shard_ids_dense(
+            start in 1u32..4,
+            ops in prop::collection::vec(
+                prop_oneof![Just(GrowShrinkOp::Grow), Just(GrowShrinkOp::Shrink)],
+                0..20,
+            ),
+        ) {
+            let probes: Vec<Probe> = (0..start).map(|_| Probe::default()).collect();
+            let mut group = EgressShardGroup::spawn(
+                NonZeroU32::new(start).unwrap(),
+                config(4, 4),
+                probes.into_iter().map(|probe| ProbeBackend { probe }).collect(),
+            )
+            .unwrap();
+
+            let mut expected_count = start as usize;
+            for op in ops {
+                match op {
+                    GrowShrinkOp::Grow => {
+                        let probe = Probe::default();
+                        let shard_id = group.grow(config(4, 4), ProbeBackend { probe });
+                        prop_assert_eq!(shard_id, ShardId::new(expected_count as u32));
+                        expected_count += 1;
+                    }
+                    GrowShrinkOp::Shrink => {
+                        let result = group.shrink();
+                        if expected_count == 0 {
+                            prop_assert!(result.is_none());
+                        } else {
+                            let shard_id = result.expect("expected a shard to shrink");
+                            prop_assert_eq!(shard_id, ShardId::new(expected_count as u32 - 1));
+                            expected_count -= 1;
+                        }
+                    }
+                }
+                prop_assert_eq!(group.shard_count(), expected_count);
+            }
+
+            group.shutdown_and_join();
+        }
+    }
+}

@@ -2,8 +2,9 @@ use std::sync::Mutex;
 
 use super::{
     AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
-    EgressRolloutMode, RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
+    RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
     default_egress_fabric_shards, default_tokio_worker_threads, derive_external_ffmpeg_permits,
+    target_egress_fabric_shards,
 };
 use crate::planner::BackendPolicy;
 
@@ -234,7 +235,6 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
     with_env_overlay(
         &[],
         &[
-            "RESTREAM_EGRESS_FABRIC",
             "RESTREAM_EGRESS_SHARDS",
             "RESTREAM_EGRESS_COMMAND_CAPACITY",
             "RESTREAM_EGRESS_COMMAND_BATCH",
@@ -250,9 +250,6 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
         || {
             let fabric = EgressFabricConfig::from_env();
             assert_eq!(fabric, EgressFabricConfig::default());
-            assert_eq!(fabric.rollout, EgressRolloutMode::All);
-            assert!(fabric.rollout.routes_srt());
-            assert!(fabric.rollout.routes_rtmp());
             assert_eq!(
                 fabric.shard_count().get(),
                 default_egress_fabric_shards(crate::system_sampling::effective_cpu_count())
@@ -269,7 +266,6 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
 fn egress_fabric_config_loads_and_clamps_env() {
     with_env_vars(
         &[
-            ("RESTREAM_EGRESS_FABRIC", "true"),
             ("RESTREAM_EGRESS_SHARDS", "0"),
             ("RESTREAM_EGRESS_COMMAND_CAPACITY", "0"),
             ("RESTREAM_EGRESS_COMMAND_BATCH", "0"),
@@ -284,7 +280,6 @@ fn egress_fabric_config_loads_and_clamps_env() {
         ],
         || {
             let fabric = EgressFabricConfig::from_env();
-            assert_eq!(fabric.rollout, EgressRolloutMode::Srt);
             assert_eq!(fabric.shards, 1);
             assert_eq!(fabric.command_channel_capacity, 1);
             assert_eq!(fabric.command_batch_budget, 1);
@@ -327,50 +322,6 @@ fn egress_fabric_config_validate_flags_cross_field_issues() {
     assert!(warnings[1].contains("RESTREAM_EGRESS_SHARDS"));
     assert!(warnings[2].contains("RESTREAM_EGRESS_DRAIN_TIMEOUT_MS"));
     assert!(warnings[3].contains("RESTREAM_EGRESS_COMMAND_BATCH"));
-}
-
-#[test]
-fn egress_rollout_mode_parses_protocol_selection_and_legacy_booleans() {
-    let cases = [
-        ("off", EgressRolloutMode::Off),
-        ("0", EgressRolloutMode::Off),
-        ("false", EgressRolloutMode::Off),
-        ("srt", EgressRolloutMode::Srt),
-        ("1", EgressRolloutMode::Srt),
-        ("true", EgressRolloutMode::Srt),
-        ("rtmp", EgressRolloutMode::Rtmp),
-        ("all", EgressRolloutMode::All),
-        ("shadow-metrics", EgressRolloutMode::ShadowMetrics),
-        ("SRT", EgressRolloutMode::Srt),
-    ];
-    for (value, expected) in cases {
-        with_env_vars(&[("RESTREAM_EGRESS_FABRIC", value)], || {
-            assert_eq!(EgressFabricConfig::from_env().rollout, expected, "{value}");
-        });
-    }
-    // Unknown values fall back to the default rather than guessing.
-    with_env_vars(&[("RESTREAM_EGRESS_FABRIC", "bogus")], || {
-        assert_eq!(
-            EgressFabricConfig::from_env().rollout,
-            EgressRolloutMode::All
-        );
-    });
-}
-
-#[test]
-fn egress_rollout_mode_routing_is_protocol_selective() {
-    assert!(!EgressRolloutMode::Off.routes_srt());
-    assert!(!EgressRolloutMode::Off.routes_rtmp());
-    assert!(EgressRolloutMode::Srt.routes_srt());
-    assert!(!EgressRolloutMode::Srt.routes_rtmp());
-    assert!(!EgressRolloutMode::Rtmp.routes_srt());
-    assert!(EgressRolloutMode::Rtmp.routes_rtmp());
-    assert!(EgressRolloutMode::All.routes_srt());
-    assert!(EgressRolloutMode::All.routes_rtmp());
-    // Shadow mode is active for calculations but never owns a connection.
-    assert!(EgressRolloutMode::ShadowMetrics.is_active());
-    assert!(!EgressRolloutMode::ShadowMetrics.routes_srt());
-    assert!(!EgressRolloutMode::ShadowMetrics.routes_rtmp());
 }
 
 #[test]
@@ -532,7 +483,6 @@ fn effective_summary_covers_runtime_knobs_without_secret_values() {
         summary["tokio"]["maxBlockingThreads"],
         config.tokio_runtime.max_blocking_threads
     );
-    assert_eq!(summary["egressFabric"]["enabled"], true);
     assert_eq!(
         summary["egressFabric"]["shards"],
         config.egress_fabric.shards
@@ -548,4 +498,62 @@ fn effective_summary_covers_runtime_knobs_without_secret_values() {
     assert_eq!(summary["srt"]["pbkeylen"], 16);
     assert!(!summary.to_string().contains("super-secret"));
     assert!(!summary.to_string().contains("admin-secret"));
+}
+
+#[test]
+fn target_egress_fabric_shards_matches_known_cases() {
+    // Zero/low output counts always floor to 1 shard, regardless of how
+    // many CPUs are available -- there is nothing to shard yet.
+    assert_eq!(target_egress_fabric_shards(0, 8), 1);
+    assert_eq!(target_egress_fabric_shards(1, 8), 1);
+
+    // A handful of outputs on an 8-core host stays well under the CPU
+    // ceiling -- this is the exact gap task #11 didn't close: fewer
+    // outputs than one shard's OUTPUTS_PER_SHARD budget should not pay
+    // for `default_egress_fabric_shards(8) == 8` dedicated shard threads.
+    assert_eq!(target_egress_fabric_shards(38, 8), 1);
+
+    // Right at and just past the CPU ceiling's output budget
+    // (default_egress_fabric_shards(8) == 8, OUTPUTS_PER_SHARD == 128).
+    assert_eq!(target_egress_fabric_shards(8 * 128, 8), 8);
+    assert_eq!(target_egress_fabric_shards(8 * 128 + 1, 8), 8);
+
+    // Never exceeds the CPU-derived ceiling no matter how many outputs.
+    assert_eq!(target_egress_fabric_shards(1_000_000, 8), 8);
+
+    // A constrained 1-CPU host still gets the same
+    // default_egress_fabric_shards(1) == 2 ceiling once outputs justify it.
+    assert_eq!(target_egress_fabric_shards(0, 1), 1);
+    assert_eq!(target_egress_fabric_shards(1_000_000, 1), 2);
+}
+
+proptest::proptest! {
+    /// The output-count-aware target never leaves the CPU-derived range:
+    /// always at least one shard, never more than
+    /// `default_egress_fabric_shards(cpus)` would allow.
+    #[test]
+    fn target_egress_fabric_shards_stays_within_cpu_bounds(
+        outputs in 0usize..100_000,
+        cpus in 1usize..256,
+    ) {
+        let target = target_egress_fabric_shards(outputs, cpus);
+        let ceiling = default_egress_fabric_shards(cpus);
+        proptest::prop_assert!(target >= 1);
+        proptest::prop_assert!(target <= ceiling);
+    }
+
+    /// More outputs never demands *fewer* shards, for a fixed CPU count --
+    /// the formula must not be able to shrink the target out from under a
+    /// growing pipeline.
+    #[test]
+    fn target_egress_fabric_shards_is_monotonic_in_outputs(
+        cpus in 1usize..256,
+        smaller in 0usize..50_000,
+        delta in 0usize..50_000,
+    ) {
+        let larger = smaller + delta;
+        let target_small = target_egress_fabric_shards(smaller, cpus);
+        let target_large = target_egress_fabric_shards(larger, cpus);
+        proptest::prop_assert!(target_large >= target_small);
+    }
 }

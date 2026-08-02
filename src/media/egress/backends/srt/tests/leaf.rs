@@ -3,7 +3,9 @@ use super::support::{budget, common, feed, leaf};
 use crate::media::egress::backend::{EngineProgress, Readiness};
 use crate::media::egress::scheduler::VisitDecision;
 use crate::media::egress::visit::EngineVisitResult;
+use crate::media::srt::SrtTraceBStats;
 use bytes::Bytes;
+use std::time::Instant;
 
 #[test]
 fn srt_fabric_leaf_from_socket_keeps_native_sender_opaque() {
@@ -132,4 +134,37 @@ fn observe_stall_uses_native_drain_as_progress() {
         leaf.observe_stall(near_deadline + deadline),
         LeafStallClass::Idle
     );
+}
+
+/// The gap this closes: fabric SRT egress never called `sender_quality_stats`
+/// at all before this, so `ActiveEgress.quality` stayed at its all-`None`
+/// default for every fabric-owned SRT output, unlike legacy egress which
+/// sampled `srt_bistats` every second. Proves the leaf actually converts a
+/// transport's raw stats into a real `PublisherQuality`.
+#[test]
+fn srt_fabric_leaf_samples_quality_from_transport_stats() {
+    let mut leaf = leaf(1);
+    leaf.transport_mut().quality_stats = Some(SrtTraceBStats {
+        ms_rtt: 42.5,
+        mbps_send_rate: 12.0,
+        pkt_snd_loss_total: 3,
+        ..unsafe { std::mem::zeroed() }
+    });
+
+    let quality = leaf
+        .sample_quality(Instant::now())
+        .expect("transport has quality stats");
+
+    assert_eq!(quality.ms_rtt, Some(42.5));
+    assert_eq!(quality.mbps_send_rate, Some(12.0));
+    assert_eq!(quality.packets_sent_loss, Some(3));
+}
+
+/// A transport with nothing to report (no connected native socket) must not
+/// fabricate an empty quality snapshot — the caller keeps whatever was
+/// published last instead of clobbering it.
+#[test]
+fn srt_fabric_leaf_reports_no_quality_when_transport_has_none() {
+    let mut leaf = leaf(1);
+    assert!(leaf.sample_quality(Instant::now()).is_none());
 }

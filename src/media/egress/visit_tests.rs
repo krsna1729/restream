@@ -1,4 +1,4 @@
-use super::backend::{EngineProgress, Interest, ProtocolFailure, Readiness};
+use super::backend::{EngineProgress, Interest, ProtocolFailure, Readiness, WaitCondition};
 use super::command::{FeedId, OutputId};
 use super::feed::{EgressFeed, FeedCursor};
 use super::leaf::LeafCommon;
@@ -31,7 +31,7 @@ fn records_progress_and_continues_current_generation() {
     let mut engine = FakeEngine::new(vec![EngineScript::Progress {
         bytes: 3,
         units: 1,
-        interest: Interest::WRITE,
+        wait: WaitCondition::Io(Interest::WRITE),
     }]);
     let mut transport = FakeTransport::default();
 
@@ -70,7 +70,9 @@ fn suspends_when_engine_needs_readiness() {
     let feed = FakeFeed::new();
     let mut common = common(1);
     common.schedule.enqueued = true;
-    let mut engine = FakeEngine::new(vec![EngineScript::Needs(Interest::WRITE)]);
+    let mut engine = FakeEngine::new(vec![EngineScript::Needs(WaitCondition::Io(
+        Interest::WRITE,
+    ))]);
     let mut transport = FakeTransport::default();
 
     let result = EngineVisit {
@@ -87,10 +89,85 @@ fn suspends_when_engine_needs_readiness() {
     let EngineVisitResult::Visited(outcome) = result else {
         panic!("expected visit");
     };
-    assert!(matches!(outcome.progress, EngineProgress::Needs(interest) if interest.writable));
+    assert!(matches!(outcome.progress, EngineProgress::Needs(wait) if wait.io_interest().writable));
     assert_eq!(outcome.decision, VisitDecision::Suspend);
     assert!(!common.schedule.enqueued);
     assert!(common.schedule.last_service_at.is_some());
+}
+
+/// Exhaustive proof of `apply_progress_to_common`'s `wants_feed_wake`
+/// mapping: `Feed`/`FeedOrIo` (from either `Needs` or `Progress`) set it
+/// `true`; `Io` and every non-wait-carrying `EngineProgress` variant set
+/// it `false`. This is the flag `RtmpShardBackend`/`SrtShardBackend`'s
+/// `enqueue_feed_waiting_leaves` reads to decide whether a `FeedWake`
+/// should directly re-enqueue a leaf without any poller call.
+#[test]
+fn wants_feed_wake_reflects_the_visit_outcomes_wait_condition() {
+    let feed = FakeFeed::new();
+
+    let cases: Vec<(EngineScript, bool)> = vec![
+        (EngineScript::Needs(WaitCondition::Feed), true),
+        (
+            EngineScript::Needs(WaitCondition::FeedOrIo(Interest::READ)),
+            true,
+        ),
+        (
+            EngineScript::Needs(WaitCondition::Io(Interest::WRITE)),
+            false,
+        ),
+        (
+            EngineScript::Progress {
+                bytes: 1,
+                units: 1,
+                wait: WaitCondition::Feed,
+            },
+            true,
+        ),
+        (
+            EngineScript::Progress {
+                bytes: 1,
+                units: 1,
+                wait: WaitCondition::FeedOrIo(Interest::WRITE),
+            },
+            true,
+        ),
+        (
+            EngineScript::Progress {
+                bytes: 1,
+                units: 1,
+                wait: WaitCondition::Io(Interest::WRITE),
+            },
+            false,
+        ),
+        (EngineScript::HandshakeComplete, false),
+        (EngineScript::PeerClosed, false),
+        (EngineScript::Yield, false),
+    ];
+
+    for (script, expected) in cases {
+        let mut common = common(1);
+        common.schedule.enqueued = true;
+        common.schedule.wants_feed_wake = !expected; // start opposite, prove it flips
+        let mut engine = FakeEngine::new(vec![script]);
+        let mut transport = FakeTransport::default();
+
+        let result = EngineVisit {
+            generation: 1,
+            common: &mut common,
+            engine: &mut engine,
+            transport: &mut transport,
+            readiness: Readiness::default(),
+            feed: &feed,
+            budget: budget(),
+        }
+        .run();
+
+        assert!(matches!(result, EngineVisitResult::Visited(_)));
+        assert_eq!(
+            common.schedule.wants_feed_wake, expected,
+            "wants_feed_wake mismatch"
+        );
+    }
 }
 
 #[test]
@@ -197,7 +274,7 @@ fn ignores_stale_generation_without_touching_engine_or_common_state() {
     let mut engine = FakeEngine::new(vec![EngineScript::Progress {
         bytes: 3,
         units: 1,
-        interest: Interest::WRITE,
+        wait: WaitCondition::Io(Interest::WRITE),
     }]);
     let mut transport = FakeTransport::default();
 

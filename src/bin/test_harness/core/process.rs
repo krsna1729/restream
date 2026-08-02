@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use tokio::process::{Child, Command};
 
-use crate::{RampApi, cleanup_ramp_db, harness_admin_password, stop_child};
+use crate::{RampApi, cleanup_ramp_db, harness_admin_password, harness_http_client, stop_child};
 
 use super::ports::TestPorts;
 use super::setup::{absolute_path, command_with_optional_cgroup};
@@ -122,7 +122,7 @@ pub(crate) async fn start_restream_child_opts(
 
 pub(crate) async fn wait_for_http_ok(url: &str, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
-    let client = reqwest::Client::new();
+    let client = harness_http_client();
     loop {
         if let Ok(response) = client.get(url).send().await
             && response.status().is_success()

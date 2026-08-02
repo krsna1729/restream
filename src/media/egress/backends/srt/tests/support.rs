@@ -8,7 +8,7 @@ use crate::media::egress::scheduler::LeafKey;
 use crate::media::srt::{
     NativeSendBacklog, SRTSOCKET, SrtEgressInterest, SrtEgressPollError, SrtEgressSendMode,
     SrtEgressSocketError, SrtFabricEgressConnectConfig, SrtMessageSender, SrtReadyLeaf,
-    SrtSendResult,
+    SrtSendResult, SrtTraceBStats,
 };
 use crate::media::ts_chunk_ring::TsChunkRing;
 use bytes::Bytes;
@@ -22,6 +22,7 @@ pub(super) struct FakeSender {
     sends: Vec<Bytes>,
     closed: u32,
     pub(super) native_backlog: Option<NativeSendBacklog>,
+    pub(super) quality_stats: Option<SrtTraceBStats>,
 }
 
 impl SrtMessageSender for FakeSender {
@@ -38,6 +39,10 @@ impl SrtMessageSender for FakeSender {
 
     fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
         self.native_backlog
+    }
+
+    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
+        self.quality_stats
     }
 }
 

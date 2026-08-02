@@ -222,10 +222,10 @@ pub(super) async fn handle_rtmp_client(
                     Ok(stats) => {
                         let receive_rate = stats.tcp_bytes_received.and_then(|bytes| {
                             let rate = previous_tcp_bytes.and_then(|(previous, sampled_at)| {
-                                let elapsed = now.duration_since(sampled_at).as_secs_f64();
-                                let delta = bytes.checked_sub(previous)?;
-                                (elapsed > 0.0).then_some(
-                                    (delta as f64 * 8.0) / (elapsed * 1_000_000.0),
+                                crate::media::tcp_stats::bytes_delta_rate_mbps(
+                                    bytes,
+                                    previous,
+                                    now.duration_since(sampled_at).as_secs_f64(),
                                 )
                             });
                             previous_tcp_bytes = Some((bytes, now));

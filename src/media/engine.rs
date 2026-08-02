@@ -106,18 +106,21 @@ pub struct ActiveEgress {
     pub terminal_stage_key: Option<StageKey>,
     pub output_name: String,
     pub encoding: String,
-    /// Whether this output is currently owned by the egress fabric runtime
-    /// rather than the legacy per-output task. Set once, right after
+    /// Whether this output is owned by the egress fabric's shard runtime
+    /// (RTMP, RTMPS, SRT, sink discard, and pipeline recirculation — every
+    /// network-egress output type). `false` for output types the fabric
+    /// does not cover (HLS PUT upload, recording), which have their own
+    /// task shape and no shard/leaf concept. Set once, right after
     /// registration, from the same routing decision the bootstrap egress
     /// reconciler already made — never inferred from `protocol`.
     pub is_fabric: bool,
     /// Fabric shard index this output is assigned to, when `is_fabric` is
-    /// true. `None` for legacy-owned outputs.
+    /// true. `None` for non-fabric output types.
     pub shard_id: Option<u32>,
     pub resync_count: Arc<AtomicU64>,
     /// Feed units the leaf's cursor is currently behind the feed head.
-    /// Fabric outputs only; stays 0 for legacy-owned outputs, which have no
-    /// shared feed cursor to report against.
+    /// Fabric outputs only; stays 0 for non-fabric output types, which have
+    /// no shared feed cursor to report against.
     pub feed_lag_units: Arc<AtomicU64>,
     /// Reason for the leaf's current send-path health (`None` when
     /// idle/healthy). Fabric outputs only.

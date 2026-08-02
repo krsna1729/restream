@@ -1,10 +1,10 @@
-//! The per-output egress task: `EgressTask::run` dispatches to the
-//! fabric-backed path for each protocol when available (falling back to
-//! the legacy per-output task otherwise), and owns the shared
-//! retry/backoff/status bookkeeping every path funnels back through.
-//! Split out of `egress.rs` (which owns `EgressReconciler` and output
-//! start-up preparation) purely to stay under the source-audit line cap —
-//! not a module-boundary change.
+//! The per-output egress task: `EgressTask::run` dispatches by URL scheme
+//! to the fabric-backed path (RTMP/RTMPS, SRT, sink discard, pipeline
+//! recirculation) or the output type's own dedicated task (HLS
+//! segmenting/PUT upload), and owns the shared retry/backoff/status
+//! bookkeeping every path funnels back through. Split out of `egress.rs`
+//! (which owns `EgressReconciler` and output start-up preparation) purely
+//! to stay under the source-audit line cap — not a module-boundary change.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -34,8 +34,7 @@ pub(super) struct SrtFabricTask {
     /// application did not request (peer closed, protocol failure, or
     /// stall recovery) — see `EgressProgressSink::terminated_unexpectedly`.
     /// `run_srt_fabric` polls this so it can return and let the shared
-    /// retry/backoff bookkeeping in `EgressTask::run` run, exactly as it
-    /// does when the legacy per-output task's own I/O loop returns.
+    /// retry/backoff bookkeeping in `EgressTask::run` run.
     pub(super) terminated: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -72,9 +71,7 @@ pub(super) struct PipelineFabricTask {
 pub(super) struct EgressTask {
     pub(super) output_id: String,
     pub(super) pipeline_id: String,
-    pub(super) encoding: String,
     pub(super) url: String,
-    pub(super) rtmp_mode: crate::domain::output_spec::RtmpOutputMode,
     pub(super) ring: Arc<crate::media::ring_buffer::RingBuffer>,
     pub(super) terminal_stage_key: crate::domain::stage::StageKey,
     pub(super) registration: crate::media::engine::EgressRegistration,
@@ -104,33 +101,11 @@ impl EgressTask {
                 OutputUrlScheme::Rtmp | OutputUrlScheme::Rtmps => {
                     if let Some(fabric) = self.rtmp_fabric.as_ref().cloned() {
                         self.run_rtmp_fabric(fabric).await;
-                    } else {
-                        crate::media::rtmp::start_rtmp_egress(
-                            self.output_id.clone(),
-                            self.pipeline_id.clone(),
-                            self.url.clone(),
-                            self.ring.clone(),
-                            self.engine.clone(),
-                            self.registration.clone(),
-                            self.rtmp_mode,
-                        )
-                        .await;
                     }
                 }
                 OutputUrlScheme::Srt => {
                     if let Some(fabric) = self.srt_fabric.as_ref().cloned() {
                         self.run_srt_fabric(fabric).await;
-                    } else {
-                        crate::media::srt::start_srt_egress(
-                            self.output_id.clone(),
-                            self.pipeline_id.clone(),
-                            self.encoding.clone(),
-                            self.url.clone(),
-                            self.ring.clone(),
-                            self.engine.clone(),
-                            self.registration.clone(),
-                        )
-                        .await;
                     }
                 }
                 OutputUrlScheme::Sink => {

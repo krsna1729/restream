@@ -100,24 +100,6 @@ pub(super) fn avio_input_queue_json(
     })
 }
 
-pub(super) fn avio_egress_queue_json(
-    output_id: &str,
-    len_bytes: usize,
-    capacity_bytes: usize,
-    high_water_bytes: usize,
-    blocked_writes: u64,
-    blocked_write_us: u64,
-) -> serde_json::Value {
-    serde_json::json!({
-        "outputId": output_id,
-        "lenBytes": len_bytes,
-        "capacityBytes": capacity_bytes,
-        "highWaterBytes": high_water_bytes,
-        "blockedWrites": blocked_writes,
-        "blockedWriteUs": blocked_write_us,
-    })
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn memory_accounting_json(
     retained_payload_bytes: u64,
@@ -127,7 +109,6 @@ pub(super) fn memory_accounting_json(
     avio_total_len_bytes: usize,
     avio_total_capacity_bytes: usize,
     avio_input_queues: Vec<serde_json::Value>,
-    avio_egress_queues: Vec<serde_json::Value>,
 ) -> serde_json::Value {
     serde_json::json!({
         "retainedPayloadBytes": retained_payload_bytes,
@@ -138,7 +119,6 @@ pub(super) fn memory_accounting_json(
             "totalLenBytes": avio_total_len_bytes,
             "totalCapacityBytes": avio_total_capacity_bytes,
             "inputQueues": avio_input_queues,
-            "egressQueues": avio_egress_queues,
         },
     })
 }
@@ -272,7 +252,6 @@ mod tests {
                 128,
                 1024,
                 vec![serde_json::json!({"stageKey": "pipeline-a:source"})],
-                vec![serde_json::json!({"outputId": "egress-a"})],
             ),
         );
 

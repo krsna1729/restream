@@ -120,6 +120,41 @@ impl EgressShardGroup {
         replaced
     }
 
+    /// Add one shard at the next index, running `backend`. Used for
+    /// output-count-driven scale-out (`EgressFabricRuntime::rescale`) —
+    /// mirrors `replace_panicked`'s spawn shape, but appends a new handle
+    /// instead of replacing one in place.
+    pub fn grow<B: EgressShardBackend>(
+        &mut self,
+        config: EgressShardConfig,
+        backend: B,
+    ) -> ShardId {
+        let shard_id = ShardId::new(u32::try_from(self.handles.len()).unwrap_or(u32::MAX));
+        self.handles
+            .push(EgressShardHandle::spawn(shard_id, config, backend));
+        shard_id
+    }
+
+    /// Remove and gracefully shut down the highest-index shard, if any.
+    /// Used for output-count-driven scale-in. The caller is responsible
+    /// for rehoming whatever outputs were assigned to this shard
+    /// (`EgressManager::rehome`) — this only tears the shard thread down,
+    /// draining any leaves it still owned per its own `Shutdown` handling
+    /// (`EgressShardRuntime::run`'s drain window), it does not reassign
+    /// them anywhere.
+    ///
+    /// Detaches rather than joins the shard thread (see
+    /// `EgressShardHandle::shutdown_detached`'s doc comment): the shard is
+    /// routable-unreachable immediately (removed from `handles` before
+    /// this returns), but its graceful drain continues in the background
+    /// rather than blocking this call for up to `drain_timeout`.
+    pub fn shrink(&mut self) -> Option<ShardId> {
+        let handle = self.handles.pop()?;
+        let shard_id = handle.shard_id();
+        handle.shutdown_detached();
+        Some(shard_id)
+    }
+
     pub fn shutdown_and_join(self) -> Vec<EgressShardSnapshot> {
         self.handles
             .into_iter()

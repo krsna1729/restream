@@ -53,6 +53,85 @@ pub struct TcpReceiverStats {
     pub tcp_skmem_wmem_max: Option<u64>,
 }
 
+impl TcpReceiverStats {
+    /// Convert into a `PublisherQuality`, copying every `TCP_INFO`/
+    /// `SO_MEMINFO` field this struct carries and leaving protocol-specific
+    /// (SRT/RTP) fields at their defaults. `send_rate_mbps` is the egress
+    /// side's own throughput computation — a two-sample delta over
+    /// wall-clock time, the same shape `rtmp/ingest.rs` already computes
+    /// for `tcp_receive_rate_mbps` — since a single `TCP_INFO` snapshot
+    /// carries cumulative byte counters, not a rate.
+    pub fn into_egress_quality(
+        self,
+        send_rate_mbps: Option<f64>,
+    ) -> crate::media::snapshots::PublisherQuality {
+        crate::media::snapshots::PublisherQuality {
+            tcp_congestion_algorithm: self.tcp_congestion_algorithm,
+            tcp_rtt_ms: self.tcp_rtt_ms,
+            tcp_rtt_var_ms: self.tcp_rtt_var_ms,
+            tcp_bytes_received: self.tcp_bytes_received,
+            tcp_bytes_sent: self.tcp_bytes_sent,
+            tcp_bytes_acked: self.tcp_bytes_acked,
+            tcp_bytes_retrans: self.tcp_bytes_retrans,
+            tcp_last_rcv_ms: self.tcp_last_rcv_ms,
+            tcp_last_snd_ms: self.tcp_last_snd_ms,
+            tcp_rcv_rtt_ms: self.tcp_rcv_rtt_ms,
+            tcp_rcv_space: self.tcp_rcv_space,
+            tcp_rcv_ooopack: self.tcp_rcv_ooopack,
+            tcp_snd_mss: self.tcp_snd_mss,
+            tcp_pmtu: self.tcp_pmtu,
+            tcp_unacked: self.tcp_unacked,
+            tcp_sacked: self.tcp_sacked,
+            tcp_lost: self.tcp_lost,
+            tcp_retrans: self.tcp_retrans,
+            tcp_snd_cwnd: self.tcp_snd_cwnd,
+            tcp_snd_ssthresh: self.tcp_snd_ssthresh,
+            tcp_advmss: self.tcp_advmss,
+            tcp_reordering: self.tcp_reordering,
+            tcp_notsent_bytes: self.tcp_notsent_bytes,
+            tcp_total_retrans: self.tcp_total_retrans,
+            tcp_pacing_rate_bps: self.tcp_pacing_rate_bps,
+            tcp_max_pacing_rate_bps: self.tcp_max_pacing_rate_bps,
+            tcp_delivery_rate_bps: self.tcp_delivery_rate_bps,
+            tcp_segs_out: self.tcp_segs_out,
+            tcp_data_segs_out: self.tcp_data_segs_out,
+            tcp_delivered: self.tcp_delivered,
+            tcp_delivered_ce: self.tcp_delivered_ce,
+            tcp_busy_time_ms: self.tcp_busy_time_ms,
+            tcp_rwnd_limited_ms: self.tcp_rwnd_limited_ms,
+            tcp_sndbuf_limited_ms: self.tcp_sndbuf_limited_ms,
+            tcp_dsack_dups: self.tcp_dsack_dups,
+            tcp_reord_seen: self.tcp_reord_seen,
+            tcp_snd_wnd: self.tcp_snd_wnd,
+            tcp_total_rto: self.tcp_total_rto,
+            tcp_total_rto_recoveries: self.tcp_total_rto_recoveries,
+            tcp_total_rto_time_ms: self.tcp_total_rto_time_ms,
+            tcp_skmem_rmem_alloc: self.tcp_skmem_rmem_alloc,
+            tcp_skmem_rmem_max: self.tcp_skmem_rmem_max,
+            tcp_skmem_wmem_alloc: self.tcp_skmem_wmem_alloc,
+            tcp_skmem_wmem_max: self.tcp_skmem_wmem_max,
+            tcp_send_rate_mbps: send_rate_mbps,
+            ..crate::media::snapshots::PublisherQuality::default()
+        }
+    }
+}
+
+/// Throughput in Mbps from two cumulative byte-counter samples, for turning
+/// `TCP_INFO`'s `tcpi_bytes_sent`/`tcpi_bytes_received` (a running total, not
+/// a rate) into a per-second figure the same way `rtmp/ingest.rs`'s inline
+/// receive-side computation and `media::srt_quality::counter_rate`'s
+/// sender-side computation both already do. `None` when the counter went
+/// backward (a reset, not real regression — TCP byte counters do not wrap
+/// in practice) or the sample interval was zero or negative (clock not
+/// actually advancing between samples).
+pub fn bytes_delta_rate_mbps(current: u64, previous: u64, elapsed_seconds: f64) -> Option<f64> {
+    if elapsed_seconds <= 0.0 {
+        return None;
+    }
+    let delta = current.checked_sub(previous)?;
+    Some((delta as f64 * 8.0) / (elapsed_seconds * 1_000_000.0))
+}
+
 #[cfg(target_os = "linux")]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -369,7 +448,16 @@ fn collect_tcp_congestion_algorithm(fd: std::os::fd::RawFd) -> Option<String> {
 fn collect_tcp_stats(socket: &tokio::net::TcpStream) -> io::Result<TcpReceiverStats> {
     use std::os::fd::AsRawFd;
 
-    let fd = socket.as_raw_fd();
+    collect_tcp_stats_by_fd(socket.as_raw_fd())
+}
+
+/// Same as [`collect_tcp_stats`] but takes a raw fd directly, for callers
+/// that own a non-Tokio socket (the RTMP egress fabric's non-blocking
+/// `std::net::TcpStream`/`rustls::StreamOwned` — see
+/// `RtmpConnection::raw_fd()`) and would otherwise have no way to reach
+/// `TCP_INFO` for that connection.
+#[cfg(target_os = "linux")]
+pub fn collect_tcp_stats_by_fd(fd: std::os::fd::RawFd) -> io::Result<TcpReceiverStats> {
     let mut info = LinuxTcpInfo::default();
     let mut info_len = std::mem::size_of::<LinuxTcpInfo>() as libc::socklen_t;
     // SAFETY: getsockopt TCP_INFO fills a LinuxTcpInfo struct. `fd` is a
@@ -432,11 +520,6 @@ pub fn collect_rtmp_receiver_stats(socket: &tokio::net::TcpStream) -> io::Result
     collect_tcp_stats(socket)
 }
 
-#[cfg(target_os = "linux")]
-pub fn collect_rtmp_sender_stats(socket: &tokio::net::TcpStream) -> io::Result<TcpReceiverStats> {
-    collect_tcp_stats(socket)
-}
-
 #[cfg(not(target_os = "linux"))]
 pub fn collect_rtmp_receiver_stats(
     _socket: &tokio::net::TcpStream,
@@ -448,7 +531,7 @@ pub fn collect_rtmp_receiver_stats(
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn collect_rtmp_sender_stats(_socket: &tokio::net::TcpStream) -> io::Result<TcpReceiverStats> {
+pub fn collect_tcp_stats_by_fd(_fd: std::os::fd::RawFd) -> io::Result<TcpReceiverStats> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "sender TCP statistics require Linux",
@@ -682,5 +765,82 @@ mod tests {
             parse_congestion_algorithm(&buffer, usize::MAX),
             Some("bbr".to_string())
         );
+    }
+
+    /// The gap this closes: fabric RTMP egress had no way to reach
+    /// `TCP_INFO` for its non-Tokio socket at all before `into_egress_quality`
+    /// and `collect_tcp_stats_by_fd` existed, so `ActiveEgress.quality`
+    /// stayed at its all-`None` default for every fabric-owned RTMP output.
+    #[test]
+    fn into_egress_quality_copies_every_field_and_carries_the_given_send_rate() {
+        let stats = TcpReceiverStats {
+            tcp_congestion_algorithm: Some("bbr".to_string()),
+            tcp_rtt_ms: Some(11.5),
+            tcp_snd_cwnd: Some(40),
+            tcp_bytes_sent: Some(9_000),
+            ..TcpReceiverStats::default()
+        };
+
+        let quality = stats.into_egress_quality(Some(3.5));
+
+        assert_eq!(quality.tcp_congestion_algorithm, Some("bbr".to_string()));
+        assert_eq!(quality.tcp_rtt_ms, Some(11.5));
+        assert_eq!(quality.tcp_snd_cwnd, Some(40));
+        assert_eq!(quality.tcp_bytes_sent, Some(9_000));
+        assert_eq!(quality.tcp_send_rate_mbps, Some(3.5));
+        // Receive-side rate is a separate field ingest computes for itself;
+        // the egress conversion must not accidentally alias it.
+        assert_eq!(quality.tcp_receive_rate_mbps, None);
+        // A field with no SRT/RTP counterpart must stay untouched.
+        assert_eq!(quality.srt_send_buf_bytes, None);
+    }
+
+    /// The gap this closes: `RtmpFabricLeaf::sample_quality`
+    /// (`egress/backends/rtmp_shard.rs`) computes `tcp_send_rate_mbps` from
+    /// two `TCP_INFO` samples the same way `rtmp/ingest.rs` computes
+    /// `tcp_receive_rate_mbps` — both now share this function, but before
+    /// the shared extraction the RTMP-egress side's copy of this exact math
+    /// had no dedicated test, unlike SRT's `counter_rate` (see
+    /// `srt_quality.rs`'s regression/zero-elapsed tests), which this
+    /// mirrors.
+    #[test]
+    fn bytes_delta_rate_mbps_computes_megabits_per_second() {
+        // 1,000,000 bytes over 1 second = 8 Mbps.
+        assert_eq!(bytes_delta_rate_mbps(1_000_000, 0, 1.0), Some(8.0));
+    }
+
+    #[test]
+    fn bytes_delta_rate_mbps_reports_none_when_counter_regresses() {
+        // A counter reset (new socket, restarted stat source) must not be
+        // misread as a negative or wrapped-around rate.
+        assert_eq!(bytes_delta_rate_mbps(100, 500, 2.0), None);
+    }
+
+    #[test]
+    fn bytes_delta_rate_mbps_reports_none_at_zero_or_negative_elapsed_seconds() {
+        assert_eq!(bytes_delta_rate_mbps(1_000, 500, 0.0), None);
+        assert_eq!(bytes_delta_rate_mbps(1_000, 500, -1.0), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn collect_tcp_stats_by_fd_matches_the_tokio_socket_path() {
+        use std::os::fd::AsRawFd;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = tokio::spawn(async move {
+            let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+            socket.write_all(b"sender-side-fd-stats").await.unwrap();
+        });
+        let (mut server, _) = listener.accept().await.unwrap();
+        let mut payload = [0u8; 20];
+        server.read_exact(&mut payload).await.unwrap();
+        client.await.unwrap();
+
+        let stats = collect_tcp_stats_by_fd(server.as_raw_fd()).unwrap();
+        assert!(stats.tcp_rtt_ms.is_some());
+        assert!(stats.tcp_bytes_received.unwrap_or(0) >= payload.len() as u64);
     }
 }

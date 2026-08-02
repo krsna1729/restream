@@ -1,7 +1,6 @@
 use super::*;
 use crate::domain::stage::StageKind;
 use crate::domain::state::{DesiredOutputState, EgressPhase as EP};
-use crate::media::avio::MemoryQueue;
 use crate::media::engine::MediaEngine;
 use crate::media::engine_hls::HlsConsumers;
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};

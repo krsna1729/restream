@@ -268,58 +268,6 @@ fn startup_audio_unblocks_once_parameter_sets_exist() {
 }
 
 #[test]
-fn warmup_does_not_unlock_codec_edge_output_on_audio_only_burst() {
-    let ring = Arc::new(RingBuffer::new(1024));
-    ring.set_codec_hint("h264");
-    let packets = vec![Arc::new(MediaPacket {
-        media_type: MediaType::Audio,
-        format: PayloadFormat::Raw,
-        is_keyframe: false,
-        track_index: 0,
-        pts: 0,
-        dts: 0,
-        payload: Bytes::from_static(&[0x11, 0x22]),
-    })];
-
-    assert!(
-        !rtmp_warmup_ready(&ring, &packets),
-        "codec-edge warmup should keep waiting until video startup data exists"
-    );
-}
-
-#[test]
-fn warmup_unlocks_codec_edge_output_once_video_startup_arrives() {
-    let ring = Arc::new(RingBuffer::new(1024));
-    ring.set_codec_hint("h264");
-    let video_packets = vec![Arc::new(MediaPacket {
-        media_type: MediaType::Video,
-        format: PayloadFormat::Raw,
-        is_keyframe: true,
-        track_index: 0,
-        pts: 0,
-        dts: 0,
-        payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x65]),
-    })];
-
-    assert!(
-        rtmp_warmup_ready(&ring, &video_packets),
-        "seeing a video burst should unlock RTMP warmup even before parameter sets are cached"
-    );
-
-    let parameter_set_ring = Arc::new(RingBuffer::new(1024));
-    parameter_set_ring.set_codec_hint("h264");
-    parameter_set_ring.set_video_parameter_sets(vec![
-        0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68, 0xCE,
-        0x38, 0x80,
-    ]);
-
-    assert!(
-        rtmp_warmup_ready(&parameter_set_ring, &[]),
-        "cached parameter sets should also satisfy RTMP warmup readiness"
-    );
-}
-
-#[test]
 fn deferred_audio_sequence_header_prefers_cached_flv_header() {
     let cached = Bytes::from_static(&[0xaf, 0x00, 0x12, 0x10]);
     let track = AudioMeta {
@@ -440,63 +388,6 @@ async fn rtmp_metadata_advertises_unconverted_hevc_as_hvc1_fourcc() {
     assert_eq!(metadata.video_width, Some(1920));
     assert_eq!(metadata.video_height, Some(1080));
     assert_eq!(metadata.audio_codec_id, Some(10));
-}
-
-#[tokio::test]
-async fn start_rtmp_egress_waits_for_ring_data_before_connecting() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    let ring = Arc::new(RingBuffer::new(1024));
-    ring.set_codec_hint("h264");
-
-    let engine = Arc::new(MediaEngine::new());
-    let registration = engine
-        .register_egress_attempt("out-warmup", "pipe-warmup", "rtmp://ignored/app/key", None)
-        .await;
-
-    let ring_c = ring.clone();
-    let engine_c = engine.clone();
-    let registration_c = registration.clone();
-    tokio::spawn(async move {
-        start_rtmp_egress(
-            "out-warmup".to_string(),
-            "pipe-warmup".to_string(),
-            format!("rtmp://{}/live/key", addr),
-            ring_c,
-            engine_c,
-            registration_c,
-            crate::domain::output_spec::RtmpOutputMode::Legacy,
-        )
-        .await;
-    });
-
-    // No data on the ring yet: the pre-connect warmup gate must hold off
-    // connecting, or MediaMTX would accept an idle publisher and later
-    // drop it for inactivity (the root cause of the RTMP reconnect storm
-    // under high output fanout).
-    let early_accept =
-        tokio::time::timeout(std::time::Duration::from_millis(200), listener.accept()).await;
-    assert!(
-        early_accept.is_err(),
-        "must not connect before the ring has data"
-    );
-
-    ring.push(MediaPacket {
-        media_type: MediaType::Video,
-        track_index: 0,
-        pts: 0,
-        dts: 0,
-        is_keyframe: true,
-        format: PayloadFormat::Flv,
-        payload: bytes::Bytes::from_static(&[0x17, 0x01, 0x00, 0x00, 0x00]),
-    });
-
-    let late_accept =
-        tokio::time::timeout(std::time::Duration::from_secs(2), listener.accept()).await;
-    assert!(late_accept.is_ok(), "must connect once the ring has data");
-
-    registration.cancel_token.cancel();
 }
 
 #[tokio::test]

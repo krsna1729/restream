@@ -50,6 +50,10 @@ impl SrtSendOps for FakeSendOps {
     fn send_backlog(&self, _socket: SRTSOCKET) -> Option<NativeSendBacklog> {
         None
     }
+
+    fn sender_quality_stats(&self, _socket: SRTSOCKET) -> Option<super::sys::SrtTraceBStats> {
+        None
+    }
 }
 
 impl Default for SrtNativeMessageSender<FakeSendOps> {

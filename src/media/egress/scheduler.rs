@@ -33,6 +33,18 @@ pub struct ScheduleState {
     pub deficit_bytes: usize,
     /// Instant of the most recent scheduler service visit.
     pub last_service_at: Option<Instant>,
+    /// `true` iff the most recent `EngineProgress`'s `WaitCondition` was
+    /// `Feed` or `FeedOrIo` — i.e. a feed wake should directly re-enqueue
+    /// this leaf. Set unconditionally from every visit outcome in
+    /// `apply_progress_to_common` (`visit.rs`); `false` for outcomes that
+    /// don't carry a wait condition at all (`HandshakeComplete`,
+    /// `FeedOverrun`, `PeerClosed`, `Failed`, `Yield`).
+    ///
+    /// Advisory only, not authoritative like `enqueued`: a feed-wake
+    /// direct-enqueue and a real poller-discovered enqueue both still
+    /// check `!enqueued` before pushing, so this flag being stale between
+    /// visits can never cause a double enqueue.
+    pub wants_feed_wake: bool,
 }
 
 impl ScheduleState {
@@ -41,6 +53,7 @@ impl ScheduleState {
             enqueued: false,
             deficit_bytes: 0,
             last_service_at: None,
+            wants_feed_wake: false,
         }
     }
 
@@ -272,5 +285,125 @@ mod tests {
         assert!(can_enqueue(&s));
         s.enqueued = true;
         assert!(!can_enqueue(&s));
+    }
+
+    // -------------------------------------------------------------------
+    // Proptest: the enqueued invariant under arbitrary operation sequences
+    // -------------------------------------------------------------------
+    //
+    // The hand-written tests above each check one specific sequence. This
+    // exercises the same `ScheduleState`/`ReadyQueue`/`try_enqueue` contract
+    // against thousands of randomly generated sequences, checking the one
+    // invariant every egress shard backend depends on for correctness (a
+    // leaf visited twice concurrently would double-borrow/double-visit it;
+    // a leaf silently dropped from the ready set stalls forever): a leaf's
+    // `enqueued` flag is `true` if and only if it currently appears in the
+    // ready queue's contents, and it never appears more than once.
+    //
+    // `poll_ready()`/`enqueue_feed_waiting_leaves()` in the real RTMP/SRT
+    // shard backends reimplement this same "check enqueued, set true, push"
+    // pattern inline (for hot-path reasons — see their doc comments) rather
+    // than calling `try_enqueue` directly, so this proptest validates the
+    // pattern's correctness in the abstract rather than those call sites
+    // literally; the backends' own deterministic tests (e.g.
+    // `feed_wake_enqueues_the_leaf_without_any_poller_call`,
+    // `feed_wake_never_enqueues_a_handshaking_leaf`) cover the concrete
+    // wiring.
+    use proptest::prelude::*;
+
+    #[derive(Debug, Clone, Copy)]
+    enum QueueOp {
+        /// Attempt to enqueue a leaf (as either a real poll discovery or a
+        /// feed-wake direct enqueue would) — must be a no-op if already
+        /// enqueued.
+        TryEnqueue(usize),
+        /// Dequeue the next ready leaf and suspend it (transport blocked):
+        /// clear `enqueued`, do not re-push.
+        DequeueAndSuspend,
+        /// Dequeue the next ready leaf and treat it as still runnable:
+        /// re-append to the tail, `enqueued` stays `true`.
+        DequeueAndRequeue,
+    }
+
+    fn queue_op_strategy(leaf_count: usize) -> impl Strategy<Value = QueueOp> {
+        prop_oneof![
+            (0..leaf_count).prop_map(QueueOp::TryEnqueue),
+            Just(QueueOp::DequeueAndSuspend),
+            Just(QueueOp::DequeueAndRequeue),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
+
+        /// For any sequence of enqueue/dequeue/suspend/requeue operations
+        /// over a small pool of leaves: every leaf's `enqueued` flag always
+        /// agrees with whether it's actually present in the queue, and the
+        /// queue never holds a duplicate.
+        #[test]
+        fn enqueued_flag_always_matches_queue_membership(
+            leaf_count in 1usize..6,
+            ops in prop::collection::vec(queue_op_strategy(5), 0..64),
+        ) {
+            let mut slab = FakeSlab::new(leaf_count);
+            let mut queue = ReadyQueue::new();
+
+            for op in ops {
+                match op {
+                    QueueOp::TryEnqueue(index) => {
+                        if index >= leaf_count {
+                            continue;
+                        }
+                        try_enqueue(&mut slab.states[index], &mut queue, LeafKey(index));
+                    }
+                    QueueOp::DequeueAndSuspend => {
+                        if let Some(key) = queue.dequeue_next() {
+                            slab.states[key.0].enqueued = false;
+                        }
+                    }
+                    QueueOp::DequeueAndRequeue => {
+                        if let Some(key) = queue.dequeue_next() {
+                            // Still runnable: enqueued stays true, goes to tail.
+                            queue.push_back_runnable(key);
+                        }
+                    }
+                }
+
+                // Invariant check after every single operation, not just at
+                // the end: a violation must be caught at the exact op that
+                // introduced it for the shrunk proptest failure to be
+                // minimal and readable.
+                let mut membership_counts = vec![0usize; leaf_count];
+                for key in queue.drain() {
+                    membership_counts[key.0] += 1;
+                }
+                for (index, count) in membership_counts.iter().enumerate() {
+                    prop_assert!(
+                        *count <= 1,
+                        "leaf {index} appeared {count} times in the ready queue"
+                    );
+                    let in_queue = *count == 1;
+                    prop_assert_eq!(
+                        slab.states[index].enqueued,
+                        in_queue,
+                        "leaf {}: enqueued={} but queue membership={}",
+                        index,
+                        slab.states[index].enqueued,
+                        in_queue,
+                    );
+                }
+                // `drain()` above emptied the queue to inspect it; rebuild
+                // it from the membership snapshot so the next op sees the
+                // same state it would have without the inspection (order
+                // among still-enqueued leaves is not part of the invariant
+                // being checked here, so re-pushing in index order is
+                // fine).
+                for (index, in_queue) in membership_counts.iter().enumerate() {
+                    if *in_queue == 1 {
+                        queue.push_back(LeafKey(index));
+                    }
+                }
+            }
+        }
     }
 }

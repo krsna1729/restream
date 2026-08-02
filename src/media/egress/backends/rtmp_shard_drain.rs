@@ -94,7 +94,7 @@ where
         self.sweep_draining_leaves(now);
 
         let head_sequence = self.feed.head_sequence();
-        for leaf in self.leaves.iter().flatten() {
+        for leaf in self.leaves.iter_mut().flatten() {
             let lag_units = head_sequence.saturating_sub(leaf.common.cursor.next_sequence);
             let reason = match leaf.observe_stall(now) {
                 LeafStallClass::Idle => None,
@@ -104,6 +104,9 @@ where
             leaf.common
                 .progress_sink
                 .record_backpressure_state(lag_units, reason);
+            if let Some(quality) = leaf.sample_quality(now) {
+                leaf.common.progress_sink.record_quality(quality);
+            }
         }
 
         let stalled: Vec<OutputId> = self

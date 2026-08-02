@@ -1174,25 +1174,41 @@ Status against each criterion, as of the retry-wiring fix above:
   from "receiver process frozen." The output then cycles through
   connect-failure retries against the still-suspended receiver, the same
   shape as a dead destination, not the distinct `classify_stall`
-  backpressured-but-connected path this was meant to exercise. Proving
-  *that* exact path live would need a receiver that keeps SRT's own
-  liveness signaling alive while deliberately not draining decoded data
-  one layer up — a raw SRT listener built from scratch (restream's libsrt
-  FFI bindings are internal to `src/media/srt`, not exposed to the harness
-  binary), out of scope here. Re-scoped the test honestly instead: it now
-  proves what `SIGSTOP` actually produces — RSS stays bounded (~21-30MB
-  growth, well under a 64MB budget) across 120s of continuous
-  connect-failure retry cycling against an unreachable destination, both
-  under legacy and fabric. The stall-sweep/`classify_stall` mechanism
-  itself (the backpressured-but-connected path specifically) is proven
-  deterministically in `leaf_termination.rs`, not live — building the raw
-  SRT listener needed to close that specific live gap remains future work,
-  but is narrow and well-understood now, not open-ended.
-All four Phase 4 exit-gate criteria now have real evidence. The remaining
-gap is narrow: a live (not just deterministic-unit) proof of the
-backpressured-but-connected SRT stall path specifically, which needs a
-purpose-built raw SRT listener — still open, tracked as future work, not
-blocking.
+  backpressured-but-connected path this was meant to exercise. The test was
+  re-scoped to prove what `SIGSTOP` actually produces — RSS stays bounded
+  (~21-30MB growth, well under a 64MB budget) across 120s of continuous
+  connect-failure retry cycling against an unreachable destination — and
+  the backpressured path got its own receiver, below.
+- **Backpressured-but-connected SRT stall path: proven live.** The receiver
+  shape `SIGSTOP` could not produce is now built on purpose:
+  `src/bin/test_harness/srt_raw_sink.rs`, a raw SRT listener with
+  hand-written libsrt FFI (the library crate's bindings are internal to
+  `src/media/srt`, and widening a production module's public API for a test
+  tool was not worth it). It accepts a real connection, lets libsrt keep
+  ACKing and keepaliving normally, and never calls `srt_recv`. Two
+  inherited socket options turn "nobody is reading" into sender-visible
+  backpressure: `SRTO_TLPKTDROP = 0`, because sender-side too-late-packet
+  dropping is gated on the *peer's* handshake flag (`m_bPeerTLPktDrop` in
+  libsrt's `CUDT::sndDropTooLate`) and otherwise the sender discards its
+  backlog instead of building one, and `SRTO_FC`/`SRTO_RCVBUF` at libsrt's
+  32-packet minimum so the flow window closes after tens of kilobytes
+  rather than megabytes. `srt_egress_backpressured_receiver`
+  (`fault.srt-output-stall`) drives it: the leaf is classified
+  `backpressured` while the sink is still `SRTS_CONNECTED` with its receive
+  window pinned full (31 of 32 packets unread, zero bytes ever read), then
+  `stalled` once it passes the 15s no-progress deadline, then closed into
+  the retry cycle — with two healthy SRT siblings progressing throughout.
+  One nuance worth recording: `bytesOut` keeps climbing for ~10.9MB after
+  the receive window closes, because it counts bytes *admitted to libsrt*,
+  not bytes acknowledged — it stops exactly when the sender's own native
+  send buffer fills. That is precisely why the fabric classifies stalls
+  from the native backlog (`srt_bistats`) rather than from that counter,
+  and the test asserts admission has stopped at the moment the engine says
+  `stalled` rather than assuming the byte counter freezes earlier.
+All four Phase 4 exit-gate criteria now have real evidence, live and
+deterministic: the stall-sweep/`classify_stall` mechanism is proven both in
+`leaf_termination.rs` and, since the raw sink exists, end to end against a
+real undrained SRT receiver.
 
 **Default flip attempted, then reverted** — see Phase 6's "Rollout
 order" for the full story: CI's own live-scenario gate caught a real
@@ -1908,16 +1924,53 @@ benchmark-driven decisions) and why that tier fits.
    scale, and adding thread-count sampling to the harness so the
    `RcvQ`/`SndQ` claim itself (not just aggregate CPU) can be verified
    directly.
-2. **RTMP feed/I/O readiness split (task #11) — `opus`.** Architectural:
-   introduce an explicit wait-condition type (`Feed` / `Io(Interest)` /
-   `FeedOrIo(Interest)` / `Timer`) so a feed wake can directly enqueue
-   feed-waiting leaves instead of bouncing through native poller
-   re-registration. Touches the `ProtocolEngine`/`EngineProgress`
-   contract shared by both RTMP and SRT backends — a redesign of a
-   cross-cutting interface, not a local fix. Needs its own design pass
-   (what changes in `EngineProgress`, how `EgressShardBackend::on_ready`
-   consumes the new wait condition, whether `Needs`/`Progress` still
-   make sense as-is) before implementation.
+2. **~~RTMP feed/I/O readiness split (task #11)~~ — done.** Added
+   `WaitCondition` (`Feed` / `Io(Interest)` / `FeedOrIo(Interest)`,
+   `backend.rs`) replacing the bare `Interest` inside
+   `EngineProgress::Needs`/`Progress`, and `ScheduleState::wants_feed_wake`
+   (set from every visit's `WaitCondition` in `apply_progress_to_common`,
+   `visit.rs`). Both `RtmpShardBackend` and `SrtShardBackend`'s
+   `on_command(FeedWake)` now directly push feed-waiting leaves onto the
+   ready queue with **zero poller calls**, replacing RTMP's old
+   `refresh_registrations_for_feed_wake` (which widened registration to
+   `READ_WRITE` via a real `epoll_ctl` call, relying on a TCP socket being
+   almost always writable to manufacture a spurious epoll event as the
+   actual wake signal — its own doc comment turned out to be stale: RTMP's
+   `MediaPublisher::advance` already keeps `READ` registered on an empty
+   feed, so the widen call's only real effect was the spurious-event
+   trick) and SRT's old no-op `FeedWake` handling (which relied entirely on
+   the shard's forced `ScheduleReady{1}` and SRT's always-`WRITE`
+   registration to eventually rediscover it). Safe against the regression
+   a previous direct-enqueue attempt hit (leaves mid handshake/negotiation
+   winning a race against real I/O discovery): handshake/negotiation only
+   ever report `WaitCondition::Io(_)`, never `Feed`/`FeedOrIo`, so
+   `wants_feed_wake` is structurally `false` for them.
+
+   Along the way, root-caused and fixed a latent, pre-existing bug this
+   change surfaced: `SessionNegotiation::advance` (RTMP) set its internal
+   `publish_accepted` flag but only checked for completion on a *separate*
+   subsequent call, which depended on the poller happening to deliver one
+   more (any) readiness event afterward — true by luck under the old
+   registration timing, not guaranteed. Found via a byte-for-byte identical
+   negotiation-trace comparison between old and new code (proving the
+   `WaitCondition` refactor itself was behavior-neutral) isolating the
+   divergence to exactly this "one more lucky call" dependency. Fixed by
+   checking completion immediately instead of waiting for a follow-up
+   visit.
+
+   Verified: full test suite (1912 tests) green, plus new regression
+   tests (`feed_wake_enqueues_the_leaf_without_any_poller_call`,
+   `feed_wake_never_enqueues_a_handshaking_leaf`,
+   `wants_feed_wake_reflects_the_visit_outcomes_wait_condition`). Re-ran
+   this session's local repro for the shard-thread-oversubscription
+   contention flake (`mixed.live.srt.h265.a1.bf0`, 6-core box, 6 egress
+   shards + 4 concurrent transcodes) 5 times post-fix: 5/5 passed, versus
+   2/5 failures pre-fix in the same environment — consistent with removing
+   real per-wake `epoll_ctl`/`epoll_wait` overhead from the shard hot loop
+   giving each shard thread more actual visit throughput per unit of CPU
+   it gets scheduled, though this is not a controlled statistical
+   before/after (small sample, single host, no repeated-measure harness
+   run).
 3. **~~Remaining hot-path allocation/dispatch (rest of task #12)~~ —
    profiled; the flagged candidates are not worth implementing.**
    `perf` was initially unusable in this sandbox
@@ -3342,10 +3395,16 @@ Actions CI jobs are **GREEN** on run `30517640919` following root-cause fixes:
    and Phase 5 live proof (~660ms SIGTERM graceful restart), all canary criteria
    are met without legacy fallback.
 5. ~~**Phase 4: close or explicitly defer the live SRT backpressured-but-connected receiver proof.**~~ **RESOLVED**:
-   Explicitly deferred building custom FFI raw SRT receiver in harness;
-   deterministic unit tests in `src/media/egress/backends/srt/tests/leaf_termination.rs`
-   (`stall_sweep_marks_terminated_unexpectedly_on_the_closed_leaf`) prove the
-   `classify_stall` contract.
+   first deferred, then actually closed. The custom-FFI raw SRT receiver was
+   built (`src/bin/test_harness/srt_raw_sink.rs`) and
+   `srt_egress_backpressured_receiver` (`fault.srt-output-stall`) proves the
+   path live — `backpressured` while the peer is still `SRTS_CONNECTED` with
+   an unread full receive window, then `stalled` and closed, siblings
+   unaffected. The deterministic unit tests in
+   `src/media/egress/backends/srt/tests/leaf_termination.rs`
+   (`stall_sweep_marks_terminated_unexpectedly_on_the_closed_leaf`) still
+   own the `classify_stall` contract at the unit level; see Phase 4's status
+   section for the receiver's mechanics and the `bytesOut` nuance.
 6. ~~**Phase 6: repeated-resync alert.**~~ **RESOLVED**: the leaf-level
    `EngineProgress::FeedOverrun` resync count now flows to both observability
    surfaces. Per-output: `visit.rs`'s `FeedOverrun` handler calls
@@ -3427,11 +3486,122 @@ Actions CI jobs are **GREEN** on run `30517640919` following root-cause fixes:
    (1 shard serving 20 outputs; 8 shards mostly idle). Re-running both
    extremes at the original 1,140/60 scale on a host that can afford it
    remains open if the `clamp(2, 8)` bound itself is ever revisited.
-9. **Phase 7: remove rollback-era duplication only after the observation
-   window.** Delete legacy RTMP tasks, legacy SRT feeder/queue/sender threads,
-   duplicate policy, and rollout compatibility paths; then update the
-   architecture, media-pipeline, performance, testing, concurrency, and
-   operator documentation to describe the single shipped ownership model.
+9. ~~**Post-merge: verify the ceiling claim directly, not just cite it.**~~
+   **RESOLVED**: after #86 merged, ran the actual scale this migration is
+   supposed to enable rather than relying on the pre-merge sweep numbers
+   above. First attempt at 1,140 RTMP + 60 SRT reproduced the documented
+   near-parity numbers (fabric ~4.6% lower CPU, ~2% higher RSS) but didn't
+   stress anything — legacy's per-output-thread cost is SRT-specific
+   (`std::thread::spawn` in `src/media/srt_egress.rs`; RTMP was already
+   async even pre-fabric), and 60 SRT outputs is nowhere near the ceiling.
+   Re-ran SRT-heavy (500, then 600 SRT outputs) to target the actual
+   mechanism. Found and fixed a real bug this exposed: the harness's
+   `mixed_fabric_matrix`/`run_protocol_fabric_matrix` "legacy" variant
+   left `RESTREAM_EGRESS_FABRIC` unset rather than pinning it to `off`,
+   which relied on the pre-merge default — post-merge, an unset var now
+   resolves to `all`, so "legacy" was silently comparing fabric against
+   itself in every large-scale run this pass (including the 1,140/60 one
+   above, still valid since it happened to match already-known numbers,
+   but not verified independently). Fixed in `src/bin/test_harness/resource_sweep/branch_matrix.rs`.
+
+   **The corrected 600-SRT-output measurement is the real proof**:
+   legacy hit `src/media/srt_egress.rs`'s explicit
+   `try_acquire_srt_sender_permit` semaphore, hard-capped at 512
+   concurrent SRT sender OS threads — 540 `"SRT sender thread limit
+   reached"` capacity rejections logged (repeated retries against the
+   ~88 outputs past the cap), and the harness run **failed outright**
+   because legacy could never get all 601 outputs running. Fabric
+   reached 601/601 cleanly, with **lower** CPU (184.0% vs 190.3%, ~3%
+   lower) and **lower** RSS (981.8MB vs 1,092.5MB, ~10% lower) than
+   legacy's partial, capacity-rejecting attempt. This is the actual
+   benefit case for this migration: not a marginal CPU number at small
+   scale (where fabric's fixed per-shard-thread pool costs slightly
+   *more*, per the shard-sweep table above), but that legacy is
+   structurally incapable of serving output counts fabric handles
+   routinely, with no possible mitigation short of raising the 512
+   constant and accepting unbounded thread growth.
+
+   **`perf`-based root cause for the small-scale CPU delta**: profiled
+   both variants (`cycles:P` @ 199Hz, 20 RTMP outputs, 20s capture) —
+   fabric spent ~1.6x more on-CPU samples than legacy in the same
+   window. The profile attributes this to architecture, not new work:
+   legacy's `epoll_wait` runs on one shared tokio reactor thread;
+   fabric's runs independently on each of its (here, 6) dedicated
+   `egress-shard-N` threads, and `clock_gettime` calls (from
+   `WorkBudget` deadline checks and the once-a-second stall sweep) show
+   up on fabric's shard threads with no legacy equivalent. Per-packet
+   work (`memchr`/`memmove` RTMP chunk scanning) is the same total
+   work, just now spread across more independently-scheduled threads
+   instead of concentrated on one. RSS was not statistically different
+   between fabric on/off in a repeated (N=5) 50-output measurement —
+   confirming this is a CPU/syscall-frequency cost, not a memory one.
+   This is the same mechanism the deferred "split feed-readiness from
+   I/O-readiness" backlog item names; the fixed per-shard overhead
+   shrinks as a proportion of total CPU as output count grows (~19%
+   higher than legacy at 2 outputs, ~8% at 20, not statistically
+   distinguishable at 50 in a repeated N=5 measurement), consistent
+   with the corrected ceiling test showing fabric CPU *below* legacy
+   once real scale is reached.
+10. **Phase 7: remove rollback-era duplication only after the observation
+    window.** Delete legacy RTMP tasks, legacy SRT feeder/queue/sender threads,
+    duplicate policy, and rollout compatibility paths; then update the
+    architecture, media-pipeline, performance, testing, concurrency, and
+    operator documentation to describe the single shipped ownership model.
+11. **Resolved: a deterministic (not contention-flavored) per-leaf CI
+    stall.** Re-running the corrected large-scale harness (item 9 above)
+    surfaced a distinct failure from the previously-documented
+    probable-contention flake: one specific RTMP fabric output failed with
+    `"terminated unexpectedly"` ~15-16s after *every* connect, across 5
+    consecutive retries in a single Release run — 100% failure rate for
+    that output's whole lifetime in the run, not an intermittent one-off.
+    Hand-re-derived the `on_ready()`/`poll_ready()` gating logic in
+    `rtmp_shard.rs`: `poll_ready()` is the only writer to `self.ready` and
+    is gated on `self.ready` being empty, so it must logically pass
+    through empty to be refilled — this contradicts the "shard starves
+    because `self.ready` never truly empties" theory used to justify the
+    earlier idle-poll fix, meaning that theory needs re-examination too.
+    Also checked `EngineVisit::run()`'s `StaleGeneration` path
+    (`src/media/egress/visit.rs`), which skips resetting
+    `schedule.enqueued` — a real bug on its own if it fires, but ruled out
+    as the cause here by the CI evidence (`enqueued` stayed `false`
+    throughout, never got stuck `true`). Rather than ship a fix for
+    unverified concurrency/lifecycle code, added temporary diagnostic
+    tracing (`rtmp_shard.rs`/`rtmp_shard_drain.rs`, PR #103) — poll
+    call/event counts, a `StaleGeneration` log line where none existed,
+    and a per-second per-leaf heartbeat of
+    `schedule.enqueued`/`registered_interest`/`pending_bytes` — to get
+    real ground truth from CI, which reproduced this reliably (3
+    consecutive failures on the same output in one Release run).
+
+    **Root cause, found from the CI artifact log**: both
+    `visit_one_ready_leaf` and `refresh_registrations_for_feed_wake` in
+    `rtmp_shard.rs` discarded the `Result` of `self.poller.register_leaf(..)`
+    (an `epoll_ctl` syscall wrapper) via `let _ = ...` and updated
+    `leaf.registered_interest` unconditionally regardless of whether the
+    syscall actually succeeded. When `register_leaf` fails (e.g. transient
+    `EBADF`/resource pressure on a CI runner), the leaf's tracked interest
+    permanently desyncs from the real kernel registration: the leaf
+    believes it's watching for the requested readiness forever, but the
+    kernel never delivers it, so `poll_ready()` never rediscovers the leaf
+    again. This exactly matched the CI evidence: `enqueued=false` forever,
+    `pending_bytes` frozen bit-for-bit (204, later 277) for 10+ seconds
+    despite `poll_ready()` running at ~50 calls/sec and finding real events
+    for every other leaf in the same shard.
+
+    **Fix**: both call sites now check the `Result` and treat a failed
+    re-registration as leaf-fatal — close the leaf so the existing
+    retry/reconnect path recovers it, instead of leaving it silently stuck
+    — mirroring how a failed *initial* registration at connect time is
+    already handled. Verified via sabotage-then-restore (revert to the old
+    discard-the-`Result` behavior, confirm two new regression tests fail
+    with the expected message, restore the fix, confirm they pass) rather
+    than relying on the CI reproduction alone. SRT's backend
+    (`src/media/egress/backends/srt.rs`) was checked and does not share
+    this bug: it has exactly one `register_leaf` call site (the initial
+    connect-time registration), which already propagates its `Result` via
+    `?`, and never re-registers afterward since SRT is always
+    write-registered (libsrt handles acknowledgement internally). The
+    temporary diagnostic tracing was removed once the fix was verified.
 
 ## Phase 7: Tuning and legacy removal
 
@@ -3512,13 +3682,19 @@ Choose the smallest shard count that meets acceptance with operational
 headroom. Do not introduce internal CPU affinity unless a separate A/B proof
 shows a consistent end-to-end win.
 
-Remove:
+Removed (see "Legacy removal" below for the full record):
 
 - legacy RTMP task-per-output ownership;
-- legacy SRT feeder, queue, sender thread, and sender semaphore;
-- duplicate retry and lifecycle policy;
-- compatibility metrics and rollout flags that no longer serve rollback;
-- tests that only exercise removed implementation details.
+- legacy SRT feeder, queue, and sender thread (the sender semaphore
+  stayed — it's shared with `src/media/srt/play.rs`, an unrelated
+  feature);
+- compatibility metrics and rollout flags that no longer served rollback;
+- tests that only exercised removed implementation details.
+
+(No duplicate retry/lifecycle policy needed removing: job-level retry
+was already the single shared mechanism both paths funneled into; the
+one real duplication was four now-dead `EgressPhase` variants the legacy
+protocol loops alone used to set.)
 
 Update:
 
@@ -3529,10 +3705,174 @@ Update:
 - stage proof maps and runtime diagnostics;
 - operator configuration and release evidence.
 
+### Dynamic shard scaling (supersedes the fixed-shard-count sweep above)
+
+Rather than picking one fixed shard count at startup from CPU count alone
+(`default_egress_fabric_shards`, still the ceiling), the shard pool now
+scales live with the number of active outputs on a feed, bounded by that
+CPU ceiling:
+
+- `target_egress_fabric_shards(output_count, effective_cpus)`
+  (`src/config.rs`) is a pure function: `ceil(output_count / 128)` clamped
+  to `[1, default_egress_fabric_shards(effective_cpus)]`. A pipeline with a
+  handful of outputs no longer pays the fixed per-shard `epoll_wait`/
+  `clock_gettime` overhead of a full CPU-count-sized shard pool — the
+  motivating cost characterized above.
+- `assign_output_to_shard` (`src/media/egress/manager.rs`) is rendezvous
+  (highest-random-weight) hashing rather than `hash % shard_count`, so
+  changing `shard_count` remaps only the ~`1/shard_count` fraction of
+  outputs whose arg-max shard actually changed, not nearly all of them —
+  this is what makes resizing affordable.
+- `EgressFabricRuntime::rescale` (`src/media/egress/runtime.rs`) grows or
+  shrinks the shard group one shard at a time toward the target and calls
+  `EgressManager::rehome` to move only the outputs whose assignment
+  changed. It is event-driven — called by each of the four
+  `engine_*_egress_fabric.rs` dispatch paths right after every `Add`/
+  `Remove`, not on a background timer.
+- The feed-wake watcher spawned by each `retain_*_fabric_runtime` reads
+  wake handles through a shared `Arc<Mutex<Vec<FeedWakeHandle>>>`
+  (`EgressFabricRuntime::feed_wake_handles`) refreshed by `rescale`, so a
+  shard grown after the watcher starts still gets fast feed-wake delivery
+  instead of falling back to idle-poll only.
+- Protocol-specific one-shot resource claims had to be made safe against a
+  rehome moving an output to a different shard moments after creation:
+  `SharedPipelineTargetSource::take_target` changed from a destructive
+  `remove` to a non-destructive `get().cloned()` (matching
+  `SharedRtmpPublishStartupSource::take_startup`'s existing pattern),
+  since a rehome's fresh `Add` on the new shard needs the same target the
+  original shard's `Add` already consumed. The target is now released
+  explicitly on `EgressCommand::Remove` instead of implicitly on first use.
+
+Full unit and proptest coverage: `target_egress_fabric_shards` bounds and
+monotonicity, rendezvous hashing's range/determinism/bounded-remap
+properties, `EgressShardGroup::grow`/`shrink` id-density, and
+`EgressManager::rehome` consistency across arbitrary Add/Remove/Resize
+sequences (`src/media/egress/manager/tests.rs`,
+`src/media/egress/shard/tests/group.rs`, `src/media/egress/runtime.rs`).
+
+### Legacy removal
+
+Done, without the production canary/observation window earlier notes in
+this file said it was deliberately waiting for — an explicit, informed
+choice made after that tradeoff was raised, not an oversight. What was
+removed:
+
+- `src/media/rtmp/egress.rs` (the legacy per-output RTMP task loop,
+  `start_rtmp_egress`), `src/media/rtmp/egress_write.rs` (its write
+  queue), and `src/media/srt_egress.rs` (the legacy SRT feeder task,
+  `start_srt_egress`, with its `Arc<MemoryQueue>` send queue and
+  dedicated `std::thread::spawn` sender thread) — deleted entirely.
+- Within `src/media/rtmp/egress_connection.rs` and `egress_transport.rs`,
+  only the legacy-only pieces (the async Tokio socket wrapper and its
+  connect/TLS/TCP-option helpers). `RtmpSessionCore`/`RtmpSessionEvent`/
+  `RtmpSessionError` — the pure, socket-independent RTMP protocol state
+  machine — stayed, since the fabric backend depends on them directly.
+  This distinction mattered: an earlier pass misclassified the whole
+  file as legacy-only before real call sites were checked.
+- `EgressRolloutMode` and the `RESTREAM_EGRESS_FABRIC` env var
+  (`src/config.rs`), and the routing branches in
+  `src/infrastructure/bootstrap/egress.rs`/`egress_task.rs` that chose
+  between fabric and legacy per protocol. RTMP/RTMPS/SRT now always
+  attempt the fabric path.
+- The legacy egress-queue registration map (`EgressRegistries.queues`
+  and its four accessor methods) and the
+  `memoryAccounting.avioQueues.egressQueues` telemetry surface it fed —
+  nothing registered into it once the SRT feeder was gone.
+- Tests that only exercised removed implementation details: the legacy
+  connect-loop's pre-connect warmup gate, the legacy SRT
+  queue-registration race test, the `EgressRolloutMode` parsing/routing
+  matrix, `RtmpWriteQueue`'s own unit tests, and the harness's
+  `avioEgressQueues` residue-detection check.
+
+**Follow-up removal, done later in a cleanup/layering pass (not part of
+this original removal commit):** the `rtmp-fabric-matrix`/`srt-fabric-matrix`/
+`rtmps-fabric-matrix`/`mixed-fabric-matrix` harness modes
+(`resource_sweep/branch_matrix.rs`'s `rtmp_fabric_matrix`/`srt_fabric_matrix`/
+`rtmps_fabric_matrix`/`mixed_fabric_matrix`, their shared
+`run_protocol_fabric_matrix` driver, and `resource_sweep.rs`'s
+`run_resource_egress_ratio`). Every historical mention of these modes
+elsewhere in this file (the extensive Phase 5 measurement history above)
+describes real work that genuinely happened and is left as-is — this note
+just explains why trying to re-run `rtmp-fabric-matrix` today returns
+`unknown command`. These modes pinned `RESTREAM_EGRESS_FABRIC=off` for
+their "legacy" variant, which stopped meaning anything the moment that env
+var was removed a few paragraphs above — both variants would have silently
+compared fabric against itself. None were registered in
+`test/harness/modes.json` or run by any CI workflow, so nothing currently
+depended on them; the recorded capture data checked in under
+`test/harness/baselines/rtmp-fabric-matrix/` and
+`test/harness/baselines/srt-fabric-matrix/` is untouched historical
+evidence, still valid for what it measured at the time (the RTMPS and
+mixed variants only ever left artifacts under `.local/artifacts/`, never
+checked in).
+
+**Not removed, on purpose:** `RuntimeInfra.sender_semaphore` and
+`try_acquire_srt_sender_permit` look egress-specific but are shared with
+`src/media/srt/play.rs` (an unrelated SRT playback feature) — caught by
+checking real production callers before deleting, not by the file/module
+naming. `src/media/srt/egress_connect/{bonded,single}.rs` look legacy-only
+by name but are the connect implementation `fabric.rs` calls into
+directly — also kept.
+
+**Known gap introduced by this removal, not by the removal method:** the
+deleted legacy RTMP warmup-gate test proved `start_rtmp_egress` wouldn't
+dial out until its ring had data (avoiding MediaMTX dropping an idle
+publisher for inactivity). The fabric RTMP path has no equivalent gate
+today (`rtmp_warmup_ready`, also deleted, had no fabric caller) — this
+predates this removal (fabric has been the default path for a while), but
+is worth a follow-up if it ever surfaces as a real reconnect-storm
+symptom.
+
+Left as future cleanup, not required for correctness:
+`src/api_runtime_views/resource_map.rs`'s per-egress queue-length lookup
+and the now-single-valued `fabric`/`execution` branching in its
+`egress_node` — both already always resolved to the fabric case for
+fabric-owned outputs, so removing the legacy queue source didn't change
+their behavior, just made what was already dead input explicit.
+
+**A real, silent telemetry regression from the fabric migration itself
+(not this removal pass), found and fixed by an explicit parity audit
+after legacy removal made it safe to compare against `docs/observability.md`'s
+existing (and, it turned out, already-stale) claims.** Two of
+`ActiveEgress`'s fields were never wired into the fabric's leaf-progress
+path at all, so they silently stayed at their all-empty defaults for
+every fabric-owned RTMP/SRT/Sink/Pipeline-recirculation output, forever:
+- `metrics` (`StageMetrics` — `bytesOut`/`packetsOut`/`packetsPerSec` in
+  the status `metrics` block): `EgressProgressSink` carried two bare
+  `Arc<AtomicU64>` handles (`metrics_bytes_out`/`metrics_packets_out`)
+  that no construction site in `src/infrastructure/bootstrap/egress.rs`
+  ever populated — an `Arc<StageMetrics>`'s individual fields can't be
+  cloned out field-by-field, only the whole struct, so this was
+  structurally unreachable, not just an oversight at one call site. Fixed
+  by giving the sink an `Arc<StageMetrics>` directly (the same `Arc`
+  legacy egress tasks used to share and call `record_out` on) plus a new
+  `StageMetrics::record_out_batch`, wired at all four fabric construction
+  sites.
+- `quality` (`PublisherQuality` — RTT, loss, retransmits, native buffer
+  occupancy): the fabric shard sweeps never sampled it at all.
+  `sender_quality_from_stats`/`SrtSenderCounterSnapshot` in
+  `src/media/srt_quality.rs` existed but were `#[cfg(test)]`-only,
+  reachable from nowhere in production. Fixed by widening that visibility
+  to `pub(crate)`, adding `SrtMessageSender::sender_quality_stats`
+  (mirrors the existing `native_send_backlog`) so the SRT stall sweep can
+  sample `srt_bistats` once per second the same way legacy did, and adding
+  `TcpReceiverStats::into_egress_quality` plus a raw-fd
+  `collect_tcp_stats_by_fd` (RTMP's fabric leaf owns a non-Tokio socket,
+  so the existing Tokio-only `collect_tcp_stats` couldn't reach it) so the
+  RTMP stall sweep can sample `TCP_INFO` the same way.
+
+Neither gap broke a test or a build — both fields defaulted cleanly to
+`None`/zero, and `docs/observability.md`'s "Implemented egress parity"
+section already (incorrectly) claimed both worked. Found only by
+explicitly comparing what legacy used to publish against what the fabric
+actually calls, not by any failing gate.
+
 ### Exit gate
 
 No production network output uses a per-output application thread, private
 media queue, independent retry task, or protocol-specific lifecycle loop.
+This is now true unconditionally, not just under the fabric rollout
+default — there is no other path.
 
 ## Existing-code change map
 
@@ -3964,17 +4304,15 @@ have real, specific evidence recorded inline in their respective phase
 sections above — this list is intentionally left unchecked rather than
 summarized into checkboxes, since several items are genuinely still open
 and a checkbox can't carry the nuance each phase section already does.
-Concretely still open: legacy per-output threads/queues/sender tasks are
-not removed (deliberately — `RESTREAM_EGRESS_FABRIC=off` needs them for
-rollback until a real canary/observation window happens, which needs an
-actual staged deployment outside this repository); the shard-count sweep's
-`1` and `8` endpoints were measured but only at a reduced 20-output scale
-(sandbox CPU constraints), not the 1,140/60-output scale `2`/`4`/`6` used —
-re-running `1`/`8` at that full scale on a less-constrained host remains
-open; the SRT backpressured-but-connected stall path's live (not just
-deterministic-unit) proof needs a purpose-built raw SRT listener, still
-future work; the mixed RTMP+RTMPS-at-scale combined workload (as opposed to
-RTMP+SRT, which is measured) is untested. Everything else on this list —
+Two items on that list have since closed: the legacy per-output
+threads/queues/sender tasks *were* removed (Phase 7), and the SRT
+backpressured-but-connected stall path now has its live proof against the
+purpose-built raw SRT listener (Phase 4). Concretely still open: the
+shard-count sweep's `1` and `8` endpoints were measured but only at a
+reduced 20-output scale (sandbox CPU constraints), not the 1,140/60-output
+scale `2`/`4`/`6` used — re-running `1`/`8` at that full scale on a
+less-constrained host remains open; the mixed RTMP+RTMPS-at-scale combined
+workload (as opposed to RTMP+SRT, which is measured) is untested. Everything else on this list —
 bounded feeds, shard isolation, panic recovery, diagnostics, default shard
 count from real A/B evidence, sink and recirculation on the fabric,
 protocol-shared policy, per-output/per-shard status and failure-reason

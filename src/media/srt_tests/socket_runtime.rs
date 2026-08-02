@@ -324,27 +324,3 @@ fn linked_libsrt_group_socket_accepts_streamid_via_setsockopt() {
         "bonded group sockets must accept StreamID via setsockopt: {result:?}"
     );
 }
-
-#[tokio::test]
-async fn start_srt_egress_handles_invalid_streamid_without_panic() {
-    let ring_buffer = Arc::new(RingBuffer::new(16));
-    let engine = Arc::new(crate::media::engine::MediaEngine::new());
-    let registration = engine
-        .register_egress_attempt(
-            "out-id",
-            "pipe-id",
-            "srt://127.0.0.1:12345?streamid=publish:mykey",
-            None,
-        )
-        .await;
-    start_srt_egress(
-        "out-id".to_string(),
-        "pipe-id".to_string(),
-        "source".to_string(),
-        "srt://127.0.0.1:12345?streamid=publish:\x00mykey".to_string(),
-        ring_buffer,
-        engine,
-        registration,
-    )
-    .await;
-}

@@ -109,7 +109,7 @@ fn retains_one_message_when_sender_backpressures() {
         budget(),
     );
 
-    assert!(matches!(progress, EngineProgress::Needs(interest) if interest.writable));
+    assert!(matches!(progress, EngineProgress::Needs(wait) if wait.io_interest().writable));
     assert_eq!(cursor, FeedCursor::new(0, 2));
     assert_eq!(sender.sent, vec![Bytes::from_static(b"abc")]);
     assert_eq!(engine.pending_message_bytes(), 3);
@@ -140,7 +140,7 @@ fn writable_recovery_sends_pending_without_resending_the_buffered_next_unit() {
         budget(),
     );
 
-    assert!(matches!(first, EngineProgress::Needs(interest) if interest.writable));
+    assert!(matches!(first, EngineProgress::Needs(wait) if wait.io_interest().writable));
     // The retry completes the retained unit (it fits in one fragment), so it
     // now correctly reports units: 1 — the engine fragments a unit into
     // MAX_SRT_MESSAGE_PAYLOAD-sized sends and only counts the unit once its
@@ -200,7 +200,7 @@ fn advance_pulls_a_burst_of_feed_units_in_one_read_from_call() {
         budget(),
     );
 
-    assert!(matches!(progress, EngineProgress::Needs(interest) if interest.writable));
+    assert!(matches!(progress, EngineProgress::Needs(wait) if wait.io_interest().writable));
     assert!(sender.sent.is_empty());
     assert_eq!(cursor, FeedCursor::new(0, 5));
     assert_eq!(engine.pending_message_bytes(), 1);
@@ -227,7 +227,7 @@ fn non_writable_visit_retains_without_transport_send() {
         budget(),
     );
 
-    assert!(matches!(progress, EngineProgress::Needs(interest) if interest.writable));
+    assert!(matches!(progress, EngineProgress::Needs(wait) if wait.io_interest().writable));
     assert_eq!(cursor, FeedCursor::new(0, 1));
     assert!(sender.sent.is_empty());
     assert_eq!(engine.pending_message_bytes(), 3);
@@ -470,7 +470,7 @@ fn large_feed_unit_resumes_at_the_correct_offset_after_would_block() {
             ..
         }
     ));
-    assert!(matches!(second, EngineProgress::Needs(interest) if interest.writable));
+    assert!(matches!(second, EngineProgress::Needs(wait) if wait.io_interest().writable));
     assert!(matches!(
         third,
         EngineProgress::Progress {

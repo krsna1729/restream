@@ -1,6 +1,8 @@
 use super::super::*;
 use super::support::{config, output_spec};
-use crate::media::egress::backend::{EngineProgress, Interest, ProtocolEngine, Readiness};
+use crate::media::egress::backend::{
+    EngineProgress, Interest, ProtocolEngine, Readiness, WaitCondition,
+};
 use crate::media::egress::command::{EgressCommand, OutputId, ShardId};
 use crate::media::egress::feed::FeedCursor;
 use crate::media::egress::policy::WorkBudget;
@@ -251,7 +253,7 @@ impl EgressShardBackend for LeafHarnessBackend {
                             EngineScript::Progress {
                                 bytes: 1,
                                 units: 1,
-                                interest: Interest::WRITE,
+                                wait: WaitCondition::Io(Interest::WRITE),
                             },
                             EngineScript::Yield,
                         ],

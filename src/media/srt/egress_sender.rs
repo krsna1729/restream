@@ -49,6 +49,15 @@ pub(crate) trait SrtMessageSender {
     fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
         None
     }
+
+    /// Raw libsrt sender-side statistics for connection-quality reporting
+    /// (RTT, loss, retransmits, bandwidth — status `quality` source).
+    /// `None` means the transport exposes no native stats (fakes, closed
+    /// sockets); the caller keeps the previous quality snapshot in that
+    /// case rather than overwriting it with an empty one.
+    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
+        None
+    }
 }
 
 impl<T> SrtMessageSender for Box<T>
@@ -65,6 +74,10 @@ where
 
     fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
         (**self).native_send_backlog()
+    }
+
+    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
+        (**self).sender_quality_stats()
     }
 }
 
@@ -121,6 +134,11 @@ where
     fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
         self.socket.and_then(|socket| self.ops.send_backlog(socket))
     }
+
+    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
+        self.socket
+            .and_then(|socket| self.ops.sender_quality_stats(socket))
+    }
 }
 
 pub(super) trait SrtSendOps {
@@ -130,6 +148,9 @@ pub(super) trait SrtSendOps {
 
     /// Instantaneous send-buffer occupancy; `None` when unavailable.
     fn send_backlog(&self, socket: SRTSOCKET) -> Option<NativeSendBacklog>;
+
+    /// Raw libsrt sender-side statistics; `None` when unavailable.
+    fn sender_quality_stats(&self, socket: SRTSOCKET) -> Option<SrtTraceBStats>;
 }
 
 #[derive(Debug)]
@@ -170,6 +191,17 @@ impl SrtSendOps for LibSrtSendOps {
             packets: stats.pkt_snd_buf.max(0) as u32,
             ms: stats.ms_snd_buf.max(0) as u32,
         })
+    }
+
+    fn sender_quality_stats(&self, socket: SRTSOCKET) -> Option<SrtTraceBStats> {
+        // SAFETY: Category 8 - FFI boundary. Same call shape as
+        // `send_backlog` above: `socket` is a live libsrt socket owned by
+        // this sender, `stats` is a repr(C) plain-data struct valid when
+        // zeroed, and clear=0/instantaneous=1 matches the flags legacy SRT
+        // egress used for its own quality sampling.
+        let mut stats: SrtTraceBStats = unsafe { std::mem::zeroed() };
+        let result = unsafe { srt_bistats(socket, &mut stats, 0, 1) };
+        (result >= 0).then_some(stats)
     }
 }
 
