@@ -1,4 +1,4 @@
-//! Regression tests for `visit_one_ready_leaf`/`refresh_registrations_for_feed_wake`
+//! Regression tests for `visit_one_ready_leaf`/`enqueue_feed_waiting_leaves`
 //! epoll_ctl re-registration behavior, split out of `rtmp_shard_tests.rs` to stay
 //! under the source-audit line cap.
 
