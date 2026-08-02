@@ -18,4 +18,4 @@ pub(crate) use resilience::{
     input_disconnect_cleared, observe_final_output, recovery, wait_for_output_running,
     wait_for_output_running_and_sink_video_above, wait_for_sink_video_above,
 };
-pub(crate) use srt_stall::fault_srt_egress_stalled_destination;
+pub(crate) use srt_stall::fault_srt_output_stall;

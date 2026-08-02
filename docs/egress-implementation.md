@@ -1174,25 +1174,41 @@ Status against each criterion, as of the retry-wiring fix above:
   from "receiver process frozen." The output then cycles through
   connect-failure retries against the still-suspended receiver, the same
   shape as a dead destination, not the distinct `classify_stall`
-  backpressured-but-connected path this was meant to exercise. Proving
-  *that* exact path live would need a receiver that keeps SRT's own
-  liveness signaling alive while deliberately not draining decoded data
-  one layer up — a raw SRT listener built from scratch (restream's libsrt
-  FFI bindings are internal to `src/media/srt`, not exposed to the harness
-  binary), out of scope here. Re-scoped the test honestly instead: it now
-  proves what `SIGSTOP` actually produces — RSS stays bounded (~21-30MB
-  growth, well under a 64MB budget) across 120s of continuous
-  connect-failure retry cycling against an unreachable destination, both
-  under legacy and fabric. The stall-sweep/`classify_stall` mechanism
-  itself (the backpressured-but-connected path specifically) is proven
-  deterministically in `leaf_termination.rs`, not live — building the raw
-  SRT listener needed to close that specific live gap remains future work,
-  but is narrow and well-understood now, not open-ended.
-All four Phase 4 exit-gate criteria now have real evidence. The remaining
-gap is narrow: a live (not just deterministic-unit) proof of the
-backpressured-but-connected SRT stall path specifically, which needs a
-purpose-built raw SRT listener — still open, tracked as future work, not
-blocking.
+  backpressured-but-connected path this was meant to exercise. The test was
+  re-scoped to prove what `SIGSTOP` actually produces — RSS stays bounded
+  (~21-30MB growth, well under a 64MB budget) across 120s of continuous
+  connect-failure retry cycling against an unreachable destination — and
+  the backpressured path got its own receiver, below.
+- **Backpressured-but-connected SRT stall path: proven live.** The receiver
+  shape `SIGSTOP` could not produce is now built on purpose:
+  `src/bin/test_harness/srt_raw_sink.rs`, a raw SRT listener with
+  hand-written libsrt FFI (the library crate's bindings are internal to
+  `src/media/srt`, and widening a production module's public API for a test
+  tool was not worth it). It accepts a real connection, lets libsrt keep
+  ACKing and keepaliving normally, and never calls `srt_recv`. Two
+  inherited socket options turn "nobody is reading" into sender-visible
+  backpressure: `SRTO_TLPKTDROP = 0`, because sender-side too-late-packet
+  dropping is gated on the *peer's* handshake flag (`m_bPeerTLPktDrop` in
+  libsrt's `CUDT::sndDropTooLate`) and otherwise the sender discards its
+  backlog instead of building one, and `SRTO_FC`/`SRTO_RCVBUF` at libsrt's
+  32-packet minimum so the flow window closes after tens of kilobytes
+  rather than megabytes. `srt_egress_backpressured_receiver`
+  (`fault.srt-output-stall`) drives it: the leaf is classified
+  `backpressured` while the sink is still `SRTS_CONNECTED` with its receive
+  window pinned full (31 of 32 packets unread, zero bytes ever read), then
+  `stalled` once it passes the 15s no-progress deadline, then closed into
+  the retry cycle — with two healthy SRT siblings progressing throughout.
+  One nuance worth recording: `bytesOut` keeps climbing for ~10.9MB after
+  the receive window closes, because it counts bytes *admitted to libsrt*,
+  not bytes acknowledged — it stops exactly when the sender's own native
+  send buffer fills. That is precisely why the fabric classifies stalls
+  from the native backlog (`srt_bistats`) rather than from that counter,
+  and the test asserts admission has stopped at the moment the engine says
+  `stalled` rather than assuming the byte counter freezes earlier.
+All four Phase 4 exit-gate criteria now have real evidence, live and
+deterministic: the stall-sweep/`classify_stall` mechanism is proven both in
+`leaf_termination.rs` and, since the raw sink exists, end to end against a
+real undrained SRT receiver.
 
 **Default flip attempted, then reverted** — see Phase 6's "Rollout
 order" for the full story: CI's own live-scenario gate caught a real
@@ -3379,10 +3395,16 @@ Actions CI jobs are **GREEN** on run `30517640919` following root-cause fixes:
    and Phase 5 live proof (~660ms SIGTERM graceful restart), all canary criteria
    are met without legacy fallback.
 5. ~~**Phase 4: close or explicitly defer the live SRT backpressured-but-connected receiver proof.**~~ **RESOLVED**:
-   Explicitly deferred building custom FFI raw SRT receiver in harness;
-   deterministic unit tests in `src/media/egress/backends/srt/tests/leaf_termination.rs`
-   (`stall_sweep_marks_terminated_unexpectedly_on_the_closed_leaf`) prove the
-   `classify_stall` contract.
+   first deferred, then actually closed. The custom-FFI raw SRT receiver was
+   built (`src/bin/test_harness/srt_raw_sink.rs`) and
+   `srt_egress_backpressured_receiver` (`fault.srt-output-stall`) proves the
+   path live — `backpressured` while the peer is still `SRTS_CONNECTED` with
+   an unread full receive window, then `stalled` and closed, siblings
+   unaffected. The deterministic unit tests in
+   `src/media/egress/backends/srt/tests/leaf_termination.rs`
+   (`stall_sweep_marks_terminated_unexpectedly_on_the_closed_leaf`) still
+   own the `classify_stall` contract at the unit level; see Phase 4's status
+   section for the receiver's mechanics and the `bytesOut` nuance.
 6. ~~**Phase 6: repeated-resync alert.**~~ **RESOLVED**: the leaf-level
    `EngineProgress::FeedOverrun` resync count now flows to both observability
    surfaces. Per-output: `visit.rs`'s `FeedOverrun` handler calls
@@ -4223,17 +4245,15 @@ have real, specific evidence recorded inline in their respective phase
 sections above — this list is intentionally left unchecked rather than
 summarized into checkboxes, since several items are genuinely still open
 and a checkbox can't carry the nuance each phase section already does.
-Concretely still open: legacy per-output threads/queues/sender tasks are
-not removed (deliberately — `RESTREAM_EGRESS_FABRIC=off` needs them for
-rollback until a real canary/observation window happens, which needs an
-actual staged deployment outside this repository); the shard-count sweep's
-`1` and `8` endpoints were measured but only at a reduced 20-output scale
-(sandbox CPU constraints), not the 1,140/60-output scale `2`/`4`/`6` used —
-re-running `1`/`8` at that full scale on a less-constrained host remains
-open; the SRT backpressured-but-connected stall path's live (not just
-deterministic-unit) proof needs a purpose-built raw SRT listener, still
-future work; the mixed RTMP+RTMPS-at-scale combined workload (as opposed to
-RTMP+SRT, which is measured) is untested. Everything else on this list —
+Two items on that list have since closed: the legacy per-output
+threads/queues/sender tasks *were* removed (Phase 7), and the SRT
+backpressured-but-connected stall path now has its live proof against the
+purpose-built raw SRT listener (Phase 4). Concretely still open: the
+shard-count sweep's `1` and `8` endpoints were measured but only at a
+reduced 20-output scale (sandbox CPU constraints), not the 1,140/60-output
+scale `2`/`4`/`6` used — re-running `1`/`8` at that full scale on a
+less-constrained host remains open; the mixed RTMP+RTMPS-at-scale combined
+workload (as opposed to RTMP+SRT, which is measured) is untested. Everything else on this list —
 bounded feeds, shard isolation, panic recovery, diagnostics, default shard
 count from real A/B evidence, sink and recirculation on the fabric,
 protocol-shared policy, per-output/per-shard status and failure-reason

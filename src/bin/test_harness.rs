@@ -70,6 +70,8 @@ mod output_progress;
 mod resource_sweep;
 #[path = "test_harness/sinks.rs"]
 mod sinks;
+#[path = "test_harness/srt_raw_sink.rs"]
+mod srt_raw_sink;
 #[path = "test_harness/srt_urls.rs"]
 mod srt_urls;
 #[path = "test_harness/suite.rs"]
@@ -94,6 +96,7 @@ pub(crate) use mode_specs::*;
 use output_progress::*;
 use resource_sweep::*;
 use sinks::*;
+use srt_raw_sink::*;
 use srt_urls::*;
 use suite::*;
 use workflow_exec::*;
@@ -223,7 +226,7 @@ async fn run() -> Result<(), String> {
             "preflight" => preflight_check().await,
             "fault.egress-retry" => fault_egress_retry().await,
             "fault.output-stall" => fault_output_stall().await,
-            "fault.srt-output-stall" => fault_srt_egress_stalled_destination().await,
+            "fault.srt-output-stall" => fault_srt_output_stall().await,
             "fault.resilience" => fault_resilience().await,
             "file.live-edge" => file_live_edge().await,
             "signal.control" => signal_control().await,
