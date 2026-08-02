@@ -1,10 +1,10 @@
-//! The per-output egress task: `EgressTask::run` dispatches to the
-//! fabric-backed path for each protocol when available (falling back to
-//! the legacy per-output task otherwise), and owns the shared
-//! retry/backoff/status bookkeeping every path funnels back through.
-//! Split out of `egress.rs` (which owns `EgressReconciler` and output
-//! start-up preparation) purely to stay under the source-audit line cap —
-//! not a module-boundary change.
+//! The per-output egress task: `EgressTask::run` dispatches by URL scheme
+//! to the fabric-backed path (RTMP/RTMPS, SRT, sink discard, pipeline
+//! recirculation) or the output type's own dedicated task (HLS
+//! segmenting/PUT upload), and owns the shared retry/backoff/status
+//! bookkeeping every path funnels back through. Split out of `egress.rs`
+//! (which owns `EgressReconciler` and output start-up preparation) purely
+//! to stay under the source-audit line cap — not a module-boundary change.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -34,8 +34,7 @@ pub(super) struct SrtFabricTask {
     /// application did not request (peer closed, protocol failure, or
     /// stall recovery) — see `EgressProgressSink::terminated_unexpectedly`.
     /// `run_srt_fabric` polls this so it can return and let the shared
-    /// retry/backoff bookkeeping in `EgressTask::run` run, exactly as it
-    /// does when the legacy per-output task's own I/O loop returns.
+    /// retry/backoff bookkeeping in `EgressTask::run` run.
     pub(super) terminated: Arc<std::sync::atomic::AtomicBool>,
 }
 

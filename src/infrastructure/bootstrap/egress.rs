@@ -341,9 +341,15 @@ impl EgressReconciler {
         let use_pipeline_fabric = matches!(url_scheme, OutputUrlScheme::Pipeline);
         let pipeline_fabric = if use_pipeline_fabric {
             // A parse failure here just leaves `pipeline_fabric` `None` —
-            // the legacy fallback path re-parses the URL itself and
-            // records the same error, so nothing is lost by not
-            // duplicating that here.
+            // `EgressTask::run`'s `OutputUrlScheme::Pipeline` arm re-parses
+            // the same `output.url` itself (pure function, identical input)
+            // and records the same error there, so nothing is lost by not
+            // duplicating that here. That arm's `Ok` branch is otherwise
+            // unreachable given this parse already succeeded whenever
+            // `pipeline_fabric` is `Some` — kept as a defensive fallback
+            // rather than an `unwrap_err()`, so a future refactor that
+            // breaks this coupling degrades to the working (if
+            // non-fabric) recirculation path instead of a panic.
             match crate::domain::output_spec::RecirculationTarget::parse(&output.url) {
                 Ok(target) => {
                     let feed = crate::application::egress::prepare_recirculation_fabric_feed(

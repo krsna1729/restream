@@ -830,7 +830,6 @@ accidents.
 
 Recommended settings include:
 
-- `RESTREAM_EGRESS_FABRIC` feature or rollout mode;
 - `RESTREAM_EGRESS_SHARDS`;
 - per-leaf maximum pending application bytes;
 - maximum feed lag duration;

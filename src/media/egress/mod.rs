@@ -1,9 +1,8 @@
 //! Protocol-neutral egress fabric.
 //!
-//! This module contains the target architecture described in
-//! `docs/egress-architecture.md`. It is introduced behind the
-//! `RESTREAM_EGRESS_FABRIC` rollout selector and coexists with the legacy
-//! per-output task model during migration.
+//! This module contains the architecture described in
+//! `docs/egress-architecture.md` — the only egress path for RTMP, RTMPS,
+//! SRT, sink discard, and pipeline recirculation outputs.
 //!
 //! # Module layout
 //!

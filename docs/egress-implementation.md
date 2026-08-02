@@ -3784,6 +3784,28 @@ removed:
   matrix, `RtmpWriteQueue`'s own unit tests, and the harness's
   `avioEgressQueues` residue-detection check.
 
+**Follow-up removal, done later in a cleanup/layering pass (not part of
+this original removal commit):** the `rtmp-fabric-matrix`/`srt-fabric-matrix`/
+`rtmps-fabric-matrix`/`mixed-fabric-matrix` harness modes
+(`resource_sweep/branch_matrix.rs`'s `rtmp_fabric_matrix`/`srt_fabric_matrix`/
+`rtmps_fabric_matrix`/`mixed_fabric_matrix`, their shared
+`run_protocol_fabric_matrix` driver, and `resource_sweep.rs`'s
+`run_resource_egress_ratio`). Every historical mention of these modes
+elsewhere in this file (the extensive Phase 5 measurement history above)
+describes real work that genuinely happened and is left as-is — this note
+just explains why trying to re-run `rtmp-fabric-matrix` today returns
+`unknown command`. These modes pinned `RESTREAM_EGRESS_FABRIC=off` for
+their "legacy" variant, which stopped meaning anything the moment that env
+var was removed a few paragraphs above — both variants would have silently
+compared fabric against itself. None were registered in
+`test/harness/modes.json` or run by any CI workflow, so nothing currently
+depended on them; the recorded capture data checked in under
+`test/harness/baselines/rtmp-fabric-matrix/` and
+`test/harness/baselines/srt-fabric-matrix/` is untouched historical
+evidence, still valid for what it measured at the time (the RTMPS and
+mixed variants only ever left artifacts under `.local/artifacts/`, never
+checked in).
+
 **Not removed, on purpose:** `RuntimeInfra.sender_semaphore` and
 `try_acquire_srt_sender_permit` look egress-specific but are shared with
 `src/media/srt/play.rs` (an unrelated SRT playback feature) — caught by

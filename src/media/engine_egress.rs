@@ -191,12 +191,13 @@ impl MediaEngine {
         registration
     }
 
-    /// Records fabric-versus-legacy ownership and shard assignment for an
+    /// Records fabric ownership and shard assignment for an
     /// already-registered output. Kept as a separate call rather than a
-    /// `register_egress_attempt_with_meta` parameter because the routing
-    /// decision (and whether a fabric task actually started, as opposed to
-    /// falling back to legacy on a startup error) isn't known until after
-    /// registration in the bootstrap egress reconciler.
+    /// `register_egress_attempt_with_meta` parameter because whether a
+    /// fabric task actually started (as opposed to failing during startup
+    /// preparation, which leaves `is_fabric` `false` and records an error
+    /// through `record_egress_error_if_current` instead) isn't known until
+    /// after registration in the bootstrap egress reconciler.
     pub async fn set_egress_fabric_attribution(
         &self,
         output_id: &str,
