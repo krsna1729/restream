@@ -43,15 +43,23 @@ fix or suppress that output at the helper level instead.
 ## Frontend test split
 
 Frontend confidence is intentionally split between TypeScript ownership and
-compiled-bundle smoke coverage:
+compiled-bundle smoke coverage. Current invariant coverage by UI contract
+boundary — SSE reconnects, mutation convergence, auth/session, route
+ownership, accessible structure — is tracked in
+[`frontend-boundary-proof-map.md`](frontend-boundary-proof-map.md), the
+frontend counterpart to [`stage-boundary-proof-map.md`](stage-boundary-proof-map.md):
 
 - `npm run test:frontend` runs the Node-based frontend suites from a temporary
   sourcemapped build of `web/ts/**`, then finishes with a smaller smoke pass
   against the shipped `public/js/**` bundle.
 - `npm run test:frontend:coverage` keeps the same split, but reports coverage
   back onto the deterministic TypeScript modules that the Node/fake-DOM suite
-  is meant to own. This is the main frontend coverage gate. Runtime transport
-  modules such as `features/dashboard.ts`, `features/modes.ts`,
+  is meant to own. This is the main frontend coverage report, run on every PR
+  by the `frontend` CI job — advisory, not threshold-gated, matching the
+  backend `coverage` job's posture (`cargo llvm-cov` also reports every PR
+  without failing the build on a percentage). Neither stack fails CI on a
+  coverage number; both make the trend visible. Runtime transport modules
+  such as `features/dashboard.ts`, `features/modes.ts`,
   `features/status.ts`, `features/publisher-health.ts`, and
   `history/controller.ts` are part of this covered surface.
 - `npm run test:frontend:coverage:all` keeps the same runtime path but emits a
@@ -63,6 +71,17 @@ compiled-bundle smoke coverage:
 This keeps detailed behavior and coverage attached to the TypeScript source of
 truth without dropping confidence in the emitted browser bundle, while avoiding
 misleading Node-only coverage targets for browser-heavy modules.
+
+`scripts/dev/frontend/node-tests.sh`'s `NODE_COVERAGE_EXCLUDES` is
+deliberately short: only modules Node's fake-DOM harness genuinely cannot
+exercise belong there (`app/dashboard-entry.ts`, a side-effecting bootstrap
+entry point; `features/hls-player.ts` and `features/input-preview.ts`, real
+`<video>`/`<audio>`/hls.js element wiring, covered instead by
+`test/frontend/hls-player.spec.ts`, `test/frontend/frontend-browser-dom.spec.ts`,
+and `test/frontend/redesign/seed-scale.spec.ts`). Use
+`npm run test:frontend:coverage:all` to check whether a module belongs on
+this list before adding to it: if it already shows non-trivial coverage
+there, Node is exercising it fine.
 
 ### Layered UI strategy
 
@@ -117,6 +136,56 @@ for every badge and branch.
 - Use `npm run test:frontend:browser-dom` for a self-contained browser-native
   slice that serves the compiled frontend assets from a lightweight local static
   server instead of requiring the full Rust dashboard app to be started first.
+
+### Property and interleaving tests
+
+Hand-picked scenario fixtures prove the cases someone thought to write down;
+they miss the cases nobody thought of. For pure state-derivation logic and
+for closures that guard against stale-callback races (the frontend analog of
+a wait/cancel/reconnect boundary), add a [fast-check](https://github.com/dubzzz/fast-check)
+property test instead of another hand-picked case:
+
+- `test/frontend/pipeline-output-overview.property.test.mjs` generates
+  randomized output fleets and checks structural invariants of
+  `buildPipelineOutputOverviewModel` (bucket partitioning, attention-list
+  bounds and tone, card pagination, order preservation) — the frontend
+  equivalent of a backend `proptest!` suite.
+- `test/frontend/frontend-log-stream-interleaving.property.test.mjs` replays
+  randomized interleavings of `sync()` calls and `EventSource` events
+  (including events from a source the module has already superseded)
+  against `core/log-stream.ts`, and asserts its staleness guard
+  (`source !== openedSource`) never lets a stale event reach `onLog` — the
+  frontend equivalent of a loom model check for a wait/reconnect race.
+
+When adding one: verify it actually catches a regression before trusting
+it — temporarily break the invariant it targets, confirm the property goes
+red with a shrunk counterexample, then revert. A property test that never
+fails on a real bug is not proof.
+
+### Specs excluded from the default Playwright run
+
+`test/frontend/msr-dashboard-soak.spec.ts` is gated behind
+`MSR_DASHBOARD_PLAYWRIGHT` (excluded via `playwright.config.ts`'s
+`testIgnore`) and defaults to a 30-minute churn/soak run against real
+pipelines and outputs — intentionally too heavy for per-PR CI. Run it
+manually, or from a future nightly slice, rather than on every PR.
+
+`test/frontend/redesign/visual-accessibility.spec.ts` (axe-core a11y +
+keyboard/ARIA/contrast checks) used to be excluded the same way but is now
+part of the default suite, run by the `playwright` CI job. Getting it there
+required fixing `getCdpHeadingLevels()`: it was walking
+`Accessibility.getFullAXTree()`'s flat node array in its raw (internal
+computation) order instead of via `parentId`/`childIds`, so heading-order
+assertions saw an arbitrary order instead of true reading order — not a real
+accessibility regression in the dashboard. It also had no committed
+screenshot/ARIA-snapshot baselines; those are now generated and checked in
+from the `playwright` CI job's own render (local Chromium/fontconfig differs
+enough from the CI runner's to make locally-generated screenshots and
+sub-pixel-sensitive width checks unreliable there — generate/update these
+baselines from CI, not a workstation). A first CI run also found the
+touch-target-size check was sweeping in daisyUI's `.btn-xs` compact buttons
+(media library row actions like Rename/Delete/Play/Download); those are
+deliberately small, not primary affordances, so the check now excludes them.
 
 Use `cargo test -- --list` when a current test inventory is needed; do not copy
 the resulting count into maintained documentation.

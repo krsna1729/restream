@@ -3,10 +3,7 @@ import { defineConfig, devices } from '@playwright/test';
 const testIgnore = [
     ...(process.env.PLAYWRIGHT_BROWSER_DOM_HARNESS
         ? []
-        : [
-              '**/frontend-browser-dom.spec.ts',
-              '**/redesign/visual-accessibility.spec.ts',
-          ]),
+        : ['**/frontend-browser-dom.spec.ts']),
     ...(process.env.MSR_DASHBOARD_PLAYWRIGHT ? [] : ['**/msr-dashboard-soak.spec.ts']),
 ];
 

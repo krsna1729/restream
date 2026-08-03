@@ -151,8 +151,8 @@ jobs:
         with:
           node_version: '22'
           npm_ci: 'true'
-      - name: Run frontend unit tests
-        run: npm run test:frontend
+      - name: Run frontend unit tests with coverage report
+        run: npm run test:frontend:coverage
       - name: Install Chromium for DOM tests
         run: npx playwright install --with-deps chromium
       - name: Run browser DOM tests

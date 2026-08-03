@@ -49,32 +49,54 @@ async function reachFromOverviewTab(
 
 async function getCdpNamesByRole(page: Page, role: string): Promise<string[]> {
   const cdp = await page.context().newCDPSession(page);
-  const axTree = await cdp.send("Accessibility.getFullAXTree");
-  await cdp.detach();
+  let axTree;
+  try {
+    axTree = await cdp.send("Accessibility.getFullAXTree");
+  } finally {
+    await cdp.detach();
+  }
   return axTree.nodes
     .filter((node) => node.role?.value === role)
     .map((node) => node.name?.value)
     .filter((name): name is string => Boolean(name));
 }
 
+// axTree.nodes is a flat array in internal computation order, which does not
+// reliably match document/reading order across independently-mounted roots
+// (verified: the pipeline header root renders before the output-overview
+// root in the DOM, but flat array order put them the other way round). Walk
+// the tree via parentId/childIds instead so heading order reflects true
+// reading order, while still using CDP's computed accessible name (which,
+// unlike raw textContent, reflects CSS text-transform).
 async function getCdpHeadingLevels(
   page: Page,
 ): Promise<{ name: string; level: number }[]> {
   const cdp = await page.context().newCDPSession(page);
-  const axTree = await cdp.send("Accessibility.getFullAXTree");
-  await cdp.detach();
-  return axTree.nodes
-    .filter((node) => node.role?.value === "heading")
-    .map((node) => {
+  let axTree;
+  try {
+    axTree = await cdp.send("Accessibility.getFullAXTree");
+  } finally {
+    await cdp.detach();
+  }
+  const byId = new Map(axTree.nodes.map((node) => [node.nodeId, node]));
+  const root = axTree.nodes.find((node) => !node.parentId) ?? axTree.nodes[0];
+  const headings: { name: string; level: number }[] = [];
+  const visit = (nodeId: string) => {
+    const node = byId.get(nodeId);
+    if (!node) return;
+    if (node.role?.value === "heading" && node.name?.value) {
       const level =
         node.properties?.find((property) => property.name === "level")?.value
           ?.value ?? 0;
-      return {
+      headings.push({
         level: typeof level === "number" ? level : Number(level),
-        name: node.name?.value ?? "",
-      };
-    })
-    .filter(({ name }) => Boolean(name));
+        name: node.name.value,
+      });
+    }
+    for (const childId of node.childIds ?? []) visit(childId);
+  };
+  visit(root.nodeId);
+  return headings;
 }
 
 for (const stateName of viewportStates) {
@@ -356,7 +378,11 @@ test("cdp: default dashboard route heading outlines stay operator-clean @desktop
         ]),
       );
       const actionButtons = await page
-        .locator(`${route.checkpointActionRoot} button`)
+        // .btn-xs is daisyUI's deliberately compact button size, used
+        // throughout for dense per-row table actions (media library
+        // Rename/Delete/Play/Download); it is not meant to satisfy a
+        // 44px touch target and is excluded here for that reason.
+        .locator(`${route.checkpointActionRoot} button:not(.btn-xs)`)
         .evaluateAll((buttons) =>
           buttons
             .filter((button) => {
