@@ -133,6 +133,31 @@ for every badge and branch.
   slice that serves the compiled frontend assets from a lightweight local static
   server instead of requiring the full Rust dashboard app to be started first.
 
+### Property and interleaving tests
+
+Hand-picked scenario fixtures prove the cases someone thought to write down;
+they miss the cases nobody thought of. For pure state-derivation logic and
+for closures that guard against stale-callback races (the frontend analog of
+a wait/cancel/reconnect boundary), add a [fast-check](https://github.com/dubzzz/fast-check)
+property test instead of another hand-picked case:
+
+- `test/frontend/pipeline-output-overview.property.test.mjs` generates
+  randomized output fleets and checks structural invariants of
+  `buildPipelineOutputOverviewModel` (bucket partitioning, attention-list
+  bounds and tone, card pagination, order preservation) — the frontend
+  equivalent of a backend `proptest!` suite.
+- `test/frontend/frontend-log-stream-interleaving.property.test.mjs` replays
+  randomized interleavings of `sync()` calls and `EventSource` events
+  (including events from a source the module has already superseded)
+  against `core/log-stream.ts`, and asserts its staleness guard
+  (`source !== openedSource`) never lets a stale event reach `onLog` — the
+  frontend equivalent of a loom model check for a wait/reconnect race.
+
+When adding one: verify it actually catches a regression before trusting
+it — temporarily break the invariant it targets, confirm the property goes
+red with a shrunk counterexample, then revert. A property test that never
+fails on a real bug is not proof.
+
 ### Specs excluded from the default Playwright run
 
 `test/frontend/msr-dashboard-soak.spec.ts` is gated behind

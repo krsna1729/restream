@@ -38,6 +38,7 @@ TEST_FILES=(
   test/frontend/frontend-pipeline-workspace.test.mjs
   test/frontend/frontend-history-stream.test.mjs
   test/frontend/frontend-log-stream.test.mjs
+  test/frontend/frontend-log-stream-interleaving.property.test.mjs
   test/frontend/frontend-history-helpers.test.mjs
   test/frontend/frontend-overview-activity-stream.test.mjs
   test/frontend/frontend-publisher-health-contract.test.mjs
