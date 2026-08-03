@@ -43,7 +43,11 @@ fix or suppress that output at the helper level instead.
 ## Frontend test split
 
 Frontend confidence is intentionally split between TypeScript ownership and
-compiled-bundle smoke coverage:
+compiled-bundle smoke coverage. Current invariant coverage by UI contract
+boundary — SSE reconnects, mutation convergence, auth/session, route
+ownership, accessible structure — is tracked in
+[`frontend-boundary-proof-map.md`](frontend-boundary-proof-map.md), the
+frontend counterpart to [`stage-boundary-proof-map.md`](stage-boundary-proof-map.md):
 
 - `npm run test:frontend` runs the Node-based frontend suites from a temporary
   sourcemapped build of `web/ts/**`, then finishes with a smaller smoke pass

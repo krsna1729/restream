@@ -50,6 +50,8 @@ media behavior or a hot path.
 - [Concurrency proofing](concurrency-proofing.md) — proof ladder and gates.
 - [Stage boundary proof map](stage-boundary-proof-map.md) — current invariant
   coverage by runtime boundary.
+- [Frontend boundary proof map](frontend-boundary-proof-map.md) — current
+  invariant coverage by UI contract boundary.
 - [Testing decision record](testing-strategy.md) — why the repository uses
   unit and live correctness tiers.
 - [Matrix resource constraints](matrix-resource-constraints.md) and
@@ -126,6 +128,7 @@ above remain the better way to learn the system.
 - [Current priorities](current-priorities.md)
 - [Development](development.md)
 - [FFmpeg versions](ffmpeg-versions.md)
+- [Frontend boundary proof map](frontend-boundary-proof-map.md)
 - [High-performance data path](high-performance-data-path.md)
 - [Layering roadmap](layering-roadmap.md)
 - [Logging](logging.md)
