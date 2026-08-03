@@ -54,8 +54,12 @@ frontend counterpart to [`stage-boundary-proof-map.md`](stage-boundary-proof-map
   against the shipped `public/js/**` bundle.
 - `npm run test:frontend:coverage` keeps the same split, but reports coverage
   back onto the deterministic TypeScript modules that the Node/fake-DOM suite
-  is meant to own. This is the main frontend coverage gate. Runtime transport
-  modules such as `features/dashboard.ts`, `features/modes.ts`,
+  is meant to own. This is the main frontend coverage report, run on every PR
+  by the `frontend` CI job — advisory, not threshold-gated, matching the
+  backend `coverage` job's posture (`cargo llvm-cov` also reports every PR
+  without failing the build on a percentage). Neither stack fails CI on a
+  coverage number; both make the trend visible. Runtime transport modules
+  such as `features/dashboard.ts`, `features/modes.ts`,
   `features/status.ts`, `features/publisher-health.ts`, and
   `history/controller.ts` are part of this covered surface.
 - `npm run test:frontend:coverage:all` keeps the same runtime path but emits a
