@@ -64,6 +64,17 @@ This keeps detailed behavior and coverage attached to the TypeScript source of
 truth without dropping confidence in the emitted browser bundle, while avoiding
 misleading Node-only coverage targets for browser-heavy modules.
 
+`scripts/dev/frontend/node-tests.sh`'s `NODE_COVERAGE_EXCLUDES` is
+deliberately short: only modules Node's fake-DOM harness genuinely cannot
+exercise belong there (`app/dashboard-entry.ts`, a side-effecting bootstrap
+entry point; `features/hls-player.ts` and `features/input-preview.ts`, real
+`<video>`/`<audio>`/hls.js element wiring, covered instead by
+`test/frontend/hls-player.spec.ts`, `test/frontend/frontend-browser-dom.spec.ts`,
+and `test/frontend/redesign/seed-scale.spec.ts`). Use
+`npm run test:frontend:coverage:all` to check whether a module belongs on
+this list before adding to it: if it already shows non-trivial coverage
+there, Node is exercising it fine.
+
 ### Layered UI strategy
 
 Treat frontend confidence as four layers, each owning a different kind of risk:

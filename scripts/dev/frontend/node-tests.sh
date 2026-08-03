@@ -52,23 +52,25 @@ TEST_FILES=(
   test/frontend/frontend-dom-render.test.mjs
 )
 
+# Only modules Node's fake-DOM harness genuinely cannot exercise stay here.
+# `npm run test:frontend:coverage:all` (no excludes) is the way to check
+# whether a module belongs on this list: if it already shows non-trivial
+# coverage there, Node is exercising it fine and it should not be excluded.
 NODE_COVERAGE_EXCLUDES=(
-  "web/ts/core/api.ts"
-  "web/ts/core/state.ts"
-  "web/ts/features/control-room.ts"
+  # Side-effecting bootstrap entry point; runs initDashboardApp() and
+  # startDashboardRuntime() at import time, so it is never imported by a
+  # unit test. Proven at the app/browser-integration layer instead
+  # (test:e2e, the `playwright` CI job).
   "web/ts/app/dashboard-entry.ts"
-  "web/ts/features/diagnostics.ts"
-  "web/ts/features/editor.ts"
-  "web/ts/features/graph.ts"
+  # Real hls.js/video-element playback logic; near-zero reachable surface
+  # under Node's fake DOM. Covered by test/frontend/hls-player.spec.ts.
   "web/ts/features/hls-player.ts"
+  # Real preview <video>/<audio> element wiring; near-zero reachable
+  # surface under Node's fake DOM. Covered by
+  # test/frontend/frontend-browser-dom.spec.ts,
+  # test/frontend/hls-player.spec.ts, and
+  # test/frontend/redesign/seed-scale.spec.ts.
   "web/ts/features/input-preview.ts"
-  "web/ts/features/media-library.ts"
-  "web/ts/features/metric-format.ts"
-  "web/ts/features/metrics.ts"
-  "web/ts/features/pipeline-dependencies.ts"
-  "web/ts/features/settings.ts"
-  "web/ts/history/render.ts"
-  "web/ts/history/state.ts"
 )
 
 if [[ "${1:-}" == "--coverage" ]]; then
