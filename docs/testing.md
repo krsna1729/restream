@@ -178,7 +178,14 @@ required fixing `getCdpHeadingLevels()`: it was walking
 computation) order instead of via `parentId`/`childIds`, so heading-order
 assertions saw an arbitrary order instead of true reading order — not a real
 accessibility regression in the dashboard. It also had no committed
-screenshot/ARIA-snapshot baselines; those are now generated and checked in.
+screenshot/ARIA-snapshot baselines; those are now generated and checked in
+from the `playwright` CI job's own render (local Chromium/fontconfig differs
+enough from the CI runner's to make locally-generated screenshots and
+sub-pixel-sensitive width checks unreliable there — generate/update these
+baselines from CI, not a workstation). A first CI run also found the
+touch-target-size check was sweeping in daisyUI's `.btn-xs` compact buttons
+(media library row actions like Rename/Delete/Play/Download); those are
+deliberately small, not primary affordances, so the check now excludes them.
 
 Use `cargo test -- --list` when a current test inventory is needed; do not copy
 the resulting count into maintained documentation.

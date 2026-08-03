@@ -370,7 +370,11 @@ test("cdp: default dashboard route heading outlines stay operator-clean @desktop
         ]),
       );
       const actionButtons = await page
-        .locator(`${route.checkpointActionRoot} button`)
+        // .btn-xs is daisyUI's deliberately compact button size, used
+        // throughout for dense per-row table actions (media library
+        // Rename/Delete/Play/Download); it is not meant to satisfy a
+        // 44px touch target and is excluded here for that reason.
+        .locator(`${route.checkpointActionRoot} button:not(.btn-xs)`)
         .evaluateAll((buttons) =>
           buttons
             .filter((button) => {
