@@ -49,8 +49,12 @@ async function reachFromOverviewTab(
 
 async function getCdpNamesByRole(page: Page, role: string): Promise<string[]> {
   const cdp = await page.context().newCDPSession(page);
-  const axTree = await cdp.send("Accessibility.getFullAXTree");
-  await cdp.detach();
+  let axTree;
+  try {
+    axTree = await cdp.send("Accessibility.getFullAXTree");
+  } finally {
+    await cdp.detach();
+  }
   return axTree.nodes
     .filter((node) => node.role?.value === role)
     .map((node) => node.name?.value)
@@ -68,8 +72,12 @@ async function getCdpHeadingLevels(
   page: Page,
 ): Promise<{ name: string; level: number }[]> {
   const cdp = await page.context().newCDPSession(page);
-  const axTree = await cdp.send("Accessibility.getFullAXTree");
-  await cdp.detach();
+  let axTree;
+  try {
+    axTree = await cdp.send("Accessibility.getFullAXTree");
+  } finally {
+    await cdp.detach();
+  }
   const byId = new Map(axTree.nodes.map((node) => [node.nodeId, node]));
   const root = axTree.nodes.find((node) => !node.parentId) ?? axTree.nodes[0];
   const headings: { name: string; level: number }[] = [];
