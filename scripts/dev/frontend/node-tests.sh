@@ -24,7 +24,12 @@ export TMPDIR="$TMP_BASE"
 
 TEST_FILES=(
   test/frontend/frontend-api-contract.test.mjs
+  test/frontend/frontend-architecture-layering.test.mjs
   test/frontend/frontend-dashboard-contract.test.mjs
+  test/frontend/dashboard-contract/output-mutations.test.mjs
+  test/frontend/dashboard-contract/pipeline-mutations.test.mjs
+  test/frontend/dashboard-contract/runtime-modes.test.mjs
+  test/frontend/dashboard-contract/runtime-polling.test.mjs
   test/frontend/frontend-core-helpers.test.mjs
   test/frontend/frontend-diagnostics.test.mjs
   test/frontend/frontend-incidents.test.mjs
