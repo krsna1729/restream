@@ -118,6 +118,24 @@ for every badge and branch.
   slice that serves the compiled frontend assets from a lightweight local static
   server instead of requiring the full Rust dashboard app to be started first.
 
+### Specs excluded from the default Playwright run
+
+`test/frontend/msr-dashboard-soak.spec.ts` is gated behind
+`MSR_DASHBOARD_PLAYWRIGHT` (excluded via `playwright.config.ts`'s
+`testIgnore`) and defaults to a 30-minute churn/soak run against real
+pipelines and outputs — intentionally too heavy for per-PR CI. Run it
+manually, or from a future nightly slice, rather than on every PR.
+
+`test/frontend/redesign/visual-accessibility.spec.ts` (axe-core a11y +
+keyboard/ARIA/contrast checks) used to be excluded the same way but is now
+part of the default suite, run by the `playwright` CI job. Getting it there
+required fixing `getCdpHeadingLevels()`: it was walking
+`Accessibility.getFullAXTree()`'s flat node array in its raw (internal
+computation) order instead of via `parentId`/`childIds`, so heading-order
+assertions saw an arbitrary order instead of true reading order — not a real
+accessibility regression in the dashboard. It also had no committed
+screenshot/ARIA-snapshot baselines; those are now generated and checked in.
+
 Use `cargo test -- --list` when a current test inventory is needed; do not copy
 the resulting count into maintained documentation.
 

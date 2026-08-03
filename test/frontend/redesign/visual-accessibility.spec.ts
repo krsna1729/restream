@@ -57,24 +57,38 @@ async function getCdpNamesByRole(page: Page, role: string): Promise<string[]> {
     .filter((name): name is string => Boolean(name));
 }
 
+// axTree.nodes is a flat array in internal computation order, which does not
+// reliably match document/reading order across independently-mounted roots
+// (verified: the pipeline header root renders before the output-overview
+// root in the DOM, but flat array order put them the other way round). Walk
+// the tree via parentId/childIds instead so heading order reflects true
+// reading order, while still using CDP's computed accessible name (which,
+// unlike raw textContent, reflects CSS text-transform).
 async function getCdpHeadingLevels(
   page: Page,
 ): Promise<{ name: string; level: number }[]> {
   const cdp = await page.context().newCDPSession(page);
   const axTree = await cdp.send("Accessibility.getFullAXTree");
   await cdp.detach();
-  return axTree.nodes
-    .filter((node) => node.role?.value === "heading")
-    .map((node) => {
+  const byId = new Map(axTree.nodes.map((node) => [node.nodeId, node]));
+  const root = axTree.nodes.find((node) => !node.parentId) ?? axTree.nodes[0];
+  const headings: { name: string; level: number }[] = [];
+  const visit = (nodeId: string) => {
+    const node = byId.get(nodeId);
+    if (!node) return;
+    if (node.role?.value === "heading" && node.name?.value) {
       const level =
         node.properties?.find((property) => property.name === "level")?.value
           ?.value ?? 0;
-      return {
+      headings.push({
         level: typeof level === "number" ? level : Number(level),
-        name: node.name?.value ?? "",
-      };
-    })
-    .filter(({ name }) => Boolean(name));
+        name: node.name.value,
+      });
+    }
+    for (const childId of node.childIds ?? []) visit(childId);
+  };
+  visit(root.nodeId);
+  return headings;
 }
 
 for (const stateName of viewportStates) {
