@@ -9,19 +9,10 @@ use crate::media::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::policy::WorkBudget;
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
-use crate::media::srt::{SrtFabricEgressConnectSpec, SrtFabricPoller};
+use crate::media::srt::SrtFabricEgressConnectSpec;
 use std::sync::mpsc::SyncSender;
 
 const SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY: usize = 1024;
-
-pub(crate) type ResolvingNativeSrtShardBackend = ResolvingSrtShardBackend<
-    SrtShardBackend<
-        SrtFabricPoller,
-        NativeSrtSocketConfigurator,
-        NativeSrtSocketConnector,
-        SrtResolveCompletionQueue,
-    >,
->;
 
 pub(crate) type ResolvingSrtShardBackendWithPoller<P> = ResolvingSrtShardBackend<
     SrtShardBackend<

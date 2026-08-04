@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! RTMP fabric shard backend: wires [`RtmpFabricEngine`] into
 //! [`EgressShardBackend`], mirroring [`crate::media::egress::backends::srt::SrtShardBackend`]'s
 //! shape — a real `TcpEgressPoller`-backed poller, leaf slab, ready queue,
@@ -444,6 +442,10 @@ impl<P> RtmpShardBackend<P, NoopRtmpResolveCompletionSource, EmptyRtmpPublishSta
 where
     P: RtmpReadinessPoller,
 {
+    // Production always constructs via `with_runtime_components` directly
+    // (see rtmp_shard_resolve_runtime.rs); this convenience constructor is
+    // only used by tests.
+    #[cfg(test)]
     pub(crate) fn new(poller: P, feed: RingFeed, budget: WorkBudget, chunk_size: u32) -> Self {
         Self::with_runtime_components(
             poller,

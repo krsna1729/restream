@@ -1,5 +1,6 @@
 use super::*;
 use std::net::TcpListener;
+use std::os::unix::io::AsRawFd;
 
 #[test]
 fn connects_and_switches_to_nonblocking_mode() {
@@ -12,7 +13,7 @@ fn connects_and_switches_to_nonblocking_mode() {
     })
     .unwrap();
 
-    assert!(raw_fd(&stream) >= 0);
+    assert!(stream.as_raw_fd() >= 0);
     // A non-blocking read on a socket with no data available must return
     // WouldBlock immediately rather than hanging — proves set_nonblocking
     // took effect rather than silently failing.
@@ -38,7 +39,7 @@ fn connect_can_be_registered_with_the_tcp_poller_and_reports_writable() {
         connect_timeout: Duration::from_secs(2),
     })
     .unwrap();
-    let fd = raw_fd(&stream);
+    let fd = stream.as_raw_fd();
 
     let mut poller = super::super::tcp::TcpEgressPoller::new(4).unwrap();
     poller

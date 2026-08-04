@@ -34,7 +34,6 @@ use tokio_util::sync::CancellationToken;
 #[path = "test_harness/api_client.rs"]
 mod api_client;
 #[path = "test_harness/catalog.rs"]
-#[allow(dead_code)]
 mod catalog;
 #[path = "test_harness/catalog_cli.rs"]
 mod catalog_cli;

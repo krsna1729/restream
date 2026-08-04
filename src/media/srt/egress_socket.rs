@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::ffi::CString;
 use std::fmt;
 use std::os::raw::{c_int, c_void};
@@ -49,16 +47,13 @@ impl std::error::Error for SrtEgressSocketError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SrtEgressSendMode {
+    // Not constructed by any production call site (every caller passes
+    // `FabricNonblocking`); kept because several tests still exercise this
+    // arm's no-op behavior as a regression guard for the pre-fabric legacy
+    // blocking-send mode.
+    #[cfg_attr(not(test), allow(dead_code))]
     LegacyBlocking,
     FabricNonblocking,
-}
-
-pub(super) fn configure_srt_egress_socket(socket: SRTSOCKET) -> Result<(), SrtEgressSocketError> {
-    configure_srt_egress_socket_with(
-        socket,
-        SrtEgressSocketConfig::NONBLOCKING_SEND,
-        LibSrtSocketOps,
-    )
 }
 
 pub(crate) fn configure_connected_srt_egress_socket(

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
@@ -151,6 +149,7 @@ where
         &self.common
     }
 
+    #[cfg(test)]
     pub(crate) fn pending_message_bytes(&self) -> usize {
         self.engine.pending_message_bytes()
     }
@@ -230,6 +229,7 @@ where
     }
 }
 
+#[cfg(test)]
 pub(crate) fn requeue_after_srt_visit(decision: VisitDecision) -> bool {
     matches!(decision, VisitDecision::Continue)
 }
@@ -435,6 +435,9 @@ struct PendingSrtConnect {
     connect_spec: SrtFabricEgressConnectSpec,
 }
 
+// Production always constructs via `with_runtime_components` directly (see
+// resolve_runtime.rs); these convenience constructors are only used by tests.
+#[cfg(test)]
 impl<P>
     SrtShardBackend<
         P,
@@ -450,6 +453,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<P, C> SrtShardBackend<P, C, NativeSrtSocketConnector, NoopSrtResolveCompletionSource>
 where
     P: SrtReadinessPoller,
@@ -562,6 +566,10 @@ where
         Ok(key)
     }
 
+    // Only used by tests exercising the resolver-independent connect path
+    // directly; production always goes through `complete_pending_connect`
+    // (below), which resolves via `self.socket_connector`.
+    #[cfg(test)]
     pub(crate) fn add_resolved_socket_with<T>(
         &mut self,
         common: LeafCommon,
@@ -598,6 +606,7 @@ where
         result
     }
 
+    #[cfg(test)]
     pub(crate) fn complete_pending_connect_with<T>(
         &mut self,
         output_id: &OutputId,
@@ -667,7 +676,8 @@ where
             })
     }
 
-    fn add_leaf(
+    #[cfg(test)]
+    pub(crate) fn add_leaf(
         &mut self,
         socket: SRTSOCKET,
         leaf: NativeSrtLeaf,

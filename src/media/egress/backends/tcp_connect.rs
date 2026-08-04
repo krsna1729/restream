@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Non-blocking-after-connect TCP dial for the RTMP/RTMPS fabric.
 //!
 //! Mirrors the SRT fabric's connect shape
@@ -11,7 +9,6 @@
 
 use std::io;
 use std::net::{SocketAddr, TcpStream};
-use std::os::unix::io::{AsRawFd, RawFd};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy)]
@@ -60,12 +57,6 @@ pub(crate) fn connect_fabric_tcp_egress_socket(
             source,
         })?;
     Ok(stream)
-}
-
-/// Raw fd accessor used by the poller registration call site; kept as a
-/// free function so callers don't need to import `AsRawFd` themselves.
-pub(crate) fn raw_fd(stream: &TcpStream) -> RawFd {
-    stream.as_raw_fd()
 }
 
 #[cfg(test)]

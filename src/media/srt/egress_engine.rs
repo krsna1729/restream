@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::marker::PhantomData;

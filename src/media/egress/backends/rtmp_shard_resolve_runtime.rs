@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Decorator that spawns RTMP DNS resolution on `Add`/`Update`, mirroring
 //! `src/media/egress/backends/srt/resolve_runtime.rs`'s
 //! `ResolvingSrtShardBackend` shape exactly: one resolve worker thread per

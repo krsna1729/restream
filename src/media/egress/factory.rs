@@ -13,7 +13,7 @@ use crate::media::egress::backends::rtmp_shard_resolve_runtime::{
 use crate::media::egress::backends::sink_shard::SinkShardBackend;
 use crate::media::egress::backends::srt::SrtReadinessPoller;
 use crate::media::egress::backends::srt::resolve_runtime::{
-    ResolvingNativeSrtShardBackend, ResolvingSrtShardBackendWithPoller, resolving_srt_shard_backend,
+    ResolvingSrtShardBackendWithPoller, resolving_srt_shard_backend,
 };
 use crate::media::egress::backends::tcp::{TcpEgressPollError, TcpEgressPoller};
 use crate::media::egress::command::ShardId;
@@ -28,7 +28,6 @@ pub(crate) enum SrtFabricShardGroupError<E> {
     Group(EgressShardGroupError),
 }
 
-#[allow(dead_code)]
 pub(crate) fn spawn_srt_fabric_shard_group<F>(
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
@@ -79,30 +78,6 @@ where
         .map_err(SrtFabricShardGroupError::Group)
 }
 
-#[allow(dead_code)]
-pub(crate) fn srt_fabric_shard_backends<F>(
-    shard_count: NonZeroU32,
-    poller_max_events: usize,
-    budget: WorkBudget,
-    feed_for: F,
-    srt_egress_muxer_port_reuse: Option<Arc<Mutex<Option<u16>>>>,
-) -> Result<Vec<ResolvingNativeSrtShardBackend>, SrtEgressPollError>
-where
-    F: FnMut(ShardId) -> TsFeed,
-{
-    srt_fabric_shard_backends_with_poller(
-        shard_count,
-        budget,
-        feed_for,
-        |shard_id| {
-            let _ = shard_id;
-            SrtFabricPoller::new(poller_max_events)
-        },
-        srt_egress_muxer_port_reuse,
-        EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 fn srt_fabric_shard_backends_with_poller<P, E, F, G>(
     shard_count: NonZeroU32,
@@ -138,7 +113,6 @@ pub(crate) enum RtmpFabricShardGroupError<E> {
     Group(EgressShardGroupError),
 }
 
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_rtmp_fabric_shard_group<F>(
     shard_count: NonZeroU32,
