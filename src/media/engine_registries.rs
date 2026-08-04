@@ -692,8 +692,13 @@ mod tests {
         assert!(pool.is_empty());
     }
 
+    // `assign`'s zero-argument checks are `debug_assert!`, not `assert!`, so
+    // the engine never panics on this caller bug in a release-like build
+    // (`--profile bench` disables debug_assertions, same as release) —
+    // these tests only observe the panic where debug_assertions are on.
     #[test]
     #[should_panic]
+    #[cfg(debug_assertions)]
     fn assign_panics_on_zero_max_shards_invariant() {
         let mut pool = SrtMuxerShardPool::default();
         pool.assign("out-1", 1, 4, 0);
@@ -701,6 +706,7 @@ mod tests {
 
     #[test]
     #[should_panic]
+    #[cfg(debug_assertions)]
     fn assign_panics_on_zero_max_outputs_per_shard_invariant() {
         let mut pool = SrtMuxerShardPool::default();
         pool.assign("out-1", 1, 0, 4);
