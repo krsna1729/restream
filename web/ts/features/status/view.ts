@@ -1,5 +1,5 @@
 import {
-  apiRequest,
+  getEngineSbom,
   getEngineSbomEndpoint,
   getEngineStatus,
   getRestreamHistory,
@@ -738,14 +738,14 @@ function bindActions(status: StatusData, sbomEndpoint: string): void {
   document
     .getElementById("download-sbom-btn")
     ?.addEventListener("click", async () => {
-      const sbom = await apiRequest(sbomEndpoint);
+      const sbom = await getEngineSbom(sbomEndpoint);
       if (sbom)
         downloadJson(`restream-sbom-${timestampForFilename()}.cdx.json`, sbom);
     });
   document
     .getElementById("copy-sbom-btn")
     ?.addEventListener("click", async () => {
-      const sbom = await apiRequest(sbomEndpoint);
+      const sbom = await getEngineSbom(sbomEndpoint);
       if (sbom) await copyJson(sbom);
     });
 }
