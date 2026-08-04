@@ -2,7 +2,8 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::media::egress::command::{EgressCommand, ShardId};
+use crate::media::egress::command::{EgressCommand, FeedId, ShardId};
+use crate::media::egress::feed::EgressFeed;
 use crate::media::egress::manager::{
     EgressManager, EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
 };
@@ -173,6 +174,84 @@ impl EgressFabricRuntime {
     pub(crate) fn shutdown(self) -> Vec<EgressShardSnapshot> {
         self.group.shutdown_and_join()
     }
+}
+
+/// Feed types the fabric wake watcher (`spawn_fabric_wake_watcher`) can run
+/// against: a wake `Notify` handle. The caller passes an already-cloned
+/// reader in (see each `retain_*_fabric_runtime`'s `feed.clone_reader()`),
+/// so this trait only needs to expose what the watcher loop itself reads.
+pub(crate) trait FabricWatchFeed: EgressFeed + Send + 'static {
+    fn notify_handle(&self) -> Arc<tokio::sync::Notify>;
+}
+
+impl FabricWatchFeed for crate::media::egress::journal::RingFeed {
+    fn notify_handle(&self) -> Arc<tokio::sync::Notify> {
+        crate::media::egress::journal::RingFeed::notify_handle(self)
+    }
+}
+
+impl FabricWatchFeed for crate::media::egress::journal::TsFeed {
+    fn notify_handle(&self) -> Arc<tokio::sync::Notify> {
+        crate::media::egress::journal::TsFeed::notify_handle(self)
+    }
+}
+
+/// Bridge feed publications into coalesced shard wakes for one fabric
+/// runtime: one watcher per feed, one gate per shard, at most one
+/// outstanding wake per (feed, shard). Shared by all four
+/// `engine_*_egress_fabric.rs` callers (`kind` only changes the log
+/// message, e.g. `"srt"`, `"rtmp"`, `"sink"`, `"pipeline"`).
+///
+/// `wake_handles` is shared with `EgressFabricRuntime::rescale`: a shard the
+/// manager grows after this watcher starts appends its handle there, so the
+/// watcher (which reads through the lock every wake rather than a one-time
+/// snapshot) picks it up without needing to know shards can resize at all.
+///
+/// Clones the feed's reader side (shared ring/journal + epoch) rather than
+/// holding only the `Notify` handle: `notify_waiters()` only wakes waiters
+/// already polling `.notified()` at the moment it fires, so a bare
+/// `notify.notified().await` loop can miss a publish that happens between
+/// loop iterations. Following the same check-register-recheck-then-await
+/// pattern as `Reader::wait_for_data` (`src/media/ring_buffer/reader.rs`)
+/// closes that window: the head is read again after registering interest,
+/// so a publish landing in the gap is still observed this iteration instead
+/// of being lost until some later push.
+pub(crate) fn spawn_fabric_wake_watcher<F>(
+    kind: &'static str,
+    feed_id: FeedId,
+    watcher_feed: F,
+    wake_handles: Arc<Mutex<Vec<FeedWakeHandle>>>,
+) -> tokio::task::JoinHandle<()>
+where
+    F: FabricWatchFeed,
+{
+    tokio::spawn(async move {
+        tracing::info!(feed_id = %feed_id, "{kind} fabric wake watcher started");
+        let notify = watcher_feed.notify_handle();
+        let mut last_head = watcher_feed.head_sequence();
+        // `last_head`'s pre-loop snapshot can already reflect data published
+        // before this task's first poll (e.g. scheduler delay from
+        // `EgressFabricRuntime::rescale`'s synchronous shard shutdowns) --
+        // treating that as "already seen" would await a `notify_waiters()`
+        // wake that already fired with no registered waiter, hanging
+        // forever. `first_iteration` forces the first pass to always fall
+        // through to deliver instead of awaiting, regardless of what
+        // `last_head` reads.
+        let mut first_iteration = true;
+        loop {
+            let notified = notify.notified();
+            let current_head = watcher_feed.head_sequence();
+            if current_head == last_head && !first_iteration {
+                notified.await;
+            }
+            first_iteration = false;
+            last_head = watcher_feed.head_sequence();
+            let handles = wake_handles.lock().unwrap().clone();
+            for handle in &handles {
+                let _ = handle.deliver();
+            }
+        }
+    })
 }
 
 #[cfg(test)]

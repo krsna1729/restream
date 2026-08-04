@@ -2,12 +2,13 @@ use std::sync::{Arc, Mutex};
 
 use crate::media::egress::command::{EgressCommand, FeedId};
 use crate::media::egress::factory::{SrtFabricShardGroupError, spawn_srt_fabric_shard_group};
-use crate::media::egress::feed::EgressFeed;
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
 };
-use crate::media::egress::runtime::{EgressFabricRuntime, EgressFabricRuntimeError};
+use crate::media::egress::runtime::{
+    EgressFabricRuntime, EgressFabricRuntimeError, spawn_fabric_wake_watcher,
+};
 use crate::media::egress::shard::EgressShardGroupError;
 #[cfg(test)]
 use crate::media::egress::shard::EgressShardSnapshot;
@@ -62,54 +63,12 @@ impl MediaEngine {
             let runtime = EgressFabricRuntime::new(manager_config, group)
                 .map_err(SrtFabricEnsureError::Runtime)?;
 
-            // Bridge feed publications into coalesced shard wakes: one
-            // watcher per feed runtime, one gate per shard, at most one
-            // outstanding wake per (feed, shard).
-            // Shared with `EgressFabricRuntime::rescale` -- see
-            // `RtmpFabricRegistry`'s identical comment in
-            // engine_rtmp_egress_fabric.rs for why a fixed snapshot here
-            // would leave a later-grown shard's leaves without the fast
-            // feed-wake path.
-            let wake_handles = runtime.feed_wake_handles();
-            // Clone the reader side (shared ring + epoch) rather than only
-            // the Notify handle: `notify_waiters()` only wakes waiters that
-            // were already polling `.notified()` at the moment it fires, so
-            // a bare `notify.notified().await` loop can miss the publish
-            // that happens between loop iterations. Following the same
-            // check-register-recheck-then-await pattern as
-            // `Reader::wait_for_data` (src/media/ring_buffer/reader.rs)
-            // closes that window: the head is read again after registering
-            // interest, so a publish landing in the gap is still observed
-            // this iteration instead of being lost until some later push.
-            let watcher_feed = feed.clone_reader();
-            let notify = watcher_feed.notify_handle();
-            let watcher_feed_id = feed_id.clone();
-            let watcher = tokio::spawn(async move {
-                tracing::info!(feed_id = %watcher_feed_id, "srt fabric wake watcher started");
-                let mut last_head = watcher_feed.head_sequence();
-                // `last_head`'s pre-loop snapshot can already reflect data
-                // published before this task's first poll (e.g. scheduler
-                // delay from `EgressFabricRuntime::rescale`'s synchronous
-                // shard shutdowns) -- treating that as "already seen" would
-                // await a `notify_waiters()` wake that already fired with no
-                // registered waiter, hanging forever. `first_iteration`
-                // forces the first pass to always fall through to deliver
-                // instead of awaiting, regardless of what `last_head` reads.
-                let mut first_iteration = true;
-                loop {
-                    let notified = notify.notified();
-                    let current_head = watcher_feed.head_sequence();
-                    if current_head == last_head && !first_iteration {
-                        notified.await;
-                    }
-                    first_iteration = false;
-                    last_head = watcher_feed.head_sequence();
-                    let handles = wake_handles.lock().unwrap().clone();
-                    for handle in &handles {
-                        let _ = handle.deliver();
-                    }
-                }
-            });
+            let watcher = spawn_fabric_wake_watcher(
+                "srt",
+                feed_id.clone(),
+                feed.clone_reader(),
+                runtime.feed_wake_handles(),
+            );
 
             tracing::info!(feed_id = %feed_id, "srt fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);
