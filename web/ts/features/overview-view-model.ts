@@ -111,7 +111,20 @@ export function formatOverviewBitrate(kbps: number | null | undefined): string {
     : `${value.toFixed(0)} Kb/s`;
 }
 
-function formatBytes(bytes: number | null | undefined): string {
+// Also used by pipeline-inspector, which duplicated these until this move —
+// kept here (rather than core/utils.ts) because this module is imported by
+// Node-only view-model tests that don't have a `window` global, and
+// core/utils.ts has a module-load-time `window.copyData = ...` side effect.
+export function formatAgeMs(ms: number | null | undefined): string {
+  if (!Number.isFinite(ms as number) || (ms as number) < 0) return "--";
+  const seconds = Math.round((ms as number) / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+export function formatByteSize(bytes: number | null | undefined): string {
   if (!Number.isFinite(bytes as number) || (bytes as number) <= 0) return "--";
   const value = bytes as number;
   if (value < 1024) return `${value} B`;
@@ -119,15 +132,6 @@ function formatBytes(bytes: number | null | undefined): string {
   if (value < 1024 * 1024 * 1024)
     return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
   return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
-}
-
-function formatAgeMs(ms: number | null | undefined): string {
-  if (!Number.isFinite(ms as number) || (ms as number) < 0) return "--";
-  const seconds = Math.round((ms as number) / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
 function inputIsStalled(pipe: PipelineView): boolean {
@@ -235,7 +239,7 @@ function inputStatus(pipe: PipelineView): OverviewStatus {
       tone: "warning",
       detail: [
         protocol || "publisher",
-        `${formatBytes(pipe.input.bytesReceived)} received`,
+        `${formatByteSize(pipe.input.bytesReceived)} received`,
         `stale ${formatAgeMs(pipe.input.lastProgressAgeMs)}`,
       ].join(" / "),
     };
@@ -507,14 +511,14 @@ export function buildOverviewViewModel(
       {
         key: "engineMemory",
         label: "Engine memory",
-        value: formatBytes(engineMemory),
+        value: formatByteSize(engineMemory),
         note: detail(
           [
             hasMetricValue(restreamMemory) && restreamMemory > 0
-              ? `Restream ${formatBytes(restreamMemory)}`
+              ? `Restream ${formatByteSize(restreamMemory)}`
               : "",
             ffmpegCount > 0 && hasMetricValue(ffmpegMemory) && ffmpegMemory > 0
-              ? `FFmpeg ${formatBytes(ffmpegMemory)}`
+              ? `FFmpeg ${formatByteSize(ffmpegMemory)}`
               : "",
           ],
           "No engine memory sample",

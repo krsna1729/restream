@@ -2,7 +2,12 @@ import { outputViewEncodingLabel } from "../../core/output-config.js";
 import { RenderScope } from "../../core/render-scope.js";
 import type { RenderScopeToken } from "../../core/render-scope.js";
 import { state } from "../../core/state.js";
-import { escapeHtml, escapeRedactedHtml, getUrlParam } from "../../core/utils.js";
+import {
+  escapeHtml,
+  escapeRedactedHtml,
+  getUrlParam,
+} from "../../core/utils.js";
+import { formatAgeMs, formatByteSize } from "../overview-view-model.js";
 import type { OutputView, PipelineView } from "../../types.js";
 import { openDiagnosticsModal } from "../diagnostics.js";
 import { pipelineInspectorShellHtml } from "./shell.js";
@@ -146,25 +151,6 @@ function formatBitrate(kbps: number | null | undefined): string {
   return value >= 1000
     ? `${(value / 1000).toFixed(1)} Mb/s`
     : `${value.toFixed(0)} Kb/s`;
-}
-
-export function formatBytes(bytes: number | null | undefined): string {
-  if (!Number.isFinite(bytes as number) || (bytes as number) <= 0) return "--";
-  const value = bytes as number;
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
-  if (value < 1024 * 1024 * 1024)
-    return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
-  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
-}
-
-function formatAgeMs(ms: number | null | undefined): string {
-  if (!Number.isFinite(ms as number) || (ms as number) < 0) return "--";
-  const seconds = Math.round((ms as number) / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
 function scrollKeyForElement(element: Element): string | null {
@@ -713,8 +699,8 @@ function renderSummary(
     ["In", inputRateLabel],
     ["Out", formatBitrate(pipe.stats.outputBitrateKbps)],
     ["Outputs", outputCountLabel],
-    ["Received", formatBytes(pipe.input.bytesReceived)],
-    ["Sent", formatBytes(pipe.input.bytesSent)],
+    ["Received", formatByteSize(pipe.input.bytesReceived)],
+    ["Sent", formatByteSize(pipe.input.bytesSent)],
     ["Alerts", apiSummary ? String(alerts.length) : "Loading"],
   ];
   const outputPreviewLimit = 12;

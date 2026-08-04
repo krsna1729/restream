@@ -177,13 +177,6 @@ let dashboardV2CheckpointsModule: DashboardV2CheckpointsModule | null = null;
 let dashboardV2CheckpointsModulePromise: Promise<void> | null = null;
 let dashboardV2OverviewActive = false;
 let dashboardV2PipelineActive = false;
-let dashboardV2PipelineInspectActive = false;
-let dashboardV2ControlRoomActive = false;
-let dashboardV2IncidentsActive = false;
-let dashboardV2TelemetryActive = false;
-let dashboardV2StatusActive = false;
-let dashboardV2MediaActive = false;
-let dashboardV2SettingsActive = false;
 let latestOverviewModel: OverviewViewModel | null = null;
 let overviewActions: DashboardV2OverviewActions | null = null;
 let latestPipelineSelectorModel: PipelineOperateSelectorModel | null = null;
@@ -199,20 +192,6 @@ let latestPipelineOutputOverviewModel:
 let pipelineOutputOverviewActions:
   | DashboardV2PipelineOutputOverviewActions
   | null = null;
-let latestPipelineInspectModel: PipelineInspectCheckpointModel | null | undefined;
-let pipelineInspectActions: DashboardV2PipelineInspectActions | null = null;
-let latestControlRoomModel: ControlRoomCheckpointModel | null | undefined;
-let controlRoomActions: DashboardV2ControlRoomActions | null = null;
-let latestIncidentsModel: IncidentsCheckpointModel | null | undefined;
-let incidentsActions: DashboardV2IncidentsActions | null = null;
-let latestTelemetryModel: TelemetryCheckpointModel | null | undefined;
-let telemetryActions: DashboardV2TelemetryActions | null = null;
-let latestStatusModel: StatusCheckpointModel | null | undefined;
-let statusActions: DashboardV2StatusActions | null = null;
-let latestMediaModel: MediaCheckpointModel | null | undefined;
-let mediaActions: DashboardV2MediaActions | null = null;
-let latestSettingsModel: SettingsCheckpointModel | null | undefined;
-let settingsActions: DashboardV2SettingsActions | null = null;
 
 const DASHBOARD_V2_CONTAINER_IDS = [
   "dashboard-v2-root",
@@ -252,64 +231,6 @@ function hideDashboardV2Pipeline(): void {
   }
 }
 
-function clearDashboardV2Checkpoint<TActions>(
-  actions: TActions | null,
-  render: (module: DashboardV2CheckpointsModule, actions: TActions) => void,
-): void {
-  if (dashboardV2CheckpointsModule && actions) {
-    render(dashboardV2CheckpointsModule, actions);
-  }
-}
-
-function hideDashboardV2PipelineInspect(): void {
-  clearDashboardV2Checkpoint(pipelineInspectActions, (module, actions) =>
-    module.renderDashboardV2PipelineInspectCheckpoint(null, actions),
-  );
-  setContainerHidden("dashboard-v2-pipeline-inspect-root", true);
-}
-
-function hideDashboardV2ControlRoom(): void {
-  clearDashboardV2Checkpoint(controlRoomActions, (module, actions) =>
-    module.renderDashboardV2ControlRoomCheckpoint(null, actions),
-  );
-  setContainerHidden("dashboard-v2-control-room-root", true);
-}
-
-function hideDashboardV2Incidents(): void {
-  clearDashboardV2Checkpoint(incidentsActions, (module, actions) =>
-    module.renderDashboardV2IncidentsCheckpoint(null, actions),
-  );
-  setContainerHidden("dashboard-v2-incidents-root", true);
-}
-
-function hideDashboardV2Telemetry(): void {
-  clearDashboardV2Checkpoint(telemetryActions, (module, actions) =>
-    module.renderDashboardV2TelemetryCheckpoint(null, actions),
-  );
-  setContainerHidden("dashboard-v2-telemetry-root", true);
-}
-
-function hideDashboardV2Status(): void {
-  clearDashboardV2Checkpoint(statusActions, (module, actions) =>
-    module.renderDashboardV2StatusCheckpoint(null, actions),
-  );
-  setContainerHidden("dashboard-v2-status-root", true);
-}
-
-function hideDashboardV2Media(): void {
-  clearDashboardV2Checkpoint(mediaActions, (module, actions) =>
-    module.renderDashboardV2MediaCheckpoint(null, actions),
-  );
-  setContainerHidden("dashboard-v2-media-root", true);
-}
-
-function hideDashboardV2Settings(): void {
-  clearDashboardV2Checkpoint(settingsActions, (module, actions) =>
-    module.renderDashboardV2SettingsCheckpoint(null, actions),
-  );
-  setContainerHidden("dashboard-v2-settings-root", true);
-}
-
 function ensureDashboardV2Module(): void {
   if (dashboardV2Module || dashboardV2ModulePromise) {
     return;
@@ -332,6 +253,134 @@ function ensureDashboardV2Module(): void {
     });
 }
 
+// The seven checkpoints rendered by DASHBOARD_V2_CHECKPOINTS_BUNDLE
+// (pipeline inspect, control room, incidents, telemetry, status, media,
+// settings) all follow the same lifecycle: an independent active flag, a
+// latest model, latest actions, and a render call gated on the checkpoints
+// module + model + actions all being ready. This factory owns that shared
+// shape so each checkpoint only supplies its container id and render call.
+interface DashboardV2CheckpointSlot<TModel, TActions> {
+  readonly setActions: (actions: TActions) => void;
+  readonly updateModel: (model: TModel | null) => void;
+  readonly renderLatest: () => void;
+  readonly hide: () => void;
+  readonly isActive: () => boolean;
+  readonly setActive: (active: boolean) => boolean;
+}
+
+function createDashboardV2CheckpointSlot<TModel, TActions>(options: {
+  readonly containerId: string;
+  readonly render: (
+    module: DashboardV2CheckpointsModule,
+    model: TModel | null,
+    actions: TActions,
+  ) => void;
+}): DashboardV2CheckpointSlot<TModel, TActions> {
+  let active = false;
+  let latestModel: TModel | null | undefined;
+  let actions: TActions | null = null;
+
+  function hide(): void {
+    if (dashboardV2CheckpointsModule && actions) {
+      options.render(dashboardV2CheckpointsModule, null, actions);
+    }
+    setContainerHidden(options.containerId, true);
+  }
+
+  function renderLatest(): void {
+    if (!active) {
+      hide();
+      return;
+    }
+    ensureDashboardV2CheckpointsModule();
+    if (!dashboardV2CheckpointsModule || latestModel === undefined || !actions)
+      return;
+    options.render(dashboardV2CheckpointsModule, latestModel, actions);
+  }
+
+  return {
+    setActions(next) {
+      actions = next;
+      renderLatest();
+    },
+    updateModel(next) {
+      latestModel = next;
+      renderLatest();
+    },
+    renderLatest,
+    hide,
+    isActive: () => active,
+    setActive(next) {
+      const changed = active !== next;
+      active = next;
+      return changed;
+    },
+  };
+}
+
+const pipelineInspectSlot = createDashboardV2CheckpointSlot<
+  PipelineInspectCheckpointModel,
+  DashboardV2PipelineInspectActions
+>({
+  containerId: "dashboard-v2-pipeline-inspect-root",
+  render: (module, model, actions) =>
+    module.renderDashboardV2PipelineInspectCheckpoint(model, actions),
+});
+
+const controlRoomSlot = createDashboardV2CheckpointSlot<
+  ControlRoomCheckpointModel,
+  DashboardV2ControlRoomActions
+>({
+  containerId: "dashboard-v2-control-room-root",
+  render: (module, model, actions) =>
+    module.renderDashboardV2ControlRoomCheckpoint(model, actions),
+});
+
+const incidentsSlot = createDashboardV2CheckpointSlot<
+  IncidentsCheckpointModel,
+  DashboardV2IncidentsActions
+>({
+  containerId: "dashboard-v2-incidents-root",
+  render: (module, model, actions) =>
+    module.renderDashboardV2IncidentsCheckpoint(model, actions),
+});
+
+const telemetrySlot = createDashboardV2CheckpointSlot<
+  TelemetryCheckpointModel,
+  DashboardV2TelemetryActions
+>({
+  containerId: "dashboard-v2-telemetry-root",
+  render: (module, model, actions) =>
+    module.renderDashboardV2TelemetryCheckpoint(model, actions),
+});
+
+const statusSlot = createDashboardV2CheckpointSlot<
+  StatusCheckpointModel,
+  DashboardV2StatusActions
+>({
+  containerId: "dashboard-v2-status-root",
+  render: (module, model, actions) =>
+    module.renderDashboardV2StatusCheckpoint(model, actions),
+});
+
+const mediaSlot = createDashboardV2CheckpointSlot<
+  MediaCheckpointModel,
+  DashboardV2MediaActions
+>({
+  containerId: "dashboard-v2-media-root",
+  render: (module, model, actions) =>
+    module.renderDashboardV2MediaCheckpoint(model, actions),
+});
+
+const settingsSlot = createDashboardV2CheckpointSlot<
+  SettingsCheckpointModel,
+  DashboardV2SettingsActions
+>({
+  containerId: "dashboard-v2-settings-root",
+  render: (module, model, actions) =>
+    module.renderDashboardV2SettingsCheckpoint(model, actions),
+});
+
 function ensureDashboardV2CheckpointsModule(): void {
   if (dashboardV2CheckpointsModule || dashboardV2CheckpointsModulePromise) {
     return;
@@ -339,13 +388,13 @@ function ensureDashboardV2CheckpointsModule(): void {
   dashboardV2CheckpointsModulePromise = import(DASHBOARD_V2_CHECKPOINTS_BUNDLE)
     .then((module) => {
       dashboardV2CheckpointsModule = module as DashboardV2CheckpointsModule;
-      renderLatestPipelineInspect();
-      renderLatestControlRoom();
-      renderLatestIncidents();
-      renderLatestTelemetry();
-      renderLatestStatus();
-      renderLatestMedia();
-      renderLatestSettings();
+      pipelineInspectSlot.renderLatest();
+      controlRoomSlot.renderLatest();
+      incidentsSlot.renderLatest();
+      telemetrySlot.renderLatest();
+      statusSlot.renderLatest();
+      mediaSlot.renderLatest();
+      settingsSlot.renderLatest();
       document.dispatchEvent(new CustomEvent("dashboard:v2-checkpoints-ready"));
     })
     .catch((error: unknown) => {
@@ -470,132 +519,6 @@ function renderLatestPipelineOutputOverview(): void {
   );
 }
 
-function renderLatestPipelineInspect(): void {
-  if (!dashboardV2PipelineInspectActive) {
-    hideDashboardV2PipelineInspect();
-    return;
-  }
-  ensureDashboardV2CheckpointsModule();
-  if (
-    !dashboardV2CheckpointsModule ||
-    latestPipelineInspectModel === undefined ||
-    !pipelineInspectActions
-  )
-    return;
-  dashboardV2CheckpointsModule.renderDashboardV2PipelineInspectCheckpoint(
-    latestPipelineInspectModel,
-    pipelineInspectActions,
-  );
-}
-
-function renderLatestControlRoom(): void {
-  if (!dashboardV2ControlRoomActive) {
-    hideDashboardV2ControlRoom();
-    return;
-  }
-  ensureDashboardV2CheckpointsModule();
-  if (
-    !dashboardV2CheckpointsModule ||
-    latestControlRoomModel === undefined ||
-    !controlRoomActions
-  )
-    return;
-  dashboardV2CheckpointsModule.renderDashboardV2ControlRoomCheckpoint(
-    latestControlRoomModel,
-    controlRoomActions,
-  );
-}
-
-function renderLatestIncidents(): void {
-  if (!dashboardV2IncidentsActive) {
-    hideDashboardV2Incidents();
-    return;
-  }
-  ensureDashboardV2CheckpointsModule();
-  if (
-    !dashboardV2CheckpointsModule ||
-    latestIncidentsModel === undefined ||
-    !incidentsActions
-  )
-    return;
-  dashboardV2CheckpointsModule.renderDashboardV2IncidentsCheckpoint(
-    latestIncidentsModel,
-    incidentsActions,
-  );
-}
-
-function renderLatestTelemetry(): void {
-  if (!dashboardV2TelemetryActive) {
-    hideDashboardV2Telemetry();
-    return;
-  }
-  ensureDashboardV2CheckpointsModule();
-  if (
-    !dashboardV2CheckpointsModule ||
-    latestTelemetryModel === undefined ||
-    !telemetryActions
-  )
-    return;
-  dashboardV2CheckpointsModule.renderDashboardV2TelemetryCheckpoint(
-    latestTelemetryModel,
-    telemetryActions,
-  );
-}
-
-function renderLatestStatus(): void {
-  if (!dashboardV2StatusActive) {
-    hideDashboardV2Status();
-    return;
-  }
-  ensureDashboardV2CheckpointsModule();
-  if (
-    !dashboardV2CheckpointsModule ||
-    latestStatusModel === undefined ||
-    !statusActions
-  )
-    return;
-  dashboardV2CheckpointsModule.renderDashboardV2StatusCheckpoint(
-    latestStatusModel,
-    statusActions,
-  );
-}
-
-function renderLatestMedia(): void {
-  if (!dashboardV2MediaActive) {
-    hideDashboardV2Media();
-    return;
-  }
-  ensureDashboardV2CheckpointsModule();
-  if (
-    !dashboardV2CheckpointsModule ||
-    latestMediaModel === undefined ||
-    !mediaActions
-  )
-    return;
-  dashboardV2CheckpointsModule.renderDashboardV2MediaCheckpoint(
-    latestMediaModel,
-    mediaActions,
-  );
-}
-
-function renderLatestSettings(): void {
-  if (!dashboardV2SettingsActive) {
-    hideDashboardV2Settings();
-    return;
-  }
-  ensureDashboardV2CheckpointsModule();
-  if (
-    !dashboardV2CheckpointsModule ||
-    latestSettingsModel === undefined ||
-    !settingsActions
-  )
-    return;
-  dashboardV2CheckpointsModule.renderDashboardV2SettingsCheckpoint(
-    latestSettingsModel,
-    settingsActions,
-  );
-}
-
 export function setDashboardV2PresentationScope(options: {
   readonly overviewActive: boolean;
   readonly pipelineActive: boolean;
@@ -609,42 +532,36 @@ export function setDashboardV2PresentationScope(options: {
 }): void {
   const nextOverviewActive = options.overviewActive;
   const nextPipelineActive = options.pipelineActive;
-  const nextPipelineInspectActive = Boolean(options.pipelineInspectActive);
-  const nextControlRoomActive = Boolean(options.controlRoomActive);
-  const nextIncidentsActive = Boolean(options.incidentsActive);
-  const nextTelemetryActive = Boolean(options.telemetryActive);
-  const nextStatusActive = Boolean(options.statusActive);
-  const nextMediaActive = Boolean(options.mediaActive);
-  const nextSettingsActive = Boolean(options.settingsActive);
   const overviewChanged = dashboardV2OverviewActive !== nextOverviewActive;
   const pipelineChanged = dashboardV2PipelineActive !== nextPipelineActive;
-  const pipelineInspectChanged =
-    dashboardV2PipelineInspectActive !== nextPipelineInspectActive;
-  const controlRoomChanged =
-    dashboardV2ControlRoomActive !== nextControlRoomActive;
-  const incidentsChanged = dashboardV2IncidentsActive !== nextIncidentsActive;
-  const telemetryChanged = dashboardV2TelemetryActive !== nextTelemetryActive;
-  const statusChanged = dashboardV2StatusActive !== nextStatusActive;
-  const mediaChanged = dashboardV2MediaActive !== nextMediaActive;
-  const settingsChanged = dashboardV2SettingsActive !== nextSettingsActive;
   dashboardV2OverviewActive = nextOverviewActive;
   dashboardV2PipelineActive = nextPipelineActive;
-  dashboardV2PipelineInspectActive = nextPipelineInspectActive;
-  dashboardV2ControlRoomActive = nextControlRoomActive;
-  dashboardV2IncidentsActive = nextIncidentsActive;
-  dashboardV2TelemetryActive = nextTelemetryActive;
-  dashboardV2StatusActive = nextStatusActive;
-  dashboardV2MediaActive = nextMediaActive;
-  dashboardV2SettingsActive = nextSettingsActive;
+  const pipelineInspectChanged = pipelineInspectSlot.setActive(
+    Boolean(options.pipelineInspectActive),
+  );
+  const controlRoomChanged = controlRoomSlot.setActive(
+    Boolean(options.controlRoomActive),
+  );
+  const incidentsChanged = incidentsSlot.setActive(
+    Boolean(options.incidentsActive),
+  );
+  const telemetryChanged = telemetrySlot.setActive(
+    Boolean(options.telemetryActive),
+  );
+  const statusChanged = statusSlot.setActive(Boolean(options.statusActive));
+  const mediaChanged = mediaSlot.setActive(Boolean(options.mediaActive));
+  const settingsChanged = settingsSlot.setActive(
+    Boolean(options.settingsActive),
+  );
   if (!dashboardV2OverviewActive) hideDashboardV2Overview();
   if (!dashboardV2PipelineActive) hideDashboardV2Pipeline();
-  if (!dashboardV2PipelineInspectActive) hideDashboardV2PipelineInspect();
-  if (!dashboardV2ControlRoomActive) hideDashboardV2ControlRoom();
-  if (!dashboardV2IncidentsActive) hideDashboardV2Incidents();
-  if (!dashboardV2TelemetryActive) hideDashboardV2Telemetry();
-  if (!dashboardV2StatusActive) hideDashboardV2Status();
-  if (!dashboardV2MediaActive) hideDashboardV2Media();
-  if (!dashboardV2SettingsActive) hideDashboardV2Settings();
+  if (!pipelineInspectSlot.isActive()) pipelineInspectSlot.hide();
+  if (!controlRoomSlot.isActive()) controlRoomSlot.hide();
+  if (!incidentsSlot.isActive()) incidentsSlot.hide();
+  if (!telemetrySlot.isActive()) telemetrySlot.hide();
+  if (!statusSlot.isActive()) statusSlot.hide();
+  if (!mediaSlot.isActive()) mediaSlot.hide();
+  if (!settingsSlot.isActive()) settingsSlot.hide();
   if (overviewChanged && dashboardV2OverviewActive) renderLatestOverview();
   if (pipelineChanged && dashboardV2PipelineActive) {
     renderLatestPipelineSelector();
@@ -652,26 +569,26 @@ export function setDashboardV2PresentationScope(options: {
     renderLatestPipelineInputStatus();
     renderLatestPipelineOutputOverview();
   }
-  if (pipelineInspectChanged && dashboardV2PipelineInspectActive) {
-    renderLatestPipelineInspect();
+  if (pipelineInspectChanged && pipelineInspectSlot.isActive()) {
+    pipelineInspectSlot.renderLatest();
   }
-  if (controlRoomChanged && dashboardV2ControlRoomActive) {
-    renderLatestControlRoom();
+  if (controlRoomChanged && controlRoomSlot.isActive()) {
+    controlRoomSlot.renderLatest();
   }
-  if (incidentsChanged && dashboardV2IncidentsActive) {
-    renderLatestIncidents();
+  if (incidentsChanged && incidentsSlot.isActive()) {
+    incidentsSlot.renderLatest();
   }
-  if (telemetryChanged && dashboardV2TelemetryActive) {
-    renderLatestTelemetry();
+  if (telemetryChanged && telemetrySlot.isActive()) {
+    telemetrySlot.renderLatest();
   }
-  if (statusChanged && dashboardV2StatusActive) {
-    renderLatestStatus();
+  if (statusChanged && statusSlot.isActive()) {
+    statusSlot.renderLatest();
   }
-  if (mediaChanged && dashboardV2MediaActive) {
-    renderLatestMedia();
+  if (mediaChanged && mediaSlot.isActive()) {
+    mediaSlot.renderLatest();
   }
-  if (settingsChanged && dashboardV2SettingsActive) {
-    renderLatestSettings();
+  if (settingsChanged && settingsSlot.isActive()) {
+    settingsSlot.renderLatest();
   }
 }
 
@@ -746,95 +663,81 @@ export function updateDashboardV2PipelineOutputOverview(
 export function setDashboardV2PipelineInspectActions(
   actions: DashboardV2PipelineInspectActions,
 ): void {
-  pipelineInspectActions = actions;
-  renderLatestPipelineInspect();
+  pipelineInspectSlot.setActions(actions);
 }
 
 export function updateDashboardV2PipelineInspectCheckpoint(
   model: PipelineInspectCheckpointModel | null,
 ): void {
-  latestPipelineInspectModel = model;
-  renderLatestPipelineInspect();
+  pipelineInspectSlot.updateModel(model);
 }
 
 export function setDashboardV2ControlRoomActions(
   actions: DashboardV2ControlRoomActions,
 ): void {
-  controlRoomActions = actions;
-  renderLatestControlRoom();
+  controlRoomSlot.setActions(actions);
 }
 
 export function updateDashboardV2ControlRoomCheckpoint(
   model: ControlRoomCheckpointModel | null,
 ): void {
-  latestControlRoomModel = model;
-  renderLatestControlRoom();
+  controlRoomSlot.updateModel(model);
 }
 
 export function setDashboardV2IncidentsActions(
   actions: DashboardV2IncidentsActions,
 ): void {
-  incidentsActions = actions;
-  renderLatestIncidents();
+  incidentsSlot.setActions(actions);
 }
 
 export function updateDashboardV2IncidentsCheckpoint(
   model: IncidentsCheckpointModel | null,
 ): void {
-  latestIncidentsModel = model;
-  renderLatestIncidents();
+  incidentsSlot.updateModel(model);
 }
 
 export function setDashboardV2TelemetryActions(
   actions: DashboardV2TelemetryActions,
 ): void {
-  telemetryActions = actions;
-  renderLatestTelemetry();
+  telemetrySlot.setActions(actions);
 }
 
 export function updateDashboardV2TelemetryCheckpoint(
   model: TelemetryCheckpointModel | null,
 ): void {
-  latestTelemetryModel = model;
-  renderLatestTelemetry();
+  telemetrySlot.updateModel(model);
 }
 
 export function setDashboardV2StatusActions(
   actions: DashboardV2StatusActions,
 ): void {
-  statusActions = actions;
-  renderLatestStatus();
+  statusSlot.setActions(actions);
 }
 
 export function updateDashboardV2StatusCheckpoint(
   model: StatusCheckpointModel | null,
 ): void {
-  latestStatusModel = model;
-  renderLatestStatus();
+  statusSlot.updateModel(model);
 }
 
 export function setDashboardV2MediaActions(actions: DashboardV2MediaActions): void {
-  mediaActions = actions;
-  renderLatestMedia();
+  mediaSlot.setActions(actions);
 }
 
 export function updateDashboardV2MediaCheckpoint(
   model: MediaCheckpointModel | null,
 ): void {
-  latestMediaModel = model;
-  renderLatestMedia();
+  mediaSlot.updateModel(model);
 }
 
 export function setDashboardV2SettingsActions(
   actions: DashboardV2SettingsActions,
 ): void {
-  settingsActions = actions;
-  renderLatestSettings();
+  settingsSlot.setActions(actions);
 }
 
 export function updateDashboardV2SettingsCheckpoint(
   model: SettingsCheckpointModel | null,
 ): void {
-  latestSettingsModel = model;
-  renderLatestSettings();
+  settingsSlot.updateModel(model);
 }

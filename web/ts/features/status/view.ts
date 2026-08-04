@@ -1,17 +1,17 @@
 import {
+  apiRequest,
   getEngineSbomEndpoint,
   getEngineStatus,
   getRestreamHistory,
 } from "../../core/api.js";
 import { createManagedLogStream } from "../../core/log-stream.js";
-import { withBasePath } from "../../core/base-path.js";
-import { redirectToLogin } from "../../core/auth-redirect.js";
 import {
   copyText,
   escapeHtml,
   escapeRedactedHtml,
   showCopiedNotification,
   showErrorAlert,
+  formatByteAmount,
 } from "../../core/utils.js";
 import { handleDashboardRuntimeLifecycleLog } from "../dashboard.js";
 import { updateRestreamProcessIndicatorFromLog } from "../restream-process-indicator.js";
@@ -150,16 +150,6 @@ function row(label: string, value: unknown): string {
         <td class="text-base-content/65 py-1.5 pr-4 align-top font-medium whitespace-nowrap">${escapeHtml(label)}</td>
         <td class="py-1.5 align-top font-mono text-sm break-all">${escapeHtml(valueOrDash(value))}</td>
     </tr>`;
-}
-
-function formatBytes(value: unknown): string {
-  const bytes = Number(value);
-  if (!Number.isFinite(bytes) || bytes < 0) return "--";
-  if (bytes < 1024) return `${bytes.toFixed(0)} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
 }
 
 function formatThreadsPerCore(value: unknown): string {
@@ -659,24 +649,6 @@ function downloadJson(filename: string, data: unknown): void {
   URL.revokeObjectURL(url);
 }
 
-async function fetchJson(endpoint: string): Promise<unknown | null> {
-  try {
-    const response = await fetch(withBasePath(endpoint));
-    if (response.status === 401) {
-      redirectToLogin();
-      return null;
-    }
-    if (!response.ok) {
-      showErrorAlert(`Request failed with ${response.status}`);
-      return null;
-    }
-    return await response.json();
-  } catch (err) {
-    showErrorAlert(`Request failed: ${err}`);
-    return null;
-  }
-}
-
 async function copyJson(data: unknown): Promise<void> {
   if (await copyText(`${JSON.stringify(data, null, 2)}\n`))
     showCopiedNotification();
@@ -766,14 +738,14 @@ function bindActions(status: StatusData, sbomEndpoint: string): void {
   document
     .getElementById("download-sbom-btn")
     ?.addEventListener("click", async () => {
-      const sbom = await fetchJson(sbomEndpoint);
+      const sbom = await apiRequest(sbomEndpoint);
       if (sbom)
         downloadJson(`restream-sbom-${timestampForFilename()}.cdx.json`, sbom);
     });
   document
     .getElementById("copy-sbom-btn")
     ?.addEventListener("click", async () => {
-      const sbom = await fetchJson(sbomEndpoint);
+      const sbom = await apiRequest(sbomEndpoint);
       if (sbom) await copyJson(sbom);
     });
 }
@@ -876,7 +848,7 @@ function renderStatusSnapshot(): void {
         row("Hostname", data.os?.hostname),
         row("Kernel", data.os?.kernelVersion),
         row("Uptime", formatUptime(data.os?.uptime)),
-        row("Total Memory", formatBytes(data.os?.totalMem)),
+        row("Total Memory", formatByteAmount(data.os?.totalMem)),
         row("CPU", data.os?.cpu?.modelName),
         row("CPU Capacity", formatCpuCapacity(data.os?.cpu)),
         row("Virtualization", formatVirtualization(data.os?.cpu)),
