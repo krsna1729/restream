@@ -42,6 +42,13 @@ Run the broad quiet-log gate before sign-off on test-heavy changes:
 
 ## Rules
 
+- Test-only code may **adapt or observe**; it must never **re-implement**. A
+  `#[cfg(test)]` constructor that hands a fake to production logic, or an
+  accessor that exposes internal state to assert on, is a legitimate seam. A
+  `#[cfg(test)]` function that repeats production's sequencing, bookkeeping, or
+  wire-format encoding is not: it drifts, and the tests then certify behavior
+  production never runs. Prefer injecting the fake through an existing type
+  parameter or constructor and calling the production function.
 - Do not add inline media generators to test-facing code when an existing fixture can cover the case.
 - Do not add a committed fixture without registering it in the fixture contract.
 - Do not run measurement harness modes from `target/debug` or `target/release`; use `./scripts/harness/run.sh` (or `./scripts/build/bench-harness.sh` followed by `target/bench/test_harness` when debugging the runner itself).

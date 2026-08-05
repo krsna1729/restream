@@ -169,6 +169,7 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 - Use `cargo fmt --all` and `cargo fmt --all --check`; do not run `rustfmt` directly.
 - Resolve media through `src/test_fixtures.rs`; add new committed assets to `REQUIRED_CHECKED_IN_FIXTURES`.
 - Prefer checked-in fixtures over inline media generation for tests, benches, and harness runs.
+- Test-only code may adapt or observe production code, never re-implement it: inject fakes through an existing type parameter or constructor and call the production function, rather than adding a `#[cfg(test)]` sibling that repeats its logic (see the test-guardrails skill).
 - For concurrency or thread-hop changes, extend `scripts/check/concurrency/fast.sh` or explain why the existing proof gate already covers the change.
 - If teardown or recovery semantics change, update the live harness assertion and the operator-visible status contract in the same change.
 - Gate selection by files touched: see the Inner Loop table above.
