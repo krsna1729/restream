@@ -48,7 +48,8 @@ impl ResourceMapOptions {
         }
     }
 
-    #[allow(dead_code)]
+    // Only called from api::agent::context, which is `#[cfg(feature = "agent-plane")]`.
+    #[cfg_attr(not(feature = "agent-plane"), allow(dead_code))]
     pub fn summary() -> Self {
         Self {
             view: ResourceMapView::Summary,

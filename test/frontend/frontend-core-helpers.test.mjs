@@ -207,16 +207,28 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
   assert.equal(copied.classList.contains("hidden"), false);
 
   assert.equal(utils.getStatusColor("warning"), "yellow");
-  assert.equal(utils.protocolUsesOutputServerPresets("hls"), true);
   assert.equal(
-    utils.resolvePresetOutputUrl(
+    utils.formatMaskedStreamKey("channel_secretvalue"),
+    "channel_se***ue",
+  );
+  assert.equal(utils.formatChannelCount(6), "5.1 (6 ch)");
+});
+
+test("editor output-url helpers resolve presets, protocols, and SRT fields", async () => {
+  const outputUrl = await loadCompiledFrontendModule(
+    "features/editor/output-url.js",
+  );
+
+  assert.equal(outputUrl.protocolUsesOutputServerPresets("hls"), true);
+  assert.equal(
+    outputUrl.resolvePresetOutputUrl(
       "https://a.upload.youtube.com/http_upload_hls?cid=${stream_key}",
       "stream key",
     ),
     "https://a.upload.youtube.com/http_upload_hls?cid=stream%20key",
   );
   assert.deepEqual(
-    utils.matchOutputServerPreset(
+    outputUrl.matchOutputServerPreset(
       "rtmp",
       "rtmp://a.rtmp.youtube.com/live2/abc123",
     ),
@@ -227,7 +239,7 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
     },
   );
   assert.deepEqual(
-    utils.matchOutputServerPreset(
+    outputUrl.matchOutputServerPreset(
       "rtmp",
       "rtmp://b.rtmp.youtube.com/live2?backup=1/backup-key",
     ),
@@ -238,7 +250,7 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
     },
   );
   assert.deepEqual(
-    utils.matchOutputServerPreset(
+    outputUrl.matchOutputServerPreset(
       "rtmp",
       "rtmps://live-api-s.facebook.com:443/rtmp/abc123",
     ),
@@ -248,21 +260,21 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
     },
   );
   assert.equal(
-    utils.detectOutputProtocol("https://example.com/live/out.m3u8"),
+    outputUrl.detectOutputProtocol("https://example.com/live/out.m3u8"),
     "hls",
   );
   assert.equal(
-    utils.extractCandidateStreamToken(
+    outputUrl.extractCandidateStreamToken(
       "srt://example.com:9000?streamid=publish:main-feed",
     ),
     "main-feed",
   );
   assert.equal(
-    utils.getDefaultOutputToken("https://example.com/hls/show/out.m3u8"),
+    outputUrl.getDefaultOutputToken("https://example.com/hls/show/out.m3u8"),
     "show",
   );
   assert.deepEqual(
-    utils.parseSrtFields(
+    outputUrl.parseSrtFields(
       "srt://example.com:10080?streamid=publish:feed&passphrase=supersecret1&pbkeylen=24&latency=200",
     ),
     {
@@ -275,14 +287,13 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
     },
   );
   assert.equal(
-    utils.buildDefaultCustomOutputUrl("rtmp", "rtmp://seed/live/key", "demo"),
+    outputUrl.buildDefaultCustomOutputUrl(
+      "rtmp",
+      "rtmp://seed/live/key",
+      "demo",
+    ),
     "rtmp://demo:1935/live/key",
   );
-  assert.equal(
-    utils.formatMaskedStreamKey("channel_secretvalue"),
-    "channel_se***ue",
-  );
-  assert.equal(utils.formatChannelCount(6), "5.1 (6 ch)");
 });
 
 test("audio track labels persist friendly names with title and language fallbacks", async () => {

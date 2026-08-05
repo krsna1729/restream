@@ -69,6 +69,40 @@ pub struct Alert {
     pub last_seen: Option<String>,
 }
 
+impl Alert {
+    /// Build an alert with no pipeline/stage/output scoping and no dedup
+    /// history. Callers that need `pipeline_id`/`stage_id`/`output_id` set
+    /// override them with struct-update syntax: `Alert { pipeline_id:
+    /// Some(...), ..Alert::new(...) }`.
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        id: String,
+        severity: Severity,
+        scope: Scope,
+        title: impl Into<String>,
+        cause: impl Into<String>,
+        evidence: Vec<String>,
+        recommended_action: impl Into<String>,
+        generated_at: &str,
+    ) -> Self {
+        Alert {
+            id,
+            severity,
+            scope,
+            pipeline_id: None,
+            stage_id: None,
+            output_id: None,
+            title: title.into(),
+            cause: cause.into(),
+            evidence,
+            recommended_action: recommended_action.into(),
+            generated_at: generated_at.to_string(),
+            first_seen: None,
+            last_seen: None,
+        }
+    }
+}
+
 // ─── Thresholds ──────────────────────────────────────────────────────────────
 
 /// Ring-buffer lag slots above this threshold trigger a Warning.
@@ -102,21 +136,16 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
     let srt = &snapshot["srtListener"];
     let udp_drops = srt.get("udpDrops").and_then(|v| v.as_u64()).unwrap_or(0);
     if udp_drops > 0 {
-        alerts.push(Alert {
-            id: "engine:srt_listener:udp_drops".into(),
-            severity: Severity::Warning,
-            scope: Scope::Engine,
-            pipeline_id: None,
-            stage_id: None,
-            output_id: None,
-            title: "SRT listener UDP drops detected".into(),
-            cause: "The SRT listener's kernel receive queue is overflowing.".into(),
-            evidence: vec![format!("udpDrops = {}", udp_drops)],
-            recommended_action: "Increase SO_RCVBUF or reduce SRT publisher bandwidth.".into(),
-            generated_at: generated_at.clone(),
-            first_seen: None,
-            last_seen: None,
-        });
+        alerts.push(Alert::new(
+            "engine:srt_listener:udp_drops".into(),
+            Severity::Warning,
+            Scope::Engine,
+            "SRT listener UDP drops detected",
+            "The SRT listener's kernel receive queue is overflowing.",
+            vec![format!("udpDrops = {}", udp_drops)],
+            "Increase SO_RCVBUF or reduce SRT publisher bandwidth.",
+            &generated_at,
+        ));
     }
 
     let nofile = &snapshot["runtimeLimits"]["nofile"];
@@ -138,24 +167,16 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
         if let Some(hard) = hard {
             evidence.push(format!("hard = {}", hard));
         }
-        alerts.push(Alert {
-            id: "engine:runtime:nofile_limit_too_low".into(),
-            severity: Severity::Warning,
-            scope: Scope::Engine,
-            pipeline_id: None,
-            stage_id: None,
-            output_id: None,
-            title: "Runtime file descriptor limit is below configured target".into(),
-            cause: "The process cannot open enough sockets/files for high fanout workloads."
-                .into(),
+        alerts.push(Alert::new(
+            "engine:runtime:nofile_limit_too_low".into(),
+            Severity::Warning,
+            Scope::Engine,
+            "Runtime file descriptor limit is below configured target",
+            "The process cannot open enough sockets/files for high fanout workloads.",
             evidence,
-            recommended_action:
-                "Run the documented host bootstrap/configuration and restart Restream with the requested nofile limit available."
-                    .into(),
-            generated_at: generated_at.clone(),
-            first_seen: None,
-            last_seen: None,
-        });
+            "Run the documented host bootstrap/configuration and restart Restream with the requested nofile limit available.",
+            &generated_at,
+        ));
     }
 
     let rtmp = &snapshot["rtmpListener"];
@@ -168,28 +189,19 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
             .get("acceptErrors")
             .and_then(|value| value.as_u64())
             .unwrap_or(0);
-        alerts.push(Alert {
-            id: "engine:rtmp_listener:fd_exhaustion".into(),
-            severity: Severity::Critical,
-            scope: Scope::Engine,
-            pipeline_id: None,
-            stage_id: None,
-            output_id: None,
-            title: "RTMP listener exhausted file descriptors".into(),
-            cause:
-                "The RTMP listener hit the process or host open-file limit while accepting connections."
-                    .into(),
-            evidence: vec![
+        alerts.push(Alert::new(
+            "engine:rtmp_listener:fd_exhaustion".into(),
+            Severity::Critical,
+            Scope::Engine,
+            "RTMP listener exhausted file descriptors",
+            "The RTMP listener hit the process or host open-file limit while accepting connections.",
+            vec![
                 format!("fdExhaustionErrors = {}", fd_exhaustion),
                 format!("acceptErrors = {}", accept_errors),
             ],
-            recommended_action:
-                "Raise the process/host nofile limit, reduce concurrent connections, and restart affected publishers."
-                    .into(),
-            generated_at: generated_at.clone(),
-            first_seen: None,
-            last_seen: None,
-        });
+            "Raise the process/host nofile limit, reduce concurrent connections, and restart affected publishers.",
+            &generated_at,
+        ));
     }
 
     // ── Per-pipeline checks ───────────────────────────────────────────────────
@@ -202,20 +214,17 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
             let input_status = input.get("status").and_then(|v| v.as_str()).unwrap_or("");
             if input_status == "off" {
                 alerts.push(Alert {
-                    id: format!("pipeline:{}:no_publisher", pipeline_id),
-                    severity: Severity::Critical,
-                    scope: Scope::Pipeline,
                     pipeline_id: Some(pipeline_id.clone()),
-                    stage_id: None,
-                    output_id: None,
-                    title: "No active publisher".into(),
-                    cause: "The pipeline is configured but not receiving a stream.".into(),
-                    evidence: vec!["input.status = off".into()],
-                    recommended_action:
-                        "Start the publisher or check the stream key and connection.".into(),
-                    generated_at: generated_at.clone(),
-                    first_seen: None,
-                    last_seen: None,
+                    ..Alert::new(
+                        format!("pipeline:{}:no_publisher", pipeline_id),
+                        Severity::Critical,
+                        Scope::Pipeline,
+                        "No active publisher",
+                        "The pipeline is configured but not receiving a stream.",
+                        vec!["input.status = off".into()],
+                        "Start the publisher or check the stream key and connection.",
+                        &generated_at,
+                    )
                 });
             }
 
@@ -227,36 +236,34 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                 && pct >= SRT_RECV_BUFFER_WARN_PCT
             {
                 let critical = pct >= SRT_RECV_BUFFER_CRITICAL_PCT;
+                let severity = if critical {
+                    Severity::Critical
+                } else {
+                    Severity::Warning
+                };
+                let title = if critical {
+                    "SRT publisher ingest is not being drained"
+                } else {
+                    "SRT publisher ingest receive buffer is filling"
+                };
                 alerts.push(Alert {
-                    id: format!("pipeline:{}:input:srt_recv_buffer_saturated", pipeline_id),
-                    severity: if critical {
-                        Severity::Critical
-                    } else {
-                        Severity::Warning
-                    },
-                    scope: Scope::Pipeline,
                     pipeline_id: Some(pipeline_id.clone()),
-                    stage_id: None,
-                    output_id: None,
-                    title: if critical {
-                        "SRT publisher ingest is not being drained".into()
-                    } else {
-                        "SRT publisher ingest receive buffer is filling".into()
-                    },
-                    cause: "The SRT application receive buffer is full or nearly full. The publisher can still be connected while Restream is not draining ingest data, so downstream outputs will stall.".into(),
-                    evidence: vec![
-                        format!(
-                            "srtRecvBufBytes = {} / {} ({:.0}%)",
-                            recv_bytes, total_bytes, pct
-                        ),
-                        "kernel UDP queue may still be empty because packets have already entered libsrt".into(),
-                    ],
-                    recommended_action:
-                        "Treat this as an input/ingest issue first: restart the affected publisher or Restream, then inspect SRT ingest readiness if it recurs."
-                            .into(),
-                    generated_at: generated_at.clone(),
-                    first_seen: None,
-                    last_seen: None,
+                    ..Alert::new(
+                        format!("pipeline:{}:input:srt_recv_buffer_saturated", pipeline_id),
+                        severity,
+                        Scope::Pipeline,
+                        title,
+                        "The SRT application receive buffer is full or nearly full. The publisher can still be connected while Restream is not draining ingest data, so downstream outputs will stall.",
+                        vec![
+                            format!(
+                                "srtRecvBufBytes = {} / {} ({:.0}%)",
+                                recv_bytes, total_bytes, pct
+                            ),
+                            "kernel UDP queue may still be empty because packets have already entered libsrt".into(),
+                        ],
+                        "Treat this as an input/ingest issue first: restart the affected publisher or Restream, then inspect SRT ingest readiness if it recurs.",
+                        &generated_at,
+                    )
                 });
             }
 
@@ -271,25 +278,21 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     let lag = reader.get("lagSlots").and_then(|v| v.as_u64()).unwrap_or(0);
                     if lag > LAG_SLOTS_WARN {
                         alerts.push(Alert {
-                            id: format!("pipeline:{}:stage:{}:lag", pipeline_id, name),
-                            severity: Severity::Warning,
-                            scope: Scope::Stage,
                             pipeline_id: Some(pipeline_id.clone()),
                             stage_id: Some(name.to_string()),
-                            output_id: None,
-                            title: format!("Stage '{}' is lagging behind the ring buffer", name),
-                            cause: "The consumer is reading slower than the producer is writing."
-                                .into(),
-                            evidence: vec![format!(
-                                "lagSlots = {} (threshold {})",
-                                lag, LAG_SLOTS_WARN
-                            )],
-                            recommended_action:
-                                "Check downstream network/encoder throughput or reduce output bitrate."
-                                    .into(),
-                            generated_at: generated_at.clone(),
-                            first_seen: None,
-                            last_seen: None,
+                            ..Alert::new(
+                                format!("pipeline:{}:stage:{}:lag", pipeline_id, name),
+                                Severity::Warning,
+                                Scope::Stage,
+                                format!("Stage '{}' is lagging behind the ring buffer", name),
+                                "The consumer is reading slower than the producer is writing.",
+                                vec![format!(
+                                    "lagSlots = {} (threshold {})",
+                                    lag, LAG_SLOTS_WARN
+                                )],
+                                "Check downstream network/encoder throughput or reduce output bitrate.",
+                                &generated_at,
+                            )
                         });
                     }
 
@@ -299,26 +302,22 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                         .unwrap_or(0);
                     if overflows > 0 {
                         alerts.push(Alert {
-                            id: format!("pipeline:{}:stage:{}:overflow", pipeline_id, name),
-                            severity: Severity::Warning,
-                            scope: Scope::Stage,
                             pipeline_id: Some(pipeline_id.clone()),
                             stage_id: Some(name.to_string()),
-                            output_id: None,
-                            title: format!(
-                                "Stage '{}' has overflowed the ring buffer {} time(s)",
-                                name, overflows
-                            ),
-                            cause:
+                            ..Alert::new(
+                                format!("pipeline:{}:stage:{}:overflow", pipeline_id, name),
+                                Severity::Warning,
+                                Scope::Stage,
+                                format!(
+                                    "Stage '{}' has overflowed the ring buffer {} time(s)",
+                                    name, overflows
+                                ),
                                 "The ring buffer was full when this reader tried to consume packets; \
-                                    some packets were skipped."
-                                    .into(),
-                            evidence: vec![format!("overflowCount = {}", overflows)],
-                            recommended_action:
-                                "Reduce output count or increase processing throughput.".into(),
-                            generated_at: generated_at.clone(),
-                            first_seen: None,
-                            last_seen: None,
+                                    some packets were skipped.",
+                                vec![format!("overflowCount = {}", overflows)],
+                                "Reduce output count or increase processing throughput.",
+                                &generated_at,
+                            )
                         });
                     }
                 }
@@ -351,59 +350,52 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                                 .and_then(|v| v.as_u64())
                                 .unwrap_or(0);
                             alerts.push(Alert {
-                                id: format!(
-                                    "pipeline:{}:output:{}:retry_admission_saturation",
-                                    pipeline_id, output_id
-                                ),
-                                severity: Severity::Warning,
-                                scope: Scope::Output,
                                 pipeline_id: Some(pipeline_id.clone()),
-                                stage_id: None,
                                 output_id: Some(output_id.clone()),
-                                title: format!(
-                                    "Output '{}' is close to exhausting its retry budget",
-                                    output_id
-                                ),
-                                cause: "The output has failed and retried repeatedly; once it \
+                                ..Alert::new(
+                                    format!(
+                                        "pipeline:{}:output:{}:retry_admission_saturation",
+                                        pipeline_id, output_id
+                                    ),
+                                    Severity::Warning,
+                                    Scope::Output,
+                                    format!(
+                                        "Output '{}' is close to exhausting its retry budget",
+                                        output_id
+                                    ),
+                                    "The output has failed and retried repeatedly; once it \
                                     reaches the configured retry ceiling it stops retrying and \
-                                    requires manual intervention to restart."
-                                    .into(),
-                                evidence: vec![format!(
-                                    "retryAttempts = {attempts} / outputMaxRetries = {output_max_retries}, retryBackoffMs = {backoff_ms}"
-                                )],
-                                recommended_action:
+                                    requires manual intervention to restart.",
+                                    vec![format!(
+                                        "retryAttempts = {attempts} / outputMaxRetries = {output_max_retries}, retryBackoffMs = {backoff_ms}"
+                                    )],
                                     "Investigate why the destination keeps rejecting connections \
-                                    before the retry budget is exhausted, or raise RESTREAM_OUTPUT_MAX_RETRIES."
-                                        .into(),
-                                generated_at: generated_at.clone(),
-                                first_seen: None,
-                                last_seen: None,
+                                    before the retry budget is exhausted, or raise RESTREAM_OUTPUT_MAX_RETRIES.",
+                                    &generated_at,
+                                )
                             });
                             continue;
                         }
 
                         alerts.push(Alert {
-                            id: format!(
-                                "pipeline:{}:output:{}:not_running",
-                                pipeline_id, output_id
-                            ),
-                            severity: Severity::Warning,
-                            scope: Scope::Output,
                             pipeline_id: Some(pipeline_id.clone()),
-                            stage_id: None,
                             output_id: Some(output_id.clone()),
-                            title: format!("Output '{}' is not running", output_id),
-                            cause: format!(
-                                "Output status is '{}' while the pipeline has an active publisher.",
-                                status
-                            ),
-                            evidence: vec![format!("output.status = {}", status)],
-                            recommended_action:
-                                "Check the destination URL, credentials, and network reachability."
-                                    .into(),
-                            generated_at: generated_at.clone(),
-                            first_seen: None,
-                            last_seen: None,
+                            ..Alert::new(
+                                format!(
+                                    "pipeline:{}:output:{}:not_running",
+                                    pipeline_id, output_id
+                                ),
+                                Severity::Warning,
+                                Scope::Output,
+                                format!("Output '{}' is not running", output_id),
+                                format!(
+                                    "Output status is '{}' while the pipeline has an active publisher.",
+                                    status
+                                ),
+                                vec![format!("output.status = {}", status)],
+                                "Check the destination URL, credentials, and network reachability.",
+                                &generated_at,
+                            )
                         });
                         continue;
                     }
@@ -419,24 +411,21 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                             .and_then(|v| v.as_str())
                             .unwrap_or("unknown error");
                         alerts.push(Alert {
-                            id: format!("pipeline:{}:output:{}:failed_phase", pipeline_id, output_id),
-                            severity: Severity::Warning,
-                            scope: Scope::Output,
                             pipeline_id: Some(pipeline_id.clone()),
-                            stage_id: None,
                             output_id: Some(output_id.clone()),
-                            title: format!("Output '{}' reported an egress failure", output_id),
-                            cause: format!("Output failed during the '{}' phase.", failure_phase),
-                            evidence: vec![
-                                format!("output.phase = {}", phase),
-                                format!("lastError = {}", last_error),
-                            ],
-                            recommended_action:
-                                "Check destination reachability, credentials, and protocol settings."
-                                    .into(),
-                            generated_at: generated_at.clone(),
-                            first_seen: None,
-                            last_seen: None,
+                            ..Alert::new(
+                                format!("pipeline:{}:output:{}:failed_phase", pipeline_id, output_id),
+                                Severity::Warning,
+                                Scope::Output,
+                                format!("Output '{}' reported an egress failure", output_id),
+                                format!("Output failed during the '{}' phase.", failure_phase),
+                                vec![
+                                    format!("output.phase = {}", phase),
+                                    format!("lastError = {}", last_error),
+                                ],
+                                "Check destination reachability, credentials, and protocol settings.",
+                                &generated_at,
+                            )
                         });
                         continue;
                     }
@@ -455,29 +444,29 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                             .and_then(|v| v.as_str())
                             .unwrap_or("unknown");
                         alerts.push(Alert {
-                            id: format!(
-                                "pipeline:{}:output:{}:blocked_by_stage",
-                                pipeline_id, output_id
-                            ),
-                            severity: Severity::Warning,
-                            scope: Scope::Output,
                             pipeline_id: Some(pipeline_id.clone()),
                             stage_id: Some(stage.to_string()),
                             output_id: Some(output_id.clone()),
-                            title: format!("Output '{}' is blocked by upstream stage", output_id),
-                            cause: format!(
-                                "The output is waiting on stage '{}' in phase '{}'.",
-                                stage, blocked_phase
-                            ),
-                            evidence: vec![
-                                format!("blockedBy.stage = {}", stage),
-                                format!("blockedBy.phase = {}", blocked_phase),
-                                format!("blockedBy.backend = {}", backend),
-                            ],
-                            recommended_action: blocked_output_action(blocked_phase).into(),
-                            generated_at: generated_at.clone(),
-                            first_seen: None,
-                            last_seen: None,
+                            ..Alert::new(
+                                format!(
+                                    "pipeline:{}:output:{}:blocked_by_stage",
+                                    pipeline_id, output_id
+                                ),
+                                Severity::Warning,
+                                Scope::Output,
+                                format!("Output '{}' is blocked by upstream stage", output_id),
+                                format!(
+                                    "The output is waiting on stage '{}' in phase '{}'.",
+                                    stage, blocked_phase
+                                ),
+                                vec![
+                                    format!("blockedBy.stage = {}", stage),
+                                    format!("blockedBy.phase = {}", blocked_phase),
+                                    format!("blockedBy.backend = {}", backend),
+                                ],
+                                blocked_output_action(blocked_phase),
+                                &generated_at,
+                            )
                         });
                         continue;
                     }
@@ -494,26 +483,21 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                         });
                     if total_size > 0 && last_progress_age_ms >= 10_000 {
                         alerts.push(Alert {
-                            id: format!("pipeline:{}:output:{}:stale_progress", pipeline_id, output_id),
-                            severity: Severity::Warning,
-                            scope: Scope::Output,
                             pipeline_id: Some(pipeline_id.clone()),
-                            stage_id: None,
                             output_id: Some(output_id.clone()),
-                            title: format!("Output '{}' has stopped making progress", output_id),
-                            cause:
-                                "The output is still registered but has not completed a send recently."
-                                    .into(),
-                            evidence: vec![format!(
-                                "lastProgressAgeMs = {} (threshold 10000)",
-                                last_progress_age_ms
-                            )],
-                            recommended_action:
-                                "Check downstream network health or restart the output if it remains stale."
-                                    .into(),
-                            generated_at: generated_at.clone(),
-                            first_seen: None,
-                            last_seen: None,
+                            ..Alert::new(
+                                format!("pipeline:{}:output:{}:stale_progress", pipeline_id, output_id),
+                                Severity::Warning,
+                                Scope::Output,
+                                format!("Output '{}' has stopped making progress", output_id),
+                                "The output is still registered but has not completed a send recently.",
+                                vec![format!(
+                                    "lastProgressAgeMs = {} (threshold 10000)",
+                                    last_progress_age_ms
+                                )],
+                                "Check downstream network health or restart the output if it remains stale.",
+                                &generated_at,
+                            )
                         });
                     }
                 }
@@ -534,22 +518,21 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown error");
                     alerts.push(Alert {
-                        id: format!("pipeline:{}:stage:{}:failed", pipeline_id, stage_kind),
-                        severity: Severity::Warning,
-                        scope: Scope::Stage,
                         pipeline_id: Some(pipeline_id.to_string()),
                         stage_id: Some(stage_kind.to_string()),
-                        output_id: None,
-                        title: format!("Stage '{}' has failed", stage_kind),
-                        cause: format!("The processing stage failed with error: {}.", last_error),
-                        evidence: vec![
-                            "phase = failed".into(),
-                            format!("lastError = {}", last_error),
-                        ],
-                        recommended_action: "Check the transcoder logs, resource limits, and media source compatibility.".into(),
-                        generated_at: generated_at.clone(),
-                        first_seen: None,
-                        last_seen: None,
+                        ..Alert::new(
+                            format!("pipeline:{}:stage:{}:failed", pipeline_id, stage_kind),
+                            Severity::Warning,
+                            Scope::Stage,
+                            format!("Stage '{}' has failed", stage_kind),
+                            format!("The processing stage failed with error: {}.", last_error),
+                            vec![
+                                "phase = failed".into(),
+                                format!("lastError = {}", last_error),
+                            ],
+                            "Check the transcoder logs, resource limits, and media source compatibility.",
+                            &generated_at,
+                        )
                     });
                 }
 
@@ -575,28 +558,24 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     && bytes_out == 0
                 {
                     alerts.push(Alert {
-                        id: format!("pipeline:{}:stage:{}:no_output", pipeline_id, stage_kind),
-                        severity: Severity::Warning,
-                        scope: Scope::Stage,
                         pipeline_id: Some(pipeline_id.to_string()),
                         stage_id: Some(stage_kind.to_string()),
-                        output_id: None,
-                        title: format!("Stage '{}' is receiving input but has no output", stage_kind),
-                        cause: "The stage backend has accepted input but has not produced any packets."
-                            .into(),
-                        evidence: vec![
-                            format!("phase = {}", phase_name),
-                            format!("packetsIn = {}", packets_in),
-                            format!("packetsOut = {}", packets_out),
-                            format!("bytesIn = {}", bytes_in),
-                            format!("bytesOut = {}", bytes_out),
-                        ],
-                        recommended_action:
-                            "Check backend stderr, codec compatibility, and downstream stage readiness."
-                                .into(),
-                        generated_at: generated_at.clone(),
-                        first_seen: None,
-                        last_seen: None,
+                        ..Alert::new(
+                            format!("pipeline:{}:stage:{}:no_output", pipeline_id, stage_kind),
+                            Severity::Warning,
+                            Scope::Stage,
+                            format!("Stage '{}' is receiving input but has no output", stage_kind),
+                            "The stage backend has accepted input but has not produced any packets.",
+                            vec![
+                                format!("phase = {}", phase_name),
+                                format!("packetsIn = {}", packets_in),
+                                format!("packetsOut = {}", packets_out),
+                                format!("bytesIn = {}", bytes_in),
+                                format!("bytesOut = {}", bytes_out),
+                            ],
+                            "Check backend stderr, codec compatibility, and downstream stage readiness.",
+                            &generated_at,
+                        )
                     });
                 }
 
@@ -604,26 +583,21 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     && (stage_kind.starts_with("preview:") || stage_kind == "hls")
                 {
                     alerts.push(Alert {
-                        id: format!(
-                            "pipeline:{}:stage:{}:waiting_for_keyframe",
-                            pipeline_id, stage_kind
-                        ),
-                        severity: Severity::Warning,
-                        scope: Scope::Stage,
                         pipeline_id: Some(pipeline_id.to_string()),
                         stage_id: Some(stage_kind.to_string()),
-                        output_id: None,
-                        title: format!("Preview stage '{}' is waiting for a keyframe", stage_kind),
-                        cause:
-                            "HLS/preview output cannot start until the source produces a video keyframe."
-                                .into(),
-                        evidence: vec![format!("phase = {}", phase_name)],
-                        recommended_action:
-                            "Shorten the source GOP/keyframe interval or wait for the next keyframe."
-                                .into(),
-                        generated_at: generated_at.clone(),
-                        first_seen: None,
-                        last_seen: None,
+                        ..Alert::new(
+                            format!(
+                                "pipeline:{}:stage:{}:waiting_for_keyframe",
+                                pipeline_id, stage_kind
+                            ),
+                            Severity::Warning,
+                            Scope::Stage,
+                            format!("Preview stage '{}' is waiting for a keyframe", stage_kind),
+                            "HLS/preview output cannot start until the source produces a video keyframe.",
+                            vec![format!("phase = {}", phase_name)],
+                            "Shorten the source GOP/keyframe interval or wait for the next keyframe.",
+                            &generated_at,
+                        )
                     });
                 }
 
@@ -634,25 +608,24 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
 
                 if phase_name == "waitingForCapacity" || capacity_wait_ms >= CAPACITY_WAIT_WARN_MS {
                     alerts.push(Alert {
-                        id: format!("pipeline:{}:stage:{}:capacity_exhausted", pipeline_id, stage_kind),
-                        severity: Severity::Warning,
-                        scope: Scope::Stage,
                         pipeline_id: Some(pipeline_id.to_string()),
                         stage_id: Some(stage_kind.to_string()),
-                        output_id: None,
-                        title: format!("Transcoding capacity exhausted for stage '{}'", stage_kind),
-                        cause: "The stage is waiting for transcoding capacity/permits to become available.".into(),
-                        evidence: vec![
-                            format!("phase = {}", phase_name),
-                            format!(
-                                "capacityWaitMs = {} ms (threshold {})",
-                                capacity_wait_ms, CAPACITY_WAIT_WARN_MS
-                            ),
-                        ],
-                        recommended_action: "Increase RESTREAM_EXTERNAL_FFMPEG_PERMITS, reduce pipeline count, or lower encoding presets.".into(),
-                        generated_at: generated_at.clone(),
-                        first_seen: None,
-                        last_seen: None,
+                        ..Alert::new(
+                            format!("pipeline:{}:stage:{}:capacity_exhausted", pipeline_id, stage_kind),
+                            Severity::Warning,
+                            Scope::Stage,
+                            format!("Transcoding capacity exhausted for stage '{}'", stage_kind),
+                            "The stage is waiting for transcoding capacity/permits to become available.",
+                            vec![
+                                format!("phase = {}", phase_name),
+                                format!(
+                                    "capacityWaitMs = {} ms (threshold {})",
+                                    capacity_wait_ms, CAPACITY_WAIT_WARN_MS
+                                ),
+                            ],
+                            "Increase RESTREAM_EXTERNAL_FFMPEG_PERMITS, reduce pipeline count, or lower encoding presets.",
+                            &generated_at,
+                        )
                     });
                 }
             }
@@ -677,21 +650,16 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
 
         match state {
             "panicked" => {
-                alerts.push(Alert {
-                    id: format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:panicked"),
-                    severity: Severity::Critical,
-                    scope: Scope::Engine,
-                    pipeline_id: None,
-                    stage_id: None,
-                    output_id: None,
-                    title: format!("Egress fabric shard panicked ({shard_label})"),
-                    cause: "The shard's OS thread panicked and every output assigned to it lost its connection until the supervisor replaces the shard.".into(),
-                    evidence: vec![format!("state = panicked ({shard_label})")],
-                    recommended_action: "Check logs for the panic message and stack trace at the time this shard stopped; outputs on this shard will reconnect once the supervisor replaces it.".into(),
-                    generated_at: generated_at.clone(),
-                    first_seen: None,
-                    last_seen: None,
-                });
+                alerts.push(Alert::new(
+                    format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:panicked"),
+                    Severity::Critical,
+                    Scope::Engine,
+                    format!("Egress fabric shard panicked ({shard_label})"),
+                    "The shard's OS thread panicked and every output assigned to it lost its connection until the supervisor replaces the shard.",
+                    vec![format!("state = panicked ({shard_label})")],
+                    "Check logs for the panic message and stack trace at the time this shard stopped; outputs on this shard will reconnect once the supervisor replaces it.",
+                    &generated_at,
+                ));
             }
             "stalled" => {
                 let progress_age_ms = shard.get("progressAgeMs").and_then(|v| v.as_u64());
@@ -699,21 +667,16 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                 if let Some(age) = progress_age_ms {
                     evidence.push(format!("progressAgeMs = {age}"));
                 }
-                alerts.push(Alert {
-                    id: format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:stalled"),
-                    severity: Severity::Warning,
-                    scope: Scope::Engine,
-                    pipeline_id: None,
-                    stage_id: None,
-                    output_id: None,
-                    title: format!("Egress fabric shard has made no progress ({shard_label})"),
-                    cause: "The shard has produced no media ticks for longer than the stall threshold; every output assigned to it may be stuck.".into(),
+                alerts.push(Alert::new(
+                    format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:stalled"),
+                    Severity::Warning,
+                    Scope::Engine,
+                    format!("Egress fabric shard has made no progress ({shard_label})"),
+                    "The shard has produced no media ticks for longer than the stall threshold; every output assigned to it may be stuck.",
                     evidence,
-                    recommended_action: "Check whether this shard's assigned outputs have healthy destinations; a genuinely idle shard with no assigned outputs is expected to age past the threshold and is not itself a problem.".into(),
-                    generated_at: generated_at.clone(),
-                    first_seen: None,
-                    last_seen: None,
-                });
+                    "Check whether this shard's assigned outputs have healthy destinations; a genuinely idle shard with no assigned outputs is expected to age past the threshold and is not itself a problem.",
+                    &generated_at,
+                ));
             }
             _ => {}
         }
@@ -729,23 +692,18 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
         if command_capacity > 0 {
             let occupancy_pct = command_depth as f64 / command_capacity as f64 * 100.0;
             if occupancy_pct >= COMMAND_CHANNEL_OVERLOAD_WARN_PCT {
-                alerts.push(Alert {
-                    id: format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:command_overload"),
-                    severity: Severity::Warning,
-                    scope: Scope::Engine,
-                    pipeline_id: None,
-                    stage_id: None,
-                    output_id: None,
-                    title: format!("Egress fabric shard command channel near capacity ({shard_label})"),
-                    cause: "The shard's command channel (add/remove/update dispatch) is close to full; further commands risk being rejected until the shard catches up.".into(),
-                    evidence: vec![format!(
+                alerts.push(Alert::new(
+                    format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:command_overload"),
+                    Severity::Warning,
+                    Scope::Engine,
+                    format!("Egress fabric shard command channel near capacity ({shard_label})"),
+                    "The shard's command channel (add/remove/update dispatch) is close to full; further commands risk being rejected until the shard catches up.",
+                    vec![format!(
                         "commandDepth = {command_depth} / commandCapacity = {command_capacity} ({occupancy_pct:.1}%)"
                     )],
-                    recommended_action: "Reduce the rate of output add/remove/update churn against this shard, or raise RESTREAM_EGRESS_COMMAND_CAPACITY.".into(),
-                    generated_at: generated_at.clone(),
-                    first_seen: None,
-                    last_seen: None,
-                });
+                    "Reduce the rate of output add/remove/update churn against this shard, or raise RESTREAM_EGRESS_COMMAND_CAPACITY.",
+                    &generated_at,
+                ));
             }
         }
 
@@ -754,23 +712,18 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
         if resync_count >= REPEATED_RESYNC_WARN_THRESHOLD {
-            alerts.push(Alert {
-                id: format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:repeated_resync"),
-                severity: Severity::Warning,
-                scope: Scope::Engine,
-                pipeline_id: None,
-                stage_id: None,
-                output_id: None,
-                title: format!("Repeated egress resynchronizations detected ({shard_label})"),
-                cause: "The egress shard is experiencing repeated feed overruns and resynchronizing leaf cursors.".into(),
-                evidence: vec![format!(
+            alerts.push(Alert::new(
+                format!("engine:egress_fabric:{protocol}:{feed_id}:{shard_index}:repeated_resync"),
+                Severity::Warning,
+                Scope::Engine,
+                format!("Repeated egress resynchronizations detected ({shard_label})"),
+                "The egress shard is experiencing repeated feed overruns and resynchronizing leaf cursors.",
+                vec![format!(
                     "resyncCount = {resync_count} (threshold {REPEATED_RESYNC_WARN_THRESHOLD})"
                 )],
-                recommended_action: "Check pipeline ring buffer capacity and downstream network bandwidth.".into(),
-                generated_at: generated_at.clone(),
-                first_seen: None,
-                last_seen: None,
-            });
+                "Check pipeline ring buffer capacity and downstream network bandwidth.",
+                &generated_at,
+            ));
         }
     }
 

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Pipeline recirculation fabric shard backend: wires [`PipelineEngine`]
 //! into [`EgressShardBackend`] — the production home
 //! `crate::media::recirculation::start_pipeline_recirculation`'s plain

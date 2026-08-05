@@ -106,7 +106,6 @@ pub(super) const SRT_GST_RUNNING: c_int = 2;
 pub(super) const SRT_GST_BROKEN: c_int = 3;
 
 pub(super) const SRT_EPOLL_IN: c_int = 0x1;
-#[allow(dead_code)]
 pub(super) const SRT_EPOLL_OUT: c_int = 0x4;
 pub(super) const SRT_EPOLL_ERR: c_int = 0x8;
 
@@ -241,9 +240,7 @@ unsafe extern "C" {
     ) -> c_int;
     pub fn srt_epoll_create() -> c_int;
     pub fn srt_epoll_add_usock(eid: c_int, u: SRTSOCKET, events: *const c_int) -> c_int;
-    #[allow(dead_code)]
     pub fn srt_epoll_update_usock(eid: c_int, u: SRTSOCKET, events: *const c_int) -> c_int;
-    #[allow(dead_code)]
     pub fn srt_epoll_remove_usock(eid: c_int, u: SRTSOCKET) -> c_int;
     pub fn srt_epoll_release(eid: c_int) -> c_int;
     pub fn srt_epoll_wait(

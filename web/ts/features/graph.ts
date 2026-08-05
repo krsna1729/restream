@@ -1,4 +1,5 @@
 import { getProcessingGraph } from "../core/api.js";
+import { formatByteAmount } from "../core/utils.js";
 
 interface GraphNode {
   id: string;
@@ -37,15 +38,6 @@ export async function fetchProcessingGraph(
 ): Promise<GraphData | null> {
   const data = (await getProcessingGraph(pipeId)) as GraphData | null;
   return data;
-}
-
-function formatBytes(value: unknown): string {
-  const b = Number(value);
-  if (!Number.isFinite(b) || b < 0) return "--";
-  if (b < 1024) return `${b.toFixed(0)} B`;
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KiB`;
-  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MiB`;
-  return `${(b / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
 }
 
 function formatRate(value: unknown): string {
@@ -300,7 +292,7 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
     ) {
       detailLines.push(`in: ${formatKbps(node.details.bitrateKbps)}`);
       detailLines.push(
-        `received: ${formatBytes(node.details.bytesReceived as number)}`,
+        `received: ${formatByteAmount(node.details.bytesReceived as number)}`,
       );
       if (node.details.lastProgressAgeMs !== undefined) {
         detailLines.push(`progress: ${formatAgeMs(node.details.lastProgressAgeMs)}`);
@@ -334,7 +326,7 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
       const phase = String(node.details.phase || "unknown");
       detailLines.push(`${status} | ${phase}`);
       detailLines.push(
-        `${formatKbps(node.details.bitrateKbps)} | ${formatBytes(node.details.totalSize)}`,
+        `${formatKbps(node.details.bitrateKbps)} | ${formatByteAmount(node.details.totalSize)}`,
       );
       const lastError =
         typeof node.details.lastError === "string"
@@ -389,12 +381,12 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
       const my = pos.y + NODE_H - 10;
       const inMetricLabel =
         node.type === "ingest"
-          ? `in: ${formatBytes(bytesInPerSec)}/s`
-          : `in: ${formatRate(packetsPerSec)} pkt | ${formatBytes(bytesInPerSec)}/s`;
+          ? `in: ${formatByteAmount(bytesInPerSec)}/s`
+          : `in: ${formatRate(packetsPerSec)} pkt | ${formatByteAmount(bytesInPerSec)}/s`;
       svg += `<text x="${pos.x + 10}" y="${my + 10}" fill="#9ca3af" font-size="10">${inMetricLabel}</text>`;
       const outLabel =
         finiteNumber(m.bytesOut) > 0
-          ? `out: ${formatBytes(bytesOutPerSec)}/s`
+          ? `out: ${formatByteAmount(bytesOutPerSec)}/s`
           : node.type === "ingest"
             ? "fan-out: source buffer"
             : "out: n/a";

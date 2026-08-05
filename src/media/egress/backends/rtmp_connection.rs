@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Plain-or-TLS transport for the RTMP fabric engine.
 //!
 //! Wraps a non-blocking `std::net::TcpStream` directly with
@@ -31,6 +29,7 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, ClientConnection, StreamOwned};
 
 use crate::media::egress::backend::Interest;
+#[cfg(test)]
 use crate::media::rtmp::rustls_client_config;
 
 pub(crate) enum RtmpConnection {
@@ -43,6 +42,10 @@ impl RtmpConnection {
         Self::Plain(stream)
     }
 
+    // Production always calls `tls_with_config` directly with an explicit
+    // client config (see rtmp_shard.rs); this default-config convenience
+    // wrapper is only exercised by tests.
+    #[cfg(test)]
     pub(crate) fn tls(stream: TcpStream, host: &str) -> Result<Self, String> {
         Self::tls_with_config(stream, host, rustls_client_config())
     }

@@ -121,7 +121,6 @@ trait SrtFabricConnectOps {
     ) -> Result<SRTSOCKET, String>;
 }
 
-#[allow(dead_code)]
 struct LibSrtFabricConnectOps;
 
 impl SrtFabricConnectOps for LibSrtFabricConnectOps {

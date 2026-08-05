@@ -170,7 +170,6 @@ impl EgressFabricConfig {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn shard_count(&self) -> NonZeroU32 {
         NonZeroU32::new(self.shards).expect("egress fabric shard count is clamped nonzero")
     }
@@ -223,7 +222,6 @@ impl EgressFabricConfig {
         warnings
     }
 
-    #[allow(dead_code)]
     pub(crate) fn shard_config(&self) -> EgressShardConfig {
         EgressShardConfig::new(
             self.command_channel_capacity,
@@ -236,7 +234,6 @@ impl EgressFabricConfig {
         .with_drain_timeout(Duration::from_millis(self.drain_timeout_ms))
     }
 
-    #[allow(dead_code)]
     pub(crate) fn work_budget(&self) -> WorkBudget {
         WorkBudget::new(
             self.visit_max_units,

@@ -132,7 +132,6 @@ pub use sys::{
 pub(crate) struct SrtFabricPoller(srt_egress_poller::SrtEgressPoller);
 
 impl SrtFabricPoller {
-    #[allow(dead_code)]
     pub(crate) fn new(max_events: usize) -> Result<Self, SrtEgressPollError> {
         srt_egress_poller::SrtEgressPoller::new(max_events).map(Self)
     }

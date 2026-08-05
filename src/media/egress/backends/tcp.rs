@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Raw-epoll TCP readiness backend for the RTMP/RTMPS fabric.
 //!
 //! Mirrors `src/media/srt/egress_poller.rs`'s shape (one epoll container per
@@ -21,6 +19,9 @@ pub(crate) struct TcpEgressInterest {
 }
 
 impl TcpEgressInterest {
+    // Only constructed by tests; production only ever registers WRITE
+    // interest (the fabric writes to already-connected TCP sockets).
+    #[cfg(test)]
     pub const READ: Self = Self {
         readable: true,
         writable: false,
@@ -29,6 +30,7 @@ impl TcpEgressInterest {
         readable: false,
         writable: true,
     };
+    #[cfg(test)]
     pub const READ_WRITE: Self = Self {
         readable: true,
         writable: true,

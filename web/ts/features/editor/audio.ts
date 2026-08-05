@@ -1,7 +1,9 @@
 import {
-  isAbsoluteUrl, resolvePresetOutputUrl, detectOutputProtocol,
-  formatChannelCount, formatCodecName, OUTPUT_SERVER_PRESETS,
+  isAbsoluteUrl, formatChannelCount, formatCodecName,
 } from "../../core/utils.js";
+import {
+  resolvePresetOutputUrl, detectOutputProtocol, OUTPUT_SERVER_PRESETS,
+} from "./output-url.js";
 import {
   detectAudioPlatform, detectAudioProtocol, getAudioCaps, getAudioPlatformLabel,
 } from "../../core/audio-caps.js";

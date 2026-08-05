@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! RTMP fabric protocol engine: the shard-scheduled, readiness-driven
 //! counterpart to the RTMP fabric's [`crate::media::egress::backends::tcp`]
 //! poller and [`crate::media::egress::backends::tcp_connect`] dial.

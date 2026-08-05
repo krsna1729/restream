@@ -307,6 +307,10 @@ function getEngineSbomEndpoint(
   return status?.sbom?.endpoint || DEFAULT_ENGINE_SBOM_ENDPOINT;
 }
 
+async function getEngineSbom(endpoint: string): Promise<unknown | null> {
+  return apiRequest(endpoint);
+}
+
 async function getAudioCapsPayload(): Promise<Record<string, unknown> | null> {
   return apiRequest<Record<string, unknown>>("/api/v1/audio-caps");
 }
@@ -891,6 +895,7 @@ export {
   getStreamKeys,
   getEngineStatus,
   getEngineSbomEndpoint,
+  getEngineSbom,
   getAudioCapsPayload,
   runPipelineDiagnostics,
   buildLogsStreamUrl,

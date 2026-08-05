@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Non-blocking RTMP client handshake for the fabric TCP leaf.
 //!
 //! Drives `rml_rtmp::handshake::Handshake` — the same pure, socket-

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use bytes::Bytes;
 use std::os::raw::c_int;
 
@@ -107,6 +105,7 @@ where
         }
     }
 
+    #[cfg(test)]
     pub(super) fn socket(&self) -> Option<SRTSOCKET> {
         self.socket
     }

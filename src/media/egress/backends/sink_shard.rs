@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Sink fabric shard backend: wires [`SinkEngine`] into
 //! [`EgressShardBackend`] on real shard OS threads — the production
 //! counterpart to the test-only `SinkHarnessBackend`

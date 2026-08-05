@@ -6,12 +6,13 @@ use crate::media::egress::backends::rtmp_shard_resolve_runtime::resolving_rtmp_s
 use crate::media::egress::backends::tcp::{TcpEgressPollError, TcpEgressPoller};
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId};
 use crate::media::egress::factory::{RtmpFabricShardGroupError, spawn_rtmp_fabric_shard_group};
-use crate::media::egress::feed::EgressFeed;
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
 };
-use crate::media::egress::runtime::{EgressFabricRuntime, EgressFabricRuntimeError};
+use crate::media::egress::runtime::{
+    EgressFabricRuntime, EgressFabricRuntimeError, spawn_fabric_wake_watcher,
+};
 use crate::media::egress::shard::EgressShardGroupError;
 #[cfg(test)]
 use crate::media::egress::shard::EgressShardSnapshot;
@@ -63,46 +64,12 @@ impl MediaEngine {
             let runtime = EgressFabricRuntime::new(manager_config, group)
                 .map_err(RtmpFabricEnsureError::Runtime)?;
 
-            // Bridge feed publications into coalesced shard wakes; same
-            // check-register-recheck-then-await pattern as the SRT fabric
-            // watcher (`retain_srt_fabric_runtime`) and `Reader::wait_for_data`,
-            // closing the lost-wakeup window a bare `notified().await` loop
-            // would have.
-            // Shared with `EgressFabricRuntime::rescale`: a shard the
-            // manager grows after this watcher starts appends its handle
-            // here, so the watcher (which reads through the lock every
-            // wake rather than a one-time snapshot) picks it up without
-            // needing to know shards can resize at all.
-            let wake_handles = runtime.feed_wake_handles();
-            let watcher_feed = feed.clone_reader();
-            let notify = watcher_feed.notify_handle();
-            let watcher_feed_id = feed_id.clone();
-            let watcher = tokio::spawn(async move {
-                tracing::info!(feed_id = %watcher_feed_id, "rtmp fabric wake watcher started");
-                let mut last_head = watcher_feed.head_sequence();
-                // `last_head`'s pre-loop snapshot can already reflect data
-                // published before this task's first poll (e.g. scheduler
-                // delay from `EgressFabricRuntime::rescale`'s synchronous
-                // shard shutdowns) -- treating that as "already seen" would
-                // await a `notify_waiters()` wake that already fired with no
-                // registered waiter, hanging forever. `first_iteration`
-                // forces the first pass to always fall through to deliver
-                // instead of awaiting, regardless of what `last_head` reads.
-                let mut first_iteration = true;
-                loop {
-                    let notified = notify.notified();
-                    let current_head = watcher_feed.head_sequence();
-                    if current_head == last_head && !first_iteration {
-                        notified.await;
-                    }
-                    first_iteration = false;
-                    last_head = watcher_feed.head_sequence();
-                    let handles = wake_handles.lock().unwrap().clone();
-                    for handle in &handles {
-                        let _ = handle.deliver();
-                    }
-                }
-            });
+            let watcher = spawn_fabric_wake_watcher(
+                "rtmp",
+                feed_id.clone(),
+                feed.clone_reader(),
+                runtime.feed_wake_handles(),
+            );
 
             tracing::info!(feed_id = %feed_id, "rtmp fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);
