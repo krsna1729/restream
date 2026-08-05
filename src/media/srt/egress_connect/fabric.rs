@@ -35,22 +35,6 @@ impl<'a> SrtFabricEgressConnectConfig<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) fn plaintext(
-        peer_addrs: &'a [SocketAddr],
-        stream_id: &'a str,
-        connect_timeout_ms: u64,
-        muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
-    ) -> Self {
-        Self::new(
-            peer_addrs,
-            stream_id,
-            None,
-            connect_timeout_ms,
-            muxer_port_claim,
-        )
-    }
-
-    #[cfg(test)]
     pub(crate) fn peer_addrs(&self) -> &[SocketAddr] {
         self.peer_addrs
     }
