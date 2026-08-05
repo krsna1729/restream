@@ -78,15 +78,6 @@ pub(crate) fn resolve_rtmps_client_config(
     }
 }
 
-#[cfg(test)]
-pub(super) fn format_host_port(host: &str, port: u16) -> String {
-    if host.contains(':') && !host.starts_with('[') {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    }
-}
-
 // Standard RTMP URL parser helper
 pub(crate) fn parse_rtmp_url(url: &str) -> Option<RtmpUrlParts> {
     let tls = match OutputUrlScheme::from_url(url) {

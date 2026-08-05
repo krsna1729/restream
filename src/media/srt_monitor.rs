@@ -1,22 +1,5 @@
 use super::*;
 
-#[cfg(test)]
-pub(super) fn video_codec_id(codec: &str) -> Option<ffmpeg_next::ffi::AVCodecID> {
-    match codec {
-        "h264" | "avc" => Some(ffmpeg_next::ffi::AVCodecID::AV_CODEC_ID_H264),
-        "h265" | "hevc" => Some(ffmpeg_next::ffi::AVCodecID::AV_CODEC_ID_HEVC),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-pub(super) fn audio_codec_id(codec: &str) -> Option<ffmpeg_next::ffi::AVCodecID> {
-    match codec {
-        "aac" => Some(ffmpeg_next::ffi::AVCodecID::AV_CODEC_ID_AAC),
-        _ => None,
-    }
-}
-
 /// Read the kernel UDP recv queue occupancy and drop count for a given local port
 /// from /proc/net/udp. Returns (rx_queue_bytes, drops).
 pub(super) fn read_udp_socket_stats(port: u16) -> Option<(u64, u64)> {

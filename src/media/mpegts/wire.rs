@@ -14,13 +14,15 @@ pub(super) fn parse_timestamp(data: &[u8]) -> i64 {
     ((b0 >> 1) & 0x07) << 30 | (b1 << 22) | ((b2 >> 1) << 15) | (b3 << 7) | (b4 >> 1)
 }
 
+/// Appending form of [`write_timestamp_buf`] for tests that build a PES
+/// header into a growing `Vec`. Delegates rather than repeating the
+/// bit-packing: a second copy would let the encoding tests keep asserting
+/// a layout production had already stopped emitting.
 #[cfg(test)]
 pub(super) fn write_timestamp(buf: &mut Vec<u8>, ts: i64, marker: u8) {
-    buf.push((marker << 4) | (((ts >> 30) as u8) & 0x07) << 1 | 0x01);
-    buf.push(((ts >> 22) & 0xFF) as u8);
-    buf.push((((ts >> 15) & 0x7F) as u8) << 1 | 0x01);
-    buf.push(((ts >> 7) & 0xFF) as u8);
-    buf.push((((ts) & 0x7F) as u8) << 1 | 0x01);
+    let mut bytes = [0u8; 5];
+    write_timestamp_buf(&mut bytes, ts, marker);
+    buf.extend_from_slice(&bytes);
 }
 
 pub(super) fn write_timestamp_buf(buf: &mut [u8], ts: i64, marker: u8) {

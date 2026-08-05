@@ -65,21 +65,4 @@ fn flv_video_seq_skipped_data_converted() {
     // Just verify no panic; codec tests cover correctness in detail
 }
 
-#[test]
-fn maps_h264_and_h265_without_guessing_unknown_codecs() {
-    assert_eq!(
-        video_codec_id("h264"),
-        Some(ffmpeg_next::ffi::AVCodecID::AV_CODEC_ID_H264)
-    );
-    assert_eq!(
-        video_codec_id("hevc"),
-        Some(ffmpeg_next::ffi::AVCodecID::AV_CODEC_ID_HEVC)
-    );
-    assert_eq!(video_codec_id("unknown"), None);
-    assert_eq!(
-        audio_codec_id("aac"),
-        Some(ffmpeg_next::ffi::AVCodecID::AV_CODEC_ID_AAC)
-    );
-    assert_eq!(audio_codec_id("opus"), None);
-}
 
