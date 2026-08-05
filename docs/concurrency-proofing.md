@@ -155,6 +155,10 @@ surface already covers it.
 - Teardown erases diagnosis: runtime cleanup drops the last structured error.
 - Harness drift: the live test still expects outdated cleanup behavior after runtime
   semantics intentionally improved.
+- Parallel test path: a `#[cfg(test)]` sibling re-implements the production
+  function so a fake can be injected, then drifts from it — the tests pass while
+  the production bookkeeping they appear to cover goes unexercised. If deleting a
+  line of production code breaks no test, that line has no proof behind it.
 - "Fast" local validation skips the actual proof gate, so model checks rot.
 
 ## Current Mandatory Surfaces

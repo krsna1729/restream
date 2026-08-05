@@ -169,6 +169,22 @@ else
 fi
 
 echo ""
+echo "Checking module-level dead-code suppression..."
+# A module-level `#![allow(dead_code)]` silences the lint for an entire file,
+# which is how a batch of stale annotations and test-only re-implementations of
+# production logic stayed hidden until an explicit audit found them. Item-level
+# `#[allow(dead_code)]` is still fine: it names one item, so it stays reviewable
+# and its justification stays visible at the site.
+MODULE_DEAD_CODE_ALLOWS=$(grep -REn '^#!\[allow\(dead_code\)\]' src/ || true)
+if [ -n "$MODULE_DEAD_CODE_ALLOWS" ]; then
+    echo "FAIL: module-level #![allow(dead_code)] hides unused and duplicated code; annotate the specific item instead:" >&2
+    echo "$MODULE_DEAD_CODE_ALLOWS" >&2
+    FAILED=1
+else
+    echo "OK: No module-level dead-code suppression in src/."
+fi
+
+echo ""
 echo "Checking harness status-schema guardrails..."
 HARNESS_STATE_FIELD_READS=$(grep -REn '\["state"\]' src/bin/test_harness/ src/bin/test_harness.rs || true)
 if [ -n "$HARNESS_STATE_FIELD_READS" ]; then

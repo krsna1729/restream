@@ -111,7 +111,7 @@ pub(crate) use srt_egress_socket::{
     configure_connected_srt_egress_socket,
 };
 #[cfg(test)]
-use srt_monitor::{audio_codec_id, monitor_listener_socket, read_udp_socket_stats, video_codec_id};
+use srt_monitor::{monitor_listener_socket, read_udp_socket_stats};
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 #[cfg(test)]
 use srt_quality::{SrtCounterSnapshot, quality_from_stats as srt_quality_from_stats};

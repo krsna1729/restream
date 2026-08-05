@@ -566,80 +566,15 @@ where
         Ok(key)
     }
 
-    // Only used by tests exercising the resolver-independent connect path
-    // directly; production always goes through `complete_pending_connect`
-    // (below), which resolves via `self.socket_connector`.
-    #[cfg(test)]
-    pub(crate) fn add_resolved_socket_with<T>(
-        &mut self,
-        common: LeafCommon,
-        config: SrtFabricEgressConnectConfig<'_>,
-        mut connector: T,
-    ) -> Result<LeafKey, SrtBackendConnectError>
-    where
-        T: SrtSocketConnector,
-    {
-        let output_id = common.output_id.clone();
-        let result = connector
-            .connect(config)
-            .map_err(SrtBackendConnectError::Connect)
-            .and_then(|socket| {
-                self.add_connected_socket(common, socket)
-                    .map_err(SrtBackendConnectError::Add)
-            });
-        match &result {
-            Ok(key) => {
-                tracing::info!(
-                    output_id = %output_id,
-                    leaf_key = key.0,
-                    "srt fabric leaf connected"
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    output_id = %output_id,
-                    error = ?error,
-                    "srt fabric leaf connect failed"
-                );
-            }
-        }
-        result
-    }
-
-    #[cfg(test)]
-    pub(crate) fn complete_pending_connect_with<T>(
-        &mut self,
-        output_id: &OutputId,
-        generation: u64,
-        peer_addrs: &[std::net::SocketAddr],
-        connector: T,
-    ) -> Result<LeafKey, SrtPendingConnectError>
-    where
-        T: SrtSocketConnector,
-    {
-        let Some(pending) = self.pending_connects.remove(output_id) else {
-            return Err(SrtPendingConnectError::Missing);
-        };
-        if pending.common.generation != generation {
-            self.pending_connects.insert(output_id.clone(), pending);
-            return Err(SrtPendingConnectError::Stale);
-        }
-        // Clone the `Arc` into a local binding rather than borrowing
-        // `self.srt_egress_muxer_port` directly: the claim built from that
-        // borrow would otherwise still be alive (via `config`) at the
-        // `&mut self` call below, which the borrow checker rejects even
-        // though the two fields don't actually overlap.
-        let muxer_port_state = self.srt_egress_muxer_port.clone();
-        let muxer_port_claim = self
-            .reuse_local_srt_egress_port
-            .then(|| claim_srt_egress_muxer_port(&muxer_port_state));
-        let config = pending
-            .connect_spec
-            .connect_config(peer_addrs, muxer_port_claim);
-        self.add_resolved_socket_with(pending.common, config, connector)
-            .map_err(SrtPendingConnectError::Connect)
-    }
-
+    /// Resolve-completion entry point: turn a queued `PendingSrtConnect`
+    /// into a live leaf using this backend's own `socket_connector`.
+    ///
+    /// Tests drive this same function rather than a parallel injectable
+    /// variant — `SrtShardBackend` is already generic over its connector
+    /// (`K: SrtSocketConnector`), so a fake is supplied by constructing the
+    /// backend with `with_runtime_components`. Keeping one path means the
+    /// progress-sink bookkeeping below stays covered instead of being
+    /// silently skipped by a test-only sibling.
     fn complete_pending_connect(
         &mut self,
         output_id: &OutputId,
