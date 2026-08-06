@@ -134,7 +134,37 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream as StdTcpStream};
 use std::thread;
 
+/// Accepts a publish request and then immediately drops the connection, so the
+/// shard observes the close. Tests that need the peer to stay connected use
+/// [`run_accepting_server_peer_until_stopped`] instead.
 fn run_accepting_server_peer(mut stream: StdTcpStream, done_tx: std::sync::mpsc::Sender<()>) {
+    run_server_peer_until_publish_accepted(&mut stream, done_tx);
+}
+
+/// Accepts a publish request, signals `done_tx`, then holds the connection open
+/// until `stop_rx` fires.
+///
+/// Tests that drive two peers to `Publishing` before asserting on shard state
+/// need this: `run_accepting_server_peer` closes as soon as it accepts, so the
+/// peer that finishes first would sit closed while the pump loop waits on the
+/// second, and a later `on_ready()` would legitimately reap that first leaf
+/// (the behavior `shard_removes_the_leaf_once_the_peer_closes_after_publish_acceptance`
+/// asserts) out from under the test.
+fn run_accepting_server_peer_until_stopped(
+    mut stream: StdTcpStream,
+    done_tx: std::sync::mpsc::Sender<()>,
+    stop_rx: std::sync::mpsc::Receiver<()>,
+) {
+    run_server_peer_until_publish_accepted(&mut stream, done_tx);
+    // Park without reading: the caller's feed is empty, so the shard writes
+    // nothing that could fill the socket buffer while we wait.
+    let _ = stop_rx.recv();
+}
+
+fn run_server_peer_until_publish_accepted(
+    stream: &mut StdTcpStream,
+    done_tx: std::sync::mpsc::Sender<()>,
+) {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
@@ -269,20 +299,27 @@ fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
     // would make this test slow and flaky) to deterministically simulate
     // "genuinely stuck for a long time" on one leaf and "healthy" on the
     // other, and asserts the sweep closes only the stuck one.
+    // Both peers must stay connected until the sweep assertions run. If a peer
+    // closed as soon as it accepted (what `run_accepting_server_peer` does),
+    // the one that finished first would sit closed while the pump loop below
+    // waits on the second, and the next `on_ready()` would reap that leaf
+    // before the test could touch it.
     let listener_a = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr_a = listener_a.local_addr().unwrap();
     let (done_a_tx, done_a_rx) = std::sync::mpsc::channel::<()>();
+    let (stop_a_tx, stop_a_rx) = std::sync::mpsc::channel::<()>();
     let server_a = thread::spawn(move || {
         let (stream, _) = listener_a.accept().unwrap();
-        run_accepting_server_peer(stream, done_a_tx);
+        run_accepting_server_peer_until_stopped(stream, done_a_tx, stop_a_rx);
     });
 
     let listener_b = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr_b = listener_b.local_addr().unwrap();
     let (done_b_tx, done_b_rx) = std::sync::mpsc::channel::<()>();
+    let (stop_b_tx, stop_b_rx) = std::sync::mpsc::channel::<()>();
     let server_b = thread::spawn(move || {
         let (stream, _) = listener_b.accept().unwrap();
-        run_accepting_server_peer(stream, done_b_tx);
+        run_accepting_server_peer_until_stopped(stream, done_b_tx, stop_b_rx);
     });
 
     let mut backend =
@@ -318,8 +355,6 @@ fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
         backend.on_ready();
         thread::sleep(Duration::from_millis(1));
     }
-    server_a.join().unwrap();
-    server_b.join().unwrap();
 
     let now = std::time::Instant::now();
     let long_ago = now - Duration::from_secs(3600);
@@ -350,6 +385,11 @@ fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
         backend.output_sockets.contains_key(&healthy_id),
         "a leaf with recent byte progress must not be closed, even with the same pending bytes"
     );
+
+    let _ = stop_a_tx.send(());
+    let _ = stop_b_tx.send(());
+    server_a.join().unwrap();
+    server_b.join().unwrap();
 }
 
 #[test]
