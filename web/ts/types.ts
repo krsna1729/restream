@@ -109,6 +109,7 @@ export interface PublisherQuality {
   msReceiveBuf?: number | null;
   mbpsLinkCapacity?: number | null;
   packetsSentNAK?: number | null;
+  srtSndbufConfiguredBytes?: number | null;
   srtBonded?: boolean | null;
   srtGroupMemberCount?: number | null;
   srtGroupConnectedMembers?: number | null;

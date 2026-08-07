@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::os::raw::c_int;
 
 use super::to_libc_sockaddr;
+use crate::media::srt::socket::{EgressBufferOpts, srt_set_egress_opts};
 use crate::media::srt::srt_crypto::{SrtCryptoConfig, apply_srt_crypto_socket};
 use crate::media::srt::sys::{
     SRT_GTYPE_BACKUP, SRTSOCKET, SrtGroupMemberConfig, srt_close, srt_connect_group,
@@ -9,7 +10,7 @@ use crate::media::srt::sys::{
 };
 use crate::media::srt::{
     SrtEgressSendMode, SrtEgressSocketError, apply_srt_egress_stream_id,
-    configure_connected_srt_egress_socket, srt_log_effective_opts, srt_set_highbitrate_opts,
+    configure_connected_srt_egress_socket, srt_log_effective_opts,
 };
 
 pub(in crate::media::srt) struct SrtBondedEgressConnectConfig<'a> {
@@ -17,6 +18,8 @@ pub(in crate::media::srt) struct SrtBondedEgressConnectConfig<'a> {
     pub(in crate::media::srt) stream_id: &'a str,
     pub(in crate::media::srt) crypto: Option<&'a SrtCryptoConfig>,
     pub(in crate::media::srt) send_mode: SrtEgressSendMode,
+    /// See `SrtSingleEgressConnectConfig::buffer_opts`.
+    pub(in crate::media::srt) buffer_opts: EgressBufferOpts,
 }
 
 pub(in crate::media::srt) fn connect_bonded_srt_egress_socket(
@@ -61,7 +64,7 @@ where
         return Err(error.to_string());
     }
 
-    ops.set_highbitrate_opts(socket);
+    ops.set_egress_opts(socket, &config.buffer_opts);
     ops.log_effective_opts(socket);
     Ok(socket)
 }
@@ -84,7 +87,7 @@ trait SrtBondedConnectOps {
         socket: SRTSOCKET,
         mode: SrtEgressSendMode,
     ) -> Result<(), SrtEgressSocketError>;
-    fn set_highbitrate_opts(&mut self, socket: SRTSOCKET);
+    fn set_egress_opts(&mut self, socket: SRTSOCKET, opts: &EgressBufferOpts);
     fn log_effective_opts(&mut self, socket: SRTSOCKET);
 }
 
@@ -171,8 +174,8 @@ impl SrtBondedConnectOps for LibSrtBondedConnectOps {
         configure_connected_srt_egress_socket(socket, mode)
     }
 
-    fn set_highbitrate_opts(&mut self, socket: SRTSOCKET) {
-        srt_set_highbitrate_opts(socket);
+    fn set_egress_opts(&mut self, socket: SRTSOCKET, opts: &EgressBufferOpts) {
+        srt_set_egress_opts(socket, opts);
     }
 
     fn log_effective_opts(&mut self, socket: SRTSOCKET) {

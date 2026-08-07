@@ -6,6 +6,10 @@ fn peer_addr() -> SocketAddr {
     "127.0.0.1:9000".parse().unwrap()
 }
 
+fn test_buffer_opts() -> EgressBufferOpts {
+    EgressBufferOpts::defaults(None).with_overrides(Some(6_250_000), None, None, None, None)
+}
+
 fn connect_config<'a>(
     muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
 ) -> SrtSingleEgressConnectConfig<'a> {
@@ -16,6 +20,7 @@ fn connect_config<'a>(
         connect_timeout_ms: 1500,
         send_mode: SrtEgressSendMode::LegacyBlocking,
         muxer_port_claim,
+        buffer_opts: test_buffer_opts(),
     }
 }
 
@@ -48,7 +53,7 @@ fn single_socket_connect_records_first_local_port_after_connect() {
         &[
             Event::Create,
             Event::Timeout(42, 1500),
-            Event::HighBitrate(42),
+            Event::EgressOpts(42, test_buffer_opts()),
             Event::ReuseAddr(42),
             Event::StreamId(42, "publish:key".to_string()),
             Event::Connect(42, peer_addr()),
@@ -74,7 +79,7 @@ fn single_socket_connect_binds_reused_muxer_port_before_connecting() {
         &[
             Event::Create,
             Event::Timeout(42, 1500),
-            Event::HighBitrate(42),
+            Event::EgressOpts(42, test_buffer_opts()),
             Event::ReuseAddr(42),
             Event::StreamId(42, "publish:key".to_string()),
             Event::Bind(42, 40000),
@@ -99,7 +104,7 @@ fn single_socket_connect_closes_socket_when_reuseaddr_setup_fails() {
         &[
             Event::Create,
             Event::Timeout(42, 1500),
-            Event::HighBitrate(42),
+            Event::EgressOpts(42, test_buffer_opts()),
             Event::ReuseAddr(42),
             Event::Close(42)
         ]
@@ -133,7 +138,7 @@ fn single_socket_connect_applies_crypto_before_stream_id_and_closes_when_crypto_
         &[
             Event::Create,
             Event::Timeout(42, 1500),
-            Event::HighBitrate(42),
+            Event::EgressOpts(42, test_buffer_opts()),
             Event::ReuseAddr(42),
             Event::Crypto(42),
             Event::Close(42)

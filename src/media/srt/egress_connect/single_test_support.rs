@@ -5,7 +5,7 @@ use std::cell::RefCell;
 pub(super) enum Event {
     Create,
     Timeout(SRTSOCKET, u64),
-    HighBitrate(SRTSOCKET),
+    EgressOpts(SRTSOCKET, EgressBufferOpts),
     ReuseAddr(SRTSOCKET),
     Crypto(SRTSOCKET),
     StreamId(SRTSOCKET, String),
@@ -68,8 +68,10 @@ impl SrtSingleConnectOps for &FakeSingleConnectOps {
             .push(Event::Timeout(socket, timeout_ms));
     }
 
-    fn set_highbitrate_opts(&mut self, socket: SRTSOCKET) {
-        self.events.borrow_mut().push(Event::HighBitrate(socket));
+    fn set_egress_opts(&mut self, socket: SRTSOCKET, opts: &EgressBufferOpts) {
+        self.events
+            .borrow_mut()
+            .push(Event::EgressOpts(socket, *opts));
     }
 
     fn set_reuseaddr(&mut self, socket: SRTSOCKET) -> Result<(), String> {

@@ -9,7 +9,7 @@ enum Event {
     Prepare(SocketAddr, bool),
     ConnectGroup(SRTSOCKET, Vec<FakeMember>),
     Configure(SRTSOCKET, SrtEgressSendMode),
-    HighBitrate(SRTSOCKET),
+    EgressOpts(SRTSOCKET, EgressBufferOpts),
     Log(SRTSOCKET),
     Close(SRTSOCKET),
 }
@@ -122,13 +122,19 @@ impl SrtBondedConnectOps for &FakeBondedConnectOps {
         Ok(())
     }
 
-    fn set_highbitrate_opts(&mut self, socket: SRTSOCKET) {
-        self.events.borrow_mut().push(Event::HighBitrate(socket));
+    fn set_egress_opts(&mut self, socket: SRTSOCKET, opts: &EgressBufferOpts) {
+        self.events
+            .borrow_mut()
+            .push(Event::EgressOpts(socket, *opts));
     }
 
     fn log_effective_opts(&mut self, socket: SRTSOCKET) {
         self.events.borrow_mut().push(Event::Log(socket));
     }
+}
+
+fn test_buffer_opts() -> EgressBufferOpts {
+    EgressBufferOpts::defaults(None).with_overrides(Some(6_250_000), None, None, None, None)
 }
 
 fn peer_addrs() -> Vec<SocketAddr> {
@@ -147,6 +153,7 @@ fn connect_config<'a>(
         stream_id: "publish:key",
         crypto,
         send_mode: SrtEgressSendMode::LegacyBlocking,
+        buffer_opts: test_buffer_opts(),
     }
 }
 
@@ -187,7 +194,7 @@ fn bonded_connect_prepares_primary_and_backup_members_before_connect() {
                 ],
             ),
             Event::Configure(42, SrtEgressSendMode::LegacyBlocking),
-            Event::HighBitrate(42),
+            Event::EgressOpts(42, test_buffer_opts()),
             Event::Log(42),
         ]
     );

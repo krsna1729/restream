@@ -336,6 +336,51 @@ srt://primary.example:10080?streamid=publish:key&bond=backup1.example:10080,back
 This code path is unit-tested for URL parsing and socket-option constants, but
 still needs live multi-link interoperability validation.
 
+### Recognized SRT egress URL parameters
+
+Only these query parameters are read from an `srt://` output URL. Anything
+else (including `mss`, `oheadbw`, `tlpktdrop`, `nakreport`, and other names
+used by ffmpeg or libsrt's own tools) is **silently ignored** — it is not an
+error, it simply has no effect:
+
+| Parameter | Purpose | Default when omitted |
+|---|---|---|
+| `streamid` | Stream ID presented to the destination | — |
+| `passphrase` | AES passphrase for an encrypted link | — |
+| `pbkeylen` | AES key length (`16`, `24`, `32`) | — |
+| `bond` | Comma-separated backup links (see above) | — |
+| `sndbuf` | SRT send-buffer ceiling, in bytes (`SRTO_SNDBUF`) | `bitrate x latency x 4` formula, ~6.25 MB at the worst-case bitrate assumption, clamped to a 2 MB floor and the ingest-derived 12 MB ceiling |
+| `rcvbuf` | SRT receive-buffer ceiling, in bytes (`SRTO_RCVBUF`) | 1 MB — egress only ever receives small ACK/NAK control traffic, never media |
+| `latency` | Timestamp-based-delivery latency window, in ms (`SRTO_LATENCY`) | 250 ms |
+| `maxbw` | Bandwidth ceiling, in **bytes/sec** — libsrt's own unit, not bits/sec (`SRTO_MAXBW`) | `-1` (unlimited/input-relative) |
+| `fc` | Flow-control window, in packets (`SRTO_FC`) | 32768 |
+
+`sndbuf`'s formula default is in `srt_egress_sndbuf_bytes` (`src/media/srt/socket.rs`).
+Raise it for a destination that legitimately needs more in-flight headroom;
+lower it to cut per-output memory on many-destination fan-outs.
+
+Example combining several overrides on one destination:
+
+```text
+srt://dest.example:9000?streamid=publish:key&sndbuf=3000000&latency=400&maxbw=6250000
+```
+
+All five are **pre-connect** settings: libsrt marks every one of them `PRE` or
+`PREBIND`, so none can be changed after the connection is established (see
+`EgressBufferOpts` in `src/media/srt/socket.rs` for the full rationale,
+including why this rules out true post-connect/adaptive resizing). The
+effective `sndbuf` value actually in force is read back from libsrt at connect
+time and reported as `srtSndbufConfiguredBytes` in output quality telemetry
+(and in the dashboard's publisher-quality panel as "Send buffer ceiling
+(configured)"), so what is in force can always be confirmed rather than
+inferred. The negotiated `latency` is already visible the same way through the
+existing `msSendTsbPdDelay`/`msReceiveTsbPdDelay` quality fields.
+
+Ingest is not configurable this way: the SRT listener is a single bound socket
+shared by all publishers, so per-caller buffer/link parameters cannot apply to
+it. Ingest encryption is configured through the API/pipeline settings, not the
+URL.
+
 Inbound bonding uses the same single listener. When the publisher initiates a
 real SRT group, `srt_accept` returns one group ID and libsrt attaches later
 links in the background. Merely opening two independent sockets with the same

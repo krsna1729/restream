@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use crate::media::srt::SrtEgressSendMode;
+use crate::media::srt::socket::EgressBufferOpts;
 use crate::media::srt::srt_crypto::SrtCryptoConfig;
 use crate::media::srt::sys::SRTSOCKET;
 
@@ -15,6 +16,7 @@ pub(crate) struct SrtFabricEgressConnectConfig<'a> {
     crypto: Option<&'a SrtCryptoConfig>,
     connect_timeout_ms: u64,
     muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
+    buffer_opts: EgressBufferOpts,
 }
 
 impl<'a> SrtFabricEgressConnectConfig<'a> {
@@ -24,6 +26,7 @@ impl<'a> SrtFabricEgressConnectConfig<'a> {
         crypto: Option<&'a SrtCryptoConfig>,
         connect_timeout_ms: u64,
         muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
+        buffer_opts: EgressBufferOpts,
     ) -> Self {
         Self {
             peer_addrs,
@@ -31,6 +34,7 @@ impl<'a> SrtFabricEgressConnectConfig<'a> {
             crypto,
             connect_timeout_ms,
             muxer_port_claim,
+            buffer_opts,
         }
     }
 
@@ -84,12 +88,14 @@ where
             connect_timeout_ms: config.connect_timeout_ms,
             send_mode: SrtEgressSendMode::FabricNonblocking,
             muxer_port_claim: config.muxer_port_claim,
+            buffer_opts: config.buffer_opts,
         }),
         peer_addrs => ops.connect_bonded(SrtBondedEgressConnectConfig {
             peer_addrs,
             stream_id: config.stream_id,
             crypto: config.crypto,
             send_mode: SrtEgressSendMode::FabricNonblocking,
+            buffer_opts: config.buffer_opts,
         }),
     }
 }
