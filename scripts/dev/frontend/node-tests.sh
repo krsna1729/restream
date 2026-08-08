@@ -16,6 +16,8 @@ trap cleanup EXIT
 
 cd "$ROOT_DIR"
 
+node scripts/check/dom-id-drift.mjs
+
 npx tsc -p tsconfig.frontend-node-test.json --outDir "$BUILD_DIR"
 cp test/support/frontend-v2-node-stubs/app/*.js "$BUILD_DIR/app/"
 
