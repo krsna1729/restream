@@ -85,7 +85,14 @@ fn fabric_config<'a>(
     crypto: Option<&'a SrtCryptoConfig>,
     muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
 ) -> SrtFabricEgressConnectConfig<'a> {
-    SrtFabricEgressConnectConfig::new(peer_addrs, "publish:key", crypto, 1500, muxer_port_claim)
+    SrtFabricEgressConnectConfig::new(
+        peer_addrs,
+        "publish:key",
+        crypto,
+        1500,
+        muxer_port_claim,
+        EgressBufferOpts::defaults(None),
+    )
 }
 
 #[test]

@@ -5,9 +5,8 @@ use super::{
     SrtEgressMuxerPortClaim, bind_srt_egress_muxer_port, connected_srt_local_port,
     set_srt_reuseaddr,
 };
-use crate::media::srt::socket::{
-    srt_set_connect_timeout, srt_set_highbitrate_opts, to_sockaddr_in,
-};
+use crate::media::srt::buffer_sizing::EgressBufferOpts;
+use crate::media::srt::socket::{srt_set_connect_timeout, srt_set_egress_opts, to_sockaddr_in};
 use crate::media::srt::srt_crypto::{SrtCryptoConfig, apply_srt_crypto_socket};
 use crate::media::srt::sys::{SRTSOCKET, sockaddr_in, srt_close, srt_connect};
 use crate::media::srt::{
@@ -23,6 +22,10 @@ pub(in crate::media::srt) struct SrtSingleEgressConnectConfig<'a> {
     pub(in crate::media::srt) connect_timeout_ms: u64,
     pub(in crate::media::srt) send_mode: SrtEgressSendMode,
     pub(in crate::media::srt) muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
+    /// Resolved SRT socket options for this destination — see
+    /// `EgressBufferOpts` in `buffer_sizing.rs` for how callers derive this
+    /// (formula/constant defaults, with any explicit URL overrides applied).
+    pub(in crate::media::srt) buffer_opts: EgressBufferOpts,
 }
 
 pub(in crate::media::srt) fn connect_single_srt_egress_socket(
@@ -40,7 +43,7 @@ where
 {
     let socket = ops.create_socket()?;
     ops.set_connect_timeout(socket, config.connect_timeout_ms);
-    ops.set_highbitrate_opts(socket);
+    ops.set_egress_opts(socket, &config.buffer_opts);
 
     if let Err(error) = ops.set_reuseaddr(socket) {
         ops.close(socket);
@@ -100,7 +103,7 @@ trait SrtSingleConnectOps {
     fn create_socket(&mut self) -> Result<SRTSOCKET, String>;
     fn close(&mut self, socket: SRTSOCKET);
     fn set_connect_timeout(&mut self, socket: SRTSOCKET, timeout_ms: u64);
-    fn set_highbitrate_opts(&mut self, socket: SRTSOCKET);
+    fn set_egress_opts(&mut self, socket: SRTSOCKET, opts: &EgressBufferOpts);
     fn set_reuseaddr(&mut self, socket: SRTSOCKET) -> Result<(), String>;
     fn apply_crypto(&mut self, socket: SRTSOCKET, crypto: &SrtCryptoConfig) -> Result<(), String>;
     fn apply_stream_id(&mut self, socket: SRTSOCKET, stream_id: &str) -> Result<(), String>;
@@ -143,8 +146,8 @@ impl SrtSingleConnectOps for LibSrtSingleConnectOps {
         srt_set_connect_timeout(socket, timeout_ms);
     }
 
-    fn set_highbitrate_opts(&mut self, socket: SRTSOCKET) {
-        srt_set_highbitrate_opts(socket);
+    fn set_egress_opts(&mut self, socket: SRTSOCKET, opts: &EgressBufferOpts) {
+        srt_set_egress_opts(socket, opts);
     }
 
     fn set_reuseaddr(&mut self, socket: SRTSOCKET) -> Result<(), String> {

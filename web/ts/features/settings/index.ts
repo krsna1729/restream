@@ -519,6 +519,10 @@ function renderSettingsRoute(
                             </select>
                         </fieldset>
                         <fieldset class="fieldset">
+                            <legend class="fieldset-legend">Latency (ms)</legend>
+                            <input type="number" id="srt-ingest-latency-ms-input" class="input input-sm w-28" min="20" max="8000" step="1" aria-label="Global SRT ingest latency in milliseconds" />
+                        </fieldset>
+                        <fieldset class="fieldset">
                             <legend class="fieldset-legend invisible">_</legend>
                             <div class="flex items-center gap-3">
                                 <button class="btn btn-accent btn-sm" data-settings-action="save-srt-ingest" aria-label="Save global SRT ingest settings">Save</button>
@@ -526,6 +530,7 @@ function renderSettingsRoute(
                             </div>
                         </fieldset>
                     </div>
+                    <p class="text-base-content/60 text-xs">This caller's own proposed minimum TSBPD delay (SRTO_RCVLATENCY) for every ingest connection that doesn't set a per-pipeline override. 20&ndash;8000ms.</p>
                 </div>
 
                 <div class="divider my-0"></div>

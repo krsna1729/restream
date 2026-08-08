@@ -126,6 +126,9 @@ where
     /// Sender-side counters from the previous quality sample, needed to
     /// compute per-second rates (loss/drop/retrans) on the next one.
     quality_snapshot: Option<SrtSenderCounterSnapshot>,
+    /// Effective `SRTO_SNDBUF` this leaf connected with (PREBIND — read
+    /// once, reported on every quality sample without a per-tick FFI call).
+    configured_sndbuf_bytes: Option<i32>,
 }
 
 impl<T> SrtFabricLeaf<T>
@@ -142,7 +145,14 @@ where
             draining_since: None,
             draining_reason: None,
             quality_snapshot: None,
+            configured_sndbuf_bytes: None,
         }
+    }
+
+    /// Sets the value read back from libsrt post-connect; see field doc.
+    pub(crate) fn with_configured_sndbuf(mut self, bytes: Option<i32>) -> Self {
+        self.configured_sndbuf_bytes = bytes;
+        self
     }
 
     pub(crate) fn common(&self) -> &LeafCommon {
@@ -204,8 +214,10 @@ where
     /// leave the previously published quality in place in that case.
     pub(crate) fn sample_quality(&mut self, now: Instant) -> Option<PublisherQuality> {
         let stats = self.transport.sender_quality_stats()?;
-        let (quality, snapshot) = srt_sender_quality_from_stats(&stats, self.quality_snapshot, now);
+        let (mut quality, snapshot) =
+            srt_sender_quality_from_stats(&stats, self.quality_snapshot, now);
         self.quality_snapshot = Some(snapshot);
+        quality.srt_sndbuf_configured_bytes = self.configured_sndbuf_bytes;
         Some(quality)
     }
 
@@ -235,7 +247,8 @@ pub(crate) fn requeue_after_srt_visit(decision: VisitDecision) -> bool {
 }
 
 pub(crate) fn srt_fabric_leaf_from_socket(common: LeafCommon, socket: SRTSOCKET) -> NativeSrtLeaf {
-    SrtFabricLeaf::new(common, srt_fabric_message_sender(socket))
+    let sndbuf = Some(crate::media::srt::srt_get_configured_sndbuf(socket));
+    SrtFabricLeaf::new(common, srt_fabric_message_sender(socket)).with_configured_sndbuf(sndbuf)
 }
 
 pub(crate) trait SrtReadinessPoller {

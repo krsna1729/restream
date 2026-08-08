@@ -271,7 +271,6 @@ pub const SRTO_PASSPHRASE: c_int = 26;
 pub const SRTO_PBKEYLEN: c_int = 27;
 pub const SRTO_CONNTIMEO: c_int = 36;
 pub const SRTO_LOSSMAXTTL: c_int = 42;
-#[cfg(test)]
 pub const SRTO_RCVLATENCY: c_int = 43;
 #[cfg(test)]
 pub const SRTO_PEERLATENCY: c_int = 44;

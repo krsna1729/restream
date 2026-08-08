@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tracing::{error, info, warn};
 
+use super::buffer_sizing::EgressBufferOpts;
 use super::sys::*;
 
 pub fn linked_srt_version() -> String {
@@ -38,10 +39,10 @@ pub(super) fn check_srt_option_result(option: &str, result: c_int) -> Result<(),
 }
 
 pub const DESIRED_UDP_BUF: i32 = 8 * 1024 * 1024;
-const DESIRED_SRT_BUF: i32 = 12 * 1024 * 1024;
-const DESIRED_FC: i32 = 32768;
+pub(super) const DESIRED_SRT_BUF: i32 = 12 * 1024 * 1024;
+pub(super) const DESIRED_FC: i32 = 32768;
 pub(super) const SRT_LOG_CRIT: c_int = 2;
-const DESIRED_LATENCY_MS: i32 = 250;
+pub(super) const DESIRED_LATENCY_MS: i32 = 250;
 const DESIRED_LOSSMAXTTL: i32 = 256;
 
 pub(super) fn enable_srt_group_connect(listener: SRTSOCKET) -> Result<(), String> {
@@ -130,6 +131,23 @@ pub(super) fn srt_set_highbitrate_opts(sock: SRTSOCKET) {
             std::mem::size_of::<c_int>() as c_int,
         );
 
+        // FC must be set before SNDBUF/RCVBUF: libsrt documents that the
+        // receiver (and, per SRTO_SNDBUF's own "see RCVBUF" cross-reference,
+        // sender) buffer size must not exceed FC in packet-count terms, and
+        // recommends setting FC first (see the shared latency/FC doc block
+        // above `SRT_LATENCY_MS_FLOOR`). DESIRED_SRT_BUF/SRT_PAYLOAD_SIZE_BYTES
+        // already fits comfortably under DESIRED_FC (~8645 buffers vs 32768
+        // packets), so this reorder changes no behavior here — it just stops
+        // this function from being an example of the wrong order to copy.
+        let fc: c_int = DESIRED_FC;
+        srt_setsockopt(
+            sock,
+            0,
+            SRTO_FC,
+            &fc as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as c_int,
+        );
+
         let srt_buf: c_int = DESIRED_SRT_BUF;
         srt_setsockopt(
             sock,
@@ -146,7 +164,78 @@ pub(super) fn srt_set_highbitrate_opts(sock: SRTSOCKET) {
             std::mem::size_of::<c_int>() as c_int,
         );
 
-        let fc: c_int = DESIRED_FC;
+        let maxbw: i64 = -1;
+        srt_setsockopt(
+            sock,
+            0,
+            SRTO_MAXBW,
+            &maxbw as *const _ as *const c_void,
+            std::mem::size_of::<i64>() as c_int,
+        );
+    }
+}
+const EGRESS_UDP_RCVBUF: i32 = 1024 * 1024; // control-only traffic on a send-dominant socket
+
+/// Egress-only counterpart to `srt_set_highbitrate_opts` (used for the one
+/// ingest listener socket, which stays on the flat high-bitrate preset — see
+/// `buffer_sizing.rs`'s "Egress-specific buffer sizing" block for why the two
+/// need to diverge). `sndbuf_bytes` is normally `srt_egress_sndbuf_bytes(bitrate)`,
+/// or an explicit `sndbuf=` URL override; RCVBUF is fixed small on both the
+/// UDP and SRT layers because an egress socket only ever receives small
+/// ACK/NAK/ACKACK control packets, never media.
+pub(super) fn srt_set_egress_opts(sock: SRTSOCKET, opts: &EgressBufferOpts) {
+    // SAFETY: All srt_setsockopt calls use correctly-sized stack-allocated
+    // option values with valid SRT socket handles. The buffer sizes, flow
+    // control window, and latency values are within platform limits.
+    unsafe {
+        let latency: c_int = opts.latency_ms;
+        srt_setsockopt(
+            sock,
+            0,
+            SRTO_LATENCY,
+            &latency as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as c_int,
+        );
+
+        let lossmaxttl: c_int = DESIRED_LOSSMAXTTL;
+        srt_setsockopt(
+            sock,
+            0,
+            SRTO_LOSSMAXTTL,
+            &lossmaxttl as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as c_int,
+        );
+
+        // Send side keeps the same generous kernel UDP buffer as ingest —
+        // this is genuinely on the transmit hot path and untested as a
+        // reduction target in this pass. Receive side does not need it.
+        let udp_sndbuf: c_int = DESIRED_UDP_BUF;
+        srt_setsockopt(
+            sock,
+            0,
+            SRTO_UDP_SNDBUF,
+            &udp_sndbuf as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as c_int,
+        );
+        let udp_rcvbuf: c_int = EGRESS_UDP_RCVBUF;
+        srt_setsockopt(
+            sock,
+            0,
+            SRTO_UDP_RCVBUF,
+            &udp_rcvbuf as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as c_int,
+        );
+
+        // FC must be set before SNDBUF/RCVBUF: libsrt documents that the
+        // sender/receiver buffer size must not exceed FC in packet-count
+        // terms, and recommends setting FC first (see the shared
+        // latency/FC doc block above `SRT_LATENCY_MS_FLOOR`).
+        // `EgressBufferOpts::with_overrides` already derives `fc_pkts` so
+        // it is always >= `sndbuf_bytes`/`rcvbuf_bytes` in packet-count
+        // terms for whatever `latency_ms` ended up in force, so this default
+        // (`DESIRED_FC` when neither `latency` nor `fc` were overridden)
+        // costs nothing.
+        let fc: c_int = opts.fc_pkts;
         srt_setsockopt(
             sock,
             0,
@@ -155,7 +244,24 @@ pub(super) fn srt_set_highbitrate_opts(sock: SRTSOCKET) {
             std::mem::size_of::<c_int>() as c_int,
         );
 
-        let maxbw: i64 = -1;
+        let srt_sndbuf: c_int = opts.sndbuf_bytes;
+        srt_setsockopt(
+            sock,
+            0,
+            SRTO_SNDBUF,
+            &srt_sndbuf as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as c_int,
+        );
+        let srt_rcvbuf: c_int = opts.rcvbuf_bytes;
+        srt_setsockopt(
+            sock,
+            0,
+            SRTO_RCVBUF,
+            &srt_rcvbuf as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as c_int,
+        );
+
+        let maxbw: i64 = opts.maxbw_bps;
         srt_setsockopt(
             sock,
             0,
@@ -179,6 +285,29 @@ pub fn srt_set_connect_timeout(sock: SRTSOCKET, timeout_ms: u64) {
             std::mem::size_of::<c_int>() as c_int,
         );
     }
+}
+
+/// Reads back the effective `SRTO_SNDBUF` libsrt actually holds for this
+/// socket. `SRTO_SNDBUF` is `SRTO_R_PREBIND` in libsrt (confirmed against
+/// the vendored source, `srtcore/core.cpp`'s `s_perm[]` option table) — it
+/// cannot change after connect, so a single read at leaf-creation time is
+/// authoritative for the socket's whole lifetime; no need to re-read it on
+/// the hot per-second quality-sampling path.
+pub(crate) fn srt_get_configured_sndbuf(sock: SRTSOCKET) -> i32 {
+    let mut value = 0i32;
+    let mut len = std::mem::size_of::<c_int>() as c_int;
+    // SAFETY: srt_getsockopt reads an integer option value from a valid SRT
+    // socket into a correctly-sized stack variable. Benign diagnostic read.
+    unsafe {
+        srt_getsockopt(
+            sock,
+            0,
+            SRTO_SNDBUF,
+            &mut value as *mut _ as *mut c_void,
+            &mut len,
+        );
+    }
+    value
 }
 
 pub(super) fn srt_log_effective_opts(sock: SRTSOCKET, label: &str) -> u64 {

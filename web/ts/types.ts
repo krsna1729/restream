@@ -83,12 +83,16 @@ export interface SrtGlobalIngestConfig {
   mode: "plaintext" | "encrypted";
   passphrase?: string | null;
   pbkeylen: 16 | 24 | 32;
+  /** SRTO_RCVLATENCY (ms) for every ingest connection without a per-pipeline override. 20-8000. */
+  latencyMs: number;
 }
 
 export interface SrtPipelineIngestConfig {
   mode: "inherit" | "plaintext" | "encrypted";
   passphrase?: string | null;
   pbkeylen?: 16 | 24 | 32 | null;
+  /** `null`/absent inherits SrtGlobalIngestConfig.latencyMs. 20-8000. */
+  latencyMs?: number | null;
 }
 
 export interface PublisherQuality {
@@ -109,6 +113,7 @@ export interface PublisherQuality {
   msReceiveBuf?: number | null;
   mbpsLinkCapacity?: number | null;
   packetsSentNAK?: number | null;
+  srtSndbufConfiguredBytes?: number | null;
   srtBonded?: boolean | null;
   srtGroupMemberCount?: number | null;
   srtGroupConnectedMembers?: number | null;

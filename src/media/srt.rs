@@ -27,6 +27,8 @@ use crate::media::startup_policy;
 #[cfg(test)]
 use crate::media::ts_chunk_ring::TsChunkReader;
 
+#[path = "srt/buffer_sizing.rs"]
+mod buffer_sizing;
 #[path = "srt/ingest.rs"]
 mod ingest;
 #[path = "srt/ingest_packets.rs"]
@@ -80,17 +82,19 @@ mod srt_url;
 mod sys;
 
 #[cfg(test)]
+use buffer_sizing::srt_set_ingest_latency_opts;
+#[cfg(test)]
 use shared_muxer::estimate_ts_accum_capacity;
 pub(crate) use shared_muxer::start_shared_ts_muxer;
-pub use socket::{DESIRED_UDP_BUF, linked_srt_version, srt_set_connect_timeout};
+pub(crate) use socket::srt_get_configured_sndbuf;
 #[cfg(test)]
 use socket::{
-    SrtGroupSummary, add_srt_group_quality, enable_srt_group_connect, is_srt_group,
-    streamid_from_getsockopt_buffer, summarize_group_members, try_acquire_srt_sender_permit,
+    DESIRED_FC, DESIRED_SRT_BUF, SrtGroupSummary, add_srt_group_quality, enable_srt_group_connect,
+    is_srt_group, streamid_from_getsockopt_buffer, summarize_group_members,
+    try_acquire_srt_sender_permit,
 };
-use socket::{
-    check_srt_option_result, check_sysctl_limits, srt_log_effective_opts, srt_set_highbitrate_opts,
-};
+pub use socket::{DESIRED_UDP_BUF, linked_srt_version, srt_set_connect_timeout};
+use socket::{check_srt_option_result, check_sysctl_limits, srt_log_effective_opts};
 #[cfg(test)]
 use srt_crypto::apply_srt_crypto_socket;
 #[cfg(test)]

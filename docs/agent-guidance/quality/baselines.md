@@ -1157,6 +1157,43 @@ Raw artifacts:
 - `.local/artifacts/msr-arena2-3031-20260712T161905Z/mediamtx-proof-plus2m.json`
 - `.local/artifacts/msr-arena2-3031-20260712T161905Z/perf-stat-restream-arena2.csv`
 - `.local/artifacts/msr-arena2-3031-20260712T161905Z/perf-stat-restream-arena2-dtlb.csv`
+
+### Negative result: mimalloc global allocator A/B - 2026-08-07 (local)
+
+Follow-up to the SRT egress buffer right-sizing work
+(`docs/configuration.md`'s "Recognized SRT egress URL parameters"). A live Go
+heap profile pulled from MediaMTX 1.20 under equivalent RTMP egress load
+showed its runtime actively scavenging freed heap pages back to the OS
+(`HeapReleased` non-zero mid-run), while restream uses glibc's default
+allocator with no custom global allocator configured anywhere. Combined with
+the `MALLOC_ARENA_MAX=2` result above (RSS win, real CPU/fault cost from the
+blunt arena-count restriction), the hypothesis was that a purpose-built
+allocator — per-thread/per-CPU segment caches with decay-based page return
+instead of blunt arena-count restriction — might recover the same RSS
+without that cost. Tried mimalloc (`tikv-jemallocator` was the other
+documented candidate, not tried).
+
+Setup: `mimalloc` crate as `#[global_allocator]` behind an opt-in Cargo
+feature, A/B against the stock build, pure-SRT scenario-1 egress fan-out
+(same harness as the buffer right-sizing work), N=640, same VPS class,
+n=2 runs per allocator.
+
+| Run | glibc (stock) | mimalloc |
+|---|---:|---:|
+| 1 | 592.7 MB | 615.4 MB |
+| 2 | 688.2 MB | 603.3 MB |
+| range | 95.5 MB | 12.1 MB |
+| mean | 640.4 MB | 609.4 MB |
+
+Conclusion: **not a clear win.** The two ranges overlap; mimalloc's mean was
+~5% lower but sits inside glibc's own run-to-run noise band at this sample
+size. mimalloc's variance was visibly tighter (12 MB vs 95 MB spread) — a
+more *consistent* footprint, not a confidently smaller one. Reverted rather
+than merged: an unproven ~5% maybe isn't worth a new dependency and a global
+allocator swap. If revisited, run a real resource-sweep/MSR soak (not a
+2-sample spot check) before deciding either way, and consider jemalloc as
+the still-untried alternative — it's the more established candidate for this
+exact glibc-arena-retention symptom in Rust server workloads.
 - `.local/artifacts/msr-arena2-3031-20260712T161905Z/pidstat-threads-restream-arena2.txt`
 - `.local/artifacts/msr-arena2-3031-20260712T161905Z/restream-smaps-rollup-before-perf.txt`
 - `.local/artifacts/msr-arena2-3031-20260712T161905Z/restream-smaps-rollup-plus2m.txt`

@@ -293,16 +293,52 @@ disappears during the wait the connection is closed gracefully.
 The runtime calls its high-bitrate helper for the SRT listener and single-link
 egress sockets:
 
-- 250 ms latency
+- 250 ms latency (default; see "SRT ingest latency" below for the
+  global/per-pipeline override)
 - 256-packet loss/reorder tolerance
 - 8 MiB UDP send/receive buffers
-- 12 MiB SRT send/receive buffers
-- 32768-packet flow-control window
+- 12 MiB SRT send/receive buffers (default; scales up for a higher
+  configured latency — see below)
+- 32768-packet flow-control window (default; scales with the buffer above)
 - unlimited automatic maximum bandwidth
 
-The code does not explicitly apply the helper to accepted sockets or bonded
-egress groups. Do not assume those sockets have every requested value without
-runtime verification.
+The code does not explicitly apply the UDP-buffer/loss-tolerance/maxbw
+portion of the helper to accepted sockets or bonded egress groups. Do not
+assume those sockets have every requested value without runtime
+verification. Latency/RCVBUF/FC, in contrast, are explicitly re-applied to
+every accepted socket in the accept-hook (see below) — those three are not
+just the listener's inherited default.
+
+### SRT ingest latency
+
+Every ingest connection's `SRTO_RCVLATENCY` — and, derived from it, its
+`SRTO_RCVBUF`/`SRTO_FC` — is resolved from `SrtGlobalIngestConfig::latencyMs`
+(global default, 250 ms) or a per-pipeline
+`SrtPipelineIngestConfig::latencyMs` override, the same inherit/override
+shape already used for SRT ingest encryption. Configurable via
+`PATCH /api/v1/settings` (`srtIngest.latencyMs`) for the global default, or
+per pipeline through its `srtIngestPolicy.latencyMs` field — both also have
+dashboard fields (Settings → Global SRT Ingest; the pipeline editor's SRT
+Ingest Policy section). Valid range: `20–8000` ms, the SRT wire protocol's
+own documented range for the negotiated TSBPD delay field
+(`docs/features/handshake.md`'s `TsbPdDelay`/`RcvTsbPdDelay`/`SndTsbPdDelay`
+in the vendored libsrt source).
+
+`RCVBUF`/`FC` scale with the resolved latency using the same formula
+egress's `SNDBUF` ceiling uses (worst-case assumed bitrate × latency ×
+margin), floored at the historical flat 12 MiB/32768-packet preset so the
+default-latency case is unchanged. This can only ever be sized from the
+value configured here, never the value actually negotiated with the caller
+(`max(this value, the caller's own PEERLATENCY)`) — `SRTO_RCVBUF` is a
+PREBIND option, locked before libsrt processes the caller's proposed
+latency at all (confirmed directly against the vendored libsrt source:
+`acceptAndRespond` in `srtcore/core.cpp` calls `interpretSrtHandshake`,
+which negotiates latency, before `prepareBuffers`, which allocates the
+receive buffer — but `SRTO_RCVBUF` was already locked well before either
+call, in the accept-hook). A caller who proposes a higher latency than
+configured here can still push the negotiated result above what the
+buffer was sized for; nothing on either end can close that gap, since
+libsrt does not validate the peer's proposed latency at all.
 
 Linux startup checks warn when `net.core.rmem_max` or `net.core.wmem_max` cannot
 support the requested UDP buffers. The listener's `/proc/net/udp` receive queue
@@ -335,6 +371,93 @@ srt://primary.example:10080?streamid=publish:key&bond=backup1.example:10080,back
 
 This code path is unit-tested for URL parsing and socket-option constants, but
 still needs live multi-link interoperability validation.
+
+### Recognized SRT egress URL parameters
+
+Only these query parameters are read from an `srt://` output URL. Anything
+else (including `mss`, `oheadbw`, `tlpktdrop`, `nakreport`, and other names
+used by ffmpeg or libsrt's own tools) is **silently ignored** — it is not an
+error, it simply has no effect:
+
+| Parameter | Purpose | Default when omitted | Clamped range |
+|---|---|---|---|
+| `streamid` | Stream ID presented to the destination | — | — |
+| `passphrase` | AES passphrase for an encrypted link | — | — |
+| `pbkeylen` | AES key length (`16`, `24`, `32`) | — | — |
+| `bond` | Comma-separated backup links (see above) | — | — |
+| `sndbuf` | SRT send-buffer ceiling, in bytes (`SRTO_SNDBUF`) | `bitrate x latency x 4` formula, ~6.25 MB at the worst-case bitrate assumption | 2 MB – 12 MB |
+| `rcvbuf` | SRT receive-buffer ceiling, in bytes (`SRTO_RCVBUF`) | 1 MB — egress only ever receives small ACK/NAK control traffic, never media | 64 KB – 4 MB |
+| `latency` | Timestamp-based-delivery latency window, in ms (`SRTO_LATENCY`) | 250 ms | 20 ms – 8000 ms |
+| `maxbw` | Bandwidth ceiling, in **bytes/sec** — libsrt's own unit, not bits/sec (`SRTO_MAXBW`) | `-1` (unlimited/input-relative) | unclamped beyond `>= -1` — a pacing rate, not a preallocated buffer |
+| `fc` | Flow-control window, in packets (`SRTO_FC`) | 32768 | 256 – 32768 |
+
+`sndbuf`'s formula default is in `srt_egress_sndbuf_bytes` (`src/media/srt/socket.rs`).
+Raise it for a destination that legitimately needs more in-flight headroom;
+lower it to cut per-output memory on many-destination fan-outs. Every
+allocation-sized field is clamped in `EgressBufferOpts::with_overrides`
+(`src/media/srt/socket.rs`) regardless of what the URL asks for — an output
+URL is operator/API-configured rather than anonymous wire input, but nothing
+stops a typo or an untrusted upstream config source from asking for gigabytes
+per destination, and that cost multiplies by output count.
+
+Example combining several overrides on one destination:
+
+```text
+srt://dest.example:9000?streamid=publish:key&sndbuf=3000000&latency=400&maxbw=6250000
+```
+
+All five are **pre-connect** settings: libsrt marks every one of them `PRE` or
+`PREBIND`, so none can be changed after the connection is established (see
+`EgressBufferOpts` in `src/media/srt/socket.rs` for the full rationale,
+including why this rules out true post-connect/adaptive resizing). The
+effective `sndbuf` value actually in force is read back from libsrt at connect
+time and reported as `srtSndbufConfiguredBytes` in output quality telemetry
+(and in the dashboard's publisher-quality panel as "Send buffer ceiling
+(configured)"), so what is in force can always be confirmed rather than
+inferred. The negotiated `latency` is already visible the same way through the
+existing `msSendTsbPdDelay`/`msReceiveTsbPdDelay` quality fields.
+
+### No per-caller SRT ingest buffer/FC parameters
+
+Ingest intentionally does **not** offer `rcvbuf=`/`fc=`/`latency=`-style
+per-caller overrides, unlike egress's URL parameters above. This isn't
+missing scope — it was implemented and then removed once the standard SRT
+URL convention (libsrt's own reference option table,
+`.local/build/static/src/srt/apps/socketoptions.hpp`) made clear there is
+no standard mechanism for it, and building a non-standard one is worse than
+not having the feature:
+
+- `rcvbuf`/`sndbuf`/`fc` are real, standard SRT URL query parameters — but
+  standard usage always configures the *local* socket of whoever's URL it
+  is. A caller's own `srt://ourserver:port?rcvbuf=...` connect URL sets
+  *their* `SRTO_RCVBUF`, never ours. These options are never wire-negotiated
+  (confirmed against the vendored libsrt source: no `SRTO_RCVBUF`/`SRTO_FC`
+  field exists anywhere in the handshake extension blocks), so there is no
+  standard — or even physically possible — way for a caller's URL to reach
+  across and configure the listener's own buffers. The only way to attempt
+  it would be inventing a non-standard convention (e.g. smuggling query
+  params inside the `streamid` field's text content, which no real SRT tool
+  does or interprets), which was tried here and reverted for exactly that
+  reason.
+- `latency` is different, and needs no code at all: it genuinely is
+  wire-negotiated (`SRTO_PEERLATENCY`, sent in the real HSREQ/HSRSP
+  extension — see `docs/features/handshake.md`). A caller who sets their
+  own standard `srt://ourserver:port?streamid=...&latency=400` on their own
+  connect call already gets that value carried onto the wire by libsrt
+  automatically, and this repo's existing `SRTO_RCVLATENCY` setting on the
+  listener already participates in that negotiation
+  (`max(local RCVLATENCY, peer PEERLATENCY)`, per
+  `docs/API/API-socket-options.md`). Nothing needs to be parsed or applied
+  on our side for a caller's latency preference to take effect.
+
+If per-caller ingest buffer sizing becomes a real need later, the only
+correct lever is an *operator*-controlled one (e.g. per-pipeline listener
+config, not caller-supplied input) — see `EgressBufferOpts` in
+`src/media/srt/buffer_sizing.rs` for the equivalent egress-side reasoning
+about who benefits from, and who should control, this kind of override.
+
+Ingest encryption is configured through the API/pipeline settings, not the
+streamid.
 
 Inbound bonding uses the same single listener. When the publisher initiates a
 real SRT group, `srt_accept` returns one group ID and libsrt attaches later
