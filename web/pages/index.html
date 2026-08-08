@@ -514,6 +514,20 @@
                 </select>
               </fieldset>
             </div>
+            <div class="mt-3 grid gap-3 sm:grid-cols-[12rem_1fr]">
+              <fieldset class="fieldset">
+                <legend class="fieldset-legend">Latency (ms)</legend>
+                <input
+                  type="number"
+                  id="pipe-srt-ingest-latency-ms-input"
+                  class="input w-full"
+                  min="20"
+                  max="8000"
+                  step="1"
+                  placeholder="Inherit global"
+                />
+              </fieldset>
+            </div>
           </details>
         </div>
 

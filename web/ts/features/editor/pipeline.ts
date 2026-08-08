@@ -493,6 +493,12 @@ function populatePipeSrtIngestFields(
   }
   if (passphraseInput) passphraseInput.value = policy?.passphrase || "";
   if (pbkeylenInput) pbkeylenInput.value = String(policy?.pbkeylen || 16);
+  const latencyInput = document.getElementById(
+    "pipe-srt-ingest-latency-ms-input",
+  ) as HTMLInputElement | null;
+  if (latencyInput)
+    latencyInput.value =
+      policy?.latencyMs != null ? String(policy.latencyMs) : "";
   const details = document.getElementById(
     "pipe-srt-ingest-fields",
   ) as HTMLDetailsElement | null;
@@ -543,10 +549,26 @@ function readPipeSrtIngestPolicy(): SrtPipelineIngestConfig | null {
     return null;
   }
 
+  const latencyRaw =
+    (
+      document.getElementById(
+        "pipe-srt-ingest-latency-ms-input",
+      ) as HTMLInputElement | null
+    )?.value.trim() || "";
+  let latencyMs: number | null = null;
+  if (latencyRaw !== "") {
+    latencyMs = Number(latencyRaw);
+    if (!Number.isFinite(latencyMs) || latencyMs < 20 || latencyMs > 8000) {
+      showErrorAlert("Per-pipeline SRT latency must be 20-8000ms");
+      return null;
+    }
+  }
+
   return {
     mode,
     passphrase: mode === "encrypted" ? passphrase : null,
     pbkeylen: mode === "encrypted" ? (pbkeylen as 16 | 24 | 32) : null,
+    latencyMs,
   };
 }
 

@@ -1,5 +1,6 @@
 import { patchConfig } from "../../core/api.js";
 import { state } from "../../core/state.js";
+import type { SrtGlobalIngestConfig } from "../../types.js";
 
 function showSavedFeedback(id: string): void {
   const el = document.getElementById(id);
@@ -67,33 +68,51 @@ export async function saveRecordingSettings(): Promise<void> {
   }
 }
 
-export function populateSrtIngestSettings(): void {
-  const enabledInput = document.getElementById("settings-srt-enabled") as HTMLInputElement | null;
-  const portInput = document.getElementById("settings-srt-port") as HTMLInputElement | null;
-  const latencyInput = document.getElementById("settings-srt-latency") as HTMLInputElement | null;
-  const passphraseInput = document.getElementById("settings-srt-passphrase") as HTMLInputElement | null;
+function parseSrtIngestPbkeylen(value: string | undefined): 16 | 24 | 32 {
+  const parsed = parseInt(value || "16", 10);
+  return parsed === 24 || parsed === 32 ? parsed : 16;
+}
 
-  const srt = (state.config as any)?.srtIngest;
-  if (enabledInput) enabledInput.checked = srt?.enabled ?? false;
-  if (portInput) portInput.value = String(srt?.port ?? 6000);
-  if (latencyInput) latencyInput.value = String(srt?.latencyMs ?? 120);
+export function populateSrtIngestSettings(): void {
+  const modeInput = document.getElementById("srt-ingest-mode-input") as HTMLSelectElement | null;
+  const passphraseInput = document.getElementById(
+    "srt-ingest-passphrase-input",
+  ) as HTMLInputElement | null;
+  const pbkeylenInput = document.getElementById(
+    "srt-ingest-pbkeylen-input",
+  ) as HTMLSelectElement | null;
+  const latencyInput = document.getElementById(
+    "srt-ingest-latency-ms-input",
+  ) as HTMLInputElement | null;
+
+  const srt = state.config?.srtIngest;
+  if (modeInput) modeInput.value = srt?.mode ?? "plaintext";
   if (passphraseInput) passphraseInput.value = srt?.passphrase ?? "";
+  if (pbkeylenInput) pbkeylenInput.value = String(srt?.pbkeylen ?? 16);
+  if (latencyInput) latencyInput.value = String(srt?.latencyMs ?? 250);
 }
 
 export async function saveSrtIngest(): Promise<void> {
-  const enabledInput = document.getElementById("settings-srt-enabled") as HTMLInputElement | null;
-  const portInput = document.getElementById("settings-srt-port") as HTMLInputElement | null;
-  const latencyInput = document.getElementById("settings-srt-latency") as HTMLInputElement | null;
-  const passphraseInput = document.getElementById("settings-srt-passphrase") as HTMLInputElement | null;
+  const modeInput = document.getElementById("srt-ingest-mode-input") as HTMLSelectElement | null;
+  const passphraseInput = document.getElementById(
+    "srt-ingest-passphrase-input",
+  ) as HTMLInputElement | null;
+  const pbkeylenInput = document.getElementById(
+    "srt-ingest-pbkeylen-input",
+  ) as HTMLSelectElement | null;
+  const latencyInput = document.getElementById(
+    "srt-ingest-latency-ms-input",
+  ) as HTMLInputElement | null;
 
-  const srtIngest = {
-    enabled: enabledInput?.checked ?? false,
-    port: parseInt(portInput?.value || "6000", 10) || 6000,
-    latencyMs: parseInt(latencyInput?.value || "120", 10) || 120,
-    passphrase: passphraseInput?.value || "",
+  const mode = modeInput?.value === "encrypted" ? "encrypted" : "plaintext";
+  const srtIngest: SrtGlobalIngestConfig = {
+    mode,
+    passphrase: mode === "encrypted" ? passphraseInput?.value || "" : null,
+    pbkeylen: parseSrtIngestPbkeylen(pbkeylenInput?.value),
+    latencyMs: parseInt(latencyInput?.value || "250", 10) || 250,
   };
 
-  const res = await patchConfig({ srtIngest: srtIngest as any });
+  const res = await patchConfig({ srtIngest });
   if (res) {
     state.config = { ...state.config, ...res };
     showSavedFeedback("srt-ingest-saved");
