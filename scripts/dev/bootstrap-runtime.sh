@@ -10,7 +10,7 @@ ROOT="${RESTREAM_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 # shellcheck source=scripts/lib/debian-packages.sh
 source "$ROOT/scripts/lib/debian-packages.sh"
 
-MEDIAMTX_VERSION="${RESTREAM_MEDIAMTX_VERSION:-v1.19.1}"
+MEDIAMTX_VERSION="${RESTREAM_MEDIAMTX_VERSION:-v1.20.0}"
 INSTALL_PACKAGES=1
 INSTALL_MEDIAMTX=1
 CHECK_HARNESS_HOST=1
