@@ -5,9 +5,8 @@ use super::{
     SrtEgressMuxerPortClaim, bind_srt_egress_muxer_port, connected_srt_local_port,
     set_srt_reuseaddr,
 };
-use crate::media::srt::socket::{
-    EgressBufferOpts, srt_set_connect_timeout, srt_set_egress_opts, to_sockaddr_in,
-};
+use crate::media::srt::buffer_sizing::EgressBufferOpts;
+use crate::media::srt::socket::{srt_set_connect_timeout, srt_set_egress_opts, to_sockaddr_in};
 use crate::media::srt::srt_crypto::{SrtCryptoConfig, apply_srt_crypto_socket};
 use crate::media::srt::sys::{SRTSOCKET, sockaddr_in, srt_close, srt_connect};
 use crate::media::srt::{
@@ -24,7 +23,7 @@ pub(in crate::media::srt) struct SrtSingleEgressConnectConfig<'a> {
     pub(in crate::media::srt) send_mode: SrtEgressSendMode,
     pub(in crate::media::srt) muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
     /// Resolved SRT socket options for this destination — see
-    /// `EgressBufferOpts` in `socket.rs` for how callers derive this
+    /// `EgressBufferOpts` in `buffer_sizing.rs` for how callers derive this
     /// (formula/constant defaults, with any explicit URL overrides applied).
     pub(in crate::media::srt) buffer_opts: EgressBufferOpts,
 }

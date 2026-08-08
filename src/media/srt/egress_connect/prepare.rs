@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use crate::media::srt::socket::EgressBufferOpts;
+use crate::media::srt::buffer_sizing::EgressBufferOpts;
 use crate::media::srt::srt_crypto::{SrtCryptoConfig, srt_crypto_from_url};
 use crate::media::srt::srt_url::parse_srt_egress_url;
 
@@ -13,9 +13,9 @@ pub(crate) struct SrtFabricEgressConnectSpec {
     crypto: Option<SrtCryptoConfig>,
     connect_timeout_ms: u64,
     /// Resolved SRT socket options for this destination: formula/constant
-    /// defaults (`EgressBufferOpts::defaults`, see socket.rs), with any
-    /// explicit `sndbuf=`/`rcvbuf=`/`latency=`/`maxbw=`/`fc=` URL overrides
-    /// applied on top.
+    /// defaults (`EgressBufferOpts::defaults`, see `buffer_sizing.rs`), with
+    /// any explicit `sndbuf=`/`rcvbuf=`/`latency=`/`maxbw=`/`fc=` URL
+    /// overrides applied on top.
     buffer_opts: EgressBufferOpts,
 }
 
@@ -143,7 +143,7 @@ mod tests {
             SrtFabricEgressConnectSpec::from_url("srt://host:9000?streamid=publish:key", 1500);
         assert_eq!(
             spec.buffer_opts().sndbuf_bytes,
-            crate::media::srt::socket::srt_egress_sndbuf_bytes(None)
+            crate::media::srt::buffer_sizing::EgressBufferOpts::defaults(None).sndbuf_bytes
         );
     }
 
@@ -164,7 +164,7 @@ mod tests {
     fn link_opts_fall_back_to_defaults_when_absent_from_url() {
         let spec =
             SrtFabricEgressConnectSpec::from_url("srt://host:9000?streamid=publish:key", 1500);
-        let defaults = crate::media::srt::socket::EgressBufferOpts::defaults(None);
+        let defaults = crate::media::srt::buffer_sizing::EgressBufferOpts::defaults(None);
         assert_eq!(spec.buffer_opts(), defaults);
     }
 }

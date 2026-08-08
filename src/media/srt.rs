@@ -27,6 +27,8 @@ use crate::media::startup_policy;
 #[cfg(test)]
 use crate::media::ts_chunk_ring::TsChunkReader;
 
+#[path = "srt/buffer_sizing.rs"]
+mod buffer_sizing;
 #[path = "srt/ingest.rs"]
 mod ingest;
 #[path = "srt/ingest_packets.rs"]

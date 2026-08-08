@@ -343,21 +343,26 @@ else (including `mss`, `oheadbw`, `tlpktdrop`, `nakreport`, and other names
 used by ffmpeg or libsrt's own tools) is **silently ignored** — it is not an
 error, it simply has no effect:
 
-| Parameter | Purpose | Default when omitted |
-|---|---|---|
-| `streamid` | Stream ID presented to the destination | — |
-| `passphrase` | AES passphrase for an encrypted link | — |
-| `pbkeylen` | AES key length (`16`, `24`, `32`) | — |
-| `bond` | Comma-separated backup links (see above) | — |
-| `sndbuf` | SRT send-buffer ceiling, in bytes (`SRTO_SNDBUF`) | `bitrate x latency x 4` formula, ~6.25 MB at the worst-case bitrate assumption, clamped to a 2 MB floor and the ingest-derived 12 MB ceiling |
-| `rcvbuf` | SRT receive-buffer ceiling, in bytes (`SRTO_RCVBUF`) | 1 MB — egress only ever receives small ACK/NAK control traffic, never media |
-| `latency` | Timestamp-based-delivery latency window, in ms (`SRTO_LATENCY`) | 250 ms |
-| `maxbw` | Bandwidth ceiling, in **bytes/sec** — libsrt's own unit, not bits/sec (`SRTO_MAXBW`) | `-1` (unlimited/input-relative) |
-| `fc` | Flow-control window, in packets (`SRTO_FC`) | 32768 |
+| Parameter | Purpose | Default when omitted | Clamped range |
+|---|---|---|---|
+| `streamid` | Stream ID presented to the destination | — | — |
+| `passphrase` | AES passphrase for an encrypted link | — | — |
+| `pbkeylen` | AES key length (`16`, `24`, `32`) | — | — |
+| `bond` | Comma-separated backup links (see above) | — | — |
+| `sndbuf` | SRT send-buffer ceiling, in bytes (`SRTO_SNDBUF`) | `bitrate x latency x 4` formula, ~6.25 MB at the worst-case bitrate assumption | 2 MB – 12 MB |
+| `rcvbuf` | SRT receive-buffer ceiling, in bytes (`SRTO_RCVBUF`) | 1 MB — egress only ever receives small ACK/NAK control traffic, never media | 64 KB – 4 MB |
+| `latency` | Timestamp-based-delivery latency window, in ms (`SRTO_LATENCY`) | 250 ms | 20 ms – 8000 ms |
+| `maxbw` | Bandwidth ceiling, in **bytes/sec** — libsrt's own unit, not bits/sec (`SRTO_MAXBW`) | `-1` (unlimited/input-relative) | unclamped beyond `>= -1` — a pacing rate, not a preallocated buffer |
+| `fc` | Flow-control window, in packets (`SRTO_FC`) | 32768 | 256 – 32768 |
 
 `sndbuf`'s formula default is in `srt_egress_sndbuf_bytes` (`src/media/srt/socket.rs`).
 Raise it for a destination that legitimately needs more in-flight headroom;
-lower it to cut per-output memory on many-destination fan-outs.
+lower it to cut per-output memory on many-destination fan-outs. Every
+allocation-sized field is clamped in `EgressBufferOpts::with_overrides`
+(`src/media/srt/socket.rs`) regardless of what the URL asks for — an output
+URL is operator/API-configured rather than anonymous wire input, but nothing
+stops a typo or an untrusted upstream config source from asking for gigabytes
+per destination, and that cost multiplies by output count.
 
 Example combining several overrides on one destination:
 
@@ -376,10 +381,47 @@ time and reported as `srtSndbufConfiguredBytes` in output quality telemetry
 inferred. The negotiated `latency` is already visible the same way through the
 existing `msSendTsbPdDelay`/`msReceiveTsbPdDelay` quality fields.
 
-Ingest is not configurable this way: the SRT listener is a single bound socket
-shared by all publishers, so per-caller buffer/link parameters cannot apply to
-it. Ingest encryption is configured through the API/pipeline settings, not the
-URL.
+### No per-caller SRT ingest buffer/FC parameters
+
+Ingest intentionally does **not** offer `rcvbuf=`/`fc=`/`latency=`-style
+per-caller overrides, unlike egress's URL parameters above. This isn't
+missing scope — it was implemented and then removed once the standard SRT
+URL convention (libsrt's own reference option table,
+`.local/build/static/src/srt/apps/socketoptions.hpp`) made clear there is
+no standard mechanism for it, and building a non-standard one is worse than
+not having the feature:
+
+- `rcvbuf`/`sndbuf`/`fc` are real, standard SRT URL query parameters — but
+  standard usage always configures the *local* socket of whoever's URL it
+  is. A caller's own `srt://ourserver:port?rcvbuf=...` connect URL sets
+  *their* `SRTO_RCVBUF`, never ours. These options are never wire-negotiated
+  (confirmed against the vendored libsrt source: no `SRTO_RCVBUF`/`SRTO_FC`
+  field exists anywhere in the handshake extension blocks), so there is no
+  standard — or even physically possible — way for a caller's URL to reach
+  across and configure the listener's own buffers. The only way to attempt
+  it would be inventing a non-standard convention (e.g. smuggling query
+  params inside the `streamid` field's text content, which no real SRT tool
+  does or interprets), which was tried here and reverted for exactly that
+  reason.
+- `latency` is different, and needs no code at all: it genuinely is
+  wire-negotiated (`SRTO_PEERLATENCY`, sent in the real HSREQ/HSRSP
+  extension — see `docs/features/handshake.md`). A caller who sets their
+  own standard `srt://ourserver:port?streamid=...&latency=400` on their own
+  connect call already gets that value carried onto the wire by libsrt
+  automatically, and this repo's existing `SRTO_RCVLATENCY` setting on the
+  listener already participates in that negotiation
+  (`max(local RCVLATENCY, peer PEERLATENCY)`, per
+  `docs/API/API-socket-options.md`). Nothing needs to be parsed or applied
+  on our side for a caller's latency preference to take effect.
+
+If per-caller ingest buffer sizing becomes a real need later, the only
+correct lever is an *operator*-controlled one (e.g. per-pipeline listener
+config, not caller-supplied input) — see `EgressBufferOpts` in
+`src/media/srt/buffer_sizing.rs` for the equivalent egress-side reasoning
+about who benefits from, and who should control, this kind of override.
+
+Ingest encryption is configured through the API/pipeline settings, not the
+streamid.
 
 Inbound bonding uses the same single listener. When the publisher initiates a
 real SRT group, `srt_accept` returns one group ID and libsrt attaches later

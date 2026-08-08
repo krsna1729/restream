@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use crate::media::srt::SrtEgressSendMode;
-use crate::media::srt::socket::EgressBufferOpts;
+use crate::media::srt::buffer_sizing::EgressBufferOpts;
 use crate::media::srt::srt_crypto::SrtCryptoConfig;
 use crate::media::srt::sys::SRTSOCKET;
 

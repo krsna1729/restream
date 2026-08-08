@@ -8,7 +8,7 @@ use super::srt_stream_id::percent_decode;
 /// for tuning `latency`/`sndbuf`/`rcvbuf`/`maxbw`/`fc` per destination —
 /// this repo only recognized `streamid`/`passphrase`/`pbkeylen`/`bond`
 /// before. Every field here is `None` (formula/constant default from
-/// `EgressBufferOpts::defaults`, see socket.rs) unless the operator asked
+/// `EgressBufferOpts::defaults`, see buffer_sizing.rs) unless the operator asked
 /// for something different on this one destination.
 pub(super) struct SrtEgressUrl {
     pub(super) host_port: String,
