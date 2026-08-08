@@ -48,6 +48,8 @@ TEST_FILES=(
   test/frontend/frontend-status-render.test.mjs
   test/frontend/frontend-settings-render.test.mjs
   test/frontend/frontend-settings-srt-ingest.test.mjs
+  test/frontend/frontend-settings-config-sections.test.mjs
+  test/frontend/frontend-settings-security.test.mjs
   test/frontend/history-nearby-render.test.mjs
   test/frontend/overview-activity-render.test.mjs
   test/frontend/overview-view-model.test.mjs
