@@ -293,16 +293,52 @@ disappears during the wait the connection is closed gracefully.
 The runtime calls its high-bitrate helper for the SRT listener and single-link
 egress sockets:
 
-- 250 ms latency
+- 250 ms latency (default; see "SRT ingest latency" below for the
+  global/per-pipeline override)
 - 256-packet loss/reorder tolerance
 - 8 MiB UDP send/receive buffers
-- 12 MiB SRT send/receive buffers
-- 32768-packet flow-control window
+- 12 MiB SRT send/receive buffers (default; scales up for a higher
+  configured latency — see below)
+- 32768-packet flow-control window (default; scales with the buffer above)
 - unlimited automatic maximum bandwidth
 
-The code does not explicitly apply the helper to accepted sockets or bonded
-egress groups. Do not assume those sockets have every requested value without
-runtime verification.
+The code does not explicitly apply the UDP-buffer/loss-tolerance/maxbw
+portion of the helper to accepted sockets or bonded egress groups. Do not
+assume those sockets have every requested value without runtime
+verification. Latency/RCVBUF/FC, in contrast, are explicitly re-applied to
+every accepted socket in the accept-hook (see below) — those three are not
+just the listener's inherited default.
+
+### SRT ingest latency
+
+Every ingest connection's `SRTO_RCVLATENCY` — and, derived from it, its
+`SRTO_RCVBUF`/`SRTO_FC` — is resolved from `SrtGlobalIngestConfig::latencyMs`
+(global default, 250 ms) or a per-pipeline
+`SrtPipelineIngestConfig::latencyMs` override, the same inherit/override
+shape already used for SRT ingest encryption. Configurable via
+`PATCH /api/v1/settings` (`srtIngest.latencyMs`) for the global default, or
+per pipeline through its `srtIngestPolicy.latencyMs` field — both also have
+dashboard fields (Settings → Global SRT Ingest; the pipeline editor's SRT
+Ingest Policy section). Valid range: `20–8000` ms, the SRT wire protocol's
+own documented range for the negotiated TSBPD delay field
+(`docs/features/handshake.md`'s `TsbPdDelay`/`RcvTsbPdDelay`/`SndTsbPdDelay`
+in the vendored libsrt source).
+
+`RCVBUF`/`FC` scale with the resolved latency using the same formula
+egress's `SNDBUF` ceiling uses (worst-case assumed bitrate × latency ×
+margin), floored at the historical flat 12 MiB/32768-packet preset so the
+default-latency case is unchanged. This can only ever be sized from the
+value configured here, never the value actually negotiated with the caller
+(`max(this value, the caller's own PEERLATENCY)`) — `SRTO_RCVBUF` is a
+PREBIND option, locked before libsrt processes the caller's proposed
+latency at all (confirmed directly against the vendored libsrt source:
+`acceptAndRespond` in `srtcore/core.cpp` calls `interpretSrtHandshake`,
+which negotiates latency, before `prepareBuffers`, which allocates the
+receive buffer — but `SRTO_RCVBUF` was already locked well before either
+call, in the accept-hook). A caller who proposes a higher latency than
+configured here can still push the negotiated result above what the
+buffer was sized for; nothing on either end can close that gap, since
+libsrt does not validate the peer's proposed latency at all.
 
 Linux startup checks warn when `net.core.rmem_max` or `net.core.wmem_max` cannot
 support the requested UDP buffers. The listener's `/proc/net/udp` receive queue

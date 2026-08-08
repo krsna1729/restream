@@ -1,19 +1,30 @@
-//! Per-destination egress SRT buffer, flow-control, and latency sizing
-//! policy (`EgressBufferOpts`). Split out of `socket.rs` to stay under the
-//! source-audit line cap — see that file for the general SRT socket FFI
-//! helpers (crypto, group membership, listener/socket guards, etc.) this
-//! module does not own.
+//! Per-destination egress SRT buffer/FC/latency sizing policy
+//! (`EgressBufferOpts`), plus ingest's own latency-scaled receive-buffer
+//! sizing (`srt_set_ingest_latency_opts`). Split out of `socket.rs` to stay
+//! under the source-audit line cap — see that file for the general SRT
+//! socket FFI helpers (crypto, group membership, listener/socket guards,
+//! etc.) this module does not own.
 //!
-//! Ingest has no per-caller equivalent: `SNDBUF`/`RCVBUF`/`FC` are never
-//! wire-negotiated (a caller's own `srt://...?rcvbuf=...` URL only
-//! configures *their* socket, never ours), and there is no standard SRT
-//! mechanism — via streamid or otherwise — for a caller to influence the
-//! listener's own values. `latency` is the one exception, but it already
-//! reaches us for free through real handshake negotiation
-//! (`SRTO_PEERLATENCY`) the moment a caller sets it on their own connect
-//! URL, so it needs no code here either.
+//! There is still no *per-caller* ingest equivalent to egress's URL
+//! overrides: `SNDBUF`/`RCVBUF`/`FC` are never wire-negotiated (a caller's
+//! own `srt://...?rcvbuf=...` URL only configures *their* socket, never
+//! ours), and there is no standard SRT mechanism — via streamid or
+//! otherwise — for a caller to influence the listener's own values. What
+//! ingest does offer is an *operator*-controlled lever
+//! (`SrtGlobalIngestConfig`/`SrtPipelineIngestConfig::latency_ms`, resolved
+//! in `media::srt_policy` and applied per accepted connection in
+//! `media::srt::listener`) — the same trust boundary as egress's URL
+//! params (operator configures it, operator bears the consequences), just
+//! applied to the listener's own `SRTO_RCVLATENCY` instead of anything a
+//! caller supplies. `latency` reaches the negotiated result for free either
+//! way, through real handshake negotiation (`SRTO_PEERLATENCY`) — what this
+//! module adds is sizing `RCVBUF`/`FC` to actually hold what that latency
+//! implies, instead of a flat preset unrelated to it.
+
+use std::os::raw::{c_int, c_void};
 
 use super::socket::{DESIRED_FC, DESIRED_LATENCY_MS, DESIRED_SRT_BUF};
+use super::sys::*;
 
 // --- SRT latency: shared ingest/egress bounds -------------------------------
 //
@@ -193,7 +204,7 @@ pub(super) fn srt_egress_sndbuf_bytes(bitrate_bps: Option<i64>, latency_ms: i32)
     bytes
         .clamp(
             EGRESS_SNDBUF_FLOOR as i64,
-            egress_sndbuf_ceiling_bytes(latency_ms) as i64,
+            latency_scaled_buffer_ceiling_bytes(latency_ms) as i64,
         )
         .max(EGRESS_SNDBUF_FLOOR as i64) as i32
 }
@@ -213,7 +224,7 @@ pub(super) fn srt_egress_sndbuf_bytes(bitrate_bps: Option<i64>, latency_ms: i32)
 /// honoring a caller's genuinely higher latency would reintroduce
 /// too-late-drop as a buffer-capacity artifact instead of a real lateness
 /// signal — silently defeating the very setting the caller asked for.
-fn egress_sndbuf_ceiling_bytes(latency_ms: i32) -> i32 {
+fn latency_scaled_buffer_ceiling_bytes(latency_ms: i32) -> i32 {
     let formula = EGRESS_DEFAULT_ASSUMED_BITRATE_BPS
         .saturating_mul(latency_ms as i64)
         .saturating_mul(EGRESS_SAFETY_MARGIN)
@@ -227,8 +238,88 @@ fn egress_sndbuf_ceiling_bytes(latency_ms: i32) -> i32 {
 /// terms — see the shared latency/FC doc block above) regardless of what
 /// latency produced that SNDBUF ceiling. Floored at `DESIRED_FC` so a
 /// caller who leaves `latency` at its default sees no change.
-fn egress_fc_ceiling_pkts(latency_ms: i32) -> i32 {
-    (egress_sndbuf_ceiling_bytes(latency_ms) / SRT_PAYLOAD_SIZE_BYTES).max(DESIRED_FC)
+fn latency_scaled_fc_ceiling_pkts(latency_ms: i32) -> i32 {
+    (latency_scaled_buffer_ceiling_bytes(latency_ms) / SRT_PAYLOAD_SIZE_BYTES).max(DESIRED_FC)
+}
+
+/// Applies this pipeline's resolved SRT ingest latency
+/// (`SrtGlobalIngestConfig`/`SrtPipelineIngestConfig::latency_ms`, resolved
+/// in `media::srt_policy`) to an accepted-but-not-yet-`open()`ed socket:
+/// `SRTO_RCVLATENCY`, plus an `RCVBUF`/`FC` pair sized from the *same*
+/// latency-scaled formula egress's `SNDBUF` ceiling uses (worst-case
+/// assumed bitrate × latency × margin, floored at the historical flat
+/// preset — see `latency_scaled_buffer_ceiling_bytes`). Must run inside the
+/// accept-hook callback (`listener.rs`'s `srt_listener_policy_callback_inner`),
+/// the same PREBIND window `EgressBufferOpts`'s doc block explains — and for
+/// the same reason, this can only ever be sized from *our own* configured
+/// latency, never the value actually negotiated with the caller:
+/// `SRTO_RCVBUF` is locked before `acceptAndRespond` (which processes the
+/// peer's proposed `PEERLATENCY` and computes
+/// `max(local RCVLATENCY, peer PEERLATENCY)`) ever runs — confirmed
+/// directly against the vendored libsrt source
+/// (`.local/build/static/src/srt/srtcore/core.cpp`'s `acceptAndRespond`:
+/// `interpretSrtHandshake`, which negotiates latency, precedes
+/// `prepareBuffers`, which allocates the receive buffer from whatever
+/// `SRTO_RCVBUF` was set to, but that value was already locked at PREBIND
+/// time, long before either call). A caller who proposes a higher
+/// `PEERLATENCY` than we sized for can still push the negotiated result
+/// above our buffer's capacity — libsrt's own `processSrtMsg_HSREQ` does no
+/// range validation on the peer's proposed value — and nothing on our side
+/// can close that gap; it is a protocol-inherent limit, not a bug here.
+/// Floored below at `DESIRED_SRT_BUF`/`DESIRED_FC` (this repo's proven-safe
+/// baseline for the single always-on ingest socket), and can only grow
+/// above that for a caller/pipeline genuinely configured for higher
+/// latency — never shrinks the default, since ingest is a single fixed
+/// cost, not multiplied by output count the way egress is, so there is no
+/// memory-pressure reason to make the common case smaller.
+///
+/// FC is applied before RCVBUF, matching libsrt's documented required
+/// order (see the shared latency/FC doc block above), and RCVBUF is
+/// additionally clamped to fit under the resolved FC so the
+/// `RCVBUF <= FC` invariant holds even though neither value here is
+/// user-supplied (both are formula-derived, but the formula's rounding
+/// could otherwise let RCVBUF's byte figure exceed FC's packet-count
+/// figure at the margins).
+///
+/// Pure resolution, split out from `srt_set_ingest_latency_opts` so the
+/// clamp/formula math is directly unit/property-testable without a real
+/// socket. Returns `(clamped_latency_ms, fc_pkts, rcvbuf_bytes)`.
+fn resolve_ingest_latency_opts(latency_ms: i32) -> (i32, i32, i32) {
+    let latency_ms = latency_ms.clamp(SRT_LATENCY_MS_FLOOR, SRT_LATENCY_MS_CEILING);
+    let fc_pkts = latency_scaled_fc_ceiling_pkts(latency_ms);
+    let rcvbuf_bytes = latency_scaled_buffer_ceiling_bytes(latency_ms)
+        .min(fc_pkts.saturating_mul(SRT_PAYLOAD_SIZE_BYTES));
+    (latency_ms, fc_pkts, rcvbuf_bytes)
+}
+
+pub(super) fn srt_set_ingest_latency_opts(sock: SRTSOCKET, latency_ms: i32) {
+    let (latency_ms, fc_pkts, rcvbuf_bytes) = resolve_ingest_latency_opts(latency_ms);
+
+    // SAFETY: All srt_setsockopt calls use correctly-sized stack-allocated
+    // option values with a valid, not-yet-opened accepted SRT socket.
+    unsafe {
+        srt_setsockopt(
+            sock,
+            0,
+            SRTO_FC,
+            &fc_pkts as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as c_int,
+        );
+        srt_setsockopt(
+            sock,
+            0,
+            SRTO_RCVBUF,
+            &rcvbuf_bytes as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as c_int,
+        );
+        srt_setsockopt(
+            sock,
+            0,
+            SRTO_RCVLATENCY,
+            &latency_ms as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as c_int,
+        );
+    }
 }
 
 /// Every per-destination SRT socket option an egress connection can carry,
@@ -299,16 +390,16 @@ impl EgressBufferOpts {
             // Both formulas are latency-dependent; `defaults()` computed
             // them at the pre-override default latency, so they need
             // re-deriving now that the effective latency has changed.
-            self.fc_pkts = egress_fc_ceiling_pkts(self.latency_ms);
+            self.fc_pkts = latency_scaled_fc_ceiling_pkts(self.latency_ms);
             self.sndbuf_bytes = srt_egress_sndbuf_bytes(self.assumed_bitrate_bps, self.latency_ms);
         }
         if let Some(v) = fc_pkts {
             self.fc_pkts = v.clamp(
                 EGRESS_FC_OVERRIDE_FLOOR,
-                egress_fc_ceiling_pkts(self.latency_ms),
+                latency_scaled_fc_ceiling_pkts(self.latency_ms),
             );
         }
-        let sndbuf_ceiling_under_fc = egress_sndbuf_ceiling_bytes(self.latency_ms)
+        let sndbuf_ceiling_under_fc = latency_scaled_buffer_ceiling_bytes(self.latency_ms)
             .min(self.fc_pkts.saturating_mul(SRT_PAYLOAD_SIZE_BYTES))
             .max(EGRESS_SNDBUF_FLOOR);
         self.sndbuf_bytes = match sndbuf_bytes {
@@ -367,7 +458,7 @@ mod egress_buffer_sizing_tests {
         // Well above the documented 40-50 Mbps envelope this repo tests;
         // at the default latency, must never exceed what ingest itself uses
         // (DESIRED_SRT_BUF) — the ceiling only grows past that for a caller
-        // who has also raised latency (see `egress_sndbuf_ceiling_bytes`).
+        // who has also raised latency (see `latency_scaled_buffer_ceiling_bytes`).
         assert_eq!(
             srt_egress_sndbuf_bytes(Some(1_000_000_000), DESIRED_LATENCY_MS),
             DESIRED_SRT_BUF
@@ -546,6 +637,18 @@ mod buffer_sizing_proptests {
             let fc_bytes = opts.fc_pkts.saturating_mul(SRT_PAYLOAD_SIZE_BYTES);
             prop_assert!(opts.sndbuf_bytes <= fc_bytes);
             prop_assert!(opts.rcvbuf_bytes <= fc_bytes);
+        }
+
+        #[test]
+        fn ingest_latency_opts_always_satisfy_range_and_fc_coupling_invariants(
+            latency_ms in any::<i32>(),
+        ) {
+            let (resolved_latency, fc_pkts, rcvbuf_bytes) = resolve_ingest_latency_opts(latency_ms);
+
+            prop_assert!((SRT_LATENCY_MS_FLOOR..=SRT_LATENCY_MS_CEILING).contains(&resolved_latency));
+            prop_assert!(fc_pkts >= DESIRED_FC);
+            prop_assert!(rcvbuf_bytes >= DESIRED_SRT_BUF.min(fc_pkts.saturating_mul(SRT_PAYLOAD_SIZE_BYTES)));
+            prop_assert!(rcvbuf_bytes <= fc_pkts.saturating_mul(SRT_PAYLOAD_SIZE_BYTES));
         }
     }
 }

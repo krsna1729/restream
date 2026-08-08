@@ -1,7 +1,7 @@
 use std::ffi::CString;
 use std::os::raw::{c_int, c_void};
 
-use crate::domain::srt_ingest::ResolvedSrtIngestConfig;
+use crate::domain::srt_ingest::ResolvedSrtCrypto;
 
 use super::{
     SRTO_ENFORCEDENCRYPTION, SRTO_PASSPHRASE, SRTO_PBKEYLEN, SRTSOCKET, check_srt_option_result,
@@ -14,10 +14,10 @@ pub(in crate::media::srt) struct SrtCryptoConfig {
     pub(super) pbkeylen: c_int,
 }
 
-pub(super) fn srt_crypto_from_resolved(config: ResolvedSrtIngestConfig) -> Option<SrtCryptoConfig> {
-    match config {
-        ResolvedSrtIngestConfig::Plaintext => None,
-        ResolvedSrtIngestConfig::Encrypted {
+pub(super) fn srt_crypto_from_resolved(crypto: ResolvedSrtCrypto) -> Option<SrtCryptoConfig> {
+    match crypto {
+        ResolvedSrtCrypto::Plaintext => None,
+        ResolvedSrtCrypto::Encrypted {
             passphrase,
             pbkeylen,
         } => Some(SrtCryptoConfig {
@@ -86,12 +86,12 @@ mod tests {
 
     #[test]
     fn plaintext_resolved_config_yields_no_crypto() {
-        assert!(srt_crypto_from_resolved(ResolvedSrtIngestConfig::Plaintext).is_none());
+        assert!(srt_crypto_from_resolved(ResolvedSrtCrypto::Plaintext).is_none());
     }
 
     #[test]
     fn encrypted_resolved_config_carries_exact_passphrase_and_pbkeylen() {
-        let crypto = srt_crypto_from_resolved(ResolvedSrtIngestConfig::Encrypted {
+        let crypto = srt_crypto_from_resolved(ResolvedSrtCrypto::Encrypted {
             passphrase: "correct-horse-battery-staple".to_string(),
             pbkeylen: 24,
         })

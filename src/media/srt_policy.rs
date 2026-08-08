@@ -102,7 +102,8 @@ fn build_policy_snapshot(
 mod tests {
     use super::*;
     use crate::domain::srt_ingest::{
-        SrtGlobalIngestMode, SrtPipelineIngestConfig, SrtPipelineIngestMode,
+        DEFAULT_SRT_INGEST_LATENCY_MS, ResolvedSrtCrypto, SrtGlobalIngestMode,
+        SrtPipelineIngestConfig, SrtPipelineIngestMode,
     };
 
     fn policy_entry(policy: SrtPipelineIngestConfig) -> SrtIngestPolicyEntry {
@@ -115,6 +116,7 @@ mod tests {
             mode: SrtGlobalIngestMode::Encrypted,
             passphrase: Some("short".to_string()),
             pbkeylen: 16,
+            latency_ms: DEFAULT_SRT_INGEST_LATENCY_MS,
         };
         let store =
             SrtIngestPolicyStore::new(global, &[policy_entry(SrtPipelineIngestConfig::default())]);
@@ -128,6 +130,7 @@ mod tests {
             mode: SrtGlobalIngestMode::Encrypted,
             passphrase: Some("global-pass-123".to_string()),
             pbkeylen: 16,
+            latency_ms: DEFAULT_SRT_INGEST_LATENCY_MS,
         };
         let expected = global.resolve().expect("valid global resolves");
 
@@ -143,6 +146,7 @@ mod tests {
             mode: SrtGlobalIngestMode::Encrypted,
             passphrase: Some("global-pass-123".to_string()),
             pbkeylen: 16,
+            latency_ms: DEFAULT_SRT_INGEST_LATENCY_MS,
         };
         let expected = global.resolve().expect("valid global resolves");
 
@@ -150,6 +154,7 @@ mod tests {
             mode: SrtPipelineIngestMode::Encrypted,
             passphrase: Some("short".to_string()),
             pbkeylen: Some(16),
+            latency_ms: None,
         };
         let store = SrtIngestPolicyStore::new(global, &[policy_entry(invalid_pipeline_policy)]);
 
@@ -163,6 +168,7 @@ mod tests {
             mode: SrtPipelineIngestMode::Encrypted,
             passphrase: Some("pipeline-pass-123".to_string()),
             pbkeylen: Some(32),
+            latency_ms: None,
         };
 
         let entries = [
@@ -177,9 +183,12 @@ mod tests {
 
         assert_eq!(
             store.resolved_policy("stream-one"),
-            Some(ResolvedSrtIngestConfig::Encrypted {
-                passphrase: "pipeline-pass-123".to_string(),
-                pbkeylen: 32,
+            Some(ResolvedSrtIngestConfig {
+                crypto: ResolvedSrtCrypto::Encrypted {
+                    passphrase: "pipeline-pass-123".to_string(),
+                    pbkeylen: 32,
+                },
+                latency_ms: DEFAULT_SRT_INGEST_LATENCY_MS,
             })
         );
     }
@@ -199,7 +208,10 @@ mod tests {
         );
         assert_eq!(
             store.resolved_policy("stream-one"),
-            Some(ResolvedSrtIngestConfig::Plaintext)
+            Some(ResolvedSrtIngestConfig {
+                crypto: ResolvedSrtCrypto::Plaintext,
+                latency_ms: DEFAULT_SRT_INGEST_LATENCY_MS,
+            })
         );
 
         let other_entry = SrtIngestPolicyEntry::new(
@@ -212,7 +224,10 @@ mod tests {
         assert_eq!(store.resolved_policy("stream-one"), None);
         assert_eq!(
             store.resolved_policy("stream-two"),
-            Some(ResolvedSrtIngestConfig::Plaintext)
+            Some(ResolvedSrtIngestConfig {
+                crypto: ResolvedSrtCrypto::Plaintext,
+                latency_ms: DEFAULT_SRT_INGEST_LATENCY_MS,
+            })
         );
     }
 
@@ -222,6 +237,7 @@ mod tests {
             mode: SrtGlobalIngestMode::Encrypted,
             passphrase: Some("global-pass-123".to_string()),
             pbkeylen: 32,
+            latency_ms: DEFAULT_SRT_INGEST_LATENCY_MS,
         };
         let store = SrtIngestPolicyStore::new(global.clone(), &[]);
         assert_eq!(store.global_config(), global);
@@ -246,7 +262,10 @@ mod tests {
         // propagating the poison as a panic.
         assert_eq!(
             store.resolved_policy("stream-one"),
-            Some(ResolvedSrtIngestConfig::Plaintext)
+            Some(ResolvedSrtIngestConfig {
+                crypto: ResolvedSrtCrypto::Plaintext,
+                latency_ms: DEFAULT_SRT_INGEST_LATENCY_MS,
+            })
         );
         store.replace(SrtGlobalIngestConfig::default(), &[]);
         assert_eq!(store.resolved_policy("stream-one"), None);

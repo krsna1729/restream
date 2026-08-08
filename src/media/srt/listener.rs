@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tracing::{error, info, warn};
 
+use super::buffer_sizing::srt_set_ingest_latency_opts;
 use super::socket::{
     SrtListenerCloser, enable_srt_group_connect, from_sockaddr_in, srt_log_effective_opts,
     srt_set_highbitrate_opts, to_sockaddr_in,
@@ -14,7 +15,9 @@ use super::srt_monitor::monitor_listener_socket;
 use super::srt_stream_id::{SrtConnectionMode, parse_srt_stream_id};
 use super::sys::*;
 use super::{SrtIngestPolicyStore, SrtServer};
-use crate::domain::srt_ingest::ResolvedSrtIngestConfig;
+use crate::domain::srt_ingest::{
+    DEFAULT_SRT_INGEST_LATENCY_MS, ResolvedSrtCrypto, ResolvedSrtIngestConfig,
+};
 
 const SRT_REJX_UNAUTHORIZED: c_int = 1401;
 const SRT_REJX_BAD_MODE: c_int = 1405;
@@ -95,7 +98,7 @@ unsafe fn srt_listener_policy_callback_inner(
         return -1;
     };
 
-    if let Some(crypto) = srt_crypto_from_resolved(policy)
+    if let Some(crypto) = srt_crypto_from_resolved(policy.crypto)
         && apply_srt_crypto_socket(ns, &crypto).is_err()
     {
         // SAFETY: ns is the live socket supplied by libsrt for this callback.
@@ -104,6 +107,14 @@ unsafe fn srt_listener_policy_callback_inner(
         }
         return -1;
     }
+
+    // This accept-hook callback is the only point ingest can still apply a
+    // PREBIND option: `ns` is a real, distinct socket already (unlike the
+    // shared listener), but libsrt has not yet called `open()` on it — see
+    // `srt_set_ingest_latency_opts`'s doc comment for the confirmed
+    // ordering and why this can only be sized from our own resolved
+    // latency, never the value actually negotiated with the caller.
+    srt_set_ingest_latency_opts(ns, policy.latency_ms);
 
     0
 }
@@ -150,17 +161,24 @@ impl SrtServer {
             }
             return;
         }
-        if let Some(crypto) = srt_crypto_from_resolved(
-            self.ingest_policy_store
-                .global_config()
-                .resolve()
-                .unwrap_or(ResolvedSrtIngestConfig::Plaintext),
-        ) {
+        let default_resolved_policy = self
+            .ingest_policy_store
+            .global_config()
+            .resolve()
+            .unwrap_or(ResolvedSrtIngestConfig {
+                crypto: ResolvedSrtCrypto::Plaintext,
+                latency_ms: DEFAULT_SRT_INGEST_LATENCY_MS,
+            });
+        if let Some(crypto) = srt_crypto_from_resolved(default_resolved_policy.crypto) {
             info!(
                 "[srt] default listener ingest encryption enabled (pbkeylen={})",
                 crypto.pbkeylen
             );
         }
+        info!(
+            "[srt] default listener ingest latency: {}ms (per-pipeline override via SrtPipelineIngestConfig::latency_ms)",
+            default_resolved_policy.latency_ms
+        );
         match enable_srt_group_connect(server_sock) {
             Ok(()) => {
                 self.engine

@@ -82,15 +82,18 @@ mod srt_url;
 mod sys;
 
 #[cfg(test)]
+use buffer_sizing::srt_set_ingest_latency_opts;
+#[cfg(test)]
 use shared_muxer::estimate_ts_accum_capacity;
 pub(crate) use shared_muxer::start_shared_ts_muxer;
 pub(crate) use socket::srt_get_configured_sndbuf;
-pub use socket::{DESIRED_UDP_BUF, linked_srt_version, srt_set_connect_timeout};
 #[cfg(test)]
 use socket::{
-    SrtGroupSummary, add_srt_group_quality, enable_srt_group_connect, is_srt_group,
-    streamid_from_getsockopt_buffer, summarize_group_members, try_acquire_srt_sender_permit,
+    DESIRED_FC, DESIRED_SRT_BUF, SrtGroupSummary, add_srt_group_quality, enable_srt_group_connect,
+    is_srt_group, streamid_from_getsockopt_buffer, summarize_group_members,
+    try_acquire_srt_sender_permit,
 };
+pub use socket::{DESIRED_UDP_BUF, linked_srt_version, srt_set_connect_timeout};
 use socket::{check_srt_option_result, check_sysctl_limits, srt_log_effective_opts};
 #[cfg(test)]
 use srt_crypto::apply_srt_crypto_socket;

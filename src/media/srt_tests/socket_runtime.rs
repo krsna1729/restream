@@ -324,3 +324,78 @@ fn linked_libsrt_group_socket_accepts_streamid_via_setsockopt() {
         "bonded group sockets must accept StreamID via setsockopt: {result:?}"
     );
 }
+
+/// Real-socket confirmation that `srt_set_ingest_latency_opts` (applied in
+/// the ingest accept-hook, on the same not-yet-`open()`ed socket state
+/// `linked_libsrt_accepts_rcvbuf_and_fc_ingest_overrides_via_prebind_setsockopt`
+/// used to exercise for the now-reverted per-caller override) reaches the
+/// socket and produces a coupled, in-range FC/RCVBUF/RCVLATENCY triple.
+#[test]
+fn linked_libsrt_ingest_latency_opts_scale_rcvbuf_and_fc_above_the_flat_default() {
+    let _srt_runtime = SrtTestRuntime::startup();
+    let sock = unsafe { srt_create_socket() };
+    assert!(sock >= 0);
+
+    // Well above the default 250ms: must scale RCVBUF/FC up from the flat
+    // DESIRED_SRT_BUF/DESIRED_FC preset, not leave them untouched.
+    srt_set_ingest_latency_opts(sock, 4_000);
+
+    let mut latency: c_int = 0;
+    let mut latency_len = std::mem::size_of::<c_int>() as c_int;
+    let mut fc: c_int = 0;
+    let mut fc_len = std::mem::size_of::<c_int>() as c_int;
+    unsafe {
+        srt_getsockopt(
+            sock,
+            0,
+            SRTO_RCVLATENCY,
+            &mut latency as *mut _ as *mut c_void,
+            &mut latency_len,
+        );
+        srt_getsockopt(sock, 0, SRTO_FC, &mut fc as *mut _ as *mut c_void, &mut fc_len);
+    }
+    let mut rcvbuf: c_int = 0;
+    let mut rcvbuf_len = std::mem::size_of::<c_int>() as c_int;
+    unsafe {
+        srt_getsockopt(
+            sock,
+            0,
+            SRTO_RCVBUF,
+            &mut rcvbuf as *mut _ as *mut c_void,
+            &mut rcvbuf_len,
+        );
+    }
+    unsafe {
+        srt_close(sock);
+    }
+
+    assert_eq!(latency, 4_000, "RCVLATENCY must reach the socket exactly");
+    assert!(fc > DESIRED_FC, "FC must scale up for a higher configured latency: got {fc}");
+    assert!(
+        rcvbuf > DESIRED_SRT_BUF,
+        "RCVBUF must scale up for a higher configured latency: got {rcvbuf}"
+    );
+}
+
+/// At the historical default latency (250ms), RCVBUF/FC must land at
+/// exactly today's flat preset — this is the "no regression for the
+/// untouched-default case" guarantee.
+#[test]
+fn linked_libsrt_ingest_latency_opts_match_the_flat_default_at_250ms() {
+    let _srt_runtime = SrtTestRuntime::startup();
+    let sock = unsafe { srt_create_socket() };
+    assert!(sock >= 0);
+
+    srt_set_ingest_latency_opts(sock, 250);
+
+    let mut fc: c_int = 0;
+    let mut fc_len = std::mem::size_of::<c_int>() as c_int;
+    unsafe {
+        srt_getsockopt(sock, 0, SRTO_FC, &mut fc as *mut _ as *mut c_void, &mut fc_len);
+    }
+    unsafe {
+        srt_close(sock);
+    }
+
+    assert_eq!(fc, DESIRED_FC);
+}

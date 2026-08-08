@@ -140,6 +140,7 @@ fn srt_global_config_from_appconfig(
         mode: SrtGlobalIngestMode::Encrypted,
         passphrase: Some(passphrase),
         pbkeylen,
+        ..SrtGlobalIngestConfig::default()
     })
 }
 
@@ -155,7 +156,9 @@ mod tests {
         MetaLookupError, MetaLookupFuture, MetaStore, PipelineListFuture, PipelineStore,
     };
     use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole};
-    use crate::domain::srt_ingest::ResolvedSrtIngestConfig;
+    use crate::domain::srt_ingest::{
+        DEFAULT_SRT_INGEST_LATENCY_MS, ResolvedSrtCrypto, ResolvedSrtIngestConfig,
+    };
 
     struct FakeMetaStore {
         value: Option<String>,
@@ -429,9 +432,12 @@ mod tests {
         );
         assert_eq!(
             policy_store.resolved_policy("stream-one"),
-            Some(ResolvedSrtIngestConfig::Encrypted {
-                passphrase: "global-pass-123".to_string(),
-                pbkeylen: 24,
+            Some(ResolvedSrtIngestConfig {
+                crypto: ResolvedSrtCrypto::Encrypted {
+                    passphrase: "global-pass-123".to_string(),
+                    pbkeylen: 24,
+                },
+                latency_ms: DEFAULT_SRT_INGEST_LATENCY_MS,
             })
         );
     }
@@ -494,9 +500,12 @@ mod tests {
         );
         assert_eq!(
             policy_store.resolved_policy("stream-one"),
-            Some(ResolvedSrtIngestConfig::Encrypted {
-                passphrase: "updated-pass-123".to_string(),
-                pbkeylen: 32,
+            Some(ResolvedSrtIngestConfig {
+                crypto: ResolvedSrtCrypto::Encrypted {
+                    passphrase: "updated-pass-123".to_string(),
+                    pbkeylen: 32,
+                },
+                latency_ms: DEFAULT_SRT_INGEST_LATENCY_MS,
             })
         );
     }

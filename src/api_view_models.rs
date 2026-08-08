@@ -130,6 +130,7 @@ mod tests {
                     mode: SrtPipelineIngestMode::Encrypted,
                     passphrase: Some("secret-pass".to_string()),
                     pbkeylen: Some(24),
+                    latency_ms: None,
                 })
                 .unwrap(),
             ),
