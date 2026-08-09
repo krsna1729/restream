@@ -1,7 +1,7 @@
 use super::*;
 use crate::media::avio::MemoryQueue;
 use crate::media::mpegts::TsDemuxer;
-use crate::media::packet::{MediaPacket, MediaType};
+use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use std::sync::Arc;
 use tokio::process::Command as TokioCommand;
 use tokio_util::sync::CancellationToken;
@@ -549,4 +549,100 @@ fn queue_close_guard_unblocks_writer_thread() {
     let result = thread.join().expect("writer thread panicked");
     assert!(result.is_ok());
     let _ = std::fs::remove_file(temp_dir.join("test_guard_recording.ts"));
+}
+
+fn drain_test_packet() -> MediaPacket {
+    MediaPacket {
+        media_type: MediaType::Video,
+        track_index: 0,
+        pts: 0,
+        dts: 0,
+        is_keyframe: false,
+        format: PayloadFormat::Raw,
+        payload: bytes::Bytes::from_static(&[0; 4]),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn drain_ready_bursts_test_call(
+    reader: &mut Reader,
+    cancel_token: &CancellationToken,
+    engine: &MediaEngine,
+) -> usize {
+    let mut packets: Vec<Arc<MediaPacket>> = Vec::new();
+    let mut feeder: Option<TsPacketFeeder> = None;
+    let video_sequence_header: Option<bytes::Bytes> = None;
+    let service_metadata = TsServiceMetadata {
+        provider_name: "test".to_string(),
+        service_name: "test".to_string(),
+    };
+    let mut ts_batch: Vec<u8> = Vec::new();
+    let queue = Arc::new(MemoryQueue::new());
+    let stage_metrics = Arc::new(StageMetrics::new());
+
+    drain_ready_bursts(
+        reader,
+        cancel_token,
+        &mut packets,
+        MEDIA_PULL_BURST_PACKETS,
+        engine,
+        "test-pipeline",
+        &mut feeder,
+        &video_sequence_header,
+        &service_metadata,
+        &mut ts_batch,
+        &queue,
+        &stage_metrics,
+    )
+    .await
+}
+
+// Regression proof for the CI flake fixed alongside this test: a recorder
+// task descheduled while the ring accumulated a backlog (CI CPU contention)
+// used to drain the *entire* backlog on resume even after a stop had already
+// been requested, extending recordings well past the requested stop point.
+// The drain loop now checks cancellation between bursts, so this must stop
+// after at most one in-flight burst.
+#[tokio::test]
+async fn drain_ready_bursts_stops_within_one_burst_after_cancellation() {
+    let ring = Arc::new(RingBuffer::new(512));
+    let mut reader = Reader::new("test-drain-cancel".to_string(), ring.clone());
+
+    let backlog = 10 * MEDIA_PULL_BURST_PACKETS;
+    for _ in 0..backlog {
+        ring.push(drain_test_packet());
+    }
+
+    let cancel_token = CancellationToken::new();
+    cancel_token.cancel();
+    let engine = Arc::new(MediaEngine::new());
+
+    let drained = drain_ready_bursts_test_call(&mut reader, &cancel_token, &engine).await;
+
+    assert!(
+        drained <= MEDIA_PULL_BURST_PACKETS,
+        "cancelled drain consumed {drained} packets from a {backlog}-packet backlog, \
+         expected at most one burst ({MEDIA_PULL_BURST_PACKETS})"
+    );
+}
+
+// Regression guard for the opposite failure mode: without cancellation,
+// draining must still consume the entire available backlog so normal
+// recording doesn't lose data or stop prematurely.
+#[tokio::test]
+async fn drain_ready_bursts_drains_full_backlog_when_not_cancelled() {
+    let ring = Arc::new(RingBuffer::new(512));
+    let mut reader = Reader::new("test-drain-full".to_string(), ring.clone());
+
+    let backlog = 10 * MEDIA_PULL_BURST_PACKETS;
+    for _ in 0..backlog {
+        ring.push(drain_test_packet());
+    }
+
+    let cancel_token = CancellationToken::new();
+    let engine = Arc::new(MediaEngine::new());
+
+    let drained = drain_ready_bursts_test_call(&mut reader, &cancel_token, &engine).await;
+
+    assert_eq!(drained, backlog);
 }

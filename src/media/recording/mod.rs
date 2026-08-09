@@ -11,10 +11,12 @@
 use crate::domain::recording::RecordingSettings;
 use crate::domain::stage::StageKey;
 use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
+use crate::media::avio::MemoryQueue;
 use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::mpegts::TsServiceMetadata;
-use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
+use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, MediaPacket, Reader, RingBuffer};
+use crate::media::stage_metrics::StageMetrics;
 use crate::media::startup_policy;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -390,6 +392,99 @@ fn build_recording_service_metadata(
     }
 }
 
+/// Drains packets currently available to `reader` in bursts of at most
+/// `burst_size`, muxing each burst to TS and writing it to `queue`.
+///
+/// Cancellation is checked before each burst, so once `cancel_token` fires
+/// this drains at most one more in-flight burst rather than the entire ring
+/// backlog. Without this check, a recorder task that was descheduled while
+/// the ring accumulated a backlog (e.g. under CI CPU contention) would drain
+/// that whole backlog on resume even though a stop had already been
+/// requested — extending the recording well past the requested stop point.
+/// Returns the total packet count drained, used by tests to prove the bound.
+#[allow(clippy::too_many_arguments)]
+async fn drain_ready_bursts(
+    reader: &mut Reader,
+    cancel_token: &CancellationToken,
+    packets: &mut Vec<Arc<MediaPacket>>,
+    burst_size: usize,
+    engine: &MediaEngine,
+    pipeline_id: &str,
+    feeder: &mut Option<TsPacketFeeder>,
+    video_sequence_header: &Option<bytes::Bytes>,
+    service_metadata: &TsServiceMetadata,
+    ts_batch: &mut Vec<u8>,
+    queue: &MemoryQueue,
+    stage_metrics: &StageMetrics,
+) -> usize {
+    let mut drained = 0usize;
+    loop {
+        if cancel_token.is_cancelled() {
+            return drained;
+        }
+        packets.clear();
+        match reader.pull_burst(packets, burst_size) {
+            Ok(0) | Err(_) => return drained,
+            Ok(n) => drained += n,
+        }
+
+        for pkt in packets.iter() {
+            // Lazily create the feeder from engine metadata.
+            if feeder.is_none() {
+                let metadata = {
+                    let ingests = engine.ingests.active.read().await;
+                    ingests.get(pipeline_id).and_then(|ingest| {
+                        let metadata = ingest.metadata();
+                        let video = metadata.video;
+                        let lock = ingest
+                            .audio_tracks
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        let tracks = if lock.is_empty() {
+                            metadata
+                                .audio
+                                .clone()
+                                .map(|audio| Arc::new(vec![audio]))
+                                .unwrap_or_else(|| Arc::new(Vec::new()))
+                        } else {
+                            Arc::clone(&lock)
+                        };
+                        (video.is_some() || !tracks.is_empty()).then_some((video, tracks))
+                    })
+                };
+                let Some((video, tracks)) = metadata else {
+                    continue;
+                };
+                *feeder = Some(TsPacketFeeder::new(
+                    video.as_ref(),
+                    tracks,
+                    PacketFeedConfig {
+                        video_sequence_header: video_sequence_header.as_ref().map(|v| v.to_vec()),
+                        raw_video_parameter_sets: reader
+                            .current_ring()
+                            .video_parameter_sets()
+                            .map(|v| v.to_vec()),
+                        service_metadata: Some(service_metadata.clone()),
+                        ..PacketFeedConfig::default()
+                    },
+                ));
+            }
+
+            if let Some(feeder) = feeder {
+                feeder.extend_ts_for_packet(pkt, ts_batch);
+            }
+        }
+        // One lock acquisition for the whole burst.
+        if !ts_batch.is_empty() {
+            queue.write(ts_batch).await;
+            ts_batch.clear();
+        }
+        for pkt in packets.iter() {
+            stage_metrics.record_in(pkt.payload.len() as u64);
+        }
+    }
+}
+
 pub async fn start_recording(
     start: RecordingStart,
     ring_buffer: Arc<RingBuffer>,
@@ -500,70 +595,21 @@ pub async fn start_recording(
         tokio::select! {
             _ = cancel_token.cancelled() => break,
             _ = reader.wait_for_data() => {
-                loop {
-                    packets.clear();
-                    match reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {}
-                    }
-
-                    for pkt in &packets {
-                        // Lazily create the feeder from engine metadata.
-                        if feeder.is_none() {
-                            let metadata = {
-                                let ingests = engine.ingests.active.read().await;
-                                ingests.get(&pipeline_id).and_then(|ingest| {
-                                    let metadata = ingest.metadata();
-                                    let video = metadata.video;
-                                    let lock = ingest
-                                        .audio_tracks
-                                        .lock()
-                                        .unwrap_or_else(|e| e.into_inner());
-                                    let tracks = if lock.is_empty() {
-                                        metadata
-                                            .audio
-                                            .clone()
-                                            .map(|audio| Arc::new(vec![audio]))
-                                            .unwrap_or_else(|| Arc::new(Vec::new()))
-                                    } else {
-                                        Arc::clone(&lock)
-                                    };
-                                    (video.is_some() || !tracks.is_empty()).then_some((video, tracks))
-                                })
-                            };
-                            let Some((video, tracks)) = metadata else {
-                                continue;
-                            };
-                            feeder = Some(TsPacketFeeder::new(
-                                video.as_ref(),
-                                tracks,
-                                PacketFeedConfig {
-                                    video_sequence_header: video_sequence_header
-                                        .as_ref()
-                                        .map(|v| v.to_vec()),
-                                    raw_video_parameter_sets: reader
-                                        .current_ring()
-                                        .video_parameter_sets()
-                                        .map(|v| v.to_vec()),
-                                    service_metadata: Some(service_metadata.clone()),
-                                    ..PacketFeedConfig::default()
-                                },
-                            ));
-                        }
-
-                        if let Some(ref mut feeder) = feeder {
-                            feeder.extend_ts_for_packet(pkt, &mut ts_batch);
-                        }
-                    }
-                    // One lock acquisition for the whole burst.
-                    if !ts_batch.is_empty() {
-                        queue.write(&ts_batch).await;
-                        ts_batch.clear();
-                    }
-                    for pkt in &packets {
-                        stage_metrics.record_in(pkt.payload.len() as u64);
-                    }
-                }
+                drain_ready_bursts(
+                    &mut reader,
+                    &cancel_token,
+                    &mut packets,
+                    MEDIA_PULL_BURST_PACKETS,
+                    &engine,
+                    &pipeline_id,
+                    &mut feeder,
+                    &video_sequence_header,
+                    &service_metadata,
+                    &mut ts_batch,
+                    &queue,
+                    &stage_metrics,
+                )
+                .await;
             }
         }
     }

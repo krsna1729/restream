@@ -105,4 +105,6 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test output_status_surfaces_retry_backoff_after_failure --lib -- --nocapture
   "$run_step_fn" lib-egress-proptest \
     scripts/build/resource-limit.sh cargo test prop_egress_lifecycle_preserves_runtime_and_health_invariants --lib -- --nocapture
+  "$run_step_fn" recording-drain-bounded-on-cancel \
+    scripts/build/resource-limit.sh cargo test media::recording::tests::drain_ready_bursts --lib -- --nocapture
 }
