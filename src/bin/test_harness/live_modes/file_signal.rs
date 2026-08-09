@@ -1,11 +1,28 @@
 use super::*;
 
-const FILE_LIVE_EDGE_MIN_DURATION_DRIFT_SECS: f64 = 0.75;
-const FILE_LIVE_EDGE_STOP_LATENCY_DRIFT_SECS: f64 = 0.75;
+/// Recording start is intentionally backdated: `Reader::new_with_keyframe_preroll`
+/// (src/media/recording/mod.rs) snaps to the most recently buffered keyframe
+/// (up to ~one GOP old) and then backs up a further fixed preroll, so decoding
+/// starts cleanly on an IDR. This is correct, by-design behavior — do not
+/// shrink this budget to "fix" a duration assertion.
+const FILE_LIVE_EDGE_START_KEYFRAME_PREROLL_DRIFT_SECS: f64 = 1.0;
+
+/// The recording drain loop (src/media/recording/mod.rs) checks cancellation
+/// between bursts, so a stop request is delayed by at most one in-flight
+/// `MEDIA_PULL_BURST_PACKETS` burst plus ordinary scheduler jitter under CI
+/// contention. Before that loop was made cooperative with cancellation,
+/// CI overruns from an unbounded backlog drain ranged up to 4.02s; this
+/// budget covers the bounded post-fix case with margin while staying tight
+/// enough to catch a regression back to unbounded draining.
+const FILE_LIVE_EDGE_STOP_DRAIN_BOUND_DRIFT_SECS: f64 = 1.5;
+
+const FILE_LIVE_EDGE_MIN_DURATION_DRIFT_SECS: f64 = 1.5;
 
 pub(crate) fn file_live_edge_max_duration_drift_secs(target_gop_seconds: u32) -> f64 {
-    FILE_LIVE_EDGE_MIN_DURATION_DRIFT_SECS
-        .max(target_gop_seconds as f64 + FILE_LIVE_EDGE_STOP_LATENCY_DRIFT_SECS)
+    let budget = target_gop_seconds as f64
+        + FILE_LIVE_EDGE_START_KEYFRAME_PREROLL_DRIFT_SECS
+        + FILE_LIVE_EDGE_STOP_DRAIN_BOUND_DRIFT_SECS;
+    FILE_LIVE_EDGE_MIN_DURATION_DRIFT_SECS.max(budget)
 }
 
 pub(crate) async fn wait_for_api_recording_state(
@@ -234,6 +251,11 @@ async fn run_file_live_edge_case(
         .await?;
     wait_for_api_recording_state(api, &pipeline_id, true, Duration::from_secs(10)).await?;
 
+    // capture_target_secs (8.0s) is close to the passthrough fixture's duration
+    // (correctness-h264.ts, 8.021334s per ffprobe) — each capture window roughly
+    // spans one file-ingest loop iteration. Ingest looping is PTS-continuous
+    // (verified: no discontinuity/reset at the loop boundary), so this is a
+    // coincidence, not a bug dependency.
     let capture_target_secs = 8.0;
     let recording_started = Instant::now();
     tokio::time::sleep(Duration::from_secs_f64(capture_target_secs)).await;

@@ -93,10 +93,10 @@ fn strip_netns_opt_removes_only_the_opt_out_flag() {
 }
 
 #[test]
-fn file_live_edge_duration_budget_covers_one_target_gop() {
-    assert_eq!(file_live_edge_max_duration_drift_secs(0), 0.75);
-    assert_eq!(file_live_edge_max_duration_drift_secs(1), 1.75);
-    assert_eq!(file_live_edge_max_duration_drift_secs(2), 2.75);
+fn file_live_edge_duration_budget_covers_one_target_gop_plus_preroll_and_stop_drain() {
+    assert_eq!(file_live_edge_max_duration_drift_secs(0), 2.5);
+    assert_eq!(file_live_edge_max_duration_drift_secs(1), 3.5);
+    assert_eq!(file_live_edge_max_duration_drift_secs(2), 4.5);
 }
 
 #[test]
