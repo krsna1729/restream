@@ -148,7 +148,17 @@ fn apply_progress_to_common<F: EgressFeed>(
             );
             VisitDecision::Continue
         }
-        EngineProgress::PeerClosed | EngineProgress::Failed(_) => VisitDecision::Close,
+        EngineProgress::Failed(failure) => {
+            tracing::warn!(
+                output_id = %common.output_id,
+                reason = failure.reason,
+                detail = %failure.detail,
+                retryable = failure.retryable,
+                "egress leaf failed"
+            );
+            VisitDecision::Close
+        }
+        EngineProgress::PeerClosed => VisitDecision::Close,
         EngineProgress::Yield => VisitDecision::Continue,
     }
 }

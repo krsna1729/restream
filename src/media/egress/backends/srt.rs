@@ -623,6 +623,11 @@ where
             .connect_spec
             .connect_config(peer_addrs, muxer_port_claim);
         let socket = self.socket_connector.connect(config).map_err(|error| {
+            tracing::warn!(
+                output_id = %output_id,
+                error = %error,
+                "srt fabric leaf connect failed"
+            );
             progress_sink.mark_terminated_unexpectedly();
             SrtPendingConnectError::Connect(SrtBackendConnectError::Connect(error))
         })?;

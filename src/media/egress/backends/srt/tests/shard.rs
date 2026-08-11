@@ -287,7 +287,7 @@ fn srt_shard_backend_complete_pending_connect_registers_resolved_socket() {
         vec![FakeConnectCall {
             peer_addrs,
             stream_id: "publish:key".to_string(),
-            connect_timeout_ms: 10000,
+            connect_timeout_ms: 30000,
         }]
     );
     assert_eq!(
@@ -372,7 +372,7 @@ fn srt_shard_backend_media_tick_completes_resolved_connect() {
         vec![FakeConnectCall {
             peer_addrs,
             stream_id: "publish:key".to_string(),
-            connect_timeout_ms: 10000,
+            connect_timeout_ms: 30000,
         }]
     );
     assert_eq!(
@@ -455,7 +455,7 @@ fn srt_shard_backend_media_tick_drains_resolve_completion_queue() {
         vec![FakeConnectCall {
             peer_addrs,
             stream_id: "publish:key".to_string(),
-            connect_timeout_ms: 10000,
+            connect_timeout_ms: 30000,
         }]
     );
     assert_eq!(

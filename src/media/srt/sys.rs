@@ -232,6 +232,7 @@ unsafe extern "C" {
     pub fn srt_getlasterror(locp: *mut c_int) -> c_int;
     pub fn srt_getlasterror_str() -> *const c_char;
     pub fn srt_setrejectreason(sock: SRTSOCKET, value: c_int) -> c_int;
+    pub fn srt_getrejectreason(sock: SRTSOCKET) -> c_int;
     pub fn srt_bistats(
         u: SRTSOCKET,
         perf: *mut SrtTraceBStats,

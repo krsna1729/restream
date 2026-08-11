@@ -10,6 +10,7 @@ pub(super) enum Event {
     Crypto(SRTSOCKET),
     StreamId(SRTSOCKET, String),
     Bind(SRTSOCKET, u16),
+    NonblockingConnect(SRTSOCKET),
     Connect(SRTSOCKET, SocketAddr),
     Configure(SRTSOCKET, SrtEgressSendMode),
     LocalPort(SRTSOCKET),
@@ -102,9 +103,16 @@ impl SrtSingleConnectOps for &FakeSingleConnectOps {
 
     fn bind_muxer_port(&mut self, socket: SRTSOCKET, port: u16) -> Result<(), String> {
         self.events.borrow_mut().push(Event::Bind(socket, port));
-        if self.fail_step == Some(FailStep::Bind) {
+        if matches!(self.fail_step, Some(FailStep::Bind)) {
             return Err("bind failed".to_string());
         }
+        Ok(())
+    }
+
+    fn set_nonblocking_connect(&mut self, socket: SRTSOCKET) -> Result<(), String> {
+        self.events
+            .borrow_mut()
+            .push(Event::NonblockingConnect(socket));
         Ok(())
     }
 
