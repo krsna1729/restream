@@ -154,13 +154,18 @@ impl MediaEngine {
         let shard_config = config.shard_config();
         let budget = config.work_budget();
         let effective_cpus = crate::system_sampling::effective_cpu_count();
-        let result = runtime.rescale(effective_cpus, shard_config, |_shard_id| {
-            Ok::<_, std::convert::Infallible>(PipelineShardBackend::new(
-                feed.clone_reader(),
-                budget,
-                target_source.clone(),
-            ))
-        });
+        let result = runtime.rescale(
+            crate::config::EgressShardProfile::OutputCount,
+            effective_cpus,
+            shard_config,
+            |_shard_id| {
+                Ok::<_, std::convert::Infallible>(PipelineShardBackend::new(
+                    feed.clone_reader(),
+                    budget,
+                    target_source.clone(),
+                ))
+            },
+        );
         match result {
             Ok(touched) if !touched.is_empty() => {
                 tracing::info!(feed_id = %feed_id, shards = ?touched, "pipeline fabric shard pool rescaled");

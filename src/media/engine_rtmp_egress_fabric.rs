@@ -178,18 +178,23 @@ impl MediaEngine {
         let chunk_size = self.config.rtmp_egress_chunk_size;
         let poller_max_events = config.srt_poller_max_events;
         let effective_cpus = crate::system_sampling::effective_cpu_count();
-        let result = runtime.rescale(effective_cpus, shard_config, |_shard_id| {
-            let poller = TcpEgressPoller::new(poller_max_events)?;
-            Ok::<_, TcpEgressPollError>(resolving_rtmp_shard_backend(
-                poller,
-                feed.clone_reader(),
-                budget,
-                chunk_size,
-                rtmps_client_config.clone(),
-                startup_source.clone(),
-                shard_config.drain_timeout(),
-            ))
-        });
+        let result = runtime.rescale(
+            crate::config::EgressShardProfile::OutputCount,
+            effective_cpus,
+            shard_config,
+            |_shard_id| {
+                let poller = TcpEgressPoller::new(poller_max_events)?;
+                Ok::<_, TcpEgressPollError>(resolving_rtmp_shard_backend(
+                    poller,
+                    feed.clone_reader(),
+                    budget,
+                    chunk_size,
+                    rtmps_client_config.clone(),
+                    startup_source.clone(),
+                    shard_config.drain_timeout(),
+                ))
+            },
+        );
         match result {
             Ok(touched) if !touched.is_empty() => {
                 tracing::info!(feed_id = %feed_id, shards = ?touched, "rtmp fabric shard pool rescaled");

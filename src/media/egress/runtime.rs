@@ -86,6 +86,7 @@ impl EgressFabricRuntime {
     /// logging.
     pub(crate) fn rescale<B, F, E>(
         &mut self,
+        profile: crate::config::EgressShardProfile,
         effective_cpus: usize,
         shard_config: EgressShardConfig,
         mut backend_for: F,
@@ -94,9 +95,11 @@ impl EgressFabricRuntime {
         B: EgressShardBackend,
         F: FnMut(ShardId) -> Result<B, E>,
     {
-        let target =
-            crate::config::target_egress_fabric_shards(self.manager.output_count(), effective_cpus)
-                as usize;
+        let target = crate::config::target_egress_fabric_shards(
+            profile,
+            self.manager.output_count(),
+            effective_cpus,
+        ) as usize;
 
         let mut touched = Vec::new();
         let mut grow_error = None;
@@ -413,9 +416,12 @@ mod tests {
 
         // Zero outputs on a 1-CPU host: target is 1 either way.
         let touched = runtime
-            .rescale(1, shard_config(), |_| -> Result<ProbeBackend, String> {
-                unreachable!("must not grow")
-            })
+            .rescale(
+                crate::config::EgressShardProfile::OutputCount,
+                1,
+                shard_config(),
+                |_| -> Result<ProbeBackend, String> { unreachable!("must not grow") },
+            )
             .unwrap();
 
         assert!(touched.is_empty());
@@ -459,11 +465,16 @@ mod tests {
 
         let new_probe = Probe::default();
         let touched = runtime
-            .rescale(2, big_shard_config, |_| {
-                Ok::<_, String>(ProbeBackend {
-                    probe: new_probe.clone(),
-                })
-            })
+            .rescale(
+                crate::config::EgressShardProfile::OutputCount,
+                2,
+                big_shard_config,
+                |_| {
+                    Ok::<_, String>(ProbeBackend {
+                        probe: new_probe.clone(),
+                    })
+                },
+            )
             .unwrap();
 
         assert_eq!(touched, vec![ShardId::new(1)]);
@@ -523,9 +534,12 @@ mod tests {
                 .unwrap();
         }
         let touched = runtime
-            .rescale(1, shard_config(), |_| -> Result<ProbeBackend, String> {
-                unreachable!("must not grow")
-            })
+            .rescale(
+                crate::config::EgressShardProfile::OutputCount,
+                1,
+                shard_config(),
+                |_| -> Result<ProbeBackend, String> { unreachable!("must not grow") },
+            )
             .unwrap();
 
         assert_eq!(touched, vec![ShardId::new(1)]);

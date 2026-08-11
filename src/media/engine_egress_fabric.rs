@@ -137,24 +137,29 @@ impl MediaEngine {
         let budget = config.work_budget();
         let poller_max_events = config.srt_poller_max_events;
         let effective_cpus = crate::system_sampling::effective_cpu_count();
-        let result = runtime.rescale(effective_cpus, shard_config, |shard_id| {
-            let poller = crate::media::srt::SrtFabricPoller::new(poller_max_events)?;
-            Ok::<_, crate::media::srt::SrtEgressPollError>(
-                crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
-                    poller,
-                    feed.clone_reader(),
-                    budget,
-                    // Same per-shard scoping the initial
-                    // `spawn_srt_fabric_shard_group` call uses: a shard
-                    // grown by a live rescale claims its own libsrt
-                    // multiplexer instead of inheriting another shard's.
-                    srt_egress_muxer_port_reuse
-                        .as_ref()
-                        .map(|ports| ports.shard(shard_id)),
-                    shard_config.drain_timeout(),
-                ),
-            )
-        });
+        let result = runtime.rescale(
+            crate::config::EgressShardProfile::SrtCpuParallel,
+            effective_cpus,
+            shard_config,
+            |shard_id| {
+                let poller = crate::media::srt::SrtFabricPoller::new(poller_max_events)?;
+                Ok::<_, crate::media::srt::SrtEgressPollError>(
+                    crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
+                        poller,
+                        feed.clone_reader(),
+                        budget,
+                        // Same per-shard scoping the initial
+                        // `spawn_srt_fabric_shard_group` call uses: a shard
+                        // grown by a live rescale claims its own libsrt
+                        // multiplexer instead of inheriting another shard's.
+                        srt_egress_muxer_port_reuse
+                            .as_ref()
+                            .map(|ports| ports.shard(shard_id)),
+                        shard_config.drain_timeout(),
+                    ),
+                )
+            },
+        );
         match result {
             Ok(touched) if !touched.is_empty() => {
                 tracing::info!(feed_id = %feed_id, shards = ?touched, "srt fabric shard pool rescaled");

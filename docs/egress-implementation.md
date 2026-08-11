@@ -3743,12 +3743,22 @@ Rather than picking one fixed shard count at startup from CPU count alone
 scales live with the number of active outputs on a feed, bounded by that
 CPU ceiling:
 
-- `target_egress_fabric_shards(output_count, effective_cpus)`
-  (`src/config.rs`) is a pure function: `ceil(output_count / 128)` clamped
-  to `[1, default_egress_fabric_shards(effective_cpus)]`. A pipeline with a
-  handful of outputs no longer pays the fixed per-shard `epoll_wait`/
-  `clock_gettime` overhead of a full CPU-count-sized shard pool — the
-  motivating cost characterized above.
+- `target_egress_fabric_shards(profile, output_count, effective_cpus)`
+  (`src/config.rs`) is a pure function. Two protocol-aware profiles:
+  - `EgressShardProfile::OutputCount` (RTMP, sink, pipeline feeds):
+    `ceil(output_count / 128)` clamped to
+    `[1, default_egress_fabric_shards(effective_cpus)]`. A pipeline with a
+    handful of outputs no longer pays the fixed per-shard `epoll_wait`/
+    `clock_gettime` overhead of a full CPU-count-sized shard pool — the
+    motivating cost characterized above.
+  - `EgressShardProfile::SrtCpuParallel` (SRT feeds): always the CPU
+    ceiling, independent of output count. Each SRT shard's leaves share
+    one libsrt egress multiplexer (one `CSndQueue` worker thread; see
+    `muxer_ports.rs`), so SRT shard count is a multiplexer-parallelism
+    budget, not an output-count amortization — a ~60-output SRT feed must
+    not be capped at 1 shard/1 multiplexer by the RTMP-shaped 128-output
+    threshold (see
+    `docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`).
 - `assign_output_to_shard` (`src/media/egress/manager.rs`) is rendezvous
   (highest-random-weight) hashing rather than `hash % shard_count`, so
   changing `shard_count` remaps only the ~`1/shard_count` fraction of
