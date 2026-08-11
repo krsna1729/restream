@@ -117,6 +117,7 @@ where
 {
     fn send_message(&mut self, message: &Bytes) -> SrtSendResult {
         let Some(socket) = self.socket else {
+            tracing::warn!("srt send peer closed: transport socket already closed (None)");
             return SrtSendResult::PeerClosed;
         };
 
@@ -217,7 +218,10 @@ fn classify_srt_send_result(
     let (code, message) = error();
     match code {
         SRT_EASYNCSND => SrtSendResult::WouldBlock,
-        SRT_ESCLOSED | SRT_ECONNLOST | SRT_ENOCONN => SrtSendResult::PeerClosed,
+        SRT_ESCLOSED | SRT_ECONNLOST | SRT_ENOCONN => {
+            tracing::warn!(code, "srt send peer closed: {message} ({code})");
+            SrtSendResult::PeerClosed
+        }
         _ => SrtSendResult::Failed(SrtSendFailure {
             reason: "srt_send",
             detail: format!("{message} ({code})"),

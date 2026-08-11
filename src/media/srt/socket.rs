@@ -174,7 +174,7 @@ pub(super) fn srt_set_highbitrate_opts(sock: SRTSOCKET) {
         );
     }
 }
-const EGRESS_UDP_RCVBUF: i32 = 1024 * 1024; // control-only traffic on a send-dominant socket
+pub(crate) const EGRESS_UDP_RCVBUF: i32 = 1024 * 1024; // control-only traffic on a send-dominant socket
 
 /// Egress-only counterpart to `srt_set_highbitrate_opts` (used for the one
 /// ingest listener socket, which stays on the flat high-bitrate preset — see
@@ -310,7 +310,7 @@ pub(crate) fn srt_get_configured_sndbuf(sock: SRTSOCKET) -> i32 {
     value
 }
 
-pub(super) fn srt_log_effective_opts(sock: SRTSOCKET, label: &str) -> u64 {
+pub(super) fn srt_log_effective_opts(sock: SRTSOCKET, label: &str, expected_udp_rcv: i32) -> u64 {
     // SAFETY: srt_getsockopt reads integer option values from a valid SRT
     // socket into correctly-sized stack variables. All options are benign
     // diagnostic reads with no side effects on the socket.
@@ -393,13 +393,13 @@ pub(super) fn srt_log_effective_opts(sock: SRTSOCKET, label: &str) -> u64 {
                 DESIRED_UDP_BUF / 1024,
             );
         }
-        if udp_rcv < DESIRED_UDP_BUF {
+        if udp_rcv < expected_udp_rcv {
             error!(
                 "[srt] WARNING: {} UDP recv buffer clamped to {}KB (wanted {}KB). \
                  Raise net.core.rmem_max",
                 label,
                 udp_rcv / 1024,
-                DESIRED_UDP_BUF / 1024,
+                expected_udp_rcv / 1024,
             );
         }
         udp_rcv.max(0) as u64

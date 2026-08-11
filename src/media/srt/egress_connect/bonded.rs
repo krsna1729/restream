@@ -3,7 +3,7 @@ use std::os::raw::c_int;
 
 use super::to_libc_sockaddr;
 use crate::media::srt::buffer_sizing::EgressBufferOpts;
-use crate::media::srt::socket::srt_set_egress_opts;
+use crate::media::srt::socket::{EGRESS_UDP_RCVBUF, srt_set_egress_opts};
 use crate::media::srt::srt_crypto::{SrtCryptoConfig, apply_srt_crypto_socket};
 use crate::media::srt::sys::{
     SRT_GTYPE_BACKUP, SRTSOCKET, SrtGroupMemberConfig, srt_close, srt_connect_group,
@@ -180,7 +180,7 @@ impl SrtBondedConnectOps for LibSrtBondedConnectOps {
     }
 
     fn log_effective_opts(&mut self, socket: SRTSOCKET) {
-        srt_log_effective_opts(socket, "egress-bonded");
+        srt_log_effective_opts(socket, "egress-bonded", EGRESS_UDP_RCVBUF);
     }
 }
 

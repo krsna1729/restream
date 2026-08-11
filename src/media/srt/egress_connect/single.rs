@@ -1,14 +1,16 @@
 use std::net::SocketAddr;
-use std::os::raw::c_int;
+use std::os::raw::{c_int, c_void};
 
 use super::{
     SrtEgressMuxerPortClaim, bind_srt_egress_muxer_port, connected_srt_local_port,
     set_srt_reuseaddr,
 };
 use crate::media::srt::buffer_sizing::EgressBufferOpts;
-use crate::media::srt::socket::{srt_set_connect_timeout, srt_set_egress_opts, to_sockaddr_in};
+use crate::media::srt::socket::{
+    EGRESS_UDP_RCVBUF, last_srt_error, srt_set_connect_timeout, srt_set_egress_opts, to_sockaddr_in,
+};
 use crate::media::srt::srt_crypto::{SrtCryptoConfig, apply_srt_crypto_socket};
-use crate::media::srt::sys::{SRTSOCKET, sockaddr_in, srt_close, srt_connect};
+use crate::media::srt::sys::{SRTSOCKET, sockaddr_in, srt_close, srt_connect, srt_setsockopt};
 use crate::media::srt::{
     SrtEgressSendMode, SrtEgressSocketError, apply_srt_egress_stream_id,
     configure_connected_srt_egress_socket, srt_log_effective_opts,
@@ -82,6 +84,13 @@ where
         return Err(error);
     }
 
+    if matches!(config.send_mode, SrtEgressSendMode::FabricNonblocking)
+        && let Err(error) = ops.set_nonblocking_connect(socket)
+    {
+        ops.close(socket);
+        return Err(error);
+    }
+
     if let Err(error) = ops.connect(socket, config.peer_addr) {
         ops.close(socket);
         return Err(error);
@@ -120,6 +129,7 @@ trait SrtSingleConnectOps {
     fn apply_crypto(&mut self, socket: SRTSOCKET, crypto: &SrtCryptoConfig) -> Result<(), String>;
     fn apply_stream_id(&mut self, socket: SRTSOCKET, stream_id: &str) -> Result<(), String>;
     fn bind_muxer_port(&mut self, socket: SRTSOCKET, port: u16) -> Result<(), String>;
+    fn set_nonblocking_connect(&mut self, socket: SRTSOCKET) -> Result<(), String>;
     fn connect(&mut self, socket: SRTSOCKET, peer_addr: SocketAddr) -> Result<(), String>;
     fn configure_connected_socket(
         &mut self,
@@ -178,6 +188,36 @@ impl SrtSingleConnectOps for LibSrtSingleConnectOps {
         bind_srt_egress_muxer_port(socket, port)
     }
 
+    fn set_nonblocking_connect(&mut self, socket: SRTSOCKET) -> Result<(), String> {
+        // Fabric egress must never block the shard thread in `srt_connect`:
+        // the default SRTO_RCVSYN=1 makes the connect synchronous for up to
+        // the connect timeout (10s), freezing every leaf visit and the stall
+        // sweep on the shard while one pending connect is in flight (see the
+        // 1001/1002 connect failures and 0-sent/3M-dropped leaves at scale).
+        // With RCVSYN=0 the connect returns immediately and the handshake
+        // completes asynchronously under the same connect-timeout bound.
+        // SAFETY: Category 8 - FFI boundary. `socket` is a live SRT socket;
+        // the zero value is a correctly-sized c_int for SRTO_RCVSYN.
+        let zero: c_int = 0;
+        let result = unsafe {
+            srt_setsockopt(
+                socket,
+                0,
+                crate::media::srt::sys::SRTO_RCVSYN,
+                &zero as *const _ as *const c_void,
+                std::mem::size_of::<c_int>() as c_int,
+            )
+        };
+        if result < 0 {
+            let (code, message) = last_srt_error();
+            Err(format!(
+                "failed to set non-blocking connect: {message} ({code})"
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     fn connect(&mut self, socket: SRTSOCKET, peer_addr: SocketAddr) -> Result<(), String> {
         let sin = to_sockaddr_in(peer_addr);
         // SAFETY: Category 8 - FFI boundary. `socket` is a live SRT socket,
@@ -185,7 +225,18 @@ impl SrtSingleConnectOps for LibSrtSingleConnectOps {
         let result =
             unsafe { srt_connect(socket, &sin, std::mem::size_of::<sockaddr_in>() as c_int) };
         if result < 0 {
-            Err("connection failed".to_string())
+            let (code, message) = last_srt_error();
+            // SAFETY: Category 8 - FFI boundary. `socket` is still a valid
+            // SRT socket handle after a failed `srt_connect`; the reject
+            // reason is a read-only integer diagnostic.
+            let reject = unsafe { crate::media::srt::sys::srt_getrejectreason(socket) };
+            if reject > 0 {
+                Err(format!(
+                    "connection failed: {message} ({code}) reject_reason={reject}"
+                ))
+            } else {
+                Err(format!("connection failed: {message} ({code})"))
+            }
         } else {
             Ok(())
         }
@@ -204,7 +255,7 @@ impl SrtSingleConnectOps for LibSrtSingleConnectOps {
     }
 
     fn log_effective_opts(&mut self, socket: SRTSOCKET) {
-        srt_log_effective_opts(socket, "egress");
+        srt_log_effective_opts(socket, "egress", EGRESS_UDP_RCVBUF);
     }
 }
 

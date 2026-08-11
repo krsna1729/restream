@@ -51,7 +51,7 @@ impl Default for LeafPolicy {
             max_feed_lag: Duration::from_secs(10),
             no_progress_timeout: Duration::from_secs(15),
             resolve_timeout: Duration::from_secs(5),
-            connect_timeout: Duration::from_secs(10),
+            connect_timeout: Duration::from_secs(30),
             handshake_timeout: Duration::from_secs(10),
             retry: RetryPolicy::default(),
         }

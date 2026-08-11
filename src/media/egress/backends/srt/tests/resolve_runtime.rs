@@ -66,7 +66,7 @@ fn resolving_srt_backend_spawns_resolver_and_completes_add() {
                 "127.0.0.2:9001".parse().unwrap(),
             ],
             stream_id: "publish:key".to_string(),
-            connect_timeout_ms: 10000,
+            connect_timeout_ms: 30000,
         }]
     );
     assert_eq!(

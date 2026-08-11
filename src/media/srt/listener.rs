@@ -7,8 +7,8 @@ use tracing::{error, info, warn};
 
 use super::buffer_sizing::srt_set_ingest_latency_opts;
 use super::socket::{
-    SrtListenerCloser, enable_srt_group_connect, from_sockaddr_in, srt_log_effective_opts,
-    srt_set_highbitrate_opts, to_sockaddr_in,
+    DESIRED_UDP_BUF, SrtListenerCloser, enable_srt_group_connect, from_sockaddr_in,
+    srt_log_effective_opts, srt_set_highbitrate_opts, to_sockaddr_in,
 };
 use super::srt_crypto::{apply_srt_crypto_socket, srt_crypto_from_resolved};
 use super::srt_monitor::monitor_listener_socket;
@@ -202,7 +202,8 @@ impl SrtServer {
             }
         }
         srt_set_highbitrate_opts(server_sock);
-        let listener_udp_recv_capacity = srt_log_effective_opts(server_sock, "listener");
+        let listener_udp_recv_capacity =
+            srt_log_effective_opts(server_sock, "listener", DESIRED_UDP_BUF);
 
         let addr_str = format!("0.0.0.0:{}", port);
         let addr = match addr_str.parse::<SocketAddr>() {
