@@ -164,7 +164,10 @@ fn observe_stall_uses_native_drain_as_progress() {
         packets: 8,
         ms: 40,
     });
-    assert_eq!(leaf.observe_stall(start), LeafStallClass::Backpressured);
+    assert_eq!(
+        leaf.observe_stall(start, None, 0),
+        LeafStallClass::Backpressured
+    );
 
     // Backlog declines: native progress resets the stall clock even though
     // the application sent nothing new.
@@ -175,22 +178,104 @@ fn observe_stall_uses_native_drain_as_progress() {
     });
     let near_deadline = start + deadline - Duration::from_millis(1);
     assert_eq!(
-        leaf.observe_stall(near_deadline),
+        leaf.observe_stall(near_deadline, None, 0),
         LeafStallClass::Backpressured
     );
 
     // No further decline: the clock runs from the last native drain and the
     // leaf crosses into stalled after the full deadline.
     assert_eq!(
-        leaf.observe_stall(near_deadline + deadline),
+        leaf.observe_stall(near_deadline + deadline, None, 0),
         LeafStallClass::Stalled
     );
 
     // Peer fully drains and nothing is pending anywhere: idle.
     leaf.transport_mut().native_backlog = Some(NativeSendBacklog::default());
     assert_eq!(
-        leaf.observe_stall(near_deadline + deadline),
+        leaf.observe_stall(near_deadline + deadline, None, 0),
         LeafStallClass::Idle
+    );
+}
+
+/// The gap this closes (report open item, "SRT stall-detection latent
+/// bug"): TLPKTDROP/TSBPD-deadline discards also shrink the native buffer
+/// head, so a backlog decline accompanied by drop-counter growth is not
+/// the peer acknowledging data. A drop-riddled leaf (0 sent / millions
+/// dropped) must reach Stalled after the no-progress deadline instead of
+/// resetting its clock every sweep.
+#[test]
+fn observe_stall_does_not_count_drop_backlog_decline_as_progress() {
+    use crate::media::srt::{NativeSendBacklog, SrtTraceBStats};
+    use std::time::{Duration, Instant};
+
+    let deadline = leaf(3).common().limits.max_backpressure_duration;
+    let mut leaf = leaf(3);
+    let start = Instant::now();
+
+    // First observation: saturated buffer, drop counter at 1,000.
+    leaf.transport_mut().native_backlog = Some(NativeSendBacklog {
+        bytes: 10_000,
+        packets: 8,
+        ms: 40,
+    });
+    leaf.transport_mut().quality_stats = Some(SrtTraceBStats {
+        pkt_snd_drop_total: 1_000,
+        ..unsafe { std::mem::zeroed() }
+    });
+    assert_eq!(
+        leaf.observe_stall(start, Some(1_000), 0),
+        LeafStallClass::Backpressured
+    );
+
+    // Backlog declines — but only because the drop counter advanced
+    // (TLPKTDROP discards). That is not progress: the stall clock keeps
+    // running and the leaf is Stalled at the deadline.
+    leaf.transport_mut().native_backlog = Some(NativeSendBacklog {
+        bytes: 6_000,
+        packets: 5,
+        ms: 25,
+    });
+    leaf.transport_mut().quality_stats = Some(SrtTraceBStats {
+        pkt_snd_drop_total: 1_037,
+        ..unsafe { std::mem::zeroed() }
+    });
+    let near_deadline = start + deadline - Duration::from_millis(1);
+    assert_eq!(
+        leaf.observe_stall(near_deadline, Some(1_037), 0),
+        LeafStallClass::Backpressured
+    );
+    assert_eq!(
+        leaf.observe_stall(near_deadline + deadline, Some(1_037), 0),
+        LeafStallClass::Stalled
+    );
+}
+
+/// The lag ceiling: a leaf whose read cursor is more than
+/// `max_feed_lag_units` behind the head is Stalled even while its native
+/// buffer drains — the ring has already advanced past its position, so
+/// catch-up would be lossy.
+#[test]
+fn observe_stall_lag_over_limit_is_stalled_despite_native_drain() {
+    use crate::media::srt::NativeSendBacklog;
+    use std::time::Instant;
+
+    let mut leaf = leaf(3);
+    leaf.transport_mut().native_backlog = Some(NativeSendBacklog {
+        bytes: 6_000,
+        packets: 5,
+        ms: 25,
+    });
+    let now = Instant::now();
+    // Fresh progress (backlog declining, no drops) would read as
+    // Backpressured — but the 301-unit lag overrides it.
+    assert_eq!(
+        leaf.observe_stall(now, Some(0), 301),
+        LeafStallClass::Stalled
+    );
+    // At or under the ceiling, native drain still counts as progress.
+    assert_eq!(
+        leaf.observe_stall(now, Some(0), 300),
+        LeafStallClass::Backpressured
     );
 }
 

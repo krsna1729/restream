@@ -217,15 +217,27 @@ pub enum LeafStallClass {
 }
 
 /// Classify a leaf's send path from its total pending bytes (application
-/// plus native transport buffers) and the age of its most recent progress
-/// of any kind (bytes sent, protocol event, or native buffer drain).
+/// plus native transport buffers), the age of its most recent progress of
+/// any kind (bytes sent, protocol event, or native buffer drain), and how
+/// far its read cursor lags the live feed edge.
+///
+/// The lag ceiling is a strict loss-of-liveness bound: a leaf whose cursor
+/// sits more than `max_lag_units` behind the feed head can never catch up
+/// without losing data (the ring has already advanced past its position),
+/// so it is stalled regardless of progress age. It applies to protocols
+/// whose catch-up is lossy (SRT's TSBPD/TLPKTDROP); lossless-TCP protocols
+/// pass 0 because a lagging leaf recovers by reading flat-out.
 pub fn classify_stall(
     pending_bytes: u64,
     age_since_progress: Duration,
+    lag_units: u64,
     limits: &LeafLimits,
 ) -> LeafStallClass {
     if pending_bytes == 0 {
         return LeafStallClass::Idle;
+    }
+    if lag_units > limits.max_lag_units {
+        return LeafStallClass::Stalled;
     }
     if age_since_progress >= limits.max_backpressure_duration {
         return LeafStallClass::Stalled;
@@ -378,16 +390,42 @@ mod tests {
             ..LeafLimits::default()
         };
         assert_eq!(
-            classify_stall(0, Duration::from_secs(3600), &limits),
+            classify_stall(0, Duration::from_secs(3600), 0, &limits),
             LeafStallClass::Idle
         );
         assert_eq!(
-            classify_stall(1, Duration::from_secs(14), &limits),
+            classify_stall(1, Duration::from_secs(14), 0, &limits),
             LeafStallClass::Backpressured
         );
         assert_eq!(
-            classify_stall(1, Duration::from_secs(15), &limits),
+            classify_stall(1, Duration::from_secs(15), 0, &limits),
             LeafStallClass::Stalled
+        );
+    }
+
+    /// The lag ceiling is a strict liveness bound independent of progress
+    /// age: a leaf whose cursor is more than `max_lag_units` behind the
+    /// head is stalled even while its transport still drains.
+    #[test]
+    fn classify_stall_lag_over_limit_is_stalled_regardless_of_progress() {
+        let limits = LeafLimits {
+            max_lag_units: 300,
+            max_backpressure_duration: Duration::from_secs(15),
+            ..LeafLimits::default()
+        };
+        assert_eq!(
+            classify_stall(1, Duration::from_secs(1), 301, &limits),
+            LeafStallClass::Stalled
+        );
+        assert_eq!(
+            classify_stall(1, Duration::from_secs(1), 300, &limits),
+            LeafStallClass::Backpressured
+        );
+        // Idle precedence is unchanged: nothing pending is not a stall even
+        // if the cursor sits far behind (the next read resyncs to head).
+        assert_eq!(
+            classify_stall(0, Duration::from_secs(1), 10_000, &limits),
+            LeafStallClass::Idle
         );
     }
 }

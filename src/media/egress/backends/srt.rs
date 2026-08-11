@@ -108,6 +108,12 @@ where
     /// Native backlog observed at the previous stall check; a decline means
     /// the peer acknowledged data (native progress) even without new sends.
     last_native_backlog_bytes: u64,
+    /// `pktSndDropTotal` observed at the previous stall check. A backlog
+    /// decline is only counted as progress when this counter did not
+    /// advance: TLPKTDROP/TSBPD-deadline discards also shrink the buffer
+    /// head, and a drop-riddled leaf must not extend its no-progress
+    /// deadline forever ("0 sent / 3M dropped").
+    last_packets_sent_drop: u64,
     /// Anchor for stall aging before any progress has been recorded.
     observed_since: Instant,
     /// Set when this leaf has been asked to close (via `Remove`,
@@ -142,6 +148,7 @@ where
             engine: SrtEgressEngine::default(),
             transport,
             last_native_backlog_bytes: 0,
+            last_packets_sent_drop: 0,
             observed_since: Instant::now(),
             draining_since: None,
             draining_reason: None,
@@ -183,17 +190,33 @@ where
     }
 
     /// Classify the send path from combined application and native pending
-    /// state.  A declining native backlog counts as protocol progress (the
-    /// peer acknowledged data), so a leaf draining slowly through libsrt is
-    /// backpressured rather than stalled; a leaf whose native buffer holds
-    /// data without any decline past the no-progress deadline is stalled.
-    pub(crate) fn observe_stall(&mut self, now: Instant) -> LeafStallClass {
+    /// state. A declining native backlog counts as protocol progress only
+    /// when the peer actually drained data — i.e. `packets_sent_drop` did
+    /// not advance (TLPKTDROP/TSBPD-deadline discards also shrink the
+    /// buffer head, and a drop-riddled leaf must not extend its
+    /// no-progress deadline forever); a leaf whose read cursor lags more
+    /// than `max_feed_lag_units` behind the head is stalled regardless.
+    /// `packets_sent_drop` is the transport's drop total for this sweep
+    /// (`None` keeps the last sampled value, so the stall sweep's second
+    /// per-leaf call costs no extra FFI); `lag_units` is how far the read
+    /// cursor is behind the live edge (0 when unprimed or for lossless
+    /// protocols).
+    pub(crate) fn observe_stall(
+        &mut self,
+        now: Instant,
+        packets_sent_drop: Option<u64>,
+        lag_units: u64,
+    ) -> LeafStallClass {
         let pressure = self.pressure();
         let native_bytes = pressure.native_backlog.map_or(0, |backlog| backlog.bytes);
-        if native_bytes < self.last_native_backlog_bytes {
+        let drops = packets_sent_drop.unwrap_or(self.last_packets_sent_drop);
+        if native_bytes < self.last_native_backlog_bytes && drops <= self.last_packets_sent_drop {
             self.common.progress.last_protocol_progress = Some(now);
         }
         self.last_native_backlog_bytes = native_bytes;
+        if let Some(drops) = packets_sent_drop {
+            self.last_packets_sent_drop = drops;
+        }
 
         let last_progress = self
             .common
@@ -204,7 +227,12 @@ where
             .max()
             .unwrap_or(self.observed_since);
         let age = now.saturating_duration_since(last_progress);
-        classify_stall(pressure.pending_bytes(), age, &self.common.limits)
+        classify_stall(
+            pressure.pending_bytes(),
+            age,
+            lag_units,
+            &self.common.limits,
+        )
     }
 
     /// Sample sender-side connection quality (RTT, loss, retransmits,
