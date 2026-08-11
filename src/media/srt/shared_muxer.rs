@@ -18,7 +18,7 @@ pub(crate) fn start_shared_ts_muxer(
     cancel: CancellationToken,
 ) -> Arc<TsChunkRing> {
     let ts_ring = Arc::new(TsChunkRing::new(
-        engine.config.ts_ring_capacity,
+        srt_ts_ring_capacity(&source_ring, engine.config.ts_ring_capacity),
         cancel.clone(),
     ));
     let ts_ring_clone = ts_ring.clone();
@@ -264,6 +264,83 @@ pub(super) fn estimate_ts_accum_capacity(packets: &[Arc<MediaPacket>]) -> usize 
         .map(|packet| packet.payload.len().saturating_add(188 * 4))
         .sum::<usize>()
         .max(188)
+}
+
+/// Headroom, in seconds, the shared SRT TS ring should retain at the
+/// probe-derived packet rate: one full stall-sweep interval plus the
+/// TSBPD latency budget, so a leaf that misses a sweep under scheduling
+/// jitter (the 131-262 ms run-queue waits measured in the scale
+/// investigation) can still read without an overrun-resync — a mid-GOP
+/// restart at the peer.
+const SRT_TS_RING_HEADROOM_SECS: f64 = 5.0;
+
+/// Upper bound for the derived TS ring, matching
+/// `adapt_pipeline_ring`'s cap. 16,384 chunks ≈ 21 MB at 1,316 B/chunk.
+const MAX_TS_RING_CAPACITY: usize = 16_384;
+
+/// Transpose of `adapt_pipeline_ring`'s resize-on-probe pattern for the
+/// shared SRT TS ring: size it at *creation* from the packet rate the
+/// probe already recorded on the source ring (`set_estimated_pkt_rate`,
+/// called by `adapt_pipeline_ring` after stream probe). The fixed
+/// `ts_ring_capacity` default (256 chunks) is a sub-millisecond bridge at
+/// MSR's real multi-track packet rate — 30 audio tracks plus video is
+/// ~1,500+ pps, so 256 chunks wrap every ~0.17 s, far less than one GOP
+/// interval. Returns the configured minimum when the probe hasn't set a
+/// rate yet (an output attached before the pipeline ever went live);
+/// in-place migration is deliberately not implemented because the muxer
+/// writer task holds the ring for the pipeline's lifetime and the
+/// creation-time sizing covers the realistic ordering (probe precedes
+/// egress attach).
+fn srt_ts_ring_capacity(source_ring: &RingBuffer, configured_capacity: usize) -> usize {
+    let pkt_rate = source_ring.estimated_pkt_rate();
+    if pkt_rate <= 0.0 {
+        return configured_capacity.clamp(1, MAX_TS_RING_CAPACITY);
+    }
+    let needed = (pkt_rate * SRT_TS_RING_HEADROOM_SECS).ceil() as usize;
+    needed.max(configured_capacity).min(MAX_TS_RING_CAPACITY)
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+
+    fn ring_with_rate(pkt_per_sec: u32) -> RingBuffer {
+        let ring = RingBuffer::new(256);
+        ring.set_estimated_pkt_rate(pkt_per_sec as f64);
+        ring
+    }
+
+    #[test]
+    fn unprobed_ring_falls_back_to_configured_minimum() {
+        // No probe rate yet (output attached before the pipeline went
+        // live): keep the configured sub-millisecond-bridge default.
+        let ring = RingBuffer::new(256);
+        assert_eq!(srt_ts_ring_capacity(&ring, 256), 256);
+        assert_eq!(srt_ts_ring_capacity(&ring, 512), 512);
+    }
+
+    #[test]
+    fn msr_multitrack_rate_scales_past_the_fixed_default() {
+        // 30 audio tracks (50 pps each) + 60 fps video = 1,560 pps; 5 s of
+        // headroom needs 7,800 chunks — the old fixed 256 wrapped every
+        // ~0.17 s at this rate.
+        let ring = ring_with_rate(1_560);
+        assert_eq!(srt_ts_ring_capacity(&ring, 256), 7_800);
+    }
+
+    #[test]
+    fn below_configured_stays_at_configured() {
+        // A low-rate singletrack stream asks for less than the configured
+        // minimum; the configured capacity wins.
+        let ring = ring_with_rate(30);
+        assert_eq!(srt_ts_ring_capacity(&ring, 256), 256);
+    }
+
+    #[test]
+    fn capacity_is_capped_like_adapt_pipeline_ring() {
+        let ring = ring_with_rate(5_000);
+        assert_eq!(srt_ts_ring_capacity(&ring, 256), MAX_TS_RING_CAPACITY);
+    }
 }
 
 #[cfg(test)]

@@ -286,6 +286,12 @@ impl RingBuffer {
             .store(pkt_per_sec.round() as u32, Ordering::Relaxed);
     }
 
+    /// Probed packet rate (0 when the probe hasn't run yet). The shared
+    /// SRT TS muxer sizes its retention ring from this rate at creation.
+    pub fn estimated_pkt_rate(&self) -> f64 {
+        self.estimated_pkt_rate.load(Ordering::Relaxed) as f64
+    }
+
     /// Buffer depth in seconds: how long the ring can absorb an ingest interruption.
     /// Returns `None` if the packet rate hasn't been set yet.
     pub fn buffer_depth_secs(&self) -> Option<f64> {

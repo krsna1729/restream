@@ -493,10 +493,6 @@ ACK rate); the producer's PTS is never consulted.
   worst-case assumption since live per-output bitrate isn't wired in for
   most outputs) — deliberately left alone pending evidence it's still a
   significant residual factor once the above fixes land.
-- Extending `adapt_pipeline_ring`'s proven resize-on-probe pattern to the
-  shared SRT `TsChunkRing` (currently a fixed `ts_ring_capacity`, sized for a
-  "sub-millisecond bridge" that collapses to far less than one GOP interval
-  at MSR's real multi-track packet rate).
 - Loom/proptest coverage for the "multiple implementers of the same
   abstraction disagree" pattern class (the divergence audit found three
   disagreeing `overrun`-recovery implementations; cursor-priming vs
@@ -509,6 +505,11 @@ ACK rate); the producer's PTS is never consulted.
   connections), so a full run would reproduce the same wall; a
   restream-as-peer harness would be the clean way to prove the fabric's own
   1,200-output handling (see the ladder reading above).
+- In-place migration for the SRT TS ring when an output attaches before the
+  pipeline ever went live (creation-time sizing falls back to the
+  configured minimum in that ordering) — deliberately not implemented: the
+  muxer writer task holds the ring for the pipeline's lifetime, and the
+  realistic ordering (probe precedes egress attach) is fully covered.
 
 **Closed this session (2026-08-11):**
 - Live scheduling-contention fault case — `fault.srt-output-stall`'s
@@ -534,6 +535,17 @@ ACK rate); the producer's PTS is never consulted.
   leaf's buffer drains only via drops with no admission progress, while
   the sieve shape is caught by the harness's peer-side correctness probes
   (the ladder's decode checks), not by backpressure classification.
+- SRT TS ring sizing — `start_shared_ts_muxer` now sizes the shared
+  `TsChunkRing` at creation from the probe-derived packet rate the source
+  ring already carries (`set_estimated_pkt_rate`, written by
+  `adapt_pipeline_ring`): `ceil(pkt_rate × 5s)`, clamped to
+  `[ts_ring_capacity, 16,384]`. The fixed 256-chunk default is a
+  sub-millisecond bridge at MSR's real multi-track rate (30 audio tracks +
+  video ≈ 1,560 pps ⇒ the old ring wrapped every ~0.17 s, far less than
+  one GOP interval, so any scheduling hiccup pushed a leaf into
+  overrun-resync and a mid-GOP restart at the peer). Unit tests cover the
+  fallback (unprobed ring → configured), the MSR envelope scaling, the
+  configured floor, and the cap.
 
 ## Artifact index
 
