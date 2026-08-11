@@ -319,6 +319,9 @@ impl RtmpFabricLeaf {
         classify_stall(
             self.common.pending_application_bytes as u64,
             age,
+            // Lossless-TCP catch-up: a lagging RTMP leaf recovers by
+            // reading flat-out, so the lag ceiling is SRT-only.
+            0,
             &self.common.limits,
         )
     }

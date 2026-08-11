@@ -111,7 +111,11 @@ where
             } else {
                 0
             };
-            let reason = match leaf.observe_stall(now) {
+            // One native stats probe per leaf per sweep; `observe_stall`
+            // reuses the sampled drop total on its second call via `None`.
+            let quality = leaf.sample_quality(now);
+            let drops = quality.as_ref().and_then(|q| q.packets_sent_drop);
+            let reason = match leaf.observe_stall(now, drops, lag_units) {
                 LeafStallClass::Idle => None,
                 LeafStallClass::Backpressured => Some("backpressured"),
                 LeafStallClass::Stalled => Some("stalled"),
@@ -119,7 +123,7 @@ where
             leaf.common()
                 .progress_sink
                 .record_backpressure_state(lag_units, reason);
-            if let Some(quality) = leaf.sample_quality(now) {
+            if let Some(quality) = quality {
                 leaf.common().progress_sink.record_quality(quality);
             }
         }
@@ -129,7 +133,13 @@ where
             .iter()
             .filter_map(|(output_id, socket_ref)| {
                 let leaf = self.leaves.get_mut(socket_ref.key.0)?.as_mut()?;
-                (leaf.observe_stall(now) == LeafStallClass::Stalled).then(|| output_id.clone())
+                let lag_units = if leaf.common().cursor_primed {
+                    head_sequence.saturating_sub(leaf.common().cursor.next_sequence)
+                } else {
+                    0
+                };
+                (leaf.observe_stall(now, None, lag_units) == LeafStallClass::Stalled)
+                    .then(|| output_id.clone())
             })
             .collect();
 
