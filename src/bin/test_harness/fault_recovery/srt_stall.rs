@@ -32,11 +32,88 @@
 //!   backpressure, and it closes the last live gap in the Phase 4 exit
 //!   gate. The same mechanism is also proven deterministically in
 //!   `src/media/egress/backends/srt/tests/leaf_termination.rs`.
+//!
+//! **Scheduling-contention phase** (`FAULT_CONTENTION_BURNER_THREADS=N`,
+//! default 0): with the raw sink in place and the watch window running, N
+//! pure-spin threads deliberately starve restream's egress shard threads
+//! the way a loaded MSR box does (the scale investigation measured
+//! 131-262ms run-queue waits under sweep load). The pass criteria are the
+//! same deterministic core either way — the burners are ambient stress,
+//! and the artifact records the load average before/during/after plus the
+//! output's libsrt drop counter (`packetsSentDrop`) across the watch, so
+//! the contention shape and its drop signature are in the evidence trail
+//! rather than asserted on. With the raw sink advertising TLPKTDROP off
+//! and never reading, drops are expected to stay ~0: the point is to show
+//! this backpressure is *not* drop-masked while still reclaiming the leaf
+//! at the no-progress deadline.
 
 use super::super::resource_sweep::read_proc_status_kb_checked;
 use super::super::*;
 use super::egress::wait_for_outputs_live_and_progressing;
 use super::resilience::create_pipeline;
+
+/// Environmental scheduling contention for `fault.srt-output-stall`:
+/// `FAULT_CONTENTION_BURNER_THREADS=N` spawns N pure-spin threads for the
+/// watch window of `srt_egress_backpressured_receiver`, deliberately
+/// starving restream's egress shard threads the way a loaded MSR box does
+/// (the ad-hoc `runqlat` evidence in the scale investigation showed
+/// 131-262ms scheduling waits on the 6-core box during sweeps). Off by
+/// default so the deterministic backpressure proof also doubles as the CI
+/// gate; the scale investigation runs it with N=8 to reproduce the
+/// contention shape live (artifact records load average + sampled drop
+/// counters either way).
+const CONTENTION_BURNER_ENV: &str = "FAULT_CONTENTION_BURNER_THREADS";
+
+/// `N` pure-spin OS threads, alive for the enclosing scope. Each burner
+/// competes for a CFS time slice without yielding, so every other thread
+/// on the box — restream's shard threads among them — sees the scheduling
+/// starvation of a heavily loaded host. Pure spin loops allocate nothing,
+/// so a 6-core box runs a dozen of them comfortably; only the CPU is
+/// consumed, which is the point.
+struct SpinBurners {
+    stop: Arc<AtomicBool>,
+    handles: Vec<JoinHandle<()>>,
+}
+
+impl SpinBurners {
+    fn spawn(count: usize) -> Result<Self, String> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut handles = Vec::with_capacity(count);
+        for index in 0..count {
+            let stop = Arc::clone(&stop);
+            let handle = thread::Builder::new()
+                .name(format!("fault-sched-burner-{index:02}"))
+                .spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        std::hint::spin_loop();
+                    }
+                })
+                .map_err(|e| format!("spawn CPU contention burner {index}: {e}"))?;
+            handles.push(handle);
+        }
+        Ok(Self { stop, handles })
+    }
+}
+
+impl Drop for SpinBurners {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        for handle in self.handles.drain(..) {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// One-minute load average from `/proc/loadavg` (first field), for the
+/// contention evidence trail.
+fn loadavg() -> Option<f64> {
+    let contents = std::fs::read_to_string("/proc/loadavg").ok()?;
+    contents.split_whitespace().next()?.parse::<f64>().ok()
+}
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, JoinHandle};
 
 async fn spawn_bare_mediamtx_srt(
     work_dir: &std::path::Path,
@@ -307,6 +384,8 @@ struct BackpressureObservation {
     entered_retry_cycle: bool,
     bytes_at_backpressure: u64,
     bytes_at_close: u64,
+    drops_first: Option<u64>,
+    drops_last: Option<u64>,
 }
 
 impl BackpressureObservation {
@@ -332,6 +411,23 @@ impl BackpressureObservation {
                 self.saw_stalled = true;
             }
             _ => {}
+        }
+    }
+
+    /// Sample the output's health drop counter (libsrt `pktSndDropTotal`,
+    /// exposed as `quality.packetsSentDrop`) for the artifact's evidence
+    /// trail. `None` means the health snapshot had no usable counter (API
+    /// hiccup or the output was recreated); never a pass gate — with the
+    /// raw sink advertising TLPKTDROP off and never reading, the sender is
+    /// expected to stay drop-free, and the point of sampling is to *show*
+    /// that this backpressure is not drop-masked (and to catch it if it
+    /// ever is).
+    fn record_drop_sample(&mut self, sample: Option<u64>) {
+        if let Some(sample) = sample {
+            if self.drops_first.is_none() {
+                self.drops_first = Some(sample);
+            }
+            self.drops_last = Some(sample);
         }
     }
 
@@ -433,11 +529,36 @@ async fn srt_egress_backpressured_receiver() -> Result<Value, String> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
+    // Optional scheduling-contention phase: burners starve restream's
+    // shard threads during the watch (off by default; the scale
+    // investigation runs this mode with `FAULT_CONTENTION_BURNER_THREADS=8`).
+    let contention_threads = std::env::var(CONTENTION_BURNER_ENV)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let contention = SpinBurners::spawn(contention_threads)?;
+    let loadavg_before = loadavg();
+    let mut loadavg_during = loadavg_before;
+
     let watch_started = Instant::now();
     let mut observation = BackpressureObservation::default();
     let deadline = watch_started + BACKPRESSURE_OBSERVATION_WINDOW;
     while Instant::now() < deadline && !observation.resolved() {
         let sink_sample = sink.observe();
+        if let Ok(health) = api.get_json("/api/v1/engine/health").await {
+            let drop_sample =
+                health["pipelines"][&pid]["outputs"][&bad_oid]["quality"]["packetsSentDrop"]
+                    .as_u64()
+                    .or_else(|| {
+                        health["pipelines"][&pid]["outputs"][&bad_oid]["quality"]["packetsSentDrop"]
+                            .as_i64()
+                            .and_then(|value| u64::try_from(value).ok())
+                    });
+            observation.record_drop_sample(drop_sample);
+        }
+        if let Some(sample) = loadavg() {
+            loadavg_during = Some(loadavg_during.map_or(sample, |current| current.max(sample)));
+        }
         if let Ok((status, value)) = api.get_output_status(&pid, &bad_oid).await {
             let reason = value["backpressureReason"].as_str().unwrap_or_default();
             observation.record(reason, status.bytes_out, sink_sample.connected_now);
@@ -451,6 +572,9 @@ async fn srt_egress_backpressured_receiver() -> Result<Value, String> {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     let watch_elapsed = watch_started.elapsed();
+    let loadavg_after = loadavg();
+    let contention_burners = contention.handles.len();
+    drop(contention);
 
     // `bytesOut` counts bytes *admitted to libsrt*, not bytes acknowledged
     // by the peer, so it keeps climbing after the receive window closes —
@@ -484,7 +608,7 @@ async fn srt_egress_backpressured_receiver() -> Result<Value, String> {
         && sibling_progress.is_ok();
 
     println!(
-        "[fault] SRT egress backpressured-but-connected receiver: {} (sinkAccepted={} peakUnreadPackets={} sawBackpressured={} connectedWhileBackpressured={} sawStalled={} enteredRetryCycle={} reasons={:?} bytesAtBackpressure={} bytesAtClose={} bytesAfterStall={} admissionStopped={} siblings={} siblingProgress={} elapsed={:.1}s)",
+        "[fault] SRT egress backpressured-but-connected receiver: {} (sinkAccepted={} peakUnreadPackets={} sawBackpressured={} connectedWhileBackpressured={} sawStalled={} enteredRetryCycle={} reasons={:?} bytesAtBackpressure={} bytesAtClose={} bytesAfterStall={} admissionStopped={} siblings={} siblingProgress={} contentionBurners={} loadavgBefore={} loadavgDuring={} loadavgAfter={} dropsFirst={:?} dropsLast={:?} elapsed={:.1}s)",
         if passed { "PASS" } else { "FAIL" },
         sink_final.accepted,
         sink_final.peak_unread_packets,
@@ -499,6 +623,12 @@ async fn srt_egress_backpressured_receiver() -> Result<Value, String> {
         admission_stopped,
         sibling_output_ids.len(),
         sibling_progress.is_ok(),
+        contention_burners,
+        loadavg_before.map_or_else(|| "n/a".to_string(), |v| format!("{v:.2}")),
+        loadavg_during.map_or_else(|| "n/a".to_string(), |v| format!("{v:.2}")),
+        loadavg_after.map_or_else(|| "n/a".to_string(), |v| format!("{v:.2}")),
+        observation.drops_first,
+        observation.drops_last,
         watch_elapsed.as_secs_f64(),
     );
 
@@ -523,6 +653,12 @@ async fn srt_egress_backpressured_receiver() -> Result<Value, String> {
         "sawStalled": observation.saw_stalled,
         "enteredRetryCycle": observation.entered_retry_cycle,
         "observationSecs": watch_elapsed.as_secs_f64(),
+        "contentionBurnerThreads": contention_burners,
+        "loadavgBefore": loadavg_before,
+        "loadavgDuring": loadavg_during,
+        "loadavgAfter": loadavg_after,
+        "dropsFirst": observation.drops_first,
+        "dropsLast": observation.drops_last,
         "rawSink": sink_final.to_json(),
         "siblingProgress": sibling_progress.as_ref().ok().cloned(),
         "siblingProgressError": sibling_progress.err(),

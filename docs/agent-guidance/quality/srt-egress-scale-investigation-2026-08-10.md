@@ -469,43 +469,71 @@ ACK rate); the producer's PTS is never consulted.
 - Sweep 720p tier in CRF mode (this session) — **root-caused and fixed in
   the harness** (per-case bitrate-controlled profile); corrected ladder
   above.
+- SRT stall detection counting TLPKTDROP drops as protocol progress — **fixed
+  and evidenced** (commit `061d7de6`): `observe_stall` now only counts a
+  native-backlog decline as progress when libsrt's drop counter did not
+  advance, so a drop-riddled leaf ("0 sent / millions dropped") can no longer
+  reset its no-progress clock every sweep; `classify_stall` also enforces the
+  previously-dead `max_feed_lag_units` ceiling (a leaf behind the feed head
+  is Stalled even while its native buffer drains, since catch-up would be
+  lossy). Unit tests cover both; the concurrency `fast.sh` gate and the full
+  live contract gate (`fault.resilience`, `fault.egress-retry`,
+  `fault.output-stall`, `recovery`) pass with the new classification.
 
 **Added, tested, but not evidenced as necessary for the reproduced bug:**
 - Retry jitter (`backoff_ms`) — `CommandChannelFull` never observed in this
   investigation at any scale.
 
 **Root-caused but not yet fixed (latent, evidence-backed):**
-- SRT `observe_stall` (`src/media/egress/backends/srt.rs:199-218`, esp.
-  206-212) counts **any** native-backlog decline as protocol progress —
-  including TLPKTDROP/TSBPD-deadline drops. A drop-riddled SRT leaf can
-  therefore have its no-progress deadline extended indefinitely, and never
-  stall-swept ("0 sent / 3M dropped" is the exact current-code hang
-  signature). RTMP has no such signal (it relies on real engine sends).
-  Candidate fix: treat `packetsSentDrop` growth as non-progress, or wire
-  `feed_lag_units` into `classify_stall` as defense-in-depth.
+- *(none remaining — the SRT `observe_stall` drop-progress divergence was
+  fixed in commit `061d7de6`, see the fixed list above.)*
 
 **Not started:**
 - `EGRESS_SNDBUF_FLOOR` reconsideration (buffer sized from a 50Mbps
   worst-case assumption since live per-output bitrate isn't wired in for
   most outputs) — deliberately left alone pending evidence it's still a
   significant residual factor once the above fixes land.
-- Wiring the currently-dead `feed_lag_units`/`max_feed_lag_units` policy into
-  `classify_stall` as defense-in-depth detection for a leaf that falls behind
-  after being correctly primed.
-- A dedicated live harness fault case reproducing real scheduling contention
-  deliberately (extending `fault.srt-output-stall`), rather than the ad-hoc
-  live experiments this investigation used.
 - Extending `adapt_pipeline_ring`'s proven resize-on-probe pattern to the
   shared SRT `TsChunkRing` (currently a fixed `ts_ring_capacity`, sized for a
   "sub-millisecond bridge" that collapses to far less than one GOP interval
   at MSR's real multi-track packet rate).
-- A broader audit of the egress fabric for other instances of the "multiple
-  implementers of the same abstraction disagree, no one noticed" pattern
-  that produced root causes 1 and 2.
+- Loom/proptest coverage for the "multiple implementers of the same
+  abstraction disagree" pattern class (the divergence audit found three
+  disagreeing `overrun`-recovery implementations; cursor-priming vs
+  live-edge-resync races are the highest-value loom targets).
 - Re-running the 30g×60fps bracket at corrected bitrates (mechanism is
   CRF-identical to the runs above; the fps dimension does not interact with
   the fix differently).
-- Splitting all of the above into logical, individually-reviewable commits.
+- A 1,200-output (300-group) bitrate-sweep run at corrected bitrates: the
+  ladder already brackets the ceiling (peer-side handshake wall at ~270 SRT
+  connections), so a full run would reproduce the same wall; a
+  restream-as-peer harness would be the clean way to prove the fabric's own
+  1,200-output handling (see the ladder reading above).
+
+**Closed this session (2026-08-11):**
+- Live scheduling-contention fault case — `fault.srt-output-stall`'s
+  backpressured-receiver proof now runs an optional contention phase
+  (`FAULT_CONTENTION_BURNER_THREADS=N`, default 0; run here at N=8): pure-spin
+  threads starve restream's shard threads while the watch window runs, and
+  the artifact records load average before/during/after plus the output's
+  libsrt drop counter. Pass criteria are the deterministic core either way;
+  PASS at both N=0 and N=8 (loadavg 0.44→2.19 under burners, drops 0/0 —
+  the backpressure is demonstrably not drop-masked, and the leaf is still
+  reclaimed at the no-progress deadline).
+- **Sieve finding (important for what the stall sweep can and cannot do)**:
+  with peer TLPKTDROP enabled, an overloaded leaf whose flow window is
+  closed keeps admitting one packet per drop (each drop frees a send-buffer
+  slot, the engine refills it, the new packet ages and is dropped) — a
+  sustained ~1 packet/sec of engine byte progress that keeps
+  `last_byte_progress` fresh, so the leaf stays classified
+  `Backpressured`/`Idle` and the stall sweep (correctly) does not reclaim
+  it. That shape — drops firing while the connection "looks healthy" — is
+  the original "0 sent / 3M dropped" peer symptom, and it is a
+  delivery-side problem: the fix for the *stall-sweep* dodge (drop-aware
+  `observe_stall`, commit `061d7de6`) tightens the deadline corner where a
+  leaf's buffer drains only via drops with no admission progress, while
+  the sieve shape is caught by the harness's peer-side correctness probes
+  (the ladder's decode checks), not by backpressure classification.
 
 ## Artifact index
 
