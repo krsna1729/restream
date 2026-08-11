@@ -493,10 +493,6 @@ ACK rate); the producer's PTS is never consulted.
   worst-case assumption since live per-output bitrate isn't wired in for
   most outputs) — deliberately left alone pending evidence it's still a
   significant residual factor once the above fixes land.
-- Loom/proptest coverage for the "multiple implementers of the same
-  abstraction disagree" pattern class (the divergence audit found three
-  disagreeing `overrun`-recovery implementations; cursor-priming vs
-  live-edge-resync races are the highest-value loom targets).
 - Re-running the 30g×60fps bracket at corrected bitrates (mechanism is
   CRF-identical to the runs above; the fps dimension does not interact with
   the fix differently).
@@ -510,6 +506,15 @@ ACK rate); the producer's PTS is never consulted.
   configured minimum in that ordering) — deliberately not implemented: the
   muxer writer task holds the ring for the pipeline's lifetime, and the
   realistic ordering (probe precedes egress attach) is fully covered.
+- Loom coverage of the leaf visit/sweep state machine — **checked and
+  ruled out, not skipped**: both `on_ready` (visits) and `on_media_tick`
+  (the once-per-second stall sweep, `sweep_stalled_leaves`) run on the
+  shard's own single OS thread inside its command loop, so `LeafCommon`
+  (including the new `last_packets_sent_drop` state) is private to one
+  thread by construction. A loom test would test a reimplementation, not
+  the code. The genuinely shared state is the ring itself, which is
+  atomic-based and already exercised by the existing threaded tests; the
+  high-value disagreement proof turned out to be the proptest below.
 
 **Closed this session (2026-08-11):**
 - Live scheduling-contention fault case — `fault.srt-output-stall`'s
@@ -546,6 +551,16 @@ ACK rate); the producer's PTS is never consulted.
   overrun-resync and a mid-GOP restart at the peer). Unit tests cover the
   fallback (unprobed ring → configured), the MSR envelope scaling, the
   configured floor, and the cap.
+- Disagreement-class property proof — `live_start_cursor` (the unified
+  resync position every overrun-recovery path now uses) is property-tested
+  over every plausible (epoch, retained window, sync point) combination:
+  the cursor always carries the feed's epoch, always lies within
+  `[oldest_sequence, head_sequence]`, equals the latest retained sync
+  point when one exists, and falls back to the *live edge* (never
+  `oldest_sequence`, the historical disagreement) when none does.
+  `live_start_cursor` is now `pub(super)` so the property can see it; the
+  contract the three implementers disagreed on is enforced by construction
+  from here on.
 
 ## Artifact index
 

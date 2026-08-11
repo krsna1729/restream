@@ -89,7 +89,7 @@ where
 ///
 /// The epoch is re-read from the feed so a concurrent epoch bump is picked up
 /// in the same step.
-fn live_start_cursor<F: EgressFeed>(feed: &F) -> FeedCursor {
+pub(super) fn live_start_cursor<F: EgressFeed>(feed: &F) -> FeedCursor {
     feed.latest_sync_point()
         .unwrap_or_else(|| FeedCursor::new(feed.epoch(), feed.head_sequence()))
 }

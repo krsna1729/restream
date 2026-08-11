@@ -1,12 +1,13 @@
 use super::backend::{EngineProgress, Interest, ProtocolFailure, Readiness, WaitCondition};
 use super::command::{FeedId, OutputId};
-use super::feed::{EgressFeed, FeedCursor};
+use super::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use super::leaf::LeafCommon;
 use super::policy::{LeafLimits, WorkBudget};
 use super::scheduler::VisitDecision;
 use super::test_driver::{EngineScript, FakeEngine, FakeFeed, FakeTransport};
-use super::visit::{EngineVisit, EngineVisitOutcome, EngineVisitResult};
+use super::visit::{EngineVisit, EngineVisitOutcome, EngineVisitResult, live_start_cursor};
 use bytes::Bytes;
+use proptest::prelude::*;
 use std::time::Duration;
 
 fn common(generation: u64) -> LeafCommon {
@@ -541,4 +542,99 @@ fn failed_progress_remains_inspectable_by_caller() {
     assert_eq!(reason, "socket");
     assert!(!retryable);
     assert_eq!(decision, VisitDecision::Close);
+}
+
+/// A feed whose cursor-window state is fully scripted, so the resync
+/// contract can be property-tested over every plausible (epoch, window,
+/// sync-point) combination without building real rings.
+struct DisagreementFeed {
+    epoch: u64,
+    oldest: u64,
+    head: u64,
+    sync: Option<u64>,
+}
+
+impl EgressFeed for DisagreementFeed {
+    type Unit = Bytes;
+
+    fn head_sequence(&self) -> u64 {
+        self.head
+    }
+
+    fn oldest_sequence(&self) -> u64 {
+        self.oldest
+    }
+
+    fn read_from(&self, _cursor: FeedCursor, _budget: ReadBudget) -> FeedRead<Self::Unit> {
+        // The resync contract never reads; this is unreachable.
+        FeedRead::Empty
+    }
+
+    fn latest_sync_point(&self) -> Option<FeedCursor> {
+        self.sync
+            .map(|sequence| FeedCursor::new(self.epoch, sequence))
+    }
+
+    fn sync_point_at_or_after(&self, _sequence: u64) -> Option<FeedCursor> {
+        self.sync
+            .map(|sequence| FeedCursor::new(self.epoch, sequence))
+    }
+
+    fn epoch(&self) -> u64 {
+        self.epoch
+    }
+}
+
+// The disagreement-class contract (`live_start_cursor`): a leaf that has
+// no valid position of its own must start/resync at the latest retained
+// sync point, or — when the ring retains none — at the live edge, never
+// at the oldest retained sequence and never outside the retained window.
+//
+// This is the property that leaf `overrun`-recovery implementers
+// historically disagreed on (the fabric rewound to `oldest_sequence` —
+// the maximum possible backward rewind — while the sink and
+// recirculation readers used the live edge, see visit.rs's
+// `live_start_cursor` docs): every future implementer agrees by
+// construction that the property holds, not by code review.
+proptest! {
+    #[test]
+    fn live_start_cursor_never_rewinds_outside_the_retained_window(
+        epoch in 0u64..4,
+        oldest in 0u64..1_000,
+        head_delta in 0u64..1_000,
+        with_sync in proptest::bool::ANY,
+    ) {
+        let head = oldest + head_delta;
+        // A sync point, when present, always lies within the retained
+        // window (that is what "retained" means).
+        let sync = with_sync.then(|| oldest + (head_delta / 2));
+        let feed = DisagreementFeed { epoch, oldest, head, sync };
+
+        let cursor = live_start_cursor(&feed);
+
+        prop_assert_eq!(cursor.epoch, epoch, "epoch must come from the feed");
+        prop_assert!(
+            cursor.next_sequence >= oldest && cursor.next_sequence <= head,
+            "cursor {} must lie within the retained window [{}, {}]",
+            cursor.next_sequence, oldest, head,
+        );
+
+        match sync {
+            // Retained sync point -> the contract is to use exactly it.
+            Some(sequence) => prop_assert_eq!(cursor.next_sequence, sequence),
+            // No retained sync point -> the live edge. The historical
+            // disagreement was the `oldest_sequence` fallback: a mid-GOP
+            // rewind. When the head differs from the oldest, the fallback
+            // must be the head.
+            None => {
+                prop_assert_eq!(cursor.next_sequence, head);
+                if oldest != head {
+                    prop_assert_ne!(
+                        cursor.next_sequence, oldest,
+                        "no-sync-point fallback must never rewind to oldest_sequence"
+                    );
+                }
+            }
+        }
+    }
 }
