@@ -2,7 +2,7 @@ use std::sync::Mutex;
 
 use super::{
     AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
-    RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
+    EgressShardProfile, RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
     default_egress_fabric_shards, default_tokio_worker_threads, derive_external_ffmpeg_permits,
     target_egress_fabric_shards,
 };
@@ -502,29 +502,49 @@ fn effective_summary_covers_runtime_knobs_without_secret_values() {
 
 #[test]
 fn target_egress_fabric_shards_matches_known_cases() {
+    use EgressShardProfile::{OutputCount, SrtCpuParallel};
+
+    // --- OutputCount (RTMP/sink/pipeline shape) ---
+
     // Zero/low output counts always floor to 1 shard, regardless of how
     // many CPUs are available -- there is nothing to shard yet.
-    assert_eq!(target_egress_fabric_shards(0, 8), 1);
-    assert_eq!(target_egress_fabric_shards(1, 8), 1);
+    assert_eq!(target_egress_fabric_shards(OutputCount, 0, 8), 1);
+    assert_eq!(target_egress_fabric_shards(OutputCount, 1, 8), 1);
 
     // A handful of outputs on an 8-core host stays well under the CPU
     // ceiling -- this is the exact gap task #11 didn't close: fewer
     // outputs than one shard's OUTPUTS_PER_SHARD budget should not pay
     // for `default_egress_fabric_shards(8) == 8` dedicated shard threads.
-    assert_eq!(target_egress_fabric_shards(38, 8), 1);
+    assert_eq!(target_egress_fabric_shards(OutputCount, 38, 8), 1);
 
     // Right at and just past the CPU ceiling's output budget
     // (default_egress_fabric_shards(8) == 8, OUTPUTS_PER_SHARD == 128).
-    assert_eq!(target_egress_fabric_shards(8 * 128, 8), 8);
-    assert_eq!(target_egress_fabric_shards(8 * 128 + 1, 8), 8);
+    assert_eq!(target_egress_fabric_shards(OutputCount, 8 * 128, 8), 8);
+    assert_eq!(target_egress_fabric_shards(OutputCount, 8 * 128 + 1, 8), 8);
 
     // Never exceeds the CPU-derived ceiling no matter how many outputs.
-    assert_eq!(target_egress_fabric_shards(1_000_000, 8), 8);
+    assert_eq!(target_egress_fabric_shards(OutputCount, 1_000_000, 8), 8);
 
     // A constrained 1-CPU host still gets the same
     // default_egress_fabric_shards(1) == 2 ceiling once outputs justify it.
-    assert_eq!(target_egress_fabric_shards(0, 1), 1);
-    assert_eq!(target_egress_fabric_shards(1_000_000, 1), 2);
+    assert_eq!(target_egress_fabric_shards(OutputCount, 0, 1), 1);
+    assert_eq!(target_egress_fabric_shards(OutputCount, 1_000_000, 1), 2);
+
+    // --- SrtCpuParallel ---
+
+    // SRT shard count is a libsrt-multiplexer parallelism budget, not an
+    // output-count amortization: the target is the CPU-derived ceiling
+    // even with one output, so a ~60-output SRT feed (MSR's real 5% slice
+    // at n=1,200) is not capped at 1 shard / 1 egress multiplexer by the
+    // RTMP-shaped OUTPUTS_PER_SHARD threshold. This is the fix for the
+    // documented SRT scalability ceiling (see
+    // docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md).
+    assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 0, 8), 8);
+    assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 1, 8), 8);
+    assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 60, 8), 8);
+    assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 1_000_000, 8), 8);
+    assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 1, 1), 2);
+    assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 1, 6), 6);
 }
 
 proptest::proptest! {
@@ -536,10 +556,12 @@ proptest::proptest! {
         outputs in 0usize..100_000,
         cpus in 1usize..256,
     ) {
-        let target = target_egress_fabric_shards(outputs, cpus);
-        let ceiling = default_egress_fabric_shards(cpus);
-        proptest::prop_assert!(target >= 1);
-        proptest::prop_assert!(target <= ceiling);
+        for profile in [EgressShardProfile::OutputCount, EgressShardProfile::SrtCpuParallel] {
+            let target = target_egress_fabric_shards(profile, outputs, cpus);
+            let ceiling = default_egress_fabric_shards(cpus);
+            proptest::prop_assert!(target >= 1);
+            proptest::prop_assert!(target <= ceiling);
+        }
     }
 
     /// More outputs never demands *fewer* shards, for a fixed CPU count --
@@ -552,8 +574,22 @@ proptest::proptest! {
         delta in 0usize..50_000,
     ) {
         let larger = smaller + delta;
-        let target_small = target_egress_fabric_shards(smaller, cpus);
-        let target_large = target_egress_fabric_shards(larger, cpus);
-        proptest::prop_assert!(target_large >= target_small);
+        for profile in [EgressShardProfile::OutputCount, EgressShardProfile::SrtCpuParallel] {
+            let target_small = target_egress_fabric_shards(profile, smaller, cpus);
+            let target_large = target_egress_fabric_shards(profile, larger, cpus);
+            proptest::prop_assert!(target_large >= target_small);
+        }
+    }
+
+    /// SrtCpuParallel is output-count-independent: any output count on a
+    /// fixed CPU count claims exactly the CPU-derived ceiling.
+    #[test]
+    fn srt_cpu_parallel_target_is_cpu_ceiling_regardless_of_outputs(
+        outputs in 0usize..100_000,
+        cpus in 1usize..256,
+    ) {
+        let target = target_egress_fabric_shards(EgressShardProfile::SrtCpuParallel, outputs, cpus);
+        let ceiling = default_egress_fabric_shards(cpus);
+        proptest::prop_assert_eq!(target, ceiling);
     }
 }

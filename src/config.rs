@@ -337,24 +337,65 @@ fn default_egress_fabric_shards(effective_cpus: usize) -> u32 {
 /// around 1,200 outputs on an 8-core host (`1200 / 8 = 150`... rounded
 /// down to a rounder, slightly more conservative number) — matching the
 /// scale the shard-count sweep above was actually measured at, rather
-/// than an unvalidated guess.
+/// than an unvalidated guess. This threshold is RTMP-shaped: see
+/// `EgressShardProfile::SrtCpuParallel` for why SRT egress does not use
+/// it.
 const OUTPUTS_PER_SHARD: u32 = 128;
+
+/// How one egress fabric runtime's shard pool should scale with its
+/// output count. A runtime is per (protocol, feed); the profile is chosen
+/// by the owning engine path, not inferred here.
+///
+/// RTMP-shaped scaling (`OutputCount`) amortizes one shard over
+/// `OUTPUTS_PER_SHARD` outputs: the marginal cost of an RTMP connection
+/// is low (no per-multiplexer thread model, no hard delivery deadline),
+/// so shards exist to spread `epoll_wait`/`clock_gettime` overhead, not
+/// to buy parallelism per connection.
+///
+/// SRT egress is different: every leaf on one shard shares that shard's
+/// libsrt egress multiplexer (`SrtEgressMuxerPorts`, `muxer_ports.rs`) and
+/// therefore one `CSndQueue` worker thread, and every send races a hard
+/// 250ms TSBPD delivery deadline. The right shard count for SRT is a
+/// multiplexer-parallelism budget — bounded by CPU count, not by how many
+/// outputs happen to land on one feed. A feed with ~60 SRT outputs (MSR's
+/// real 5% slice at n=1,200) must not be capped at 1 shard / 1 multiplexer
+/// by an RTMP-shaped 128-outputs-per-shard threshold — that is the
+/// documented blocker for scaling SRT egress past the low hundreds
+/// (`docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`,
+/// "The real scalability ceiling").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EgressShardProfile {
+    /// RTMP/sink/pipeline feeds: grow one shard per `OUTPUTS_PER_SHARD`
+    /// outputs, bounded by the CPU-derived ceiling.
+    OutputCount,
+    /// SRT feeds: always claim the CPU-derived ceiling, independent of
+    /// output count — shard count is a libsrt-multiplexer parallelism
+    /// budget, and CPU count is its natural ceiling.
+    SrtCpuParallel,
+}
 
 /// Live, output-count-aware shard target for one egress fabric runtime
 /// (one instance per protocol per feed — see `EgressFabricRuntime`), used
 /// to rescale the shard pool as outputs are added/removed instead of
 /// paying for a fixed shard count picked once at startup. Pure function
-/// of (how many outputs this fabric runtime currently owns, how many CPUs
-/// the process has) — no lookup table, no cached classification: the
-/// CPU-derived ceiling is `default_egress_fabric_shards` unchanged, and
-/// output count only ever pushes the target *down* from that ceiling,
-/// never past it.
-pub(crate) fn target_egress_fabric_shards(output_count: usize, effective_cpus: usize) -> u32 {
+/// of (the feed's protocol profile, how many outputs this fabric runtime
+/// currently owns, how many CPUs the process has) — no lookup table, no
+/// cached classification: the CPU-derived ceiling is
+/// `default_egress_fabric_shards` unchanged, and output count only ever
+/// pushes the target *down* from that ceiling, never past it.
+pub(crate) fn target_egress_fabric_shards(
+    profile: EgressShardProfile,
+    output_count: usize,
+    effective_cpus: usize,
+) -> u32 {
     let cpu_max = default_egress_fabric_shards(effective_cpus);
-    let by_outputs = u32::try_from(output_count)
-        .unwrap_or(u32::MAX)
-        .div_ceil(OUTPUTS_PER_SHARD)
-        .max(1);
+    let by_outputs = match profile {
+        EgressShardProfile::OutputCount => u32::try_from(output_count)
+            .unwrap_or(u32::MAX)
+            .div_ceil(OUTPUTS_PER_SHARD)
+            .max(1),
+        EgressShardProfile::SrtCpuParallel => cpu_max.max(1),
+    };
     by_outputs.clamp(1, cpu_max)
 }
 
