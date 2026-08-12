@@ -35,6 +35,7 @@ Worktree: `.local/worktrees/msr-1080p-investigation`, branch
 - [Bitrate / connection-count bracketing evidence](#bitrate--connection-count-bracketing-evidence)
 - [The 720p tier was in CRF mode](#the-720p-tier-was-in-crf-mode)
 - [What's fixed, what's evidenced-but-unproven, what's still open](#whats-fixed-whats-evidenced-but-unproven-whats-still-open)
+- [Real-1080p MSR envelope: residual intermittent zero-video failures (2026-08-12)](#real-1080p-msr-envelope-residual-intermittent-zero-video-failures-2026-08-12)
 - [Artifact index](#artifact-index)
 
 ## Objective
@@ -487,6 +488,15 @@ ACK rate); the producer's PTS is never consulted.
 **Root-caused but not yet fixed (latent, evidence-backed):**
 - *(none remaining — the SRT `observe_stall` drop-progress divergence was
   fixed in commit `061d7de6`, see the fixed list above.)*
+- **Residual real-1080p envelope flake (the active residual):** video egress
+  is delivered in 2–4 s bursts / 1–4 s holes (all outputs lockstep, audio
+  continuous) because the leaf visit work budget batch-drains video ahead of
+  the demux fill and re-visits are feed-event-gated (see the 2026-08-12
+  section below). This reproduces the original zero-video verdict
+  intermittently at n=30 (~36%) and is the likely mechanism behind the
+  original n=600–900 catastrophe — separate from the overrun/start class
+  (which stays at zero post-fix). Not yet fixed: a pacing change here is a
+  hot-path concurrency change needing the full proof workflow.
 
 **Not started:**
 - `EGRESS_SNDBUF_FLOOR` reconsideration (buffer sized from a 50Mbps
@@ -562,9 +572,95 @@ ACK rate); the producer's PTS is never consulted.
   contract the three implementers disagreed on is enforced by construction
   from here on.
 
+## Real-1080p MSR envelope: residual intermittent zero-video failures (2026-08-12)
+
+The canonical `msr` harness envelope was run on the real fixture
+(`/tmp/msr-1080p-30a.mp4`, 1× H.264 1080p @ 3036k/25fps + 30× AAC, 1508 MB,
+stream-copied from yt-dlp `dX8_EjS6ZjU` fmt 137+140) at n=30 with
+`MSR_SIGNAL_CALIBRATION=0` (calibration is proven to fail on real media) and
+the investigative `RESTREAM_MSR_FIXTURE_OVERRIDE` hook. Commands do not
+encode: the publisher stream-copies `0:v:0` + `0:a:1`×29 + `0:a:2` through
+MPEG-TS (`-bsf:v h264_mp4toannexb`), so the 30-audio envelope costs no
+encoder CPU on the publisher.
+
+Result: **the original failure verdict still reproduces intermittently at
+n=30 — 4/11 runs failed with `msr-rank01-* ffprobe did not capture any video
+packets`** (run 1: rtmp-0008 @ checkpoint 30; run 3: srt-0020 — the original
+SRT channel; run 6: rtmp-0021; run 10: rtmp-0021 at ~t=20–25s). Failing
+probes show audio-only packet streams (zero video) with the video stream
+present in the header; the harness verdict is the same class as the original
+n=600–900 log.
+
+### Delivery shape: video bursts with holes, audio continuous
+
+Not a per-output defect. In every run the engine's video egress is globally
+lockstep-bursty: all outputs' `bytesOut` move identically at 0.8 s sampling
+(identical rates to 3 decimals; e.g. run 11 swinging 0.021 → 0.874 → 0.000 →
+0.972 MB/s), and every probe — healthy and failing — shows video arriving in
+2–4 s spans at full 25–26 fps separated by 1–4 s holes, while audio is
+continuous throughout the 5 s window (SRT: full 43 pkt/s; RTMP: a fixed
+6.1 pkt/s muxer cadence, ~1/7 of source). Passing probes catch 1–3 s of
+burst (21–83 video packets); failing probes land fully inside a hole. The
+observed failure rate (~36%) ≈ the measured hole fraction of the delivery
+schedule.
+
+Facts that rule out the neighboring hypotheses:
+- **Publisher is smooth.** The same ffmpeg publisher run standalone
+  (31-stream stream-copy through `-f mpegts`) emits video at a rock-steady
+  25 f/s with no gaps (control probe: 125 video packets over 4.96 s).
+- **Input is smooth.** Engine input `bytesReceived` constant 0.85–1.1 MB/s.
+- **No feed overruns.** Per-output `resyncCount` 0 and `feedLagUnits` 0–8 in
+  all captured health samples — the committed overrun/resync fixes are
+  active and quiet.
+- **No TCP pathology (the RTMP quality row is tcp_info-backed, per the
+  telemetry code):** `tcpLost` = 0, `tcpRetrans` = 0, `tcpNotsentBytes` = 0
+  (zero socket backpressure) in every sample; `tcpBytesAcked` growth
+  decelerates in the same holes the mediamtx `bytesReceived` shows — the
+  engine simply stops sending video during holes; the wire is never the
+  bottleneck.
+- **Mediamtx publish side healthy** at video rate whenever polled (0.17–0.72
+  MB/s per path, avg ~0.43 MB/s ≈ source).
+
+### Driver: the per-visit leaf work budget, event-gated re-visits
+
+`config.rs` defaults — `visit_max_units: 32`, `visit_max_bytes: 256*1024`,
+`visit_max_us: 2_000`, readiness re-registration event-gated (feed
+readiness / 25 ms idle poll) — batch-drain up to ~0.66 s of 3.1 Mbps video
+per leaf visit. At the real bitrate the mux outruns the demux fill, so a
+leaf drains the available backlog in large batches, then idles until the
+ring re-fills and the next feed event re-registers it — the 2–4 s burst /
+1–4 s hole schedule. Audio packets stay continuously available in the
+interleave (and are small enough to slip through every visit), so audio
+never holes; 30 outputs × 25 fps × 15 KB makes the aggregate video demand
+11.7 MB/s shared through the same event-gated path, so all leaves burst in
+lockstep. At n=600–900 the same batching with hundreds of leaves stretches
+loop cadence into sustained holes — the original catastrophe at scale.
+This is a separate mechanism from the fixed overrun/start class (those
+counters stay at zero); it is a delivery-pacing shape that only the
+peer-side probe can see (progress gates stay green on audio bytes alone).
+
+### Residual status
+
+- Not a harness/reader artifact: the engine provably does not send video
+  during holes (tcp acked + mediamtx bytesReceived), and failures reproduce
+  with and without external probe load.
+- Not a mediamtx config fix (`writeQueueSize`, `readTimeout`): the wire
+  lacks the video.
+- Open: a pacing fix — re-visit leaves on a media-cadence timer rather than
+  feed-event gating, or byte-fair per-visit budgets tuned to real bitrate —
+  is a hot-path concurrency change requiring the full proof workflow
+  (fast.sh contract gate, benchmark before/after, live harness fault case);
+  recommended as the next backlog item.
+
 ## Artifact index
 
 Live run artifacts (this worktree, `.local/artifacts/`, all `NO_CLEANUP=1`):
+the 2026-08-12 msr envelope runs (overwritten per run, latest preserved):
+`msr-restream.log`, `msr-mediamtx.yml`, `msr-samples.jsonl`,
+`msr-30-msr-rank01-*.ffprobe.json` (run-1 collapse series 83→0 preserved for
+rtmp-0001..0008), publishers; poll captures `/tmp/msr-final*.jsonl`
+(engine health incl. tcp_info + mediamtx paths at 0.8 s), control publisher
+emission probes in `/tmp/pub-ctrl2-probe.json`.
 `bitrate-sweep-postfix-15`, `bitrate-sweep-postfix-60`,
 `bitrate-sweep-lowbitrate-15`, `bitrate-sweep-lowbitrate-60`,
 `bitrate-sweep-dropcheck-60`, `bitrate-sweep-profile-60` (+ `/tmp/restream-profile-60.data`,
