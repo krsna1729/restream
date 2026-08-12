@@ -44,6 +44,22 @@ impl SrtResolveWorkerSet {
         ));
     }
 
+    /// Spawn a single worker that resolves a batch of requests, collapsing
+    /// N thread creations into 1. Each request is resolved sequentially in
+    /// the worker; completions are sent to the shared completion queue.
+    fn spawn_batch(&mut self, requests: Vec<SrtResolveRequest>) {
+        if requests.is_empty() {
+            return;
+        }
+        let sender = self.completion_sender.clone();
+        self.workers.push(std::thread::spawn(move || {
+            for request in requests {
+                let _ = super::resolve_srt_peer_hosts(request, sender.clone());
+            }
+            Ok(())
+        }));
+    }
+
     fn reap_finished(&mut self) {
         let mut index = 0;
         while index < self.workers.len() {
@@ -65,6 +81,11 @@ impl SrtResolveWorkerSet {
 pub(crate) struct ResolvingSrtShardBackend<B> {
     backend: B,
     resolve_workers: SrtResolveWorkerSet,
+    /// Pending resolves buffered during `on_command` and flushed in
+    /// `on_media_tick` — batches N resolves into one thread instead of
+    /// spawning a thread per command. At 1,200-output scale this reduces
+    /// thread creations from 1,200 to ~shard-iterations (~30/s = 40/iter).
+    pending_resolves: Vec<SrtResolveRequest>,
 }
 
 impl<B> ResolvingSrtShardBackend<B> {
@@ -72,6 +93,7 @@ impl<B> ResolvingSrtShardBackend<B> {
         Self {
             backend,
             resolve_workers,
+            pending_resolves: Vec::with_capacity(64),
         }
     }
 
@@ -93,8 +115,10 @@ where
     B: EgressShardBackend,
 {
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
+        // Buffer the resolve request instead of spawning a thread per
+        // command. `on_media_tick` flushes the batch.
         if let Some(request) = resolve_request_from_command(&command) {
-            self.resolve_workers.spawn(request);
+            self.pending_resolves.push(request);
         }
         self.backend.on_command(command)
     }
@@ -117,6 +141,14 @@ where
 
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         let effect = self.backend.on_media_tick();
+        // Flush buffered resolve requests into the worker set, batching
+        // all pending resolves into a single thread per tick instead of
+        // one thread per command. At 1,200-output scale this collapses
+        // ~1,200 thread creations into ~40 (one per shard iteration).
+        if !self.pending_resolves.is_empty() {
+            let batch = std::mem::take(&mut self.pending_resolves);
+            self.resolve_workers.spawn_batch(batch);
+        }
         self.resolve_workers.reap_finished();
         effect
     }
