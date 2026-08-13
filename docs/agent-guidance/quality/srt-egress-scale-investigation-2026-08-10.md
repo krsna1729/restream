@@ -1,9 +1,17 @@
 # SRT Egress Correctness-at-Scale Investigation - 2026-08-10
 
-Status: **two root causes found, fixed, and evidenced; one architectural
-scalability ceiling found and not yet fixed.** This report documents the full
-investigation, not just the conclusion, because several early hypotheses
-turned out to be wrong in informative ways.
+Status: **three root causes found, fixed, and evidenced; the architectural
+scalability ceiling fixed and proven live; the bitrate ladder re-run with
+corrected numbers after a harness-measurement bug was discovered.** This
+report documents the full investigation, not just the conclusion, because
+several early hypotheses turned out to be wrong in informative ways.
+
+2026-08-11 update: the sweep's "720p" transcode tier was running in x264 CRF
+mode (constant quality), silently emitting ~19.3 Mbps per output instead of
+the ladder's nominal 1.5M — every pre-2026-08-11 bitrate/connection-count
+number in this report is invalidated by that factor. See
+[The 720p tier was in CRF mode](#the-720p-tier-was-in-crf-mode) and the
+corrected [Bitrate / connection-count bracketing evidence](#bitrate--connection-count-bracketing-evidence).
 
 Worktree: `.local/worktrees/msr-1080p-investigation`, branch
 `codex/msr-1080p-investigation`.
@@ -25,6 +33,7 @@ Worktree: `.local/worktrees/msr-1080p-investigation`, branch
 - [Why the first verification of that fix looked like a failure](#why-the-first-verification-of-that-fix-looked-like-a-failure)
 - [The real scalability ceiling: OUTPUTS_PER_SHARD is RTMP-shaped](#the-real-scalability-ceiling-outputs_per_shard-is-rtmp-shaped)
 - [Bitrate / connection-count bracketing evidence](#bitrate--connection-count-bracketing-evidence)
+- [The 720p tier was in CRF mode](#the-720p-tier-was-in-crf-mode)
 - [What's fixed, what's evidenced-but-unproven, what's still open](#whats-fixed-whats-evidenced-but-unproven-whats-still-open)
 - [Artifact index](#artifact-index)
 
@@ -322,27 +331,121 @@ per-shard output threshold, or have SRT egress simply always claim
 is multiplexer parallelism, and CPU count is the natural ceiling for that,
 independent of how many outputs happen to land on one feed).
 
+**Implemented and live-proven (2026-08-11)**: `OUTPUTS_PER_SHARD` is now
+protocol-aware — SRT feeds use a lower per-shard output threshold than RTMP
+so shard (and therefore multiplexer) count tracks CPU parallelism rather
+than the RTMP-shaped 128 cap. Live at 60g: the health API reports **12 SRT
+egress shards** (old formula capped at 1 per feed); the SRT send path is
+split across them. Unit tests cover the new formula; see
+`src/config.rs` (`target_egress_fabric_shards`) and the sweep's
+shard-formula runs (`shard-formula-check-*`).
+
 ## Bitrate / connection-count bracketing evidence
 
-All runs: `bitrate_sweep`, `h264-rtmp` config, real synthetic source (no
-uncommitted fixture). SRT failure counts are ffprobe dimension-probe
-failures (`correctnessOk`/`correctnessFailures` in the harness's own output).
+All runs: `bitrate_sweep`, `h264-srt` config (SRT ingest + SRT egress, 2
+outputs per group: `src` passthrough + `720p` transcode), real synthetic
+source fixture. "Failures" = ffprobe dimension-probe failures
+(`correctnessOk`/`correctnessFailures` in the harness output).
+
+**2026-08-11 corrected ladder** (after the CRF fix below; totals are the
+true SRT egress load: `groups × bitrate × 2 outputs`):
+
+| Groups | Bitrate | True egress | Result |
+|---:|---:|---:|---|
+| 30 | 1.5M | ~122 Mbps | **120/120 probes pass**, 0 drops both tiers, transcode ring 1.5MB, CPU 90% |
+| 30 | 1.5M (a2 multi-audio) | ~122 Mbps | 3/3 sampled probes decode, **all drops 0** both tiers |
+| 60 | 1.5M | ~244 Mbps | **6/6 steady-state probes decode** (1080p/720p), 720p drops all 0, ring 1.5MB, CPU 126% |
+| 135 | 1.5M | ~549 Mbps | **0 fabric failures, 0 overflow**, rings 1.3MB, CPU 230% — but the mediamtx peer logs 424 TS decode errors (peer wall, see below) |
+| 135 | 4M | ~1.08 Gbps | **reproducible ramp failure**: 5-16/540 tracks never registered within 45s (`stalled=unregistered-cell`), harness aborts |
+| 135 | 8M | ~2.16 Gbps | **ramp failure**: 13/540 unregistered at 45s |
+
+Reading: restream's fabric holds 270 SRT outputs / ~550 Mbps cleanly —
+zero internal failures, zero overflows, rings at 1.3-1.5MB (vs 14MB at the
+contaminated 60g, 75s of video latency). The wall at scale is the **peer**:
+the single mediamtx process degrades first (TS `decode error: astits` +
+`initial delimiter not found` lines at 135g×1.5M, ~424 in 2.5 min) and its
+SRT listener stops completing handshakes under ~1 Gbps / 270-publisher ramp
+load (the unregistered leaves at 4M/8M — the fabric never even reached
+steady state, so those two rungs bracket the ramp ceiling, not a
+steady-state ceiling).
+
+**Old (contaminated) ladder** — every number inflated ~11× on the 720p tier,
+so the reported loads were 633 Mbps (30g), 1.27 Gbps (60g), 2.84 Gbps
+(135g), and the "clean 30g" / "1 failure at 60g" / "88-235 at 135g" results
+were really runs 3-5× past the fabric's true ceiling. The 30g 8M and 30g 4M
+brackets below were similarly inflated:
 
 | SRT connections | Bitrate | SRT failures | Notes |
 |---:|---:|---:|---|
-| 30 | 1.5M | 0/30 | clean |
+| 30 | 1.5M | 0/30 | **was actually ~633 Mbps** (0.63G of CRF 720p) |
 | 30 | 8M | 2/30 | pre-fix; post-fix also 2/30 (residual, see below) |
-| 120 | 1.5M | failing from the start | killed mid-run once pattern was clear |
+| 120 | 1.5M | failing from the start | **was actually ~2.5 Gbps** |
 | 120 | 8M | 119/120 pre-fix | |
 | 120 | 8M | 119/120 post-cursor-fix | test scale never exercised the muxer fix (60/feed < 128) |
 
 Connection count is the primary driver; bitrate is a secondary multiplier —
-30 connections tolerates 8M reasonably (2/30), 120 connections fails even at
-1.5M. The residual 2/30 at 30 connections/8M post-fix showed **zero**
+but only after the CRF correction does that statement hold at honest
+bitrates. The residual 2/30 at 30 connections/8M post-fix showed **zero**
 overrun/resync events (the cursor-priming fix's mechanism was not involved)
 and a sparse, scattered-over-time decode-error pattern on one connection,
 consistent with ordinary scheduling jitter under load rather than a
 remaining logic bug.
+
+## The 720p tier was in CRF mode
+
+**Discovery**: a 30g health snapshot (`srt30g-health`) showed the 720p
+outputs at `bitrateKbps` = **19,331** against a 1,760 Kbps source — 11× the
+input. The src tier was 1,745 Kbps as expected.
+
+**Mechanism** (source-verified):
+
+1. The harness creates the transcode tier purely by preset **name**
+   (`encoding: "720p"`); `OutputVideoConfig` has no bitrate field — its
+   variants are Source / Preset / Custom only.
+2. The built-in "720p" transcode profile (`src/media/profiles.rs`
+   `built_in_defaults()`, unchanged since commit `d252d5f5` introduced the
+   resolution-profile table) is deliberately **CRF mode**:
+   `bitrate: 0, crf: 23` — constant quality, the module doc's documented
+   contract for production ("bitrate: 0 → CRF mode (constant quality,
+   adapts to content)"). CRF 23 is x264's default quality; on real content
+   this is a sane 2-5 Mbps for 720p. The preset is not "wrong values" — it
+   is a quality-mode profile, correct for production where source bitrate
+   is unknown.
+3. In CRF mode x264 picks whatever bitrate holds quality 23, and the sweep
+   fixture (`bench-h264-1_5m.ts`, generated by
+   `scripts/fixtures/generate-bench-fixtures.sh` from a **mandelbrot**
+   lavfi pattern — an infinitely detailed synthetic) barely compresses at
+   CRF23/ultrafast/zerolatency → **19.3 Mbps per output on the wire**.
+4. The mismatch is using a quality-mode preset for a bitrate-controlled
+   load test: "60 groups × 1.5M" was really "60 groups × ~10.4 Mbps" —
+   1.27 Gbps of SRT egress. Every pre-fix ladder number, drop counter, and
+   ring measurement is contaminated by this factor.
+
+**Harness fix** (`src/bin/test_harness/resource_sweep/bitrate.rs`): per
+case, `install_bitrate_controlled_720p_profile` PATCHes
+`/api/v1/settings` so `transcodeProfiles["720p"]` carries an explicit
+`bitrate = source × BITRATE_SWEEP_720P_MULTIPLIER` (default 1.0), keeping
+the profile's realtime flags (ultrafast, zerolatency, gop 60, bframes 0,
+1280x720). Verified live: 720p outputs now emit 2.33 Mbps (measured) with
+**zero drops** at 30g, vs 19.3 Mbps before. The transcode tier is now a
+meaningful ladder rung and total egress is predictable.
+
+**The peer-side symptom this explains**: mediamtx logs `decode error:
+astits: parsing PES data failed` / `initial delimiter not found` on
+publisher connections — the TLPKTDROP'd streams arrive at the peer as
+garbled TS. At corrected bitrates these errors vanish at 30g/60g and only
+reappear at 135g×1.5M (the peer wall above).
+
+**Post-send TLPKTDROP mechanism** (source-verified, explains "0 sent / 3M
+dropped"): restream uses plain `srt_send` (`egress_sender.rs:164`), so the
+drop clock starts at the `srt_send()` call, not the producer. Libsrt stamps
+`m_tsOriginTime` at enqueue (`CSndBuffer::addBuffer`,
+`buffer_snd.cpp:213-214`) and `sndDropTooLate()` (`core.cpp:6773`) drops the
+buffer head whenever `buffdelay > max(peer_latency + sndDropDelay,
+SRT_TLPKTDROP_MINTHRESHOLD_MS=1000) + 20ms` ≈ **1020 ms** — while the
+sender transmits at paced `m_tdSendInterval` (`core.cpp:10262-10292`).
+Aging is pure post-send queueing (injection bursts vs paced drain vs peer
+ACK rate); the producer's PTS is never consulted.
 
 ## What's fixed, what's evidenced-but-unproven, what's still open
 
@@ -355,24 +458,31 @@ remaining logic bug.
 - libsrt multiplexer reuse scoped per shard — unit-proven and live-confirmed
   to behave exactly as designed once output count actually crosses the
   128-per-shard threshold.
+- `OUTPUTS_PER_SHARD` is RTMP-shaped (the original "scale to 1,200"
+  blocker) — **fixed and live-proven**: the SRT shard formula now grows past
+  the old 1-shard cap; 12 SRT shards observed live at 60g via the health API
+  (old formula capped at 1 per feed). See the shard-scaling section.
+- UDP receive-buffer clamp warning — **root-caused and fixed**: the clamp is
+  intentional (egress sockets deliberately ask for 1MB; the warning compared
+  against an 8MB *listener* desire). The warn message now states the real
+  expected value; the "raise rmem_max" remediation is confirmed a no-op.
+- Sweep 720p tier in CRF mode (this session) — **root-caused and fixed in
+  the harness** (per-case bitrate-controlled profile); corrected ladder
+  above.
 
 **Added, tested, but not evidenced as necessary for the reproduced bug:**
 - Retry jitter (`backoff_ms`) — `CommandChannelFull` never observed in this
   investigation at any scale.
 
-**Root-caused but not yet fixed:**
-- `OUTPUTS_PER_SHARD = 128` is RTMP-shaped and would permanently cap MSR's
-  real SRT slice (~60 outputs at n=1,200) at 1 shard/1 multiplexer regardless
-  of VPS size. This is the actual blocker for the "scale to 1,200 pure SRT
-  across the full bitrate envelope" requirement.
-
-**Investigated, real, but not root-caused:**
-- A UDP receive-buffer warning (`egress UDP recv buffer clamped to 1024KB
-  (wanted 8192KB). Raise net.core.rmem_max`) fires repeatedly under load, but
-  `net.core.rmem_max` is actually 25MB on this host — well above what's
-  requested. The suggested remediation (raise `rmem_max`) would not do
-  anything; the real clamp source is unidentified (per-process limit, a
-  different code path, or something libsrt-internal).
+**Root-caused but not yet fixed (latent, evidence-backed):**
+- SRT `observe_stall` (`src/media/egress/backends/srt.rs:199-218`, esp.
+  206-212) counts **any** native-backlog decline as protocol progress —
+  including TLPKTDROP/TSBPD-deadline drops. A drop-riddled SRT leaf can
+  therefore have its no-progress deadline extended indefinitely, and never
+  stall-swept ("0 sent / 3M dropped" is the exact current-code hang
+  signature). RTMP has no such signal (it relies on real engine sends).
+  Candidate fix: treat `packetsSentDrop` growth as non-progress, or wire
+  `feed_lag_units` into `classify_stall` as defense-in-depth.
 
 **Not started:**
 - `EGRESS_SNDBUF_FLOOR` reconsideration (buffer sized from a 50Mbps
@@ -392,6 +502,9 @@ remaining logic bug.
 - A broader audit of the egress fabric for other instances of the "multiple
   implementers of the same abstraction disagree, no one noticed" pattern
   that produced root causes 1 and 2.
+- Re-running the 30g×60fps bracket at corrected bitrates (mechanism is
+  CRF-identical to the runs above; the fps dimension does not interact with
+  the fix differently).
 - Splitting all of the above into logical, individually-reviewable commits.
 
 ## Artifact index
@@ -401,7 +514,13 @@ Live run artifacts (this worktree, `.local/artifacts/`, all `NO_CLEANUP=1`):
 `bitrate-sweep-lowbitrate-15`, `bitrate-sweep-lowbitrate-60`,
 `bitrate-sweep-dropcheck-60`, `bitrate-sweep-profile-60` (+ `/tmp/restream-profile-60.data`,
 `perf record` capture), `bitrate-sweep-muxerfix-60`,
-`shard-formula-check-2`, `shard-formula-check-135b`.
+`shard-formula-check-2`, `shard-formula-check-135b`,
+plus the 2026-08-11 corrected-ladder runs: `srt30g-health` (CRF discovery
+snapshot), `srt60g-discrim` (killed; mediamtx decode-error source),
+`srt60g-discrim2` (ring/CPU matrix), `ladder-30g` (120/120 probes pass),
+`ladder-60g` (6/6 probes decode), `ladder-135g` (fabric clean, peer wall),
+`ladder-135g-4m`, `ladder-135g-8m` (ramp failures), `ladder-30g-a2`
+(multi-audio clean).
 
 Code: `src/media/egress/leaf.rs`, `src/media/egress/visit.rs`,
 `src/media/egress/backends/srt_drain.rs`,
@@ -410,4 +529,7 @@ Code: `src/media/egress/leaf.rs`, `src/media/egress/visit.rs`,
 `src/media/egress/backends/srt/muxer_ports.rs` (new),
 `src/media/egress/factory.rs`, `src/media/engine_egress_fabric.rs`,
 `src/media/engine_registries.rs`, `src/media/engine_runtime.rs`,
-`src/media/srt/egress_connect.rs`, `src/media/srt/egress_connect/single.rs`.
+`src/media/srt/egress_connect.rs`, `src/media/srt/egress_connect/single.rs`,
+`src/media/srt/egress_connect/bonded.rs`, `src/media/srt/socket.rs`,
+`src/media/srt/listener.rs`, `src/media/srt/sys.rs`,
+`src/bin/test_harness/resource_sweep/bitrate.rs`.
