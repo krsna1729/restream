@@ -56,6 +56,8 @@ struct BitrateSweepEnv {
     sample_interval_secs: u64,
     output_groups: usize,
     no_cleanup: bool,
+    skip_probes: bool,
+    bitrate_720p_multiplier: f64,
     bitrates: Vec<BitrateSpec>,
     configs: Vec<SweepConfig>,
 }
@@ -90,6 +92,13 @@ impl BitrateSweepEnv {
             no_cleanup: std::env::var("BITRATE_SWEEP_NO_CLEANUP")
                 .ok()
                 .is_some_and(|v| v == "1"),
+            skip_probes: std::env::var("BITRATE_SWEEP_SKIP_PROBES")
+                .ok()
+                .is_some_and(|v| v == "1"),
+            bitrate_720p_multiplier: std::env::var("BITRATE_SWEEP_720P_MULTIPLIER")
+                .ok()
+                .and_then(|value| value.parse::<f64>().ok())
+                .unwrap_or(1.0),
             bitrates: parse_bitrate_specs("BITRATE_SWEEP_BITRATES", "1.5M,4M,8M")?,
             configs: parse_sweep_configs("BITRATE_SWEEP_CONFIGS")?,
             work_dir,
@@ -199,12 +208,50 @@ pub(crate) async fn bitrate_sweep() -> Result<Value, String> {
     Ok(result)
 }
 
+/// The built-in "720p" transcode profile is CRF-mode (`bitrate: 0`), so the
+/// transcode tier's bitrate is content-dependent — ~19M on the synthetic
+/// sweep fixture at a 1.5M source — silently breaking the sweep's bitrate
+/// ladder (a "60 groups × 1.5M" case actually pushed ~1.3Gbps of SRT
+/// egress). Override the profile per case so the transcode tier carries a
+/// controlled bitrate: `source_mbps × BITRATE_SWEEP_720P_MULTIPLIER`
+/// (default 1.0). Dimensions and realtime x264 flags are preserved.
+async fn install_bitrate_controlled_720p_profile(
+    api: &RampApi,
+    bitrate: &BitrateSpec,
+    multiplier: f64,
+) -> Result<(), String> {
+    let settings = api.get_json("/api/v1/settings").await?;
+    let mut profiles: restream::domain::transcode_profile::TranscodeProfiles =
+        serde_json::from_value(settings["transcodeProfiles"].clone())
+            .map_err(|error| format!("parse transcode profiles: {error}"))?;
+    let target_bps = (bitrate.mbps * 1_000_000.0 * multiplier).round() as i64;
+    profiles.insert(
+        "720p".to_string(),
+        restream::domain::transcode_profile::TranscodeProfile {
+            preset: "ultrafast".to_string(),
+            tune: "zerolatency".to_string(),
+            crf: 23,
+            gop: 60,
+            bframes: 0,
+            bitrate: target_bps,
+            max_bitrate: 0,
+            width: 1280,
+            height: 720,
+        },
+    );
+    api.patch_json("/api/v1/settings", json!({ "transcodeProfiles": profiles }))
+        .await?;
+    Ok(())
+}
+
 async fn run_bitrate_case(
     env: &BitrateSweepEnv,
     config: SweepConfig,
     bitrate: &BitrateSpec,
 ) -> Result<BitrateSweepCase, String> {
     let mut stack = start_bitrate_sweep_stack(env).await?;
+    install_bitrate_controlled_720p_profile(&stack.api, bitrate, env.bitrate_720p_multiplier)
+        .await?;
     let stream_key = format!(
         "bitrate-{}-{}",
         config.name,
@@ -253,13 +300,16 @@ async fn run_bitrate_case(
     let samples = sample_bitrate_window(env, &mut stack, config, bitrate, &pipeline_id).await?;
     let mut correctness_ok = true;
     let mut correctness_failures = Vec::new();
-    for (kind, name, expected) in &probe_specs {
-        let url = bitrate_probe_url(env, *kind, name);
-        if let Some(observed) =
-            check_bitrate_stream(name, &url, expected, Duration::from_secs(20)).await?
-        {
-            correctness_ok = false;
-            correctness_failures.push(format!("{name}: expected {expected}, observed {observed}"));
+    if !env.skip_probes {
+        for (kind, name, expected) in &probe_specs {
+            let url = bitrate_probe_url(env, *kind, name);
+            if let Some(observed) =
+                check_bitrate_stream(name, &url, expected, Duration::from_secs(20)).await?
+            {
+                correctness_ok = false;
+                correctness_failures
+                    .push(format!("{name}: expected {expected}, observed {observed}"));
+            }
         }
     }
 
