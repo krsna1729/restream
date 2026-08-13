@@ -1,6 +1,7 @@
 use super::*;
 use crate::mediamtx_probe::{
-    MediaMtxPathHealth, mediamtx_path_health_json, verify_mediamtx_path_health,
+    MediaMtxPathHealth, mediamtx_path_health_json, merge_mediamtx_path_health,
+    verify_mediamtx_path_health,
 };
 
 #[path = "msr/dashboard.rs"]
@@ -21,34 +22,71 @@ use verification::*;
 pub(crate) const MSR_MODE: &str = "msr";
 pub(crate) const MSR_DASHBOARD_MODE: &str = "msr.dashboard";
 
+/// Peer-verification results for one MSR checkpoint. Exactly one of
+/// `path_health`/`post_sample_path_health` (mediamtx peer) or
+/// `sink_verification` (sink peer) is populated, depending on `MSR_PEER`;
+/// both are `Option` so the JSON artifact only carries the fields that
+/// apply, keeping the mediamtx-mode shape byte-identical to before this
+/// mode split existed.
 struct MsrCheckpointAggregate {
     resource: ResourceAggregate,
-    path_health: MediaMtxPathHealth,
-    post_sample_path_health: MediaMtxPathHealth,
+    path_health: Option<MediaMtxPathHealth>,
+    post_sample_path_health: Option<MediaMtxPathHealth>,
+    sink_verification: Option<MsrSinkVerification>,
     ffprobe_checks: Vec<Value>,
 }
 
 fn msr_checkpoint_aggregate_json(aggregate: &MsrCheckpointAggregate) -> Value {
     let mut value = resource_aggregate_json(&aggregate.resource);
     if let Some(object) = value.as_object_mut() {
-        object.insert(
-            "mediamtxPathHealth".to_string(),
-            mediamtx_path_health_json(MSR_MODE, &aggregate.resource.label, &aggregate.path_health),
-        );
-        object.insert(
-            "mediamtxPostSamplePathHealth".to_string(),
-            mediamtx_path_health_json(
-                MSR_MODE,
-                &format!("{}-post-sample", aggregate.resource.label),
-                &aggregate.post_sample_path_health,
-            ),
-        );
+        if let Some(path_health) = &aggregate.path_health {
+            object.insert(
+                "mediamtxPathHealth".to_string(),
+                mediamtx_path_health_json(MSR_MODE, &aggregate.resource.label, path_health),
+            );
+        }
+        if let Some(post_sample_path_health) = &aggregate.post_sample_path_health {
+            object.insert(
+                "mediamtxPostSamplePathHealth".to_string(),
+                mediamtx_path_health_json(
+                    MSR_MODE,
+                    &format!("{}-post-sample", aggregate.resource.label),
+                    post_sample_path_health,
+                ),
+            );
+        }
+        if let Some(sink_verification) = &aggregate.sink_verification {
+            object.insert(
+                "sinkVerification".to_string(),
+                msr_sink_verification_json(sink_verification),
+            );
+        }
         object.insert(
             "ffprobeSamples".to_string(),
             Value::Array(aggregate.ffprobe_checks.clone()),
         );
     }
     value
+}
+
+/// (ready/present, expected, bytes delta) from whichever peer verification
+/// this checkpoint used, for the report table.
+fn checkpoint_ready_summary(aggregate: &MsrCheckpointAggregate) -> (usize, usize, u64) {
+    if let Some(health) = &aggregate.path_health {
+        (
+            health.ready_paths,
+            health.expected_paths,
+            health.bytes_received_delta,
+        )
+    } else if let Some(sink) = &aggregate.sink_verification {
+        (
+            sink.outputs_present,
+            sink.outputs_expected,
+            sink.bytes_out_delta,
+        )
+    } else {
+        (0, 0, 0)
+    }
 }
 
 fn human_kib(kb: u64) -> String {
@@ -81,24 +119,32 @@ fn format_msr_report(
     srt_outputs: usize,
     aggregates: &[MsrCheckpointAggregate],
 ) -> String {
+    let sink_mode = aggregates
+        .iter()
+        .any(|aggregate| aggregate.sink_verification.is_some());
+    let proof_phrase = if sink_mode {
+        "loopback engine health API byte-growth proof"
+    } else {
+        "loopback MediaMTX path API byte-growth proof"
+    };
     let mut report = format!(
         "Status: PASS at every checkpoint including {executed_outputs} outputs \
          (1 SRT ingest, {audio_tracks} audio tracks, Zipf fan-out, {rtmp_outputs} RTMP \
          with {enhanced_rtmp_outputs} Enhanced RTMP / {srt_outputs} SRT, \
-         1080p30 H.264 passthrough, loopback MediaMTX path API byte-growth proof).\n\n"
+         1080p30 H.264 passthrough, {proof_phrase}).\n\n"
     );
     report.push_str("| Outputs | Egress mix | MediaMTX ready | MediaMTX bytes delta | CPU avg % | CPU peak % | RSS peak | AVIO HWM peak | Samples |\n");
     report.push_str("|---:|---|---:|---:|---:|---:|---:|---:|---:|\n");
     for aggregate in aggregates {
         let resource = &aggregate.resource;
-        let path_health = &aggregate.path_health;
+        let (ready, expected, bytes_delta) = checkpoint_ready_summary(aggregate);
         report.push_str(&format!(
             "| {} | {} | {}/{} | {} | {:.1} | {:.1} | {} | {} | {} |\n",
             resource.outputs,
             resource.egress_mix,
-            path_health.ready_paths,
-            path_health.expected_paths,
-            human_bytes(path_health.bytes_received_delta),
+            ready,
+            expected,
+            human_bytes(bytes_delta),
             resource.total_cpu_avg_pct,
             resource.total_cpu_peak_pct,
             human_kib(resource.rss_peak_kb),
@@ -109,8 +155,13 @@ fn format_msr_report(
     let cores = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
         .unwrap_or(1);
+    let proof_detail = if sink_mode {
+        "Peer proof is from the restream engine health API (`/api/v1/engine/health`): every expected output must be present and `bytesOut` must grow across the sample window before a checkpoint can pass."
+    } else {
+        "MediaMTX proof is from `/v3/paths/list`: every expected path must be ready and `bytesReceived` must grow across the sample window before a checkpoint can pass."
+    };
     report.push_str(&format!(
-        "\nCPU % is of a single core ({}% available on this host). MediaMTX proof is from `/v3/paths/list`: every expected path must be ready and `bytesReceived` must grow across the sample window before a checkpoint can pass.\n",
+        "\nCPU % is of a single core ({}% available on this host). {proof_detail}\n",
         cores * 100
     ));
     report
@@ -143,6 +194,30 @@ fn configure_msr_env(mut env: ResourceSweepEnv, profile: MsrRunProfile) -> Resou
         env.restream_db_path = env.work_dir.join(format!("{}.db", profile.output_prefix()));
     }
     env
+}
+
+/// Verify expected mediamtx paths for a checkpoint, grouped by the peer
+/// instance each output actually publishes to (`env.mtx_count` peers), and
+/// merge the per-instance results into one aggregate. With `mtx_count == 1`
+/// this issues exactly one `verify_mediamtx_path_health` call against
+/// `env.mtx_api`, matching prior single-instance behavior byte-for-byte.
+async fn verify_msr_grouped_path_health(
+    env: &ResourceSweepEnv,
+    outputs: &[MsrOutputSpec],
+    sample_secs: u64,
+    timeout: Duration,
+) -> Result<MediaMtxPathHealth, String> {
+    let groups = msr_group_expected_paths_by_instance(outputs, env.mtx_count);
+    let mut accumulated: Option<MediaMtxPathHealth> = None;
+    for (instance, paths) in groups {
+        let api_port = env.mtx_api + instance as u16;
+        let health = verify_mediamtx_path_health(api_port, &paths, sample_secs, timeout).await?;
+        accumulated = Some(match accumulated {
+            None => health,
+            Some(previous) => merge_mediamtx_path_health(previous, health),
+        });
+    }
+    accumulated.ok_or_else(|| "no expected mediamtx paths for checkpoint".to_string())
 }
 
 struct MsrPhaseResult {
@@ -219,17 +294,6 @@ async fn run_msr_phase(
                 msr_progress_timeout(output_ids.len()),
             )
             .await?;
-            let expected_mediamtx_paths = plan[..output.ordinal]
-                .iter()
-                .map(msr_mediamtx_path)
-                .collect::<Vec<_>>();
-            let path_health = verify_mediamtx_path_health(
-                env.mtx_api,
-                &expected_mediamtx_paths,
-                env_secs("MSR_SINK_SAMPLE_SECS", 3),
-                Duration::from_secs(env_secs("MSR_SINK_TIMEOUT_SECS", 60)),
-            )
-            .await?;
             let rtmp_count = plan
                 .iter()
                 .take(output.ordinal)
@@ -237,27 +301,63 @@ async fn run_msr_phase(
                 .count();
             let srt_count = output.ordinal - rtmp_count;
             let label = format!("{}-outputs", output.ordinal);
-            append_line(
-                &env.samples_jsonl,
-                &format!(
-                    "{}\n",
-                    serde_json::to_string(&mediamtx_path_health_json(
-                        MSR_MODE,
-                        &label,
-                        &path_health
-                    ))
-                    .unwrap()
-                ),
-            )?;
-            let skip_ffprobe = std::env::var("MSR_SKIP_FFPROBE")
-                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-                .unwrap_or(false);
+
+            let (path_health, sink_verification) = match env.peer_mode {
+                ResourceSweepPeer::Mediamtx => {
+                    let health = verify_msr_grouped_path_health(
+                        &env,
+                        &plan[..output.ordinal],
+                        env_secs("MSR_SINK_SAMPLE_SECS", 3),
+                        Duration::from_secs(env_secs("MSR_SINK_TIMEOUT_SECS", 60)),
+                    )
+                    .await?;
+                    append_line(
+                        &env.samples_jsonl,
+                        &format!(
+                            "{}\n",
+                            serde_json::to_string(&mediamtx_path_health_json(
+                                MSR_MODE, &label, &health
+                            ))
+                            .unwrap()
+                        ),
+                    )?;
+                    (Some(health), None)
+                }
+                ResourceSweepPeer::Sink => {
+                    let verification = verify_msr_sink_checkpoint(
+                        &stack.api,
+                        &pipeline_id,
+                        &output_ids,
+                        env_secs("MSR_SINK_ENGINE_SAMPLE_SECS", 2),
+                    )
+                    .await?;
+                    append_line(
+                        &env.samples_jsonl,
+                        &format!(
+                            "{}\n",
+                            serde_json::to_string(&msr_sink_verification_json(&verification))
+                                .unwrap()
+                        ),
+                    )?;
+                    (None, Some(verification))
+                }
+            };
+
+            // Sink peers discard data at the transport layer, so there is
+            // nothing for ffprobe/signal capture to read back from — force
+            // the skip regardless of MSR_SKIP_FFPROBE.
+            let skip_ffprobe = env.peer_mode == ResourceSweepPeer::Sink
+                || std::env::var("MSR_SKIP_FFPROBE")
+                    .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                    .unwrap_or(false);
             let ffprobe_checks = if skip_ffprobe {
                 Vec::new()
             } else {
                 run_msr_ffprobe_checkpoint(&env, output.ordinal, &plan[..output.ordinal]).await?
             };
-            if profile == MsrRunProfile::SignalCalibration {
+            if profile == MsrRunProfile::SignalCalibration
+                && env.peer_mode != ResourceSweepPeer::Sink
+            {
                 signal_checks.extend(
                     run_msr_signal_checkpoint(&env, output.ordinal, &plan[..output.ordinal])
                         .await?,
@@ -277,29 +377,36 @@ async fn run_msr_phase(
                 },
             )
             .await?;
-            let post_sample_path_health = verify_mediamtx_path_health(
-                env.mtx_api,
-                &expected_mediamtx_paths,
-                env_secs("MSR_SINK_POST_SAMPLE_SECS", 2),
-                Duration::from_secs(env_secs("MSR_SINK_TIMEOUT_SECS", 60)),
-            )
-            .await?;
-            append_line(
-                &env.samples_jsonl,
-                &format!(
-                    "{}\n",
-                    serde_json::to_string(&mediamtx_path_health_json(
-                        MSR_MODE,
-                        &format!("{}-post-sample", output.ordinal),
-                        &post_sample_path_health
-                    ))
-                    .unwrap()
-                ),
-            )?;
+            let post_sample_path_health = match env.peer_mode {
+                ResourceSweepPeer::Mediamtx => {
+                    let health = verify_msr_grouped_path_health(
+                        &env,
+                        &plan[..output.ordinal],
+                        env_secs("MSR_SINK_POST_SAMPLE_SECS", 2),
+                        Duration::from_secs(env_secs("MSR_SINK_TIMEOUT_SECS", 60)),
+                    )
+                    .await?;
+                    append_line(
+                        &env.samples_jsonl,
+                        &format!(
+                            "{}\n",
+                            serde_json::to_string(&mediamtx_path_health_json(
+                                MSR_MODE,
+                                &format!("{}-post-sample", output.ordinal),
+                                &health
+                            ))
+                            .unwrap()
+                        ),
+                    )?;
+                    Some(health)
+                }
+                ResourceSweepPeer::Sink => None,
+            };
             aggregates.push(MsrCheckpointAggregate {
                 resource,
                 path_health,
                 post_sample_path_health,
+                sink_verification,
                 ffprobe_checks,
             });
         }
@@ -373,7 +480,7 @@ async fn run_msr_phase(
         stop_child(&mut standby_publisher).await;
         delete_resource_pipeline(&stack.api, &pipeline_id).await;
         stop_child(&mut stack.restream).await;
-        stop_child(&mut stack.mediamtx).await;
+        stop_children(&mut stack.mediamtx).await;
     }
     Ok(MsrPhaseResult {
         env,

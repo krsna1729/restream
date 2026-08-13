@@ -19,7 +19,7 @@ use super::{
     run_mixed_input_case_with_env, safe_artifact_stem, signal_report_json,
     spawn_publisher_with_selection, start_output, stop_child, sweep_fixture,
     validate_signal_quality_with_tolerances, wait_for_api_input_live, wait_for_http_ok,
-    wait_for_input_state, wait_for_outputs_progress,
+    wait_for_input_state, wait_for_outputs_progress, wait_for_tcp_listener_ready,
 };
 
 #[path = "resource_sweep/bitrate.rs"]
@@ -43,8 +43,8 @@ pub(crate) use catalog::{
 mod config;
 pub(crate) use config::SweepConfig;
 use config::{
-    ResourceSweepEnv, ResourceSweepLifecycle, parse_string_set, parse_sweep_configs,
-    parse_usize_list, sweep_configs,
+    ResourceSweepEnv, ResourceSweepLifecycle, ResourceSweepPeer, parse_string_set,
+    parse_sweep_configs, parse_usize_list, sweep_configs,
 };
 #[path = "resource_sweep/measurement.rs"]
 mod measurement;
@@ -56,11 +56,25 @@ use measurement::{
 };
 
 /// Live process stack shared by a resource-sweep sample.
+///
+/// `mediamtx` holds one `Child` per peer instance (`env.mtx_count`, default
+/// 1): mediamtx processes normally, or `restream --sink-mode` processes
+/// when `env.peer_mode == ResourceSweepPeer::Sink`. Every non-`msr`
+/// resource-sweep scenario runs with `mtx_count == 1`, so this stays a
+/// single-element Vec and existing behavior is unchanged.
 struct ResourceSweepStack {
-    mediamtx: Child,
+    mediamtx: Vec<Child>,
     restream: Child,
     api: RampApi,
     restream_pid: u32,
+}
+
+/// Stop every child in a peer-instance Vec (or any other child list),
+/// mirroring the single-child `stop_child` used elsewhere in this module.
+async fn stop_children(children: &mut [Child]) {
+    for child in children {
+        stop_child(child).await;
+    }
 }
 
 pub(crate) async fn resource_sweep() -> Result<Value, String> {
@@ -153,10 +167,207 @@ pub(crate) async fn resource_sweep() -> Result<Value, String> {
         }
         if let Some(stack) = stack.as_mut() {
             stop_child(&mut stack.restream).await;
-            stop_child(&mut stack.mediamtx).await;
+            stop_children(&mut stack.mediamtx).await;
         }
     }
     Ok(result)
+}
+
+/// Ports for peer instance `index` (0-based): each of `mtx_rtmp`/`mtx_rtmps`/
+/// `mtx_srt`/`mtx_api` offset by `index`. Instance 0 always matches the
+/// pre-existing single-mediamtx ports, so `mtx_count == 1` is byte-identical
+/// to prior behavior.
+fn peer_instance_ports(env: &ResourceSweepEnv, index: usize) -> (u16, u16, u16, u16) {
+    let offset = index as u16;
+    (
+        env.mtx_rtmp.wrapping_add(offset),
+        env.mtx_rtmps.wrapping_add(offset),
+        env.mtx_srt.wrapping_add(offset),
+        env.mtx_api.wrapping_add(offset),
+    )
+}
+
+/// The HTTP port for sink-peer instance `index`. Sink peers are full
+/// `restream` processes (see `spawn_sink_peer`) and therefore need their own
+/// HTTP/DB surface; this range sits well clear of every other harness port
+/// range (`mtx_api + 2000 ..`) so it doesn't collide at any `MTX_COUNT` the
+/// harness realistically runs (a handful of instances, not thousands).
+fn sink_peer_http_port(env: &ResourceSweepEnv, index: usize) -> u16 {
+    env.mtx_api
+        .saturating_add(2000)
+        .saturating_add(index as u16)
+}
+
+/// Suffix `path` with `-{index}` (before the extension) for `index > 0`,
+/// leaving `index == 0` untouched so instance-0 artifact filenames stay
+/// stable for existing tooling and single-instance runs.
+fn instance_suffixed_path(path: &Path, index: usize) -> PathBuf {
+    if index == 0 {
+        return path.to_path_buf();
+    }
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("instance");
+    let file_name = match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) => format!("{stem}-{index}.{ext}"),
+        None => format!("{stem}-{index}"),
+    };
+    path.with_file_name(file_name)
+}
+
+async fn spawn_mediamtx_peer(env: &ResourceSweepEnv, index: usize) -> Result<Child, String> {
+    let (rtmp, rtmps, srt, api) = peer_instance_ports(env, index);
+    let log_path = instance_suffixed_path(&env.mediamtx_log, index);
+    let config_path = instance_suffixed_path(&env.mediamtx_config, index);
+    let log = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
+    let err_log = log.try_clone().map_err(|e| e.to_string())?;
+    let rtmp_tls_lines = match &env.rtmps_tls {
+        Some((cert, key)) => format!(
+            "rtmpEncryption: \"optional\"\nrtmpsAddress: :{}\nrtmpServerCert: {}\nrtmpServerKey: {}\n",
+            rtmps,
+            cert.display(),
+            key.display()
+        ),
+        None => "rtmpEncryption: \"no\"\n".to_string(),
+    };
+    std::fs::write(
+        &config_path,
+        format!(
+            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nwriteQueueSize: 512\nrtmp: yes\nrtmpAddress: :{rtmp}\n{rtmp_tls_lines}rtsp: no\nsrt: yes\nsrtAddress: :{srt}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{api}\nmetrics: no\npaths:\n  all:\n"
+        ),
+    )
+    .map_err(|e| e.to_string())?;
+    let mut cmd = Command::new("mediamtx");
+    let mut child = remove_mediamtx_config_env(&mut cmd)
+        .arg(&config_path)
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(err_log))
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    if let Err(err) = wait_for_http_ok(
+        &format!("http://127.0.0.1:{api}/v3/paths/list"),
+        Duration::from_secs(30),
+    )
+    .await
+    {
+        stop_child(&mut child).await;
+        return Err(format!("mediamtx[{index}] did not become ready: {err}"));
+    }
+    Ok(child)
+}
+
+async fn verify_preexisting_mediamtx_peer(index: usize, api_port: u16) -> Result<Child, String> {
+    // Mediamtx pre-started externally — verify it's live, don't spawn. The
+    // dummy child is just a `Vec<Child>`-shaped placeholder; stopping it
+    // later is a no-op against the already-exited `true` process.
+    let mut dummy = Command::new("true")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("dummy: {e}"))?;
+    if let Err(err) = wait_for_http_ok(
+        &format!("http://127.0.0.1:{api_port}/v3/paths/list"),
+        Duration::from_secs(10),
+    )
+    .await
+    {
+        let _ = dummy.kill().await;
+        return Err(format!("pre-started mediamtx[{index}] not ready: {err}"));
+    }
+    Ok(dummy)
+}
+
+async fn spawn_sink_peer(env: &ResourceSweepEnv, index: usize) -> Result<Child, String> {
+    if !env.restream_bin.exists() {
+        return Err(format!(
+            "restream binary not found at {}",
+            env.restream_bin.display()
+        ));
+    }
+    let (rtmp, _rtmps, srt, _api) = peer_instance_ports(env, index);
+    let http = sink_peer_http_port(env, index);
+    let log_dir = env.work_dir.join("logs");
+    std::fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
+    let log_path = log_dir.join(format!("sink-{index}.log"));
+    let log = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
+    let err_log = log.try_clone().map_err(|e| e.to_string())?;
+    let db_path = env.work_dir.join(format!("sink-{index}.db"));
+    cleanup_ramp_db(&db_path);
+    let mut cmd = Command::new(&env.restream_bin);
+    cmd.env("RESTREAM_SINK_MODE", "1")
+        .env("RESTREAM_HTTP_PORT", http.to_string())
+        .env("RESTREAM_RTMP_PORT", rtmp.to_string())
+        .env("RESTREAM_SRT_PORT", srt.to_string())
+        .env("RESTREAM_INITIAL_ADMIN_PASSWORD", harness_admin_password())
+        .env("RESTREAM_LOG_DIR", &log_dir)
+        .env("RESTREAM_DB_PATH", db_path.to_string_lossy().to_string())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(err_log))
+        .kill_on_drop(true);
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    if let Err(err) = wait_for_tcp_listener_ready(rtmp, Duration::from_secs(30)).await {
+        stop_child(&mut child).await;
+        return Err(format!(
+            "sink peer[{index}] RTMP listener did not become ready: {err}"
+        ));
+    }
+    if let Err(err) = wait_for_tcp_listener_ready(srt, Duration::from_secs(30)).await {
+        stop_child(&mut child).await;
+        return Err(format!(
+            "sink peer[{index}] SRT listener did not become ready: {err}"
+        ));
+    }
+    Ok(child)
+}
+
+async fn verify_preexisting_sink_peer(index: usize, rtmp: u16, srt: u16) -> Result<Child, String> {
+    let mut dummy = Command::new("true")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("dummy: {e}"))?;
+    if let Err(err) = wait_for_tcp_listener_ready(rtmp, Duration::from_secs(10)).await {
+        let _ = dummy.kill().await;
+        return Err(format!(
+            "pre-started sink peer[{index}] RTMP listener not ready: {err}"
+        ));
+    }
+    if let Err(err) = wait_for_tcp_listener_ready(srt, Duration::from_secs(10)).await {
+        let _ = dummy.kill().await;
+        return Err(format!(
+            "pre-started sink peer[{index}] SRT listener not ready: {err}"
+        ));
+    }
+    Ok(dummy)
+}
+
+async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>, String> {
+    let skip_start = std::env::var("MTX_SKIP_START").is_ok();
+    let mut children = Vec::with_capacity(env.mtx_count);
+    for index in 0..env.mtx_count {
+        let spawned = match (env.peer_mode, skip_start) {
+            (ResourceSweepPeer::Mediamtx, true) => {
+                let (_, _, _, api) = peer_instance_ports(env, index);
+                verify_preexisting_mediamtx_peer(index, api).await
+            }
+            (ResourceSweepPeer::Mediamtx, false) => spawn_mediamtx_peer(env, index).await,
+            (ResourceSweepPeer::Sink, true) => {
+                let (rtmp, _, srt, _) = peer_instance_ports(env, index);
+                verify_preexisting_sink_peer(index, rtmp, srt).await
+            }
+            (ResourceSweepPeer::Sink, false) => spawn_sink_peer(env, index).await,
+        };
+        match spawned {
+            Ok(child) => children.push(child),
+            Err(err) => {
+                stop_children(&mut children).await;
+                return Err(err);
+            }
+        }
+    }
+    Ok(children)
 }
 
 async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSweepStack, String> {
@@ -168,63 +379,7 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
     }
     std::fs::create_dir_all(env.work_dir.join("logs")).map_err(|e| e.to_string())?;
     cleanup_ramp_db(&env.restream_db_path);
-    let mut mediamtx = if std::env::var("MTX_SKIP_START").is_ok() {
-        // Mediamtx pre-started externally — verify it's live, don't spawn.
-        let mut dummy = Command::new("true")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("dummy: {e}"))?;
-        let api_port = env.mtx_api;
-        if let Err(err) = wait_for_http_ok(
-            &format!("http://127.0.0.1:{api_port}/v3/paths/list"),
-            Duration::from_secs(10),
-        )
-        .await
-        {
-            let _ = dummy.kill().await;
-            return Err(format!("pre-started mediamtx not ready: {err}"));
-        }
-        dummy
-    } else {
-        let log = std::fs::File::create(&env.mediamtx_log).map_err(|e| e.to_string())?;
-        let err_log = log.try_clone().map_err(|e| e.to_string())?;
-        let rtmp_tls_lines = match &env.rtmps_tls {
-            Some((cert, key)) => format!(
-                "rtmpEncryption: \"optional\"\nrtmpsAddress: :{}\nrtmpServerCert: {}\nrtmpServerKey: {}\n",
-                env.mtx_rtmps,
-                cert.display(),
-                key.display()
-            ),
-            None => "rtmpEncryption: \"no\"\n".to_string(),
-        };
-        std::fs::write(
-            &env.mediamtx_config,
-            format!(
-                "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nwriteQueueSize: 512\nrtmp: yes\nrtmpAddress: :{}\n{rtmp_tls_lines}rtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
-                env.mtx_rtmp, env.mtx_srt, env.mtx_api
-            ),
-        )
-        .map_err(|e| e.to_string())?;
-        let mut cmd = Command::new("mediamtx");
-        let mut child = remove_mediamtx_config_env(&mut cmd)
-            .arg(&env.mediamtx_config)
-            .stdout(Stdio::from(log))
-            .stderr(Stdio::from(err_log))
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-        if let Err(err) = wait_for_http_ok(
-            &format!("http://127.0.0.1:{}/v3/paths/list", env.mtx_api),
-            Duration::from_secs(30),
-        )
-        .await
-        {
-            stop_child(&mut child).await;
-            return Err(format!("mediamtx did not become ready: {err}"));
-        }
-        child
-    };
+    let mut mediamtx = start_resource_sweep_peers(env).await?;
 
     let restream_log = std::fs::File::create(&env.restream_log).map_err(|e| e.to_string())?;
     let restream_err = restream_log.try_clone().map_err(|e| e.to_string())?;
@@ -254,7 +409,7 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
     .await
     {
         stop_child(&mut restream).await;
-        stop_child(&mut mediamtx).await;
+        stop_children(&mut mediamtx).await;
         return Err(format!("restream did not become ready: {err}"));
     }
     let mut api = RampApi::new(env.restream_http);
@@ -308,7 +463,7 @@ async fn run_resource_baseline(
     let aggregate = sample_resource_window(env, active, meta).await?;
     if local_only {
         stop_child(&mut local_stack.as_mut().unwrap().restream).await;
-        stop_child(&mut local_stack.as_mut().unwrap().mediamtx).await;
+        stop_children(&mut local_stack.as_mut().unwrap().mediamtx).await;
     }
     let _ = retained_publishers;
     Ok(aggregate)
@@ -353,7 +508,7 @@ async fn run_resource_ingest_only(
     }
     if local_only {
         stop_child(&mut local_stack.as_mut().unwrap().restream).await;
-        stop_child(&mut local_stack.as_mut().unwrap().mediamtx).await;
+        stop_children(&mut local_stack.as_mut().unwrap().mediamtx).await;
     }
     Ok(aggregate)
 }
@@ -442,7 +597,7 @@ async fn run_resource_ingest_growth(
     }
     if local_only {
         stop_child(&mut local_stack.as_mut().unwrap().restream).await;
-        stop_child(&mut local_stack.as_mut().unwrap().mediamtx).await;
+        stop_children(&mut local_stack.as_mut().unwrap().mediamtx).await;
     }
     Ok(out)
 }
@@ -537,7 +692,7 @@ async fn run_resource_egress_growth(
     }
     if local_only {
         stop_child(&mut local_stack.as_mut().unwrap().restream).await;
-        stop_child(&mut local_stack.as_mut().unwrap().mediamtx).await;
+        stop_children(&mut local_stack.as_mut().unwrap().mediamtx).await;
     }
     Ok(out)
 }
@@ -644,4 +799,77 @@ pub(crate) fn scaled_output_progress_timeout(
     let extra_outputs = output_count.saturating_sub(1) as u64;
     let scaled_secs = base_secs.saturating_add(extra_outputs.saturating_mul(per_output_secs));
     Duration::from_secs(scaled_secs.min(cap_secs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_env() -> ResourceSweepEnv {
+        ResourceSweepEnv {
+            work_dir: PathBuf::from("."),
+            summary_json: PathBuf::from("summary.json"),
+            summary_csv: PathBuf::from("summary.csv"),
+            samples_jsonl: PathBuf::from("samples.jsonl"),
+            restream_log: PathBuf::from("restream.log"),
+            mediamtx_log: PathBuf::from("mediamtx.log"),
+            mediamtx_config: PathBuf::from("mediamtx.yml"),
+            restream_bin: PathBuf::from("restream"),
+            restream_db_path: PathBuf::from("restream.db"),
+            restream_http: 3030,
+            restream_rtmp: 1935,
+            restream_srt: 10080,
+            mtx_rtmp: 1936,
+            mtx_rtmps: 1937,
+            mtx_srt: 8891,
+            mtx_api: 9997,
+            mtx_count: 4,
+            peer_mode: ResourceSweepPeer::Mediamtx,
+            sample_secs: 1,
+            sample_interval_ms: 1000,
+            settle_secs: 1,
+            ingest_counts: Vec::new(),
+            egress_counts: Vec::new(),
+            scenario_filter: None,
+            lifecycle: ResourceSweepLifecycle::Continuous,
+            no_cleanup: false,
+            srt_crypto: HarnessSrtCrypto::plaintext(),
+            backend_policy_env: Vec::new(),
+            rtmps_tls: None,
+        }
+    }
+
+    #[test]
+    fn peer_instance_ports_offset_from_instance_zero() {
+        let env = test_env();
+        // Instance 0 always matches the pre-existing single-mediamtx ports.
+        assert_eq!(peer_instance_ports(&env, 0), (1936, 1937, 8891, 9997));
+        assert_eq!(peer_instance_ports(&env, 3), (1939, 1940, 8894, 10000));
+    }
+
+    #[test]
+    fn sink_peer_http_port_is_well_clear_of_mtx_api() {
+        let env = test_env();
+        assert_eq!(sink_peer_http_port(&env, 0), 11997);
+        assert_eq!(sink_peer_http_port(&env, 3), 12000);
+    }
+
+    #[test]
+    fn instance_suffixed_path_leaves_instance_zero_unchanged() {
+        let path = PathBuf::from("/work/msr-mediamtx.yml");
+        assert_eq!(instance_suffixed_path(&path, 0), path);
+        assert_eq!(
+            instance_suffixed_path(&path, 2),
+            PathBuf::from("/work/msr-mediamtx-2.yml")
+        );
+    }
+
+    #[test]
+    fn instance_suffixed_path_handles_extensionless_paths() {
+        let path = PathBuf::from("/work/mediamtx-log");
+        assert_eq!(
+            instance_suffixed_path(&path, 1),
+            PathBuf::from("/work/mediamtx-log-1")
+        );
+    }
 }

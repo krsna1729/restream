@@ -5,8 +5,8 @@ use std::sync::OnceLock;
 use serde::Deserialize;
 
 use super::super::{
-    HarnessSrtCrypto, default_restream_bin, default_work_db_path, env_secs, harness_port_defaults,
-    harness_srt_crypto_from_env,
+    HarnessSrtCrypto, default_restream_bin, default_work_db_path, env_secs, env_usize,
+    harness_port_defaults, harness_srt_crypto_from_env,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -41,6 +41,33 @@ impl ResourceSweepLifecycle {
     }
 }
 
+/// The peer process a resource-sweep (and, in particular, `msr`) stack
+/// publishes egress outputs into. `Mediamtx` (the default) preserves
+/// existing behavior for every resource-sweep scenario. `Sink` swaps in
+/// `restream` binaries running in `RESTREAM_SINK_MODE=1` — a minimal
+/// accept-and-discard listener with far lower per-connection memory than a
+/// full mediamtx pipeline — for scale runs where raw connection count
+/// matters more than a readable path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ResourceSweepPeer {
+    Mediamtx,
+    Sink,
+}
+
+impl ResourceSweepPeer {
+    fn from_env() -> Result<Self, String> {
+        match std::env::var("MSR_PEER")
+            .unwrap_or_else(|_| "mediamtx".to_string())
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "mediamtx" => Ok(Self::Mediamtx),
+            "sink" => Ok(Self::Sink),
+            other => Err(format!("MSR_PEER must be mediamtx or sink (got {other})")),
+        }
+    }
+}
+
 /// Environment and output paths for resource-sweep measurement runs.
 #[derive(Clone)]
 pub(super) struct ResourceSweepEnv {
@@ -60,6 +87,14 @@ pub(super) struct ResourceSweepEnv {
     pub(super) mtx_rtmps: u16,
     pub(super) mtx_srt: u16,
     pub(super) mtx_api: u16,
+    /// Number of peer (mediamtx or sink) instances distributed round-robin
+    /// across egress outputs by ordinal, one port range per instance
+    /// starting at `mtx_rtmp`/`mtx_srt`/`mtx_api`. `MTX_COUNT` (default 1)
+    /// keeps every other resource-sweep scenario on a single instance.
+    pub(super) mtx_count: usize,
+    /// `MSR_PEER` (default `mediamtx`): which process type backs the peer
+    /// instances above.
+    pub(super) peer_mode: ResourceSweepPeer,
     pub(super) sample_secs: u64,
     pub(super) sample_interval_ms: u64,
     pub(super) settle_secs: u64,
@@ -106,6 +141,8 @@ impl ResourceSweepEnv {
             mtx_rtmps: ports.mtx_rtmps,
             mtx_srt: ports.mtx_srt,
             mtx_api: ports.mtx_api,
+            mtx_count: env_usize("MTX_COUNT", 1).max(1),
+            peer_mode: ResourceSweepPeer::from_env()?,
             sample_secs: env_secs("RESOURCE_SWEEP_SAMPLE_SECS", 6),
             sample_interval_ms: env_secs("RESOURCE_SWEEP_SAMPLE_INTERVAL_MS", 1000),
             settle_secs: env_secs("RESOURCE_SWEEP_SETTLE_SECS", 4),

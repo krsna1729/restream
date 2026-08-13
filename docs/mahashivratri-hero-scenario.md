@@ -394,6 +394,48 @@ Names are provisional until the mode is implemented:
 | `MSR_PROGRESS_TIMEOUT_PER_OUTPUT_SECS` | `2` | Additional progress allowance per output |
 | `MSR_PROGRESS_TIMEOUT_CAP_SECS` | `900` | Maximum progress wait |
 | `MSR_NO_CLEANUP` | unset | Leave the final stack for inspection |
+| `MTX_COUNT` | `1` | Number of peer instances (`MTX_RTMP`/`MTX_SRT`/`MTX_API` + instance offset each); outputs distribute round-robin by ordinal (`ordinal % MTX_COUNT`) |
+| `MTX_SKIP_START` | unset | Peer instances are pre-started externally; the harness verifies all `MTX_COUNT` instances are live instead of spawning them |
+| `MSR_PEER` | `mediamtx` | `mediamtx` (default) or `sink` — see "Peer modes" below |
+| `MSR_SKIP_FFPROBE` | unset | Skip ffprobe read-back checks (always forced on when `MSR_PEER=sink`) |
+| `MSR_SINK_SAMPLE_SECS` | `3` | mediamtx path-health sample window before the resource-window sample |
+| `MSR_SINK_POST_SAMPLE_SECS` | `2` | mediamtx path-health sample window after the resource-window sample |
+| `MSR_SINK_TIMEOUT_SECS` | `60` | Timeout for mediamtx path-health verification (both windows above) |
+| `MSR_SINK_ENGINE_SAMPLE_SECS` | `2` | Engine-health bytesOut sample window used only when `MSR_PEER=sink` |
+
+### Peer modes (`MSR_PEER`)
+
+Every egress output publishes into a peer process the harness itself owns —
+this is the only supported way to run the 1,200-output scale test; peers are
+never expected to be started by hand outside `MTX_SKIP_START`.
+
+- **`mediamtx`** (default): `MTX_COUNT` mediamtx instances, each with its own
+  config/log file (instance 0 keeps the pre-existing `msr-mediamtx.yml`/`.log`
+  names; instance N>0 is suffixed `-N`). Each checkpoint's expected paths are
+  grouped by the instance the output actually published to and verified
+  against that instance's `/v3/paths/list`, then merged into one
+  `mediamtxPathHealth`/`mediamtxPostSamplePathHealth` aggregate in the
+  checkpoint JSON (with `MTX_COUNT=1`, the default, this is byte-identical to
+  the pre-multi-instance shape).
+- **`sink`**: `MTX_COUNT` `restream` processes running with
+  `RESTREAM_SINK_MODE=1` (see `docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`,
+  "Sink mode") in place of mediamtx — a minimal accept-and-discard listener
+  with far lower per-connection memory, for runs where raw connection count
+  matters more than a readable path. Readiness is a TCP/SRT listen-state
+  check on each instance's RTMP and SRT ports (no HTTP/health polling
+  needed to confirm the peer itself is up). Because a sink peer discards
+  data below the RTMP/SRT protocol layer, mediamtx path-health and ffprobe
+  read-back are skipped entirely; each checkpoint is instead verified from
+  restream's own `/api/v1/engine/health`: every expected output must be
+  present and its `bytesOut` must grow across `MSR_SINK_ENGINE_SAMPLE_SECS`.
+  The checkpoint JSON carries a `sinkVerification` object with
+  `outputsExpected`/`outputsPresent`/`bytesOutBefore`/`bytesOutAfter`/
+  `bytesOutDelta`/`packetsSentDrop` totals in place of `mediamtxPathHealth`.
+  Known limitation: the sink RTMP listener discards raw bytes without
+  completing the RTMP handshake, so RTMP-protocol outputs (95% of the
+  canonical mix) will not see `bytesOut` growth against a sink peer — `sink`
+  mode is currently only a clean pass for `MSR_PROTOCOL_MIX=srt-only` (or
+  mixes dominated by SRT) runs.
 
 ## Acceptance Contract
 

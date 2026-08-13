@@ -386,9 +386,16 @@ pub(super) fn spawn_msr_publisher(
     )
 }
 
+/// The peer instance (0-based) that receives output `ordinal`, matching the
+/// round-robin distribution `msr_output_url` publishes with. Shared by
+/// every place that needs to reach the same peer an output actually landed
+/// on: publish URL, read-back URL, and per-instance path-health grouping.
+pub(super) fn msr_peer_instance(ordinal: usize, mtx_count: usize) -> usize {
+    ordinal % mtx_count.max(1)
+}
+
 pub(super) fn msr_output_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> String {
-    let mtx_count = std::cmp::max(1, env_usize("MTX_COUNT", 1));
-    let instance = output.ordinal % mtx_count;
+    let instance = msr_peer_instance(output.ordinal, env.mtx_count);
     let rtmp_port = env.mtx_rtmp + instance as u16;
     let srt_port = env.mtx_srt + instance as u16;
     match output.protocol {
@@ -404,12 +411,36 @@ pub(super) fn msr_mediamtx_path(output: &MsrOutputSpec) -> String {
     }
 }
 
+/// Group `outputs`' expected mediamtx paths by the peer instance each
+/// output actually publishes to (see `msr_peer_instance`), sorted by
+/// instance index. With `mtx_count == 1` this always yields exactly one
+/// group covering every path, matching the pre-multi-instance behavior.
+pub(super) fn msr_group_expected_paths_by_instance(
+    outputs: &[MsrOutputSpec],
+    mtx_count: usize,
+) -> Vec<(usize, Vec<String>)> {
+    let mtx_count = mtx_count.max(1);
+    let mut groups: Vec<(usize, Vec<String>)> = Vec::new();
+    for output in outputs {
+        let instance = msr_peer_instance(output.ordinal, mtx_count);
+        match groups.iter_mut().find(|(index, _)| *index == instance) {
+            Some((_, paths)) => paths.push(msr_mediamtx_path(output)),
+            None => groups.push((instance, vec![msr_mediamtx_path(output)])),
+        }
+    }
+    groups.sort_unstable_by_key(|(index, _)| *index);
+    groups
+}
+
 pub(super) fn msr_read_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> String {
+    let instance = msr_peer_instance(output.ordinal, env.mtx_count);
+    let rtmp_port = env.mtx_rtmp + instance as u16;
+    let srt_port = env.mtx_srt + instance as u16;
     match output.protocol {
-        MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{}/live/{}", env.mtx_rtmp, output.name),
+        MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{rtmp_port}/live/{}", output.name),
         MsrProtocol::Srt => {
             let mut url =
-                harness_srt_ffmpeg_url(env.mtx_srt, &output.name, HarnessSrtMode::Read, None);
+                harness_srt_ffmpeg_url(srt_port, &output.name, HarnessSrtMode::Read, None);
             if let Some(secs) = std::env::var("MSR_SRT_READ_TIMEOUT_SECS")
                 .ok()
                 .and_then(|v| v.trim().parse::<u64>().ok())

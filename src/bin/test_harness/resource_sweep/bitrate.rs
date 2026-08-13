@@ -321,7 +321,7 @@ async fn run_bitrate_case(
     delete_resource_pipeline(&stack.api, &pipeline_id).await;
     if !env.no_cleanup {
         stop_child(&mut stack.restream).await;
-        stop_child(&mut stack.mediamtx).await;
+        stop_children(&mut stack.mediamtx).await;
     }
 
     summarize_bitrate_case(
@@ -406,7 +406,7 @@ async fn start_bitrate_sweep_stack(env: &BitrateSweepEnv) -> Result<ResourceSwee
     api.login().await?;
     let restream_pid = restream.id().ok_or("restream pid missing")?;
     Ok(ResourceSweepStack {
-        mediamtx,
+        mediamtx: vec![mediamtx],
         restream,
         api,
         restream_pid,
