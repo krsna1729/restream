@@ -37,6 +37,7 @@ Worktree: `.local/worktrees/msr-1080p-investigation`, branch
 - [What's fixed, what's evidenced-but-unproven, what's still open](#whats-fixed-whats-evidenced-but-unproven-whats-still-open)
 - [Real-1080p MSR envelope: residual intermittent zero-video failures (2026-08-12)](#real-1080p-msr-envelope-residual-intermittent-zero-video-failures-2026-08-12)
 - [2026-08-12 update: sink mode, 1,200-output scaling, command channel optimization](#2026-08-12-update-sink-mode-1200-output-scaling-command-channel-optimization)
+- [2026-08-13 update: ingest path exonerated, residual hole is egress-side](#2026-08-13-update-ingest-path-exonerated-residual-hole-is-egress-side)
 - [Artifact index](#artifact-index)
 
 ## Objective
@@ -652,6 +653,61 @@ peer-side probe can see (progress gates stay green on audio bytes alone).
   is a hot-path concurrency change requiring the full proof workflow
   (fast.sh contract gate, benchmark before/after, live harness fault case);
   recommended as the next backlog item.
+
+## 2026-08-13 update: ingest path exonerated, residual hole is egress-side
+
+### Direct instrumentation of the ingest-forward path
+
+Added `[ingest-fwd]` trace at `forward_ingest_packets()` entry that logs per-call
+video count + gate state. Ran instrumented msr n=30 (real 1080p+30A fixture) with
+`RUST_LOG=restream::media::srt::ingest_packets=info,...`:
+
+Result: **409 video-forward calls in ~16s = 25.6 fps** — continuous 25fps delivery
+with **zero inter-arrival gaps > 500ms**. Gate state = `active` on every call.
+Video=1 per call (one PES per `drain_into`), consistent with per-frame PES
+assembly completing at the next PUSI=1 (~40ms cadence).
+
+**Conclusion: the ingest path is NOT the root cause of the 1-3.5s video holes
+observed at the egress.** The source ring receives video at full frame rate
+continuously. Any video absence at an SRT or RTMP output must come from the
+egress side: feed-reader cursor issues, TsFeed/TS-muxer delivery jitter, SRT
+socket send-buffer backpressure, or shard-visit scheduling gaps.
+
+### Lifecycle benchmark
+
+Consolidated obsolete multi-file SRT benchmarks into a single
+`benches/srt_lifecycle.rs` (5c0a6d6). Models both raw-blocking client
+(RCVSYN=1,SNDSYN=1) and production fabric-egress nonblocking
+(RCVSYN=0,SNDSYN=0 after connect) setups.
+
+Key results (1200 connections, 3s send):
+- raw-blocking: 1195/1200 opened, 28MB sent, 18.52s elapsed
+  (each `srt_connect` blocks ~15ms for handshake on 8 workers)
+- egress-nonblocking: 1200/1200 opened, 2.6MB sent, 11.05s elapsed
+  (all `srt_connect` return immediately; 321/1200 handshakes complete
+  within window; 0 sender failures)
+
+Validates the fabric egress approach: nonblocking connect does not stall the
+caller thread, eliminating thundering-herd blocking at scale.
+
+### Open: egress-side investigation for residual hole
+
+Now that the ingest side is confirmed clean, the residual 1-3.5s video gap
+(observed as head_lag=0 with audio-only reads between GOP-sized video batches
+at the egress visit level) must be in:
+
+1. **TsFeed / TsChunkRing** — cursor tracking between the TS muxer writer and
+   the SRT leaf reader (separate from the source RingFeed whose cursor prime
+   fix is already landed).
+2. **SRT egress send backpressure** — TLPKTDROP on the send side, or
+   SRTO_SNDBUF filling up, silently discarding video while audio (which needs
+   less bandwidth) continues.
+3. **Shard visit scheduling** — the 25ms idle_wait between shard iterations
+   combined with event-gated re-visits (FeedWake from ring notifications) may
+   leave a leaf unvisited during a data burst.
+
+Recommended next step: add egress-side instrumentation to `TsFeed::read_from`
+and the SRT egress sender packet loop to measure actual per-output delivery.
 
 ## Artifact index
 
