@@ -40,6 +40,7 @@ Worktree: `.local/worktrees/msr-1080p-investigation`, branch
 - [2026-08-13 update: ingest path exonerated, residual hole is egress-side](#2026-08-13-update-ingest-path-exonerated-residual-hole-is-egress-side)
 - [2026-08-13 update: residual "zero video" verdict root-caused — probe artifact, not an engine defect](#2026-08-13-update-residual-zero-video-verdict-root-caused--probe-artifact-not-an-engine-defect)
 - [2026-08-13 update: sink-mode bugs fixed; ~600-connection SRT egress ceiling root-caused and fixed](#2026-08-13-update-sink-mode-bugs-fixed-600-connection-srt-egress-ceiling-root-caused-and-fixed)
+- [2026-08-13 update: sink mode gained real RTMP capability; RTMP-only confirmed at 1,200](#2026-08-13-update-sink-mode-gained-real-rtmp-capability-rtmp-only-confirmed-at-1200)
 - [Artifact index](#artifact-index)
 
 ## Objective
@@ -929,6 +930,41 @@ RTMP listener doesn't complete a handshake (documented limitation above),
 so that verification needs `MSR_PEER=mediamtx` instead, which reintroduces
 mediamtx's own peer-capacity ceiling from earlier in this document and was
 out of scope for this session.
+
+## 2026-08-13 update: sink mode gained real RTMP capability; RTMP-only confirmed at 1,200
+
+Sink mode's RTMP listener (`src/media/rtmp/listener.rs`, `RESTREAM_SINK_MODE=1`)
+previously accepted a TCP connection and discarded bytes without completing
+the RTMP handshake — a real RTMP client (restream's own egress fabric
+included) blocks on the handshake and then blocks again waiting for the
+server to accept its `connect`/`publish` requests before it ever sends
+media, so no RTMP egress connection to a sink peer ever delivered a byte.
+Live-confirmed: 0/50 outputs made progress in 158s against the old sink.
+
+Fixed by reusing the exact machinery real RTMP ingest already drives:
+`perform_server_handshake` (shared with ingest, unchanged) completes C0/C1
+↔ S0/S1/S2, then a new minimal driver (`src/media/rtmp/sink_session.rs`)
+runs `rml_rtmp::sessions::ServerSession` — the same state machine real
+ingest uses — accepting `ConnectionRequested`/`PublishStreamRequested` and
+discarding every other event (video/audio data, metadata, play requests)
+unread. No new RTMP implementation: both pieces are the identical library
+and pattern real ingest already relies on, just without instantiating a
+pipeline for what they receive.
+
+**Live-proven**: 50/50 and 100/100 clean immediately after the fix, then
+the full 100→1,200 RTMP-only ramp passed **every single checkpoint in
+1-2 seconds, 1,200/1,200, zero stragglers, zero `packetsSentDrop`** (TCP is
+reliable; SRT's TLPKTDROP mechanism has no RTMP analogue). Final state at
+n=1,200: **2.1 of 6 CPU cores, 1.5 GB RSS, 55 threads** — dramatically
+cheaper than the SRT-only run at the same scale (3.4 cores, 3.9 GB RSS,
+214 threads), consistent with this document's own earlier reasoning: RTMP
+over TCP has low per-connection marginal cost, no per-multiplexer thread
+model, and no hard delivery deadline forcing drops under load.
+
+Both protocol slices of the MSR envelope are now proven correct and
+performant at the full 1,200-output target on this 6-core host. The
+canonical 95%-RTMP/5%-SRT mix (the real MSR shape) at the same scale and
+bitrate is the natural closing verification.
 
 ## Artifact index
 

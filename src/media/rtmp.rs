@@ -15,6 +15,7 @@ mod ingest;
 mod ingest_packets;
 mod listener;
 mod play;
+mod sink_session;
 mod timestamps;
 
 pub use listener::{start_rtmp_server, start_rtmp_server_on};
