@@ -318,6 +318,7 @@ pub(crate) fn srt_resolve_completion_queue(
     (sender, SrtResolveCompletionQueue { receiver })
 }
 
+#[allow(dead_code)]
 pub(crate) fn spawn_srt_resolve_worker(
     request: SrtResolveRequest,
     completion_sender: SyncSender<SrtResolvedConnect>,
@@ -327,9 +328,7 @@ pub(crate) fn spawn_srt_resolve_worker(
     // (local sinks, peered restream instances) use IP addresses, so this
     // avoids 1,200 thread creations at scale — each thread costs ~2 MB of
     // virtual address space and a clone() syscall.
-    if request.peer_hosts.len() == 1
-        && request.peer_hosts[0].parse::<SocketAddr>().is_ok()
-    {
+    if request.peer_hosts.len() == 1 && request.peer_hosts[0].parse::<SocketAddr>().is_ok() {
         let result = resolve_srt_peer_hosts(request, completion_sender);
         return thread::spawn(move || result);
     }

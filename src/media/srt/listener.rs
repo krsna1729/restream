@@ -120,6 +120,67 @@ unsafe fn srt_listener_policy_callback_inner(
     0
 }
 
+/// Single-threaded sink discard loop: accepts SRT connections, adds them to
+/// a client list, and round-robins non-blocking reads. No per-connection
+/// threads, no epoll. Runs inside `spawn_blocking` in sink mode.
+fn sink_discard_loop(server_sock: SRTSOCKET) {
+    let mut clients: Vec<SRTSOCKET> = Vec::with_capacity(1024);
+    let mut idx = 0usize;
+    let mut buf = [0u8; 1316];
+    let mut accepted: u64 = 0;
+    let mut discarded: u64 = 0;
+    let mut closed: u64 = 0;
+    let mut last_log = std::time::Instant::now();
+    loop {
+        // Non-blocking accept
+        let mut client_sin = sockaddr_in {
+            sin_family: 0,
+            sin_port: 0,
+            sin_addr: 0,
+            sin_zero: [0; 8],
+        };
+        let mut len = std::mem::size_of::<sockaddr_in>() as c_int;
+        let client_sock = unsafe { srt_accept(server_sock, &mut client_sin, &mut len) };
+        if client_sock >= 0 {
+            clients.push(client_sock);
+            accepted += 1;
+            continue;
+        }
+        // Round-robin read from one client per iteration
+        if !clients.is_empty() {
+            idx %= clients.len();
+            let sock = clients[idx];
+            let n = unsafe { srt_recv(sock, buf.as_mut_ptr(), 1316) };
+            if n > 0 {
+                discarded += n as u64;
+                idx += 1;
+            } else {
+                unsafe {
+                    srt_close(sock);
+                }
+                clients.swap_remove(idx);
+                closed += 1;
+                if idx >= clients.len() && !clients.is_empty() {
+                    idx = 0;
+                }
+            }
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Periodic metrics
+        if last_log.elapsed().as_secs() >= 10 {
+            info!(
+                "[srt] SINK_MODE: clients={} accepted={} discarded={}MB closed={}",
+                clients.len(),
+                accepted,
+                discarded / (1024 * 1024),
+                closed,
+            );
+            last_log = std::time::Instant::now();
+        }
+    }
+}
+
 impl SrtServer {
     pub async fn run(self: Arc<Self>, port: u16) {
         // SINK_MODE: minimal discard listener — no pipeline, no auth, no ring.
@@ -169,6 +230,16 @@ impl SrtServer {
                     &reuse as *const _ as *const c_void,
                     std::mem::size_of::<c_int>() as c_int,
                 );
+                // Non-blocking accept so the discard loop can service
+                // existing clients and print metrics between accepts.
+                let sync: c_int = 0;
+                srt_setsockopt(
+                    server_sock,
+                    0,
+                    SRTO_RCVSYN,
+                    &sync as *const _ as *const c_void,
+                    std::mem::size_of::<c_int>() as c_int,
+                );
                 srt_bind(
                     server_sock,
                     &sin,
@@ -177,35 +248,30 @@ impl SrtServer {
                 srt_listen(server_sock, 1024);
             }
             info!("[srt] SINK_MODE: listening on {}", addr_str);
-            loop {
-                let mut client_sin = sockaddr_in {
-                    sin_family: 0,
-                    sin_port: 0,
-                    sin_addr: 0,
-                    sin_zero: [0; 8],
-                };
-                let mut len = std::mem::size_of::<sockaddr_in>() as c_int;
-                let client_sock = unsafe { srt_accept(server_sock, &mut client_sin, &mut len) };
-                if client_sock < 0 {
-                    // SAFETY: last SRT error is thread-local
-                    let err_ptr = unsafe { srt_getlasterror_str() };
-                    let err = unsafe { std::ffi::CStr::from_ptr(err_ptr) }.to_string_lossy();
-                    warn!("[srt] SINK_MODE: accept error: {}", err);
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                    continue;
+            // Spawn the blocking sink loop on tokio's blocking thread pool
+            // so we don't occupy a tokio worker. Inside, one tight loop
+            // accepts and round-robins non-blocking reads — no per-connection
+            // threads, no epoll, no spawn overhead.
+            tokio::task::spawn_blocking(move || {
+                if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    sink_discard_loop(server_sock);
+                })) {
+                    let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    error!("[srt] SINK_MODE: discard loop panicked: {}", msg);
                 }
-                std::thread::spawn(move || {
-                    let mut buf = [0u8; 1316];
-                    loop {
-                        let n = unsafe { srt_recv(client_sock, buf.as_mut_ptr(), 1316) };
-                        if n <= 0 {
-                            break;
-                        }
-                    }
-                    unsafe {
-                        srt_close(client_sock);
-                    }
-                });
+            });
+            // Keep the async function alive until the server shuts down.
+            // Without this, the outer `run` returns immediately and the
+            // SRT listener task exits — which is treated as a critical
+            // failure and triggers server shutdown.
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             }
         }
 

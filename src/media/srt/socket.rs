@@ -187,6 +187,18 @@ pub(super) fn srt_set_egress_opts(sock: SRTSOCKET, opts: &EgressBufferOpts) {
     // option values with valid SRT socket handles. The buffer sizes, flow
     // control window, and latency values are within platform limits.
     unsafe {
+        // Set LIVE transmission type so the egress socket can connect to
+        // sink-mode peers that require LIVE mode (SRTO_TRANSTYPE=SRTT_LIVE).
+        // Without this, clients default to a non-LIVE mode and the SRT
+        // handshake fails with MESSAGEAPI reject on the sink side.
+        let live_mode: c_int = SRTT_LIVE;
+        srt_setsockopt(
+            sock,
+            0,
+            SRTO_TRANSTYPE,
+            &live_mode as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as c_int,
+        );
         let latency: c_int = opts.latency_ms;
         srt_setsockopt(
             sock,

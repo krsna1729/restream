@@ -142,6 +142,9 @@ harness = false
 [[bench]]
 name = "input_gate"
 harness = false
+[[bench]]
+name = "srt_lifecycle"
+harness = false
 
 [profile.dev]
 incremental = true
