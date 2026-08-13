@@ -189,6 +189,12 @@ surface already covers it.
   - `health_snapshot_surfaces_flapping_after_repeated_egress_recoveries`
   - `output_status_surfaces_retry_backoff_after_failure`
   - `prop_egress_lifecycle_preserves_runtime_and_health_invariants`
+- `src/media/egress/visit.rs`
+  - `first_visit_primes_the_cursor_to_the_latest_sync_point`
+  - `first_visit_primes_to_the_live_edge_without_a_sync_point`
+  - `first_visit_primes_the_cursor_epoch_from_the_feed`
+  - `fresh_leaf_first_visit_starts_at_the_retained_keyframe_not_sequence_zero`
+  - `fresh_leaf_first_visit_starts_at_the_live_edge_when_no_keyframe_is_retained`
 - `src/media/avio.rs`
   - close/wake/backpressure loom coverage in `tests/avio_loom.rs`
   - `media::avio::tests`

@@ -288,6 +288,14 @@ Cursors do not pin retained entries. If a cursor falls behind
 `oldest_sequence`, the feed reports overrun. The leaf then follows the common
 resynchronization policy instead of forcing the feed to grow.
 
+A leaf has no feed handle at construction, so its cursor starts as a
+placeholder and is anchored on the leaf's first visit — and again when a
+protocol reports handshake completion, since handshake states never read the
+feed. Both the initial anchor and every resynchronization target the same live
+start position: the latest retained sync point, or the feed head when no sync
+point is retained. Never `oldest_sequence`, which is the largest backward jump
+the feed allows and leaves the leaf a full retention window behind live.
+
 Feed epochs change when a discontinuity invalidates old cursors, such as a
 source replacement or preparation-stage restart. An epoch mismatch is handled
 as a resynchronization event.

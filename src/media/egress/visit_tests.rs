@@ -176,6 +176,7 @@ fn resynchronizes_and_records_overrun_instead_of_closing() {
     feed.push(bytes::Bytes::from_static(b"sync"), true);
     let sync_point = feed.latest_sync_point().expect("keyframe was pushed");
     let mut common = common(2);
+    common.cursor_primed = true; // already running; not a first-visit prime
     common.cursor = FeedCursor::new(0, 999); // stale position past the overrun boundary
     let resync_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     common.progress_sink.resync_count = Some(resync_count.clone());
@@ -208,10 +209,22 @@ fn resynchronizes_and_records_overrun_instead_of_closing() {
     assert_eq!(resync_count.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
+/// Without a retained sync point the resync target is the live edge, *not*
+/// `oldest_sequence`. Rewinding to the oldest retained sequence is the largest
+/// backward jump the feed allows: it lands mid-GOP, one publish away from
+/// being overwritten again, and leaves the leaf a full retention window behind
+/// live — which on SRT is silently dropped by `TLPKTDROP` instead of
+/// delivered. This mirrors `RingBuffer::fast_forward`, which returns the write
+/// index when no keyframe is retained.
 #[test]
-fn resync_falls_back_to_oldest_sequence_without_a_sync_point() {
+fn resync_falls_back_to_the_live_edge_without_a_sync_point() {
     let feed = FakeFeed::new();
+    for _ in 0..40 {
+        feed.push_str("unit", false); // no sync points at all
+    }
+    feed.set_overrun_at(32); // oldest retained = 32, head = 40
     let mut common = common(2);
+    common.cursor_primed = true; // already running; not a first-visit prime
     common.cursor = FeedCursor::new(0, 999);
     let mut engine = FakeEngine::new(vec![EngineScript::FeedOverrun]);
     let mut transport = FakeTransport::default();
@@ -230,8 +243,9 @@ fn resync_falls_back_to_oldest_sequence_without_a_sync_point() {
     assert!(matches!(result, EngineVisitResult::Visited(_)));
     assert_eq!(
         common.cursor,
-        FeedCursor::new(feed.epoch(), feed.oldest_sequence())
+        FeedCursor::new(feed.epoch(), feed.head_sequence())
     );
+    assert_ne!(common.cursor.next_sequence, feed.oldest_sequence());
 }
 
 #[test]
@@ -292,8 +306,205 @@ fn ignores_stale_generation_without_touching_engine_or_common_state() {
     assert!(matches!(result, EngineVisitResult::StaleGeneration));
     assert!(common.schedule.enqueued);
     assert_eq!(common.cursor, FeedCursor::new(0, 0));
+    // A rejected visit must not consume the one-shot cursor priming either:
+    // the leaf still has to be anchored by whichever visit actually runs.
+    assert!(!common.cursor_primed);
     assert_eq!(engine.advance_calls, 0);
     assert_eq!(transport.bytes_written, 0);
+}
+
+/// The gap this closes: every leaf was constructed with `FeedCursor::new(0, 0)`
+/// and nothing moved it before the first read, so on any established pipeline
+/// — where the feed head is already far past the retention window — the first
+/// read of every new leaf was a guaranteed `FeedRead::Overrun`, recovered from
+/// whatever position the overrun handler happened to pick. Priming makes the
+/// first read start from a valid live position instead.
+#[test]
+fn first_visit_primes_the_cursor_to_the_latest_sync_point() {
+    let feed = FakeFeed::new();
+    for seq in 0..40 {
+        feed.push_str("unit", seq % 10 == 0); // sync points at 0, 10, 20, 30
+    }
+    feed.set_overrun_at(32); // oldest retained = 32, head = 40
+    let mut common = common(1);
+    assert_eq!(common.cursor, FeedCursor::new(0, 0));
+    assert!(!common.cursor_primed);
+    // `Needs` leaves the cursor alone, so what is asserted below is purely
+    // the priming step, not anything the engine did.
+    let mut engine = FakeEngine::new(vec![EngineScript::Needs(WaitCondition::Feed)]);
+    let mut transport = FakeTransport::default();
+
+    let result = EngineVisit {
+        generation: 1,
+        common: &mut common,
+        engine: &mut engine,
+        transport: &mut transport,
+        readiness: Readiness::WRITABLE,
+        feed: &feed,
+        budget: budget(),
+    }
+    .run();
+
+    assert!(matches!(result, EngineVisitResult::Visited(_)));
+    assert_eq!(common.cursor, feed.latest_sync_point().expect("sync point"));
+    assert_eq!(common.cursor.next_sequence, 30);
+    assert!(common.cursor_primed);
+    // Priming is not a failure: it must not be accounted as an overrun.
+    assert_eq!(common.progress.overrun_count, 0);
+}
+
+/// A leaf created against a feed with no retained sync point (audio-only, or a
+/// GOP longer than the retention window — the common case for a small
+/// high-bitrate TS ring) starts at the live edge, never at `oldest_sequence`.
+#[test]
+fn first_visit_primes_to_the_live_edge_without_a_sync_point() {
+    let feed = FakeFeed::new();
+    for _ in 0..40 {
+        feed.push_str("unit", false);
+    }
+    feed.set_overrun_at(32); // oldest retained = 32, head = 40
+    let mut common = common(1);
+    let mut engine = FakeEngine::new(vec![EngineScript::Needs(WaitCondition::Feed)]);
+    let mut transport = FakeTransport::default();
+
+    let result = EngineVisit {
+        generation: 1,
+        common: &mut common,
+        engine: &mut engine,
+        transport: &mut transport,
+        readiness: Readiness::WRITABLE,
+        feed: &feed,
+        budget: budget(),
+    }
+    .run();
+
+    assert!(matches!(result, EngineVisitResult::Visited(_)));
+    assert_eq!(common.cursor, FeedCursor::new(0, 40));
+    assert_ne!(common.cursor.next_sequence, feed.oldest_sequence());
+}
+
+/// Priming reads the feed's current epoch, so a leaf created before an epoch
+/// bump does not start with a stale epoch and burn its first read on an
+/// `EpochMismatch`.
+#[test]
+fn first_visit_primes_the_cursor_epoch_from_the_feed() {
+    let feed = FakeFeed::new();
+    feed.push_str("kf", true);
+    feed.advance_epoch();
+    let mut common = common(1);
+    let mut engine = FakeEngine::new(vec![EngineScript::Needs(WaitCondition::Feed)]);
+    let mut transport = FakeTransport::default();
+
+    let result = EngineVisit {
+        generation: 1,
+        common: &mut common,
+        engine: &mut engine,
+        transport: &mut transport,
+        readiness: Readiness::WRITABLE,
+        feed: &feed,
+        budget: budget(),
+    }
+    .run();
+
+    assert!(matches!(result, EngineVisitResult::Visited(_)));
+    assert_eq!(common.cursor.epoch, 1);
+}
+
+/// Priming is one-shot: once a leaf is reading, later visits must never rewind
+/// it to the feed's sync point, or a leaf on a keyframe-dense feed would
+/// re-anchor forward on every visit and drop everything in between.
+#[test]
+fn later_visits_do_not_re_prime_a_progressing_leaf() {
+    let feed = FakeFeed::new();
+    feed.push_str("kf", true);
+    let mut common = common(1);
+    let mut engine = FakeEngine::new(vec![
+        EngineScript::Progress {
+            bytes: 2,
+            units: 1,
+            wait: WaitCondition::Feed,
+        },
+        EngineScript::Needs(WaitCondition::Feed),
+    ]);
+    let mut transport = FakeTransport::default();
+
+    for _ in 0..2 {
+        // Between visits the feed publishes a new sync point; a re-prime
+        // would jump the cursor forward to it and skip unsent units.
+        let result = EngineVisit {
+            generation: 1,
+            common: &mut common,
+            engine: &mut engine,
+            transport: &mut transport,
+            readiness: Readiness::WRITABLE,
+            feed: &feed,
+            budget: budget(),
+        }
+        .run();
+        assert!(matches!(result, EngineVisitResult::Visited(_)));
+        feed.push_str("kf", true);
+    }
+
+    // Primed to sync point 0, then advanced by exactly the one unit the
+    // engine reported — not re-anchored to the newer sync point.
+    assert_eq!(common.cursor, FeedCursor::new(0, 1));
+}
+
+/// Handshake and negotiation states never read the feed, so the anchor taken
+/// on the first visit ages across the whole connect/handshake round trip. The
+/// transition into a media-capable state re-anchors rather than handing the
+/// publisher a cursor that is already behind live.
+#[test]
+fn handshake_completion_re_anchors_the_cursor_to_the_live_start() {
+    let feed = FakeFeed::new();
+    feed.push_str("kf", true);
+    let mut common = common(1);
+    let mut engine = FakeEngine::new(vec![
+        EngineScript::Needs(WaitCondition::Io(Interest::WRITE)),
+        EngineScript::HandshakeComplete,
+    ]);
+    let mut transport = FakeTransport::default();
+
+    // First visit: primed at sequence 0 while still handshaking.
+    let first = EngineVisit {
+        generation: 1,
+        common: &mut common,
+        engine: &mut engine,
+        transport: &mut transport,
+        readiness: Readiness::WRITABLE,
+        feed: &feed,
+        budget: budget(),
+    }
+    .run();
+    assert!(matches!(first, EngineVisitResult::Visited(_)));
+    assert_eq!(common.cursor, FeedCursor::new(0, 0));
+
+    // The feed moves on while the handshake is still in flight.
+    for _ in 0..8 {
+        feed.push_str("unit", false);
+    }
+    feed.push_str("kf", true);
+
+    let second = EngineVisit {
+        generation: 1,
+        common: &mut common,
+        engine: &mut engine,
+        transport: &mut transport,
+        readiness: Readiness::WRITABLE,
+        feed: &feed,
+        budget: budget(),
+    }
+    .run();
+
+    let EngineVisitResult::Visited(outcome) = second else {
+        panic!("expected visit");
+    };
+    assert!(matches!(
+        outcome.progress,
+        EngineProgress::HandshakeComplete
+    ));
+    assert_eq!(common.cursor, feed.latest_sync_point().expect("sync point"));
+    assert_eq!(common.cursor.next_sequence, 9);
 }
 
 #[test]

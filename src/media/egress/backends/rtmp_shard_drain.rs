@@ -95,7 +95,15 @@ where
 
         let head_sequence = self.feed.head_sequence();
         for leaf in self.leaves.iter_mut().flatten() {
-            let lag_units = head_sequence.saturating_sub(leaf.common.cursor.next_sequence);
+            // A leaf that has not been visited yet still holds the
+            // placeholder cursor, so `head - cursor` would report the whole
+            // feed as lag rather than a real measurement. It is not behind:
+            // it has not started.
+            let lag_units = if leaf.common.cursor_primed {
+                head_sequence.saturating_sub(leaf.common.cursor.next_sequence)
+            } else {
+                0
+            };
             let reason = match leaf.observe_stall(now) {
                 LeafStallClass::Idle => None,
                 LeafStallClass::Backpressured => Some("backpressured"),

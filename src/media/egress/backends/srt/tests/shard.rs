@@ -930,7 +930,10 @@ fn feed_wake_drives_connected_leaf_to_send_on_shard_thread() {
 
     handle.shutdown_and_join();
     let sends = probe.sends.lock().unwrap();
-    assert_eq!(&*sends[0], b"payload-1".as_slice());
+    // Both chunks in this feed are keyframes, and a fresh leaf is primed onto
+    // the newest retained sync point before its first read, so it starts at
+    // `payload-2` rather than replaying the already-published `payload-1`.
+    assert_eq!(&*sends[0], b"payload-2".as_slice());
 
     // Status publication: the shard published progress into the
     // application-side counters without any app-thread involvement.
