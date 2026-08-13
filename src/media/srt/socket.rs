@@ -67,7 +67,7 @@ pub(super) fn enable_srt_group_connect(listener: SRTSOCKET) -> Result<(), String
     }
 }
 
-pub(super) fn check_sysctl_limits() {
+pub(super) fn check_sysctl_limits(udp_buf: i32) {
     let check = |path: &str, need: usize, label: &str| {
         if let Ok(s) = std::fs::read_to_string(path)
             && let Ok(val) = s.trim().parse::<usize>()
@@ -82,17 +82,17 @@ pub(super) fn check_sysctl_limits() {
     };
     check(
         "/proc/sys/net/core/rmem_max",
-        DESIRED_UDP_BUF as usize,
+        udp_buf as usize,
         "net.core.rmem_max",
     );
     check(
         "/proc/sys/net/core/wmem_max",
-        DESIRED_UDP_BUF as usize,
+        udp_buf as usize,
         "net.core.wmem_max",
     );
 }
 
-pub(super) fn srt_set_highbitrate_opts(sock: SRTSOCKET) {
+pub(super) fn srt_set_highbitrate_opts(sock: SRTSOCKET, udp_buf: i32) {
     // SAFETY: All srt_setsockopt calls use correctly-sized stack-allocated
     // option values with valid SRT socket handles. The UDP/SRT buffer sizes,
     // flow control window, and latency values are within platform limits.
@@ -115,7 +115,6 @@ pub(super) fn srt_set_highbitrate_opts(sock: SRTSOCKET) {
             std::mem::size_of::<c_int>() as c_int,
         );
 
-        let udp_buf: c_int = DESIRED_UDP_BUF;
         srt_setsockopt(
             sock,
             0,

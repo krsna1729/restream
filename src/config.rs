@@ -267,8 +267,11 @@ pub struct AppConfig {
     pub hls_max_segments: usize,
     pub recording_threads: Option<u32>,
     pub ts_ring_capacity: usize,
+    pub ring_headroom_secs: f64,
     pub ring_capacity: usize,
     pub transcoder_ring_capacity: usize,
+    pub srt_udp_buffer: usize,
+    pub sink_mode: bool,
     pub require_srt_bonding: bool,
     pub external_ffmpeg_permits: usize,
     pub ffmpeg_bin_path: Option<String>,
@@ -560,8 +563,11 @@ impl Default for AppConfig {
             hls_max_segments: 20,
             recording_threads: None,
             ts_ring_capacity: 256,
+            ring_headroom_secs: 6.0,
             ring_capacity: 1024,
             transcoder_ring_capacity: 512,
+            sink_mode: false,
+            srt_udp_buffer: 8 * 1024 * 1024,
             require_srt_bonding: false,
             external_ffmpeg_permits: derived_permits,
             ffmpeg_bin_path: None,
@@ -621,9 +627,17 @@ impl AppConfig {
             .ok()
             .and_then(|v| v.parse::<u32>().ok());
         let ts_ring_capacity = env_usize("RESTREAM_TS_RING_CAPACITY", 256).clamp(32, 16384);
+        let ring_headroom_secs = std::env::var("RESTREAM_RING_HEADROOM_SECS")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(6.0)
+            .clamp(0.1, 60.0);
         let ring_capacity = env_usize("RESTREAM_RING_CAPACITY", 1024).clamp(64, 16384);
         let transcoder_ring_capacity =
             env_usize("RESTREAM_TRANSCODER_RING_CAPACITY", 512).clamp(64, 16384);
+        let srt_udp_buffer =
+            env_usize("RESTREAM_SRT_UDP_BUFFER", 8 * 1024 * 1024).clamp(65536, 268_435_456);
+        let sink_mode = std::env::var_os("RESTREAM_SINK_MODE").is_some();
         let require_srt_bonding = std::env::var_os("RESTREAM_REQUIRE_SRT_BONDING").is_some();
         let ffmpeg_bin_path = std::env::var("FFMPEG_BIN_PATH").ok();
         let log_dir =
@@ -697,8 +711,11 @@ impl AppConfig {
             hls_max_segments,
             recording_threads,
             ts_ring_capacity,
+            ring_headroom_secs,
             ring_capacity,
             transcoder_ring_capacity,
+            sink_mode,
+            srt_udp_buffer,
             require_srt_bonding,
             external_ffmpeg_permits: permits,
             ffmpeg_bin_path,
@@ -781,10 +798,13 @@ impl AppConfig {
                 "hlsSegmentCapacityBytes": self.hls_segment_capacity_bytes,
                 "hlsMaxSegments": self.hls_max_segments,
                 "tsRingCapacity": self.ts_ring_capacity,
+                "ringHeadroomSecs": self.ring_headroom_secs,
                 "ringCapacity": self.ring_capacity,
                 "transcoderRingCapacity": self.transcoder_ring_capacity,
             },
+            "sinkMode": self.sink_mode,
             "srt": {
+                "udpBuffer": self.srt_udp_buffer,
                 "requireBonding": self.require_srt_bonding,
                 "passphraseConfigured": self.srt_passphrase.is_some(),
                 "pbkeylen": self.srt_pbkeylen,
