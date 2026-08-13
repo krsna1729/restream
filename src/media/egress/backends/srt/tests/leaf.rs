@@ -1,6 +1,6 @@
 use super::super::*;
-use super::support::{budget, common, feed, leaf};
-use crate::media::egress::backend::{EngineProgress, Readiness};
+use super::support::{budget, common, feed, leaf, wrapped_feed};
+use crate::media::egress::backend::{EngineProgress, Readiness, WaitCondition};
 use crate::media::egress::scheduler::VisitDecision;
 use crate::media::egress::visit::EngineVisitResult;
 use crate::media::srt::SrtTraceBStats;
@@ -54,6 +54,64 @@ fn srt_fabric_leaf_ignores_stale_ready_generation() {
     assert!(matches!(result, EngineVisitResult::StaleGeneration));
     assert_eq!(leaf.common().cursor.next_sequence, 0);
     assert_eq!(leaf.common().progress.total_bytes_sent, 0);
+}
+
+/// The gap this closes, on the production `TsFeed` rather than a fake: an SRT
+/// leaf added to a pipeline that has been running for a while starts against a
+/// ring whose head is far past sequence 0. Every such leaf used to begin at
+/// `(0, 0)`, so its first read was a guaranteed `FeedRead::Overrun` — one
+/// resync WARN per leaf at startup, recovering from a position it should never
+/// have held. The leaf must instead be primed onto the newest retained
+/// keyframe and send from there.
+#[test]
+fn fresh_leaf_first_visit_starts_at_the_retained_keyframe_not_sequence_zero() {
+    // 40 chunks through a capacity-8 ring: retained window is [32, 40), and
+    // the newest retained keyframe is sequence 35.
+    let feed = wrapped_feed(40, 5);
+    let mut leaf = leaf(7);
+
+    let result = leaf.visit_ready(7, Readiness::WRITABLE, &feed, budget());
+
+    let EngineVisitResult::Visited(outcome) = result else {
+        panic!("expected SRT fabric visit");
+    };
+    assert!(
+        !matches!(outcome.progress, EngineProgress::FeedOverrun),
+        "a freshly primed leaf must not overrun on its very first read"
+    );
+    assert_eq!(leaf.common().progress.overrun_count, 0);
+    assert_eq!(
+        leaf.transport_mut()
+            .sends()
+            .first()
+            .map(|sent| sent.as_ref()),
+        Some(b"chunk-35".as_ref()),
+        "leaf should send from the newest retained keyframe"
+    );
+}
+
+/// Same first-visit path when no keyframe is retained (the newest one has
+/// already aged out of the window): the leaf starts at the live edge and waits
+/// for the feed, rather than rewinding to `oldest_sequence` and running a full
+/// retention window behind live.
+#[test]
+fn fresh_leaf_first_visit_starts_at_the_live_edge_when_no_keyframe_is_retained() {
+    // Only sequence 0 is a keyframe, and it aged out 32 sequences ago.
+    let feed = wrapped_feed(40, 1_000);
+    let mut leaf = leaf(7);
+
+    let result = leaf.visit_ready(7, Readiness::WRITABLE, &feed, budget());
+
+    let EngineVisitResult::Visited(outcome) = result else {
+        panic!("expected SRT fabric visit");
+    };
+    assert!(matches!(
+        outcome.progress,
+        EngineProgress::Needs(WaitCondition::Feed)
+    ));
+    assert_eq!(leaf.common().progress.overrun_count, 0);
+    assert_eq!(leaf.common().cursor.next_sequence, 40);
+    assert!(leaf.transport_mut().sends().is_empty());
 }
 
 #[test]

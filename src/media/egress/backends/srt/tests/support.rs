@@ -25,6 +25,12 @@ pub(super) struct FakeSender {
     pub(super) quality_stats: Option<SrtTraceBStats>,
 }
 
+impl FakeSender {
+    pub(super) fn sends(&self) -> &[Bytes] {
+        &self.sends
+    }
+}
+
 impl SrtMessageSender for FakeSender {
     fn send_message(&mut self, message: &Bytes) -> SrtSendResult {
         self.sends.push(message.clone());
@@ -277,6 +283,24 @@ pub(super) fn feed(chunks: impl IntoIterator<Item = Bytes>) -> TsFeed {
     let ring = TsChunkRing::new(8, CancellationToken::new());
     for chunk in chunks {
         ring.push(chunk, true);
+    }
+    TsFeed::new(&ring, Arc::new(FeedEpoch::new()))
+}
+
+/// A `TsFeed` whose ring has already wrapped, like every feed an output is
+/// added to on an established pipeline: `total_chunks` pushed through a
+/// capacity-8 ring, so only the last 8 sequences are still retained. Chunk
+/// payloads are `chunk-<sequence>` so a test can assert exactly where a leaf
+/// started reading; every `keyframe_every`-th chunk is a keyframe (pass a
+/// value larger than `total_chunks` for a feed whose only keyframe has
+/// already aged out of the retention window).
+pub(super) fn wrapped_feed(total_chunks: u64, keyframe_every: u64) -> TsFeed {
+    let ring = TsChunkRing::new(8, CancellationToken::new());
+    for sequence in 0..total_chunks {
+        ring.push(
+            Bytes::from(format!("chunk-{sequence}")),
+            sequence % keyframe_every == 0,
+        );
     }
     TsFeed::new(&ring, Arc::new(FeedEpoch::new()))
 }

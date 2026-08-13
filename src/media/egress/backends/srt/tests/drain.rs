@@ -172,3 +172,39 @@ fn shutdown_marks_every_connected_leaf_draining() {
     assert!(leaf.draining_since.is_some());
     assert_eq!(leaf.draining_reason, Some(CloseReason::ShardShutdown));
 }
+
+/// `feed_lag_units` is a measurement of how far behind a *reading* leaf is.
+/// A leaf that has not been visited yet still holds the placeholder cursor,
+/// so subtracting it from the head would publish the entire feed length as
+/// lag — a leaf that is connecting, on a pipeline that has been running for
+/// an hour, would look catastrophically behind while doing nothing wrong.
+#[test]
+fn stall_sweep_reports_no_feed_lag_for_a_leaf_that_has_not_been_visited_yet() {
+    use super::support::wrapped_feed;
+
+    let mut backend = SrtShardBackend::with_socket_configurator(
+        FakeReadinessPoller::default(),
+        wrapped_feed(40, 5),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+        FakeSocketConfigurator::default(),
+    );
+    let feed_lag_units = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+    let leaf = SrtFabricLeaf::new(
+        common(7).with_progress_sink(crate::media::egress::leaf::EgressProgressSink {
+            feed_lag_units: Some(feed_lag_units.clone()),
+            ..Default::default()
+        }),
+        Box::new(ControllableSender {
+            native_backlog: Arc::new(Mutex::new(None)),
+        }) as Box<dyn SrtMessageSender + Send>,
+    );
+    backend.add_leaf(42, leaf).unwrap();
+
+    backend.sweep_stalled_leaves(Instant::now());
+
+    assert_eq!(
+        feed_lag_units.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "an unvisited leaf has not started reading, so it is not behind"
+    );
+}

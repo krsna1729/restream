@@ -149,6 +149,16 @@ pub struct LeafCommon {
     pub feed: FeedId,
     /// Current read position in the feed.
     pub cursor: FeedCursor,
+    /// Whether [`cursor`](Self::cursor) has been anchored to a real feed
+    /// position yet. A freshly constructed leaf has no feed handle (the feed
+    /// is owned by the shard and only borrowed per visit), so its cursor
+    /// starts at the placeholder `(0, 0)`; `EngineVisit::run` primes it to a
+    /// live start point on the first visit and sets this flag. Without the
+    /// flag the leaf would begin reading at sequence 0 — on any established
+    /// pipeline that is hundreds of units behind the feed head, so the first
+    /// read overruns and the leaf resynchronizes from a stale position it
+    /// should never have been at.
+    pub cursor_primed: bool,
     /// Current lifecycle state.
     pub lifecycle: LeafLifecycle,
     /// Scheduler visibility and deficit accounting.
@@ -307,6 +317,7 @@ impl LeafCommon {
             generation,
             feed,
             cursor: FeedCursor::new(0, 0),
+            cursor_primed: false,
             lifecycle: LeafLifecycle::Created,
             schedule: ScheduleState::new(),
             deadlines: LeafDeadlines::none(),

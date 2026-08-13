@@ -166,6 +166,7 @@ above remain the better way to learn the system.
 - [Quality journal](agent-guidance/quality/journal.md)
 - [MSR final report — 2026-07-12](agent-guidance/quality/msr-final-report-2026-07-12.md)
 - [RTMP egress experiments — 2026-07-13](agent-guidance/quality/rtmp-egress-experiments-2026-07-13.md)
+- [SRT egress correctness-at-scale investigation — 2026-08-10](agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md)
 
 ### Canonical agent skills and references
 
