@@ -37,6 +37,7 @@ impl SrtResolveWorkerSet {
         }
     }
 
+    #[allow(dead_code)]
     fn spawn(&mut self, request: SrtResolveRequest) {
         self.workers.push(spawn_srt_resolve_worker(
             request,
