@@ -114,8 +114,17 @@ fn validate_msr_ffprobe_sample(output: &MsrOutputSpec, probe: &Value) -> Result<
     }
     let video_index = video_stream["index"].as_i64().unwrap_or(0);
     let mut video_packets = 0usize;
-    let mut last_dts = None;
+    let mut last_dts: Option<f64> = None;
+    let mut first_any_pts: Option<f64> = None;
+    let mut first_video_pts: Option<f64> = None;
+    let mut max_video_gap: f64 = 0.0;
     for packet in probe["packets"].as_array().into_iter().flatten() {
+        let pts = packet["pts_time"]
+            .as_str()
+            .and_then(|value| value.parse::<f64>().ok());
+        if first_any_pts.is_none() {
+            first_any_pts = pts;
+        }
         if packet["stream_index"].as_i64() != Some(video_index) {
             continue;
         }
@@ -125,13 +134,17 @@ fn validate_msr_ffprobe_sample(output: &MsrOutputSpec, probe: &Value) -> Result<
         else {
             continue;
         };
-        if let Some(previous) = last_dts
-            && dts < previous
-        {
-            return Err(format!(
-                "{} ffprobe observed non-monotone video DTS ({previous} -> {dts})",
-                output.name
-            ));
+        if let Some(previous) = last_dts {
+            if dts < previous {
+                return Err(format!(
+                    "{} ffprobe observed non-monotone video DTS ({previous} -> {dts})",
+                    output.name
+                ));
+            }
+            max_video_gap = max_video_gap.max(dts - previous);
+        }
+        if first_video_pts.is_none() {
+            first_video_pts = pts;
         }
         last_dts = Some(dts);
         video_packets += 1;
@@ -142,10 +155,30 @@ fn validate_msr_ffprobe_sample(output: &MsrOutputSpec, probe: &Value) -> Result<
             output.name
         ));
     }
+    // The reader-side peer (mediamtx) forwards video to a fresh reader only
+    // from the next IDR, so the first video packet arrives up to one full GOP
+    // (plus connect jitter) after audio starts — that leading wait is the
+    // publisher's GOP structure, not an egress defect. The correctness signal
+    // is continuity *after* video starts: a real delivery hole (e.g. libsrt
+    // TLPKTDROP starving the large fragmented video PES while small audio
+    // messages survive) shows up as a multi-second inter-packet DTS gap.
+    let max_gap_budget = env_secs("MSR_FFPROBE_MAX_VIDEO_GAP_SECS", 2) as f64;
+    if max_video_gap > max_gap_budget {
+        return Err(format!(
+            "{} ffprobe observed a {max_video_gap:.2}s video delivery gap (budget {max_gap_budget:.2}s)",
+            output.name
+        ));
+    }
+    let first_video_offset = match (first_any_pts, first_video_pts) {
+        (Some(any), Some(video)) => Some(video - any),
+        _ => None,
+    };
     Ok(json!({
         "videoCodec": video_codec,
         "audioStreams": audio_streams,
         "videoPackets": video_packets,
+        "firstVideoOffsetSecs": first_video_offset,
+        "maxVideoGapSecs": max_video_gap,
     }))
 }
 
@@ -156,7 +189,13 @@ pub(super) async fn run_msr_ffprobe_checkpoint(
 ) -> Result<Vec<Value>, String> {
     let sample_count = msr_ffprobe_sample_count(outputs.len());
     let seed = msr_ffprobe_seed();
-    let duration = env_secs("MSR_FFPROBE_SAMPLE_SECS", 5);
+    // The window must cover the publisher's worst-case keyframe interval:
+    // the read-side peer gates a fresh reader's video on the next IDR, and
+    // the interval clock starts at the first (audio) packet, so a window
+    // shorter than one GOP intermittently contains zero video packets on a
+    // perfectly healthy stream (live-measured: first video 0.6-5.3s after
+    // attach at a 3-4.2s GOP, continuous ever after).
+    let duration = env_secs("MSR_FFPROBE_SAMPLE_SECS", 12);
     let probesize = std::env::var("MSR_FFPROBE_PROBESIZE").unwrap_or_else(|_| "10M".to_string());
     let analyzeduration =
         std::env::var("MSR_FFPROBE_ANALYZEDURATION").unwrap_or_else(|_| "10M".to_string());

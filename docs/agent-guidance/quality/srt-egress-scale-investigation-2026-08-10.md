@@ -38,6 +38,7 @@ Worktree: `.local/worktrees/msr-1080p-investigation`, branch
 - [Real-1080p MSR envelope: residual intermittent zero-video failures (2026-08-12)](#real-1080p-msr-envelope-residual-intermittent-zero-video-failures-2026-08-12)
 - [2026-08-12 update: sink mode, 1,200-output scaling, command channel optimization](#2026-08-12-update-sink-mode-1200-output-scaling-command-channel-optimization)
 - [2026-08-13 update: ingest path exonerated, residual hole is egress-side](#2026-08-13-update-ingest-path-exonerated-residual-hole-is-egress-side)
+- [2026-08-13 update: residual "zero video" verdict root-caused — probe artifact, not an engine defect](#2026-08-13-update-residual-zero-video-verdict-root-caused--probe-artifact-not-an-engine-defect)
 - [Artifact index](#artifact-index)
 
 ## Objective
@@ -708,6 +709,88 @@ at the egress visit level) must be in:
 
 Recommended next step: add egress-side instrumentation to `TsFeed::read_from`
 and the SRT egress sender packet loop to measure actual per-output delivery.
+
+## 2026-08-13 update: residual "zero video" verdict root-caused — probe artifact, not an engine defect
+
+Reproduced the failing verdict on the first try with a new high-bitrate
+fixture (Big Buck Bunny 1080p60 h264 ~4 Mbps + 30×AAC ≈ 8 Mbps,
+`scripts/fixtures/generate-msr-1080p-fixture.sh`, GOP 3.1–4.2 s):
+`msr` srt-only n=30 → `msr-rank01-srt-0002 ffprobe did not capture any video
+packets`. Then discriminated the three remaining hypotheses with per-second
+muxer instrumentation plus live timed-attach probes:
+
+- **The shared TS muxer emits video continuously**: `video_in=60/s,
+  video_muxed=60/s, dropped=0, overflows=0` every single second
+  (instrumented `shared_muxer.rs`). The `audio_in≈6/s` that looks anomalous
+  is normal — ffmpeg's mpegts muxer packs ~7 AAC frames per PES, and the
+  probe re-splits them to ~47 pkt/s.
+- **The peer receives full rate**: mediamtx path health showed 30/30 paths
+  with tracks at ~27 MB/s aggregate (full VBR rate incl. video), zero
+  decode errors — the engine→peer leg delivers video.
+- **Timed reader attaches prove continuity**: 10 sequential 8 s ffprobe
+  attaches across paths measured time-to-first-video of **0.62–5.31 s**
+  (≈ uniform over the GOP) and, after the first video packet, a max
+  inter-packet DTS gap of **0.117–0.200 s** — no holes, ever.
+
+Mechanism of the false verdict: mediamtx forwards video to a fresh reader
+only from the next IDR, while audio starts immediately; ffprobe's
+`-read_intervals %+N` clock starts at that first (audio) packet. With a
+GOP ≥ the 5 s sample window, a healthy stream intermittently yields zero
+video packets in-window (measured directly: one attach waited 5.31 s). The
+earlier "engine bytesOut holes" (0.02→0.87→0.00→0.97 MB/s at 0.8 s
+sampling, all outputs lockstep) are VBR at GOP cadence — a large IDR
+followed by small P-frames of the same shared content — not delivery
+pauses. This closes the "burst/hole pacing residual" as **not an engine
+defect**; the earlier TLPKTDROP/cursor findings were real and remain fixed.
+
+Harness fix (`resource_sweep/msr/verification.rs`):
+`MSR_FFPROBE_SAMPLE_SECS` default 5 → 12 (covers worst-case GOP + attach
+jitter), and the verdict now measures what matters — video must appear in
+the window AND stay continuous after its first packet
+(`MSR_FFPROBE_MAX_VIDEO_GAP_SECS`, default 2 s, catches real starvation
+like TLPKTDROP eating fragmented video PES while single-message audio
+survives). Checks record `firstVideoOffsetSecs`/`maxVideoGapSecs`.
+
+### Layer 2: the failure that survived the wider window — peer UDP rcvbuf overflow
+
+The 12 s window still failed intermittently (`srt-0022`: 7.6 s of pure
+audio at full 45 pkt/s — beyond any GOP; a correlated rerun caught
+`srt-0019` at 12.0 s audio-only). Per-second polling of engine health +
+`/proc/net/snmp` + `/proc/net/udp` during a fresh ramp attributed it
+completely:
+
+- **Every one of the run's 2,652,812 kernel `RcvbufErrors` landed on one
+  UDP port — mediamtx's SRT listener.** gosrt multiplexes every SRT flow
+  (30 publishers ≈ 240 Mbps ≈ 23k pkt/s, plus retransmissions, plus
+  reader egress) through that single socket and never calls `SO_RCVBUF`,
+  so it runs at `net.core.rmem_default` = 208 KB ≈ **7 ms** of buffering.
+  Any mediamtx read-loop hiccup or lockstep IDR burst (all outputs carry
+  the same content, so their keyframe bursts align) overflows it at
+  30–50k drops/s.
+- The engine sender is clean the whole time: `packetsSentDrop=0`, send
+  rate steady, send-buffer occupancy only spiking (to ~386 ms) from the
+  retransmission backlog the receiver's NAKs demand
+  (`packetsSentLoss`≈`packetsSentRetrans` ≈ 83k in ~15 min on one output).
+- Retransmission heals most loss (RTT 0.65 ms), but whatever misses the
+  250 ms TSBPD deadline is dropped **receiver-side** (invisible in the
+  sender's `packetsSentDrop`) — a multi-packet video PES dies if any
+  fragment is missing while single-packet audio PES survives, giving the
+  signature audio-only stream at mediamtx and every downstream probe.
+
+Host remediation, live-proven: `sysctl net.core.rmem_default=8388608`
+(mediamtx inherits it since it never asks for more) dropped kernel UDP
+errors from 2.65 M/run to ~104 k/run (25×) and the full srt-only n=30
+ffprobe checkpoint went **PASS** with `firstVideoOffsetSecs` 2.0–3.3 s and
+`maxVideoGapSecs` ≈ 0.017 s across every sample. For scale runs the
+structural answer is `MSR_PEER=sink`: restream's own sink-mode listener
+requests 8 MB UDP buffers itself and one process per port-slice avoids
+the single-socket multiplexer bottleneck entirely.
+
+Takeaway for production: the engine's egress was never the defect at this
+tier — the receiving peer's socket sizing was. The same signature
+(sender-side drop counters at zero, `packetsSentLoss`≈`packetsSentRetrans`
+climbing, peers reporting audio-only) should be read as receiver-side
+pressure, not an engine pacing bug.
 
 ## Artifact index
 
