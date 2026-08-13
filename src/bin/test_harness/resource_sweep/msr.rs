@@ -324,11 +324,19 @@ async fn run_msr_phase(
                     (Some(health), None)
                 }
                 ResourceSweepPeer::Sink => {
+                    // 5s, not 2s: real video is delivered at GOP cadence
+                    // (bursts up to ~4.2s apart at this fixture's keyframe
+                    // interval), so a leaf just past its last burst can
+                    // show a genuinely flat 2s window with nothing wrong.
+                    // Live-evidenced: a 2s window false-failed 5/700 leaves
+                    // at the n=700 checkpoint of an otherwise-clean 1,200
+                    // -output ramp; 5s cleared the same ramp with zero
+                    // false positives end to end.
                     let verification = verify_msr_sink_checkpoint(
                         &stack.api,
                         &pipeline_id,
                         &output_ids,
-                        env_secs("MSR_SINK_ENGINE_SAMPLE_SECS", 2),
+                        env_secs("MSR_SINK_ENGINE_SAMPLE_SECS", 5),
                     )
                     .await?;
                     append_line(
