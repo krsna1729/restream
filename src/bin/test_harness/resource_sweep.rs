@@ -20,6 +20,7 @@ use super::{
     spawn_publisher_with_selection, start_output, stop_child, sweep_fixture,
     validate_signal_quality_with_tolerances, wait_for_api_input_live, wait_for_http_ok,
     wait_for_input_state, wait_for_outputs_progress, wait_for_tcp_listener_ready,
+    wait_for_udp_listener_ready,
 };
 
 #[path = "resource_sweep/bitrate.rs"]
@@ -313,7 +314,7 @@ async fn spawn_sink_peer(env: &ResourceSweepEnv, index: usize) -> Result<Child, 
             "sink peer[{index}] RTMP listener did not become ready: {err}"
         ));
     }
-    if let Err(err) = wait_for_tcp_listener_ready(srt, Duration::from_secs(30)).await {
+    if let Err(err) = wait_for_udp_listener_ready(srt, Duration::from_secs(30)).await {
         stop_child(&mut child).await;
         return Err(format!(
             "sink peer[{index}] SRT listener did not become ready: {err}"
@@ -334,7 +335,7 @@ async fn verify_preexisting_sink_peer(index: usize, rtmp: u16, srt: u16) -> Resu
             "pre-started sink peer[{index}] RTMP listener not ready: {err}"
         ));
     }
-    if let Err(err) = wait_for_tcp_listener_ready(srt, Duration::from_secs(10)).await {
+    if let Err(err) = wait_for_udp_listener_ready(srt, Duration::from_secs(10)).await {
         let _ = dummy.kill().await;
         return Err(format!(
             "pre-started sink peer[{index}] SRT listener not ready: {err}"

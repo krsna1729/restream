@@ -39,6 +39,7 @@ Worktree: `.local/worktrees/msr-1080p-investigation`, branch
 - [2026-08-12 update: sink mode, 1,200-output scaling, command channel optimization](#2026-08-12-update-sink-mode-1200-output-scaling-command-channel-optimization)
 - [2026-08-13 update: ingest path exonerated, residual hole is egress-side](#2026-08-13-update-ingest-path-exonerated-residual-hole-is-egress-side)
 - [2026-08-13 update: residual "zero video" verdict root-caused — probe artifact, not an engine defect](#2026-08-13-update-residual-zero-video-verdict-root-caused--probe-artifact-not-an-engine-defect)
+- [2026-08-13 update: sink-mode bugs fixed; real ~600-connection SRT egress ceiling characterized](#2026-08-13-update-sink-mode-bugs-fixed-real-600-connection-srt-egress-ceiling-characterized)
 - [Artifact index](#artifact-index)
 
 ## Objective
@@ -791,6 +792,111 @@ tier — the receiving peer's socket sizing was. The same signature
 (sender-side drop counters at zero, `packetsSentLoss`≈`packetsSentRetrans`
 climbing, peers reporting audio-only) should be read as receiver-side
 pressure, not an engine pacing bug.
+
+## 2026-08-13 update: sink-mode bugs fixed; real ~600-connection SRT egress ceiling characterized
+
+Pure-SRT scale ramp (`MSR_PEER=sink`, `MSR_PROTOCOL_MIX=srt-only`, real BBB
+1080p60/8Mbps fixture, `scripts/fixtures/generate-msr-1080p-fixture.sh`)
+found two real sink-mode production bugs and one real, only-partially-
+mitigated SRT protocol/architecture ceiling near 600-650 concurrent
+connections.
+
+### Fixed: sink discard loop misread "no data yet" as connection close
+
+`sink_discard_loop` (`src/media/srt/listener.rs`, `RESTREAM_SINK_MODE=1`)
+treated any `srt_recv` return `<= 0` as a closed connection. The listener
+sets `SRTO_RCVSYN=0` (nonblocking), inherited by every accepted socket, so
+a fresh accept's first read routinely returns `SRT_EASYNCRCV` ("nothing to
+read yet") — not a close. Every accepted client was torn down on its first
+empty poll: live at n=100 sink-peer outputs, sink logs showed
+`accepted=208 closed=208 clients=0 discarded=0MB` over 5 minutes — 100% of
+connections closed before a single byte was read. Fixed by checking
+`last_srt_error()` and only closing on a real error code.
+
+### Fixed: sink discard loop busy-spun a full CPU core once any client existed
+
+The same loop's only backoff (`sleep(10ms)`) was gated on `clients.is_empty()`
+— with one or more clients connected it spun continuously, non-blocking
+`srt_accept()` + one non-blocking `srt_recv()` per iteration, forever, even
+when no client had data. Measured: each of 4 sink instances pegged ~80% of
+a CPU core purely from this spin, ~3.2 of 6 cores on the host consumed for
+no productive work. Fixed with an `empty_streak` counter: after a full lap
+of the client list finds no data anywhere, sleep 1ms before the next lap.
+Reset on any accept or successful read, so a busy client set is never
+throttled. Live-proven: n=400 checkpoint fell from 15s to 1s, n=500 from
+17s to 2s after this fix (see below).
+
+### Also fixed: harness sink-peer readiness checked TCP state on a UDP port
+
+`spawn_sink_peer`/`verify_preexisting_sink_peer`
+(`src/bin/test_harness/resource_sweep.rs`) waited for the SRT port via
+`wait_for_tcp_listener_ready`, which polls `/proc/net/tcp`'s LISTEN state —
+SRT binds UDP, which never appears there, so this always timed out at 30s.
+New `wait_for_udp_listener_ready`/`proc_net_has_bound_udp_port`
+(`src/bin/test_harness/core/process.rs`) check `/proc/net/udp[6]` for the
+bound local port instead (UDP has no LISTEN state; presence of the port is
+the readiness signal).
+
+### Open: SRT egress connections above ~600-650 concurrent show a real,
+### only partially understood failure mode
+
+With both sink-mode bugs fixed, a clean 500-outputs-in-14s /
+600-outputs-in-3s ramp still hits a wall past ~600-650 total concurrent SRT
+egress connections in one pipeline. Symptom: `restream::media::srt::egress_sender`
+logs `srt send peer closed: Connection does not exist (2002)` (SRT_ENOCONN)
+on `srt_send()` for a leaf shortly after libsrt itself logs the connection
+as established (confirmed via temporary `SRT_LOG_NOTICE` tracing, since
+reverted) — not a connect timeout, not a rejected handshake, but an
+established connection whose socket ID libsrt reports as no longer valid
+by the time the engine's next send lands. Classified correctly as
+`PeerClosed` by `classify_srt_send_result`, triggering the existing
+retry/backoff path.
+
+Reproduction: extending a live, already-clean 600-connection pipeline to
+750 via direct API calls (bypassing a fresh-process confound) reproduced
+it immediately — 51/150 new outputs failed within 15s of creation, 257
+total `ENOCONN` warnings logged. **No permanent failures observed**: every
+failed output's exponential-backoff retry (base 5s, doubling, capped at
+300s) eventually succeeded (`outputMaxRetries` 10, max retries seen on any
+one output: 7) — but the worst-case straggler in a checkpoint can take
+several minutes, making "wait for every output to report progress"
+diverge sharply from "the fabric is actually broken."
+
+Two hypotheses tested and one clearly rejected:
+- **`RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT=0`** (each egress socket its own
+  local port/multiplexer instead of one shared per shard): made things
+  **worse** — checkpoint progress visibly regressed (508→534→511→499
+  outputs-with-progress across successive polls) under the CPU/thread
+  pressure of ~700+ separate multiplexers × 2 libsrt worker threads each
+  on a 6-core host. This confirms the existing per-shard shared-multiplexer
+  design (this doc's own 2026-08-11 fix) is correct; do not revisit it as
+  a lead.
+- **More sink peer instances** (`MTX_COUNT` 4→12, cutting connections per
+  sink-side multiplexer from ~187 to ~62): genuine partial improvement —
+  the same 600→750 extension that failed immediately at `MTX_COUNT=4`
+  instead showed slow-but-steady tail convergence (693/700 lingering,
+  climbing) at `MTX_COUNT=12`, not an immediate burst of failures. Matches
+  this doc's own prior finding that MediaMTX's single-multiplexer SRT
+  listener degrades under concurrent-connection load (the "peer wall" in
+  the corrected bitrate ladder above) — the sink's one-multiplexer-per-
+  instance design likely has the same shape of ceiling. Not conclusively
+  isolated as the sole mechanism (the tail did not fully disappear at
+  `MTX_COUNT=12`), so this is evidence, not a closed root cause.
+
+**Not yet done**: correlating the exact failing output's socket ID against
+libsrt's own connection lifecycle to rule in/out a socket-ID-reuse race in
+restream's own connect-completion path (`complete_pending_connect`,
+`src/media/egress/backends/srt.rs`) versus a purely peer-side (sink
+multiplexer) capacity limit. The generation-based staleness guard already
+present there (`pending.common.generation != generation`) was read and
+looks correct for the cases it's designed to catch; it was not proven
+sufficient or insufficient for this specific race.
+
+**Recommended next step**: a live socket-id/generation audit — log the
+`SRTSOCKET` value and its leaf's generation at connect-completion and at
+every send, then diff against libsrt's own trace for the same socket ID,
+narrowed to a small reproducing window (n=650-700) rather than a full
+ramp, to keep iteration cheap.
 
 ## Artifact index
 
