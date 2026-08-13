@@ -168,45 +168,63 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
     }
     std::fs::create_dir_all(env.work_dir.join("logs")).map_err(|e| e.to_string())?;
     cleanup_ramp_db(&env.restream_db_path);
-    let mediamtx_log = std::fs::File::create(&env.mediamtx_log).map_err(|e| e.to_string())?;
-    let mediamtx_err = mediamtx_log.try_clone().map_err(|e| e.to_string())?;
-    // mediamtx serves RTMPS on its own dedicated `rtmpsAddress` listener,
-    // separate from the plain `rtmpAddress` port — there is no same-port
-    // auto-detection despite `rtmpEncryption: "optional"`'s name.
-    let rtmp_tls_lines = match &env.rtmps_tls {
-        Some((cert, key)) => format!(
-            "rtmpEncryption: \"optional\"\nrtmpsAddress: :{}\nrtmpServerCert: {}\nrtmpServerKey: {}\n",
-            env.mtx_rtmps,
-            cert.display(),
-            key.display()
-        ),
-        None => "rtmpEncryption: \"no\"\n".to_string(),
-    };
-    std::fs::write(
-        &env.mediamtx_config,
-        format!(
-            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nwriteQueueSize: 512\nrtmp: yes\nrtmpAddress: :{}\n{rtmp_tls_lines}rtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
-            env.mtx_rtmp, env.mtx_srt, env.mtx_api
-        ),
-    )
-    .map_err(|e| e.to_string())?;
-    let mut mediamtx_command = Command::new("mediamtx");
-    let mut mediamtx = remove_mediamtx_config_env(&mut mediamtx_command)
-        .arg(&env.mediamtx_config)
-        .stdout(Stdio::from(mediamtx_log))
-        .stderr(Stdio::from(mediamtx_err))
-        .kill_on_drop(true)
-        .spawn()
+    let mut mediamtx = if std::env::var("MTX_SKIP_START").is_ok() {
+        // Mediamtx pre-started externally — verify it's live, don't spawn.
+        let mut dummy = Command::new("true")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("dummy: {e}"))?;
+        let api_port = env.mtx_api;
+        if let Err(err) = wait_for_http_ok(
+            &format!("http://127.0.0.1:{api_port}/v3/paths/list"),
+            Duration::from_secs(10),
+        )
+        .await
+        {
+            let _ = dummy.kill().await;
+            return Err(format!("pre-started mediamtx not ready: {err}"));
+        }
+        dummy
+    } else {
+        let log = std::fs::File::create(&env.mediamtx_log).map_err(|e| e.to_string())?;
+        let err_log = log.try_clone().map_err(|e| e.to_string())?;
+        let rtmp_tls_lines = match &env.rtmps_tls {
+            Some((cert, key)) => format!(
+                "rtmpEncryption: \"optional\"\nrtmpsAddress: :{}\nrtmpServerCert: {}\nrtmpServerKey: {}\n",
+                env.mtx_rtmps,
+                cert.display(),
+                key.display()
+            ),
+            None => "rtmpEncryption: \"no\"\n".to_string(),
+        };
+        std::fs::write(
+            &env.mediamtx_config,
+            format!(
+                "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nwriteQueueSize: 512\nrtmp: yes\nrtmpAddress: :{}\n{rtmp_tls_lines}rtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\nmoq: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
+                env.mtx_rtmp, env.mtx_srt, env.mtx_api
+            ),
+        )
         .map_err(|e| e.to_string())?;
-    if let Err(err) = wait_for_http_ok(
-        &format!("http://127.0.0.1:{}/v3/paths/list", env.mtx_api),
-        Duration::from_secs(30),
-    )
-    .await
-    {
-        stop_child(&mut mediamtx).await;
-        return Err(format!("mediamtx did not become ready: {err}"));
-    }
+        let mut cmd = Command::new("mediamtx");
+        let mut child = remove_mediamtx_config_env(&mut cmd)
+            .arg(&env.mediamtx_config)
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(err_log))
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        if let Err(err) = wait_for_http_ok(
+            &format!("http://127.0.0.1:{}/v3/paths/list", env.mtx_api),
+            Duration::from_secs(30),
+        )
+        .await
+        {
+            stop_child(&mut child).await;
+            return Err(format!("mediamtx did not become ready: {err}"));
+        }
+        child
+    };
 
     let restream_log = std::fs::File::create(&env.restream_log).map_err(|e| e.to_string())?;
     let restream_err = restream_log.try_clone().map_err(|e| e.to_string())?;

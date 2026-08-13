@@ -387,9 +387,13 @@ pub(super) fn spawn_msr_publisher(
 }
 
 pub(super) fn msr_output_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> String {
+    let mtx_count = std::cmp::max(1, env_usize("MTX_COUNT", 1));
+    let instance = output.ordinal % mtx_count;
+    let rtmp_port = env.mtx_rtmp + instance as u16;
+    let srt_port = env.mtx_srt + instance as u16;
     match output.protocol {
-        MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{}/live/{}", env.mtx_rtmp, output.name),
-        MsrProtocol::Srt => harness_srt_standard_publish_url(env.mtx_srt, &output.name),
+        MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{rtmp_port}/live/{}", output.name),
+        MsrProtocol::Srt => harness_srt_standard_publish_url(srt_port, &output.name),
     }
 }
 
@@ -404,7 +408,16 @@ pub(super) fn msr_read_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> St
     match output.protocol {
         MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{}/live/{}", env.mtx_rtmp, output.name),
         MsrProtocol::Srt => {
-            harness_srt_ffmpeg_url(env.mtx_srt, &output.name, HarnessSrtMode::Read, None)
+            let mut url =
+                harness_srt_ffmpeg_url(env.mtx_srt, &output.name, HarnessSrtMode::Read, None);
+            if let Some(secs) = std::env::var("MSR_SRT_READ_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+            {
+                let timeout_us = secs.saturating_mul(1_000_000);
+                url = url.replace("timeout=30000000", &format!("timeout={timeout_us}"));
+            }
+            url
         }
     }
 }

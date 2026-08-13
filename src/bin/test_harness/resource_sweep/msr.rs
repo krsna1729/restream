@@ -249,8 +249,14 @@ async fn run_msr_phase(
                     .unwrap()
                 ),
             )?;
-            let ffprobe_checks =
-                run_msr_ffprobe_checkpoint(&env, output.ordinal, &plan[..output.ordinal]).await?;
+            let skip_ffprobe = std::env::var("MSR_SKIP_FFPROBE")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false);
+            let ffprobe_checks = if skip_ffprobe {
+                Vec::new()
+            } else {
+                run_msr_ffprobe_checkpoint(&env, output.ordinal, &plan[..output.ordinal]).await?
+            };
             if profile == MsrRunProfile::SignalCalibration {
                 signal_checks.extend(
                     run_msr_signal_checkpoint(&env, output.ordinal, &plan[..output.ordinal])
