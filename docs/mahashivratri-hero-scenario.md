@@ -431,11 +431,12 @@ never expected to be started by hand outside `MTX_SKIP_START`.
   The checkpoint JSON carries a `sinkVerification` object with
   `outputsExpected`/`outputsPresent`/`bytesOutBefore`/`bytesOutAfter`/
   `bytesOutDelta`/`packetsSentDrop` totals in place of `mediamtxPathHealth`.
-  Known limitation: the sink RTMP listener discards raw bytes without
-  completing the RTMP handshake, so RTMP-protocol outputs (95% of the
-  canonical mix) will not see `bytesOut` growth against a sink peer — `sink`
-  mode is currently only a clean pass for `MSR_PROTOCOL_MIX=srt-only` (or
-  mixes dominated by SRT) runs.
+  The sink RTMP listener completes real `connect`/`createStream`/`publish`
+  negotiation (`rml_rtmp::sessions::ServerSession`, the same state machine
+  real ingest drives) before discarding media, so a genuine RTMP egress
+  connection proceeds past its handshake and delivers real `bytesOut`
+  growth — `sink` mode is a clean pass for `rtmp-only`, `srt-only`, and the
+  canonical mix alike.
 
 ## Acceptance Contract
 
