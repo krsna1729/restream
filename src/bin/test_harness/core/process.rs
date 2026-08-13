@@ -189,6 +189,63 @@ pub(crate) async fn wait_for_tcp_listener_ready(
     }
 }
 
+/// A bound UDP socket has no TCP-style LISTEN state — `/proc/net/udp`'s
+/// state column is `07` (`TCP_CLOSE`, the kernel's generic "unconnected"
+/// value for UDP) the moment `bind()` succeeds, so presence of the local
+/// port is itself the readiness signal.
+pub(crate) fn proc_net_has_bound_udp_port(contents: &str, port: u16) -> bool {
+    let wanted_port = format!("{port:04X}");
+    contents.lines().skip(1).any(|line| {
+        let mut fields = line.split_whitespace();
+        let _slot = fields.next();
+        let Some(local_addr) = fields.next() else {
+            return false;
+        };
+        let Some((_, local_port)) = local_addr.rsplit_once(':') else {
+            return false;
+        };
+        local_port.eq_ignore_ascii_case(&wanted_port)
+    })
+}
+
+fn udp_listener_ready(port: u16) -> Result<bool, String> {
+    for path in ["/proc/net/udp", "/proc/net/udp6"] {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => {
+                if proc_net_has_bound_udp_port(&contents, port) {
+                    return Ok(true);
+                }
+            }
+            Err(err) => {
+                return Err(format!("failed to read {path}: {err}"));
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// SRT binds a UDP socket, not a TCP one — [`wait_for_tcp_listener_ready`]
+/// against a UDP port would poll `/proc/net/tcp` forever and always time
+/// out, since UDP sockets never appear there.
+pub(crate) async fn wait_for_udp_listener_ready(
+    port: u16,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if udp_listener_ready(port)? {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "UDP port {port} was not bound within {}s",
+                timeout.as_secs()
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 pub(crate) fn append_line(path: &Path, line: &str) -> Result<(), String> {
     let mut file = OpenOptions::new()
         .create(true)

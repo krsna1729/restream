@@ -7,8 +7,8 @@ use tracing::{error, info, warn};
 
 use super::buffer_sizing::srt_set_ingest_latency_opts;
 use super::socket::{
-    SrtListenerCloser, enable_srt_group_connect, from_sockaddr_in, srt_log_effective_opts,
-    srt_set_highbitrate_opts, to_sockaddr_in,
+    SrtListenerCloser, enable_srt_group_connect, from_sockaddr_in, last_srt_error,
+    srt_log_effective_opts, srt_set_highbitrate_opts, to_sockaddr_in,
 };
 use super::srt_crypto::{apply_srt_crypto_socket, srt_crypto_from_resolved};
 use super::srt_monitor::monitor_listener_socket;
@@ -131,6 +131,12 @@ fn sink_discard_loop(server_sock: SRTSOCKET) {
     let mut discarded: u64 = 0;
     let mut closed: u64 = 0;
     let mut last_log = std::time::Instant::now();
+    // Counts consecutive empty reads. Once it reaches a full lap of the
+    // client list with no client having had data, every client was polled
+    // and found empty — back off briefly instead of re-polling the same
+    // idle set at CPU-bound rate. Reset on any accept or successful read,
+    // so a busy set of clients is never throttled.
+    let mut empty_streak: usize = 0;
     loop {
         // Non-blocking accept
         let mut client_sin = sockaddr_in {
@@ -144,6 +150,7 @@ fn sink_discard_loop(server_sock: SRTSOCKET) {
         if client_sock >= 0 {
             clients.push(client_sock);
             accepted += 1;
+            empty_streak = 0;
             continue;
         }
         // Round-robin read from one client per iteration
@@ -154,6 +161,22 @@ fn sink_discard_loop(server_sock: SRTSOCKET) {
             if n > 0 {
                 discarded += n as u64;
                 idx += 1;
+                empty_streak = 0;
+            } else if n < 0 && last_srt_error().0 == SRT_EASYNCRCV {
+                // Nonblocking socket with nothing to read yet — not a
+                // close. A fresh accept commonly has no data buffered on
+                // its very first poll; treating this as a close condition
+                // tore down every client on its first empty read.
+                idx += 1;
+                empty_streak += 1;
+                if empty_streak >= clients.len() {
+                    // A full lap found no data on any client: back off
+                    // instead of re-polling an idle set at CPU-bound rate
+                    // (measured: one sink instance pegs a full core
+                    // spinning empty accept+recv calls with no backoff).
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    empty_streak = 0;
+                }
             } else {
                 unsafe {
                     srt_close(sock);
@@ -163,8 +186,10 @@ fn sink_discard_loop(server_sock: SRTSOCKET) {
                 if idx >= clients.len() && !clients.is_empty() {
                     idx = 0;
                 }
+                empty_streak = 0;
             }
         } else {
+            empty_streak = 0;
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         // Periodic metrics
