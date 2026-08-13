@@ -279,6 +279,16 @@ pub struct AppConfig {
     pub no_color: bool,
     pub srt_passphrase: Option<String>,
     pub srt_pbkeylen: i32,
+    /// Per-leaf SRT egress connect timeout. Live-evidenced at real MSR
+    /// scale: a live handshake burst of 600-700 concurrent SRT egress
+    /// connects to one peer reliably completes within ~3-9s but not
+    /// within the old 3s default, so every leaf whose handshake landed
+    /// past 3s hit libsrt's own connect-timeout ENOCONN and paid a full
+    /// retry+backoff cycle instead of just finishing. 10s cleared the
+    /// same burst with zero failures
+    /// (`docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`,
+    /// "sink-mode bugs fixed; real ~600-connection SRT egress ceiling
+    /// characterized"). Not scale-tested past 700 in one pipeline.
     pub srt_connect_timeout_ms: u64,
     pub srt_egress_reuse_local_port: bool,
     pub srt_egress_muxer_max_outputs_per_shard: usize,
@@ -575,7 +585,7 @@ impl Default for AppConfig {
             no_color: false,
             srt_passphrase: None,
             srt_pbkeylen: 16,
-            srt_connect_timeout_ms: 3_000,
+            srt_connect_timeout_ms: 10_000,
             srt_egress_reuse_local_port: true,
             srt_egress_muxer_max_outputs_per_shard: 0,
             srt_egress_muxer_max_shards: 64,
@@ -648,7 +658,7 @@ impl AppConfig {
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
             .unwrap_or(16);
-        let srt_connect_timeout_ms = env_u64("RESTREAM_SRT_CONNECT_TIMEOUT_MS", 3_000);
+        let srt_connect_timeout_ms = env_u64("RESTREAM_SRT_CONNECT_TIMEOUT_MS", 10_000);
         let srt_egress_reuse_local_port =
             env_bool_default_true("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT");
         let srt_egress_muxer_max_outputs_per_shard =

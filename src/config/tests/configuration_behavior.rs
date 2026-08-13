@@ -430,7 +430,7 @@ fn srt_egress_reuse_local_port_defaults_on_and_allows_override() {
 #[test]
 fn srt_connect_timeout_defaults_and_allows_override() {
     with_env_overlay(&[], &["RESTREAM_SRT_CONNECT_TIMEOUT_MS"], || {
-        assert_eq!(AppConfig::from_env().srt_connect_timeout_ms, 3_000);
+        assert_eq!(AppConfig::from_env().srt_connect_timeout_ms, 10_000);
     });
     with_env_vars(&[("RESTREAM_SRT_CONNECT_TIMEOUT_MS", "500")], || {
         assert_eq!(AppConfig::from_env().srt_connect_timeout_ms, 500);
