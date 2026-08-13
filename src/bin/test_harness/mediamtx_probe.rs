@@ -363,6 +363,36 @@ pub(crate) async fn verify_mediamtx_path_codec_health(
     Ok(health)
 }
 
+/// Combine two `MediaMtxPathHealth` samples drawn from different mediamtx
+/// instances (one per `MTX_COUNT` peer) into a single aggregate: counts and
+/// byte totals sum, `sample_secs` — identical across instances by
+/// construction, since every group in a checkpoint uses the same caller-
+/// supplied duration — is kept as-is.
+pub(crate) fn merge_mediamtx_path_health(
+    a: MediaMtxPathHealth,
+    b: MediaMtxPathHealth,
+) -> MediaMtxPathHealth {
+    MediaMtxPathHealth {
+        expected_paths: a.expected_paths + b.expected_paths,
+        ready_paths: a.ready_paths + b.ready_paths,
+        reader_count: a.reader_count + b.reader_count,
+        paths_with_tracks: a.paths_with_tracks + b.paths_with_tracks,
+        inbound_frame_errors: a
+            .inbound_frame_errors
+            .saturating_add(b.inbound_frame_errors),
+        bytes_received_before: a
+            .bytes_received_before
+            .saturating_add(b.bytes_received_before),
+        bytes_received_after: a
+            .bytes_received_after
+            .saturating_add(b.bytes_received_after),
+        bytes_received_delta: a
+            .bytes_received_delta
+            .saturating_add(b.bytes_received_delta),
+        sample_secs: a.sample_secs,
+    }
+}
+
 pub(crate) fn mediamtx_path_health_json(
     scenario: &str,
     label: &str,
@@ -487,6 +517,44 @@ mod tests {
 
         assert!(error.contains("inbound frame errors"));
         assert!(error.contains("live/a (2)"));
+    }
+
+    #[test]
+    fn merges_path_health_from_multiple_mediamtx_instances() {
+        let a = MediaMtxPathHealth {
+            expected_paths: 10,
+            ready_paths: 10,
+            reader_count: 1,
+            paths_with_tracks: 10,
+            inbound_frame_errors: 1,
+            bytes_received_before: 100,
+            bytes_received_after: 200,
+            bytes_received_delta: 100,
+            sample_secs: 3,
+        };
+        let b = MediaMtxPathHealth {
+            expected_paths: 5,
+            ready_paths: 5,
+            reader_count: 0,
+            paths_with_tracks: 5,
+            inbound_frame_errors: 0,
+            bytes_received_before: 50,
+            bytes_received_after: 90,
+            bytes_received_delta: 40,
+            sample_secs: 3,
+        };
+
+        let merged = merge_mediamtx_path_health(a, b);
+
+        assert_eq!(merged.expected_paths, 15);
+        assert_eq!(merged.ready_paths, 15);
+        assert_eq!(merged.reader_count, 1);
+        assert_eq!(merged.paths_with_tracks, 15);
+        assert_eq!(merged.inbound_frame_errors, 1);
+        assert_eq!(merged.bytes_received_before, 150);
+        assert_eq!(merged.bytes_received_after, 290);
+        assert_eq!(merged.bytes_received_delta, 140);
+        assert_eq!(merged.sample_secs, 3);
     }
 
     #[test]

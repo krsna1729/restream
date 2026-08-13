@@ -401,7 +401,7 @@ async fn run_backend_complex_audio_probe(
         }
         if let Some(stack) = stack.as_mut() {
             stop_child(&mut stack.restream).await;
-            stop_child(&mut stack.mediamtx).await;
+            stop_children(&mut stack.mediamtx).await;
         }
     }
     Ok(result)
@@ -493,7 +493,7 @@ async fn run_branch_matrix_variant(env: &BranchMatrixEnv) -> Result<Value, Strin
         }
         if let Some(stack) = stack.as_mut() {
             stop_child(&mut stack.restream).await;
-            stop_child(&mut stack.mediamtx).await;
+            stop_children(&mut stack.mediamtx).await;
         }
     }
     Ok(result)

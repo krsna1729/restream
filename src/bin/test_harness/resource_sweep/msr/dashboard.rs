@@ -277,7 +277,7 @@ pub(crate) async fn msr_dashboard() -> Result<Value, String> {
             delete_resource_pipeline(&stack.api, &pipeline.id).await;
         }
         stop_child(&mut stack.restream).await;
-        stop_child(&mut stack.mediamtx).await;
+        stop_children(&mut stack.mediamtx).await;
     }
 
     playwright_result.map(|_| result)

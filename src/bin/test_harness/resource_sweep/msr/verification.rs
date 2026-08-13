@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::*;
 
 fn msr_ffprobe_sample_count(output_count: usize) -> usize {
@@ -347,6 +349,110 @@ async fn run_msr_signal_check(
             &report,
         ),
     }))
+}
+
+/// Sink-peer checkpoint verdict: the restream engine health API replaces
+/// mediamtx path health when `MSR_PEER=sink` (a sink peer discards data at
+/// the transport layer and has no `/v3/paths/list`-equivalent to read
+/// back). Totals are summed across every expected output so a scale run
+/// leaves a machine-readable verdict even without mediamtx.
+pub(super) struct MsrSinkVerification {
+    pub(super) outputs_expected: usize,
+    pub(super) outputs_present: usize,
+    pub(super) bytes_out_before: u64,
+    pub(super) bytes_out_after: u64,
+    pub(super) bytes_out_delta: u64,
+    pub(super) packets_sent_drop: u64,
+    pub(super) sample_secs: u64,
+}
+
+pub(super) fn msr_sink_verification_json(verification: &MsrSinkVerification) -> Value {
+    json!({
+        "kind": "msrSinkVerification",
+        "outputsExpected": verification.outputs_expected,
+        "outputsPresent": verification.outputs_present,
+        "bytesOutBefore": verification.bytes_out_before,
+        "bytesOutAfter": verification.bytes_out_after,
+        "bytesOutDelta": verification.bytes_out_delta,
+        "packetsSentDrop": verification.packets_sent_drop,
+        "sampleSecs": verification.sample_secs,
+    })
+}
+
+/// bytesOut and packetsSentDrop for each present output, keyed by output
+/// id, read from `GET /api/v1/engine/health`. Outputs missing from the
+/// health tree (not yet registered, or torn down) are simply absent from
+/// the map — callers detect that by output id, not by an error here.
+async fn sample_engine_output_bytes(
+    api: &RampApi,
+    pipeline_id: &str,
+    output_ids: &[String],
+) -> Result<HashMap<String, (u64, u64)>, String> {
+    let health = api.get_json("/api/v1/engine/health").await?;
+    let mut samples = HashMap::with_capacity(output_ids.len());
+    for output_id in output_ids {
+        let entry = &health["pipelines"][pipeline_id]["outputs"][output_id];
+        if entry.is_null() {
+            continue;
+        }
+        let bytes_out = entry["metrics"]["bytesOut"]
+            .as_u64()
+            .or_else(|| entry["bytesOut"].as_u64())
+            .unwrap_or(0);
+        let packets_sent_drop = entry["quality"]["packetsSentDrop"].as_u64().unwrap_or(0);
+        samples.insert(output_id.clone(), (bytes_out, packets_sent_drop));
+    }
+    Ok(samples)
+}
+
+/// Verify a sink-peer checkpoint: every expected output must be present in
+/// engine health both before and after the sample window, and its bytesOut
+/// must have grown. Returns per-checkpoint totals for the JSON artifact.
+pub(super) async fn verify_msr_sink_checkpoint(
+    api: &RampApi,
+    pipeline_id: &str,
+    output_ids: &[String],
+    sample_secs: u64,
+) -> Result<MsrSinkVerification, String> {
+    let before = sample_engine_output_bytes(api, pipeline_id, output_ids).await?;
+    tokio::time::sleep(Duration::from_secs(sample_secs)).await;
+    let after = sample_engine_output_bytes(api, pipeline_id, output_ids).await?;
+
+    let mut missing = Vec::new();
+    let mut stalled = Vec::new();
+    let mut bytes_out_before = 0u64;
+    let mut bytes_out_after = 0u64;
+    let mut packets_sent_drop = 0u64;
+    for output_id in output_ids {
+        let Some(&(after_bytes, after_drop)) = after.get(output_id) else {
+            missing.push(output_id.clone());
+            continue;
+        };
+        let before_bytes = before.get(output_id).map(|(bytes, _)| *bytes).unwrap_or(0);
+        if !before.contains_key(output_id) || after_bytes <= before_bytes {
+            stalled.push(format!("{output_id} ({before_bytes} -> {after_bytes})"));
+        }
+        bytes_out_before = bytes_out_before.saturating_add(before_bytes);
+        bytes_out_after = bytes_out_after.saturating_add(after_bytes);
+        packets_sent_drop = packets_sent_drop.saturating_add(after_drop);
+    }
+    if !missing.is_empty() || !stalled.is_empty() {
+        return Err(format!(
+            "sink checkpoint verification failed for {} expected outputs: missing=[{}] stalled=[{}]",
+            output_ids.len(),
+            missing.join(", "),
+            stalled.join(", ")
+        ));
+    }
+    Ok(MsrSinkVerification {
+        outputs_expected: output_ids.len(),
+        outputs_present: output_ids.len(),
+        bytes_out_before,
+        bytes_out_after,
+        bytes_out_delta: bytes_out_after.saturating_sub(bytes_out_before),
+        packets_sent_drop,
+        sample_secs,
+    })
 }
 
 pub(super) async fn run_msr_signal_checkpoint(
