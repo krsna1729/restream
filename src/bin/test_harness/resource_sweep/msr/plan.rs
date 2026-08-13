@@ -205,6 +205,24 @@ impl MsrRunProfile {
     }
 
     fn fixture(self) -> Result<PathBuf, String> {
+        // Lets this mode run against a real high-bitrate source instead of
+        // the checked-in low-bitrate fixture, without changing
+        // REQUIRED_CHECKED_IN_FIXTURES or committing external media --
+        // large real-media fixtures are reproducible via
+        // scripts/fixtures/generate-msr-1080p-fixture.sh rather than
+        // checked in.
+        if let Self::Canonical = self
+            && let Ok(path) = std::env::var("RESTREAM_MSR_FIXTURE_OVERRIDE")
+        {
+            let path = PathBuf::from(path);
+            if path.is_file() {
+                return Ok(path);
+            }
+            return Err(format!(
+                "RESTREAM_MSR_FIXTURE_OVERRIDE set but not a file: {}",
+                path.display()
+            ));
+        }
         match self {
             Self::Canonical => restream::test_fixtures::checked_in_fixture(
                 "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
