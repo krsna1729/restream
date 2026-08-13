@@ -895,16 +895,40 @@ still overridable via `RESTREAM_SRT_CONNECT_TIMEOUT_MS`). Live-proven: the
 same 600→650→700 ramp that always showed failures past 600 at the 3s
 default ran **zero `ENOCONN`/`egress.failed` events across all three
 checkpoints** at the 10s default — 600 in 6s, 650 in 9s, 700 in 7s, every
-checkpoint clean on the first pass, no stragglers, no retries. Not
-scale-tested past 700 concurrent connections in one pipeline; the 1,200
-full ramp is the natural next step to confirm the fix holds at MSR's real
-target scale.
+checkpoint clean on the first pass, no stragglers, no retries.
 
-**Recommended next step**: a live socket-id/generation audit — log the
-`SRTSOCKET` value and its leaf's generation at connect-completion and at
-every send, then diff against libsrt's own trace for the same socket ID,
-narrowed to a small reproducing window (n=650-700) rather than a full
-ramp, to keep iteration cheap.
+### Confirmed at the full 1,200-output target
+
+The complete 100→1,200 sink-peer ramp (all fixes applied: sink accept/
+busy-spin fixes, 10s connect timeout, 5s sink-verification sample window)
+ran clean end to end: **1,200/1,200 PASS**, every 100-output checkpoint
+converging in 0-28s with zero `ENOCONN`, zero `egress.failed`, zero sink
+verification false-positives. Final state at n=1,200: 3.4 of 6 CPU cores,
+3.9 GB RSS, 214 threads, ~3.6 GB delivered in the closing 5s sample window
+(~5.8 Gbps aggregate egress). `packetsSentDrop` was still nonzero at full
+scale (TLPKTDROP under real network-stack/CPU contention, the same
+mechanism characterized earlier in this document) but did not block
+correctness — retransmission and the existing retry/backoff handle it, and
+every output kept delivering bytes throughout.
+
+Also fixed as part of closing this out: `verify_msr_sink_checkpoint`'s
+sample window (`MSR_SINK_ENGINE_SAMPLE_SECS`, `src/bin/test_harness/resource_sweep/msr.rs`)
+was 2s — a leaf sampled between two GOP-cadence bursts (up to ~4.2s apart
+at this fixture's keyframe interval) could show a genuinely flat window
+with nothing actually wrong. Live-caught: 5/700 leaves false-failed a
+checkpoint at 2s; widening to 5s cleared the identical ramp with zero
+false positives. Same class of fix as the earlier `MSR_FFPROBE_SAMPLE_SECS`
+widening above — GOP-cadence delivery needs a sample window at least one
+GOP wide, not a fixed short interval.
+
+The pure-SRT egress path is now genuinely proven to 1,200 outputs at real
+1080p/8 Mbps bitrate on this 6-core host, correctly, with no known open
+defects. RTMP-only and the canonical 95%-RTMP/5%-SRT mix at the same real
+bitrate and scale have not yet been run through this fixture — sink mode's
+RTMP listener doesn't complete a handshake (documented limitation above),
+so that verification needs `MSR_PEER=mediamtx` instead, which reintroduces
+mediamtx's own peer-capacity ceiling from earlier in this document and was
+out of scope for this session.
 
 ## Artifact index
 
