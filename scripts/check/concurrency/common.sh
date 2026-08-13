@@ -111,4 +111,6 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test fresh_leaf_first_visit --lib -- --nocapture
   "$run_step_fn" recording-drain-bounded-on-cancel \
     scripts/build/resource-limit.sh cargo test media::recording::tests::drain_ready_bursts --lib -- --nocapture
+  "$run_step_fn" lib-srt-egress-muxer-port-shard-scoping \
+    scripts/build/resource-limit.sh cargo test muxer_port --lib -- --nocapture
 }

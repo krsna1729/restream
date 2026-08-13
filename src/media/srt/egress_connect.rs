@@ -123,14 +123,39 @@ pub(crate) fn connected_srt_local_port(sock: SRTSOCKET) -> Result<u16, String> {
 
 pub(crate) enum SrtEgressMuxerPortClaim<'a> {
     First(MutexGuard<'a, Option<u16>>),
-    Reuse(u16),
+    /// A port learned by an earlier connect on this shard. The state is kept
+    /// by reference (not as a held guard) so concurrent reusers never
+    /// serialize on it, while `forget_stale_port` can still clear a
+    /// recording that is no longer bindable.
+    Reuse {
+        state: &'a Mutex<Option<u16>>,
+        port: u16,
+    },
 }
 
 impl SrtEgressMuxerPortClaim<'_> {
     pub(crate) fn bind_port(&self) -> Option<u16> {
         match self {
             SrtEgressMuxerPortClaim::First(_) => None,
-            SrtEgressMuxerPortClaim::Reuse(port) => Some(*port),
+            SrtEgressMuxerPortClaim::Reuse { port, .. } => Some(*port),
+        }
+    }
+
+    /// Drops a recorded port that could not be re-bound, so the next connect
+    /// on this shard autoselects a fresh one.
+    ///
+    /// libsrt destroys a multiplexer once its last socket closes and releases
+    /// the underlying UDP port with it; if the port is then taken by
+    /// something else, every later connect that binds it fails. Without this,
+    /// a shard whose outputs were all removed and re-added could wedge
+    /// permanently on a port it no longer owns.
+    pub(crate) fn forget_stale_port(&self) {
+        let SrtEgressMuxerPortClaim::Reuse { state, port } = self else {
+            return;
+        };
+        let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+        if *guard == Some(*port) {
+            *guard = None;
         }
     }
 
@@ -144,7 +169,7 @@ impl SrtEgressMuxerPortClaim<'_> {
                     false
                 }
             }
-            SrtEgressMuxerPortClaim::Reuse(_) => false,
+            SrtEgressMuxerPortClaim::Reuse { .. } => false,
         }
     }
 }
@@ -154,7 +179,8 @@ pub(crate) fn claim_srt_egress_muxer_port(
 ) -> SrtEgressMuxerPortClaim<'_> {
     let guard = state.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(port) = *guard {
-        SrtEgressMuxerPortClaim::Reuse(port)
+        drop(guard);
+        SrtEgressMuxerPortClaim::Reuse { state, port }
     } else {
         SrtEgressMuxerPortClaim::First(guard)
     }

@@ -500,6 +500,18 @@ per-destination byte queues and sender threads are removed.
 SRT internal sender-buffer limits remain part of the leaf's total buffering
 policy; moving buffering into libsrt does not make it free or unbounded.
 
+libsrt runs its own protocol engine on threads the fabric does not own: one
+`CSndQueue` worker and one `CRcvQueue` worker per multiplexer, where a
+multiplexer is one bound local UDP endpoint. Local-port reuse
+(`RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT`) exists so egress sockets do not each
+create their own multiplexer and thread pair. That reuse is scoped per shard,
+not engine-wide: every leaf on a shard shares that shard's multiplexer, and
+shard *N* is shared across feeds so the libsrt thread count tracks shard count
+rather than feed or output count. Scoping it engine-wide instead put every SRT
+egress connection on one libsrt sender thread, which saturated well before CPU
+did and let libsrt's TLPKTDROP discard packets that missed their delivery
+deadline.
+
 ### Future backends
 
 A future protocol either reuses an existing readiness family or adds a new

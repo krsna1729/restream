@@ -1,5 +1,4 @@
-use std::sync::{Arc, Mutex};
-
+use crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPorts;
 use crate::media::egress::command::{EgressCommand, FeedId};
 use crate::media::egress::factory::{SrtFabricShardGroupError, spawn_srt_fabric_shard_group};
 use crate::media::egress::journal::TsFeed;
@@ -38,16 +37,16 @@ impl MediaEngine {
             false
         } else {
             let config = &self.config.egress_fabric;
-            // Share the same local-UDP-port reuse state the legacy SRT
-            // egress path uses (`MediaEngine::srt_egress_muxer_port_handle`)
-            // so a socket connected by either path can be reused by the
-            // other, restoring the libsrt egress-multiplexer sharing the
-            // fabric path lost by always passing `None` here — see
-            // `docs/egress-implementation.md` Phase 4 status.
+            // Engine-wide, per-shard local-UDP-port reuse: leaves on one
+            // shard share that shard's libsrt egress multiplexer (and its
+            // one `CSndQueue` worker thread), while different shards get
+            // different multiplexers. Shard *N* of every feed shares one
+            // entry, so libsrt's thread count tracks shard count rather
+            // than feed count — see `muxer_ports.rs`.
             let srt_egress_muxer_port_reuse = self
                 .config
                 .srt_egress_reuse_local_port
-                .then(|| self.srt_egress_muxer_port_handle());
+                .then(|| self.srt_egress_muxer_ports_handle());
             let group = spawn_srt_fabric_shard_group(
                 config.shard_count(),
                 config.shard_config(),
@@ -131,21 +130,27 @@ impl MediaEngine {
         &self,
         feed_id: &FeedId,
         runtime: &mut EgressFabricRuntime,
-        (feed, srt_egress_muxer_port_reuse): (TsFeed, Option<Arc<Mutex<Option<u16>>>>),
+        (feed, srt_egress_muxer_port_reuse): (TsFeed, Option<SrtEgressMuxerPorts>),
     ) {
         let config = &self.config.egress_fabric;
         let shard_config = config.shard_config();
         let budget = config.work_budget();
         let poller_max_events = config.srt_poller_max_events;
         let effective_cpus = crate::system_sampling::effective_cpu_count();
-        let result = runtime.rescale(effective_cpus, shard_config, |_shard_id| {
+        let result = runtime.rescale(effective_cpus, shard_config, |shard_id| {
             let poller = crate::media::srt::SrtFabricPoller::new(poller_max_events)?;
             Ok::<_, crate::media::srt::SrtEgressPollError>(
                 crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
                     poller,
                     feed.clone_reader(),
                     budget,
-                    srt_egress_muxer_port_reuse.clone(),
+                    // Same per-shard scoping the initial
+                    // `spawn_srt_fabric_shard_group` call uses: a shard
+                    // grown by a live rescale claims its own libsrt
+                    // multiplexer instead of inheriting another shard's.
+                    srt_egress_muxer_port_reuse
+                        .as_ref()
+                        .map(|ports| ports.shard(shard_id)),
                     shard_config.drain_timeout(),
                 ),
             )

@@ -147,7 +147,7 @@ fn single_socket_connect_applies_crypto_before_stream_id_and_closes_when_crypto_
 }
 
 #[test]
-fn single_socket_connect_closes_socket_when_muxer_port_bind_fails() {
+fn single_socket_connect_closes_socket_and_forgets_port_when_muxer_port_bind_fails() {
     let muxer_port = Mutex::new(Some(40000));
     let claim = super::super::claim_srt_egress_muxer_port(&muxer_port);
     let ops = FakeSingleConnectOps::failing(FailStep::Bind);
@@ -155,10 +155,45 @@ fn single_socket_connect_closes_socket_when_muxer_port_bind_fails() {
     let result = connect_single_srt_egress_socket_with(connect_config(Some(claim)), &ops);
 
     assert_eq!(result, Err("bind failed".to_string()));
-    assert_eq!(*muxer_port.lock().unwrap(), Some(40000));
+    // libsrt frees a multiplexer's local UDP port once its last socket
+    // closes, so a recorded port can stop being bindable while the shard
+    // that learned it is still alive. Dropping the recording lets the next
+    // attempt autoselect instead of failing this shard's connects forever.
+    assert_eq!(
+        *muxer_port.lock().unwrap(),
+        None,
+        "an unbindable recorded muxer port must not be retained"
+    );
     let events = ops.events.borrow();
     assert_eq!(events.last(), Some(&Event::Close(42)));
     assert!(!events.contains(&Event::Connect(42, peer_addr())));
+}
+
+#[test]
+fn single_socket_connect_after_a_failed_muxer_port_bind_records_a_freshly_autoselected_port() {
+    // The recovery half of the test above, driven through the same
+    // production entry point: with the stale recording cleared, the next
+    // connect on this shard claims `First`, binds nothing, and records
+    // whatever local port libsrt autoselected.
+    let muxer_port = Mutex::new(Some(40000));
+    let failing_claim = super::super::claim_srt_egress_muxer_port(&muxer_port);
+    let failing_ops = FakeSingleConnectOps::failing(FailStep::Bind);
+    let _ =
+        connect_single_srt_egress_socket_with(connect_config(Some(failing_claim)), &failing_ops);
+
+    let retry_claim = super::super::claim_srt_egress_muxer_port(&muxer_port);
+    assert_eq!(retry_claim.bind_port(), None);
+    let ops = FakeSingleConnectOps::new();
+    let socket = connect_single_srt_egress_socket_with(connect_config(Some(retry_claim)), &ops);
+
+    assert_eq!(socket, Ok(42));
+    assert_eq!(*muxer_port.lock().unwrap(), Some(41000));
+    assert!(
+        !ops.events
+            .borrow()
+            .iter()
+            .any(|event| matches!(event, Event::Bind(_, _)))
+    );
 }
 
 #[test]
