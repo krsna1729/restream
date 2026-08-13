@@ -17,11 +17,42 @@ pub struct OutputRetryPolicy {
 }
 
 impl OutputRetryPolicy {
-    pub fn backoff_ms(&self, retries: u32) -> u64 {
+    /// Backoff delay before the next retry attempt, in milliseconds.
+    ///
+    /// `jitter_key` (in production, the output id) desynchronizes retries.
+    /// Without jitter, outputs that fail their first dispatch attempt in the
+    /// same narrow window (e.g. a burst of output creates hitting a busy
+    /// shard) all compute the exact same delay and retry in a second,
+    /// equally-synchronized wave against the same still-busy shard. Equal
+    /// jitter -- half the computed delay fixed, half spread uniformly across
+    /// `[0, half]` -- desynchronizes those retries while still guaranteeing
+    /// at least half the intended backoff (unlike full jitter, which can
+    /// degenerate to a near-zero wait right after a failure). The jitter is a
+    /// deterministic hash of `(jitter_key, shift)`, not a fresh random draw
+    /// per call, so repeated calls against the same failure (e.g. successive
+    /// reconciler ticks polling `remaining_ms`) return a stable value instead
+    /// of jittering around on every poll. Hashing the clamped `shift` rather
+    /// than raw `retries` keeps retries beyond the shift limit -- which
+    /// already clamp to the same delay -- on the same jitter too.
+    pub fn backoff_ms(&self, retries: u32, jitter_key: &str) -> u64 {
         let shift = retries.min(16);
         let multiplier = 1u64.checked_shl(shift).unwrap_or(u64::MAX);
-        self.base_ms.saturating_mul(multiplier).min(self.max_ms)
+        let capped = self.base_ms.saturating_mul(multiplier).min(self.max_ms);
+        let half = capped / 2;
+        half + (jitter_fraction(jitter_key, shift) * half as f64) as u64
     }
+}
+
+/// Deterministic pseudo-random fraction in `[0, 1)` derived from `key` and
+/// `retries`. Not a real RNG -- the goal is a stable, well-spread value per
+/// `(key, retries)` pair so different outputs desynchronize, not
+/// unpredictability.
+fn jitter_fraction(key: &str, retries: u32) -> f64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    retries.hash(&mut hasher);
+    (hasher.finish() as f64) / (u64::MAX as f64)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +80,7 @@ pub fn decide_output_start_action(
     effective_has_ingest: bool,
     failure: Option<OutputFailureWindow>,
     policy: OutputRetryPolicy,
+    jitter_key: &str,
 ) -> OutputStartAction {
     if desired_state != DesiredOutputState::Running || is_active {
         return OutputStartAction::NotApplicable;
@@ -60,7 +92,7 @@ pub fn decide_output_start_action(
         if failure.retries >= policy.max_retries {
             return OutputStartAction::MarkFailed;
         }
-        let backoff_ms = policy.backoff_ms(failure.retries);
+        let backoff_ms = policy.backoff_ms(failure.retries, jitter_key);
         if failure.elapsed_ms < backoff_ms {
             return OutputStartAction::WaitRetry {
                 retries: failure.retries,
@@ -256,6 +288,8 @@ mod tests {
     use crate::domain::output_spec::OutputConfig;
     use crate::domain::stage::StageKind;
     use crate::media::metadata::VideoMeta;
+    // `Strategy` brings `prop_map` into scope for the `proptest!` block below.
+    use proptest::strategy::Strategy;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -269,6 +303,11 @@ mod tests {
 
     #[test]
     fn start_action_waits_during_backoff_window() {
+        // Unjittered ceiling: base_ms 5_000 * 2^2 = 20_000. Equal jitter puts
+        // the actual backoff in [10_000, 20_000], so assert the shape of the
+        // decision (still waiting, retries/remaining_ms consistent with
+        // whatever backoff_ms was actually chosen) rather than the exact
+        // pre-jitter value.
         let action = decide_output_start_action(
             DesiredOutputState::Running,
             false,
@@ -278,16 +317,120 @@ mod tests {
                 elapsed_ms: 5_000,
             }),
             test_retry_policy(),
+            "output-a",
         );
 
-        assert_eq!(
-            action,
+        match action {
             OutputStartAction::WaitRetry {
-                retries: 2,
-                backoff_ms: 20_000,
-                remaining_ms: 15_000,
+                retries,
+                backoff_ms,
+                remaining_ms,
+            } => {
+                assert_eq!(retries, 2);
+                assert!(
+                    (10_000..=20_000).contains(&backoff_ms),
+                    "expected [10000, 20000], got {backoff_ms}"
+                );
+                assert_eq!(remaining_ms, backoff_ms - 5_000);
             }
+            other => panic!("expected WaitRetry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn backoff_ms_is_jittered_and_desynchronizes_different_outputs() {
+        let policy = test_retry_policy();
+
+        // Same output, same retry count, called repeatedly (as the
+        // reconciler does every tick while a WaitRetry is pending): stable,
+        // not a fresh random draw each call.
+        let first = policy.backoff_ms(2, "output-a");
+        let second = policy.backoff_ms(2, "output-a");
+        assert_eq!(first, second, "jitter must be stable across repeated calls");
+
+        // Different outputs failing in the same burst must not all compute
+        // the exact same delay -- that's the thundering-herd bug this
+        // jitter exists to prevent.
+        let other_output = policy.backoff_ms(2, "output-b");
+        assert_ne!(
+            first, other_output,
+            "different outputs should not share the same jittered backoff"
         );
+
+        // Both stay within the equal-jitter band regardless of key.
+        for backoff in [first, other_output] {
+            assert!(
+                (10_000..=20_000).contains(&backoff),
+                "expected [10000, 20000], got {backoff}"
+            );
+        }
+    }
+
+    proptest::proptest! {
+        /// This is the actual claim jitter exists to prove: when many outputs
+        /// fail their first dispatch attempt in the same narrow burst window
+        /// (the scenario a burst of ~32 concurrent output-creation workers
+        /// hitting one busy shard produces), do their retries actually spread
+        /// out, or do they still cluster into a smaller number of synchronized
+        /// waves that hit the shard together?
+        ///
+        /// Without jitter every output in the burst shares the exact same
+        /// `retries`, so `backoff_ms` was previously 100% concentrated: every
+        /// one of them retried at literally the same computed delay. This
+        /// checks the jittered replacement directly against that failure
+        /// mode, on realistic output-id-shaped keys (`output_<12 hex chars>`,
+        /// this repo's actual id format — not integers or short strings, which
+        /// could hash unrealistically well or badly) and asserts a bound on
+        /// how concentrated the busiest bucket is allowed to be.
+        #[test]
+        fn jitter_desynchronizes_a_burst_of_same_retry_outputs(
+            output_ids in proptest::collection::hash_set(
+                "[0-9a-f]{12}".prop_map(|hex| format!("output_{hex}")),
+                20..200,
+            ),
+            retries in 0u32..8,
+        ) {
+            let policy = test_retry_policy();
+            let n = output_ids.len();
+
+            let mut counts: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
+            for id in &output_ids {
+                let backoff = policy.backoff_ms(retries, id);
+                *counts.entry(backoff).or_insert(0) += 1;
+            }
+
+            // The unjittered baseline this replaces: every output in the
+            // burst lands in exactly one bucket (the busiest bucket holds
+            // 100% of the herd). Jitter must break that up substantially --
+            // no single retry moment should still account for more than a
+            // fifth of the burst. This is a concentration bound, not a
+            // uniqueness requirement: some collisions across dozens of
+            // outputs sharing a hashed backoff value are expected and fine,
+            // as long as the herd is genuinely spread rather than reformed
+            // into one or a few synchronized waves.
+            let busiest = *counts.values().max().expect("at least one output");
+            let max_allowed_busiest = (n as f64 * 0.2).ceil() as u32;
+            proptest::prop_assert!(
+                busiest <= max_allowed_busiest,
+                "busiest retry moment has {busiest}/{n} outputs (retries={retries}), \
+                 expected at most {max_allowed_busiest} -- jitter is not desynchronizing this burst"
+            );
+
+            // Every jittered value still respects the equal-jitter band, so
+            // this never trades desynchronization for an unbounded wait.
+            let ceiling = policy.backoff_ms(retries, "output_000000000000").max(
+                policy.backoff_ms(retries, "output_ffffffffffff")
+            );
+            let unjittered_shift = retries.min(16);
+            let unjittered = policy
+                .base_ms
+                .saturating_mul(1u64.checked_shl(unjittered_shift).unwrap_or(u64::MAX))
+                .min(policy.max_ms);
+            for backoff in counts.keys() {
+                proptest::prop_assert!(*backoff <= ceiling.max(unjittered));
+                proptest::prop_assert!(*backoff >= unjittered / 2);
+            }
+        }
     }
 
     #[test]
@@ -299,6 +442,7 @@ mod tests {
                 true,
                 None,
                 test_retry_policy(),
+                "output-a",
             ),
             OutputStartAction::NotApplicable
         );
@@ -309,6 +453,7 @@ mod tests {
                 true,
                 None,
                 test_retry_policy(),
+                "output-a",
             ),
             OutputStartAction::NotApplicable
         );
@@ -322,6 +467,7 @@ mod tests {
             true,
             None,
             test_retry_policy(),
+            "output-a",
         );
 
         assert_eq!(action, OutputStartAction::StartNow);
@@ -329,6 +475,8 @@ mod tests {
 
     #[test]
     fn start_action_starts_now_once_backoff_window_elapses() {
+        // elapsed_ms (20_000) is >= backoff_ms for every jittered value in
+        // [10_000, 20_000], so this holds regardless of jitter_key.
         let action = decide_output_start_action(
             DesiredOutputState::Running,
             false,
@@ -338,6 +486,7 @@ mod tests {
                 elapsed_ms: 20_000,
             }),
             test_retry_policy(),
+            "output-a",
         );
 
         assert_eq!(action, OutputStartAction::StartNow);
@@ -347,7 +496,13 @@ mod tests {
     fn backoff_ms_clamps_retries_beyond_shift_limit() {
         let policy = test_retry_policy();
 
-        assert_eq!(policy.backoff_ms(16), policy.backoff_ms(u32::MAX));
+        // Same jitter_key: retries beyond the shift limit hash on the
+        // clamped `shift`, not raw `retries`, so they must still match
+        // exactly, jitter included.
+        assert_eq!(
+            policy.backoff_ms(16, "output-a"),
+            policy.backoff_ms(u32::MAX, "output-a")
+        );
     }
 
     #[test]
@@ -361,6 +516,7 @@ mod tests {
                 elapsed_ms: 999_999,
             }),
             test_retry_policy(),
+            "output-a",
         );
 
         assert_eq!(action, OutputStartAction::MarkFailed);
@@ -374,6 +530,7 @@ mod tests {
             false,
             None,
             test_retry_policy(),
+            "output-a",
         );
 
         assert_eq!(action, OutputStartAction::SkipNoIngest);

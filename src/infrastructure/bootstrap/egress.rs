@@ -67,6 +67,7 @@ impl EgressReconciler {
                 snapshot.effective_has_ingest,
                 failure,
                 self.tuning.output_retry_policy(),
+                &output.id,
             ) {
                 OutputStartAction::NotApplicable => {}
                 OutputStartAction::SkipNoIngest => {

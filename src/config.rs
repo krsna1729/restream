@@ -106,8 +106,8 @@ impl RuntimeTuning {
         ticks.max(1)
     }
 
-    pub(crate) fn output_backoff_ms(&self, retries: u32) -> u64 {
-        self.output_retry_policy().backoff_ms(retries)
+    pub(crate) fn output_backoff_ms(&self, retries: u32, jitter_key: &str) -> u64 {
+        self.output_retry_policy().backoff_ms(retries, jitter_key)
     }
 
     pub(crate) fn output_retry_policy(&self) -> crate::application::reconcile::OutputRetryPolicy {

@@ -253,8 +253,10 @@ impl EgressTask {
                     had_progress,
                 );
                 last_failed.insert(self.output_id.clone(), (Instant::now(), retries));
-                (retries < self.tuning.output_max_retries)
-                    .then_some((retries, self.tuning.output_backoff_ms(retries)))
+                (retries < self.tuning.output_max_retries).then_some((
+                    retries,
+                    self.tuning.output_backoff_ms(retries, &self.output_id),
+                ))
             }
         };
 
@@ -708,8 +710,10 @@ impl EgressTask {
                 false,
             );
             last_failed.insert(self.output_id.clone(), (Instant::now(), retries));
-            (retries < self.tuning.output_max_retries)
-                .then_some((retries, self.tuning.output_backoff_ms(retries)))
+            (retries < self.tuning.output_max_retries).then_some((
+                retries,
+                self.tuning.output_backoff_ms(retries, &self.output_id),
+            ))
         } else {
             None
         };
