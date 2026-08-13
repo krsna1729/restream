@@ -18,8 +18,14 @@ impl MediaEngine {
         self.runtime.sender_semaphore.clone()
     }
 
-    pub fn srt_egress_muxer_port_handle(&self) -> Arc<std::sync::Mutex<Option<u16>>> {
-        self.runtime.srt_egress_muxer_port.clone()
+    /// Engine-wide per-shard libsrt egress multiplexer port registry. Each
+    /// egress-fabric shard resolves its own entry, so shards do not share a
+    /// libsrt sender thread — see
+    /// `crate::media::egress::backends::srt::muxer_ports`.
+    pub(crate) fn srt_egress_muxer_ports_handle(
+        &self,
+    ) -> crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPorts {
+        self.runtime.srt_egress_muxer_ports.clone()
     }
 
     pub fn bonding_available(&self) -> bool {

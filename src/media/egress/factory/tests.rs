@@ -1,4 +1,5 @@
 use super::*;
+use crate::media::egress::command::ShardId;
 use crate::media::egress::journal::FeedEpoch;
 use crate::media::srt::{SRTSOCKET, SrtEgressInterest, SrtEgressPollError, SrtReadyLeaf};
 use crate::media::ts_chunk_ring::TsChunkRing;
@@ -67,6 +68,78 @@ fn srt_fabric_shard_backends_build_one_backend_per_shard() {
 
     assert_eq!(backends.len(), 3);
     assert_eq!(*seen.lock().unwrap(), vec![0, 1, 2]);
+}
+
+#[test]
+fn srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state() {
+    // libsrt runs exactly one `CSndQueue` worker thread per bound local UDP
+    // port, so handing every shard the same reuse state funnels all egress
+    // sockets through one libsrt sender thread. Each shard must get its own.
+    let ports = SrtEgressMuxerPorts::default();
+
+    let backends = srt_fabric_shard_backends_with_poller(
+        NonZeroU32::new(3).unwrap(),
+        budget(),
+        |_| feed(),
+        |_| Ok::<_, &'static str>(FakeSrtPoller),
+        Some(ports.clone()),
+        EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+    )
+    .unwrap();
+
+    assert_eq!(
+        ports.tracked_shards(),
+        3,
+        "one libsrt multiplexer port per shard"
+    );
+    let states = backends
+        .iter()
+        .map(|backend| {
+            backend
+                .inner_backend()
+                .srt_egress_muxer_port_state()
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    for (index, state) in states.iter().enumerate() {
+        // Within a shard, reuse still works: a later leaf on this shard
+        // resolves the same state and therefore binds the same port.
+        assert!(
+            Arc::ptr_eq(state, &ports.shard(ShardId::new(index as u32))),
+            "shard {index} must keep claiming its own port"
+        );
+        for other in states.iter().skip(index + 1) {
+            assert!(
+                !Arc::ptr_eq(state, other),
+                "shards must not share one libsrt multiplexer"
+            );
+        }
+    }
+}
+
+#[test]
+fn srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry() {
+    let backends = srt_fabric_shard_backends_with_poller(
+        NonZeroU32::new(2).unwrap(),
+        budget(),
+        |_| feed(),
+        |_| Ok::<_, &'static str>(FakeSrtPoller),
+        None,
+        EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+    )
+    .unwrap();
+
+    // Reuse disabled still means backend-local, never-shared state.
+    let first = backends[0]
+        .inner_backend()
+        .srt_egress_muxer_port_state()
+        .clone();
+    let second = backends[1]
+        .inner_backend()
+        .srt_egress_muxer_port_state()
+        .clone();
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert_eq!(*first.lock().unwrap(), None);
 }
 
 #[test]

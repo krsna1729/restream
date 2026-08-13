@@ -973,6 +973,37 @@ Current branch status:
   alongside legacy RTMP) has been proven. Do not flip the default on the
   strength of the CPU/RSS numbers alone until that pure-fabric isolation
   case is run.
+  **Later correction: "process-wide sharing semantics" was the wrong target
+  and became a bottleneck of its own.** libsrt gives each multiplexer
+  (= each bound local UDP endpoint) exactly one `CSndQueue` worker thread
+  and one `CRcvQueue` worker thread — `CUDTUnited::updateMux` in
+  `srtcore/api.cpp` calls `CSndQueue::init`/`CRcvQueue::init`
+  (`srtcore/queue.cpp`) only on the create-a-new-multiplexer path, and the
+  `SRT:SndQ:wN` / `SRT:RcvQ:wN` thread names come from a process-global
+  counter, so `wN` identifies the *N*th multiplexer the process ever
+  created, not worker *N* of a pool. One engine-wide reused port therefore
+  meant one libsrt sender thread for every SRT egress connection in the
+  process. Measured at 120 concurrent SRT egress outputs (60 passthrough +
+  60 transcoded, 8 Mb/s h264): `SRT:SndQ:w2` carried by far the most kernel
+  time of any thread in the process — several times the busiest
+  `egress-shard-N` thread — while `SRT:SndQ:w1` (the ingest listener's
+  multiplexer) sat near idle; `quality.msSendBuf` ran 957-1020 ms against a
+  250 ms `msSendTsbPdDelay`, and all 120 outputs reported nonzero
+  `pktSndDropTotal` (80k-233k accumulated, 702-3187/s ongoing) while 0/120
+  RTMP outputs at the same scale dropped anything. Aggregate CPU was not
+  saturated (~85% busy across 6 cores), so this was serialization, not a
+  core shortage. **Fixed:** the reuse state is now scoped per `ShardId`
+  (`SrtEgressMuxerPorts`, `src/media/egress/backends/srt/muxer_ports.rs`)
+  rather than being one engine-wide `Arc<Mutex<Option<u16>>>`, so each
+  egress-fabric shard gets its own multiplexer and its own libsrt worker
+  thread pair. Both wiring paths resolve per shard: the initial
+  `srt_fabric_shard_backends_with_poller` loop and
+  `MediaEngine::rescale_srt_fabric`'s grow closure (which previously
+  ignored its `shard_id`). Shard *N* is shared across feeds, so the libsrt
+  thread count tracks shard count (already CPU-sized) rather than feed
+  count. A side effect worth noting: the per-shard mutex is now touched
+  only by its own shard thread, so a `First` claim held across a blocking
+  connect no longer stalls other shards' connects.
   **`SrtEgressEngine::advance` also read one feed unit per `feed.read_from`
   call** (`ReadBudget::new(budget.max_units.min(1), ..)`), the same
   one-unit-per-call shape the RTMP fabric engine had before its own

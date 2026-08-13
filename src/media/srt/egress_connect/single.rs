@@ -61,11 +61,23 @@ where
     }
 
     let muxer_port_claim = config.muxer_port_claim;
-    if let Some(port) = muxer_port_claim
-        .as_ref()
-        .and_then(SrtEgressMuxerPortClaim::bind_port)
+    if let Some(claim) = muxer_port_claim.as_ref()
+        && let Some(port) = claim.bind_port()
         && let Err(error) = ops.bind_muxer_port(socket, port)
     {
+        // The shard's learned muxer port is no longer bindable — libsrt
+        // released it when the last socket on that multiplexer closed and
+        // something else has since taken it. Forget the recording so the
+        // retry autoselects a fresh port instead of this shard wedging on a
+        // port it no longer owns. This attempt still fails: a failed
+        // `srt_bind` leaves the socket half-opened, so it is closed and the
+        // caller's normal reconnect path starts over on a clean one.
+        warn!(
+            port,
+            err = %error,
+            "[srt-egress] reusable local UDP muxer port no longer bindable; retry will autoselect"
+        );
+        claim.forget_stale_port();
         ops.close(socket);
         return Err(error);
     }

@@ -1,5 +1,5 @@
 use std::num::NonZeroU32;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::media::egress::backends::pipeline_shard::{
     PipelineShardBackend, SharedPipelineTargetSource,
@@ -12,6 +12,7 @@ use crate::media::egress::backends::rtmp_shard_resolve_runtime::{
 };
 use crate::media::egress::backends::sink_shard::SinkShardBackend;
 use crate::media::egress::backends::srt::SrtReadinessPoller;
+use crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPorts;
 use crate::media::egress::backends::srt::resolve_runtime::{
     ResolvingSrtShardBackendWithPoller, resolving_srt_shard_backend,
 };
@@ -34,7 +35,7 @@ pub(crate) fn spawn_srt_fabric_shard_group<F>(
     poller_max_events: usize,
     budget: WorkBudget,
     feed_for: F,
-    srt_egress_muxer_port_reuse: Option<Arc<Mutex<Option<u16>>>>,
+    srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
 ) -> Result<EgressShardGroup, SrtFabricShardGroupError<SrtEgressPollError>>
 where
     F: FnMut(ShardId) -> TsFeed,
@@ -58,7 +59,7 @@ fn spawn_srt_fabric_shard_group_with_poller<P, E, F, G>(
     budget: WorkBudget,
     feed_for: F,
     poller_for: G,
-    srt_egress_muxer_port_reuse: Option<Arc<Mutex<Option<u16>>>>,
+    srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
 ) -> Result<EgressShardGroup, SrtFabricShardGroupError<E>>
 where
     P: SrtReadinessPoller + Send + 'static,
@@ -84,7 +85,7 @@ fn srt_fabric_shard_backends_with_poller<P, E, F, G>(
     budget: WorkBudget,
     mut feed_for: F,
     mut poller_for: G,
-    srt_egress_muxer_port_reuse: Option<Arc<Mutex<Option<u16>>>>,
+    srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
     drain_timeout: std::time::Duration,
 ) -> Result<Vec<ResolvingSrtShardBackendWithPoller<P>>, E>
 where
@@ -100,7 +101,14 @@ where
             poller,
             feed_for(shard_id),
             budget,
-            srt_egress_muxer_port_reuse.clone(),
+            // Per shard, not one state shared by the whole group: libsrt
+            // gives each bound local port exactly one `CSndQueue` worker
+            // thread, so a group-wide port would funnel every leaf on
+            // every shard through a single libsrt sender thread (see
+            // `muxer_ports.rs`).
+            srt_egress_muxer_port_reuse
+                .as_ref()
+                .map(|ports| ports.shard(shard_id)),
             drain_timeout,
         ));
     }

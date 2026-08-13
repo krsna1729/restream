@@ -66,8 +66,45 @@ fn srt_egress_muxer_port_claim_serializes_first_port_selection() {
     let reuse_claim = claim_srt_egress_muxer_port(&state);
     assert_eq!(reuse_claim.bind_port(), Some(41000));
     assert!(
+        state.try_lock().is_ok(),
+        "reusing connectors must not hold the claim, so concurrent connects on one shard do not serialize"
+    );
+    assert!(
         !reuse_claim.record_first_connected_port(42000),
         "later connectors must not replace the learned muxer port"
     );
+    assert_eq!(*state.lock().unwrap(), Some(41000));
+}
+
+#[test]
+fn srt_egress_muxer_port_claim_forgets_only_the_port_it_was_issued() {
+    let state = std::sync::Mutex::new(Some(41000));
+
+    let claim = claim_srt_egress_muxer_port(&state);
+    claim.forget_stale_port();
+    assert_eq!(
+        *state.lock().unwrap(),
+        None,
+        "an unbindable port must be dropped so the next connect autoselects"
+    );
+
+    // A stale claim (its port already replaced by a later connect) must not
+    // clobber the newer recording.
+    *state.lock().unwrap() = Some(41000);
+    let stale = claim_srt_egress_muxer_port(&state);
+    *state.lock().unwrap() = Some(42000);
+    stale.forget_stale_port();
+    assert_eq!(*state.lock().unwrap(), Some(42000));
+}
+
+#[test]
+fn srt_egress_muxer_port_first_claim_never_forgets_a_port() {
+    let state = std::sync::Mutex::new(None);
+
+    let claim = claim_srt_egress_muxer_port(&state);
+    // `First` holds the guard; `forget_stale_port` must be a no-op rather
+    // than deadlocking on its own claim.
+    claim.forget_stale_port();
+    assert!(claim.record_first_connected_port(41000));
     assert_eq!(*state.lock().unwrap(), Some(41000));
 }

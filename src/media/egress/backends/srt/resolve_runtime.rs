@@ -79,6 +79,13 @@ impl<B> ResolvingSrtShardBackend<B> {
     pub(crate) fn worker_count(&self) -> usize {
         self.resolve_workers.worker_count()
     }
+
+    /// The wrapped shard backend, so factory-wiring tests can inspect what
+    /// this decorator was actually constructed around.
+    #[cfg(test)]
+    pub(crate) fn inner_backend(&self) -> &B {
+        &self.backend
+    }
 }
 
 impl<B> EgressShardBackend for ResolvingSrtShardBackend<B>
@@ -152,12 +159,12 @@ pub(crate) fn resolving_srt_shard_backend_with_configurator<P, C>(
     feed: TsFeed,
     budget: WorkBudget,
     socket_configurator: C,
-    // Shared local-UDP-port reuse state for the libsrt egress multiplexer
-    // (see `SrtShardBackend::with_srt_egress_muxer_port_reuse`). `None`
-    // leaves reuse disabled (every existing test/no-config caller); `Some`
-    // is the same `Arc<Mutex<Option<u16>>>` the legacy SRT egress path
-    // shares via `MediaEngine::srt_egress_muxer_port_handle`, so a socket
-    // connected by either path can be reused by the other.
+    // This shard's local-UDP-port reuse state for the libsrt egress
+    // multiplexer (see `SrtShardBackend::with_srt_egress_muxer_port_reuse`).
+    // `None` leaves reuse disabled (every existing test/no-config caller);
+    // `Some` is the per-shard state minted by `SrtEgressMuxerPorts::shard`
+    // in `factory.rs`/`engine_egress_fabric.rs`, so leaves on this shard
+    // share one libsrt multiplexer and other shards get their own.
     srt_egress_muxer_port_reuse: Option<std::sync::Arc<std::sync::Mutex<Option<u16>>>>,
     drain_timeout: std::time::Duration,
 ) -> ResolvingSrtShardBackend<

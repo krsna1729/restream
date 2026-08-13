@@ -165,6 +165,79 @@ async fn srt_fabric_registry_retains_native_runtime_once_per_feed() {
     );
 }
 
+/// End-to-end wiring proof for the libsrt egress-multiplexer scoping.
+///
+/// libsrt creates one `CMultiplexer` per bound local UDP port and gives each
+/// one exactly one `CSndQueue` and one `CRcvQueue` worker thread
+/// (`srtcore/api.cpp::updateMux` -> `srtcore/queue.cpp`). An engine-wide
+/// port therefore put every SRT egress connection on one libsrt sender
+/// thread, which is what saturated at ~120 concurrent egress outputs and
+/// drove libsrt's TLPKTDROP to discard packets past their deadline. This
+/// asserts the real `retain_srt_fabric_runtime` path claims one port per
+/// shard, and that shard *N* is shared across feeds so the libsrt thread
+/// count tracks shard count rather than feed count.
+#[tokio::test]
+async fn srt_fabric_runtime_claims_one_libsrt_muxer_port_per_shard_shared_across_feeds() {
+    let engine = MediaEngine::new();
+    assert!(
+        engine.config.srt_egress_reuse_local_port,
+        "this test covers the reuse-enabled default"
+    );
+    let shard_count = engine.config.egress_fabric.shard_count().get();
+    assert!(shard_count > 1, "need more than one shard to be meaningful");
+    let ts_ring = TsChunkRing::new(8, CancellationToken::new());
+    let feed = TsFeed::new(&ts_ring, Arc::new(FeedEpoch::new()));
+    let first_feed = FeedId::new("feed-engine-srt-muxer-source");
+    let second_feed = FeedId::new("feed-engine-srt-muxer-720p");
+
+    assert_eq!(
+        engine
+            .retain_srt_fabric_runtime(first_feed.clone(), &feed)
+            .await,
+        Ok(true)
+    );
+    let ports = engine.srt_egress_muxer_ports_handle();
+    assert_eq!(
+        ports.tracked_shards(),
+        shard_count as usize,
+        "one libsrt multiplexer port per shard"
+    );
+
+    // A second feed's shards reuse the same per-shard entries rather than
+    // minting a second multiplexer per shard.
+    assert_eq!(
+        engine
+            .retain_srt_fabric_runtime(second_feed.clone(), &feed)
+            .await,
+        Ok(true)
+    );
+    assert_eq!(
+        ports.tracked_shards(),
+        shard_count as usize,
+        "shard N is shared across feeds, so libsrt thread count tracks shard count"
+    );
+
+    // Distinct per shard; stable (reusable) within a shard.
+    let states = (0..shard_count)
+        .map(|index| ports.shard(ShardId::new(index)))
+        .collect::<Vec<_>>();
+    for (index, state) in states.iter().enumerate() {
+        assert!(Arc::ptr_eq(state, &ports.shard(ShardId::new(index as u32))));
+        for other in states.iter().skip(index + 1) {
+            assert!(
+                !Arc::ptr_eq(state, other),
+                "shards must not share one libsrt multiplexer"
+            );
+        }
+    }
+
+    assert!(engine.release_srt_fabric_runtime(&first_feed).await);
+    assert!(engine.release_srt_fabric_runtime(&second_feed).await);
+    // Releasing a feed keeps the per-shard entries: a shard that comes back
+    // reuses its previous port instead of stranding it.
+    assert_eq!(ports.tracked_shards(), shard_count as usize);
+}
+
 #[tokio::test]
 async fn srt_fabric_registry_shutdown_helper_removes_and_joins_retained_runtime() {
     let engine = MediaEngine::new();

@@ -44,6 +44,7 @@ impl SrtLeafPressure {
 }
 
 mod add_error;
+pub(crate) mod muxer_ports;
 pub(crate) mod resolve_runtime;
 mod socket_config;
 
@@ -415,11 +416,11 @@ pub(crate) struct SrtShardBackend<
     poll_buffer: Vec<SrtReadyLeaf>,
     pending_connects: HashMap<OutputId, PendingSrtConnect>,
     last_stall_sweep: Option<Instant>,
-    /// Shared local-UDP-port state for libsrt egress-multiplexer reuse,
-    /// mirroring the legacy path's `MediaEngine::srt_egress_muxer_port_handle`
-    /// (`src/media/engine_runtime.rs`) — the same `Arc<Mutex<Option<u16>>>` is
-    /// passed to both when the fabric runtime is constructed, so a socket
-    /// connected by either path can be reused by the other. Defaults to a
+    /// This shard's local-UDP-port state for libsrt egress-multiplexer
+    /// reuse, handed out per shard by
+    /// `SrtEgressMuxerPorts::shard` (`muxer_ports.rs`) so every leaf on this
+    /// shard shares one libsrt multiplexer — and therefore one `CSndQueue`
+    /// worker thread — while other shards get their own. Defaults to a
     /// fresh, backend-local mutex with reuse disabled so every existing
     /// constructor (tests included) keeps building unconfigured sockets
     /// unless `with_srt_egress_muxer_port_reuse` opts in explicitly.
@@ -550,6 +551,14 @@ where
         self.srt_egress_muxer_port = state;
         self.reuse_local_srt_egress_port = enabled;
         self
+    }
+
+    /// The exact reuse state this backend will claim from, so shard-wiring
+    /// tests can prove distinct shards were handed distinct per-shard state
+    /// (`Arc::ptr_eq`) without a second construction path.
+    #[cfg(test)]
+    pub(crate) fn srt_egress_muxer_port_state(&self) -> &Arc<Mutex<Option<u16>>> {
+        &self.srt_egress_muxer_port
     }
 
     pub(crate) fn add_connected_socket(
