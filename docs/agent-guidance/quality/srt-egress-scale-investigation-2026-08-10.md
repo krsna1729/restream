@@ -966,6 +966,23 @@ performant at the full 1,200-output target on this 6-core host. The
 canonical 95%-RTMP/5%-SRT mix (the real MSR shape) at the same scale and
 bitrate is the natural closing verification.
 
+### Closing result: canonical 95%-RTMP/5%-SRT mix confirmed at 1,200
+
+Same fixture, same host, default `MSR_PROTOCOL_MIX` (`rtmp:1140, srt:60` at
+n=1,200, MSR's real production shape) through the full 100→1,200 ramp:
+**1,200/1,200 PASS, every checkpoint converging in 1-3s, zero stragglers,
+zero `ENOCONN`, zero sink-verification false positives, zero
+`packetsSentDrop`** (the SRT slice at only 60 of 1,200 outputs carries far
+less TLPKTDROP surface than the srt-only run). Final state at n=1,200:
+**~2.5 of 6 CPU cores, 1.9 GB RSS, 223 threads**, between the RTMP-only and
+SRT-only numbers above as expected for a mostly-RTMP mix with a real SRT
+slice's shard/multiplexer overhead.
+
+All three MSR protocol mixes — `rtmp-only`, `srt-only`, and the canonical
+95/5 shape — are now proven correct and performant at the full
+1,200-output target, real 1080p60/8 Mbps bitrate, on this 6-core host,
+with no known open defects.
+
 ## Artifact index
 
 Live run artifacts (this worktree, `.local/artifacts/`, all `NO_CLEANUP=1`):
