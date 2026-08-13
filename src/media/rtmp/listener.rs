@@ -74,23 +74,39 @@ pub async fn start_rtmp_server_on(
                         continue;
                     }
                 };
-                let pipeline_access_clone = pipeline_access.clone();
-                let security_clone = security.clone();
-                let engine_clone = engine.clone();
-                tokio::spawn(async move {
-                    let _permit = permit;
-                    if let Err(e) = handle_rtmp_client(
-                        socket,
-                        addr,
-                        pipeline_access_clone,
-                        security_clone,
-                        engine_clone,
-                    )
-                    .await
-                    {
-                        warn!("error handling client {}: {:?}", addr, e);
-                    }
-                });
+                if engine.config.sink_mode {
+                    info!("[rtmp] SINK_MODE: discarding data from {}", addr);
+                    tokio::spawn(async move {
+                        drop(permit);
+                        use tokio::io::AsyncReadExt;
+                        let mut buf = [0u8; 4096];
+                        let mut stream = socket;
+                        loop {
+                            match stream.read(&mut buf).await {
+                                Ok(0) | Err(_) => break,
+                                Ok(_) => {}
+                            }
+                        }
+                    });
+                } else {
+                    let pipeline_access_clone = pipeline_access.clone();
+                    let security_clone = security.clone();
+                    let engine_clone = engine.clone();
+                    tokio::spawn(async move {
+                        let _permit = permit;
+                        if let Err(e) = handle_rtmp_client(
+                            socket,
+                            addr,
+                            pipeline_access_clone,
+                            security_clone,
+                            engine_clone,
+                        )
+                        .await
+                        {
+                            warn!("error handling client {}: {:?}", addr, e);
+                        }
+                    });
+                }
             }
             Err(e) => {
                 engine

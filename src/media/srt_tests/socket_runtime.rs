@@ -82,7 +82,7 @@ fn receive_error_classifier_disconnects_closed_publishers() {
 #[test]
 fn sysctl_check_does_not_panic() {
     // Smoke test: runs on any Linux, should not panic even if paths don't exist
-    check_sysctl_limits();
+    check_sysctl_limits(crate::media::srt::socket::DESIRED_UDP_BUF);
 }
 
 #[test]

@@ -195,7 +195,7 @@ impl SrtServer {
             srt_startup();
             srt_setloglevel(socket::SRT_LOG_CRIT);
         }
-        check_sysctl_limits();
+        check_sysctl_limits(engine.config.srt_udp_buffer as i32);
         Self {
             pipeline_access,
             engine,

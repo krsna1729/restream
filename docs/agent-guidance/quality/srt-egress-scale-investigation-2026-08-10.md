@@ -36,6 +36,7 @@ Worktree: `.local/worktrees/msr-1080p-investigation`, branch
 - [The 720p tier was in CRF mode](#the-720p-tier-was-in-crf-mode)
 - [What's fixed, what's evidenced-but-unproven, what's still open](#whats-fixed-whats-evidenced-but-unproven-whats-still-open)
 - [Real-1080p MSR envelope: residual intermittent zero-video failures (2026-08-12)](#real-1080p-msr-envelope-residual-intermittent-zero-video-failures-2026-08-12)
+- [2026-08-12 update: sink mode, 1,200-output scaling, command channel optimization](#2026-08-12-update-sink-mode-1200-output-scaling-command-channel-optimization)
 - [Artifact index](#artifact-index)
 
 ## Objective
@@ -684,3 +685,54 @@ Code: `src/media/egress/leaf.rs`, `src/media/egress/visit.rs`,
 `src/media/srt/egress_connect/bonded.rs`, `src/media/srt/socket.rs`,
 `src/media/srt/listener.rs`, `src/media/srt/sys.rs`,
 `src/bin/test_harness/resource_sweep/bitrate.rs`.
+
+## 2026-08-12 update: sink mode, 1,200-output scaling, command channel optimization
+
+### Sink mode (`RESTREAM_SINK_MODE=1`)
+
+A minimal SRT/RTMP listener that accepts connections and discards data at the
+application level — no pipelines, no source rings, no probes, no adaptive
+resize. RAM per connection: ~10 KB vs 4.6 MB (ring) + 6 MB (SRT buffer) with
+a full pipeline. Created via `SrtServer::run` in `listener.rs`: binds with
+`SRTT_LIVE` + `SRTO_LATENCY=250` + `SRTO_REUSEADDR`, accepts in a tight loop,
+spawns discard threads. Equivalent for RTMP in `rtmp/listener.rs`.
+
+For 1,200-output tests, 4 sink instances on separate ports absorb 300
+connections each. Kernel UDP receive buffer stays at default; no
+`RESTREAM_SRT_UDP_BUFFER` or `RESTREAM_RING_HEADROOM_SECS` needed on sinks.
+
+### Config additions (env via config framework)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RESTREAM_SINK_MODE` | (unset) | Enable minimal discard listener |
+| `RESTREAM_SRT_UDP_BUFFER` | 8 MB | SRT UDP send/recv buffer |
+| `RESTREAM_RING_HEADROOM_SECS` | 6.0 s | Pipeline ring adaptive-resize headroom |
+
+### Command channel optimization
+
+`dispatch_spec` (`manager.rs`) previously cloned the `OutputSpec` at the call
+site before checking command slot availability — 100% wasted heap allocation
+(Strings, Arc bump, LeafPolicy) when the channel was full. Now checks the
+slot first and clones only on success.
+
+### 1,200-output scale test results (4 sink instances × 300)
+
+- 1,243 egress.started, 42 failed (all SRT handshake timeout)
+- 8 end-to-end SRT connections established (2 per sink)
+- 0 `CommandChannelFull` errors at capacity 8192
+- 0 panics across all instances
+- Memory: 5.6 GiB total (A + 4 sinks + ffmpeg + OS)
+
+Remaining bottleneck: SRT egress connection establishment rate on A. Each
+connection spawns a DNS resolution thread, waits on a limited-capacity
+completion queue, and the shard processes completions batch-by-batch.
+With 1,200 connections in flight, the thread-per-resolve model saturates the
+6-core machine at ~8 simultaneous connections.
+
+### Files changed
+
+`src/config.rs`, `src/media/egress/manager.rs`,
+`src/media/engine_pipeline.rs`, `src/media/rtmp/listener.rs`,
+`src/media/srt.rs`, `src/media/srt/listener.rs`,
+`src/media/srt/socket.rs`, `src/media/srt_tests/socket_runtime.rs`.

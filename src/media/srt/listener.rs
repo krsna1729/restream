@@ -7,8 +7,8 @@ use tracing::{error, info, warn};
 
 use super::buffer_sizing::srt_set_ingest_latency_opts;
 use super::socket::{
-    DESIRED_UDP_BUF, SrtListenerCloser, enable_srt_group_connect, from_sockaddr_in,
-    srt_log_effective_opts, srt_set_highbitrate_opts, to_sockaddr_in,
+    SrtListenerCloser, enable_srt_group_connect, from_sockaddr_in, srt_log_effective_opts,
+    srt_set_highbitrate_opts, to_sockaddr_in,
 };
 use super::srt_crypto::{apply_srt_crypto_socket, srt_crypto_from_resolved};
 use super::srt_monitor::monitor_listener_socket;
@@ -18,6 +18,7 @@ use super::{SrtIngestPolicyStore, SrtServer};
 use crate::domain::srt_ingest::{
     DEFAULT_SRT_INGEST_LATENCY_MS, ResolvedSrtCrypto, ResolvedSrtIngestConfig,
 };
+use crate::media::srt::sys::{srt_bind, srt_close, srt_create_socket, srt_listen, srt_recv};
 
 const SRT_REJX_UNAUTHORIZED: c_int = 1401;
 const SRT_REJX_BAD_MODE: c_int = 1405;
@@ -121,6 +122,93 @@ unsafe fn srt_listener_policy_callback_inner(
 
 impl SrtServer {
     pub async fn run(self: Arc<Self>, port: u16) {
+        // SINK_MODE: minimal discard listener — no pipeline, no auth, no ring.
+        // Accepts every connection, reads and discards data at application level.
+        if self.engine.config.sink_mode {
+            info!(
+                "[srt] SINK_MODE: starting discard listener on port {}",
+                port
+            );
+            let server_sock = unsafe { srt_create_socket() };
+            if server_sock < 0 {
+                return;
+            }
+            let addr_str = format!("0.0.0.0:{}", port);
+            let addr: SocketAddr = match addr_str.parse() {
+                Ok(a) => a,
+                Err(_) => {
+                    unsafe {
+                        srt_close(server_sock);
+                    }
+                    return;
+                }
+            };
+            let sin = to_sockaddr_in(addr);
+            unsafe {
+                let live: c_int = SRTT_LIVE;
+                srt_setsockopt(
+                    server_sock,
+                    0,
+                    SRTO_TRANSTYPE,
+                    &live as *const _ as *const c_void,
+                    std::mem::size_of::<c_int>() as c_int,
+                );
+                let lat: c_int = 250;
+                srt_setsockopt(
+                    server_sock,
+                    0,
+                    SRTO_LATENCY,
+                    &lat as *const _ as *const c_void,
+                    std::mem::size_of::<c_int>() as c_int,
+                );
+                let reuse: c_int = 1;
+                srt_setsockopt(
+                    server_sock,
+                    0,
+                    SRTO_REUSEADDR,
+                    &reuse as *const _ as *const c_void,
+                    std::mem::size_of::<c_int>() as c_int,
+                );
+                srt_bind(
+                    server_sock,
+                    &sin,
+                    std::mem::size_of::<sockaddr_in>() as c_int,
+                );
+                srt_listen(server_sock, 1024);
+            }
+            info!("[srt] SINK_MODE: listening on {}", addr_str);
+            loop {
+                let mut client_sin = sockaddr_in {
+                    sin_family: 0,
+                    sin_port: 0,
+                    sin_addr: 0,
+                    sin_zero: [0; 8],
+                };
+                let mut len = std::mem::size_of::<sockaddr_in>() as c_int;
+                let client_sock = unsafe { srt_accept(server_sock, &mut client_sin, &mut len) };
+                if client_sock < 0 {
+                    // SAFETY: last SRT error is thread-local
+                    let err_ptr = unsafe { srt_getlasterror_str() };
+                    let err = unsafe { std::ffi::CStr::from_ptr(err_ptr) }.to_string_lossy();
+                    warn!("[srt] SINK_MODE: accept error: {}", err);
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    continue;
+                }
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 1316];
+                    loop {
+                        let n = unsafe { srt_recv(client_sock, buf.as_mut_ptr(), 1316) };
+                        if n <= 0 {
+                            break;
+                        }
+                    }
+                    unsafe {
+                        srt_close(client_sock);
+                    }
+                });
+            }
+        }
+
         // SAFETY: srt_create_socket returns a valid SRT socket handle or -1
         // on error. The socket is closed via SrtListenerCloser on drop or
         // explicitly on bind/listen failure below.
@@ -201,9 +289,12 @@ impl SrtServer {
                 )
             }
         }
-        srt_set_highbitrate_opts(server_sock);
-        let listener_udp_recv_capacity =
-            srt_log_effective_opts(server_sock, "listener", DESIRED_UDP_BUF);
+        srt_set_highbitrate_opts(server_sock, self.engine.config.srt_udp_buffer as i32);
+        let listener_udp_recv_capacity = srt_log_effective_opts(
+            server_sock,
+            "listener",
+            self.engine.config.srt_udp_buffer as i32,
+        );
 
         let addr_str = format!("0.0.0.0:{}", port);
         let addr = match addr_str.parse::<SocketAddr>() {

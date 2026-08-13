@@ -117,12 +117,8 @@ impl EgressManager {
         F: FnMut(ShardId, EgressCommand) -> Result<(), E>,
     {
         match command {
-            EgressCommand::Add(spec) => {
-                self.dispatch_spec(EgressCommand::Add(spec.clone()), spec, dispatch)
-            }
-            EgressCommand::Update(spec) => {
-                self.dispatch_spec(EgressCommand::Update(spec.clone()), spec, dispatch)
-            }
+            EgressCommand::Add(spec) => self.dispatch_spec(spec, false, dispatch),
+            EgressCommand::Update(spec) => self.dispatch_spec(spec, true, dispatch),
             EgressCommand::Remove(output_id) => self.dispatch_remove(output_id, dispatch),
             // Feed wakes are delivered per shard by the feed watcher, not
             // routed through manager assignment.
@@ -183,8 +179,8 @@ impl EgressManager {
 
     fn dispatch_spec<E, F>(
         &mut self,
-        command: EgressCommand,
         spec: OutputSpec,
+        is_update: bool,
         mut dispatch: F,
     ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<E>>
     where
@@ -212,8 +208,16 @@ impl EgressManager {
                 EgressManagerCommandError::ShardDraining { shard_id },
             ));
         }
+        // Check slot availability BEFORE cloning the OutputSpec for the
+        // dispatch. When the channel is full, this avoids the spec clone
+        // (heap-allocated Strings, Arc bump, LeafPolicy clone) entirely.
         self.check_command_slot(shard_id)
             .map_err(EgressManagerDispatchError::Command)?;
+        let command = if is_update {
+            EgressCommand::Update(spec.clone())
+        } else {
+            EgressCommand::Add(spec.clone())
+        };
         dispatch(shard_id, command)
             .map_err(|source| EgressManagerDispatchError::Dispatch { shard_id, source })?;
         self.reserve_command_slot(shard_id)
@@ -412,7 +416,7 @@ impl EgressManager {
                 self.desired.remove(&output_id);
                 self.desired_specs.remove(&output_id);
             }
-            self.dispatch_spec(EgressCommand::Add(spec.clone()), spec, &mut dispatch)?;
+            self.dispatch_spec(spec, false, &mut dispatch)?;
             moved.push(output_id);
         }
 

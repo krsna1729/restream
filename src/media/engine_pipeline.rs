@@ -36,11 +36,11 @@ impl MediaEngine {
         audio_track_count: usize,
     ) -> Option<Arc<RingBuffer>> {
         const AUDIO_PKT_RATE: f64 = 50.0;
-        const HEADROOM_SECS: f64 = 6.0;
         const MAX_RING_CAPACITY: usize = 16_384;
+        let headroom_secs = self.config.ring_headroom_secs.max(0.1);
 
         let pkt_rate = video_fps.max(0.0) + audio_track_count as f64 * AUDIO_PKT_RATE;
-        let needed = ((pkt_rate * HEADROOM_SECS).ceil() as usize)
+        let needed = ((pkt_rate * headroom_secs).ceil() as usize)
             .max(self.config.ring_capacity)
             .min(MAX_RING_CAPACITY);
 
@@ -78,7 +78,7 @@ impl MediaEngine {
             audio_track_count,
             new_capacity = needed,
             seeded_packets,
-            headroom_secs = format!("{:.1}", needed as f64 / pkt_rate),
+            headroom_secs = format!("{:.1}", headroom_secs),
             "adaptive ring resize: readers migrate in-place, no egress reconnect"
         );
 
