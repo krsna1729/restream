@@ -64,6 +64,7 @@ fn srt_fabric_shard_backends_build_one_backend_per_shard() {
         },
         None,
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+        None,
     )
     .unwrap();
 
@@ -86,6 +87,7 @@ fn srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state() {
         |_| Ok::<_, &'static str>(FakeSrtPoller),
         Some(ports.clone()),
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+        None,
     )
     .unwrap();
 
@@ -132,6 +134,7 @@ fn srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry() {
         |_| Ok::<_, &'static str>(FakeSrtPoller),
         None,
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+        None,
     )
     .unwrap();
 
@@ -158,6 +161,7 @@ fn spawn_srt_fabric_shard_group_starts_requested_shards() {
         |_| feed(),
         |_| Ok::<_, &'static str>(FakeSrtPoller),
         None,
+        None,
     )
     .unwrap();
 
@@ -182,10 +186,39 @@ fn spawn_srt_fabric_shard_group_reports_poller_creation_error() {
             Ok(FakeSrtPoller)
         },
         None,
+        None,
     );
 
     assert!(matches!(
         result,
         Err(SrtFabricShardGroupError::Backend("poller failed"))
     ));
+}
+
+#[test]
+fn srt_fabric_shard_backends_share_one_connect_admission_semaphore_across_shards() {
+    // Connect admission is engine-wide, not per shard: every shard's
+    // backend must clone the *same* semaphore handle so a permit acquired
+    // on one shard is visible to every other shard (see
+    // `srt_connect_admission.rs`).
+    let admission = Arc::new(tokio::sync::Semaphore::new(1));
+
+    let backends = srt_fabric_shard_backends_with_poller(
+        "pipeline-a",
+        NonZeroU32::new(3).unwrap(),
+        budget(),
+        |_| feed(),
+        |_| Ok::<_, &'static str>(FakeSrtPoller),
+        None,
+        EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+        Some(admission.clone()),
+    )
+    .unwrap();
+
+    assert_eq!(backends.len(), 3);
+    assert_eq!(admission.available_permits(), 1);
+    let permit = admission.clone().try_acquire_owned().unwrap();
+    assert_eq!(admission.available_permits(), 0);
+    drop(permit);
+    assert_eq!(admission.available_permits(), 1);
 }

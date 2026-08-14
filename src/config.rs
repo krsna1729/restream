@@ -305,6 +305,15 @@ pub struct AppConfig {
     /// date); multiplexer count scales with `shard_count x
     /// active_pipeline_count` instead of a flat `shard_count` when enabled.
     pub srt_egress_muxer_port_pipeline_scoped: bool,
+    /// Engine-wide bound on concurrent in-flight SRT egress connects
+    /// (`srt_connect_admission.rs`). Decouples connection-*establishment*
+    /// concurrency from shard count: a mass output-creation burst (all of
+    /// MSR's outputs added together) can resolve far more connects at once
+    /// than shard count alone would ever expose to libsrt without this.
+    /// Sized with margin under the measured ~120-connections-per-
+    /// multiplexer libsrt `CSndQueue` saturation point
+    /// (`docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`).
+    pub srt_egress_connect_concurrency: usize,
     pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
     pub secure_session_cookies: bool,
@@ -617,6 +626,7 @@ impl Default for AppConfig {
             srt_egress_muxer_max_outputs_per_shard: 0,
             srt_egress_muxer_max_shards: 64,
             srt_egress_muxer_port_pipeline_scoped: true,
+            srt_egress_connect_concurrency: 64,
             use_internal_file_ingest: false,
             initial_admin_password: None,
             secure_session_cookies: false,
@@ -695,6 +705,8 @@ impl AppConfig {
             env_usize("RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS", 64).clamp(1, 64);
         let srt_egress_muxer_port_pipeline_scoped =
             env_bool_default_true("RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED");
+        let srt_egress_connect_concurrency =
+            env_usize("RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY", 64).clamp(1, 4096);
         let use_internal_file_ingest =
             std::env::var_os("RESTREAM_USE_INTERNAL_FILE_INGEST").is_some();
         let initial_admin_password = std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok();
@@ -768,6 +780,7 @@ impl AppConfig {
             srt_egress_muxer_max_outputs_per_shard,
             srt_egress_muxer_max_shards,
             srt_egress_muxer_port_pipeline_scoped,
+            srt_egress_connect_concurrency,
             use_internal_file_ingest,
             initial_admin_password,
             secure_session_cookies,

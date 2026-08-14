@@ -29,6 +29,7 @@ pub(crate) enum SrtFabricShardGroupError<E> {
     Group(EgressShardGroupError),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_srt_fabric_shard_group<F>(
     pipeline_id: &str,
     shard_count: NonZeroU32,
@@ -37,6 +38,7 @@ pub(crate) fn spawn_srt_fabric_shard_group<F>(
     budget: WorkBudget,
     feed_for: F,
     srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
+    connect_admission: Option<Arc<tokio::sync::Semaphore>>,
 ) -> Result<EgressShardGroup, SrtFabricShardGroupError<SrtEgressPollError>>
 where
     F: FnMut(ShardId) -> TsFeed,
@@ -52,6 +54,7 @@ where
             SrtFabricPoller::new(poller_max_events)
         },
         srt_egress_muxer_port_reuse,
+        connect_admission,
     )
 }
 
@@ -64,6 +67,7 @@ fn spawn_srt_fabric_shard_group_with_poller<P, E, F, G>(
     feed_for: F,
     poller_for: G,
     srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
+    connect_admission: Option<Arc<tokio::sync::Semaphore>>,
 ) -> Result<EgressShardGroup, SrtFabricShardGroupError<E>>
 where
     P: SrtReadinessPoller + Send + 'static,
@@ -78,6 +82,7 @@ where
         poller_for,
         srt_egress_muxer_port_reuse,
         shard_config.drain_timeout(),
+        connect_admission,
     )
     .map_err(SrtFabricShardGroupError::Backend)?;
     EgressShardGroup::spawn(shard_count, shard_config, backends)
@@ -93,6 +98,7 @@ fn srt_fabric_shard_backends_with_poller<P, E, F, G>(
     mut poller_for: G,
     srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
     drain_timeout: std::time::Duration,
+    connect_admission: Option<Arc<tokio::sync::Semaphore>>,
 ) -> Result<Vec<ResolvingSrtShardBackendWithPoller<P>>, E>
 where
     P: SrtReadinessPoller,
@@ -117,6 +123,10 @@ where
                 .as_ref()
                 .map(|ports| ports.shard(pipeline_id, shard_id)),
             drain_timeout,
+            // Shared engine-wide, not per shard: this bounds total
+            // in-flight SRT connect concurrency, independent of shard
+            // count (see `srt_connect_admission.rs`).
+            connect_admission.clone(),
         ));
     }
     Ok(backends)

@@ -519,6 +519,11 @@ pub struct RuntimeInfra {
     /// see `SrtEgressMuxerPorts` for why this is keyed by shard id rather
     /// than being a single engine-wide port.
     pub(crate) srt_egress_muxer_ports: SrtEgressMuxerPorts,
+    /// Engine-wide bound on concurrent in-flight SRT egress connects —
+    /// see `srt_connect_admission.rs`. One shared semaphore, not per shard
+    /// or per pipeline: it caps total connection-establishment concurrency
+    /// regardless of how that work is sharded.
+    pub(crate) srt_egress_connect_admission: Arc<tokio::sync::Semaphore>,
     pub external_ffmpeg_semaphore: Arc<tokio::sync::Semaphore>,
     pub diag_semaphores: TokioRwLock<HashMap<String, Arc<tokio::sync::Semaphore>>>,
     pub event_log: Arc<EventLog>,
@@ -540,6 +545,9 @@ impl RuntimeInfra {
             listener_shutdowns: std::sync::Mutex::new(Vec::new()),
             sender_semaphore: Arc::new(tokio::sync::Semaphore::new(512)),
             srt_egress_muxer_ports: SrtEgressMuxerPorts::default(),
+            srt_egress_connect_admission: Arc::new(tokio::sync::Semaphore::new(
+                config.srt_egress_connect_concurrency,
+            )),
             external_ffmpeg_semaphore: Arc::new(tokio::sync::Semaphore::new(
                 external_ffmpeg_permits,
             )),
