@@ -16,6 +16,7 @@ along the way; this one explains the resulting steady-state footprint.
 - [Memory: dominant cost is per-connection, not per-feed](#memory-dominant-cost-is-per-connection-not-per-feed)
 - [CPU: proportional to active egress-shard thread count, not output count](#cpu-proportional-to-active-egress-shard-thread-count-not-output-count)
 - [Summary](#summary)
+- [Efficiency evaluation](#efficiency-evaluation)
 
 ## Method
 
@@ -281,3 +282,109 @@ single 6-core, 12 GB host's headroom, but a much larger track catalog
 (hundreds of distinct SRT selections rather than 30) would scale SRT's
 thread cost linearly in feed count even at low per-feed output counts,
 independent of total connection count.
+
+## Efficiency evaluation
+
+Is this footprint minimal, or is there slack worth removing? Two separate
+findings, with different confidence and different recommended action.
+
+### Not minimal: per-feed SRT shard pools over-provision small feeds
+
+The dominant thread cost in every mix that includes SRT is
+`egress-shard` threads for SRT feeds: 180 of 214 threads in `srt-only`, 156
+of 189 egress-shard threads in canonical. Each of the 26-30 distinct SRT
+feeds gets its own independent shard pool sized at the full CPU-derived
+ceiling (`EgressShardProfile::SrtCpuParallel`,
+`target_egress_fabric_shards` in `src/config.rs`) — including feeds with as
+few as 9-11 outputs (the smallest canonical-mix ranks), which get exactly
+the same 6 dedicated shard threads as a 285-output feed. This is genuine
+over-provisioning: the CPU-per-100-threads figures above already show most
+SRT shard threads sitting mostly idle, and a 9-output feed cannot plausibly
+need 6 dedicated OS threads' worth of libsrt-multiplexer parallelism.
+
+The size of the win is real but bounded by what's actually safe to remove.
+Each idle Tokio-adjacent OS thread costs a kernel thread-stack reservation
+plus scheduler bookkeeping (single-digit KB to low hundreds of KB of
+resident stack depending on actual usage, not the full 2-8 MB reserved
+address-space default) and one more `epoll_wait` participant — real but
+small next to the ~4-6 MB CSndBuffer per SRT *connection* that dominates
+measured RSS. The likely payoff of fixing this is a meaningfully smaller
+thread count (better process/scheduler hygiene, clearer `htop`/telemetry
+signal, lower baseline CPU from fewer idle-wake cycles) more than a large
+RSS reduction.
+
+**Why this was not changed in this session**: `EgressShardProfile::SrtCpuParallel`
+being output-count-*independent* is not an oversight — it is the fix,
+proptested (`srt_cpu_parallel_target_is_cpu_ceiling_regardless_of_outputs`,
+`src/config/tests/configuration_behavior.rs`), for a real, previously-shipped
+bug: an earlier output-count-scaled SRT shard formula capped a ~60-output
+SRT feed at 1 shard / 1 libsrt multiplexer, and that one multiplexer's
+`CSndQueue` thread became a hard bottleneck past roughly 120 concurrent SRT
+egress connections, causing continuous `TLPKTDROP` (see
+[the SRT egress scale investigation](srt-egress-scale-investigation-2026-08-10.md)).
+Two directions could reduce the current footprint without reopening that
+bug, and both are real hot-path/lifecycle changes requiring the full proof
+ladder (deterministic unit tests, the existing proptests re-verified against
+the new formula, a live harness run at real bitrate re-proving zero
+`TLPKTDROP`/overrun events, and a benchmark) before being trustworthy:
+
+1. **Give `SrtCpuParallel` its own, much smaller output-per-shard threshold**
+   than RTMP's 128 (informed by the ~120-connection failure point observed
+   above — a threshold well under that, with margin, applied per shard
+   rather than per feed) instead of being fully output-count-independent.
+   Lower risk to implement (one pure function, already unit- and
+   proptest-covered), but directly touches the exact formula whose previous
+   version caused the original incident, so the new threshold and its
+   safety margin would need explicit justification, not just "smaller
+   than 128."
+2. **Share one shard pool per protocol across all feeds** (matching how the
+   libsrt egress multiplexer layer already shares per shard ID across
+   feeds, `src/media/egress/backends/srt/muxer_ports.rs`) instead of
+   instantiating a new pool per feed. This is architecturally consistent
+   with the multiplexer layer's own design and would cut SRT egress shard
+   threads from `feed_count × cpu_max` to just `cpu_max` regardless of how
+   many distinct feeds exist — a much larger win at high feed-catalog
+   counts — but is a materially larger change (each `EgressFabricRuntime`
+   is currently instantiated per `(protocol, feed)`; sharing a pool means a
+   shard must be able to service leaves from multiple feeds, which the
+   `EgressShard`'s `feeds: FeedSubscriptions` field already models, but the
+   manager/runtime instantiation call sites do not currently exercise).
+
+Neither direction is implemented here. This session's mandate and budget
+went to proving correctness and real-bitrate scale for all three mixes and
+documenting the resulting footprint truthfully; picking and shipping one of
+the above requires its own scoped session with the full concurrency proof
+ladder, not a follow-on edit appended to this one.
+
+### Already minimal: everything else measured
+
+The remaining cost centers do not show comparable slack:
+
+- **Fixed baseline threads (~20)**: sqlx pool size, Tokio worker count, and
+  ingest `TsbPd` threads are either fixed pool sizes tuned elsewhere or
+  scale with live connection count, not with output count — nothing here
+  is MSR-output-driven bloat.
+- **RTMP egress-shard threads (33)**: `OutputCount` profile already
+  amortizes shard cost across up to 128 outputs per shard; the measured
+  33 threads for 1,200 RTMP outputs (or 1,140 in canonical) is close to
+  the theoretical minimum `sum(ceil(feed_outputs / 128))` for this
+  population's actual shape (two feeds exceed 128, the rest sit at exactly
+  1 shard each — there is no unused per-feed headroom to remove).
+- **Per-connection SRT memory (~6 MB `CSndBuffer`/socket)**: already
+  configurable per-destination via the `sndbuf=` URL parameter
+  (`docs/configuration.md` § "Recognized SRT egress URL parameters") for
+  operators who know their real bitrate needs less headroom; the default
+  is a worst-case-bitrate formula, not a fixed overallocation independent
+  of configured link parameters.
+- **Ring buffers (`source_ring`/`output_ring`/`TsChunkRing`)**: shared once
+  per pipeline/stage regardless of destination count, and already the
+  smallest measured contributor (2.9-10.7% of RSS across all three mixes).
+
+Net assessment: the current design's per-connection and per-feed-population
+costs are close to minimal for what each destination protocol structurally
+requires. The one substantiated inefficiency — SRT egress-shard thread
+count scaling with distinct feed count rather than actual load — is real,
+bounded in expected payoff, and deliberately left unfixed here because a
+correct fix requires the same proof rigor that the two bugs this
+investigation already found and fixed both required, and this session's
+scope was documentation, not another hot-path change.

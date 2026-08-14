@@ -97,6 +97,11 @@ counts vary with active publishers, outputs, recordings, stage sharing, codec
 backend selection, and native-library internals. Runtime health and engineering
 telemetry are the appropriate source for a running process.
 
+[Media pipeline § Thread and memory ownership, ingest to egress](media-pipeline.md#thread-and-memory-ownership-ingest-to-egress)
+applies this policy to RTMP and SRT specifically: which hop runs on a Tokio
+worker versus a dedicated OS thread, and which structure owns memory at each
+hop, from entry socket to exit socket.
+
 ## Input selection
 
 Each pipeline owns up to four independently authenticated input sessions. Every
