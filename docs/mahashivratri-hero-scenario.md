@@ -20,13 +20,23 @@
 - **Scenario status:** canonical Mahashivratri capacity and correctness target
 - **Architecture status:** model and test the current implementation; no media-path
   redesign is implied by this document
-- **Harness status:** `msr` mode implemented; measured at full scale on a
-  dedicated 6-core VPS on 2026-07-11 (Phase 2 connection-scale ramp);
-  event-hardware and bitrate-envelope runs still pending
-- **Baseline status:** passing 30-track / 1,200-output connection-scale
-  baseline recorded 2026-07-11 — see
-  `docs/agent-guidance/quality/baselines.md`
-  § "Mahashivratri msr full-scale ramp"
+- **Harness status:** `msr` mode implemented, including an owned sink-mode
+  verification peer (`MSR_PEER=sink`) as an alternative to mediamtx for
+  raw-connection-count runs. Measured at full scale on a dedicated 6-core
+  VPS at real 1080p60/8Mbps bitrate on 2026-08-13 for all three canonical
+  protocol mixes (pure RTMP, pure SRT, canonical 95/5); 4K, HEVC, and
+  event-hardware/external-link runs still pending
+- **Baseline status:** all three protocol mixes clean at the full
+  1,200-output target with real 1080p60/8Mbps media, recorded 2026-08-13 —
+  see
+  [1,200-output resource attribution](agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md)
+  for the measured CPU/RSS/thread footprint and
+  [the SRT egress scale investigation](agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md)
+  for the correctness fixes that made this run clean. The earlier
+  2026-07-11 connection-scale baseline (synthetic low-bitrate fixture) is
+  superseded by this real-bitrate result; see
+  `docs/agent-guidance/quality/baselines.md` § "Mahashivratri msr
+  full-scale ramp" for the historical entry.
 
 This document tracks the Mahashivratri production scenario for the current
 backend: one high-resolution SRT contribution carrying one video stream and 30
@@ -175,23 +185,44 @@ per second.
 
 ## Measured Baselines
 
-First full-scale Phase 2 ramp (2026-07-11, commit 6fc2f254, dedicated 6-vCPU
-EPYC gen1 VPS, 1080p30 H.264 passthrough, loopback sink): PASS at every
-checkpoint through 1,200 outputs with no capacity knee — ~2.4 cores average /
-2.8 peak and 447 MB RSS at 1,200 outputs, sublinear CPU scaling, zero
-warnings or errors. Full per-checkpoint table and caveats live in
-`docs/agent-guidance/quality/baselines.md` § "Mahashivratri msr full-scale
-ramp — 2026-07-11 (VPS)". This covers connection-scale evidence for MSR-02,
-MSR-03, and MSR-07; MSR-01 (link certification), Phase 3 (bitrate envelope),
-and Phase 4 (degradation slices) remain open.
+**Real-bitrate full-scale run (2026-08-13, dedicated 6-core VPS, 1080p60
+H.264 source passthrough at 8 Mbps, 30 audio tracks, sink-mode verification
+peer with real RTMP/SRT protocol negotiation)**: all three canonical
+protocol mixes clean at every checkpoint through 1,200 outputs —
 
-Hardware-counter profiling during the 1,200-output soak (same host, same
+| Mix | Outputs | CPU (of 6 cores) | RSS | Threads |
+|---|---:|---:|---:|---:|
+| pure SRT | 1200/1200 | ~2.9 | 4.11 GB | 214 |
+| pure RTMP | 1200/1200 | ~2.4 | 1.51 GB | 55 |
+| canonical 95/5 | 1200/1200 | ~3.2 | 1.97 GB | 223 |
+
+Full thread/memory/CPU attribution, including why SRT's footprint differs
+so much from RTMP's, lives in
+[1,200-output resource attribution](agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md).
+This closes connection-scale evidence for MSR-02, MSR-03, and MSR-07 at
+real 1080p60 bitrate (superseding the synthetic-bitrate run below) and
+covers the 1080p slice of Phase 3's bitrate envelope. MSR-01 (external-link
+certification), the 4K/HEVC slice of Phase 3, and Phase 4 (degradation
+slices) remain open.
+
+First full-scale Phase 2 ramp (2026-07-11, commit 6fc2f254, dedicated 6-vCPU
+EPYC gen1 VPS, 1080p30 H.264 passthrough, loopback sink, synthetic
+low-bitrate fixture): PASS at every checkpoint through 1,200 outputs with no
+capacity knee — ~2.4 cores average / 2.8 peak and 447 MB RSS at 1,200
+outputs, sublinear CPU scaling, zero warnings or errors. Full per-checkpoint
+table and caveats live in `docs/agent-guidance/quality/baselines.md`
+§ "Mahashivratri msr full-scale ramp — 2026-07-11 (VPS)".
+
+Hardware-counter profiling during that 2026-07-11 soak (same host, same
 commit) attributed two structural CPU costs inside the ~2.4-core total:
 the SRT ingest epoll waiter busy-spins for ~1 core per ingest
 (`src/media/srt.rs:1536`; fix filed), and libsrt allocates one multiplexer
 (2 OS threads) per SRT egress — 122 threads and ~1 core of RcvQ work at 60
 SRT outputs. Details and the tokio locality dataset live in
-`docs/agent-guidance/quality/baselines.md` § "Profiling notes (VPS)".
+`docs/agent-guidance/quality/baselines.md` § "Profiling notes (VPS)". The
+per-SRT-egress-connection multiplexer cost this profiling described was
+since fixed to be per-*shard* instead (see the SRT egress scale
+investigation); the 2026-08-13 run above reflects that fix.
 
 ## Risks To Track
 
@@ -466,10 +497,15 @@ Eventually, a passing canonical run should require:
 - [x] Exact 30-track transport mapping built from the checked-in `2v16a` fixture
 - [x] Deterministic topology unit tests added
 - [x] `msr` mode registered
-- [ ] Generic receiver-health proof recorded at the required connection counts
-- [ ] Phase 1 correctness run passing
-- [ ] Phase 2 bounded Zipf ramp baseline recorded
-- [ ] Phase 3 1080p/4K and H.264/HEVC envelope recorded
+- [x] Generic receiver-health proof recorded at the required connection counts
+      (mediamtx path-health and, since 2026-08-12, sink-mode's real
+      RTMP/SRT protocol-level verification)
+- [ ] Phase 1 correctness run passing (per-language audio identity at scale;
+      distinct from the connection-scale/bytes-out proof recorded so far)
+- [x] Phase 2 bounded Zipf ramp baseline recorded (all three protocol mixes,
+      1,200 outputs, real 1080p60/8Mbps bitrate — 2026-08-13)
+- [ ] Phase 3 1080p/4K and H.264/HEVC envelope recorded (1080p H.264 slice
+      done 2026-08-13; 4K and HEVC still open)
 - [ ] Phase 4 degradation behavior recorded
 - [ ] Phase 5 external-link certification recorded or explicitly waived
 
