@@ -400,18 +400,21 @@ const OUTPUTS_PER_SHARD: u32 = 128;
 ///
 /// An output-count-scaled variant of this profile (a much smaller
 /// SRT-specific per-shard threshold than RTMP's 128, shrinking shard count
-/// for small feeds) was implemented and live-tested at the full
-/// 1,200-output MSR target on 2026-08-14 and reproducibly failed —
-/// concentrating a mass output-creation burst onto fewer libsrt
-/// multiplexers reintroduced (and, after a connect-admission fix targeting
-/// that specific mechanism, still reproduced in a different, apparently
-/// steady-state-capacity-bound shape) the `SRT_ENOCONN`/TLPKTDROP failure
-/// class this profile's current output-count-*independent* shape was
-/// originally built to fix. See the "Efficiency evaluation" section of
-/// `docs/agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md`
-/// for the full account and the open "adaptive shard sizing" investigation
-/// this deferred to. Do not reintroduce output-count scaling for
-/// `SrtCpuParallel` without a live re-proof at 1,200 outputs.
+/// for small feeds) was implemented on 2026-08-14 and live-tested against
+/// this profile's unmodified (output-count-*independent*) baseline in a
+/// controlled 4-worktree, 16-run comparison. Both variants failed
+/// `srt-only` at 1,200 outputs identically (~85-99% of outputs progressing
+/// before stalling), while both passed every other mix (rtmp-only, 50/50,
+/// 95/5) cleanly — the failure was traced to the test *environment*
+/// (`unshare --net` unavailable, forcing every run onto the host's shared,
+/// non-isolated network namespace; a measured ~90% UDP receive-buffer
+/// overflow rate at 1,200 concurrent real-bitrate SRT flows over that
+/// shared loopback), not to this profile's shard-count formula. See
+/// `docs/agent-guidance/quality/msr-1200-netns-confound-investigation-2026-08-14.md`
+/// for the full campaign data. Output-count scaling for `SrtCpuParallel`
+/// therefore remains unshipped only for lack of a *valid* live re-proof
+/// (one run under real network-namespace isolation), not because it was
+/// shown unsafe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EgressShardProfile {
     /// RTMP/sink/pipeline feeds: grow one shard per `OUTPUTS_PER_SHARD`

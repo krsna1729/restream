@@ -519,3 +519,4 @@ Eventually, a passing canonical run should require:
 - [Performance and resource baselines](agent-guidance/quality/baselines.md)
 - [SRT egress scale investigation](agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md)
 - [1,200-output resource attribution (thread/memory/CPU by mix)](agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md)
+- [netns confound investigation (4-worktree controlled campaign)](agent-guidance/quality/msr-1200-netns-confound-investigation-2026-08-14.md)
