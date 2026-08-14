@@ -28,6 +28,12 @@ impl MediaEngine {
         self.runtime.srt_egress_muxer_ports.clone()
     }
 
+    /// Engine-wide SRT egress connect-concurrency admission control — see
+    /// `crate::media::egress::backends::srt_connect_admission`.
+    pub(crate) fn srt_egress_connect_admission_handle(&self) -> Arc<tokio::sync::Semaphore> {
+        self.runtime.srt_egress_connect_admission.clone()
+    }
+
     pub fn bonding_available(&self) -> bool {
         self.runtime
             .listener_stats

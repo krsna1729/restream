@@ -160,12 +160,14 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolving_srt_shard_backend<P>(
     poller: P,
     feed: TsFeed,
     budget: WorkBudget,
     srt_egress_muxer_port_reuse: Option<std::sync::Arc<std::sync::Mutex<Option<u16>>>>,
     drain_timeout: std::time::Duration,
+    connect_admission: Option<std::sync::Arc<tokio::sync::Semaphore>>,
 ) -> ResolvingSrtShardBackend<
     SrtShardBackend<
         P,
@@ -184,9 +186,11 @@ where
         NativeSrtSocketConfigurator,
         srt_egress_muxer_port_reuse,
         drain_timeout,
+        connect_admission,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolving_srt_shard_backend_with_configurator<P, C>(
     poller: P,
     feed: TsFeed,
@@ -200,6 +204,11 @@ pub(crate) fn resolving_srt_shard_backend_with_configurator<P, C>(
     // share one libsrt multiplexer and other shards get their own.
     srt_egress_muxer_port_reuse: Option<std::sync::Arc<std::sync::Mutex<Option<u16>>>>,
     drain_timeout: std::time::Duration,
+    // Engine-wide connect-concurrency admission control (see
+    // `srt_connect_admission.rs`). `None` leaves connects unthrottled
+    // (every existing test/no-config caller); `Some` is the one shared
+    // handle from `MediaEngine::srt_egress_connect_admission_handle`.
+    connect_admission: Option<std::sync::Arc<tokio::sync::Semaphore>>,
 ) -> ResolvingSrtShardBackend<
     SrtShardBackend<P, C, NativeSrtSocketConnector, SrtResolveCompletionQueue>,
 >
@@ -217,7 +226,8 @@ where
         NativeSrtSocketConnector,
         completion_queue,
     )
-    .with_drain_timeout(drain_timeout);
+    .with_drain_timeout(drain_timeout)
+    .with_connect_admission(connect_admission);
     if let Some(state) = srt_egress_muxer_port_reuse {
         backend = backend.with_srt_egress_muxer_port_reuse(state, true);
     }

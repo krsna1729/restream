@@ -461,6 +461,23 @@ fn srt_connect_timeout_defaults_and_allows_override() {
 }
 
 #[test]
+fn srt_egress_connect_concurrency_defaults_and_allows_override() {
+    with_env_overlay(&[], &["RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY"], || {
+        assert_eq!(AppConfig::from_env().srt_egress_connect_concurrency, 64);
+    });
+    with_env_vars(&[("RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY", "8")], || {
+        assert_eq!(AppConfig::from_env().srt_egress_connect_concurrency, 8);
+    });
+    with_env_vars(&[("RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY", "0")], || {
+        assert_eq!(
+            AppConfig::from_env().srt_egress_connect_concurrency,
+            1,
+            "clamped to at least 1 -- zero would permanently deadlock every SRT connect"
+        );
+    });
+}
+
+#[test]
 fn initial_admin_password_is_loaded_by_config_module() {
     with_env_vars(&[("RESTREAM_INITIAL_ADMIN_PASSWORD", "dev-secret")], || {
         let config = AppConfig::from_env();

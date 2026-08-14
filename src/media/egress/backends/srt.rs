@@ -136,6 +136,8 @@ where
     /// Effective `SRTO_SNDBUF` this leaf connected with (PREBIND — read
     /// once, reported on every quality sample without a per-tick FFI call).
     configured_sndbuf_bytes: Option<i32>,
+    /// Connect-admission permit; see `srt_connect_admission.rs`.
+    handshake_permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 impl<T> SrtFabricLeaf<T>
@@ -154,6 +156,7 @@ where
             draining_reason: None,
             quality_snapshot: None,
             configured_sndbuf_bytes: None,
+            handshake_permit: None,
         }
     }
 
@@ -465,6 +468,9 @@ pub(crate) struct SrtShardBackend<
     /// unless `with_srt_egress_muxer_port_reuse` opts in explicitly.
     srt_egress_muxer_port: Arc<Mutex<Option<u16>>>,
     reuse_local_srt_egress_port: bool,
+    /// Connect-concurrency admission; see `srt_connect_admission.rs`.
+    connect_admission: Option<Arc<tokio::sync::Semaphore>>,
+    connect_backlog: VecDeque<SrtResolvedConnect>,
     /// Bound on how long a leaf may stay in `draining_since` before it is
     /// force-closed regardless of remaining pending send-path bytes.
     /// Mirrors `RtmpShardBackend::drain_timeout` exactly. Defaults to
@@ -562,6 +568,8 @@ where
             last_stall_sweep: None,
             srt_egress_muxer_port: Arc::new(Mutex::new(None)),
             reuse_local_srt_egress_port: false,
+            connect_admission: None,
+            connect_backlog: VecDeque::new(),
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
         }
@@ -800,6 +808,8 @@ where
         );
         let feed = &self.feed;
         let leaf = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)?;
+        // Releases the connect-admission permit -- see `srt_connect_admission.rs`.
+        leaf.handshake_permit = None;
         let result = leaf.visit_ready(
             event.generation,
             Readiness {
@@ -947,19 +957,9 @@ where
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         let mut resolved = Vec::new();
         self.resolve_completions.drain_resolved(&mut resolved);
-        let mut connected_any = false;
-        for completion in resolved {
-            let connected = self
-                .complete_pending_connect(
-                    &completion.output_id,
-                    completion.generation,
-                    &completion.peer_addrs,
-                )
-                .is_ok();
-            connected_any |= connected;
-        }
+        let connected_any = self.drain_connect_backlog(resolved);
         self.sweep_stalled_leaves(Instant::now());
-        if connected_any {
+        if connected_any || !self.connect_backlog.is_empty() {
             EgressShardCommandEffect::ScheduleReady { count: 1 }
         } else {
             EgressShardCommandEffect::Continue
@@ -991,6 +991,9 @@ fn duration_millis_u64(duration: std::time::Duration) -> u64 {
 
 #[path = "srt_drain.rs"]
 mod srt_drain;
+
+#[path = "srt_connect_admission.rs"]
+mod srt_connect_admission;
 
 #[cfg(test)]
 mod tests;

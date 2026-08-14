@@ -672,6 +672,12 @@ protected by:
 - optional per-host or per-destination-class limits if live evidence requires
   them.
 
+For SRT, a process-wide connect-admission semaphore
+(`RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY`, `srt_connect_admission.rs`) now
+implements the first bullet for both the initial mass-`Add` path and
+reconnects; the per-shard and per-host/per-destination-class refinements
+remain open, as does equivalent admission control for RTMP.
+
 These controls prevent a large dead-destination set from causing DNS, TCP, TLS,
 or SRT handshake storms.
 

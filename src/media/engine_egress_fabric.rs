@@ -70,6 +70,7 @@ impl MediaEngine {
                 config.work_budget(),
                 |_| feed.clone_reader(),
                 srt_egress_muxer_port_reuse.clone(),
+                Some(self.srt_egress_connect_admission_handle()),
             )
             .map_err(SrtFabricEnsureError::Spawn)?;
             let manager_config =
@@ -163,6 +164,7 @@ impl MediaEngine {
         let poller_max_events = config.srt_poller_max_events;
         let effective_cpus = crate::system_sampling::effective_cpu_count();
         let scope_key = self.srt_egress_muxer_scope_key(&pipeline_id).to_string();
+        let connect_admission = self.srt_egress_connect_admission_handle();
         let result = runtime.rescale(
             crate::config::EgressShardProfile::SrtCpuParallel,
             effective_cpus,
@@ -183,6 +185,9 @@ impl MediaEngine {
                             .as_ref()
                             .map(|ports| ports.shard(&scope_key, shard_id)),
                         shard_config.drain_timeout(),
+                        // Same shared engine-wide admission handle the
+                        // initial spawn uses.
+                        Some(connect_admission.clone()),
                     ),
                 )
             },
