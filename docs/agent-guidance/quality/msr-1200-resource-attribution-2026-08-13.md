@@ -356,6 +356,21 @@ documenting the resulting footprint truthfully; picking and shipping one of
 the above requires its own scoped session with the full concurrency proof
 ladder, not a follow-on edit appended to this one.
 
+**2026-08-14 update**: direction 1 (a smaller SRT-specific per-shard
+threshold) was implemented and live-tested the next day. The first two
+live attempts appeared to fail at 1,200-output `srt-only` scale and this
+section was briefly rewritten to say so. A controlled 4-worktree, 16-run
+follow-up campaign then showed the *unmodified baseline* fails the
+identical `srt-only`-at-1,200 case the same way, under the same
+(environmentally confounded — no private network namespace available that
+session) conditions — see
+[the netns confound investigation](msr-1200-netns-confound-investigation-2026-08-14.md)
+for the full account. The shard-formula change itself was not shown
+unsafe; it remains unshipped only pending a valid re-proof under real
+network-namespace isolation, and `src/config.rs`'s `EgressShardProfile`
+doc comment reflects this corrected status. Direction 2 (shared pool
+across feeds) remains unattempted and untested either way.
+
 ### Already minimal: everything else measured
 
 The remaining cost centers do not show comparable slack:
