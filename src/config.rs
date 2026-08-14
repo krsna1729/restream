@@ -293,6 +293,18 @@ pub struct AppConfig {
     pub srt_egress_reuse_local_port: bool,
     pub srt_egress_muxer_max_outputs_per_shard: usize,
     pub srt_egress_muxer_max_shards: usize,
+    /// Whether `SrtEgressMuxerPorts`' local-port-reuse registry (see
+    /// `muxer_ports.rs`) is keyed per `(pipeline, shard)` (`true`, default)
+    /// or per shard alone, shared engine-wide across every pipeline
+    /// (`false`, the pre-2026-08-14 behavior). Per-pipeline scoping closes
+    /// a real cross-tenant coupling: two unrelated pipelines' shard *N*
+    /// would otherwise share one libsrt multiplexer and `CSndQueue` worker
+    /// thread purely because their shard-assignment formulas both produced
+    /// the same numeric shard id. Numerically a no-op for any
+    /// single-pipeline deployment (including every MSR measurement to
+    /// date); multiplexer count scales with `shard_count x
+    /// active_pipeline_count` instead of a flat `shard_count` when enabled.
+    pub srt_egress_muxer_port_pipeline_scoped: bool,
     pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
     pub secure_session_cookies: bool,
@@ -376,6 +388,21 @@ const OUTPUTS_PER_SHARD: u32 = 128;
 /// documented blocker for scaling SRT egress past the low hundreds
 /// (`docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`,
 /// "The real scalability ceiling").
+///
+/// An output-count-scaled variant of this profile (a much smaller
+/// SRT-specific per-shard threshold than RTMP's 128, shrinking shard count
+/// for small feeds) was implemented and live-tested at the full
+/// 1,200-output MSR target on 2026-08-14 and reproducibly failed —
+/// concentrating a mass output-creation burst onto fewer libsrt
+/// multiplexers reintroduced (and, after a connect-admission fix targeting
+/// that specific mechanism, still reproduced in a different, apparently
+/// steady-state-capacity-bound shape) the `SRT_ENOCONN`/TLPKTDROP failure
+/// class this profile's current output-count-*independent* shape was
+/// originally built to fix. See the "Efficiency evaluation" section of
+/// `docs/agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md`
+/// for the full account and the open "adaptive shard sizing" investigation
+/// this deferred to. Do not reintroduce output-count scaling for
+/// `SrtCpuParallel` without a live re-proof at 1,200 outputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EgressShardProfile {
     /// RTMP/sink/pipeline feeds: grow one shard per `OUTPUTS_PER_SHARD`
@@ -589,6 +616,7 @@ impl Default for AppConfig {
             srt_egress_reuse_local_port: true,
             srt_egress_muxer_max_outputs_per_shard: 0,
             srt_egress_muxer_max_shards: 64,
+            srt_egress_muxer_port_pipeline_scoped: true,
             use_internal_file_ingest: false,
             initial_admin_password: None,
             secure_session_cookies: false,
@@ -665,6 +693,8 @@ impl AppConfig {
             env_usize("RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD", 0).min(10_000);
         let srt_egress_muxer_max_shards =
             env_usize("RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS", 64).clamp(1, 64);
+        let srt_egress_muxer_port_pipeline_scoped =
+            env_bool_default_true("RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED");
         let use_internal_file_ingest =
             std::env::var_os("RESTREAM_USE_INTERNAL_FILE_INGEST").is_some();
         let initial_admin_password = std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok();
@@ -737,6 +767,7 @@ impl AppConfig {
             srt_egress_reuse_local_port,
             srt_egress_muxer_max_outputs_per_shard,
             srt_egress_muxer_max_shards,
+            srt_egress_muxer_port_pipeline_scoped,
             use_internal_file_ingest,
             initial_admin_password,
             secure_session_cookies,
@@ -821,6 +852,7 @@ impl AppConfig {
                 "connectTimeoutMs": self.srt_connect_timeout_ms,
                 "egressMuxerMaxOutputsPerShard": self.srt_egress_muxer_max_outputs_per_shard,
                 "egressMuxerMaxShards": self.srt_egress_muxer_max_shards,
+                "egressMuxerPortPipelineScoped": self.srt_egress_muxer_port_pipeline_scoped,
             },
             "security": {
                 "secureSessionCookies": self.secure_session_cookies,

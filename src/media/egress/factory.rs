@@ -30,6 +30,7 @@ pub(crate) enum SrtFabricShardGroupError<E> {
 }
 
 pub(crate) fn spawn_srt_fabric_shard_group<F>(
+    pipeline_id: &str,
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
     poller_max_events: usize,
@@ -41,6 +42,7 @@ where
     F: FnMut(ShardId) -> TsFeed,
 {
     spawn_srt_fabric_shard_group_with_poller(
+        pipeline_id,
         shard_count,
         shard_config,
         budget,
@@ -53,7 +55,9 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_srt_fabric_shard_group_with_poller<P, E, F, G>(
+    pipeline_id: &str,
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
     budget: WorkBudget,
@@ -67,6 +71,7 @@ where
     G: FnMut(ShardId) -> Result<P, E>,
 {
     let backends = srt_fabric_shard_backends_with_poller(
+        pipeline_id,
         shard_count,
         budget,
         feed_for,
@@ -81,6 +86,7 @@ where
 
 #[allow(clippy::too_many_arguments)]
 fn srt_fabric_shard_backends_with_poller<P, E, F, G>(
+    pipeline_id: &str,
     shard_count: NonZeroU32,
     budget: WorkBudget,
     mut feed_for: F,
@@ -101,14 +107,15 @@ where
             poller,
             feed_for(shard_id),
             budget,
-            // Per shard, not one state shared by the whole group: libsrt
-            // gives each bound local port exactly one `CSndQueue` worker
-            // thread, so a group-wide port would funnel every leaf on
-            // every shard through a single libsrt sender thread (see
-            // `muxer_ports.rs`).
+            // Per (pipeline, shard), not one state shared engine-wide or
+            // shared across pipelines: libsrt gives each bound local port
+            // exactly one `CSndQueue` worker thread, so a group-wide port
+            // would funnel every leaf on every shard through a single
+            // libsrt sender thread, and a pipeline-agnostic port would let
+            // unrelated pipelines share that thread (see `muxer_ports.rs`).
             srt_egress_muxer_port_reuse
                 .as_ref()
-                .map(|ports| ports.shard(shard_id)),
+                .map(|ports| ports.shard(pipeline_id, shard_id)),
             drain_timeout,
         ));
     }

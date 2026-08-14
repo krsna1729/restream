@@ -54,6 +54,7 @@ fn srt_fabric_shard_backends_build_one_backend_per_shard() {
     let seen_for_poller = Arc::clone(&seen);
 
     let backends = srt_fabric_shard_backends_with_poller(
+        "pipeline-a",
         NonZeroU32::new(3).unwrap(),
         budget(),
         |_| feed(),
@@ -78,6 +79,7 @@ fn srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state() {
     let ports = SrtEgressMuxerPorts::default();
 
     let backends = srt_fabric_shard_backends_with_poller(
+        "pipeline-a",
         NonZeroU32::new(3).unwrap(),
         budget(),
         |_| feed(),
@@ -105,7 +107,10 @@ fn srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state() {
         // Within a shard, reuse still works: a later leaf on this shard
         // resolves the same state and therefore binds the same port.
         assert!(
-            Arc::ptr_eq(state, &ports.shard(ShardId::new(index as u32))),
+            Arc::ptr_eq(
+                state,
+                &ports.shard("pipeline-a", ShardId::new(index as u32))
+            ),
             "shard {index} must keep claiming its own port"
         );
         for other in states.iter().skip(index + 1) {
@@ -120,6 +125,7 @@ fn srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state() {
 #[test]
 fn srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry() {
     let backends = srt_fabric_shard_backends_with_poller(
+        "pipeline-a",
         NonZeroU32::new(2).unwrap(),
         budget(),
         |_| feed(),
@@ -145,6 +151,7 @@ fn srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry() {
 #[test]
 fn spawn_srt_fabric_shard_group_starts_requested_shards() {
     let group = spawn_srt_fabric_shard_group_with_poller(
+        "pipeline-a",
         NonZeroU32::new(2).unwrap(),
         shard_config(),
         budget(),
@@ -163,6 +170,7 @@ fn spawn_srt_fabric_shard_group_starts_requested_shards() {
 #[test]
 fn spawn_srt_fabric_shard_group_reports_poller_creation_error() {
     let result = spawn_srt_fabric_shard_group_with_poller(
+        "pipeline-a",
         NonZeroU32::new(2).unwrap(),
         shard_config(),
         budget(),

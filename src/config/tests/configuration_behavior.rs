@@ -428,6 +428,29 @@ fn srt_egress_reuse_local_port_defaults_on_and_allows_override() {
 }
 
 #[test]
+fn srt_egress_muxer_port_pipeline_scoped_defaults_on_and_allows_override() {
+    with_env_overlay(
+        &[],
+        &["RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED"],
+        || {
+            assert!(AppConfig::from_env().srt_egress_muxer_port_pipeline_scoped);
+        },
+    );
+    with_env_vars(
+        &[("RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED", "false")],
+        || {
+            assert!(!AppConfig::from_env().srt_egress_muxer_port_pipeline_scoped);
+        },
+    );
+    with_env_vars(
+        &[("RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED", "0")],
+        || {
+            assert!(!AppConfig::from_env().srt_egress_muxer_port_pipeline_scoped);
+        },
+    );
+}
+
+#[test]
 fn srt_connect_timeout_defaults_and_allows_override() {
     with_env_overlay(&[], &["RESTREAM_SRT_CONNECT_TIMEOUT_MS"], || {
         assert_eq!(AppConfig::from_env().srt_connect_timeout_ms, 10_000);
@@ -539,6 +562,11 @@ fn target_egress_fabric_shards_matches_known_cases() {
     // RTMP-shaped OUTPUTS_PER_SHARD threshold. This is the fix for the
     // documented SRT scalability ceiling (see
     // docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md).
+    // An output-count-scaled variant was tried and reverted after failing
+    // live at 1,200 outputs -- see the doc comment on
+    // `EgressShardProfile::SrtCpuParallel` and
+    // docs/agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md
+    // "Efficiency evaluation" before changing this again.
     assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 0, 8), 8);
     assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 1, 8), 8);
     assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 60, 8), 8);
