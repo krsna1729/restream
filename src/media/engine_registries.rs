@@ -112,6 +112,11 @@ pub(crate) struct SrtFabricRegistry {
     /// grown later so a rescaled-in shard gets its own libsrt multiplexer
     /// instead of falling back to another shard's.
     pub(crate) srt_egress_muxer_port_reuse: HashMap<FeedId, Option<SrtEgressMuxerPorts>>,
+    /// The owning pipeline id resolved at creation time, reused on every
+    /// later rescale so a shard grown after startup claims its libsrt
+    /// multiplexer port under the same `(pipeline, shard)` key the initial
+    /// spawn used — see `SrtEgressMuxerPorts`.
+    pub(crate) pipeline_ids: HashMap<FeedId, String>,
 }
 
 impl SrtFabricRegistry {
@@ -122,6 +127,7 @@ impl SrtFabricRegistry {
             feed_watchers: HashMap::new(),
             feeds: HashMap::new(),
             srt_egress_muxer_port_reuse: HashMap::new(),
+            pipeline_ids: HashMap::new(),
         }
     }
 }

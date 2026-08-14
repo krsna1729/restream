@@ -504,13 +504,20 @@ libsrt runs its own protocol engine on threads the fabric does not own: one
 `CSndQueue` worker and one `CRcvQueue` worker per multiplexer, where a
 multiplexer is one bound local UDP endpoint. Local-port reuse
 (`RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT`) exists so egress sockets do not each
-create their own multiplexer and thread pair. That reuse is scoped per shard,
-not engine-wide: every leaf on a shard shares that shard's multiplexer, and
-shard *N* is shared across feeds so the libsrt thread count tracks shard count
-rather than feed or output count. Scoping it engine-wide instead put every SRT
-egress connection on one libsrt sender thread, which saturated well before CPU
-did and let libsrt's TLPKTDROP discard packets that missed their delivery
-deadline.
+create their own multiplexer and thread pair. That reuse is scoped per
+`(pipeline, shard)`, not engine-wide: every leaf on a shard of one pipeline
+shares that shard's multiplexer, and shard *N* is shared across feeds of that
+pipeline so the libsrt thread count tracks shard count rather than feed or
+output count. Scoping it engine-wide instead put every SRT egress connection
+on one libsrt sender thread, which saturated well before CPU did and let
+libsrt's TLPKTDROP discard packets that missed their delivery deadline.
+Scoping it per shard alone (dropping the pipeline key) closes that but opens
+a narrower one: two unrelated pipelines' shard *N* would then share one
+multiplexer purely because their shard-assignment formulas produced the same
+numeric id — a real cross-tenant coupling for any multi-pipeline deployment.
+`RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED` (default enabled) is the
+opt-out back to the flat per-shard-only behavior for operators who prefer
+fewer multiplexers over that isolation guarantee.
 
 ### Future backends
 

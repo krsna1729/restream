@@ -456,7 +456,7 @@ flowchart LR
         Leaf2["SRT leaf: connection,\ncongestion, encryption state"] --> Send2["non-blocking srt_sendmsg2"]
     end
     TCR --> Leaf2
-    subgraph L2["libsrt egress multiplexer: 1 per SHARD (not per feed),\nshared across every feed assigned to that shard —\n1 CSndQueue + 1 CRcvQueue worker-thread pair"]
+    subgraph L2["libsrt egress multiplexer: 1 per (pipeline, shard) by default,\nshared across every feed of that pipeline assigned to that shard —\n1 CSndQueue + 1 CRcvQueue worker-thread pair"]
         Send2 --> Buf["CSndBuffer (~6 MB negotiated\nceiling per socket) + TSBPD\ndeadline enforcement"]
     end
     Buf --> Dest2["Destination SRT receiver"]
@@ -468,7 +468,7 @@ flowchart LR
 | `TsDemuxer` → `source_ring` | Tokio worker, inline async | Shared `source_ring`, same structure as RTMP |
 | Shared `TsMuxer` (SRT preparation) | 1 Tokio task per `(pipeline, preset)`, inline async | `TsChunkRing` (256-chunk shared ring, `RESTREAM_TS_RING_CAPACITY`) |
 | Egress shard (SRT) | Fixed OS-thread pool **per feed** (a feed is one `(protocol, pipeline, encoding)` selection, e.g. one selected audio track), sized by `EgressShardProfile::SrtCpuParallel`: always the CPU-derived ceiling, **not reduced for a small feed** — this is deliberate, not an oversight; see below | Per-leaf `LeafCommon`, same small bound as RTMP |
-| libsrt egress multiplexer | 1 per shard **ID**, shared across every feed's shard *N* — so multiplexer/thread count tracks shard count, not feed count or output count (`src/media/egress/backends/srt/muxer_ports.rs`) | libsrt's own `CSndBuffer`, a real per-**socket** userspace allocation (~6.1 MB negotiated ceiling from `DESIRED_SRT_BUF`, `src/media/srt/socket.rs`) that counts toward process RSS — roughly 2.8x RTMP's per-connection memory cost in the measured example above. Kernel `SO_SNDBUF` (`DESIRED_UDP_BUF`, 8 MiB requested) is separate and does not count toward RSS |
+| libsrt egress multiplexer | 1 per `(pipeline, shard id)` by default, shared across every feed of that pipeline on shard *N* — so multiplexer/thread count tracks `shard count x active pipeline count`, not feed count or output count (`src/media/egress/backends/srt/muxer_ports.rs`; `RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED=0` reverts to sharing by shard id alone, engine-wide) | libsrt's own `CSndBuffer`, a real per-**socket** userspace allocation (~6.1 MB negotiated ceiling from `DESIRED_SRT_BUF`, `src/media/srt/socket.rs`) that counts toward process RSS — roughly 2.8x RTMP's per-connection memory cost in the measured example above. Kernel `SO_SNDBUF` (`DESIRED_UDP_BUF`, 8 MiB requested) is separate and does not count toward RSS |
 
 `SrtCpuParallel` claiming the full CPU-derived shard ceiling for every SRT
 feed regardless of that feed's own output count is the fix for a real,
