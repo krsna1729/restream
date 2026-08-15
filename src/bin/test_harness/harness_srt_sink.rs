@@ -1,4 +1,4 @@
-//! Harness-native SRT accept-and-discard listener for `MSR_PEER=sink`.
+//! Harness-native SRT accept-and-discard listener pool for `MSR_PEER=sink`.
 //!
 //! Replaces what used to be `RESTREAM_SINK_MODE=1` on a separate `restream`
 //! process: a receiving peer that accepts every connection and discards its
@@ -18,17 +18,22 @@
 //! checked against `srtcore/srt.h` of the pinned libsrt build; linking is
 //! free since the harness binary already links the same static `libsrt.a`.
 //!
-//! **Threading**: `discard_threads` (default 1, matching the exact
-//! single-threaded behavior the production listener this replaces always
-//! had) independent OS threads each call `srt_accept()` on the *same*
-//! shared listener socket and maintain their own private client list —
-//! libsrt's `srt_accept()` is safe to call concurrently from multiple
-//! threads (internally serialized), so accepted connections distribute
-//! across threads without any explicit dispatcher. Each thread's client
-//! list is touched only by that thread, so no lock is needed once a socket
-//! has been accepted -- the same thread-confined-ownership principle this
-//! session's C-benchmark work converged on independently (see
-//! `test/native/srt-scaling/README.md`).
+//! **Threading: exclusive port ownership, not shared-multiplexer pooling.**
+//! Earlier revisions let every discard thread call `srt_accept()`/`srt_recv()`
+//! concurrently against the *same* listener socket. That was measured to be
+//! a severe regression (see
+//! `docs/agent-guidance/quality/srt-scaling-investigation.md`'s tunable
+//! sweep): a listening port in unpatched libsrt has one shared multiplexer
+//! (`CSndQueue`/`CRcvQueue`), and multiple external threads hammering it
+//! concurrently contends against that structure's internal locking rather
+//! than adding capacity. `HarnessSrtSinkPool` instead binds every requested
+//! port up front, then partitions the port list into contiguous chunks
+//! across `thread_count` threads (`ports.len() / thread_count`, remainder
+//! spread one-per-thread to the first few) — each thread owns its chunk of
+//! listeners *exclusively* and never touches a socket outside it, so no two
+//! threads ever share a multiplexer. `thread_count` must therefore be `<=`
+//! the port count for this to have any effect; the pool clamps it to
+//! `[1, ports.len()]`.
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::Arc;
@@ -198,90 +203,22 @@ struct SinkCounters {
     closed: AtomicU64,
 }
 
-/// A multi-threaded SRT listener that accepts connections and discards
-/// everything read from them.
-pub(crate) struct HarnessSrtSink {
-    port: u16,
-    listener: SrtSocket,
-    stop: Arc<AtomicBool>,
-    counters: Arc<SinkCounters>,
-    threads: Vec<JoinHandle<()>>,
-}
-
-impl HarnessSrtSink {
-    pub(crate) fn start(
-        port: u16,
-        udp_buffer: i32,
-        discard_threads: usize,
-    ) -> Result<Self, String> {
-        srt_startup_once();
-        let discard_threads = discard_threads.max(1);
-
-        // SAFETY: Category 8 - FFI boundary. No arguments; returns a
-        // socket id or SRT_INVALID_SOCK, checked below.
-        let listener = unsafe { srt_create_socket() };
-        if listener == SRT_INVALID_SOCK {
-            return Err(format!("create harness SRT sink socket: {}", srt_error()));
-        }
-
-        let configured = configure_and_bind(listener, port, udp_buffer as c_int);
-        if let Err(error) = configured {
-            // SAFETY: Category 8 - FFI boundary. Closing the socket
-            // created immediately above, which no other thread has
-            // observed yet.
-            unsafe {
-                srt_close(listener);
-            }
-            return Err(error);
-        }
-
-        let stop = Arc::new(AtomicBool::new(false));
-        let counters = Arc::new(SinkCounters::default());
-        let mut threads = Vec::with_capacity(discard_threads);
-        for worker_idx in 0..discard_threads {
-            let thread_stop = stop.clone();
-            let thread_counters = counters.clone();
-            let handle = std::thread::Builder::new()
-                .name(format!("harness-srt-sink-{port}-{worker_idx}"))
-                .spawn(move || discard_loop(listener, &thread_stop, &thread_counters))
-                .map_err(|error| format!("spawn harness SRT sink thread: {error}"))?;
-            threads.push(handle);
-        }
-
-        tracing::info!(
-            "[harness-srt-sink] listening on {port} ({discard_threads} discard thread(s), udp_buffer={udp_buffer})"
-        );
-
-        Ok(Self {
-            port,
-            listener,
-            stop,
-            counters,
-            threads,
-        })
+fn create_and_bind_listener(port: u16, udp_buffer: c_int) -> Result<SrtSocket, String> {
+    // SAFETY: Category 8 - FFI boundary. No arguments; returns a socket id
+    // or SRT_INVALID_SOCK, checked below.
+    let listener = unsafe { srt_create_socket() };
+    if listener == SRT_INVALID_SOCK {
+        return Err(format!("create harness SRT sink socket: {}", srt_error()));
     }
-
-    /// Stop every discard thread, join them, then close the shared
-    /// listener socket exactly once (no thread touches it directly).
-    pub(crate) fn stop(mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        for handle in self.threads.drain(..) {
-            let _ = handle.join();
-        }
-        tracing::info!(
-            "[harness-srt-sink] stopped {} (accepted={} discarded={}MB closed={})",
-            self.port,
-            self.counters.accepted.load(Ordering::Relaxed),
-            self.counters.discarded_bytes.load(Ordering::Relaxed) / (1024 * 1024),
-            self.counters.closed.load(Ordering::Relaxed),
-        );
-        // SAFETY: Category 8 - FFI boundary. Every thread that accepted
-        // connections off this listener has now joined and stopped
-        // touching it; closing here is the sole close of this socket.
+    if let Err(error) = configure_and_bind(listener, port, udp_buffer) {
+        // SAFETY: Category 8 - FFI boundary. Closing the socket created
+        // immediately above, which no other thread has observed yet.
         unsafe {
-            srt_close(self.listener);
+            srt_close(listener);
         }
+        return Err(error);
     }
+    Ok(listener)
 }
 
 fn configure_and_bind(listener: SrtSocket, port: u16, udp_buffer: c_int) -> Result<(), String> {
@@ -326,17 +263,129 @@ fn configure_and_bind(listener: SrtSocket, port: u16, udp_buffer: c_int) -> Resu
     Ok(())
 }
 
-/// One worker's private accept-and-discard loop. `listener` is shared
-/// read-only across all workers (only `srt_accept`/`srt_getlasterror` are
-/// called on it here, both safe for concurrent use); each worker's
-/// `clients` list is touched only by that worker.
-fn discard_loop(listener: SrtSocket, stop: &AtomicBool, counters: &SinkCounters) {
+/// A pool of SRT accept-and-discard listeners spread across a bounded set
+/// of threads, each owning a disjoint subset of ports exclusively (see
+/// module doc comment for why exclusivity, not shared-multiplexer pooling).
+pub(crate) struct HarnessSrtSinkPool {
+    listeners: Vec<SrtSocket>,
+    stop: Arc<AtomicBool>,
+    counters: Arc<SinkCounters>,
+    threads: Vec<JoinHandle<()>>,
+}
+
+impl HarnessSrtSinkPool {
+    /// `thread_count` is clamped to `[1, ports.len()]`. Ports are chunked
+    /// contiguously across threads (`ports.len() / thread_count` each, the
+    /// first `ports.len() % thread_count` threads getting one extra) so
+    /// every thread owns its chunk exclusively and no multiplexer is ever
+    /// touched by more than one thread.
+    pub(crate) fn start(
+        ports: &[u16],
+        udp_buffer: i32,
+        thread_count: usize,
+    ) -> Result<Self, String> {
+        srt_startup_once();
+        if ports.is_empty() {
+            return Err("harness SRT sink pool needs at least one port".to_string());
+        }
+        let thread_count = thread_count.clamp(1, ports.len());
+
+        let mut listeners = Vec::with_capacity(ports.len());
+        for &port in ports {
+            match create_and_bind_listener(port, udp_buffer as c_int) {
+                Ok(listener) => listeners.push(listener),
+                Err(error) => {
+                    for listener in listeners {
+                        // SAFETY: Category 8 - FFI boundary. Every listener
+                        // in this partial Vec was created and bound above
+                        // by this function and observed by no other thread.
+                        unsafe {
+                            srt_close(listener);
+                        }
+                    }
+                    return Err(error);
+                }
+            }
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let counters = Arc::new(SinkCounters::default());
+        let base = listeners.len() / thread_count;
+        let remainder = listeners.len() % thread_count;
+        let mut threads = Vec::with_capacity(thread_count);
+        let mut cursor = 0usize;
+        for worker_idx in 0..thread_count {
+            let take = base + usize::from(worker_idx < remainder);
+            if take == 0 {
+                continue;
+            }
+            let owned: Vec<SrtSocket> = listeners[cursor..cursor + take].to_vec();
+            cursor += take;
+            let thread_stop = stop.clone();
+            let thread_counters = counters.clone();
+            let handle = std::thread::Builder::new()
+                .name(format!("harness-srt-sink-pool-{worker_idx}"))
+                .spawn(move || discard_loop(owned, &thread_stop, &thread_counters))
+                .map_err(|error| format!("spawn harness SRT sink thread: {error}"))?;
+            threads.push(handle);
+        }
+
+        tracing::info!(
+            "[harness-srt-sink] listening on {} port(s) ({thread_count} thread(s), \
+             {base}-{} ports/thread, udp_buffer={udp_buffer})",
+            ports.len(),
+            base + usize::from(remainder > 0),
+        );
+
+        Ok(Self {
+            listeners,
+            stop,
+            counters,
+            threads,
+        })
+    }
+
+    /// Stop every worker thread, join them, then close every listener
+    /// socket exactly once (no thread touches a listener outside its own
+    /// owned chunk while running, and all threads have joined by the time
+    /// we close anything here).
+    pub(crate) fn stop(mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        for handle in self.threads.drain(..) {
+            let _ = handle.join();
+        }
+        tracing::info!(
+            "[harness-srt-sink] stopped {} port(s) (accepted={} discarded={}MB closed={})",
+            self.listeners.len(),
+            self.counters.accepted.load(Ordering::Relaxed),
+            self.counters.discarded_bytes.load(Ordering::Relaxed) / (1024 * 1024),
+            self.counters.closed.load(Ordering::Relaxed),
+        );
+        for listener in self.listeners.drain(..) {
+            // SAFETY: Category 8 - FFI boundary. Every worker thread that
+            // could have touched this listener has joined above.
+            unsafe {
+                srt_close(listener);
+            }
+        }
+    }
+}
+
+/// One worker's private accept-and-discard loop over its exclusively-owned
+/// `listeners`. No other thread ever calls anything on these sockets, so no
+/// lock is needed for either the listener round-robin or the accepted
+/// `clients` list.
+fn discard_loop(listeners: Vec<SrtSocket>, stop: &AtomicBool, counters: &SinkCounters) {
     let mut clients: Vec<SrtSocket> = Vec::with_capacity(1024);
-    let mut idx = 0usize;
+    let mut client_idx = 0usize;
+    let mut listener_idx = 0usize;
     let mut buf = [0u8; 1316];
     let mut empty_streak: usize = 0;
 
     while !stop.load(Ordering::Relaxed) {
+        let listener = listeners[listener_idx % listeners.len()];
+        listener_idx = listener_idx.wrapping_add(1);
+
         let mut peer = SockaddrIn {
             sin_family: 0,
             sin_port: 0,
@@ -345,9 +394,8 @@ fn discard_loop(listener: SrtSocket, stop: &AtomicBool, counters: &SinkCounters)
         };
         let mut peer_len = std::mem::size_of::<SockaddrIn>() as c_int;
         // SAFETY: Category 8 - FFI boundary. Non-blocking accept on a
-        // listener socket shared (read-only, concurrency-safe per
-        // libsrt) across workers; out-parameters are stack locals sized
-        // by `peer_len`.
+        // listener this thread exclusively owns; out-parameters are stack
+        // locals sized by `peer_len`.
         let accepted = unsafe { srt_accept(listener, &mut peer, &mut peer_len) };
         if accepted != SRT_INVALID_SOCK {
             clients.push(accepted);
@@ -362,8 +410,8 @@ fn discard_loop(listener: SrtSocket, stop: &AtomicBool, counters: &SinkCounters)
             continue;
         }
 
-        idx %= clients.len();
-        let sock = clients[idx];
+        client_idx %= clients.len();
+        let sock = clients[client_idx];
         // SAFETY: Category 8 - FFI boundary. `sock` was accepted by this
         // thread and is never touched by any other thread; `buf` is a
         // correctly-sized stack buffer.
@@ -372,7 +420,7 @@ fn discard_loop(listener: SrtSocket, stop: &AtomicBool, counters: &SinkCounters)
             counters
                 .discarded_bytes
                 .fetch_add(n as u64, Ordering::Relaxed);
-            idx += 1;
+            client_idx += 1;
             empty_streak = 0;
         } else {
             let mut sys_errno: c_int = 0;
@@ -382,7 +430,7 @@ fn discard_loop(listener: SrtSocket, stop: &AtomicBool, counters: &SinkCounters)
             if err == SRT_EASYNCRCV || err == SRT_ETIMEOUT {
                 // Nothing buffered yet -- not a close. A fresh accept
                 // commonly has no data on its first poll.
-                idx += 1;
+                client_idx += 1;
                 empty_streak += 1;
                 if empty_streak >= clients.len() {
                     std::thread::sleep(std::time::Duration::from_millis(1));
@@ -394,10 +442,10 @@ fn discard_loop(listener: SrtSocket, stop: &AtomicBool, counters: &SinkCounters)
                 unsafe {
                     srt_close(sock);
                 }
-                clients.swap_remove(idx);
+                clients.swap_remove(client_idx);
                 counters.closed.fetch_add(1, Ordering::Relaxed);
-                if idx >= clients.len() {
-                    idx = 0;
+                if client_idx >= clients.len() {
+                    client_idx = 0;
                 }
                 empty_streak = 0;
             }
@@ -417,35 +465,54 @@ fn discard_loop(listener: SrtSocket, stop: &AtomicBool, counters: &SinkCounters)
 mod tests {
     use super::*;
 
-    fn free_udp_port() -> u16 {
-        let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind probe socket");
-        socket.local_addr().expect("probe socket addr").port()
+    fn free_udp_ports(count: usize) -> Vec<u16> {
+        (0..count)
+            .map(|_| {
+                let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind probe socket");
+                socket.local_addr().expect("probe socket addr").port()
+            })
+            .collect()
     }
 
     #[test]
-    fn harness_srt_sink_starts_and_stops_without_connections() {
-        let port = free_udp_port();
-        let sink = HarnessSrtSink::start(port, 8 * 1024 * 1024, 1).expect("start harness SRT sink");
-        sink.stop();
+    fn harness_srt_sink_pool_starts_and_stops_without_connections() {
+        let ports = free_udp_ports(1);
+        let pool =
+            HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 1).expect("start harness sink pool");
+        pool.stop();
     }
 
     #[test]
-    fn harness_srt_sink_rejects_a_port_already_bound() {
-        let port = free_udp_port();
-        let sink = HarnessSrtSink::start(port, 8 * 1024 * 1024, 1).expect("start harness SRT sink");
-        let conflict = HarnessSrtSink::start(port, 8 * 1024 * 1024, 1);
+    fn harness_srt_sink_pool_rejects_a_port_already_bound() {
+        let ports = free_udp_ports(1);
+        let pool =
+            HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 1).expect("start harness sink pool");
+        let conflict = HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 1);
         assert!(
             conflict.is_err(),
-            "second sink on port {port} unexpectedly bound"
+            "second pool on {ports:?} unexpectedly bound"
         );
-        sink.stop();
+        pool.stop();
     }
 
     #[test]
-    fn harness_srt_sink_supports_multiple_discard_threads() {
-        let port = free_udp_port();
-        let sink = HarnessSrtSink::start(port, 8 * 1024 * 1024, 4).expect("start harness SRT sink");
-        assert_eq!(sink.threads.len(), 4);
-        sink.stop();
+    fn harness_srt_sink_pool_clamps_thread_count_to_port_count() {
+        let ports = free_udp_ports(2);
+        // Requesting more threads than ports must not panic or leave a
+        // port unowned; it clamps to one thread per port.
+        let pool =
+            HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 8).expect("start harness sink pool");
+        assert_eq!(pool.threads.len(), 2);
+        pool.stop();
+    }
+
+    #[test]
+    fn harness_srt_sink_pool_partitions_ports_across_fewer_threads() {
+        let ports = free_udp_ports(4);
+        let pool =
+            HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 2).expect("start harness sink pool");
+        assert_eq!(pool.threads.len(), 2);
+        assert_eq!(pool.listeners.len(), 4);
+        pool.stop();
     }
 }

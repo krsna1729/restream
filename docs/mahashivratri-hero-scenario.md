@@ -428,7 +428,7 @@ Names are provisional until the mode is implemented:
 | `PEER_COUNT` | `1` | Number of peer instances (`MTX_RTMP`/`MTX_SRT`/`MTX_API` + instance offset each); outputs distribute round-robin by ordinal (`ordinal % PEER_COUNT`) |
 | `PEER_SKIP_START` | unset | Meaningful only for `MSR_PEER=mediamtx`: peer instances are pre-started externally, and the harness verifies all `PEER_COUNT` instances are live instead of spawning them. No effect on `MSR_PEER=sink` — an in-process listener has no external-process equivalent to skip-start; it is always bound fresh by the harness. |
 | `MSR_PEER` | `mediamtx` | `mediamtx` (default) or `sink` — see "Peer modes" below |
-| `HARNESS_SRT_SINK_THREADS` | `1` | `MSR_PEER=sink` only: discard-thread count per SRT sink-peer instance, independent of `PEER_COUNT` |
+| `HARNESS_SRT_SINK_THREADS` | `PEER_COUNT` | `MSR_PEER=sink` only: **total** discard-thread count for the shared SRT sink pool, partitioned into exclusively-owned port chunks (`PEER_COUNT / HARNESS_SRT_SINK_THREADS` ports/thread) — not a per-port count. Default reproduces the historical 1-port-per-thread behavior |
 | `HARNESS_SRT_SINK_UDP_BUFFER` | `8388608` (8MB) | `MSR_PEER=sink` only: `SRTO_UDP_RCVBUF`/`SRTO_UDP_SNDBUF` for each SRT sink-peer instance |
 | `MSR_SKIP_FFPROBE` | unset | Skip ffprobe read-back checks (always forced on when `MSR_PEER=sink`) |
 | `MSR_SINK_SAMPLE_SECS` | `3` | mediamtx path-health sample window before the resource-window sample |
@@ -451,22 +451,40 @@ never expected to be started by hand outside `PEER_SKIP_START`.
   checkpoint JSON (with `PEER_COUNT=1`, the default, this is byte-identical to
   the pre-multi-instance shape).
 - **`sink`**: `PEER_COUNT` in-process, harness-native accept-and-discard
-  listeners (RTMP: `sinks.rs`'s `GeneralizedSinkServer`; SRT:
-  `harness_srt_sink.rs`'s `HarnessSrtSink`) in place of mediamtx, bound
-  directly by the `test_harness` process itself — far lower per-connection
-  memory than a real mediamtx path, for runs where raw connection count
-  matters more than a readable path. As of
-  `docs/agent-guidance/quality/srt-scaling-investigation.md`'s sink-mode
-  extraction, this replaced spawning a separate `restream --sink-mode`
-  process per instance; `RESTREAM_SINK_MODE` no longer exists in production
-  restream (see that doc for why the two "sink" concepts — this receiver
-  and the unrelated `sink://` egress output type — needed to be
-  disambiguated). Because binds are synchronous and in-process, there is no
-  readiness-polling step to wait on, and `PEER_SKIP_START` has no effect on
-  `sink` peers (it exists only for pre-started external processes, i.e.
-  `mediamtx`). `HARNESS_SRT_SINK_THREADS` (default 1) tunes the SRT
-  listener's discard-thread count independent of `PEER_COUNT`. Because a
-  sink peer discards data below the RTMP/SRT protocol layer, mediamtx
+  listeners for RTMP (`sinks.rs`'s `GeneralizedSinkServer`, one per
+  instance) in place of mediamtx, bound directly by the `test_harness`
+  process itself — far lower per-connection memory than a real mediamtx
+  path, for runs where raw connection count matters more than a readable
+  path. As of `docs/agent-guidance/quality/srt-scaling-investigation.md`'s
+  sink-mode extraction, this replaced spawning a separate `restream
+  --sink-mode` process per instance; `RESTREAM_SINK_MODE` no longer exists
+  in production restream (see that doc for why the two "sink" concepts —
+  this receiver and the unrelated `sink://` egress output type — needed to
+  be disambiguated). Because binds are synchronous and in-process, there is
+  no readiness-polling step to wait on, and `PEER_SKIP_START` has no effect
+  on `sink` peers (it exists only for pre-started external processes, i.e.
+  `mediamtx`).
+
+  The SRT side is a single shared `harness_srt_sink.rs::HarnessSrtSinkPool`
+  spanning every `PEER_COUNT` port, not one listener per instance.
+  `HARNESS_SRT_SINK_THREADS` is a **total** thread budget for that pool
+  (default: `PEER_COUNT`, i.e. one thread per port), partitioned into
+  contiguous, **exclusively owned** port chunks — `ports.len() /
+  HARNESS_SRT_SINK_THREADS` ports per thread, remainder spread one-per-thread
+  to the first few. No two threads ever call anything on the same listener
+  socket. This replaced an earlier design where every thread shared one
+  listener per instance via concurrent `srt_accept()`/`srt_recv()`, which
+  the tunable sweep in `srt-scaling-investigation.md` found to be a severe
+  regression (a listening port in unpatched libsrt has one shared
+  multiplexer; multiple threads hammering it concurrently contends against
+  its internal locking rather than adding capacity). Exclusive ownership
+  fixed that and, per that doc's follow-up sweep, 2 ports/thread
+  outperforms 1 port/thread at every port count tested, with a measured
+  local optimum around 8 ports / 4 threads on a 6-core host — pushing
+  either axis further can get worse again once total discard-thread count
+  starts competing with the sender for CPU.
+
+  Because a sink peer discards data below the RTMP/SRT protocol layer, mediamtx
   path-health and ffprobe read-back are skipped entirely; each checkpoint
   is instead verified from restream's own `/api/v1/engine/health`: every
   expected output must be present and its `bytesOut` must grow across
