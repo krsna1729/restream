@@ -13,9 +13,7 @@ use crate::media::engine::MediaEngine;
 use crate::media::ingest_auth::PipelineAccessAuthenticator;
 use crate::media::security::IngestSecurityService;
 
-use super::handshake::perform_server_handshake;
 use super::ingest::handle_rtmp_client;
-use super::sink_session::run_sink_rtmp_session;
 
 /// RTMP Ingest Server
 pub async fn start_rtmp_server(
@@ -76,51 +74,23 @@ pub async fn start_rtmp_server_on(
                         continue;
                     }
                 };
-                if engine.config.sink_mode {
-                    tokio::spawn(async move {
-                        drop(permit);
-                        let mut buf = [0u8; 4096];
-                        let mut stream = socket;
-                        // A real RTMP client (restream's own egress fabric
-                        // included) blocks on the handshake, then blocks
-                        // again waiting for the server to accept its
-                        // connect/publish requests before it ever sends
-                        // media — a listener that only discards bytes
-                        // never gets that far, leaving every real RTMP
-                        // egress connection to this sink hung forever.
-                        // Reuses the exact server handshake real ingest
-                        // performs, then drives a minimal ServerSession
-                        // (sink_session.rs) that accepts connect/publish
-                        // and discards every media message unread.
-                        match perform_server_handshake(&mut stream, &mut buf).await {
-                            Ok(leading) => {
-                                info!("[rtmp] SINK_MODE: discarding data from {}", addr);
-                                run_sink_rtmp_session(&mut stream, &mut buf, &leading).await;
-                            }
-                            Err(error) => {
-                                warn!("[rtmp] SINK_MODE: handshake failed for {}: {}", addr, error);
-                            }
-                        }
-                    });
-                } else {
-                    let pipeline_access_clone = pipeline_access.clone();
-                    let security_clone = security.clone();
-                    let engine_clone = engine.clone();
-                    tokio::spawn(async move {
-                        let _permit = permit;
-                        if let Err(e) = handle_rtmp_client(
-                            socket,
-                            addr,
-                            pipeline_access_clone,
-                            security_clone,
-                            engine_clone,
-                        )
-                        .await
-                        {
-                            warn!("error handling client {}: {:?}", addr, e);
-                        }
-                    });
-                }
+                let pipeline_access_clone = pipeline_access.clone();
+                let security_clone = security.clone();
+                let engine_clone = engine.clone();
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    if let Err(e) = handle_rtmp_client(
+                        socket,
+                        addr,
+                        pipeline_access_clone,
+                        security_clone,
+                        engine_clone,
+                    )
+                    .await
+                    {
+                        warn!("error handling client {}: {:?}", addr, e);
+                    }
+                });
             }
             Err(e) => {
                 engine
