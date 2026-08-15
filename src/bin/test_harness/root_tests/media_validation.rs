@@ -262,18 +262,6 @@ fn proc_net_has_listening_port_ignores_non_listen_states() {
 }
 
 #[test]
-fn proc_net_has_bound_udp_port_matches_any_state() {
-    // UDP has no LISTEN state: `/proc/net/udp`'s state column reads `07`
-    // (TCP_CLOSE) the moment a bind() succeeds — presence of the local
-    // port is itself the readiness signal, unlike the TCP LISTEN check.
-    let table = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n\
-   0: 0100007F:C4C1 00000000:0000 07 00000000:00000000 00:00000000 00000000   100        0 1 1 0000000000000000 100\n";
-
-    assert!(proc_net_has_bound_udp_port(table, 50369));
-    assert!(!proc_net_has_bound_udp_port(table, 1935));
-}
-
-#[test]
 fn kill_and_wait_child_terminates_spawned_process() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

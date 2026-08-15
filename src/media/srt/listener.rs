@@ -7,8 +7,8 @@ use tracing::{error, info, warn};
 
 use super::buffer_sizing::srt_set_ingest_latency_opts;
 use super::socket::{
-    SrtListenerCloser, enable_srt_group_connect, from_sockaddr_in, last_srt_error,
-    srt_log_effective_opts, srt_set_highbitrate_opts, to_sockaddr_in,
+    SrtListenerCloser, enable_srt_group_connect, from_sockaddr_in, srt_log_effective_opts,
+    srt_set_highbitrate_opts, to_sockaddr_in,
 };
 use super::srt_crypto::{apply_srt_crypto_socket, srt_crypto_from_resolved};
 use super::srt_monitor::monitor_listener_socket;
@@ -18,7 +18,7 @@ use super::{SrtIngestPolicyStore, SrtServer};
 use crate::domain::srt_ingest::{
     DEFAULT_SRT_INGEST_LATENCY_MS, ResolvedSrtCrypto, ResolvedSrtIngestConfig,
 };
-use crate::media::srt::sys::{srt_bind, srt_close, srt_create_socket, srt_listen, srt_recv};
+use crate::media::srt::sys::{srt_bind, srt_close, srt_create_socket, srt_listen};
 
 const SRT_REJX_UNAUTHORIZED: c_int = 1401;
 const SRT_REJX_BAD_MODE: c_int = 1405;
@@ -120,197 +120,8 @@ unsafe fn srt_listener_policy_callback_inner(
     0
 }
 
-/// Single-threaded sink discard loop: accepts SRT connections, adds them to
-/// a client list, and round-robins non-blocking reads. No per-connection
-/// threads, no epoll. Runs inside `spawn_blocking` in sink mode.
-fn sink_discard_loop(server_sock: SRTSOCKET) {
-    let mut clients: Vec<SRTSOCKET> = Vec::with_capacity(1024);
-    let mut idx = 0usize;
-    let mut buf = [0u8; 1316];
-    let mut accepted: u64 = 0;
-    let mut discarded: u64 = 0;
-    let mut closed: u64 = 0;
-    let mut last_log = std::time::Instant::now();
-    // Counts consecutive empty reads. Once it reaches a full lap of the
-    // client list with no client having had data, every client was polled
-    // and found empty — back off briefly instead of re-polling the same
-    // idle set at CPU-bound rate. Reset on any accept or successful read,
-    // so a busy set of clients is never throttled.
-    let mut empty_streak: usize = 0;
-    loop {
-        // Non-blocking accept
-        let mut client_sin = sockaddr_in {
-            sin_family: 0,
-            sin_port: 0,
-            sin_addr: 0,
-            sin_zero: [0; 8],
-        };
-        let mut len = std::mem::size_of::<sockaddr_in>() as c_int;
-        let client_sock = unsafe { srt_accept(server_sock, &mut client_sin, &mut len) };
-        if client_sock >= 0 {
-            clients.push(client_sock);
-            accepted += 1;
-            empty_streak = 0;
-            continue;
-        }
-        // Round-robin read from one client per iteration
-        if !clients.is_empty() {
-            idx %= clients.len();
-            let sock = clients[idx];
-            let n = unsafe { srt_recv(sock, buf.as_mut_ptr(), 1316) };
-            if n > 0 {
-                discarded += n as u64;
-                idx += 1;
-                empty_streak = 0;
-            } else if n < 0 && last_srt_error().0 == SRT_EASYNCRCV {
-                // Nonblocking socket with nothing to read yet — not a
-                // close. A fresh accept commonly has no data buffered on
-                // its very first poll; treating this as a close condition
-                // tore down every client on its first empty read.
-                idx += 1;
-                empty_streak += 1;
-                if empty_streak >= clients.len() {
-                    // A full lap found no data on any client: back off
-                    // instead of re-polling an idle set at CPU-bound rate
-                    // (measured: one sink instance pegs a full core
-                    // spinning empty accept+recv calls with no backoff).
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                    empty_streak = 0;
-                }
-            } else {
-                unsafe {
-                    srt_close(sock);
-                }
-                clients.swap_remove(idx);
-                closed += 1;
-                if idx >= clients.len() && !clients.is_empty() {
-                    idx = 0;
-                }
-                empty_streak = 0;
-            }
-        } else {
-            empty_streak = 0;
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        // Periodic metrics
-        if last_log.elapsed().as_secs() >= 10 {
-            info!(
-                "[srt] SINK_MODE: clients={} accepted={} discarded={}MB closed={}",
-                clients.len(),
-                accepted,
-                discarded / (1024 * 1024),
-                closed,
-            );
-            last_log = std::time::Instant::now();
-        }
-    }
-}
-
 impl SrtServer {
     pub async fn run(self: Arc<Self>, port: u16) {
-        // SINK_MODE: minimal discard listener — no pipeline, no auth, no ring.
-        // Accepts every connection, reads and discards data at application level.
-        if self.engine.config.sink_mode {
-            info!(
-                "[srt] SINK_MODE: starting discard listener on port {}",
-                port
-            );
-            let server_sock = unsafe { srt_create_socket() };
-            if server_sock < 0 {
-                return;
-            }
-            let addr_str = format!("0.0.0.0:{}", port);
-            let addr: SocketAddr = match addr_str.parse() {
-                Ok(a) => a,
-                Err(_) => {
-                    unsafe {
-                        srt_close(server_sock);
-                    }
-                    return;
-                }
-            };
-            let sin = to_sockaddr_in(addr);
-            unsafe {
-                let live: c_int = SRTT_LIVE;
-                srt_setsockopt(
-                    server_sock,
-                    0,
-                    SRTO_TRANSTYPE,
-                    &live as *const _ as *const c_void,
-                    std::mem::size_of::<c_int>() as c_int,
-                );
-                // Sink mode is a receive-dominant socket at scale (up to
-                // 1,200 simultaneous accepted connections in the msr
-                // harness), the same shape as the production ingest
-                // listener just below in this file — apply the same
-                // high-bitrate UDP/SRT buffer preset it already uses
-                // instead of leaving libsrt's small defaults in place.
-                // Confirmed via isolated libsrt benchmarking that undersized
-                // receive buffers are what turns connection fan-in above a
-                // few hundred concurrent flows into steady-state send
-                // errors on the peer.
-                srt_set_highbitrate_opts(server_sock, self.engine.config.srt_udp_buffer as i32);
-                let lat: c_int = 250;
-                srt_setsockopt(
-                    server_sock,
-                    0,
-                    SRTO_LATENCY,
-                    &lat as *const _ as *const c_void,
-                    std::mem::size_of::<c_int>() as c_int,
-                );
-                let reuse: c_int = 1;
-                srt_setsockopt(
-                    server_sock,
-                    0,
-                    SRTO_REUSEADDR,
-                    &reuse as *const _ as *const c_void,
-                    std::mem::size_of::<c_int>() as c_int,
-                );
-                // Non-blocking accept so the discard loop can service
-                // existing clients and print metrics between accepts.
-                let sync: c_int = 0;
-                srt_setsockopt(
-                    server_sock,
-                    0,
-                    SRTO_RCVSYN,
-                    &sync as *const _ as *const c_void,
-                    std::mem::size_of::<c_int>() as c_int,
-                );
-                srt_bind(
-                    server_sock,
-                    &sin,
-                    std::mem::size_of::<sockaddr_in>() as c_int,
-                );
-                srt_listen(server_sock, 1024);
-            }
-            info!("[srt] SINK_MODE: listening on {}", addr_str);
-            // Spawn the blocking sink loop on tokio's blocking thread pool
-            // so we don't occupy a tokio worker. Inside, one tight loop
-            // accepts and round-robins non-blocking reads — no per-connection
-            // threads, no epoll, no spawn overhead.
-            tokio::task::spawn_blocking(move || {
-                if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    sink_discard_loop(server_sock);
-                })) {
-                    let msg = if let Some(s) = panic.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else if let Some(s) = panic.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        "unknown panic".to_string()
-                    };
-                    error!("[srt] SINK_MODE: discard loop panicked: {}", msg);
-                }
-            });
-            // Keep the async function alive until the server shuts down.
-            // Without this, the outer `run` returns immediately and the
-            // SRT listener task exits — which is treated as a critical
-            // failure and triggers server shutdown.
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-            }
-        }
-
         // SAFETY: srt_create_socket returns a valid SRT socket handle or -1
         // on error. The socket is closed via SrtListenerCloser on drop or
         // explicitly on bind/listen failure below.

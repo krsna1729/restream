@@ -271,7 +271,6 @@ pub struct AppConfig {
     pub ring_capacity: usize,
     pub transcoder_ring_capacity: usize,
     pub srt_udp_buffer: usize,
-    pub sink_mode: bool,
     pub require_srt_bonding: bool,
     pub external_ffmpeg_permits: usize,
     pub ffmpeg_bin_path: Option<String>,
@@ -615,7 +614,6 @@ impl Default for AppConfig {
             ring_headroom_secs: 6.0,
             ring_capacity: 1024,
             transcoder_ring_capacity: 512,
-            sink_mode: false,
             srt_udp_buffer: 8 * 1024 * 1024,
             require_srt_bonding: false,
             external_ffmpeg_permits: derived_permits,
@@ -688,7 +686,6 @@ impl AppConfig {
             env_usize("RESTREAM_TRANSCODER_RING_CAPACITY", 512).clamp(64, 16384);
         let srt_udp_buffer =
             env_usize("RESTREAM_SRT_UDP_BUFFER", 8 * 1024 * 1024).clamp(65536, 268_435_456);
-        let sink_mode = std::env::var_os("RESTREAM_SINK_MODE").is_some();
         let require_srt_bonding = std::env::var_os("RESTREAM_REQUIRE_SRT_BONDING").is_some();
         let ffmpeg_bin_path = std::env::var("FFMPEG_BIN_PATH").ok();
         let log_dir =
@@ -769,7 +766,6 @@ impl AppConfig {
             ring_headroom_secs,
             ring_capacity,
             transcoder_ring_capacity,
-            sink_mode,
             srt_udp_buffer,
             require_srt_bonding,
             external_ffmpeg_permits: permits,
@@ -859,7 +855,6 @@ impl AppConfig {
                 "ringCapacity": self.ring_capacity,
                 "transcoderRingCapacity": self.transcoder_ring_capacity,
             },
-            "sinkMode": self.sink_mode,
             "srt": {
                 "udpBuffer": self.srt_udp_buffer,
                 "requireBonding": self.require_srt_bonding,
