@@ -407,6 +407,7 @@ async fn start_bitrate_sweep_stack(env: &BitrateSweepEnv) -> Result<ResourceSwee
     let restream_pid = restream.id().ok_or("restream pid missing")?;
     Ok(ResourceSweepStack {
         mediamtx: vec![mediamtx],
+        sink_peers: Vec::new(),
         restream,
         api,
         restream_pid,
