@@ -686,7 +686,31 @@ rather than anything specific to the harness sink's own threading model.
   TX/RX thread pair** (confirmed via `perf` to be genuine per-packet kernel
   cost, not application-level) has not been pushed further with
   `sendmmsg()`/GSO batching or a different I/O model. Future work, not
-  started here.
+  started here. **This is about the isolated C benchmark's raw UDP path
+  specifically** — a distinct question from `sendmmsg()` for restream's own
+  production SRT egress, addressed next.
+- **`sendmmsg()`/UDP GSO batching for restream's own production SRT egress
+  send path — investigated and closed, do not implement.** A gist
+  suggesting this as a fix for restream's `MAX_SRT_MESSAGE_PAYLOAD = 1316`
+  fragmentation (a 74KB keyframe becomes ~57 `srt_send()` calls) prompted a
+  scoping pass. Findings: 1316 bytes is not a restream tuning choice — it
+  sits under libsrt's own live-mode message ceiling
+  (`SRT_LIVE_MAX_PLSIZE = 1456`, MTU minus UDP/SRT headers; larger single
+  messages are rejected by libsrt with `SRT_ELARGEMSG`). `sendmmsg()`
+  itself is inapplicable by construction: restream's Rust code never
+  touches a raw UDP socket for SRT — libsrt owns it internally — and the
+  vendored libsrt source confirms libsrt itself never calls `sendmmsg()`
+  either (its own sender thread uses singular `::sendmsg()`,
+  asynchronously, regardless of application-side call count).
+  `docs/egress-implementation.md` already investigated this exact CPU gap
+  (3.6x vs. legacy) and found the dominant cause was not send-path call
+  count at all — batching fragments per scheduler visit only moved the
+  number from 158% to 149%, and raising the message ceiling to 1456 was
+  reasoned to save only a few percent more. The real cause was SRT egress
+  sockets not sharing a UDP multiplexer port (one `RcvQ`/`SndQ` thread pair
+  per socket instead of shared); fixing that (muxer-port reuse) closed the
+  gap entirely — fabric ended up *below* legacy CPU at scale. Recorded here
+  so this doesn't get re-proposed from the gist without this context again.
 - **The 900–1,200-connection degradation is unresolved in the patched-libsrt
   line of work** and was not chased further once attention moved to
   investigating stock libsrt harder instead. If a future need requires
