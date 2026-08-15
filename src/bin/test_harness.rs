@@ -47,6 +47,8 @@ mod fault_manifest;
 mod fault_recovery;
 #[path = "test_harness/fault_runner.rs"]
 mod fault_runner;
+#[path = "test_harness/harness_srt_sink.rs"]
+mod harness_srt_sink;
 #[path = "test_harness/hls_put.rs"]
 mod hls_put;
 #[path = "test_harness/live_modes.rs"]
@@ -85,6 +87,7 @@ use fault_input_promotion::*;
 use fault_manifest::*;
 use fault_recovery::*;
 use fault_runner::*;
+use harness_srt_sink::*;
 use hls_put::*;
 use live_modes::*;
 use media_probes::*;
