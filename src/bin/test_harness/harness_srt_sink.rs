@@ -72,7 +72,8 @@ unsafe extern "C" {
 }
 
 const SRT_INVALID_SOCK: SrtSocket = -1;
-const SRT_EASYNCRCV: c_int = 6003;
+const SRT_EASYNCRCV: c_int = 6002;
+const SRT_ETIMEOUT: c_int = 6003;
 
 /// `LOG_CRIT`. Non-blocking accept/recv report "nothing available yet" as
 /// an *error* on every idle poll, which would bury real problems in noise.
@@ -378,7 +379,7 @@ fn discard_loop(listener: SrtSocket, stop: &AtomicBool, counters: &SinkCounters)
             // SAFETY: Category 8 - FFI boundary. `sys_errno` is a valid
             // stack-local out-parameter.
             let err = unsafe { srt_getlasterror(&mut sys_errno) };
-            if err == SRT_EASYNCRCV {
+            if err == SRT_EASYNCRCV || err == SRT_ETIMEOUT {
                 // Nothing buffered yet -- not a close. A fresh accept
                 // commonly has no data on its first poll.
                 idx += 1;
