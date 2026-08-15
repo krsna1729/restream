@@ -489,6 +489,7 @@ async fn run_msr_phase(
         delete_resource_pipeline(&stack.api, &pipeline_id).await;
         stop_child(&mut stack.restream).await;
         stop_children(&mut stack.mediamtx).await;
+        stop_harness_sink_peers(&mut stack.sink_peers).await;
     }
     Ok(MsrPhaseResult {
         env,

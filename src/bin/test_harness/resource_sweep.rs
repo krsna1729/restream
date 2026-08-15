@@ -1,26 +1,26 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tokio::process::{Child, Command};
 
 use super::{
-    FfmpegStats, HarnessSrtCrypto, HarnessSrtMode, MSR_LANGUAGE_CODES, MSR_LANGUAGE_NAMES,
-    MixedEnv, PublishTrackSelection, RampApi, RtmpOutputMode, SignalTolerances, append_line,
-    append_srt_crypto, apply_harness_srt_listener_env, apply_srt_listener_env,
-    capture_signal_sample, cleanup_ramp_db, create_backup_input, create_output,
-    create_output_with_rtmp_mode, decode_pcm_quality, default_restream_bin, default_work_db_path,
-    env_secs, env_usize, ffprobe_live_sample, file_tail_lines, harness_admin_password,
-    harness_port_defaults, harness_srt_crypto_from_env, harness_srt_ffmpeg_url,
-    harness_srt_standard_publish_url, mixed_input_case_for_command, parse_srt_crypto_variants,
-    probe_dims_ramp, remove_mediamtx_config_env, run_ffmpeg_filter_log,
+    FfmpegStats, GeneralizedSinkMetrics, GeneralizedSinkServer, HarnessSrtCrypto, HarnessSrtMode,
+    HarnessSrtSink, MSR_LANGUAGE_CODES, MSR_LANGUAGE_NAMES, MixedEnv, PublishTrackSelection,
+    RampApi, RtmpOutputMode, SignalTolerances, append_line, append_srt_crypto,
+    apply_harness_srt_listener_env, apply_srt_listener_env, capture_signal_sample, cleanup_ramp_db,
+    create_backup_input, create_output, create_output_with_rtmp_mode, decode_pcm_quality,
+    default_restream_bin, default_work_db_path, env_secs, env_usize, ffprobe_live_sample,
+    file_tail_lines, harness_admin_password, harness_port_defaults, harness_srt_crypto_from_env,
+    harness_srt_ffmpeg_url, harness_srt_standard_publish_url, mixed_input_case_for_command,
+    parse_srt_crypto_variants, probe_dims_ramp, remove_mediamtx_config_env, run_ffmpeg_filter_log,
     run_mixed_input_case_with_env, safe_artifact_stem, signal_report_json,
-    spawn_publisher_with_selection, start_output, stop_child, sweep_fixture,
-    validate_signal_quality_with_tolerances, wait_for_api_input_live, wait_for_http_ok,
-    wait_for_input_state, wait_for_outputs_progress, wait_for_tcp_listener_ready,
-    wait_for_udp_listener_ready,
+    spawn_publisher_with_selection, start_generalized_sink_server, start_output, stop_child,
+    stop_generalized_sink_server, sweep_fixture, validate_signal_quality_with_tolerances,
+    wait_for_api_input_live, wait_for_http_ok, wait_for_input_state, wait_for_outputs_progress,
 };
 
 #[path = "resource_sweep/bitrate.rs"]
@@ -58,16 +58,30 @@ use measurement::{
 
 /// Live process stack shared by a resource-sweep sample.
 ///
-/// `mediamtx` holds one `Child` per peer instance (`env.peer_count`, default
-/// 1): mediamtx processes normally, or `restream --sink-mode` processes
-/// when `env.peer_mode == ResourceSweepPeer::Sink`. Every non-`msr`
-/// resource-sweep scenario runs with `peer_count == 1`, so this stays a
-/// single-element Vec and existing behavior is unchanged.
+/// Exactly one of `mediamtx`/`sink_peers` is populated, one entry per peer
+/// instance (`env.peer_count`, default 1), depending on `env.peer_mode`:
+/// `mediamtx` holds real child processes (`env.peer_mode ==
+/// ResourceSweepPeer::Mediamtx`); `sink_peers` holds in-process
+/// harness-native listeners (`env.peer_mode == ResourceSweepPeer::Sink` --
+/// see `harness_srt_sink.rs` and `sinks.rs`'s `GeneralizedSinkServer`, which
+/// replaced spawning a separate `restream --sink-mode` process). Every
+/// non-`msr` resource-sweep scenario runs with `peer_count == 1` and
+/// `peer_mode == Mediamtx`, so `mediamtx` stays a single-element Vec and
+/// `sink_peers` stays empty there, matching pre-existing behavior.
 struct ResourceSweepStack {
     mediamtx: Vec<Child>,
+    sink_peers: Vec<HarnessSinkPeer>,
     restream: Child,
     api: RampApi,
     restream_pid: u32,
+}
+
+/// One in-process harness-native sink-peer instance: an RTMP
+/// accept-and-discard listener (reused from `sinks.rs`, already
+/// harness-native and proven) paired with an SRT one (`harness_srt_sink.rs`).
+struct HarnessSinkPeer {
+    rtmp: GeneralizedSinkServer,
+    srt: HarnessSrtSink,
 }
 
 /// Stop every child in a peer-instance Vec (or any other child list),
@@ -75,6 +89,15 @@ struct ResourceSweepStack {
 async fn stop_children(children: &mut [Child]) {
     for child in children {
         stop_child(child).await;
+    }
+}
+
+/// Stop every in-process harness sink-peer instance. Mirrors
+/// `stop_children`'s role for the mediamtx-`Child` path.
+async fn stop_harness_sink_peers(peers: &mut Vec<HarnessSinkPeer>) {
+    for peer in peers.drain(..) {
+        stop_generalized_sink_server(peer.rtmp);
+        peer.srt.stop();
     }
 }
 
@@ -188,17 +211,6 @@ fn peer_instance_ports(env: &ResourceSweepEnv, index: usize) -> (u16, u16, u16, 
     )
 }
 
-/// The HTTP port for sink-peer instance `index`. Sink peers are full
-/// `restream` processes (see `spawn_sink_peer`) and therefore need their own
-/// HTTP/DB surface; this range sits well clear of every other harness port
-/// range (`mtx_api + 2000 ..`) so it doesn't collide at any `PEER_COUNT` the
-/// harness realistically runs (a handful of instances, not thousands).
-fn sink_peer_http_port(env: &ResourceSweepEnv, index: usize) -> u16 {
-    env.mtx_api
-        .saturating_add(2000)
-        .saturating_add(index as u16)
-}
-
 /// Suffix `path` with `-{index}` (before the extension) for `index > 0`,
 /// leaving `index == 0` untouched so instance-0 artifact filenames stay
 /// stable for existing tooling and single-instance runs.
@@ -280,85 +292,15 @@ async fn verify_preexisting_mediamtx_peer(index: usize, api_port: u16) -> Result
     Ok(dummy)
 }
 
-async fn spawn_sink_peer(env: &ResourceSweepEnv, index: usize) -> Result<Child, String> {
-    if !env.restream_bin.exists() {
-        return Err(format!(
-            "restream binary not found at {}",
-            env.restream_bin.display()
-        ));
-    }
-    let (rtmp, _rtmps, srt, _api) = peer_instance_ports(env, index);
-    let http = sink_peer_http_port(env, index);
-    let log_dir = env.work_dir.join("logs");
-    std::fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
-    let log_path = log_dir.join(format!("sink-{index}.log"));
-    let log = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
-    let err_log = log.try_clone().map_err(|e| e.to_string())?;
-    let db_path = env.work_dir.join(format!("sink-{index}.db"));
-    cleanup_ramp_db(&db_path);
-    let mut cmd = Command::new(&env.restream_bin);
-    cmd.env("RESTREAM_SINK_MODE", "1")
-        .env("RESTREAM_HTTP_PORT", http.to_string())
-        .env("RESTREAM_RTMP_PORT", rtmp.to_string())
-        .env("RESTREAM_SRT_PORT", srt.to_string())
-        .env("RESTREAM_INITIAL_ADMIN_PASSWORD", harness_admin_password())
-        .env("RESTREAM_LOG_DIR", &log_dir)
-        .env("RESTREAM_DB_PATH", db_path.to_string_lossy().to_string())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(err_log))
-        .kill_on_drop(true);
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    if let Err(err) = wait_for_tcp_listener_ready(rtmp, Duration::from_secs(30)).await {
-        stop_child(&mut child).await;
-        return Err(format!(
-            "sink peer[{index}] RTMP listener did not become ready: {err}"
-        ));
-    }
-    if let Err(err) = wait_for_udp_listener_ready(srt, Duration::from_secs(30)).await {
-        stop_child(&mut child).await;
-        return Err(format!(
-            "sink peer[{index}] SRT listener did not become ready: {err}"
-        ));
-    }
-    Ok(child)
-}
-
-async fn verify_preexisting_sink_peer(index: usize, rtmp: u16, srt: u16) -> Result<Child, String> {
-    let mut dummy = Command::new("true")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("dummy: {e}"))?;
-    if let Err(err) = wait_for_tcp_listener_ready(rtmp, Duration::from_secs(10)).await {
-        let _ = dummy.kill().await;
-        return Err(format!(
-            "pre-started sink peer[{index}] RTMP listener not ready: {err}"
-        ));
-    }
-    if let Err(err) = wait_for_udp_listener_ready(srt, Duration::from_secs(10)).await {
-        let _ = dummy.kill().await;
-        return Err(format!(
-            "pre-started sink peer[{index}] SRT listener not ready: {err}"
-        ));
-    }
-    Ok(dummy)
-}
-
 async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>, String> {
     let skip_start = std::env::var("PEER_SKIP_START").is_ok();
     let mut children = Vec::with_capacity(env.peer_count);
     for index in 0..env.peer_count {
-        let spawned = match (env.peer_mode, skip_start) {
-            (ResourceSweepPeer::Mediamtx, true) => {
-                let (_, _, _, api) = peer_instance_ports(env, index);
-                verify_preexisting_mediamtx_peer(index, api).await
-            }
-            (ResourceSweepPeer::Mediamtx, false) => spawn_mediamtx_peer(env, index).await,
-            (ResourceSweepPeer::Sink, true) => {
-                let (rtmp, _, srt, _) = peer_instance_ports(env, index);
-                verify_preexisting_sink_peer(index, rtmp, srt).await
-            }
-            (ResourceSweepPeer::Sink, false) => spawn_sink_peer(env, index).await,
+        let spawned = if skip_start {
+            let (_, _, _, api) = peer_instance_ports(env, index);
+            verify_preexisting_mediamtx_peer(index, api).await
+        } else {
+            spawn_mediamtx_peer(env, index).await
         };
         match spawned {
             Ok(child) => children.push(child),
@@ -371,6 +313,48 @@ async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>
     Ok(children)
 }
 
+/// Starts one in-process harness-native sink-peer instance: an RTMP
+/// accept-and-discard listener plus an SRT one, bound directly to
+/// `rtmp_port`/`srt_port` -- no readiness polling needed, unlike spawning a
+/// separate process, since a synchronous bind either succeeds or fails
+/// immediately.
+async fn start_harness_sink_peer(rtmp_port: u16, srt_port: u16) -> Result<HarnessSinkPeer, String> {
+    let metrics = Arc::new(GeneralizedSinkMetrics::default());
+    let rtmp = start_generalized_sink_server(rtmp_port, metrics)
+        .await
+        .map_err(|err| format!("harness sink RTMP listener on {rtmp_port}: {err}"))?;
+
+    let discard_threads = env_usize("HARNESS_SRT_SINK_THREADS", 1);
+    let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024) as i32;
+    let srt = match HarnessSrtSink::start(srt_port, udp_buffer, discard_threads) {
+        Ok(srt) => srt,
+        Err(err) => {
+            stop_generalized_sink_server(rtmp);
+            return Err(format!("harness sink SRT listener on {srt_port}: {err}"));
+        }
+    };
+    Ok(HarnessSinkPeer { rtmp, srt })
+}
+
+/// `PEER_SKIP_START` is not honoured here: it exists for pre-started
+/// external processes (mediamtx), which an in-process listener has no
+/// equivalent of -- a harness sink peer is always started fresh, bound
+/// directly by this harness process.
+async fn start_harness_sink_peers(env: &ResourceSweepEnv) -> Result<Vec<HarnessSinkPeer>, String> {
+    let mut peers = Vec::with_capacity(env.peer_count);
+    for index in 0..env.peer_count {
+        let (rtmp_port, _rtmps, srt_port, _api) = peer_instance_ports(env, index);
+        match start_harness_sink_peer(rtmp_port, srt_port).await {
+            Ok(peer) => peers.push(peer),
+            Err(err) => {
+                stop_harness_sink_peers(&mut peers).await;
+                return Err(err);
+            }
+        }
+    }
+    Ok(peers)
+}
+
 async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSweepStack, String> {
     if !env.restream_bin.exists() {
         return Err(format!(
@@ -380,7 +364,12 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
     }
     std::fs::create_dir_all(env.work_dir.join("logs")).map_err(|e| e.to_string())?;
     cleanup_ramp_db(&env.restream_db_path);
-    let mut mediamtx = start_resource_sweep_peers(env).await?;
+    let mut mediamtx = Vec::new();
+    let mut sink_peers = Vec::new();
+    match env.peer_mode {
+        ResourceSweepPeer::Mediamtx => mediamtx = start_resource_sweep_peers(env).await?,
+        ResourceSweepPeer::Sink => sink_peers = start_harness_sink_peers(env).await?,
+    }
 
     let restream_log = std::fs::File::create(&env.restream_log).map_err(|e| e.to_string())?;
     let restream_err = restream_log.try_clone().map_err(|e| e.to_string())?;
@@ -411,6 +400,7 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
     {
         stop_child(&mut restream).await;
         stop_children(&mut mediamtx).await;
+        stop_harness_sink_peers(&mut sink_peers).await;
         return Err(format!("restream did not become ready: {err}"));
     }
     let mut api = RampApi::new(env.restream_http);
@@ -418,6 +408,7 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
     let restream_pid = restream.id().ok_or("restream pid missing")?;
     Ok(ResourceSweepStack {
         mediamtx,
+        sink_peers,
         restream,
         api,
         restream_pid,
@@ -465,6 +456,7 @@ async fn run_resource_baseline(
     if local_only {
         stop_child(&mut local_stack.as_mut().unwrap().restream).await;
         stop_children(&mut local_stack.as_mut().unwrap().mediamtx).await;
+        stop_harness_sink_peers(&mut local_stack.as_mut().unwrap().sink_peers).await;
     }
     let _ = retained_publishers;
     Ok(aggregate)
@@ -510,6 +502,7 @@ async fn run_resource_ingest_only(
     if local_only {
         stop_child(&mut local_stack.as_mut().unwrap().restream).await;
         stop_children(&mut local_stack.as_mut().unwrap().mediamtx).await;
+        stop_harness_sink_peers(&mut local_stack.as_mut().unwrap().sink_peers).await;
     }
     Ok(aggregate)
 }
@@ -599,6 +592,7 @@ async fn run_resource_ingest_growth(
     if local_only {
         stop_child(&mut local_stack.as_mut().unwrap().restream).await;
         stop_children(&mut local_stack.as_mut().unwrap().mediamtx).await;
+        stop_harness_sink_peers(&mut local_stack.as_mut().unwrap().sink_peers).await;
     }
     Ok(out)
 }
@@ -694,6 +688,7 @@ async fn run_resource_egress_growth(
     if local_only {
         stop_child(&mut local_stack.as_mut().unwrap().restream).await;
         stop_children(&mut local_stack.as_mut().unwrap().mediamtx).await;
+        stop_harness_sink_peers(&mut local_stack.as_mut().unwrap().sink_peers).await;
     }
     Ok(out)
 }
@@ -846,13 +841,6 @@ mod tests {
         // Instance 0 always matches the pre-existing single-mediamtx ports.
         assert_eq!(peer_instance_ports(&env, 0), (1936, 1937, 8891, 9997));
         assert_eq!(peer_instance_ports(&env, 3), (1939, 1940, 8894, 10000));
-    }
-
-    #[test]
-    fn sink_peer_http_port_is_well_clear_of_mtx_api() {
-        let env = test_env();
-        assert_eq!(sink_peer_http_port(&env, 0), 11997);
-        assert_eq!(sink_peer_http_port(&env, 3), 12000);
     }
 
     #[test]
