@@ -559,12 +559,26 @@ Two clear, real-pipeline-confirmed findings:
   listener/`srt_accept()`) is a real, unfixed regression**, found during the
   same sweep: `srt-only`@1,200 with 4 threads on `PEER_COUNT=1` never
   converged within the 900s progress-timeout cap — worse than the
-  single-thread baseline. The concurrent-`srt_accept()`-sharing design in
-  `harness_srt_sink.rs` was assumed safe by analogy with production patterns
-  but was not independently load-tested before this finding; root cause is
-  unknown. Anyone touching this file next should treat
-  `HARNESS_SRT_SINK_THREADS>1` as untrusted until root-caused, and prefer
-  `PEER_COUNT` for scaling instead.
+  single-thread baseline. This is not an unexplained mystery — it is the
+  expected outcome given what [Patched-libsrt exploration](#patched-libsrt-exploration-documented-not-adopted)
+  above already established: a listening port in *unpatched* libsrt has one
+  shared multiplexer (`CSndQueue`/`CRcvQueue`), and making that structure
+  safely and productively parallel across multiple threads required real
+  internal-library surgery (`CRcvQueuePool`/`CSndQueuePool`/`CTsbpdPool`,
+  thread-confined ownership, a briefly-locked inbox) — and even the patched
+  fork needed two iterations to get that right (a dangling-pointer crash,
+  then a lock-contention stall dropping accept throughput to 19/300 in 8s)
+  before it stopped regressing. `HARNESS_SRT_SINK_THREADS>1` attempts the
+  same kind of pool parallelism from *outside* stock, unpatched libsrt, with
+  none of that internal locking work — so it hitting the same class of
+  problem (contention/serialization against one shared multiplexer, worse
+  than doing nothing) is consistent with, not surprising given, that prior
+  finding. Thread-scaling the receive side is not a productive knob against
+  stock libsrt; `PEER_COUNT` (independent multiplexers, one per bound port)
+  is the axis stock libsrt actually supports, matching the C-benchmark's own
+  `port_count` result. Anyone wanting `HARNESS_SRT_SINK_THREADS>1` to work
+  would need the same kind of internal libsrt patching the fork already did
+  — not a fix inside `harness_srt_sink.rs` itself.
 - The original in-session claim that `srt-only`@1,200 reported `PASS` 3/3
   times under the *old*, now-removed `--sink-mode` implementation is
   superseded — see the corrected bullet in
