@@ -9,7 +9,7 @@ use tokio::process::{Child, Command};
 
 use super::{
     FfmpegStats, GeneralizedSinkMetrics, GeneralizedSinkServer, HarnessSrtCrypto, HarnessSrtMode,
-    HarnessSrtSink, MSR_LANGUAGE_CODES, MSR_LANGUAGE_NAMES, MixedEnv, PublishTrackSelection,
+    HarnessSrtSinkPool, MSR_LANGUAGE_CODES, MSR_LANGUAGE_NAMES, MixedEnv, PublishTrackSelection,
     RampApi, RtmpOutputMode, SignalTolerances, append_line, append_srt_crypto,
     apply_harness_srt_listener_env, apply_srt_listener_env, capture_signal_sample, cleanup_ramp_db,
     create_backup_input, create_output, create_output_with_rtmp_mode, decode_pcm_quality,
@@ -70,18 +70,25 @@ use measurement::{
 /// `sink_peers` stays empty there, matching pre-existing behavior.
 struct ResourceSweepStack {
     mediamtx: Vec<Child>,
-    sink_peers: Vec<HarnessSinkPeer>,
+    sink_peers: SinkPeerStack,
     restream: Child,
     api: RampApi,
     restream_pid: u32,
 }
 
-/// One in-process harness-native sink-peer instance: an RTMP
-/// accept-and-discard listener (reused from `sinks.rs`, already
-/// harness-native and proven) paired with an SRT one (`harness_srt_sink.rs`).
-struct HarnessSinkPeer {
-    rtmp: GeneralizedSinkServer,
-    srt: HarnessSrtSink,
+/// In-process harness-native sink peers: one RTMP accept-and-discard
+/// listener per `PEER_COUNT` instance (reused from `sinks.rs`, already
+/// harness-native and proven), plus a single shared `HarnessSrtSinkPool`
+/// spanning every instance's SRT port. The SRT side is one shared pool
+/// rather than one-listener-per-instance so `HARNESS_SRT_SINK_THREADS` can
+/// be a total thread budget partitioned with exclusive port ownership
+/// across *all* `PEER_COUNT` ports, not a per-port thread count -- see
+/// `harness_srt_sink.rs`'s module doc comment for why shared-multiplexer
+/// thread pooling was a measured regression.
+#[derive(Default)]
+struct SinkPeerStack {
+    rtmp: Vec<GeneralizedSinkServer>,
+    srt_pool: Option<HarnessSrtSinkPool>,
 }
 
 /// Stop every child in a peer-instance Vec (or any other child list),
@@ -92,12 +99,14 @@ async fn stop_children(children: &mut [Child]) {
     }
 }
 
-/// Stop every in-process harness sink-peer instance. Mirrors
-/// `stop_children`'s role for the mediamtx-`Child` path.
-async fn stop_harness_sink_peers(peers: &mut Vec<HarnessSinkPeer>) {
-    for peer in peers.drain(..) {
-        stop_generalized_sink_server(peer.rtmp);
-        peer.srt.stop();
+/// Stop every in-process harness sink peer (RTMP listeners and the shared
+/// SRT pool). Mirrors `stop_children`'s role for the mediamtx-`Child` path.
+async fn stop_harness_sink_peers(stack: &mut SinkPeerStack) {
+    for server in stack.rtmp.drain(..) {
+        stop_generalized_sink_server(server);
+    }
+    if let Some(pool) = stack.srt_pool.take() {
+        pool.stop();
     }
 }
 
@@ -318,41 +327,49 @@ async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>
 /// `rtmp_port`/`srt_port` -- no readiness polling needed, unlike spawning a
 /// separate process, since a synchronous bind either succeeds or fails
 /// immediately.
-async fn start_harness_sink_peer(rtmp_port: u16, srt_port: u16) -> Result<HarnessSinkPeer, String> {
-    let metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let rtmp = start_generalized_sink_server(rtmp_port, metrics)
-        .await
-        .map_err(|err| format!("harness sink RTMP listener on {rtmp_port}: {err}"))?;
-
-    let discard_threads = env_usize("HARNESS_SRT_SINK_THREADS", 1);
-    let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024) as i32;
-    let srt = match HarnessSrtSink::start(srt_port, udp_buffer, discard_threads) {
-        Ok(srt) => srt,
-        Err(err) => {
-            stop_generalized_sink_server(rtmp);
-            return Err(format!("harness sink SRT listener on {srt_port}: {err}"));
-        }
-    };
-    Ok(HarnessSinkPeer { rtmp, srt })
-}
-
 /// `PEER_SKIP_START` is not honoured here: it exists for pre-started
 /// external processes (mediamtx), which an in-process listener has no
 /// equivalent of -- a harness sink peer is always started fresh, bound
 /// directly by this harness process.
-async fn start_harness_sink_peers(env: &ResourceSweepEnv) -> Result<Vec<HarnessSinkPeer>, String> {
-    let mut peers = Vec::with_capacity(env.peer_count);
+///
+/// `HARNESS_SRT_SINK_THREADS` defaults to `env.peer_count` -- one thread
+/// per port, exactly reproducing the historical single-threaded-per-port
+/// default -- and is a *total* thread budget for the shared SRT pool
+/// (`HarnessSrtSinkPool`), partitioned with exclusive port ownership
+/// across every `PEER_COUNT` port, not a per-port thread count.
+async fn start_harness_sink_peers(env: &ResourceSweepEnv) -> Result<SinkPeerStack, String> {
+    let mut rtmp = Vec::with_capacity(env.peer_count);
+    let mut srt_ports = Vec::with_capacity(env.peer_count);
     for index in 0..env.peer_count {
         let (rtmp_port, _rtmps, srt_port, _api) = peer_instance_ports(env, index);
-        match start_harness_sink_peer(rtmp_port, srt_port).await {
-            Ok(peer) => peers.push(peer),
+        let metrics = Arc::new(GeneralizedSinkMetrics::default());
+        match start_generalized_sink_server(rtmp_port, metrics).await {
+            Ok(server) => rtmp.push(server),
             Err(err) => {
-                stop_harness_sink_peers(&mut peers).await;
-                return Err(err);
+                for server in rtmp {
+                    stop_generalized_sink_server(server);
+                }
+                return Err(format!("harness sink RTMP listener on {rtmp_port}: {err}"));
             }
         }
+        srt_ports.push(srt_port);
     }
-    Ok(peers)
+
+    let discard_threads = env_usize("HARNESS_SRT_SINK_THREADS", env.peer_count);
+    let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024) as i32;
+    let srt_pool = match HarnessSrtSinkPool::start(&srt_ports, udp_buffer, discard_threads) {
+        Ok(pool) => pool,
+        Err(err) => {
+            for server in rtmp {
+                stop_generalized_sink_server(server);
+            }
+            return Err(format!("harness SRT sink pool on {srt_ports:?}: {err}"));
+        }
+    };
+    Ok(SinkPeerStack {
+        rtmp,
+        srt_pool: Some(srt_pool),
+    })
 }
 
 async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSweepStack, String> {
@@ -365,7 +382,7 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
     std::fs::create_dir_all(env.work_dir.join("logs")).map_err(|e| e.to_string())?;
     cleanup_ramp_db(&env.restream_db_path);
     let mut mediamtx = Vec::new();
-    let mut sink_peers = Vec::new();
+    let mut sink_peers = SinkPeerStack::default();
     match env.peer_mode {
         ResourceSweepPeer::Mediamtx => mediamtx = start_resource_sweep_peers(env).await?,
         ResourceSweepPeer::Sink => sink_peers = start_harness_sink_peers(env).await?,

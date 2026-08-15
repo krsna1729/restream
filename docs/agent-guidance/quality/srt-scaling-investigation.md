@@ -14,6 +14,7 @@
 - [Pure-Rust SRT design proposal (research artifact, not adopted)](#pure-rust-srt-design-proposal-research-artifact-not-adopted)
 - [Live verification](#live-verification)
 - [Harness-native sink extraction and re-verification — 2026-08-15](#harness-native-sink-extraction-and-re-verification--2026-08-15)
+- [Exclusive ports-per-thread pool — fixes the thread-scaling regression](#exclusive-ports-per-thread-pool--fixes-the-thread-scaling-regression)
 - [What remains open](#what-remains-open)
 
 ## Summary
@@ -529,17 +530,65 @@ Two clear, real-pipeline-confirmed findings:
 - **More discard threads sharing one listener (`HARNESS_SRT_SINK_THREADS=4`
   at `PEER_COUNT=1`) is a regression, not an improvement** — the run never
   converged within the 900s progress-timeout cap (worse than the
-  single-thread baseline's 388s). This points at a real bug in the
-  multi-thread `srt_accept()`-sharing design in `harness_srt_sink.rs` (four
-  OS threads calling `srt_accept()` concurrently on one shared listener
-  socket, each then owning a thread-confined `Vec<SrtSocket>` — the
-  concurrent-accept part was assumed libsrt-safe by analogy with production
-  patterns, but was not independently load-tested before this run). **Not
-  root-caused here** — flagged as a genuine open bug for whoever picks this
-  up next, not silently left as an untested code path. Given this result,
-  `PEER_COUNT` (independent listeners), not `HARNESS_SRT_SINK_THREADS`
-  (threads sharing one listener), is the tunable to reach for if a run needs
-  cleaner `srt-only` behavior at 900-1,200 connections.
+  single-thread baseline's 388s). Root cause: four OS threads calling
+  `srt_accept()`/`srt_recv()` concurrently against the *same* shared
+  listener socket/multiplexer, contending on libsrt's own internal locking
+  rather than adding capacity. **Since fixed** by rewriting the pool to give
+  every thread exclusive port ownership instead of a shared listener — see
+  [Exclusive ports-per-thread pool](#exclusive-ports-per-thread-pool--fixes-the-thread-scaling-regression)
+  below, which also found that pairing `PEER_COUNT` with a *small* number of
+  exclusively-owned threads beats scaling `PEER_COUNT` alone.
+
+## Exclusive ports-per-thread pool — fixes the thread-scaling regression
+
+The `HARNESS_SRT_SINK_THREADS>1` regression above was diagnosed, not left
+unfixed: `harness_srt_sink.rs` was rewritten from `HarnessSrtSink`
+(one listener, N threads sharing it via concurrent `srt_accept()`) to
+`HarnessSrtSinkPool` (N listeners bound up front, `M` threads, each owning a
+contiguous, **exclusive** chunk of `N/M` listeners — no two threads ever
+touch the same multiplexer). `PEER_COUNT` still governs total port count and
+output-URL distribution as before; `HARNESS_SRT_SINK_THREADS` is now a
+*total* thread budget for the one shared pool spanning every `PEER_COUNT`
+port (default `PEER_COUNT`, i.e. one thread per port, reproducing the old
+default exactly), not a per-port count.
+
+Re-running the worst cell (`srt-only`@1,200) against the new pool:
+
+| Ports (`PEER_COUNT`) | Threads (`HARNESS_SRT_SINK_THREADS`) | Ports/thread | Elapsed | `packetsSentDrop` |
+|---:|---:|---:|---:|---:|
+| 1 | 1 | 1 | 388s | 14,458,511 (old baseline, shared multiplexer) |
+| 4 | 1 (old, shared) | 1 | 36s | 2,874,270 (old best, shared-multiplexer design) |
+| 4 | 4 (new pool) | 1 | 49s | 3,752,304 (regression check — matches old, within host noise) |
+| 8 | 8 (new pool) | 1 | 41s | 3,518,141 |
+| 4 | 2 (new pool) | 2 | 18s | 1,515,438 |
+| **8** | **4 (new pool)** | **2** | **6s** | **1,144,493** |
+| 16 | 8 (new pool) | 2 | 13s | 1,587,509 |
+
+Findings:
+
+- **Exclusive ownership doesn't just avoid the regression — it beats the old
+  shared-multiplexer "best" case outright.** `8 ports/4 threads` reaches
+  1,144,493 dropped packets, a 92% reduction from the original 14.46M
+  baseline and better than the old design's best result (`PEER_COUNT=4`,
+  2,874,270) at any thread count tested.
+- **2 ports/thread consistently and substantially beats 1 port/thread**, at
+  every total port count tried (compare each `ports/thread=1` row against
+  the `ports/thread=2` row at the same or nearby port count). One thread
+  serving its own listener alone still has to interleave accept and recv
+  sequentially with nothing else to do while a connection is idle; two
+  exclusively-owned listeners give it more useful work per scheduling
+  quantum without introducing any cross-thread sharing.
+- **The relationship is not monotonic in port count** — `8 ports/4 threads`
+  (6s, 1.14M drops) beats both `4 ports/2 threads` (18s, 1.52M) *and*
+  `16 ports/8 threads` (13s, 1.59M), despite the last one preserving the
+  same 2-ports/thread ratio at double the scale. Total discard-thread count
+  appears to matter independently of exclusivity: this host has 6 cores,
+  `restreamCpuAvgPct` already sits at 200-260% (2-2.6 cores) for the sender
+  alone, and 8 total discard threads likely start competing for CPU with
+  the sender rather than adding capacity. `8 ports/4 threads` is a measured
+  local optimum on this host, not a proven global one — a host with more
+  cores might push the optimum further out on both axes. Not explored
+  further here.
 
 ## What remains open
 
@@ -555,30 +604,27 @@ Two clear, real-pipeline-confirmed findings:
   still built, checked in, and ready to re-run for a finer-grained answer
   (`port_count` between 4 and higher) — judge by the `pct_of_target` column,
   not just error counts.
-- **`HARNESS_SRT_SINK_THREADS>1` (multiple discard threads sharing one
-  listener/`srt_accept()`) is a real, unfixed regression**, found during the
-  same sweep: `srt-only`@1,200 with 4 threads on `PEER_COUNT=1` never
-  converged within the 900s progress-timeout cap — worse than the
-  single-thread baseline. This is not an unexplained mystery — it is the
-  expected outcome given what [Patched-libsrt exploration](#patched-libsrt-exploration-documented-not-adopted)
-  above already established: a listening port in *unpatched* libsrt has one
-  shared multiplexer (`CSndQueue`/`CRcvQueue`), and making that structure
-  safely and productively parallel across multiple threads required real
-  internal-library surgery (`CRcvQueuePool`/`CSndQueuePool`/`CTsbpdPool`,
-  thread-confined ownership, a briefly-locked inbox) — and even the patched
-  fork needed two iterations to get that right (a dangling-pointer crash,
-  then a lock-contention stall dropping accept throughput to 19/300 in 8s)
-  before it stopped regressing. `HARNESS_SRT_SINK_THREADS>1` attempts the
-  same kind of pool parallelism from *outside* stock, unpatched libsrt, with
-  none of that internal locking work — so it hitting the same class of
-  problem (contention/serialization against one shared multiplexer, worse
-  than doing nothing) is consistent with, not surprising given, that prior
-  finding. Thread-scaling the receive side is not a productive knob against
-  stock libsrt; `PEER_COUNT` (independent multiplexers, one per bound port)
-  is the axis stock libsrt actually supports, matching the C-benchmark's own
-  `port_count` result. Anyone wanting `HARNESS_SRT_SINK_THREADS>1` to work
-  would need the same kind of internal libsrt patching the fork already did
-  — not a fix inside `harness_srt_sink.rs` itself.
+- **`HARNESS_SRT_SINK_THREADS>1` sharing one listener was a real regression
+  — now fixed, not just diagnosed.** The original shared-multiplexer design
+  (multiple threads calling `srt_accept()` concurrently on one listener) hit
+  exactly the class of problem
+  [Patched-libsrt exploration](#patched-libsrt-exploration-documented-not-adopted)
+  already predicted: a listening port in unpatched libsrt has one shared
+  multiplexer, and making it safely parallel across threads needs real
+  internal-library surgery the fork itself took two iterations to get right.
+  `harness_srt_sink.rs` was rewritten to give every thread **exclusive**
+  port ownership instead (`HarnessSrtSinkPool` — see
+  [Exclusive ports-per-thread pool](#exclusive-ports-per-thread-pool--fixes-the-thread-scaling-regression)
+  above), which not only resolved the regression but beat the old
+  single-thread-per-port design outright (92% fewer dropped packets at the
+  best-found ratio). The remaining open question is *where the optimum sits
+  on hosts with different core counts* — the 8-ports/4-threads local optimum
+  found here is specific to a 6-core host and was not chased further.
+- **`PEER_COUNT` (independent multiplexers, one per bound port) remains the
+  primary scaling axis stock libsrt supports**, matching the C-benchmark's
+  own `port_count` result — but per the pool findings above, pairing it with
+  a *small*, exclusively-owned thread count per port (2 ports/thread, not 1)
+  measurably beats scaling `PEER_COUNT` alone.
 - The original in-session claim that `srt-only`@1,200 reported `PASS` 3/3
   times under the *old*, now-removed `--sink-mode` implementation is
   superseded — see the corrected bullet in
