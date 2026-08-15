@@ -239,6 +239,17 @@ impl SrtServer {
                     &live as *const _ as *const c_void,
                     std::mem::size_of::<c_int>() as c_int,
                 );
+                // Sink mode is a receive-dominant socket at scale (up to
+                // 1,200 simultaneous accepted connections in the msr
+                // harness), the same shape as the production ingest
+                // listener just below in this file — apply the same
+                // high-bitrate UDP/SRT buffer preset it already uses
+                // instead of leaving libsrt's small defaults in place.
+                // Confirmed via isolated libsrt benchmarking that undersized
+                // receive buffers are what turns connection fan-in above a
+                // few hundred concurrent flows into steady-state send
+                // errors on the peer.
+                srt_set_highbitrate_opts(server_sock, self.engine.config.srt_udp_buffer as i32);
                 let lat: c_int = 250;
                 srt_setsockopt(
                     server_sock,
