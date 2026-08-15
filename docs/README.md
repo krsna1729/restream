@@ -169,6 +169,7 @@ above remain the better way to learn the system.
 - [SRT egress correctness-at-scale investigation — 2026-08-10](agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md)
 - [MSR 1,200-output resource attribution — 2026-08-13](agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md)
 - [MSR 1,200-output netns confound investigation — 2026-08-14](agent-guidance/quality/msr-1200-netns-confound-investigation-2026-08-14.md)
+- [SRT fan-in scaling first-principles libsrt investigation — 2026-08-15](agent-guidance/quality/srt-scaling-first-principles-investigation-2026-08-15.md)
 
 ### Canonical agent skills and references
 
