@@ -425,8 +425,8 @@ Names are provisional until the mode is implemented:
 | `MSR_PROGRESS_TIMEOUT_PER_OUTPUT_SECS` | `2` | Additional progress allowance per output |
 | `MSR_PROGRESS_TIMEOUT_CAP_SECS` | `900` | Maximum progress wait |
 | `MSR_NO_CLEANUP` | unset | Leave the final stack for inspection |
-| `MTX_COUNT` | `1` | Number of peer instances (`MTX_RTMP`/`MTX_SRT`/`MTX_API` + instance offset each); outputs distribute round-robin by ordinal (`ordinal % MTX_COUNT`) |
-| `MTX_SKIP_START` | unset | Peer instances are pre-started externally; the harness verifies all `MTX_COUNT` instances are live instead of spawning them |
+| `PEER_COUNT` | `1` | Number of peer instances (`MTX_RTMP`/`MTX_SRT`/`MTX_API` + instance offset each); outputs distribute round-robin by ordinal (`ordinal % PEER_COUNT`) |
+| `PEER_SKIP_START` | unset | Peer instances are pre-started externally; the harness verifies all `PEER_COUNT` instances are live instead of spawning them |
 | `MSR_PEER` | `mediamtx` | `mediamtx` (default) or `sink` — see "Peer modes" below |
 | `MSR_SKIP_FFPROBE` | unset | Skip ffprobe read-back checks (always forced on when `MSR_PEER=sink`) |
 | `MSR_SINK_SAMPLE_SECS` | `3` | mediamtx path-health sample window before the resource-window sample |
@@ -438,17 +438,17 @@ Names are provisional until the mode is implemented:
 
 Every egress output publishes into a peer process the harness itself owns —
 this is the only supported way to run the 1,200-output scale test; peers are
-never expected to be started by hand outside `MTX_SKIP_START`.
+never expected to be started by hand outside `PEER_SKIP_START`.
 
-- **`mediamtx`** (default): `MTX_COUNT` mediamtx instances, each with its own
+- **`mediamtx`** (default): `PEER_COUNT` mediamtx instances, each with its own
   config/log file (instance 0 keeps the pre-existing `msr-mediamtx.yml`/`.log`
   names; instance N>0 is suffixed `-N`). Each checkpoint's expected paths are
   grouped by the instance the output actually published to and verified
   against that instance's `/v3/paths/list`, then merged into one
   `mediamtxPathHealth`/`mediamtxPostSamplePathHealth` aggregate in the
-  checkpoint JSON (with `MTX_COUNT=1`, the default, this is byte-identical to
+  checkpoint JSON (with `PEER_COUNT=1`, the default, this is byte-identical to
   the pre-multi-instance shape).
-- **`sink`**: `MTX_COUNT` `restream` processes running with
+- **`sink`**: `PEER_COUNT` `restream` processes running with
   `RESTREAM_SINK_MODE=1` (see `docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`,
   "Sink mode") in place of mediamtx — a minimal accept-and-discard listener
   with far lower per-connection memory, for runs where raw connection count

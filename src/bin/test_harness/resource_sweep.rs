@@ -58,10 +58,10 @@ use measurement::{
 
 /// Live process stack shared by a resource-sweep sample.
 ///
-/// `mediamtx` holds one `Child` per peer instance (`env.mtx_count`, default
+/// `mediamtx` holds one `Child` per peer instance (`env.peer_count`, default
 /// 1): mediamtx processes normally, or `restream --sink-mode` processes
 /// when `env.peer_mode == ResourceSweepPeer::Sink`. Every non-`msr`
-/// resource-sweep scenario runs with `mtx_count == 1`, so this stays a
+/// resource-sweep scenario runs with `peer_count == 1`, so this stays a
 /// single-element Vec and existing behavior is unchanged.
 struct ResourceSweepStack {
     mediamtx: Vec<Child>,
@@ -176,7 +176,7 @@ pub(crate) async fn resource_sweep() -> Result<Value, String> {
 
 /// Ports for peer instance `index` (0-based): each of `mtx_rtmp`/`mtx_rtmps`/
 /// `mtx_srt`/`mtx_api` offset by `index`. Instance 0 always matches the
-/// pre-existing single-mediamtx ports, so `mtx_count == 1` is byte-identical
+/// pre-existing single-mediamtx ports, so `peer_count == 1` is byte-identical
 /// to prior behavior.
 fn peer_instance_ports(env: &ResourceSweepEnv, index: usize) -> (u16, u16, u16, u16) {
     let offset = index as u16;
@@ -191,7 +191,7 @@ fn peer_instance_ports(env: &ResourceSweepEnv, index: usize) -> (u16, u16, u16, 
 /// The HTTP port for sink-peer instance `index`. Sink peers are full
 /// `restream` processes (see `spawn_sink_peer`) and therefore need their own
 /// HTTP/DB surface; this range sits well clear of every other harness port
-/// range (`mtx_api + 2000 ..`) so it doesn't collide at any `MTX_COUNT` the
+/// range (`mtx_api + 2000 ..`) so it doesn't collide at any `PEER_COUNT` the
 /// harness realistically runs (a handful of instances, not thousands).
 fn sink_peer_http_port(env: &ResourceSweepEnv, index: usize) -> u16 {
     env.mtx_api
@@ -345,9 +345,9 @@ async fn verify_preexisting_sink_peer(index: usize, rtmp: u16, srt: u16) -> Resu
 }
 
 async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>, String> {
-    let skip_start = std::env::var("MTX_SKIP_START").is_ok();
-    let mut children = Vec::with_capacity(env.mtx_count);
-    for index in 0..env.mtx_count {
+    let skip_start = std::env::var("PEER_SKIP_START").is_ok();
+    let mut children = Vec::with_capacity(env.peer_count);
+    for index in 0..env.peer_count {
         let spawned = match (env.peer_mode, skip_start) {
             (ResourceSweepPeer::Mediamtx, true) => {
                 let (_, _, _, api) = peer_instance_ports(env, index);
@@ -824,7 +824,7 @@ mod tests {
             mtx_rtmps: 1937,
             mtx_srt: 8891,
             mtx_api: 9997,
-            mtx_count: 4,
+            peer_count: 4,
             peer_mode: ResourceSweepPeer::Mediamtx,
             sample_secs: 1,
             sample_interval_ms: 1000,

@@ -89,9 +89,9 @@ pub(super) struct ResourceSweepEnv {
     pub(super) mtx_api: u16,
     /// Number of peer (mediamtx or sink) instances distributed round-robin
     /// across egress outputs by ordinal, one port range per instance
-    /// starting at `mtx_rtmp`/`mtx_srt`/`mtx_api`. `MTX_COUNT` (default 1)
+    /// starting at `mtx_rtmp`/`mtx_srt`/`mtx_api`. `PEER_COUNT` (default 1)
     /// keeps every other resource-sweep scenario on a single instance.
-    pub(super) mtx_count: usize,
+    pub(super) peer_count: usize,
     /// `MSR_PEER` (default `mediamtx`): which process type backs the peer
     /// instances above.
     pub(super) peer_mode: ResourceSweepPeer,
@@ -141,7 +141,7 @@ impl ResourceSweepEnv {
             mtx_rtmps: ports.mtx_rtmps,
             mtx_srt: ports.mtx_srt,
             mtx_api: ports.mtx_api,
-            mtx_count: env_usize("MTX_COUNT", 1).max(1),
+            peer_count: env_usize("PEER_COUNT", 1).max(1),
             peer_mode: ResourceSweepPeer::from_env()?,
             sample_secs: env_secs("RESOURCE_SWEEP_SAMPLE_SECS", 6),
             sample_interval_ms: env_secs("RESOURCE_SWEEP_SAMPLE_INTERVAL_MS", 1000),

@@ -364,7 +364,7 @@ pub(crate) async fn verify_mediamtx_path_codec_health(
 }
 
 /// Combine two `MediaMtxPathHealth` samples drawn from different mediamtx
-/// instances (one per `MTX_COUNT` peer) into a single aggregate: counts and
+/// instances (one per `PEER_COUNT` peer) into a single aggregate: counts and
 /// byte totals sum, `sample_secs` — identical across instances by
 /// construction, since every group in a checkpoint uses the same caller-
 /// supplied duration — is kept as-is.
