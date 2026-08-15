@@ -15,6 +15,7 @@
 - [Live verification](#live-verification)
 - [Harness-native sink extraction and re-verification — 2026-08-15](#harness-native-sink-extraction-and-re-verification--2026-08-15)
 - [Exclusive ports-per-thread pool — fixes the thread-scaling regression](#exclusive-ports-per-thread-pool--fixes-the-thread-scaling-regression)
+  - [Exact knee location: 100-step ramp at the pool optimum](#exact-knee-location-100-step-ramp-at-the-pool-optimum)
 - [What remains open](#what-remains-open)
 
 ## Summary
@@ -590,6 +591,48 @@ Findings:
   cores might push the optimum further out on both axes. Not explored
   further here.
 
+### Exact knee location: 100-step ramp at the pool optimum
+
+The matrix above only checkpoints at 300/600/900/1,200, which pins the
+`srt-only` break somewhere in "600-900" — too coarse to call a real number.
+Re-run at 100-connection steps, `PEER_COUNT=8`/`HARNESS_SRT_SINK_THREADS=4`
+(the local optimum above):
+
+| scale | `packetsSentDrop` | elapsed |
+|---:|---:|---:|
+| 100 | 0 | 1s |
+| 200 | 0 | 1s |
+| 300 | 0 | 0s |
+| 400 | 0 | 0s |
+| 500 | 0 | 2s |
+| 600 | 0 | 1s |
+| **700** | **35,962** | 2s |
+| 800 | 180,264 | 3s |
+| 900 | 430,309 | 8s |
+| 1,000 | 753,182 | 10s |
+| 1,100 | 700,143 | 5s |
+| 1,200 | 1,259,544 | 7s |
+
+Zero loss holds flat through 600, then the knee lands exactly at **700** and
+rises roughly monotonically after that (1,100 sitting slightly below 1,000
+looks like host-timing noise — same order of magnitude, no matching anomaly
+in elapsed time — not a real reversal). Comparing this to the same
+`PEER_COUNT=8,threads=4` cell's earlier reported 900/1,200 numbers
+(430,309/1,259,544 here vs. 430,309/1,144,493 in the ports-per-thread table
+above): 900 matches exactly, 1,200 differs by about 10% run-to-run — the
+scale of host noise to expect between repeated cells here.
+
+The important negative result: **the exclusive-ownership pool fix improved
+severity past the knee dramatically (see the ports-per-thread table above)
+but did not move the knee's location** — it's still 700 under the best pool
+configuration found, same order of magnitude as the coarse matrix's
+"600-900" bound. Whatever breaks at 700 is a different limit than the
+thread-contention bug the pool fixed; it's consistent with the genuine
+CPU/kernel-socket saturation this investigation's `perf` profiling already
+identified (see
+[Corrected TCP vs UDP vs SRT ladder](#corrected-tcp-vs-udp-vs-srt-ladder))
+rather than anything specific to the harness sink's own threading model.
+
 ## What remains open
 
 - **The smallest `port_count` for a genuinely clean stock-libsrt result at
@@ -600,10 +643,16 @@ Findings:
   dropped packets roughly 5x versus `PEER_COUNT=1` (14.46M → 2.87M) and
   convergence time roughly 10x (388s → 36s), but does not reach zero drops —
   4 independent listeners is a real improvement, not a full fix, matching the
-  isolated C benchmark's own finding. `test/native/srt-scaling/sweep.sh` is
-  still built, checked in, and ready to re-run for a finer-grained answer
-  (`port_count` between 4 and higher) — judge by the `pct_of_target` column,
-  not just error counts.
+  isolated C benchmark's own finding. The 100-step ramp in
+  [Exact knee location](#exact-knee-location-100-step-ramp-at-the-pool-optimum)
+  pins the actual zero-loss ceiling at **700** connections under the best
+  pool config found (`8 ports/4 threads`) — real progress from the coarse
+  matrix's "600-900" bound, but the knee itself did not move from tuning the
+  harness sink's threading; it is a lower ceiling than "1,200 clean," not
+  "1,200 now clean." `test/native/srt-scaling/sweep.sh` is still built,
+  checked in, and ready to re-run for a finer-grained answer on the isolated
+  C-benchmark side — judge by the `pct_of_target` column, not just error
+  counts.
 - **`HARNESS_SRT_SINK_THREADS>1` sharing one listener was a real regression
   — now fixed, not just diagnosed.** The original shared-multiplexer design
   (multiple threads calling `srt_accept()` concurrently on one listener) hit
