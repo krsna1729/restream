@@ -13,6 +13,7 @@
 - [Patched-libsrt exploration (documented, not adopted)](#patched-libsrt-exploration-documented-not-adopted)
 - [Pure-Rust SRT design proposal (research artifact, not adopted)](#pure-rust-srt-design-proposal-research-artifact-not-adopted)
 - [Live verification](#live-verification)
+- [Harness-native sink extraction and re-verification — 2026-08-15](#harness-native-sink-extraction-and-re-verification--2026-08-15)
 - [What remains open](#what-remains-open)
 
 ## Summary
@@ -59,20 +60,28 @@ production changes — see the two sections below.
 
 Live-verified against the actual msr harness: `canonical`@1,200 passes
 cleanly. `srt-only`@1,200 reported clean too, but see the correction above —
-that result doesn't mean what it first appeared to mean.
+that result doesn't mean what it first appeared to mean. `RESTREAM_SINK_MODE`
+was subsequently removed from production `restream` entirely and replaced
+with an in-process, harness-native sink listener — the same `srt-only`
+degradation was reproduced (and its `PEER_COUNT` tunable quantified) against
+the new implementation; see
+[Harness-native sink extraction and re-verification](#harness-native-sink-extraction-and-re-verification--2026-08-15).
 
 The C-benchmark tools themselves (fixed, and further hardened with a
 timer-wheel scheduler, CPU-affinity pinning, and `rdtscp`-based timing) are
 now checked into `test/native/srt-scaling/` for whoever picks up the
 still-open port-count question — see that directory's `README.md`.
 
-What actually shipped to restream from this investigation is narrow: the
-`--sink-mode` test-harness listener (`src/media/srt/listener.rs`) was missing
-the same high-bitrate UDP/SRT buffer preset the production ingest listener two
-paragraphs below it in the same file already applies, and two env vars that
-were misnamed after mediamtx even though they control either peer backing
-(`MTX_COUNT`, `MTX_SKIP_START`) were renamed to `PEER_COUNT`/`PEER_SKIP_START`
-— see [What was folded back into restream](#what-was-folded-back-into-restream)
+What actually shipped to restream from this investigation: `RESTREAM_SINK_MODE`
+was removed from production `restream` entirely (it existed only to serve the
+msr harness and collided in name with the unrelated, real `sink://` egress
+type) and replaced by an in-process, harness-native listener
+(`src/bin/test_harness/harness_srt_sink.rs` for SRT, the existing
+`sinks.rs` for RTMP) — see the harness-native section below. Two env vars
+that were misnamed after mediamtx even though they control either peer
+backing (`MTX_COUNT`, `MTX_SKIP_START`) were renamed to
+`PEER_COUNT`/`PEER_SKIP_START` — see
+[What was folded back into restream](#what-was-folded-back-into-restream)
 for why `PEER_*`, not `SINK_*`. Production SRT egress (`SrtEgressMuxerPorts`,
 per-shard multiplexer sharding) and production SRT ingest (`buffer_sizing.rs`
 + `srt_set_highbitrate_opts`) already had adequate fixes in place before this
@@ -253,7 +262,17 @@ adequate — neither was changed:
 
 ## What was folded back into restream
 
-**`src/media/srt/listener.rs`, `--sink-mode` discard listener.** This is the
+**Historical note**: the `--sink-mode` discard listener described in this
+section below was later removed from `src/media/srt/listener.rs` entirely
+and replaced by an in-process, harness-native listener — see
+[Harness-native sink extraction and re-verification](#harness-native-sink-extraction-and-re-verification--2026-08-15).
+The buffer-tuning fix described here was carried forward into the new
+`harness_srt_sink.rs` (`apply_highbitrate_opts`, applied from the start
+rather than added after the fact) — kept below as the historical record of
+why it mattered.
+
+**`src/media/srt/listener.rs`, `--sink-mode` discard listener (removed,
+see note above).** This is the
 one gap: the test-harness receive path used by the msr scale harness
 (`MSR_PEER=sink`, up to 1,200 simultaneous accepted connections against one
 listener when `PEER_COUNT=1`, the default) built its socket with only
@@ -415,20 +434,145 @@ the actual msr live harness, not just the isolated C benchmarks above:
   `bytesOutDelta`/CPU profile were not re-checked against this same bar —
   worth doing before trusting it fully either).
 
+## Harness-native sink extraction and re-verification — 2026-08-15
+
+`RESTREAM_SINK_MODE` was an overloaded name collision with the unrelated,
+real, user-facing `sink://` egress output type, and had no production
+justification of its own — it existed only so the msr harness could spin up
+receiving peers at scale. It has been removed from production `restream`
+entirely and replaced with an in-process, harness-native listener: RTMP
+reuses the harness's existing `sinks.rs` (`GeneralizedSinkServer`, real
+`rml_rtmp` handshake/session negotiation) unmodified; SRT is a new
+hand-rolled libsrt FFI module, `src/bin/test_harness/harness_srt_sink.rs`
+(`HarnessSrtSink`), following the same "harness owns its own libsrt FFI"
+precedent `srt_raw_sink.rs` already established for fault testing.
+`grep -rn "sink_mode\|RESTREAM_SINK_MODE\|SINK_MODE" src/` outside
+`src/bin/test_harness/` now returns nothing; `sink://`/`EgressProtocol::Sink`
+is the only remaining production "sink" concept.
+
+**A real bug was found and fixed during this port**: `harness_srt_sink.rs`
+initially declared `SRT_EASYNCRCV = 6003`, which is actually libsrt's
+`SRT_ETIMEOUT` value — the real `SRT_EASYNCRCV` is `6002`. Every "no data yet"
+response from a non-blocking `srt_recv()` was therefore misclassified as a
+fatal error and closed the connection, which closed essentially every SRT
+connection immediately after accept (a freshly-accepted socket has no data on
+its first poll). Symptom: `canonical`@300 got permanently stuck at 285/300
+(the 15 SRT outputs, 5%, endlessly retried). Found by adding `eprintln!`
+diagnostics (`tracing::*!` is silently a no-op in `test_harness` — it never
+installs a subscriber) and cross-checking the observed error code against
+production's own `src/media/srt/sys.rs` constants. Fixed by correcting the
+constant and adding `SRT_ETIMEOUT = 6003` alongside it, both treated as
+"not a close" — matching production `src/media/srt/ingest.rs`'s own
+`SRT_EASYNCRCV | SRT_ETIMEOUT => WaitForReadiness` classification.
+
+Full 12-cell verification matrix, `MSR_PEER=sink`, `PEER_COUNT=1` (the
+harness-native sink's parity default, matching the old single-threaded
+production `sink_discard_loop` exactly), run against the fixed binary:
+
+| mix | scale | status | elapsed | bytesOutDelta | packetsSentDrop | restreamCpuAvgPct |
+|---|---:|---|---:|---:|---:|---:|
+| canonical (95/5) | 300 | PASS | 1s | 73,854,675 | 0 | 44.4% |
+| canonical (95/5) | 600 | PASS | 1s | 156,679,103 | 0 | 81.4% |
+| canonical (95/5) | 900 | PASS | 2s | 247,436,896 | 0 | 103.6% |
+| canonical (95/5) | 1200 | PASS | 2s | 324,587,953 | 0 | 156.6% |
+| srt-every:2 (50/50) | 300 | PASS | 26s | 80,124,900 | 0 | 120.7% |
+| srt-every:2 (50/50) | 600 | PASS | 2s | 154,827,180 | 0 | 96.3% |
+| srt-every:2 (50/50) | 900 | PASS | 1s | 265,356,164 | 0 | 183.3% |
+| srt-every:2 (50/50) | 1200 | PASS | 21s | 318,468,187 | 353 | 242.9% |
+| srt-only | 300 | PASS | 2s | 85,179,980 | 0 | 65.7% |
+| srt-only | 600 | PASS | 3s | 170,157,860 | 0 | 144.7% |
+| srt-only | 900 | PASS | 22s | 256,831,876 | **570,401** | 178.8% |
+| srt-only | 1200 | PASS | **388s** | 347,705,060 | **14,458,511** | 260.3% |
+
+(`rtmp-only` was validated separately at all four scales with zero
+`packetsSentDrop` before this fix — it never exercises the SRT sink code
+path at all, so it is unaffected by the constant bug and was not re-run.)
+
+Read honestly, not just by the harness's bare `PASS`: `canonical` is clean at
+every scale (only 5% SRT, diluted enough to stay clean). `srt-every:2`
+(50/50) stays clean through 900 and only shows a small crack at 1,200 (353
+dropped packets — real but minor). `srt-only` is clean through 600, then
+degrades sharply: 570K dropped packets at 900, and **14.46 million** dropped
+packets plus a 388-second convergence time (vs. 1-26s for every other cell)
+at 1,200. This is the exact same "harness `PASS` does not mean clean
+throughput" pattern documented for the *old* sink-mode implementation in
+[Live verification](#live-verification) above, now reproduced in the *new*,
+bug-fixed harness-native sink — confirming this is a real, receive-side
+degradation intrinsic to a single-listener/single-discard-thread SRT sink at
+high real-connection-count, not an artifact of the removed constant bug or
+of the old production code path. At `PEER_COUNT=1`, the harness-native sink
+is structurally identical to the C-benchmark's own worst case
+(`port_count=1`): one listener socket, one accept/read loop.
+
+A follow-up tunable sweep isolating `PEER_COUNT` (port-count-equivalent) and
+`HARNESS_SRT_SINK_THREADS` (discard-thread-count) independently at
+`srt-only`@1,200 — the worst cell above — is the direct, real-pipeline
+answer to the still-open "smallest port_count" question below:
+
+| `PEER_COUNT` | `HARNESS_SRT_SINK_THREADS` | status | elapsed | packetsSentDrop |
+|---:|---:|---|---:|---:|
+| 1 (baseline, from the matrix above) | 1 | PASS | 388s | 14,458,511 |
+| 4 | 1 | PASS | 36s | 2,874,270 |
+| 2 | 1 | PASS | 80s | 4,180,495 |
+| 1 | 4 | **timed out (900s cap)** | 900s | n/a (never converged) |
+
+Two clear, real-pipeline-confirmed findings:
+
+- **More independent listener instances (`PEER_COUNT`) substantially help**,
+  matching the C-benchmark's own `port_count` result qualitatively: going
+  from 1 to 4 instances cut convergence time roughly 10x (388s → 36s) and
+  dropped packets roughly 5x (14.46M → 2.87M). It does not reach zero drops
+  at 1,200 — `port_count=4` is an improvement, not a full fix, in the real
+  pipeline just as the isolated C benchmark found. `PEER_COUNT=2` is
+  measurably worse than `PEER_COUNT=4` on both axes, consistent with "more
+  independent multiplexers is directly better," not a step function.
+- **More discard threads sharing one listener (`HARNESS_SRT_SINK_THREADS=4`
+  at `PEER_COUNT=1`) is a regression, not an improvement** — the run never
+  converged within the 900s progress-timeout cap (worse than the
+  single-thread baseline's 388s). This points at a real bug in the
+  multi-thread `srt_accept()`-sharing design in `harness_srt_sink.rs` (four
+  OS threads calling `srt_accept()` concurrently on one shared listener
+  socket, each then owning a thread-confined `Vec<SrtSocket>` — the
+  concurrent-accept part was assumed libsrt-safe by analogy with production
+  patterns, but was not independently load-tested before this run). **Not
+  root-caused here** — flagged as a genuine open bug for whoever picks this
+  up next, not silently left as an untested code path. Given this result,
+  `PEER_COUNT` (independent listeners), not `HARNESS_SRT_SINK_THREADS`
+  (threads sharing one listener), is the tunable to reach for if a run needs
+  cleaner `srt-only` behavior at 900-1,200 connections.
+
 ## What remains open
 
 - **The smallest `port_count` for a genuinely clean stock-libsrt result at
-  1,200 real 8Mbps connections is unresolved.** The original "4" answer is
-  retracted (see the correction section). `test/native/srt-scaling/sweep.sh`
-  is built, checked in, and ready to re-run to a real conclusion — judge by
-  the `pct_of_target` column, not just error counts, this time.
-- **`srt-only` at 1,200 reported `PASS` 3/3 times under `--no-netns` in this
-  session, but that result is now known not to mean "delivered cleanly"**
-  (see the corrected bullet in [Live verification](#live-verification)) —
-  actual throughput was ~5.6% of target with millions of dropped packets.
-  Whether the sink-mode buffer fix helps at all under a throughput-aware
-  measure, and whether the 2026-08-14 netns confound is resolved, are both
-  still open. `unshare --net` also remains unavailable in this sandbox.
+  1,200 real 8Mbps connections is still not fully resolved, but the
+  real-pipeline `PEER_COUNT` sweep in
+  [Harness-native sink extraction and re-verification](#harness-native-sink-extraction-and-re-verification--2026-08-15)
+  now confirms the qualitative direction**: `PEER_COUNT=4` cuts `srt-only`@1,200
+  dropped packets roughly 5x versus `PEER_COUNT=1` (14.46M → 2.87M) and
+  convergence time roughly 10x (388s → 36s), but does not reach zero drops —
+  4 independent listeners is a real improvement, not a full fix, matching the
+  isolated C benchmark's own finding. `test/native/srt-scaling/sweep.sh` is
+  still built, checked in, and ready to re-run for a finer-grained answer
+  (`port_count` between 4 and higher) — judge by the `pct_of_target` column,
+  not just error counts.
+- **`HARNESS_SRT_SINK_THREADS>1` (multiple discard threads sharing one
+  listener/`srt_accept()`) is a real, unfixed regression**, found during the
+  same sweep: `srt-only`@1,200 with 4 threads on `PEER_COUNT=1` never
+  converged within the 900s progress-timeout cap — worse than the
+  single-thread baseline. The concurrent-`srt_accept()`-sharing design in
+  `harness_srt_sink.rs` was assumed safe by analogy with production patterns
+  but was not independently load-tested before this finding; root cause is
+  unknown. Anyone touching this file next should treat
+  `HARNESS_SRT_SINK_THREADS>1` as untrusted until root-caused, and prefer
+  `PEER_COUNT` for scaling instead.
+- The original in-session claim that `srt-only`@1,200 reported `PASS` 3/3
+  times under the *old*, now-removed `--sink-mode` implementation is
+  superseded — see the corrected bullet in
+  [Live verification](#live-verification) for that history, and the
+  harness-native section above for the same finding reproduced (and now
+  quantified with a working tunable) in the current implementation. Whether
+  the 2026-08-14 netns confound is separately resolved remains open;
+  `unshare --net` also remains unavailable in this sandbox.
 - **The remaining ~1.7-2.0 Gbps ceiling measured for a single core-pinned
   TX/RX thread pair** (confirmed via `perf` to be genuine per-packet kernel
   cost, not application-level) has not been pushed further with
