@@ -197,8 +197,8 @@ fn configure_msr_env(mut env: ResourceSweepEnv, profile: MsrRunProfile) -> Resou
 }
 
 /// Verify expected mediamtx paths for a checkpoint, grouped by the peer
-/// instance each output actually publishes to (`env.mtx_count` peers), and
-/// merge the per-instance results into one aggregate. With `mtx_count == 1`
+/// instance each output actually publishes to (`env.peer_count` peers), and
+/// merge the per-instance results into one aggregate. With `peer_count == 1`
 /// this issues exactly one `verify_mediamtx_path_health` call against
 /// `env.mtx_api`, matching prior single-instance behavior byte-for-byte.
 async fn verify_msr_grouped_path_health(
@@ -207,7 +207,7 @@ async fn verify_msr_grouped_path_health(
     sample_secs: u64,
     timeout: Duration,
 ) -> Result<MediaMtxPathHealth, String> {
-    let groups = msr_group_expected_paths_by_instance(outputs, env.mtx_count);
+    let groups = msr_group_expected_paths_by_instance(outputs, env.peer_count);
     let mut accumulated: Option<MediaMtxPathHealth> = None;
     for (instance, paths) in groups {
         let api_port = env.mtx_api + instance as u16;

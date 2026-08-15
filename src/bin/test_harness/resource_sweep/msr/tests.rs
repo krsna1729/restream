@@ -174,7 +174,7 @@ fn srt_outputs_use_mediamtx_standard_stream_id() {
         mtx_rtmps: 1937,
         mtx_srt: 8891,
         mtx_api: 9997,
-        mtx_count: 1,
+        peer_count: 1,
         peer_mode: ResourceSweepPeer::Mediamtx,
         sample_secs: 1,
         sample_interval_ms: 1000,
@@ -214,14 +214,14 @@ fn peer_instance_selection_round_robins_by_ordinal() {
     assert_eq!(msr_peer_instance(4, 4), 0);
     assert_eq!(msr_peer_instance(5, 4), 1);
     assert_eq!(msr_peer_instance(1200, 4), 0);
-    // mtx_count == 0 must not panic (divide-by-zero); it clamps to 1.
+    // peer_count == 0 must not panic (divide-by-zero); it clamps to 1.
     assert_eq!(msr_peer_instance(7, 0), 0);
 }
 
 #[test]
 fn output_and_read_urls_target_the_same_instance_the_output_publishes_to() {
     let mut env = base_test_env();
-    env.mtx_count = 4;
+    env.peer_count = 4;
     let output = MsrOutputSpec {
         ordinal: 5,
         rank: 1,
@@ -258,7 +258,7 @@ fn expected_paths_group_by_the_instance_each_output_publishes_to() {
     let total_paths: usize = groups.iter().map(|(_, paths)| paths.len()).sum();
     assert_eq!(total_paths, checkpoint.len());
 
-    // Single-instance grouping (mtx_count == 1, the default) always yields
+    // Single-instance grouping (peer_count == 1, the default) always yields
     // exactly one group covering every expected path.
     let single = msr_group_expected_paths_by_instance(checkpoint, 1);
     assert_eq!(single.len(), 1);
@@ -284,7 +284,7 @@ fn base_test_env() -> ResourceSweepEnv {
         mtx_rtmps: 1937,
         mtx_srt: 8891,
         mtx_api: 9997,
-        mtx_count: 1,
+        peer_count: 1,
         peer_mode: ResourceSweepPeer::Mediamtx,
         sample_secs: 1,
         sample_interval_ms: 1000,
