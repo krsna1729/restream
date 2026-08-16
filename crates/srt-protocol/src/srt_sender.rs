@@ -371,11 +371,19 @@ impl SenderBuffer {
     }
 
     /// 再送パケットを取得
-    pub fn pop_retransmit(&mut self, now: Timestamp) -> Option<DataPacket> {
+    ///
+    /// `entry.sent_time` は元の送信時刻のまま更新しない (libsrt
+    /// `CSndBuffer::Block::m_tsOriginTime` と同じ意図 --
+    /// `srtcore/buffer_snd.h`/`.cpp` 参照。再送のたびにここを今の時刻へ
+    /// 書き換えると、TLPKTDROP がシーケンス順に単調でなくなる: 再送された
+    /// 古いパケットが「若返り」、一度も再送されていない新しいパケットより
+    /// 後に期限切れ扱いになりかねない。それは TLPKTDROP の目的
+    /// (配信期限を過ぎたら潔く諦めてレイテンシを抑える) にも反する --
+    /// 再送を繰り返す限り永遠に期限切れにならなくなってしまう)。
+    pub fn pop_retransmit(&mut self) -> Option<DataPacket> {
         while let Some(seq) = self.loss_list.pop_front() {
             if let Some(entry) = self.packets.get_mut(&seq) {
                 entry.retransmit_count += 1;
-                entry.sent_time = now;
 
                 let mut packet = entry.packet.clone();
                 packet.retransmitted = true;
@@ -423,29 +431,46 @@ impl SenderBuffer {
     }
 
     /// 期限切れパケットを削除 (TLPKTDROP)
+    ///
+    /// `oldest_unacked` から `next_seq` に向かってシーケンス順に走査し、
+    /// 最初に期限切れでないパケットに達したら打ち切る -- libsrt
+    /// `CSndBuffer::dropLateData` と同じ単調前方走査 (`srtcore/buffer_snd.cpp`)。
+    /// `pop_retransmit` がもう `sent_time` を更新しないため (理由は
+    /// そちらのドキュメント参照)、`sent_time` は送信順 = シーケンス順の
+    /// まま単調に増加し続ける -- この走査の正しさの前提。`handle_ack` と
+    /// 同じく `oldest_unacked` を更新するので、両者は「まだ生きている
+    /// 先頭パケット」という同じ境界を共有し続け、パケット集合に穴が
+    /// 生じない。
     pub fn drop_expired(&mut self, now: Timestamp) -> Vec<u32> {
-        let mut dropped = Vec::new();
-
         // TLPKTDROP 閾値: SRT latency の 1.25 倍、最低 1 秒
         // 仕様 (draft-sharabayko-srt.md の #too-late-packet-drop 節) の推奨値に従う。
         let threshold = (self.latency_us * 125 / 100).max(1_000_000);
 
-        let expired: Vec<u32> = self
-            .packets
-            .iter()
-            .filter_map(|(&seq, entry)| {
-                let elapsed = now.as_micros().saturating_sub(entry.sent_time.as_micros());
-                if elapsed > threshold { Some(seq) } else { None }
-            })
-            .collect();
+        let mut dropped = Vec::new();
+        let mut seq = self.oldest_unacked;
+        while sequence_less_than(seq, self.next_seq) {
+            match self.packets.get(&seq) {
+                Some(entry) => {
+                    let elapsed = now.as_micros().saturating_sub(entry.sent_time.as_micros());
+                    if elapsed <= threshold {
+                        break;
+                    }
+                    self.packets.remove(&seq);
+                    dropped.push(seq);
+                }
+                None => {
+                    // 既に ACK 済みで存在しない -- 走査を継続する
+                }
+            }
+            seq = seq.wrapping_add(1) & 0x7FFF_FFFF;
+        }
 
-        for seq in expired {
-            self.packets.remove(&seq);
-            dropped.push(seq);
+        if sequence_less_than(self.oldest_unacked, seq) {
+            self.oldest_unacked = seq;
         }
 
         // 損失リストからも削除
-        self.loss_list.retain(|seq| !dropped.contains(seq));
+        self.loss_list.retain(|s| !dropped.contains(s));
 
         dropped
     }
@@ -562,7 +587,7 @@ mod tests {
         assert!(buf.has_retransmit());
 
         // 再送パケットを取得
-        let retransmit = buf.pop_retransmit(now);
+        let retransmit = buf.pop_retransmit();
         assert!(retransmit.is_some());
         let pkt = retransmit.expect("再送パケットは Some になる想定");
         assert_eq!(pkt.sequence_number, 1001);
@@ -686,5 +711,57 @@ mod tests {
         let now = Timestamp::from_micros(1_000_001);
         let dropped = buf.drop_expired(now);
         assert_eq!(dropped, vec![0], "境界値の超過で drop されるはず");
+    }
+
+    #[test]
+    fn test_retransmit_does_not_postpone_tlpktdrop() {
+        // 回帰テスト: pop_retransmit が sent_time を今の時刻へ書き換えて
+        // いた頃は、再送を繰り返すパケットが TLPKTDROP の対象から永遠に
+        // 逃れられてしまっていた (libsrt の m_tsOriginTime は再送では
+        // 更新されない -- 参照: pop_retransmit のドキュメント)。
+        let mut buf = SenderBuffer::new(0, 8192, 10); // 閾値は 1 秒床
+        let send_time = Timestamp::from_micros(0);
+        buf.push(vec![1], 100, 1, send_time);
+
+        buf.handle_nak(&[0]);
+        // 元の送信からほぼ 1 秒経った時点で再送を試みる。
+        let retransmitted = buf.pop_retransmit();
+        assert!(retransmitted.is_some());
+
+        // 元の送信から 1_000_001us -- 再送直後からはまだ 100_001us しか
+        // 経っていないが、TLPKTDROP は元の送信時刻を基準にするべき。
+        let now = Timestamp::from_micros(1_000_001);
+        let dropped = buf.drop_expired(now);
+        assert_eq!(
+            dropped,
+            vec![0],
+            "再送しても元の送信時刻基準の期限切れ判定は変わらないはず"
+        );
+    }
+
+    #[test]
+    fn test_drop_expired_advances_oldest_unacked_like_handle_ack() {
+        // drop_expired は handle_ack と同じ「まだ生きている先頭パケット」
+        // 境界を共有するべき -- 片方だけが進むと、その境界より前に穴が
+        // 残ってしまう。
+        let mut buf = SenderBuffer::new(0, 8192, 10);
+        buf.push(vec![1], 100, 1, Timestamp::from_micros(0));
+        buf.push(vec![2], 100, 1, Timestamp::from_micros(0));
+        buf.push(vec![3], 100, 1, Timestamp::from_micros(2_000_000));
+
+        // 先頭 2 パケットだけ期限切れ、3 番目はまだ新しい。
+        let dropped = buf.drop_expired(Timestamp::from_micros(1_000_001));
+        assert_eq!(dropped, vec![0, 1]);
+        assert_eq!(buf.packets_in_flight(), 1);
+
+        // ACK 2 は既に drop_expired で消えた分をカバーするだけの no-op に
+        // なるはずで、seq=2 (まだ生きている) には影響しない。
+        buf.handle_ack(2);
+        assert_eq!(buf.packets_in_flight(), 1);
+
+        // seq=2 (シーケンス番号としては 2) を最終的に ACK すれば空になる。
+        buf.handle_ack(3);
+        assert_eq!(buf.packets_in_flight(), 0);
+        assert!(buf.is_empty());
     }
 }

@@ -363,9 +363,14 @@ impl SrtConnection {
     }
 
     /// 再送パケットを取得して送信キューに追加
-    pub fn process_retransmit(&mut self, now: Timestamp) {
+    ///
+    /// `now` はこの Core の他のメソッドとのシグネチャ一貫性のために残して
+    /// いる (このメソッド自体はもう使わない -- 再送パケットの
+    /// `sent_time` を更新しなくなった理由は
+    /// `SenderBuffer::pop_retransmit` のドキュメント参照)。
+    pub fn process_retransmit(&mut self, _now: Timestamp) {
         if let Some(ref mut sender) = self.sender {
-            while let Some(mut packet) = sender.pop_retransmit(now) {
+            while let Some(mut packet) = sender.pop_retransmit() {
                 // 暗号化
                 if let Some(ref mut crypto) = self.crypto
                     && let Ok(key_flag) =

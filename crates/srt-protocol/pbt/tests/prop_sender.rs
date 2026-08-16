@@ -117,7 +117,7 @@ proptest! {
         buf.handle_nak(&[lost_seq]);
 
         // 再送パケットを取得
-        let retransmit = buf.pop_retransmit(now);
+        let retransmit = buf.pop_retransmit();
         prop_assert!(retransmit.is_some());
         let pkt = retransmit.expect("再送パケットは Some になる想定");
         prop_assert_eq!(pkt.sequence_number, lost_seq);
