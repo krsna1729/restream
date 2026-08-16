@@ -11,7 +11,7 @@
 - [What restream already had right](#what-restream-already-had-right)
 - [What was folded back into restream](#what-was-folded-back-into-restream)
 - [Patched-libsrt exploration (documented, not adopted)](#patched-libsrt-exploration-documented-not-adopted)
-- [Pure-Rust SRT design proposal (research artifact, not adopted)](#pure-rust-srt-design-proposal-research-artifact-not-adopted)
+- [Pure-Rust SRT design proposal (now committed, plan active)](#pure-rust-srt-design-proposal-now-committed-plan-active)
 - [Live verification](#live-verification)
 - [Harness-native sink extraction and re-verification — 2026-08-15](#harness-native-sink-extraction-and-re-verification--2026-08-15)
 - [Exclusive ports-per-thread pool — fixes the thread-scaling regression](#exclusive-ports-per-thread-pool--fixes-the-thread-scaling-regression)
@@ -381,24 +381,19 @@ actually is remains open (see the correction section and
 material either way, and is the starting point if the stock-libsrt path
 turns out not to be enough.
 
-## Pure-Rust SRT design proposal (research artifact, not adopted)
+## Pure-Rust SRT design proposal (now committed, plan active)
 
-`.local/experiments/srt-scaling/rust-srt-design.md` (git-ignored, not part of
-this repository) is a 10-part design proposal for a from-scratch, sans-I/O
-Rust SRT implementation — protocol state machine, connection lifecycle, and
-threading model as three separable layers, so the application (not libsrt)
-owns thread/socket placement. It surveys two existing Rust SRT crates
-(`russelltg/srt-rs`: mature 5-crate layering, differential-tested against
-libsrt's own unit tests, but stale since mid-2024 and self-flagged
-not-production-ready; `shiguredo/srt-rs`: younger, genuinely sans-I/O,
-LIVE-mode-scoped matching restream's usage, but excludes group/bonding
-support — restream's one real gap against that crate's current scope, since
-restream actively uses SRT bonding on both ingest and egress) and audits
-restream's full `SRTO_*`/`srt_*` FFI dependency surface against both.
-Forward-looking research only; no code from it has been adopted. It is not
-committed to the repository because it lives entirely outside `src/`, `docs/`,
-or any tracked path — anyone continuing this line of work should copy the
-relevant sections into a tracked doc first.
+**Update:** this design proposal was moved out of the git-ignored sandbox
+path it originally lived in
+(`.local/experiments/srt-scaling/rust-srt-design.md`) and into tracked docs:
+[`../../srt-pure-rust-design.md`](../../srt-pure-rust-design.md) (the
+architecture) and [`../../srt-pure-rust-plan.md`](../../srt-pure-rust-plan.md)
+(restream's concrete, phased, gated migration plan built on it, including a
+primary-source-verified decision to fork `shiguredo/srt-rs`, and a
+Broadcast-first/Backup-optional reprioritization of the bonding gap this
+section originally flagged). This section is left as the historical record
+of the state before that move; see the two linked docs for current guidance
+and execution status.
 
 ## Live verification
 

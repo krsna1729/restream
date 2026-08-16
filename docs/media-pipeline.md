@@ -491,6 +491,15 @@ at 1,200 outputs.
 
 ## SRT bonding
 
+Current production bonding (below) is libsrt-based and `SRT_GTYPE_BACKUP`
+only. A phased plan exists to replace libsrt with a pure-Rust implementation
+and, within that, to prioritize `SRT_GTYPE_BROADCAST` support ahead of
+matching this existing Backup capability — see
+[`srt-pure-rust-plan.md`](srt-pure-rust-plan.md) for the rationale (a
+pipeline-input-level failover switch already covers what Backup groups
+provide operationally) and [`srt-pure-rust-design.md`](srt-pure-rust-design.md)
+for the target architecture.
+
 ### Ingest
 
 The SRT listener requests `SRTO_GROUPCONNECT=1`. A publisher-created bonded

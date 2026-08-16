@@ -71,6 +71,9 @@ active documentation set.
 - [Current priorities](current-priorities.md) — maintained forward-looking
   priorities.
 - [Layering roadmap](layering-roadmap.md) — maintained refactor sequence.
+- [Pure-Rust SRT design](srt-pure-rust-design.md) and
+  [migration plan](srt-pure-rust-plan.md) — active, phased plan to replace
+  the libsrt FFI dependency; execution not yet started.
 - [Frontend layering audit](../audits/frontend-layering-audit-2026-07-21.md) — three-lens frontend architecture audit.
 - [Testing decision record](testing-strategy.md) — accepted rationale for the
   unit/live tier boundary. Use [testing.md](testing.md) for current commands.
@@ -116,6 +119,7 @@ above remain the better way to learn the system.
 - [Third-party component manifest](../distribution/THIRD_PARTY_COMPONENTS.md)
 - [Harness manifest README](../test/harness/README.md)
 - [SRT scaling investigation tools README](../test/native/srt-scaling/README.md)
+- [Rust raw-UDP scaling prototype README](../test/native/srt-scaling/rs-udp-bench/README.md)
 - [Phase 0 egress baseline workloads](../test/harness/baselines/egress-phase0/README.md)
 - [RTMP fabric A/B baseline](../test/harness/baselines/rtmp-fabric-matrix/README.md)
 
@@ -145,6 +149,8 @@ above remain the better way to learn the system.
 - [Source distribution](source-distribution.md)
 - [Stage boundary proof map](stage-boundary-proof-map.md)
 - [Testing](testing.md)
+- [Pure-Rust SRT design](srt-pure-rust-design.md)
+- [Pure-Rust SRT migration plan](srt-pure-rust-plan.md)
 
 ### Plans, scenarios, and evidence
 
