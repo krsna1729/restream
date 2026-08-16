@@ -16,6 +16,9 @@
 #include <unistd.h>
 #include <srt/srt.h>
 
+// Must match TEST_PAYLOAD in crates/srt-interop/src/bin/caller.rs.
+static const char *EXPECTED_PAYLOAD = "the quick brown fox jumps over the lazy dog 0123456789";
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: %s <port> [passphrase]\n", argv[0]);
@@ -83,7 +86,14 @@ int main(int argc, char **argv) {
     char buf[2048];
     int n = srt_recv(accepted, buf, sizeof(buf));
     if (n > 0) {
+        buf[n] = '\0';
         fprintf(stderr, "[srt-interop-listener] received %d bytes\n", n);
+        if (passphrase) {
+            int matches = (size_t)n == strlen(EXPECTED_PAYLOAD) &&
+                          memcmp(buf, EXPECTED_PAYLOAD, (size_t)n) == 0;
+            printf("RECEIVED %d bytes match_expected=%s content=%s\n", n,
+                   matches ? "true" : "false", buf);
+        }
     }
 
     srt_close(accepted);

@@ -1,23 +1,32 @@
 // Minimal plain (non-bonded) SRT caller against stock libsrt, for Phase 3
 // wire-interop testing of the pure-Rust SRT core (crates/srt-protocol) --
 // see docs/srt-pure-rust-plan.md Phase 3 and the sibling
-// srt-interop-listener.c. Deliberately as small as possible: no bonding,
-// no encryption, just connect and confirm the handshake completes.
+// srt-interop-listener.c.
 //
-// Usage: srt-interop-caller <host> <port> [stream_id]
+// With a passphrase, sends the same known test payload
+// srt-interop-caller.rs does -- used to live-verify the receiving side's
+// crypto stack decrypts correctly against real libsrt, not just that the
+// handshake completes.
+//
+// Usage: srt-interop-caller <host> <port> [stream_id] [passphrase]
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <srt/srt.h>
+
+// Must match TEST_PAYLOAD in crates/srt-interop/src/bin/caller.rs.
+static const char *TEST_PAYLOAD = "the quick brown fox jumps over the lazy dog 0123456789";
 
 int main(int argc, char **argv) {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <host> <port> [stream_id]\n", argv[0]);
+        fprintf(stderr, "usage: %s <host> <port> [stream_id] [passphrase]\n", argv[0]);
         return 2;
     }
     const char *host = argv[1];
     const char *port = argv[2];
-    const char *stream_id = argc >= 4 ? argv[3] : NULL;
+    const char *stream_id = (argc >= 4 && argv[3][0] != '\0') ? argv[3] : NULL;
+    const char *passphrase = (argc >= 5 && argv[4][0] != '\0') ? argv[4] : NULL;
     setvbuf(stdout, NULL, _IONBF, 0);
 
     srt_startup();
@@ -31,6 +40,12 @@ int main(int argc, char **argv) {
     if (stream_id) {
         if (srt_setsockflag(sock, SRTO_STREAMID, stream_id, (int)strlen(stream_id)) == SRT_ERROR) {
             fprintf(stderr, "setsockflag STREAMID failed: %s\n", srt_getlasterror_str());
+            return 1;
+        }
+    }
+    if (passphrase) {
+        if (srt_setsockflag(sock, SRTO_PASSPHRASE, passphrase, (int)strlen(passphrase)) == SRT_ERROR) {
+            fprintf(stderr, "setsockflag PASSPHRASE failed: %s\n", srt_getlasterror_str());
             return 1;
         }
     }
@@ -48,8 +63,10 @@ int main(int argc, char **argv) {
 
     printf("CONNECTED\n");
 
-    const char *msg = "hello from libsrt caller";
+    const char *msg = passphrase ? TEST_PAYLOAD : "hello from libsrt caller";
     srt_send(sock, msg, (int)strlen(msg));
+    // Give the peer time to receive and decrypt before this process exits.
+    usleep(300000);
 
     srt_close(sock);
     srt_cleanup();

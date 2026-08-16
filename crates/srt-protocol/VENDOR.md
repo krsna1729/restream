@@ -14,6 +14,7 @@ for the bonding-specific source verification done against it.
 - [Provenance](#provenance)
 - [What was trimmed from the upstream tree](#what-was-trimmed-from-the-upstream-tree)
 - [Local patches](#local-patches)
+- [Crypto backend: pure-Rust RustCrypto stack, not aws-lc-rs](#crypto-backend-pure-rust-rustcrypto-stack-not-aws-lc-rs)
 - [Pulling future upstream commits](#pulling-future-upstream-commits)
 - [Known open upstream issues, not yet patched locally](#known-open-upstream-issues-not-yet-patched-locally)
 - [License and dependency audit](#license-and-dependency-audit)
@@ -118,6 +119,70 @@ low and the cost of shipping with an open, self-identified Critical crypto
 bug is not a tradeoff worth making for the sake of staying byte-identical
 to upstream.
 
+## Crypto backend: pure-Rust RustCrypto stack, not aws-lc-rs
+
+The vendored crate originally depended on `aws-lc-rs`, which pulls in
+`aws-lc-sys` — a `cmake`+C-compiler native build step at compile time.
+That's exactly the kind of native-toolchain dependency this whole migration
+exists to move away from (see `docs/srt-pure-rust-plan.md`'s own framing:
+replacing libsrt's heavy native build chain with a pure-Rust one). Replaced
+with pure-Rust [RustCrypto](https://github.com/RustCrypto) crates —
+**all audited crates, no hand-rolled crypto primitives**:
+
+| Primitive | Crate(s) |
+|---|---|
+| KEK derivation (PBKDF2-HMAC-SHA1) | `pbkdf2` + `sha1` |
+| SEK wrap/unwrap (AES Key Wrap, RFC 3394) | `aes-kw` |
+| Payload encryption (AES-CTR) | `ctr` + `aes`, driven via the `cipher` crate's traits |
+
+**A real trap worth naming, since it's what made hand-rolling AES-CTR/
+AES-KW look necessary in an earlier draft of this patch:** pinning older
+`hmac`/`sha1`/`pbkdf2` (the versions that happen to line up with commonly-
+seen tutorial examples) alongside current `ctr`/`aes-kw` pulls in **two
+incompatible generations of the `cipher`/`aes` traits simultaneously**
+(`cipher 0.4`/`aes 0.8` vs `cipher 0.5`/`aes 0.9`) — and it still compiles,
+because Cargo allows multiple versions of the same crate to coexist across
+separate parts of the dependency graph. It just means the AES-CTR path and
+the AES-KW path end up on incompatible cipher-trait generations with no
+single consistent `aes::Aes128`/`Aes256` type usable across both — which
+is genuinely awkward, and an understandable reason to reach for hand-rolled
+mode-of-operation code instead of untangling it. The actual fix is simpler:
+bump `hmac`/`sha1`/`pbkdf2` to their current versions (`0.13`/`0.11`/`0.13`
+at the time of this patch) so everything resolves onto one consistent
+generation. Verified directly (a scratch `cargo build` with only these
+deps) before applying this patch — single `aes`/`cipher` version each, no
+duplicates.
+
+**Live-verified against real libsrt, both directions, with actual encrypted
+data exchange — not just handshake completion**, using
+`crates/srt-interop`'s caller/listener (extended with `[passphrase]`
+support and a known test payload) against `test/native/srt-interop-{caller,
+listener}.c` (extended with `SRTO_PASSPHRASE` and the same known payload):
+
+- Rust caller (new crypto stack) → real libsrt listener: libsrt received
+  and decrypted `"the quick brown fox jumps over the lazy dog 0123456789"`
+  byte-for-byte correctly.
+- Real libsrt caller → Rust listener (new crypto stack): same payload,
+  same byte-exact match, other direction.
+
+This is strong evidence by construction: AES-CTR is a keystream XOR — any
+error in KEK derivation, SEK unwrap, or counter-block construction would
+produce garbage ciphertext/plaintext, not a byte-exact match. A wrong
+implementation essentially cannot pass this test by accident.
+
+The existing `tests/test_crypto.rs` known-answer tests (independent
+counter-block construction, byte-placement regression checks — see that
+file's own header comment for why round-trip tests alone can't catch a
+counter-block placement bug) were updated to call `ctr`/`aes` directly
+instead of `aws_lc_rs`, preserving their original purpose: an
+independently-reconstructed encryption path to compare against
+`CryptoContext::encrypt`'s own output, not a like-for-like restatement of
+the same code under test.
+
+`aws-lc-sys`'s `cmake`+C-compiler build requirement (previously the
+`aws-lc-rs` era's caveat in this section) no longer applies —
+`crates/srt-protocol` now has zero native build dependencies.
+
 ## Pulling future upstream commits
 
 ```sh
@@ -158,22 +223,22 @@ onward actually reads this list again.
 
 `cargo-deny` is not installed in the environment this vendoring was done
 in, so this was checked manually — **re-run `cargo deny check` in an
-environment that has it before this lands in a release build.** New
-transitive dependencies pulled in by `shiguredo_srt` (`aws-lc-rs`,
-`aws-lc-sys`, `cmake`, `dunce`, `fs_extra`, `jobserver`, `untrusted`), all
-from crates.io (satisfies `deny.toml`'s `allow-registry` restriction — the
-whole reason this is vendored in-tree rather than as a `git =` dependency,
-see the plan's Workspace section): all license expressions resolve to at
-least one term already in `deny.toml`'s `[licenses] allow` list (MIT,
-Apache-2.0, BSD-3-Clause, ISC all appear; `aws-lc-sys`'s multi-clause `AND`
-expression was checked term-by-term, not just at a glance). No GPL/copyleft
-term anywhere in the new dependency tree.
+environment that has it before this lands in a release build.**
 
-`aws-lc-sys` builds a C library via `cmake` at compile time (confirmed:
-`cargo build` pulled and built `cmake`, `cc`, `jobserver` — the standard
-Rust `cmake`-crate build chain) — this is a new native-build-tooling
-requirement for whichever environment builds restream going forward
-(cmake + a C compiler), separate from and in addition to restream's
-existing FFmpeg/libsrt static-build toolchain. Confirmed present and
-working in the environment this was vendored in; worth an explicit check
-in CI/Docker image definitions before this lands there.
+**Current state (post crypto-backend swap, see above):** dependencies are
+`aes`, `aes-kw`, `cipher`, `ctr`, `hmac`, `pbkdf2`, `sha1`, plus their own
+transitive deps (`cmov`, `cpubits`, `ctutils`, `digest`, `inout`, and
+`typenum`/`generic-array`/`hybrid-array` already shared with restream's
+existing dependency tree), all pure Rust, all from crates.io. All license
+expressions resolve to a term already in `deny.toml`'s `[licenses] allow`
+list (MIT, Apache-2.0 both appear across this set). No GPL/copyleft term.
+**Zero native (C/C++) build dependencies** — confirmed via a clean `cargo
+build` with no `cc`/`cmake`/`jobserver` compilation step, unlike the
+`aws-lc-rs` era below.
+
+**Historical note (no longer applicable, kept for context):** the original
+`aws-lc-rs` dependency pulled in `aws-lc-sys`, which built a C library via
+`cmake` at compile time — a new native-build-tooling requirement (cmake +
+a C compiler) separate from and in addition to restream's existing
+FFmpeg/libsrt static-build toolchain. This was the direct motivation for
+the crypto backend swap documented above; it no longer applies.

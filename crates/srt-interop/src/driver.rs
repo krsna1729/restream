@@ -13,22 +13,30 @@ use std::time::Instant;
 pub struct DriverResult {
     pub connected: bool,
     pub events: Vec<String>,
+    pub received_payloads: Vec<Vec<u8>>,
 }
 
 /// Drive `conn` against `socket` until `Connected`, a fatal error/disconnect,
-/// or `deadline` elapses. `on_connect_actions`, if given, runs once right
-/// after entering `Connected` (e.g. to send/receive a payload) before the
-/// driver returns.
+/// or `deadline` elapses. `on_connect`, if given, runs once right after
+/// entering `Connected` (e.g. to send a payload). After connecting, the
+/// driver keeps running for `post_connect_linger` before returning, so it
+/// can actually observe `DataReceived` events (collected into
+/// `DriverResult::received_payloads`) instead of exiting the instant the
+/// handshake completes.
 pub fn run(
     conn: &mut SrtConnection,
     socket: &UdpSocket,
     start: Instant,
     deadline: std::time::Duration,
+    post_connect_linger: std::time::Duration,
     mut on_connect: impl FnMut(&mut SrtConnection, &UdpSocket, Timestamp),
 ) -> DriverResult {
     let mut timers: HashMap<TimerId, Timestamp> = HashMap::new();
     let mut events = Vec::new();
+    let mut received_payloads = Vec::new();
     let mut connected = false;
+    let mut connect_action_done = false;
+    let mut linger_until: Option<Instant> = None;
     socket
         .set_read_timeout(Some(std::time::Duration::from_millis(50)))
         .expect("set_read_timeout");
@@ -81,6 +89,10 @@ pub fn run(
                     connected = true;
                     events.push("Connected".to_string());
                 }
+                ConnectionEvent::DataReceived { payload, .. } => {
+                    events.push(format!("DataReceived({} bytes)", payload.len()));
+                    received_payloads.push(payload.clone());
+                }
                 ConnectionEvent::Disconnected { reason } => {
                     events.push(format!("Disconnected: {reason}"));
                 }
@@ -91,15 +103,26 @@ pub fn run(
             }
         }
 
-        if connected {
+        if connected && !connect_action_done {
+            connect_action_done = true;
             let t = now(start);
             on_connect(conn, socket, t);
             drain_outputs(conn, socket, &mut timers, t);
+            linger_until = Some(Instant::now() + post_connect_linger);
+        }
+
+        if let Some(until) = linger_until
+            && Instant::now() >= until
+        {
             break;
         }
     }
 
-    DriverResult { connected, events }
+    DriverResult {
+        connected,
+        events,
+        received_payloads,
+    }
 }
 
 fn drain_outputs(

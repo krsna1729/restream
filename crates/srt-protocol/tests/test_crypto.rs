@@ -23,8 +23,8 @@
 //! 独立に検証する。一方、packet index が bytes 10-13 に置かれること自体の絶対的な正しさは
 //! KAT・PBT のいずれでも独立検証されておらず、上記の libsrt 突き合わせに依拠する。
 
-use aws_lc_rs::cipher::{AES_128, AES_256, DecryptingKey, DecryptionContext, UnboundCipherKey};
-use aws_lc_rs::iv::{FixedLength, IV_LEN_128_BIT};
+use cipher::{KeyIvInit, StreamCipher};
+use ctr::Ctr128BE;
 use shiguredo_srt::{CryptoContext, KeyLength};
 
 /// SRT 仕様の byte 配置に従ってカウンタブロック (AES-CTR の初期 IV) を構築する。
@@ -49,17 +49,19 @@ fn spec_counter_block(salt: &[u8; 16], packet_index: u32) -> [u8; 16] {
 
 /// 明示構築したカウンタブロックを IV として AES-CTR を適用する (暗号化・復号は同一操作)。
 fn aes_ctr_apply(sek: &[u8], iv: &[u8; 16], data: &mut [u8]) {
-    let algorithm = match sek.len() {
-        16 => &AES_128,
-        32 => &AES_256,
+    match sek.len() {
+        16 => {
+            let mut cipher = Ctr128BE::<aes::Aes128>::new_from_slices(sek, iv)
+                .expect("CTR key should be created");
+            cipher.apply_keystream(data);
+        }
+        32 => {
+            let mut cipher = Ctr128BE::<aes::Aes256>::new_from_slices(sek, iv)
+                .expect("CTR key should be created");
+            cipher.apply_keystream(data);
+        }
         _ => unreachable!("SEK length must be 16 or 32"),
-    };
-    let unbound =
-        UnboundCipherKey::new(algorithm, sek).expect("UnboundCipherKey should be created");
-    let key = DecryptingKey::ctr(unbound).expect("CTR key should be created");
-    let context = DecryptionContext::Iv128(FixedLength::<IV_LEN_128_BIT>::from(iv));
-    key.decrypt(data, context)
-        .expect("CTR apply should succeed");
+    }
 }
 
 /// 仕様の byte 配置で構築したカウンタブロックで計算した暗号文と

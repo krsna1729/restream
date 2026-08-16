@@ -1,25 +1,33 @@
 //! Real UDP-backed SRT listener for interop testing against libsrt.
 //! See docs/srt-pure-rust-plan.md Phase 3.
 //!
-//! Usage: srt-interop-listener <port>
+//! Usage: srt-interop-listener <port> [passphrase]
 //!
 //! Single-peer only: waits for one datagram, `connect()`s the socket to
 //! that sender, then drives the handshake. Not the eventual Phase 7
 //! production listener (which owns N sockets across a thread pool) -- this
 //! exists only to prove wire-level interop.
+//!
+//! With a passphrase, checks any received payload against the known test
+//! payload `srt-interop-caller` sends -- used to live-verify the pure-Rust
+//! AES-CTR/AES-KW/PBKDF2 crypto stack decrypts correctly against real
+//! libsrt, not just that the handshake completes.
 
 use shiguredo_srt::{ConnectionOptions, SrtConnection, Timestamp};
 use srt_interop::driver;
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 
+const EXPECTED_PAYLOAD: &[u8] = b"the quick brown fox jumps over the lazy dog 0123456789";
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("usage: {} <port>", args[0]);
+        eprintln!("usage: {} <port> [passphrase]", args[0]);
         std::process::exit(2);
     }
     let port = &args[1];
+    let passphrase = args.get(2).filter(|s| !s.is_empty()).cloned();
 
     let socket = UdpSocket::bind(format!("0.0.0.0:{port}")).expect("bind");
     eprintln!("[listener] listening on port {port}");
@@ -37,6 +45,7 @@ fn main() {
 
     let options = ConnectionOptions {
         socket_id: std::process::id(),
+        passphrase,
         ..Default::default()
     };
     let mut conn = SrtConnection::new_listener(options);
@@ -50,6 +59,7 @@ fn main() {
         &socket,
         start,
         Duration::from_secs(5),
+        Duration::from_secs(2),
         |_, _, _| {},
     );
 
@@ -58,6 +68,14 @@ fn main() {
     }
     if result.connected {
         println!("CONNECTED peer_stream_id={:?}", conn.peer_stream_id());
+        for payload in &result.received_payloads {
+            let matches = payload.as_slice() == EXPECTED_PAYLOAD;
+            println!(
+                "RECEIVED {} bytes match_expected={matches} content={:?}",
+                payload.len(),
+                String::from_utf8_lossy(payload)
+            );
+        }
         std::process::exit(0);
     } else {
         println!("FAILED state={:?}", conn.state());

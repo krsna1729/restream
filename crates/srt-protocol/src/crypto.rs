@@ -4,14 +4,34 @@
 //! - KEK (Key Encrypting Key): パスフレーズから PBKDF2 で導出
 //! - SEK (Stream Encrypting Key): ランダム生成、KEK で AES Key Wrap
 //! - AES-CTR でデータ暗号化
+//!
+//! restream local patch (crates/srt-protocol/VENDOR.md): originally
+//! `aws-lc-rs`, which pulls in `aws-lc-sys` -- a cmake+C-compiler native
+//! build step, exactly the kind of native toolchain dependency this whole
+//! migration exists to move away from. Replaced with a pure-Rust
+//! RustCrypto stack, all audited crates, no hand-rolled crypto:
+//! - PBKDF2-HMAC-SHA1 (KEK derivation): `pbkdf2` + `sha1`
+//! - AES Key Wrap / RFC 3394 (SEK wrap/unwrap): `aes-kw`
+//! - AES-CTR (payload encryption): `ctr` + `aes`, `cipher` traits
+//!
+//! `ctr`/`aes-kw` and `hmac`/`sha1`/`pbkdf2` must be pinned to versions
+//! that agree on the same `cipher`/`aes` generation (currently `cipher
+//! 0.5`/`aes 0.9`) -- pinning older `hmac`/`sha1`/`pbkdf2` alongside
+//! current `ctr`/`aes-kw` pulls in two incompatible generations
+//! simultaneously and still compiles (Cargo allows this across separate
+//! parts of the dependency graph), which is a real trap: it's what made
+//! hand-rolling AES-CTR/AES-KW look necessary in an earlier draft of this
+//! patch. Verified clean (single generation, no duplicate `aes`/`cipher`
+//! versions) at the versions pinned in `Cargo.toml`.
 
 use std::fmt;
-use std::num::NonZeroU32;
 
-use aws_lc_rs::cipher::{AES_128, AES_256, DecryptingKey, DecryptionContext, UnboundCipherKey};
-use aws_lc_rs::iv::{FixedLength, IV_LEN_128_BIT};
-use aws_lc_rs::key_wrap::{AES_128 as KW_AES_128, AES_256 as KW_AES_256, AesKek, KeyWrap};
-use aws_lc_rs::pbkdf2::{self, PBKDF2_HMAC_SHA1};
+use aes::{Aes128, Aes256};
+use aes_kw::{KwAes128, KwAes256};
+use cipher::{KeyInit, KeyIvInit, StreamCipher};
+use ctr::Ctr128BE;
+use pbkdf2::pbkdf2_hmac;
+use sha1::Sha1;
 
 use crate::error::Error;
 
@@ -376,48 +396,51 @@ fn derive_kek(passphrase: &str, salt: &[u8; 16], key_length: KeyLength) -> Vec<u
     let mut kek = vec![0u8; key_length.len()];
     // Salt の下位 64 bits (8 bytes) を使用
     let salt_lsb = &salt[8..16];
-    let iterations = NonZeroU32::new(PBKDF2_ITERATIONS).expect("iterations should be non-zero");
-    pbkdf2::derive(
-        PBKDF2_HMAC_SHA1,
-        iterations,
-        salt_lsb,
-        passphrase.as_bytes(),
-        &mut kek,
-    );
+    pbkdf2_hmac::<Sha1>(passphrase.as_bytes(), salt_lsb, PBKDF2_ITERATIONS, &mut kek);
     kek
 }
 
-/// SEK を AES Key Wrap でラップ
+/// SEK を AES Key Wrap (RFC 3394) でラップ
 fn wrap_sek(kek: &[u8], sek: &[u8], key_length: KeyLength) -> Result<Vec<u8>, Error> {
-    let algorithm = match key_length {
-        KeyLength::Aes128 => &KW_AES_128,
-        KeyLength::Aes256 => &KW_AES_256,
-    };
-    let aes_kek = AesKek::new(algorithm, kek)
-        .map_err(|e| Error::crypto_error(format!("invalid KEK: {e}")))?;
     let mut wrapped = vec![0u8; sek.len() + 8];
-    aes_kek
-        .wrap(sek, &mut wrapped)
-        .map_err(|e| Error::crypto_error(format!("AES key wrap failed: {e}")))?;
+    match key_length {
+        KeyLength::Aes128 => {
+            let kw = KwAes128::new_from_slice(kek)
+                .map_err(|e| Error::crypto_error(format!("invalid KEK: {e}")))?;
+            kw.wrap_key(sek, &mut wrapped)
+                .map_err(|e| Error::crypto_error(format!("AES key wrap failed: {e}")))?;
+        }
+        KeyLength::Aes256 => {
+            let kw = KwAes256::new_from_slice(kek)
+                .map_err(|e| Error::crypto_error(format!("invalid KEK: {e}")))?;
+            kw.wrap_key(sek, &mut wrapped)
+                .map_err(|e| Error::crypto_error(format!("AES key wrap failed: {e}")))?;
+        }
+    }
     Ok(wrapped)
 }
 
-/// SEK を AES Key Wrap でアンラップ
+/// SEK を AES Key Wrap (RFC 3394) でアンラップ
 fn unwrap_sek(kek: &[u8], wrapped: &[u8], key_length: KeyLength) -> Result<Vec<u8>, Error> {
     if wrapped.len() < 8 {
         return Err(Error::crypto_error("wrapped key too short"));
     }
 
-    let algorithm = match key_length {
-        KeyLength::Aes128 => &KW_AES_128,
-        KeyLength::Aes256 => &KW_AES_256,
-    };
-    let aes_kek = AesKek::new(algorithm, kek)
-        .map_err(|e| Error::crypto_error(format!("invalid KEK: {e}")))?;
     let mut unwrapped = vec![0u8; wrapped.len() - 8];
-    aes_kek
-        .unwrap(wrapped, &mut unwrapped)
-        .map_err(|e| Error::crypto_error(format!("AES key unwrap failed: {e}")))?;
+    match key_length {
+        KeyLength::Aes128 => {
+            let kw = KwAes128::new_from_slice(kek)
+                .map_err(|e| Error::crypto_error(format!("invalid KEK: {e}")))?;
+            kw.unwrap_key(wrapped, &mut unwrapped)
+                .map_err(|e| Error::crypto_error(format!("AES key unwrap failed: {e}")))?;
+        }
+        KeyLength::Aes256 => {
+            let kw = KwAes256::new_from_slice(kek)
+                .map_err(|e| Error::crypto_error(format!("invalid KEK: {e}")))?;
+            kw.unwrap_key(wrapped, &mut unwrapped)
+                .map_err(|e| Error::crypto_error(format!("AES key unwrap failed: {e}")))?;
+        }
+    }
     Ok(unwrapped)
 }
 
@@ -449,22 +472,21 @@ fn encrypt_payload(
     iv[12] ^= pi_bytes[2];
     iv[13] ^= pi_bytes[3];
 
-    let algorithm = match key_length {
-        KeyLength::Aes128 => &AES_128,
-        KeyLength::Aes256 => &AES_256,
-    };
-
-    let unbound_key = UnboundCipherKey::new(algorithm, sek)
-        .map_err(|e| Error::crypto_error(format!("invalid SEK: {e}")))?;
-
-    // CTR モードでは暗号化と復号化は同じ操作
-    // DecryptionContext を使ってカスタム IV を指定
-    let key = DecryptingKey::ctr(unbound_key)
-        .map_err(|e| Error::crypto_error(format!("failed to create CTR key: {e}")))?;
-
-    let context = DecryptionContext::Iv128(FixedLength::<IV_LEN_128_BIT>::from(&iv));
-    key.decrypt(payload, context)
-        .map_err(|e| Error::crypto_error(format!("encryption failed: {e}")))?;
+    // CTR モードでは暗号化と復号化は同じ操作 (鍵ストリームとの XOR)。
+    // 128-bit カウンタブロック全体をビッグエンディアンのカウンタとして扱う
+    // Ctr128BE が libsrt の haicrypt 実装と一致する (上記コメント参照)。
+    match key_length {
+        KeyLength::Aes128 => {
+            let mut cipher = Ctr128BE::<Aes128>::new_from_slices(sek, &iv)
+                .map_err(|e| Error::crypto_error(format!("invalid SEK: {e}")))?;
+            cipher.apply_keystream(payload);
+        }
+        KeyLength::Aes256 => {
+            let mut cipher = Ctr128BE::<Aes256>::new_from_slices(sek, &iv)
+                .map_err(|e| Error::crypto_error(format!("invalid SEK: {e}")))?;
+            cipher.apply_keystream(payload);
+        }
+    }
 
     Ok(())
 }
