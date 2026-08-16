@@ -2722,6 +2722,7 @@ dependencies = [
  "aes",
  "aes-kw",
  "cipher 0.5.2",
+ "criterion",
  "ctr",
  "hmac 0.13.0",
  "pbkdf2 0.13.0",

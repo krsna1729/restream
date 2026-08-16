@@ -26,3 +26,14 @@ sha1 = "0.11"
 pbkdf2 = "0.13"
 # ログ出力 (デバッグ出力を tracing-subscriber 側で制御する)
 tracing = "0.1"
+
+[dev-dependencies]
+# restream local patch (crates/srt-protocol/VENDOR.md): Core-only benchmark
+# for docs/srt-pure-rust-plan.md Phase 4's kill-switch criterion (is the
+# Rust Core cheaper per packet than libsrt, measured with no I/O in the
+# way). Same criterion version restream's own root Cargo.toml pins.
+criterion = "0.8"
+
+[[bench]]
+name = "core_packet_loop"
+harness = false
