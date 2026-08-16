@@ -952,6 +952,7 @@ fn make_opts(socket_id: u32) -> ConnectionOptions {
         stream_id: None,
         crypto_salt: None,
         crypto_sek: None,
+        max_bandwidth_bytes_per_sec: None,
     }
 }
 
@@ -968,6 +969,7 @@ fn make_opts_with_stream_id(socket_id: u32, stream_id: String) -> ConnectionOpti
         stream_id: Some(stream_id),
         crypto_salt: None,
         crypto_sek: None,
+        max_bandwidth_bytes_per_sec: None,
     }
 }
 

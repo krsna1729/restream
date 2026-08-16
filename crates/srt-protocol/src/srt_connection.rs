@@ -157,6 +157,10 @@ pub struct ConnectionOptions {
     pub srt_version: u32,
     /// Stream ID (Caller が Listener に送信する識別子、最大 512 バイト)
     pub stream_id: Option<String>,
+    /// 最大帯域幅 (`SRTO_MAXBW` 相当、バイト/秒)。`None` の場合は libsrt の
+    /// `BW_INFINITE` (1 Gbps) 相当のデフォルトを使う
+    /// ([`crate::srt_sender`] のペーシング計算を参照)。
+    pub max_bandwidth_bytes_per_sec: Option<u64>,
 }
 
 impl Default for ConnectionOptions {
@@ -172,6 +176,7 @@ impl Default for ConnectionOptions {
             tsbpd_delay: 120,
             srt_version: 0x010500, // 1.5.0
             stream_id: None,
+            max_bandwidth_bytes_per_sec: None,
         }
     }
 }
@@ -306,11 +311,15 @@ impl SrtConnection {
 
     /// 送信/受信バッファを初期化
     fn init_buffers(&mut self, now: Timestamp, peer_initial_seq: u32, tsbpd_time_base: u64) {
-        self.sender = Some(SenderBuffer::new(
+        let mut sender = SenderBuffer::new(
             self.initial_seq,
             DEFAULT_FLOW_WINDOW,
             self.options.tsbpd_delay,
-        ));
+        );
+        if let Some(max_bw) = self.options.max_bandwidth_bytes_per_sec {
+            sender.set_max_bandwidth(max_bw);
+        }
+        self.sender = Some(sender);
         self.receiver = Some(ReceiverBuffer::new(
             peer_initial_seq,
             self.options.tsbpd_delay,

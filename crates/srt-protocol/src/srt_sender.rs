@@ -11,8 +11,31 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::srt_packet::{DataPacket, PacketPosition, sequence_less_than};
+use crate::srt_packet::{DataPacket, PacketPosition, SRT_HEADER_SIZE, sequence_less_than};
 use crate::time::Timestamp;
+
+/// UDP + IPv4 header overhead on top of the SRT header itself
+/// (`SRT_HEADER_SIZE`) -- matches libsrt's own LiveCC pacing formula
+/// (`m_zHeaderSize = MSS - maxPayloadSize`, `srtcore/congctl.cpp`).
+const UDP_IP_HEADER_OVERHEAD: usize = 28; // 20 (IPv4) + 8 (UDP)
+
+/// "No configured limit" default max bandwidth, matching libsrt's own
+/// `BW_INFINITE` (`srtcore/common.h`): 1 Gbps expressed in bytes/sec. Live
+/// mode always paces off *some* bandwidth figure -- there is no "pacing
+/// disabled" state in real SRT live mode, just a very generous default.
+const DEFAULT_MAX_BANDWIDTH_BYTES_PER_SEC: u64 = 1_000_000_000 / 8;
+
+/// Optimistic initial payload-size estimate for the pacing average, before
+/// any real packets have been sent -- matches libsrt's `LiveCC` constructor
+/// initializing `m_zSndAvgPayloadSize` to `maxPayloadSize()` (1500 MTU - 44
+/// bytes IP/UDP/SRT overhead = 1456) rather than 0, so the first computed
+/// pacing period isn't artificially tiny.
+const INITIAL_AVG_PAYLOAD_SIZE_BYTES: f64 = 1456.0;
+
+/// IIR averaging window for the payload-size estimate feeding the pacing
+/// formula, matching libsrt's `avg_iir<128>` (`srtcore/congctl.cpp`,
+/// `srtcore/utilities.h`): `avg = (avg * (LEN - 1) + new) / LEN`.
+const AVG_PAYLOAD_SIZE_IIR_LEN: f64 = 128.0;
 
 /// 送信パケットエントリ
 #[derive(Debug, Clone)]
@@ -63,26 +86,40 @@ pub struct SenderBuffer {
     total_sent: u64,
     /// 送信バイト総数
     total_bytes_sent: u64,
+    /// 送信ペイロードサイズの移動平均 (バイト、ペーシング計算用)
+    avg_payload_size: f64,
+    /// 最大帯域幅 (バイト/秒、`SRTO_MAXBW` 相当、ペーシング計算用)
+    max_bandwidth_bytes_per_sec: u64,
 }
 
 impl SenderBuffer {
     /// 新しい送信バッファを作成
+    ///
+    /// LIVE モードでは輻輳ウィンドウはフローウィンドウに追従させる (TCP 風の
+    /// AIMD 成長はしない) -- 実 libsrt の `LiveCC` も `m_dMaxCWndSize =
+    /// flowWindowSize()`, `m_dCWndSize = m_dMaxCWndSize` としており、実際の
+    /// 送信制御はペーシング (`packet_send_period`) が担う
+    /// (`srtcore/congctl.cpp`)。
     pub fn new(initial_seq: u32, flow_window: u32, latency_ms: u16) -> Self {
-        Self {
+        let mut buf = Self {
             packets: BTreeMap::new(),
             loss_list: VecDeque::new(),
             oldest_unacked: initial_seq,
             next_seq: initial_seq,
             next_msg: 1,
             flow_window,
-            congestion_window: 16, // 初期値
+            congestion_window: flow_window,
             max_buffer_size: 8192,
             latency_us: latency_ms as u64 * 1000,
-            packet_send_period: 0, // 初期値は制限なし
+            packet_send_period: 0,
             last_send_time: None,
             total_sent: 0,
             total_bytes_sent: 0,
-        }
+            avg_payload_size: INITIAL_AVG_PAYLOAD_SIZE_BYTES,
+            max_bandwidth_bytes_per_sec: DEFAULT_MAX_BANDWIDTH_BYTES_PER_SEC,
+        };
+        buf.recompute_packet_send_period();
+        buf
     }
 
     /// 次のシーケンス番号を取得
@@ -178,9 +215,50 @@ impl SenderBuffer {
         self.congestion_window = cwnd;
     }
 
-    /// フローウィンドウを設定
+    /// フローウィンドウを設定 (輻輳ウィンドウも追従させる、LIVE モードの
+    /// 挙動は [`Self::new`] のコメント参照)
     pub fn set_flow_window(&mut self, flow_window: u32) {
         self.flow_window = flow_window;
+        self.congestion_window = flow_window;
+    }
+
+    /// 最大帯域幅を設定 (`SRTO_MAXBW` 相当、バイト/秒)。ペーシング間隔を
+    /// 即座に再計算する (libsrt `LiveCC::setMaxBW` -> `updatePktSndPeriod`
+    /// に相当、`srtcore/congctl.cpp`)。`bytes_per_sec` が 0 の場合は
+    /// libsrt 同様 [`DEFAULT_MAX_BANDWIDTH_BYTES_PER_SEC`] にフォールバック
+    /// する。
+    pub fn set_max_bandwidth(&mut self, bytes_per_sec: u64) {
+        self.max_bandwidth_bytes_per_sec = if bytes_per_sec == 0 {
+            DEFAULT_MAX_BANDWIDTH_BYTES_PER_SEC
+        } else {
+            bytes_per_sec
+        };
+        self.recompute_packet_send_period();
+    }
+
+    /// 送信ペイロードサイズの移動平均を更新する (libsrt
+    /// `LiveCC::updatePayloadSize` に相当、実送信のたびに呼ぶ)。
+    ///
+    /// 平均値は更新するが、ここではペーシング間隔を再計算しない --
+    /// [`Self::set_packet_send_period`] で明示的に上書きされた値を送信の
+    /// たびに黙って再計算で潰してしまうのを避けるため
+    /// (`tests/test_srt_connection.rs::test_packet_pacing` はこの手動上書
+    /// きが送信後も保持されることに依存する)。LIVE ペイロードサイズは実運
+    /// 用上ほぼ一定 (`MAX_SRT_MESSAGE_PAYLOAD` 相当) なので、再計算は
+    /// [`Self::new`] と [`Self::set_max_bandwidth`] の時点のみで十分。
+    fn record_sent_payload_size(&mut self, size: usize) {
+        self.avg_payload_size = (self.avg_payload_size * (AVG_PAYLOAD_SIZE_IIR_LEN - 1.0)
+            + size as f64)
+            / AVG_PAYLOAD_SIZE_IIR_LEN;
+    }
+
+    /// 平均ペイロードサイズと最大帯域幅からパケット送信間隔を計算する
+    /// (libsrt `LiveCC::updatePktSndPeriod` に相当、`srtcore/congctl.cpp`)。
+    fn recompute_packet_send_period(&mut self) {
+        let packet_size_bytes =
+            self.avg_payload_size + (SRT_HEADER_SIZE + UDP_IP_HEADER_OVERHEAD) as f64;
+        let period_us = 1_000_000.0 * packet_size_bytes / self.max_bandwidth_bytes_per_sec as f64;
+        self.packet_send_period = period_us.round() as u64;
     }
 
     /// ペイロードをバッファに追加して送信パケットを生成
@@ -220,6 +298,7 @@ impl SenderBuffer {
         // 統計を更新
         self.total_sent += 1;
         self.total_bytes_sent += packet.payload.len() as u64;
+        self.record_sent_payload_size(packet.payload.len());
 
         // シーケンス番号とメッセージ番号を進める
         self.next_seq = self.next_seq.wrapping_add(1) & 0x7FFF_FFFF;
@@ -277,6 +356,7 @@ impl SenderBuffer {
             // 統計を更新
             self.total_sent += 1;
             self.total_bytes_sent += packet.payload.len() as u64;
+            self.record_sent_payload_size(packet.payload.len());
 
             self.next_seq = self.next_seq.wrapping_add(1) & 0x7FFF_FFFF;
             packets.push(packet);
