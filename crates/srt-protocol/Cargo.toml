@@ -41,3 +41,7 @@ harness = false
 [[bench]]
 name = "core_packet_loop_io"
 harness = false
+
+[[bench]]
+name = "receiver_loss_scan"
+harness = false

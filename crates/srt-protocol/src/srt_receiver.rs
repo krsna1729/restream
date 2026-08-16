@@ -11,7 +11,7 @@
 //! - TSBPD (Time-based Packet Delivery)
 //! - 受信レート / リンク容量の推定
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::srt_packet::{DataPacket, sequence_greater_than, sequence_less_than};
 use crate::time::Timestamp;
@@ -285,8 +285,22 @@ pub struct ReceiverBuffer {
     /// 次に期待するシーケンス番号
     expected_seq: u32,
 
-    /// 損失リスト (検出した損失パケット)
-    loss_list: Vec<u32>,
+    /// 損失リスト (検出した損失パケット)。`contains`/`insert`/`remove` は
+    /// 受信ごとのホットパスで O(1) が必要なため `HashSet` を使う (upstream
+    /// shiguredo/srt-rs issue 0055: 元々は `Vec<u32>` で `contains`/`retain`
+    /// が O(n) だった)。
+    loss_list: HashSet<u32>,
+
+    /// `loss_list` の循環順最小値のキャッシュ (upstream issue 0073)。
+    /// `find_deliverable_seq` の `has_gap` 判定は「loss_list の循環順最小値
+    /// が seq より前か」と等価なので、この値があれば全走査が要らない。
+    /// 挿入時は O(1) で更新する。削除時に削除対象がこの最小値自身だった
+    /// 場合のみ O(loss_list) で再計算する (通常は稀な遅延パケット回復時
+    /// のみ発生)。`loss_list` の要素が相互に 2^30 以上離れることはない
+    /// 前提 (`sequence_less_than` の定義上、それを超えると循環順の概念が
+    /// 破綻する -- 実運用では loss_list は常に expected_seq 付近に集中
+    /// するため問題にならない)。
+    loss_list_min: Option<u32>,
 
     /// 最後に ACK 送信した時刻
     last_ack_time: Timestamp,
@@ -360,7 +374,8 @@ impl ReceiverBuffer {
         Self {
             packets: BTreeMap::new(),
             expected_seq: initial_seq,
-            loss_list: Vec::new(),
+            loss_list: HashSet::new(),
+            loss_list_min: None,
             last_ack_time: start_time,
             last_ack_seq: initial_seq,
             packets_since_ack: 0,
@@ -387,6 +402,27 @@ impl ReceiverBuffer {
     /// TSBPD を有効/無効にする
     pub fn set_tsbpd_enabled(&mut self, enabled: bool) {
         self.tsbpd_enabled = enabled;
+    }
+
+    /// `loss_list` に要素を追加し、循環順最小値キャッシュを O(1) で更新する。
+    fn loss_list_insert(&mut self, seq: u32) {
+        self.loss_list.insert(seq);
+        match self.loss_list_min {
+            Some(min) if sequence_less_than(min, seq) => {}
+            _ => self.loss_list_min = Some(seq),
+        }
+    }
+
+    /// `loss_list` から要素を削除する。削除対象が循環順最小値キャッシュ
+    /// 自身だった場合のみ、残りの要素から O(loss_list) で再計算する。
+    fn loss_list_remove(&mut self, seq: u32) {
+        if self.loss_list.remove(&seq) && self.loss_list_min == Some(seq) {
+            self.loss_list_min = self
+                .loss_list
+                .iter()
+                .copied()
+                .reduce(|a, b| if sequence_less_than(a, b) { a } else { b });
+        }
     }
 
     /// 次に期待するシーケンス番号を取得
@@ -479,7 +515,7 @@ impl ReceiverBuffer {
             while sequence_less_than(s, seq) {
                 if !self.packets.contains_key(&s) && !self.loss_list.contains(&s) {
                     new_losses.push(s);
-                    self.loss_list.push(s);
+                    self.loss_list_insert(s);
                     self.total_lost += 1;
                 }
                 s = s.wrapping_add(1) & 0x7FFF_FFFF;
@@ -492,7 +528,7 @@ impl ReceiverBuffer {
         }
 
         // 損失リストから回復したパケットを削除
-        self.loss_list.retain(|&s| s != seq);
+        self.loss_list_remove(seq);
 
         if new_losses.is_empty() {
             None
@@ -535,11 +571,20 @@ impl ReceiverBuffer {
     /// 早期 return せず全候補を走査するのは、循環順最小が数値順最小と食い違うのはラップ境界を
     /// またぐ場合のみだが、その判定に全候補の循環順比較が要るためである。堅牢性を優先し、
     /// 配信ポインタ等の最適化は導入しない。
+    ///
+    /// `has_gap` 自体は `loss_list_min` (循環順最小値キャッシュ、
+    /// upstream shiguredo/srt-rs issue 0073) により O(1) -- 「seq より循環順で
+    /// 前にある loss_list の要素が存在するか」は「loss_list の循環順最小値が
+    /// seq より前か」と等価なので、候補ごとに loss_list 全体を走査する必要が
+    /// ない。これにより全体の計算量は O(packets × loss_list) から
+    /// O(packets) に下がる。
     fn find_deliverable_seq(&self, now: Timestamp) -> Option<u32> {
         let mut best: Option<u32> = None;
         for (&seq, entry) in &self.packets {
             let time_ok = !self.tsbpd_enabled || entry.delivery_time <= now;
-            let has_gap = self.loss_list.iter().any(|&s| sequence_less_than(s, seq));
+            let has_gap = self
+                .loss_list_min
+                .is_some_and(|min| sequence_less_than(min, seq));
             if time_ok && !has_gap {
                 // 既存 best が seq より循環順で前なら保持、そうでなければ seq に更新する
                 best = match best {
@@ -604,9 +649,18 @@ impl ReceiverBuffer {
             return None;
         }
 
-        Some(NakPacket {
-            loss_list: self.loss_list.clone(),
-        })
+        // NakPacket.loss_list は Vec<u32> (ワイヤ形式)。数値昇順にソートする
+        // のは、srt_connection.rs の encode_loss_list が連続シーケンス番号を
+        // 範囲としてエンコードして圧縮するため -- 順序不定のまま渡すと圧縮が
+        // 効かず NAK パケットが肥大化する (upstream shiguredo/srt-rs issue
+        // 0055)。数値昇順ソートはラップ境界 (0x7FFF_FFFF -> 0) をまたぐ連続
+        // 範囲の圧縮を分割してしまうが、稀なケースで NAK が 1 範囲分肥大化
+        // するだけなので許容する (循環順ソートは sequence_less_than が全順序
+        // ではないため安全に実装できない)。
+        let mut loss_list: Vec<u32> = self.loss_list.iter().copied().collect();
+        loss_list.sort_unstable();
+
+        Some(NakPacket { loss_list })
     }
 
     /// NAK 送信間隔を計算 (RTT + 4*RTTVar) / 2
@@ -689,7 +743,7 @@ impl ReceiverBuffer {
             .collect();
 
         for seq in expired {
-            self.loss_list.retain(|&s| s != seq);
+            self.loss_list_remove(seq);
             dropped.push(seq);
         }
 
@@ -1221,7 +1275,7 @@ mod tests {
         // 1001 を受信して 1000 が損失として登録される
         buf.receive(make_packet(1001, 200_000), now);
 
-        assert_eq!(buf.loss_list, vec![1000]);
+        assert_eq!(buf.loss_list, HashSet::from([1000]));
 
         // TLPKTDROP = max(1.25 * 120_000, 1_000_000) = 1_000_000μs
         // 次側パケット seq 1001 の delivery_time = 500_000 + 200_000 + 120_000 = 820_000
@@ -1252,7 +1306,7 @@ mod tests {
         // now = 2_400_000: 両方超過 → 1001 が削除される
         let dropped = buf.drop_too_late(Timestamp::from_micros(2_400_000));
         assert_eq!(dropped, vec![1001]);
-        assert_eq!(buf.loss_list, Vec::<u32>::new());
+        assert_eq!(buf.loss_list, HashSet::new());
     }
 
     #[test]
@@ -1345,6 +1399,59 @@ mod tests {
             popped.push(pkt.sequence_number);
         }
         assert_eq!(popped, vec![0x7FFF_FFFF, 0, 1]);
+    }
+
+    #[test]
+    fn test_loss_list_min_cache_recomputes_across_wrap_boundary_on_removal() {
+        // loss_list_min キャッシュ (upstream issue 0073) の再計算経路を検証する:
+        // キャッシュされた循環順最小値そのものが削除されたとき、残った要素の中から
+        // 正しい新しい最小値を O(loss_list) で再計算できること。ラップ境界をまたぐ
+        // 損失集合で検証することで、数値順最小値と循環順最小値の食い違いが
+        // 再計算後も正しく扱われることを確認する。
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(0x7FFF_FFFD, 120, start, 0);
+        buf.set_tsbpd_enabled(false);
+
+        let now = Timestamp::from_micros(1000);
+
+        // 0x7FFF_FFFD, 0x7FFF_FFFE, 0x7FFF_FFFF, 0 を欠損させ、循環順で
+        // 最も新しい 1 のみ受信する。loss_list_min は循環順最古の
+        // 0x7FFF_FFFD になるはず。
+        buf.receive(make_packet(1, 100), now);
+        assert!(buf.loss_list.contains(&0x7FFF_FFFD));
+        assert!(buf.loss_list.contains(&0x7FFF_FFFE));
+        assert!(buf.loss_list.contains(&0x7FFF_FFFF));
+        assert!(buf.loss_list.contains(&0));
+
+        // 循環順最古の欠損 (0x7FFF_FFFD) が回復する -- キャッシュされた最小値
+        // 自身が削除されるので、O(loss_list) 再計算経路を通る。新しい最小値は
+        // 残りの中で循環順最古の 0x7FFF_FFFE になるはず。
+        buf.receive(make_packet(0x7FFF_FFFD, 100), now);
+
+        // 0x7FFF_FFFD 自体は (循環順で手前に欠損がないので) 即座に配信可能になる。
+        assert_eq!(
+            buf.pop_ready(now).map(|p| p.sequence_number),
+            Some(0x7FFF_FFFD)
+        );
+
+        // loss_list_min が正しく 0x7FFF_FFFE に再計算されていれば、seq=1 (循環順で
+        // 0x7FFF_FFFE より後ろ) はまだ穴によってブロックされ、配信されない。
+        // 再計算が壊れていて loss_list_min が誤って None のままだと、ここで
+        // 1 が (誤って) 配信されてしまうはず。
+        assert!(buf.pop_ready(now).is_none());
+
+        // 残りの欠損も回復させれば、循環順どおりに配信される。
+        buf.receive(make_packet(0x7FFF_FFFE, 100), now);
+        buf.receive(make_packet(0x7FFF_FFFF, 100), now);
+        buf.receive(make_packet(0, 100), now);
+
+        // 0x7FFF_FFFD は既に上で配信済みなので、残りは循環順どおり
+        // 0x7FFF_FFFE, 0x7FFF_FFFF, 0, 1 の順で配信される。
+        let mut popped = Vec::new();
+        while let Some(pkt) = buf.pop_ready(now) {
+            popped.push(pkt.sequence_number);
+        }
+        assert_eq!(popped, vec![0x7FFF_FFFE, 0x7FFF_FFFF, 0, 1]);
     }
 
     #[test]
