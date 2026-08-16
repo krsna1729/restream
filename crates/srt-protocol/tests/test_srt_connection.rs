@@ -820,3 +820,66 @@ fn test_multiple_sends_before_transfer() {
     let received = collect_received_data(&mut listener);
     assert_eq!(received.len(), 5);
 }
+
+/// End-to-end loss recovery: a dropped DATA packet must produce a NAK from
+/// the listener and a retransmit from the caller. No prior test in this
+/// file exercised the full loss -> NAK -> retransmit round trip (the
+/// existing `test_nak_timer`/`test_process_retransmit` tests fire the
+/// relevant timers but never simulate an actual gap), so this was an
+/// unverified path until this test -- added after a live netem differential
+/// run (docs/srt-pure-rust-plan.md Phase 4 tooling) needed to confirm the
+/// mechanism itself works before trusting its recovery-rate numbers.
+#[test]
+fn test_dropped_packet_triggers_nak_then_retransmit() {
+    let mut caller = SrtConnection::new_caller(test_options());
+    let mut listener = SrtConnection::new_listener(test_options());
+
+    establish_connection(&mut caller, &mut listener).expect("connection should be established");
+    while caller.poll_event().is_some() {}
+    while listener.poll_event().is_some() {}
+
+    let now = ts(100_000);
+    for i in 0..10 {
+        let data = format!("Message {}", i);
+        caller
+            .send(data.as_bytes(), now)
+            .expect("send should succeed");
+    }
+
+    // Deliver every DATA packet except the 6th (index 5), simulating one
+    // lost packet.
+    let mut idx = 0;
+    while let Some(output) = caller.poll_output() {
+        if let ConnectionOutput::SendPacket(data) = output {
+            if idx != 5 {
+                let _ = listener.feed_recv_buf(&data, now);
+            }
+            idx += 1;
+        }
+    }
+
+    // Advance time and fire the listener's NAK timer.
+    let now2 = ts(150_000);
+    listener
+        .handle_timer(TimerId::Nak, now2)
+        .expect("nak timer");
+
+    // Transfer the listener's output (should include a NAK) to the caller.
+    let mut nak_sent = false;
+    while let Some(output) = listener.poll_output() {
+        if let ConnectionOutput::SendPacket(data) = output {
+            nak_sent = true;
+            let _ = caller.feed_recv_buf(&data, now2);
+        }
+    }
+    assert!(
+        nak_sent,
+        "listener should have emitted a NAK for the dropped packet"
+    );
+
+    let stats = caller.sender_stats().expect("stats");
+    assert!(
+        stats.total_retransmits > 0,
+        "caller should have retransmitted the lost packet after receiving the NAK"
+    );
+}

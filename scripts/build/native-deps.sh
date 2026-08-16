@@ -315,6 +315,22 @@ for helper in server client; do
     fi
 done
 
+# docs/srt-pure-rust-plan.md Phase 4 differential loss/latency testing
+# helpers -- the libsrt side of the Rust-Core-vs-libsrt comparison in
+# crates/srt-interop's loss-caller/loss-listener binaries.
+for helper in caller listener; do
+    source_file="$ROOT/test/native/srt-loss-$helper.c"
+    output_file="$PREFIX/bin/restream-srt-loss-$helper"
+    if [[ ! -x "$output_file" ||
+        "$source_file" -nt "$output_file" ||
+        "$PREFIX/lib/libsrt.a" -nt "$output_file" ]]; then
+        cc -O2 -I"$PREFIX/include" "$source_file" \
+            "$PREFIX/lib/libsrt.a" -L"$PREFIX/lib" -lstdc++ \
+            -lmbedtls -lmbedx509 -lmbedcrypto -ldl -lpthread -lm \
+            -o "$output_file"
+    fi
+done
+
 X264_FINGERPRINT="$(
     {
         git -C "$SOURCES/x264" rev-parse HEAD

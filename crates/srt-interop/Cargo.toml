@@ -15,3 +15,11 @@ path = "src/bin/caller.rs"
 [[bin]]
 name = "srt-interop-listener"
 path = "src/bin/listener.rs"
+
+[[bin]]
+name = "srt-interop-loss-caller"
+path = "src/bin/loss_caller.rs"
+
+[[bin]]
+name = "srt-interop-loss-listener"
+path = "src/bin/loss_listener.rs"
