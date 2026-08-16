@@ -11,13 +11,14 @@
 //! vs. libsrt-plus-its-own-driver, both paying real socket cost.
 //!
 //! Matches `srt_ingest_latency.rs`'s own structure directly: same
-//! `PACKETS_PER_ITER = 8` (small enough to never touch the sender's initial
-//! 16-packet congestion window within one batch, so -- like that bench --
-//! this one doesn't need to manually pump the ACK timer inside the timed
-//! region either), same `b.iter_custom` shape reusing one persistent
-//! connection across all measured iterations of a sample.
+//! `b.iter_custom` shape reusing one persistent connection across all
+//! measured iterations of a sample. `PACKETS_PER_ITER_VALUES` includes 1 to
+//! isolate true single-packet cost -- each `iter_custom` sample still pays
+//! one connection-setup + driver-thread-spawn cost regardless of this value,
+//! so a batch of 1 also checks whether that fixed per-sample overhead is
+//! hiding in the amortized larger-batch numbers.
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use shiguredo_srt::{
     ConnectionEvent, ConnectionOptions, ConnectionOutput, ConnectionState, SrtConnection, TimerId,
     Timestamp,
@@ -29,7 +30,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const PAYLOAD_SIZE: usize = 1316;
-const PACKETS_PER_ITER: u64 = 8;
+/// 1 isolates true single-packet cost; 8 matches libsrt's own
+/// `benches/srt_ingest_latency.rs` `PACKETS_PER_ITER` for direct comparison.
+const PACKETS_PER_ITER_VALUES: &[u64] = &[1, 8];
 /// How often the listener's background driver thread fires the ACK timer
 /// while idle -- matches the ~10ms cadence `core_packet_loop.rs` and real
 /// SRT both use (see that file's `ACK_EVERY_N_PACKETS` doc comment).
@@ -155,60 +158,72 @@ fn bench_round_trip(c: &mut Criterion, label: &str, passphrase: Option<&str>) {
     let mut group = c.benchmark_group("core_packet_loop_io");
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(30);
-    group.throughput(Throughput::Bytes(PAYLOAD_SIZE as u64 * PACKETS_PER_ITER));
 
-    group.bench_function(label, |b| {
-        b.iter_custom(|iters| {
-            let (mut caller, caller_sock, listener, listener_sock, start) =
-                setup_connected_pair_io(passphrase);
-            caller_sock
-                .set_read_timeout(Some(SOCKET_POLL_TIMEOUT))
-                .unwrap();
+    for &packets_per_iter in PACKETS_PER_ITER_VALUES {
+        group.throughput(Throughput::Bytes(PAYLOAD_SIZE as u64 * packets_per_iter));
+        group.bench_with_input(
+            BenchmarkId::new(label, packets_per_iter),
+            &packets_per_iter,
+            |b, &packets_per_iter| {
+                b.iter_custom(|iters| {
+                    let (mut caller, caller_sock, listener, listener_sock, start) =
+                        setup_connected_pair_io(passphrase);
+                    caller_sock
+                        .set_read_timeout(Some(SOCKET_POLL_TIMEOUT))
+                        .unwrap();
 
-            let total_packets = iters * PACKETS_PER_ITER;
-            let received = AtomicU64::new(0);
-            let stop = AtomicBool::new(false);
+                    let total_packets = iters * packets_per_iter;
+                    let received = AtomicU64::new(0);
+                    let stop = AtomicBool::new(false);
 
-            thread::scope(|s| {
-                let received_ref = &received;
-                let stop_ref = &stop;
-                s.spawn(move || {
-                    run_listener_driver(listener, listener_sock, start, received_ref, stop_ref)
-                });
+                    thread::scope(|s| {
+                        let received_ref = &received;
+                        let stop_ref = &stop;
+                        s.spawn(move || {
+                            run_listener_driver(
+                                listener,
+                                listener_sock,
+                                start,
+                                received_ref,
+                                stop_ref,
+                            )
+                        });
 
-                let payload = [0x42u8; PAYLOAD_SIZE];
-                let send_start = Instant::now();
-                let mut buf = [0u8; 2048];
-                for _ in 0..total_packets {
-                    loop {
-                        if caller.can_send() {
-                            break;
-                        }
-                        if let Ok(n) = caller_sock.recv(&mut buf) {
+                        let payload = [0x42u8; PAYLOAD_SIZE];
+                        let send_start = Instant::now();
+                        let mut buf = [0u8; 2048];
+                        for _ in 0..total_packets {
+                            loop {
+                                if caller.can_send() {
+                                    break;
+                                }
+                                if let Ok(n) = caller_sock.recv(&mut buf) {
+                                    let now = now_ts(start);
+                                    let _ = caller.feed_recv_buf(&buf[..n], now);
+                                    drain_sent(&mut caller, &caller_sock);
+                                }
+                            }
                             let now = now_ts(start);
-                            let _ = caller.feed_recv_buf(&buf[..n], now);
+                            caller
+                                .send(black_box(&payload), now)
+                                .expect("send should succeed once can_send() is true");
                             drain_sent(&mut caller, &caller_sock);
                         }
-                    }
-                    let now = now_ts(start);
-                    caller
-                        .send(black_box(&payload), now)
-                        .expect("send should succeed once can_send() is true");
-                    drain_sent(&mut caller, &caller_sock);
-                }
-                while received_ref.load(Ordering::Relaxed) < total_packets {
-                    if let Ok(n) = caller_sock.recv(&mut buf) {
-                        let now = now_ts(start);
-                        let _ = caller.feed_recv_buf(&buf[..n], now);
-                        drain_sent(&mut caller, &caller_sock);
-                    }
-                }
-                let elapsed = send_start.elapsed();
-                stop_ref.store(true, Ordering::Relaxed);
-                elapsed
-            })
-        });
-    });
+                        while received_ref.load(Ordering::Relaxed) < total_packets {
+                            if let Ok(n) = caller_sock.recv(&mut buf) {
+                                let now = now_ts(start);
+                                let _ = caller.feed_recv_buf(&buf[..n], now);
+                                drain_sent(&mut caller, &caller_sock);
+                            }
+                        }
+                        let elapsed = send_start.elapsed();
+                        stop_ref.store(true, Ordering::Relaxed);
+                        elapsed
+                    })
+                });
+            },
+        );
+    }
 
     group.finish();
 }

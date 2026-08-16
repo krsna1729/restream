@@ -1,4 +1,4 @@
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use restream::media::srt::*;
 use std::ffi::c_int;
 use std::hint::black_box;
@@ -7,7 +7,11 @@ use std::time::{Duration, Instant};
 const BENCH_LATENCY_MS: c_int = 20;
 const BENCH_PASSPHRASE: &str = "benchpass12";
 const SRT_LIVE_PAYLOAD_BYTES: usize = 1316;
-const PACKETS_PER_ITER: usize = 8;
+/// 1 isolates true single-packet cost (crates/srt-protocol's Core benches
+/// -- `benches/core_packet_loop.rs`, `core_packet_loop_io.rs` -- measure
+/// the same point for a direct comparison); 8 is the original steady-state
+/// batch.
+const PACKETS_PER_ITER_VALUES: &[usize] = &[1, 8];
 
 #[derive(Clone, Copy)]
 struct CryptoMode {
@@ -168,45 +172,55 @@ fn bench_ingest(c: &mut Criterion, payload: &[u8], crypto: CryptoMode) {
     let mut group = c.benchmark_group(format!("srt_ingest/{}", crypto.label));
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(30);
-    group.throughput(Throughput::Bytes((payload.len() * PACKETS_PER_ITER) as u64));
 
-    group.bench_function("recv_path", |b| {
-        b.iter_custom(|iters| {
-            let (sender, receiver) = make_srt_pair(crypto);
-            let send_payload = payload.to_vec();
-            let sender_thread = std::thread::spawn(move || {
-                for _ in 0..iters {
-                    for _ in 0..PACKETS_PER_ITER {
-                        let n = unsafe {
-                            srt_send(sender, send_payload.as_ptr(), send_payload.len() as c_int)
-                        };
-                        assert_eq!(n, send_payload.len() as c_int, "send: {}", srt_error());
+    for &packets_per_iter in PACKETS_PER_ITER_VALUES {
+        group.throughput(Throughput::Bytes((payload.len() * packets_per_iter) as u64));
+        group.bench_with_input(
+            BenchmarkId::new("recv_path", packets_per_iter),
+            &packets_per_iter,
+            |b, &packets_per_iter| {
+                b.iter_custom(|iters| {
+                    let (sender, receiver) = make_srt_pair(crypto);
+                    let send_payload = payload.to_vec();
+                    let sender_thread = std::thread::spawn(move || {
+                        for _ in 0..iters {
+                            for _ in 0..packets_per_iter {
+                                let n = unsafe {
+                                    srt_send(
+                                        sender,
+                                        send_payload.as_ptr(),
+                                        send_payload.len() as c_int,
+                                    )
+                                };
+                                assert_eq!(n, send_payload.len() as c_int, "send: {}", srt_error());
+                            }
+                        }
+                        sender
+                    });
+
+                    let mut recv_buf = vec![0u8; payload.len()];
+                    let start = Instant::now();
+                    for _ in 0..iters {
+                        for _ in 0..packets_per_iter {
+                            let n = unsafe {
+                                srt_recv(receiver, recv_buf.as_mut_ptr(), recv_buf.len() as c_int)
+                            };
+                            assert_eq!(n, recv_buf.len() as c_int, "recv: {}", srt_error());
+                            black_box(n);
+                        }
                     }
-                }
-                sender
-            });
+                    let elapsed = start.elapsed();
 
-            let mut recv_buf = vec![0u8; payload.len()];
-            let start = Instant::now();
-            for _ in 0..iters {
-                for _ in 0..PACKETS_PER_ITER {
-                    let n = unsafe {
-                        srt_recv(receiver, recv_buf.as_mut_ptr(), recv_buf.len() as c_int)
-                    };
-                    assert_eq!(n, recv_buf.len() as c_int, "recv: {}", srt_error());
-                    black_box(n);
-                }
-            }
-            let elapsed = start.elapsed();
-
-            let sender = sender_thread.join().unwrap();
-            unsafe {
-                srt_close(sender);
-                srt_close(receiver);
-            }
-            elapsed
-        });
-    });
+                    let sender = sender_thread.join().unwrap();
+                    unsafe {
+                        srt_close(sender);
+                        srt_close(receiver);
+                    }
+                    elapsed
+                });
+            },
+        );
+    }
 
     group.finish();
 }
@@ -215,43 +229,55 @@ fn bench_egress(c: &mut Criterion, payload: &[u8], crypto: CryptoMode) {
     let mut group = c.benchmark_group(format!("srt_egress/{}", crypto.label));
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(30);
-    group.throughput(Throughput::Bytes((payload.len() * PACKETS_PER_ITER) as u64));
 
-    group.bench_function("send_path", |b| {
-        b.iter_custom(|iters| {
-            let (sender, receiver) = make_srt_pair(crypto);
-            let recv_len = payload.len();
-            let receiver_thread = std::thread::spawn(move || {
-                let mut recv_buf = vec![0u8; recv_len];
-                for _ in 0..iters {
-                    for _ in 0..PACKETS_PER_ITER {
-                        let n = unsafe {
-                            srt_recv(receiver, recv_buf.as_mut_ptr(), recv_buf.len() as c_int)
-                        };
-                        assert_eq!(n, recv_buf.len() as c_int, "recv: {}", srt_error());
+    for &packets_per_iter in PACKETS_PER_ITER_VALUES {
+        group.throughput(Throughput::Bytes((payload.len() * packets_per_iter) as u64));
+        group.bench_with_input(
+            BenchmarkId::new("send_path", packets_per_iter),
+            &packets_per_iter,
+            |b, &packets_per_iter| {
+                b.iter_custom(|iters| {
+                    let (sender, receiver) = make_srt_pair(crypto);
+                    let recv_len = payload.len();
+                    let receiver_thread = std::thread::spawn(move || {
+                        let mut recv_buf = vec![0u8; recv_len];
+                        for _ in 0..iters {
+                            for _ in 0..packets_per_iter {
+                                let n = unsafe {
+                                    srt_recv(
+                                        receiver,
+                                        recv_buf.as_mut_ptr(),
+                                        recv_buf.len() as c_int,
+                                    )
+                                };
+                                assert_eq!(n, recv_buf.len() as c_int, "recv: {}", srt_error());
+                            }
+                        }
+                        receiver
+                    });
+
+                    let start = Instant::now();
+                    for _ in 0..iters {
+                        for _ in 0..packets_per_iter {
+                            let n = unsafe {
+                                srt_send(sender, payload.as_ptr(), payload.len() as c_int)
+                            };
+                            assert_eq!(n, payload.len() as c_int, "send: {}", srt_error());
+                            black_box(n);
+                        }
                     }
-                }
-                receiver
-            });
+                    let elapsed = start.elapsed();
 
-            let start = Instant::now();
-            for _ in 0..iters {
-                for _ in 0..PACKETS_PER_ITER {
-                    let n = unsafe { srt_send(sender, payload.as_ptr(), payload.len() as c_int) };
-                    assert_eq!(n, payload.len() as c_int, "send: {}", srt_error());
-                    black_box(n);
-                }
-            }
-            let elapsed = start.elapsed();
-
-            let receiver = receiver_thread.join().unwrap();
-            unsafe {
-                srt_close(sender);
-                srt_close(receiver);
-            }
-            elapsed
-        });
-    });
+                    let receiver = receiver_thread.join().unwrap();
+                    unsafe {
+                        srt_close(sender);
+                        srt_close(receiver);
+                    }
+                    elapsed
+                });
+            },
+        );
+    }
 
     group.finish();
 }

@@ -11,7 +11,7 @@
 //! via `benches/srt_ingest_latency.rs` (restream's root crate) and the
 //! isolated C throughput floor in `test/native/srt-scaling/`.
 
-use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use shiguredo_srt::{
     ConnectionOptions, ConnectionOutput, ConnectionState, SrtConnection, TimerId, Timestamp,
 };
@@ -23,12 +23,14 @@ use std::hint::black_box;
 /// Integration seams section).
 const PAYLOAD_SIZE: usize = 1316;
 
-/// Packets processed per measured batch. Must stay well under
-/// `DEFAULT_FLOW_WINDOW` (8192) -- this benchmark never drains ACKs back to
-/// the sender, so a batch this size never risks blocking on a full flow
-/// window and each batch starts from a freshly (but realistically)
-/// established connection rather than accumulating unbounded state.
-const PACKETS_PER_BATCH: u64 = 64;
+/// Batch sizes measured per run. 1 isolates true single-packet cost (no
+/// amortization across a batch -- confirms the steady-state number isn't a
+/// batching artifact); 8 matches libsrt's own `benches/srt_ingest_latency.rs`
+/// `PACKETS_PER_ITER` for a direct comparison; 64 is the original
+/// steady-state batch. All stay well under `DEFAULT_FLOW_WINDOW` (8192) --
+/// each batch starts from a freshly (but realistically) established
+/// connection with zero packets in flight.
+const BATCH_SIZES: &[u64] = &[1, 8, 64];
 
 fn ts(micros: u64) -> Timestamp {
     Timestamp::from_micros(micros)
@@ -107,10 +109,10 @@ const ACK_EVERY_N_PACKETS: u64 = 8;
 /// cycle, periodically interleaved with an ACK round-trip to keep the
 /// congestion window open. This is the steady-state unit of work Phase 4's
 /// kill-switch criterion measures.
-fn run_batch(caller: &mut SrtConnection, listener: &mut SrtConnection) {
+fn run_batch(caller: &mut SrtConnection, listener: &mut SrtConnection, batch_size: u64) {
     let payload = [0x42u8; PAYLOAD_SIZE];
     let mut now_us = 20_000u64;
-    for i in 0..PACKETS_PER_BATCH {
+    for i in 0..batch_size {
         let now = ts(now_us);
         caller
             .send(black_box(&payload), now)
@@ -141,27 +143,39 @@ fn run_batch(caller: &mut SrtConnection, listener: &mut SrtConnection) {
 
 fn bench_plain(c: &mut Criterion) {
     let mut group = c.benchmark_group("core_packet_loop");
-    group.throughput(Throughput::Elements(PACKETS_PER_BATCH));
-    group.bench_function("plain_send_recv", |b| {
-        b.iter_batched(
-            || setup_connected_pair(None),
-            |(mut caller, mut listener)| run_batch(&mut caller, &mut listener),
-            BatchSize::SmallInput,
+    for &batch_size in BATCH_SIZES {
+        group.throughput(Throughput::Elements(batch_size));
+        group.bench_with_input(
+            BenchmarkId::new("plain_send_recv", batch_size),
+            &batch_size,
+            |b, &batch_size| {
+                b.iter_batched(
+                    || setup_connected_pair(None),
+                    |(mut caller, mut listener)| run_batch(&mut caller, &mut listener, batch_size),
+                    BatchSize::SmallInput,
+                );
+            },
         );
-    });
+    }
     group.finish();
 }
 
 fn bench_encrypted(c: &mut Criterion) {
     let mut group = c.benchmark_group("core_packet_loop");
-    group.throughput(Throughput::Elements(PACKETS_PER_BATCH));
-    group.bench_function("aes128_send_recv", |b| {
-        b.iter_batched(
-            || setup_connected_pair(Some("bench-passphrase")),
-            |(mut caller, mut listener)| run_batch(&mut caller, &mut listener),
-            BatchSize::SmallInput,
+    for &batch_size in BATCH_SIZES {
+        group.throughput(Throughput::Elements(batch_size));
+        group.bench_with_input(
+            BenchmarkId::new("aes128_send_recv", batch_size),
+            &batch_size,
+            |b, &batch_size| {
+                b.iter_batched(
+                    || setup_connected_pair(Some("bench-passphrase")),
+                    |(mut caller, mut listener)| run_batch(&mut caller, &mut listener, batch_size),
+                    BatchSize::SmallInput,
+                );
+            },
         );
-    });
+    }
     group.finish();
 }
 
