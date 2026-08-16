@@ -327,8 +327,20 @@ impl HandshakePacket {
         // numeric reason here so callers can distinguish rejection causes
         // (e.g. restream's own SRT_REJX_UNAUTHORIZED=1401) instead of just
         // seeing a generic decode failure.
+        //
+        // restream local patch, round 2 (found by `cargo fuzz run
+        // fuzz_handshake_decode`, crash-063f71ad...): the naive `as i32 -
+        // 1000` panics ("attempt to subtract with overflow") for any
+        // adversarial handshake_type_raw >= 0x8000_0000 -- casting such a
+        // value to i32 already lands near i32::MIN, and subtracting 1000
+        // more underflows i32's range. No real libsrt peer sends a value
+        // in that range (real reject codes are 0-a few thousand), but a
+        // malformed/adversarial packet can carry any u32, and decode()
+        // must never panic on attacker-controlled input. Widen to i64
+        // (cannot overflow for any u32 input) before narrowing back to the
+        // public i32 field via a truncating `as` cast, which never panics.
         let reject_reason = if handshake_type == HandshakeType::Rejected {
-            Some(handshake_type_raw as i32 - 1000)
+            Some((handshake_type_raw as i64 - 1000) as i32)
         } else {
             None
         };
@@ -389,8 +401,17 @@ impl HandshakePacket {
         // decoded-from-wire case; the actual wire value a *rejection we
         // originate* must carry is `1000 + reject_reason` (see
         // `new_rejection`'s doc comment), not the bare discriminant.
+        //
+        // restream local patch (same class of bug `cargo fuzz run
+        // fuzz_handshake_decode` found on the decode side, see decode()'s
+        // comment above): a caller could in principle construct
+        // `reject_reason: Some(i32::MAX)` (directly via `new_rejection`,
+        // or by re-encoding a packet decoded from adversarial input), and
+        // `1000 + i32::MAX` would panic in a checked build. Widen to i64
+        // (cannot overflow for any i32 input) before narrowing to the
+        // u32 actually written to the wire.
         let handshake_type_wire = if self.handshake_type == HandshakeType::Rejected {
-            (1000 + self.reject_reason.unwrap_or(0)) as u32
+            (1000i64 + self.reject_reason.unwrap_or(0) as i64) as u32
         } else {
             self.handshake_type as u32
         };
@@ -1108,6 +1129,59 @@ mod tests {
             HandshakePacket::decode(&packet).expect("must decode a real reject wire value");
         assert_eq!(decoded.handshake_type, HandshakeType::Rejected);
         assert_eq!(decoded.reject_reason, Some(12));
+    }
+
+    // restream local patch (crates/srt-protocol/VENDOR.md): regression test
+    // for a real panic `cargo fuzz run fuzz_handshake_decode` found within
+    // its first few thousand of 12M+ iterations (artifact
+    // crash-063f71adb17dc4145d5fe833e849110974bde70f): `handshake_type_raw
+    // as i32 - 1000` panicked with "attempt to subtract with overflow" for
+    // any adversarial handshake_type_raw >= 0x8000_0000. No real libsrt
+    // peer sends such a value, but decode() must never panic on
+    // attacker-controlled input regardless.
+    #[test]
+    fn test_decode_adversarial_huge_handshake_type_does_not_panic() {
+        for handshake_type_raw in [0x8000_0000u32, 0x8000_0001, 0x8000_03E7, u32::MAX - 3] {
+            let mut control_info = Vec::new();
+            write_u32(&mut control_info, HS_VERSION_5);
+            write_u16(&mut control_info, 0);
+            write_u16(&mut control_info, 0);
+            write_u32(&mut control_info, 0);
+            write_u32(&mut control_info, DEFAULT_MTU);
+            write_u32(&mut control_info, DEFAULT_FLOW_WINDOW);
+            write_u32(&mut control_info, handshake_type_raw);
+            write_u32(&mut control_info, 42);
+            write_u32(&mut control_info, 0);
+            control_info.extend_from_slice(&[0u8; 16]);
+            let packet = ControlPacket {
+                control_type: ControlType::Handshake,
+                subtype: 0,
+                type_specific_info: 0,
+                timestamp: 0,
+                dest_socket_id: 0,
+                control_info,
+            };
+            // Must not panic; decode() succeeding with some reject_reason
+            // value is the only contract for this class of malformed-but-
+            // not-out-of-range-per-from_u32 input.
+            let decoded = HandshakePacket::decode(&packet)
+                .expect("handshake_type_raw >= 1000 always decodes as Rejected, never errors");
+            assert_eq!(decoded.handshake_type, HandshakeType::Rejected);
+            assert!(decoded.reject_reason.is_some());
+        }
+    }
+
+    // restream local patch: symmetric check for the encode-side arithmetic
+    // (same class of bug, addition instead of subtraction -- see encode()'s
+    // comment). Not found by the fuzzer (fuzzing only exercises decode()),
+    // caught by code review of the mirrored logic instead.
+    #[test]
+    fn test_encode_extreme_reject_reason_does_not_panic() {
+        for reason in [i32::MAX, i32::MAX - 1, i32::MIN, 0] {
+            let hs = HandshakePacket::new_rejection(1, 2, reason);
+            // Must not panic.
+            let _packet = hs.encode(1000, 0);
+        }
     }
 
     #[test]
