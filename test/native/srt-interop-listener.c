@@ -3,18 +3,26 @@
 // see docs/srt-pure-rust-plan.md Phase 3 and the sibling
 // srt-interop-caller.c.
 //
-// Usage: srt-interop-listener <port>
+// Usage: srt-interop-listener <port> [passphrase]
+//
+// With a passphrase, SRTO_PASSPHRASE is required on the listener socket --
+// a caller that doesn't supply one is rejected by libsrt itself at the
+// protocol level (SRT_REJ_UNSECURE), before srt_accept ever returns. Used
+// to live-verify the Rust core's reject-reason handling: see
+// docs/srt-pure-rust-plan.md Phase 3.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <srt/srt.h>
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <port>\n", argv[0]);
+        fprintf(stderr, "usage: %s <port> [passphrase]\n", argv[0]);
         return 2;
     }
     int port = atoi(argv[1]);
+    const char *passphrase = argc >= 3 ? argv[2] : NULL;
     setvbuf(stdout, NULL, _IONBF, 0);
 
     srt_startup();
@@ -23,6 +31,13 @@ int main(int argc, char **argv) {
     if (listener == SRT_INVALID_SOCK) {
         fprintf(stderr, "srt_create_socket failed: %s\n", srt_getlasterror_str());
         return 1;
+    }
+
+    if (passphrase) {
+        if (srt_setsockflag(listener, SRTO_PASSPHRASE, passphrase, (int)strlen(passphrase)) == SRT_ERROR) {
+            fprintf(stderr, "setsockflag PASSPHRASE failed: %s\n", srt_getlasterror_str());
+            return 1;
+        }
     }
 
     struct sockaddr_in address;
@@ -40,13 +55,21 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    fprintf(stderr, "[srt-interop-listener] listening on port %d\n", port);
+    fprintf(stderr, "[srt-interop-listener] listening on port %d%s\n", port,
+            passphrase ? " (passphrase required)" : "");
 
     struct sockaddr_in peer_addr;
     int peer_addr_len = sizeof(peer_addr);
     SRTSOCKET accepted = srt_accept(listener, (struct sockaddr *)&peer_addr, &peer_addr_len);
     if (accepted == SRT_INVALID_SOCK) {
-        fprintf(stderr, "srt_accept failed: %s\n", srt_getlasterror_str());
+        fprintf(stderr, "srt_accept failed (expected if the caller was rejected): %s\n",
+                srt_getlasterror_str());
+        // The rejection response is already sent by the time srt_accept
+        // returns; this delay is just so the test harness has a moment to
+        // observe the caller-side result before this process exits.
+        srt_close(listener);
+        usleep(500000);
+        srt_cleanup();
         return 1;
     }
 

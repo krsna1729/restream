@@ -58,6 +58,7 @@ fn arb_handshake_packet_ipv4() -> impl Strategy<Value = HandshakePacket> {
                         ip_bytes[3],
                     )),
                     extensions: Vec::new(),
+                    reject_reason: None,
                 }
             },
         )
@@ -108,6 +109,7 @@ fn arb_handshake_packet_ipv6() -> impl Strategy<Value = HandshakePacket> {
                     syn_cookie,
                     peer_ip: IpAddr::V6(Ipv6Addr::from(ip_bytes)),
                     extensions: Vec::new(),
+                    reject_reason: None,
                 }
             },
         )
@@ -217,11 +219,26 @@ proptest! {
 
     #[test]
     fn test_handshake_type_from_u32_invalid(
-        value in any::<u32>().prop_filter("not a valid handshake type", |v| {
+        // restream local patch (crates/srt-protocol/VENDOR.md): values
+        // >= 1000 are no longer invalid -- real libsrt rejection responses
+        // use exactly that range (`1000 + SRT_REJECT_REASON`), and
+        // from_u32 now maps them all to HandshakeType::Rejected instead of
+        // erroring. True "invalid" is only the narrow gap [2, 999] that
+        // isn't a known success type and isn't a reject-reason range.
+        value in (2u32..1000u32).prop_filter("not a valid handshake type", |v| {
             !matches!(*v, 0xFFFFFFFD | 0xFFFFFFFE | 0xFFFFFFFF | 0x00000000 | 0x00000001)
         })
     ) {
         prop_assert_eq!(HandshakeType::from_u32(value), None);
+    }
+
+    #[test]
+    fn test_handshake_type_from_u32_rejected_range(
+        value in (1000u32..=u32::MAX).prop_filter("not one of the 3 near-MAX known types", |v| {
+            !matches!(*v, 0xFFFFFFFD..=0xFFFFFFFF)
+        }),
+    ) {
+        prop_assert_eq!(HandshakeType::from_u32(value), Some(HandshakeType::Rejected));
     }
 
     // ===== ExtensionType::from_u16 =====
@@ -572,7 +589,11 @@ proptest! {
         initial_packet_seq in any::<u32>(),
         mtu in any::<u32>(),
         flow_window in any::<u32>(),
-        invalid_type in any::<u32>().prop_filter("not a valid hs type", |v| {
+        // restream local patch (crates/srt-protocol/VENDOR.md): narrowed to
+        // [2, 999] -- values >= 1000 now decode successfully as a real
+        // libsrt-style rejection response instead of erroring, see
+        // test_decode_rejected_handshake_type_succeeds below.
+        invalid_type in (2u32..1000u32).prop_filter("not a valid hs type", |v| {
             !matches!(*v, 0xFFFFFFFD | 0xFFFFFFFE | 0xFFFFFFFF | 0x00000000 | 0x00000001)
         }),
         socket_id in any::<u32>(),
@@ -603,6 +624,49 @@ proptest! {
 
         let result = HandshakePacket::decode(&packet);
         prop_assert!(result.is_err());
+    }
+
+    // restream local patch (crates/srt-protocol/VENDOR.md): complements
+    // test_decode_invalid_handshake_type above -- values >= 1000 must
+    // decode successfully (a real libsrt rejection response), not error.
+    #[test]
+    fn test_decode_rejected_handshake_type_succeeds(
+        version in any::<u32>(),
+        encryption_field in any::<u16>(),
+        extension_field in any::<u16>(),
+        initial_packet_seq in any::<u32>(),
+        mtu in any::<u32>(),
+        flow_window in any::<u32>(),
+        reject_type in (1000u32..=u32::MAX).prop_filter("not one of the 3 near-MAX known types", |v| {
+            !matches!(*v, 0xFFFFFFFD..=0xFFFFFFFF)
+        }),
+        socket_id in any::<u32>(),
+        syn_cookie in any::<u32>(),
+    ) {
+        let mut control_info = Vec::new();
+        control_info.extend_from_slice(&version.to_be_bytes());
+        control_info.extend_from_slice(&encryption_field.to_be_bytes());
+        control_info.extend_from_slice(&extension_field.to_be_bytes());
+        control_info.extend_from_slice(&(initial_packet_seq & 0x7FFF_FFFF).to_be_bytes());
+        control_info.extend_from_slice(&mtu.to_be_bytes());
+        control_info.extend_from_slice(&flow_window.to_be_bytes());
+        control_info.extend_from_slice(&reject_type.to_be_bytes());
+        control_info.extend_from_slice(&socket_id.to_be_bytes());
+        control_info.extend_from_slice(&syn_cookie.to_be_bytes());
+        control_info.extend_from_slice(&[0u8; 16]);
+
+        let packet = ControlPacket {
+            control_type: ControlType::Handshake,
+            subtype: 0,
+            type_specific_info: 0,
+            timestamp: 0,
+            dest_socket_id: 0,
+            control_info,
+        };
+
+        let decoded = HandshakePacket::decode(&packet).expect("must decode, not error");
+        prop_assert_eq!(decoded.handshake_type, HandshakeType::Rejected);
+        prop_assert_eq!(decoded.reject_reason, Some(reject_type as i32 - 1000));
     }
 
     // ===== Decode with short buffer =====

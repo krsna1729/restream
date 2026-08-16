@@ -48,10 +48,20 @@ pub enum HandshakeType {
     Waveahand = 0x00000000,
     /// INDUCTION (0x00000001)
     Induction = 0x00000001,
+    /// REJECTED -- sentinel only; the actual numeric reject reason (SRT's
+    /// `1000 + SRT_REJECT_REASON`-or-custom-code wire scheme, see
+    /// `srtcore/handshake.h`'s `URQFailure`/`RejectReasonForURQ` in the
+    /// real libsrt source) is carried separately in
+    /// `HandshakePacket::reject_reason`, not in this discriminant. Values
+    /// `>= URQ_FAILURE_TYPES` (1000) on the wire all decode to this variant.
+    Rejected = 0x0000_03E8, // 1000 = URQ_FAILURE_TYPES
 }
 
 impl HandshakeType {
     /// u32 から変換
+    ///
+    /// `>= 1000` は全て `Rejected` として扱う (実際の reject reason は
+    /// 呼び出し側で別途 `value - 1000` として計算する必要がある)。
     pub fn from_u32(value: u32) -> Option<Self> {
         match value {
             0xFFFFFFFD => Some(Self::Done),
@@ -59,6 +69,7 @@ impl HandshakeType {
             0xFFFFFFFF => Some(Self::Conclusion),
             0x00000000 => Some(Self::Waveahand),
             0x00000001 => Some(Self::Induction),
+            v if v >= 1000 => Some(Self::Rejected),
             _ => None,
         }
     }
@@ -161,6 +172,12 @@ pub struct HandshakePacket {
     pub peer_ip: IpAddr,
     /// 拡張
     pub extensions: Vec<HandshakeExtension>,
+    /// Reject reason (`handshake_type == Rejected` の場合のみ `Some`)。
+    /// 実際の SRT_REJECT_REASON 値 (0-17 程度) か、libsrt の
+    /// `SRT_REJC_PREDEFINED`(1000)/`SRT_REJC_USERDEFINED`(2000) バケット
+    /// に基づくアプリケーション定義コード。ワイヤ上は
+    /// `1000 + reject_reason` としてエンコードされる。
+    pub reject_reason: Option<i32>,
 }
 
 impl HandshakePacket {
@@ -178,6 +195,7 @@ impl HandshakePacket {
             syn_cookie: 0,
             peer_ip: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
             extensions: Vec::new(),
+            reject_reason: None,
         }
     }
 
@@ -195,6 +213,7 @@ impl HandshakePacket {
             syn_cookie,
             peer_ip: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
             extensions: Vec::new(),
+            reject_reason: None,
         }
     }
 
@@ -223,6 +242,7 @@ impl HandshakePacket {
             syn_cookie,
             peer_ip: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
             extensions: Vec::new(),
+            reject_reason: None,
         }
     }
 
@@ -251,6 +271,31 @@ impl HandshakePacket {
             syn_cookie,
             peer_ip: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
             extensions: Vec::new(),
+            reject_reason: None,
+        }
+    }
+
+    /// 新しい REJECTION レスポンスを作成 (Listener)
+    ///
+    /// `reason` は `SRT_REJECT_REASON` 値 (0-17 程度) か、libsrt の
+    /// `SRT_REJC_PREDEFINED`(1000)/`SRT_REJC_USERDEFINED`(2000) バケットに
+    /// 基づくアプリケーション定義コード (例: restream 自身の
+    /// `SRT_REJX_UNAUTHORIZED = 1401`)。ワイヤ上は `1000 + reason` として
+    /// エンコードされる (`srtcore/handshake.h` の `URQFailure` と同じ式)。
+    pub fn new_rejection(socket_id: u32, syn_cookie: u32, reason: i32) -> Self {
+        Self {
+            version: HS_VERSION_5,
+            encryption_field: 0,
+            extension_field: 0,
+            initial_packet_seq: 0,
+            mtu: DEFAULT_MTU,
+            flow_window: DEFAULT_FLOW_WINDOW,
+            handshake_type: HandshakeType::Rejected,
+            socket_id,
+            syn_cookie,
+            peer_ip: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            extensions: Vec::new(),
+            reject_reason: Some(reason),
         }
     }
 
@@ -274,6 +319,19 @@ impl HandshakePacket {
         let handshake_type = HandshakeType::from_u32(handshake_type_raw).ok_or_else(|| {
             Error::invalid_data(format!("unknown handshake type: {handshake_type_raw:#x}"))
         })?;
+        // restream local patch (crates/srt-protocol/VENDOR.md): a real
+        // libsrt rejection response encodes `1000 + reason` in this exact
+        // field (`srtcore/handshake.h`'s `URQFailure`/`RejectReasonForURQ`).
+        // HandshakeType::from_u32 now maps any `>= 1000` value to the
+        // `Rejected` sentinel instead of erroring; recover the actual
+        // numeric reason here so callers can distinguish rejection causes
+        // (e.g. restream's own SRT_REJX_UNAUTHORIZED=1401) instead of just
+        // seeing a generic decode failure.
+        let reject_reason = if handshake_type == HandshakeType::Rejected {
+            Some(handshake_type_raw as i32 - 1000)
+        } else {
+            None
+        };
         let socket_id = read_u32(&mut buf)?;
         let syn_cookie = read_u32(&mut buf)?;
 
@@ -313,6 +371,7 @@ impl HandshakePacket {
             syn_cookie,
             peer_ip,
             extensions,
+            reject_reason,
         })
     }
 
@@ -326,7 +385,16 @@ impl HandshakePacket {
         write_u32(&mut control_info, self.initial_packet_seq & 0x7FFF_FFFF);
         write_u32(&mut control_info, self.mtu);
         write_u32(&mut control_info, self.flow_window);
-        write_u32(&mut control_info, self.handshake_type as u32);
+        // Rejected's discriminant (1000) is only a sentinel for the
+        // decoded-from-wire case; the actual wire value a *rejection we
+        // originate* must carry is `1000 + reject_reason` (see
+        // `new_rejection`'s doc comment), not the bare discriminant.
+        let handshake_type_wire = if self.handshake_type == HandshakeType::Rejected {
+            (1000 + self.reject_reason.unwrap_or(0)) as u32
+        } else {
+            self.handshake_type as u32
+        };
+        write_u32(&mut control_info, handshake_type_wire);
         write_u32(&mut control_info, self.socket_id);
         write_u32(&mut control_info, self.syn_cookie);
 
@@ -879,6 +947,7 @@ mod tests {
             syn_cookie: 0xABCDEF01,
             peer_ip: IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1)),
             extensions: Vec::new(),
+            reject_reason: None,
         };
 
         let packet = original.encode(1000, 0);
@@ -975,6 +1044,70 @@ mod tests {
 
         let result = decoded.get_km_response();
         assert!(matches!(result, Err(KmError::BadSecret)));
+    }
+
+    // restream local patch (crates/srt-protocol/VENDOR.md): reject-reason
+    // wire encode/decode did not exist at all before -- decode() hard-errored
+    // on any handshake_type outside the 5 known success values, which is
+    // exactly the value range (1000+) a real libsrt rejection response uses.
+    #[test]
+    fn test_rejection_roundtrip_predefined_reason() {
+        // SRT_REJ_BADSECRET = 10 (srtcore/srt.h) -> wire value 1010
+        let hs = HandshakePacket::new_rejection(1, 2, 10);
+        let packet = hs.encode(1000, 0);
+        let decoded =
+            HandshakePacket::decode(&packet).expect("reject packets must decode, not error");
+        assert_eq!(decoded.handshake_type, HandshakeType::Rejected);
+        assert_eq!(decoded.reject_reason, Some(10));
+    }
+
+    #[test]
+    fn test_rejection_roundtrip_restream_custom_reason() {
+        // Matches src/media/srt/listener.rs's own SRT_REJX_UNAUTHORIZED.
+        const SRT_REJX_UNAUTHORIZED: i32 = 1401;
+        let hs = HandshakePacket::new_rejection(1, 2, SRT_REJX_UNAUTHORIZED);
+        let packet = hs.encode(1000, 0);
+        let decoded = HandshakePacket::decode(&packet).expect("reject packets must decode");
+        assert_eq!(decoded.reject_reason, Some(SRT_REJX_UNAUTHORIZED));
+    }
+
+    #[test]
+    fn test_non_rejection_handshake_has_no_reject_reason() {
+        let hs = HandshakePacket::new_conclusion_request(1, 2, 3, 0, false);
+        let packet = hs.encode(1000, 0);
+        let decoded = HandshakePacket::decode(&packet).expect("decode should succeed");
+        assert_eq!(decoded.reject_reason, None);
+    }
+
+    #[test]
+    fn test_decode_real_libsrt_wire_value_directly() {
+        // Constructs the exact raw wire bytes a real libsrt listener would
+        // send for URQFailure(SRT_REJ_UNSECURE=12) -- i.e. this test does
+        // not go through this crate's own encode() at all, so it can't be
+        // fooled by a matching bug on both sides.
+        let mut control_info = Vec::new();
+        write_u32(&mut control_info, HS_VERSION_5);
+        write_u16(&mut control_info, 0);
+        write_u16(&mut control_info, 0);
+        write_u32(&mut control_info, 0);
+        write_u32(&mut control_info, DEFAULT_MTU);
+        write_u32(&mut control_info, DEFAULT_FLOW_WINDOW);
+        write_u32(&mut control_info, 1012); // 1000 + SRT_REJ_UNSECURE(12)
+        write_u32(&mut control_info, 42);
+        write_u32(&mut control_info, 0);
+        control_info.extend_from_slice(&[0u8; 16]); // peer_ip
+        let packet = ControlPacket {
+            control_type: ControlType::Handshake,
+            subtype: 0,
+            type_specific_info: 0,
+            timestamp: 0,
+            dest_socket_id: 0,
+            control_info,
+        };
+        let decoded =
+            HandshakePacket::decode(&packet).expect("must decode a real reject wire value");
+        assert_eq!(decoded.handshake_type, HandshakeType::Rejected);
+        assert_eq!(decoded.reject_reason, Some(12));
     }
 
     #[test]

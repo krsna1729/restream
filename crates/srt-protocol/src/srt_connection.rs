@@ -811,6 +811,22 @@ impl SrtConnection {
 
                 self.event_queue.push_back(ConnectionEvent::Connected);
             }
+            // restream local patch (crates/srt-protocol/VENDOR.md): the
+            // wire-format layer now correctly decodes a real libsrt
+            // rejection response (handshake_type >= 1000) instead of
+            // erroring on it, but nothing consumed `hs.reject_reason` --
+            // this arm was the previous silent `_ => {}` catch-all, so a
+            // rejected connection attempt would just hang until the
+            // caller's own handshake timeout fired, with no reason ever
+            // surfaced to the application. Live-verified against a real
+            // libsrt listener configured to require a passphrase while
+            // this caller connects without one (SRT_REJ_UNSECURE).
+            HandshakeType::Rejected => {
+                return Err(Error::handshake_rejected(format!(
+                    "connection rejected by peer, reason={}",
+                    hs.reject_reason.unwrap_or(-1)
+                )));
+            }
             _ => {}
         }
 
