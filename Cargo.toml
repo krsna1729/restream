@@ -1,0 +1,25 @@
+[package]
+name = "shiguredo_srt"
+version = "2026.1.0-canary.1"
+edition = "2024"
+rust-version = "1.93"
+description = "SRT (Secure Reliable Transport) library"
+readme = "README.md"
+homepage = "https://github.com/shiguredo/srt-rs"
+repository = "https://github.com/shiguredo/srt-rs"
+license = "Apache-2.0"
+include = ["/src/**", "LICENSE", "README.md"]
+
+[workspace]
+members = [
+  "crates/c-api",
+  "examples/srt_caller",
+  "examples/srt_listener",
+  "pbt",
+]
+exclude = ["fuzz"]
+
+[dependencies]
+aws-lc-rs = "1.17"
+# ログ出力 (デバッグ出力を tracing-subscriber 側で制御する)
+tracing = "0.1"
