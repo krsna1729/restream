@@ -39,6 +39,11 @@ const DEFAULT_BITRATE_BPS: u64 = 8_000_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
+
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 5 {
         eprintln!(

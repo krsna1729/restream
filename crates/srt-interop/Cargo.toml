@@ -7,6 +7,8 @@ description = "Standalone caller/listener binaries over srt-protocol + std, for 
 
 [dependencies]
 shiguredo_srt = { path = "../srt-protocol" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [[bin]]
 name = "srt-interop-caller"

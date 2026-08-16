@@ -2964,6 +2964,8 @@ name = "srt-interop"
 version = "0.0.0"
 dependencies = [
  "shiguredo_srt",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

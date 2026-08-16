@@ -21,10 +21,15 @@
 use shiguredo_srt::{ConnectionEvent, ConnectionOptions, SrtConnection, TimerId, Timestamp};
 use srt_interop::driver::drain_outputs;
 use std::collections::HashMap;
-use std::net::UdpSocket;
+use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
+
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 4 {
         eprintln!("usage: {} <port> <duration_secs> <latency_ms>", args[0]);
@@ -36,24 +41,15 @@ fn main() {
 
     let socket = UdpSocket::bind(format!("0.0.0.0:{port}")).expect("bind");
     println!("LISTENING");
-
-    let start = Instant::now();
-    let now = |start: Instant| Timestamp::from_micros(start.elapsed().as_micros() as u64);
-
-    // Wait (up to a generous connect window) for the caller's first
-    // handshake packet before switching to the short poll timeout used for
-    // the sustained receive loop.
-    let mut buf = [0u8; 2048];
-    socket
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .expect("set_read_timeout");
-    let (n, peer) = socket
-        .recv_from(&mut buf)
-        .expect("recv_from (first packet)");
-    socket.connect(peer).expect("connect to peer");
+    // Short poll timeout throughout, including while waiting for the
+    // caller's first packet -- a single fixed 2ms timeout keeps the
+    // bootstrap and steady-state phases the same loop (see below).
     socket
         .set_read_timeout(Some(Duration::from_millis(2)))
         .expect("set_read_timeout");
+
+    let start = Instant::now();
+    let now = |start: Instant| Timestamp::from_micros(start.elapsed().as_micros() as u64);
 
     let options = ConnectionOptions {
         socket_id: std::process::id(),
@@ -61,16 +57,14 @@ fn main() {
         ..Default::default()
     };
     let mut conn = SrtConnection::new_listener(options);
-    conn.feed_recv_buf(&buf[..n], now(start))
-        .expect("feed first packet");
-
     let mut timers: HashMap<TimerId, Timestamp> = HashMap::new();
-    drain_outputs(&mut conn, &socket, &mut timers, now(start));
 
     let mut total_received: u64 = 0;
     let mut connected = false;
     let mut stream_deadline: Option<Instant> = None;
     let connect_deadline = Instant::now() + Duration::from_secs(5);
+    let mut peer: Option<SocketAddr> = None;
+    let mut buf = [0u8; 2048];
 
     loop {
         if !connected && Instant::now() >= connect_deadline {
@@ -86,8 +80,24 @@ fn main() {
             break;
         }
 
-        match socket.recv(&mut buf) {
-            Ok(n) => {
+        // recv_from, not recv: until the first packet arrives there is no
+        // connected peer to restrict to, and a stray/malformed first
+        // datagram (this is a real UDP socket exposed to netem-impaired
+        // traffic, not a controlled test fixture) must not crash the
+        // process -- feed_recv_buf errors are ignored here exactly like
+        // every later packet, not unwrapped. A prior version used a
+        // separate `.expect()`-based bootstrap for just the first packet
+        // and could panic (default Rust panic exit code 101) if that
+        // packet failed to parse as a valid handshake.
+        match socket.recv_from(&mut buf) {
+            Ok((n, addr)) => {
+                if peer.is_none() {
+                    if let Err(e) = socket.connect(addr) {
+                        eprintln!("[loss-listener] connect to peer failed: {e}");
+                        continue;
+                    }
+                    peer = Some(addr);
+                }
                 let t = now(start);
                 let _ = conn.feed_recv_buf(&buf[..n], t);
             }

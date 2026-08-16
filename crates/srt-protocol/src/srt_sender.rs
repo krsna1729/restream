@@ -90,6 +90,14 @@ pub struct SenderBuffer {
     avg_payload_size: f64,
     /// 最大帯域幅 (バイト/秒、`SRTO_MAXBW` 相当、ペーシング計算用)
     max_bandwidth_bytes_per_sec: u64,
+    /// 再送総数 (累積、libsrt `pktRetransTotal` 相当)。`packets` に現存する
+    /// エントリの `retransmit_count` 合計とは別に持つ -- ACK で購入済み
+    /// パケットが `packets` から削除された後も、それが再送されていたという
+    /// 事実自体は失われてはならない (低 RTT 環境では再送からごく短時間で
+    /// ACK が届くため、ライブスキャン方式だと "再送は成功したのに
+    /// total_retransmits はほぼ 0" という誤った統計になる -- 実際に
+    /// docs/srt-pure-rust-plan.md Phase 4 の差分テストで踏んだ)。
+    total_retransmits: u64,
 }
 
 impl SenderBuffer {
@@ -117,6 +125,7 @@ impl SenderBuffer {
             total_bytes_sent: 0,
             avg_payload_size: INITIAL_AVG_PAYLOAD_SIZE_BYTES,
             max_bandwidth_bytes_per_sec: DEFAULT_MAX_BANDWIDTH_BYTES_PER_SEC,
+            total_retransmits: 0,
         };
         buf.recompute_packet_send_period();
         buf
@@ -384,6 +393,7 @@ impl SenderBuffer {
         while let Some(seq) = self.loss_list.pop_front() {
             if let Some(entry) = self.packets.get_mut(&seq) {
                 entry.retransmit_count += 1;
+                self.total_retransmits += 1;
 
                 let mut packet = entry.packet.clone();
                 packet.retransmitted = true;
@@ -476,9 +486,15 @@ impl SenderBuffer {
 
     /// 統計情報を取得
     pub fn stats(&self) -> SenderStats {
-        let total_retransmits: u32 = self.packets.values().map(|e| e.retransmit_count).sum();
+        // 累積カウンタ (libsrt pktRetransTotal 相当)。`packets` に現存する
+        // エントリだけを合算するライブスキャン方式は、ACK 済みで
+        // `packets` から削除された後にその再送実績が消えてしまうバグ
+        // だった (self.total_retransmits のフィールドコメント参照)。
+        let total_retransmits: u32 = self.total_retransmits.min(u32::MAX as u64) as u32;
 
-        // 再送回数別カウント
+        // 再送回数別カウント (こちらは意図的に現存パケットのみのライブ
+        // スナップショット -- 「今バッファにあるパケットのうち何回再送
+        // されたか」の分布であり、累積合計とは別の指標)
         let mut retransmits_once = 0u32;
         let mut retransmits_twice = 0u32;
         let mut retransmits_many = 0u32;
@@ -586,6 +602,37 @@ mod tests {
         let pkt = retransmit.expect("再送パケットは Some になる想定");
         assert_eq!(pkt.sequence_number, 1001);
         assert!(pkt.retransmitted);
+    }
+
+    /// `stats().total_retransmits` must stay accurate after the
+    /// retransmitted packet is later ACKed and purged from `packets` --
+    /// it used to be computed by summing `retransmit_count` across
+    /// currently-buffered packets only, so a fast ACK (as happens at low
+    /// RTT, where the live differential test matrix in
+    /// docs/srt-pure-rust-plan.md Phase 4 first caught this) made a
+    /// successfully-recovered retransmission disappear from the stat
+    /// entirely once its packet left the buffer.
+    #[test]
+    fn test_total_retransmits_survives_ack_purge() {
+        let mut buf = SenderBuffer::new(1000, 8192, 120);
+        let now = Timestamp::from_micros(0);
+
+        buf.push(vec![1], 100, 1, now);
+        buf.push(vec![2], 100, 1, now);
+        buf.push(vec![3], 100, 1, now);
+
+        buf.handle_nak(&[1001]);
+        let retransmit = buf.pop_retransmit();
+        assert!(retransmit.is_some());
+        assert_eq!(buf.stats().total_retransmits, 1);
+
+        // ACK past every buffered packet, including the one just
+        // retransmitted -- it is now fully purged from `packets`.
+        buf.handle_ack(1003);
+        assert_eq!(buf.packets_in_flight(), 0);
+
+        // The retransmission genuinely happened; the stat must still say so.
+        assert_eq!(buf.stats().total_retransmits, 1);
     }
 
     #[test]
