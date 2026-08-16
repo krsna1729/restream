@@ -5,6 +5,7 @@
 //! - SEK (Stream Encrypting Key): ランダム生成、KEK で AES Key Wrap
 //! - AES-CTR でデータ暗号化
 
+use std::fmt;
 use std::num::NonZeroU32;
 
 use aws_lc_rs::cipher::{AES_128, AES_256, DecryptingKey, DecryptionContext, UnboundCipherKey};
@@ -108,7 +109,6 @@ pub enum KmRefreshState {
 }
 
 /// 暗号化コンテキスト
-#[derive(Debug)]
 pub struct CryptoContext {
     /// Key Encrypting Key (PBKDF2 で導出)
     kek: Vec<u8>,
@@ -128,6 +128,40 @@ pub struct CryptoContext {
     km_refresh_state: KmRefreshState,
     /// 次のキー (事前通知中に生成)
     next_key: Option<KeyFlag>,
+}
+
+// restream local patch (crates/srt-protocol/VENDOR.md, upstream issues
+// 0049/0050, open/unfixed at vendor commit 6779cdd): #[derive(Debug)] would
+// print raw kek/sek_even/sek_odd key bytes via {:?}/dbg!(). Redact them
+// explicitly; the remaining fields carry no secret material.
+impl fmt::Debug for CryptoContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CryptoContext")
+            .field("kek", &"[REDACTED]")
+            .field("sek_even", &"[REDACTED]")
+            .field("sek_odd", &"[REDACTED]")
+            .field("salt", &self.salt)
+            .field("current_key", &self.current_key)
+            .field("key_length", &self.key_length)
+            .field("encrypted_packet_count", &self.encrypted_packet_count)
+            .field("km_refresh_state", &self.km_refresh_state)
+            .field("next_key", &self.next_key)
+            .finish()
+    }
+}
+
+// restream local patch (crates/srt-protocol/VENDOR.md, upstream issue
+// 0050, open/unfixed at vendor commit 6779cdd): Vec<u8>'s default Drop only
+// frees memory, it does not zero it, so key material could linger in freed
+// heap memory. `decommission_old_key` already zeros explicitly on its own
+// path; this covers the remaining case (the whole context dropped, e.g. on
+// abnormal connection teardown).
+impl Drop for CryptoContext {
+    fn drop(&mut self) {
+        self.kek.fill(0);
+        self.sek_even.fill(0);
+        self.sek_odd.fill(0);
+    }
 }
 
 impl CryptoContext {

@@ -727,7 +727,18 @@ impl SrtConnection {
                 // 暗号化コンテキスト生成
                 if let Some(ref passphrase) = self.options.passphrase {
                     let key_length = hs.key_length().unwrap_or(self.options.key_length);
-                    let salt = self.options.crypto_salt.unwrap_or([0u8; 16]);
+                    // restream local patch (crates/srt-protocol/VENDOR.md,
+                    // upstream issue 0052, open/unfixed at vendor commit
+                    // 6779cdd): an all-zero salt default made PBKDF2 derive
+                    // the same KEK from the same passphrase every time,
+                    // defeating rainbow-table resistance. Salt must be
+                    // caller-supplied random bytes; error instead of
+                    // silently defaulting.
+                    let salt = self.options.crypto_salt.ok_or_else(|| {
+                        Error::crypto_error(
+                            "crypto_salt is required when passphrase is set (caller must supply random salt; no implicit default)",
+                        )
+                    })?;
                     let default_sek = vec![0u8; key_length.len()];
                     let sek = self.options.crypto_sek.as_deref().unwrap_or(&default_sek);
                     self.crypto = Some(CryptoContext::new_sender(

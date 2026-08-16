@@ -125,6 +125,10 @@ fn test_handshake_with_encryption() {
 
     let caller_opts = ConnectionOptions {
         passphrase: Some(passphrase.clone()),
+        // restream local patch (crates/srt-protocol/VENDOR.md, upstream
+        // issue 0052): crypto_salt is now required when passphrase is set,
+        // no implicit zero default.
+        crypto_salt: Some([0x42; 16]),
         key_length: KeyLength::Aes128,
         tsbpd_delay: 0,
         ..Default::default()
@@ -151,6 +155,10 @@ fn test_handshake_with_aes256() {
 
     let caller_opts = ConnectionOptions {
         passphrase: Some(passphrase.clone()),
+        // restream local patch (crates/srt-protocol/VENDOR.md, upstream
+        // issue 0052): crypto_salt is now required when passphrase is set,
+        // no implicit zero default.
+        crypto_salt: Some([0x42; 16]),
         key_length: KeyLength::Aes256,
         tsbpd_delay: 0,
         ..Default::default()
@@ -231,6 +239,10 @@ fn test_data_transfer_with_encryption() {
 
     let caller_opts = ConnectionOptions {
         passphrase: Some(passphrase.clone()),
+        // restream local patch (crates/srt-protocol/VENDOR.md, upstream
+        // issue 0052): crypto_salt is now required when passphrase is set,
+        // no implicit zero default.
+        crypto_salt: Some([0x42; 16]),
         key_length: KeyLength::Aes128,
         tsbpd_delay: 0,
         ..Default::default()
@@ -705,6 +717,10 @@ fn test_receive_encrypted_data_with_aes256() {
 
     let caller_opts = ConnectionOptions {
         passphrase: Some(passphrase.clone()),
+        // restream local patch (crates/srt-protocol/VENDOR.md, upstream
+        // issue 0052): crypto_salt is now required when passphrase is set,
+        // no implicit zero default.
+        crypto_salt: Some([0x42; 16]),
         key_length: KeyLength::Aes256,
         tsbpd_delay: 0,
         ..Default::default()

@@ -120,6 +120,7 @@ above remain the better way to learn the system.
 - [Harness manifest README](../test/harness/README.md)
 - [SRT scaling investigation tools README](../test/native/srt-scaling/README.md)
 - [Rust raw-UDP scaling prototype README](../test/native/srt-scaling/rs-udp-bench/README.md)
+- [Vendored shiguredo/srt-rs: import provenance and local patches](../crates/srt-protocol/VENDOR.md)
 - [Phase 0 egress baseline workloads](../test/harness/baselines/egress-phase0/README.md)
 - [RTMP fabric A/B baseline](../test/harness/baselines/rtmp-fabric-matrix/README.md)
 

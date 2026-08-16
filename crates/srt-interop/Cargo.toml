@@ -1,0 +1,17 @@
+[package]
+name = "srt-interop"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Standalone caller/listener binaries over srt-protocol + std, for interop tests without linking restream or libsrt. See docs/srt-pure-rust-plan.md."
+
+[dependencies]
+shiguredo_srt = { path = "../srt-protocol" }
+
+[[bin]]
+name = "srt-interop-caller"
+path = "src/bin/caller.rs"
+
+[[bin]]
+name = "srt-interop-listener"
+path = "src/bin/listener.rs"

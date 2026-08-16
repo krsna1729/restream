@@ -7,6 +7,14 @@ publish = false
 license = "MIT"
 repository = "https://github.com/krsna1729/restream"
 
+# Root package retained as a workspace member alongside the vendored
+# pure-Rust SRT crates (docs/srt-pure-rust-plan.md). Keeps every existing
+# scripts/build/* command, build.rs, benches/, and tests/ path working
+# unchanged -- see that plan's "Workspace and crate layout" section.
+[workspace]
+members = [".", "crates/srt-protocol", "crates/srt-protocol/pbt", "crates/srt-interop"]
+exclude = ["crates/srt-protocol/fuzz"]
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
