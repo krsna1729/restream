@@ -9,9 +9,8 @@
 //! - ACK によるバッファ解放
 //! - 送信ウィンドウ管理
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
-use crate::seq_ring_buffer::SeqRingBuffer;
 use crate::srt_packet::{DataPacket, PacketPosition, SRT_HEADER_SIZE, sequence_less_than};
 use crate::time::Timestamp;
 
@@ -53,7 +52,7 @@ struct SentPacket {
 #[derive(Debug)]
 pub struct SenderBuffer {
     /// 送信済みパケット (sequence_number -> SentPacket)
-    packets: SeqRingBuffer<SentPacket>,
+    packets: BTreeMap<u32, SentPacket>,
 
     /// 損失リスト (NAK で報告されたパケット)
     loss_list: VecDeque<u32>,
@@ -102,12 +101,8 @@ impl SenderBuffer {
     /// 送信制御はペーシング (`packet_send_period`) が担う
     /// (`srtcore/congctl.cpp`)。
     pub fn new(initial_seq: u32, flow_window: u32, latency_ms: u16) -> Self {
-        // リングバッファの容量は構築時の flow_window に固定する (0 除算を
-        // 避けるため最低 1)。in-flight パケット数はプロトコル上
-        // flow_window を超えないので、この容量が実質的な上限になる。
-        let packets = SeqRingBuffer::new(flow_window.max(1));
         let mut buf = Self {
-            packets,
+            packets: BTreeMap::new(),
             loss_list: VecDeque::new(),
             oldest_unacked: initial_seq,
             next_seq: initial_seq,
@@ -197,12 +192,12 @@ impl SenderBuffer {
 
     /// 送信中のパケット数
     pub fn packets_in_flight(&self) -> u32 {
-        self.packets.len()
+        self.packets.len() as u32
     }
 
     /// バッファ内のパケット数
     pub fn packets_in_buffer(&self) -> usize {
-        self.packets.len() as usize
+        self.packets.len()
     }
 
     /// バッファが空かどうか
@@ -223,13 +218,6 @@ impl SenderBuffer {
     /// フローウィンドウを設定 (輻輳ウィンドウも追従させる、LIVE モードの
     /// 挙動は [`Self::new`] のコメント参照)
     pub fn set_flow_window(&mut self, flow_window: u32) {
-        debug_assert!(
-            flow_window <= self.packets.capacity(),
-            "flow_window {flow_window} exceeds the ring buffer capacity {} fixed at construction \
-             (nothing calls set_flow_window in this crate today; if a caller needs to grow the \
-             window past what SenderBuffer::new was given, SeqRingBuffer needs a resize path)",
-            self.packets.capacity()
-        );
         self.flow_window = flow_window;
         self.congestion_window = flow_window;
     }
@@ -385,7 +373,7 @@ impl SenderBuffer {
     /// 再送パケットを取得
     pub fn pop_retransmit(&mut self, now: Timestamp) -> Option<DataPacket> {
         while let Some(seq) = self.loss_list.pop_front() {
-            if let Some(entry) = self.packets.get_mut(seq) {
+            if let Some(entry) = self.packets.get_mut(&seq) {
                 entry.retransmit_count += 1;
                 entry.sent_time = now;
 
@@ -403,7 +391,16 @@ impl SenderBuffer {
     /// `ack_seq` は次に期待するシーケンス番号 (この番号未満は全て ACK)
     pub fn handle_ack(&mut self, ack_seq: u32) {
         // ack_seq より小さいシーケンス番号のパケットを全て削除
-        self.packets.remove_less_than(ack_seq);
+        let to_remove: Vec<u32> = self
+            .packets
+            .keys()
+            .copied()
+            .filter(|&seq| sequence_less_than(seq, ack_seq))
+            .collect();
+
+        for seq in to_remove {
+            self.packets.remove(&seq);
+        }
 
         // 損失リストからも削除
         self.loss_list
@@ -419,7 +416,7 @@ impl SenderBuffer {
     pub fn handle_nak(&mut self, lost_sequences: &[u32]) {
         for &seq in lost_sequences {
             // バッファに存在するパケットのみ追加
-            if self.packets.contains(seq) && !self.loss_list.contains(&seq) {
+            if self.packets.contains_key(&seq) && !self.loss_list.contains(&seq) {
                 self.loss_list.push_back(seq);
             }
         }
@@ -427,6 +424,8 @@ impl SenderBuffer {
 
     /// 期限切れパケットを削除 (TLPKTDROP)
     pub fn drop_expired(&mut self, now: Timestamp) -> Vec<u32> {
+        let mut dropped = Vec::new();
+
         // TLPKTDROP 閾値: SRT latency の 1.25 倍、最低 1 秒
         // 仕様 (draft-sharabayko-srt.md の #too-late-packet-drop 節) の推奨値に従う。
         let threshold = (self.latency_us * 125 / 100).max(1_000_000);
@@ -434,43 +433,37 @@ impl SenderBuffer {
         let expired: Vec<u32> = self
             .packets
             .iter()
-            .filter_map(|(seq, entry)| {
+            .filter_map(|(&seq, entry)| {
                 let elapsed = now.as_micros().saturating_sub(entry.sent_time.as_micros());
                 if elapsed > threshold { Some(seq) } else { None }
             })
             .collect();
 
-        for seq in &expired {
-            self.packets.remove(*seq);
+        for seq in expired {
+            self.packets.remove(&seq);
+            dropped.push(seq);
         }
 
         // 損失リストからも削除
-        self.loss_list.retain(|seq| !expired.contains(seq));
+        self.loss_list.retain(|seq| !dropped.contains(seq));
 
-        expired
+        dropped
     }
 
     /// バッファ内の最古のパケット送信時刻を取得
-    ///
-    /// リングバッファの走査順は配列順であり送信順ではないため、
-    /// `oldest_unacked` からの (ラップアラウンド安全な) シーケンス距離が
-    /// 最小のエントリを最古とみなす。
     pub fn oldest_packet_time(&self) -> Option<Timestamp> {
-        self.packets
-            .iter()
-            .min_by_key(|(seq, _)| seq.wrapping_sub(self.oldest_unacked) & 0x7FFF_FFFF)
-            .map(|(_, entry)| entry.sent_time)
+        self.packets.values().next().map(|e| e.sent_time)
     }
 
     /// 統計情報を取得
     pub fn stats(&self) -> SenderStats {
-        let total_retransmits: u32 = self.packets.iter().map(|(_, e)| e.retransmit_count).sum();
+        let total_retransmits: u32 = self.packets.values().map(|e| e.retransmit_count).sum();
 
         // 再送回数別カウント
         let mut retransmits_once = 0u32;
         let mut retransmits_twice = 0u32;
         let mut retransmits_many = 0u32;
-        for (_, entry) in self.packets.iter() {
+        for entry in self.packets.values() {
             match entry.retransmit_count {
                 1 => retransmits_once += 1,
                 2 => retransmits_twice += 1,
@@ -480,7 +473,7 @@ impl SenderBuffer {
         }
 
         SenderStats {
-            packets_in_buffer: self.packets.len(),
+            packets_in_buffer: self.packets.len() as u32,
             packets_in_loss_list: self.loss_list.len() as u32,
             total_retransmits,
             total_sent: self.total_sent,

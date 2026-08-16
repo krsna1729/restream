@@ -1,7 +1,6 @@
 mod buf;
 mod crypto;
 mod error;
-mod seq_ring_buffer;
 mod srt_connection;
 mod srt_handshake;
 mod srt_packet;

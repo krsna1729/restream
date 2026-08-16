@@ -619,17 +619,19 @@ impl SrtConnection {
             .map_or(0, |s| now.as_micros().saturating_sub(s.as_micros())) as u32
     }
 
-    fn handle_data_packet(&mut self, mut pkt: DataPacket, now: Timestamp) -> Result<(), Error> {
+    fn handle_data_packet(&mut self, pkt: DataPacket, now: Timestamp) -> Result<(), Error> {
         if self.state != ConnectionState::Connected {
             return Ok(()); // 接続前のデータは無視
         }
 
-        // 復号化 (pkt は所有権を持つので clone せず in-place で復号する)
+        let mut payload = pkt.payload.clone();
+
+        // 復号化
         if pkt.encryption_flag != 0 {
             if let Some(ref crypto) = self.crypto {
                 let key_flag = KeyFlag::from_kk_field(pkt.encryption_flag)
                     .ok_or_else(|| Error::crypto_error("invalid KK flag"))?;
-                crypto.decrypt(pkt.sequence_number, key_flag, &mut pkt.payload)?;
+                crypto.decrypt(pkt.sequence_number, key_flag, &mut payload)?;
             } else {
                 return Err(Error::crypto_error(
                     "encrypted packet but no crypto context",
@@ -644,7 +646,10 @@ impl SrtConnection {
                 None => return Ok(()),
             };
 
-            let losses = receiver.receive(pkt, now);
+            let mut decrypted_pkt = pkt;
+            decrypted_pkt.payload = payload;
+
+            let losses = receiver.receive(decrypted_pkt, now);
             let should_ack = receiver.should_send_ack(now);
 
             // 配信可能なパケットを収集
