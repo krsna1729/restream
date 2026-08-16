@@ -197,7 +197,7 @@ impl SenderBuffer {
 
     /// バッファ内のパケット数
     pub fn packets_in_buffer(&self) -> usize {
-        self.packets.len()
+        self.packets_in_flight() as usize
     }
 
     /// バッファが空かどうか
@@ -398,17 +398,11 @@ impl SenderBuffer {
     ///
     /// `ack_seq` は次に期待するシーケンス番号 (この番号未満は全て ACK)
     pub fn handle_ack(&mut self, ack_seq: u32) {
-        // ack_seq より小さいシーケンス番号のパケットを全て削除
-        let to_remove: Vec<u32> = self
-            .packets
-            .keys()
-            .copied()
-            .filter(|&seq| sequence_less_than(seq, ack_seq))
-            .collect();
-
-        for seq in to_remove {
-            self.packets.remove(&seq);
-        }
+        // ack_seq より小さいシーケンス番号のパケットを全て削除。
+        // BTreeMap::retain は削除対象キーを一時 Vec に集める必要がなく、
+        // その場で不要エントリを取り除ける (毎 ACK ごとの割り当てを回避)。
+        self.packets
+            .retain(|&seq, _| !sequence_less_than(seq, ack_seq));
 
         // 損失リストからも削除
         self.loss_list
