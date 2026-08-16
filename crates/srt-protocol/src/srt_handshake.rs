@@ -481,6 +481,17 @@ impl HandshakePacket {
             ext_type: ExtensionType::Sid,
             data: encode_le_words(stream_id, 512),
         });
+        // restream local patch (crates/srt-protocol/VENDOR.md): real libsrt
+        // gates its own extension-scanning loop on the CONFIG bit in
+        // extension_field (confirmed at srtcore/core.cpp:2925,12433 --
+        // `if (IsSet(ext_flags, CHandShake::HS_EXT_CONFIG))`) and always
+        // sets it itself when adding a SID/congestion extension
+        // (srtcore/core.cpp:1708 etc). Without this, the SID bytes are
+        // correctly on the wire but a real libsrt peer silently never looks
+        // for them -- confirmed via live capture against real libsrt
+        // (extension present and correctly sized, but srt_getsockflag
+        // SRTO_STREAMID on the libsrt side returned empty).
+        self.extension_field |= extension_flags::CONFIG;
     }
 
     /// Stream ID 拡張を取得
@@ -507,6 +518,10 @@ impl HandshakePacket {
             ext_type: ExtensionType::Congestion,
             data: encode_le_words(congestion_control, 512),
         });
+        // restream local patch (crates/srt-protocol/VENDOR.md): same CONFIG
+        // bit issue as add_sid_extension above -- real libsrt gates parsing
+        // of this extension type on the same flag.
+        self.extension_field |= extension_flags::CONFIG;
     }
 
     /// Congestion 拡張を取得
@@ -973,6 +988,43 @@ mod tests {
 
         let sid = decoded.get_sid_extension();
         assert_eq!(sid, Some("test_stream".to_string()));
+    }
+
+    // restream local patch (crates/srt-protocol/VENDOR.md): regression test
+    // for a real libsrt interop bug found via live capture -- add_sid_extension
+    // wrote the SID bytes correctly but never set the CONFIG bit in
+    // extension_field, so this crate's own decode() (which doesn't gate on
+    // that flag) round-tripped fine while real libsrt (which does gate on
+    // it, srtcore/core.cpp:2925,12433) silently ignored the extension.
+    // test_sid_extension_basic above would NOT have caught this: it only
+    // proves this crate's encoder and decoder agree with each other, never
+    // that a real libsrt-compatible peer would also find the extension.
+    #[test]
+    fn test_sid_extension_sets_config_flag() {
+        let mut hs = HandshakePacket::new_conclusion_request(1, 2, 3, 0, false);
+        assert_eq!(
+            hs.extension_field & extension_flags::CONFIG,
+            0,
+            "CONFIG bit should not be set before any config-type extension is added"
+        );
+        hs.add_sid_extension("test_stream");
+        assert_eq!(
+            hs.extension_field & extension_flags::CONFIG,
+            extension_flags::CONFIG,
+            "real libsrt gates its extension-scanning loop on this bit (srtcore/core.cpp:2925) \
+             and always sets it itself when adding a SID/congestion extension (core.cpp:1708) -- \
+             without it, a real libsrt peer silently ignores an otherwise-correctly-encoded SID extension"
+        );
+    }
+
+    #[test]
+    fn test_congestion_extension_sets_config_flag() {
+        let mut hs = HandshakePacket::new_conclusion_request(1, 2, 3, 0, false);
+        hs.add_congestion_extension("live");
+        assert_eq!(
+            hs.extension_field & extension_flags::CONFIG,
+            extension_flags::CONFIG
+        );
     }
 
     #[test]

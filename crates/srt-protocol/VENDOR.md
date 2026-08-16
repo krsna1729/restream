@@ -100,11 +100,12 @@ redundant:
 | [0049](https://github.com/shiguredo/srt-rs/blob/develop/issues/0049-bug-fix-crypto-context-debug-leaks-secret-keys.md) | Critical | `CryptoContext` had `#[derive(Debug)]`, printing raw `kek`/`sek_even`/`sek_odd` key bytes via `{:?}`/`dbg!()`. Replaced with a manual `Debug` impl that redacts those three fields (`src/crypto.rs`). |
 | [0050](https://github.com/shiguredo/srt-rs/blob/develop/issues/0050-bug-fix-crypto-context-drop-not-zeroize-secret-keys.md) | Critical | `Vec<u8>`'s default `Drop` frees `kek`/`sek_even`/`sek_odd` without zeroing — key material could linger in freed heap memory. Added a `Drop` impl that zeroes all three (`src/crypto.rs`). |
 | [0052](https://github.com/shiguredo/srt-rs/blob/develop/issues/0052-bug-fix-crypto-salt-default-all-zero.md) | High | `handle_handshake_caller` defaulted an unset `crypto_salt` to `[0u8; 16]`, making PBKDF2 derive the same KEK from the same passphrase every time (defeats rainbow-table resistance). Now returns `Error::crypto_error(...)` instead of defaulting (`src/srt_connection.rs`). The listener side was already safe — it derives salt from the peer's KMREQ, never invents its own. |
+| *(not upstream-tracked — found here, via live capture against real libsrt, not from upstream's own issue list)* | Critical for StreamID-dependent features | `add_sid_extension`/`add_congestion_extension` wrote the extension bytes correctly but never set the `CONFIG` bit (`0x0004`) in `extension_field`. Real libsrt gates its own extension-scanning loop on that exact bit (confirmed at `srtcore/core.cpp:2925,12433`) and always sets it itself when adding a SID/congestion extension (`core.cpp:1708`). Without the fix: a Rust caller's StreamID was correctly encoded on the wire (verified via `tcpdump` — packet size delta matched the StreamID length exactly) but a real libsrt listener silently never looked for it. This crate's own `test_sid_extension_basic` didn't catch it because it only round-trips through this crate's own `decode()`, which doesn't gate on the flag either — only a real cross-implementation test surfaces this class of bug. Fixed in `src/srt_handshake.rs`; added `test_sid_extension_sets_config_flag`/`test_congestion_extension_sets_config_flag` regression tests. Live-verified fixed against real libsrt in both directions (Rust caller → libsrt listener and libsrt caller → Rust listener), see `crates/srt-interop/`. |
 
-Fixing these required updating 4 existing integration tests
+Fixing the crypto issues required updating 4 existing integration tests
 (`tests/test_srt_connection.rs`) that relied on the old implicit-zero-salt
 default to now explicitly set `crypto_salt`, matching how a real caller
-must use the API post-patch. All 125 tests across the crate (unit +
+must use the API post-patch. All 127 tests across the crate (unit +
 integration + property-based + doctests) pass after these patches —
 verified via `cargo test -p shiguredo_srt` and `cargo test -p pbt`.
 
