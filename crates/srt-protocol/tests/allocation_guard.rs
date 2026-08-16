@@ -22,6 +22,14 @@
 //! internal structure (loss list, retransmit bookkeeping, event queue)
 //! quietly accumulating unbounded state and allocating more per packet the
 //! longer a connection lives.
+//!
+//! Measured **9 allocations/packet**, flat, crate-side only -- the
+//! `forward_sent` helper below deliberately avoids collecting `poll_output()`
+//! results into an intermediate `Vec` (an earlier version of this test did,
+//! and that harness-side `Vec<Vec<u8>>` allocation was itself inflating the
+//! measured count by one, to 10, on top of whatever the crate actually
+//! allocates -- worth calling out explicitly since it's an easy trap for any
+//! allocation-counting test built around this crate's poll-based API).
 
 use shiguredo_srt::{
     ConnectionOptions, ConnectionOutput, ConnectionState, SrtConnection, TimerId, Timestamp,
@@ -50,14 +58,20 @@ fn ts(micros: u64) -> Timestamp {
     Timestamp::from_micros(micros)
 }
 
-fn drain_sent(conn: &mut SrtConnection) -> Vec<Vec<u8>> {
-    let mut sent = Vec::new();
-    while let Some(out) = conn.poll_output() {
+/// Forwards every queued `SendPacket` from `from` directly into `to`,
+/// with no intermediate collection -- a `Vec<Vec<u8>>` collecting step
+/// here (as an earlier version of this helper had) would itself allocate
+/// in the *test harness*, not the crate, and inflate the measured count
+/// with a cost this crate never actually pays. `poll_output()` already
+/// hands back an owned `Vec<u8>` per packet (allocated once, inside the
+/// crate, when the packet was encoded) -- this helper just moves it
+/// straight into `feed_recv_buf` without copying or re-collecting it.
+fn forward_sent(from: &mut SrtConnection, to: &mut SrtConnection, now: Timestamp) {
+    while let Some(out) = from.poll_output() {
         if let ConnectionOutput::SendPacket(data) = out {
-            sent.push(data);
+            let _ = to.feed_recv_buf(&data, now);
         }
     }
-    sent
 }
 
 fn setup_connected_pair() -> (SrtConnection, SrtConnection) {
@@ -72,12 +86,8 @@ fn setup_connected_pair() -> (SrtConnection, SrtConnection) {
     caller.connect(ts(0)).expect("connect() should succeed");
     for i in 0..10u64 {
         let now = ts(i * 10_000);
-        for data in drain_sent(&mut caller) {
-            let _ = listener.feed_recv_buf(&data, now);
-        }
-        for data in drain_sent(&mut listener) {
-            let _ = caller.feed_recv_buf(&data, now);
-        }
+        forward_sent(&mut caller, &mut listener, now);
+        forward_sent(&mut listener, &mut caller, now);
         if caller.state() == ConnectionState::Connected
             && listener.state() == ConnectionState::Connected
         {
@@ -105,15 +115,11 @@ fn steady_state_allocations_stay_bounded_and_flat() {
     let mut send_one = |caller: &mut SrtConnection, listener: &mut SrtConnection, i: u64| {
         let now = ts(now_us);
         caller.send(&payload, now).expect("send");
-        for data in drain_sent(caller) {
-            listener.feed_recv_buf(&data, now).expect("decode");
-        }
+        forward_sent(caller, listener, now);
         while listener.poll_event().is_some() {}
         if (i + 1).is_multiple_of(ACK_EVERY_N_PACKETS) {
             let _ = listener.handle_timer(TimerId::Ack, now);
-            for data in drain_sent(listener) {
-                let _ = caller.feed_recv_buf(&data, now);
-            }
+            forward_sent(listener, caller, now);
         }
         now_us += 1_000;
     };
@@ -140,9 +146,10 @@ fn steady_state_allocations_stay_bounded_and_flat() {
     eprintln!("per-packet allocations by window: {window_allocs:?}");
     eprintln!("first half avg: {first_half_avg}, second half avg: {second_half_avg}");
 
-    // Bounded: generous ceiling well above the ~9 allocations/packet
-    // measured during Phase 4 development (payload copy, tree-node churn,
-    // encode buffers) -- this is a regression guard, not a tight budget.
+    // Bounded: generous ceiling above the 9 allocations/packet measured
+    // crate-side (payload copy for buffering, encode buffers, receiver-side
+    // insert, ready-packet collection -- see this file's module doc) --
+    // this is a regression guard, not a tight budget.
     for &allocs in &window_allocs {
         assert!(
             allocs <= 20,
