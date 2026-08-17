@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/resource.h>
 #include <srt/srt.h>
 
 #define PAYLOAD_SIZE 1316
@@ -107,13 +108,24 @@ int main(int argc, char **argv) {
         srt_bistats(sock, &stats, 0, 1);
     }
 
+    // getrusage(RUSAGE_SELF, ...): same CPU/memory accounting the Rust
+    // driver-framework bake-off binaries use (crates/srt-interop/src/
+    // cpu_stats.rs), so libsrt can serve as a complete reference baseline
+    // on all three axes -- throughput, latency, and CPU/memory -- not just
+    // throughput/RTT.
+    struct rusage usage;
+    memset(&usage, 0, sizeof(usage));
+    getrusage(RUSAGE_SELF, &usage);
+    double cpu_user_ms = usage.ru_utime.tv_sec * 1000.0 + usage.ru_utime.tv_usec / 1000.0;
+    double cpu_sys_ms = usage.ru_stime.tv_sec * 1000.0 + usage.ru_stime.tv_usec / 1000.0;
+
     printf(
-        "STATS role=listener pkt_recv=%lld pkt_recv_total=%lld "
+        "STATS role=listener backend=libsrt pkt_recv=%lld pkt_recv_total=%lld "
         "pkt_rcv_loss_total=%d pkt_rcv_drop_total=%d pkt_retrans_total=%d "
-        "rtt_ms=%.3f elapsed_s=%.3f\n",
+        "rtt_ms=%.3f elapsed_s=%.3f cpu_user_ms=%.1f cpu_sys_ms=%.1f peak_rss_kb=%ld\n",
         total_recv, (long long)stats.pktRecv, stats.pktRcvLossTotal,
         stats.pktRcvDropTotal, stats.pktRetransTotal, stats.msRTT,
-        now_seconds() - start);
+        now_seconds() - start, cpu_user_ms, cpu_sys_ms, usage.ru_maxrss);
 
     srt_close(sock);
     srt_close(listener);
