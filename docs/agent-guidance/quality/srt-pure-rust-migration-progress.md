@@ -122,6 +122,35 @@ The artifacts were regenerated under `.local/artifacts/msr/` and the run
 used `BENCH_BUILD=never`, proving the harness consumed the newly built bench
 binaries rather than silently rebuilding debug executables.
 
+### Optimized six-driver smoke
+
+The six swappable Rust drivers and the libsrt control pair were rebuilt with
+the same bench profile and exercised at 8 Mbps for three seconds with no
+impairment. All seven final cells produced caller/listener stats and exited
+successfully; the first compio namespace cell returned `1/1`, but an immediate
+exact rerun passed, so it was treated as a transient harness event rather than
+a protocol failure.
+
+| Driver | Pair CPU ms/s | Pair RSS KiB | CPU ms/s/Mbps | RSS KiB/Mbps |
+|---|---:|---:|---:|---:|
+| libsrt | 427.6 | 11,520 | 53.45 | 1,440 |
+| mio | 320.7 | 5,120 | 40.09 | 640 |
+| tokio | 329.5 | 6,144 | 41.19 | 768 |
+| smol | 414.7 | 5,632 | 51.84 | 704 |
+| monoio | 277.9 | 5,632 | 34.74 | 704 |
+| glommio | 551.8 | 28,160 | 68.98 | 3,520 |
+| compio | 439.9 | 5,888 | 54.99 | 736 |
+
+CPU is caller plus listener user/system time normalized by the three-second
+run; RSS is the sum of both processes. These are fixed-rate smoke diagnostics,
+not a linear scaling law. The paired receiver flamegraphs remain the stronger
+topology evidence because they capture both restream and sink under the
+600-output workload.
+
+The raw smoke ledgers are
+`.local/artifacts/srt-six-driver-smoke-20260817.tsv` and
+`.local/artifacts/srt-compio-smoke-20260817.tsv`.
+
 ## Affinity invariant for tuple sharding and bonding
 
 Tuple affinity is necessary for correctness, but it is not sufficient for a
