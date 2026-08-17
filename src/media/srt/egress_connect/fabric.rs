@@ -38,12 +38,10 @@ impl<'a> SrtFabricEgressConnectConfig<'a> {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn peer_addrs(&self) -> &[SocketAddr] {
         self.peer_addrs
     }
 
-    #[cfg(test)]
     pub(crate) fn stream_id(&self) -> &str {
         self.stream_id
     }
@@ -51,6 +49,20 @@ impl<'a> SrtFabricEgressConnectConfig<'a> {
     #[cfg(test)]
     pub(crate) fn connect_timeout_ms(&self) -> u64 {
         self.connect_timeout_ms
+    }
+
+    pub(crate) fn crypto_parameters(&self) -> Option<(&str, i32)> {
+        self.crypto.as_ref().map(|crypto| crypto.rust_parameters())
+    }
+
+    pub(crate) fn buffer_parameters(&self) -> (i32, i32, i32, i64, i32) {
+        (
+            self.buffer_opts.sndbuf_bytes,
+            self.buffer_opts.rcvbuf_bytes,
+            self.buffer_opts.latency_ms,
+            self.buffer_opts.maxbw_bps,
+            self.buffer_opts.fc_pkts,
+        )
     }
 
     #[cfg(test)]

@@ -1,7 +1,7 @@
 use super::*;
 use crate::media::egress::command::ShardId;
 use crate::media::egress::journal::FeedEpoch;
-use crate::media::srt::{SRTSOCKET, SrtEgressInterest, SrtEgressPollError, SrtReadyLeaf};
+use crate::media::srt::{SrtEgressInterest, SrtEgressPollError, SrtLeafHandle, SrtReadyLeaf};
 use crate::media::ts_chunk_ring::TsChunkRing;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,7 +13,7 @@ struct FakeSrtPoller;
 impl SrtReadinessPoller for FakeSrtPoller {
     fn register_leaf(
         &mut self,
-        _socket: SRTSOCKET,
+        _handle: SrtLeafHandle,
         _key: crate::media::egress::scheduler::LeafKey,
         _generation: u64,
         _interest: SrtEgressInterest,
@@ -21,7 +21,7 @@ impl SrtReadinessPoller for FakeSrtPoller {
         Ok(())
     }
 
-    fn remove(&mut self, _socket: SRTSOCKET) -> Result<(), SrtEgressPollError> {
+    fn remove(&mut self, _handle: SrtLeafHandle) -> Result<(), SrtEgressPollError> {
         Ok(())
     }
 

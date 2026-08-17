@@ -33,6 +33,9 @@
 #                    glommio/compio (default: libsrt plus all six backends
 #                    -- the full docs/srt-pure-rust-plan.md Phase 4
 #                    driver-framework bake-off)
+#   SRT_INTEROP_BIN_DIR  directory containing optimized Rust interop binaries
+#                    (default: target/release, Cargo's bench-profile output;
+#                    build with scripts/build/srt-interop-bench.sh)
 set -uo pipefail
 
 repo_root="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
@@ -46,6 +49,7 @@ BITRATE_LEVELS="${BITRATE_LEVELS:-8000000}"
 LOSS_LEVELS="${LOSS_LEVELS:-0.5 1 2 5 10 15}"
 LATENCY_LEVELS="${LATENCY_LEVELS:-0 5 10 20 50 100}"
 IMPLS="${IMPLS:-libsrt rust-mio rust-tokio rust-smol rust-monoio rust-glommio rust-compio}"
+SRT_INTEROP_BIN_DIR="${SRT_INTEROP_BIN_DIR:-$repo_root/target/release}"
 
 PREFIX="${AGENT_SHARED_STATIC_ROOT:-$repo_root/.local/build/static}/prefix"
 LIBSRT_LISTENER="$PREFIX/bin/restream-srt-loss-listener"
@@ -62,8 +66,8 @@ resolve_bins() {
     echo "$LIBSRT_LISTENER" "$LIBSRT_CALLER"
   else
     local backend="${impl#rust-}"
-    echo "$repo_root/target/debug/srt-interop-loss-listener-$backend" \
-         "$repo_root/target/debug/srt-interop-loss-caller-$backend"
+    echo "$SRT_INTEROP_BIN_DIR/srt-interop-loss-listener-$backend" \
+         "$SRT_INTEROP_BIN_DIR/srt-interop-loss-caller-$backend"
   fi
 }
 
@@ -73,7 +77,7 @@ for impl in $IMPLS; do
     if [[ "$impl" == "libsrt" ]]; then
       echo "missing $listener_bin / $caller_bin -- run scripts/build/native-deps.sh first" >&2
     else
-      echo "missing $listener_bin / $caller_bin -- run: scripts/build/resource-limit.sh cargo build -p srt-interop" >&2
+      echo "missing $listener_bin / $caller_bin -- run: scripts/build/srt-interop-bench.sh" >&2
     fi
     exit 1
   fi

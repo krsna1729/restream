@@ -212,7 +212,7 @@ fn marks_single_link_srt_without_group_member_fields() {
 
 #[test]
 fn maps_srt_sender_quality_from_bistats() {
-    let stats = SrtTraceBStats {
+    let stats: SrtSenderStats = SrtTraceBStats {
         ms_rtt: 12.5,
         mbps_send_rate: 3.25,
         mbps_bandwidth: 42.0,
@@ -228,7 +228,8 @@ fn maps_srt_sender_quality_from_bistats() {
         pkt_flow_window: 8192,
         pkt_congestion_window: 1024,
         ..unsafe { std::mem::zeroed() }
-    };
+    }
+    .into();
     let sampled_at = Instant::now();
     let previous = SrtSenderCounterSnapshot {
         packets_sent_loss: 4,
@@ -273,12 +274,13 @@ fn srt_sender_rates_report_none_when_counter_regresses_instead_of_wrapping() {
         packets_sent_retrans: 900,
         sampled_at,
     };
-    let stats = SrtTraceBStats {
+    let stats: SrtSenderStats = SrtTraceBStats {
         pkt_snd_loss_total: 10,
         pkt_snd_drop_total: 1,
         pkt_retrans_total: 0,
         ..unsafe { std::mem::zeroed() }
-    };
+    }
+    .into();
 
     let (quality, _) =
         srt_sender_quality_from_stats(&stats, Some(previous), sampled_at + Duration::from_secs(2));
@@ -299,10 +301,11 @@ fn srt_sender_rates_report_none_at_zero_elapsed_seconds() {
         packets_sent_retrans: 0,
         sampled_at,
     };
-    let stats = SrtTraceBStats {
+    let stats: SrtSenderStats = SrtTraceBStats {
         pkt_snd_loss_total: 15,
         ..unsafe { std::mem::zeroed() }
-    };
+    }
+    .into();
 
     let (quality, _) = srt_sender_quality_from_stats(&stats, Some(previous), sampled_at);
     assert_eq!(quality.packets_sent_loss_per_sec, None);
@@ -313,14 +316,15 @@ fn srt_sender_rates_report_none_at_zero_elapsed_seconds() {
 // widening rather than sign-extending into a near-`u64::MAX` garbage value.
 #[test]
 fn sender_quality_from_stats_clamps_negative_sentinel_counters_to_zero() {
-    let stats = SrtTraceBStats {
+    let stats: SrtSenderStats = SrtTraceBStats {
         pkt_snd_loss_total: -1,
         pkt_snd_drop_total: -1,
         pkt_retrans_total: -1,
         ms_snd_tsb_pd_delay: -1,
         ms_snd_buf: -1,
         ..unsafe { std::mem::zeroed() }
-    };
+    }
+    .into();
 
     let (quality, snapshot) = srt_sender_quality_from_stats(&stats, None, Instant::now());
     assert_eq!(quality.packets_sent_loss, Some(0));

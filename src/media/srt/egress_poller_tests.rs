@@ -1,6 +1,7 @@
 use super::srt_egress_poller::*;
 use super::sys::{SRT_EPOLL_ERR, SRT_EPOLL_OUT, SRTSOCKET};
 use crate::media::egress::scheduler::LeafKey;
+use crate::media::srt::SrtLeafHandle;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::os::raw::c_int;
@@ -173,10 +174,12 @@ fn poll_returns_bounded_writable_events() {
         vec![
             SrtReadySocket {
                 socket: 10,
+                readable: false,
                 writable: true,
             },
             SrtReadySocket {
                 socket: 11,
+                readable: false,
                 writable: true,
             },
         ]
@@ -196,6 +199,7 @@ fn poll_merges_error_style_read_and_write_reports() {
         ready,
         vec![SrtReadySocket {
             socket: 42,
+            readable: true,
             writable: true,
         }]
     );
@@ -217,9 +221,43 @@ fn register_leaf_preserves_key_and_generation_for_ready_events() {
     assert_eq!(
         ready,
         vec![SrtReadyLeaf {
-            socket: 42,
+            handle: SrtLeafHandle::Native(42),
             key: LeafKey(9),
             generation: 77,
+            readable: false,
+            writable: true,
+        }]
+    );
+}
+
+#[test]
+fn poll_leaves_reports_readable_and_writable_directions() {
+    let ops = FakePollOps::default();
+    ops.push_wait(vec![42], vec![42]);
+    let mut poller = SrtEgressPoller::with_ops(8, ops).unwrap();
+    let mut ready = Vec::new();
+
+    poller
+        .register_leaf(
+            42,
+            LeafKey(9),
+            77,
+            SrtEgressInterest {
+                readable: true,
+                writable: true,
+            },
+        )
+        .unwrap();
+    let count = poller.poll_leaves(25, &mut ready).unwrap();
+
+    assert_eq!(count, 1);
+    assert_eq!(
+        ready,
+        vec![SrtReadyLeaf {
+            handle: SrtLeafHandle::Native(42),
+            key: LeafKey(9),
+            generation: 77,
+            readable: true,
             writable: true,
         }]
     );
@@ -238,7 +276,7 @@ fn poll_leaves_ignores_unregistered_ready_socket() {
     let count = poller.poll_leaves(25, &mut ready).unwrap();
 
     assert_eq!(count, 1);
-    assert_eq!(ready[0].socket, 42);
+    assert_eq!(ready[0].handle, SrtLeafHandle::Native(42));
 }
 
 #[test]

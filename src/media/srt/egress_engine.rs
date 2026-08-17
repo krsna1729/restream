@@ -92,6 +92,10 @@ impl<T> SrtEgressEngine<T> {
             .map_or(0, PendingSrtMessage::remaining_len)
     }
 
+    pub(crate) fn needs_write_interest(&self) -> bool {
+        self.pending.is_some() || !self.pending_units.is_empty()
+    }
+
     #[cfg(test)]
     pub(crate) fn pending_units_len(&self) -> usize {
         self.pending_units.len()

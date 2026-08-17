@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use crate::media::snapshots::PublisherQuality;
 
-use super::SrtTraceBStats;
+use super::{SrtSenderStats, SrtTraceBStats};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SrtCounterSnapshot {
@@ -101,14 +101,14 @@ pub(super) fn quality_from_stats(
 }
 
 pub(crate) fn sender_quality_from_stats(
-    stats: &SrtTraceBStats,
+    stats: &SrtSenderStats,
     previous: Option<SrtSenderCounterSnapshot>,
     sampled_at: Instant,
 ) -> (PublisherQuality, SrtSenderCounterSnapshot) {
     let current = SrtSenderCounterSnapshot {
-        packets_sent_loss: stats.pkt_snd_loss_total.max(0) as u64,
-        packets_sent_drop: stats.pkt_snd_drop_total.max(0) as u64,
-        packets_sent_retrans: stats.pkt_retrans_total.max(0) as u64,
+        packets_sent_loss: stats.packets_sent_loss_total,
+        packets_sent_drop: stats.packets_sent_drop_total,
+        packets_sent_retrans: stats.packets_retransmit_total,
         sampled_at,
     };
     let elapsed =
@@ -116,15 +116,15 @@ pub(crate) fn sender_quality_from_stats(
 
     (
         PublisherQuality {
-            ms_rtt: Some(stats.ms_rtt),
-            mbps_send_rate: Some(stats.mbps_send_rate),
-            mbps_link_capacity: Some(stats.mbps_bandwidth),
-            ms_send_tsb_pd_delay: Some(stats.ms_snd_tsb_pd_delay.max(0) as f64),
-            ms_send_buf: Some(stats.ms_snd_buf.max(0) as f64),
+            ms_rtt: Some(stats.rtt_ms),
+            mbps_send_rate: Some(stats.send_rate_mbps),
+            mbps_link_capacity: Some(stats.bandwidth_mbps),
+            ms_send_tsb_pd_delay: Some(stats.send_tsbpd_delay_ms),
+            ms_send_buf: Some(stats.send_buf_ms),
             packets_sent_loss: Some(current.packets_sent_loss),
             packets_sent_drop: Some(current.packets_sent_drop),
             packets_sent_retrans: Some(current.packets_sent_retrans),
-            packets_received_nak: Some(stats.pkt_recv_nak_total.max(0) as u64),
+            packets_received_nak: Some(stats.packets_received_nak_total),
             packets_sent_loss_per_sec: previous.zip(elapsed).and_then(|(snapshot, seconds)| {
                 counter_rate(
                     current.packets_sent_loss,
@@ -146,11 +146,11 @@ pub(crate) fn sender_quality_from_stats(
                     seconds,
                 )
             }),
-            srt_send_buf_bytes: Some(stats.byte_snd_buf),
-            srt_send_buf_avail_bytes: Some(stats.byte_avail_snd_buf),
-            srt_flight_size_pkts: Some(stats.pkt_flight_size),
-            srt_flow_window_pkts: Some(stats.pkt_flow_window),
-            srt_congestion_window_pkts: Some(stats.pkt_congestion_window),
+            srt_send_buf_bytes: Some(stats.send_buf_bytes),
+            srt_send_buf_avail_bytes: Some(stats.send_buf_available_bytes),
+            srt_flight_size_pkts: Some(stats.flight_size_packets),
+            srt_flow_window_pkts: Some(stats.flow_window_packets),
+            srt_congestion_window_pkts: Some(stats.congestion_window_packets),
             ..PublisherQuality::default()
         },
         current,

@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::media::egress::backend::CloseReason;
+use crate::media::egress::backend::{CloseReason, Readiness};
 use crate::media::egress::command::{FeedId, OutputId};
 use crate::media::egress::journal::{FeedEpoch, TsFeed};
 use crate::media::egress::leaf::LeafCommon;
@@ -7,8 +7,8 @@ use crate::media::egress::policy::{LeafLimits, WorkBudget};
 use crate::media::egress::scheduler::LeafKey;
 use crate::media::srt::{
     NativeSendBacklog, SRTSOCKET, SrtEgressInterest, SrtEgressPollError, SrtEgressSendMode,
-    SrtEgressSocketError, SrtFabricEgressConnectConfig, SrtMessageSender, SrtReadyLeaf,
-    SrtSendResult, SrtTraceBStats,
+    SrtEgressSocketError, SrtFabricEgressConnectConfig, SrtLeafHandle, SrtMessageSender,
+    SrtReadyLeaf, SrtSendResult, SrtSenderStats, srt_fabric_message_sender,
 };
 use crate::media::ts_chunk_ring::TsChunkRing;
 use bytes::Bytes;
@@ -21,8 +21,9 @@ use tokio_util::sync::CancellationToken;
 pub(super) struct FakeSender {
     sends: Vec<Bytes>,
     closed: u32,
+    pub(super) readiness: Vec<Readiness>,
     pub(super) native_backlog: Option<NativeSendBacklog>,
-    pub(super) quality_stats: Option<SrtTraceBStats>,
+    pub(super) quality_stats: Option<SrtSenderStats>,
 }
 
 impl FakeSender {
@@ -32,6 +33,10 @@ impl FakeSender {
 }
 
 impl SrtMessageSender for FakeSender {
+    fn on_readiness(&mut self, readiness: Readiness) {
+        self.readiness.push(readiness);
+    }
+
     fn send_message(&mut self, message: &Bytes) -> SrtSendResult {
         self.sends.push(message.clone());
         SrtSendResult::Accepted {
@@ -47,7 +52,7 @@ impl SrtMessageSender for FakeSender {
         self.native_backlog
     }
 
-    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
+    fn sender_quality_stats(&self) -> Option<SrtSenderStats> {
         self.quality_stats
     }
 }
@@ -120,11 +125,18 @@ impl FakeReadinessPoller {
 impl SrtReadinessPoller for FakeReadinessPoller {
     fn register_leaf(
         &mut self,
-        socket: SRTSOCKET,
+        handle: SrtLeafHandle,
         key: LeafKey,
         generation: u64,
         interest: SrtEgressInterest,
     ) -> Result<(), SrtEgressPollError> {
+        let SrtLeafHandle::Native(socket) = handle else {
+            return Err(SrtEgressPollError {
+                operation: "fake_register_leaf",
+                code: -1,
+                message: "fake poller accepts only native handles".to_string(),
+            });
+        };
         self.inner
             .lock()
             .unwrap()
@@ -133,7 +145,14 @@ impl SrtReadinessPoller for FakeReadinessPoller {
         Ok(())
     }
 
-    fn remove(&mut self, socket: SRTSOCKET) -> Result<(), SrtEgressPollError> {
+    fn remove(&mut self, handle: SrtLeafHandle) -> Result<(), SrtEgressPollError> {
+        let SrtLeafHandle::Native(socket) = handle else {
+            return Err(SrtEgressPollError {
+                operation: "fake_remove_leaf",
+                code: -1,
+                message: "fake poller accepts only native handles".to_string(),
+            });
+        };
         let mut state = self.inner.lock().unwrap();
         state.removed.push(socket);
         if let Some(events) = &state.events {
@@ -178,9 +197,16 @@ impl FakeSocketConfigurator {
 impl SrtSocketConfigurator for FakeSocketConfigurator {
     fn configure_connected(
         &mut self,
-        socket: SRTSOCKET,
+        handle: SrtLeafHandle,
         mode: SrtEgressSendMode,
     ) -> Result<(), SrtEgressSocketError> {
+        let SrtLeafHandle::Native(socket) = handle else {
+            return Err(SrtEgressSocketError {
+                option: "SRTSOCKET",
+                code: -1,
+                message: "fake configurator accepts only native handles".to_owned(),
+            });
+        };
         self.calls.lock().unwrap().push((socket, mode));
         if self.fail {
             return Err(SrtEgressSocketError {
@@ -244,7 +270,10 @@ impl FakeSocketConnector {
 }
 
 impl SrtSocketConnector for FakeSocketConnector {
-    fn connect(&mut self, config: SrtFabricEgressConnectConfig<'_>) -> Result<SRTSOCKET, String> {
+    fn connect(
+        &mut self,
+        config: SrtFabricEgressConnectConfig<'_>,
+    ) -> Result<SrtConnectedTransport, String> {
         self.calls.lock().unwrap().push(FakeConnectCall {
             peer_addrs: config.peer_addrs().to_vec(),
             stream_id: config.stream_id().to_string(),
@@ -254,7 +283,11 @@ impl SrtSocketConnector for FakeSocketConnector {
             config.has_muxer_port_claim(),
             config.muxer_port_claim_bind_port(),
         ));
-        self.socket.clone()
+        self.socket.clone().map(|socket| SrtConnectedTransport {
+            handle: SrtLeafHandle::Native(socket),
+            sender: srt_fabric_message_sender(socket),
+            configured_sndbuf: None,
+        })
     }
 }
 

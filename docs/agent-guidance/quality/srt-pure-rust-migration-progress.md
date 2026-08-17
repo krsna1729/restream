@@ -3,6 +3,7 @@
 ## Contents
 
 - [Current migration policy](#current-migration-policy)
+- [Phase 6: production Rust egress seam](#phase-6-production-rust-egress-seam)
 - [Phase 4: TLPKTDROP receiver accounting](#phase-4-tlpktdrop-receiver-accounting)
 - [Affinity invariant for tuple sharding and bonding](#affinity-invariant-for-tuple-sharding-and-bonding)
 
@@ -50,10 +51,59 @@ Evidence:
   counter.
 
 The corrected driver-framework bake-off was completed and its temporary raw
-output was cleaned up after analysis. The current recommendation is to build
-the production-shaped `mio` driver first: it had the strongest balanced
-single-pair CPU/memory result, while the other runtime variants remain useful
-as later experimental adapters rather than production defaults.
+output was cleaned up after analysis. The production-shaped `mio` driver was
+selected because it had the strongest balanced single-pair CPU/memory result;
+the other runtime variants remain useful as later experimental adapters rather
+than production defaults.
+
+## Phase 6: production Rust egress seam
+
+The first production-shaped Rust caller path is now wired through the existing
+egress fabric without changing the egress engine or protocol engine:
+
+- `SrtLeafHandle` and `SrtConnectedTransport` let a connector own either a
+  native libsrt socket or a Rust UDP socket plus its message sender.
+- `SrtRustMessageSender` owns a connected nonblocking UDP socket and a Core
+  `SrtConnection`; `SrtRustFabricPoller` owns the mio readiness registration.
+- `RESTREAM_SRT_BACKEND=libsrt|rust` selects the complete egress connector,
+  configurator, and poller at runtime. The default remains `libsrt`.
+- The harness sink selector remains explicit: `HARNESS_SRT_SINK_BACKEND=rust`
+  or `libsrt`, falling back to `RESTREAM_SRT_BACKEND` when unset. This keeps
+  mixed endpoints available for differential testing while preserving the
+  final whole-stack deployment shape.
+
+The initial live manual-QA slice used the bench-profile binaries and a
+one-output SRT-only MSR run. Both sides passed the output-progress and sink
+byte-growth checks with zero sender drops:
+
+| Restream | Sink | Bytes out delta | Restream CPU / RSS peak |
+|---|---|---:|---:|
+| Rust | Rust | 246,844 | 18.8% / 89,472 KiB |
+| Rust | libsrt | 251,356 | 16.6% / 89,636 KiB |
+| libsrt | Rust | 248,160 | 38.04% / 90,472 KiB |
+
+These are seam and interop checks, not the scale gate. Bonding, AES-192,
+Core timer wakeups during idle periods, pacing-aware send admission, and the
+300/700/1200-output differential matrix remain open before Rust egress can be
+called production-complete.
+
+The receiver strategy investigation was profiled as paired processes, not
+just as restream. Each of the four 600-output Rust-sink captures contains both
+`restream.svg` and `sink.svg`, with matching raw perf data and folded stacks:
+
+| Receiver strategy | Restream CPU avg / peak | Restream RSS peak | Sink profile |
+|---|---:|---:|---|
+| Distinct ports, 4 workers | 219.28% / 231.83% | 637,584 KiB | paired `sink.svg` |
+| `SO_REUSEPORT`, 4 workers | 209.03% / 237.18% | 635,536 KiB | paired `sink.svg` |
+| Connected handoff, 4 workers | 202.47% / 216.38% | 633,908 KiB | paired `sink.svg` |
+| One port per stream, 1 worker | 242.04% / 275.25% | 632,024 KiB | paired `sink.svg` |
+
+The complete profiles and the sink-side interpretation are recorded in
+[`srt-scaling-investigation.md`](srt-scaling-investigation.md). The receiver
+conclusion is deliberately split from sender conclusions: the restream
+flamegraphs share the libsrt `sendmsg`/UDP and mutex/futex cost, while the sink
+flamegraphs expose Core receive-buffer, ACK, allocation, and feedback UDP
+costs. No topology result is being attributed to only one endpoint.
 
 ## Affinity invariant for tuple sharding and bonding
 

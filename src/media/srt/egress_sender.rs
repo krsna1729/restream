@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use std::os::raw::c_int;
 
-use crate::media::egress::backend::CloseReason;
+use crate::media::egress::backend::{CloseReason, Readiness};
+use crate::media::srt::srt_egress_poller::SrtEgressInterest;
 
 use super::socket::last_srt_error;
 use super::sys::{
@@ -20,6 +21,45 @@ pub(crate) struct NativeSendBacklog {
     pub bytes: u64,
     pub packets: u32,
     pub ms: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct SrtSenderStats {
+    pub packets_sent_loss_total: u64,
+    pub packets_sent_drop_total: u64,
+    pub packets_retransmit_total: u64,
+    pub packets_received_nak_total: u64,
+    pub rtt_ms: f64,
+    pub send_rate_mbps: f64,
+    pub bandwidth_mbps: f64,
+    pub send_tsbpd_delay_ms: f64,
+    pub send_buf_ms: f64,
+    pub send_buf_bytes: i32,
+    pub send_buf_available_bytes: i32,
+    pub flight_size_packets: i32,
+    pub flow_window_packets: i32,
+    pub congestion_window_packets: i32,
+}
+
+impl From<SrtTraceBStats> for SrtSenderStats {
+    fn from(stats: SrtTraceBStats) -> Self {
+        Self {
+            packets_sent_loss_total: stats.pkt_snd_loss_total.max(0) as u64,
+            packets_sent_drop_total: stats.pkt_snd_drop_total.max(0) as u64,
+            packets_retransmit_total: stats.pkt_retrans_total.max(0) as u64,
+            packets_received_nak_total: stats.pkt_recv_nak_total.max(0) as u64,
+            rtt_ms: stats.ms_rtt,
+            send_rate_mbps: stats.mbps_send_rate,
+            bandwidth_mbps: stats.mbps_bandwidth,
+            send_tsbpd_delay_ms: stats.ms_snd_tsb_pd_delay.max(0) as f64,
+            send_buf_ms: stats.ms_snd_buf.max(0) as f64,
+            send_buf_bytes: stats.byte_snd_buf.max(0),
+            send_buf_available_bytes: stats.byte_avail_snd_buf.max(0),
+            flight_size_packets: stats.pkt_flight_size.max(0),
+            flow_window_packets: stats.pkt_flow_window.max(0),
+            congestion_window_packets: stats.pkt_congestion_window.max(0),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +81,16 @@ pub(crate) trait SrtMessageSender {
     fn send_message(&mut self, message: &Bytes) -> SrtSendResult;
     fn close(&mut self, reason: CloseReason);
 
+    fn on_readiness(&mut self, _readiness: Readiness) {}
+
+    fn readiness_interest(&self) -> SrtEgressInterest {
+        SrtEgressInterest::WRITE
+    }
+
+    fn dynamic_readiness(&self) -> bool {
+        false
+    }
+
     /// Instantaneous native sender-buffer occupancy, when the transport has
     /// one.  `None` means the transport exposes no native buffer (fakes,
     /// closed sockets) and only application pending state applies.
@@ -53,7 +103,7 @@ pub(crate) trait SrtMessageSender {
     /// `None` means the transport exposes no native stats (fakes, closed
     /// sockets); the caller keeps the previous quality snapshot in that
     /// case rather than overwriting it with an empty one.
-    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
+    fn sender_quality_stats(&self) -> Option<SrtSenderStats> {
         None
     }
 }
@@ -70,11 +120,23 @@ where
         (**self).close(reason);
     }
 
+    fn on_readiness(&mut self, readiness: Readiness) {
+        (**self).on_readiness(readiness);
+    }
+
+    fn readiness_interest(&self) -> SrtEgressInterest {
+        (**self).readiness_interest()
+    }
+
+    fn dynamic_readiness(&self) -> bool {
+        (**self).dynamic_readiness()
+    }
+
     fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
         (**self).native_send_backlog()
     }
 
-    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
+    fn sender_quality_stats(&self) -> Option<SrtSenderStats> {
         (**self).sender_quality_stats()
     }
 }
@@ -135,9 +197,10 @@ where
         self.socket.and_then(|socket| self.ops.send_backlog(socket))
     }
 
-    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
+    fn sender_quality_stats(&self) -> Option<SrtSenderStats> {
         self.socket
             .and_then(|socket| self.ops.sender_quality_stats(socket))
+            .map(Into::into)
     }
 }
 

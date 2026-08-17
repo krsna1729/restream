@@ -1,5 +1,6 @@
 //! Native SRT ingest and egress via raw `libsrt` FFI bindings.
 
+use std::os::fd::RawFd;
 #[cfg(test)]
 use std::os::raw::{c_int, c_void};
 use std::sync::Arc;
@@ -107,9 +108,9 @@ pub(crate) use srt_egress_connect::{
 use srt_egress_connect::{resolve_host, to_libc_sockaddr};
 pub(crate) use srt_egress_engine::SrtEgressEngine;
 pub(crate) use srt_egress_poller::{SrtEgressInterest, SrtEgressPollError, SrtReadyLeaf};
-#[cfg(test)]
-pub(crate) use srt_egress_sender::SrtSendResult;
+pub(crate) use srt_egress_sender::SrtSenderStats;
 pub(crate) use srt_egress_sender::{NativeSendBacklog, SrtMessageSender};
+pub(crate) use srt_egress_sender::{SrtSendFailure, SrtSendResult};
 pub(crate) use srt_egress_socket::{
     SrtEgressSendMode, SrtEgressSocketError, apply_srt_egress_stream_id,
     configure_connected_srt_egress_socket,
@@ -125,6 +126,12 @@ pub(crate) use srt_quality::{
 #[cfg(test)]
 use srt_stream_id::{SrtConnectionMode, parse_srt_stream_id, percent_decode};
 pub(crate) use sys::SrtTraceBStats;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum SrtLeafHandle {
+    Native(SRTSOCKET),
+    Rust(RawFd),
+}
 use sys::*;
 pub use sys::{
     SRTO_ENFORCEDENCRYPTION, SRTO_LATENCY, SRTO_PASSPHRASE, SRTO_PBKEYLEN, SRTSOCKET, sockaddr_in,
@@ -142,15 +149,29 @@ impl SrtFabricPoller {
 
     pub(crate) fn register_leaf(
         &mut self,
-        socket: SRTSOCKET,
+        handle: SrtLeafHandle,
         key: crate::media::egress::scheduler::LeafKey,
         generation: u64,
         interest: SrtEgressInterest,
     ) -> Result<(), SrtEgressPollError> {
+        let SrtLeafHandle::Native(socket) = handle else {
+            return Err(SrtEgressPollError {
+                operation: "srt_epoll_register",
+                code: -1,
+                message: "native SRT poller cannot register a Rust transport handle".into(),
+            });
+        };
         self.0.register_leaf(socket, key, generation, interest)
     }
 
-    pub(crate) fn remove(&mut self, socket: SRTSOCKET) -> Result<(), SrtEgressPollError> {
+    pub(crate) fn remove(&mut self, handle: SrtLeafHandle) -> Result<(), SrtEgressPollError> {
+        let SrtLeafHandle::Native(socket) = handle else {
+            return Err(SrtEgressPollError {
+                operation: "srt_epoll_remove_usock",
+                code: -1,
+                message: "native SRT poller cannot remove a Rust transport handle".into(),
+            });
+        };
         self.0.remove(socket)
     }
 

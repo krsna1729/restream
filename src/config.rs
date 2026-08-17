@@ -340,6 +340,15 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+pub(crate) fn rust_srt_backend_selected() -> bool {
+    std::env::var("RESTREAM_SRT_BACKEND").is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "rust" | "srt-rust"
+        )
+    })
+}
+
 fn default_tokio_worker_threads(effective_cpus: usize) -> usize {
     let effective_cpus = effective_cpus.max(1);
     if effective_cpus <= 2 {

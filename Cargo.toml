@@ -63,6 +63,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 percent-encoding = "2"
 shiguredo_mp4 = "2026.3.0"
+shiguredo_srt = { path = "crates/srt-protocol" }
+mio = { version = "1", features = ["net", "os-poll"] }
 tracing = { version = "0.1", features = ["max_level_debug"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"
@@ -168,9 +170,8 @@ split-debuginfo = "unpacked"
 [profile.dev.package."*"]
 opt-level = 1
 
-# Local benchmarks: fast incremental builds, debug symbols for flamegraphs.
-# Accuracy is equivalent for relative comparisons; absolute ns values may
-# differ ≤5% from full release.  CI uses --profile release for absolute numbers.
+# Local benchmarks: release-equivalent optimization with debug symbols for
+# flamegraphs. CI uses --profile release for absolute numbers.
 #
 # Cargo hardcodes target/release as this profile's output dir for `bench`
 # (dir-name cannot be overridden for the built-in profile names) and `cargo
@@ -181,7 +182,7 @@ opt-level = 1
 [profile.bench]
 opt-level = 3
 lto = "thin"
-incremental = true
+incremental = false
 debug = 1
 split-debuginfo = "unpacked"
 codegen-units = 16

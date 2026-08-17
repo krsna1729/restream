@@ -12,6 +12,7 @@ use crate::media::egress::backends::rtmp_shard_resolve_runtime::{
 };
 use crate::media::egress::backends::sink_shard::SinkShardBackend;
 use crate::media::egress::backends::srt::SrtReadinessPoller;
+use crate::media::egress::backends::srt::SrtRuntimePoller;
 use crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPorts;
 use crate::media::egress::backends::srt::resolve_runtime::{
     ResolvingSrtShardBackendWithPoller, resolving_srt_shard_backend,
@@ -21,7 +22,7 @@ use crate::media::egress::command::ShardId;
 use crate::media::egress::journal::{RingFeed, TsFeed};
 use crate::media::egress::policy::WorkBudget;
 use crate::media::egress::shard::{EgressShardConfig, EgressShardGroup, EgressShardGroupError};
-use crate::media::srt::{SrtEgressPollError, SrtFabricPoller};
+use crate::media::srt::SrtEgressPollError;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SrtFabricShardGroupError<E> {
@@ -51,7 +52,7 @@ where
         feed_for,
         |shard_id| {
             let _ = shard_id;
-            SrtFabricPoller::new(poller_max_events)
+            SrtRuntimePoller::new(poller_max_events)
         },
         srt_egress_muxer_port_reuse,
         connect_admission,

@@ -3,7 +3,7 @@ use super::support::{budget, common, feed, leaf, wrapped_feed};
 use crate::media::egress::backend::{EngineProgress, Readiness, WaitCondition};
 use crate::media::egress::scheduler::VisitDecision;
 use crate::media::egress::visit::EngineVisitResult;
-use crate::media::srt::SrtTraceBStats;
+use crate::media::srt::SrtSenderStats;
 use bytes::Bytes;
 use std::time::Instant;
 
@@ -54,6 +54,17 @@ fn srt_fabric_leaf_ignores_stale_ready_generation() {
     assert!(matches!(result, EngineVisitResult::StaleGeneration));
     assert_eq!(leaf.common().cursor.next_sequence, 0);
     assert_eq!(leaf.common().progress.total_bytes_sent, 0);
+}
+
+#[test]
+fn srt_fabric_leaf_forwards_readiness_to_transport() {
+    let feed = feed([Bytes::from_static(b"abc")]);
+    let mut leaf = leaf(7);
+
+    let result = leaf.visit_ready(7, Readiness::BOTH, &feed, budget());
+
+    assert!(matches!(result, EngineVisitResult::Visited(_)));
+    assert_eq!(leaf.transport_mut().readiness, vec![Readiness::BOTH]);
 }
 
 /// The gap this closes, on the production `TsFeed` rather than a fake: an SRT
@@ -205,7 +216,7 @@ fn observe_stall_uses_native_drain_as_progress() {
 /// resetting its clock every sweep.
 #[test]
 fn observe_stall_does_not_count_drop_backlog_decline_as_progress() {
-    use crate::media::srt::{NativeSendBacklog, SrtTraceBStats};
+    use crate::media::srt::{NativeSendBacklog, SrtSenderStats};
     use std::time::{Duration, Instant};
 
     let deadline = leaf(3).common().limits.max_backpressure_duration;
@@ -218,9 +229,9 @@ fn observe_stall_does_not_count_drop_backlog_decline_as_progress() {
         packets: 8,
         ms: 40,
     });
-    leaf.transport_mut().quality_stats = Some(SrtTraceBStats {
-        pkt_snd_drop_total: 1_000,
-        ..unsafe { std::mem::zeroed() }
+    leaf.transport_mut().quality_stats = Some(SrtSenderStats {
+        packets_sent_drop_total: 1_000,
+        ..SrtSenderStats::default()
     });
     assert_eq!(
         leaf.observe_stall(start, Some(1_000), 0),
@@ -235,9 +246,9 @@ fn observe_stall_does_not_count_drop_backlog_decline_as_progress() {
         packets: 5,
         ms: 25,
     });
-    leaf.transport_mut().quality_stats = Some(SrtTraceBStats {
-        pkt_snd_drop_total: 1_037,
-        ..unsafe { std::mem::zeroed() }
+    leaf.transport_mut().quality_stats = Some(SrtSenderStats {
+        packets_sent_drop_total: 1_037,
+        ..SrtSenderStats::default()
     });
     let near_deadline = start + deadline - Duration::from_millis(1);
     assert_eq!(
@@ -287,11 +298,11 @@ fn observe_stall_lag_over_limit_is_stalled_despite_native_drain() {
 #[test]
 fn srt_fabric_leaf_samples_quality_from_transport_stats() {
     let mut leaf = leaf(1);
-    leaf.transport_mut().quality_stats = Some(SrtTraceBStats {
-        ms_rtt: 42.5,
-        mbps_send_rate: 12.0,
-        pkt_snd_loss_total: 3,
-        ..unsafe { std::mem::zeroed() }
+    leaf.transport_mut().quality_stats = Some(SrtSenderStats {
+        rtt_ms: 42.5,
+        send_rate_mbps: 12.0,
+        packets_sent_loss_total: 3,
+        ..SrtSenderStats::default()
     });
 
     let quality = leaf

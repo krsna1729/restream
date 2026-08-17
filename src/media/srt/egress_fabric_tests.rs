@@ -12,6 +12,7 @@ use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::policy::{LeafLimits, WorkBudget};
 use crate::media::egress::scheduler::{LeafKey, VisitDecision};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
+use crate::media::srt::SrtLeafHandle;
 use crate::media::ts_chunk_ring::TsChunkRing;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -191,7 +192,7 @@ impl SrtFabricHarness {
         self.poller.poll_leaves(0, &mut ready).unwrap();
         let event = ready
             .into_iter()
-            .find(|event| event.socket == self.socket)
+            .find(|event| event.handle == SrtLeafHandle::Native(self.socket))
             .unwrap();
         EngineVisit {
             generation: event.generation,

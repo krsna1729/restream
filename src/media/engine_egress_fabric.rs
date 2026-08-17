@@ -170,7 +170,8 @@ impl MediaEngine {
             effective_cpus,
             shard_config,
             |shard_id| {
-                let poller = crate::media::srt::SrtFabricPoller::new(poller_max_events)?;
+                let poller =
+                    crate::media::egress::backends::srt::SrtRuntimePoller::new(poller_max_events)?;
                 Ok::<_, crate::media::srt::SrtEgressPollError>(
                     crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
                         poller,

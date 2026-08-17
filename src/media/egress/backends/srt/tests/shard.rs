@@ -7,7 +7,7 @@ use crate::media::egress::command::{EgressCommand, FeedId, OutputId, OutputSpec,
 use crate::media::egress::policy::{LeafPolicy, WorkBudget};
 use crate::media::egress::scheduler::LeafKey;
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
-use crate::media::srt::{SrtEgressInterest, SrtEgressSendMode, SrtReadyLeaf};
+use crate::media::srt::{SrtEgressInterest, SrtEgressSendMode, SrtLeafHandle, SrtReadyLeaf};
 use bytes::Bytes;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -535,9 +535,10 @@ fn srt_shard_backend_socket_setup_failure_preserves_existing_leaf() {
 
     let result = backend.add_connected_socket(common(8), 99);
     poller_handle.push_ready(SrtReadyLeaf {
-        socket: 42,
+        handle: SrtLeafHandle::Native(42),
         key,
         generation: 7,
+        readable: false,
         writable: true,
     });
 
@@ -591,15 +592,17 @@ fn on_ready_does_not_strand_a_second_ready_leaf_behind_a_would_block_leaf() {
         .unwrap();
 
     poller_handle.push_ready(SrtReadyLeaf {
-        socket: 41,
+        handle: SrtLeafHandle::Native(41),
         key: blocked_key,
         generation: 6,
+        readable: false,
         writable: true,
     });
     poller_handle.push_ready(SrtReadyLeaf {
-        socket: 42,
+        handle: SrtLeafHandle::Native(42),
         key: healthy_key,
         generation: 7,
+        readable: false,
         writable: true,
     });
 
@@ -628,9 +631,10 @@ fn srt_shard_backend_ready_event_visits_registered_leaf() {
         .add_leaf(42, SrtFabricLeaf::new(common(7), Box::new(probe.sender)))
         .unwrap();
     poller_handle.push_ready(SrtReadyLeaf {
-        socket: 42,
+        handle: SrtLeafHandle::Native(42),
         key,
         generation: 7,
+        readable: false,
         writable: true,
     });
 
@@ -657,9 +661,10 @@ fn srt_shard_backend_ignores_unregistered_ready_leaf() {
         .add_leaf(42, SrtFabricLeaf::new(common(7), Box::new(probe.sender)))
         .unwrap();
     poller_handle.push_ready(SrtReadyLeaf {
-        socket: 99,
+        handle: SrtLeafHandle::Native(99),
         key: LeafKey(9),
         generation: 7,
+        readable: false,
         writable: true,
     });
 
@@ -708,9 +713,10 @@ fn srt_shard_backend_removed_leaf_ignores_late_readiness() {
 
     backend.on_command(EgressCommand::Remove(OutputId::new("out-srt")));
     poller_handle.push_ready(SrtReadyLeaf {
-        socket: 42,
+        handle: SrtLeafHandle::Native(42),
         key,
         generation: 7,
+        readable: false,
         writable: true,
     });
 
@@ -903,9 +909,10 @@ fn feed_wake_drives_connected_leaf_to_send_on_shard_thread() {
     );
     let key = backend.add_leaf(42, leaf).unwrap();
     poller.push_ready(SrtReadyLeaf {
-        socket: 42,
+        handle: SrtLeafHandle::Native(42),
         key,
         generation: 7,
+        readable: false,
         writable: true,
     });
 
@@ -970,9 +977,10 @@ fn on_ready_removes_leaf_on_close_decision() {
     );
     let key = backend.add_leaf(42, leaf).unwrap();
     poller_handle.push_ready(SrtReadyLeaf {
-        socket: 42,
+        handle: SrtLeafHandle::Native(42),
         key,
         generation: 7,
+        readable: false,
         writable: true,
     });
 

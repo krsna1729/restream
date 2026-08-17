@@ -14,41 +14,32 @@ use crate::media::egress::scheduler::{LeafKey, VisitDecision};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::snapshots::PublisherQuality;
+#[cfg(test)]
+use crate::media::srt::SRTSOCKET;
+#[cfg(test)]
+use crate::media::srt::srt_fabric_message_sender;
 use crate::media::srt::{
-    NativeSendBacklog, SRTSOCKET, SrtEgressEngine, SrtEgressInterest, SrtEgressPollError,
-    SrtEgressSendMode, SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec, SrtFabricPoller,
+    NativeSendBacklog, SrtEgressEngine, SrtEgressInterest, SrtEgressPollError, SrtEgressSendMode,
+    SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec, SrtFabricPoller, SrtLeafHandle,
     SrtMessageSender, SrtReadyLeaf, SrtSenderCounterSnapshot, claim_srt_egress_muxer_port,
-    connect_fabric_srt_egress_socket, srt_fabric_message_sender, srt_sender_quality_from_stats,
+    srt_sender_quality_from_stats,
 };
-
-/// Combined application and native pending state for one SRT fabric leaf.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct SrtLeafPressure {
-    pub app_pending_bytes: usize,
-    pub native_backlog: Option<NativeSendBacklog>,
-}
-
-impl SrtLeafPressure {
-    /// Bytes charged against the leaf memory envelope: retained application
-    /// message plus unacknowledged native sender-buffer bytes.
-    pub(crate) fn pending_bytes(&self) -> u64 {
-        self.app_pending_bytes as u64 + self.native_backlog.map_or(0, |backlog| backlog.bytes)
-    }
-
-    /// True when data is waiting anywhere on the send path.  A leaf with a
-    /// drained application queue but a saturated native buffer is
-    /// backpressured, not idle.
-    pub(crate) fn is_backpressured(&self) -> bool {
-        self.pending_bytes() > 0
-    }
-}
 
 mod add_error;
 pub(crate) mod muxer_ports;
+#[path = "srt/pressure.rs"]
+mod pressure;
 pub(crate) mod resolve_runtime;
+#[path = "srt/runtime.rs"]
+mod runtime;
 mod socket_config;
 
 pub(crate) use add_error::SrtBackendAddError;
+pub(crate) use pressure::{SrtLeafPressure, SrtLeafSocket};
+pub(crate) use runtime::{
+    NativeSrtSocketConnector, NoopSrtResolveCompletionSource, SrtConnectedTransport,
+    SrtRuntimePoller, SrtRuntimeSocketConfigurator, SrtRuntimeSocketConnector,
+};
 pub(crate) use socket_config::{NativeSrtSocketConfigurator, SrtSocketConfigurator};
 
 type NativeSrtLeaf = SrtFabricLeaf<Box<dyn SrtMessageSender + Send>>;
@@ -260,6 +251,10 @@ where
         feed: &TsFeed,
         budget: WorkBudget,
     ) -> EngineVisitResult {
+        if !self.common.is_current_generation(generation) {
+            return EngineVisitResult::StaleGeneration;
+        }
+        self.transport.on_readiness(readiness);
         EngineVisit {
             generation,
             common: &mut self.common,
@@ -271,6 +266,18 @@ where
         }
         .run()
     }
+
+    pub(crate) fn readiness_interest(&self) -> SrtEgressInterest {
+        let transport_interest = self.transport.readiness_interest();
+        SrtEgressInterest {
+            readable: transport_interest.readable,
+            writable: transport_interest.writable || self.engine.needs_write_interest(),
+        }
+    }
+
+    pub(crate) fn dynamic_readiness(&self) -> bool {
+        self.transport.dynamic_readiness()
+    }
 }
 
 #[cfg(test)]
@@ -278,6 +285,7 @@ pub(crate) fn requeue_after_srt_visit(decision: VisitDecision) -> bool {
     matches!(decision, VisitDecision::Continue)
 }
 
+#[cfg(test)]
 pub(crate) fn srt_fabric_leaf_from_socket(common: LeafCommon, socket: SRTSOCKET) -> NativeSrtLeaf {
     let sndbuf = Some(crate::media::srt::srt_get_configured_sndbuf(socket));
     SrtFabricLeaf::new(common, srt_fabric_message_sender(socket)).with_configured_sndbuf(sndbuf)
@@ -286,13 +294,13 @@ pub(crate) fn srt_fabric_leaf_from_socket(common: LeafCommon, socket: SRTSOCKET)
 pub(crate) trait SrtReadinessPoller {
     fn register_leaf(
         &mut self,
-        socket: SRTSOCKET,
+        handle: SrtLeafHandle,
         key: LeafKey,
         generation: u64,
         interest: SrtEgressInterest,
     ) -> Result<(), SrtEgressPollError>;
 
-    fn remove(&mut self, socket: SRTSOCKET) -> Result<(), SrtEgressPollError>;
+    fn remove(&mut self, handle: SrtLeafHandle) -> Result<(), SrtEgressPollError>;
 
     fn poll_leaves(
         &mut self,
@@ -302,7 +310,10 @@ pub(crate) trait SrtReadinessPoller {
 }
 
 pub(crate) trait SrtSocketConnector {
-    fn connect(&mut self, config: SrtFabricEgressConnectConfig<'_>) -> Result<SRTSOCKET, String>;
+    fn connect(
+        &mut self,
+        config: SrtFabricEgressConnectConfig<'_>,
+    ) -> Result<SrtConnectedTransport, String>;
 }
 
 pub(crate) trait SrtResolveCompletionSource {
@@ -384,46 +395,6 @@ impl SrtResolveCompletionSource for SrtResolveCompletionQueue {
     }
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct NativeSrtSocketConnector;
-
-impl SrtSocketConnector for NativeSrtSocketConnector {
-    fn connect(&mut self, config: SrtFabricEgressConnectConfig<'_>) -> Result<SRTSOCKET, String> {
-        connect_fabric_srt_egress_socket(config)
-    }
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct NoopSrtResolveCompletionSource;
-
-impl SrtResolveCompletionSource for NoopSrtResolveCompletionSource {
-    fn drain_resolved(&mut self, _resolved: &mut Vec<SrtResolvedConnect>) {}
-}
-
-impl SrtReadinessPoller for SrtFabricPoller {
-    fn register_leaf(
-        &mut self,
-        socket: SRTSOCKET,
-        key: LeafKey,
-        generation: u64,
-        interest: SrtEgressInterest,
-    ) -> Result<(), SrtEgressPollError> {
-        self.register_leaf(socket, key, generation, interest)
-    }
-
-    fn remove(&mut self, socket: SRTSOCKET) -> Result<(), SrtEgressPollError> {
-        self.remove(socket)
-    }
-
-    fn poll_leaves(
-        &mut self,
-        timeout_ms: i64,
-        ready: &mut Vec<SrtReadyLeaf>,
-    ) -> Result<usize, SrtEgressPollError> {
-        self.poll_leaves(timeout_ms, ready)
-    }
-}
-
 pub(crate) struct SrtShardBackend<
     P,
     C = NativeSrtSocketConfigurator,
@@ -481,12 +452,6 @@ pub(crate) struct SrtShardBackend<
     /// across every leaf this backend has ever visited. Mirrors
     /// `RtmpShardBackend::resync_count` exactly.
     resync_count: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SrtLeafSocket {
-    key: LeafKey,
-    socket: SRTSOCKET,
 }
 
 struct PendingSrtConnect {
@@ -608,24 +573,43 @@ where
         &self.srt_egress_muxer_port
     }
 
+    #[cfg(test)]
     pub(crate) fn add_connected_socket(
         &mut self,
         common: LeafCommon,
         socket: SRTSOCKET,
     ) -> Result<LeafKey, SrtBackendAddError> {
+        self.add_connected_transport(
+            common,
+            SrtConnectedTransport {
+                handle: SrtLeafHandle::Native(socket),
+                sender: srt_fabric_message_sender(socket),
+                configured_sndbuf: Some(crate::media::srt::srt_get_configured_sndbuf(socket)),
+            },
+        )
+    }
+
+    fn add_connected_transport(
+        &mut self,
+        common: LeafCommon,
+        transport: SrtConnectedTransport,
+    ) -> Result<LeafKey, SrtBackendAddError> {
         self.socket_configurator
-            .configure_connected(socket, SrtEgressSendMode::FabricNonblocking)?;
+            .configure_connected(transport.handle, SrtEgressSendMode::FabricNonblocking)?;
 
         let key = LeafKey(self.leaves.len());
+        let handle = transport.handle;
+        let leaf = SrtFabricLeaf::new(common, transport.sender)
+            .with_configured_sndbuf(transport.configured_sndbuf);
+        let interest = leaf.readiness_interest();
         self.poller
-            .register_leaf(socket, key, common.generation, SrtEgressInterest::WRITE)
+            .register_leaf(handle, key, leaf.common.generation, interest)
             .map_err(SrtBackendAddError::Poller)?;
-        let output_id = common.output_id.clone();
-        let leaf = srt_fabric_leaf_from_socket(common, socket);
+        let output_id = leaf.common.output_id.clone();
         self.leaves.push(Some(leaf));
         if let Some(previous) = self
             .output_sockets
-            .insert(output_id, SrtLeafSocket { key, socket })
+            .insert(output_id, SrtLeafSocket { key, handle })
         {
             self.remove_leaf_socket(
                 previous,
@@ -669,7 +653,7 @@ where
         let config = pending
             .connect_spec
             .connect_config(peer_addrs, muxer_port_claim);
-        let socket = self.socket_connector.connect(config).map_err(|error| {
+        let transport = self.socket_connector.connect(config).map_err(|error| {
             tracing::warn!(
                 output_id = %output_id,
                 error = %error,
@@ -678,7 +662,7 @@ where
             progress_sink.mark_terminated_unexpectedly();
             SrtPendingConnectError::Connect(SrtBackendConnectError::Connect(error))
         })?;
-        self.add_connected_socket(pending.common, socket)
+        self.add_connected_transport(pending.common, transport)
             .map_err(|error| {
                 progress_sink.mark_terminated_unexpectedly();
                 SrtPendingConnectError::Connect(SrtBackendConnectError::Add(error))
@@ -694,16 +678,19 @@ where
         let key = LeafKey(self.leaves.len());
         let output_id = leaf.common.output_id.clone();
         self.poller.register_leaf(
-            socket,
+            SrtLeafHandle::Native(socket),
             key,
             leaf.common.generation,
             SrtEgressInterest::WRITE,
         )?;
         self.leaves.push(Some(leaf));
-        if let Some(previous) = self
-            .output_sockets
-            .insert(output_id, SrtLeafSocket { key, socket })
-        {
+        if let Some(previous) = self.output_sockets.insert(
+            output_id,
+            SrtLeafSocket {
+                key,
+                handle: SrtLeafHandle::Native(socket),
+            },
+        ) {
             self.remove_leaf_socket(
                 previous,
                 crate::media::egress::backend::CloseReason::Removed,
@@ -734,7 +721,7 @@ where
         .with_progress_sink(spec.progress.clone());
         let connect_spec = SrtFabricEgressConnectSpec::from_url(
             target_url,
-            duration_millis_u64(spec.policy.connect_timeout),
+            resolve_runtime::duration_millis_u64(spec.policy.connect_timeout),
         );
         if connect_spec.peer_hosts().is_empty() {
             return;
@@ -758,7 +745,7 @@ where
         socket_ref: SrtLeafSocket,
         reason: crate::media::egress::backend::CloseReason,
     ) -> bool {
-        let _ = self.poller.remove(socket_ref.socket);
+        let _ = self.poller.remove(socket_ref.handle);
         let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) else {
             return false;
         };
@@ -813,12 +800,21 @@ where
         let result = leaf.visit_ready(
             event.generation,
             Readiness {
-                readable: false,
+                readable: event.readable,
                 writable: event.writable,
             },
             feed,
             budget,
         );
+
+        if !matches!(result, EngineVisitResult::StaleGeneration) && leaf.dynamic_readiness() {
+            let _ = self.poller.register_leaf(
+                event.handle,
+                event.key,
+                leaf.common.generation,
+                leaf.readiness_interest(),
+            );
+        }
 
         let decision = match result {
             EngineVisitResult::StaleGeneration => VisitDecision::Suspend,
@@ -973,7 +969,7 @@ where
             .map(|(_, socket_ref)| socket_ref)
             .collect();
         for socket_ref in sockets {
-            let _ = self.poller.remove(socket_ref.socket);
+            let _ = self.poller.remove(socket_ref.handle);
             if let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) {
                 let mut leaf = leaf;
                 leaf.engine.close(
@@ -985,15 +981,18 @@ where
     }
 }
 
-fn duration_millis_u64(duration: std::time::Duration) -> u64 {
-    duration.as_millis().min(u128::from(u64::MAX)) as u64
-}
-
 #[path = "srt_drain.rs"]
 mod srt_drain;
 
 #[path = "srt_connect_admission.rs"]
 mod srt_connect_admission;
+
+#[path = "srt/rs_poller.rs"]
+mod rs_poller;
+#[path = "srt/rs_sender.rs"]
+mod rs_sender;
+
+pub(crate) use rs_poller::SrtRustFabricPoller;
 
 #[cfg(test)]
 mod tests;

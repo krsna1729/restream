@@ -3,31 +3,38 @@ use std::os::raw::c_int;
 
 use super::socket::last_srt_error;
 use super::sys::{
-    SRT_EPOLL_ERR, SRT_EPOLL_OUT, SRTSOCKET, srt_epoll_add_usock, srt_epoll_create,
+    SRT_EPOLL_ERR, SRT_EPOLL_IN, SRT_EPOLL_OUT, SRTSOCKET, srt_epoll_add_usock, srt_epoll_create,
     srt_epoll_release, srt_epoll_remove_usock, srt_epoll_update_usock, srt_epoll_wait,
 };
 use crate::media::egress::scheduler::LeafKey;
+use crate::media::srt::SrtLeafHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct SrtEgressInterest {
+    pub readable: bool,
     pub writable: bool,
 }
 
 impl SrtEgressInterest {
-    pub const WRITE: Self = Self { writable: true };
+    pub const WRITE: Self = Self {
+        readable: false,
+        writable: true,
+    };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SrtReadySocket {
     pub socket: SRTSOCKET,
+    pub readable: bool,
     pub writable: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SrtReadyLeaf {
-    pub socket: SRTSOCKET,
+    pub handle: SrtLeafHandle,
     pub key: LeafKey,
     pub generation: u64,
+    pub readable: bool,
     pub writable: bool,
 }
 
@@ -148,15 +155,19 @@ where
             } else {
                 ready.push(SrtReadySocket {
                     socket: *socket,
+                    readable: false,
                     writable: true,
                 });
             }
         }
 
         for socket in self.readfds.iter().take(read_count.max(0) as usize) {
-            if !ready.iter().any(|event| event.socket == *socket) {
+            if let Some(existing) = ready.iter_mut().find(|event| event.socket == *socket) {
+                existing.readable = true;
+            } else {
                 ready.push(SrtReadySocket {
                     socket: *socket,
+                    readable: true,
                     writable: false,
                 });
             }
@@ -177,9 +188,10 @@ where
         for event in ready_sockets {
             if let Some(registered) = self.registered.get(&event.socket) {
                 ready.push(SrtReadyLeaf {
-                    socket: event.socket,
+                    handle: SrtLeafHandle::Native(event.socket),
                     key: registered.key,
                     generation: registered.generation,
+                    readable: event.readable,
                     writable: event.writable,
                 });
             }
@@ -200,6 +212,9 @@ where
 
 fn events_for(interest: SrtEgressInterest) -> c_int {
     let mut events = SRT_EPOLL_ERR;
+    if interest.readable {
+        events |= SRT_EPOLL_IN;
+    }
     if interest.writable {
         events |= SRT_EPOLL_OUT;
     }

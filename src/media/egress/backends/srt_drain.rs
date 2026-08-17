@@ -147,7 +147,7 @@ where
             let Some(socket_ref) = self.output_sockets.remove(&output_id) else {
                 continue;
             };
-            let _ = self.poller.remove(socket_ref.socket);
+            let _ = self.poller.remove(socket_ref.handle);
             if let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) {
                 let mut leaf = leaf;
                 leaf.common.progress_sink.mark_terminated_unexpectedly();
@@ -192,9 +192,10 @@ where
             }
             leaf.common.schedule.enqueued = true;
             self.ready.push_back(SrtReadyLeaf {
-                socket: socket_ref.socket,
+                handle: socket_ref.handle,
                 key: socket_ref.key,
                 generation: leaf.common.generation,
+                readable: false,
                 writable: false,
             });
         }

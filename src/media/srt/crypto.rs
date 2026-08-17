@@ -14,6 +14,12 @@ pub(in crate::media::srt) struct SrtCryptoConfig {
     pub(super) pbkeylen: c_int,
 }
 
+impl SrtCryptoConfig {
+    pub(super) fn rust_parameters(&self) -> (&str, c_int) {
+        (&self.passphrase, self.pbkeylen)
+    }
+}
+
 pub(super) fn srt_crypto_from_resolved(crypto: ResolvedSrtCrypto) -> Option<SrtCryptoConfig> {
     match crypto {
         ResolvedSrtCrypto::Plaintext => None,

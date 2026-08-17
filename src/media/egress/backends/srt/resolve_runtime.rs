@@ -1,9 +1,11 @@
 use std::thread::JoinHandle;
 
+#[cfg(test)]
+use super::NativeSrtSocketConnector;
 use super::{
-    NativeSrtSocketConfigurator, NativeSrtSocketConnector, SrtResolveCompletionQueue,
-    SrtResolveRequest, SrtResolveWorkerError, SrtResolvedConnect, SrtShardBackend,
-    duration_millis_u64, spawn_srt_resolve_worker, srt_resolve_completion_queue,
+    SrtResolveCompletionQueue, SrtResolveRequest, SrtResolveWorkerError, SrtResolvedConnect,
+    SrtRuntimeSocketConfigurator, SrtRuntimeSocketConnector, SrtShardBackend,
+    spawn_srt_resolve_worker, srt_resolve_completion_queue,
 };
 use crate::media::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
@@ -14,11 +16,15 @@ use std::sync::mpsc::SyncSender;
 
 const SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY: usize = 1024;
 
+pub(crate) fn duration_millis_u64(duration: std::time::Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
 pub(crate) type ResolvingSrtShardBackendWithPoller<P> = ResolvingSrtShardBackend<
     SrtShardBackend<
         P,
-        NativeSrtSocketConfigurator,
-        NativeSrtSocketConnector,
+        SrtRuntimeSocketConfigurator,
+        SrtRuntimeSocketConnector,
         SrtResolveCompletionQueue,
     >,
 >;
@@ -171,26 +177,35 @@ pub(crate) fn resolving_srt_shard_backend<P>(
 ) -> ResolvingSrtShardBackend<
     SrtShardBackend<
         P,
-        NativeSrtSocketConfigurator,
-        NativeSrtSocketConnector,
+        SrtRuntimeSocketConfigurator,
+        SrtRuntimeSocketConnector,
         SrtResolveCompletionQueue,
     >,
 >
 where
     P: super::SrtReadinessPoller,
 {
-    resolving_srt_shard_backend_with_configurator(
+    let (completion_sender, completion_queue) =
+        srt_resolve_completion_queue(SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY);
+    let mut backend = SrtShardBackend::with_runtime_components(
         poller,
         feed,
         budget,
-        NativeSrtSocketConfigurator,
-        srt_egress_muxer_port_reuse,
-        drain_timeout,
-        connect_admission,
+        SrtRuntimeSocketConfigurator::from_environment(),
+        SrtRuntimeSocketConnector::from_environment(),
+        completion_queue,
     )
+    .with_drain_timeout(drain_timeout)
+    .with_connect_admission(connect_admission);
+    if let Some(state) = srt_egress_muxer_port_reuse {
+        backend = backend.with_srt_egress_muxer_port_reuse(state, true);
+    }
+    ResolvingSrtShardBackend::new(backend, SrtResolveWorkerSet::new(completion_sender))
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn resolving_srt_shard_backend_with_configurator<P, C>(
     poller: P,
     feed: TsFeed,

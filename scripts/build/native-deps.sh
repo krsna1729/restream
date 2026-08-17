@@ -323,10 +323,12 @@ for helper in caller listener; do
     output_file="$PREFIX/bin/restream-srt-loss-$helper"
     if [[ ! -x "$output_file" ||
         "$source_file" -nt "$output_file" ||
-        "$PREFIX/lib/libsrt.a" -nt "$output_file" ]]; then
-        cc -O2 -I"$PREFIX/include" "$source_file" \
+        "$PREFIX/lib/libsrt.a" -nt "$output_file" ||
+        "$ROOT/scripts/build/native-deps.sh" -nt "$output_file" ]]; then
+        cc $BUILD_CFLAGS -I"$PREFIX/include" "$source_file" \
             "$PREFIX/lib/libsrt.a" -L"$PREFIX/lib" -lstdc++ \
             -lmbedtls -lmbedx509 -lmbedcrypto -ldl -lpthread -lm \
+            -Wl,-z,relro,-z,now \
             -o "$output_file"
     fi
 done
