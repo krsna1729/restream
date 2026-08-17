@@ -176,6 +176,7 @@ fn srt_outputs_use_mediamtx_standard_stream_id() {
         mtx_api: 9997,
         peer_count: 1,
         peer_mode: ResourceSweepPeer::Mediamtx,
+        srt_sink_backend: HarnessSrtSinkBackend::Libsrt,
         sample_secs: 1,
         sample_interval_ms: 1000,
         settle_secs: 1,
@@ -214,6 +215,9 @@ fn peer_instance_selection_round_robins_by_ordinal() {
     assert_eq!(msr_peer_instance(4, 4), 0);
     assert_eq!(msr_peer_instance(5, 4), 1);
     assert_eq!(msr_peer_instance(1200, 4), 0);
+    assert_eq!(msr_peer_instance(1, 1200), 1);
+    assert_eq!(msr_peer_instance(1199, 1200), 1199);
+    assert_eq!(msr_peer_instance(1200, 1200), 0);
     // peer_count == 0 must not panic (divide-by-zero); it clamps to 1.
     assert_eq!(msr_peer_instance(7, 0), 0);
 }
@@ -286,6 +290,7 @@ fn base_test_env() -> ResourceSweepEnv {
         mtx_api: 9997,
         peer_count: 1,
         peer_mode: ResourceSweepPeer::Mediamtx,
+        srt_sink_backend: HarnessSrtSinkBackend::Libsrt,
         sample_secs: 1,
         sample_interval_ms: 1000,
         settle_secs: 1,

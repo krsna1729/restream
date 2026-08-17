@@ -16,6 +16,8 @@
 - [Harness-native sink extraction and re-verification — 2026-08-15](#harness-native-sink-extraction-and-re-verification--2026-08-15)
 - [Exclusive ports-per-thread pool — fixes the thread-scaling regression](#exclusive-ports-per-thread-pool--fixes-the-thread-scaling-regression)
   - [Exact knee location: 100-step ramp at the pool optimum](#exact-knee-location-100-step-ramp-at-the-pool-optimum)
+- [Tuple affinity and bonding identity — 2026-08-17](#tuple-affinity-and-bonding-identity--2026-08-17)
+- [Fourth sink topology: one port per stream — 2026-08-17](#fourth-sink-topology-one-port-per-stream--2026-08-17)
 - [What remains open](#what-remains-open)
 
 ## Summary
@@ -627,6 +629,167 @@ CPU/kernel-socket saturation this investigation's `perf` profiling already
 identified (see
 [Corrected TCP vs UDP vs SRT ladder](#corrected-tcp-vs-udp-vs-srt-ladder))
 rather than anything specific to the harness sink's own threading model.
+
+## Tuple affinity and bonding identity — 2026-08-17
+
+The answer to "can we always route by tuples?" is **no: tuple affinity is the
+transport-correctness baseline, not the complete bonding key**.
+
+### Non-bonded SRT
+
+The owner key for a connected UDP socket is the full local/remote UDP 4-tuple
+(the harness currently has one public local endpoint, so its map can use the
+peer address as a shorthand). Once a worker has connected a datagram socket to
+that tuple, all later packets for the tuple must stay with that worker. A
+kernel probe with two `SO_REUSEPORT` sockets bound to the same 4-tuple delivered
+all 100 test datagrams to one socket (`[0, 100]`), not round-robin. This is why
+the connected-handoff design is correct at the UDP ownership boundary, but also
+why it cannot split a shared source tuple across workers.
+
+The SRT socket-ID field can distinguish multiple SRT sessions multiplexed by a
+single UDP tuple, but it is not a substitute for tuple ownership. On ordinary
+data packets the header carries the destination socket ID, identifying the
+receiver-side SRT session; the handshake carries the sender's socket ID. Both
+are connection-local and must be cached as part of the session state. StreamID
+and GROUP are handshake extensions and are not available on every data
+datagram.
+
+### Bonded SRT
+
+Bonding adds a second invariant: all physical legs of one logical bond must
+land on the same group state machine/worker before steady-state packet
+processing. The routing hierarchy is:
+
+1. `GROUP group_id + group_type` from the handshake is the primary bond
+   identity. The stock libsrt reference puts group ID, type, flags, and weight
+   in `SRT_CMD_GROUP`; the listener creates or finds the peer group by that
+   identity and rejects a type collision (`/home/dev/srt/srtcore/core.cpp`,
+   `fillHsExtGroup`, `interpretGroup`, and `makeMePeerOf`).
+2. Normalized StreamID is the application-level identity/validation key. It is
+   useful for proving the legs belong to the same requested stream, but it is
+   not a transport ownership key and cannot replace GROUP for a bonded peer.
+3. Each leg retains its own full UDP tuple and direction-appropriate SRT socket
+   ID for per-connection state, retransmission, sequencing, and teardown.
+
+Do not match bond legs by socket ID alone: each physical leg is a separate SRT
+connection and therefore has its own socket IDs. Do not match by StreamID alone:
+two unrelated publishers can intentionally use the same StreamID. If GROUP is
+absent, malformed, or not allowed by policy, the connection is non-bonded and
+must follow the ordinary tuple-affinity path.
+
+This is also why a broadcast receiver should use listener-to-connected handoff
+with a **group-owned worker**: both legs reach the same receive merge/dedup
+state, avoiding cross-worker sequence arbitration. A least-load policy may
+choose the worker when the group is first created, but subsequent legs must
+lookup that group and follow it. Disconnect accounting must remove the whole
+leg/group membership before a least-load decision is made again.
+
+### What the strategy comparison proves
+
+| Strategy | Correct ownership unit | Observed contention/pathology |
+|---|---|---|
+| Distinct ports | One libsrt/Rust owner per port | Strong isolation, but extra sockets/threads and a hard host knee remain. |
+| One public port + `SO_REUSEPORT` | Kernel hash of the UDP tuple | More tuples distribute well; a shared tuple remains pinned to one worker. Low tuple cardinality produced extreme worker skew in `perf`. |
+| Listener-to-connected handoff | Listener assigns one tuple, connected worker owns it | Removes the listener from steady-state traffic, but one shared tuple still serializes all SRT sessions on that owner. Bonding additionally requires group affinity. |
+
+At 600 outputs with 600 independent source tuples, connected handoff balanced
+150 tuples per worker but still recorded 34 sender-side drops at 371.0% CPU and
+~687 MiB RSS. The matching high-tuple `SO_REUSEPORT` run passed its 600-output
+checkpoint but recorded 254,558 drops at 342.7% CPU and ~730 MiB RSS. More
+tuples improve ownership distribution; they do not remove SRT protocol cost,
+sender backpressure, or the receiver's per-session state cost.
+
+At the full 1,200-output target, the same high-tuple `SO_REUSEPORT` setup did
+not reach its first checkpoint within the bounded 180-second run and emitted no
+result JSON. The timeout cleaned up the harness, restream, and peer processes.
+This is a scale failure, not a missing measurement: tuple cardinality alone
+does not make the strategy viable at the target load.
+
+Therefore the current connected handoff is correct for non-bonded tuple
+ownership, but it is **not yet bonding-correct**: the harness still needs a
+GROUP-aware bond table that assigns every leg to the same worker. A future
+connected-owner/per-SRT-session dispatcher may use `(full tuple, destination
+socket ID)` after the owner receives the datagram, but it must be measured for
+channel and response-path contention before it can be called a performance
+improvement.
+
+## Fourth sink topology: one port per stream — 2026-08-17
+
+The Rust sink now exposes a separate `per-stream-port` scaling mode. It binds
+one distinct UDP port for every configured `PEER_COUNT` slot, and the MSR
+ordinal-to-peer mapping sends each output to its corresponding port. This is
+different from the ordinary distinct-port sweep, where a smaller port pool is
+shared round-robin by many streams. For a 1,200-output SRT-only run, the
+topology is therefore 1,200 Rust sink ports and 1,200 SRT outputs.
+
+The SRT-only path does not bind the harness's unused RTMP listeners. The sink
+also rejects a port range that contains restream's own SRT listener, which is
+important for the default `8891..10090` range at 1,200 ports. Use a separate
+base such as `MTX_SRT=11000` for this run.
+
+The implementation does not claim that a per-stream port removes SRT's
+per-session cost. It isolates each stream at the UDP ownership boundary so the
+measurement can answer that question directly; CPU, RSS, drops, output
+checkpoint, and profile evidence are recorded below after the live run.
+
+### Live evidence
+
+The initial attempt exposed the host prerequisite rather than a protocol
+limit: the shell `nofile` soft limit was 1,024, and binding stopped at port
+12,015 with `EMFILE`. With `ulimit -n 65535`, the corrected probe counted all
+1,200 listeners live on `13000..14199` and passed 30/30 outputs with zero
+sender drops. No child process remained after cleanup.
+
+The full run used the bench binary, `PEER_COUNT=1200`,
+`HARNESS_SRT_SINK_THREADS=1`, and `MTX_SRT=13000`. It reached 1,200/1,200
+outputs and zero sender drops:
+
+| Measure | Result |
+|---|---:|
+| Rust sink UDP listeners | 1,200 |
+| Rust sink workers | 1 |
+| Active SRT egresses | 1,200 |
+| Restream CPU average / peak | 275.43% / 280.47% |
+| Restream RSS peak | 1,276,580 KiB |
+| Restream PSS peak | 1,260,201 KiB |
+| Harness thread peak | 214 |
+| Output checkpoint | 1,200 / 1,200 |
+| Sender packet drops | 0 |
+
+Artifacts:
+
+- `.local/artifacts/msr-rust-sink-per-stream-ports-1200-full-20260817/`
+- `.local/artifacts/msr-rust-sink-per-stream-ports-1200-probe-counted-20260817/`
+- `.local/artifacts/msr-rust-sink-per-stream-ports-1200-profile-20260817/`
+- `.local/artifacts/msr-rust-sink-per-stream-ports-1200-sink-worker-profile-explicit-20260817/`
+
+The on-CPU restream profile contained 14K samples with no lost samples. Its
+visible cost was dominated by runtime scheduling and waiting around the
+libsrt epoll path: `UDT::epoll_wait2` appeared at 2.13% inclusive in the
+Tokio scheduler stack. The harness-process sink profile contained 20K samples
+with no lost samples. An additional profile attached directly to the one
+sink-worker TID contained 3K samples with no lost samples. Its named receiver
+hot functions were allocation and receive-buffer work: `_int_malloc` 2.81%,
+`ReceiverBuffer::pop_ready` 2.62%, `_int_free` 2.58%,
+`SrtConnection::feed_recv_buf` 2.18%,
+`process_rust_connections_mode` 1.51%, `ReceiverBuffer::receive` 1.65%, and
+`ReceiverBuffer::generate_ack` 1.49% self time. It also showed
+`__libc_recvfrom` 0.24% and `__libc_sendto` 0.23%. The unresolved kernel
+samples are a host `kptr_restrict` reporting limitation, not evidence of an
+application lock convoy.
+
+The controlled conclusion is that one worker is sufficient for this topology
+at the current target and that it clears the earlier shared-topology stall.
+It does not prove one worker is optimal: all 1,200 sockets are still serviced
+by one mio loop, and the profile points to per-packet allocation, receive
+buffer processing, ACK generation, and kernel wait time as the next tuning
+surfaces. A worker-count sweep is a separate experiment and must keep the
+1,200-port map fixed.
+
+The 1,200-port run required raising the process `nofile` limit. Any reusable
+benchmark wrapper for this topology must set that limit before binding; the
+application now fails early and explicitly if the sink range overlaps
+restream's own SRT listener.
 
 ## What remains open
 

@@ -5,8 +5,8 @@ use std::sync::OnceLock;
 use serde::Deserialize;
 
 use super::super::{
-    HarnessSrtCrypto, default_restream_bin, default_work_db_path, env_secs, env_usize,
-    harness_port_defaults, harness_srt_crypto_from_env,
+    HarnessSrtCrypto, HarnessSrtSinkBackend, default_restream_bin, default_work_db_path, env_secs,
+    env_usize, harness_port_defaults, harness_srt_crypto_from_env,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -95,6 +95,7 @@ pub(super) struct ResourceSweepEnv {
     /// `MSR_PEER` (default `mediamtx`): which process type backs the peer
     /// instances above.
     pub(super) peer_mode: ResourceSweepPeer,
+    pub(super) srt_sink_backend: HarnessSrtSinkBackend,
     pub(super) sample_secs: u64,
     pub(super) sample_interval_ms: u64,
     pub(super) settle_secs: u64,
@@ -143,6 +144,7 @@ impl ResourceSweepEnv {
             mtx_api: ports.mtx_api,
             peer_count: env_usize("PEER_COUNT", 1).max(1),
             peer_mode: ResourceSweepPeer::from_env()?,
+            srt_sink_backend: HarnessSrtSinkBackend::from_env()?,
             sample_secs: env_secs("RESOURCE_SWEEP_SAMPLE_SECS", 6),
             sample_interval_ms: env_secs("RESOURCE_SWEEP_SAMPLE_INTERVAL_MS", 1000),
             settle_secs: env_secs("RESOURCE_SWEEP_SETTLE_SECS", 4),

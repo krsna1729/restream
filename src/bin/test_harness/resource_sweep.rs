@@ -9,7 +9,7 @@ use tokio::process::{Child, Command};
 
 use super::{
     FfmpegStats, GeneralizedSinkMetrics, GeneralizedSinkServer, HarnessSrtCrypto, HarnessSrtMode,
-    HarnessSrtSinkPool, MSR_LANGUAGE_CODES, MSR_LANGUAGE_NAMES, MixedEnv, PublishTrackSelection,
+    HarnessSrtSinkPeer, MSR_LANGUAGE_CODES, MSR_LANGUAGE_NAMES, MixedEnv, PublishTrackSelection,
     RampApi, RtmpOutputMode, SignalTolerances, append_line, append_srt_crypto,
     apply_harness_srt_listener_env, apply_srt_listener_env, capture_signal_sample, cleanup_ramp_db,
     create_backup_input, create_output, create_output_with_rtmp_mode, decode_pcm_quality,
@@ -49,6 +49,7 @@ use config::{
 };
 #[path = "resource_sweep/measurement.rs"]
 mod measurement;
+use super::HarnessSrtSinkBackend;
 pub(super) use measurement::ffmpeg_children_stats;
 pub(crate) use measurement::read_proc_status_kb_checked;
 use measurement::{
@@ -88,7 +89,7 @@ struct ResourceSweepStack {
 #[derive(Default)]
 struct SinkPeerStack {
     rtmp: Vec<GeneralizedSinkServer>,
-    srt_pool: Option<HarnessSrtSinkPool>,
+    srt_pool: Option<HarnessSrtSinkPeer>,
 }
 
 /// Stop every child in a peer-instance Vec (or any other child list),
@@ -338,26 +339,54 @@ async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>
 /// (`HarnessSrtSinkPool`), partitioned with exclusive port ownership
 /// across every `PEER_COUNT` port, not a per-port thread count.
 async fn start_harness_sink_peers(env: &ResourceSweepEnv) -> Result<SinkPeerStack, String> {
+    tracing::info!(
+        backend = env.srt_sink_backend.as_str(),
+        "starting harness SRT sink backend"
+    );
+    let bind_rtmp = msr::msr_sink_uses_rtmp()?;
     let mut rtmp = Vec::with_capacity(env.peer_count);
     let mut srt_ports = Vec::with_capacity(env.peer_count);
     for index in 0..env.peer_count {
         let (rtmp_port, _rtmps, srt_port, _api) = peer_instance_ports(env, index);
         let metrics = Arc::new(GeneralizedSinkMetrics::default());
-        match start_generalized_sink_server(rtmp_port, metrics).await {
-            Ok(server) => rtmp.push(server),
-            Err(err) => {
-                for server in rtmp {
-                    stop_generalized_sink_server(server);
+        if bind_rtmp {
+            match start_generalized_sink_server(rtmp_port, metrics).await {
+                Ok(server) => rtmp.push(server),
+                Err(err) => {
+                    for server in rtmp {
+                        stop_generalized_sink_server(server);
+                    }
+                    return Err(format!("harness sink RTMP listener on {rtmp_port}: {err}"));
                 }
-                return Err(format!("harness sink RTMP listener on {rtmp_port}: {err}"));
             }
         }
         srt_ports.push(srt_port);
     }
 
-    let discard_threads = env_usize("HARNESS_SRT_SINK_THREADS", env.peer_count);
+    if srt_ports.contains(&env.restream_srt) {
+        for server in rtmp {
+            stop_generalized_sink_server(server);
+        }
+        return Err(format!(
+            "harness sink SRT port range includes restream's own SRT port {}: choose a different MTX_SRT base for {} ports",
+            env.restream_srt,
+            srt_ports.len()
+        ));
+    }
+
+    let default_threads = match env.srt_sink_backend {
+        HarnessSrtSinkBackend::Libsrt => env.peer_count,
+        HarnessSrtSinkBackend::Rust => 1,
+    };
+    let discard_threads = env_usize("HARNESS_SRT_SINK_THREADS", default_threads);
     let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024) as i32;
-    let srt_pool = match HarnessSrtSinkPool::start(&srt_ports, udp_buffer, discard_threads) {
+    let srt_pool = match HarnessSrtSinkPeer::start(
+        env.srt_sink_backend,
+        &srt_ports,
+        udp_buffer,
+        discard_threads,
+        &env.srt_crypto,
+    ) {
         Ok(pool) => pool,
         Err(err) => {
             for server in rtmp {
@@ -838,6 +867,7 @@ mod tests {
             mtx_api: 9997,
             peer_count: 4,
             peer_mode: ResourceSweepPeer::Mediamtx,
+            srt_sink_backend: HarnessSrtSinkBackend::Libsrt,
             sample_secs: 1,
             sample_interval_ms: 1000,
             settle_secs: 1,

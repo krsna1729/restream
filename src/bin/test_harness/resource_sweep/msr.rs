@@ -22,6 +22,13 @@ use verification::*;
 pub(crate) const MSR_MODE: &str = "msr";
 pub(crate) const MSR_DASHBOARD_MODE: &str = "msr.dashboard";
 
+pub(crate) fn msr_sink_uses_rtmp() -> Result<bool, String> {
+    Ok(!matches!(
+        MsrProtocolMix::from_env()?,
+        MsrProtocolMix::SrtOnly
+    ))
+}
+
 /// Peer-verification results for one MSR checkpoint. Exactly one of
 /// `path_health`/`post_sample_path_health` (mediamtx peer) or
 /// `sink_verification` (sink peer) is populated, depending on `MSR_PEER`;

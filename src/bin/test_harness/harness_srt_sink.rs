@@ -40,6 +40,96 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 
+use super::HarnessSrtCrypto;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HarnessSrtSinkBackend {
+    Libsrt,
+    Rust,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RustSinkScaling {
+    Ports,
+    PerStreamPort,
+    ReusePort,
+    Connected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RustConnectedRouting {
+    RoundRobin,
+    LeastTuples,
+}
+
+impl RustConnectedRouting {
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "round-robin" | "round_robin" | "rr" => Ok(Self::RoundRobin),
+            "least-tuples" | "least_tuples" | "least-loaded" | "least_loaded" => {
+                Ok(Self::LeastTuples)
+            }
+            other => Err(format!(
+                "HARNESS_SRT_SINK_CONNECTED_ROUTING must be round-robin or least-tuples (got {other})"
+            )),
+        }
+    }
+
+    pub(crate) fn from_env() -> Result<Self, String> {
+        let value = std::env::var("HARNESS_SRT_SINK_CONNECTED_ROUTING")
+            .unwrap_or_else(|_| "round-robin".to_string());
+        Self::parse(&value)
+    }
+}
+
+impl RustSinkScaling {
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "ports" | "distinct-ports" => Ok(Self::Ports),
+            "per-stream" | "per-stream-port" | "per-stream-ports" | "one-port-per-stream" => {
+                Ok(Self::PerStreamPort)
+            }
+            "reuseport" | "reuse-port" => Ok(Self::ReusePort),
+            "connected" | "connected-dgram" => Ok(Self::Connected),
+            other => Err(format!(
+                "HARNESS_SRT_SINK_SCALING must be ports, per-stream-port, reuseport, or connected (got {other})"
+            )),
+        }
+    }
+
+    pub(crate) fn from_env() -> Result<Self, String> {
+        let value =
+            std::env::var("HARNESS_SRT_SINK_SCALING").unwrap_or_else(|_| "ports".to_string());
+        Self::parse(&value)
+    }
+}
+
+impl HarnessSrtSinkBackend {
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "libsrt" | "native" => Ok(Self::Libsrt),
+            "rust" | "srt-rust" => Ok(Self::Rust),
+            other => Err(format!(
+                "HARNESS_SRT_SINK_BACKEND must be libsrt or rust (got {other})"
+            )),
+        }
+    }
+
+    pub(crate) fn from_env() -> Result<Self, String> {
+        let value = std::env::var("HARNESS_SRT_SINK_BACKEND")
+            .or_else(|_| std::env::var("RESTREAM_SRT_BACKEND"))
+            .unwrap_or_else(|_| "libsrt".to_string());
+        Self::parse(&value)
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Libsrt => "libsrt",
+            Self::Rust => "rust",
+        }
+    }
+}
+
 type SrtSocket = c_int;
 
 #[repr(C)]
@@ -461,58 +551,47 @@ fn discard_loop(listeners: Vec<SrtSocket>, stop: &AtomicBool, counters: &SinkCou
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[path = "harness_srt_sink/rust_sink.rs"]
+mod rust_sink;
 
-    fn free_udp_ports(count: usize) -> Vec<u16> {
-        (0..count)
-            .map(|_| {
-                let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind probe socket");
-                socket.local_addr().expect("probe socket addr").port()
-            })
-            .collect()
+pub(crate) enum HarnessSrtSinkPeer {
+    Libsrt(HarnessSrtSinkPool),
+    Rust(rust_sink::RustHarnessSrtSinkPool),
+}
+
+impl HarnessSrtSinkPeer {
+    pub(crate) fn start(
+        backend: HarnessSrtSinkBackend,
+        ports: &[u16],
+        udp_buffer: i32,
+        thread_count: usize,
+        crypto: &HarnessSrtCrypto,
+    ) -> Result<Self, String> {
+        match backend {
+            HarnessSrtSinkBackend::Libsrt => {
+                HarnessSrtSinkPool::start(ports, udp_buffer, thread_count).map(Self::Libsrt)
+            }
+            HarnessSrtSinkBackend::Rust => {
+                let scaling = RustSinkScaling::from_env()?;
+                rust_sink::RustHarnessSrtSinkPool::start(
+                    ports,
+                    udp_buffer,
+                    thread_count,
+                    scaling,
+                    crypto,
+                )
+                .map(Self::Rust)
+            }
+        }
     }
 
-    #[test]
-    fn harness_srt_sink_pool_starts_and_stops_without_connections() {
-        let ports = free_udp_ports(1);
-        let pool =
-            HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 1).expect("start harness sink pool");
-        pool.stop();
-    }
-
-    #[test]
-    fn harness_srt_sink_pool_rejects_a_port_already_bound() {
-        let ports = free_udp_ports(1);
-        let pool =
-            HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 1).expect("start harness sink pool");
-        let conflict = HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 1);
-        assert!(
-            conflict.is_err(),
-            "second pool on {ports:?} unexpectedly bound"
-        );
-        pool.stop();
-    }
-
-    #[test]
-    fn harness_srt_sink_pool_clamps_thread_count_to_port_count() {
-        let ports = free_udp_ports(2);
-        // Requesting more threads than ports must not panic or leave a
-        // port unowned; it clamps to one thread per port.
-        let pool =
-            HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 8).expect("start harness sink pool");
-        assert_eq!(pool.threads.len(), 2);
-        pool.stop();
-    }
-
-    #[test]
-    fn harness_srt_sink_pool_partitions_ports_across_fewer_threads() {
-        let ports = free_udp_ports(4);
-        let pool =
-            HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 2).expect("start harness sink pool");
-        assert_eq!(pool.threads.len(), 2);
-        assert_eq!(pool.listeners.len(), 4);
-        pool.stop();
+    pub(crate) fn stop(self) {
+        match self {
+            Self::Libsrt(pool) => pool.stop(),
+            Self::Rust(pool) => pool.stop(),
+        }
     }
 }
+#[cfg(test)]
+#[path = "harness_srt_sink/tests.rs"]
+mod tests;
