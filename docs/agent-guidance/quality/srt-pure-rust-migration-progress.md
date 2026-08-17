@@ -105,6 +105,23 @@ flamegraphs share the libsrt `sendmsg`/UDP and mutex/futex cost, while the sink
 flamegraphs expose Core receive-buffer, ACK, allocation, and feedback UDP
 costs. No topology result is being attributed to only one endpoint.
 
+### Post-commit bench-profile recheck
+
+After commit `90205e72`, `scripts/build/bench-harness.sh` rebuilt both
+production-shaped binaries with the verified x86-64-v3 bench profile. The
+one-output MSR seam check was repeated in all three endpoint combinations;
+these short runs are correctness/interop evidence, not a CPU baseline:
+
+| Restream | Sink | Restream CPU sample | RSS peak | Bytes out delta | Drops |
+|---|---|---:|---:|---:|---:|
+| Rust | Rust | 7.86% | 89,448 KiB | 251,544 | 0 |
+| Rust | libsrt | 8.87% | 89,680 KiB | 246,844 | 0 |
+| libsrt | Rust | 24.24% | 90,404 KiB | 247,220 | 0 |
+
+The artifacts were regenerated under `.local/artifacts/msr/` and the run
+used `BENCH_BUILD=never`, proving the harness consumed the newly built bench
+binaries rather than silently rebuilding debug executables.
+
 ## Affinity invariant for tuple sharding and bonding
 
 Tuple affinity is necessary for correctness, but it is not sufficient for a
