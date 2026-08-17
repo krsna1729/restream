@@ -151,6 +151,42 @@ The raw smoke ledgers are
 `.local/artifacts/srt-six-driver-smoke-20260817.tsv` and
 `.local/artifacts/srt-compio-smoke-20260817.tsv`.
 
+### High-impairment recheck and smol readiness fix
+
+The first 10% loss / 100ms one-way delay bake-off exposed two measurement
+fairness problems rather than a Rust protocol limit. Every interop binary had
+a hard-coded five-second handshake deadline, which was too short for this
+impaired path. The deadline is now a shared 15-second constant, so all seven
+pairs get the same opportunity to establish the connection.
+
+The smol pair still failed intermittently after that fairness change. A direct
+run showed the listener reaching `CONNECTED` while the caller reported
+`handshake timeout`. The smol adapter had waited for readiness and then called
+the raw socket; that bypassed async-io's optimistic read plus retry sequence.
+The adapter now uses async-io's `recv`/`recv_from` read path for the blocking
+branch and retains a raw nonblocking drain for queued datagrams. Five repeated
+smol cells passed after the change, and the full high-impairment matrix passed
+all seven pairs:
+
+| Pair | Caller/listener | Caller packets | Listener packets | Caller retransmits | Listener loss events |
+|---|---:|---:|---:|---:|---:|
+| libsrt | 0 / 0 | 7,612 total | 6,691 total | 769 | 683 |
+| mio | 0 / 0 | 7,587 | 7,415 | 1,512 | 773 |
+| tokio | 0 / 0 | 7,588 | 7,415 | 1,713 | 815 |
+| smol | 0 / 0 | 7,587 | 7,418 | 1,591 | 917 |
+| monoio | 0 / 0 | 7,586 | 7,416 | 1,659 | 781 |
+| glommio | 0 / 0 | 7,586 | 7,404 | 1,625 | 810 |
+| compio | 0 / 0 | 7,586 | 7,413 | 1,681 | 884 |
+
+The exact raw output is
+`.local/artifacts/srt-six-driver-loss10-delay100-10s-readfix-20260817.tsv`.
+The matrix was run from the optimized bench-profile binaries with
+`target-cpu=x86-64-v3`; it is a protocol/differential gate, not a claim that
+the runtimes have equal CPU cost. The four receiver-topology flamegraph runs
+remain separately paired: every strategy directory contains both
+`restream.svg` and `sink.svg`, so sender and receiver pathologies are not
+being inferred from one endpoint's profile.
+
 ## Affinity invariant for tuple sharding and bonding
 
 Tuple affinity is necessary for correctness, but it is not sufficient for a
