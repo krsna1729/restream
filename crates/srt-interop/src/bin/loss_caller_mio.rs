@@ -118,19 +118,23 @@ fn main() {
         } else {
             MAX_POLL_WAIT
         };
-        // Below SPIN_THRESHOLD, skip the epoll_wait syscall and let the
-        // loop itself spin (non-blocking recv + pacing recheck each lap):
-        // at high pacing rates (e.g. ~1.36ms/packet at 8 Mbps) the syscall
-        // cost of poll() is a large enough fraction of the period that
-        // calling it unconditionally on every lap was measured to cap
-        // achieved throughput well below target (56% of nominal at 8 Mbps,
-        // rising smoothly to 83% at 1 Mbps -- the signature of a fixed
-        // per-lap cost against a shrinking period, not an OS timer-
-        // granularity wall). Above the threshold there's genuine idle time
-        // worth actually blocking for, so still use poll() there.
-        const SPIN_THRESHOLD: Duration = Duration::from_millis(3);
-        if wait > SPIN_THRESHOLD
-            && let Err(e) = poll.poll(&mut events, Some(wait))
+        // Block via epoll_wait for the wait minus a small TAIL_SPIN margin,
+        // not the full wait: poll()'s own syscall latency was measured to
+        // cap achieved throughput well below target when called every lap
+        // with a short timeout (56% of nominal at 8 Mbps, rising smoothly
+        // to 83% at 1 Mbps -- the signature of a fixed per-lap cost against
+        // a shrinking period). Leaving the last ~300us un-slept and letting
+        // the loop's own next iteration(s) spin it off (next wait is then
+        // <=TAIL_SPIN, so block_for computes to ~0 and this becomes a fast
+        // non-blocking recv-check loop) gets syscall-free precision for the
+        // final margin while still sleeping -- and yielding the CPU -- for
+        // the bulk of every period, unlike an earlier version of this file
+        // that spun the *entire* wait below a fixed 3ms threshold and
+        // measured ~93% CPU use even at moderate bitrates.
+        const TAIL_SPIN: Duration = Duration::from_micros(300);
+        let block_for = wait.saturating_sub(TAIL_SPIN);
+        if block_for > Duration::ZERO
+            && let Err(e) = poll.poll(&mut events, Some(block_for))
         {
             // EINTR and similar are routine under a signal-heavy test host;
             // just loop back and recompute the wait.
@@ -198,6 +202,7 @@ fn main() {
 
     let stats = conn.sender_stats();
     let elapsed_s = start.elapsed().as_secs_f64();
+    let p = srt_interop::cpu_stats::process_stats();
     match stats {
         // total_retransmits/packets_in_loss_list are directly comparable to
         // libsrt's pktRetransTotal/current loss-list size. Sender-side RTT
@@ -205,13 +210,21 @@ fn main() {
         // tracks it) -- the loss-listener's STATS line is the RTT source of
         // record for this differential comparison.
         Some(s) => println!(
-            "STATS role=caller pkt_sent={total_sent} pkt_sent_total={} \
-             pkt_retrans_total={} pkt_loss_list_len={} elapsed_s={elapsed_s:.3}",
-            s.total_sent, s.total_retransmits, s.packets_in_loss_list
+            "STATS role=caller backend=mio pkt_sent={total_sent} pkt_sent_total={} \
+             pkt_retrans_total={} pkt_loss_list_len={} elapsed_s={elapsed_s:.3} \
+             cpu_user_ms={:.1} cpu_sys_ms={:.1} peak_rss_kb={}",
+            s.total_sent,
+            s.total_retransmits,
+            s.packets_in_loss_list,
+            p.cpu_user_ms,
+            p.cpu_sys_ms,
+            p.peak_rss_kb
         ),
         None => println!(
-            "STATS role=caller pkt_sent={total_sent} pkt_sent_total=0 \
-             pkt_retrans_total=0 pkt_loss_list_len=0 elapsed_s={elapsed_s:.3}"
+            "STATS role=caller backend=mio pkt_sent={total_sent} pkt_sent_total=0 \
+             pkt_retrans_total=0 pkt_loss_list_len=0 elapsed_s={elapsed_s:.3} \
+             cpu_user_ms={:.1} cpu_sys_ms={:.1} peak_rss_kb={}",
+            p.cpu_user_ms, p.cpu_sys_ms, p.peak_rss_kb
         ),
     }
 

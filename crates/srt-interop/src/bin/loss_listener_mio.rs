@@ -89,7 +89,18 @@ fn main() {
             break;
         }
 
-        poll.poll(&mut events, Some(MAX_POLL_WAIT)).ok();
+        // Track the earliest-due armed timer (e.g. the 10ms ACK timer),
+        // capped at MAX_POLL_WAIT -- a fixed poll interval here would add
+        // up to its own duration of jitter to when ACKs actually go out,
+        // polluting the RTT measurement this differential matrix exists
+        // to make.
+        let wait = Duration::from_micros(srt_interop::mio_driver::time_until_earliest_timer(
+            &timers,
+            now(start),
+            MAX_POLL_WAIT.as_micros() as u64,
+        ))
+        .min(MAX_POLL_WAIT);
+        poll.poll(&mut events, Some(wait)).ok();
 
         // recv_from, not recv: until the first packet arrives there is no
         // connected peer to restrict to, and a stray/malformed first
@@ -148,6 +159,7 @@ fn main() {
 
     let stats = conn.receiver_stats();
     let elapsed_s = start.elapsed().as_secs_f64();
+    let p = srt_interop::cpu_stats::process_stats();
     match stats {
         // total_lost is directly comparable to libsrt's pktRcvLossTotal.
         // total_duplicates has no direct libsrt-side counterpart printed by
@@ -155,16 +167,22 @@ fn main() {
         // a different concept); reported here honestly as duplicates, not
         // relabeled as drops.
         Some(s) => println!(
-            "STATS role=listener pkt_recv={total_received} pkt_recv_total={} \
-             pkt_rcv_loss_total={} pkt_rcv_dup_total={} rtt_ms={:.3} elapsed_s={elapsed_s:.3}",
+            "STATS role=listener backend=mio pkt_recv={total_received} pkt_recv_total={} \
+             pkt_rcv_loss_total={} pkt_rcv_dup_total={} rtt_ms={:.3} elapsed_s={elapsed_s:.3} \
+             cpu_user_ms={:.1} cpu_sys_ms={:.1} peak_rss_kb={}",
             s.total_received,
             s.total_lost,
             s.total_duplicates,
-            s.rtt as f64 / 1000.0
+            s.rtt as f64 / 1000.0,
+            p.cpu_user_ms,
+            p.cpu_sys_ms,
+            p.peak_rss_kb
         ),
         None => println!(
-            "STATS role=listener pkt_recv={total_received} pkt_recv_total=0 \
-             pkt_rcv_loss_total=0 pkt_rcv_dup_total=0 rtt_ms=0.000 elapsed_s={elapsed_s:.3}"
+            "STATS role=listener backend=mio pkt_recv={total_received} pkt_recv_total=0 \
+             pkt_rcv_loss_total=0 pkt_rcv_dup_total=0 rtt_ms=0.000 elapsed_s={elapsed_s:.3} \
+             cpu_user_ms={:.1} cpu_sys_ms={:.1} peak_rss_kb={}",
+            p.cpu_user_ms, p.cpu_sys_ms, p.peak_rss_kb
         ),
     }
 

@@ -28,7 +28,11 @@
 #                    sweep, e.g. "1000000 2000000 4000000 8000000 16000000")
 #   LOSS_LEVELS      space-separated loss percentages (default matrix)
 #   LATENCY_LEVELS   space-separated netem one-way delays in ms (default matrix)
-#   IMPLS            space-separated implementations to run: libsrt rust
+#   IMPLS            space-separated implementations to run: libsrt and/or
+#                    rust-<backend> for backend in mio/tokio/smol/monoio/
+#                    glommio/compio (default: libsrt plus all six backends
+#                    -- the full docs/srt-pure-rust-plan.md Phase 4
+#                    driver-framework bake-off)
 set -uo pipefail
 
 repo_root="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
@@ -41,42 +45,49 @@ SRT_LATENCY_MS="${SRT_LATENCY_MS:-200}"
 BITRATE_LEVELS="${BITRATE_LEVELS:-8000000}"
 LOSS_LEVELS="${LOSS_LEVELS:-0.5 1 2 5 10 15}"
 LATENCY_LEVELS="${LATENCY_LEVELS:-0 5 10 20 50 100}"
-IMPLS="${IMPLS:-libsrt rust}"
+IMPLS="${IMPLS:-libsrt rust-mio rust-tokio rust-smol rust-monoio rust-glommio rust-compio}"
 
 PREFIX="${AGENT_SHARED_STATIC_ROOT:-$repo_root/.local/build/static}/prefix"
 LIBSRT_LISTENER="$PREFIX/bin/restream-srt-loss-listener"
 LIBSRT_CALLER="$PREFIX/bin/restream-srt-loss-caller"
-RUST_LISTENER="$repo_root/target/debug/srt-interop-loss-listener"
-RUST_CALLER="$repo_root/target/debug/srt-interop-loss-caller"
+
+# Resolve an impl name to its listener/caller binary paths. libsrt is the
+# one non-Rust entry; every other impl is expected to be rust-<backend>,
+# matching crates/srt-interop's srt-interop-loss-{listener,caller}-<backend>
+# binaries (mio/tokio/smol/monoio/glommio/compio -- see Cargo.toml's doc
+# comment for why they're separate binaries, not one swappable trait).
+resolve_bins() {
+  local impl="$1"
+  if [[ "$impl" == "libsrt" ]]; then
+    echo "$LIBSRT_LISTENER" "$LIBSRT_CALLER"
+  else
+    local backend="${impl#rust-}"
+    echo "$repo_root/target/debug/srt-interop-loss-listener-$backend" \
+         "$repo_root/target/debug/srt-interop-loss-caller-$backend"
+  fi
+}
+
+for impl in $IMPLS; do
+  read -r listener_bin caller_bin <<< "$(resolve_bins "$impl")"
+  if [[ ! -x "$listener_bin" || ! -x "$caller_bin" ]]; then
+    if [[ "$impl" == "libsrt" ]]; then
+      echo "missing $listener_bin / $caller_bin -- run scripts/build/native-deps.sh first" >&2
+    else
+      echo "missing $listener_bin / $caller_bin -- run: scripts/build/resource-limit.sh cargo build -p srt-interop" >&2
+    fi
+    exit 1
+  fi
+done
 
 PORT=19300
 CELL_TIMEOUT=$((DURATION_SECS + 30))
-
-for bin in "$LIBSRT_LISTENER" "$LIBSRT_CALLER"; do
-  if [[ " $IMPLS " == *" libsrt "* && ! -x "$bin" ]]; then
-    echo "missing $bin -- run scripts/build/native-deps.sh first" >&2
-    exit 1
-  fi
-done
-for bin in "$RUST_LISTENER" "$RUST_CALLER"; do
-  if [[ " $IMPLS " == *" rust "* && ! -x "$bin" ]]; then
-    echo "missing $bin -- run: scripts/build/resource-limit.sh cargo build -p srt-interop" >&2
-    exit 1
-  fi
-done
 
 echo -e "impl\tloss_pct\tdelay_ms\tbitrate_bps\tduration_s\tcaller_rc\tlistener_rc\tcaller_stats\tlistener_stats" > "$OUT"
 
 run_cell() {
   local impl="$1" loss_pct="$2" delay_ms="$3" bitrate_bps="$4"
   local listener_bin caller_bin
-  if [[ "$impl" == "libsrt" ]]; then
-    listener_bin="$LIBSRT_LISTENER"
-    caller_bin="$LIBSRT_CALLER"
-  else
-    listener_bin="$RUST_LISTENER"
-    caller_bin="$RUST_CALLER"
-  fi
+  read -r listener_bin caller_bin <<< "$(resolve_bins "$impl")"
 
   # -u (name only, don't create): the cell runs as root via sudo, and this
   # sandboxed environment does not let root write into a file the

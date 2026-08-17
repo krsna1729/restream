@@ -57,3 +57,21 @@ pub fn due_timers(timers: &mut HashMap<TimerId, Timestamp>, now: Timestamp) -> V
     }
     due
 }
+
+/// Microseconds until the earliest-due armed timer (e.g. the 10ms ACK
+/// timer), or `default_us` if none are armed yet. Used by the
+/// loss-listener binaries so their poll wait tracks the next real timer
+/// deadline instead of a fixed interval -- a fixed wait adds up to its own
+/// duration of jitter to when ACKs actually go out, which pollutes the RTT
+/// measurement this whole differential matrix exists to make.
+pub fn time_until_earliest_timer(
+    timers: &HashMap<TimerId, Timestamp>,
+    now: Timestamp,
+    default_us: u64,
+) -> u64 {
+    timers
+        .values()
+        .map(|deadline| deadline.as_micros().saturating_sub(now.as_micros()))
+        .min()
+        .unwrap_or(default_us)
+}

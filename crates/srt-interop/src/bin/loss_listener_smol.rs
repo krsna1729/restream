@@ -1,0 +1,174 @@
+//! Sustained-throughput SRT listener over the pure-Rust Core, on smol --
+//! the smol entry in the docs/srt-pure-rust-plan.md Phase 4
+//! driver-framework bake-off. See loss_caller_smol.rs and
+//! mio_driver.rs's doc comments for shared background.
+//!
+//! Usage: srt-interop-loss-listener-smol <port> <duration_secs> <latency_ms>
+
+use shiguredo_srt::{ConnectionEvent, ConnectionOptions, SrtConnection, TimerId, Timestamp};
+use smol::Timer;
+use smol::net::UdpSocket;
+use srt_interop::smol_driver::{
+    drain_outputs, due_timers, time_until_earliest_timer, try_recv_from,
+};
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::time::{Duration, Instant};
+
+const MAX_WAIT: Duration = Duration::from_millis(20);
+
+fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
+
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 4 {
+        eprintln!("usage: {} <port> <duration_secs> <latency_ms>", args[0]);
+        std::process::exit(2);
+    }
+    let port: u16 = args[1].parse().expect("port");
+    let duration_secs: f64 = args[2].parse().expect("duration_secs");
+    let latency_ms: u16 = args[3].parse().expect("latency_ms");
+
+    smol::block_on(async {
+        let socket = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], port)))
+            .await
+            .expect("bind");
+        println!("LISTENING");
+
+        let start = Instant::now();
+        let now = |start: Instant| Timestamp::from_micros(start.elapsed().as_micros() as u64);
+
+        let options = ConnectionOptions {
+            socket_id: std::process::id(),
+            tsbpd_delay: latency_ms,
+            ..Default::default()
+        };
+        let mut conn = SrtConnection::new_listener(options);
+        let mut timers: HashMap<TimerId, Timestamp> = HashMap::new();
+
+        let mut total_received: u64 = 0;
+        let mut connected = false;
+        let mut stream_deadline: Option<Instant> = None;
+        let connect_deadline = Instant::now() + Duration::from_secs(5);
+        let mut peer: Option<SocketAddr> = None;
+        let mut buf = [0u8; 2048];
+
+        loop {
+            if !connected && Instant::now() >= connect_deadline {
+                eprintln!(
+                    "[loss-listener-smol] connect timed out, state={:?}",
+                    conn.state()
+                );
+                break;
+            }
+            if let Some(d) = stream_deadline
+                && Instant::now() >= d
+            {
+                break;
+            }
+
+            let wait = Duration::from_micros(time_until_earliest_timer(
+                &timers,
+                now(start),
+                MAX_WAIT.as_micros() as u64,
+            ))
+            .min(MAX_WAIT);
+            let recv_fut = async { socket.recv_from(&mut buf).await.ok() };
+            let timer_fut = async {
+                Timer::after(wait).await;
+                None
+            };
+            if let Some((n, addr)) = futures_lite::future::or(recv_fut, timer_fut).await {
+                if peer.is_none() {
+                    if let Err(e) = socket.connect(addr).await {
+                        eprintln!("[loss-listener-smol] connect to peer failed: {e}");
+                    } else {
+                        peer = Some(addr);
+                    }
+                }
+                let t = now(start);
+                let _ = conn.feed_recv_buf(&buf[..n], t);
+            }
+
+            // Drain any further packets already queued, non-blocking -- a
+            // stray/malformed first datagram must not crash the process,
+            // feed_recv_buf errors are always ignored here exactly like
+            // every later packet.
+            while let Some(res) = try_recv_from(&socket, &mut buf) {
+                match res {
+                    Ok((n, addr)) => {
+                        if peer.is_none() {
+                            if let Err(e) = socket.connect(addr).await {
+                                eprintln!("[loss-listener-smol] connect to peer failed: {e}");
+                                continue;
+                            }
+                            peer = Some(addr);
+                        }
+                        let t = now(start);
+                        let _ = conn.feed_recv_buf(&buf[..n], t);
+                    }
+                    Err(_) => break,
+                }
+            }
+
+            let t = now(start);
+            for id in due_timers(&mut timers, t) {
+                let _ = conn.handle_timer(id, t);
+            }
+            drain_outputs(&mut conn, &socket, &mut timers, t).await;
+
+            while let Some(ev) = conn.poll_event() {
+                match ev {
+                    ConnectionEvent::Connected => {
+                        connected = true;
+                        println!("CONNECTED");
+                        stream_deadline =
+                            Some(Instant::now() + Duration::from_secs_f64(duration_secs));
+                    }
+                    ConnectionEvent::DataReceived { .. } => {
+                        total_received += 1;
+                    }
+                    ConnectionEvent::Disconnected { reason } => {
+                        eprintln!("[loss-listener-smol] disconnected: {reason}");
+                        stream_deadline = Some(Instant::now());
+                    }
+                    ConnectionEvent::Error(msg) => {
+                        eprintln!("[loss-listener-smol] error: {msg}");
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let stats = conn.receiver_stats();
+        let elapsed_s = start.elapsed().as_secs_f64();
+        let p = srt_interop::cpu_stats::process_stats();
+        match stats {
+            Some(s) => println!(
+                "STATS role=listener backend=smol pkt_recv={total_received} pkt_recv_total={} \
+                 pkt_rcv_loss_total={} pkt_rcv_dup_total={} rtt_ms={:.3} elapsed_s={elapsed_s:.3} \
+                 cpu_user_ms={:.1} cpu_sys_ms={:.1} peak_rss_kb={}",
+                s.total_received,
+                s.total_lost,
+                s.total_duplicates,
+                s.rtt as f64 / 1000.0,
+                p.cpu_user_ms,
+                p.cpu_sys_ms,
+                p.peak_rss_kb
+            ),
+            None => println!(
+                "STATS role=listener backend=smol pkt_recv={total_received} pkt_recv_total=0 \
+                 pkt_rcv_loss_total=0 pkt_rcv_dup_total=0 rtt_ms=0.000 elapsed_s={elapsed_s:.3} \
+                 cpu_user_ms={:.1} cpu_sys_ms={:.1} peak_rss_kb={}",
+                p.cpu_user_ms, p.cpu_sys_ms, p.peak_rss_kb
+            ),
+        }
+
+        if !connected {
+            std::process::exit(1);
+        }
+    });
+}
