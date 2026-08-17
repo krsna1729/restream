@@ -9,3 +9,5 @@ pub mod driver;
 pub mod mio_driver;
 pub mod smol_driver;
 pub mod tokio_driver;
+
+pub const INTEROP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);

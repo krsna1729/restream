@@ -54,7 +54,7 @@ async fn main() {
     let mut total_received: u64 = 0;
     let mut connected = false;
     let mut stream_deadline: Option<Instant> = None;
-    let connect_deadline = Instant::now() + Duration::from_secs(5);
+    let connect_deadline = Instant::now() + srt_interop::INTEROP_CONNECT_TIMEOUT;
     let mut peer: Option<SocketAddr> = None;
     let mut buf = [0u8; 2048];
 

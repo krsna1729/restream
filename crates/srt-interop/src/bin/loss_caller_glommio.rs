@@ -36,7 +36,7 @@ mod linux {
 
     const PAYLOAD_SIZE: usize = 1316;
     const DEFAULT_BITRATE_BPS: u64 = 8_000_000;
-    const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+    const CONNECT_TIMEOUT: Duration = srt_interop::INTEROP_CONNECT_TIMEOUT;
     const MAX_WAIT: Duration = Duration::from_millis(20);
     const TAIL_SPIN: Duration = Duration::from_micros(300);
 
@@ -155,12 +155,14 @@ mod linux {
                     };
                     let block_for = wait.saturating_sub(TAIL_SPIN);
                     if block_for > Duration::ZERO {
-                        let recv_fut = async { socket.recv(&mut buf).await.ok() };
+                        let recv_fut = async { socket.recv_from(&mut buf).await.ok() };
                         let timer_fut = async {
                             glommio::timer::sleep(block_for).await;
                             None
                         };
-                        if let Some(n) = futures_lite::future::or(recv_fut, timer_fut).await {
+                        if let Some((n, _addr)) =
+                            futures_lite::future::or(recv_fut, timer_fut).await
+                        {
                             let t = now(start);
                             let _ = conn.feed_recv_buf(&buf[..n], t);
                         }
@@ -168,10 +170,10 @@ mod linux {
 
                     // Drain any further packets already queued, non-blocking.
                     while let Some(res) = futures_lite::future::block_on(
-                        futures_lite::future::poll_once(socket.recv(&mut buf)),
+                        futures_lite::future::poll_once(socket.recv_from(&mut buf)),
                     ) {
                         match res {
-                            Ok(n) => {
+                            Ok((n, _addr)) => {
                                 let t = now(start);
                                 let _ = conn.feed_recv_buf(&buf[..n], t);
                             }

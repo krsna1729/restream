@@ -6,8 +6,9 @@
 //! backend gets its own small driver module rather than one shared trait.
 
 use shiguredo_srt::{ConnectionOutput, SrtConnection, TimerId, Timestamp};
-use smol::net::UdpSocket;
 use std::collections::HashMap;
+
+pub type UdpSocket = smol::Async<std::net::UdpSocket>;
 
 pub async fn drain_outputs(
     conn: &mut SrtConnection,
@@ -18,7 +19,7 @@ pub async fn drain_outputs(
     while let Some(out) = conn.poll_output() {
         match out {
             ConnectionOutput::SendPacket(bytes) => {
-                let _ = socket.send(&bytes).await;
+                let _ = socket.write_with(|inner| inner.send(&bytes)).await;
             }
             ConnectionOutput::SetTimer {
                 id,
@@ -58,18 +59,49 @@ pub fn time_until_earliest_timer(
 }
 
 /// Attempt one non-blocking recv without actually awaiting readiness --
-/// `smol::net::UdpSocket` (built on async-io/polling, readiness-based like
-/// mio internally) has no built-in `try_recv`, so this polls the recv
-/// future exactly once via `futures_lite::future::poll_once`: if the
-/// underlying fd isn't readable yet the future returns Pending and this
-/// returns `None` immediately, rather than actually suspending the task.
 pub fn try_recv(socket: &UdpSocket, buf: &mut [u8]) -> Option<std::io::Result<usize>> {
-    futures_lite::future::block_on(futures_lite::future::poll_once(socket.recv(buf)))
+    match socket.get_ref().recv(buf) {
+        Ok(n) => Some(Ok(n)),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => None,
+        Err(error) => Some(Err(error)),
+    }
 }
 
 pub fn try_recv_from(
     socket: &UdpSocket,
     buf: &mut [u8],
 ) -> Option<std::io::Result<(usize, std::net::SocketAddr)>> {
-    futures_lite::future::block_on(futures_lite::future::poll_once(socket.recv_from(buf)))
+    match socket.get_ref().recv_from(buf) {
+        Ok((n, addr)) => Some(Ok((n, addr))),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => None,
+        Err(error) => Some(Err(error)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use smol::Async;
+    use std::net::UdpSocket as StdUdpSocket;
+
+    #[test]
+    fn try_recv_reads_a_ready_datagram_without_awaiting() {
+        let receiver = Async::<StdUdpSocket>::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+            .expect("bind receiver");
+        let sender = StdUdpSocket::bind("127.0.0.1:0").expect("bind sender");
+        sender
+            .send_to(
+                b"ping",
+                receiver.get_ref().local_addr().expect("receiver address"),
+            )
+            .expect("send datagram");
+
+        let mut buf = [0u8; 4];
+        let result = try_recv(&receiver, &mut buf)
+            .expect("datagram should be ready")
+            .expect("recv datagram");
+
+        assert_eq!(result, 4);
+        assert_eq!(&buf, b"ping");
+    }
 }

@@ -12,15 +12,14 @@
 
 use shiguredo_srt::{ConnectionEvent, ConnectionOptions, SrtConnection, TimerId, Timestamp};
 use smol::Timer;
-use smol::net::UdpSocket;
-use srt_interop::smol_driver::{drain_outputs, due_timers, try_recv};
+use srt_interop::smol_driver::{UdpSocket, drain_outputs, due_timers, try_recv};
 use std::collections::HashMap;
 use std::net::ToSocketAddrs;
 use std::time::{Duration, Instant};
 
 const PAYLOAD_SIZE: usize = 1316;
 const DEFAULT_BITRATE_BPS: u64 = 8_000_000;
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const CONNECT_TIMEOUT: Duration = srt_interop::INTEROP_CONNECT_TIMEOUT;
 const MAX_WAIT: Duration = Duration::from_millis(20);
 // See loss_caller_mio.rs's doc comment for the measured tradeoff behind
 // this "sleep the bulk, spin the tail" split.
@@ -56,8 +55,8 @@ fn main() {
             .next()
             .expect("no address resolved");
 
-        let socket = UdpSocket::bind("0.0.0.0:0").await.expect("bind");
-        socket.connect(peer_addr).await.expect("connect");
+        let socket = UdpSocket::bind(std::net::SocketAddr::from(([0, 0, 0, 0], 0))).expect("bind");
+        socket.get_ref().connect(peer_addr).expect("connect");
 
         let options = ConnectionOptions {
             socket_id: std::process::id(),

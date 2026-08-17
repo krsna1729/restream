@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 const PAYLOAD_SIZE: usize = 1316;
 const DEFAULT_BITRATE_BPS: u64 = 8_000_000;
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const CONNECT_TIMEOUT: Duration = srt_interop::INTEROP_CONNECT_TIMEOUT;
 const SOCKET: Token = Token(0);
 // Upper bound on the mio poll timeout so the loop still notices
 // connect_deadline/stream_deadline promptly even when there's nothing else

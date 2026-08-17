@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 const PAYLOAD_SIZE: usize = 1316;
 const DEFAULT_BITRATE_BPS: u64 = 8_000_000;
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const CONNECT_TIMEOUT: Duration = srt_interop::INTEROP_CONNECT_TIMEOUT;
 const MAX_WAIT: Duration = Duration::from_millis(20);
 const TAIL_SPIN: Duration = Duration::from_micros(300);
 

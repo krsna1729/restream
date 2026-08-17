@@ -7,9 +7,8 @@
 
 use shiguredo_srt::{ConnectionEvent, ConnectionOptions, SrtConnection, TimerId, Timestamp};
 use smol::Timer;
-use smol::net::UdpSocket;
 use srt_interop::smol_driver::{
-    drain_outputs, due_timers, time_until_earliest_timer, try_recv_from,
+    UdpSocket, drain_outputs, due_timers, time_until_earliest_timer, try_recv_from,
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -33,9 +32,7 @@ fn main() {
     let latency_ms: u16 = args[3].parse().expect("latency_ms");
 
     smol::block_on(async {
-        let socket = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], port)))
-            .await
-            .expect("bind");
+        let socket = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], port))).expect("bind");
         println!("LISTENING");
 
         let start = Instant::now();
@@ -52,7 +49,7 @@ fn main() {
         let mut total_received: u64 = 0;
         let mut connected = false;
         let mut stream_deadline: Option<Instant> = None;
-        let connect_deadline = Instant::now() + Duration::from_secs(5);
+        let connect_deadline = Instant::now() + srt_interop::INTEROP_CONNECT_TIMEOUT;
         let mut peer: Option<SocketAddr> = None;
         let mut buf = [0u8; 2048];
 
@@ -83,7 +80,7 @@ fn main() {
             };
             if let Some((n, addr)) = futures_lite::future::or(recv_fut, timer_fut).await {
                 if peer.is_none() {
-                    if let Err(e) = socket.connect(addr).await {
+                    if let Err(e) = socket.get_ref().connect(addr) {
                         eprintln!("[loss-listener-smol] connect to peer failed: {e}");
                     } else {
                         peer = Some(addr);
@@ -101,7 +98,7 @@ fn main() {
                 match res {
                     Ok((n, addr)) => {
                         if peer.is_none() {
-                            if let Err(e) = socket.connect(addr).await {
+                            if let Err(e) = socket.get_ref().connect(addr) {
                                 eprintln!("[loss-listener-smol] connect to peer failed: {e}");
                                 continue;
                             }
