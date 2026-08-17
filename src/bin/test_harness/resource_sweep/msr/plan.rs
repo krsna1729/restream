@@ -400,7 +400,10 @@ pub(super) fn msr_output_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> 
     let srt_port = env.mtx_srt + instance as u16;
     match output.protocol {
         MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{rtmp_port}/live/{}", output.name),
-        MsrProtocol::Srt => harness_srt_standard_publish_url(srt_port, &output.name),
+        MsrProtocol::Srt => append_srt_crypto(
+            harness_srt_standard_publish_url(srt_port, &output.name),
+            &env.srt_crypto,
+        ),
     }
 }
 

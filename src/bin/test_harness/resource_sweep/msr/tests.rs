@@ -208,6 +208,27 @@ fn srt_outputs_use_mediamtx_standard_stream_id() {
 }
 
 #[test]
+fn encrypted_srt_outputs_carry_the_same_crypto_parameters_as_the_sink() {
+    let mut env = base_test_env();
+    env.srt_crypto = HarnessSrtCrypto::encrypted(24);
+    let output = MsrOutputSpec {
+        ordinal: 20,
+        rank: 1,
+        language_code: "eng",
+        language_name: "English",
+        protocol: MsrProtocol::Srt,
+        rtmp_mode: RtmpOutputMode::Legacy,
+        encoding: "source+atrack:0".to_string(),
+        name: "msr-rank01-srt-0001".to_string(),
+    };
+
+    assert_eq!(
+        msr_output_url(&env, &output),
+        "srt://127.0.0.1:8891?streamid=#!::m=publish,r=msr-rank01-srt-0001&passphrase=0123456789abcd&pbkeylen=24"
+    );
+}
+
+#[test]
 fn peer_instance_selection_round_robins_by_ordinal() {
     assert_eq!(msr_peer_instance(1, 1), 0);
     assert_eq!(msr_peer_instance(1200, 1), 0);

@@ -35,7 +35,7 @@
 //! the port count for this to have any effect; the pool clamps it to
 //! `[1, ports.len()]`.
 
-use std::ffi::{CStr, c_char, c_int, c_void};
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
@@ -182,6 +182,8 @@ const SRTO_UDP_SNDBUF: c_int = 8;
 const SRTO_UDP_RCVBUF: c_int = 9;
 const SRTO_REUSEADDR: c_int = 15;
 const SRTO_MAXBW: c_int = 16;
+const SRTO_PASSPHRASE: c_int = 26;
+const SRTO_PBKEYLEN: c_int = 27;
 const SRTO_LATENCY: c_int = 23;
 const SRTO_LOSSMAXTTL: c_int = 42;
 const SRTO_TRANSTYPE: c_int = 50;
@@ -248,6 +250,29 @@ fn set_int_option(
     }
 }
 
+fn set_string_option(
+    socket: SrtSocket,
+    option: c_int,
+    value: &str,
+    name: &str,
+) -> Result<(), String> {
+    let value = CString::new(value).map_err(|_| format!("{name} contains an interior NUL"))?;
+    let result = unsafe {
+        srt_setsockopt(
+            socket,
+            0,
+            option,
+            value.as_ptr().cast::<c_void>(),
+            value.as_bytes().len() as c_int,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(format!("set {name}: {}", srt_error()))
+    }
+}
+
 /// Same preset production restream applies via `srt_set_highbitrate_opts`
 /// before its own sink-mode listener binds (now removed from production —
 /// see `docs/agent-guidance/quality/srt-scaling-investigation.md`).
@@ -293,14 +318,18 @@ struct SinkCounters {
     closed: AtomicU64,
 }
 
-fn create_and_bind_listener(port: u16, udp_buffer: c_int) -> Result<SrtSocket, String> {
+fn create_and_bind_listener(
+    port: u16,
+    udp_buffer: c_int,
+    crypto: &HarnessSrtCrypto,
+) -> Result<SrtSocket, String> {
     // SAFETY: Category 8 - FFI boundary. No arguments; returns a socket id
     // or SRT_INVALID_SOCK, checked below.
     let listener = unsafe { srt_create_socket() };
     if listener == SRT_INVALID_SOCK {
         return Err(format!("create harness SRT sink socket: {}", srt_error()));
     }
-    if let Err(error) = configure_and_bind(listener, port, udp_buffer) {
+    if let Err(error) = configure_and_bind(listener, port, udp_buffer, crypto) {
         // SAFETY: Category 8 - FFI boundary. Closing the socket created
         // immediately above, which no other thread has observed yet.
         unsafe {
@@ -311,7 +340,12 @@ fn create_and_bind_listener(port: u16, udp_buffer: c_int) -> Result<SrtSocket, S
     Ok(listener)
 }
 
-fn configure_and_bind(listener: SrtSocket, port: u16, udp_buffer: c_int) -> Result<(), String> {
+fn configure_and_bind(
+    listener: SrtSocket,
+    port: u16,
+    udp_buffer: c_int,
+    crypto: &HarnessSrtCrypto,
+) -> Result<(), String> {
     // SAFETY: Category 8 - FFI boundary. `listener` is a live socket owned
     // by this function; the option value is a stack-allocated c_int.
     unsafe {
@@ -325,6 +359,16 @@ fn configure_and_bind(listener: SrtSocket, port: u16, udp_buffer: c_int) -> Resu
         );
     }
     apply_highbitrate_opts(listener, udp_buffer)?;
+    if let Some(passphrase) = crypto.passphrase.as_deref() {
+        set_string_option(listener, SRTO_PASSPHRASE, passphrase, "SRTO_PASSPHRASE")?;
+        let pbkeylen = crypto
+            .pbkeylen
+            .as_deref()
+            .unwrap_or("16")
+            .parse::<c_int>()
+            .map_err(|error| format!("parse SRTO_PBKEYLEN: {error}"))?;
+        set_int_option(listener, SRTO_PBKEYLEN, pbkeylen, "SRTO_PBKEYLEN")?;
+    }
     set_int_option(listener, SRTO_REUSEADDR, 1, "SRTO_REUSEADDR")?;
     // Non-blocking accept, so the discard loop can service existing
     // clients and honour the stop flag without blocking on a new one.
@@ -373,6 +417,7 @@ impl HarnessSrtSinkPool {
         ports: &[u16],
         udp_buffer: i32,
         thread_count: usize,
+        crypto: &HarnessSrtCrypto,
     ) -> Result<Self, String> {
         srt_startup_once();
         if ports.is_empty() {
@@ -382,7 +427,7 @@ impl HarnessSrtSinkPool {
 
         let mut listeners = Vec::with_capacity(ports.len());
         for &port in ports {
-            match create_and_bind_listener(port, udp_buffer as c_int) {
+            match create_and_bind_listener(port, udp_buffer as c_int, crypto) {
                 Ok(listener) => listeners.push(listener),
                 Err(error) => {
                     for listener in listeners {
@@ -569,7 +614,7 @@ impl HarnessSrtSinkPeer {
     ) -> Result<Self, String> {
         match backend {
             HarnessSrtSinkBackend::Libsrt => {
-                HarnessSrtSinkPool::start(ports, udp_buffer, thread_count).map(Self::Libsrt)
+                HarnessSrtSinkPool::start(ports, udp_buffer, thread_count, crypto).map(Self::Libsrt)
             }
             HarnessSrtSinkBackend::Rust => {
                 let scaling = RustSinkScaling::from_env()?;

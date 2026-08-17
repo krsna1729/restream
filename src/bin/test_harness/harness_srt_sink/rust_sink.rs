@@ -42,10 +42,11 @@ impl RustHarnessSrtSinkPool {
 
         let key_length = match crypto.pbkeylen.as_deref() {
             None | Some("16") => KeyLength::Aes128,
+            Some("24") => KeyLength::Aes192,
             Some("32") => KeyLength::Aes256,
             Some(other) => {
                 return Err(format!(
-                    "Rust harness SRT sink supports pbkeylen 16 or 32 (got {other})"
+                    "Rust harness SRT sink supports pbkeylen 16, 24, or 32 (got {other})"
                 ));
             }
         };

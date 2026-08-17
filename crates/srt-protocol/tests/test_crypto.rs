@@ -55,13 +55,36 @@ fn aes_ctr_apply(sek: &[u8], iv: &[u8; 16], data: &mut [u8]) {
                 .expect("CTR key should be created");
             cipher.apply_keystream(data);
         }
+        24 => {
+            let mut cipher = Ctr128BE::<aes::Aes192>::new_from_slices(sek, iv)
+                .expect("CTR key should be created");
+            cipher.apply_keystream(data);
+        }
         32 => {
             let mut cipher = Ctr128BE::<aes::Aes256>::new_from_slices(sek, iv)
                 .expect("CTR key should be created");
             cipher.apply_keystream(data);
         }
-        _ => unreachable!("SEK length must be 16 or 32"),
+        _ => unreachable!("SEK length must be 16, 24, or 32"),
     }
+}
+
+#[test]
+fn aes192_kat_packet_index_nonzero() {
+    let salt: [u8; 16] = [
+        0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE,
+        0xCF,
+    ];
+    let sek: [u8; 24] = [
+        0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E,
+        0x6F, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
+    ];
+    let plaintext: [u8; 32] = [
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE,
+        0xFF, 0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87, 0x98, 0xA9, 0xBA, 0xCB, 0xDC, 0xED,
+        0xFE, 0x0F,
+    ];
+    assert_kat(KeyLength::Aes192, salt, &sek, 0x1020_3040, &plaintext);
 }
 
 /// 仕様の byte 配置で構築したカウンタブロックで計算した暗号文と

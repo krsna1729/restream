@@ -82,10 +82,43 @@ byte-growth checks with zero sender drops:
 | Rust | libsrt | 251,356 | 16.6% / 89,636 KiB |
 | libsrt | Rust | 248,160 | 38.04% / 90,472 KiB |
 
-These are seam and interop checks, not the scale gate. Bonding, AES-192,
-Core timer wakeups during idle periods, pacing-aware send admission, and the
+These are seam and interop checks, not the scale gate. Bonding, Core timer
+wakeups during idle periods, pacing-aware send admission, and the
 300/700/1200-output differential matrix remain open before Rust egress can be
 called production-complete.
+
+### AES-192 parity and retained three-way interop evidence
+
+The local libsrt reference accepts 'SRTO_PBKEYLEN' values 16, 24, and 32 and
+advertises AES-192 as handshake encryption field 3. The Rust Core previously
+implemented only AES-128 and AES-256, and both Rust adapter boundaries
+rejected pbkeylen=24. The parity fix adds AES-192 to AES-CTR, AES-KW,
+handshake-field mapping, the production Rust caller, and the Rust harness
+sink.
+
+The first live attempt failed before any bytes were produced because the MSR
+output URL stayed plaintext while the Rust sink was configured for AES-192.
+The native harness sink also initially did not apply its crypto settings to
+the listener. Both harness boundaries now consume the same HarnessSrtCrypto
+tuple, so the differential cases exercise encryption rather than merely the
+plaintext seam:
+
+| Restream | Sink | Result | Bytes out delta | Drops | Restream CPU sample | RSS peak |
+|---|---|---|---:|---:|---:|---:|
+| Rust | Rust | PASS | 251,356 | 0 | 26.62% | 89,400 KiB |
+| Rust | libsrt | PASS | 246,468 | 0 | 13.85% | 90,268 KiB |
+| libsrt | Rust | PASS | 249,852 | 0 | 23.81% | 90,564 KiB |
+
+All runs used MSR_OUTPUT_COUNTS=1, MSR_PROTOCOL_MIX=srt-only,
+HARNESS_SRT_PBKEYLEN=24, and BENCH_BUILD=never after
+scripts/build/bench-harness.sh. The retained reports are:
+
+- .local/artifacts/srt-aes192-rust-rust/msr-results.json
+- .local/artifacts/srt-aes192-rust-libsrt/msr-results.json
+- .local/artifacts/srt-aes192-libsrt-rust/msr-results.json
+
+This closes AES-192 parity for the tested caller/listener combinations; it
+does not close bonding, idle timer, pacing, ingest, or scale gates.
 
 The receiver strategy investigation was profiled as paired processes, not
 just as restream. Each of the four 600-output Rust-sink captures contains both

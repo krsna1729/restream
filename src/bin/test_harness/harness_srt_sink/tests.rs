@@ -129,7 +129,8 @@ fn free_udp_ports(count: usize) -> Vec<u16> {
 fn harness_srt_sink_pool_starts_and_stops_without_connections() {
     let ports = free_udp_ports(1);
     let pool =
-        HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 1).expect("start harness sink pool");
+        HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 1, &HarnessSrtCrypto::plaintext())
+            .expect("start harness sink pool");
     pool.stop();
 }
 
@@ -137,8 +138,10 @@ fn harness_srt_sink_pool_starts_and_stops_without_connections() {
 fn harness_srt_sink_pool_rejects_a_port_already_bound() {
     let ports = free_udp_ports(1);
     let pool =
-        HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 1).expect("start harness sink pool");
-    let conflict = HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 1);
+        HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 1, &HarnessSrtCrypto::plaintext())
+            .expect("start harness sink pool");
+    let conflict =
+        HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 1, &HarnessSrtCrypto::plaintext());
     assert!(
         conflict.is_err(),
         "second pool on {ports:?} unexpectedly bound"
@@ -152,7 +155,8 @@ fn harness_srt_sink_pool_clamps_thread_count_to_port_count() {
     // Requesting more threads than ports must not panic or leave a
     // port unowned; it clamps to one thread per port.
     let pool =
-        HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 8).expect("start harness sink pool");
+        HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 8, &HarnessSrtCrypto::plaintext())
+            .expect("start harness sink pool");
     assert_eq!(pool.threads.len(), 2);
     pool.stop();
 }
@@ -161,7 +165,8 @@ fn harness_srt_sink_pool_clamps_thread_count_to_port_count() {
 fn harness_srt_sink_pool_partitions_ports_across_fewer_threads() {
     let ports = free_udp_ports(4);
     let pool =
-        HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 2).expect("start harness sink pool");
+        HarnessSrtSinkPool::start(&ports, 8 * 1024 * 1024, 2, &HarnessSrtCrypto::plaintext())
+            .expect("start harness sink pool");
     assert_eq!(pool.threads.len(), 2);
     assert_eq!(pool.listeners.len(), 4);
     pool.stop();

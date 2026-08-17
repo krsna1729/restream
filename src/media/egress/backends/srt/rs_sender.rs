@@ -61,10 +61,11 @@ impl SrtRustMessageSender {
         if let Some((passphrase, pbkeylen)) = config.crypto_parameters() {
             let key_length = match pbkeylen {
                 16 => KeyLength::Aes128,
+                24 => KeyLength::Aes192,
                 32 => KeyLength::Aes256,
                 other => {
                     return Err(format!(
-                        "Rust SRT caller supports pbkeylen 16 or 32, got {other}"
+                        "Rust SRT caller supports pbkeylen 16, 24, or 32, got {other}"
                     ));
                 }
             };

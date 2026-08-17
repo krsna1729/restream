@@ -26,8 +26,8 @@
 
 use std::fmt;
 
-use aes::{Aes128, Aes256};
-use aes_kw::{KwAes128, KwAes256};
+use aes::{Aes128, Aes192, Aes256};
+use aes_kw::{KwAes128, KwAes192, KwAes256};
 use cipher::{KeyInit, KeyIvInit, StreamCipher};
 use ctr::Ctr128BE;
 use pbkdf2::pbkdf2_hmac;
@@ -44,6 +44,8 @@ pub enum KeyLength {
     /// AES-128 (16 bytes)
     #[default]
     Aes128 = 16,
+    /// AES-192 (24 bytes)
+    Aes192 = 24,
     /// AES-256 (32 bytes)
     Aes256 = 32,
 }
@@ -59,6 +61,7 @@ impl KeyLength {
     pub fn from_len(len: usize) -> Option<Self> {
         match len {
             16 => Some(Self::Aes128),
+            24 => Some(Self::Aes192),
             32 => Some(Self::Aes256),
             _ => None,
         }
@@ -68,6 +71,7 @@ impl KeyLength {
     pub fn from_encryption_field(value: u16) -> Option<Self> {
         match value {
             2 => Some(Self::Aes128),
+            3 => Some(Self::Aes192),
             4 => Some(Self::Aes256),
             _ => None,
         }
@@ -77,6 +81,7 @@ impl KeyLength {
     pub fn to_encryption_field(self) -> u16 {
         match self {
             Self::Aes128 => 2,
+            Self::Aes192 => 3,
             Self::Aes256 => 4,
         }
     }
@@ -410,6 +415,12 @@ fn wrap_sek(kek: &[u8], sek: &[u8], key_length: KeyLength) -> Result<Vec<u8>, Er
             kw.wrap_key(sek, &mut wrapped)
                 .map_err(|e| Error::crypto_error(format!("AES key wrap failed: {e}")))?;
         }
+        KeyLength::Aes192 => {
+            let kw = KwAes192::new_from_slice(kek)
+                .map_err(|e| Error::crypto_error(format!("invalid KEK: {e}")))?;
+            kw.wrap_key(sek, &mut wrapped)
+                .map_err(|e| Error::crypto_error(format!("AES key wrap failed: {e}")))?;
+        }
         KeyLength::Aes256 => {
             let kw = KwAes256::new_from_slice(kek)
                 .map_err(|e| Error::crypto_error(format!("invalid KEK: {e}")))?;
@@ -430,6 +441,12 @@ fn unwrap_sek(kek: &[u8], wrapped: &[u8], key_length: KeyLength) -> Result<Vec<u
     match key_length {
         KeyLength::Aes128 => {
             let kw = KwAes128::new_from_slice(kek)
+                .map_err(|e| Error::crypto_error(format!("invalid KEK: {e}")))?;
+            kw.unwrap_key(wrapped, &mut unwrapped)
+                .map_err(|e| Error::crypto_error(format!("AES key unwrap failed: {e}")))?;
+        }
+        KeyLength::Aes192 => {
+            let kw = KwAes192::new_from_slice(kek)
                 .map_err(|e| Error::crypto_error(format!("invalid KEK: {e}")))?;
             kw.unwrap_key(wrapped, &mut unwrapped)
                 .map_err(|e| Error::crypto_error(format!("AES key unwrap failed: {e}")))?;
@@ -481,6 +498,11 @@ fn encrypt_payload(
                 .map_err(|e| Error::crypto_error(format!("invalid SEK: {e}")))?;
             cipher.apply_keystream(payload);
         }
+        KeyLength::Aes192 => {
+            let mut cipher = Ctr128BE::<Aes192>::new_from_slices(sek, &iv)
+                .map_err(|e| Error::crypto_error(format!("invalid SEK: {e}")))?;
+            cipher.apply_keystream(payload);
+        }
         KeyLength::Aes256 => {
             let mut cipher = Ctr128BE::<Aes256>::new_from_slices(sek, &iv)
                 .map_err(|e| Error::crypto_error(format!("invalid SEK: {e}")))?;
@@ -498,7 +520,11 @@ mod tests {
     #[test]
     fn test_key_length() {
         assert_eq!(KeyLength::Aes128.len(), 16);
+        assert_eq!(KeyLength::Aes192.len(), 24);
         assert_eq!(KeyLength::Aes256.len(), 32);
+        assert_eq!(KeyLength::from_len(24), Some(KeyLength::Aes192));
+        assert_eq!(KeyLength::from_encryption_field(3), Some(KeyLength::Aes192));
+        assert_eq!(KeyLength::Aes192.to_encryption_field(), 3);
     }
 
     #[test]
