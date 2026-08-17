@@ -10,33 +10,36 @@
 //! Usage: srt-interop-loss-caller <host> <port> <duration_secs> <latency_ms> [bitrate_bps]
 //!
 //! Pacing is delegated to the Core itself (`ConnectionOptions::
-//! max_bandwidth_bytes_per_sec` + `can_send_with_pacing`) rather than
-//! reimplementing the C helper's app-level nanosleep deadline math -- this
-//! is the real Driver's pacing model (Phase 6/7), so exercising it here is
-//! more representative than a from-scratch pacer would be.
-//!
-//! This blocking single-thread driver's own `thread::sleep`-based wait loop
-//! measurably undershoots the nominal target bitrate in practice (observed
-//! 40-90% of target across runs) -- OS sleep/scheduling granularity, not a
-//! Core pacing defect (verified by comparing measured send intervals
-//! against the Core's own computed `packet_send_period` in isolation, and
-//! by a deterministic in-process test with no real sockets/sleep involved
-//! at all). The orchestration script for the differential matrix should
-//! read achieved throughput from each cell's own STATS line
-//! (`pkt_sent`/`pkt_recv`) rather than assume the requested bitrate was hit,
-//! and compare loss/RTT as rates against that achieved baseline -- not as
-//! an absolute-throughput benchmark, which this tool is not (see benches/
-//! for that).
+//! max_bandwidth_bytes_per_sec` + `can_send_with_pacing`); the driver's job
+//! is only to wake up at exactly the right time, via mio -- see
+//! mio_driver.rs's doc comment for why a blocking-socket/thread::sleep
+//! driver isn't good enough here. Even with mio, `poll()`'s own syscall
+//! latency was measured to cap achieved throughput at ~55-60% of the 8 Mbps
+//! nominal target (worse at higher bitrates, better at lower -- the
+//! signature of a fixed per-lap cost against a shrinking pacing period);
+//! spinning the loop itself (no syscall) below SPIN_THRESHOLD instead of
+//! calling `poll()` brought that to ~78-90% and RTT down to match libsrt's
+//! own baseline (~0.3-2ms vs libsrt's ~0.2-0.7ms, both far below the naive
+//! thread::sleep driver's earlier 1.8-3ms). As with the old driver, the
+//! orchestration script should still read achieved throughput from each
+//! cell's own STATS line rather than assume the requested bitrate was hit.
 
-use shiguredo_srt::{ConnectionEvent, ConnectionOptions, SrtConnection, TimerId, Timestamp};
-use srt_interop::driver::drain_outputs;
+use mio::net::UdpSocket;
+use mio::{Events, Interest, Poll, Token};
+use shiguredo_srt::{ConnectionEvent, ConnectionOptions, SrtConnection, Timestamp};
+use srt_interop::mio_driver::{drain_outputs, due_timers};
 use std::collections::HashMap;
-use std::net::UdpSocket;
+use std::net::ToSocketAddrs;
 use std::time::{Duration, Instant};
 
 const PAYLOAD_SIZE: usize = 1316;
 const DEFAULT_BITRATE_BPS: u64 = 8_000_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const SOCKET: Token = Token(0);
+// Upper bound on the mio poll timeout so the loop still notices
+// connect_deadline/stream_deadline promptly even when there's nothing else
+// pending (e.g. still waiting on the handshake).
+const MAX_POLL_WAIT: Duration = Duration::from_millis(20);
 
 fn main() {
     tracing_subscriber::fmt()
@@ -61,19 +64,20 @@ fn main() {
         .map(|s| s.parse().expect("bitrate_bps"))
         .unwrap_or(DEFAULT_BITRATE_BPS);
 
-    let socket = UdpSocket::bind("0.0.0.0:0").expect("bind");
-    socket
-        .connect(format!("{host}:{port}"))
-        .expect("connect (UDP, no handshake yet)");
-    // Non-blocking + a bounded thread::sleep for the pacing wait, rather
-    // than blocking recv with a fixed SO_RCVTIMEO: setting the socket
-    // timeout every loop iteration to track `time_until_send` was itself a
-    // syscall on the hot path and, combined with a fixed short timeout,
-    // quantized every pacing interval upward -- observed empirically as a
-    // ~25-40% throughput shortfall against the requested bitrate before
-    // this fix.
-    socket.set_nonblocking(true).expect("set_nonblocking");
-    const MAX_WAIT: Duration = Duration::from_millis(2);
+    let peer_addr = format!("{host}:{port}")
+        .to_socket_addrs()
+        .expect("resolve host:port")
+        .next()
+        .expect("no address resolved");
+
+    let mut socket = UdpSocket::bind("0.0.0.0:0".parse().unwrap()).expect("bind");
+    socket.connect(peer_addr).expect("connect");
+
+    let mut poll = Poll::new().expect("mio Poll::new");
+    poll.registry()
+        .register(&mut socket, SOCKET, Interest::READABLE)
+        .expect("register socket");
+    let mut events = Events::with_capacity(128);
 
     let options = ConnectionOptions {
         socket_id: std::process::id(),
@@ -88,7 +92,7 @@ fn main() {
     conn.connect(now(start))
         .expect("connect() should queue INDUCTION");
 
-    let mut timers: HashMap<TimerId, Timestamp> = HashMap::new();
+    let mut timers: HashMap<shiguredo_srt::TimerId, Timestamp> = HashMap::new();
     drain_outputs(&mut conn, &socket, &mut timers, now(start));
 
     let payload = vec![0x42u8; PAYLOAD_SIZE];
@@ -109,20 +113,40 @@ fn main() {
             break;
         }
 
-        // Drain every packet currently available (non-blocking) before
-        // deciding how long to wait.
+        let wait = if connected {
+            Duration::from_micros(conn.time_until_send(now(start))).min(MAX_POLL_WAIT)
+        } else {
+            MAX_POLL_WAIT
+        };
+        // Below SPIN_THRESHOLD, skip the epoll_wait syscall and let the
+        // loop itself spin (non-blocking recv + pacing recheck each lap):
+        // at high pacing rates (e.g. ~1.36ms/packet at 8 Mbps) the syscall
+        // cost of poll() is a large enough fraction of the period that
+        // calling it unconditionally on every lap was measured to cap
+        // achieved throughput well below target (56% of nominal at 8 Mbps,
+        // rising smoothly to 83% at 1 Mbps -- the signature of a fixed
+        // per-lap cost against a shrinking period, not an OS timer-
+        // granularity wall). Above the threshold there's genuine idle time
+        // worth actually blocking for, so still use poll() there.
+        const SPIN_THRESHOLD: Duration = Duration::from_millis(3);
+        if wait > SPIN_THRESHOLD
+            && let Err(e) = poll.poll(&mut events, Some(wait))
+        {
+            // EINTR and similar are routine under a signal-heavy test host;
+            // just loop back and recompute the wait.
+            if e.kind() != std::io::ErrorKind::Interrupted {
+                eprintln!("[loss-caller] poll error: {e}");
+                break;
+            }
+        }
+
         loop {
             match socket.recv(&mut buf) {
                 Ok(n) => {
                     let t = now(start);
                     let _ = conn.feed_recv_buf(&buf[..n], t);
                 }
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
-                    break;
-                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(e) => {
                     eprintln!("[loss-caller] recv error: {e}");
                     break;
@@ -131,13 +155,7 @@ fn main() {
         }
 
         let t = now(start);
-        let due: Vec<TimerId> = timers
-            .iter()
-            .filter(|(_, deadline)| t.as_micros() >= deadline.as_micros())
-            .map(|(id, _)| *id)
-            .collect();
-        for id in due {
-            timers.remove(&id);
+        for id in due_timers(&mut timers, t) {
             let _ = conn.handle_timer(id, t);
         }
         drain_outputs(&mut conn, &socket, &mut timers, t);
@@ -163,8 +181,7 @@ fn main() {
         if connected {
             // Drain every packet the Core's own pacer currently allows,
             // matching how a real Driver would behave (send until not
-            // ready, then wait for the next event/timer) rather than
-            // sending at most one packet per poll tick.
+            // ready, then wait for the next event/timer).
             loop {
                 let t = now(start);
                 if !conn.can_send_with_pacing(t) {
@@ -176,12 +193,6 @@ fn main() {
                 total_sent += 1;
                 drain_outputs(&mut conn, &socket, &mut timers, t);
             }
-            let wait = Duration::from_micros(conn.time_until_send(now(start))).min(MAX_WAIT);
-            if wait > Duration::ZERO {
-                std::thread::sleep(wait);
-            }
-        } else {
-            std::thread::sleep(MAX_WAIT);
         }
     }
 

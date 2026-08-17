@@ -1631,6 +1631,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02bd0af71c67b473010cbbc60715ee815645a4dc942899111f494b4b737d6fda"
 dependencies = [
  "libc",
+ "log",
  "wasi",
  "windows-sys 0.61.2",
 ]
@@ -2963,6 +2964,7 @@ dependencies = [
 name = "srt-interop"
 version = "0.0.0"
 dependencies = [
+ "mio",
  "shiguredo_srt",
  "tracing",
  "tracing-subscriber",

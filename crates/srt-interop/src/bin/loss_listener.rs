@@ -11,18 +11,27 @@
 //!
 //! Single-peer only, same as listener.rs: waits for one datagram,
 //! `connect()`s the socket to that sender, then drives the handshake and
-//! the sustained receive loop.
+//! the sustained receive loop -- via mio, not blocking sockets; see
+//! mio_driver.rs's doc comment for why.
 //!
 //! Unlike the C helper, no rolling-snapshot workaround is needed here:
 //! `ReceiverStats` is a plain in-memory getter on our own Core state, not a
 //! socket-state query (`srt_bistats`) that can race the peer's close and
 //! fail -- a single read after the loop exits is always safe.
 
+use mio::net::UdpSocket;
+use mio::{Events, Interest, Poll, Token};
 use shiguredo_srt::{ConnectionEvent, ConnectionOptions, SrtConnection, TimerId, Timestamp};
-use srt_interop::driver::drain_outputs;
+use srt_interop::mio_driver::{drain_outputs, due_timers};
 use std::collections::HashMap;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
+
+const SOCKET: Token = Token(0);
+// Upper bound on the mio poll timeout so the loop still notices
+// connect_deadline/stream_deadline promptly even when idle (e.g. no ACK
+// timer armed yet because the caller hasn't connected).
+const MAX_POLL_WAIT: Duration = Duration::from_millis(20);
 
 fn main() {
     tracing_subscriber::fmt()
@@ -35,18 +44,18 @@ fn main() {
         eprintln!("usage: {} <port> <duration_secs> <latency_ms>", args[0]);
         std::process::exit(2);
     }
-    let port = &args[1];
+    let port: u16 = args[1].parse().expect("port");
     let duration_secs: f64 = args[2].parse().expect("duration_secs");
     let latency_ms: u16 = args[3].parse().expect("latency_ms");
 
-    let socket = UdpSocket::bind(format!("0.0.0.0:{port}")).expect("bind");
+    let mut socket = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], port))).expect("bind");
     println!("LISTENING");
-    // Short poll timeout throughout, including while waiting for the
-    // caller's first packet -- a single fixed 2ms timeout keeps the
-    // bootstrap and steady-state phases the same loop (see below).
-    socket
-        .set_read_timeout(Some(Duration::from_millis(2)))
-        .expect("set_read_timeout");
+
+    let mut poll = Poll::new().expect("mio Poll::new");
+    poll.registry()
+        .register(&mut socket, SOCKET, Interest::READABLE)
+        .expect("register socket");
+    let mut events = Events::with_capacity(128);
 
     let start = Instant::now();
     let now = |start: Instant| Timestamp::from_micros(start.elapsed().as_micros() as u64);
@@ -80,44 +89,37 @@ fn main() {
             break;
         }
 
+        poll.poll(&mut events, Some(MAX_POLL_WAIT)).ok();
+
         // recv_from, not recv: until the first packet arrives there is no
         // connected peer to restrict to, and a stray/malformed first
         // datagram (this is a real UDP socket exposed to netem-impaired
         // traffic, not a controlled test fixture) must not crash the
         // process -- feed_recv_buf errors are ignored here exactly like
-        // every later packet, not unwrapped. A prior version used a
-        // separate `.expect()`-based bootstrap for just the first packet
-        // and could panic (default Rust panic exit code 101) if that
-        // packet failed to parse as a valid handshake.
-        match socket.recv_from(&mut buf) {
-            Ok((n, addr)) => {
-                if peer.is_none() {
-                    if let Err(e) = socket.connect(addr) {
-                        eprintln!("[loss-listener] connect to peer failed: {e}");
-                        continue;
+        // every later packet, not unwrapped.
+        loop {
+            match socket.recv_from(&mut buf) {
+                Ok((n, addr)) => {
+                    if peer.is_none() {
+                        if let Err(e) = socket.connect(addr) {
+                            eprintln!("[loss-listener] connect to peer failed: {e}");
+                            continue;
+                        }
+                        peer = Some(addr);
                     }
-                    peer = Some(addr);
+                    let t = now(start);
+                    let _ = conn.feed_recv_buf(&buf[..n], t);
                 }
-                let t = now(start);
-                let _ = conn.feed_recv_buf(&buf[..n], t);
-            }
-            Err(e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(e) => {
-                eprintln!("[loss-listener] recv error: {e}");
-                break;
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => {
+                    eprintln!("[loss-listener] recv error: {e}");
+                    break;
+                }
             }
         }
 
         let t = now(start);
-        let due: Vec<TimerId> = timers
-            .iter()
-            .filter(|(_, deadline)| t.as_micros() >= deadline.as_micros())
-            .map(|(id, _)| *id)
-            .collect();
-        for id in due {
-            timers.remove(&id);
+        for id in due_timers(&mut timers, t) {
             let _ = conn.handle_timer(id, t);
         }
         drain_outputs(&mut conn, &socket, &mut timers, t);

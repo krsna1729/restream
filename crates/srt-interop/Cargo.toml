@@ -9,6 +9,11 @@ description = "Standalone caller/listener binaries over srt-protocol + std, for 
 shiguredo_srt = { path = "../srt-protocol" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Low-jitter event-driven I/O for the sustained-throughput loss-caller/
+# loss-listener binaries -- see mio_driver.rs's doc comment for why a
+# blocking-socket + fixed-timeout/thread::sleep driver isn't good enough
+# for Phase 4's differential loss/latency matrix.
+mio = { version = "1", features = ["os-poll", "net"] }
 
 [[bin]]
 name = "srt-interop-caller"

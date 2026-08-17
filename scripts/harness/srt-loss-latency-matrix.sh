@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Differential loss/latency test matrix for docs/srt-pure-rust-plan.md
-# Phase 4: libsrt vs the pure-Rust Core, under identical tc netem
-# impairment, across a grid of loss levels x one-way network delays.
+# Differential loss/latency/bitrate test matrix for
+# docs/srt-pure-rust-plan.md Phase 4: libsrt vs the pure-Rust Core, under
+# identical tc netem impairment, across a grid of loss levels x one-way
+# network delays x target bitrates.
 #
 # Each cell runs in a fresh network namespace (sudo unshare --net) so tc
 # qdisc state never leaks between cells and every cell can reuse the same
@@ -21,8 +22,10 @@
 #   SRT_LATENCY_MS   fixed SRT protocol latency (SRTO_LATENCY / tsbpd_delay)
 #                    for every cell -- a realistic fixed operator setting,
 #                    not the netem axis (default 200)
-#   BITRATE_BPS      target stream bitrate (default 8000000, matches the
-#                    original Phase 4 plan's loss-only design)
+#   BITRATE_LEVELS   space-separated target bitrates in bps (default just
+#                    8000000, matching the original Phase 4 plan's
+#                    loss-only design; set multiple values for a bitrate
+#                    sweep, e.g. "1000000 2000000 4000000 8000000 16000000")
 #   LOSS_LEVELS      space-separated loss percentages (default matrix)
 #   LATENCY_LEVELS   space-separated netem one-way delays in ms (default matrix)
 #   IMPLS            space-separated implementations to run: libsrt rust
@@ -35,7 +38,7 @@ OUT="${1:-/tmp/srt-loss-latency-matrix-$(date +%Y%m%d-%H%M%S).tsv}"
 
 DURATION_SECS="${DURATION_SECS:-600}"
 SRT_LATENCY_MS="${SRT_LATENCY_MS:-200}"
-BITRATE_BPS="${BITRATE_BPS:-8000000}"
+BITRATE_LEVELS="${BITRATE_LEVELS:-8000000}"
 LOSS_LEVELS="${LOSS_LEVELS:-0.5 1 2 5 10 15}"
 LATENCY_LEVELS="${LATENCY_LEVELS:-0 5 10 20 50 100}"
 IMPLS="${IMPLS:-libsrt rust}"
@@ -62,10 +65,10 @@ for bin in "$RUST_LISTENER" "$RUST_CALLER"; do
   fi
 done
 
-echo -e "impl\tloss_pct\tdelay_ms\tduration_s\tcaller_rc\tlistener_rc\tcaller_stats\tlistener_stats" > "$OUT"
+echo -e "impl\tloss_pct\tdelay_ms\tbitrate_bps\tduration_s\tcaller_rc\tlistener_rc\tcaller_stats\tlistener_stats" > "$OUT"
 
 run_cell() {
-  local impl="$1" loss_pct="$2" delay_ms="$3"
+  local impl="$1" loss_pct="$2" delay_ms="$3" bitrate_bps="$4"
   local listener_bin caller_bin
   if [[ "$impl" == "libsrt" ]]; then
     listener_bin="$LIBSRT_LISTENER"
@@ -107,7 +110,7 @@ run_cell() {
     '$listener_bin' '$PORT' '$DURATION_SECS' '$SRT_LATENCY_MS' > '$listener_log' 2>&1 &
     lpid=\$!
     sleep 0.3
-    '$caller_bin' 127.0.0.1 '$PORT' '$DURATION_SECS' '$SRT_LATENCY_MS' '$BITRATE_BPS' > '$caller_log' 2>&1
+    '$caller_bin' 127.0.0.1 '$PORT' '$DURATION_SECS' '$SRT_LATENCY_MS' '$bitrate_bps' > '$caller_log' 2>&1
     caller_rc=\$?
     wait \$lpid
     listener_rc=\$?
@@ -127,8 +130,8 @@ run_cell() {
   caller_stats="$(grep '^STATS ' "$caller_log" 2>/dev/null || echo "NO_STATS")"
   listener_stats="$(grep '^STATS ' "$listener_log" 2>/dev/null || echo "NO_STATS")"
 
-  echo -e "${impl}\t${loss_pct}\t${delay_ms}\t${DURATION_SECS}\t${caller_rc}\t${listener_rc}\t${caller_stats}\t${listener_stats}" >> "$OUT"
-  echo "[matrix] impl=${impl} loss=${loss_pct}% delay=${delay_ms}ms caller_rc=${caller_rc} listener_rc=${listener_rc}"
+  echo -e "${impl}\t${loss_pct}\t${delay_ms}\t${bitrate_bps}\t${DURATION_SECS}\t${caller_rc}\t${listener_rc}\t${caller_stats}\t${listener_stats}" >> "$OUT"
+  echo "[matrix] impl=${impl} loss=${loss_pct}% delay=${delay_ms}ms bitrate=${bitrate_bps} caller_rc=${caller_rc} listener_rc=${listener_rc}"
   if [[ "$caller_stats" == "NO_STATS" || "$listener_stats" == "NO_STATS" ]]; then
     echo "[matrix]   caller_log: $(tail -5 "$caller_log" 2>/dev/null)"
     echo "[matrix]   listener_log: $(tail -5 "$listener_log" 2>/dev/null)"
@@ -141,7 +144,9 @@ total=0
 for impl in $IMPLS; do
   for loss_pct in $LOSS_LEVELS; do
     for delay_ms in $LATENCY_LEVELS; do
-      total=$((total + 1))
+      for bitrate_bps in $BITRATE_LEVELS; do
+        total=$((total + 1))
+      done
     done
   done
 done
@@ -152,9 +157,11 @@ n=0
 for impl in $IMPLS; do
   for loss_pct in $LOSS_LEVELS; do
     for delay_ms in $LATENCY_LEVELS; do
-      n=$((n + 1))
-      echo "[matrix] cell $n/$total"
-      run_cell "$impl" "$loss_pct" "$delay_ms"
+      for bitrate_bps in $BITRATE_LEVELS; do
+        n=$((n + 1))
+        echo "[matrix] cell $n/$total"
+        run_cell "$impl" "$loss_pct" "$delay_ms" "$bitrate_bps"
+      done
     done
   done
 done
