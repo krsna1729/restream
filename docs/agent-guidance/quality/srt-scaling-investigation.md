@@ -18,6 +18,7 @@
   - [Exact knee location: 100-step ramp at the pool optimum](#exact-knee-location-100-step-ramp-at-the-pool-optimum)
 - [Tuple affinity and bonding identity — 2026-08-17](#tuple-affinity-and-bonding-identity--2026-08-17)
 - [Fourth sink topology: one port per stream — 2026-08-17](#fourth-sink-topology-one-port-per-stream--2026-08-17)
+- [Matched paired receiver profiles — 2026-08-17](#matched-paired-receiver-profiles--2026-08-17)
 - [What remains open](#what-remains-open)
 
 ## Summary
@@ -790,6 +791,70 @@ The 1,200-port run required raising the process `nofile` limit. Any reusable
 benchmark wrapper for this topology must set that limit before binding; the
 application now fails early and explicitly if the sink range overlaps
 restream's own SRT listener.
+
+## Matched paired receiver profiles — 2026-08-17
+
+The four receiver topologies were re-run with the same Rust Core sink, SRT-only
+MSR workload, 600 outputs, 12-second resource sample, and bench-profile
+restream/test-harness binaries. `perf record -F 99 -g` ran concurrently against
+the restream process and the named Rust sink threads. The host cannot create the
+default private network namespace, so these captures use the documented
+`--no-netns` fallback; all other process and port isolation remained in place.
+The bench binary SHA-256 was
+`23679eb2df8ea64270754cccc78e2b3b678ee6f3465f37e4430bedca5adb94be`.
+
+| Strategy | Sink map | Restream CPU avg/peak | Restream RSS/PSS peak | Outputs / drops | Perf samples (restream/sink) |
+|---|---|---:|---:|---:|---:|
+| Distinct ports | 4 ports, 4 workers | 219.28% / 231.83% | 637,584 / 627,440 KiB | 600/600, 0 | 6,531 / 872 |
+| `SO_REUSEPORT` | 1 port, 4 workers | 209.03% / 237.18% | 635,536 / 625,111 KiB | 600/600, 0 | 5,522 / 497 |
+| Connected handoff | 1 listener, 4 workers | 202.47% / 216.38% | 633,908 / 623,892 KiB | 600/600, 0 | 5,711 / 67 |
+| One port per stream | 600 ports, 1 worker | 242.04% / 275.25% | 632,024 / 622,886 KiB | 600/600, 0 | 5,893 / 2,084 |
+
+Artifacts are under
+`.local/artifacts/msr-rust-sink-strategy-{ports,reuseport,connected,per-stream-port}-600-profile-20260817-no-netns-profile{4,5}/`.
+Each directory contains `restream.svg` and `sink.svg`, raw perf data, folded
+stacks, text reports, the run log, and the JSON resource result. The connected
+diagnostic is additionally recorded at
+`.local/artifacts/msr-rust-sink-strategy-connected-600-profile-20260817-no-netns-trace/`.
+
+### What the paired flame graphs say
+
+- **Restream is not receiver-topology limited at this checkpoint.** Every
+  restream profile has the same inclusive kernel chain: syscall entry,
+  `sendmsg`, `udp_sendmsg`, and loopback/IP output, consuming roughly 52–57%
+  of samples. The largest named self costs are libsrt's
+  `pthread_mutex_lock` (4.45–5.14%), `pthread_mutex_unlock` (about 2.4%), and
+  futex wake/scheduling work. This is the sender-side libsrt/UDP path; changing
+  the sink from four ports to one port or 600 ports does not remove it.
+- **Distinct ports and `SO_REUSEPORT` have the same receiver shape.** Their
+  sink stacks spend the remaining user-space time in
+  `ReceiverBuffer::pop_ready`, `process_rust_connections_mode`, SipHash/hash
+  lookup, and SRT ACK processing. The inclusive sink path is then dominated by
+  kernel `sendto`/UDP output for SRT feedback, not by a Rust lock convoy.
+- **One port per stream increases receiver CPU despite clean delivery.** Its
+  sink profile shows `ReceiverBuffer::generate_ack` (2.54% self),
+  `ReceiverBuffer::pop_ready` (2.40%), `process_rust_connections_mode` (2.17%),
+  and `SrtConnection::feed_recv_buf` (1.83%). The inclusive
+  `drain_rust_outputs_mode` stack reaches `sendto`/UDP kernel output in about
+  36% of samples. The topology isolates ownership but multiplies the per-port
+  polling/socket work; it is not a free performance win.
+- **Connected handoff needs tuple-cardinality interpretation.** Its raw sink
+  capture is sparse (67 samples), so it is not strong enough for a fine-grained
+  symbol ranking. The trace capture nevertheless proves steady-state handoff:
+  the listener saw 6 packets/tuples and performed 6 handoffs, while connected
+  sockets processed 1,792,174 packets. In this harness, 600 SRT sessions were
+  concentrated into only six source UDP tuples, so the listener left the hot
+  path after handoff but those few worker assignments carried many SRT socket
+  IDs. This is a valid low-tuple-cardinality pathology, not evidence that the
+  connected workers are universally cheap. A high-tuple connected run is still
+  required before ranking its load distribution against real-world callers.
+
+The evidence-backed order for further receiver tuning is therefore: preserve
+tuple/group affinity, measure connected handoff again with deliberately varied
+source tuples, then optimize Rust Core receive-buffer/ACK allocation and the
+per-packet UDP feedback path. Batching is not yet a topology conclusion: the
+same kernel packet path appears in all four profiles and must be evaluated as a
+cross-strategy experiment after the ownership measurements are complete.
 
 ## What remains open
 
