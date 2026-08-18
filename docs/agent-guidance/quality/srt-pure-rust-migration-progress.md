@@ -21,6 +21,7 @@
 - [Kernel-symbol and profiling toolchain verification — 2026-08-18](#kernel-symbol-and-profiling-toolchain-verification--2026-08-18)
 - [Reusable SRT lifecycle crate extraction — 2026-08-18](#reusable-srt-lifecycle-crate-extraction--2026-08-18)
 - [Six runtime adapter contract and compio ownership — 2026-08-18](#six-runtime-adapter-contract-and-compio-ownership--2026-08-18)
+- [Interop crate layering audit — 2026-08-19](#interop-crate-layering-audit--2026-08-19)
 
 ## Current migration policy
 
@@ -1045,3 +1046,22 @@ promote a helper when two adapters demonstrate the same policy without
 erasing runtime-specific ownership semantics. Broader loss/latency/bitrate
 and scale measurements remain later gates after the integrated adapters and
 bonding paths are complete.
+
+## Interop crate layering audit — 2026-08-19
+
+The standalone `crates/srt-interop/Cargo.toml` was audited against the
+extracted lifecycle boundary. Its only local SRT dependency is
+`crates/srt-protocol`; the six driver modules contain caller/listener socket
+ownership and the external STATS contract, but no `WorkerRouter`,
+`GroupAffinity`, GROUP/StreamID admission, logical-group teardown, or
+connected-worker handoff. The direct source search found no lifecycle policy
+duplicated in this crate.
+
+This makes the protocol-only dependency intentional rather than an incomplete
+extraction: `srt-interop` is a standalone transport/driver bake-off, while
+restream and the harness are the application adapters that need
+`srt-lifecycle`. Adding the lifecycle crate to `srt-interop` without a caller
+would add dependency surface and falsely imply that the benchmark binaries
+exercise production routing policy. The six-driver benchmark remains layered
+as `srt-protocol` plus runtime-specific adapters; production routing remains
+`srt-protocol` plus `srt-lifecycle` plus an application adapter.
