@@ -59,8 +59,15 @@ itself was unsuitable:
   `group_id + normalized StreamID`. Distinct publishers reusing a group ID
   could therefore be pinned to the same worker and share the mirror-group
   cache. The router and mirror cache now use the same logical key.
+- Authorization is asynchronous after transport `Connected`. A GROUP leg can
+  therefore have already delivered application payloads into its bounded
+  pre-authorization queue before the worker receives the accept command. The
+  GROUP path previously rejected that state even though the single-leg path
+  drained it. Group admission now installs the member and returns the queued
+  payloads to the logical session in order.
 
-These are covered by handshake retry, route cleanup, and routing unit tests.
+These are covered by handshake retry, route cleanup, routing tests, and a
+regression test for GROUP admission with pre-authorization data.
 
 ## libsrt reference alignment
 
@@ -96,6 +103,20 @@ HARNESS_SRT_SINK_CONNECTED_ROUTING=least-tuples
 `mixed.live.srt.h264.a1.bf0` passed all 16 output probes, HLS, recording,
 stage-sharing, and lifecycle cleanup. The artifact directory is
 `.local/artifacts/mixed/live/srt/h264/a1/bf0/`.
+
+After the logical-key and GROUP pre-authorization fixes, a fresh optimized
+Rust/Rust connected bonded MSR smoke also passed:
+
+- 30/30 outputs reached the sink;
+- two bonded ingest legs reached `publisher connected` and one logical
+  pipeline;
+- the Rust sink reported `handoffs=1`, `group_packets=2`, and
+  `group_worker_reuses=1`;
+- `packetsSentDrop=0` and `bytesOutDelta=7,594,725`.
+
+The machine-readable result is
+`.local/artifacts/msr-rust-bond-connected-racefix-20260818/msr.json`; the
+run used the refreshed `target/bench` binaries.
 
 The remaining proof is not the basic handoff: it is a post-fix bonded
 Broadcast/Backup run with deliberately distinct source tuples, failover, and

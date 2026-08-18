@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 
 use mio::net::UdpSocket;
@@ -57,7 +57,7 @@ impl ConnectedGroup {
         &mut self,
         connection: RustConnection,
         socket_index: usize,
-    ) -> Result<u32, String> {
+    ) -> Result<(u32, VecDeque<Vec<u8>>), String> {
         let RustConnection {
             id,
             peer,
@@ -67,9 +67,6 @@ impl ConnectedGroup {
             pending,
             pending_bytes: _,
         } = connection;
-        if !pending.is_empty() {
-            return Err("SRT GROUP member has unadmitted data".to_string());
-        }
         let mut member_id = core.peer_socket_id();
         if member_id == 0 || self.members.contains_key(&member_id) {
             member_id = self.next_member_id;
@@ -91,7 +88,7 @@ impl ConnectedGroup {
                 timers,
             },
         );
-        Ok(member_id)
+        Ok((member_id, pending))
     }
 
     pub(super) fn service_member(
@@ -206,5 +203,85 @@ impl ConnectedGroup {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shiguredo_srt::{
+        ConnectionOptions, ConnectionOutput, ConnectionState, GroupType, SrtConnection,
+    };
+
+    fn transfer(caller: &mut SrtConnection, listener: &mut SrtConnection, now: Timestamp) {
+        while let Some(output) = caller.poll_output() {
+            if let ConnectionOutput::SendPacket(packet) = output {
+                listener
+                    .feed_recv_buf(&packet, now)
+                    .expect("listener accepts handshake packet");
+            }
+        }
+    }
+
+    fn connected_listener() -> SrtConnection {
+        let mut caller = SrtConnection::new_caller(ConnectionOptions {
+            tsbpd_delay: 0,
+            ..Default::default()
+        });
+        let mut listener = SrtConnection::new_listener(ConnectionOptions {
+            tsbpd_delay: 0,
+            ..Default::default()
+        });
+        caller
+            .connect(Timestamp::from_micros(0))
+            .expect("caller starts handshake");
+        for round in 0..10 {
+            let now = Timestamp::from_micros(round * 10_000);
+            transfer(&mut caller, &mut listener, now);
+            while let Some(output) = listener.poll_output() {
+                if let ConnectionOutput::SendPacket(packet) = output {
+                    caller
+                        .feed_recv_buf(&packet, now)
+                        .expect("caller accepts handshake packet");
+                }
+            }
+            if caller.state() == ConnectionState::Connected
+                && listener.state() == ConnectionState::Connected
+            {
+                return listener;
+            }
+        }
+        panic!("listener did not connect");
+    }
+
+    #[test]
+    fn group_admission_preserves_data_buffered_before_authorization() {
+        let connection = RustConnection {
+            id: ConnectionId {
+                worker: 0,
+                serial: 1,
+            },
+            peer: SocketAddr::from(([127, 0, 0, 1], 29_001)),
+            core: connected_listener(),
+            timers: HashMap::new(),
+            authorized: false,
+            pending: VecDeque::from([b"buffered".to_vec()]),
+            pending_bytes: 8,
+        };
+        let extension = GroupExtensionData {
+            group_id: 0x4000_0001,
+            group_type: GroupType::Broadcast,
+            flags: 0,
+            weight: 1,
+        };
+        let mut group = ConnectedGroup::new(extension, connection.id).expect("group creates");
+
+        let (member_id, pending) = group
+            .add_member(connection, 0)
+            .expect("buffered data does not prevent group admission");
+
+        assert_eq!(member_id, 1);
+        assert_eq!(pending, VecDeque::from([b"buffered".to_vec()]));
+        assert!(group.members.contains_key(&member_id));
     }
 }

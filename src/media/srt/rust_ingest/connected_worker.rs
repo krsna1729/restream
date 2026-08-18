@@ -437,7 +437,7 @@ fn authorize_peer(state: &mut WorkerState<'_>, index: usize, logical_id: Connect
                 entry.insert(group)
             }
         };
-        let Ok(member_id) = group.add_member(connection, index) else {
+        let Ok((member_id, pending)) = group.add_member(connection, index) else {
             let _ = send_event(
                 state.events,
                 IngestEvent::Disconnected {
@@ -452,12 +452,26 @@ fn authorize_peer(state: &mut WorkerState<'_>, index: usize, logical_id: Connect
             remove_peer(state, peer_addr);
             return;
         };
+        let route_key = key.clone();
         peer.route = PeerRoute::Group { key, member_id };
-        if let RouteKind::Group(key, member_id) = route_kind(peer) {
-            let _ = state.groups.get_mut(&key).is_some_and(|group| {
-                group.service_member(member_id, &peer.socket, None, state.events, state.now)
-            });
+        for payload in pending {
+            if !send_event(
+                state.events,
+                IngestEvent::Data {
+                    id: logical_id,
+                    payload,
+                },
+            ) {
+                cleanup_route(state, index);
+                return;
+            }
         }
+        let Some(peer) = state.peers.get(index).and_then(Option::as_ref) else {
+            return;
+        };
+        let _ = state.groups.get_mut(&route_key).is_some_and(|group| {
+            group.service_member(member_id, &peer.socket, None, state.events, state.now)
+        });
         return;
     }
     connection.authorized = true;
