@@ -52,6 +52,9 @@ pub mod stage_runtime;
 pub mod standby_gop;
 pub mod startup_policy;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub mod ffmpeg;
 pub mod tcp_stats;
 pub mod timing;

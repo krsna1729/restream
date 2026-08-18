@@ -460,6 +460,7 @@ mod tests {
 
     #[test]
     fn poisoned_inner_lock_does_not_panic_subsequent_calls() {
+        let _expected_panic_silencer = crate::media::test_support::silence_expected_panics();
         let lc = StageLifecycle::new(StagePhase::Producing);
 
         let poison_lc = lc.clone();

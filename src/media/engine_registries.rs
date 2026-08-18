@@ -716,18 +716,24 @@ mod tests {
     // (`--profile bench` disables debug_assertions, same as release) —
     // these tests only observe the panic where debug_assertions are on.
     #[test]
-    #[should_panic]
     #[cfg(debug_assertions)]
     fn assign_panics_on_zero_max_shards_invariant() {
+        let _expected_panic_silencer = crate::media::test_support::silence_expected_panics();
         let mut pool = SrtMuxerShardPool::default();
-        pool.assign("out-1", 1, 4, 0);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pool.assign("out-1", 1, 4, 0);
+        }));
+        assert!(result.is_err());
     }
 
     #[test]
-    #[should_panic]
     #[cfg(debug_assertions)]
     fn assign_panics_on_zero_max_outputs_per_shard_invariant() {
+        let _expected_panic_silencer = crate::media::test_support::silence_expected_panics();
         let mut pool = SrtMuxerShardPool::default();
-        pool.assign("out-1", 1, 0, 4);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pool.assign("out-1", 1, 0, 4);
+        }));
+        assert!(result.is_err());
     }
 }

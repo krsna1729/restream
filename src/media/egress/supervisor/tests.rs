@@ -92,6 +92,7 @@ impl EgressShardBackend for TestBackend {
 
 #[test]
 fn supervisor_replaces_panicked_shard_and_replays_only_its_outputs() {
+    let _expected_panic_silencer = crate::media::test_support::silence_expected_panics();
     let mut manager = EgressManager::new(EgressManagerConfig::new(2, 16).unwrap());
     let survivor = Probe::default();
     let replacement = Probe::default();

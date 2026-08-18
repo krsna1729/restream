@@ -119,7 +119,11 @@ fn arb_handshake_packet_ipv6() -> impl Strategy<Value = HandshakePacket> {
 fn arb_km_message() -> impl Strategy<Value = KmMessage> {
     (
         prop::sample::select(vec![KeyFlag::Even, KeyFlag::Odd]),
-        prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        prop::sample::select(vec![
+            KeyLength::Aes128,
+            KeyLength::Aes192,
+            KeyLength::Aes256,
+        ]),
         any::<[u8; 16]>(), // salt
                            // wrapped_key サイズ: key_length + 8 bytes
     )
@@ -568,10 +572,10 @@ proptest! {
     fn test_key_length_method(
         enc_field in prop::sample::select(vec![
             (2u16, Some(KeyLength::Aes128)),
+            (3u16, Some(KeyLength::Aes192)),
             (4u16, Some(KeyLength::Aes256)),
             (0u16, None),
             (1u16, None),
-            (3u16, None),
             (5u16, None),
         ])
     ) {

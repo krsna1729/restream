@@ -245,6 +245,7 @@ mod tests {
 
     #[test]
     fn poisoned_lock_recovers_instead_of_panicking() {
+        let _expected_panic_silencer = crate::media::test_support::silence_expected_panics();
         let store = SrtIngestPolicyStore::new(
             SrtGlobalIngestConfig::default(),
             &[policy_entry(SrtPipelineIngestConfig::default())],

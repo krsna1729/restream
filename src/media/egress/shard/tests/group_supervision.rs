@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn shard_group_contains_panic_to_assigned_shard() {
+    let _expected_panic_silencer = crate::media::test_support::silence_expected_panics();
     let survivor = Probe::default();
     let group = EgressShardGroup::spawn(
         NonZeroU32::new(2).unwrap(),
@@ -60,6 +61,7 @@ fn shard_group_contains_panic_to_assigned_shard() {
 
 #[test]
 fn panicked_shard_closes_command_path_without_stopping_other_shards() {
+    let _expected_panic_silencer = crate::media::test_support::silence_expected_panics();
     let survivor = Probe::default();
     let group = EgressShardGroup::spawn(
         NonZeroU32::new(2).unwrap(),
@@ -116,6 +118,7 @@ fn panicked_shard_closes_command_path_without_stopping_other_shards() {
 
 #[test]
 fn shard_group_replaces_only_panicked_shards() {
+    let _expected_panic_silencer = crate::media::test_support::silence_expected_panics();
     let survivor = Probe::default();
     let replacement = Probe::default();
     let mut group = EgressShardGroup::spawn(

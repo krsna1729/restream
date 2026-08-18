@@ -373,6 +373,7 @@ fn wait_for_command_depth_at_least(group: &EgressShardGroup, shard_id: ShardId, 
 
 #[test]
 fn manager_replays_only_replaced_shard_outputs_after_panic() {
+    let _expected_panic_silencer = crate::media::test_support::silence_expected_panics();
     let mut manager = manager(2);
     let survivor = Probe::default();
     let replacement = Probe::default();

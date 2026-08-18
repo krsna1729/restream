@@ -11,7 +11,8 @@ echo "[test-hygiene] checking Rust formatting with pinned toolchain"
 CARGO_TERM_COLOR=never cargo fmt --all --check
 
 echo "[test-hygiene] running Rust test graph with captured output"
-if ! CARGO_TERM_COLOR=never scripts/build/resource-limit.sh cargo test --workspace -- --nocapture \
+if ! PROPTEST_DISABLE_FAILURE_PERSISTENCE=1 CARGO_TERM_COLOR=never \
+  scripts/build/resource-limit.sh cargo test --workspace -- --nocapture \
   2>&1 | tee "$LOG_FILE"; then
   echo "[test-hygiene] cargo test failed before noise scan" >&2
   exit 1

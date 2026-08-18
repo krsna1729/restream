@@ -555,6 +555,7 @@ fn run_accepting_server_peer_reporting_video_after_idle(
 /// delivers `FeedWake`, and asserts the server actually receives it.
 #[test]
 fn feed_wake_delivers_media_published_after_the_leaf_goes_idle() {
+    let _expected_panic_silencer = crate::media::test_support::silence_expected_panics();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let (publish_tx, publish_rx) = std::sync::mpsc::channel::<()>();

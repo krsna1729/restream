@@ -13,7 +13,7 @@ proptest! {
     #[test]
     fn test_encrypt_decrypt_roundtrip(
         passphrase in "[a-zA-Z0-9]{10,32}",
-        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes192, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
         payload_data in prop::collection::vec(any::<u8>(), 16..1400),
         packet_index in 0u32..1000000,
@@ -46,7 +46,7 @@ proptest! {
     #[test]
     fn test_encrypt_changes_data(
         passphrase in "[a-zA-Z0-9]{10,32}",
-        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes192, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
         payload_data in prop::collection::vec(1u8..=255, 16..1400),
         packet_index in 0u32..1000000,
@@ -65,7 +65,7 @@ proptest! {
     #[test]
     fn test_different_packet_index_produces_different_ciphertext(
         passphrase in "[a-zA-Z0-9]{10,32}",
-        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes192, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
         payload_data in prop::collection::vec(any::<u8>(), 16..1400),
         packet_index1 in 0u32..500000,
@@ -88,7 +88,7 @@ proptest! {
     #[test]
     fn test_salt_low_bytes_do_not_affect_ciphertext(
         passphrase in "[a-zA-Z0-9]{10,32}",
-        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes192, KeyLength::Aes256]),
         salt_high in prop::collection::vec(any::<u8>(), 14..=14),
         low1 in any::<u8>(),
         low2 in any::<u8>(),
@@ -127,7 +127,7 @@ proptest! {
     #[test]
     fn test_sek_wrap_unwrap_roundtrip(
         passphrase in "[a-zA-Z0-9]{10,32}",
-        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes192, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
     ) {
         let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
@@ -152,7 +152,7 @@ proptest! {
 
     #[test]
     fn test_key_length_roundtrip(
-        key_len in prop::sample::select(vec![16usize, 32]),
+        key_len in prop::sample::select(vec![16usize, 24, 32]),
     ) {
         let key_length = KeyLength::from_len(key_len).expect("valid key length");
         prop_assert_eq!(key_length.len(), key_len);
@@ -205,7 +205,7 @@ proptest! {
     // KeyLength::from_encryption_field の境界値テスト
     #[test]
     fn test_key_length_from_encryption_field_valid(
-        value in prop::sample::select(vec![2u16, 4u16]),
+        value in prop::sample::select(vec![2u16, 3, 4]),
     ) {
         let key_length = KeyLength::from_encryption_field(value);
         prop_assert!(key_length.is_some());
@@ -225,7 +225,7 @@ proptest! {
     #[test]
     fn test_key_length_from_len_invalid(
         len in prop::sample::select(vec![
-            0usize, 1, 8, 15, 17, 18, 23, 24, 25, 26, 31, 33, 48, 64, 100
+            0usize, 1, 8, 15, 17, 18, 23, 25, 26, 31, 33, 48, 64, 100
         ]),
     ) {
         let key_length = KeyLength::from_len(len);
@@ -237,7 +237,7 @@ proptest! {
     fn test_wrong_passphrase_fails_unwrap(
         passphrase1 in "[a-zA-Z0-9]{10,32}",
         passphrase2 in "[a-zA-Z0-9]{10,32}",
-        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes192, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
     ) {
         prop_assume!(passphrase1 != passphrase2);
@@ -264,7 +264,7 @@ proptest! {
     #[test]
     fn test_km_refresh_full_lifecycle(
         passphrase in "[a-zA-Z0-9]{10,32}",
-        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes192, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
     ) {
         let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
@@ -307,7 +307,7 @@ proptest! {
     #[test]
     fn test_update_sek_changes_decryption(
         passphrase in "[a-zA-Z0-9]{10,32}",
-        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes192, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
         payload_data in prop::collection::vec(any::<u8>(), 16..256),
         packet_index in 0u32..1000000,
@@ -351,7 +351,7 @@ proptest! {
     #[test]
     fn test_encrypt_empty_payload(
         passphrase in "[a-zA-Z0-9]{10,32}",
-        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes192, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
         packet_index in 0u32..1000000,
     ) {
@@ -369,7 +369,7 @@ proptest! {
     #[test]
     fn test_switch_key_without_pre_announce(
         passphrase in "[a-zA-Z0-9]{10,32}",
-        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes192, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
     ) {
         let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
@@ -388,7 +388,7 @@ proptest! {
     #[test]
     fn test_ctr_mode_different_iv_per_packet(
         passphrase in "[a-zA-Z0-9]{10,32}",
-        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes192, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
         payload_data in prop::collection::vec(any::<u8>(), 32..256),
     ) {
@@ -410,7 +410,7 @@ proptest! {
     #[test]
     fn test_packet_index_wraparound(
         passphrase in "[a-zA-Z0-9]{10,32}",
-        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes192, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
         payload_data in prop::collection::vec(any::<u8>(), 16..256),
     ) {
