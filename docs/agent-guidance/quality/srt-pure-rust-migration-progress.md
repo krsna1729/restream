@@ -382,6 +382,17 @@ reader and sends bounded `WorkerCommand` messages back to the worker that owns
 the accepted UDP tuple; disconnect cancellation removes both the media reader
 and the worker session.
 
+The follow-up review found and fixed three lifecycle details before handoff:
+the worker authorization command is now queued before the read task starts,
+so an early `Send` cannot overtake ownership; the per-connection cancellation
+token now participates in the media wait, so an idle active pipeline wakes and
+drops its `TsChunkReader` on disconnect; and both the reuse-port and connected
+worker wait calculations include the Core's next pacing deadline whenever
+fragmented output is queued. The latter prevents a valid reader from being
+rounded down to one packet per 20 ms poll interval. Production-path tests now
+exercise the actual fragment sender, idle-session cancellation, outbound byte
+limits, and a connected Core pacing deadline.
+
 The first live read attempt exposed a real Rust-only boundary: a muxed video
 burst reached `SrtConnection::send` as one `734,704`-byte message. The Core's
 single-packet send path emitted that as one UDP datagram, so the caller received
@@ -403,7 +414,9 @@ Evidence from the optimized, x86-64-v3 bench binaries:
   checks. Its retained scenario is
   `.local/artifacts/mixed/live/srt/h264/a1/bf0/scenario.json`.
 - The focused Rust read unit test verifies that payloads are split at the
-  1,316-byte boundary, and the existing Core bidirectional send test passes.
+  1,316-byte boundary by observing `WorkerCommand::Send` messages from the
+  production helper; the read cancellation, queue-limit, and Core pacing
+  regression tests also pass. The existing Core bidirectional send test passes.
 
 The same focused policy run also gives the next blocker precisely. After the
 plain case, changing global SRT policy to encrypted caused the Rust listener

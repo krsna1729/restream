@@ -206,10 +206,18 @@ pub(super) fn poll_wait(
     connections: &HashMap<SocketAddr, RustConnection>,
     now: Timestamp,
 ) -> Duration {
-    connections
+    let timer_wait = connections
         .values()
         .flat_map(|connection| connection.timers.values())
         .map(|deadline| Duration::from_micros(deadline.as_micros().saturating_sub(now.as_micros())))
+        .min();
+    let send_wait = connections
+        .values()
+        .filter_map(|connection| connection::pending_send_wait(connection, now))
+        .min();
+    timer_wait
+        .into_iter()
+        .chain(send_wait)
         .min()
         .unwrap_or(POLL_MAX_WAIT)
         .min(POLL_MAX_WAIT)

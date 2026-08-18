@@ -299,6 +299,7 @@ async fn admit_connection(
     let parsed = parse_srt_stream_id(&stream_id);
     let client_ip = peer.ip().to_string();
     let mut logical_id = id;
+    let mut read_start = None::<(String, Sender<WorkerCommand>)>;
     let is_reader = parsed.mode == SrtConnectionMode::Read;
     let accepted = if !matches!(
         parsed.mode,
@@ -355,8 +356,7 @@ async fn admit_connection(
                         );
                         false
                     } else if let Some(sender) = sender {
-                        let cancel = read::spawn(server.clone(), id, pipeline.id, sender);
-                        plays.insert(id, cancel);
+                        read_start = Some((pipeline.id, sender));
                         physical_to_logical.insert(id, id);
                         true
                     } else {
@@ -434,6 +434,9 @@ async fn admit_connection(
                 )
                 .await;
         }
+    } else if let Some((pipeline_id, sender)) = read_start {
+        let cancel = read::spawn(server.clone(), id, pipeline_id, sender);
+        plays.insert(id, cancel);
     }
 }
 

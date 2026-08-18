@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use mio::net::UdpSocket;
 use shiguredo_srt::{
@@ -63,6 +64,14 @@ pub(super) fn queue_send(connection: &mut RustConnection, payload: Vec<u8>) -> b
         .saturating_add(payload.len());
     connection.pending_outbound.push_back(payload);
     true
+}
+
+pub(super) fn pending_send_wait(connection: &RustConnection, now: Timestamp) -> Option<Duration> {
+    if connection.pending_outbound.is_empty() {
+        None
+    } else {
+        Some(Duration::from_micros(connection.core.time_until_send(now)))
+    }
 }
 
 pub(super) fn service(
@@ -249,4 +258,92 @@ fn service_events(connection: &mut RustConnection, events: &Sender<IngestEvent>)
 
 fn send_event(events: &Sender<IngestEvent>, event: IngestEvent) -> bool {
     events.blocking_send(event).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn exchange(caller: &mut SrtConnection, listener: &mut SrtConnection, now: Timestamp) {
+        while let Some(ConnectionOutput::SendPacket(packet)) = caller.poll_output() {
+            let _ = listener.feed_recv_buf(&packet, now);
+        }
+        while let Some(ConnectionOutput::SendPacket(packet)) = listener.poll_output() {
+            let _ = caller.feed_recv_buf(&packet, now);
+        }
+    }
+
+    fn connected_listener() -> SrtConnection {
+        let mut caller = SrtConnection::new_caller(ConnectionOptions {
+            tsbpd_delay: 0,
+            ..ConnectionOptions::default()
+        });
+        let mut listener = SrtConnection::new_listener(ConnectionOptions {
+            tsbpd_delay: 0,
+            ..ConnectionOptions::default()
+        });
+        caller
+            .connect(Timestamp::from_micros(0))
+            .expect("caller connects");
+        for round in 0..10 {
+            exchange(
+                &mut caller,
+                &mut listener,
+                Timestamp::from_micros(round * 10_000),
+            );
+            if listener.state() == shiguredo_srt::ConnectionState::Connected {
+                return listener;
+            }
+        }
+        panic!("listener did not connect");
+    }
+
+    #[test]
+    fn outbound_queue_rejects_byte_limit() {
+        let mut connection = new(
+            ConnectionId {
+                worker: 0,
+                serial: 1,
+            },
+            "127.0.0.1:29001".parse().expect("peer address parses"),
+            &WorkerOptions {
+                passphrase: None,
+                key_length: shiguredo_srt::KeyLength::Aes128,
+                tsbpd_delay: 0,
+            },
+        );
+
+        assert!(queue_send(
+            &mut connection,
+            vec![0; PENDING_OUTBOUND_BYTE_LIMIT]
+        ));
+        assert!(!queue_send(&mut connection, vec![0]));
+    }
+
+    #[test]
+    fn pending_send_wait_uses_core_pacing_deadline() {
+        let mut connection = new(
+            ConnectionId {
+                worker: 0,
+                serial: 1,
+            },
+            "127.0.0.1:29001".parse().expect("peer address parses"),
+            &WorkerOptions {
+                passphrase: None,
+                key_length: shiguredo_srt::KeyLength::Aes128,
+                tsbpd_delay: 0,
+            },
+        );
+        connection.core = connected_listener();
+        let now = Timestamp::from_micros(100_000);
+        connection
+            .core
+            .send(&[0; 1316], now)
+            .expect("connected core sends");
+        assert!(queue_send(&mut connection, vec![0; 1316]));
+
+        let wait = pending_send_wait(&connection, now).expect("pending send has a deadline");
+        assert!(wait > Duration::ZERO);
+        assert!(wait < Duration::from_millis(20));
+    }
 }

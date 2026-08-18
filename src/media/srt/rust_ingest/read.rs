@@ -40,11 +40,10 @@ async fn run(
     let mut ts_batch = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
 
     loop {
-        let wake = reader.wait_for_data_or_cancelled().await;
-        if cancel.is_cancelled() {
+        let Some(wake) = wait_for_data_or_session_cancelled(&mut reader, &cancel).await else {
             tracing::debug!(?id, %pipeline_id, "Rust SRT read cancelled while waiting for media");
             break;
-        }
+        };
 
         loop {
             pull_packets.clear();
@@ -90,6 +89,16 @@ async fn run(
     }
 }
 
+async fn wait_for_data_or_session_cancelled(
+    reader: &mut TsChunkReader,
+    cancel: &CancellationToken,
+) -> Option<TsChunkWaitResult> {
+    tokio::select! {
+        _ = cancel.cancelled() => None,
+        wake = reader.wait_for_data_or_cancelled() => Some(wake),
+    }
+}
+
 async fn send_ts_batch(
     cancel: &CancellationToken,
     commands: &Sender<WorkerCommand>,
@@ -115,13 +124,28 @@ async fn send_ts_batch(
 mod tests {
     use super::*;
 
-    #[test]
-    fn read_batches_are_split_at_srt_payload_limit() {
+    #[tokio::test]
+    async fn read_batches_are_split_at_srt_payload_limit() {
         let payload = vec![0u8; SRT_TS_PAYLOAD_BYTES * 2 + 17];
-        let chunks = payload
-            .chunks(SRT_TS_PAYLOAD_BYTES)
-            .map(<[u8]>::to_vec)
-            .collect::<Vec<_>>();
+        let id = ConnectionId {
+            worker: 0,
+            serial: 1,
+        };
+        let cancel = CancellationToken::new();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(3);
+
+        assert!(send_ts_batch(&cancel, &sender, id, &payload).await);
+        drop(sender);
+
+        let mut chunks = Vec::new();
+        while let Some(WorkerCommand::Send {
+            id: message_id,
+            payload,
+        }) = receiver.recv().await
+        {
+            assert_eq!(message_id, id);
+            chunks.push(payload);
+        }
 
         assert_eq!(chunks.len(), 3);
         assert_eq!(chunks[0].len(), SRT_TS_PAYLOAD_BYTES);
@@ -132,5 +156,21 @@ mod tests {
                 .iter()
                 .all(|chunk| chunk.len() <= SRT_TS_PAYLOAD_BYTES)
         );
+    }
+
+    #[tokio::test]
+    async fn session_cancellation_wakes_idle_reader() {
+        let ring = crate::media::ts_chunk_ring::TsChunkRing::new(16, CancellationToken::new());
+        let mut reader = TsChunkReader::new("read-test".to_string(), &ring);
+        let cancel = CancellationToken::new();
+        let waiter = tokio::spawn({
+            let cancel = cancel.clone();
+            async move { wait_for_data_or_session_cancelled(&mut reader, &cancel).await }
+        });
+
+        tokio::task::yield_now().await;
+        cancel.cancel();
+
+        assert_eq!(waiter.await.expect("reader waiter completes"), None);
     }
 }

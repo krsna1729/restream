@@ -23,7 +23,7 @@ in SQLite.
 | Dashboard/API listener | `127.0.0.1:3030` | `RESTREAM_HTTP_BIND_ADDR`, `RESTREAM_HTTP_PORT` |
 | RTMP listener | `0.0.0.0:1935` | `RESTREAM_RTMP_PORT` |
 | SRT listener | `0.0.0.0:10080` | `RESTREAM_SRT_PORT` |
-| SRT protocol backend | `libsrt` | `RESTREAM_SRT_BACKEND=rust` or `srt-rust` selects the pure-Rust SRT Core for non-bonded publish ingest and SRT egress; unset or any other value keeps the complete libsrt path |
+| SRT protocol backend | `libsrt` | `RESTREAM_SRT_BACKEND=rust` or `srt-rust` selects the pure-Rust SRT Core for publish ingest, SRT read/play, and SRT egress; Rust read currently accepts only pipelines whose resolved crypto and latency match the listener's startup policy. Unset or any other value keeps the complete libsrt path |
 | Rust SRT ingest workers | Derived from available parallelism, clamped to `1..=64` | `RESTREAM_SRT_INGEST_WORKERS` (one `SO_REUSEPORT` UDP socket and one OS worker per selected worker; in `connected` scaling this is the number of connected-socket workers behind one public listener) |
 | Rust SRT ingest scaling | One `SO_REUSEPORT` socket per worker | `RESTREAM_SRT_INGEST_SCALING=connected` selects one public listener that completes handshake admission, then hands each tuple to a worker-owned connected UDP socket; `RESTREAM_SRT_INGEST_ROUTING=least-tuples` is the default and `round-robin` is available for first-owner selection |
 | Tokio scheduler workers | Derived from the effective CPU mask/quota | `RESTREAM_TOKIO_WORKER_THREADS` |

@@ -693,8 +693,17 @@ fn remove_peer(state: &mut WorkerState<'_>, peer: std::net::SocketAddr) {
     }
 }
 
-fn poll_wait(_peers: &[Option<ConnectedPeer>], _now: Timestamp) -> Duration {
-    MAX_WAIT
+fn poll_wait(peers: &[Option<ConnectedPeer>], now: Timestamp) -> Duration {
+    peers
+        .iter()
+        .filter_map(|peer| peer.as_ref())
+        .filter_map(|peer| match &peer.route {
+            PeerRoute::Single(connection) => connection::pending_send_wait(connection, now),
+            _ => None,
+        })
+        .min()
+        .unwrap_or(MAX_WAIT)
+        .min(MAX_WAIT)
 }
 
 fn send_event(events: &Sender<IngestEvent>, event: IngestEvent) -> bool {
