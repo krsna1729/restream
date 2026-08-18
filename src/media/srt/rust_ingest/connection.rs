@@ -8,8 +8,8 @@ use shiguredo_srt::{
 };
 use tokio::sync::mpsc::Sender;
 
-use super::super::types::{ConnectionId, IngestEvent};
 use super::WorkerOptions;
+use super::types::{ConnectionId, IngestEvent};
 
 const PENDING_PACKET_LIMIT: usize = 256;
 const PENDING_BYTE_LIMIT: usize = 4 * 1024 * 1024;
@@ -48,32 +48,50 @@ pub(super) fn service(
     events: &Sender<IngestEvent>,
     now: Timestamp,
 ) -> bool {
-    while let Some(output) = connection.core.poll_output() {
+    if drain_core_outputs(
+        &mut connection.core,
+        socket,
+        connection.peer,
+        &mut connection.timers,
+        now,
+    )
+    .is_err()
+    {
+        return false;
+    }
+
+    service_events(connection, events)
+}
+
+pub(super) fn drain_core_outputs(
+    core: &mut SrtConnection,
+    socket: &UdpSocket,
+    peer: SocketAddr,
+    timers: &mut HashMap<TimerId, Timestamp>,
+    now: Timestamp,
+) -> io::Result<()> {
+    while let Some(output) = core.poll_output() {
         match output {
-            ConnectionOutput::SendPacket(packet) => {
-                match socket.send_to(&packet, connection.peer) {
-                    Ok(_) => {}
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                    Err(error) => {
-                        tracing::debug!(peer = %connection.peer, %error, "Rust SRT ingest response failed");
-                        return false;
-                    }
-                }
-            }
+            ConnectionOutput::SendPacket(packet) => match socket.send_to(&packet, peer) {
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(error),
+            },
             ConnectionOutput::SetTimer {
                 id,
                 duration_micros,
             } => {
-                connection
-                    .timers
-                    .insert(id, now.add_micros(duration_micros));
+                timers.insert(id, now.add_micros(duration_micros));
             }
             ConnectionOutput::ClearTimer { id } => {
-                connection.timers.remove(&id);
+                timers.remove(&id);
             }
         }
     }
+    Ok(())
+}
 
+fn service_events(connection: &mut RustConnection, events: &Sender<IngestEvent>) -> bool {
     while let Some(event) = connection.core.poll_event() {
         match event {
             ConnectionEvent::Connected => {
@@ -82,16 +100,21 @@ pub(super) fn service(
                     .peer_stream_id()
                     .unwrap_or_default()
                     .to_string();
+                let group = connection.core.peer_group_extension();
+                let peer_socket_id = connection.core.peer_socket_id();
                 if !send_event(
                     events,
                     IngestEvent::Connected {
                         id: connection.id,
                         peer: connection.peer,
                         stream_id,
+                        group,
+                        peer_socket_id,
                     },
                 ) {
                     return false;
                 }
+                break;
             }
             ConnectionEvent::DataReceived { payload, .. } => {
                 if connection.authorized {

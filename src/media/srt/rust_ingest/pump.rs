@@ -7,9 +7,9 @@ use mio::net::UdpSocket;
 use shiguredo_srt::Timestamp;
 use tokio::sync::mpsc::{Receiver, Sender, error::TryRecvError};
 
+use super::super::connection::{self, RustConnection};
 use super::super::types::{ConnectionId, IngestEvent, WorkerCommand};
 use super::WorkerOptions;
-use super::connection::{self, RustConnection};
 
 const POLL_MAX_WAIT: Duration = Duration::from_millis(20);
 
@@ -24,7 +24,11 @@ pub(super) fn process_commands(
         match commands.try_recv() {
             Ok(WorkerCommand::Stop) | Err(TryRecvError::Disconnected) => return true,
             Err(TryRecvError::Empty) => return false,
-            Ok(WorkerCommand::Authorize { id, accepted }) => {
+            Ok(WorkerCommand::Authorize {
+                id,
+                logical_id: _,
+                accepted,
+            }) => {
                 let peer = connections
                     .iter()
                     .find_map(|(peer, connection)| (connection.id == id).then_some(*peer));
@@ -59,6 +63,7 @@ pub(super) fn process_commands(
                     connections.remove(&peer);
                 }
             }
+            Ok(WorkerCommand::Handoff { .. } | WorkerCommand::ForwardPacket { .. }) => {}
         }
     }
 }

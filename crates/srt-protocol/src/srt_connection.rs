@@ -302,6 +302,16 @@ impl SrtConnection {
         self.peer_group_extension
     }
 
+    /// Return the SRT socket ID advertised by the peer during handshake.
+    ///
+    /// The peer socket ID is stable for the lifetime of one SRT leg and is
+    /// useful as a member identity after GROUP admission. It is not a
+    /// replacement for the UDP tuple when routing packets because the first
+    /// induction packet must be assigned before this value is known.
+    pub fn peer_socket_id(&self) -> u32 {
+        self.peer_socket_id
+    }
+
     /// Set listener-side GROUP metadata before processing the conclusion.
     pub fn set_group_extension(&mut self, group: GroupExtensionData) {
         self.options.group_extension = Some(group);

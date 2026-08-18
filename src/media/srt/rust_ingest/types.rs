@@ -1,5 +1,9 @@
 use std::net::SocketAddr;
 
+use shiguredo_srt::GroupExtensionData;
+
+use super::connection::RustConnection;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct ConnectionId {
     pub(super) worker: usize,
@@ -12,6 +16,8 @@ pub(super) enum IngestEvent {
         id: ConnectionId,
         peer: SocketAddr,
         stream_id: String,
+        group: Option<GroupExtensionData>,
+        peer_socket_id: u32,
     },
     Data {
         id: ConnectionId,
@@ -25,8 +31,18 @@ pub(super) enum IngestEvent {
     },
 }
 
-#[derive(Debug)]
 pub(super) enum WorkerCommand {
-    Authorize { id: ConnectionId, accepted: bool },
+    Authorize {
+        id: ConnectionId,
+        logical_id: ConnectionId,
+        accepted: bool,
+    },
+    Handoff {
+        connection: Box<RustConnection>,
+    },
+    ForwardPacket {
+        peer: SocketAddr,
+        packet: Vec<u8>,
+    },
     Stop,
 }

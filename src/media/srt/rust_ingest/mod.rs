@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -8,7 +8,7 @@ use tracing::{error, info, warn};
 
 use crate::config::rust_srt_ingest_worker_count;
 use crate::domain::srt_ingest::{ResolvedSrtCrypto, ResolvedSrtIngestConfig};
-use crate::media::ingest_auth::PipelineAccessMode;
+use crate::media::ingest_auth::{AuthenticatedPipeline, PipelineAccessMode};
 
 use super::SrtServer;
 use super::srt_stream_id::{SrtConnectionMode, parse_srt_stream_id};
@@ -16,6 +16,10 @@ use session::RustIngestSession;
 use types::{ConnectionId, IngestEvent, WorkerCommand};
 use worker::WorkerOptions;
 
+mod connected;
+mod connected_group;
+mod connected_worker;
+mod connection;
 mod routing;
 mod session;
 mod socket;
@@ -83,6 +87,12 @@ impl RustIngestPool {
         events: mpsc::Sender<IngestEvent>,
     ) -> Result<(Self, Vec<std::thread::JoinHandle<()>>), String> {
         let stop = Arc::new(AtomicBool::new(false));
+        if crate::config::rust_srt_ingest_connected() {
+            let (commands, handles) =
+                connected::start(port, workers, udp_buffer, options, events, stop.clone())?;
+            return Ok((Self { stop, commands }, handles));
+        }
+
         let mut sockets = Vec::with_capacity(workers);
         for worker_index in 0..workers {
             let socket = socket::bind_reuseport(port, udp_buffer)
@@ -126,10 +136,14 @@ impl RustIngestPool {
         self.stop.clone()
     }
 
-    fn authorize(&self, id: ConnectionId, accepted: bool) -> bool {
+    fn authorize(&self, id: ConnectionId, logical_id: ConnectionId, accepted: bool) -> bool {
         self.commands.get(id.worker).is_some_and(|sender| {
             sender
-                .try_send(WorkerCommand::Authorize { id, accepted })
+                .try_send(WorkerCommand::Authorize {
+                    id,
+                    logical_id,
+                    accepted,
+                })
                 .is_ok()
         })
     }
@@ -149,17 +163,37 @@ async fn serve_events(
     global: ResolvedSrtIngestConfig,
 ) {
     let mut sessions = HashMap::<ConnectionId, RustIngestSession>::new();
+    let mut physical_to_logical = HashMap::<ConnectionId, ConnectionId>::new();
+    let mut bonded_sessions = HashMap::<BondKey, BondSession>::new();
     while let Some(event) = events.recv().await {
         match event {
             IngestEvent::Connected {
                 id,
                 peer,
                 stream_id,
+                group,
+                peer_socket_id,
             } => {
-                admit_connection(server, &pool, &mut sessions, id, peer, stream_id, &global).await;
+                admit_connection(
+                    server,
+                    &pool,
+                    &mut sessions,
+                    &mut physical_to_logical,
+                    &mut bonded_sessions,
+                    ConnectionAdmission {
+                        id,
+                        peer,
+                        stream_id,
+                        group,
+                        peer_socket_id,
+                    },
+                    &global,
+                )
+                .await;
             }
             IngestEvent::Data { id, payload } => {
-                if let Some(session) = sessions.get_mut(&id) {
+                let logical_id = physical_to_logical.get(&id).copied().unwrap_or(id);
+                if let Some(session) = sessions.get_mut(&logical_id) {
                     session.push(&server.engine, &payload).await;
                 }
             }
@@ -169,7 +203,19 @@ async fn serve_events(
                 reason,
                 had_error,
             } => {
-                if let Some(session) = sessions.remove(&id) {
+                let logical_id = physical_to_logical.remove(&id).unwrap_or(id);
+                let empty_bond = bonded_sessions.iter_mut().find_map(|(key, bond)| {
+                    bond.members
+                        .remove(&id)
+                        .then_some((key.clone(), bond.members.is_empty()))
+                });
+                if let Some((key, true)) = empty_bond {
+                    bonded_sessions.remove(&key);
+                }
+                let still_bonded = bonded_sessions
+                    .values()
+                    .any(|bond| bond.logical_id == logical_id);
+                if !still_bonded && let Some(session) = sessions.remove(&logical_id) {
                     session
                         .finish(&server.engine, Some(phase), Some(reason), had_error)
                         .await;
@@ -190,17 +236,53 @@ async fn serve_events(
     }
 }
 
+struct ConnectionAdmission {
+    id: ConnectionId,
+    peer: std::net::SocketAddr,
+    stream_id: String,
+    group: Option<shiguredo_srt::GroupExtensionData>,
+    peer_socket_id: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BondKey {
+    group_id: u32,
+    stream_id: String,
+}
+
+struct BondSession {
+    logical_id: ConnectionId,
+    members: HashSet<ConnectionId>,
+}
+
 async fn admit_connection(
     server: &Arc<SrtServer>,
     pool: &RustIngestPool,
     sessions: &mut HashMap<ConnectionId, RustIngestSession>,
-    id: ConnectionId,
-    peer: std::net::SocketAddr,
-    stream_id: String,
+    physical_to_logical: &mut HashMap<ConnectionId, ConnectionId>,
+    bonded_sessions: &mut HashMap<BondKey, BondSession>,
+    admission: ConnectionAdmission,
     global: &ResolvedSrtIngestConfig,
 ) {
+    let ConnectionAdmission {
+        id,
+        peer,
+        stream_id,
+        group,
+        peer_socket_id,
+    } = admission;
+    if let Some(group) = group {
+        tracing::debug!(
+            %peer,
+            group_id = format_args!("{:#x}", group.group_id),
+            ?group.group_type,
+            peer_socket_id,
+            "Rust SRT ingest completed bonded leg handshake"
+        );
+    }
     let parsed = parse_srt_stream_id(&stream_id);
     let client_ip = peer.ip().to_string();
+    let mut logical_id = id;
     let accepted = if parsed.mode != SrtConnectionMode::Publish || parsed.stream_key.is_empty() {
         warn!(peer = %peer, "Rust SRT ingest rejected invalid publish StreamID");
         false
@@ -215,37 +297,93 @@ async fn admit_connection(
         warn!(peer = %peer, "Rust SRT ingest rejected banned publisher");
         false
     } else {
-        admit_authenticated(server, sessions, id, peer, &parsed.stream_key, global).await
+        match authenticate_connection(server, peer, &parsed.stream_key, global).await {
+            None => false,
+            Some(pipeline) => {
+                if let Some(group) = group {
+                    let key = BondKey {
+                        group_id: group.group_id,
+                        stream_id: normalize_stream_id(&stream_id),
+                    };
+                    if let Some(bond) = bonded_sessions.get_mut(&key) {
+                        logical_id = bond.logical_id;
+                        bond.members.insert(id);
+                        physical_to_logical.insert(id, logical_id);
+                        true
+                    } else {
+                        match RustIngestSession::create(
+                            server,
+                            pipeline,
+                            &parsed.stream_key,
+                            &peer.to_string(),
+                        )
+                        .await
+                        {
+                            None => false,
+                            Some(session) => {
+                                sessions.insert(id, session);
+                                physical_to_logical.insert(id, id);
+                                let mut members = HashSet::new();
+                                members.insert(id);
+                                bonded_sessions.insert(
+                                    key,
+                                    BondSession {
+                                        logical_id: id,
+                                        members,
+                                    },
+                                );
+                                true
+                            }
+                        }
+                    }
+                } else {
+                    match RustIngestSession::create(
+                        server,
+                        pipeline,
+                        &parsed.stream_key,
+                        &peer.to_string(),
+                    )
+                    .await
+                    {
+                        None => false,
+                        Some(session) => {
+                            sessions.insert(id, session);
+                            physical_to_logical.insert(id, id);
+                            true
+                        }
+                    }
+                }
+            }
+        }
     };
-    if !pool.authorize(id, accepted)
-        && let Some(session) = sessions.remove(&id)
-    {
-        session
-            .finish(
-                &server.engine,
-                Some("authorize"),
-                Some("Rust SRT ingest worker command channel closed".to_string()),
-                true,
-            )
-            .await;
+    if !pool.authorize(id, logical_id, accepted) {
+        physical_to_logical.remove(&id);
+        if let Some(session) = sessions.remove(&logical_id) {
+            session
+                .finish(
+                    &server.engine,
+                    Some("authorize"),
+                    Some("Rust SRT ingest worker command channel closed".to_string()),
+                    true,
+                )
+                .await;
+        }
     }
 }
 
-async fn admit_authenticated(
+async fn authenticate_connection(
     server: &Arc<SrtServer>,
-    sessions: &mut HashMap<ConnectionId, RustIngestSession>,
-    id: ConnectionId,
     peer: std::net::SocketAddr,
     stream_key: &str,
     global: &ResolvedSrtIngestConfig,
-) -> bool {
+) -> Option<AuthenticatedPipeline> {
     let Some(policy) = server.ingest_policy_store.resolved_policy(stream_key) else {
         warn!(peer = %peer, "Rust SRT ingest rejected unknown stream key");
-        return false;
+        return None;
     };
     if policy.crypto != global.crypto || policy.latency_ms != global.latency_ms {
         warn!(peer = %peer, "Rust SRT ingest rejected per-stream policy not representable by current listener");
-        return false;
+        return None;
     }
     let pipeline = match server
         .pipeline_access
@@ -259,17 +397,14 @@ async fn admit_authenticated(
         Ok(pipeline) => pipeline,
         Err(_) => {
             warn!(peer = %peer, "Rust SRT ingest authentication failed");
-            return false;
+            return None;
         }
     };
-    let Some(session) =
-        RustIngestSession::create(server, pipeline, stream_key, &peer.to_string()).await
-    else {
-        warn!(peer = %peer, "Rust SRT ingest rejected duplicate publisher");
-        return false;
-    };
-    sessions.insert(id, session);
-    true
+    Some(pipeline)
+}
+
+fn normalize_stream_id(stream_id: &str) -> String {
+    stream_id.trim_matches('\0').trim().to_string()
 }
 
 fn worker_options(global: &ResolvedSrtIngestConfig) -> Result<WorkerOptions, String> {

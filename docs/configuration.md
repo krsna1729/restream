@@ -24,7 +24,8 @@ in SQLite.
 | RTMP listener | `0.0.0.0:1935` | `RESTREAM_RTMP_PORT` |
 | SRT listener | `0.0.0.0:10080` | `RESTREAM_SRT_PORT` |
 | SRT protocol backend | `libsrt` | `RESTREAM_SRT_BACKEND=rust` or `srt-rust` selects the pure-Rust SRT Core for non-bonded publish ingest and SRT egress; unset or any other value keeps the complete libsrt path |
-| Rust SRT ingest workers | Derived from available parallelism, clamped to `1..=64` | `RESTREAM_SRT_INGEST_WORKERS` (one `SO_REUSEPORT` UDP socket and one OS worker per selected worker) |
+| Rust SRT ingest workers | Derived from available parallelism, clamped to `1..=64` | `RESTREAM_SRT_INGEST_WORKERS` (one `SO_REUSEPORT` UDP socket and one OS worker per selected worker; in `connected` scaling this is the number of connected-socket workers behind one public listener) |
+| Rust SRT ingest scaling | One `SO_REUSEPORT` socket per worker | `RESTREAM_SRT_INGEST_SCALING=connected` selects one public listener that completes handshake admission, then hands each tuple to a worker-owned connected UDP socket; `RESTREAM_SRT_INGEST_ROUTING=least-tuples` is the default and `round-robin` is available for first-owner selection |
 | Tokio scheduler workers | Derived from the effective CPU mask/quota | `RESTREAM_TOKIO_WORKER_THREADS` |
 | Tokio blocking-thread ceiling | `512` | `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` |
 | Transcoder backend | External FFmpeg subprocess | `RESTREAM_INTERNAL_VIDEO_PRESETS`, `RESTREAM_INTERNAL_HEVC_TO_H264`, `RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX` (`1`/`true`/`yes`/`on` enable each in-process stage family independently) |
@@ -468,6 +469,15 @@ Inbound bonding uses the same single listener. When the publisher initiates a
 real SRT group, `srt_accept` returns one group ID and libsrt attaches later
 links in the background. Merely opening two independent sockets with the same
 StreamID does not create a bond.
+
+The Rust connected ingest path follows the same lifecycle boundary. It uses
+the first handshake packets only for provisional tuple ownership, learns the
+peer GROUP and StreamID before processing CONCLUSION, and installs a
+libsrt-compatible local mirror GROUP extension in its response. Only after the
+Core reaches `Connected` does the listener transfer the complete connection
+state to the worker's connected socket. All legs with the same peer GROUP stay
+on one worker-owned `SrtGroup`; each leg retains its own tuple, timers, and
+socket ID.
 
 The linked libsrt must be built with `ENABLE_BONDING=ON`. The listener checks
 `SRTO_GROUPCONNECT` at startup and logs a warning when the linked binary does

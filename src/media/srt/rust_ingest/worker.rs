@@ -9,10 +9,9 @@ use mio::{Events, Interest, Poll, Token};
 use shiguredo_srt::Timestamp;
 use tokio::sync::mpsc::{Receiver, Sender};
 
+use super::connection::RustConnection;
 use super::types::{IngestEvent, WorkerCommand};
 
-#[path = "connection.rs"]
-mod connection;
 #[path = "pump.rs"]
 mod pump;
 
@@ -64,7 +63,7 @@ fn run(
     let mut next_socket_id = (std::process::id() as u32)
         .wrapping_add((worker_index as u32).wrapping_mul(0x10001))
         .max(1);
-    let mut connections = std::collections::HashMap::new();
+    let mut connections = std::collections::HashMap::<std::net::SocketAddr, RustConnection>::new();
     let mut packet = vec![0u8; 64 * 1024];
     let mut poll_events = Events::with_capacity(1);
 

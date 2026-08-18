@@ -45,6 +45,16 @@ pub(super) fn bind_reuseport(port: u16, udp_buffer: usize) -> io::Result<UdpSock
     Ok(UdpSocket::from(fd))
 }
 
+pub(super) fn connect_reuseport(
+    port: u16,
+    peer: std::net::SocketAddr,
+    udp_buffer: usize,
+) -> io::Result<UdpSocket> {
+    let socket = bind_reuseport(port, udp_buffer)?;
+    socket.connect(peer)?;
+    Ok(socket)
+}
+
 fn set_socket_option(
     fd: std::os::fd::RawFd,
     option: libc::c_int,

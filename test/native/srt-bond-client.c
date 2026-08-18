@@ -7,8 +7,8 @@
 #include <srt/srt.h>
 
 int main(int argc, char **argv) {
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s <broadcast|backup> <port>\n", argv[0]);
+    if (argc != 3 && argc != 4) {
+        fprintf(stderr, "usage: %s <broadcast|backup> <port> [streamid]\n", argv[0]);
         return 2;
     }
 
@@ -26,6 +26,14 @@ int main(int argc, char **argv) {
     SRTSOCKET group = srt_create_group(group_type);
     if (group == SRT_INVALID_SOCK) {
         fprintf(stderr, "group creation failed: %s\n", srt_getlasterror_str());
+        return 1;
+    }
+
+    const char *streamid = argc == 4 ? argv[3] : "publish:restream-srt-bond-test";
+    if (srt_setsockopt(group, 0, SRTO_STREAMID, streamid, (int)strlen(streamid)) == SRT_ERROR) {
+        fprintf(stderr, "group streamid failed: %s\n", srt_getlasterror_str());
+        srt_close(group);
+        srt_cleanup();
         return 1;
     }
 

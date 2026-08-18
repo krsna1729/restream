@@ -357,6 +357,16 @@ pub(crate) fn rust_srt_ingest_worker_count() -> usize {
     env_usize("RESTREAM_SRT_INGEST_WORKERS", default).clamp(1, 64)
 }
 
+pub(crate) fn rust_srt_ingest_connected() -> bool {
+    std::env::var("RESTREAM_SRT_INGEST_SCALING")
+        .is_ok_and(|value| value.trim().eq_ignore_ascii_case("connected"))
+}
+
+pub(crate) fn rust_srt_ingest_round_robin() -> bool {
+    std::env::var("RESTREAM_SRT_INGEST_ROUTING")
+        .is_ok_and(|value| value.trim().eq_ignore_ascii_case("round-robin"))
+}
+
 fn default_tokio_worker_threads(effective_cpus: usize) -> usize {
     let effective_cpus = effective_cpus.max(1);
     if effective_cpus <= 2 {
