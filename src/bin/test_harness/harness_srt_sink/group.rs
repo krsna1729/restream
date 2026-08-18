@@ -5,7 +5,7 @@ use shiguredo_srt::{
     GroupExtensionData, GroupMode, HandshakePacket, SRTGROUP_MASK, SrtGroup, SrtPacket,
 };
 
-use super::{RustSinkConnection, RustSinkConnectionKey};
+use super::{RustSinkConnection, RustSinkConnectionKey, RustSinkConnections, RustSinkRouteMap};
 
 #[path = "group_runtime.rs"]
 mod runtime;
@@ -88,6 +88,62 @@ impl RustSinkGroup {
         );
         Ok(member_id)
     }
+}
+
+pub(super) fn admit_connected(
+    connection_key: RustSinkConnectionKey,
+    connections: &mut RustSinkConnections,
+    routes: &mut RustSinkRouteMap,
+    groups: &mut RustSinkGroups,
+    group_routes: &mut RustSinkGroupRoutes,
+    next_group_id: &mut u32,
+) -> Result<(), String> {
+    let Some(connection) = connections.get(&connection_key) else {
+        return Err("Rust sink handoff connection is missing".to_string());
+    };
+    let Some(peer_group) = connection.conn.peer_group_extension() else {
+        return Ok(());
+    };
+    let key = RustSinkGroupKey {
+        peer_group_id: peer_group.group_id,
+        stream_id: normalize_stream_id(connection.conn.peer_stream_id().map(str::to_owned)),
+    };
+    let mode = GroupMode::from_group_type(peer_group.group_type)
+        .ok_or_else(|| "Rust sink received an undefined GROUP type".to_string())?;
+    if let Some(group) = groups.get(&key) {
+        if group.mode() != mode {
+            return Err("Rust sink GROUP type changed for an existing group".to_string());
+        }
+    } else {
+        let local_extension = GroupExtensionData {
+            group_id: allocate_group_id(next_group_id),
+            group_type: peer_group.group_type,
+            flags: peer_group.flags,
+            weight: 0,
+        };
+        groups.insert(key.clone(), RustSinkGroup::new(local_extension, mode)?);
+    }
+    let Some(connection) = connections.remove(&connection_key) else {
+        return Err("Rust sink handoff connection disappeared".to_string());
+    };
+    let member_id = groups
+        .get_mut(&key)
+        .expect("connected GROUP was inserted or found")
+        .add_connection(connection_key, connection, peer_group)?;
+    let route = RustSinkGroupRoute {
+        group: key.clone(),
+        member_id,
+    };
+    let aliases = routes
+        .iter()
+        .filter_map(|(alias, mapped)| (*mapped == connection_key).then_some(*alias))
+        .collect::<Vec<_>>();
+    routes.retain(|_, mapped| *mapped != connection_key);
+    for alias in aliases {
+        group_routes.insert(alias, route.clone());
+    }
+    group_routes.insert(connection_key, route);
+    Ok(())
 }
 
 fn prepare_admission(

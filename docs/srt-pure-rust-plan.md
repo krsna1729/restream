@@ -133,7 +133,7 @@ already provides that capability at a different layer.
 | D2 | **Broadcast group support is the priority bonding target, ahead of Backup** | Restream's actual gap is packet-loss redundancy via simultaneous multi-link delivery, not failover — a pipeline-input-level failover switch already exists. Confirmed against real libsrt source (`group.cpp`) that Broadcast is also the *architecturally simpler* of the two group types (no idle/standby/promotion state machine), so prioritizing it is both the higher-value and lower-risk order. |
 | D3 | **Bonding needs Core-level extension points for both group types; it is NOT pure Driver orchestration** | The group ID/type/weight ride in the SRT HSv5 handshake extension, and send-sequence numbering is a group-owned property (`m_iLastSchedSeqNo`, `overrideSndSeqNo`), not private per-connection state — true for Broadcast as much as Backup. See [Bonding](#bonding-the-central-design-problem). |
 | D3a | Group send *scheduling* (fan-out to all members vs. active/standby selection) lives in **Core**; group receive *merge* (`CUDTGroup::recv`) is **one shared mechanism for both group types**, also in Core | Confirmed from source: libsrt has separate `sendBroadcast`/`sendBackup` but a single shared `recv`. Backup's extra complexity (stability detection, promotion, parallel-send-during-failover) is entirely send-side and entirely skippable if Phase 8b is deferred — it does not entangle with the receive-merge machinery Phase 8a needs anyway. |
-| D4 | Convert repo to a **Cargo workspace with the root package retained**; add `crates/srt-protocol` (Core). **No separate `srt-driver` crate** | Root-package-plus-workspace keeps `src/`, `build.rs`, `benches/`, `tests/` paths and every existing `scripts/build/*` command working unchanged. Driver stays in `src/media/srt/` because restream already owns the thread/shard/poller machinery a generic driver crate would duplicate. |
+| D4 | Convert repo to a **Cargo workspace with the root package retained**; add `crates/srt-protocol` (Core) and a reusable `crates/srt-lifecycle` seam. Do not create one generic runtime crate that owns a framework's event loop. | Root-package-plus-workspace keeps `src/`, `build.rs`, `benches/`, `tests/` paths and every existing `scripts/build/*` command working unchanged. The lifecycle seam is now justified by the same handshake, GROUP-affinity, alias-routing, connected-handoff, and teardown policy appearing independently in restream ingest and the harness sink. |
 | D5 | **Do not pursue `no_std`** | Nice-to-have in the source design doc, hard requirement nowhere. `alloc` is needed for connection setup/teardown anyway. Enforce the *real* invariant (no I/O, no threads, no wall-clock) with a crate-graph architecture test instead. |
 | D6 | Keep upstream's internal API shape inside the vendored connection machine; apply the idealized `process_event(&mut self, event, now) -> Outputs` shape **only at the boundaries we own** (group machine, Core↔Driver interface) | Reshaping all of shiguredo's internals to the idealized signature is a rewrite in disguise and destroys rebaseability against upstream fixes. Deliberate deviation from the source design doc. |
 | D7 | The **test harness keeps its own libsrt FFI permanently**, and `native-deps.sh` keeps building libsrt even after production stops linking it | The harness's independent libsrt is the interop oracle. Removing production's libsrt makes the harness's *more* valuable, not less. |
@@ -402,6 +402,8 @@ src/                    # unchanged; restream package
 crates/
   srt-protocol/         # Core: sans-I/O. Vendored shiguredo fork + group layer.
     VENDOR.md           # upstream commit, fork point, local-patch inventory
+  srt-lifecycle/        # reusable sans-I/O admission, affinity, handoff, and
+                        # teardown state machine over srt-protocol
   srt-interop/          # dev-only: standalone caller/listener binaries over
                         # srt-protocol + std, for interop tests without linking
                         # restream or libsrt
@@ -423,18 +425,62 @@ crates/
   than nothing, but Core's whole value proposition is being fuzzable,
   replayable, and compilable without `tokio`, `std` I/O, FFmpeg, or the
   12-second static-link step. Only a crate boundary buys that.
-- **No `srt-driver` crate.** restream already has the driver: dedicated shard
-  OS threads (`src/media/egress/shard.rs`), `SrtFabricPoller`
-  (`src/media/srt/egress_poller.rs`), the ingest accept thread
-  (`src/media/srt/listener.rs:270`), work budgets, backpressure
-  classification. A generic driver crate would either duplicate that or force
-  restream to adopt someone else's threading model — the opposite of the
-  point, which is *restream owning thread/socket placement*. Driver code
-  stays in `src/media/srt/` under a new `rs_driver/` submodule.
+- **Lifecycle is reusable; event loops are not.** `crates/srt-lifecycle` owns
+  pending-handshake state, packet-key aliases, GROUP plus normalized StreamID
+  affinity, worker-selection policy, connected handoff, timer/output actions,
+  and disconnect/reconnect accounting. It must not depend on Mio, Tokio,
+  Glommio, or any other runtime, and it must not create sockets or threads.
+  Restream and the harness each keep their own thin socket/event-loop adapter,
+  so they retain control of thread and socket placement without reimplementing
+  lifecycle policy.
+- **No catch-all `srt-driver` crate.** Restream already has the driver-side
+  policy: dedicated shard OS threads (`src/media/egress/shard.rs`),
+  `SrtFabricPoller` (`src/media/srt/egress_poller.rs`), the ingest accept loop,
+  work budgets, and backpressure classification. A framework-neutral driver
+  crate would either duplicate that or force restream to adopt someone else's
+  threading model. The reusable unit is the lifecycle state machine, not an
+  imposed runtime.
 - **`crates/srt-interop`** exists so interop tests and fuzzers can run a real
   Rust caller/listener as a subprocess without linking FFmpeg/libsqlite/
   libsrt — seconds vs minutes of build time, materially changing iteration
   speed for Phases 3-5.
+
+### Evidence-led layering revision
+
+The attached scaling analysis and gist are design evidence, not instructions
+to copy an architecture wholesale. Their strongest confirmed lesson is the
+separation between sans-I/O protocol state and driver-owned socket/thread
+placement. The local `/home/dev/srt-rs` checkout reinforces that lesson: its
+`SrtConnection` is reusable sans-I/O state and its examples own Tokio sockets,
+but its group API alone does not define listener admission, tuple/socket-ID
+aliases, worker affinity, connected-socket transfer, or disconnect cleanup.
+
+The current restream tree supplies the missing proof of a second reusable
+boundary. `src/media/srt/rust_ingest/connected.rs` and `routing.rs`, and the
+harness sink's `connected.rs`, `group.rs`, and `group_runtime.rs`, each carry
+versions of the same lifecycle policy. The harness's six framework modules in
+`crates/srt-interop` are intentionally benchmark adapters, not a common
+lowest-denominator runtime API. Therefore the next extraction is
+`srt-lifecycle`, while the six runtime-specific adapters remain independently
+owned and benchmarkable.
+
+The dependency direction is intentionally one-way:
+
+```text
+srt-protocol  <-  srt-lifecycle  <-  restream/harness lifecycle adapters
+                                      ^
+                                      +-- mio/tokio/smol/monoio/glommio/compio
+                                          remain adapter choices, not core deps
+```
+
+`srt-lifecycle` should be extracted only after the current listener-owned
+connected handoff is verified. Its first public contract should be the
+invariants already required by the live tests: one owner per packet key,
+GROUP and normalized StreamID keep all bond legs together, a connected Core
+and its timers move together exactly once, and release removes every alias and
+group reference. The crate should carry deterministic unit/property tests for
+those invariants; socket creation, authorization callbacks, media delivery,
+and metrics stay at the application boundary.
 
 ### Internal module decomposition of `crates/srt-protocol`
 

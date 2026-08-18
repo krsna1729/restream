@@ -31,6 +31,15 @@ input to the Rust bonding work. It is not copied wholesale: its group API and
 example-level socket loops must be audited against the pinned libsrt wire
 behavior before the production Core/Driver path adopts any part of it.
 
+The crate-layer decision is now explicit. Keep `crates/srt-protocol` as the
+sans-I/O wire/protocol Core. Extract the duplicated handshake admission,
+packet-key aliasing, GROUP plus normalized StreamID affinity, connected
+handoff, and teardown policy into a new runtime-neutral `crates/srt-lifecycle`
+crate. Restream and the harness keep their Mio/Tokio/other-framework socket
+adapters; no framework is pulled into the lifecycle crate and no generic event
+loop is imposed on future users. The six `srt-interop` framework modules remain
+benchmark adapters and interop executables, not the reusable lifecycle API.
+
 The MSR sink boundary now has the same explicit split. `MSR_PEER=sink` uses
 the native pool by default; `HARNESS_SRT_SINK_BACKEND=rust` binds a dedicated
 pure-Rust `SrtConnection` receiver pool driven by one mio readiness loop over

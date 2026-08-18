@@ -1,4 +1,6 @@
 use super::*;
+use shiguredo_srt::{ConnectionState, GroupExtensionData, SRTGROUP_MASK};
+use std::collections::hash_map::Entry;
 
 #[derive(Default)]
 struct Trace {
@@ -8,12 +10,18 @@ struct Trace {
     tuple_count: AtomicU64,
     group_packets: AtomicU64,
     group_worker_reuses: AtomicU64,
-    source_worker_reuses: AtomicU64,
 }
 
 enum Command {
-    AddPeer { peer: SocketAddr, packet: Vec<u8> },
-    ForwardPacket { peer: SocketAddr, packet: Vec<u8> },
+    Handoff {
+        key: RustSinkConnectionKey,
+        aliases: Vec<RustSinkConnectionKey>,
+        connection: Box<RustSinkConnection>,
+    },
+    ForwardPacket {
+        peer: SocketAddr,
+        packet: Vec<u8>,
+    },
 }
 
 struct ConnectedPeer {
@@ -99,6 +107,7 @@ pub(super) fn start(
     let listener_release_receiver = release_receiver;
     let listener_trace = trace.clone();
     let listener_routing = routing;
+    let listener_crypto = crypto;
     let listener = match std::thread::Builder::new()
         .name("harness-srt-connected-listener".to_string())
         .spawn(move || {
@@ -110,6 +119,7 @@ pub(super) fn start(
                 listener_stop,
                 listener_trace,
                 listener_routing,
+                listener_crypto,
             )
         }) {
         Ok(thread) => thread,
@@ -131,6 +141,7 @@ pub(super) fn start(
     Ok(RustHarnessSrtSinkPool { stop, threads })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_listener(
     port: u16,
     udp_buffer: i32,
@@ -139,6 +150,7 @@ fn run_listener(
     stop: Arc<AtomicBool>,
     trace: Option<Arc<Trace>>,
     routing: RustConnectedRouting,
+    crypto: RustSinkCrypto,
 ) {
     let std_socket = match bind_reuseport_socket(port, udp_buffer) {
         Ok(socket) => socket,
@@ -168,29 +180,34 @@ fn run_listener(
 
     let mut events = Events::with_capacity(1);
     let mut packet = [0u8; 64 * 1024];
-    let mut tuple_workers = HashMap::<SocketAddr, usize>::new();
+    let start = Instant::now();
+    let mut active_workers = HashMap::<RustSinkConnectionKey, usize>::new();
+    let mut active_connection_workers = HashMap::<RustSinkConnectionKey, usize>::new();
+    let mut pending = HashMap::<RustSinkConnectionKey, RustSinkConnection>::new();
+    let mut pending_routes = HashMap::<RustSinkConnectionKey, RustSinkConnectionKey>::new();
+    let mut pending_groups = HashMap::<GroupAffinity, GroupExtensionData>::new();
+    let mut pending_group_refs = HashMap::<RustSinkConnectionKey, GroupAffinity>::new();
     let mut group_workers = HashMap::<GroupAffinity, usize>::new();
-    // Native libsrt's first induction datagram has no GROUP extension. Keep a
-    // provisional source-IP owner until the group metadata appears so bonded
-    // legs cannot be split between connected workers during admission.
-    let mut source_workers = HashMap::<std::net::IpAddr, usize>::new();
-    let mut source_tuple_counts = HashMap::<std::net::IpAddr, usize>::new();
+    let mut active_group_counts = HashMap::<GroupAffinity, usize>::new();
+    let mut active_connection_groups = HashMap::<RustSinkConnectionKey, GroupAffinity>::new();
     let mut worker_tuple_counts = vec![0usize; workers.len()];
     let mut worker_assignment_counts = vec![0usize; workers.len()];
     let mut next_worker = 0usize;
+    let mut next_socket_id = std::process::id().wrapping_add(1);
+    let mut next_group_id = std::process::id().wrapping_add(1);
     while !stop.load(Ordering::Relaxed) {
         while let Ok(peer) = release_receiver.try_recv() {
-            if let Some(worker) = tuple_workers.remove(&peer) {
-                worker_tuple_counts[worker] = worker_tuple_counts[worker].saturating_sub(1);
-            }
-            let source = peer.ip();
-            if let Some(count) = source_tuple_counts.get_mut(&source) {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    source_tuple_counts.remove(&source);
-                    source_workers.remove(&source);
-                }
-            }
+            release_active_peer(
+                peer,
+                &mut active_workers,
+                &mut active_connection_workers,
+                &mut group_workers,
+                &mut worker_tuple_counts,
+                &mut pending_groups,
+                &pending_group_refs,
+                &mut active_group_counts,
+                &mut active_connection_groups,
+            );
         }
         if let Err(error) = poll.poll(&mut events, Some(Duration::from_millis(20)))
             && error.kind() != std::io::ErrorKind::Interrupted
@@ -199,6 +216,13 @@ fn run_listener(
             break;
         }
         if events.is_empty() {
+            process_pending_timers(
+                &socket,
+                &mut pending,
+                &mut pending_routes,
+                &mut pending_group_refs,
+                start,
+            );
             continue;
         }
 
@@ -214,129 +238,283 @@ fn run_listener(
             if let Some(trace) = &trace {
                 trace.listener_packets.fetch_add(1, Ordering::Relaxed);
             }
-            let group_affinity = group::group_extension_from_packet(&packet[..size]).map(
-                |(extension, stream_id)| GroupAffinity {
-                    group_id: extension.group_id,
-                    stream_id: group::normalize_stream_id(stream_id),
-                },
-            );
-            if group_affinity.is_some()
+            let packet_group = packet_group_affinity(&packet[..size]);
+            if packet_group.is_some()
                 && let Some(trace) = &trace
             {
                 trace.group_packets.fetch_add(1, Ordering::Relaxed);
             }
-            let (worker, first_packet) = if let Some(worker) = tuple_workers.get(&peer).copied() {
-                if group_affinity.is_some()
+            let packet_key = rust_sink_connection_key(peer, &packet[..size]);
+            if let Some(worker) = active_workers.get(&packet_key).copied() {
+                if packet_group.is_some()
                     && let Some(trace) = &trace
                 {
                     trace.group_worker_reuses.fetch_add(1, Ordering::Relaxed);
                 }
-                if let Some(affinity) = group_affinity.as_ref() {
-                    group_workers.entry(affinity.clone()).or_insert(worker);
-                }
-                (worker, false)
-            } else {
-                let affinity_worker = group_affinity.as_ref().and_then(|affinity| {
-                    group_workers.get(affinity).copied().or_else(|| {
-                        affinity.stream_id.as_ref().and_then(|_| {
-                            group_workers
-                                .get(&GroupAffinity {
-                                    group_id: affinity.group_id,
-                                    stream_id: None,
-                                })
-                                .copied()
-                        })
+                if workers[worker]
+                    .send(Command::ForwardPacket {
+                        peer,
+                        packet: packet[..size].to_vec(),
                     })
+                    .is_err()
+                {
+                    tracing::debug!(%peer, worker, "Rust connected sink worker channel closed");
+                }
+                continue;
+            }
+
+            let connection_key = pending_routes
+                .get(&packet_key)
+                .copied()
+                .unwrap_or(packet_key);
+            if let Entry::Vacant(entry) = pending.entry(connection_key) {
+                let socket_id = next_socket_id;
+                next_socket_id = next_socket_id.wrapping_add(1).max(1);
+                entry.insert(new_rust_sink_connection(&crypto, socket_id, None));
+            }
+            pending_routes.insert(packet_key, connection_key);
+            let connection = pending
+                .get_mut(&connection_key)
+                .expect("pending connection inserted above");
+            if let Some((affinity, extension)) = &packet_group {
+                pending_group_refs.insert(connection_key, affinity.clone());
+                let local_extension = pending_groups.entry(affinity.clone()).or_insert_with(|| {
+                    let local_id = SRTGROUP_MASK | (next_group_id & 0x3FFF_FFFF).max(1);
+                    next_group_id = next_group_id.wrapping_add(1).max(1);
+                    GroupExtensionData {
+                        group_id: local_id,
+                        group_type: extension.group_type,
+                        flags: extension.flags,
+                        weight: 0,
+                    }
                 });
-                let source_worker = source_workers.get(&peer.ip()).copied();
-                if affinity_worker.is_none()
-                    && source_worker.is_some()
-                    && let Some(trace) = &trace
-                {
-                    trace.source_worker_reuses.fetch_add(1, Ordering::Relaxed);
-                }
-                if affinity_worker.is_some()
-                    && let Some(trace) = &trace
-                {
-                    trace.group_worker_reuses.fetch_add(1, Ordering::Relaxed);
-                }
-                let worker = affinity_worker
-                    .or(source_worker)
-                    .unwrap_or_else(|| match routing {
-                        RustConnectedRouting::RoundRobin => {
-                            let worker = next_worker % workers.len();
-                            next_worker = next_worker.wrapping_add(1);
-                            worker
+                connection.conn.set_group_extension(*local_extension);
+            }
+            let now = timestamp(start);
+            let failed = connection.conn.feed_recv_buf(&packet[..size], now).is_err()
+                || drain_rust_outputs_mode(
+                    &mut connection.conn,
+                    RustSinkOutput::Datagram {
+                        socket: &socket,
+                        peer,
+                    },
+                    &mut connection.timers,
+                    now,
+                )
+                .is_err();
+            if failed {
+                pending.remove(&connection_key);
+                pending_routes.retain(|_, mapped| *mapped != connection_key);
+                pending_group_refs.remove(&connection_key);
+                continue;
+            }
+            let connected = connection.conn.state() == ConnectionState::Connected;
+            if connected {
+                let Some(connection) = pending.remove(&connection_key) else {
+                    continue;
+                };
+                let aliases = pending_routes
+                    .iter()
+                    .filter_map(|(alias, mapped)| (*mapped == connection_key).then_some(*alias))
+                    .collect::<Vec<_>>();
+                pending_routes.retain(|_, mapped| *mapped != connection_key);
+                let connected_group =
+                    connection
+                        .conn
+                        .peer_group_extension()
+                        .map(|extension| GroupAffinity {
+                            group_id: extension.group_id,
+                            stream_id: group::normalize_stream_id(
+                                connection.conn.peer_stream_id().map(str::to_owned),
+                            ),
+                        });
+                let worker = connected_group
+                    .as_ref()
+                    .and_then(|affinity| {
+                        let worker = group_workers.get(affinity).copied();
+                        if worker.is_some()
+                            && let Some(trace) = &trace
+                        {
+                            trace.group_worker_reuses.fetch_add(1, Ordering::Relaxed);
                         }
-                        RustConnectedRouting::LeastTuples => {
-                            let mut selected = next_worker % workers.len();
-                            for offset in 1..workers.len() {
-                                let candidate = (next_worker + offset) % workers.len();
-                                if worker_tuple_counts[candidate] < worker_tuple_counts[selected] {
-                                    selected = candidate;
-                                }
-                            }
-                            next_worker = selected.wrapping_add(1);
-                            selected
-                        }
+                        worker
+                    })
+                    .unwrap_or_else(|| {
+                        select_worker(&mut next_worker, &worker_tuple_counts, routing)
                     });
-                tuple_workers.insert(peer, worker);
-                worker_tuple_counts[worker] += 1;
-                source_workers.entry(peer.ip()).or_insert(worker);
-                *source_tuple_counts.entry(peer.ip()).or_default() += 1;
-                if let Some(affinity) = group_affinity {
-                    group_workers.entry(affinity).or_insert(worker);
+                if let Some(affinity) = connected_group.clone() {
+                    group_workers.entry(affinity.clone()).or_insert(worker);
+                    active_connection_groups.insert(connection_key, affinity.clone());
+                    *active_group_counts.entry(affinity).or_default() += 1;
                 }
+                for alias in aliases
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(connection_key))
+                {
+                    active_workers.insert(alias, worker);
+                }
+                active_connection_workers.insert(connection_key, worker);
+                worker_tuple_counts[worker] += 1;
+                worker_assignment_counts[worker] += 1;
                 if let Some(trace) = &trace {
                     trace.handoffs.fetch_add(1, Ordering::Relaxed);
                     trace.tuple_count.fetch_add(1, Ordering::Relaxed);
                 }
-                worker_assignment_counts[worker] += 1;
-                (worker, true)
-            };
-            let command = if first_packet {
-                Command::AddPeer {
-                    peer,
-                    packet: packet[..size].to_vec(),
+                pending_group_refs.remove(&connection_key);
+                if workers[worker]
+                    .send(Command::Handoff {
+                        key: connection_key,
+                        aliases,
+                        connection: Box::new(connection),
+                    })
+                    .is_err()
+                {
+                    tracing::debug!(%peer, worker, "Rust connected sink worker handoff failed");
                 }
-            } else {
-                Command::ForwardPacket {
-                    peer,
-                    packet: packet[..size].to_vec(),
-                }
-            };
-            if workers[worker].send(command).is_err() {
-                tuple_workers.remove(&peer);
-                let source = peer.ip();
-                if let Some(count) = source_tuple_counts.get_mut(&source) {
-                    *count = count.saturating_sub(1);
-                    if *count == 0 {
-                        source_tuple_counts.remove(&source);
-                        source_workers.remove(&source);
-                    }
-                }
-                if first_packet {
-                    worker_tuple_counts[worker] = worker_tuple_counts[worker].saturating_sub(1);
-                    worker_assignment_counts[worker] =
-                        worker_assignment_counts[worker].saturating_sub(1);
-                }
-                tracing::debug!(%peer, worker, "Rust connected sink worker channel closed");
             }
         }
+        process_pending_timers(
+            &socket,
+            &mut pending,
+            &mut pending_routes,
+            &mut pending_group_refs,
+            start,
+        );
     }
     if let Some(trace) = trace {
         eprintln!(
-            "[rust-sink-handoff] listener_packets={} connected_socket_packets={} handoffs={} tuples={} group_packets={} group_worker_reuses={} source_worker_reuses={} worker_assignments={:?}",
+            "[rust-sink-handoff] listener_packets={} connected_socket_packets={} handoffs={} tuples={} group_packets={} group_worker_reuses={} worker_assignments={:?}",
             trace.listener_packets.load(Ordering::Relaxed),
             trace.connected_socket_packets.load(Ordering::Relaxed),
             trace.handoffs.load(Ordering::Relaxed),
             trace.tuple_count.load(Ordering::Relaxed),
             trace.group_packets.load(Ordering::Relaxed),
             trace.group_worker_reuses.load(Ordering::Relaxed),
-            trace.source_worker_reuses.load(Ordering::Relaxed),
             worker_assignment_counts,
         );
     }
+}
+
+fn packet_group_affinity(packet: &[u8]) -> Option<(GroupAffinity, GroupExtensionData)> {
+    group::group_extension_from_packet(packet).map(|(extension, stream_id)| {
+        (
+            GroupAffinity {
+                group_id: extension.group_id,
+                stream_id: group::normalize_stream_id(stream_id),
+            },
+            extension,
+        )
+    })
+}
+
+fn select_worker(
+    next_worker: &mut usize,
+    worker_tuple_counts: &[usize],
+    routing: RustConnectedRouting,
+) -> usize {
+    match routing {
+        RustConnectedRouting::RoundRobin => {
+            let worker = *next_worker % worker_tuple_counts.len();
+            *next_worker = next_worker.wrapping_add(1);
+            worker
+        }
+        RustConnectedRouting::LeastTuples => {
+            let mut selected = *next_worker % worker_tuple_counts.len();
+            for offset in 1..worker_tuple_counts.len() {
+                let candidate = (*next_worker + offset) % worker_tuple_counts.len();
+                if worker_tuple_counts[candidate] < worker_tuple_counts[selected] {
+                    selected = candidate;
+                }
+            }
+            *next_worker = selected.wrapping_add(1);
+            selected
+        }
+    }
+}
+
+fn process_pending_timers(
+    socket: &MioUdpSocket,
+    pending: &mut HashMap<RustSinkConnectionKey, RustSinkConnection>,
+    pending_routes: &mut HashMap<RustSinkConnectionKey, RustSinkConnectionKey>,
+    pending_group_refs: &mut HashMap<RustSinkConnectionKey, GroupAffinity>,
+    start: Instant,
+) {
+    let now = timestamp(start);
+    let keys = pending.keys().copied().collect::<Vec<_>>();
+    let mut disconnected = Vec::new();
+    for key in keys {
+        let Some(connection) = pending.get_mut(&key) else {
+            continue;
+        };
+        let due = connection
+            .timers
+            .iter()
+            .filter_map(|(id, deadline)| (now >= *deadline).then_some(*id))
+            .collect::<Vec<_>>();
+        for id in due {
+            connection.timers.remove(&id);
+            if connection.conn.handle_timer(id, now).is_err() {
+                disconnected.push(key);
+                break;
+            }
+        }
+        if !disconnected.contains(&key)
+            && (drain_rust_outputs_mode(
+                &mut connection.conn,
+                RustSinkOutput::Datagram {
+                    socket,
+                    peer: key.peer,
+                },
+                &mut connection.timers,
+                now,
+            )
+            .is_err()
+                || connection.conn.state() == ConnectionState::Disconnected)
+        {
+            disconnected.push(key);
+        }
+    }
+    for key in disconnected {
+        pending.remove(&key);
+        pending_routes.retain(|_, mapped| *mapped != key);
+        pending_group_refs.remove(&key);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn release_active_peer(
+    peer: SocketAddr,
+    active_workers: &mut HashMap<RustSinkConnectionKey, usize>,
+    active_connection_workers: &mut HashMap<RustSinkConnectionKey, usize>,
+    group_workers: &mut HashMap<GroupAffinity, usize>,
+    worker_tuple_counts: &mut [usize],
+    pending_groups: &mut HashMap<GroupAffinity, GroupExtensionData>,
+    pending_group_refs: &HashMap<RustSinkConnectionKey, GroupAffinity>,
+    active_group_counts: &mut HashMap<GroupAffinity, usize>,
+    active_connection_groups: &mut HashMap<RustSinkConnectionKey, GroupAffinity>,
+) {
+    let keys = active_connection_workers
+        .keys()
+        .filter(|key| key.peer == peer)
+        .copied()
+        .collect::<Vec<_>>();
+    for key in keys {
+        if let Some(worker) = active_connection_workers.remove(&key) {
+            worker_tuple_counts[worker] = worker_tuple_counts[worker].saturating_sub(1);
+        }
+        if let Some(affinity) = active_connection_groups.remove(&key)
+            && let Some(count) = active_group_counts.get_mut(&affinity)
+        {
+            *count = count.saturating_sub(1);
+            if *count == 0 && !pending_group_refs.values().any(|group| group == &affinity) {
+                active_group_counts.remove(&affinity);
+                group_workers.remove(&affinity);
+                pending_groups.remove(&affinity);
+            }
+        }
+    }
+    active_workers.retain(|key, _| key.peer != peer);
 }
 
 fn run_worker(
@@ -366,10 +544,27 @@ fn run_worker(
 
     while !stop.load(Ordering::Relaxed) {
         while let Ok(command) = receiver.try_recv() {
-            let (peer, packet) = match command {
-                Command::AddPeer { peer, packet } | Command::ForwardPacket { peer, packet } => {
-                    (peer, packet)
-                }
+            if let Command::Handoff {
+                key,
+                aliases,
+                connection,
+            } = command
+            {
+                admit_handoff(
+                    port,
+                    udp_buffer,
+                    &mut poll,
+                    &mut peers,
+                    &mut peer_indexes,
+                    key,
+                    aliases,
+                    *connection,
+                    &mut next_group_id,
+                );
+                continue;
+            }
+            let Command::ForwardPacket { peer, packet } = command else {
+                continue;
             };
             let peer_index = match ensure_connected_peer(
                 port,
@@ -496,6 +691,50 @@ fn run_worker(
             unique_socket_ids,
             max_socket_ids_per_tuple,
         );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn admit_handoff(
+    port: u16,
+    udp_buffer: i32,
+    poll: &mut Poll,
+    peers: &mut Vec<Option<ConnectedPeer>>,
+    peer_indexes: &mut HashMap<SocketAddr, usize>,
+    key: RustSinkConnectionKey,
+    aliases: Vec<RustSinkConnectionKey>,
+    connection: RustSinkConnection,
+    next_group_id: &mut u32,
+) {
+    let peer = key.peer;
+    let peer_index = match ensure_connected_peer(port, udp_buffer, poll, peers, peer_indexes, peer)
+    {
+        Ok(index) => index,
+        Err(error) => {
+            tracing::debug!(%error, %peer, "Rust connected sink peer setup failed");
+            return;
+        }
+    };
+    let Some(Some(connected_peer)) = peers.get_mut(peer_index) else {
+        return;
+    };
+    connected_peer.last_activity = Instant::now();
+    connected_peer.connections.insert(key, connection);
+    connected_peer.routes.insert(key, key);
+    for alias in aliases {
+        connected_peer.routes.insert(alias, key);
+    }
+    if let Err(error) = group::admit_connected(
+        key,
+        &mut connected_peer.connections,
+        &mut connected_peer.routes,
+        &mut connected_peer.groups,
+        &mut connected_peer.group_routes,
+        next_group_id,
+    ) {
+        tracing::debug!(%error, %peer, "Rust connected sink group handoff failed");
+        connected_peer.connections.remove(&key);
+        connected_peer.routes.retain(|_, mapped| *mapped != key);
     }
 }
 
