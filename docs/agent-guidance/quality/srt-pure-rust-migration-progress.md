@@ -15,6 +15,7 @@
 - [Rust sink GROUP admission — 2026-08-18](#rust-sink-group-admission--2026-08-18)
 - [Production Rust bonded egress and paired endpoint profile — 2026-08-18](#production-rust-bonded-egress-and-paired-endpoint-profile--2026-08-18)
 - [Explicit production Broadcast/Backup mode matrix — 2026-08-18](#explicit-production-broadcastbackup-mode-matrix--2026-08-18)
+- [Backup receive-batch ordering correction — 2026-08-18](#backup-receivebatch-ordering-correction--2026-08-18)
 - [Kernel symbols and connected affinity profile — 2026-08-18](#kernel-symbols-and-connected-affinity-profile--2026-08-18)
 - [Kernel-symbol and profiling toolchain verification — 2026-08-18](#kernel-symbol-and-profiling-toolchain-verification--2026-08-18)
 - [Reusable SRT lifecycle crate extraction — 2026-08-18](#reusable-srt-lifecycle-crate-extraction--2026-08-18)
@@ -881,6 +882,39 @@ zero. Logs are retained under
 libsrt reference failover path, while live Rust production failover under a
 deliberately killed bonded member remains an explicit gate before claiming
 Rust Backup failover complete.
+
+## Backup receive-batch ordering correction — 2026-08-18
+
+The Core receive path had a concrete Backup race that was not covered by the
+previous promotion test. `SrtGroup::poll_data` refreshed a member's
+`ConnectionState::Disconnected` before draining its queued events. If the
+active member's final DATA and SHUTDOWN and the standby's first post-promotion
+DATA were observed in one driver batch, the active DATA was rejected before its
+SHUTDOWN event was consumed, and the standby DATA was evaluated while the
+member was still `Standby`.
+
+The fix in `crates/srt-protocol/src/srt_group.rs` keeps pending admission state
+until event draining, evaluates Backup data admission per event, promotes the
+standby immediately after consuming the active disconnect, and performs the
+full disconnected-state refresh afterward. The regression test
+`backup_delivers_standby_payload_arriving_with_active_shutdown` feeds that
+ordering with real `SrtConnection` packets and verifies ordered `primary` then
+`backup` delivery plus member promotion.
+
+Evidence:
+
+- The test failed before the fix with `backup` as the first delivered payload.
+- `cargo test -p shiguredo_srt` passed with 106 unit tests, the allocation guard,
+  2 buffer tests, 5 crypto tests, 4 error tests, 30 connection tests, 4 group
+  tests, and the doctest.
+- `cargo clippy -p shiguredo_srt --all-targets -- -D warnings` passed.
+- The ignored native interop test ran the real Rust sink against the pinned
+  native client for both Broadcast and Backup and passed.
+
+This closes one receive-batch correctness seam. It does not close the separate
+live Rust egress failover gate: deliberately killed-member behavior, sustained
+gap/duplicate measurement, and 300/700/1200 Broadcast/Backup scale profiles
+remain required.
 
 ## Kernel-symbol and profiling toolchain verification — 2026-08-18
 

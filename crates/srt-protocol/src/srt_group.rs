@@ -175,8 +175,9 @@ impl SrtGroup {
     }
 
     pub fn poll_data(&mut self, now: Timestamp) -> Option<GroupPacket> {
-        self.refresh_states();
+        self.refresh_pending_states();
         self.collect_events();
+        self.refresh_states();
 
         let next = self.next_receive_sequence.or_else(|| {
             self.pending.keys().copied().reduce(|left, right| {
@@ -283,10 +284,16 @@ impl SrtGroup {
     }
 
     fn collect_events(&mut self) {
-        for member in &mut self.members {
-            let accept_data =
-                self.mode == GroupMode::Broadcast || member.state == GroupMemberState::Active;
-            while let Some(event) = member.connection.poll_event() {
+        for index in 0..self.members.len() {
+            while let Some((member_id, accept_data, event)) = {
+                let member = &mut self.members[index];
+                let accept_data =
+                    self.mode == GroupMode::Broadcast || member.state == GroupMemberState::Active;
+                member
+                    .connection
+                    .poll_event()
+                    .map(|event| (member.id, accept_data, event))
+            } {
                 match event {
                     ConnectionEvent::DataReceived {
                         sequence_number,
@@ -299,7 +306,7 @@ impl SrtGroup {
                             .is_none_or(|next| !sequence_less_than(sequence_number, next)) =>
                     {
                         self.pending.entry(sequence_number).or_insert(GroupPacket {
-                            member_id: member.id,
+                            member_id,
                             sequence_number,
                             message_number,
                             timestamp,
@@ -307,7 +314,10 @@ impl SrtGroup {
                         });
                     }
                     ConnectionEvent::Disconnected { .. } | ConnectionEvent::Error(_) => {
-                        member.state = GroupMemberState::Broken;
+                        self.members[index].state = GroupMemberState::Broken;
+                        if self.mode == GroupMode::Backup {
+                            self.promote_backup_member();
+                        }
                     }
                     _ => {}
                 }
@@ -316,12 +326,21 @@ impl SrtGroup {
     }
 
     fn refresh_states(&mut self) {
+        self.refresh_pending_states();
         for member in &mut self.members {
             if member.state != GroupMemberState::Broken
                 && member.connection.state() == ConnectionState::Disconnected
             {
                 member.state = GroupMemberState::Broken;
             }
+        }
+        if self.mode == GroupMode::Backup && !self.has_active_member() {
+            self.promote_backup_member();
+        }
+    }
+
+    fn refresh_pending_states(&mut self) {
+        for member in &mut self.members {
             if member.state == GroupMemberState::Pending
                 && member.connection.state() == ConnectionState::Connected
             {

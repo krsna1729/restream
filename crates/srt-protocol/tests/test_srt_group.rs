@@ -1,5 +1,5 @@
 use shiguredo_srt::{
-    ConnectionOptions, ConnectionOutput, ConnectionState, GroupMemberState, GroupMode,
+    ConnectionOptions, ConnectionOutput, ConnectionState, ControlType, GroupMemberState, GroupMode,
     SrtConnection, SrtGroup, SrtPacket, Timestamp,
 };
 
@@ -141,6 +141,55 @@ fn backup_promotion_preserves_group_sequence() {
         .pop()
         .unwrap();
     assert_eq!(data_sequence(&backup_packet), 1);
+    assert_eq!(group.member(2).unwrap().state(), GroupMemberState::Active);
+}
+
+#[test]
+fn backup_delivers_standby_payload_arriving_with_active_shutdown() {
+    let (mut caller_a, listener_a) = establish_pair();
+    let (mut caller_b, listener_b) = establish_pair();
+    let mut group = SrtGroup::new(0x4000_0004, GroupMode::Backup).unwrap();
+    group.add_member(1, 100, listener_a).unwrap();
+    group.add_member(2, 1, listener_b).unwrap();
+
+    caller_a.send(b"primary", ts(100_000)).unwrap();
+    let primary_packet = packets_from(&mut caller_a).pop().unwrap();
+    caller_a.disconnect(ts(101_000));
+    let shutdown_packet = packets_from(&mut caller_a)
+        .into_iter()
+        .find(|packet| {
+            matches!(
+                SrtPacket::decode(packet),
+                Ok(SrtPacket::Control(control)) if control.control_type == ControlType::Shutdown
+            )
+        })
+        .expect("active member should emit shutdown");
+
+    caller_b.synchronize_send_sequence(1).unwrap();
+    caller_b.send(b"backup", ts(102_000)).unwrap();
+    let backup_packet = packets_from(&mut caller_b).pop().unwrap();
+
+    group
+        .member_mut(1)
+        .unwrap()
+        .connection_mut()
+        .feed_recv_buf(&primary_packet, ts(102_000))
+        .unwrap();
+    group
+        .member_mut(1)
+        .unwrap()
+        .connection_mut()
+        .feed_recv_buf(&shutdown_packet, ts(102_000))
+        .unwrap();
+    group
+        .member_mut(2)
+        .unwrap()
+        .connection_mut()
+        .feed_recv_buf(&backup_packet, ts(102_000))
+        .unwrap();
+
+    assert_eq!(group.poll_data(ts(103_000)).unwrap().payload, b"primary");
+    assert_eq!(group.poll_data(ts(103_000)).unwrap().payload, b"backup");
     assert_eq!(group.member(2).unwrap().state(), GroupMemberState::Active);
 }
 
