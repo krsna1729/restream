@@ -472,8 +472,8 @@ The fix keeps the dependency direction intact. `buffer_sizing` remains the
 restream policy owner and now exposes the pure resolution needed by both
 backends. `ConnectionOptions` carries the already-resolved flow window and
 receive capacity; `set_listener_policy` installs them before conclusion;
-`SrtConnection` advertises the flow window and creates the receiver with the
-effective `min(RCVBUF packets, FC)` capacity. No policy lookup, allocation, or
+`SrtConnection` advertises and creates the receiver with the effective
+`min(RCVBUF packets, FC)` capacity. No policy lookup, allocation, or
 extra branch was added to the datagram receive hot path. The Rust harness sink
 uses the same 12 MiB/FC preset as its libsrt sink, and Rust single/group
 egress consumes the resolved FC rather than falling back to 8,192.

@@ -303,10 +303,18 @@ pub(super) fn resolve_ingest_latency_opts(latency_ms: i32) -> (i32, i32, i32) {
 /// the protocol crate.
 pub(super) fn resolve_ingest_buffer_packets(latency_ms: i32) -> (u32, u32) {
     let (_, fc_pkts, rcvbuf_bytes) = resolve_ingest_latency_opts(latency_ms);
-    let receive_buffer_packets = (rcvbuf_bytes / SRT_RCVBUF_PACKET_SIZE_BYTES)
-        .clamp(32, fc_pkts)
-        .unsigned_abs();
+    let receive_buffer_packets = receive_buffer_packets_from_bytes(rcvbuf_bytes, fc_pkts as u32);
     (fc_pkts as u32, receive_buffer_packets)
+}
+
+/// Match libsrt's `SRTO_RCVBUF` conversion before handing capacity to the
+/// Rust Core. `flightCapacity()` is the smaller of this value and FC.
+pub(crate) fn receive_buffer_packets_from_bytes(
+    rcvbuf_bytes: i32,
+    flow_window_packets: u32,
+) -> u32 {
+    (i64::from(rcvbuf_bytes.max(0)) / i64::from(SRT_RCVBUF_PACKET_SIZE_BYTES))
+        .clamp(32, i64::from(flow_window_packets)) as u32
 }
 
 pub(super) fn srt_set_ingest_latency_opts(sock: SRTSOCKET, latency_ms: i32) {
@@ -612,6 +620,19 @@ mod egress_buffer_sizing_tests {
             resolve_ingest_buffer_packets(DESIRED_LATENCY_MS);
         assert_eq!(flow_window_packets, DESIRED_FC as u32);
         assert_eq!(receive_buffer_packets, 8_548);
+    }
+
+    #[test]
+    fn egress_buffer_packets_match_libsrt_byte_conversion() {
+        assert_eq!(
+            receive_buffer_packets_from_bytes(1_024 * 1_024, 32_768),
+            712
+        );
+        assert_eq!(
+            receive_buffer_packets_from_bytes(12 * 1024 * 1024, 32_768),
+            8_548
+        );
+        assert_eq!(receive_buffer_packets_from_bytes(i32::MAX, 679), 679);
     }
 }
 

@@ -412,6 +412,12 @@ impl SrtConnection {
         self.last_nak_time = Some(now);
     }
 
+    fn flight_capacity_packets(&self) -> u32 {
+        self.options
+            .flow_window_packets
+            .min(self.options.receive_buffer_packets)
+    }
+
     /// 受信データを処理
     pub fn feed_recv_buf(&mut self, buf: &[u8], now: Timestamp) -> Result<(), Error> {
         if buf.len() < SRT_HEADER_SIZE {
@@ -1414,7 +1420,7 @@ impl SrtConnection {
 
     fn send_induction_request(&mut self, now: Timestamp) {
         let mut hs = HandshakePacket::new_induction_request(self.options.socket_id);
-        hs.flow_window = self.options.flow_window_packets;
+        hs.flow_window = self.flight_capacity_packets();
         if let Some(group) = self.options.group_extension {
             hs.add_group_extension(group);
         }
@@ -1436,7 +1442,7 @@ impl SrtConnection {
             self.syn_cookie,
             encryption_field,
         );
-        hs.flow_window = self.options.flow_window_packets;
+        hs.flow_window = self.flight_capacity_packets();
         if let Some(group) = self.options.group_extension {
             hs.add_group_extension(group);
         }
@@ -1467,7 +1473,7 @@ impl SrtConnection {
             encryption_field,
             has_encryption,
         );
-        hs.flow_window = self.options.flow_window_packets;
+        hs.flow_window = self.flight_capacity_packets();
 
         // SRT フラグ
         // CRYPT と REXMITFLG は常に設定 (レガシー互換性フラグ)
@@ -1525,7 +1531,7 @@ impl SrtConnection {
             encryption_field,
             has_encryption,
         );
-        hs.flow_window = self.options.flow_window_packets;
+        hs.flow_window = self.flight_capacity_packets();
 
         // SRT フラグ
         // CRYPT と REXMITFLG は常に設定 (レガシー互換性フラグ)
@@ -1759,7 +1765,7 @@ mod tests {
             panic!("listener conclusion response is control");
         };
         let handshake = HandshakePacket::decode(&control).expect("valid handshake");
-        assert_eq!(handshake.flow_window, 32_768);
+        assert_eq!(handshake.flow_window, 8_548);
     }
 
     #[test]

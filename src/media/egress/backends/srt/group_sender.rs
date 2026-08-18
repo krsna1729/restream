@@ -16,7 +16,7 @@ use shiguredo_srt::{
 use crate::media::egress::backend::{CloseReason, Readiness};
 use crate::media::srt::{
     NativeSendBacklog, SrtEgressInterest, SrtMessageSender, SrtSendFailure, SrtSendResult,
-    SrtSenderStats,
+    SrtSenderStats, receive_buffer_packets_from_bytes,
 };
 
 pub(super) struct SrtRustGroupSender {
@@ -63,7 +63,7 @@ impl SrtRustGroupSender {
         };
         for (index, _) in sender.peers.iter().enumerate() {
             let weight = if index == 0 { 1 } else { 0 };
-            let mut options = group_options(config, latency, maxbw, fc, group_id, weight)?;
+            let mut options = group_options(config, rcvbuf, latency, maxbw, fc, group_id, weight)?;
             options.socket_id = nonzero_random_u32();
             let mut connection = SrtConnection::new_caller(options);
             connection
@@ -232,17 +232,20 @@ impl SrtRustGroupSender {
 
 fn group_options(
     config: &crate::media::srt::SrtFabricEgressConnectConfig<'_>,
+    rcvbuf: i32,
     latency: i32,
     maxbw: i64,
     fc: i32,
     group_id: u32,
     weight: u16,
 ) -> Result<ConnectionOptions, String> {
+    let flow_window_packets = fc.max(32) as u32;
     let mut options = ConnectionOptions {
         tsbpd_delay: latency.clamp(0, u16::MAX as i32) as u16,
         stream_id: Some(config.stream_id().to_string()),
         max_bandwidth_bytes_per_sec: (maxbw > 0).then_some((maxbw / 8) as u64),
-        flow_window_packets: fc.max(32) as u32,
+        flow_window_packets,
+        receive_buffer_packets: receive_buffer_packets_from_bytes(rcvbuf, flow_window_packets),
         group_extension: Some(GroupExtensionData {
             group_id,
             group_type: shiguredo_srt::GroupType::Backup,

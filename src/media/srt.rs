@@ -30,6 +30,7 @@ use crate::media::ts_chunk_ring::TsChunkReader;
 
 #[path = "srt/buffer_sizing.rs"]
 mod buffer_sizing;
+pub(crate) use buffer_sizing::receive_buffer_packets_from_bytes;
 #[path = "srt/ingest.rs"]
 mod ingest;
 #[path = "srt/ingest_packets.rs"]

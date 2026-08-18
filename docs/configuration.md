@@ -347,13 +347,15 @@ buffer was sized for; nothing on either end can close that gap, since
 libsrt does not validate the peer's proposed latency at all.
 
 The Rust Core consumes the same resolved values before it processes the
-conclusion: FC is the advertised flow-window packet count, and RCVBUF is
-converted using libsrt's default-MSS `MSS - UDP header` packet size (1472
-bytes), then capped by FC. At the default 250 ms policy this is FC 32,768 and
-an effective Rust receive capacity of 8,548 packets for the 12 MiB RCVBUF.
-This keeps the internal Rust receiver and the native `CRcvBuffer` on the same
-effective window. The Linux UDP `SO_RCVBUF` remains a socket-startup setting;
-per-stream sizing here is the SRT protocol buffer, not the kernel queue.
+conclusion: FC is the policy upper bound, and RCVBUF is converted using
+libsrt's default-MSS `MSS - UDP header` packet size (1472 bytes), then capped
+by FC. The handshake advertises the effective `min(RCVBUF packets, FC)` flight
+capacity. At the default 250 ms policy this is FC 32,768, an effective Rust
+receive capacity of 8,548 packets, and an 8,548-packet advertised flight
+window for the 12 MiB RCVBUF. This keeps the internal Rust receiver and the
+native `CRcvBuffer` on the same effective window. The Linux UDP `SO_RCVBUF`
+remains a socket-startup setting; per-stream sizing here is the SRT protocol
+buffer, not the kernel queue.
 
 Linux startup checks warn when `net.core.rmem_max` or `net.core.wmem_max` cannot
 support the requested UDP buffers. The listener's `/proc/net/udp` receive queue

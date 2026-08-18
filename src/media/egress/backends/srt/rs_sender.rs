@@ -15,7 +15,7 @@ use shiguredo_srt::{
 use crate::media::egress::backend::{CloseReason, Readiness};
 use crate::media::srt::{
     NativeSendBacklog, SrtEgressInterest, SrtLeafHandle, SrtMessageSender, SrtSendFailure,
-    SrtSendResult, SrtSenderStats,
+    SrtSendResult, SrtSenderStats, receive_buffer_packets_from_bytes,
 };
 
 pub(crate) enum SrtRustMessageSender {
@@ -78,12 +78,14 @@ impl SrtRustSingleMessageSender {
             .map_err(|error| format!("connect Rust SRT caller socket to {peer}: {error}"))?;
         let socket = UdpSocket::from_std(std_socket);
         let started = Instant::now();
+        let flow_window_packets = fc.max(32) as u32;
         let mut options = ConnectionOptions {
             socket_id: nonzero_random_u32(),
             tsbpd_delay: latency.clamp(0, u16::MAX as i32) as u16,
             stream_id: Some(config.stream_id().to_string()),
             max_bandwidth_bytes_per_sec: (maxbw > 0).then_some((maxbw / 8) as u64),
-            flow_window_packets: fc.max(32) as u32,
+            flow_window_packets,
+            receive_buffer_packets: receive_buffer_packets_from_bytes(rcvbuf, flow_window_packets),
             ..ConnectionOptions::default()
         };
         if let Some((passphrase, pbkeylen)) = config.crypto_parameters() {
