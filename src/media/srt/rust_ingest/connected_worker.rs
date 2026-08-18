@@ -462,10 +462,14 @@ fn authorize_peer(state: &mut WorkerState<'_>, index: usize, logical_id: Connect
     }
     connection.authorized = true;
     peer.route = PeerRoute::Single(connection);
-    if let PeerRoute::Single(connection) = &mut peer.route
-        && !connection::service(connection, &peer.socket, state.events, state.now)
-    {
+    let service_ok = if let PeerRoute::Single(connection) = &mut peer.route {
+        connection::service(connection, &peer.socket, state.events, state.now)
+    } else {
+        false
+    };
+    if !service_ok {
         peer.route = PeerRoute::Closed;
+        cleanup_route(state, index);
     }
 }
 
@@ -487,47 +491,49 @@ fn service_timers(state: &mut WorkerState<'_>) {
         };
         match kind {
             RouteKind::Pending => {
-                let Some(Some(peer)) = state.peers.get_mut(index) else {
-                    continue;
+                let service_ok = {
+                    let Some(Some(peer)) = state.peers.get_mut(index) else {
+                        continue;
+                    };
+                    let PeerRoute::Pending(connection) = &mut peer.route else {
+                        continue;
+                    };
+                    let due = connection
+                        .timers
+                        .iter()
+                        .filter_map(|(id, deadline)| (state.now >= *deadline).then_some(*id))
+                        .collect::<Vec<_>>();
+                    for id in due {
+                        connection.timers.remove(&id);
+                        let _ = connection.core.handle_timer(id, state.now);
+                    }
+                    connection::service(connection, &peer.socket, state.events, state.now)
                 };
-                let PeerRoute::Pending(connection) = &mut peer.route else {
-                    continue;
-                };
-                let due = connection
-                    .timers
-                    .iter()
-                    .filter_map(|(id, deadline)| (state.now >= *deadline).then_some(*id))
-                    .collect::<Vec<_>>();
-                for id in due {
-                    connection.timers.remove(&id);
-                    let _ = connection.core.handle_timer(id, state.now);
+                if !service_ok {
+                    cleanup_route(state, index);
                 }
-                let _ = connection::drain_core_outputs(
-                    &mut connection.core,
-                    &peer.socket,
-                    peer.peer,
-                    &mut connection.timers,
-                    state.now,
-                );
             }
             RouteKind::Single => {
-                let Some(Some(peer)) = state.peers.get_mut(index) else {
-                    continue;
+                let service_ok = {
+                    let Some(Some(peer)) = state.peers.get_mut(index) else {
+                        continue;
+                    };
+                    let PeerRoute::Single(connection) = &mut peer.route else {
+                        continue;
+                    };
+                    let due = connection
+                        .timers
+                        .iter()
+                        .filter_map(|(id, deadline)| (state.now >= *deadline).then_some(*id))
+                        .collect::<Vec<_>>();
+                    for id in due {
+                        connection.timers.remove(&id);
+                        let _ = connection.core.handle_timer(id, state.now);
+                    }
+                    connection::service(connection, &peer.socket, state.events, state.now)
                 };
-                let PeerRoute::Single(connection) = &mut peer.route else {
-                    continue;
-                };
-                let due = connection
-                    .timers
-                    .iter()
-                    .filter_map(|(id, deadline)| (state.now >= *deadline).then_some(*id))
-                    .collect::<Vec<_>>();
-                for id in due {
-                    connection.timers.remove(&id);
-                    let _ = connection.core.handle_timer(id, state.now);
-                }
-                if !connection::service(connection, &peer.socket, state.events, state.now) {
-                    peer.route = PeerRoute::Closed;
+                if !service_ok {
+                    cleanup_route(state, index);
                 }
             }
             RouteKind::Group(key, member_id) => {
@@ -629,4 +635,54 @@ fn send_event(events: &Sender<IngestEvent>, event: IngestEvent) -> bool {
 
 fn timestamp(start: Instant) -> Timestamp {
     Timestamp::from_micros(start.elapsed().as_micros() as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closed_route_releases_tuple_for_reuse() {
+        let mut poll = Poll::new().expect("poll creates");
+        let std_socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("socket binds");
+        std_socket
+            .set_nonblocking(true)
+            .expect("socket becomes nonblocking");
+        let mut socket = UdpSocket::from_std(std_socket);
+        poll.registry()
+            .register(&mut socket, Token(1), Interest::READABLE)
+            .expect("socket registers");
+
+        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 29_001));
+        let mut peers = vec![Some(ConnectedPeer {
+            socket,
+            id: ConnectionId {
+                worker: 0,
+                serial: 1,
+            },
+            peer,
+            route: PeerRoute::Closed,
+        })];
+        let mut indexes = HashMap::from([(peer, 0)]);
+        let mut groups = HashMap::new();
+        let (events, _event_receiver) = tokio::sync::mpsc::channel(1);
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let mut state = WorkerState {
+            poll: &mut poll,
+            peers: &mut peers,
+            indexes: &mut indexes,
+            groups: &mut groups,
+            port: 29_000,
+            udp_buffer: 64 * 1024,
+            events: &events,
+            release_sender: &release_sender,
+            now: Timestamp::from_micros(0),
+        };
+
+        cleanup_route(&mut state, 0);
+
+        assert!(state.peers[0].is_none());
+        assert!(!state.indexes.contains_key(&peer));
+        assert_eq!(release_receiver.try_recv().expect("tuple release"), peer);
+    }
 }

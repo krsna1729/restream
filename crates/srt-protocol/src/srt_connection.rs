@@ -64,6 +64,8 @@ pub enum TimerId {
 /// 非活性タイムアウト時間 (マイクロ秒)
 /// SRT 仕様では通常 5 秒
 const INACTIVITY_TIMEOUT_MICROS: u64 = 5_000_000;
+const HANDSHAKE_RETRY_INTERVAL_MICROS: u64 = 1_000_000;
+const HANDSHAKE_MAX_RETRIES: u8 = 5;
 
 /// libsrt 互換ゼロパディング (4 バイト)
 ///
@@ -232,6 +234,8 @@ pub struct SrtConnection {
     peer_stream_id: Option<String>,
     /// Peer bonding group metadata.
     peer_group_extension: Option<GroupExtensionData>,
+    last_handshake_packet: Option<Vec<u8>>,
+    handshake_retries: u8,
 }
 
 impl SrtConnection {
@@ -258,6 +262,8 @@ impl SrtConnection {
             received_km: None,
             peer_stream_id: None,
             peer_group_extension: None,
+            last_handshake_packet: None,
+            handshake_retries: 0,
         }
     }
 
@@ -284,6 +290,8 @@ impl SrtConnection {
             received_km: None,
             peer_stream_id: None,
             peer_group_extension: None,
+            last_handshake_packet: None,
+            handshake_retries: 0,
         }
     }
 
@@ -324,15 +332,11 @@ impl SrtConnection {
         }
 
         self.start_time = Some(now);
+        self.handshake_retries = 0;
         self.send_induction_request(now);
         self.set_state(ConnectionState::Induction);
         self.handshake_state = HandshakeState::InductionSent;
-
-        // ハンドシェイクタイムアウト設定
-        self.output_queue.push_back(ConnectionOutput::SetTimer {
-            id: TimerId::Handshake,
-            duration_micros: 1_000_000, // 1秒
-        });
+        self.arm_handshake_timer();
 
         Ok(())
     }
@@ -420,10 +424,16 @@ impl SrtConnection {
         match timer_id {
             TimerId::Handshake => {
                 if self.state != ConnectionState::Connected {
-                    self.event_queue
-                        .push_back(ConnectionEvent::Error("handshake timeout".to_string()));
-                    self.set_state(ConnectionState::Disconnected);
-                    self.handshake_state = HandshakeState::Failed;
+                    if self.handshake_retries >= HANDSHAKE_MAX_RETRIES {
+                        self.event_queue
+                            .push_back(ConnectionEvent::Error("handshake timeout".to_string()));
+                        self.set_state(ConnectionState::Disconnected);
+                        self.handshake_state = HandshakeState::Failed;
+                    } else {
+                        self.handshake_retries = self.handshake_retries.saturating_add(1);
+                        self.retransmit_handshake();
+                        self.arm_handshake_timer();
+                    }
                 }
             }
             TimerId::Keepalive => {
@@ -821,7 +831,10 @@ impl SrtConnection {
         match hs.handshake_type {
             HandshakeType::Induction => {
                 // INDUCTION レスポンス受信
-                if self.handshake_state != HandshakeState::InductionSent {
+                if !matches!(
+                    self.handshake_state,
+                    HandshakeState::InductionSent | HandshakeState::ConclusionSent
+                ) {
                     return Ok(());
                 }
 
@@ -834,7 +847,9 @@ impl SrtConnection {
                 );
 
                 // 暗号化コンテキスト生成
-                if let Some(ref passphrase) = self.options.passphrase {
+                if self.handshake_state == HandshakeState::InductionSent
+                    && let Some(ref passphrase) = self.options.passphrase
+                {
                     let key_length = hs.key_length().unwrap_or(self.options.key_length);
                     // restream local patch (crates/srt-protocol/VENDOR.md,
                     // upstream issue 0052, open/unfixed at vendor commit
@@ -858,9 +873,15 @@ impl SrtConnection {
                 // CONCLUSION を送信
                 self.send_conclusion_request(now);
                 self.handshake_state = HandshakeState::ConclusionSent;
+                self.handshake_retries = 0;
+                self.arm_handshake_timer();
             }
             HandshakeType::Conclusion => {
                 // CONCLUSION レスポンス受信 → 接続完了
+                if self.handshake_state == HandshakeState::Completed {
+                    self.retransmit_handshake();
+                    return Ok(());
+                }
                 if self.handshake_state != HandshakeState::ConclusionSent {
                     return Ok(());
                 }
@@ -902,6 +923,7 @@ impl SrtConnection {
                 }
 
                 self.handshake_state = HandshakeState::Completed;
+                self.handshake_retries = 0;
                 self.set_state(ConnectionState::Connected);
                 self.start_time = Some(now);
 
@@ -952,15 +974,25 @@ impl SrtConnection {
         match hs.handshake_type {
             HandshakeType::Induction => {
                 // INDUCTION リクエスト受信
+                if self.handshake_state == HandshakeState::Completed {
+                    self.retransmit_handshake();
+                    return Ok(());
+                }
                 self.peer_socket_id = hs.socket_id;
                 self.syn_cookie = self.options.syn_cookie.unwrap_or(0);
 
                 // INDUCTION レスポンス送信
                 self.send_induction_response(now);
                 self.handshake_state = HandshakeState::InductionReceived;
+                self.handshake_retries = 0;
+                self.arm_handshake_timer();
             }
             HandshakeType::Conclusion => {
                 // CONCLUSION リクエスト受信
+                if self.handshake_state == HandshakeState::Completed {
+                    self.retransmit_handshake();
+                    return Ok(());
+                }
                 if self.handshake_state != HandshakeState::InductionReceived {
                     return Ok(());
                 }
@@ -1003,6 +1035,7 @@ impl SrtConnection {
                 // CONCLUSION レスポンス送信
                 self.send_conclusion_response(now);
                 self.handshake_state = HandshakeState::Completed;
+                self.handshake_retries = 0;
                 self.set_state(ConnectionState::Connected);
                 self.start_time = Some(now);
 
@@ -1337,8 +1370,7 @@ impl SrtConnection {
         let pkt = hs.encode(self.relative_timestamp(now), 0);
         let mut buf = Vec::new();
         pkt.encode(&mut buf);
-        self.output_queue
-            .push_back(ConnectionOutput::SendPacket(buf));
+        self.queue_handshake_packet(buf);
     }
 
     fn send_induction_response(&mut self, now: Timestamp) {
@@ -1359,8 +1391,7 @@ impl SrtConnection {
         let pkt = hs.encode(self.relative_timestamp(now), self.peer_socket_id);
         let mut buf = Vec::new();
         pkt.encode(&mut buf);
-        self.output_queue
-            .push_back(ConnectionOutput::SendPacket(buf));
+        self.queue_handshake_packet(buf);
     }
 
     fn send_conclusion_request(&mut self, now: Timestamp) {
@@ -1423,8 +1454,7 @@ impl SrtConnection {
         let pkt = hs.encode(self.relative_timestamp(now), 0);
         let mut buf = Vec::new();
         pkt.encode(&mut buf);
-        self.output_queue
-            .push_back(ConnectionOutput::SendPacket(buf));
+        self.queue_handshake_packet(buf);
     }
 
     fn send_conclusion_response(&mut self, now: Timestamp) {
@@ -1467,8 +1497,27 @@ impl SrtConnection {
         let pkt = hs.encode(self.relative_timestamp(now), self.peer_socket_id);
         let mut buf = Vec::new();
         pkt.encode(&mut buf);
+        self.queue_handshake_packet(buf);
+    }
+
+    fn queue_handshake_packet(&mut self, packet: Vec<u8>) {
+        self.last_handshake_packet = Some(packet.clone());
         self.output_queue
-            .push_back(ConnectionOutput::SendPacket(buf));
+            .push_back(ConnectionOutput::SendPacket(packet));
+    }
+
+    fn retransmit_handshake(&mut self) {
+        if let Some(packet) = self.last_handshake_packet.as_ref() {
+            self.output_queue
+                .push_back(ConnectionOutput::SendPacket(packet.clone()));
+        }
+    }
+
+    fn arm_handshake_timer(&mut self) {
+        self.output_queue.push_back(ConnectionOutput::SetTimer {
+            id: TimerId::Handshake,
+            duration_micros: HANDSHAKE_RETRY_INTERVAL_MICROS,
+        });
     }
 
     /// Keepalive パケットを送信

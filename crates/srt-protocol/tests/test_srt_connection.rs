@@ -120,6 +120,36 @@ fn test_handshake_without_encryption() {
 }
 
 #[test]
+fn test_handshake_retransmits_after_packet_loss() {
+    let mut caller = SrtConnection::new_caller(test_options());
+    let mut listener = SrtConnection::new_listener(test_options());
+
+    caller.connect(ts(0)).expect("caller connection starts");
+    while caller.poll_output().is_some() {}
+
+    caller
+        .handle_timer(TimerId::Handshake, ts(1_000_000))
+        .expect("caller handshake retry");
+    transfer_caller_to_listener(&mut caller, &mut listener, ts(1_000_000));
+    while listener.poll_output().is_some() {}
+
+    listener
+        .handle_timer(TimerId::Handshake, ts(2_000_000))
+        .expect("listener handshake retry");
+    transfer_listener_to_caller(&mut listener, &mut caller, ts(2_000_000));
+    while caller.poll_output().is_some() {}
+
+    caller
+        .handle_timer(TimerId::Handshake, ts(3_000_000))
+        .expect("caller conclusion retry");
+    transfer_caller_to_listener(&mut caller, &mut listener, ts(3_000_000));
+    transfer_listener_to_caller(&mut listener, &mut caller, ts(3_000_000));
+
+    assert_eq!(caller.state(), ConnectionState::Connected);
+    assert_eq!(listener.state(), ConnectionState::Connected);
+}
+
+#[test]
 fn test_handshake_with_encryption() {
     let passphrase = "test-passphrase".to_string();
 

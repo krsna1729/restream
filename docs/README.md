@@ -179,6 +179,7 @@ above remain the better way to learn the system.
 - [MSR 1,200-output netns confound investigation — 2026-08-14](agent-guidance/quality/msr-1200-netns-confound-investigation-2026-08-14.md)
 - [SRT fan-in scaling investigation — 2026-08-15](agent-guidance/quality/srt-scaling-investigation.md)
 - [SRT bonding wire spec — 2026-08-16](agent-guidance/quality/srt-bonding-wire-spec-2026-08-16.md)
+- [SRT six-driver matrix and connected lifecycle audit — 2026-08-18](agent-guidance/quality/srt-six-driver-matrix-2026-08-18.md)
 
 ### Canonical agent skills and references
 
