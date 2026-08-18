@@ -127,6 +127,51 @@ impl ExtensionType {
     }
 }
 
+/// SRT bonding group type carried by the GROUP handshake extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum GroupType {
+    /// No group type was selected.
+    Undefined = 0,
+    /// Broadcast mode duplicates each message across all active links.
+    Broadcast = 1,
+    /// Backup mode activates one link and fails over to a standby link.
+    Backup = 2,
+}
+
+impl GroupType {
+    fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Undefined),
+            1 => Some(Self::Broadcast),
+            2 => Some(Self::Backup),
+            _ => None,
+        }
+    }
+}
+
+/// SRT bonding group metadata from the two-word GROUP extension.
+///
+/// The wire layout is the same as libsrt's `SrtHSRequest`:
+/// `group_id`, followed by `[type:8][flags:8][weight:16]`, in network order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupExtensionData {
+    /// Group identifier. Libsrt marks group IDs with [`SRTGROUP_MASK`].
+    pub group_id: u32,
+    /// Group scheduling/failover mode.
+    pub group_type: GroupType,
+    /// Group flags, including [`GFLAG_SYNCONMSG`] when requested.
+    pub flags: u8,
+    /// Per-link weight used by group scheduling/failover.
+    pub weight: u16,
+}
+
+/// Libsrt's marker bit for group identifiers.
+pub const SRTGROUP_MASK: u32 = 1 << 30;
+
+/// Synchronize group data on message boundaries.
+pub const GFLAG_SYNCONMSG: u8 = 0x01;
+
 /// SRT フラグ
 pub mod srt_flags {
     /// TSBPD 送信有効
@@ -491,6 +536,46 @@ impl HandshakePacket {
                     send_tsbpd_delay,
                 });
             }
+        }
+        None
+    }
+
+    /// Add the libsrt-compatible two-word GROUP extension.
+    pub fn add_group_extension(&mut self, group: GroupExtensionData) {
+        let mut data = Vec::with_capacity(8);
+        write_u32(&mut data, group.group_id);
+        let packed = (u32::from(group.group_type as u8) << 24)
+            | (u32::from(group.flags) << 16)
+            | u32::from(group.weight);
+        write_u32(&mut data, packed);
+
+        self.extensions.push(HandshakeExtension {
+            ext_type: ExtensionType::Group,
+            data,
+        });
+        // GROUP is a CONFIG extension in libsrt. There is no independent
+        // GROUP bit in the handshake extension flags.
+        self.extension_field |= extension_flags::CONFIG;
+    }
+
+    /// Read the first valid libsrt-compatible GROUP extension.
+    pub fn get_group_extension(&self) -> Option<GroupExtensionData> {
+        for extension in &self.extensions {
+            if extension.ext_type != ExtensionType::Group || extension.data.len() < 8 {
+                continue;
+            }
+
+            let mut data = extension.data.as_slice();
+            let group_id = read_u32(&mut data).ok()?;
+            let packed = read_u32(&mut data).ok()?;
+            let group_type = GroupType::from_u8((packed >> 24) as u8)?;
+
+            return Some(GroupExtensionData {
+                group_id,
+                group_type,
+                flags: (packed >> 16) as u8,
+                weight: packed as u16,
+            });
         }
         None
     }
@@ -1371,5 +1456,35 @@ mod tests {
 
         let sid = decoded.get_sid_extension();
         assert_eq!(sid, Some("test_stream".to_string()));
+    }
+
+    #[test]
+    fn test_group_extension_matches_libsrt_layout() {
+        let mut hs = HandshakePacket::new_conclusion_request(1, 2, 3, 0, false);
+        let group = GroupExtensionData {
+            group_id: 0x4000_1234,
+            group_type: GroupType::Broadcast,
+            flags: 0,
+            weight: 200,
+        };
+
+        hs.add_group_extension(group);
+
+        assert_eq!(
+            hs.extension_field & extension_flags::CONFIG,
+            extension_flags::CONFIG
+        );
+        let packet = hs.encode(1000, 0);
+        let decoded = HandshakePacket::decode(&packet).expect("GROUP handshake must round-trip");
+
+        assert_eq!(decoded.get_group_extension(), Some(group));
+        assert_eq!(
+            decoded
+                .extensions
+                .iter()
+                .find(|extension| extension.ext_type == ExtensionType::Group)
+                .map(|extension| extension.data.as_slice()),
+            Some(&[0x40, 0x00, 0x12, 0x34, 0x01, 0x00, 0x00, 0xC8][..])
+        );
     }
 }

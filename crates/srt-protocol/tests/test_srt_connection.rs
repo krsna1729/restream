@@ -3,8 +3,8 @@
 //! sansio パターンを活用して、実ソケットなしで Caller/Listener の相互接続をテストする。
 
 use shiguredo_srt::{
-    ConnectionEvent, ConnectionOptions, ConnectionOutput, ConnectionState, KeyLength,
-    SrtConnection, TimerId, Timestamp,
+    ConnectionEvent, ConnectionOptions, ConnectionOutput, ConnectionState, GroupExtensionData,
+    GroupType, KeyLength, SrtConnection, TimerId, Timestamp,
 };
 
 /// テスト用のデフォルトオプション (TSBPD 遅延を 0 にして即時配信)
@@ -197,6 +197,41 @@ fn test_handshake_with_stream_id() {
 
     // Listener 側で Stream ID を受信できていることを確認
     assert_eq!(listener.peer_stream_id(), Some(stream_id.as_str()));
+}
+
+#[test]
+fn test_handshake_with_group_metadata_on_both_legs() {
+    let caller_group = GroupExtensionData {
+        group_id: 0x4000_1001,
+        group_type: GroupType::Broadcast,
+        flags: 0,
+        weight: 100,
+    };
+    let listener_group = GroupExtensionData {
+        group_id: 0x4000_2002,
+        group_type: GroupType::Broadcast,
+        flags: 0,
+        weight: 100,
+    };
+
+    let caller_opts = ConnectionOptions {
+        group_extension: Some(caller_group),
+        tsbpd_delay: 0,
+        ..Default::default()
+    };
+    let listener_opts = ConnectionOptions {
+        group_extension: Some(listener_group),
+        tsbpd_delay: 0,
+        ..Default::default()
+    };
+
+    let mut caller = SrtConnection::new_caller(caller_opts);
+    let mut listener = SrtConnection::new_listener(listener_opts);
+
+    establish_connection(&mut caller, &mut listener).expect("group handshake should establish");
+
+    assert_eq!(listener.peer_group_extension(), Some(caller_group));
+    assert_eq!(caller.peer_group_extension(), Some(listener_group));
 }
 
 // ============================================================================

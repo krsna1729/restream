@@ -9,8 +9,8 @@ use crate::buf::write_u32;
 use crate::crypto::{CryptoContext, KeyFlag, KeyLength};
 use crate::error::Error;
 use crate::srt_handshake::{
-    DEFAULT_FLOW_WINDOW, HandshakePacket, HandshakeState, HandshakeType, KmError, KmMessage,
-    srt_flags,
+    DEFAULT_FLOW_WINDOW, GroupExtensionData, HandshakePacket, HandshakeState, HandshakeType,
+    KmError, KmMessage, srt_flags,
 };
 use crate::srt_packet::{ControlPacket, ControlType, DataPacket, SRT_HEADER_SIZE, SrtPacket};
 use crate::srt_receiver::ReceiverBuffer;
@@ -157,6 +157,8 @@ pub struct ConnectionOptions {
     pub srt_version: u32,
     /// Stream ID (Caller が Listener に送信する識別子、最大 512 バイト)
     pub stream_id: Option<String>,
+    /// Optional libsrt-compatible bonding group metadata.
+    pub group_extension: Option<GroupExtensionData>,
     /// 最大帯域幅 (`SRTO_MAXBW` 相当、バイト/秒)。`None` の場合は libsrt の
     /// `BW_INFINITE` (1 Gbps) 相当のデフォルトを使う
     /// ([`crate::srt_sender`] のペーシング計算を参照)。
@@ -176,6 +178,7 @@ impl Default for ConnectionOptions {
             tsbpd_delay: 120,
             srt_version: 0x010500, // 1.5.0
             stream_id: None,
+            group_extension: None,
             max_bandwidth_bytes_per_sec: None,
         }
     }
@@ -226,6 +229,8 @@ pub struct SrtConnection {
     received_km: Option<KmMessage>,
     /// ピアから受信した Stream ID (Listener 用)
     peer_stream_id: Option<String>,
+    /// Peer bonding group metadata.
+    peer_group_extension: Option<GroupExtensionData>,
 }
 
 impl SrtConnection {
@@ -251,6 +256,7 @@ impl SrtConnection {
             last_recv_time: None,
             received_km: None,
             peer_stream_id: None,
+            peer_group_extension: None,
         }
     }
 
@@ -276,6 +282,7 @@ impl SrtConnection {
             last_recv_time: None,
             received_km: None,
             peer_stream_id: None,
+            peer_group_extension: None,
         }
     }
 
@@ -287,6 +294,11 @@ impl SrtConnection {
     /// ピアから受信した Stream ID を取得 (Listener 用)
     pub fn peer_stream_id(&self) -> Option<&str> {
         self.peer_stream_id.as_deref()
+    }
+
+    /// Return the bonding group metadata advertised by the peer.
+    pub fn peer_group_extension(&self) -> Option<GroupExtensionData> {
+        self.peer_group_extension
     }
 
     /// 接続を開始 (Caller のみ)
@@ -773,6 +785,7 @@ impl SrtConnection {
                 // CONCLUSION レスポンスの socket_id で更新
                 // (INDUCTION とは異なる値の場合がある)
                 self.peer_socket_id = hs.socket_id;
+                self.peer_group_extension = hs.get_group_extension();
 
                 tracing::debug!(
                     "received CONCLUSION response, peer_initial_seq={}, peer_socket_id={:#x}",
@@ -882,6 +895,7 @@ impl SrtConnection {
                 if let Some(stream_id) = hs.get_sid_extension() {
                     self.peer_stream_id = Some(stream_id);
                 }
+                self.peer_group_extension = hs.get_group_extension();
 
                 // KMREQ を処理して CryptoContext を作成
                 if let Some(ref passphrase) = self.options.passphrase {
@@ -1311,6 +1325,10 @@ impl SrtConnection {
             hs.add_sid_extension(stream_id);
         }
 
+        if let Some(group) = self.options.group_extension {
+            hs.add_group_extension(group);
+        }
+
         // CONCLUSION リクエストは dest_socket_id = 0 で送信 (libsrt 互換)
         let pkt = hs.encode(self.relative_timestamp(now), 0);
         let mut buf = Vec::new();
@@ -1350,6 +1368,10 @@ impl SrtConnection {
         // 受信した KMREQ をそのまま KMRSP として返す
         if let Some(ref km) = self.received_km {
             hs.add_km_response(km);
+        }
+
+        if let Some(group) = self.options.group_extension {
+            hs.add_group_extension(group);
         }
 
         let pkt = hs.encode(self.relative_timestamp(now), self.peer_socket_id);

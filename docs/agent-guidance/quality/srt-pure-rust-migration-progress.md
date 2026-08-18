@@ -8,6 +8,7 @@
 - [Affinity invariant for tuple sharding and bonding](#affinity-invariant-for-tuple-sharding-and-bonding)
 - [Paired Rust egress timer/wakeup profile — 2026-08-18](#paired-rust-egress-timerwakeup-profile--2026-08-18)
 - [Production Rust publish-ingest seam — 2026-08-18](#production-rust-publish-ingest-seam--2026-08-18)
+- [Production GROUP handshake metadata — 2026-08-18](#production-group-handshake-metadata--2026-08-18)
 
 ## Current migration policy
 
@@ -355,4 +356,38 @@ Per-pipeline handshake policy, Rust Broadcast bonding, and Rust Backup
 failover are the next production seams. The current tuple map is deliberate:
 wire data packets carry the destination socket ID, not a reliable caller
 source socket ID, so later logical connections from an identical UDP tuple
-cannot be safely split by socket ID alone.
+ cannot be safely split by socket ID alone.
+
+## Production GROUP handshake metadata — 2026-08-18
+
+The first bonding increment adds the libsrt-compatible group wire metadata to
+the production `shiguredo_srt` Core. The local libsrt reference was used as
+the authority: `srtcore/core.cpp::fillHsExtGroup` writes two network-order
+32-bit words under command `SRT_CMD_GROUP` (8), and both
+`interpretGroup` and `runAcceptHook` scan it only when the ordinary CONFIG
+extension flag is set. The packed second word is `[type:8][flags:8][weight:16]`;
+the group ID must carry `SRTGROUP_MASK` (bit 30).
+
+The production implementation now provides `GroupType`, `GroupExtensionData`,
+`SRTGROUP_MASK`, `GFLAG_SYNCONMSG`, `HandshakePacket::add_group_extension`,
+and `HandshakePacket::get_group_extension`. `ConnectionOptions` can carry
+local group metadata, `SrtConnection` emits it on both conclusion legs, and
+stores the peer's group metadata for the future group worker. The exploratory
+`/home/dev/srt-rs` implementation was not copied: its separate GROUP flag
+would be incompatible with the pinned libsrt parser, which uses CONFIG.
+
+Proof completed:
+
+- The red test failed before the production group types and methods existed.
+- The green handshake test validates the exact eight bytes for a Broadcast
+  group (`40 00 12 34 01 00 00 c8`) and the CONFIG bit.
+- The sans-I/O connection test establishes caller and listener with distinct
+  group IDs and verifies both peer metadata directions.
+- `scripts/build/resource-limit.sh cargo test -p shiguredo_srt --lib`
+  passed (104 tests), the focused connection test passed, and
+  `scripts/build/resource-limit.sh cargo check --workspace` passed.
+
+This increment is wire/identity groundwork only. It does not claim bonded
+routing: group membership, shared sequence ownership, Broadcast merge/dedup,
+disconnect removal, Backup promotion, and paired restream/sink profiles
+remain the next gates.
