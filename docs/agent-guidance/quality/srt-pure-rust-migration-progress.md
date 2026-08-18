@@ -476,7 +476,8 @@ receive capacity; `set_listener_policy` installs them before conclusion;
 `min(RCVBUF packets, FC)` capacity. No policy lookup, allocation, or
 extra branch was added to the datagram receive hot path. The Rust harness sink
 uses the same 12 MiB/FC preset as its libsrt sink, and Rust single/group
-egress consumes the resolved FC rather than falling back to 8,192.
+egress consumes the resolved FC and RCVBUF packet capacity rather than falling
+back to 8,192.
 
 Evidence:
 
@@ -485,11 +486,16 @@ Evidence:
   the conclusion's advertised flow window.
 - `ingest_buffer_packets_match_libsrt_byte_conversion` passes with the exact
   8,548-packet default conversion.
+- `egress_buffer_packets_match_libsrt_byte_conversion` passes with the exact
+  712-packet conversion for the 1 MiB egress RCVBUF, including the FC cap.
 - `cargo test -p shiguredo_srt --lib` passes 106 tests, the protocol
   integration suite passes 30 tests, and the Rust ingest focused suite passes
   12 tests.
 - `cargo check --bin test_harness` and `cargo fmt --all -- --check` pass after
   updating the harness sink and Rust egress callers.
+- A fresh optimized Rust/Rust policy run and identical optimized libsrt control
+  each pass all five cases after correcting the advertised effective flight
+  capacity; both leave no media processes behind.
 
 This closes the internal protocol-buffer parity item, not the kernel queue
 item: Rust listener UDP `SO_RCVBUF` remains a global per-socket startup value.
