@@ -154,6 +154,18 @@ impl SrtGroup {
         true
     }
 
+    pub fn remove_member(&mut self, member_id: u32) -> bool {
+        let Some(index) = self
+            .members
+            .iter()
+            .position(|member| member.id == member_id)
+        else {
+            return false;
+        };
+        self.members.remove(index);
+        true
+    }
+
     pub fn send(&mut self, payload: &[u8], now: Timestamp) -> Result<usize, Error> {
         self.refresh_states();
         match self.mode {

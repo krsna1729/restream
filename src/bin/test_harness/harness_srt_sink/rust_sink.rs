@@ -308,12 +308,20 @@ fn run_rust_sink_pool(sockets: Vec<StdUdpSocket>, stop: Arc<AtomicBool>, crypto:
     let mut routes: Vec<RustSinkRouteMap> = std::iter::repeat_with(HashMap::new)
         .take(sockets.len())
         .collect();
+    let mut groups: Vec<group::RustSinkGroups> = std::iter::repeat_with(HashMap::new)
+        .take(sockets.len())
+        .collect();
+    let mut group_routes: Vec<group::RustSinkGroupRoutes> = std::iter::repeat_with(HashMap::new)
+        .take(sockets.len())
+        .collect();
     let mut events = Events::with_capacity(sockets.len().max(1));
     let mut packet = [0u8; 64 * 1024];
     let start = Instant::now();
     let mut next_socket_id = std::process::id().wrapping_add(1);
+    let mut next_group_id = std::process::id().wrapping_add(1);
     while !stop.load(Ordering::Relaxed) {
-        let wait = rust_sink_poll_wait(&slots, timestamp(start));
+        let now = timestamp(start);
+        let wait = rust_sink_poll_wait(&slots, &groups, now);
         if let Err(error) = poll.poll(&mut events, Some(wait))
             && error.kind() != std::io::ErrorKind::Interrupted
         {
@@ -326,31 +334,35 @@ fn run_rust_sink_pool(sockets: Vec<StdUdpSocket>, stop: Arc<AtomicBool>, crypto:
             if index >= sockets.len() {
                 continue;
             }
-            receive_rust_packets(
-                &mut sockets[index],
-                &mut slots[index],
-                &mut routes[index],
-                &crypto,
+            let mut state = RustSinkGroupPoolState {
+                connections: &mut slots[index],
+                routes: &mut routes[index],
+                groups: &mut groups[index],
+                group_routes: &mut group_routes[index],
+                crypto: &crypto,
                 start,
-                &mut next_socket_id,
-                &mut packet,
-            );
+                next_socket_id: &mut next_socket_id,
+                next_group_id: &mut next_group_id,
+            };
+            receive_rust_packets(&mut sockets[index], &mut state, &mut packet);
         }
 
         let now = timestamp(start);
         for index in 0..slots.len() {
             process_rust_connections(&sockets[index], &mut slots[index], &mut routes[index], now);
+            group::process(
+                &mut groups[index],
+                &mut group_routes[index],
+                &sockets[index],
+                now,
+            );
         }
     }
 }
 
 fn receive_rust_packets(
     socket: &mut MioUdpSocket,
-    connections: &mut RustSinkConnections,
-    routes: &mut RustSinkRouteMap,
-    crypto: &RustSinkCrypto,
-    start: Instant,
-    next_socket_id: &mut u32,
+    state: &mut RustSinkGroupPoolState<'_>,
     packet: &mut [u8],
 ) {
     loop {
@@ -363,17 +375,11 @@ fn receive_rust_packets(
             }
         };
 
-        receive_rust_packet(
+        group::receive(
             peer,
             &packet[..size],
-            RustSinkPacketContext {
-                connections,
-                routes,
-                crypto,
-                start,
-                next_socket_id,
-                output: RustSinkOutput::Datagram { socket, peer },
-            },
+            state,
+            RustSinkOutput::Datagram { socket, peer },
         );
     }
 }
@@ -387,6 +393,17 @@ enum RustSinkOutput<'a> {
     Connected {
         socket: &'a MioUdpSocket,
     },
+}
+
+struct RustSinkGroupPoolState<'a> {
+    connections: &'a mut RustSinkConnections,
+    routes: &'a mut RustSinkRouteMap,
+    groups: &'a mut group::RustSinkGroups,
+    group_routes: &'a mut group::RustSinkGroupRoutes,
+    crypto: &'a RustSinkCrypto,
+    start: Instant,
+    next_socket_id: &'a mut u32,
+    next_group_id: &'a mut u32,
 }
 
 struct RustSinkPacketContext<'a> {
@@ -414,7 +431,7 @@ fn receive_rust_packet(peer: SocketAddr, packet: &[u8], context: RustSinkPacketC
     if let Entry::Vacant(entry) = context.connections.entry(connection_key) {
         let socket_id = *context.next_socket_id;
         *context.next_socket_id = context.next_socket_id.wrapping_add(1);
-        entry.insert(new_rust_sink_connection(context.crypto, socket_id));
+        entry.insert(new_rust_sink_connection(context.crypto, socket_id, None));
         context
             .routes
             .insert(RustSinkConnectionKey { peer, socket_id }, connection_key);
@@ -444,13 +461,18 @@ fn receive_rust_packet(peer: SocketAddr, packet: &[u8], context: RustSinkPacketC
     }
 }
 
-fn new_rust_sink_connection(crypto: &RustSinkCrypto, socket_id: u32) -> RustSinkConnection {
+fn new_rust_sink_connection(
+    crypto: &RustSinkCrypto,
+    socket_id: u32,
+    group_extension: Option<shiguredo_srt::GroupExtensionData>,
+) -> RustSinkConnection {
     RustSinkConnection {
         conn: SrtConnection::new_listener(ConnectionOptions {
             socket_id,
             passphrase: crypto.passphrase.clone(),
             key_length: crypto.key_length,
             tsbpd_delay: 250,
+            group_extension,
             ..ConnectionOptions::default()
         }),
         timers: HashMap::new(),
@@ -461,8 +483,12 @@ fn timestamp(start: Instant) -> Timestamp {
     Timestamp::from_micros(start.elapsed().as_micros() as u64)
 }
 
-fn rust_sink_poll_wait(slots: &[RustSinkConnections], now: Timestamp) -> Duration {
-    let micros = slots
+fn rust_sink_poll_wait(
+    slots: &[RustSinkConnections],
+    groups: &[group::RustSinkGroups],
+    now: Timestamp,
+) -> Duration {
+    let connection_micros = slots
         .iter()
         .flat_map(|connections| connections.values())
         .flat_map(|connection| connection.timers.values())
@@ -470,7 +496,12 @@ fn rust_sink_poll_wait(slots: &[RustSinkConnections], now: Timestamp) -> Duratio
         .min()
         .unwrap_or(20_000)
         .clamp(1, 20_000);
-    Duration::from_micros(micros)
+    let group_micros = groups
+        .iter()
+        .map(|groups| group::poll_wait(groups, now).as_micros() as u64)
+        .min()
+        .unwrap_or(20_000);
+    Duration::from_micros(connection_micros.min(group_micros).clamp(1, 20_000))
 }
 
 fn process_rust_connections(
@@ -576,3 +607,4 @@ fn drain_rust_outputs_mode(
 }
 
 mod connected;
+mod group;

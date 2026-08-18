@@ -302,6 +302,11 @@ impl SrtConnection {
         self.peer_group_extension
     }
 
+    /// Set listener-side GROUP metadata before processing the conclusion.
+    pub fn set_group_extension(&mut self, group: GroupExtensionData) {
+        self.options.group_extension = Some(group);
+    }
+
     /// 接続を開始 (Caller のみ)
     pub fn connect(&mut self, now: Timestamp) -> Result<(), Error> {
         if self.role != ConnectionRole::Caller {

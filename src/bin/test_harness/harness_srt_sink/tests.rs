@@ -1,6 +1,7 @@
 use super::rust_sink::{RustHarnessSrtSinkPool, rust_sink_connection_key};
 use super::*;
 use shiguredo_srt::HandshakePacket;
+use std::process::Command;
 
 #[test]
 fn parses_the_rust_sink_backend_for_rust_stack_runs() {
@@ -114,6 +115,44 @@ fn rust_sink_connection_key_separates_shared_udp_mux_connections() {
         rust_sink_connection_key(peer, &first_bytes),
         rust_sink_connection_key(peer, &second_bytes)
     );
+}
+
+#[test]
+#[ignore = "requires the pinned native libsrt bonding client"]
+fn rust_sink_accepts_libsrt_broadcast_and_backup_groups() {
+    let client = std::env::var_os("SRT_BOND_CLIENT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(".local/build/static/prefix/bin/restream-srt-bond-client")
+        });
+    assert!(
+        client.is_file(),
+        "native bonding client missing: {}",
+        client.display()
+    );
+
+    for mode in ["broadcast", "backup"] {
+        let port = free_udp_ports(1)[0];
+        let pool = RustHarnessSrtSinkPool::start(
+            &[port],
+            8 * 1024 * 1024,
+            1,
+            RustSinkScaling::Ports,
+            &HarnessSrtCrypto::plaintext(),
+        )
+        .expect("start Rust sink for native bonding client");
+        let output = Command::new(&client)
+            .args([mode, &port.to_string()])
+            .output()
+            .expect("run native bonding client");
+        pool.stop();
+        assert!(
+            output.status.success(),
+            "native {mode} client failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 fn free_udp_ports(count: usize) -> Vec<u16> {

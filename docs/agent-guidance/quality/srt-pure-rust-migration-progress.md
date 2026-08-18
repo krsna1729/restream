@@ -10,6 +10,7 @@
 - [Production Rust publish-ingest seam — 2026-08-18](#production-rust-publish-ingest-seam--2026-08-18)
 - [Production GROUP handshake metadata — 2026-08-18](#production-group-handshake-metadata--2026-08-18)
 - [Core Broadcast/Backup group machine — 2026-08-18](#core-broadcastbackup-group-machine--2026-08-18)
+- [Rust sink GROUP admission — 2026-08-18](#rust-sink-group-admission--2026-08-18)
 
 ## Current migration policy
 
@@ -428,3 +429,32 @@ restream adapters must next admit multiple GROUP legs into one group worker,
 remove disconnected members, and be exercised in paired restream/sink live
 tests for Rust↔Rust and libsrt interop. Those profiles must retain the earlier
 receiver-strategy rule: capture both the restream process and the sink worker.
+
+## Rust sink GROUP admission — 2026-08-18
+
+The Rust harness sink now has a receiver-side GROUP admission path for its
+distinct-port, one-port-per-stream, and SO_REUSEPORT loops. It decodes GROUP
+and StreamID only from a conclusion handshake, keys one logical group by the
+peer group ID plus normalized StreamID, allocates one listener-side mirror
+group ID, and routes every leg to the same `SrtGroup`. Each leg keeps its own
+tuple and timers; the group Core performs the shared sequence merge/dedup and
+removes broken members. This follows the libsrt `makeMePeerOf` behavior rather
+than treating StreamID or socket ID as a per-datagram sharding key.
+
+Proof completed:
+
+- The admission unit test proves that repeated legs reuse one mirror ID and
+  preserve the caller's link weight.
+- The ignored live test
+  `rust_sink_accepts_libsrt_broadcast_and_backup_groups` passed against the
+  pinned native `restream-srt-bond-client` for both Broadcast and Backup;
+  Backup includes closing the weighted primary and sending again.
+- The regular harness sink tests and `cargo check --bin test_harness` pass.
+
+Scope boundary: the Connected listener-to-connected-datagram handoff still
+uses its non-bonded tuple worker map, so bonded traffic through that strategy
+must be routed through the same group registry before it is production-ready.
+No Rust restream egress group driver exists yet, and no paired restream/sink
+bonding profile is claimed by this increment. The paired profile contract
+remains mandatory for the next scale evidence: profile the restream process
+and the named Rust sink worker(s) in the same run.
