@@ -349,6 +349,14 @@ pub(crate) fn rust_srt_backend_selected() -> bool {
     })
 }
 
+pub(crate) fn rust_srt_ingest_worker_count() -> usize {
+    let available = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    let default = default_tokio_worker_threads(available);
+    env_usize("RESTREAM_SRT_INGEST_WORKERS", default).clamp(1, 64)
+}
+
 fn default_tokio_worker_threads(effective_cpus: usize) -> usize {
     let effective_cpus = effective_cpus.max(1);
     if effective_cpus <= 2 {

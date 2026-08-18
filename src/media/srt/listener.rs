@@ -122,6 +122,10 @@ unsafe fn srt_listener_policy_callback_inner(
 
 impl SrtServer {
     pub async fn run(self: Arc<Self>, port: u16) {
+        if crate::config::rust_srt_backend_selected() {
+            super::rust_ingest::run(self, port).await;
+            return;
+        }
         // SAFETY: srt_create_socket returns a valid SRT socket handle or -1
         // on error. The socket is closed via SrtListenerCloser on drop or
         // explicitly on bind/listen failure below.

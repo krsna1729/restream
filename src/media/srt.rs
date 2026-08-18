@@ -38,6 +38,8 @@ mod ingest_packets;
 mod listener;
 #[path = "srt/play.rs"]
 mod play;
+#[path = "srt/rust_ingest/mod.rs"]
+mod rust_ingest;
 #[path = "srt/shared_muxer.rs"]
 mod shared_muxer;
 #[path = "srt/socket.rs"]

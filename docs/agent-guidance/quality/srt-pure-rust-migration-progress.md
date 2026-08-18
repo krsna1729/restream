@@ -7,6 +7,7 @@
 - [Phase 4: TLPKTDROP receiver accounting](#phase-4-tlpktdrop-receiver-accounting)
 - [Affinity invariant for tuple sharding and bonding](#affinity-invariant-for-tuple-sharding-and-bonding)
 - [Paired Rust egress timer/wakeup profile — 2026-08-18](#paired-rust-egress-timerwakeup-profile--2026-08-18)
+- [Production Rust publish-ingest seam — 2026-08-18](#production-rust-publish-ingest-seam--2026-08-18)
 
 ## Current migration policy
 
@@ -314,3 +315,44 @@ for the expected idle/waiting share. There is no dominant worker lock convoy.
 The next receiver work is therefore allocation/receive-buffer/ACK reduction,
 while the next restream work is replacing the per-idle global deadline scan
 with a cached or heap-backed wakeup index.
+
+## Production Rust publish-ingest seam — 2026-08-18
+
+The first production restream receiver seam is now live behind
+`RESTREAM_SRT_BACKEND=rust`. It binds one non-bonded SRT UDP listener per
+configured Rust ingest worker with `SO_REUSEPORT`; Linux keeps each sender UDP
+tuple on one worker, and the worker owns the corresponding sans-I/O
+`SrtConnection` state. A bounded worker-to-Tokio event channel preserves the
+existing StreamID parsing, ban check, pipeline authentication, MPEG-TS demux,
+and `forward_ingest_packets` media boundary. Clean Core disconnects are now
+recorded as disconnects rather than ingest errors.
+
+Static gates passed after the seam was split into the listener coordinator,
+packet pump, connection service, and media session modules:
+
+- `cargo fmt --all --check`
+- `scripts/build/resource-limit.sh cargo test rust_ingest --lib` — the worker
+  budget contract passed
+- `scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings`
+
+The optimized live binaries were rebuilt by `scripts/build/bench-harness.sh`.
+Its x86-64-v3 feature preflight passed on this host, and it applied
+`-C target-cpu=x86-64-v3` to the bench profile. The Rust/Rust live differential
+slice used `mixed.live.srt.h264.a1.bf0` with `MSR_PEER=sink`,
+`HARNESS_SRT_SINK_BACKEND=rust`, and `RESTREAM_SRT_BACKEND=rust`. It passed
+16/16 outputs, the Rust sink probe (`69` video packets, `7` audio packets, `3`
+keyframes, monotone DTS), HLS preview/upload, recording, stage-sharing, and
+lifecycle checks. The retained artifact is
+`.local/artifacts/mixed/live/srt/h264/a1/bf0/`; its restream log records
+`Rust SRT ingest listener started` with two workers.
+
+This is intentionally a development seam, not the final whole-stack claim.
+Rust ingest currently admits non-bonded `publish` only; SRT `read` and bonding
+remain unavailable in this mode. Because the Core listener must select crypto
+and TSBPD delay before the handshake completes, the first seam accepts only
+pipelines whose resolved crypto and latency equal the global listener policy.
+Per-pipeline handshake policy, Rust Broadcast bonding, and Rust Backup
+failover are the next production seams. The current tuple map is deliberate:
+wire data packets carry the destination socket ID, not a reliable caller
+source socket ID, so later logical connections from an identical UDP tuple
+cannot be safely split by socket ID alone.

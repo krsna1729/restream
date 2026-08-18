@@ -23,6 +23,8 @@ in SQLite.
 | Dashboard/API listener | `127.0.0.1:3030` | `RESTREAM_HTTP_BIND_ADDR`, `RESTREAM_HTTP_PORT` |
 | RTMP listener | `0.0.0.0:1935` | `RESTREAM_RTMP_PORT` |
 | SRT listener | `0.0.0.0:10080` | `RESTREAM_SRT_PORT` |
+| SRT protocol backend | `libsrt` | `RESTREAM_SRT_BACKEND=rust` or `srt-rust` selects the pure-Rust SRT Core for non-bonded publish ingest and SRT egress; unset or any other value keeps the complete libsrt path |
+| Rust SRT ingest workers | Derived from available parallelism, clamped to `1..=64` | `RESTREAM_SRT_INGEST_WORKERS` (one `SO_REUSEPORT` UDP socket and one OS worker per selected worker) |
 | Tokio scheduler workers | Derived from the effective CPU mask/quota | `RESTREAM_TOKIO_WORKER_THREADS` |
 | Tokio blocking-thread ceiling | `512` | `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` |
 | Transcoder backend | External FFmpeg subprocess | `RESTREAM_INTERNAL_VIDEO_PRESETS`, `RESTREAM_INTERNAL_HEVC_TO_H264`, `RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX` (`1`/`true`/`yes`/`on` enable each in-process stage family independently) |
