@@ -357,10 +357,11 @@ The optimized live binaries were rebuilt by `scripts/build/bench-harness.sh`.
 Its x86-64-v3 feature preflight passed on this host, and it applied
 `-C target-cpu=x86-64-v3` to the bench profile. The Rust/Rust live differential
 slice used `mixed.live.srt.h264.a1.bf0` with `MSR_PEER=sink`,
-`HARNESS_SRT_SINK_BACKEND=rust`, and `RESTREAM_SRT_BACKEND=rust`. It passed
-16/16 outputs, the Rust sink probe (`69` video packets, `7` audio packets, `3`
-keyframes, monotone DTS), HLS preview/upload, recording, stage-sharing, and
-lifecycle checks. The retained artifact is
+`HARNESS_SRT_SINK_BACKEND=rust`, and `RESTREAM_SRT_BACKEND=rust`. The exact
+optimized-source recheck passed 16/16 outputs, the Rust sink probe (`80` video
+packets, `8` audio packets, `3` keyframes, monotone DTS), HLS preview/upload,
+recording, stage-sharing, pipeline deletion, and zero-residue checks. The
+retained artifact is
 `.local/artifacts/mixed/live/srt/h264/a1/bf0/`; its restream log records
 `Rust SRT ingest listener started` with two workers.
 
@@ -403,11 +404,13 @@ than one valid fragmented burst. The outbound guard is now 4,096 entries with
 the existing 4 MiB byte cap; the inbound authorization queue remains 256
 entries.
 
-Evidence from the optimized, x86-64-v3 bench binaries:
+Evidence from the optimized, x86-64-v3 bench binaries built from implementation
+commit `de812502`:
 
 - `srt.policy` with `RESTREAM_SRT_BACKEND=rust` and
-  `HARNESS_SRT_SINK_BACKEND=rust` completed the plain `read:` probe and
-  advanced to the next encrypted-policy case. Its retained log is
+  `HARNESS_SRT_SINK_BACKEND=rust` completed the plain `read:` probe and then
+  rejected the encrypted-policy case with the expected explicit admission
+  error. Its retained log is
   `.local/artifacts/latest/srt.policy/restream.log`.
 - `mixed.live.srt.h264.a1.bf0` with the Rust ingest and Rust sink passed the
   burst graph, Rust sink media probe, pipeline deletion, and zero-residue
@@ -426,6 +429,13 @@ currently snapshots crypto and latency when its worker pool starts. libsrt
 instead resolves the policy in its accept callback for each newly-created
 socket. Supporting runtime policy changes and per-pipeline crypto therefore
 belongs in the next listener-admission seam, not in `srt-interop`.
+
+The implementation commit passed `cargo test --lib srt::` (279 tests),
+`cargo clippy --lib -- -D warnings`, `cargo fmt --all --check`, the Markdown
+check, the concurrency fast gate, and `scripts/build/bench-harness.sh`. The
+bench build verified host support for `x86-64-v3` and used the bench profile's
+`opt-level=3`, thin LTO, and `-C target-cpu=x86-64-v3` settings. No `restream`,
+`mediamtx`, or `ffmpeg` processes remained after either live run.
 
 The layering decision remains evidence-led. `srt-protocol` owns the sans-I/O
 wire state machine, `srt-lifecycle` owns reusable admission/affinity/GROUP
