@@ -393,6 +393,16 @@ for receiver-side deduplication. Both modes are available through the native
 libsrt and pure-Rust egress backends; live differential evidence is recorded in
 the SRT migration progress log.
 
+The URL is the egress application's configuration surface. `bondmode` is the
+Restream parameter that selects the group implementation before either backend
+creates the caller group. It is intentionally explicit rather than pretending
+that `type` or `grouptype` is a universal SRT URL parameter: Haivision's
+`srt-test-live` group URI uses `type`, but the public libsrt API selects the
+group with `srt_create_group(SRT_GTYPE_...)`, and generic SRT URL consumers do
+not share one bonding-group URI grammar. The interoperable value is the SRT
+HSv5 GROUP extension (`1` Broadcast or `2` Backup), which the receiver must
+match.
+
 ### Recognized SRT egress URL parameters
 
 Only these query parameters are read from an `srt://` output URL. Anything

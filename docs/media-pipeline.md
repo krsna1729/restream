@@ -493,12 +493,25 @@ at 1,200 outputs.
 
 Production egress bonding supports both `SRT_GTYPE_BACKUP` and
 `SRT_GTYPE_BROADCAST` in either the native libsrt or pure-Rust backend. The
-mode is selected with `bondmode=backup|broadcast` on the `bond=` URL; omitting
-it preserves the historical Backup default. The receiver must still advertise
-the same group type in its GROUP handshake extension. The remaining phased
-work is live differential scale/failover evidence for both modes, not a
-second mode-specific implementation path. See [`srt-pure-rust-plan.md`](srt-pure-rust-plan.md)
-and [`srt-pure-rust-design.md`](srt-pure-rust-design.md) for the layering and
+mode is selected by the egress URL query parameter `bondmode=backup|broadcast`
+alongside the `bond=` peer list; omitting it preserves the historical Backup
+default. Here, “configuration-driven” means that the egress caller chooses the
+mode from this URL parameter before creating its group. `bondmode` is a
+Restream URL parameter, not a separate wire field: the selected mode is
+encoded on the wire as the SRT HSv5 `GROUP` extension's standardized group type
+(`1` Broadcast or `2` Backup). The receiver must advertise and accept the same
+group type in its GROUP handshake extension. SRT does not define one universal
+URI key for creating groups. Haivision's `srt-test-live` group-URI syntax uses
+`type=broadcast|backup`, while the libsrt API itself uses
+`srt_create_group(SRT_GTYPE_...)`; that application syntax is not a generic
+libsrt URL contract. Restream therefore uses the explicit `bondmode` name with
+its own `bond=` peer-list syntax. A listener does not select its bonding mode
+from a listener URL; it derives the mode from the caller's GROUP extension and
+rejects unsupported types or later members whose type changes.
+The remaining phased work is live differential scale/failover evidence for
+both modes, not a second mode-specific implementation path. See
+[`srt-pure-rust-plan.md`](srt-pure-rust-plan.md) and
+[`srt-pure-rust-design.md`](srt-pure-rust-design.md) for the layering and
 interop rationale.
 
 ### Ingest
