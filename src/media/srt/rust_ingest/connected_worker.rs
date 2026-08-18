@@ -215,6 +215,60 @@ fn process_commands(commands: &mut Receiver<WorkerCommand>, state: &mut WorkerSt
                 }
                 authorize_peer(state, index, logical_id);
             }
+            Ok(WorkerCommand::Send { id, payload }) => {
+                let Some(index) = state
+                    .peers
+                    .iter()
+                    .position(|peer| peer.as_ref().is_some_and(|peer| peer.id == id))
+                else {
+                    continue;
+                };
+                let (queue_ok, service_ok) = {
+                    let Some(Some(peer)) = state.peers.get_mut(index) else {
+                        continue;
+                    };
+                    let PeerRoute::Single(connection) = &mut peer.route else {
+                        continue;
+                    };
+                    let queue_ok = connection::queue_send(connection, payload);
+                    let service_ok = queue_ok
+                        && connection::service(connection, &peer.socket, state.events, state.now);
+                    (queue_ok, service_ok)
+                };
+                if !queue_ok {
+                    let _ = send_event(
+                        state.events,
+                        IngestEvent::Disconnected {
+                            id,
+                            phase: "send",
+                            reason: "Rust SRT outbound queue full".to_string(),
+                            had_error: true,
+                        },
+                    );
+                    cleanup_route(state, index);
+                } else if !service_ok {
+                    cleanup_route(state, index);
+                }
+            }
+            Ok(WorkerCommand::Close { id, reason }) => {
+                let Some(index) = state
+                    .peers
+                    .iter()
+                    .position(|peer| peer.as_ref().is_some_and(|peer| peer.id == id))
+                else {
+                    continue;
+                };
+                let _ = send_event(
+                    state.events,
+                    IngestEvent::Disconnected {
+                        id,
+                        phase: "close",
+                        reason,
+                        had_error: false,
+                    },
+                );
+                cleanup_route(state, index);
+            }
         }
     }
 }

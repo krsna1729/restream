@@ -63,6 +63,48 @@ pub(super) fn process_commands(
                     connections.remove(&peer);
                 }
             }
+            Ok(WorkerCommand::Send { id, payload }) => {
+                let peer = connections
+                    .iter()
+                    .find_map(|(peer, connection)| (connection.id == id).then_some(*peer));
+                let Some(peer) = peer else {
+                    continue;
+                };
+                let Some(connection) = connections.get_mut(&peer) else {
+                    continue;
+                };
+                if !connection::queue_send(connection, payload) {
+                    connections.remove(&peer);
+                    let _ = send_event(
+                        events,
+                        IngestEvent::Disconnected {
+                            id,
+                            phase: "send",
+                            reason: "Rust SRT outbound queue full".to_string(),
+                            had_error: true,
+                        },
+                    );
+                } else if !connection::service(connection, socket, events, now) {
+                    connections.remove(&peer);
+                }
+            }
+            Ok(WorkerCommand::Close { id, reason }) => {
+                let peer = connections
+                    .iter()
+                    .find_map(|(peer, connection)| (connection.id == id).then_some(*peer));
+                if let Some(peer) = peer {
+                    connections.remove(&peer);
+                    let _ = send_event(
+                        events,
+                        IngestEvent::Disconnected {
+                            id,
+                            phase: "close",
+                            reason,
+                            had_error: false,
+                        },
+                    );
+                }
+            }
             Ok(WorkerCommand::Handoff { .. } | WorkerCommand::ForwardPacket { .. }) => {}
         }
     }

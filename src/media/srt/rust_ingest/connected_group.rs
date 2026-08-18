@@ -66,6 +66,7 @@ impl ConnectedGroup {
             authorized: _,
             pending,
             pending_bytes: _,
+            ..
         } = connection;
         let mut member_id = core.peer_socket_id();
         if member_id == 0 || self.members.contains_key(&member_id) {
@@ -267,6 +268,8 @@ mod tests {
             authorized: false,
             pending: VecDeque::from([b"buffered".to_vec()]),
             pending_bytes: 8,
+            pending_outbound: VecDeque::new(),
+            pending_outbound_bytes: 0,
         };
         let extension = GroupExtensionData {
             group_id: 0x4000_0001,

@@ -44,5 +44,13 @@ pub(super) enum WorkerCommand {
         peer: SocketAddr,
         packet: Vec<u8>,
     },
+    Send {
+        id: ConnectionId,
+        payload: Vec<u8>,
+    },
+    Close {
+        id: ConnectionId,
+        reason: String,
+    },
     Stop,
 }

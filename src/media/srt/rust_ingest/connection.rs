@@ -4,7 +4,8 @@ use std::net::SocketAddr;
 
 use mio::net::UdpSocket;
 use shiguredo_srt::{
-    ConnectionEvent, ConnectionOptions, ConnectionOutput, SrtConnection, TimerId, Timestamp,
+    ConnectionEvent, ConnectionOptions, ConnectionOutput, ErrorKind, SrtConnection, TimerId,
+    Timestamp,
 };
 use tokio::sync::mpsc::Sender;
 
@@ -13,6 +14,8 @@ use super::types::{ConnectionId, IngestEvent};
 
 const PENDING_PACKET_LIMIT: usize = 256;
 const PENDING_BYTE_LIMIT: usize = 4 * 1024 * 1024;
+const PENDING_OUTBOUND_PACKET_LIMIT: usize = 4096;
+const PENDING_OUTBOUND_BYTE_LIMIT: usize = 4 * 1024 * 1024;
 
 pub(super) struct RustConnection {
     pub(super) id: ConnectionId,
@@ -22,6 +25,8 @@ pub(super) struct RustConnection {
     pub(super) authorized: bool,
     pub(super) pending: VecDeque<Vec<u8>>,
     pub(super) pending_bytes: usize,
+    pub(super) pending_outbound: VecDeque<Vec<u8>>,
+    pub(super) pending_outbound_bytes: usize,
 }
 
 pub(super) fn new(id: ConnectionId, peer: SocketAddr, options: &WorkerOptions) -> RustConnection {
@@ -39,7 +44,25 @@ pub(super) fn new(id: ConnectionId, peer: SocketAddr, options: &WorkerOptions) -
         authorized: false,
         pending: VecDeque::new(),
         pending_bytes: 0,
+        pending_outbound: VecDeque::new(),
+        pending_outbound_bytes: 0,
     }
+}
+
+pub(super) fn queue_send(connection: &mut RustConnection, payload: Vec<u8>) -> bool {
+    if connection.pending_outbound.len() >= PENDING_OUTBOUND_PACKET_LIMIT
+        || connection
+            .pending_outbound_bytes
+            .saturating_add(payload.len())
+            > PENDING_OUTBOUND_BYTE_LIMIT
+    {
+        return false;
+    }
+    connection.pending_outbound_bytes = connection
+        .pending_outbound_bytes
+        .saturating_add(payload.len());
+    connection.pending_outbound.push_back(payload);
+    true
 }
 
 pub(super) fn service(
@@ -60,7 +83,55 @@ pub(super) fn service(
         return false;
     }
 
+    if !flush_pending(connection, socket, events, now) {
+        return false;
+    }
+
     service_events(connection, events)
+}
+
+fn flush_pending(
+    connection: &mut RustConnection,
+    socket: &UdpSocket,
+    events: &Sender<IngestEvent>,
+    now: Timestamp,
+) -> bool {
+    while let Some(payload) = connection.pending_outbound.front() {
+        if !connection.core.can_send_with_pacing(now) {
+            break;
+        }
+        match connection.core.send(payload, now) {
+            Ok(()) => {
+                let Some(payload) = connection.pending_outbound.pop_front() else {
+                    return false;
+                };
+                connection.pending_outbound_bytes = connection
+                    .pending_outbound_bytes
+                    .saturating_sub(payload.len());
+            }
+            Err(error) if error.kind == ErrorKind::InvalidState => break,
+            Err(error) => {
+                let _ = send_event(
+                    events,
+                    IngestEvent::Disconnected {
+                        id: connection.id,
+                        phase: "send",
+                        reason: error.to_string(),
+                        had_error: true,
+                    },
+                );
+                return false;
+            }
+        }
+    }
+    drain_core_outputs(
+        &mut connection.core,
+        socket,
+        connection.peer,
+        &mut connection.timers,
+        now,
+    )
+    .is_ok()
 }
 
 pub(super) fn drain_core_outputs(

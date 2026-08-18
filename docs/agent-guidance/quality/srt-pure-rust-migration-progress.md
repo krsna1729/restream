@@ -8,6 +8,7 @@
 - [Affinity invariant for tuple sharding and bonding](#affinity-invariant-for-tuple-sharding-and-bonding)
 - [Paired Rust egress timer/wakeup profile — 2026-08-18](#paired-rust-egress-timerwakeup-profile--2026-08-18)
 - [Production Rust publish-ingest seam — 2026-08-18](#production-rust-publish-ingest-seam--2026-08-18)
+- [Production Rust read/play seam — 2026-08-18](#production-rust-readplay-seam--2026-08-18)
 - [Production GROUP handshake metadata — 2026-08-18](#production-group-handshake-metadata--2026-08-18)
 - [Core Broadcast/Backup group machine — 2026-08-18](#core-broadcastbackup-group-machine--2026-08-18)
 - [Rust sink GROUP admission — 2026-08-18](#rust-sink-group-admission--2026-08-18)
@@ -372,6 +373,56 @@ pipelines whose resolved crypto and latency equal the global listener policy.
 The current tuple map is deliberate: wire data packets carry the destination
 socket ID, not a reliable caller source socket ID, so later logical connections
 from an identical UDP tuple cannot safely be split by socket ID alone.
+
+## Production Rust read/play seam — 2026-08-18
+
+Rust SRT `read` admission now uses the same listener-side StreamID policy and
+active-pipeline check as the native play path. The read task owns the media
+reader and sends bounded `WorkerCommand` messages back to the worker that owns
+the accepted UDP tuple; disconnect cancellation removes both the media reader
+and the worker session.
+
+The first live read attempt exposed a real Rust-only boundary: a muxed video
+burst reached `SrtConnection::send` as one `734,704`-byte message. The Core's
+single-packet send path emitted that as one UDP datagram, so the caller received
+no media. The read seam now fragments every batch to the existing 1,316-byte
+MPEG-TS/SRT payload size before crossing the worker boundary. A second trace
+then exposed the independent outbound queue guard: 256 entries was smaller
+than one valid fragmented burst. The outbound guard is now 4,096 entries with
+the existing 4 MiB byte cap; the inbound authorization queue remains 256
+entries.
+
+Evidence from the optimized, x86-64-v3 bench binaries:
+
+- `srt.policy` with `RESTREAM_SRT_BACKEND=rust` and
+  `HARNESS_SRT_SINK_BACKEND=rust` completed the plain `read:` probe and
+  advanced to the next encrypted-policy case. Its retained log is
+  `.local/artifacts/latest/srt.policy/restream.log`.
+- `mixed.live.srt.h264.a1.bf0` with the Rust ingest and Rust sink passed the
+  burst graph, Rust sink media probe, pipeline deletion, and zero-residue
+  checks. Its retained scenario is
+  `.local/artifacts/mixed/live/srt/h264/a1/bf0/scenario.json`.
+- The focused Rust read unit test verifies that payloads are split at the
+  1,316-byte boundary, and the existing Core bidirectional send test passes.
+
+The same focused policy run also gives the next blocker precisely. After the
+plain case, changing global SRT policy to encrypted caused the Rust listener
+to reject the next connection as “per-stream policy not representable by
+current listener.” This is not a read/play media failure: the Rust listener
+currently snapshots crypto and latency when its worker pool starts. libsrt
+instead resolves the policy in its accept callback for each newly-created
+socket. Supporting runtime policy changes and per-pipeline crypto therefore
+belongs in the next listener-admission seam, not in `srt-interop`.
+
+The layering decision remains evidence-led. `srt-protocol` owns the sans-I/O
+wire state machine, `srt-lifecycle` owns reusable admission/affinity/GROUP
+policy, and restream owns its media/auth/read task and Mio worker adapter.
+The six `srt-interop` binaries currently exercise direct protocol/runtime
+adapters and have no admission, GROUP lifecycle, or worker handoff path to
+reuse. Adding `srt-lifecycle` as a dependency now would be cosmetic and would
+not make their standalone measurements represent the production read seam.
+When lifecycle-backed multi-connection benchmarks are added, they should
+depend on `srt-lifecycle` explicitly and measure that policy path.
 
 ### Bonding assignment lifecycle audit — 2026-08-18
 

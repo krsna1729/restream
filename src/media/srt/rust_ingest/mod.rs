@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use shiguredo_srt::KeyLength;
-use tokio::sync::mpsc::{self, Receiver};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::{error, info, warn};
 
 use crate::config::rust_srt_ingest_worker_count;
@@ -20,6 +20,7 @@ mod connected;
 mod connected_group;
 mod connected_worker;
 mod connection;
+mod read;
 mod routing;
 mod session;
 mod socket;
@@ -148,6 +149,10 @@ impl RustIngestPool {
         })
     }
 
+    fn command_sender(&self, id: ConnectionId) -> Option<Sender<WorkerCommand>> {
+        self.commands.get(id.worker).cloned()
+    }
+
     fn stop(&self) {
         self.stop.store(true, Ordering::Release);
         for sender in &self.commands {
@@ -163,6 +168,7 @@ async fn serve_events(
     global: ResolvedSrtIngestConfig,
 ) {
     let mut sessions = HashMap::<ConnectionId, RustIngestSession>::new();
+    let mut plays = HashMap::<ConnectionId, tokio_util::sync::CancellationToken>::new();
     let mut physical_to_logical = HashMap::<ConnectionId, ConnectionId>::new();
     let mut bonded_sessions = HashMap::<BondKey, BondSession>::new();
     while let Some(event) = events.recv().await {
@@ -178,6 +184,7 @@ async fn serve_events(
                     server,
                     &pool,
                     &mut sessions,
+                    &mut plays,
                     &mut physical_to_logical,
                     &mut bonded_sessions,
                     ConnectionAdmission {
@@ -203,7 +210,11 @@ async fn serve_events(
                 reason,
                 had_error,
             } => {
+                tracing::debug!(?id, phase, %reason, had_error, "Rust SRT ingest connection disconnected");
                 let logical_id = physical_to_logical.remove(&id).unwrap_or(id);
+                if let Some(cancel) = plays.remove(&logical_id) {
+                    cancel.cancel();
+                }
                 let empty_bond = bonded_sessions.iter_mut().find_map(|(key, bond)| {
                     bond.members
                         .remove(&id)
@@ -224,6 +235,9 @@ async fn serve_events(
         }
     }
     pool.stop();
+    for cancel in plays.into_values() {
+        cancel.cancel();
+    }
     for (_, session) in sessions {
         session
             .finish(
@@ -255,10 +269,12 @@ struct BondSession {
     members: HashSet<ConnectionId>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn admit_connection(
     server: &Arc<SrtServer>,
     pool: &RustIngestPool,
     sessions: &mut HashMap<ConnectionId, RustIngestSession>,
+    plays: &mut HashMap<ConnectionId, tokio_util::sync::CancellationToken>,
     physical_to_logical: &mut HashMap<ConnectionId, ConnectionId>,
     bonded_sessions: &mut HashMap<BondKey, BondSession>,
     admission: ConnectionAdmission,
@@ -283,24 +299,71 @@ async fn admit_connection(
     let parsed = parse_srt_stream_id(&stream_id);
     let client_ip = peer.ip().to_string();
     let mut logical_id = id;
-    let accepted = if parsed.mode != SrtConnectionMode::Publish || parsed.stream_key.is_empty() {
-        warn!(peer = %peer, "Rust SRT ingest rejected invalid publish StreamID");
+    let is_reader = parsed.mode == SrtConnectionMode::Read;
+    let accepted = if !matches!(
+        parsed.mode,
+        SrtConnectionMode::Publish | SrtConnectionMode::Read
+    ) || parsed.stream_key.is_empty()
+        || (is_reader && group.is_some())
+    {
+        warn!(peer = %peer, "Rust SRT ingest rejected invalid StreamID or read GROUP");
         false
     } else if server
         .security
         .is_ip_banned_for(
-            crate::media::security::RateLimitScope::SrtPublish,
+            if is_reader {
+                crate::media::security::RateLimitScope::SrtRead
+            } else {
+                crate::media::security::RateLimitScope::SrtPublish
+            },
             &client_ip,
         )
         .is_some()
     {
-        warn!(peer = %peer, "Rust SRT ingest rejected banned publisher");
+        warn!(peer = %peer, "Rust SRT ingest rejected banned SRT client");
         false
     } else {
-        match authenticate_connection(server, peer, &parsed.stream_key, global).await {
+        match authenticate_connection(
+            server,
+            peer,
+            &parsed.stream_key,
+            if is_reader {
+                PipelineAccessMode::SrtRead
+            } else {
+                PipelineAccessMode::SrtPublish
+            },
+            global,
+        )
+        .await
+        {
             None => false,
             Some(pipeline) => {
-                if let Some(group) = group {
+                if is_reader {
+                    let active = server
+                        .engine
+                        .ingests
+                        .active
+                        .read()
+                        .await
+                        .contains_key(&pipeline.id);
+                    let sender = pool.command_sender(id);
+                    if !active {
+                        warn!(
+                            peer = %peer,
+                            pipeline = %pipeline.id,
+                            "Rust SRT read rejected without active ingest"
+                        );
+                        false
+                    } else if let Some(sender) = sender {
+                        let cancel = read::spawn(server.clone(), id, pipeline.id, sender);
+                        plays.insert(id, cancel);
+                        physical_to_logical.insert(id, id);
+                        true
+                    } else {
+                        warn!(peer = %peer, "Rust SRT read rejected without worker command channel");
+                        false
+                    }
+                } else if let Some(group) = group {
                     let key = BondKey {
                         group_id: group.group_id,
                         stream_id: normalize_stream_id(&stream_id),
@@ -358,6 +421,9 @@ async fn admit_connection(
     };
     if !pool.authorize(id, logical_id, accepted) {
         physical_to_logical.remove(&id);
+        if let Some(cancel) = plays.remove(&id) {
+            cancel.cancel();
+        }
         if let Some(session) = sessions.remove(&logical_id) {
             session
                 .finish(
@@ -375,6 +441,7 @@ async fn authenticate_connection(
     server: &Arc<SrtServer>,
     peer: std::net::SocketAddr,
     stream_key: &str,
+    access_mode: PipelineAccessMode,
     global: &ResolvedSrtIngestConfig,
 ) -> Option<AuthenticatedPipeline> {
     let Some(policy) = server.ingest_policy_store.resolved_policy(stream_key) else {
@@ -387,11 +454,7 @@ async fn authenticate_connection(
     }
     let pipeline = match server
         .pipeline_access
-        .authenticate(
-            PipelineAccessMode::SrtPublish,
-            stream_key,
-            &peer.ip().to_string(),
-        )
+        .authenticate(access_mode, stream_key, &peer.ip().to_string())
         .await
     {
         Ok(pipeline) => pipeline,
