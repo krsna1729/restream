@@ -769,6 +769,15 @@ impl ReceiverBuffer {
             dropped.push(seq);
         }
 
+        if !dropped.is_empty() {
+            let dropped_set: HashSet<u32> = dropped.iter().copied().collect();
+            while self.packets.contains_key(&self.expected_seq)
+                || dropped_set.contains(&self.expected_seq)
+            {
+                self.expected_seq = self.expected_seq.wrapping_add(1) & 0x7FFF_FFFF;
+            }
+        }
+
         dropped
     }
 
@@ -1304,6 +1313,46 @@ mod tests {
         // now = 2_000_000 > 820_000 + 1_000_000 = 1_820_000 なので削除される
         let dropped = buf.drop_too_late(Timestamp::from_micros(2_000_000));
         assert_eq!(dropped, vec![1000]);
+    }
+
+    /// TLPKTDROP で諦めたシーケンス (1000) が expected_seq に永久に張り付き、
+    /// 以後届くパケットのたびに receive() のギャップ検出ループが同じ穴を
+    /// 「新規損失」として際限なく再カウントし続けるバグの回帰テスト。
+    /// docs/srt-pure-rust-plan.md Phase 4 の差分テストで、10% loss + 100ms
+    /// delay + 高ビットレートのセルにおいて pkt_rcv_loss_total が受信
+    /// パケット数の 1000 倍以上に達する形で発見された。
+    #[test]
+    fn test_drop_too_late_advances_expected_seq_and_stops_recounting() {
+        let start = Timestamp::from_micros(1_000_000);
+        let tsbpd_time_base = 500_000;
+        let mut buf = ReceiverBuffer::new(1000, 120, start, tsbpd_time_base);
+
+        let now = Timestamp::from_micros(1_000_000);
+        // 1001 を受信して 1000 が損失として登録される (expected_seq は
+        // 1000 のまま -- 1000 自体は一度も届いていないため)。
+        buf.receive(make_packet(1001, 200_000), now);
+        assert_eq!(buf.expected_sequence(), 1000);
+
+        // TLPKTDROP で 1000 を諦める。
+        let dropped = buf.drop_too_late(Timestamp::from_micros(2_000_000));
+        assert_eq!(dropped, vec![1000]);
+
+        // 修正前は expected_seq が 1000 に張り付いたままだった。
+        // 1000 (諦めた) と 1001 (受信済み) の両方を追い越して 1002 まで
+        // 進んでいるはずで、1001 は既に受信済みなのでループはそこも越える。
+        assert_eq!(buf.expected_sequence(), 1002);
+        assert_eq!(buf.total_lost, 1);
+
+        // 以後、間隔をおいて新しいパケットが多数届いても、既に諦めた 1000
+        // が「新規損失」として再カウントされてはならない -- total_lost は
+        // 1 のまま (1000 のみ) であるべきで、修正前は毎回のパケット到着で
+        // ここが際限なく増加していた。
+        for (i, seq) in (1002u32..1050).enumerate() {
+            let t = Timestamp::from_micros(2_000_000 + i as u64 * 10_000);
+            buf.receive(make_packet(seq, 300_000 + i as u32 * 1_000), t);
+        }
+        assert_eq!(buf.total_lost, 1);
+        assert_eq!(buf.expected_sequence(), 1050);
     }
 
     #[test]

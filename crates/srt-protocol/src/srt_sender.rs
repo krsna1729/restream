@@ -11,13 +11,8 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::srt_packet::{DataPacket, PacketPosition, SRT_HEADER_SIZE, sequence_less_than};
+use crate::srt_packet::{DataPacket, PacketPosition, sequence_less_than};
 use crate::time::Timestamp;
-
-/// UDP + IPv4 header overhead on top of the SRT header itself
-/// (`SRT_HEADER_SIZE`) -- matches libsrt's own LiveCC pacing formula
-/// (`m_zHeaderSize = MSS - maxPayloadSize`, `srtcore/congctl.cpp`).
-const UDP_IP_HEADER_OVERHEAD: usize = 28; // 20 (IPv4) + 8 (UDP)
 
 /// "No configured limit" default max bandwidth, matching libsrt's own
 /// `BW_INFINITE` (`srtcore/common.h`): 1 Gbps expressed in bytes/sec. Live
@@ -82,6 +77,7 @@ pub struct SenderBuffer {
     packet_send_period: u64,
     /// 最後のパケット送信時刻
     last_send_time: Option<Timestamp>,
+    packet_send_period_overridden: bool,
     /// 送信パケット総数
     total_sent: u64,
     /// 送信バイト総数
@@ -121,6 +117,7 @@ impl SenderBuffer {
             latency_us: latency_ms as u64 * 1000,
             packet_send_period: 0,
             last_send_time: None,
+            packet_send_period_overridden: false,
             total_sent: 0,
             total_bytes_sent: 0,
             avg_payload_size: INITIAL_AVG_PAYLOAD_SIZE_BYTES,
@@ -165,11 +162,9 @@ impl SenderBuffer {
         // パケットペーシングチェック
         if self.packet_send_period > 0
             && let Some(last_time) = self.last_send_time
+            && now.as_micros() < last_time.as_micros()
         {
-            let elapsed = now.as_micros().saturating_sub(last_time.as_micros());
-            if elapsed < self.packet_send_period {
-                return false;
-            }
+            return false;
         }
 
         true
@@ -188,11 +183,10 @@ impl SenderBuffer {
             return 0;
         }
 
-        if let Some(last_time) = self.last_send_time {
-            let elapsed = now.as_micros().saturating_sub(last_time.as_micros());
-            if elapsed < self.packet_send_period {
-                return self.packet_send_period - elapsed;
-            }
+        if let Some(last_time) = self.last_send_time
+            && now.as_micros() < last_time.as_micros()
+        {
+            return last_time.as_micros() - now.as_micros();
         }
 
         0
@@ -201,11 +195,20 @@ impl SenderBuffer {
     /// パケット送信間隔を設定 (マイクロ秒)
     pub fn set_packet_send_period(&mut self, period: u64) {
         self.packet_send_period = period;
+        self.packet_send_period_overridden = true;
     }
 
     /// 送信時刻を記録
     pub fn record_send_time(&mut self, now: Timestamp) {
-        self.last_send_time = Some(now);
+        self.last_send_time = Some(match (self.last_send_time, self.packet_send_period) {
+            (Some(last_time), period) if period > 0 => {
+                Timestamp::from_micros(last_time.as_micros().saturating_add(period))
+            }
+            (None, period) if period > 0 => {
+                Timestamp::from_micros(now.as_micros().saturating_add(period))
+            }
+            _ => now,
+        });
     }
 
     /// 送信中のパケット数
@@ -251,31 +254,27 @@ impl SenderBuffer {
         } else {
             bytes_per_sec
         };
+        self.packet_send_period_overridden = false;
         self.recompute_packet_send_period();
     }
 
     /// 送信ペイロードサイズの移動平均を更新する (libsrt
     /// `LiveCC::updatePayloadSize` に相当、実送信のたびに呼ぶ)。
     ///
-    /// 平均値は更新するが、ここではペーシング間隔を再計算しない --
-    /// [`Self::set_packet_send_period`] で明示的に上書きされた値を送信の
-    /// たびに黙って再計算で潰してしまうのを避けるため
-    /// (`tests/test_srt_connection.rs::test_packet_pacing` はこの手動上書
-    /// きが送信後も保持されることに依存する)。LIVE ペイロードサイズは実運
-    /// 用上ほぼ一定 (`MAX_SRT_MESSAGE_PAYLOAD` 相当) なので、再計算は
-    /// [`Self::new`] と [`Self::set_max_bandwidth`] の時点のみで十分。
     fn record_sent_payload_size(&mut self, size: usize) {
         self.avg_payload_size = (self.avg_payload_size * (AVG_PAYLOAD_SIZE_IIR_LEN - 1.0)
             + size as f64)
             / AVG_PAYLOAD_SIZE_IIR_LEN;
+        if !self.packet_send_period_overridden {
+            self.recompute_packet_send_period();
+        }
     }
 
     /// 平均ペイロードサイズと最大帯域幅からパケット送信間隔を計算する
     /// (libsrt `LiveCC::updatePktSndPeriod` に相当、`srtcore/congctl.cpp`)。
     fn recompute_packet_send_period(&mut self) {
-        let packet_size_bytes =
-            self.avg_payload_size + (SRT_HEADER_SIZE + UDP_IP_HEADER_OVERHEAD) as f64;
-        let period_us = 1_000_000.0 * packet_size_bytes / self.max_bandwidth_bytes_per_sec as f64;
+        let period_us =
+            1_000_000.0 * self.avg_payload_size / self.max_bandwidth_bytes_per_sec as f64;
         self.packet_send_period = period_us.round() as u64;
     }
 
@@ -693,6 +692,29 @@ mod tests {
         // 1000μs 後は送信可能
         assert!(buf.can_send_with_pacing(Timestamp::from_micros(1000)));
         assert_eq!(buf.time_until_send(Timestamp::from_micros(1000)), 0);
+    }
+
+    #[test]
+    fn test_packet_pacing_catches_up_after_late_wakeup() {
+        let mut buf = SenderBuffer::new(1000, 8192, 120);
+        buf.set_packet_send_period(1000);
+        buf.record_send_time(Timestamp::from_micros(0));
+
+        assert!(buf.can_send_with_pacing(Timestamp::from_micros(1500)));
+        buf.record_send_time(Timestamp::from_micros(1500));
+        assert!(!buf.can_send_with_pacing(Timestamp::from_micros(1999)));
+        assert_eq!(buf.time_until_send(Timestamp::from_micros(1999)), 1);
+        assert!(buf.can_send_with_pacing(Timestamp::from_micros(2000)));
+    }
+
+    #[test]
+    fn test_packet_pacing_uses_payload_bandwidth() {
+        let mut buf = SenderBuffer::new(1000, 8192, 120);
+        buf.set_max_bandwidth(2_000_000);
+        buf.record_send_time(Timestamp::from_micros(0));
+
+        assert!(buf.time_until_send(Timestamp::from_micros(727)) > 0);
+        assert_eq!(buf.time_until_send(Timestamp::from_micros(728)), 0);
     }
 
     #[test]
