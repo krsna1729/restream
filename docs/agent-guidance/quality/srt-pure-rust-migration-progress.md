@@ -13,6 +13,7 @@
 - [Rust sink GROUP admission — 2026-08-18](#rust-sink-group-admission--2026-08-18)
 - [Production Rust bonded egress and paired endpoint profile — 2026-08-18](#production-rust-bonded-egress-and-paired-endpoint-profile--2026-08-18)
 - [Kernel symbols and connected affinity profile — 2026-08-18](#kernel-symbols-and-connected-affinity-profile--2026-08-18)
+- [Kernel-symbol and profiling toolchain verification — 2026-08-18](#kernel-symbol-and-profiling-toolchain-verification--2026-08-18)
 - [Reusable SRT lifecycle crate extraction — 2026-08-18](#reusable-srt-lifecycle-crate-extraction--2026-08-18)
 - [Six runtime adapter contract and compio ownership — 2026-08-18](#six-runtime-adapter-contract-and-compio-ownership--2026-08-18)
 
@@ -363,15 +364,69 @@ lifecycle checks. The retained artifact is
 `Rust SRT ingest listener started` with two workers.
 
 This is intentionally a development seam, not the final whole-stack claim.
-Rust ingest currently admits non-bonded `publish` only; SRT `read` and bonding
-remain unavailable in this mode. Because the Core listener must select crypto
+Rust ingest admits non-bonded `publish` and the connected receiver now admits
+libsrt Broadcast and Backup GROUP handshakes; SRT `read` and production media
+failover remain separate gates. Because the Core listener must select crypto
 and TSBPD delay before the handshake completes, the first seam accepts only
 pipelines whose resolved crypto and latency equal the global listener policy.
-Per-pipeline handshake policy, Rust Broadcast bonding, and Rust Backup
-failover are the next production seams. The current tuple map is deliberate:
-wire data packets carry the destination socket ID, not a reliable caller
-source socket ID, so later logical connections from an identical UDP tuple
- cannot be safely split by socket ID alone.
+The current tuple map is deliberate: wire data packets carry the destination
+socket ID, not a reliable caller source socket ID, so later logical connections
+from an identical UDP tuple cannot safely be split by socket ID alone.
+
+### Bonding assignment lifecycle audit — 2026-08-18
+
+The handshake contains enough information for correct bonding, but not at the
+first packet boundary. A listener normally receives INDUCTION first; native
+libsrt does not include GROUP there. GROUP and StreamID become available when
+the listener processes CONCLUSION, immediately before the Core emits
+`ConnectionEvent::Connected`. The peer socket ID is also cached at that point
+and identifies the individual physical leg, not the logical bond.
+
+This makes the handoff timing decisive. The harness connected sink creates its
+worker-owned connected UDP socket on the first datagram. That is correct for
+locking one UDP tuple to one worker and passed the tested loopback bond, where
+both legs shared a source IP and provisional source-IP affinity kept them
+together. It is not a universal bonded assignment rule: legs arriving from
+different source IPs can be split before GROUP is known, and a connected socket
+cannot later be moved between workers without moving the Core state and any
+packets already buffered during the transition.
+
+Production Rust ingest now has that listener-owned admission path when
+`RESTREAM_SRT_INGEST_SCALING=connected` is selected. The listener assigns a
+provisional tuple owner, parses GROUP on INDUCTION or CONCLUSION, installs a
+local mirror GROUP extension before feeding the GROUP-bearing packet, and
+hands off the complete Core state before publishing `Connected`. The worker
+creates and registers the connected datagram socket, then emits `Connected`
+from the worker-owned state; this makes the subsequent authorization command
+causally follow the handoff rather than racing it on the Tokio channel. Data
+queued behind the handshake remains in the Core event queue until admission.
+The worker then moves each bonded leg into one
+`(peer_group_id, normalized_stream_id)` group owner containing each leg's tuple
+and socket-ID-specific transport state.
+
+The first native production attempt failed before CONCLUSION because the Rust
+listener did not echo a GROUP extension; libsrt logged `the listener did not
+respond with group ID` and rejected both Broadcast and Backup. After adding
+the mirror response, the pinned native caller reached `connected_group` for
+both types, and the production log emitted one logical publisher connection
+per two-leg group rather than one session per leg. Evidence is retained under
+`.local/artifacts/connected-production-bond-qa-20260818c/`. This distinguishes
+the actual handshake defect from connected-socket handoff: the handoff was
+not reached until the GROUP response was corrected.
+
+A second lifecycle audit found an independent ordering race in the first
+handoff implementation: publishing `Connected` from the listener before its
+`Handoff` command was enqueued allowed Tokio to send `Authorize` first. The
+worker could then discard authorization because it did not yet own the peer.
+The listener now transfers the Core first, and the worker emits `Connected`
+only after creating/registering the connected socket. `Authorize` therefore
+cannot precede ownership, while handshake and post-handshake data remain in
+the same Core event queue.
+
+The final optimized-binary recheck is retained under
+`.local/artifacts/connected-production-bond-qa-20260818g/`: the native
+Broadcast/Backup group test passed with Backup failover, and the connected
+MPEG-TS smoke passed 16/16 output checks.
 
 ## Production GROUP handshake metadata — 2026-08-18
 
@@ -567,6 +622,23 @@ Rust/Rust production soak. Rust-egress to native libsrt group-receiver
 interop, native libsrt egress to Rust GROUP admission, and Connected-mode
 GROUP admission are now live-verified. The four receiver-strategy comparison
 must continue to treat sink cost and restream cost as separate columns.
+
+## Kernel-symbol and profiling toolchain verification — 2026-08-18
+
+The host profiling toolchain is now installed and verified for the running
+`6.8.0-137-generic` kernel: the matching `linux-tools`/`perf`, headers,
+`dwarves`/`pahole`, `bpftrace`, `trace-cmd`, KernelShark, Hotspot, elfutils,
+LLVM, and Cargo Flamegraph 0.6.14. `kernel.perf_event_paranoid=-1` and
+`kernel.kptr_restrict=0` are active for this boot.
+
+The host exposes the matching BTF image at `/sys/kernel/btf/vmlinux` and
+`/boot/System.map-6.8.0-137-generic`. The exact Noble ddeb packages
+`linux-image-6.8.0-137-generic-dbgsym` and
+`linux-image-unsigned-6.8.0-137-generic-dbgsym` are not published, so older
+kernel debug packages were not substituted. Current captures are suitable for
+kernel function/syscall/softirq attribution through BTF, kallsyms, and
+`System.map`; kernel source-line attribution requires a matching 137 DWARF
+image from the kernel provider.
 
 ## Reusable SRT lifecycle crate extraction — 2026-08-18
 

@@ -59,6 +59,8 @@ Useful env vars:
 - `RESOURCE_SWEEP_SCENARIOS=baseline-empty,ingest-only,ingest-growth-same,ingest-growth-mixed,egress-growth-source-same,egress-growth-source-srt,egress-growth-source-mixed,egress-growth-transcode-same,egress-growth-transcode-srt,egress-growth-transcode-mixed,egress-growth-source-plus-transcode-mixed,egress-growth-transcode-dual-mixed,egress-growth-source-plus-transcode-dual-mixed,egress-growth-hevc-bridge`
 - `RESOURCE_SWEEP_LIFECYCLE=isolated|continuous|cumulative`
 - `RESOURCE_SWEEP_NO_CLEANUP=1` to leave the final scenario running
+- `MSR_PEER=sink HARNESS_SRT_SINK_BACKEND=rust` to run the SRT sink/listener
+  on the pure-Rust Core; omit it for the libsrt control stack
 
 The scenario filter is the main "cheap loop" knob. It lets you rerun only the
 slice you care about instead of paying for the whole sweep.

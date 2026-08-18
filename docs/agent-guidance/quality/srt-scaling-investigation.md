@@ -19,6 +19,7 @@
 - [Tuple affinity and bonding identity — 2026-08-17](#tuple-affinity-and-bonding-identity--2026-08-17)
 - [Fourth sink topology: one port per stream — 2026-08-17](#fourth-sink-topology-one-port-per-stream--2026-08-17)
 - [Matched paired receiver profiles — 2026-08-17](#matched-paired-receiver-profiles--2026-08-17)
+- [High-tuple connected handoff profile — 2026-08-17](#high-tuple-connected-handoff-profile--2026-08-17)
 - [What remains open](#what-remains-open)
 
 ## Summary
@@ -678,6 +679,24 @@ two unrelated publishers can intentionally use the same StreamID. If GROUP is
 absent, malformed, or not allowed by policy, the connection is non-bonded and
 must follow the ordinary tuple-affinity path.
 
+The production listener verification exposed an important lifecycle detail.
+The Rust Core had the peer GROUP metadata, but the listener initially omitted a
+local GROUP extension from its response. Native libsrt then rejected both
+Broadcast and Backup with `the listener did not respond with group ID`, before
+CONCLUSION and before any connected-socket handoff. The fix mirrors the peer
+group ID/type/flags in the listener's response, reuses that mirror for later
+legs, and retires it when the last tuple leaves. The corrected native caller
+reached `connected_group` for both group types and produced one logical
+publisher admission for each two-leg test; see
+`.local/artifacts/connected-production-bond-qa-20260818c/`.
+
+The follow-up lifecycle fix moved `Connected` emission from the listener to
+the worker after connected-socket registration. This removes the possible
+`Authorize`-before-`Handoff` command race; the corrected live run is retained
+under `.local/artifacts/connected-production-bond-qa-20260818f/`.
+The exact post-commit optimized-binary recheck is under
+`.local/artifacts/connected-production-bond-qa-20260818g/`.
+
 This is also why a broadcast receiver should use listener-to-connected handoff
 with a **group-owned worker**: both legs reach the same receive merge/dedup
 state, avoiding cross-worker sequence arbitration. A least-load policy may
@@ -855,6 +874,49 @@ source tuples, then optimize Rust Core receive-buffer/ACK allocation and the
 per-packet UDP feedback path. Batching is not yet a topology conclusion: the
 same kernel packet path appears in all four profiles and must be evaluated as a
 cross-strategy experiment after the ownership measurements are complete.
+
+## High-tuple connected handoff profile — 2026-08-17
+
+The sparse six-tuple connected capture was repeated with the sender-side
+libsrt local-port reuse disabled (`RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT=0`).
+This deliberately gives each output its own source tuple, at the cost of
+creating one libsrt muxer/thread pair per output. The receiver remained the
+same Rust connected-handoff topology: one public port, four workers, tuple
+affinity, and a connected UDP socket owned by the selected worker.
+
+| Measurement | Result |
+|---|---:|
+| Outputs | 600/600 |
+| Listener tuples / handoffs | 832 / 832 |
+| Connected-socket packets | 3,212,374 |
+| Tuple assignment per worker | 207, 208, 207, 208 |
+| Restream CPU average / peak | 371.97% / 415.82% |
+| Restream RSS peak | 830,068 KiB |
+| Restream `packetsSentDrop` | 17,716 |
+
+The run passed the harness presence/byte-growth gate, but its throughput and
+resource numbers are not an apples-to-apples improvement over the four-way
+receiver table: disabling reuse intentionally moved the sender from six
+libsrt muxers to roughly 600. The restream flamegraph contains the expected
+large population of `SRT:SndQ`/`SRT:RcvQ` threads, `SRT:GC`,
+`SharedMutex::unlock`, `CSndUList::update`, and `sendmsg`; the recorder lost
+50.26% of samples under that deliberately overloaded sender condition, so its
+fine-grained percentages are diagnostic only.
+
+The sink flamegraph was recorded from the listener plus all four connected
+workers. It contains only 73 on-CPU samples because the receiver is mostly
+waiting: 61.97% of the inclusive samples were in `epoll_wait`, and the
+listener's own `run_listener` frame accounted for 8.58% self time. There is no
+evidence of a worker lock convoy or of tuple imbalance: the trace shows the
+four workers receiving an even 207/208 tuple assignment. This validates the
+earlier conclusion that the six-tuple result was a low-cardinality workload
+artifact, not proof that connected handoff has no receiver work.
+
+The paired artifacts are under
+`.local/artifacts/msr-rust-sink-strategy-connected-600-high-tuples-perf-20260817/`
+(`restream.svg`, `sink.svg`, raw `perf.data`, folded stacks, reports, and the
+MSR result). The bench binary SHA-256 was
+`55931af8cbbc5b3efde52f835861d750e52f8c997614412e45beea3ee94f2594`.
 
 ## What remains open
 

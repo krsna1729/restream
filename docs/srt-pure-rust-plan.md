@@ -37,17 +37,14 @@ self-flagged "NOT PRODUCTION READY"). **Neither supports any SRT group/bonding
 type**, which restream uses in production on both ingest and egress — this is
 the central open design problem this plan resolves.
 
-**Priority within bonding, set explicitly by direction:** restream already
-has a failover switch at the pipeline-input level, so `SRT_GTYPE_BACKUP`'s
-failover semantics duplicate a capability restream already owns elsewhere
-(confirmed: current production egress bonding, `docs/media-pipeline.md`'s
-`## SRT bonding` section, specifically creates `SRT_GTYPE_BACKUP` groups via
-the `bond=` URL parameter — this plan deliberately deprioritizes matching
-that exact capability). What restream does *not* already have is redundant,
-simultaneous-path delivery to beat packet loss on a single link — that is
-`SRT_GTYPE_BROADCAST`, and it is the priority bonding target. Backup is
-secondary/optional. This reorders and substantially simplifies the bonding
-work versus a backup-first plan — confirmed against real libsrt source, see
+**Priority within bonding, set explicitly by direction:** Broadcast is first
+because restream does not already have redundant, simultaneous-path delivery
+to beat packet loss on a single link. Backup follows because current
+production egress uses `SRT_GTYPE_BACKUP` through the `bond=` URL parameter,
+and a final Rust stack must interoperate with that behavior as well. The
+pipeline-input failover switch is useful but is not a substitute for SRT
+Backup wire compatibility. This ordering keeps the simpler group first while
+retaining both group types as required scope; see
 [Bonding](#bonding-the-central-design-problem).
 
 The goal of this plan: a phased, risk-gated path to replacing libsrt, with
@@ -77,10 +74,8 @@ premise doesn't hold up under measurement.
 
 ## Scope and honest framing
 
-This is roughly an **8-11 month committed effort** (Phases 0-7, 8a, 9) at
-focused single-developer/agent pace, plus an **optional +6-8 weeks** if
-Phase 8b (Backup) is ever taken up — it is not part of the committed
-timeline (see [Bonding](#bonding-the-central-design-problem)). Phases 3 and 4
+This is roughly an **8-11 month committed effort** (Phases 0-7, 8a, 8b, 9) at
+focused single-developer/agent pace. Phases 3 and 4
 (wire format + handshake, then the LIVE data plane) are the bulk of the
 committed effort and produce **zero shippable value on their own**. The plan
 is sequenced so that value or a kill signal lands at several points before
@@ -88,11 +83,11 @@ the end:
 
 | Milestone | Value delivered even if everything after it is abandoned |
 |---|---|
-| Phase 1 | A committed, source-and-capture-backed spec of libsrt group (Broadcast-first, Backup-secondary) wire behavior — reusable by the patched-fork path too |
+| Phase 1 | A committed, source-and-capture-backed spec of libsrt group (Broadcast-first, Backup-secondary) wire behavior — reusable by the exploratory `/home/dev/srt-rs` group implementation and the production Rust Core |
 | Phase 6 | Rust SRT **egress** shipping behind a flag; if it beats libsrt's drop counts, that alone is a win |
 | Phase 7 | Rust SRT **ingest** — this is where the 700-connection ceiling either falls or the premise is disproven |
-| Phase 8a | Broadcast-group wire-compat — the actual packet-loss-redundancy value; if it fails, hybrid (libsrt for broadcast-bonded, Rust for everything else) is a **supported permanent end state**, not a failure |
-| Phase 8b (optional) | Backup-group wire-compat — lower priority; restream's pipeline-input-level failover switch already covers this use case, so this phase can be skipped or deferred indefinitely without blocking anything else |
+| Phase 8a | Broadcast-group wire-compat — required for the final Rust stack |
+| Phase 8b | Backup-group wire-compat — required for the final Rust stack; the pipeline-level failover switch is not a substitute for SRT Backup interoperability |
 
 The motivating measurements are settled and are not re-derived here: stock
 libsrt's zero-loss ceiling of **700 connections** at 8 ports/4 threads on a
@@ -117,11 +112,11 @@ singular `::sendmsg()`), and re-attempting the in-libsrt thread-pool patch
 from scratch.
 
 Also out of scope because restream does not need them: **File mode,
-rendezvous, FEC/packet filters, balancing group type, multicast**. Of the two
-group types restream actually uses today, **`SRT_GTYPE_BROADCAST` is
-in-scope and prioritized (Phase 8a)**; `SRT_GTYPE_BACKUP` is optional/
-deferred (Phase 8b) because restream's pipeline-input-level failover switch
-already provides that capability at a different layer.
+rendezvous, FEC/packet filters, balancing group type, multicast**. Both group
+types restream may encounter, **`SRT_GTYPE_BROADCAST` and
+`SRT_GTYPE_BACKUP`**, are in scope for the final Rust stack. Broadcast remains
+the first implementation target; Backup follows on the same Core group
+extension points.
 
 ---
 
@@ -130,15 +125,16 @@ already provides that capability at a different layer.
 | # | Decision | Rationale (short) |
 |---|---|---|
 | D1 | **Fork-and-extend `shiguredo/srt-rs`**, vendored in-tree, rather than build from scratch | Interop is the dominant risk; shiguredo has *confirmed* libsrt/FFmpeg/OBS interop including a 4-byte control-packet padding shim — an interop detail you only find by painful debugging. Apache-2.0, active, already sans-I/O, LIVE-only matches restream exactly. AGENTS.md: "prefer targeted fixes over rewrites." |
-| D2 | **Broadcast group support is the priority bonding target, ahead of Backup** | Restream's actual gap is packet-loss redundancy via simultaneous multi-link delivery, not failover — a pipeline-input-level failover switch already exists. Confirmed against real libsrt source (`group.cpp`) that Broadcast is also the *architecturally simpler* of the two group types (no idle/standby/promotion state machine), so prioritizing it is both the higher-value and lower-risk order. |
+| D2 | **Broadcast group support is the first bonding target; Backup is required immediately after** | Restream's actual gap is packet-loss redundancy via simultaneous multi-link delivery, and Broadcast is the architecturally simpler group type. Both group types are required before the Rust backend can be the final whole-stack replacement. |
 | D3 | **Bonding needs Core-level extension points for both group types; it is NOT pure Driver orchestration** | The group ID/type/weight ride in the SRT HSv5 handshake extension, and send-sequence numbering is a group-owned property (`m_iLastSchedSeqNo`, `overrideSndSeqNo`), not private per-connection state — true for Broadcast as much as Backup. See [Bonding](#bonding-the-central-design-problem). |
-| D3a | Group send *scheduling* (fan-out to all members vs. active/standby selection) lives in **Core**; group receive *merge* (`CUDTGroup::recv`) is **one shared mechanism for both group types**, also in Core | Confirmed from source: libsrt has separate `sendBroadcast`/`sendBackup` but a single shared `recv`. Backup's extra complexity (stability detection, promotion, parallel-send-during-failover) is entirely send-side and entirely skippable if Phase 8b is deferred — it does not entangle with the receive-merge machinery Phase 8a needs anyway. |
+| D3a | Group send *scheduling* (fan-out to all members vs. active/standby selection) lives in **Core**; group receive *merge* (`CUDTGroup::recv`) is **one shared mechanism for both group types**, also in Core | Confirmed from source: libsrt has separate `sendBroadcast`/`sendBackup` but a single shared `recv`. Backup's extra complexity (stability detection, promotion, parallel-send-during-failover) is entirely send-side, so it can follow Broadcast without changing the shared receive-merge design. |
 | D4 | Convert repo to a **Cargo workspace with the root package retained**; add `crates/srt-protocol` (Core) and a reusable `crates/srt-lifecycle` seam. Do not create one generic runtime crate that owns a framework's event loop. | Root-package-plus-workspace keeps `src/`, `build.rs`, `benches/`, `tests/` paths and every existing `scripts/build/*` command working unchanged. The lifecycle seam is now justified by the same handshake, GROUP-affinity, alias-routing, connected-handoff, and teardown policy appearing independently in restream ingest and the harness sink. |
 | D5 | **Do not pursue `no_std`** | Nice-to-have in the source design doc, hard requirement nowhere. `alloc` is needed for connection setup/teardown anyway. Enforce the *real* invariant (no I/O, no threads, no wall-clock) with a crate-graph architecture test instead. |
 | D6 | Keep upstream's internal API shape inside the vendored connection machine; apply the idealized `process_event(&mut self, event, now) -> Outputs` shape **only at the boundaries we own** (group machine, Core↔Driver interface) | Reshaping all of shiguredo's internals to the idealized signature is a rewrite in disguise and destroys rebaseability against upstream fixes. Deliberate deviation from the source design doc. |
-| D7 | The **test harness keeps its own libsrt FFI permanently**, and `native-deps.sh` keeps building libsrt even after production stops linking it | The harness's independent libsrt is the interop oracle. Removing production's libsrt makes the harness's *more* valuable, not less. |
-| D8 | Hybrid (libsrt for bonded pipelines, Rust for the rest) is an **accepted terminal state** | Removes the all-or-nothing pressure from Phase 8a/8b, the riskiest phases. |
+| D7 | The **test harness keeps both Rust and libsrt SRT sinks**, and `native-deps.sh` keeps building libsrt permanently | The Rust MSR path must use a Rust sink/listener so the receiver cannot bottleneck the Rust egress measurement. The independent libsrt sink remains the control and four-way interop oracle; it is not used as the only sink for Rust scale claims. |
+| D8 | Mixed backends are allowed only during development and differential testing; final deployment is whole-stack | Phase 6 may test Rust egress with libsrt ingest/sinks, and Phase 7 may test Rust ingest with libsrt egress. A final Rust deployment uses Rust for non-bonded and bonded SRT alike. The fallback is the complete libsrt stack, not a permanent per-output hybrid. |
 | D9 | Full hot-path determinism (`process_event(event, now)` with `now` always externally injected, never read internally) is a **design goal, not an absolute gate** | restream's own production RTMP path already runs a sans-I/O crate (`rml_rtmp`) that calls `SystemTime::now()` internally rather than taking it as a parameter, and it has been in unincident production use since this codebase's inception. Purity is worth pursuing where cheap, but should not become a blocking perfectionism point the way Phase 3/4's actual interop and cost gates are. See [Comparison with rml_rtmp](#comparison-with-rml_rtmp-restreams-existing-sans-io-precedent). |
+| D10 | **Tuple affinity is the transport baseline; bonded affinity is `GROUP id/type` → normalized StreamID validation → per-leg tuple/socket state** | A UDP 4-tuple must have one owner, but tuple alone cannot join bonding legs. Stock libsrt negotiates GROUP metadata only in the handshake, and each physical bond leg has separate socket IDs. All legs must be assigned to one group worker before the shared receive/merge state is used. |
 
 ### Primary-source verification of `shiguredo/srt-rs` (D1)
 
@@ -198,14 +194,13 @@ Findings that sharpen, and in one place correct, the earlier research:
 
 ## Bonding: the central design problem
 
-**Priority, per explicit direction: Broadcast first, Backup second/optional.**
-restream already has a failover switch at the pipeline-input level, so
-`SRT_GTYPE_BACKUP`'s value to restream is redundant with a capability that
-already exists one layer up. What restream doesn't have today is redundant,
-simultaneous-path delivery to beat packet loss on a single stream — that's
-`SRT_GTYPE_BROADCAST`, and closing that gap is the actual point of doing
-bonding work at all. This section is written broadcast-first; backup is
-covered second, as optional/deferred work.
+**Priority, per explicit direction: Broadcast first, Backup second, both
+required for the final Rust stack.** Restream does not have redundant,
+simultaneous-path delivery to beat packet loss on a single stream, which makes
+`SRT_GTYPE_BROADCAST` the first target. Its pipeline-input failover switch
+does not replace `SRT_GTYPE_BACKUP` interoperability, which current
+production egress uses through `bond=` URLs. This section is written
+broadcast-first; Backup is the required follow-on.
 
 The findings below are grounded in the real libsrt source, not inference —
 read directly from a local clone at `/home/dev/srt/srtcore/group.cpp` (a
@@ -281,11 +276,11 @@ extra logic that only applies to Backup).
 
 **Net effect on the bounded extension-point list:** Phase 8a (Broadcast) needs
 rows 1-3 and 5 below, in a simplified form (no standby run-mode, no
-promotion). Phase 8b (Backup, optional/deferred) needs everything, including
-the `Idle`/`Standby` mode and promotion logic — the harder half of the
-original list.
+promotion). Phase 8b (Backup, required before Rust mode) needs everything,
+including the `Idle`/`Standby` mode and promotion logic — the harder half of
+the original list.
 
-| Core layer | Needed for Broadcast (Phase 8a) | Additionally needed for Backup (Phase 8b, optional) |
+| Core layer | Needed for Broadcast (Phase 8a) | Additionally needed for Backup (Phase 8b, required) |
 |---|---|---|
 | Wire format | Encode/decode the HSv5 group extension block (ID, type, flags, weight) | — (shared) |
 | Handshake machine | Emit group extension as caller; parse as listener; surface group identity + type in `HandshakeResult` | — (shared) |
@@ -297,8 +292,8 @@ original list.
 **Recommendation, restated:** fork `shiguredo/srt-rs` into
 `crates/srt-protocol` and add exactly the Broadcast-column hooks first;
 treat the Backup-column additions as a clearly-scoped, separately-gated
-follow-on (Phase 8b) that may never get built if the pipeline-level failover
-switch continues to cover restream's actual failover need. Read
+follow-on (Phase 8b) that is required before Rust becomes the final
+whole-stack mode. Read
 `russelltg/srt-protocol` as reference (and steal its `srt-c`
 differential-testing *pattern*), but do not base on it: stale since
 2024-05-31, self-flagged "NOT PRODUCTION READY," TSBPD untested,
@@ -309,11 +304,11 @@ semantics restream must interoperate with.
 **This is why Phase 1 is a mandatory, code-free spike, scoped to Broadcast
 first.** The table above is now source-grounded rather than a pure
 hypothesis, but Phase 1 still needs to nail exact wire-level field layout and
-capture real traffic before any Core code is written — and, since Backup is
-now optional, Phase 1's packet-capture scenarios should cover Broadcast's
-activation/fan-out/merge behavior in depth and Backup's failover only enough
-to confirm the extension-point table above, not to fully spec it (that work
-is deferred to whenever/if Phase 8b is actually taken up).
+capture real traffic before any Core code is written. Phase 1's packet-capture
+scenarios should cover Broadcast's
+activation/fan-out/merge behavior in depth and Backup's failover enough to
+lock the extension points; Phase 8b then completes the implementation-grade
+Backup behavior before Rust whole-stack mode is enabled.
 
 ---
 
@@ -520,6 +515,11 @@ there.
   `target/bench/` binaries. Core-only Criterion benches
   (`crates/srt-protocol/benches/`) don't need it; anything the harness
   executes does.
+- The SRT loss/latency matrix uses optimized binaries from `target/release`.
+  Build its Rust side with `scripts/build/srt-interop-bench.sh`; it verifies
+  host x86-64-v3 support and applies `opt-level=3`, thin LTO, and the same
+  linker hardening used by the workspace. The native libsrt loss wrappers are
+  built with the matching `-O3 -march=x86-64-v3` flags.
 - Touching `build.rs`, `scripts/build/native-deps.sh`, or `test/native/*.c`
   requires `scripts/agent/worktree.sh --no-share-static`. Phases 1, 3, 8, 9
   all touch native inputs — budget the full static rebuild each time.
@@ -597,8 +597,9 @@ restream's decisions to make and measure.
 
 ## Coexistence and rollback strategy
 
-Big-bang cutover is unacceptable; the plan uses **three independent levers**,
-all in place before any production traffic touches the Rust path.
+Big-bang cutover is unacceptable; the plan uses **two final deployment
+levers** plus one temporary phase-isolation lever, all in place before any
+production traffic touches the Rust path.
 
 **Lever 1 — Cargo feature `srt-rust` (compile-time).**
 Added to `[features]` in the root `Cargo.toml` alongside the existing
@@ -612,22 +613,27 @@ production code path references it. Rollback = flip one default.
 read once at startup. Default `libsrt` through Phase 8. Rollback = restart
 with an env var.
 
-**Lever 3 — Per-pipeline / per-output override (the important one).**
-A persisted output-level field resolved through the existing egress
-`OutputSpec` / `ProtocolSpec` (`src/media/egress/command.rs`), so a single
-problem destination can be moved back to libsrt without touching the rest of
-the process. This is what makes the A/B real: both backends live in one
-process, feeding the same `TsFeed`, scheduled by the same shard threads,
-reporting into the same `snapshots.rs` quality surface — apples-to-apples on
-one host under one workload.
+For the MSR `MSR_PEER=sink` receiver, `HARNESS_SRT_SINK_BACKEND=rust` is the
+explicit Phase 6/7 isolation setting and also follows `RESTREAM_SRT_BACKEND`
+when the harness-specific variable is absent. Rust-stack measurements must
+set both sides to Rust; libsrt control measurements must set both to libsrt.
+This harness selector is a measurement endpoint choice, not a permanent
+per-output mixing policy.
 
-**Bonded pipelines are pinned to libsrt** by the resolver until the
-corresponding phase passes: Broadcast-bonded pipelines pinned until Phase 8a
-passes; Backup-bonded pipelines pinned until Phase 8b passes (which may be
-never, per D8/D2 — Backup is optional). That pin makes D8 (permanent hybrid)
-a zero-additional-work fallback, and it degrades gracefully: if only 8a ships,
-restream still gets non-bonded Rust everywhere plus Broadcast-bonded Rust,
-with Backup-bonded pipelines simply staying on libsrt indefinitely.
+**Lever 3 — Temporary phase-isolation override.**
+During Phases 6 and 7, a non-default test-only per-output or per-endpoint
+override may be used to isolate Rust egress, Rust ingest, and mixed interop
+failures. It is not the final production contract and must not survive the
+whole-stack Rust cutover as a persisted mixing policy. The final A/B remains
+process-wide: `libsrt` selects the complete native stack and `rust` selects
+the complete Rust stack.
+
+**Bonded pipelines may remain on libsrt during the transitional phases** while
+Rust non-bonded egress/ingest is being isolated. That is a development gate,
+not the final architecture. Rust mode is not declared complete until both
+Broadcast and Backup bonding are implemented and the process can run the
+entire SRT graph on Rust. If bonding fails its gate, the supported fallback is
+the complete libsrt mode.
 
 **Rollback rehearsal is a gate, not a hope:** Phase 6's exit criteria include
 a live harness run that flips a running pipeline from Rust to libsrt
@@ -669,11 +675,15 @@ behind an env flag, never into the production static prefix.
 | **Rust caller** | self-consistency | outbound wire compat |
 | **libsrt caller** | inbound wire compat | **control** (must also pass, or the harness is lying) |
 
-**Tier 3 — live harness modes, unchanged.**
+**Tier 3 — live harness modes, with an explicit SRT sink backend.**
 `mixed.live.srt.h264.a1.bf2` and its 7 siblings (h264/h265 × a1/a2 × bf0/bf2);
 `fault.srt-output-stall` (`src/bin/test_harness/fault_recovery/srt_stall.rs`);
 msr via `MSR_OUTPUT_COUNTS=1200 MSR_PEER=sink MSR_PROTOCOL_MIX=srt-only
-scripts/harness/run.sh msr -- --no-netns`.
+scripts/harness/run.sh msr -- --no-netns`. The harness SRT sink must be
+selectable as `libsrt` or Rust. A Rust-stack MSR run sets both the restream
+backend and the harness sink backend to Rust; a libsrt control run sets both
+to libsrt. Transitional mixed runs are retained only for isolating one side
+of the migration and are never the final scale claim.
 
 **Read msr results correctly.** The investigation doc is explicit that msr's
 `PASS` only checks "all outputs present, `bytesOutDelta > 0`" — it passed 3/3
@@ -744,9 +754,9 @@ starts until the design survives outside one sandbox's `.local/`.
 ### Phase 1 — libsrt group wire spike, Broadcast-first (2-3 weeks) — READ-ONLY, no production code
 
 **Build.** A verified wire-behavior spec, from two independent sources, with
-depth weighted toward Broadcast (the priority target) and Backup covered only
-enough to confirm/refine the extension-point table (since Phase 8b is
-optional and may never be built):
+depth weighted toward Broadcast (the first target) and Backup covered enough
+to lock the extension-point table. Phase 8b will expand the Backup material
+into the full implementation gate required for Rust whole-stack mode:
 
 *Source reading* — against the exact pinned commit
 (`v1.5.5`/`b6b4ae990daa8193625a4ddeaeaed03023b23125`, re-cloned fresh rather
@@ -756,8 +766,8 @@ this plan's initial research, which are not pinned to that commit):
 confirmed at `group.cpp:1208-1900` in the unpinned reference checkout),
 `CUDTGroup::recv` (shared merge path, confirmed at `group.cpp:2387`),
 `sendBackup` and the stability/promotion logic referenced near
-`group.cpp:3488` (secondary focus, enough to confirm the Backup-column
-extension points, not a full spec), and `srtcore/core.cpp` handshake
+`group.cpp:3488` (secondary focus for the initial spike; Phase 8b expands this
+into a complete implementation spec), and `srtcore/core.cpp` handshake
 extension processing (`SRT_CMD_GROUP` encode/decode, `SRTO_GROUPCONNECT`
 listener path — shared by both group types).
 
@@ -777,9 +787,8 @@ flags, weight); Broadcast's shared-sequence and fan-out-send mechanism in
 full; group-level receive merge and TSBPD basis; what `srt_group_data`'s
 `memberstate` transitions correspond to on the wire for Broadcast; and, at
 lighter depth, Backup's sequence-sync-at-promotion mechanism, standby
-keepalive cadence, and failover trigger condition — enough to validate the
-Backup column of the extension-point table without fully speccing
-implementation-ready detail (deferred to if/when Phase 8b is taken up). Plus
+keepalive cadence, and failover trigger condition — enough to validate and
+bound the Backup implementation work that Phase 8b must complete. Plus
 the **final Core extension-point list** replacing the source-grounded-but-
 still-provisional table in [Bonding](#bonding-the-central-design-problem).
 
@@ -795,10 +804,10 @@ memory.
 - **NO-GO / re-plan** if Broadcast group semantics turn out to be pervasive
   across the connection state machine in a way the source reading above
   didn't anticipate — meaning a vendored fork would have to be rewritten
-  rather than extended. In that case: adopt permanent hybrid (D8) for
-  bonding entirely, or revisit the patched-fork path with the sequence-sync
-  knowledge now in hand. (A similar finding limited to Backup specifically
-  does not block anything — Backup is already optional per D2/Phase 8b.)
+  rather than extended. In that case: keep the complete libsrt mode and
+  revisit the exploratory `/home/dev/srt-rs` path or the Core boundary with
+  the sequence-sync knowledge now in hand. A similar finding in Backup blocks
+  Rust whole-stack mode; it does not justify shipping a partial hybrid.
 
 ### Phase 2 — Workspace conversion + vendored skeleton + seam de-libsrt-ification (1-2 weeks)
 
@@ -938,8 +947,10 @@ key-size-mismatch panic as a specific regression to test for.
   so **`SrtEgressEngine<T>` and the whole `ProtocolEngine` path are reused
   verbatim.**
 - `SrtRustFabricPoller` with the same 3-method surface as `SrtFabricPoller`.
-- The three coexistence levers wired end to end (feature `srt-rust`, env
-  selector, per-output override), with bonded outputs pinned to libsrt.
+- The two final coexistence levers wired end to end (feature `srt-rust`,
+  process-wide env selector), plus a temporary phase-isolation override for
+  mixed differential tests. Bonded outputs may remain on libsrt during this
+  transitional phase, but Rust mode is not final until Phase 8 completes.
 - `native_send_backlog()` now reports *our* send buffer — genuinely better
   data than libsrt exposed, feeding the existing backpressure classification
   unchanged.
@@ -958,7 +969,8 @@ key-size-mismatch panic as a specific regression to test for.
 - All 8 `mixed.live.srt.*` matrix modes on the Rust backend.
 - `benches/srt_lifecycle.rs` and `benches/srt_ingest_latency.rs`
   before/after.
-- msr `srt-only` at 300 / 700 / 1200 outputs, `MSR_PEER=sink`, judged on
+- msr `srt-only` at 300 / 700 / 1200 outputs, `MSR_PEER=sink`, with the
+  harness SRT sink using the same backend as restream, judged on
   `packetsSentDrop` and `bytesOutDelta` vs target — **not** on harness PASS.
 
 **Go/no-go.** GO if correctness modes are at full parity **and** msr drop
@@ -997,8 +1009,9 @@ owns the choices libsrt made for it:
   8 Mbps against the Rust listener, 100-step ramp, judged by `pct_of_target`
   — directly comparable to the measured 700-connection zero-loss ceiling
   under the best stock-libsrt pool config.
-- msr `srt-only` @ 700 / 900 / 1200 / 1500, drop counts and `bytesOutDelta`
-  vs the 9,600 Mbps target; `restreamCpuAvgPct` recorded (libsrt's
+- msr `srt-only` @ 700 / 900 / 1200 / 1500, with the Rust harness sink,
+  drop counts and `bytesOutDelta` vs the 9,600 Mbps target;
+  `restreamCpuAvgPct` recorded (libsrt's
   degradation sat at 230-243% on a 6-core host — well under the ceiling — so
   CPU is a diagnostic, not the pass criterion).
 - All `mixed.live.srt.*` modes, ingest side.
@@ -1014,7 +1027,10 @@ implementation.
 
 ### Phase 8a — Bonding: Broadcast group support (4-6 weeks) — the priority bonding phase
 
-**Build.** Implement the Broadcast-column of Phase 1's spec: the group wire
+**Build.** Use `/home/dev/srt-rs/src/srt_group.rs` and its related handshake
+changes as an exploratory reference only; audit every behavior against the
+Phase 1 capture/spec before porting it into the vendored Core. Then implement
+the Broadcast-column of Phase 1's spec: the group wire
 extension in the wire-format layer (shared groundwork, also needed if 8b ever
 happens), handshake-side group identity + type in `HandshakeResult`,
 connection-side externally-supplied send-sequence injection, and the
@@ -1054,41 +1070,39 @@ AGENTS.md § Media Rules). Group status must populate the same
 
 **Go/no-go.** GO if all four interop combinations pass and the loss-reduction
 test shows a real, measured improvement over single-link delivery. **NO-GO →
-adopt D8 for broadcast: broadcast-bonded pipelines stay on libsrt
-permanently, everything else runs Rust.** The per-output pin from Phase 6
-already implements this.
+Rust whole-stack mode remains unavailable; keep the complete libsrt mode and
+rework the Rust bonding design.** Transitional mixed testing may continue
+only as an investigation aid.
 
-### Phase 8b — Bonding: Backup group support (6-8 weeks; optional, only if a concrete need surfaces)
+### Phase 8b — Bonding: Backup group support (6-8 weeks; required for Rust mode)
 
-**Do not start this phase by default.** restream already has a
-pipeline-input-level failover switch; Backup-group support only earns its
-cost if a specific need for *socket-level* (not pipeline-level) failover is
-identified later — e.g. a customer requirement to interoperate with a
-specific third-party encoder that only speaks libsrt Backup bonding. Treat
-this as a backlog item gated on that need appearing, not a default part of
-the roadmap.
+**Build.** Implement the Backup-column additions from Phase 1's spec on top
+of Phase 8a's group machine. The pipeline-input-level failover switch remains
+useful, but it does not replace socket-level Backup interoperability with
+libsrt peers.
 
-**If undertaken:** implement the Backup-column additions from Phase 1's
-spec on top of Phase 8a's group machine — `Idle`/`Standby` connection run
-mode, RTT-driven stability/failover detection, promotion with sequence
-continuity, brief parallel-send-during-failover. Reuses Phase 8a's wire
-format, handshake group-identity plumbing, and receive-merge machinery
-unchanged (confirmed shared via D3a).
+Implement `Idle`/`Standby` connection run mode, RTT-driven stability/failover
+detection, promotion with sequence continuity, and brief
+parallel-send-during-failover. Reuse Phase 8a's wire format, handshake
+group-identity plumbing, and receive-merge machinery unchanged (confirmed
+shared via D3a).
 
-**Proof (if undertaken).** Failover: kill the active member mid-stream;
+**Proof.** Failover: kill the active member mid-stream;
 assert continuous delivery within the TSBPD latency budget, no duplicate
 delivery, no sequence gap, correct `memberstate` transitions. Both
 directions, both roles. Otherwise identical proof shape to Phase 8a.
 
-**Go/no-go (if undertaken).** Time-boxed at 8 weeks. GO if all failover
-cases pass. NO-GO → adopt D8 for backup specifically: backup-bonded
-pipelines stay on libsrt permanently (the pipeline-level failover switch
-already covers the operational need this would have served).
+**Go/no-go.** Time-boxed at 8 weeks. GO if all failover cases pass and the
+Rust process can run the complete SRT stack, including both bonding modes.
+NO-GO → Rust whole-stack mode remains unavailable and the complete libsrt
+mode remains the production fallback; do not ship a partial Rust/hybrid mode.
 
 ### Phase 9 — Default flip, soak, and libsrt removal (3-4 weeks; conditional)
 
 **Build.** Flip `RESTREAM_SRT_BACKEND` default to `rust`; 30-day soak with
-the per-output libsrt escape hatch still live. Only then: delete
+the complete Rust stack, including the Rust harness sink and both bonding
+modes. Keep process-wide restart rollback to `libsrt` available during the
+soak. Only then: delete
 `src/media/srt/sys.rs` and the FFI-bearing modules, drop libsrt from
 `build.rs` / `scripts/build/native-deps.sh` /
 `scripts/build/native/native-inputs.lock` /
@@ -1111,9 +1125,9 @@ the per-output libsrt escape hatch still live. Only then: delete
 regeneration, container smoke.
 
 **Go/no-go for removal.** 30 days at default-on with zero SRT-attributed
-production incidents and no per-output rollbacks exercised. Otherwise stay
-hybrid indefinitely — the flag costs almost nothing to keep and buys a
-permanent escape hatch.
+production incidents and no process-wide rollback required. Otherwise retain
+the process-wide `libsrt` mode and keep the Rust mode opt-in; do not introduce
+a permanent mixed deployment policy.
 
 ---
 
@@ -1158,15 +1172,15 @@ symbols, listing existing test modes, gathering file inventories.
 
 | Phase | Kill/branch criterion | Outcome if it fires |
 |---|---|---|
-| 1 | Bonding requires pervasive rather than bounded Core change | Adopt hybrid (D8) up front, or revisit the patched fork with sequence-sync knowledge |
+| 1 | Bonding requires pervasive rather than bounded Core change | Keep the complete libsrt mode and revisit the exploratory group implementation or the Core boundary with sequence-sync knowledge |
 | 2 | Workspace conversion destabilizes native link or worktree caching | Revert; Core as in-tree module + architecture test |
 | 3 | Handshake interop not 100% in both directions | **Stop the project** |
 | 4 | Rust Core not measurably cheaper per packet than libsrt | **Stop the project** — premise disproven, ~5 months, documented |
 | 6 | Correctness parity but no scale improvement at 1200 | Stop before ingest; diagnose driver design |
 | 7 | Zero-loss ceiling under 1400 connections | Revert ingest; keep egress if Phase 6 won |
-| 8a | Broadcast interop or loss-reduction goal unachieved in 6 weeks | **Permanent hybrid for broadcast** — libsrt for broadcast-bonded, Rust for the rest (already implemented via the per-output pin) |
-| 8b | Not started by default; if undertaken, backup interop unachieved in 8 weeks | **Permanent hybrid for backup** — libsrt for backup-bonded pipelines (already the case if 8b is simply never started; the pipeline-input failover switch covers the operational need) |
-| 9 | Any SRT incident during the 30-day soak | Stay hybrid indefinitely; keep the flag |
+| 8a | Broadcast interop or loss-reduction goal unachieved in 6 weeks | Rust whole-stack mode remains unavailable; keep the complete libsrt mode and rework the Rust bonding path |
+| 8b | Backup interop or failover goal unachieved in 8 weeks | Rust whole-stack mode remains unavailable; keep the complete libsrt mode and rework the Rust bonding path |
+| 9 | Any SRT incident during the 30-day soak | Keep the complete libsrt mode as the default and the Rust mode opt-in; no permanent mixed deployment |
 
 ---
 

@@ -180,6 +180,8 @@ above remain the better way to learn the system.
 - [SRT fan-in scaling investigation — 2026-08-15](agent-guidance/quality/srt-scaling-investigation.md)
 - [SRT bonding wire spec — 2026-08-16](agent-guidance/quality/srt-bonding-wire-spec-2026-08-16.md)
 - [SRT six-driver matrix and connected lifecycle audit — 2026-08-18](agent-guidance/quality/srt-six-driver-matrix-2026-08-18.md)
+- [SRT connected lifecycle audit — 2026-08-18](agent-guidance/quality/srt-connected-lifecycle-audit-2026-08-18.md)
+- [SRT pure-Rust migration progress](agent-guidance/quality/srt-pure-rust-migration-progress.md)
 
 ### Canonical agent skills and references
 
@@ -239,4 +241,3 @@ above remain the better way to learn the system.
   doc in the same change and run `node scripts/check/docs.mjs`. The staged gate
   router selects this check automatically for Markdown and documentation-check
   changes.
-- [SRT connected lifecycle audit — 2026-08-18](agent-guidance/quality/srt-connected-lifecycle-audit-2026-08-18.md)
