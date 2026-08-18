@@ -9,6 +9,7 @@
 - [Paired Rust egress timer/wakeup profile — 2026-08-18](#paired-rust-egress-timerwakeup-profile--2026-08-18)
 - [Production Rust publish-ingest seam — 2026-08-18](#production-rust-publish-ingest-seam--2026-08-18)
 - [Production Rust read/play seam — 2026-08-18](#production-rust-readplay-seam--2026-08-18)
+- [Rust receive-buffer parity seam — 2026-08-18](#rust-receive-buffer-parity-seam--2026-08-18)
 - [Production GROUP handshake metadata — 2026-08-18](#production-group-handshake-metadata--2026-08-18)
 - [Core Broadcast/Backup group machine — 2026-08-18](#core-broadcastbackup-group-machine--2026-08-18)
 - [Rust sink GROUP admission — 2026-08-18](#rust-sink-group-admission--2026-08-18)
@@ -371,8 +372,11 @@ libsrt Broadcast and Backup GROUP handshakes; SRT `read` and production media
 failover remain separate gates. The listener now decodes the incoming
 StreamID from the conclusion datagram, resolves the shared per-stream policy,
 and applies crypto plus TSBPD delay before the Core processes KMREQ. This
-matches the libsrt accept-hook ordering. Rust UDP receive-buffer sizing still
-uses the global startup setting and remains a separate parity item. The
+matches the libsrt accept-hook ordering. The Rust Core now also consumes the
+resolved per-stream FC and internal receive-buffer packet capacity before
+conclusion, using libsrt's exact 1472-byte default-MSS conversion for the
+12 MiB RCVBUF. Kernel UDP receive-buffer sizing still uses the global startup
+setting and remains separate from this protocol-buffer parity. The
 current tuple map is deliberate: wire data packets carry the destination
 socket ID, not a reliable caller source socket ID, so later logical connections
 from an identical UDP tuple cannot safely be split by socket ID alone.
@@ -431,9 +435,12 @@ The first production run exposed the remaining stale application-layer guard:
 the Core admission fix was correct, but `authenticate_connection` still
 rejected policies whose crypto or latency differed from the global startup
 configuration. Removing that guard made the Rust and libsrt matrices agree.
-The next evidence-led seam is receive-buffer sizing parity for high-latency
-policies, followed by the broader loss/latency/bitrate/scaling performance
-loop.
+The receive-buffer parity seam is now closed. The remaining limitation is
+intentional and documented: the caller can propose a higher PEERLATENCY than
+the local pre-conclusion policy-sized capacity, and the kernel UDP queue is
+still global. The next evidence-led phase is the broader loss/latency/bitrate/
+scaling performance loop across restream, the Rust sink, and all six runtime
+adapters.
 
 The implementation commit passed `cargo test --lib srt::` (279 tests),
 `cargo clippy --lib -- -D warnings`, `cargo fmt --all --check`, the Markdown
@@ -451,6 +458,81 @@ reuse. Adding `srt-lifecycle` as a dependency now would be cosmetic and would
 not make their standalone measurements represent the production read seam.
 When lifecycle-backed multi-connection benchmarks are added, they should
 depend on `srt-lifecycle` explicitly and measure that policy path.
+
+## Rust receive-buffer parity seam — 2026-08-18
+
+The source audit found that the Rust Core had two independent fixed 8,192
+packet limits: `ReceiverBuffer::max_buffer_size` and every handshake's flow
+window. Pinned libsrt instead allocates `CRcvBuffer` from `SRTO_RCVBUF`,
+converts bytes to packets with `MSS - UDP header` (1,472 bytes at the default
+MSS), and caps the result by `SRTO_FC`. At the restream default of 12 MiB and
+FC 32,768, the native effective capacity is 8,548 packets.
+
+The fix keeps the dependency direction intact. `buffer_sizing` remains the
+restream policy owner and now exposes the pure resolution needed by both
+backends. `ConnectionOptions` carries the already-resolved flow window and
+receive capacity; `set_listener_policy` installs them before conclusion;
+`SrtConnection` advertises the flow window and creates the receiver with the
+effective `min(RCVBUF packets, FC)` capacity. No policy lookup, allocation, or
+extra branch was added to the datagram receive hot path. The Rust harness sink
+uses the same 12 MiB/FC preset as its libsrt sink, and Rust single/group
+egress consumes the resolved FC rather than falling back to 8,192.
+
+Evidence:
+
+- The red protocol test failed because listener policy accepted only crypto
+  and latency; it now passes while checking both the full ACK capacity and
+  the conclusion's advertised flow window.
+- `ingest_buffer_packets_match_libsrt_byte_conversion` passes with the exact
+  8,548-packet default conversion.
+- `cargo test -p shiguredo_srt --lib` passes 106 tests, the protocol
+  integration suite passes 30 tests, and the Rust ingest focused suite passes
+  12 tests.
+- `cargo check --bin test_harness` and `cargo fmt --all -- --check` pass after
+  updating the harness sink and Rust egress callers.
+
+This closes the internal protocol-buffer parity item, not the kernel queue
+item: Rust listener UDP `SO_RCVBUF` remains a global per-socket startup value.
+It also cannot pre-size for a caller's higher `PEERLATENCY`, because that
+value is learned only after the pre-conclusion policy window. The next loop
+must therefore measure high-latency loss/latency/bitrate behavior and then
+resume the six-runtime and receiver-strategy profiles with both protocol and
+kernel counters recorded.
+
+### Buffer formula allocation audit — 2026-08-18
+
+The formula is safe but conservative for the current MSR target. At 8 Mbps
+and 250 ms, the raw latency window is 250 KB; the existing 4x safety margin
+needs 1 MB. The resulting comparison is:
+
+| Path | Current default at 250 ms | 8 Mbps, 4x model | Oversizing |
+|---|---:|---:|---:|
+| Rust/native ingest floor | 12 MiB / 8,548 packets | 1 MB / 679 packets | 12.6x |
+| Native egress, unknown bitrate | 6.25 MB / ~4,245 packets | 1 MB | 6.25x |
+| Native egress, known 8 Mbps | 2 MB floor / ~1,358 packets | 1 MB | 2x |
+
+At 1,200 streams those configured ceilings correspond to 14.4 GB, 7.5 GB,
+and 2.4 GB respectively. These are upper bounds, not proof that all pages
+are resident: libsrt grows and occupies its per-socket userspace buffers with
+traffic and retransmission state, while the Rust receiver's ordered map does
+not pre-reserve the full packet ceiling.
+
+The existing measurements show the cost is real. The 1,200-output native
+SRT-only run measured 3,990,917 KB RSS, about 3.33 MB per output, while its
+socket log reported `SRT snd=6102KB`; the configured 6.25 MB ceiling was not
+fully resident but still dominated the per-output memory cost. The earlier
+320-output attribution measured 493 MB of unattributed private dirty memory,
+and the severe 20% loss / 150 ms ± 40 ms jitter test grew only 12–28 KB per
+connection above its baseline. The latter shows the current ceiling is not
+being approached by the tested loss profile.
+
+Therefore the allocation is not optimal for a known 8 Mbps/250 ms workload,
+although the 4x model itself is a reasonable starting safety margin. Do not
+lower the production default solely from arithmetic: the next performance
+loop must A/B the current policy against a bitrate-aware 1 MB model and a
+2 MB safety floor at 30/300/700/1200 streams, recording drops, latency,
+RSS/PSS, native `msSndBuf`, and CPU/flamegraph changes. A reduction is valid
+only if all four scales retain zero drops under the loss/jitter scenarios.
 
 ### Bonding assignment lifecycle audit — 2026-08-18
 

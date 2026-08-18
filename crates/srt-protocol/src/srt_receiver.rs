@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+use crate::srt_handshake::DEFAULT_FLOW_WINDOW;
 use crate::srt_packet::{DataPacket, sequence_greater_than, sequence_less_than};
 use crate::time::Timestamp;
 
@@ -371,6 +372,22 @@ impl ReceiverBuffer {
         start_time: Timestamp,
         tsbpd_time_base: u64,
     ) -> Self {
+        Self::with_buffer_size(
+            initial_seq,
+            tsbpd_delay_ms,
+            start_time,
+            tsbpd_time_base,
+            DEFAULT_FLOW_WINDOW,
+        )
+    }
+
+    pub(crate) fn with_buffer_size(
+        initial_seq: u32,
+        tsbpd_delay_ms: u16,
+        start_time: Timestamp,
+        tsbpd_time_base: u64,
+        max_buffer_size: u32,
+    ) -> Self {
         Self {
             packets: BTreeMap::new(),
             expected_seq: initial_seq,
@@ -386,7 +403,7 @@ impl ReceiverBuffer {
             wrapping_period_active: false,
             rtt: 100_000, // 初期 RTT: 100ms
             rtt_var: 50_000,
-            max_buffer_size: 8192,
+            max_buffer_size,
             total_received: 0,
             total_lost: 0,
             total_duplicates: 0,

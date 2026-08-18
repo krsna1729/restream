@@ -65,7 +65,7 @@ impl SrtRustSingleMessageSender {
             return Err("Rust SRT single caller requires one peer address".to_string());
         };
         let peer = *peer;
-        let (sndbuf, rcvbuf, latency, maxbw, _fc) = config.buffer_parameters();
+        let (sndbuf, rcvbuf, latency, maxbw, fc) = config.buffer_parameters();
         let std_socket = StdUdpSocket::bind(("0.0.0.0", 0))
             .map_err(|error| format!("bind Rust SRT caller socket: {error}"))?;
         configure_udp_buffer(std_socket.as_raw_fd(), libc::SO_SNDBUF, sndbuf)?;
@@ -83,6 +83,7 @@ impl SrtRustSingleMessageSender {
             tsbpd_delay: latency.clamp(0, u16::MAX as i32) as u16,
             stream_id: Some(config.stream_id().to_string()),
             max_bandwidth_bytes_per_sec: (maxbw > 0).then_some((maxbw / 8) as u64),
+            flow_window_packets: fc.max(32) as u32,
             ..ConnectionOptions::default()
         };
         if let Some((passphrase, pbkeylen)) = config.crypto_parameters() {

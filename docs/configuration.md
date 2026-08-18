@@ -23,7 +23,7 @@ in SQLite.
 | Dashboard/API listener | `127.0.0.1:3030` | `RESTREAM_HTTP_BIND_ADDR`, `RESTREAM_HTTP_PORT` |
 | RTMP listener | `0.0.0.0:1935` | `RESTREAM_RTMP_PORT` |
 | SRT listener | `0.0.0.0:10080` | `RESTREAM_SRT_PORT` |
-| SRT protocol backend | `libsrt` | `RESTREAM_SRT_BACKEND=rust` or `srt-rust` selects the pure-Rust SRT Core for publish ingest, SRT read/play, and SRT egress; Rust SRT listener admission resolves per-stream crypto and TSBPD delay from StreamID before conclusion processing. Rust UDP receive-buffer sizing remains the global startup setting. Unset or any other value keeps the complete libsrt path |
+| SRT protocol backend | `libsrt` | `RESTREAM_SRT_BACKEND=rust` or `srt-rust` selects the pure-Rust SRT Core for publish ingest, SRT read/play, and SRT egress; Rust SRT listener admission resolves per-stream crypto, TSBPD delay, flow window, and internal receive-buffer capacity from StreamID before conclusion processing. Kernel UDP receive-buffer sizing remains the global startup setting. Unset or any other value keeps the complete libsrt path |
 | Rust SRT ingest workers | Derived from available parallelism, clamped to `1..=64` | `RESTREAM_SRT_INGEST_WORKERS` (one `SO_REUSEPORT` UDP socket and one OS worker per selected worker; in `connected` scaling this is the number of connected-socket workers behind one public listener) |
 | Rust SRT ingest scaling | One `SO_REUSEPORT` socket per worker | `RESTREAM_SRT_INGEST_SCALING=connected` selects one public listener that completes handshake admission, then hands each tuple to a worker-owned connected UDP socket; `RESTREAM_SRT_INGEST_ROUTING=least-tuples` is the default and `round-robin` is available for first-owner selection |
 | Tokio scheduler workers | Derived from the effective CPU mask/quota | `RESTREAM_TOKIO_WORKER_THREADS` |
@@ -345,6 +345,15 @@ call, in the accept-hook). A caller who proposes a higher latency than
 configured here can still push the negotiated result above what the
 buffer was sized for; nothing on either end can close that gap, since
 libsrt does not validate the peer's proposed latency at all.
+
+The Rust Core consumes the same resolved values before it processes the
+conclusion: FC is the advertised flow-window packet count, and RCVBUF is
+converted using libsrt's default-MSS `MSS - UDP header` packet size (1472
+bytes), then capped by FC. At the default 250 ms policy this is FC 32,768 and
+an effective Rust receive capacity of 8,548 packets for the 12 MiB RCVBUF.
+This keeps the internal Rust receiver and the native `CRcvBuffer` on the same
+effective window. The Linux UDP `SO_RCVBUF` remains a socket-startup setting;
+per-stream sizing here is the SRT protocol buffer, not the kernel queue.
 
 Linux startup checks warn when `net.core.rmem_max` or `net.core.wmem_max` cannot
 support the requested UDP buffers. The listener's `/proc/net/udp` receive queue

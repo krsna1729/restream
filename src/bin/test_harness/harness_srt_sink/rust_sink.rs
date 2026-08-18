@@ -16,6 +16,9 @@ use shiguredo_srt::{
 
 use super::{HarnessSrtCrypto, RustConnectedRouting, RustSinkScaling, SockaddrIn, c_int, c_void};
 
+const RUST_SINK_FLOW_WINDOW_PACKETS: u32 = 32_768;
+const RUST_SINK_RECEIVE_BUFFER_PACKETS: u32 = (12 * 1024 * 1024 / 1472) as u32;
+
 pub(crate) struct RustHarnessSrtSinkPool {
     stop: Arc<AtomicBool>,
     pub(super) threads: Vec<JoinHandle<()>>,
@@ -417,6 +420,8 @@ fn new_rust_sink_connection(
             key_length: crypto.key_length,
             tsbpd_delay: 250,
             group_extension,
+            flow_window_packets: RUST_SINK_FLOW_WINDOW_PACKETS,
+            receive_buffer_packets: RUST_SINK_RECEIVE_BUFFER_PACKETS,
             ..ConnectionOptions::default()
         }),
         timers: HashMap::new(),

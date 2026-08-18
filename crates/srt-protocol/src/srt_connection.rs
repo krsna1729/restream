@@ -66,6 +66,7 @@ pub enum TimerId {
 const INACTIVITY_TIMEOUT_MICROS: u64 = 5_000_000;
 const HANDSHAKE_RETRY_INTERVAL_MICROS: u64 = 1_000_000;
 const HANDSHAKE_MAX_RETRIES: u8 = 5;
+const MIN_FLOW_WINDOW_PACKETS: u32 = 32;
 
 /// libsrt 互換ゼロパディング (4 バイト)
 ///
@@ -166,6 +167,10 @@ pub struct ConnectionOptions {
     /// `BW_INFINITE` (1 Gbps) 相当のデフォルトを使う
     /// ([`crate::srt_sender`] のペーシング計算を参照)。
     pub max_bandwidth_bytes_per_sec: Option<u64>,
+    /// Flow-control window advertised in the handshake, in packets.
+    pub flow_window_packets: u32,
+    /// Local receive-buffer capacity, in packets.
+    pub receive_buffer_packets: u32,
 }
 
 impl Default for ConnectionOptions {
@@ -183,6 +188,8 @@ impl Default for ConnectionOptions {
             stream_id: None,
             group_extension: None,
             max_bandwidth_bytes_per_sec: None,
+            flow_window_packets: DEFAULT_FLOW_WINDOW,
+            receive_buffer_packets: DEFAULT_FLOW_WINDOW,
         }
     }
 }
@@ -238,9 +245,19 @@ pub struct SrtConnection {
     handshake_retries: u8,
 }
 
+fn normalize_buffer_options(mut options: ConnectionOptions) -> ConnectionOptions {
+    options.flow_window_packets = options.flow_window_packets.max(MIN_FLOW_WINDOW_PACKETS);
+    options.receive_buffer_packets = options
+        .receive_buffer_packets
+        .max(MIN_FLOW_WINDOW_PACKETS)
+        .min(options.flow_window_packets);
+    options
+}
+
 impl SrtConnection {
     /// Caller として新しい接続を作成
     pub fn new_caller(options: ConnectionOptions) -> Self {
+        let options = normalize_buffer_options(options);
         let initial_seq = options.initial_seq.unwrap_or(0);
         Self {
             role: ConnectionRole::Caller,
@@ -269,6 +286,7 @@ impl SrtConnection {
 
     /// Listener として新しい接続を作成
     pub fn new_listener(options: ConnectionOptions) -> Self {
+        let options = normalize_buffer_options(options);
         let initial_seq = options.initial_seq.unwrap_or(0);
         Self {
             role: ConnectionRole::Listener,
@@ -331,6 +349,8 @@ impl SrtConnection {
         passphrase: Option<String>,
         key_length: KeyLength,
         tsbpd_delay: u16,
+        flow_window_packets: u32,
+        receive_buffer_packets: u32,
     ) -> Result<(), Error> {
         if self.role != ConnectionRole::Listener || self.state != ConnectionState::Listening {
             return Err(Error::invalid_state(
@@ -340,6 +360,10 @@ impl SrtConnection {
         self.options.passphrase = passphrase;
         self.options.key_length = key_length;
         self.options.tsbpd_delay = tsbpd_delay;
+        self.options.flow_window_packets = flow_window_packets.max(MIN_FLOW_WINDOW_PACKETS);
+        self.options.receive_buffer_packets = receive_buffer_packets
+            .max(MIN_FLOW_WINDOW_PACKETS)
+            .min(self.options.flow_window_packets);
         Ok(())
     }
 
@@ -368,18 +392,21 @@ impl SrtConnection {
     fn init_buffers(&mut self, now: Timestamp, peer_initial_seq: u32, tsbpd_time_base: u64) {
         let mut sender = SenderBuffer::new(
             self.initial_seq,
-            DEFAULT_FLOW_WINDOW,
+            self.options.flow_window_packets,
             self.options.tsbpd_delay,
         );
         if let Some(max_bw) = self.options.max_bandwidth_bytes_per_sec {
             sender.set_max_bandwidth(max_bw);
         }
         self.sender = Some(sender);
-        self.receiver = Some(ReceiverBuffer::new(
+        self.receiver = Some(ReceiverBuffer::with_buffer_size(
             peer_initial_seq,
             self.options.tsbpd_delay,
             now,
             tsbpd_time_base,
+            self.options
+                .receive_buffer_packets
+                .min(self.options.flow_window_packets),
         ));
         self.last_ack_time = Some(now);
         self.last_nak_time = Some(now);
@@ -1387,6 +1414,7 @@ impl SrtConnection {
 
     fn send_induction_request(&mut self, now: Timestamp) {
         let mut hs = HandshakePacket::new_induction_request(self.options.socket_id);
+        hs.flow_window = self.options.flow_window_packets;
         if let Some(group) = self.options.group_extension {
             hs.add_group_extension(group);
         }
@@ -1408,6 +1436,7 @@ impl SrtConnection {
             self.syn_cookie,
             encryption_field,
         );
+        hs.flow_window = self.options.flow_window_packets;
         if let Some(group) = self.options.group_extension {
             hs.add_group_extension(group);
         }
@@ -1438,6 +1467,7 @@ impl SrtConnection {
             encryption_field,
             has_encryption,
         );
+        hs.flow_window = self.options.flow_window_packets;
 
         // SRT フラグ
         // CRYPT と REXMITFLG は常に設定 (レガシー互換性フラグ)
@@ -1495,6 +1525,7 @@ impl SrtConnection {
             encryption_field,
             has_encryption,
         );
+        hs.flow_window = self.options.flow_window_packets;
 
         // SRT フラグ
         // CRYPT と REXMITFLG は常に設定 (レガシー互換性フラグ)
@@ -1699,6 +1730,36 @@ mod tests {
         let conn = SrtConnection::new_listener(ConnectionOptions::default());
         assert_eq!(conn.state(), ConnectionState::Listening);
         assert_eq!(conn.role, ConnectionRole::Listener);
+    }
+
+    #[test]
+    fn listener_policy_configures_receive_window_before_conclusion() {
+        let mut listener = SrtConnection::new_listener(ConnectionOptions::default());
+        listener
+            .set_listener_policy(None, KeyLength::Aes128, 2_000, 32_768, 8_548)
+            .expect("listener policy is still mutable before conclusion");
+
+        listener.init_buffers(Timestamp::from_micros(0), 100, 0);
+        let ack = listener
+            .receiver
+            .as_mut()
+            .expect("listener receiver exists")
+            .generate_ack(Timestamp::from_micros(0));
+        assert_eq!(ack.available_buffer, 8_548);
+
+        listener.send_conclusion_response(Timestamp::from_micros(0));
+        let ConnectionOutput::SendPacket(packet) = listener
+            .poll_output()
+            .expect("listener emits conclusion response")
+        else {
+            panic!("listener conclusion response is a packet");
+        };
+        let SrtPacket::Control(control) = SrtPacket::decode(&packet).expect("valid SRT packet")
+        else {
+            panic!("listener conclusion response is control");
+        };
+        let handshake = HandshakePacket::decode(&control).expect("valid handshake");
+        assert_eq!(handshake.flow_window, 32_768);
     }
 
     #[test]

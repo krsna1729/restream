@@ -66,6 +66,9 @@ const SRT_LATENCY_MS_CEILING: i32 = 8_000;
 // RCVBUF's own worked example ("32 buffers (46592 with default SRTO_MSS)" =
 // 46592/32 = 1456) and the FC sizing formula's own "(MSS - 44)" denominator.
 const SRT_PAYLOAD_SIZE_BYTES: i32 = 1456;
+// libsrt converts SRTO_RCVBUF bytes to packets using MSS minus the UDP
+// header, not the media payload size used for FC's conservative ceiling.
+const SRT_RCVBUF_PACKET_SIZE_BYTES: i32 = 1472;
 
 // --- Egress-specific buffer sizing -----------------------------------------
 //
@@ -284,12 +287,26 @@ fn latency_scaled_fc_ceiling_pkts(latency_ms: i32) -> i32 {
 /// Pure resolution, split out from `srt_set_ingest_latency_opts` so the
 /// clamp/formula math is directly unit/property-testable without a real
 /// socket. Returns `(clamped_latency_ms, fc_pkts, rcvbuf_bytes)`.
-fn resolve_ingest_latency_opts(latency_ms: i32) -> (i32, i32, i32) {
+pub(super) fn resolve_ingest_latency_opts(latency_ms: i32) -> (i32, i32, i32) {
     let latency_ms = latency_ms.clamp(SRT_LATENCY_MS_FLOOR, SRT_LATENCY_MS_CEILING);
     let fc_pkts = latency_scaled_fc_ceiling_pkts(latency_ms);
     let rcvbuf_bytes = latency_scaled_buffer_ceiling_bytes(latency_ms)
         .min(fc_pkts.saturating_mul(SRT_PAYLOAD_SIZE_BYTES));
     (latency_ms, fc_pkts, rcvbuf_bytes)
+}
+
+/// Resolve the packet capacities consumed by the Rust SRT core from the same
+/// policy that drives native libsrt's `SRTO_FC` and `SRTO_RCVBUF`. The native
+/// implementation converts the receive-buffer byte value with `MSS - UDP
+/// header` and then caps it by FC; preserving that order keeps the two
+/// backends on the same effective packet window without putting native FFI in
+/// the protocol crate.
+pub(super) fn resolve_ingest_buffer_packets(latency_ms: i32) -> (u32, u32) {
+    let (_, fc_pkts, rcvbuf_bytes) = resolve_ingest_latency_opts(latency_ms);
+    let receive_buffer_packets = (rcvbuf_bytes / SRT_RCVBUF_PACKET_SIZE_BYTES)
+        .clamp(32, fc_pkts)
+        .unsigned_abs();
+    (fc_pkts as u32, receive_buffer_packets)
 }
 
 pub(super) fn srt_set_ingest_latency_opts(sock: SRTSOCKET, latency_ms: i32) {
@@ -587,6 +604,14 @@ mod egress_buffer_sizing_tests {
         assert!(
             opts.sndbuf_bytes <= EGRESS_FC_OVERRIDE_FLOOR.saturating_mul(SRT_PAYLOAD_SIZE_BYTES)
         );
+    }
+
+    #[test]
+    fn ingest_buffer_packets_match_libsrt_byte_conversion() {
+        let (flow_window_packets, receive_buffer_packets) =
+            resolve_ingest_buffer_packets(DESIRED_LATENCY_MS);
+        assert_eq!(flow_window_packets, DESIRED_FC as u32);
+        assert_eq!(receive_buffer_packets, 8_548);
     }
 }
 

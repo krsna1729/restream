@@ -38,7 +38,7 @@ impl SrtRustGroupSender {
         if peers.len() < 2 {
             return Err("Rust SRT group caller requires at least two peers".to_string());
         }
-        let (sndbuf, rcvbuf, latency, maxbw, _fc) = config.buffer_parameters();
+        let (sndbuf, rcvbuf, latency, maxbw, fc) = config.buffer_parameters();
         let std_socket = StdUdpSocket::bind(("0.0.0.0", 0))
             .map_err(|error| format!("bind Rust SRT group socket: {error}"))?;
         super::rs_sender::configure_udp_buffer(std_socket.as_raw_fd(), libc::SO_SNDBUF, sndbuf)?;
@@ -63,7 +63,7 @@ impl SrtRustGroupSender {
         };
         for (index, _) in sender.peers.iter().enumerate() {
             let weight = if index == 0 { 1 } else { 0 };
-            let mut options = group_options(config, latency, maxbw, group_id, weight)?;
+            let mut options = group_options(config, latency, maxbw, fc, group_id, weight)?;
             options.socket_id = nonzero_random_u32();
             let mut connection = SrtConnection::new_caller(options);
             connection
@@ -234,6 +234,7 @@ fn group_options(
     config: &crate::media::srt::SrtFabricEgressConnectConfig<'_>,
     latency: i32,
     maxbw: i64,
+    fc: i32,
     group_id: u32,
     weight: u16,
 ) -> Result<ConnectionOptions, String> {
@@ -241,6 +242,7 @@ fn group_options(
         tsbpd_delay: latency.clamp(0, u16::MAX as i32) as u16,
         stream_id: Some(config.stream_id().to_string()),
         max_bandwidth_bytes_per_sec: (maxbw > 0).then_some((maxbw / 8) as u64),
+        flow_window_packets: fc.max(32) as u32,
         group_extension: Some(GroupExtensionData {
             group_id,
             group_type: shiguredo_srt::GroupType::Backup,

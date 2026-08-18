@@ -197,7 +197,7 @@ fn listener_can_apply_stream_policy_before_encrypted_conclusion() {
     transfer_caller_to_listener(&mut caller, &mut listener, ts(0));
     transfer_listener_to_caller(&mut listener, &mut caller, ts(0));
     listener
-        .set_listener_policy(Some(passphrase), KeyLength::Aes256, 2_000)
+        .set_listener_policy(Some(passphrase), KeyLength::Aes256, 2_000, 32_768, 8_548)
         .expect("listener policy is still mutable before conclusion");
 
     for round in 1..10 {

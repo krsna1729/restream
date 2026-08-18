@@ -92,9 +92,17 @@ pub(super) fn apply_listener_policy(
     };
     let tsbpd_delay = u16::try_from(policy.latency_ms)
         .map_err(|_| format!("invalid SRT latency {}", policy.latency_ms))?;
+    let (flow_window_packets, receive_buffer_packets) =
+        super::super::buffer_sizing::resolve_ingest_buffer_packets(policy.latency_ms);
     connection
         .core
-        .set_listener_policy(passphrase, key_length, tsbpd_delay)
+        .set_listener_policy(
+            passphrase,
+            key_length,
+            tsbpd_delay,
+            flow_window_packets,
+            receive_buffer_packets,
+        )
         .map_err(|error| error.to_string())
 }
 
