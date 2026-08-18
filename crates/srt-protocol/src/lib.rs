@@ -2,6 +2,7 @@ mod buf;
 mod crypto;
 mod error;
 mod srt_connection;
+mod srt_group;
 mod srt_handshake;
 mod srt_packet;
 mod srt_receiver;
@@ -19,6 +20,7 @@ pub use srt_connection::{
     ConnectionEvent, ConnectionOptions, ConnectionOutput, ConnectionRole, ConnectionState,
     SrtConnection, TimerId,
 };
+pub use srt_group::{GroupMemberState, GroupMode, GroupPacket, SrtGroup, SrtGroupMember};
 pub use srt_handshake::{
     DEFAULT_FLOW_WINDOW, DEFAULT_MTU, ExtensionType, GFLAG_SYNCONMSG, GroupExtensionData,
     GroupType, HS_VERSION_4, HS_VERSION_5, HandshakeExtension, HandshakePacket, HandshakeState,

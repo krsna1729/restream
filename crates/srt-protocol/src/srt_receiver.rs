@@ -430,6 +430,28 @@ impl ReceiverBuffer {
         self.expected_seq
     }
 
+    pub fn advance_expected_sequence(&mut self, sequence_number: u32) {
+        if !sequence_greater_than(sequence_number, self.expected_seq) {
+            return;
+        }
+
+        self.packets
+            .retain(|&seq, _| !sequence_less_than(seq, sequence_number));
+        let stale_losses: Vec<u32> = self
+            .loss_list
+            .iter()
+            .copied()
+            .filter(|&seq| sequence_less_than(seq, sequence_number))
+            .collect();
+        for seq in stale_losses {
+            self.loss_list_remove(seq);
+        }
+        self.expected_seq = sequence_number;
+        while self.packets.contains_key(&self.expected_seq) {
+            self.expected_seq = self.expected_seq.wrapping_add(1) & 0x7FFF_FFFF;
+        }
+    }
+
     /// パケットを受信
     ///
     /// 損失が検出された場合、損失リストを返す

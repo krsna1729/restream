@@ -9,6 +9,7 @@
 - [Paired Rust egress timer/wakeup profile — 2026-08-18](#paired-rust-egress-timerwakeup-profile--2026-08-18)
 - [Production Rust publish-ingest seam — 2026-08-18](#production-rust-publish-ingest-seam--2026-08-18)
 - [Production GROUP handshake metadata — 2026-08-18](#production-group-handshake-metadata--2026-08-18)
+- [Core Broadcast/Backup group machine — 2026-08-18](#core-broadcastbackup-group-machine--2026-08-18)
 
 ## Current migration policy
 
@@ -391,3 +392,39 @@ This increment is wire/identity groundwork only. It does not claim bonded
 routing: group membership, shared sequence ownership, Broadcast merge/dedup,
 disconnect removal, Backup promotion, and paired restream/sink profiles
 remain the next gates.
+
+## Core Broadcast/Backup group machine — 2026-08-18
+
+The next increment makes the group behavior explicit in the protocol Core with
+`SrtGroup`. Its receive path follows the libsrt reference's shared bond receive
+model (`srtcore/group.cpp::recv`): data from every leg is collected into one
+sequence-keyed pending set, the lowest eligible sequence is delivered once, and
+all member receivers advance past that sequence. This makes duplicate
+Broadcast legs and a packet arriving on a different leg observable in the same
+way instead of letting each connection deliver independently.
+
+The send path now has both modes:
+
+- Broadcast sends one coordinated sequence number to every active member.
+- Backup selects the highest-weight active/standby member, promotes a standby
+  after failure, aligns the promoted sender to the group's next sequence, and
+  continues without reusing a sequence.
+
+The connection and sender seams needed for this are explicit sequence-bearing
+`DataReceived` events, coordinated send sequence injection, and receiver
+advancement after a group delivery. A red/green regression test caught the
+important promotion case: an unused standby still had sequence zero when the
+group had already sent sequence zero on the primary. The fix synchronizes an
+empty promoted sender to the group sequence before sending; the focused group
+suite now passes all three Broadcast/Backup tests.
+
+Proof completed:
+
+- `cargo test -p shiguredo_srt --test test_srt_group` passed (3 tests).
+- The existing Core library and connection tests remain green.
+
+This is still a Core seam, not a production bonding claim. The harness and
+restream adapters must next admit multiple GROUP legs into one group worker,
+remove disconnected members, and be exercised in paired restream/sink live
+tests for Rust↔Rust and libsrt interop. Those profiles must retain the earlier
+receiver-strategy rule: capture both the restream process and the sink worker.

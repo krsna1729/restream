@@ -110,6 +110,7 @@ pub enum ConnectionEvent {
     /// データ受信
     DataReceived {
         payload: Vec<u8>,
+        sequence_number: u32,
         message_number: u32,
         timestamp: u32,
     },
@@ -435,6 +436,7 @@ impl SrtConnection {
                         while let Some(ready_pkt) = receiver.pop_ready(now) {
                             self.event_queue.push_back(ConnectionEvent::DataReceived {
                                 payload: ready_pkt.payload,
+                                sequence_number: ready_pkt.sequence_number,
                                 message_number: ready_pkt.message_number,
                                 timestamp: ready_pkt.timestamp,
                             });
@@ -489,12 +491,37 @@ impl SrtConnection {
 
     /// データを送信
     pub fn send(&mut self, payload: &[u8], now: Timestamp) -> Result<(), Error> {
+        self.send_internal(payload, None, now)
+    }
+
+    /// Send one message with a caller-supplied SRT sequence number.
+    pub fn send_with_sequence(
+        &mut self,
+        payload: &[u8],
+        sequence_number: u32,
+        now: Timestamp,
+    ) -> Result<(), Error> {
+        self.send_internal(payload, Some(sequence_number), now)
+    }
+
+    fn send_internal(
+        &mut self,
+        payload: &[u8],
+        sequence_number: Option<u32>,
+        now: Timestamp,
+    ) -> Result<(), Error> {
         if self.state != ConnectionState::Connected {
             return Err(Error::invalid_state("not connected"));
         }
 
         if !self.can_send() {
             return Err(Error::invalid_state("send buffer full"));
+        }
+
+        if let Some(sequence_number) = sequence_number
+            && self.next_sequence_number() != Some(sequence_number)
+        {
+            return Err(Error::invalid_state("sequence number is out of order"));
         }
 
         let timestamp = self.relative_timestamp(now);
@@ -505,7 +532,16 @@ impl SrtConnection {
                 .sender
                 .as_mut()
                 .ok_or_else(|| Error::invalid_state("sender buffer not initialized"))?;
-            sender.push(payload.to_vec(), timestamp, peer_socket_id, now)
+            match sequence_number {
+                Some(sequence_number) => sender.push_with_sequence(
+                    payload.to_vec(),
+                    timestamp,
+                    peer_socket_id,
+                    now,
+                    sequence_number,
+                ),
+                None => sender.push(payload.to_vec(), timestamp, peer_socket_id, now),
+            }
         };
 
         if let Some(mut packet) = packet {
@@ -539,6 +575,37 @@ impl SrtConnection {
         self.check_km_refresh(now);
 
         Ok(())
+    }
+
+    /// Return the next sequence number assigned by the connection.
+    pub fn next_sequence_number(&self) -> Option<u32> {
+        self.sender.as_ref().map(SenderBuffer::next_sequence_number)
+    }
+
+    pub fn advance_receive_sequence(&mut self, sequence_number: u32, now: Timestamp) {
+        let Some(receiver) = self.receiver.as_mut() else {
+            return;
+        };
+        receiver.advance_expected_sequence(sequence_number);
+        while let Some(ready_packet) = receiver.pop_ready(now) {
+            self.event_queue.push_back(ConnectionEvent::DataReceived {
+                payload: ready_packet.payload,
+                sequence_number: ready_packet.sequence_number,
+                message_number: ready_packet.message_number,
+                timestamp: ready_packet.timestamp,
+            });
+        }
+    }
+
+    pub fn synchronize_send_sequence(&mut self, sequence_number: u32) -> Result<(), Error> {
+        let Some(sender) = self.sender.as_mut() else {
+            return Err(Error::invalid_state("sender buffer not initialized"));
+        };
+        if sender.synchronize_next_sequence_number(sequence_number) {
+            Ok(())
+        } else {
+            Err(Error::invalid_state("sender buffer has in-flight packets"))
+        }
     }
 
     /// 送信可能かどうか (ウィンドウサイズのみ)
@@ -694,6 +761,7 @@ impl SrtConnection {
         for ready_pkt in ready_packets {
             self.event_queue.push_back(ConnectionEvent::DataReceived {
                 payload: ready_pkt.payload,
+                sequence_number: ready_pkt.sequence_number,
                 message_number: ready_pkt.message_number,
                 timestamp: ready_pkt.timestamp,
             });
@@ -1005,6 +1073,7 @@ impl SrtConnection {
             while let Some(ready_pkt) = receiver.pop_ready(now) {
                 self.event_queue.push_back(ConnectionEvent::DataReceived {
                     payload: ready_pkt.payload,
+                    sequence_number: ready_pkt.sequence_number,
                     message_number: ready_pkt.message_number,
                     timestamp: ready_pkt.timestamp,
                 });

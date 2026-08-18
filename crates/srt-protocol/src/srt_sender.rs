@@ -136,6 +136,15 @@ impl SenderBuffer {
         self.next_seq
     }
 
+    pub(crate) fn synchronize_next_sequence_number(&mut self, sequence_number: u32) -> bool {
+        if !self.packets.is_empty() {
+            return false;
+        }
+        self.next_seq = sequence_number & 0x7FFF_FFFF;
+        self.oldest_unacked = self.next_seq;
+        true
+    }
+
     /// 次のメッセージ番号を取得
     pub fn next_message_number(&self) -> u32 {
         self.next_msg
@@ -278,12 +287,28 @@ impl SenderBuffer {
         dest_socket_id: u32,
         now: Timestamp,
     ) -> Option<DataPacket> {
+        self.push_with_sequence(payload, timestamp, dest_socket_id, now, self.next_seq)
+    }
+
+    /// Push a packet using an externally coordinated sequence number.
+    pub fn push_with_sequence(
+        &mut self,
+        payload: Vec<u8>,
+        timestamp: u32,
+        dest_socket_id: u32,
+        now: Timestamp,
+        sequence_number: u32,
+    ) -> Option<DataPacket> {
         if !self.can_send() {
             return None;
         }
 
+        if sequence_number != self.next_seq {
+            return None;
+        }
+
         let packet = DataPacket {
-            sequence_number: self.next_seq,
+            sequence_number,
             position: PacketPosition::Single,
             order_flag: false,
             encryption_flag: 0,
@@ -296,7 +321,7 @@ impl SenderBuffer {
 
         // バッファに保存
         self.packets.insert(
-            self.next_seq,
+            sequence_number,
             SentPacket {
                 packet: packet.clone(),
                 sent_time: now,
