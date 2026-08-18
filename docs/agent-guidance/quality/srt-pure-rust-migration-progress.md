@@ -368,10 +368,12 @@ retained artifact is
 This is intentionally a development seam, not the final whole-stack claim.
 Rust ingest admits non-bonded `publish` and the connected receiver now admits
 libsrt Broadcast and Backup GROUP handshakes; SRT `read` and production media
-failover remain separate gates. Because the Core listener must select crypto
-and TSBPD delay before the handshake completes, the first seam accepts only
-pipelines whose resolved crypto and latency equal the global listener policy.
-The current tuple map is deliberate: wire data packets carry the destination
+failover remain separate gates. The listener now decodes the incoming
+StreamID from the conclusion datagram, resolves the shared per-stream policy,
+and applies crypto plus TSBPD delay before the Core processes KMREQ. This
+matches the libsrt accept-hook ordering. Rust UDP receive-buffer sizing still
+uses the global startup setting and remains a separate parity item. The
+current tuple map is deliberate: wire data packets carry the destination
 socket ID, not a reliable caller source socket ID, so later logical connections
 from an identical UDP tuple cannot safely be split by socket ID alone.
 
@@ -404,14 +406,18 @@ than one valid fragmented burst. The outbound guard is now 4,096 entries with
 the existing 4 MiB byte cap; the inbound authorization queue remains 256
 entries.
 
-Evidence from the optimized, x86-64-v3 bench binaries built from implementation
-commit `de812502`:
+Evidence from the optimized, x86-64-v3 bench binaries built from the current
+source:
 
 - `srt.policy` with `RESTREAM_SRT_BACKEND=rust` and
-  `HARNESS_SRT_SINK_BACKEND=rust` completed the plain `read:` probe and then
-  rejected the encrypted-policy case with the expected explicit admission
-  error. Its retained log is
-  `.local/artifacts/latest/srt.policy/restream.log`.
+  `HARNESS_SRT_SINK_BACKEND=rust` passed all five cases, including inherited
+  encrypted-16 policy, per-pipeline plaintext under an encrypted global,
+  encrypted-24 and encrypted-32 pipelines, and the plaintext/wrong-passphrase
+  rejection probes. The retained result is
+  `.local/artifacts/srt.policy.rust/results.json`.
+- The identical `RESTREAM_SRT_BACKEND=libsrt` /
+  `HARNESS_SRT_SINK_BACKEND=libsrt` control passed the same five cases. Its
+  retained result is `.local/artifacts/srt.policy.libsrt/results.json`.
 - `mixed.live.srt.h264.a1.bf0` with the Rust ingest and Rust sink passed the
   burst graph, Rust sink media probe, pipeline deletion, and zero-residue
   checks. Its retained scenario is
@@ -421,14 +427,13 @@ commit `de812502`:
   production helper; the read cancellation, queue-limit, and Core pacing
   regression tests also pass. The existing Core bidirectional send test passes.
 
-The same focused policy run also gives the next blocker precisely. After the
-plain case, changing global SRT policy to encrypted caused the Rust listener
-to reject the next connection as “per-stream policy not representable by
-current listener.” This is not a read/play media failure: the Rust listener
-currently snapshots crypto and latency when its worker pool starts. libsrt
-instead resolves the policy in its accept callback for each newly-created
-socket. Supporting runtime policy changes and per-pipeline crypto therefore
-belongs in the next listener-admission seam, not in `srt-interop`.
+The first production run exposed the remaining stale application-layer guard:
+the Core admission fix was correct, but `authenticate_connection` still
+rejected policies whose crypto or latency differed from the global startup
+configuration. Removing that guard made the Rust and libsrt matrices agree.
+The next evidence-led seam is receive-buffer sizing parity for high-latency
+policies, followed by the broader loss/latency/bitrate/scaling performance
+loop.
 
 The implementation commit passed `cargo test --lib srt::` (279 tests),
 `cargo clippy --lib -- -D warnings`, `cargo fmt --all --check`, the Markdown

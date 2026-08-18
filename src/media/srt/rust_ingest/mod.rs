@@ -55,6 +55,7 @@ pub(super) async fn run(server: Arc<SrtServer>, port: u16) {
         workers,
         server.engine.config.srt_udp_buffer,
         options,
+        server.ingest_policy_store.clone(),
         event_sender,
     ) {
         Ok(pool) => pool,
@@ -71,7 +72,7 @@ pub(super) async fn run(server: Arc<SrtServer>, port: u16) {
         stop.store(true, Ordering::Release);
     });
     info!(port, workers, "Rust SRT ingest listener started");
-    serve_events(&server, pool, event_receiver, global).await;
+    serve_events(&server, pool, event_receiver).await;
 }
 
 struct RustIngestPool {
@@ -85,12 +86,20 @@ impl RustIngestPool {
         workers: usize,
         udp_buffer: usize,
         options: WorkerOptions,
+        policy_store: Arc<super::SrtIngestPolicyStore>,
         events: mpsc::Sender<IngestEvent>,
     ) -> Result<(Self, Vec<std::thread::JoinHandle<()>>), String> {
         let stop = Arc::new(AtomicBool::new(false));
         if crate::config::rust_srt_ingest_connected() {
-            let (commands, handles) =
-                connected::start(port, workers, udp_buffer, options, events, stop.clone())?;
+            let (commands, handles) = connected::start(
+                port,
+                workers,
+                udp_buffer,
+                options,
+                policy_store,
+                events,
+                stop.clone(),
+            )?;
             return Ok((Self { stop, commands }, handles));
         }
 
@@ -112,6 +121,7 @@ impl RustIngestPool {
                 command_receiver,
                 events.clone(),
                 options.clone(),
+                policy_store.clone(),
             ) {
                 Ok(handle) => handle,
                 Err(error) => {
@@ -165,7 +175,6 @@ async fn serve_events(
     server: &Arc<SrtServer>,
     pool: RustIngestPool,
     mut events: Receiver<IngestEvent>,
-    global: ResolvedSrtIngestConfig,
 ) {
     let mut sessions = HashMap::<ConnectionId, RustIngestSession>::new();
     let mut plays = HashMap::<ConnectionId, tokio_util::sync::CancellationToken>::new();
@@ -194,7 +203,6 @@ async fn serve_events(
                         group,
                         peer_socket_id,
                     },
-                    &global,
                 )
                 .await;
             }
@@ -278,7 +286,6 @@ async fn admit_connection(
     physical_to_logical: &mut HashMap<ConnectionId, ConnectionId>,
     bonded_sessions: &mut HashMap<BondKey, BondSession>,
     admission: ConnectionAdmission,
-    global: &ResolvedSrtIngestConfig,
 ) {
     let ConnectionAdmission {
         id,
@@ -333,7 +340,6 @@ async fn admit_connection(
             } else {
                 PipelineAccessMode::SrtPublish
             },
-            global,
         )
         .await
         {
@@ -445,14 +451,13 @@ async fn authenticate_connection(
     peer: std::net::SocketAddr,
     stream_key: &str,
     access_mode: PipelineAccessMode,
-    global: &ResolvedSrtIngestConfig,
 ) -> Option<AuthenticatedPipeline> {
-    let Some(policy) = server.ingest_policy_store.resolved_policy(stream_key) else {
+    if server
+        .ingest_policy_store
+        .resolved_policy(stream_key)
+        .is_none()
+    {
         warn!(peer = %peer, "Rust SRT ingest rejected unknown stream key");
-        return None;
-    };
-    if policy.crypto != global.crypto || policy.latency_ms != global.latency_ms {
-        warn!(peer = %peer, "Rust SRT ingest rejected per-stream policy not representable by current listener");
         return None;
     }
     let pipeline = match server

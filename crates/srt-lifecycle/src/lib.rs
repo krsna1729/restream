@@ -18,6 +18,14 @@ pub struct GroupAffinity {
     pub extension: GroupExtensionData,
 }
 
+/// Handshake identity available before the protocol Core processes conclusion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandshakeIdentity {
+    pub is_conclusion: bool,
+    pub stream_id: Option<String>,
+    pub group: Option<GroupAffinity>,
+}
+
 impl GroupAffinity {
     /// Return the stable logical identity used to keep all physical legs on
     /// one worker. The wire StreamID is normalized only at this boundary.
@@ -179,19 +187,31 @@ pub fn normalize_stream_id(stream_id: Option<String>) -> Option<String> {
 /// Extract the handshake phase and optional GROUP affinity from one datagram.
 #[must_use]
 pub fn handshake_route(packet: &[u8]) -> Option<(bool, Option<GroupAffinity>)> {
+    let identity = handshake_identity(packet)?;
+    Some((identity.is_conclusion, identity.group))
+}
+
+/// Decode the StreamID and GROUP identity from a handshake datagram.
+#[must_use]
+pub fn handshake_identity(packet: &[u8]) -> Option<HandshakeIdentity> {
     let SrtPacket::Control(control) = SrtPacket::decode(packet).ok()? else {
         return None;
     };
     let handshake = HandshakePacket::decode(&control).ok()?;
     let is_conclusion = matches!(handshake.handshake_type, HandshakeType::Conclusion);
+    let stream_id = handshake.get_sid_extension();
     let group = handshake
         .get_group_extension()
         .map(|extension| GroupAffinity {
             group_id: extension.group_id,
-            stream_id: handshake.get_sid_extension(),
+            stream_id: stream_id.clone(),
             extension,
         });
-    Some((is_conclusion, group))
+    Some(HandshakeIdentity {
+        is_conclusion,
+        stream_id,
+        group,
+    })
 }
 
 /// Convenience for callers that only need GROUP metadata from a datagram.
@@ -260,5 +280,18 @@ mod tests {
         assert_eq!(worker_count(2, 8), 2);
         assert_eq!(worker_count(99, 4), 4);
         assert_eq!(worker_count(99, 0), 1);
+    }
+
+    #[test]
+    fn conclusion_identity_exposes_stream_without_group_metadata() {
+        let mut handshake = HandshakePacket::new_conclusion_request(1, 2, 3, 0, false);
+        handshake.add_sid_extension("publish:camera");
+        let mut packet = Vec::new();
+        handshake.encode(0, 0).encode(&mut packet);
+
+        let identity = super::handshake_identity(&packet).expect("handshake identity");
+        assert!(identity.is_conclusion);
+        assert_eq!(identity.stream_id.as_deref(), Some("publish:camera"));
+        assert!(identity.group.is_none());
     }
 }

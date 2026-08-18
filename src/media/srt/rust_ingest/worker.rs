@@ -29,10 +29,21 @@ pub(super) fn spawn(
     commands: Receiver<WorkerCommand>,
     events: Sender<IngestEvent>,
     options: WorkerOptions,
+    policy_store: Arc<super::super::SrtIngestPolicyStore>,
 ) -> io::Result<JoinHandle<()>> {
     std::thread::Builder::new()
         .name(format!("restream-srt-rust-ingest-{worker_index}"))
-        .spawn(move || run(worker_index, socket, stop, commands, events, options))
+        .spawn(move || {
+            run(
+                worker_index,
+                socket,
+                stop,
+                commands,
+                events,
+                options,
+                policy_store,
+            )
+        })
 }
 
 fn run(
@@ -42,6 +53,7 @@ fn run(
     mut commands: Receiver<WorkerCommand>,
     events: Sender<IngestEvent>,
     options: WorkerOptions,
+    policy_store: Arc<super::super::SrtIngestPolicyStore>,
 ) {
     let mut socket = UdpSocket::from_std(std_socket);
     let mut poll = match Poll::new() {
@@ -91,6 +103,7 @@ fn run(
                     connections: &mut connections,
                     events: &events,
                     options: &options,
+                    policy_store: &policy_store,
                     worker_index,
                     next_socket_id: &mut next_socket_id,
                     start,

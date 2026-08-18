@@ -180,6 +180,43 @@ fn test_handshake_with_encryption() {
 }
 
 #[test]
+fn listener_can_apply_stream_policy_before_encrypted_conclusion() {
+    let passphrase = "stream-policy-passphrase".to_string();
+    let caller_opts = ConnectionOptions {
+        passphrase: Some(passphrase.clone()),
+        crypto_salt: Some([0x24; 16]),
+        key_length: KeyLength::Aes256,
+        stream_id: Some("publish:encrypted-stream".to_string()),
+        tsbpd_delay: 0,
+        ..Default::default()
+    };
+    let mut caller = SrtConnection::new_caller(caller_opts);
+    let mut listener = SrtConnection::new_listener(test_options());
+
+    caller.connect(ts(0)).expect("caller connection starts");
+    transfer_caller_to_listener(&mut caller, &mut listener, ts(0));
+    transfer_listener_to_caller(&mut listener, &mut caller, ts(0));
+    listener
+        .set_listener_policy(Some(passphrase), KeyLength::Aes256, 2_000)
+        .expect("listener policy is still mutable before conclusion");
+
+    for round in 1..10 {
+        exchange_packets(&mut caller, &mut listener, ts(round * 10_000));
+        if caller.state() == ConnectionState::Connected
+            && listener.state() == ConnectionState::Connected
+        {
+            return;
+        }
+    }
+
+    panic!(
+        "stream policy was not applied before encrypted conclusion: caller={:?}, listener={:?}",
+        caller.state(),
+        listener.state()
+    );
+}
+
+#[test]
 fn test_handshake_with_aes256() {
     let passphrase = "test-passphrase-256".to_string();
 

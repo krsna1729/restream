@@ -5,11 +5,15 @@ use std::time::Duration;
 
 use mio::net::UdpSocket;
 use shiguredo_srt::{
-    ConnectionEvent, ConnectionOptions, ConnectionOutput, ErrorKind, SrtConnection, TimerId,
-    Timestamp,
+    ConnectionEvent, ConnectionOptions, ConnectionOutput, ConnectionState, ErrorKind, KeyLength,
+    SrtConnection, TimerId, Timestamp,
 };
 use tokio::sync::mpsc::Sender;
 
+use crate::domain::srt_ingest::ResolvedSrtCrypto;
+
+use super::super::SrtIngestPolicyStore;
+use super::super::srt_stream_id::parse_srt_stream_id;
 use super::WorkerOptions;
 use super::types::{ConnectionId, IngestEvent};
 
@@ -48,6 +52,50 @@ pub(super) fn new(id: ConnectionId, peer: SocketAddr, options: &WorkerOptions) -
         pending_outbound: VecDeque::new(),
         pending_outbound_bytes: 0,
     }
+}
+
+pub(super) fn apply_listener_policy(
+    connection: &mut RustConnection,
+    policy_store: &SrtIngestPolicyStore,
+    packet: &[u8],
+) -> Result<(), String> {
+    if connection.core.state() != ConnectionState::Listening {
+        return Ok(());
+    }
+    let Some(identity) = srt_lifecycle::handshake_identity(packet) else {
+        return Ok(());
+    };
+    if !identity.is_conclusion {
+        return Ok(());
+    }
+    let Some(stream_id) = identity.stream_id else {
+        return Ok(());
+    };
+    let parsed = parse_srt_stream_id(&stream_id);
+    let Some(policy) = policy_store.resolved_policy(&parsed.stream_key) else {
+        return Ok(());
+    };
+    let (passphrase, key_length) = match policy.crypto {
+        ResolvedSrtCrypto::Plaintext => (None, KeyLength::Aes128),
+        ResolvedSrtCrypto::Encrypted {
+            passphrase,
+            pbkeylen,
+        } => (
+            Some(passphrase),
+            match pbkeylen {
+                16 => KeyLength::Aes128,
+                24 => KeyLength::Aes192,
+                32 => KeyLength::Aes256,
+                other => return Err(format!("unsupported SRT pbkeylen {other}")),
+            },
+        ),
+    };
+    let tsbpd_delay = u16::try_from(policy.latency_ms)
+        .map_err(|_| format!("invalid SRT latency {}", policy.latency_ms))?;
+    connection
+        .core
+        .set_listener_policy(passphrase, key_length, tsbpd_delay)
+        .map_err(|error| error.to_string())
 }
 
 pub(super) fn queue_send(connection: &mut RustConnection, payload: Vec<u8>) -> bool {
@@ -262,6 +310,13 @@ fn send_event(events: &Sender<IngestEvent>, event: IngestEvent) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::domain::srt_ingest::{
+        SrtGlobalIngestConfig, SrtPipelineIngestConfig, SrtPipelineIngestMode,
+    };
+
+    use super::super::super::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
     use super::*;
 
     fn exchange(caller: &mut SrtConnection, listener: &mut SrtConnection, now: Timestamp) {
@@ -271,6 +326,15 @@ mod tests {
         while let Some(ConnectionOutput::SendPacket(packet)) = listener.poll_output() {
             let _ = caller.feed_recv_buf(&packet, now);
         }
+    }
+
+    fn next_send_packet(connection: &mut SrtConnection) -> Vec<u8> {
+        while let Some(output) = connection.poll_output() {
+            if let ConnectionOutput::SendPacket(packet) = output {
+                return packet;
+            }
+        }
+        panic!("connection did not emit a packet");
     }
 
     fn connected_listener() -> SrtConnection {
@@ -296,6 +360,71 @@ mod tests {
             }
         }
         panic!("listener did not connect");
+    }
+
+    #[test]
+    fn listener_policy_helper_applies_stream_crypto_before_conclusion() {
+        let passphrase = "stream-policy-passphrase".to_string();
+        let mut pipeline_policy = SrtPipelineIngestConfig {
+            mode: SrtPipelineIngestMode::Encrypted,
+            passphrase: Some(passphrase.clone()),
+            pbkeylen: Some(32),
+            latency_ms: Some(2_000),
+        };
+        pipeline_policy.validate().expect("policy validates");
+        let policy_store = Arc::new(SrtIngestPolicyStore::new(
+            SrtGlobalIngestConfig::default(),
+            &[SrtIngestPolicyEntry::new(
+                "pipeline-1",
+                "encrypted-stream",
+                pipeline_policy,
+            )],
+        ));
+        let mut caller = SrtConnection::new_caller(ConnectionOptions {
+            passphrase: Some(passphrase),
+            crypto_salt: Some([0x24; 16]),
+            key_length: shiguredo_srt::KeyLength::Aes256,
+            stream_id: Some("publish:encrypted-stream".to_string()),
+            tsbpd_delay: 0,
+            ..ConnectionOptions::default()
+        });
+        let mut connection = new(
+            ConnectionId {
+                worker: 0,
+                serial: 1,
+            },
+            "127.0.0.1:29001".parse().expect("peer address parses"),
+            &WorkerOptions {
+                passphrase: None,
+                key_length: shiguredo_srt::KeyLength::Aes128,
+                tsbpd_delay: 250,
+            },
+        );
+
+        caller
+            .connect(Timestamp::from_micros(0))
+            .expect("caller connects");
+        let induction = next_send_packet(&mut caller);
+        connection
+            .core
+            .feed_recv_buf(&induction, Timestamp::from_micros(0))
+            .expect("listener receives induction");
+        let induction_response = next_send_packet(&mut connection.core);
+        caller
+            .feed_recv_buf(&induction_response, Timestamp::from_micros(0))
+            .expect("caller receives induction response");
+        let conclusion = next_send_packet(&mut caller);
+
+        apply_listener_policy(&mut connection, &policy_store, &conclusion)
+            .expect("policy applies before conclusion");
+        connection
+            .core
+            .feed_recv_buf(&conclusion, Timestamp::from_micros(10_000))
+            .expect("listener accepts encrypted conclusion");
+        assert_eq!(
+            connection.core.state(),
+            shiguredo_srt::ConnectionState::Connected
+        );
     }
 
     #[test]

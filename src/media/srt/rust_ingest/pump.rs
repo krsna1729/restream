@@ -115,6 +115,7 @@ pub(super) struct ReceiveState<'a> {
     pub(super) connections: &'a mut HashMap<SocketAddr, RustConnection>,
     pub(super) events: &'a Sender<IngestEvent>,
     pub(super) options: &'a WorkerOptions,
+    pub(super) policy_store: &'a super::super::super::SrtIngestPolicyStore,
     pub(super) worker_index: usize,
     pub(super) next_socket_id: &'a mut u32,
     pub(super) start: Instant,
@@ -127,6 +128,7 @@ pub(super) fn receive_packets(state: &mut ReceiveState<'_>) -> bool {
         connections,
         events,
         options,
+        policy_store,
         worker_index,
         next_socket_id,
         start,
@@ -150,6 +152,24 @@ pub(super) fn receive_packets(state: &mut ReceiveState<'_>) -> bool {
             **next_socket_id = (**next_socket_id).wrapping_add(1).max(1);
             connection::new(id, peer, options)
         });
+        if let Err(error) =
+            connection::apply_listener_policy(connection, policy_store, &packet[..size])
+        {
+            let id = connection.id;
+            connections.remove(&peer);
+            if !send_event(
+                events,
+                IngestEvent::Disconnected {
+                    id,
+                    phase: "admission",
+                    reason: error,
+                    had_error: true,
+                },
+            ) {
+                return false;
+            }
+            continue;
+        }
         if let Err(error) = connection.core.feed_recv_buf(&packet[..size], now) {
             tracing::debug!(%peer, %error, "Rust SRT ingest rejected datagram");
             let id = connection.id;

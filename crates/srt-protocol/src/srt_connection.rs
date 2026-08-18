@@ -320,6 +320,29 @@ impl SrtConnection {
         self.peer_socket_id
     }
 
+    /// Apply the listener-side policy selected from the incoming StreamID.
+    ///
+    /// A listener may only change these handshake options while it is still
+    /// waiting for the conclusion packet. This mirrors libsrt's accept hook:
+    /// the caller's StreamID is known, but KMREQ and the accepted connection
+    /// have not been processed yet.
+    pub fn set_listener_policy(
+        &mut self,
+        passphrase: Option<String>,
+        key_length: KeyLength,
+        tsbpd_delay: u16,
+    ) -> Result<(), Error> {
+        if self.role != ConnectionRole::Listener || self.state != ConnectionState::Listening {
+            return Err(Error::invalid_state(
+                "listener policy can only change before conclusion",
+            ));
+        }
+        self.options.passphrase = passphrase;
+        self.options.key_length = key_length;
+        self.options.tsbpd_delay = tsbpd_delay;
+        Ok(())
+    }
+
     /// Set listener-side GROUP metadata before processing the conclusion.
     pub fn set_group_extension(&mut self, group: GroupExtensionData) {
         self.options.group_extension = Some(group);

@@ -33,6 +33,7 @@ struct ListenerContext {
     releases: Receiver<SocketAddr>,
     stop: Arc<AtomicBool>,
     options: WorkerOptions,
+    policy_store: Arc<super::super::SrtIngestPolicyStore>,
 }
 
 pub(super) fn start(
@@ -40,6 +41,7 @@ pub(super) fn start(
     workers: usize,
     udp_buffer: usize,
     options: WorkerOptions,
+    policy_store: Arc<super::super::SrtIngestPolicyStore>,
     events: Sender<IngestEvent>,
     stop: Arc<AtomicBool>,
 ) -> Result<(CommandSenders, ThreadHandles), String> {
@@ -75,6 +77,7 @@ pub(super) fn start(
                 releases: release_receiver,
                 stop,
                 options: listener_options,
+                policy_store,
             });
         })
         .map_err(|error| format!("spawn connected Rust ingest listener: {error}"))?;
@@ -91,6 +94,7 @@ fn run_listener(context: ListenerContext) {
         releases,
         stop,
         options,
+        policy_store,
     } = context;
     let std_socket = match socket::bind_reuseport(port, udp_buffer) {
         Ok(socket) => socket,
@@ -155,6 +159,7 @@ fn run_listener(context: ListenerContext) {
                 commands: &commands,
                 next_serial: &mut next_serial,
                 options: &options,
+                policy_store: &policy_store,
                 local_groups: &mut local_groups,
                 next_group_id: &mut next_group_id,
                 start,
@@ -173,6 +178,7 @@ struct ListenerState<'a> {
     commands: &'a [Sender<WorkerCommand>],
     next_serial: &'a mut u64,
     options: &'a WorkerOptions,
+    policy_store: &'a super::super::SrtIngestPolicyStore,
     local_groups: &'a mut HashMap<LogicalGroupKey, GroupExtensionData>,
     next_group_id: &'a mut u32,
     start: Instant,
@@ -222,6 +228,14 @@ fn receive_packets(state: &mut ListenerState<'_>, packet: &mut [u8]) {
             .expect("pending connection inserted above");
         if let Some(local_group) = local_group {
             connection.core.set_group_extension(local_group);
+        }
+        if let Err(error) =
+            connection::apply_listener_policy(connection, state.policy_store, &packet[..size])
+        {
+            tracing::debug!(%peer, %error, "Rust SRT connected listener policy admission failed");
+            state.pending.remove(&peer);
+            release_route(state.router, state.local_groups, peer);
+            continue;
         }
         if (is_conclusion || group.is_some()) && connection.id.worker == usize::MAX {
             connection.id.worker = state.router.assign(peer, group.clone(), state.routing_mode);
