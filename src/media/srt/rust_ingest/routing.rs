@@ -10,6 +10,24 @@ pub(super) struct GroupAffinity {
     pub(super) extension: GroupExtensionData,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(super) struct LogicalGroupKey {
+    pub(super) group_id: u32,
+    pub(super) stream_id: Option<String>,
+}
+
+impl GroupAffinity {
+    pub(super) fn logical_key(&self) -> LogicalGroupKey {
+        LogicalGroupKey {
+            group_id: self.group_id,
+            stream_id: self
+                .stream_id
+                .as_deref()
+                .map(|stream_id| stream_id.trim_matches('\0').trim().to_string()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RoutingMode {
     RoundRobin,
@@ -22,9 +40,9 @@ pub(super) fn worker_count(requested: usize, available_parallelism: usize) -> us
 
 pub(super) struct WorkerRouter {
     tuple_workers: HashMap<SocketAddr, usize>,
-    tuple_groups: HashMap<SocketAddr, u32>,
-    group_workers: HashMap<u32, usize>,
-    group_tuple_counts: HashMap<u32, usize>,
+    tuple_groups: HashMap<SocketAddr, LogicalGroupKey>,
+    group_workers: HashMap<LogicalGroupKey, usize>,
+    group_tuple_counts: HashMap<LogicalGroupKey, usize>,
     worker_tuple_counts: Vec<usize>,
     next_worker: usize,
 }
@@ -56,7 +74,7 @@ impl WorkerRouter {
 
         let worker = group
             .as_ref()
-            .and_then(|key| self.group_workers.get(&key.group_id).copied())
+            .and_then(|affinity| self.group_workers.get(&affinity.logical_key()).copied())
             .unwrap_or_else(|| self.select_worker(mode));
         self.tuple_workers.insert(peer, worker);
         self.worker_tuple_counts[worker] = self.worker_tuple_counts[worker].saturating_add(1);
@@ -66,17 +84,17 @@ impl WorkerRouter {
         worker
     }
 
-    pub(super) fn release(&mut self, peer: SocketAddr) -> Option<u32> {
+    pub(super) fn release(&mut self, peer: SocketAddr) -> Option<LogicalGroupKey> {
         let worker = self.tuple_workers.remove(&peer)?;
         self.worker_tuple_counts[worker] = self.worker_tuple_counts[worker].saturating_sub(1);
-        if let Some(group_id) = self.tuple_groups.remove(&peer)
-            && let Some(count) = self.group_tuple_counts.get_mut(&group_id)
+        if let Some(group_key) = self.tuple_groups.remove(&peer)
+            && let Some(count) = self.group_tuple_counts.get_mut(&group_key)
         {
             *count = count.saturating_sub(1);
             if *count == 0 {
-                self.group_tuple_counts.remove(&group_id);
-                self.group_workers.remove(&group_id);
-                return Some(group_id);
+                self.group_tuple_counts.remove(&group_key);
+                self.group_workers.remove(&group_key);
+                return Some(group_key);
             }
         }
         None
@@ -96,12 +114,15 @@ impl WorkerRouter {
         if self.tuple_groups.contains_key(&peer) {
             return;
         }
-        self.group_workers.entry(group.group_id).or_insert(worker);
+        let group_key = group.logical_key();
+        self.group_workers
+            .entry(group_key.clone())
+            .or_insert(worker);
         self.group_tuple_counts
-            .entry(group.group_id)
+            .entry(group_key.clone())
             .and_modify(|count| *count = count.saturating_add(1))
             .or_insert(1);
-        self.tuple_groups.insert(peer, group.group_id);
+        self.tuple_groups.insert(peer, group_key);
     }
 
     fn select_worker(&mut self, mode: RoutingMode) -> usize {
@@ -182,9 +203,50 @@ mod tests {
         assert_eq!(third_worker, second_worker);
 
         assert_eq!(router.release(second), None);
-        assert_eq!(router.release(third), Some(group.group_id));
+        assert_eq!(router.release(third), Some(group.logical_key()));
         assert_eq!(router.active_tuple_count(), 0);
         assert_eq!(router.active_group_count(), 0);
+    }
+
+    #[test]
+    fn group_worker_affinity_includes_stream_id() {
+        let mut router = super::WorkerRouter::new(2);
+        let first = SocketAddr::from(([127, 0, 0, 1], 21_001));
+        let second = SocketAddr::from(([127, 0, 0, 1], 21_002));
+        let base = GroupExtensionData {
+            group_id: 0x4000_0042,
+            group_type: GroupType::Broadcast,
+            flags: 0,
+            weight: 7,
+        };
+        let first_group = super::GroupAffinity {
+            group_id: base.group_id,
+            stream_id: Some("publish:first".to_string()),
+            extension: base,
+        };
+        let second_group = super::GroupAffinity {
+            group_id: base.group_id,
+            stream_id: Some("publish:second".to_string()),
+            extension: base,
+        };
+
+        let first_worker = router.assign(
+            first,
+            Some(first_group.clone()),
+            super::RoutingMode::RoundRobin,
+        );
+        let second_worker = router.assign(
+            second,
+            Some(second_group.clone()),
+            super::RoutingMode::RoundRobin,
+        );
+        assert_ne!(first_worker, second_worker);
+
+        let third = SocketAddr::from(([127, 0, 0, 1], 21_003));
+        assert_eq!(
+            router.assign(third, Some(first_group), super::RoutingMode::LeastTuples),
+            first_worker
+        );
     }
 
     #[test]

@@ -239,3 +239,4 @@ above remain the better way to learn the system.
   doc in the same change and run `node scripts/check/docs.mjs`. The staged gate
   router selects this check automatically for Markdown and documentation-check
   changes.
+- [SRT connected lifecycle audit — 2026-08-18](agent-guidance/quality/srt-connected-lifecycle-audit-2026-08-18.md)

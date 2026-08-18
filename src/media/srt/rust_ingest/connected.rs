@@ -14,7 +14,7 @@ use tokio::sync::mpsc::{self, Sender};
 
 use super::connected_worker;
 use super::connection::{self, RustConnection};
-use super::routing::{GroupAffinity, RoutingMode, WorkerRouter, handshake_route};
+use super::routing::{GroupAffinity, LogicalGroupKey, RoutingMode, WorkerRouter, handshake_route};
 use super::socket;
 use super::types::{ConnectionId, IngestEvent, WorkerCommand};
 use super::worker::WorkerOptions;
@@ -128,7 +128,7 @@ fn run_listener(context: ListenerContext) {
     let mut routes = HashMap::<SocketAddr, usize>::new();
     let mut router = WorkerRouter::new(workers);
     let mut next_serial = u64::from(std::process::id()) << 32;
-    let mut local_groups = HashMap::<u32, GroupExtensionData>::new();
+    let mut local_groups = HashMap::<LogicalGroupKey, GroupExtensionData>::new();
     let mut next_group_id = (std::process::id() & 0x3FFF_FFFF).max(1);
 
     while !stop.load(Ordering::Acquire) {
@@ -173,7 +173,7 @@ struct ListenerState<'a> {
     commands: &'a [Sender<WorkerCommand>],
     next_serial: &'a mut u64,
     options: &'a WorkerOptions,
-    local_groups: &'a mut HashMap<u32, GroupExtensionData>,
+    local_groups: &'a mut HashMap<LogicalGroupKey, GroupExtensionData>,
     next_group_id: &'a mut u32,
     start: Instant,
 }
@@ -279,11 +279,11 @@ fn receive_packets(state: &mut ListenerState<'_>, packet: &mut [u8]) {
 
 fn release_route(
     router: &mut WorkerRouter,
-    local_groups: &mut HashMap<u32, GroupExtensionData>,
+    local_groups: &mut HashMap<LogicalGroupKey, GroupExtensionData>,
     peer: SocketAddr,
 ) {
-    if let Some(group_id) = router.release(peer) {
-        local_groups.remove(&group_id);
+    if let Some(group_key) = router.release(peer) {
+        local_groups.remove(&group_key);
     }
 }
 
@@ -295,7 +295,8 @@ fn local_group_extension(
     state: &mut ListenerState<'_>,
     affinity: &GroupAffinity,
 ) -> GroupExtensionData {
-    if let Some(extension) = state.local_groups.get(&affinity.group_id).copied() {
+    let group_key = affinity.logical_key();
+    if let Some(extension) = state.local_groups.get(&group_key).copied() {
         return extension;
     }
     let group_id = SRTGROUP_MASK | (*state.next_group_id & 0x3FFF_FFFF).max(1);
@@ -306,6 +307,6 @@ fn local_group_extension(
         flags: affinity.extension.flags,
         weight: 0,
     };
-    state.local_groups.insert(affinity.group_id, extension);
+    state.local_groups.insert(group_key, extension);
     extension
 }
