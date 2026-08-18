@@ -3,12 +3,9 @@
 //! driver-framework bake-off. Like monoio, compio is completion-based
 //! (io_uring on Linux, IOCP on Windows) with owned-buffer semantics; unlike
 //! monoio it's cross-platform and newer/less established -- a data point
-//! on whether that abstraction costs anything measurable. See
-//! mio_driver.rs's doc comment for shared background, Cargo.toml's doc
-//! comment for why each backend is a separate binary, and
-//! loss_caller_monoio.rs's doc comment for why there's no drain-all-pending
-//! loop and why a timed-out recv's buffer is simply abandoned rather than
-//! reused (io_uring ops can't be safely cancelled mid-flight).
+//! on whether that abstraction costs anything measurable. Its receive task
+//! keeps one owned-buffer operation in flight at a time; the pacing loop
+//! never cancels a receive operation.
 //!
 //! Usage: srt-interop-loss-caller-compio <host> <port> <duration_secs> <latency_ms> [bitrate_bps]
 
@@ -17,6 +14,7 @@ use compio::net::UdpSocket;
 use shiguredo_srt::{ConnectionEvent, ConnectionOptions, SrtConnection, TimerId, Timestamp};
 use std::collections::HashMap;
 use std::net::ToSocketAddrs;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const PAYLOAD_SIZE: usize = 1316;
@@ -108,6 +106,19 @@ async fn main() {
         .expect("connect() should queue INDUCTION");
 
     let mut timers: HashMap<TimerId, Timestamp> = HashMap::new();
+    let (received_sender, received_receiver) = mpsc::channel();
+    let received_socket = socket.clone();
+    let received_task = compio::runtime::spawn(async move {
+        loop {
+            let BufResult(result, buffer) = received_socket.recv(vec![0u8; 2048]).await;
+            let Ok(size) = result else {
+                break;
+            };
+            if received_sender.send(buffer[..size].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
     drain_outputs(&mut conn, &socket, &mut timers, now(start)).await;
 
     let payload = vec![0x42u8; PAYLOAD_SIZE];
@@ -136,13 +147,10 @@ async fn main() {
             MAX_WAIT
         };
         let block_for = wait.saturating_sub(TAIL_SPIN);
-        if block_for > Duration::ZERO
-            && let Ok(BufResult(res, buf)) =
-                compio::time::timeout(block_for, socket.recv(vec![0u8; 2048])).await
-            && let Ok(n) = res
-        {
+        compio::time::sleep(block_for).await;
+        while let Ok(buf) = received_receiver.try_recv() {
             let t = now(start);
-            let _ = conn.feed_recv_buf(&buf[..n], t);
+            let _ = conn.feed_recv_buf(&buf, t);
         }
 
         let t = now(start);
@@ -184,6 +192,7 @@ async fn main() {
         }
     }
 
+    let _ = received_task.cancel().await;
     let stats = conn.sender_stats();
     let elapsed_s = start.elapsed().as_secs_f64();
     let p = srt_interop::cpu_stats::process_stats();

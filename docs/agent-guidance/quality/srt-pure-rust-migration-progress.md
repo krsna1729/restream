@@ -14,6 +14,7 @@
 - [Production Rust bonded egress and paired endpoint profile — 2026-08-18](#production-rust-bonded-egress-and-paired-endpoint-profile--2026-08-18)
 - [Kernel symbols and connected affinity profile — 2026-08-18](#kernel-symbols-and-connected-affinity-profile--2026-08-18)
 - [Reusable SRT lifecycle crate extraction — 2026-08-18](#reusable-srt-lifecycle-crate-extraction--2026-08-18)
+- [Six runtime adapter contract and compio ownership — 2026-08-18](#six-runtime-adapter-contract-and-compio-ownership--2026-08-18)
 
 ## Current migration policy
 
@@ -595,3 +596,53 @@ Verification after extraction:
   drops and 0 live-process residue after the run. This is an integration
   correctness check, not a performance comparison; performance tuning resumes
   only after the remaining SRT integration seams consume the same layering.
+
+## Six runtime adapter contract and compio ownership — 2026-08-18
+
+The six framework implementations remain deliberately separate runtime
+adapters in `crates/srt-interop`: mio, Tokio, smol, monoio, glommio, and
+compio. They all consume the same `srt-protocol` Core and expose the same
+external caller/listener arguments and STATS contract, but they do not share a
+runtime trait. This preserves the meaningful differences between readiness,
+task, and completion models while keeping the dependency direction one-way:
+
+```text
+srt-protocol -> srt-lifecycle -> application adapter
+                    ^
+                    +-- runtime-specific socket/task ownership
+                        (mio, tokio, smol, monoio, glommio, compio)
+```
+
+This is integration evidence, not a performance result. The canonical
+`scripts/build/srt-interop-bench.sh` build verified the host's x86-64-v3
+features and produced optimized binaries with opt-level 3, thin LTO, and
+`target-cpu=x86-64-v3`. The bounded live smoke in
+`.local/artifacts/srt-seven-framework-interop-fixed-20260818.tsv` used those
+binaries plus the native libsrt control at 1 Mbps, 50 ms SRT latency, 0%
+loss, 0 ms netem delay, and three seconds per cell. All seven pairs exited
+0, emitted caller and listener STATS, and reported zero retransmits and zero
+receiver loss.
+
+The first smoke exposed an adapter-only defect that compile checks could not
+see. Compio's pacing loop canceled a single-shot `recv`/`recv_from` whenever
+its timer won. Three optimized 10-second zero-loss repeats reproduced 43--49
+caller retransmits and 35--42 receiver loss events. The compio runtime submits
+owned-buffer operations and cancellation can discard a completion after the
+kernel has consumed a datagram. That behavior does not belong in
+`srt-protocol` or `srt-lifecycle`.
+
+The compio adapter now has a dedicated receive task that owns one receive
+operation at a time and forwards completed datagrams to the pacing loop; the
+pacing loop never cancels a receive. Three post-fix optimized repeats under
+`.local/artifacts/srt-compio-zero-loss-fixed-20260818-*.tsv` all exited 0 with
+zero retransmits and zero receiver loss. An intermediate multishot-stream
+attempt was rejected because it delivered no packets and grew RSS to roughly
+5 GiB; it was discarded rather than hidden behind a passing exit code.
+
+The layering conclusion is therefore evidence-backed: do not add a generic
+runtime event-loop crate. Keep shared lifecycle policy in `srt-lifecycle`,
+keep socket and receive-operation ownership in each runtime adapter, and only
+promote a helper when two adapters demonstrate the same policy without
+erasing runtime-specific ownership semantics. Broader loss/latency/bitrate
+and scale measurements remain later gates after the integrated adapters and
+bonding paths are complete.

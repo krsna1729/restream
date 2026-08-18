@@ -10,6 +10,7 @@ use compio::net::UdpSocket;
 use shiguredo_srt::{ConnectionEvent, ConnectionOptions, SrtConnection, TimerId, Timestamp};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const MAX_WAIT: Duration = Duration::from_millis(20);
@@ -93,12 +94,28 @@ async fn main() {
     };
     let mut conn = SrtConnection::new_listener(options);
     let mut timers: HashMap<TimerId, Timestamp> = HashMap::new();
+    let (received_sender, received_receiver) = mpsc::channel();
+    let received_socket = socket.clone();
+    let received_task = compio::runtime::spawn(async move {
+        loop {
+            let BufResult(result, buffer) = received_socket.recv_from(vec![0u8; 2048]).await;
+            let Ok((size, addr)) = result else {
+                break;
+            };
+            if received_socket.connect(addr).await.is_err()
+                || received_sender
+                    .send((buffer[..size].to_vec(), addr))
+                    .is_err()
+            {
+                break;
+            }
+        }
+    });
 
     let mut total_received: u64 = 0;
     let mut connected = false;
     let mut stream_deadline: Option<Instant> = None;
     let connect_deadline = Instant::now() + srt_interop::INTEROP_CONNECT_TIMEOUT;
-    let mut peer: Option<SocketAddr> = None;
 
     loop {
         if !connected && Instant::now() >= connect_deadline {
@@ -121,25 +138,10 @@ async fn main() {
         ))
         .min(MAX_WAIT);
 
-        // A fresh buffer per attempt -- see loss_caller_compio.rs/
-        // loss_caller_monoio.rs's doc comments: io_uring ops can't be
-        // safely cancelled mid-flight, so a timed-out recv's buffer is
-        // simply abandoned rather than reused. A stray/malformed first
-        // datagram must not crash the process either, so no bare
-        // .expect() on the parsed result.
-        if let Ok(BufResult(res, buf)) =
-            compio::time::timeout(wait, socket.recv_from(vec![0u8; 2048])).await
-            && let Ok((n, addr)) = res
-        {
-            if peer.is_none() {
-                if let Err(e) = socket.connect(addr).await {
-                    eprintln!("[loss-listener-compio] connect to peer failed: {e}");
-                } else {
-                    peer = Some(addr);
-                }
-            }
+        compio::time::sleep(wait).await;
+        while let Ok((packet, _addr)) = received_receiver.try_recv() {
             let t = now(start);
-            let _ = conn.feed_recv_buf(&buf[..n], t);
+            let _ = conn.feed_recv_buf(&packet, t);
         }
 
         let t = now(start);
@@ -170,6 +172,7 @@ async fn main() {
         }
     }
 
+    let _ = received_task.cancel().await;
     let stats = conn.receiver_stats();
     let elapsed_s = start.elapsed().as_secs_f64();
     let p = srt_interop::cpu_stats::process_stats();
