@@ -6,4 +6,5 @@ mod muxer_port;
 mod resolve_runtime;
 mod resolver;
 mod shard;
+mod shard_wakeup;
 mod support;

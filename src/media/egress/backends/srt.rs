@@ -26,6 +26,8 @@ use crate::media::srt::{
 };
 
 mod add_error;
+#[path = "srt/leaf_ready.rs"]
+mod leaf_ready;
 pub(crate) mod muxer_ports;
 #[path = "srt/pressure.rs"]
 mod pressure;
@@ -33,6 +35,8 @@ pub(crate) mod resolve_runtime;
 #[path = "srt/runtime.rs"]
 mod runtime;
 mod socket_config;
+#[path = "srt/wakeup.rs"]
+mod wakeup;
 
 pub(crate) use add_error::SrtBackendAddError;
 pub(crate) use pressure::{SrtLeafPressure, SrtLeafSocket};
@@ -244,34 +248,12 @@ where
         Some(quality)
     }
 
-    pub(crate) fn visit_ready(
-        &mut self,
-        generation: u64,
-        readiness: Readiness,
-        feed: &TsFeed,
-        budget: WorkBudget,
-    ) -> EngineVisitResult {
-        if !self.common.is_current_generation(generation) {
-            return EngineVisitResult::StaleGeneration;
-        }
-        self.transport.on_readiness(readiness);
-        EngineVisit {
-            generation,
-            common: &mut self.common,
-            engine: &mut self.engine,
-            transport: &mut self.transport,
-            readiness,
-            feed,
-            budget,
-        }
-        .run()
-    }
-
     pub(crate) fn readiness_interest(&self) -> SrtEgressInterest {
         let transport_interest = self.transport.readiness_interest();
         SrtEgressInterest {
             readable: transport_interest.readable,
-            writable: transport_interest.writable || self.engine.needs_write_interest(),
+            writable: transport_interest.writable
+                || (self.engine.needs_write_interest() && self.transport.write_ready()),
         }
     }
 
@@ -863,6 +845,19 @@ where
     K: SrtSocketConnector + Send + 'static,
     R: SrtResolveCompletionSource + Send + 'static,
 {
+    fn next_wakeup(&self) -> Option<Instant> {
+        wakeup::next_wakeup(self)
+    }
+
+    fn on_wakeup(&mut self) -> EgressShardCommandEffect {
+        let scheduled = wakeup::transport_wakeup(self);
+        if scheduled > 0 {
+            EgressShardCommandEffect::ScheduleReady { count: scheduled }
+        } else {
+            EgressShardCommandEffect::Continue
+        }
+    }
+
     fn resync_count(&self) -> u64 {
         self.resync_count
     }

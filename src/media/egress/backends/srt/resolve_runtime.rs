@@ -121,6 +121,14 @@ impl<B> EgressShardBackend for ResolvingSrtShardBackend<B>
 where
     B: EgressShardBackend,
 {
+    fn next_wakeup(&self) -> Option<std::time::Instant> {
+        self.backend.next_wakeup()
+    }
+
+    fn on_wakeup(&mut self) -> EgressShardCommandEffect {
+        self.backend.on_wakeup()
+    }
+
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
         // Buffer the resolve request instead of spawning a thread per
         // command. `on_media_tick` flushes the batch.

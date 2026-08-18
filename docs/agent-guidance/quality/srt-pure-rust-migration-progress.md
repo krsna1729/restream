@@ -6,6 +6,7 @@
 - [Phase 6: production Rust egress seam](#phase-6-production-rust-egress-seam)
 - [Phase 4: TLPKTDROP receiver accounting](#phase-4-tlpktdrop-receiver-accounting)
 - [Affinity invariant for tuple sharding and bonding](#affinity-invariant-for-tuple-sharding-and-bonding)
+- [Paired Rust egress timer/wakeup profile — 2026-08-18](#paired-rust-egress-timerwakeup-profile--2026-08-18)
 
 ## Current migration policy
 
@@ -266,3 +267,50 @@ worker, yet still produced 34 sender-side drops at 371.0% CPU; high-tuple
 `SO_REUSEPORT` setup timed out before its first checkpoint at 180 seconds.
 Tuple distribution fixes ownership skew, not the SRT protocol or per-session
 cost.
+
+## Paired Rust egress timer/wakeup profile — 2026-08-18
+
+The Rust production egress path now exposes transport timer and pacing
+deadlines to the egress shard. Idle handshake, retransmit, ACK, keepalive, and
+inactivity timers wake the shard without requiring a readable UDP event.
+Pacing-blocked application queues suppress writable polling until their send
+deadline, avoiding a permanently writable-UDP scheduler loop. A deterministic
+regression test covers timer service without fd readiness:
+`idle_transport_deadline_is_serviced_without_fd_readiness`.
+
+The first paired Rust/Rust 600-output run deliberately used one sink port. It
+stalled at 561/600 and the restream log recorded repeated `handshake timeout`
+events to the same sink port (`127.0.0.1:31642`). This is receiver admission
+pressure, not a protocol interop failure: the same Rust sender and receiver
+passed 30/30 and 120/120, and the measured 8-port/4-worker receiver topology
+passed 600/600.
+
+The valid profile used `PEER_COUNT=8`,
+`HARNESS_SRT_SINK_SCALING=ports`, `HARNESS_SRT_SINK_THREADS=4`, Rust egress,
+Rust sink, SRT-only MSR, and 600 outputs. `perf record -F 99 -g` captured the
+restream process and all sink worker threads concurrently. Both flamegraphs,
+raw perf data, folded stacks, reports, and the result JSON are retained in
+`.local/artifacts/msr-rust-egress-ports8-profile-20260818/`.
+
+| Endpoint | CPU / RSS evidence | Result |
+|---|---:|---:|
+| Restream | 249.37% average, 257.41% peak; 188,940 KiB RSS | Rust egress, 600/600 |
+| Rust sink | profiled across 11 sink/runtime TIDs | 8 ports / 4 workers |
+| Differential gate | 165,937,448 bytes growth; 0 sender drops | PASS |
+
+The restream flamegraph shows the expected Rust UDP/SRT path: packet send in
+`SrtRustMessageSender::flush_outputs`, receive/feedback in `service`, Core
+`feed_recv_buf`, ACK generation, and timer handling. The new global wakeup
+scan is visible as `SrtShardBackend::next_wakeup` and
+`SrtRustMessageSender::next_timer_deadline`; it is measurable but small enough
+to be the next optimization target rather than a correctness blocker.
+
+The sink flamegraph is receiver-side evidence, not a restream proxy. Its
+largest named Rust costs are `SrtConnection::feed_recv_buf` (1.59%),
+`ReceiverBuffer::pop_ready` (1.28%), `_int_malloc` (0.81%),
+`process_rust_connections_mode` (0.80%), `ReceiverBuffer::generate_ack`
+(0.66%), and `ReceiverBuffer::receive` (0.62%), with `epoll_wait` accounting
+for the expected idle/waiting share. There is no dominant worker lock convoy.
+The next receiver work is therefore allocation/receive-buffer/ACK reduction,
+while the next restream work is replacing the per-idle global deadline scan
+with a cached or heap-backed wakeup index.

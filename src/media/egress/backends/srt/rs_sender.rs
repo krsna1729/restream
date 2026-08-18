@@ -2,14 +2,14 @@ use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::{SocketAddr, UdpSocket as StdUdpSocket};
 use std::os::fd::{AsRawFd, RawFd};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use mio::net::UdpSocket;
 use rand::RngExt;
 use shiguredo_srt::{
-    ConnectionOptions, ConnectionOutput, ConnectionState, ErrorKind, KeyLength, SrtConnection,
-    TimerId, Timestamp,
+    ConnectionEvent, ConnectionOptions, ConnectionOutput, ConnectionState, ErrorKind, KeyLength,
+    SrtConnection, TimerId, Timestamp,
 };
 
 use crate::media::egress::backend::{CloseReason, Readiness};
@@ -167,6 +167,33 @@ impl SrtRustMessageSender {
         Ok(())
     }
 
+    fn service(&mut self, now: Timestamp, readable: bool) -> Result<(), String> {
+        self.process_timers(now)?;
+        if readable {
+            self.receive_packets(now)?;
+        }
+        self.flush_outputs(now)?;
+        while let Some(event) = self.conn.poll_event() {
+            match event {
+                ConnectionEvent::Error(detail) => {
+                    tracing::warn!(peer = %self.peer, detail = %detail, "Rust SRT connection error");
+                    self.closed = true;
+                }
+                ConnectionEvent::Disconnected { reason } => {
+                    tracing::warn!(peer = %self.peer, reason = %reason, "Rust SRT connection disconnected");
+                    self.closed = true;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn timestamp_deadline(&self, deadline: Timestamp) -> Option<Instant> {
+        self.started
+            .checked_add(Duration::from_micros(deadline.as_micros()))
+    }
+
     fn receive_packets(&mut self, now: Timestamp) -> Result<(), String> {
         loop {
             let result = self
@@ -193,6 +220,9 @@ impl SrtMessageSender for SrtRustMessageSender {
             return SrtSendResult::WouldBlock;
         }
         let now = self.now();
+        if !self.conn.can_send_with_pacing(now) {
+            return SrtSendResult::WouldBlock;
+        }
         if let Err(error) = self.conn.send(message, now) {
             return if error.kind == ErrorKind::InvalidState {
                 SrtSendResult::WouldBlock
@@ -230,20 +260,41 @@ impl SrtMessageSender for SrtRustMessageSender {
             return;
         }
         let now = self.now();
-        let result = self
-            .process_timers(now)
-            .and_then(|()| {
-                readiness
-                    .readable
-                    .then(|| self.receive_packets(now))
-                    .transpose()
-                    .map(|_| ())
-            })
-            .and_then(|()| self.flush_outputs(now));
-        if result.is_err() {
+        if self.service(now, readiness.readable).is_err() {
             self.closed = true;
         }
-        while self.conn.poll_event().is_some() {}
+    }
+
+    fn next_timer_deadline(&self) -> Option<Instant> {
+        self.timers
+            .values()
+            .filter_map(|deadline| self.timestamp_deadline(*deadline))
+            .min()
+    }
+
+    fn next_send_deadline(&self) -> Option<Instant> {
+        if self.closed || self.conn.state() != ConnectionState::Connected || !self.conn.can_send() {
+            return None;
+        }
+        let wait_micros = self.conn.time_until_send(self.now());
+        (wait_micros > 0).then(|| Instant::now() + Duration::from_micros(wait_micros))
+    }
+
+    fn on_wakeup(&mut self) {
+        if self.closed {
+            return;
+        }
+        if self.service(self.now(), false).is_err() {
+            self.closed = true;
+        }
+    }
+
+    fn write_ready(&self) -> bool {
+        !self.closed && self.conn.can_send_with_pacing(self.now())
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed
     }
 
     fn readiness_interest(&self) -> SrtEgressInterest {

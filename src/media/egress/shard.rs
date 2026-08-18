@@ -129,6 +129,14 @@ impl EgressShardSnapshot {
 pub trait EgressShardBackend: Send + 'static {
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect;
 
+    fn next_wakeup(&self) -> Option<Instant> {
+        None
+    }
+
+    fn on_wakeup(&mut self) -> EgressShardCommandEffect {
+        EgressShardCommandEffect::Continue
+    }
+
     fn timer_generation(&self, _output_id: &OutputId) -> Option<u64> {
         None
     }
@@ -378,6 +386,10 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             let mut timers_processed = self.process_timer_batch(&mut running);
             if running && processed == 0 && ready_processed == 0 && timers_processed == 0 {
                 processed = self.wait_for_command(&mut running);
+                if running && processed == 0 {
+                    let effect = self.backend.on_wakeup();
+                    self.apply_effect(effect);
+                }
                 if running {
                     ready_processed += self.process_ready_batch(&mut running);
                 }
@@ -451,7 +463,16 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
     }
 
     fn wait_for_command(&mut self, running: &mut bool) -> usize {
-        match self.receiver.recv_timeout(self.config.idle_wait) {
+        let timeout = self
+            .backend
+            .next_wakeup()
+            .map(|deadline| {
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(self.config.idle_wait)
+            })
+            .unwrap_or(self.config.idle_wait);
+        match self.receiver.recv_timeout(timeout) {
             Ok(command) => {
                 let effect = self.process_command(command);
                 if self.apply_effect(effect).stops_shard() {

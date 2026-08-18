@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use std::os::raw::c_int;
+use std::time::Instant;
 
 use crate::media::egress::backend::{CloseReason, Readiness};
 use crate::media::srt::srt_egress_poller::SrtEgressInterest;
@@ -83,6 +84,24 @@ pub(crate) trait SrtMessageSender {
 
     fn on_readiness(&mut self, _readiness: Readiness) {}
 
+    fn next_timer_deadline(&self) -> Option<Instant> {
+        None
+    }
+
+    fn next_send_deadline(&self) -> Option<Instant> {
+        None
+    }
+
+    fn on_wakeup(&mut self) {}
+
+    fn write_ready(&self) -> bool {
+        true
+    }
+
+    fn is_closed(&self) -> bool {
+        false
+    }
+
     fn readiness_interest(&self) -> SrtEgressInterest {
         SrtEgressInterest::WRITE
     }
@@ -122,6 +141,26 @@ where
 
     fn on_readiness(&mut self, readiness: Readiness) {
         (**self).on_readiness(readiness);
+    }
+
+    fn next_timer_deadline(&self) -> Option<Instant> {
+        (**self).next_timer_deadline()
+    }
+
+    fn next_send_deadline(&self) -> Option<Instant> {
+        (**self).next_send_deadline()
+    }
+
+    fn on_wakeup(&mut self) {
+        (**self).on_wakeup();
+    }
+
+    fn write_ready(&self) -> bool {
+        (**self).write_ready()
+    }
+
+    fn is_closed(&self) -> bool {
+        (**self).is_closed()
     }
 
     fn readiness_interest(&self) -> SrtEgressInterest {
