@@ -10,10 +10,40 @@ use super::srt_stream_id::percent_decode;
 /// before. Every field here is `None` (formula/constant default from
 /// `EgressBufferOpts::defaults`, see buffer_sizing.rs) unless the operator asked
 /// for something different on this one destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SrtBondMode {
+    Broadcast,
+    Backup,
+}
+
+impl SrtBondMode {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "broadcast" => Some(Self::Broadcast),
+            "backup" => Some(Self::Backup),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn group_mode(self) -> shiguredo_srt::GroupMode {
+        match self {
+            Self::Broadcast => shiguredo_srt::GroupMode::Broadcast,
+            Self::Backup => shiguredo_srt::GroupMode::Backup,
+        }
+    }
+
+    pub(crate) fn group_type(self) -> shiguredo_srt::GroupType {
+        match self {
+            Self::Broadcast => shiguredo_srt::GroupType::Broadcast,
+            Self::Backup => shiguredo_srt::GroupType::Backup,
+        }
+    }
+}
 pub(super) struct SrtEgressUrl {
     pub(super) host_port: String,
     pub(super) streamid: String,
     pub(super) bond_addrs: Vec<String>,
+    pub(super) bond_mode: SrtBondMode,
     pub(super) passphrase: String,
     pub(super) pbkeylen: Option<c_int>,
     /// `sndbuf=<bytes>`: SRT send-buffer ceiling (`SRTO_SNDBUF`).
@@ -43,6 +73,7 @@ pub(super) fn parse_srt_egress_url(url: &str) -> SrtEgressUrl {
 
     let mut streamid = String::new();
     let mut bond_addrs: Vec<String> = Vec::new();
+    let mut bond_mode = SrtBondMode::Backup;
     let mut passphrase = String::new();
     let mut pbkeylen = None;
     let mut sndbuf_bytes = None;
@@ -61,6 +92,11 @@ pub(super) fn parse_srt_egress_url(url: &str) -> SrtEgressUrl {
                     "bond" => {
                         bond_addrs = key_val[1].split(',').map(|s| s.to_string()).collect();
                     }
+                    "bondmode" => {
+                        if let Some(mode) = SrtBondMode::parse(key_val[1]) {
+                            bond_mode = mode;
+                        }
+                    }
                     "sndbuf" => sndbuf_bytes = key_val[1].parse::<i32>().ok().filter(|v| *v > 0),
                     "rcvbuf" => rcvbuf_bytes = key_val[1].parse::<i32>().ok().filter(|v| *v > 0),
                     "latency" => latency_ms = key_val[1].parse::<i32>().ok().filter(|v| *v >= 0),
@@ -75,6 +111,7 @@ pub(super) fn parse_srt_egress_url(url: &str) -> SrtEgressUrl {
         host_port,
         streamid,
         bond_addrs,
+        bond_mode,
         passphrase,
         pbkeylen,
         sndbuf_bytes,
@@ -148,6 +185,18 @@ mod tests {
             Some(-1)
         );
         assert_eq!(parse_srt_egress_url("host:9000?maxbw=-2").maxbw_bps, None);
+    }
+
+    #[test]
+    fn bond_mode_defaults_to_backup_and_parses_broadcast() {
+        assert_eq!(
+            parse_srt_egress_url("host:9000").bond_mode,
+            SrtBondMode::Backup
+        );
+        assert_eq!(
+            parse_srt_egress_url("host:9000?bondmode=broadcast").bond_mode,
+            SrtBondMode::Broadcast
+        );
     }
 
     #[test]

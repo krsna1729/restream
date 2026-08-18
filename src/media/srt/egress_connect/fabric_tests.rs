@@ -2,6 +2,8 @@ use super::*;
 use std::cell::RefCell;
 use std::sync::Mutex;
 
+use crate::media::srt::srt_url::SrtBondMode;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Event {
     Single {
@@ -15,6 +17,7 @@ enum Event {
     Bonded {
         peer_addrs: Vec<SocketAddr>,
         stream_id: String,
+        bond_mode: SrtBondMode,
         has_crypto: bool,
         send_mode: SrtEgressSendMode,
     },
@@ -66,6 +69,7 @@ impl SrtFabricConnectOps for &FakeFabricConnectOps {
         self.events.borrow_mut().push(Event::Bonded {
             peer_addrs: config.peer_addrs.to_vec(),
             stream_id: config.stream_id.to_string(),
+            bond_mode: config.bond_mode,
             has_crypto: config.crypto.is_some(),
             send_mode: config.send_mode,
         });
@@ -92,6 +96,7 @@ fn fabric_config<'a>(
         1500,
         muxer_port_claim,
         EgressBufferOpts::defaults(None),
+        SrtBondMode::Backup,
     )
 }
 
@@ -139,6 +144,7 @@ fn fabric_connect_uses_bonded_nonblocking_socket_for_multiple_peers() {
         &[Event::Bonded {
             peer_addrs,
             stream_id: "publish:key".to_string(),
+            bond_mode: SrtBondMode::Backup,
             has_crypto: false,
             send_mode: SrtEgressSendMode::FabricNonblocking,
         }]

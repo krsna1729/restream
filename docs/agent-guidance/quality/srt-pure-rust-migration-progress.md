@@ -14,6 +14,7 @@
 - [Core Broadcast/Backup group machine — 2026-08-18](#core-broadcastbackup-group-machine--2026-08-18)
 - [Rust sink GROUP admission — 2026-08-18](#rust-sink-group-admission--2026-08-18)
 - [Production Rust bonded egress and paired endpoint profile — 2026-08-18](#production-rust-bonded-egress-and-paired-endpoint-profile--2026-08-18)
+- [Explicit production Broadcast/Backup mode matrix — 2026-08-18](#explicit-production-broadcastbackup-mode-matrix--2026-08-18)
 - [Kernel symbols and connected affinity profile — 2026-08-18](#kernel-symbols-and-connected-affinity-profile--2026-08-18)
 - [Kernel-symbol and profiling toolchain verification — 2026-08-18](#kernel-symbol-and-profiling-toolchain-verification--2026-08-18)
 - [Reusable SRT lifecycle crate extraction — 2026-08-18](#reusable-srt-lifecycle-crate-extraction--2026-08-18)
@@ -837,6 +838,49 @@ Rust/Rust production soak. Rust-egress to native libsrt group-receiver
 interop, native libsrt egress to Rust GROUP admission, and Connected-mode
 GROUP admission are now live-verified. The four receiver-strategy comparison
 must continue to treat sink cost and restream cost as separate columns.
+
+## Explicit production Broadcast/Backup mode matrix — 2026-08-18
+
+The production egress mode is now explicit and typed end to end. The URL
+parser accepts `bondmode=broadcast|backup`; omission and unknown values retain
+the historical Backup default. Native egress maps the mode to
+`SRT_GTYPE_BROADCAST` (`1`) or `SRT_GTYPE_BACKUP` (`2`). Rust egress maps it to
+the matching `GroupMode` and handshake `GroupType`. The MSR sink harness uses
+`MSR_SRT_BOND_MODE` to exercise the same URL path. This keeps the two backend
+modes whole-stack selectable while allowing mixed backends for differential
+testing.
+
+The optimized `target/bench` binaries were used for all eight 30-output runs.
+Each run used two bonded legs, `MSR_PROTOCOL_MIX=srt-only`, four Rust sink
+workers where applicable, and the sink verification window. Every matrix cell
+passed with 30/30 outputs and zero sink-reported packet drops:
+
+| Egress | Sink | Mode | CPU avg (%) | RSS peak (KiB) | Bytes out | Result |
+|---|---|---|---:|---:|---:|---|
+| Rust | Rust | Broadcast | 48.67 | 91,036 | 7,856,144 | PASS, 30/30, 0 drops |
+| Rust | Rust | Backup | 53.60 | 90,840 | 7,521,504 | PASS, 30/30, 0 drops |
+| Rust | libsrt | Broadcast | 40.66 | 90,452 | 7,505,148 | PASS, 30/30, 0 drops |
+| Rust | libsrt | Backup | 37.72 | 90,172 | 7,461,720 | PASS, 30/30, 0 drops |
+| libsrt | Rust | Broadcast | 119.99 | 141,700 | 7,618,136 | PASS, 30/30, 0 drops |
+| libsrt | Rust | Backup | 78.68 | 141,880 | 7,671,716 | PASS, 30/30, 0 drops |
+| libsrt | libsrt | Broadcast | 93.85 | 143,388 | 7,511,164 | PASS, 30/30, 0 drops |
+| libsrt | libsrt | Backup | 103.12 | 143,484 | 7,488,040 | PASS, 30/30, 0 drops |
+
+The artifacts are retained under
+`.local/artifacts/srt-bond-mode-20260818-<egress>-<sink>-<mode>-30/`.
+The CPU/RSS values are run-level MSR resource-window measurements, not
+isolated sink-worker measurements; the paired endpoint perf/profile work
+remains the authority for hot-path attribution.
+
+The native reference failover helper was also rerun against the pinned
+libsrt build. Broadcast accepted two members and delivered one message;
+Backup accepted two members, closed the weight-1 primary, promoted the
+standby, and delivered the post-close message (`failover=1`). Both exited
+zero. Logs are retained under
+`.local/artifacts/srt-bond-mode-20260818-native-failover/`. This proves the
+libsrt reference failover path, while live Rust production failover under a
+deliberately killed bonded member remains an explicit gate before claiming
+Rust Backup failover complete.
 
 ## Kernel-symbol and profiling toolchain verification — 2026-08-18
 

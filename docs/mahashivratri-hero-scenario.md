@@ -434,6 +434,7 @@ Names are provisional until the mode is implemented:
 | `HARNESS_SRT_SINK_FC_PACKETS` | `32768` | `MSR_PEER=sink` only: SRT flow-control ceiling used by both the libsrt and Rust sink backends |
 | `HARNESS_SRT_SINK_RCVBUF_BYTES` | `12582912` (12MiB) | `MSR_PEER=sink` only: SRT send/receive buffer policy used by both sink backends; Rust converts it to packets using 1472 bytes per packet and caps it at FC |
 | `MSR_SRT_BOND` | unset | `MSR_PEER=sink` test-only switch: adds a second SRT leg to the same sink endpoint so the Rust or libsrt bonding receiver is exercised without changing ordinary MSR output URLs |
+| `MSR_SRT_BOND_MODE` | unset (`backup`) | `MSR_SRT_BOND=1` only: `backup` or `broadcast`; appends `bondmode=` to the output URL so the native and Rust egress paths can be tested against the matching sink group mode |
 | `MSR_SKIP_FFPROBE` | unset | Skip ffprobe read-back checks (always forced on when `MSR_PEER=sink`) |
 | `MSR_SINK_SAMPLE_SECS` | `3` | mediamtx path-health sample window before the resource-window sample |
 | `MSR_SINK_POST_SAMPLE_SECS` | `2` | mediamtx path-health sample window after the resource-window sample |

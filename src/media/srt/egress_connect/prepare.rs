@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use crate::media::srt::buffer_sizing::EgressBufferOpts;
 use crate::media::srt::srt_crypto::{SrtCryptoConfig, srt_crypto_from_url};
-use crate::media::srt::srt_url::parse_srt_egress_url;
+use crate::media::srt::srt_url::{SrtBondMode, parse_srt_egress_url};
 
 use super::{SrtEgressMuxerPortClaim, SrtFabricEgressConnectConfig};
 
@@ -10,6 +10,7 @@ use super::{SrtEgressMuxerPortClaim, SrtFabricEgressConnectConfig};
 pub(crate) struct SrtFabricEgressConnectSpec {
     peer_hosts: Vec<String>,
     stream_id: String,
+    bond_mode: SrtBondMode,
     crypto: Option<SrtCryptoConfig>,
     connect_timeout_ms: u64,
     /// Resolved SRT socket options for this destination: formula/constant
@@ -37,6 +38,7 @@ impl SrtFabricEgressConnectSpec {
         Self {
             peer_hosts,
             stream_id: parsed.streamid,
+            bond_mode: parsed.bond_mode,
             crypto: srt_crypto_from_url(parsed.passphrase, parsed.pbkeylen),
             connect_timeout_ms,
             buffer_opts,
@@ -59,6 +61,7 @@ impl SrtFabricEgressConnectSpec {
             self.connect_timeout_ms,
             muxer_port_claim,
             self.buffer_opts,
+            self.bond_mode,
         )
     }
 
@@ -80,6 +83,11 @@ impl SrtFabricEgressConnectSpec {
     #[cfg(test)]
     pub(crate) fn connect_timeout_ms(&self) -> u64 {
         self.connect_timeout_ms
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bond_mode(&self) -> SrtBondMode {
+        self.bond_mode
     }
 }
 
@@ -114,6 +122,20 @@ mod tests {
         );
 
         assert!(spec.has_crypto());
+    }
+
+    #[test]
+    fn srt_fabric_connect_spec_preserves_broadcast_bond_mode() {
+        let spec = SrtFabricEgressConnectSpec::from_url(
+            "srt://host:9000?streamid=publish:key&bondmode=broadcast",
+            2500,
+        );
+
+        assert_eq!(spec.bond_mode(), SrtBondMode::Broadcast);
+        assert_eq!(
+            spec.connect_config(&[], None).bond_mode(),
+            SrtBondMode::Broadcast
+        );
     }
 
     #[test]

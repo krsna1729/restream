@@ -5,9 +5,10 @@ use super::to_libc_sockaddr;
 use crate::media::srt::buffer_sizing::EgressBufferOpts;
 use crate::media::srt::socket::{EGRESS_UDP_RCVBUF, srt_set_egress_opts};
 use crate::media::srt::srt_crypto::{SrtCryptoConfig, apply_srt_crypto_socket};
+use crate::media::srt::srt_url::SrtBondMode;
 use crate::media::srt::sys::{
-    SRT_GTYPE_BACKUP, SRTSOCKET, SrtGroupMemberConfig, srt_close, srt_connect_group,
-    srt_create_group, srt_getlasterror_str, srt_prepare_endpoint,
+    SRT_GTYPE_BACKUP, SRT_GTYPE_BROADCAST, SRTSOCKET, SrtGroupMemberConfig, srt_close,
+    srt_connect_group, srt_create_group, srt_getlasterror_str, srt_prepare_endpoint,
 };
 use crate::media::srt::{
     SrtEgressSendMode, SrtEgressSocketError, apply_srt_egress_stream_id,
@@ -17,6 +18,7 @@ use crate::media::srt::{
 pub(in crate::media::srt) struct SrtBondedEgressConnectConfig<'a> {
     pub(in crate::media::srt) peer_addrs: &'a [SocketAddr],
     pub(in crate::media::srt) stream_id: &'a str,
+    pub(in crate::media::srt) bond_mode: SrtBondMode,
     pub(in crate::media::srt) crypto: Option<&'a SrtCryptoConfig>,
     pub(in crate::media::srt) send_mode: SrtEgressSendMode,
     /// See `SrtSingleEgressConnectConfig::buffer_opts`.
@@ -36,7 +38,7 @@ fn connect_bonded_srt_egress_socket_with<O>(
 where
     O: SrtBondedConnectOps,
 {
-    let socket = ops.create_group()?;
+    let socket = ops.create_group(config.bond_mode)?;
 
     if let Some(crypto) = config.crypto
         && let Err(error) = ops.apply_crypto(socket, crypto)
@@ -73,7 +75,7 @@ where
 trait SrtBondedConnectOps {
     type Member;
 
-    fn create_group(&mut self) -> Result<SRTSOCKET, String>;
+    fn create_group(&mut self, mode: SrtBondMode) -> Result<SRTSOCKET, String>;
     fn close(&mut self, socket: SRTSOCKET);
     fn apply_crypto(&mut self, socket: SRTSOCKET, crypto: &SrtCryptoConfig) -> Result<(), String>;
     fn apply_stream_id(&mut self, socket: SRTSOCKET, stream_id: &str) -> Result<(), String>;
@@ -97,11 +99,15 @@ struct LibSrtBondedConnectOps;
 impl SrtBondedConnectOps for LibSrtBondedConnectOps {
     type Member = SrtGroupMemberConfig;
 
-    fn create_group(&mut self) -> Result<SRTSOCKET, String> {
+    fn create_group(&mut self, mode: SrtBondMode) -> Result<SRTSOCKET, String> {
         // SAFETY: Category 8 - FFI boundary. libsrt returns either a valid
         // group socket handle or a negative sentinel, and the sentinel is
         // checked before the handle is used.
-        let socket = unsafe { srt_create_group(SRT_GTYPE_BACKUP) };
+        let group_type = match mode {
+            SrtBondMode::Broadcast => SRT_GTYPE_BROADCAST,
+            SrtBondMode::Backup => SRT_GTYPE_BACKUP,
+        };
+        let socket = unsafe { srt_create_group(group_type) };
         if socket < 0 {
             tracing::error!("Failed to create bonding group");
             Err("failed to create bonding group".to_string())

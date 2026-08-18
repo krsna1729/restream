@@ -9,8 +9,7 @@ use mio::net::UdpSocket;
 use rand::RngExt;
 use shiguredo_srt::{
     ConnectionOptions, ConnectionOutput, ConnectionState, ErrorKind, GroupExtensionData,
-    GroupMemberState, GroupMode, KeyLength, SRTGROUP_MASK, SrtConnection, SrtGroup, TimerId,
-    Timestamp,
+    GroupMemberState, KeyLength, SRTGROUP_MASK, SrtConnection, SrtGroup, TimerId, Timestamp,
 };
 
 use crate::media::egress::backend::{CloseReason, Readiness};
@@ -49,7 +48,7 @@ impl SrtRustGroupSender {
         let socket = UdpSocket::from_std(std_socket);
         let started = Instant::now();
         let group_id = SRTGROUP_MASK | nonzero_random_u32() & 0x3FFF_FFFF;
-        let group = SrtGroup::new(group_id, GroupMode::Backup)
+        let group = SrtGroup::new(group_id, config.bond_mode().group_mode())
             .map_err(|error| format!("create Rust SRT group: {error}"))?;
         let mut sender = Self {
             socket: Some(socket),
@@ -248,7 +247,7 @@ fn group_options(
         receive_buffer_packets: receive_buffer_packets_from_bytes(rcvbuf, flow_window_packets),
         group_extension: Some(GroupExtensionData {
             group_id,
-            group_type: shiguredo_srt::GroupType::Backup,
+            group_type: config.bond_mode().group_type(),
             flags: 0,
             weight,
         }),

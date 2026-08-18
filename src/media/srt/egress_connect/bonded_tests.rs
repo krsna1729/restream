@@ -3,7 +3,7 @@ use std::cell::RefCell;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Event {
-    CreateGroup,
+    CreateGroup(SrtBondMode),
     Crypto(SRTSOCKET),
     StreamId(SRTSOCKET, String),
     Prepare(SocketAddr, bool),
@@ -53,8 +53,8 @@ impl FakeBondedConnectOps {
 impl SrtBondedConnectOps for &FakeBondedConnectOps {
     type Member = FakeMember;
 
-    fn create_group(&mut self) -> Result<SRTSOCKET, String> {
-        self.events.borrow_mut().push(Event::CreateGroup);
+    fn create_group(&mut self, mode: SrtBondMode) -> Result<SRTSOCKET, String> {
+        self.events.borrow_mut().push(Event::CreateGroup(mode));
         if self.fail_step == Some(FailStep::CreateGroup) {
             return Err("failed to create bonding group".to_string());
         }
@@ -148,9 +148,18 @@ fn connect_config<'a>(
     peer_addrs: &'a [SocketAddr],
     crypto: Option<&'a SrtCryptoConfig>,
 ) -> SrtBondedEgressConnectConfig<'a> {
+    connect_config_with_mode(peer_addrs, crypto, SrtBondMode::Backup)
+}
+
+fn connect_config_with_mode<'a>(
+    peer_addrs: &'a [SocketAddr],
+    crypto: Option<&'a SrtCryptoConfig>,
+    bond_mode: SrtBondMode,
+) -> SrtBondedEgressConnectConfig<'a> {
     SrtBondedEgressConnectConfig {
         peer_addrs,
         stream_id: "publish:key",
+        bond_mode,
         crypto,
         send_mode: SrtEgressSendMode::LegacyBlocking,
         buffer_opts: test_buffer_opts(),
@@ -176,7 +185,7 @@ fn bonded_connect_prepares_primary_and_backup_members_before_connect() {
     assert_eq!(
         ops.events.borrow().as_slice(),
         &[
-            Event::CreateGroup,
+            Event::CreateGroup(SrtBondMode::Backup),
             Event::StreamId(42, "publish:key".to_string()),
             Event::Prepare(peer_addrs[0], true),
             Event::Prepare(peer_addrs[1], false),
@@ -215,7 +224,7 @@ fn bonded_connect_applies_crypto_before_stream_id() {
     assert_eq!(
         &ops.events.borrow()[..3],
         &[
-            Event::CreateGroup,
+            Event::CreateGroup(SrtBondMode::Backup),
             Event::Crypto(42),
             Event::StreamId(42, "publish:key".to_string()),
         ]
@@ -230,7 +239,10 @@ fn bonded_connect_returns_create_error_without_close_when_group_creation_fails()
     let result = connect_bonded_srt_egress_socket_with(connect_config(&peer_addrs, None), &ops);
 
     assert_eq!(result, Err("failed to create bonding group".to_string()));
-    assert_eq!(ops.events.borrow().as_slice(), &[Event::CreateGroup]);
+    assert_eq!(
+        ops.events.borrow().as_slice(),
+        &[Event::CreateGroup(SrtBondMode::Backup)]
+    );
 }
 
 #[test]
@@ -300,5 +312,23 @@ fn bonded_connect_applies_fabric_send_mode_after_connect_and_closes_on_failure()
         ops.events
             .borrow()
             .contains(&Event::Configure(42, SrtEgressSendMode::FabricNonblocking))
+    );
+}
+
+#[test]
+fn bonded_connect_selects_broadcast_group_mode_before_connect() {
+    let peer_addrs = peer_addrs();
+    let ops = FakeBondedConnectOps::new();
+
+    let socket = connect_bonded_srt_egress_socket_with(
+        connect_config_with_mode(&peer_addrs, None, SrtBondMode::Broadcast),
+        &ops,
+    )
+    .unwrap();
+
+    assert_eq!(socket, 42);
+    assert_eq!(
+        ops.events.borrow().first(),
+        Some(&Event::CreateGroup(SrtBondMode::Broadcast))
     );
 }

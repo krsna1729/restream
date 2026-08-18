@@ -229,6 +229,13 @@ fn encrypted_srt_outputs_carry_the_same_crypto_parameters_as_the_sink() {
 }
 
 #[test]
+fn srt_bond_mode_accepts_only_the_two_protocol_group_modes() {
+    assert_eq!(normalize_srt_bond_mode("broadcast"), Some("broadcast"));
+    assert_eq!(normalize_srt_bond_mode(" BACKUP "), Some("backup"));
+    assert_eq!(normalize_srt_bond_mode("round-robin"), None);
+}
+
+#[test]
 fn peer_instance_selection_round_robins_by_ordinal() {
     assert_eq!(msr_peer_instance(1, 1), 0);
     assert_eq!(msr_peer_instance(1200, 1), 0);

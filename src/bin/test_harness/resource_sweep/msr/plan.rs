@@ -404,9 +404,26 @@ pub(super) fn msr_output_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> 
             let mut url = harness_srt_standard_publish_url(srt_port, &output.name);
             if std::env::var_os("MSR_SRT_BOND").is_some() {
                 url.push_str(&format!("&bond=127.0.0.1:{srt_port}"));
+                if let Some(mode) = configured_srt_bond_mode() {
+                    url.push_str(&format!("&bondmode={mode}"));
+                }
             }
             append_srt_crypto(url, &env.srt_crypto)
         }
+    }
+}
+
+fn configured_srt_bond_mode() -> Option<&'static str> {
+    std::env::var("MSR_SRT_BOND_MODE")
+        .ok()
+        .and_then(|value| normalize_srt_bond_mode(&value))
+}
+
+pub(super) fn normalize_srt_bond_mode(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "broadcast" => Some("broadcast"),
+        "backup" => Some("backup"),
+        _ => None,
     }
 }
 

@@ -491,14 +491,15 @@ at 1,200 outputs.
 
 ## SRT bonding
 
-Current production bonding (below) is libsrt-based and `SRT_GTYPE_BACKUP`
-only. A phased plan exists to replace libsrt with a pure-Rust implementation
-and, within that, to prioritize `SRT_GTYPE_BROADCAST` support ahead of
-matching this existing Backup capability — see
-[`srt-pure-rust-plan.md`](srt-pure-rust-plan.md) for the rationale (a
-pipeline-input-level failover switch already covers what Backup groups
-provide operationally) and [`srt-pure-rust-design.md`](srt-pure-rust-design.md)
-for the target architecture.
+Production egress bonding supports both `SRT_GTYPE_BACKUP` and
+`SRT_GTYPE_BROADCAST` in either the native libsrt or pure-Rust backend. The
+mode is selected with `bondmode=backup|broadcast` on the `bond=` URL; omitting
+it preserves the historical Backup default. The receiver must still advertise
+the same group type in its GROUP handshake extension. The remaining phased
+work is live differential scale/failover evidence for both modes, not a
+second mode-specific implementation path. See [`srt-pure-rust-plan.md`](srt-pure-rust-plan.md)
+and [`srt-pure-rust-design.md`](srt-pure-rust-design.md) for the layering and
+interop rationale.
 
 ### Ingest
 
@@ -518,13 +519,19 @@ depends on the distro `libsrt` package.
 
 ### Egress
 
-Backup links via `bond=` URL parameter:
+Bonded links use the `bond=` URL parameter, with an optional group mode:
 
 ```text
-srt://primary:10080?streamid=publish:key&bond=backup1:10080,backup2:10080
+srt://primary:10080?streamid=publish:key&bond=backup1:10080,backup2:10080&bondmode=backup
+srt://primary:10080?streamid=publish:key&bond=backup1:10080,backup2:10080&bondmode=broadcast
 ```
 
-Creates an `SRT_GTYPE_BACKUP` group. Both single-connection and bonded egress groups now call `srt_set_highbitrate_opts(client_sock)` immediately after creation to prevent packet drops and buffer overflows under high bitrates.
+`bondmode=backup` creates an `SRT_GTYPE_BACKUP` group: the highest-weight
+active member sends and standby members take over after failure.
+`bondmode=broadcast` creates an `SRT_GTYPE_BROADCAST` group: active members
+send the same sequence and the receiver deduplicates it by group sequence.
+Both single-connection and bonded egress groups apply their resolved socket
+options before transmission.
 
 ## Protocol correctness requirements
 

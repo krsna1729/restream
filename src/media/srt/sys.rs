@@ -99,6 +99,7 @@ pub struct SrtTraceBStats {
 }
 
 pub const SRTGROUP_MASK: c_int = 1 << 30;
+pub const SRT_GTYPE_BROADCAST: c_int = 1;
 pub const SRT_GTYPE_BACKUP: c_int = 2;
 pub(super) const SRTS_CONNECTED: c_int = 5;
 pub(super) const SRTS_BROKEN: c_int = 6;

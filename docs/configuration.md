@@ -380,14 +380,18 @@ sysctl policy cannot drift. They do not disable AppArmor or other host security
 policy; use `--no-netns` as a temporary fallback when the host administrator
 has not approved unprivileged namespaces.
 
-SRT egress backup links can be supplied with:
+SRT egress bonded links can be supplied with an optional group mode:
 
 ```text
-srt://primary.example:10080?streamid=publish:key&bond=backup1.example:10080,backup2.example:10080
+srt://primary.example:10080?streamid=publish:key&bond=backup1.example:10080,backup2.example:10080&bondmode=backup
+srt://primary.example:10080?streamid=publish:key&bond=backup1.example:10080,backup2.example:10080&bondmode=broadcast
 ```
 
-This code path is unit-tested for URL parsing and socket-option constants, but
-still needs live multi-link interoperability validation.
+`bondmode=backup` is the historical default and uses active/standby
+failover. `bondmode=broadcast` sends the same group sequence on active links
+for receiver-side deduplication. Both modes are available through the native
+libsrt and pure-Rust egress backends; live differential evidence is recorded in
+the SRT migration progress log.
 
 ### Recognized SRT egress URL parameters
 
@@ -402,6 +406,7 @@ error, it simply has no effect:
 | `passphrase` | AES passphrase for an encrypted link | — | — |
 | `pbkeylen` | AES key length (`16`, `24`, `32`) | — | — |
 | `bond` | Comma-separated backup links (see above) | — | — |
+| `bondmode` | Bond group mode: `backup` or `broadcast` | `backup` | — |
 | `sndbuf` | SRT send-buffer ceiling, in bytes (`SRTO_SNDBUF`) | `bitrate x latency x 4` formula, ~6.25 MB at the worst-case bitrate assumption | 2 MB – 12 MB |
 | `rcvbuf` | SRT receive-buffer ceiling, in bytes (`SRTO_RCVBUF`) | 1 MB — egress only ever receives small ACK/NAK control traffic, never media | 64 KB – 4 MB |
 | `latency` | Timestamp-based-delivery latency window, in ms (`SRTO_LATENCY`) | 250 ms | 20 ms – 8000 ms |

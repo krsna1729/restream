@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use crate::media::srt::SrtEgressSendMode;
 use crate::media::srt::buffer_sizing::EgressBufferOpts;
 use crate::media::srt::srt_crypto::SrtCryptoConfig;
+use crate::media::srt::srt_url::SrtBondMode;
 use crate::media::srt::sys::SRTSOCKET;
 
 use super::{
@@ -13,6 +14,7 @@ use super::{
 pub(crate) struct SrtFabricEgressConnectConfig<'a> {
     peer_addrs: &'a [SocketAddr],
     stream_id: &'a str,
+    bond_mode: SrtBondMode,
     crypto: Option<&'a SrtCryptoConfig>,
     connect_timeout_ms: u64,
     muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
@@ -27,10 +29,12 @@ impl<'a> SrtFabricEgressConnectConfig<'a> {
         connect_timeout_ms: u64,
         muxer_port_claim: Option<SrtEgressMuxerPortClaim<'a>>,
         buffer_opts: EgressBufferOpts,
+        bond_mode: SrtBondMode,
     ) -> Self {
         Self {
             peer_addrs,
             stream_id,
+            bond_mode,
             crypto,
             connect_timeout_ms,
             muxer_port_claim,
@@ -44,6 +48,10 @@ impl<'a> SrtFabricEgressConnectConfig<'a> {
 
     pub(crate) fn stream_id(&self) -> &str {
         self.stream_id
+    }
+
+    pub(crate) fn bond_mode(&self) -> SrtBondMode {
+        self.bond_mode
     }
 
     #[cfg(test)]
@@ -105,6 +113,7 @@ where
         peer_addrs => ops.connect_bonded(SrtBondedEgressConnectConfig {
             peer_addrs,
             stream_id: config.stream_id,
+            bond_mode: config.bond_mode,
             crypto: config.crypto,
             send_mode: SrtEgressSendMode::FabricNonblocking,
             buffer_opts: config.buffer_opts,
