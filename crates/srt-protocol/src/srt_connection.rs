@@ -318,6 +318,15 @@ impl SrtConnection {
         self.state
     }
 
+    /// Return this connection's local SRT socket ID.
+    ///
+    /// The ID is stable for the lifetime of one SRT leg and is carried in the
+    /// destination field of peer feedback packets. Callers multiplexing
+    /// multiple legs over one UDP tuple can use it to preserve leg identity.
+    pub fn socket_id(&self) -> u32 {
+        self.options.socket_id
+    }
+
     /// ピアから受信した Stream ID を取得 (Listener 用)
     pub fn peer_stream_id(&self) -> Option<&str> {
         self.peer_stream_id.as_deref()

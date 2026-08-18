@@ -15,6 +15,7 @@
 - [Rust sink GROUP admission — 2026-08-18](#rust-sink-group-admission--2026-08-18)
 - [Production Rust bonded egress and paired endpoint profile — 2026-08-18](#production-rust-bonded-egress-and-paired-endpoint-profile--2026-08-18)
 - [Explicit production Broadcast/Backup mode matrix — 2026-08-18](#explicit-production-broadcastbackup-mode-matrix--2026-08-18)
+- [Socket-ID bonded feedback routing and live Backup failover — 2026-08-19](#socket-id-bonded-feedback-routing-and-live-backup-failover--2026-08-19)
 - [Backup receive-batch ordering correction — 2026-08-18](#backup-receivebatch-ordering-correction--2026-08-18)
 - [Kernel symbols and connected affinity profile — 2026-08-18](#kernel-symbols-and-connected-affinity-profile--2026-08-18)
 - [Kernel-symbol and profiling toolchain verification — 2026-08-18](#kernel-symbol-and-profiling-toolchain-verification--2026-08-18)
@@ -833,12 +834,13 @@ with `sudo`; kernel address-map restriction remains noted in the generated
 reports. The profile is suitable for syscall/wakeup attribution and not for
 claiming fully symbolized kernel internals.
 
-The remaining bonding gates are failover under a live bonded output, Broadcast
-and Backup scale profiles at 300/700/1200 outputs, and the final whole-stack
-Rust/Rust production soak. Rust-egress to native libsrt group-receiver
-interop, native libsrt egress to Rust GROUP admission, and Connected-mode
-GROUP admission are now live-verified. The four receiver-strategy comparison
-must continue to treat sink cost and restream cost as separate columns.
+The remaining bonding gates are Broadcast and Backup scale profiles at
+300/700/1200 outputs and the final whole-stack Rust/Rust production soak.
+Rust-egress to native libsrt group-receiver interop, native libsrt egress to
+Rust GROUP admission, Connected-mode GROUP admission, and the basic live Rust
+Backup failover path are now live-verified. The four receiver-strategy
+comparison must continue to treat sink cost and restream cost as separate
+columns.
 
 ## Explicit production Broadcast/Backup mode matrix — 2026-08-18
 
@@ -879,9 +881,41 @@ Backup accepted two members, closed the weight-1 primary, promoted the
 standby, and delivered the post-close message (`failover=1`). Both exited
 zero. Logs are retained under
 `.local/artifacts/srt-bond-mode-20260818-native-failover/`. This proves the
-libsrt reference failover path, while live Rust production failover under a
-deliberately killed bonded member remains an explicit gate before claiming
-Rust Backup failover complete.
+libsrt reference failover path. The repeated live Rust production failover
+result is recorded below.
+
+## Socket-ID bonded feedback routing and live Backup failover — 2026-08-19
+
+The Rust bonded sender stored SRT group member IDs as one-based values in its
+socket-ID map. Its feedback receive path then added one more before indexing
+the Core group, so feedback from two legs sharing one peer tuple could be
+delivered to the wrong member. This was a member-identity boundary error, not
+a timer or group-promotion failure.
+
+The regression test
+`same_peer_feedback_reaches_the_socket_id_member` constructs two real SRT
+connection pairs with the same peer tuple, sends feedback from the second
+pair, and routes it through `SrtRustGroupSender::receive_packets`. It failed
+before the correction and passed after the receive path used the already
+one-based member ID directly. The existing unknown-socket-ID tuple fallback
+remains covered separately.
+
+The production-shaped manual QA used optimized x86-64-v3 bench binaries,
+Rust restream egress, a two-leg `bondmode=backup` URL, and the pinned native
+GROUP receiver. The native receiver deliberately closed the weight-1 primary
+after the first message. Two independent runs passed:
+
+| Run | Receiver evidence | Restream/harness evidence |
+|---|---|---|
+| `.local/artifacts/msr-rust-bond-failover-20260819/` | `closed_primary_after_first=1`; `members_before=2`; `members_after=1`; `messages=2`; `bytes=2632` | `outputs=1/1`; `bytesOutDelta=112424`; `outputsPresent=1`; `status=PASS` |
+| `.local/artifacts/msr-rust-bond-failover-20260819-retry/` | `closed_primary_after_first=1`; `members_before=2`; `members_after=1`; `messages=2`; `bytes=2632` | `outputs=1/1`; `bytesOutDelta=101144`; `outputsPresent=1`; `status=PASS` |
+
+The receiver logged `GROUP RCV-DROPPED` packets at the deliberate primary
+close. Those are queued packets abandoned with the closed primary; they are
+not hidden as a clean zero-loss claim. The failover contract itself is
+verified by the post-close second message, clean process exit, and successful
+restream output checkpoint. This closes basic Rust Backup failover, but not
+the sustained gap/duplicate budget or the 300/700/1200 scale gates.
 
 ## Backup receive-batch ordering correction — 2026-08-18
 
@@ -911,10 +945,10 @@ Evidence:
 - The ignored native interop test ran the real Rust sink against the pinned
   native client for both Broadcast and Backup and passed.
 
-This closes one receive-batch correctness seam. It does not close the separate
-live Rust egress failover gate: deliberately killed-member behavior, sustained
-gap/duplicate measurement, and 300/700/1200 Broadcast/Backup scale profiles
-remain required.
+This closes one receive-batch correctness seam. Combined with the repeated
+live result above, deliberately killed-member behavior is now covered at the
+basic production seam; sustained gap/duplicate measurement and the
+300/700/1200 Broadcast/Backup scale profiles remain required.
 
 ## Kernel-symbol and profiling toolchain verification — 2026-08-18
 

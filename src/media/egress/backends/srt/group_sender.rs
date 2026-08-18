@@ -22,6 +22,7 @@ pub(super) struct SrtRustGroupSender {
     socket: Option<UdpSocket>,
     peers: Vec<SocketAddr>,
     group: SrtGroup,
+    member_by_socket_id: HashMap<u32, u32>,
     timers: HashMap<u32, HashMap<TimerId, Timestamp>>,
     pending_datagrams: VecDeque<(SocketAddr, Vec<u8>)>,
     recv_buf: Vec<u8>,
@@ -54,6 +55,7 @@ impl SrtRustGroupSender {
             socket: Some(socket),
             peers,
             group,
+            member_by_socket_id: HashMap::new(),
             timers: HashMap::new(),
             pending_datagrams: VecDeque::new(),
             recv_buf: vec![0; 64 * 1024],
@@ -65,6 +67,7 @@ impl SrtRustGroupSender {
             let mut options = group_options(config, rcvbuf, latency, maxbw, fc, group_id, weight)?;
             options.socket_id = nonzero_random_u32();
             let mut connection = SrtConnection::new_caller(options);
+            let socket_id = connection.socket_id();
             connection
                 .connect(sender.now())
                 .map_err(|error| format!("start Rust SRT group handshake: {error}"))?;
@@ -72,6 +75,9 @@ impl SrtRustGroupSender {
                 .group
                 .add_member(index as u32 + 1, weight, connection)
                 .map_err(|error| format!("add Rust SRT group member: {error}"))?;
+            sender
+                .member_by_socket_id
+                .insert(socket_id, index as u32 + 1);
             sender.timers.insert(index as u32 + 1, HashMap::new());
         }
         sender.flush_outputs(sender.now())?;
@@ -188,10 +194,15 @@ impl SrtRustGroupSender {
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(error) => return Err(format!("receive Rust SRT group datagram: {error}")),
             };
-            let Some(member_id) = self.peers.iter().position(|candidate| *candidate == peer) else {
+            let Some(member_id) = member_id_for_datagram(
+                &self.peers,
+                &self.member_by_socket_id,
+                peer,
+                &self.recv_buf[..size],
+            ) else {
                 continue;
             };
-            let Some(member) = self.group.member_mut(member_id as u32 + 1) else {
+            let Some(member) = self.group.member_mut(member_id) else {
                 continue;
             };
             member
@@ -406,5 +417,176 @@ impl SrtMessageSender for SrtRustGroupSender {
             }
         }
         any.then_some(stats)
+    }
+}
+
+fn member_id_for_datagram(
+    peers: &[SocketAddr],
+    member_by_socket_id: &HashMap<u32, u32>,
+    peer: SocketAddr,
+    packet: &[u8],
+) -> Option<u32> {
+    packet_destination_socket_id(packet)
+        .and_then(|socket_id| (socket_id != 0).then(|| member_by_socket_id.get(&socket_id)))
+        .flatten()
+        .copied()
+        .or_else(|| {
+            peers
+                .iter()
+                .position(|candidate| *candidate == peer)
+                .map(|index| index as u32 + 1)
+        })
+}
+
+fn packet_destination_socket_id(packet: &[u8]) -> Option<u32> {
+    let bytes = packet.get(12..16)?;
+    Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shiguredo_srt::{ConnectionEvent, ControlPacket, ControlType, GroupMode, SrtPacket};
+
+    fn transfer(caller: &mut SrtConnection, listener: &mut SrtConnection, now: Timestamp) {
+        while let Some(output) = caller.poll_output() {
+            if let ConnectionOutput::SendPacket(packet) = output {
+                listener
+                    .feed_recv_buf(&packet, now)
+                    .expect("packet should decode");
+            }
+        }
+    }
+
+    fn establish_pair(socket_id: u32) -> (SrtConnection, SrtConnection) {
+        let mut caller = SrtConnection::new_caller(ConnectionOptions {
+            socket_id,
+            tsbpd_delay: 0,
+            ..Default::default()
+        });
+        let mut listener = SrtConnection::new_listener(ConnectionOptions {
+            tsbpd_delay: 0,
+            ..Default::default()
+        });
+        caller
+            .connect(Timestamp::from_micros(0))
+            .expect("caller should connect");
+        for round in 0..10 {
+            let now = Timestamp::from_micros(round * 10_000);
+            transfer(&mut caller, &mut listener, now);
+            while let Some(output) = listener.poll_output() {
+                if let ConnectionOutput::SendPacket(packet) = output {
+                    caller
+                        .feed_recv_buf(&packet, now)
+                        .expect("response should decode");
+                }
+            }
+            if caller.state() == ConnectionState::Connected
+                && listener.state() == ConnectionState::Connected
+            {
+                while caller.poll_event().is_some() {}
+                while listener.poll_event().is_some() {}
+                return (caller, listener);
+            }
+        }
+        panic!("pair did not connect");
+    }
+
+    fn data_packets(connection: &mut SrtConnection) -> Vec<Vec<u8>> {
+        connection
+            .poll_output()
+            .into_iter()
+            .filter_map(|output| match output {
+                ConnectionOutput::SendPacket(packet)
+                    if matches!(SrtPacket::decode(&packet), Ok(SrtPacket::Data(_))) =>
+                {
+                    Some(packet)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn same_peer_feedback_uses_destination_socket_id() {
+        let peer = "127.0.0.1:9000".parse().expect("peer address");
+        let mut members = HashMap::new();
+        members.insert(101, 1);
+        members.insert(202, 2);
+        let mut packet = Vec::new();
+        ControlPacket::new(ControlType::Ack, 0, 202).encode(&mut packet);
+
+        assert_eq!(
+            member_id_for_datagram(&[peer, peer], &members, peer, &packet),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn unknown_destination_socket_id_falls_back_to_peer_tuple() {
+        let peer = "127.0.0.1:9000".parse().expect("peer address");
+        let mut members = HashMap::new();
+        members.insert(101, 1);
+        members.insert(202, 2);
+        let mut packet = Vec::new();
+        ControlPacket::new(ControlType::Ack, 0, 303).encode(&mut packet);
+
+        assert_eq!(
+            member_id_for_datagram(&[peer, peer], &members, peer, &packet),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn same_peer_feedback_reaches_the_socket_id_member() {
+        let (caller_a, _listener_a) = establish_pair(101);
+        let (caller_b, mut listener_b) = establish_pair(202);
+        let receiver = StdUdpSocket::bind(("127.0.0.1", 0)).expect("receiver should bind");
+        receiver
+            .set_nonblocking(true)
+            .expect("receiver should be nonblocking");
+        let receiver_addr = receiver.local_addr().expect("receiver address");
+        let source = StdUdpSocket::bind(("127.0.0.1", 0)).expect("source should bind");
+        let peer = source.local_addr().expect("source address");
+        let caller_b_socket_id = caller_b.socket_id();
+
+        listener_b
+            .send(b"feedback", Timestamp::from_micros(100_000))
+            .expect("listener should send feedback");
+        let packet = data_packets(&mut listener_b)
+            .into_iter()
+            .next()
+            .expect("feedback should produce a data packet");
+        source
+            .send_to(&packet, receiver_addr)
+            .expect("feedback should reach the shared socket");
+
+        let mut group = SrtGroup::new(0x4000_0005, GroupMode::Broadcast).expect("group");
+        group.add_member(1, 100, caller_a).expect("member one");
+        group.add_member(2, 100, caller_b).expect("member two");
+        let mut sender = SrtRustGroupSender {
+            socket: Some(UdpSocket::from_std(receiver)),
+            peers: vec![peer, peer],
+            group,
+            member_by_socket_id: HashMap::from([(caller_b_socket_id, 2)]),
+            timers: HashMap::new(),
+            pending_datagrams: VecDeque::new(),
+            recv_buf: vec![0; 64 * 1024],
+            started: Instant::now(),
+            closed: false,
+        };
+
+        sender
+            .receive_packets(Timestamp::from_micros(100_000))
+            .expect("feedback should be accepted");
+        assert!(matches!(
+            sender
+                .group
+                .member_mut(2)
+                .expect("socket-ID member should exist")
+                .connection_mut()
+                .poll_event(),
+            Some(ConnectionEvent::DataReceived { payload, .. }) if payload == b"feedback"
+        ));
     }
 }

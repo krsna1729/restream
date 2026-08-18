@@ -401,9 +401,21 @@ pub(super) fn msr_output_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> 
     match output.protocol {
         MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{rtmp_port}/live/{}", output.name),
         MsrProtocol::Srt => {
-            let mut url = harness_srt_standard_publish_url(srt_port, &output.name);
+            let (mut url, target) = match std::env::var("MSR_SRT_OUTPUT_TARGET") {
+                Ok(target) => (
+                    harness_srt_standard_publish_url_at(&target, &output.name),
+                    target,
+                ),
+                Err(_) => {
+                    let target = format!("127.0.0.1:{srt_port}");
+                    (
+                        harness_srt_standard_publish_url(srt_port, &output.name),
+                        target,
+                    )
+                }
+            };
             if std::env::var_os("MSR_SRT_BOND").is_some() {
-                url.push_str(&format!("&bond=127.0.0.1:{srt_port}"));
+                url.push_str(&format!("&bond={target}"));
                 if let Some(mode) = configured_srt_bond_mode() {
                     url.push_str(&format!("&bondmode={mode}"));
                 }

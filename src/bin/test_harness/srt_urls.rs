@@ -31,7 +31,11 @@ pub(crate) fn harness_srt_output_url(port: u16, stream_key: &str, mode: HarnessS
 }
 
 pub(crate) fn harness_srt_standard_publish_url(port: u16, stream_key: &str) -> String {
-    format!("srt://127.0.0.1:{port}?streamid=#!::m=publish,r={stream_key}")
+    harness_srt_standard_publish_url_at(&format!("127.0.0.1:{port}"), stream_key)
+}
+
+pub(crate) fn harness_srt_standard_publish_url_at(target: &str, stream_key: &str) -> String {
+    format!("srt://{target}?streamid=#!::m=publish,r={stream_key}")
 }
 
 pub(crate) fn harness_srt_ffmpeg_url(
@@ -86,6 +90,10 @@ mod tests {
         assert_eq!(
             harness_srt_standard_publish_url(9000, "out"),
             "srt://127.0.0.1:9000?streamid=#!::m=publish,r=out"
+        );
+        assert_eq!(
+            harness_srt_standard_publish_url_at("127.0.0.1:9001", "out"),
+            "srt://127.0.0.1:9001?streamid=#!::m=publish,r=out"
         );
         assert_eq!(
             harness_srt_ffmpeg_listener_url(9000),
