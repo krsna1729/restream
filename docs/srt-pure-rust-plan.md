@@ -473,14 +473,14 @@ srt-protocol  <-  srt-lifecycle  <-  restream/harness lifecycle adapters
                                           remain adapter choices, not core deps
 ```
 
-`srt-lifecycle` should be extracted only after the current listener-owned
-connected handoff is verified. Its first public contract should be the
-invariants already required by the live tests: one owner per packet key,
-GROUP and normalized StreamID keep all bond legs together, a connected Core
-and its timers move together exactly once, and release removes every alias and
-group reference. The crate should carry deterministic unit/property tests for
-those invariants; socket creation, authorization callbacks, media delivery,
-and metrics stay at the application boundary.
+The listener-owned connected handoff is now verified and the first
+`srt-lifecycle` extraction is implemented. Its initial public contract is the
+generic transport-key router, one owner per packet key, GROUP plus normalized
+StreamID affinity for all bond legs, handshake GROUP extraction, and release
+of the final logical group reference. The next extraction can add explicit
+Core/timer handoff events if both adapters still need them; socket creation,
+authorization callbacks, media delivery, and metrics stay at the application
+boundary.
 
 ### Internal module decomposition of `crates/srt-protocol`
 

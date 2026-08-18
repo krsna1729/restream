@@ -3158,6 +3158,7 @@ dependencies = [
  "shiguredo_mp4",
  "shiguredo_srt",
  "sqlx",
+ "srt-lifecycle",
  "sysinfo",
  "tokio",
  "tokio-rustls",
@@ -3849,6 +3850,13 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "srt-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "shiguredo_srt",
 ]
 
 [[package]]

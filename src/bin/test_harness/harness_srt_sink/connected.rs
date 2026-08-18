@@ -1,5 +1,6 @@
 use super::*;
 use shiguredo_srt::{ConnectionState, GroupExtensionData, SRTGROUP_MASK};
+use srt_lifecycle::{GroupAffinity, LogicalGroupKey};
 use std::collections::hash_map::Entry;
 
 #[derive(Default)]
@@ -32,12 +33,6 @@ struct ConnectedPeer {
     groups: group::RustSinkGroups,
     group_routes: group::RustSinkGroupRoutes,
     last_activity: Instant,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct GroupAffinity {
-    group_id: u32,
-    stream_id: Option<String>,
 }
 
 const CONNECTED_PEER_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -185,11 +180,11 @@ fn run_listener(
     let mut active_connection_workers = HashMap::<RustSinkConnectionKey, usize>::new();
     let mut pending = HashMap::<RustSinkConnectionKey, RustSinkConnection>::new();
     let mut pending_routes = HashMap::<RustSinkConnectionKey, RustSinkConnectionKey>::new();
-    let mut pending_groups = HashMap::<GroupAffinity, GroupExtensionData>::new();
-    let mut pending_group_refs = HashMap::<RustSinkConnectionKey, GroupAffinity>::new();
-    let mut group_workers = HashMap::<GroupAffinity, usize>::new();
-    let mut active_group_counts = HashMap::<GroupAffinity, usize>::new();
-    let mut active_connection_groups = HashMap::<RustSinkConnectionKey, GroupAffinity>::new();
+    let mut pending_groups = HashMap::<LogicalGroupKey, GroupExtensionData>::new();
+    let mut pending_group_refs = HashMap::<RustSinkConnectionKey, LogicalGroupKey>::new();
+    let mut group_workers = HashMap::<LogicalGroupKey, usize>::new();
+    let mut active_group_counts = HashMap::<LogicalGroupKey, usize>::new();
+    let mut active_connection_groups = HashMap::<RustSinkConnectionKey, LogicalGroupKey>::new();
     let mut worker_tuple_counts = vec![0usize; workers.len()];
     let mut worker_assignment_counts = vec![0usize; workers.len()];
     let mut next_worker = 0usize;
@@ -277,8 +272,9 @@ fn run_listener(
                 .get_mut(&connection_key)
                 .expect("pending connection inserted above");
             if let Some((affinity, extension)) = &packet_group {
-                pending_group_refs.insert(connection_key, affinity.clone());
-                let local_extension = pending_groups.entry(affinity.clone()).or_insert_with(|| {
+                let group_key = affinity.logical_key();
+                pending_group_refs.insert(connection_key, group_key.clone());
+                let local_extension = pending_groups.entry(group_key).or_insert_with(|| {
                     let local_id = SRTGROUP_MASK | (next_group_id & 0x3FFF_FFFF).max(1);
                     next_group_id = next_group_id.wrapping_add(1).max(1);
                     GroupExtensionData {
@@ -324,14 +320,13 @@ fn run_listener(
                         .peer_group_extension()
                         .map(|extension| GroupAffinity {
                             group_id: extension.group_id,
-                            stream_id: group::normalize_stream_id(
-                                connection.conn.peer_stream_id().map(str::to_owned),
-                            ),
+                            stream_id: connection.conn.peer_stream_id().map(str::to_owned),
+                            extension,
                         });
                 let worker = connected_group
                     .as_ref()
                     .and_then(|affinity| {
-                        let worker = group_workers.get(affinity).copied();
+                        let worker = group_workers.get(&affinity.logical_key()).copied();
                         if worker.is_some()
                             && let Some(trace) = &trace
                         {
@@ -343,9 +338,10 @@ fn run_listener(
                         select_worker(&mut next_worker, &worker_tuple_counts, routing)
                     });
                 if let Some(affinity) = connected_group.clone() {
-                    group_workers.entry(affinity.clone()).or_insert(worker);
-                    active_connection_groups.insert(connection_key, affinity.clone());
-                    *active_group_counts.entry(affinity).or_default() += 1;
+                    let group_key = affinity.logical_key();
+                    group_workers.entry(group_key.clone()).or_insert(worker);
+                    active_connection_groups.insert(connection_key, group_key.clone());
+                    *active_group_counts.entry(group_key).or_default() += 1;
                 }
                 for alias in aliases
                     .iter()
@@ -401,7 +397,8 @@ fn packet_group_affinity(packet: &[u8]) -> Option<(GroupAffinity, GroupExtension
         (
             GroupAffinity {
                 group_id: extension.group_id,
-                stream_id: group::normalize_stream_id(stream_id),
+                stream_id,
+                extension,
             },
             extension,
         )
@@ -437,7 +434,7 @@ fn process_pending_timers(
     socket: &MioUdpSocket,
     pending: &mut HashMap<RustSinkConnectionKey, RustSinkConnection>,
     pending_routes: &mut HashMap<RustSinkConnectionKey, RustSinkConnectionKey>,
-    pending_group_refs: &mut HashMap<RustSinkConnectionKey, GroupAffinity>,
+    pending_group_refs: &mut HashMap<RustSinkConnectionKey, LogicalGroupKey>,
     start: Instant,
 ) {
     let now = timestamp(start);
@@ -487,12 +484,12 @@ fn release_active_peer(
     peer: SocketAddr,
     active_workers: &mut HashMap<RustSinkConnectionKey, usize>,
     active_connection_workers: &mut HashMap<RustSinkConnectionKey, usize>,
-    group_workers: &mut HashMap<GroupAffinity, usize>,
+    group_workers: &mut HashMap<LogicalGroupKey, usize>,
     worker_tuple_counts: &mut [usize],
-    pending_groups: &mut HashMap<GroupAffinity, GroupExtensionData>,
-    pending_group_refs: &HashMap<RustSinkConnectionKey, GroupAffinity>,
-    active_group_counts: &mut HashMap<GroupAffinity, usize>,
-    active_connection_groups: &mut HashMap<RustSinkConnectionKey, GroupAffinity>,
+    pending_groups: &mut HashMap<LogicalGroupKey, GroupExtensionData>,
+    pending_group_refs: &HashMap<RustSinkConnectionKey, LogicalGroupKey>,
+    active_group_counts: &mut HashMap<LogicalGroupKey, usize>,
+    active_connection_groups: &mut HashMap<RustSinkConnectionKey, LogicalGroupKey>,
 ) {
     let keys = active_connection_workers
         .keys()

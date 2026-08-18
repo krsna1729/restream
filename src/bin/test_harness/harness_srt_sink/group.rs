@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
-use shiguredo_srt::{
-    GroupExtensionData, GroupMode, HandshakePacket, SRTGROUP_MASK, SrtGroup, SrtPacket,
-};
+use shiguredo_srt::{GroupExtensionData, GroupMode, SRTGROUP_MASK, SrtGroup};
+use srt_lifecycle::normalize_stream_id;
 
 use super::{RustSinkConnection, RustSinkConnectionKey, RustSinkConnections, RustSinkRouteMap};
 
@@ -193,21 +192,7 @@ fn prepare_admission(
 pub(super) fn group_extension_from_packet(
     packet: &[u8],
 ) -> Option<(GroupExtensionData, Option<String>)> {
-    let SrtPacket::Control(control) = SrtPacket::decode(packet).ok()? else {
-        return None;
-    };
-    let handshake = HandshakePacket::decode(&control).ok()?;
-    Some((
-        handshake.get_group_extension()?,
-        handshake.get_sid_extension(),
-    ))
-}
-
-pub(super) fn normalize_stream_id(stream_id: Option<String>) -> Option<String> {
-    stream_id.and_then(|stream_id| {
-        let normalized = stream_id.trim_matches('\0').trim().to_string();
-        (!normalized.is_empty()).then_some(normalized)
-    })
+    srt_lifecycle::group_extension_from_packet(packet)
 }
 
 fn allocate_group_id(next_group_id: &mut u32) -> u32 {
@@ -219,6 +204,7 @@ fn allocate_group_id(next_group_id: &mut u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shiguredo_srt::HandshakePacket;
 
     #[test]
     fn group_admission_allocates_one_mirror_id_per_peer_group_and_stream() {

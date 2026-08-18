@@ -168,7 +168,7 @@ struct ListenerState<'a> {
     socket: &'a mut UdpSocket,
     pending: &'a mut HashMap<SocketAddr, RustConnection>,
     routes: &'a mut HashMap<SocketAddr, usize>,
-    router: &'a mut WorkerRouter,
+    router: &'a mut WorkerRouter<SocketAddr>,
     routing_mode: RoutingMode,
     commands: &'a [Sender<WorkerCommand>],
     next_serial: &'a mut u64,
@@ -278,11 +278,11 @@ fn receive_packets(state: &mut ListenerState<'_>, packet: &mut [u8]) {
 }
 
 fn release_route(
-    router: &mut WorkerRouter,
+    router: &mut WorkerRouter<SocketAddr>,
     local_groups: &mut HashMap<LogicalGroupKey, GroupExtensionData>,
     peer: SocketAddr,
 ) {
-    if let Some(group_key) = router.release(peer) {
+    if let Some(group_key) = router.release(&peer) {
         local_groups.remove(&group_key);
     }
 }

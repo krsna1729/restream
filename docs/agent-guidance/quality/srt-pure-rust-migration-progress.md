@@ -13,6 +13,7 @@
 - [Rust sink GROUP admission — 2026-08-18](#rust-sink-group-admission--2026-08-18)
 - [Production Rust bonded egress and paired endpoint profile — 2026-08-18](#production-rust-bonded-egress-and-paired-endpoint-profile--2026-08-18)
 - [Kernel symbols and connected affinity profile — 2026-08-18](#kernel-symbols-and-connected-affinity-profile--2026-08-18)
+- [Reusable SRT lifecycle crate extraction — 2026-08-18](#reusable-srt-lifecycle-crate-extraction--2026-08-18)
 
 ## Current migration policy
 
@@ -565,3 +566,32 @@ Rust/Rust production soak. Rust-egress to native libsrt group-receiver
 interop, native libsrt egress to Rust GROUP admission, and Connected-mode
 GROUP admission are now live-verified. The four receiver-strategy comparison
 must continue to treat sink cost and restream cost as separate columns.
+
+## Reusable SRT lifecycle crate extraction — 2026-08-18
+
+The lifecycle seam is now implemented as `crates/srt-lifecycle`, rather than
+remaining a plan-only boundary. It depends only on `crates/srt-protocol` and
+standard library collections. Its public policy surface is the generic
+transport-key `WorkerRouter`, `GroupAffinity`, `LogicalGroupKey`,
+`RoutingMode`, StreamID normalization, and handshake GROUP extraction. It does
+not depend on Mio, Tokio, any of the six benchmark runtimes, threads, sockets,
+media, authorization, or wall-clock time.
+
+Restream connected ingest now uses `WorkerRouter<SocketAddr>` and the shared
+GROUP/StreamID handshake route. The harness connected sink uses the same
+policy with its own `RustSinkConnectionKey` transport key, retaining the
+protocol socket-ID dimension locally. This keeps runtime-specific socket
+creation and connected-datagram ownership in each adapter while eliminating
+the duplicated affinity, disconnect cleanup, and handshake parsing policy.
+
+Verification after extraction:
+
+- `cargo test -p srt-lifecycle`: 3 passed, 0 failed.
+- `cargo test --bin test_harness harness_srt_sink`: 10 passed, 1 native-only
+  test ignored, 0 failed.
+- `cargo clippy -p srt-lifecycle --all-targets -- -D warnings` and the
+  harness all-target clippy gate passed.
+- Optimized Rust/Rust bonded MSR smoke reached 30/30 outputs with 0 sender
+  drops and 0 live-process residue after the run. This is an integration
+  correctness check, not a performance comparison; performance tuning resumes
+  only after the remaining SRT integration seams consume the same layering.

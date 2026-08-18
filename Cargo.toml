@@ -12,7 +12,13 @@ repository = "https://github.com/krsna1729/restream"
 # scripts/build/* command, build.rs, benches/, and tests/ path working
 # unchanged -- see that plan's "Workspace and crate layout" section.
 [workspace]
-members = [".", "crates/srt-protocol", "crates/srt-protocol/pbt", "crates/srt-interop"]
+members = [
+    ".",
+    "crates/srt-protocol",
+    "crates/srt-lifecycle",
+    "crates/srt-protocol/pbt",
+    "crates/srt-interop",
+]
 exclude = ["crates/srt-protocol/fuzz"]
 
 [lints.rust]
@@ -64,6 +70,7 @@ url = "2"
 percent-encoding = "2"
 shiguredo_mp4 = "2026.3.0"
 shiguredo_srt = { path = "crates/srt-protocol" }
+srt-lifecycle = { path = "crates/srt-lifecycle" }
 mio = { version = "1", features = ["net", "os-poll"] }
 tracing = { version = "0.1", features = ["max_level_debug"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
