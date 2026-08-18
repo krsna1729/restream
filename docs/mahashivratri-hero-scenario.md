@@ -428,8 +428,10 @@ Names are provisional until the mode is implemented:
 | `PEER_COUNT` | `1` | Number of peer instances (`MTX_RTMP`/`MTX_SRT`/`MTX_API` + instance offset each); outputs distribute round-robin by ordinal (`ordinal % PEER_COUNT`) |
 | `PEER_SKIP_START` | unset | Meaningful only for `MSR_PEER=mediamtx`: peer instances are pre-started externally, and the harness verifies all `PEER_COUNT` instances are live instead of spawning them. No effect on `MSR_PEER=sink` — an in-process listener has no external-process equivalent to skip-start; it is always bound fresh by the harness. |
 | `MSR_PEER` | `mediamtx` | `mediamtx` (default) or `sink` — see "Peer modes" below |
-| `HARNESS_SRT_SINK_THREADS` | `PEER_COUNT` | `MSR_PEER=sink` only: **total** discard-thread count for the shared SRT sink pool, partitioned into exclusively-owned port chunks (`PEER_COUNT / HARNESS_SRT_SINK_THREADS` ports/thread) — not a per-port count. Default reproduces the historical 1-port-per-thread behavior |
-| `HARNESS_SRT_SINK_UDP_BUFFER` | `8388608` (8MB) | `MSR_PEER=sink` only: `SRTO_UDP_RCVBUF`/`SRTO_UDP_SNDBUF` for each SRT sink-peer instance |
+| `HARNESS_SRT_SINK_BACKEND` | `libsrt` (or `RESTREAM_SRT_BACKEND`) | `MSR_PEER=sink` only: `libsrt` for the native control stack or `rust` for the pure-Rust Core receiver. The Rust MSR path must set this to `rust` so the sink cannot bottleneck Rust egress with libsrt |
+| `HARNESS_SRT_SINK_THREADS` | `PEER_COUNT` | `MSR_PEER=sink` only: **libsrt** discard-thread count for the shared SRT sink pool, partitioned into exclusively-owned port chunks. The Rust backend uses one mio loop and ignores this value |
+| `HARNESS_SRT_SINK_UDP_BUFFER` | `8388608` (8MB) | `MSR_PEER=sink` only: native libsrt sink `SRTO_UDP_RCVBUF`/`SRTO_UDP_SNDBUF`; the Rust backend does not use this native option |
+| `MSR_SRT_BOND` | unset | `MSR_PEER=sink` test-only switch: adds a second SRT leg to the same sink endpoint so the Rust or libsrt bonding receiver is exercised without changing ordinary MSR output URLs |
 | `MSR_SKIP_FFPROBE` | unset | Skip ffprobe read-back checks (always forced on when `MSR_PEER=sink`) |
 | `MSR_SINK_SAMPLE_SECS` | `3` | mediamtx path-health sample window before the resource-window sample |
 | `MSR_SINK_POST_SAMPLE_SECS` | `2` | mediamtx path-health sample window after the resource-window sample |
@@ -465,8 +467,11 @@ never expected to be started by hand outside `PEER_SKIP_START`.
   on `sink` peers (it exists only for pre-started external processes, i.e.
   `mediamtx`).
 
-  The SRT side is a single shared `harness_srt_sink.rs::HarnessSrtSinkPool`
-  spanning every `PEER_COUNT` port, not one listener per instance.
+  The SRT side is a single shared sink pool spanning every `PEER_COUNT` port,
+  not one listener per instance. `HARNESS_SRT_SINK_BACKEND=libsrt` selects
+  `harness_srt_sink.rs::HarnessSrtSinkPool`; `HARNESS_SRT_SINK_BACKEND=rust`
+  selects the pure-Rust `SrtConnection` receiver and its one mio readiness
+  loop. Rust-stack measurements must use the latter.
   `HARNESS_SRT_SINK_THREADS` is a **total** thread budget for that pool
   (default: `PEER_COUNT`, i.e. one thread per port), partitioned into
   contiguous, **exclusively owned** port chunks — `ports.len() /

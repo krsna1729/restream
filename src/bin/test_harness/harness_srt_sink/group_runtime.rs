@@ -175,6 +175,25 @@ pub(crate) fn process(
     socket: &super::super::MioUdpSocket,
     now: Timestamp,
 ) {
+    process_mode(groups, group_routes, socket, now, false);
+}
+
+pub(crate) fn process_connected(
+    groups: &mut RustSinkGroups,
+    group_routes: &mut RustSinkGroupRoutes,
+    socket: &super::super::MioUdpSocket,
+    now: Timestamp,
+) {
+    process_mode(groups, group_routes, socket, now, true);
+}
+
+fn process_mode(
+    groups: &mut RustSinkGroups,
+    group_routes: &mut RustSinkGroupRoutes,
+    socket: &super::super::MioUdpSocket,
+    now: Timestamp,
+    connected: bool,
+) {
     let keys: Vec<RustSinkGroupKey> = groups.keys().cloned().collect();
     for key in keys {
         let Some(group) = groups.get_mut(&key) else {
@@ -205,9 +224,13 @@ pub(crate) fn process(
                 broken.push(member_id);
                 continue;
             };
-            let output = RustSinkOutput::Datagram {
-                socket,
-                peer: leg.peer,
+            let output = if connected {
+                RustSinkOutput::Connected { socket }
+            } else {
+                RustSinkOutput::Datagram {
+                    socket,
+                    peer: leg.peer,
+                }
             };
             if super::super::drain_rust_outputs_mode(
                 member.connection_mut(),

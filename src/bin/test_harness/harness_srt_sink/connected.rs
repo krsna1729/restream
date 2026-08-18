@@ -6,6 +6,9 @@ struct Trace {
     connected_socket_packets: AtomicU64,
     handoffs: AtomicU64,
     tuple_count: AtomicU64,
+    group_packets: AtomicU64,
+    group_worker_reuses: AtomicU64,
+    source_worker_reuses: AtomicU64,
 }
 
 enum Command {
@@ -18,7 +21,15 @@ struct ConnectedPeer {
     socket: MioUdpSocket,
     connections: RustSinkConnections,
     routes: RustSinkRouteMap,
+    groups: group::RustSinkGroups,
+    group_routes: group::RustSinkGroupRoutes,
     last_activity: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct GroupAffinity {
+    group_id: u32,
+    stream_id: Option<String>,
 }
 
 const CONNECTED_PEER_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -158,12 +169,27 @@ fn run_listener(
     let mut events = Events::with_capacity(1);
     let mut packet = [0u8; 64 * 1024];
     let mut tuple_workers = HashMap::<SocketAddr, usize>::new();
+    let mut group_workers = HashMap::<GroupAffinity, usize>::new();
+    // Native libsrt's first induction datagram has no GROUP extension. Keep a
+    // provisional source-IP owner until the group metadata appears so bonded
+    // legs cannot be split between connected workers during admission.
+    let mut source_workers = HashMap::<std::net::IpAddr, usize>::new();
+    let mut source_tuple_counts = HashMap::<std::net::IpAddr, usize>::new();
     let mut worker_tuple_counts = vec![0usize; workers.len()];
+    let mut worker_assignment_counts = vec![0usize; workers.len()];
     let mut next_worker = 0usize;
     while !stop.load(Ordering::Relaxed) {
         while let Ok(peer) = release_receiver.try_recv() {
             if let Some(worker) = tuple_workers.remove(&peer) {
                 worker_tuple_counts[worker] = worker_tuple_counts[worker].saturating_sub(1);
+            }
+            let source = peer.ip();
+            if let Some(count) = source_tuple_counts.get_mut(&source) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    source_tuple_counts.remove(&source);
+                    source_workers.remove(&source);
+                }
             }
         }
         if let Err(error) = poll.poll(&mut events, Some(Duration::from_millis(20)))
@@ -188,33 +214,84 @@ fn run_listener(
             if let Some(trace) = &trace {
                 trace.listener_packets.fetch_add(1, Ordering::Relaxed);
             }
+            let group_affinity = group::group_extension_from_packet(&packet[..size]).map(
+                |(extension, stream_id)| GroupAffinity {
+                    group_id: extension.group_id,
+                    stream_id: group::normalize_stream_id(stream_id),
+                },
+            );
+            if group_affinity.is_some()
+                && let Some(trace) = &trace
+            {
+                trace.group_packets.fetch_add(1, Ordering::Relaxed);
+            }
             let (worker, first_packet) = if let Some(worker) = tuple_workers.get(&peer).copied() {
+                if group_affinity.is_some()
+                    && let Some(trace) = &trace
+                {
+                    trace.group_worker_reuses.fetch_add(1, Ordering::Relaxed);
+                }
+                if let Some(affinity) = group_affinity.as_ref() {
+                    group_workers.entry(affinity.clone()).or_insert(worker);
+                }
                 (worker, false)
             } else {
-                let worker = match routing {
-                    RustConnectedRouting::RoundRobin => {
-                        let worker = next_worker % workers.len();
-                        next_worker = next_worker.wrapping_add(1);
-                        worker
-                    }
-                    RustConnectedRouting::LeastTuples => {
-                        let mut selected = next_worker % workers.len();
-                        for offset in 1..workers.len() {
-                            let candidate = (next_worker + offset) % workers.len();
-                            if worker_tuple_counts[candidate] < worker_tuple_counts[selected] {
-                                selected = candidate;
-                            }
+                let affinity_worker = group_affinity.as_ref().and_then(|affinity| {
+                    group_workers.get(affinity).copied().or_else(|| {
+                        affinity.stream_id.as_ref().and_then(|_| {
+                            group_workers
+                                .get(&GroupAffinity {
+                                    group_id: affinity.group_id,
+                                    stream_id: None,
+                                })
+                                .copied()
+                        })
+                    })
+                });
+                let source_worker = source_workers.get(&peer.ip()).copied();
+                if affinity_worker.is_none()
+                    && source_worker.is_some()
+                    && let Some(trace) = &trace
+                {
+                    trace.source_worker_reuses.fetch_add(1, Ordering::Relaxed);
+                }
+                if affinity_worker.is_some()
+                    && let Some(trace) = &trace
+                {
+                    trace.group_worker_reuses.fetch_add(1, Ordering::Relaxed);
+                }
+                let worker = affinity_worker
+                    .or(source_worker)
+                    .unwrap_or_else(|| match routing {
+                        RustConnectedRouting::RoundRobin => {
+                            let worker = next_worker % workers.len();
+                            next_worker = next_worker.wrapping_add(1);
+                            worker
                         }
-                        next_worker = selected.wrapping_add(1);
-                        selected
-                    }
-                };
+                        RustConnectedRouting::LeastTuples => {
+                            let mut selected = next_worker % workers.len();
+                            for offset in 1..workers.len() {
+                                let candidate = (next_worker + offset) % workers.len();
+                                if worker_tuple_counts[candidate] < worker_tuple_counts[selected] {
+                                    selected = candidate;
+                                }
+                            }
+                            next_worker = selected.wrapping_add(1);
+                            selected
+                        }
+                    });
                 tuple_workers.insert(peer, worker);
                 worker_tuple_counts[worker] += 1;
+                source_workers.entry(peer.ip()).or_insert(worker);
+                *source_tuple_counts.entry(peer.ip()).or_default() += 1;
+                if let Some(affinity) = group_affinity {
+                    group_workers.entry(affinity).or_insert(worker);
+                }
                 if let Some(trace) = &trace {
                     trace.handoffs.fetch_add(1, Ordering::Relaxed);
                     trace.tuple_count.fetch_add(1, Ordering::Relaxed);
                 }
+                worker_assignment_counts[worker] += 1;
                 (worker, true)
             };
             let command = if first_packet {
@@ -230,8 +307,18 @@ fn run_listener(
             };
             if workers[worker].send(command).is_err() {
                 tuple_workers.remove(&peer);
+                let source = peer.ip();
+                if let Some(count) = source_tuple_counts.get_mut(&source) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        source_tuple_counts.remove(&source);
+                        source_workers.remove(&source);
+                    }
+                }
                 if first_packet {
                     worker_tuple_counts[worker] = worker_tuple_counts[worker].saturating_sub(1);
+                    worker_assignment_counts[worker] =
+                        worker_assignment_counts[worker].saturating_sub(1);
                 }
                 tracing::debug!(%peer, worker, "Rust connected sink worker channel closed");
             }
@@ -239,11 +326,15 @@ fn run_listener(
     }
     if let Some(trace) = trace {
         eprintln!(
-            "[rust-sink-handoff] listener_packets={} connected_socket_packets={} handoffs={} tuples={}",
+            "[rust-sink-handoff] listener_packets={} connected_socket_packets={} handoffs={} tuples={} group_packets={} group_worker_reuses={} source_worker_reuses={} worker_assignments={:?}",
             trace.listener_packets.load(Ordering::Relaxed),
             trace.connected_socket_packets.load(Ordering::Relaxed),
             trace.handoffs.load(Ordering::Relaxed),
             trace.tuple_count.load(Ordering::Relaxed),
+            trace.group_packets.load(Ordering::Relaxed),
+            trace.group_worker_reuses.load(Ordering::Relaxed),
+            trace.source_worker_reuses.load(Ordering::Relaxed),
+            worker_assignment_counts,
         );
     }
 }
@@ -270,6 +361,7 @@ fn run_worker(
     let mut packet = [0u8; 64 * 1024];
     let start = Instant::now();
     let mut next_socket_id = std::process::id().wrapping_add(1);
+    let mut next_group_id = std::process::id().wrapping_add(1);
     let mut observed_socket_ids = HashMap::<SocketAddr, HashSet<u32>>::new();
 
     while !stop.load(Ordering::Relaxed) {
@@ -298,19 +390,14 @@ fn run_worker(
             };
             connected_peer.last_activity = Instant::now();
             observe_socket_id(&mut observed_socket_ids, peer, &packet);
-            receive_rust_packet(
+            receive_connected_packet(
                 peer,
                 &packet,
-                RustSinkPacketContext {
-                    connections: &mut connected_peer.connections,
-                    routes: &mut connected_peer.routes,
-                    crypto: &crypto,
-                    start,
-                    next_socket_id: &mut next_socket_id,
-                    output: RustSinkOutput::Connected {
-                        socket: &connected_peer.socket,
-                    },
-                },
+                connected_peer,
+                &crypto,
+                start,
+                &mut next_socket_id,
+                &mut next_group_id,
             );
         }
 
@@ -348,19 +435,14 @@ fn run_worker(
                     connected_peer.peer,
                     &packet[..size],
                 );
-                receive_rust_packet(
+                receive_connected_packet(
                     connected_peer.peer,
                     &packet[..size],
-                    RustSinkPacketContext {
-                        connections: &mut connected_peer.connections,
-                        routes: &mut connected_peer.routes,
-                        crypto: &crypto,
-                        start,
-                        next_socket_id: &mut next_socket_id,
-                        output: RustSinkOutput::Connected {
-                            socket: &connected_peer.socket,
-                        },
-                    },
+                    connected_peer,
+                    &crypto,
+                    start,
+                    &mut next_socket_id,
+                    &mut next_group_id,
                 );
             }
         }
@@ -378,7 +460,14 @@ fn run_worker(
                 now,
                 true,
             );
+            group::process_connected(
+                &mut connected_peer.groups,
+                &mut connected_peer.group_routes,
+                &connected_peer.socket,
+                now,
+            );
             if connected_peer.connections.is_empty()
+                && connected_peer.groups.is_empty()
                 && connected_peer.last_activity.elapsed() >= CONNECTED_PEER_IDLE_TIMEOUT
             {
                 let peer = connected_peer.peer;
@@ -408,6 +497,34 @@ fn run_worker(
             max_socket_ids_per_tuple,
         );
     }
+}
+
+fn receive_connected_packet(
+    peer: SocketAddr,
+    packet: &[u8],
+    connected_peer: &mut ConnectedPeer,
+    crypto: &RustSinkCrypto,
+    start: Instant,
+    next_socket_id: &mut u32,
+    next_group_id: &mut u32,
+) {
+    let socket = &connected_peer.socket;
+    let mut state = RustSinkGroupPoolState {
+        connections: &mut connected_peer.connections,
+        routes: &mut connected_peer.routes,
+        groups: &mut connected_peer.groups,
+        group_routes: &mut connected_peer.group_routes,
+        crypto,
+        start,
+        next_socket_id,
+        next_group_id,
+    };
+    group::receive(
+        peer,
+        packet,
+        &mut state,
+        RustSinkOutput::Connected { socket },
+    );
 }
 
 fn observe_socket_id(
@@ -448,6 +565,8 @@ fn ensure_connected_peer(
         socket,
         connections: HashMap::new(),
         routes: HashMap::new(),
+        groups: HashMap::new(),
+        group_routes: HashMap::new(),
         last_activity: Instant::now(),
     };
     if index == peers.len() {
@@ -460,7 +579,7 @@ fn ensure_connected_peer(
 }
 
 fn connected_poll_wait(peers: &[Option<ConnectedPeer>], now: Timestamp) -> Duration {
-    let micros = peers
+    let connection_micros = peers
         .iter()
         .filter_map(Option::as_ref)
         .flat_map(|peer| peer.connections.values())
@@ -469,6 +588,13 @@ fn connected_poll_wait(peers: &[Option<ConnectedPeer>], now: Timestamp) -> Durat
         .min()
         .unwrap_or(20_000)
         .clamp(1, 20_000);
+    let group_micros = peers
+        .iter()
+        .filter_map(Option::as_ref)
+        .map(|peer| group::poll_wait(&peer.groups, now).as_micros() as u64)
+        .min()
+        .unwrap_or(20_000);
+    let micros = connection_micros.min(group_micros).clamp(1, 20_000);
     Duration::from_micros(micros)
 }
 

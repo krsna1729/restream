@@ -2,8 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use shiguredo_srt::{
-    GroupExtensionData, GroupMode, HandshakePacket, HandshakeType, SRTGROUP_MASK, SrtGroup,
-    SrtPacket,
+    GroupExtensionData, GroupMode, HandshakePacket, SRTGROUP_MASK, SrtGroup, SrtPacket,
 };
 
 use super::{RustSinkConnection, RustSinkConnectionKey};
@@ -11,7 +10,7 @@ use super::{RustSinkConnection, RustSinkConnectionKey};
 #[path = "group_runtime.rs"]
 mod runtime;
 
-pub(super) use runtime::{poll_wait, process, receive};
+pub(super) use runtime::{poll_wait, process, process_connected, receive};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct RustSinkGroupKey {
@@ -105,6 +104,15 @@ fn prepare_admission(
         peer_group_id: peer_group.group_id,
         stream_id: normalize_stream_id(stream_id),
     };
+    if !groups.contains_key(&key)
+        && key.stream_id.is_some()
+        && let Some(pending) = groups.remove(&RustSinkGroupKey {
+            peer_group_id: key.peer_group_id,
+            stream_id: None,
+        })
+    {
+        groups.insert(key.clone(), pending);
+    }
     if let Some(group) = groups.get(&key) {
         if group.mode() != mode {
             return Err("Rust sink GROUP type changed for an existing group".to_string());
@@ -126,21 +134,20 @@ fn prepare_admission(
     Ok(Some(GroupAdmission { local_extension }))
 }
 
-fn group_extension_from_packet(packet: &[u8]) -> Option<(GroupExtensionData, Option<String>)> {
+pub(super) fn group_extension_from_packet(
+    packet: &[u8],
+) -> Option<(GroupExtensionData, Option<String>)> {
     let SrtPacket::Control(control) = SrtPacket::decode(packet).ok()? else {
         return None;
     };
     let handshake = HandshakePacket::decode(&control).ok()?;
-    if handshake.handshake_type != HandshakeType::Conclusion {
-        return None;
-    }
     Some((
         handshake.get_group_extension()?,
         handshake.get_sid_extension(),
     ))
 }
 
-fn normalize_stream_id(stream_id: Option<String>) -> Option<String> {
+pub(super) fn normalize_stream_id(stream_id: Option<String>) -> Option<String> {
     stream_id.and_then(|stream_id| {
         let normalized = stream_id.trim_matches('\0').trim().to_string();
         (!normalized.is_empty()).then_some(normalized)

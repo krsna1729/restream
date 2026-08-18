@@ -982,6 +982,8 @@ mod srt_drain;
 #[path = "srt_connect_admission.rs"]
 mod srt_connect_admission;
 
+#[path = "srt/group_sender.rs"]
+mod group_sender;
 #[path = "srt/rs_poller.rs"]
 mod rs_poller;
 #[path = "srt/rs_sender.rs"]

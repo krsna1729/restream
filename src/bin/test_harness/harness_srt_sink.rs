@@ -187,6 +187,7 @@ const SRTO_PBKEYLEN: c_int = 27;
 const SRTO_LATENCY: c_int = 23;
 const SRTO_LOSSMAXTTL: c_int = 42;
 const SRTO_TRANSTYPE: c_int = 50;
+const SRTO_GROUPCONNECT: c_int = 57;
 const SRTT_LIVE: c_int = 0;
 
 // Mirrors src/media/srt/socket.rs's DESIRED_* constants for
@@ -373,6 +374,9 @@ fn configure_and_bind(
     // Non-blocking accept, so the discard loop can service existing
     // clients and honour the stop flag without blocking on a new one.
     set_int_option(listener, SRTO_RCVSYN, 0, "SRTO_RCVSYN")?;
+    if std::env::var_os("MSR_SRT_BOND").is_some() {
+        set_int_option(listener, SRTO_GROUPCONNECT, 1, "SRTO_GROUPCONNECT")?;
+    }
 
     let addr = SockaddrIn {
         sin_family: libc::AF_INET as u16,

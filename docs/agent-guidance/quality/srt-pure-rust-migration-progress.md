@@ -11,6 +11,8 @@
 - [Production GROUP handshake metadata — 2026-08-18](#production-group-handshake-metadata--2026-08-18)
 - [Core Broadcast/Backup group machine — 2026-08-18](#core-broadcastbackup-group-machine--2026-08-18)
 - [Rust sink GROUP admission — 2026-08-18](#rust-sink-group-admission--2026-08-18)
+- [Production Rust bonded egress and paired endpoint profile — 2026-08-18](#production-rust-bonded-egress-and-paired-endpoint-profile--2026-08-18)
+- [Kernel symbols and connected affinity profile — 2026-08-18](#kernel-symbols-and-connected-affinity-profile--2026-08-18)
 
 ## Current migration policy
 
@@ -434,8 +436,8 @@ receiver-strategy rule: capture both the restream process and the sink worker.
 
 The Rust harness sink now has a receiver-side GROUP admission path for its
 distinct-port, one-port-per-stream, and SO_REUSEPORT loops. It decodes GROUP
-and StreamID only from a conclusion handshake, keys one logical group by the
-peer group ID plus normalized StreamID, allocates one listener-side mirror
+and StreamID from any handshake that carries the extensions, keys one logical
+group by the peer group ID plus normalized StreamID, allocates one listener-side mirror
 group ID, and routes every leg to the same `SrtGroup`. Each leg keeps its own
 tuple and timers; the group Core performs the shared sequence merge/dedup and
 removes broken members. This follows the libsrt `makeMePeerOf` behavior rather
@@ -451,10 +453,106 @@ Proof completed:
   Backup includes closing the weighted primary and sending again.
 - The regular harness sink tests and `cargo check --bin test_harness` pass.
 
-Scope boundary: the Connected listener-to-connected-datagram handoff still
-uses its non-bonded tuple worker map, so bonded traffic through that strategy
-must be routed through the same group registry before it is production-ready.
-No Rust restream egress group driver exists yet, and no paired restream/sink
-bonding profile is claimed by this increment. The paired profile contract
-remains mandatory for the next scale evidence: profile the restream process
-and the named Rust sink worker(s) in the same run.
+The Connected listener-to-connected-datagram handoff now preserves the same
+tuple owner, but feeds the worker through the shared GROUP admission and merge
+state. Connected group timers and group membership are included in worker
+liveness, so a bonded peer is not released while its group legs are active.
+Native libsrt sends its first induction datagram without GROUP metadata. The
+listener therefore uses source-IP rendezvous as a provisional owner, then
+caches the observed GROUP key. This is a correctness guard against splitting
+bond legs before admission, not a final scale policy: independent streams from
+the same source IP currently contend on that one connected worker. The trace
+reports both `source_worker_reuses` and per-worker tuple assignments so this
+tradeoff remains visible in every profile.
+The Rust restream egress group driver and paired endpoint profiles are recorded
+below. The paired profile contract remains mandatory for every later scale
+comparison: profile the restream process and the named Rust sink worker(s) in
+the same run.
+
+## Production Rust bonded egress and paired endpoint profile — 2026-08-18
+
+The production Rust egress connector now selects a group sender whenever the
+resolved SRT URL has two or more peer addresses. `SrtRustGroupSender` owns one
+nonblocking UDP socket and multiplexes one Core `SrtConnection` per bond leg
+behind the same Rust poller FD. It uses the same Backup group type and primary
+weight ordering as the current libsrt egress path; the single-peer path remains
+separate and unchanged. This preserves the final whole-stack policy while
+allowing mixed endpoint interop during validation.
+
+The MSR harness has a test-only `MSR_SRT_BOND=1` switch. It adds a second leg
+to the same sink endpoint, which is the relevant one-public-port case for
+testing socket-ID-based logical grouping without changing ordinary MSR URLs.
+The first whole-stack Rust/Rust bonded smoke passed at 30 outputs with
+`HARNESS_SRT_SINK_SCALING=reuseport`, four sink workers, zero sender drops, and
+7,567,564 bytes of sink-side byte growth. Differential 30-output bonded smokes
+also passed in both mixed directions: Rust egress to the native libsrt sink
+produced 7,469,240 bytes with zero drops, and native libsrt egress to the Rust
+sink produced 8,049,596 bytes with zero drops.
+
+The Connected receiver path was then exercised with
+`HARNESS_SRT_SINK_CONNECTED_ROUTING=least-tuples` and four workers. It passed
+30/30 outputs with zero drops and 30 listener handoffs. The trace observed 30
+tuple assignments and three socket IDs per tuple: the two bonded SRT legs plus
+the listener-side connection identity, all remaining under one connected worker
+owner.
+
+The paired profile used the optimized `target/bench` binaries, 120 bonded SRT
+outputs, Rust restream ingest and egress, Rust sink, one public sink port with
+four `SO_REUSEPORT` workers, and a 30-second resource window. It captured the
+restream process and all sink-process threads in the same live interval:
+
+| Endpoint | Resource result | Profile evidence |
+|---|---:|---|
+| Restream | 137.33% average / 188.52% peak CPU; 116,768 KiB RSS peak | 431 samples; 0 lost samples |
+| Rust sink | four `harness-srt-rust-sink-*` workers | 328 samples; 0 lost samples |
+| Differential gate | 120/120 outputs; 26,518,152 bytes growth; 0 sender drops | PASS |
+
+Artifacts are retained under
+`.local/artifacts/msr-rust-bond-profile-20260818/`, including `restream.svg`,
+`sink.svg`, raw perf data, folded stacks, symbol reports, and the MSR result
+JSON/CSV. The restream flamegraph's largest repeated path is kernel UDP receive
+queue wakeup work below `UdpSocket::send_to` and
+`SrtRustGroupSender::flush_outputs` (6.26% on one egress shard and 5.10% on
+another in the symbol report). `next_timer_deadline` is visible at 0.93% in
+the report; group sequence/state helpers are small. This identifies per-leg
+UDP syscall and loopback wakeup amplification as the current egress limit,
+not a group lock or sequence-merge bottleneck.
+
+The sink profile shows the same feedback traffic from the opposite direction:
+kernel wakeup/send paths account for the largest samples, followed by the
+`run_rust_sink_pool` loop, `receive_rust_packets` (2.44%), allocation (`malloc`
+2.13%), hash calculation (1.83%), Core `SrtConnection::feed_recv_buf`
+(1.22%), and `SrtGroup::poll_data` (0.61%). `epoll_wait` is expected idle
+time, and no dominant worker lock convoy appears. Receiver-side work is now
+most plausibly packet feedback plus allocation/hash and receive-buffer cost;
+any batching or allocation reuse must be evaluated as a cross-strategy
+optimization after the four receiver ownership strategies have each been
+profiled at both endpoints.
+
+The Connected GROUP implementation has its own paired 120-output profile under
+`.local/artifacts/msr-rust-bond-connected-profile-20260818/`. It reached
+120/120 outputs, 26,444,832 bytes of sink-side growth, and zero sender drops;
+the restream resource window measured 118.06% average / 171.79% peak CPU and
+114,896 KiB RSS peak. The paired perf captures contain 1K restream samples and
+2K sink samples, with zero lost samples. The connected restream flamegraph
+again centers on `SrtRustGroupSender::flush_outputs` and per-leg
+`UdpSocket::send_to` (roughly 7.3-9.0% per egress shard), while the sink
+flamegraph attributes the largest work to connected-worker epoll and feedback
+`sendto`/UDP paths (38.81% syscall children, 17.99% sendto, 10.36%
+`epoll_wait`), followed by `drain_rust_outputs_mode` (19.84% inclusive), Core
+`feed_recv_buf` (2.05%), allocation (1.66%), and `SrtGroup::poll_data` (0.64%).
+This is consistent with the other receiver strategies: connected handoff adds
+one listener/worker forwarding stage, but does not remove the per-datagram
+protocol syscall or feedback cost.
+
+The kernel samples resolve because profiling used the pinned Linux perf binary
+with `sudo`; kernel address-map restriction remains noted in the generated
+reports. The profile is suitable for syscall/wakeup attribution and not for
+claiming fully symbolized kernel internals.
+
+The remaining bonding gates are failover under a live bonded output, Broadcast
+and Backup scale profiles at 300/700/1200 outputs, and the final whole-stack
+Rust/Rust production soak. Rust-egress to native libsrt group-receiver
+interop, native libsrt egress to Rust GROUP admission, and Connected-mode
+GROUP admission are now live-verified. The four receiver-strategy comparison
+must continue to treat sink cost and restream cost as separate columns.

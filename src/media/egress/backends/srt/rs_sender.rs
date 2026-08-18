@@ -18,7 +18,35 @@ use crate::media::srt::{
     SrtSendResult, SrtSenderStats,
 };
 
-pub(crate) struct SrtRustMessageSender {
+pub(crate) enum SrtRustMessageSender {
+    Single(Box<SrtRustSingleMessageSender>),
+    Group(Box<super::group_sender::SrtRustGroupSender>),
+}
+
+impl SrtRustMessageSender {
+    pub(crate) fn connect(
+        config: &crate::media::srt::SrtFabricEgressConnectConfig<'_>,
+    ) -> Result<Self, String> {
+        match config.peer_addrs() {
+            [] => Err("Rust SRT caller requires at least one peer address".to_string()),
+            [_] => SrtRustSingleMessageSender::connect(config)
+                .map(Box::new)
+                .map(Self::Single),
+            _ => super::group_sender::SrtRustGroupSender::connect(config)
+                .map(Box::new)
+                .map(Self::Group),
+        }
+    }
+
+    pub(crate) fn raw_fd(&self) -> Option<RawFd> {
+        match self {
+            Self::Single(sender) => sender.raw_fd(),
+            Self::Group(sender) => sender.raw_fd(),
+        }
+    }
+}
+
+pub(crate) struct SrtRustSingleMessageSender {
     socket: Option<UdpSocket>,
     peer: SocketAddr,
     conn: SrtConnection,
@@ -29,15 +57,14 @@ pub(crate) struct SrtRustMessageSender {
     closed: bool,
 }
 
-impl SrtRustMessageSender {
+impl SrtRustSingleMessageSender {
     pub(crate) fn connect(
         config: &crate::media::srt::SrtFabricEgressConnectConfig<'_>,
     ) -> Result<Self, String> {
-        let peer = match config.peer_addrs() {
-            [peer] => *peer,
-            [] => return Err("Rust SRT caller requires one peer address".to_string()),
-            _ => return Err("Rust SRT caller does not support bonding yet".to_string()),
+        let [peer] = config.peer_addrs() else {
+            return Err("Rust SRT single caller requires one peer address".to_string());
         };
+        let peer = *peer;
         let (sndbuf, rcvbuf, latency, maxbw, _fc) = config.buffer_parameters();
         let std_socket = StdUdpSocket::bind(("0.0.0.0", 0))
             .map_err(|error| format!("bind Rust SRT caller socket: {error}"))?;
@@ -214,7 +241,7 @@ impl SrtRustMessageSender {
     }
 }
 
-impl SrtMessageSender for SrtRustMessageSender {
+impl SrtMessageSender for SrtRustSingleMessageSender {
     fn send_message(&mut self, message: &Bytes) -> SrtSendResult {
         if self.closed || self.conn.state() != ConnectionState::Connected {
             return SrtSendResult::WouldBlock;
@@ -332,7 +359,11 @@ impl SrtMessageSender for SrtRustMessageSender {
     }
 }
 
-fn configure_udp_buffer(fd: RawFd, option: libc::c_int, value: i32) -> Result<(), String> {
+pub(super) fn configure_udp_buffer(
+    fd: RawFd,
+    option: libc::c_int,
+    value: i32,
+) -> Result<(), String> {
     if value <= 0 {
         return Ok(());
     }
@@ -374,4 +405,90 @@ pub(crate) fn connected_transport(
         sender: Box::new(sender),
         configured_sndbuf: Some(sndbuf),
     })
+}
+
+impl SrtMessageSender for SrtRustMessageSender {
+    fn send_message(&mut self, message: &Bytes) -> SrtSendResult {
+        match self {
+            Self::Single(sender) => sender.send_message(message),
+            Self::Group(sender) => sender.send_message(message),
+        }
+    }
+
+    fn close(&mut self, reason: CloseReason) {
+        match self {
+            Self::Single(sender) => sender.close(reason),
+            Self::Group(sender) => sender.close(reason),
+        }
+    }
+
+    fn on_readiness(&mut self, readiness: Readiness) {
+        match self {
+            Self::Single(sender) => sender.on_readiness(readiness),
+            Self::Group(sender) => sender.on_readiness(readiness),
+        }
+    }
+
+    fn next_timer_deadline(&self) -> Option<Instant> {
+        match self {
+            Self::Single(sender) => sender.next_timer_deadline(),
+            Self::Group(sender) => sender.next_timer_deadline(),
+        }
+    }
+
+    fn next_send_deadline(&self) -> Option<Instant> {
+        match self {
+            Self::Single(sender) => sender.next_send_deadline(),
+            Self::Group(sender) => sender.next_send_deadline(),
+        }
+    }
+
+    fn on_wakeup(&mut self) {
+        match self {
+            Self::Single(sender) => sender.on_wakeup(),
+            Self::Group(sender) => sender.on_wakeup(),
+        }
+    }
+
+    fn write_ready(&self) -> bool {
+        match self {
+            Self::Single(sender) => sender.write_ready(),
+            Self::Group(sender) => sender.write_ready(),
+        }
+    }
+
+    fn is_closed(&self) -> bool {
+        match self {
+            Self::Single(sender) => sender.is_closed(),
+            Self::Group(sender) => sender.is_closed(),
+        }
+    }
+
+    fn readiness_interest(&self) -> SrtEgressInterest {
+        match self {
+            Self::Single(sender) => sender.readiness_interest(),
+            Self::Group(sender) => sender.readiness_interest(),
+        }
+    }
+
+    fn dynamic_readiness(&self) -> bool {
+        match self {
+            Self::Single(sender) => sender.dynamic_readiness(),
+            Self::Group(sender) => sender.dynamic_readiness(),
+        }
+    }
+
+    fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
+        match self {
+            Self::Single(sender) => sender.native_send_backlog(),
+            Self::Group(sender) => sender.native_send_backlog(),
+        }
+    }
+
+    fn sender_quality_stats(&self) -> Option<SrtSenderStats> {
+        match self {
+            Self::Single(sender) => sender.sender_quality_stats(),
+            Self::Group(sender) => sender.sender_quality_stats(),
+        }
+    }
 }

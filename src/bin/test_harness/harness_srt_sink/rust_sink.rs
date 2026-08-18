@@ -1,4 +1,3 @@
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, UdpSocket as StdUdpSocket};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -404,61 +403,6 @@ struct RustSinkGroupPoolState<'a> {
     start: Instant,
     next_socket_id: &'a mut u32,
     next_group_id: &'a mut u32,
-}
-
-struct RustSinkPacketContext<'a> {
-    connections: &'a mut RustSinkConnections,
-    routes: &'a mut RustSinkRouteMap,
-    crypto: &'a RustSinkCrypto,
-    start: Instant,
-    next_socket_id: &'a mut u32,
-    output: RustSinkOutput<'a>,
-}
-
-fn receive_rust_packet(peer: SocketAddr, packet: &[u8], context: RustSinkPacketContext<'_>) {
-    let packet_key = rust_sink_connection_key(peer, packet);
-    let connection_key = context
-        .routes
-        .get(&packet_key)
-        .copied()
-        .or_else(|| {
-            context
-                .connections
-                .contains_key(&packet_key)
-                .then_some(packet_key)
-        })
-        .unwrap_or(packet_key);
-    if let Entry::Vacant(entry) = context.connections.entry(connection_key) {
-        let socket_id = *context.next_socket_id;
-        *context.next_socket_id = context.next_socket_id.wrapping_add(1);
-        entry.insert(new_rust_sink_connection(context.crypto, socket_id, None));
-        context
-            .routes
-            .insert(RustSinkConnectionKey { peer, socket_id }, connection_key);
-    }
-
-    let now = timestamp(context.start);
-    let failed = {
-        let Some(connection) = context.connections.get_mut(&connection_key) else {
-            return;
-        };
-        if let Err(error) = connection.conn.feed_recv_buf(packet, now) {
-            tracing::debug!(%error, "Rust harness SRT sink ignored malformed packet");
-            true
-        } else {
-            drain_rust_outputs_mode(
-                &mut connection.conn,
-                context.output,
-                &mut connection.timers,
-                now,
-            )
-            .is_err()
-        }
-    };
-    if failed {
-        context.connections.remove(&connection_key);
-        context.routes.retain(|_, mapped| *mapped != connection_key);
-    }
 }
 
 fn new_rust_sink_connection(

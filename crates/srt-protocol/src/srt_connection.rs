@@ -1320,7 +1320,10 @@ impl SrtConnection {
     }
 
     fn send_induction_request(&mut self, now: Timestamp) {
-        let hs = HandshakePacket::new_induction_request(self.options.socket_id);
+        let mut hs = HandshakePacket::new_induction_request(self.options.socket_id);
+        if let Some(group) = self.options.group_extension {
+            hs.add_group_extension(group);
+        }
         let pkt = hs.encode(self.relative_timestamp(now), 0);
         let mut buf = Vec::new();
         pkt.encode(&mut buf);
@@ -1335,11 +1338,14 @@ impl SrtConnection {
             0
         };
 
-        let hs = HandshakePacket::new_induction_response(
+        let mut hs = HandshakePacket::new_induction_response(
             self.options.socket_id,
             self.syn_cookie,
             encryption_field,
         );
+        if let Some(group) = self.options.group_extension {
+            hs.add_group_extension(group);
+        }
         let pkt = hs.encode(self.relative_timestamp(now), self.peer_socket_id);
         let mut buf = Vec::new();
         pkt.encode(&mut buf);
@@ -1586,6 +1592,7 @@ fn encode_loss_list(loss_list: &[u32]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{GroupType, SRTGROUP_MASK};
 
     #[test]
     fn test_connection_options_default() {
@@ -1610,6 +1617,33 @@ mod tests {
         let conn = SrtConnection::new_listener(ConnectionOptions::default());
         assert_eq!(conn.state(), ConnectionState::Listening);
         assert_eq!(conn.role, ConnectionRole::Listener);
+    }
+
+    #[test]
+    fn caller_advertises_group_on_induction() {
+        let group = GroupExtensionData {
+            group_id: SRTGROUP_MASK | 0x1234,
+            group_type: GroupType::Backup,
+            flags: 0,
+            weight: 1,
+        };
+        let mut conn = SrtConnection::new_caller(ConnectionOptions {
+            socket_id: 17,
+            group_extension: Some(group),
+            ..ConnectionOptions::default()
+        });
+        conn.connect(Timestamp::from_micros(0))
+            .expect("caller connection starts");
+        let ConnectionOutput::SendPacket(packet) = conn.poll_output().expect("induction packet")
+        else {
+            panic!("caller must emit an induction packet");
+        };
+        let SrtPacket::Control(control) = SrtPacket::decode(&packet).expect("valid SRT packet")
+        else {
+            panic!("induction must be a control packet");
+        };
+        let handshake = HandshakePacket::decode(&control).expect("valid handshake");
+        assert_eq!(handshake.get_group_extension(), Some(group));
     }
 
     #[test]

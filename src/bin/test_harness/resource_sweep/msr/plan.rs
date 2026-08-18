@@ -400,10 +400,13 @@ pub(super) fn msr_output_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> 
     let srt_port = env.mtx_srt + instance as u16;
     match output.protocol {
         MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{rtmp_port}/live/{}", output.name),
-        MsrProtocol::Srt => append_srt_crypto(
-            harness_srt_standard_publish_url(srt_port, &output.name),
-            &env.srt_crypto,
-        ),
+        MsrProtocol::Srt => {
+            let mut url = harness_srt_standard_publish_url(srt_port, &output.name);
+            if std::env::var_os("MSR_SRT_BOND").is_some() {
+                url.push_str(&format!("&bond=127.0.0.1:{srt_port}"));
+            }
+            append_srt_crypto(url, &env.srt_crypto)
+        }
     }
 }
 
