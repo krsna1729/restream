@@ -540,6 +540,54 @@ loop must A/B the current policy against a bitrate-aware 1 MB model and a
 RSS/PSS, native `msSndBuf`, and CPU/flamegraph changes. A reduction is valid
 only if all four scales retain zero drops under the loss/jitter scenarios.
 
+### Controlled sink-buffer A/B — 2026-08-18
+
+The harness now accepts the same test-only policy for both sink backends:
+`HARNESS_SRT_SINK_FC_PACKETS` and `HARNESS_SRT_SINK_RCVBUF_BYTES`. The native
+sink applies the values as `SRTO_FC`/`SRTO_SNDBUF`/`SRTO_RCVBUF`; the Rust sink
+converts the byte value using libsrt's 1,472-byte packet conversion and caps
+the result by FC. This makes the measurement a policy comparison rather than
+an advantage for either receiver.
+
+The first valid whole-stack A/B used the optimized `target/bench` binaries,
+300 SRT outputs, one sink port, and one sink worker. Every case reached 300/300
+outputs with zero sender drops:
+
+| Stack | Sink policy | Restream CPU avg | RSS peak | PSS peak | RSS change vs 1 MB |
+|---|---:|---:|---:|---:|---:|
+| Rust/Rust | 1,000,000 bytes / 679 packets | 170.82% | 127,704 KiB | 122,421 KiB | baseline |
+| Rust/Rust | 2 MiB / 1,424 packets | 148.69% | 131,468 KiB | 124,459 KiB | +3,764 KiB |
+| libsrt/libsrt | 1,000,000 bytes | 65.47% | 304,628 KiB | 297,690 KiB | baseline |
+| libsrt/libsrt | 2 MiB | 94.51% | 323,836 KiB | 316,613 KiB | +19,208 KiB |
+
+The RSS delta from 1 MB to 2 MiB was about 12.5 KiB/output for Rust and
+64.0 KiB/output for libsrt in this n=300 run. This is evidence that the
+configured ceiling is not eagerly allocated one-for-one: neither backend
+showed a 1 MB-per-output RSS jump. It is also evidence that libsrt carries a
+larger per-connection native footprint on this workload. The CPU difference is
+not a buffer-size conclusion: it is a whole-stack implementation difference,
+and the one-run CPU values are not a substitute for a repeated perf profile.
+
+The attempted 1,200-output reduction runs did not produce a valid buffer-only
+comparison. With one shared Rust listener, the 1 MB run fell from 903 to 2
+progressing outputs over 174 seconds. With the established 8-port/4-worker
+mitigation it fell from 1,173 to 196 over 215 seconds. In the one-port-per-
+stream topology, both the 1 MB run and a same-topology 12 MiB control produced
+Rust inactivity timeouts before the output checkpoint. Those artifacts show a
+receiver worker/socket-servicing limit, not a formula result, and are retained
+under `.local/artifacts/msr-rust-sink-buffer-ab-20260818-common/`,
+`.local/artifacts/msr-rust-sink-buffer-ab-20260818-8p4t/`, and
+`.local/artifacts/msr-rust-sink-buffer-ab-20260818-per-stream/`.
+
+Current conclusion: the 12 MiB ingest floor is conservative, and the 4x
+bitrate-times-latency model is not wasteful as a safety rule, but a 1 MB
+receiver policy is not yet admissible for the 1,200 target. The remaining
+blocker is sink scaling and connection servicing; it must be fixed and
+profiled before a smaller policy can be evaluated at target scale. The 300
+case supports measuring a 2 MiB candidate next, not changing the production
+default yet. The reproducible 300-output reports are in
+`.local/artifacts/msr-rust-sink-buffer-ab-20260818-common/`.
+
 ### Bonding assignment lifecycle audit — 2026-08-18
 
 The handshake contains enough information for correct bonding, but not at the

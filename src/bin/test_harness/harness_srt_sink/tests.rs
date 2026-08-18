@@ -1,4 +1,4 @@
-use super::rust_sink::{RustHarnessSrtSinkPool, rust_sink_connection_key};
+use super::rust_sink::{RustHarnessSrtSinkPool, RustSinkBufferPolicy, rust_sink_connection_key};
 use super::*;
 use shiguredo_srt::HandshakePacket;
 use std::process::Command;
@@ -55,6 +55,20 @@ fn rust_harness_srt_sink_pool_starts_and_stops_without_connections() {
     .expect("start Rust harness sink pool");
     assert_eq!(pool.threads.len(), 1);
     pool.stop();
+}
+
+#[test]
+fn rust_sink_buffer_policy_converts_bytes_and_caps_by_flow_window() {
+    let one_megabyte = RustSinkBufferPolicy::from_values(32_768, 1_000_000);
+    assert_eq!(one_megabyte.flow_window_packets, 32_768);
+    assert_eq!(one_megabyte.receive_buffer_packets, 679);
+
+    let two_mebibytes = RustSinkBufferPolicy::from_values(32_768, 2 * 1024 * 1024);
+    assert_eq!(two_mebibytes.receive_buffer_packets, 1_424);
+
+    let capped = RustSinkBufferPolicy::from_values(679, 12 * 1024 * 1024);
+    assert_eq!(capped.flow_window_packets, 679);
+    assert_eq!(capped.receive_buffer_packets, 679);
 }
 
 #[test]

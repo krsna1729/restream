@@ -431,6 +431,8 @@ Names are provisional until the mode is implemented:
 | `HARNESS_SRT_SINK_BACKEND` | `libsrt` (or `RESTREAM_SRT_BACKEND`) | `MSR_PEER=sink` only: `libsrt` for the native control stack or `rust` for the pure-Rust Core receiver. The Rust MSR path must set this to `rust` so the sink cannot bottleneck Rust egress with libsrt |
 | `HARNESS_SRT_SINK_THREADS` | `PEER_COUNT` | `MSR_PEER=sink` only: **libsrt** discard-thread count for the shared SRT sink pool, partitioned into exclusively-owned port chunks. The Rust backend uses one mio loop and ignores this value |
 | `HARNESS_SRT_SINK_UDP_BUFFER` | `8388608` (8MB) | `MSR_PEER=sink` only: native libsrt sink `SRTO_UDP_RCVBUF`/`SRTO_UDP_SNDBUF`; the Rust backend does not use this native option |
+| `HARNESS_SRT_SINK_FC_PACKETS` | `32768` | `MSR_PEER=sink` only: SRT flow-control ceiling used by both the libsrt and Rust sink backends |
+| `HARNESS_SRT_SINK_RCVBUF_BYTES` | `12582912` (12MiB) | `MSR_PEER=sink` only: SRT send/receive buffer policy used by both sink backends; Rust converts it to packets using 1472 bytes per packet and caps it at FC |
 | `MSR_SRT_BOND` | unset | `MSR_PEER=sink` test-only switch: adds a second SRT leg to the same sink endpoint so the Rust or libsrt bonding receiver is exercised without changing ordinary MSR output URLs |
 | `MSR_SKIP_FFPROBE` | unset | Skip ffprobe read-back checks (always forced on when `MSR_PEER=sink`) |
 | `MSR_SINK_SAMPLE_SECS` | `3` | mediamtx path-health sample window before the resource-window sample |

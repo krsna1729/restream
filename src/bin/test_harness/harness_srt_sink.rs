@@ -195,8 +195,46 @@ const SRTT_LIVE: c_int = 0;
 // private to the production srt module (see module doc comment).
 const DESIRED_LATENCY_MS: c_int = 250;
 const DESIRED_LOSSMAXTTL: c_int = 256;
-const DESIRED_FC: c_int = 32768;
-const DESIRED_SRT_BUF: c_int = 12 * 1024 * 1024;
+const DEFAULT_SRT_FC_PACKETS: u32 = 32768;
+const DEFAULT_SRT_BUFFER_BYTES: u32 = 12 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct HarnessSrtBufferPolicy {
+    pub(super) flow_window_packets: u32,
+    pub(super) buffer_bytes: u32,
+}
+
+impl HarnessSrtBufferPolicy {
+    pub(super) fn from_env() -> Result<Self, String> {
+        Ok(Self {
+            flow_window_packets: positive_u32_env(
+                "HARNESS_SRT_SINK_FC_PACKETS",
+                DEFAULT_SRT_FC_PACKETS,
+            )?
+            .max(32),
+            buffer_bytes: positive_u32_env(
+                "HARNESS_SRT_SINK_RCVBUF_BYTES",
+                DEFAULT_SRT_BUFFER_BYTES,
+            )?,
+        })
+    }
+}
+
+fn positive_u32_env(name: &str, default: u32) -> Result<u32, String> {
+    match std::env::var(name) {
+        Ok(value) => {
+            let parsed = value
+                .parse::<u32>()
+                .map_err(|error| format!("{name} must be a positive integer: {error}"))?;
+            if parsed == 0 {
+                return Err(format!("{name} must be greater than zero"));
+            }
+            Ok(parsed)
+        }
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(format!("read {name}: {error}")),
+    }
+}
 
 fn srt_error() -> String {
     // SAFETY: Category 8 - FFI boundary. `srt_getlasterror_str` returns a
@@ -280,6 +318,15 @@ fn set_string_option(
 /// `udp_buffer` is the one caller-configurable knob (defaults to matching
 /// `RESTREAM_SRT_UDP_BUFFER`'s own 8MB production default).
 fn apply_highbitrate_opts(socket: SrtSocket, udp_buffer: c_int) -> Result<(), String> {
+    let buffer_policy = HarnessSrtBufferPolicy::from_env()?;
+    apply_highbitrate_opts_with_policy(socket, udp_buffer, buffer_policy)
+}
+
+fn apply_highbitrate_opts_with_policy(
+    socket: SrtSocket,
+    udp_buffer: c_int,
+    buffer_policy: HarnessSrtBufferPolicy,
+) -> Result<(), String> {
     set_int_option(socket, SRTO_LATENCY, DESIRED_LATENCY_MS, "SRTO_LATENCY")?;
     set_int_option(
         socket,
@@ -291,9 +338,13 @@ fn apply_highbitrate_opts(socket: SrtSocket, udp_buffer: c_int) -> Result<(), St
     set_int_option(socket, SRTO_UDP_RCVBUF, udp_buffer, "SRTO_UDP_RCVBUF")?;
     // FC before SNDBUF/RCVBUF: libsrt documents that both must not exceed
     // FC in packet-count terms.
-    set_int_option(socket, SRTO_FC, DESIRED_FC, "SRTO_FC")?;
-    set_int_option(socket, SRTO_SNDBUF, DESIRED_SRT_BUF, "SRTO_SNDBUF")?;
-    set_int_option(socket, SRTO_RCVBUF, DESIRED_SRT_BUF, "SRTO_RCVBUF")?;
+    let flow_window_packets = c_int::try_from(buffer_policy.flow_window_packets)
+        .map_err(|error| format!("SRT FC packet count is too large: {error}"))?;
+    let buffer_bytes = c_int::try_from(buffer_policy.buffer_bytes)
+        .map_err(|error| format!("SRT buffer size is too large: {error}"))?;
+    set_int_option(socket, SRTO_FC, flow_window_packets, "SRTO_FC")?;
+    set_int_option(socket, SRTO_SNDBUF, buffer_bytes, "SRTO_SNDBUF")?;
+    set_int_option(socket, SRTO_RCVBUF, buffer_bytes, "SRTO_RCVBUF")?;
     let maxbw: i64 = -1;
     // SAFETY: Category 8 - FFI boundary. `socket` is a live libsrt socket;
     // `maxbw` is a stack-local i64 matching SRTO_MAXBW's contract.

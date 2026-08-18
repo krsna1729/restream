@@ -14,10 +14,12 @@ use shiguredo_srt::{
     Timestamp,
 };
 
-use super::{HarnessSrtCrypto, RustConnectedRouting, RustSinkScaling, SockaddrIn, c_int, c_void};
+use super::{
+    HarnessSrtBufferPolicy, HarnessSrtCrypto, RustConnectedRouting, RustSinkScaling, SockaddrIn,
+    c_int, c_void,
+};
 
-const RUST_SINK_FLOW_WINDOW_PACKETS: u32 = 32_768;
-const RUST_SINK_RECEIVE_BUFFER_PACKETS: u32 = (12 * 1024 * 1024 / 1472) as u32;
+const SRT_RCVBUF_PACKET_SIZE_BYTES: u32 = 1_472;
 
 pub(crate) struct RustHarnessSrtSinkPool {
     stop: Arc<AtomicBool>,
@@ -28,6 +30,33 @@ pub(crate) struct RustHarnessSrtSinkPool {
 struct RustSinkCrypto {
     passphrase: Option<String>,
     key_length: KeyLength,
+    buffer_policy: RustSinkBufferPolicy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RustSinkBufferPolicy {
+    pub(super) flow_window_packets: u32,
+    pub(super) receive_buffer_packets: u32,
+}
+
+impl RustSinkBufferPolicy {
+    pub(super) fn from_values(flow_window_packets: u32, receive_buffer_bytes: u32) -> Self {
+        let flow_window_packets = flow_window_packets.max(32);
+        let receive_buffer_packets =
+            (receive_buffer_bytes / SRT_RCVBUF_PACKET_SIZE_BYTES).clamp(32, flow_window_packets);
+        Self {
+            flow_window_packets,
+            receive_buffer_packets,
+        }
+    }
+
+    fn from_env() -> Result<Self, String> {
+        let policy = HarnessSrtBufferPolicy::from_env()?;
+        Ok(Self::from_values(
+            policy.flow_window_packets,
+            policy.buffer_bytes,
+        ))
+    }
 }
 
 impl RustHarnessSrtSinkPool {
@@ -52,11 +81,13 @@ impl RustHarnessSrtSinkPool {
                 ));
             }
         };
+        let buffer_policy = RustSinkBufferPolicy::from_env()?;
 
         let stop = Arc::new(AtomicBool::new(false));
         let sink_crypto = RustSinkCrypto {
             passphrase: crypto.passphrase.clone(),
             key_length,
+            buffer_policy,
         };
         if scaling == RustSinkScaling::Connected {
             let routing = RustConnectedRouting::from_env()?;
@@ -420,8 +451,8 @@ fn new_rust_sink_connection(
             key_length: crypto.key_length,
             tsbpd_delay: 250,
             group_extension,
-            flow_window_packets: RUST_SINK_FLOW_WINDOW_PACKETS,
-            receive_buffer_packets: RUST_SINK_RECEIVE_BUFFER_PACKETS,
+            flow_window_packets: crypto.buffer_policy.flow_window_packets,
+            receive_buffer_packets: crypto.buffer_policy.receive_buffer_packets,
             ..ConnectionOptions::default()
         }),
         timers: HashMap::new(),
