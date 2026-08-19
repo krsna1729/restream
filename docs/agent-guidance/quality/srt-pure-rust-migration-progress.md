@@ -22,6 +22,7 @@
 - [Reusable SRT lifecycle crate extraction — 2026-08-18](#reusable-srt-lifecycle-crate-extraction--2026-08-18)
 - [Six runtime adapter contract and compio ownership — 2026-08-18](#six-runtime-adapter-contract-and-compio-ownership--2026-08-18)
 - [Interop crate layering audit — 2026-08-19](#interop-crate-layering-audit--2026-08-19)
+- [Receiver bookkeeping optimization and current scale boundary — 2026-08-19](#receiver-bookkeeping-optimization-and-current-scale-boundary--2026-08-19)
 
 ## Current migration policy
 
@@ -1065,3 +1066,29 @@ would add dependency surface and falsely imply that the benchmark binaries
 exercise production routing policy. The six-driver benchmark remains layered
 as `srt-protocol` plus runtime-specific adapters; production routing remains
 `srt-protocol` plus `srt-lifecycle` plus an application adapter.
+
+## Receiver bookkeeping optimization and current scale boundary — 2026-08-19
+
+The receiver hot path now has two evidence-backed fast paths in
+`crates/srt-protocol/src/srt_receiver.rs`. It caches the circularly oldest
+buffered sequence for the common TSBPD delivery search and retains the full
+search for out-of-order timestamp cases. It also advances `expected_seq`
+directly for ordinary in-order packets; the contiguous buffered scan remains
+for recovery of a sequence recorded in `loss_list`.
+
+The focused Criterion benchmark measured the buffered 250ms TSBPD case at
+`1.885ms` median after the combined change, versus `2.266ms` for the prior
+candidate and `6.809ms` before the delivery hint. The empty-window control was
+`1.485ms`, within the prior `1.461ms` control range. Protocol unit tests,
+clippy with `-D warnings`, and the complete protocol property suite passed;
+the out-of-order timestamp fallback test also remained green.
+
+Manual whole-stack Rust/Rust MSR evidence with eight sink ports and eight Rust
+sink workers is split by scale: 30/30 passed in one second with zero sender
+drops, and 700/700 passed in 27 seconds with zero sender drops. The 1,200
+attempt did not produce a checkpoint and remained in connection-admission
+churn after more than four minutes, with repeated failure/disconnect activity;
+that run was terminated and retained under
+`.local/artifacts/msr-rust-sink-scale-ports-threads8-fastpath-20260819/`.
+Therefore this optimization moves the proven Rust/Rust knee through 700 but
+does not close the 1,200-output, 8Mbps, zero-drop gate.

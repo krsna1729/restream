@@ -13,6 +13,9 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+#[cfg(test)]
+use std::cell::Cell;
+
 use crate::srt_handshake::DEFAULT_FLOW_WINDOW;
 use crate::srt_packet::{DataPacket, sequence_greater_than, sequence_less_than};
 use crate::time::Timestamp;
@@ -283,6 +286,8 @@ pub struct ReceiverBuffer {
     /// 受信パケット (sequence_number -> ReceivedPacket)
     packets: BTreeMap<u32, ReceivedPacket>,
 
+    delivery_seq_hint: Option<u32>,
+
     /// 次に期待するシーケンス番号
     expected_seq: u32,
 
@@ -362,6 +367,12 @@ pub struct ReceiverBuffer {
 
     /// リンク容量推定器
     link_capacity_estimator: LinkCapacityEstimator,
+
+    #[cfg(test)]
+    delivery_scan_calls: Cell<usize>,
+
+    #[cfg(test)]
+    receive_expected_sequence_scans: Cell<usize>,
 }
 
 impl ReceiverBuffer {
@@ -390,6 +401,7 @@ impl ReceiverBuffer {
     ) -> Self {
         Self {
             packets: BTreeMap::new(),
+            delivery_seq_hint: None,
             expected_seq: initial_seq,
             loss_list: HashSet::new(),
             loss_list_min: None,
@@ -413,6 +425,10 @@ impl ReceiverBuffer {
             ack_timestamps: AckTimestampTracker::new(),
             rate_estimator: ReceivingRateEstimator::new(start_time),
             link_capacity_estimator: LinkCapacityEstimator::new(),
+            #[cfg(test)]
+            delivery_scan_calls: Cell::new(0),
+            #[cfg(test)]
+            receive_expected_sequence_scans: Cell::new(0),
         }
     }
 
@@ -432,14 +448,16 @@ impl ReceiverBuffer {
 
     /// `loss_list` から要素を削除する。削除対象が循環順最小値キャッシュ
     /// 自身だった場合のみ、残りの要素から O(loss_list) で再計算する。
-    fn loss_list_remove(&mut self, seq: u32) {
-        if self.loss_list.remove(&seq) && self.loss_list_min == Some(seq) {
+    fn loss_list_remove(&mut self, seq: u32) -> bool {
+        let removed = self.loss_list.remove(&seq);
+        if removed && self.loss_list_min == Some(seq) {
             self.loss_list_min = self
                 .loss_list
                 .iter()
                 .copied()
                 .reduce(|a, b| if sequence_less_than(a, b) { a } else { b });
         }
+        removed
     }
 
     /// 次に期待するシーケンス番号を取得
@@ -454,6 +472,7 @@ impl ReceiverBuffer {
 
         self.packets
             .retain(|&seq, _| !sequence_less_than(seq, sequence_number));
+        self.refresh_delivery_seq_hint();
         let stale_losses: Vec<u32> = self
             .loss_list
             .iter()
@@ -474,6 +493,7 @@ impl ReceiverBuffer {
     /// 損失が検出された場合、損失リストを返す
     pub fn receive(&mut self, packet: DataPacket, now: Timestamp) -> Option<Vec<u32>> {
         let seq = packet.sequence_number;
+        let was_expected = seq == self.expected_seq;
 
         // 重複チェック
         if self.packets.contains_key(&seq) {
@@ -545,6 +565,12 @@ impl ReceiverBuffer {
                 delivery_time,
             },
         );
+        if self
+            .delivery_seq_hint
+            .is_none_or(|hint| sequence_less_than(seq, hint))
+        {
+            self.delivery_seq_hint = Some(seq);
+        }
 
         // 損失検出
         let mut new_losses = Vec::new();
@@ -561,13 +587,19 @@ impl ReceiverBuffer {
             }
         }
 
-        // expected_seq を更新
-        while self.packets.contains_key(&self.expected_seq) {
-            self.expected_seq = self.expected_seq.wrapping_add(1) & 0x7FFF_FFFF;
-        }
-
         // 損失リストから回復したパケットを削除
-        self.loss_list_remove(seq);
+        let recovered_loss = self.loss_list_remove(seq);
+
+        if was_expected && !recovered_loss {
+            self.expected_seq = self.expected_seq.wrapping_add(1) & 0x7FFF_FFFF;
+        } else if was_expected {
+            #[cfg(test)]
+            self.receive_expected_sequence_scans
+                .set(self.receive_expected_sequence_scans.get().saturating_add(1));
+            while self.packets.contains_key(&self.expected_seq) {
+                self.expected_seq = self.expected_seq.wrapping_add(1) & 0x7FFF_FFFF;
+            }
+        }
 
         if new_losses.is_empty() {
             None
@@ -582,6 +614,9 @@ impl ReceiverBuffer {
         let delivery_seq = self.find_deliverable_seq(now)?;
 
         let entry = self.packets.remove(&delivery_seq)?;
+        if self.delivery_seq_hint == Some(delivery_seq) {
+            self.delivery_seq_hint = self.next_sequence_after(delivery_seq);
+        }
 
         // TSBPD ラップアラウンド期間の終了判定
         // 仕様 (draft-sharabayko-srt.md の #tsbpd-time-base 節):
@@ -607,9 +642,9 @@ impl ReceiverBuffer {
     /// 数値順で最初に見つけた候補を返すと境界をまたぐ連続パケットの配送順序が逆転するため、
     /// 配信候補の中から循環順で最小の seq を選ぶ。
     ///
-    /// 早期 return せず全候補を走査するのは、循環順最小が数値順最小と食い違うのはラップ境界を
-    /// またぐ場合のみだが、その判定に全候補の循環順比較が要るためである。堅牢性を優先し、
-    /// 配信ポインタ等の最適化は導入しない。
+    /// 循環順最小のパケットが配信可能なら、そのパケットを直接返す。最小パケットがまだ
+    /// 配信時刻に達していない場合は、既存の全候補走査に戻して out-of-order timestamp を
+    /// 保持する。
     ///
     /// `has_gap` 自体は `loss_list_min` (循環順最小値キャッシュ、
     /// upstream shiguredo/srt-rs issue 0073) により O(1) -- 「seq より循環順で
@@ -618,6 +653,20 @@ impl ReceiverBuffer {
     /// ない。これにより全体の計算量は O(packets × loss_list) から
     /// O(packets) に下がる。
     fn find_deliverable_seq(&self, now: Timestamp) -> Option<u32> {
+        if let Some(seq) = self.delivery_seq_hint
+            && let Some(entry) = self.packets.get(&seq)
+            && (!self.tsbpd_enabled || entry.delivery_time <= now)
+            && !self
+                .loss_list_min
+                .is_some_and(|min| sequence_less_than(min, seq))
+        {
+            return Some(seq);
+        }
+
+        #[cfg(test)]
+        self.delivery_scan_calls
+            .set(self.delivery_scan_calls.get().saturating_add(1));
+
         let mut best: Option<u32> = None;
         for (&seq, entry) in &self.packets {
             let time_ok = !self.tsbpd_enabled || entry.delivery_time <= now;
@@ -633,6 +682,33 @@ impl ReceiverBuffer {
             }
         }
         best
+    }
+
+    fn next_sequence_after(&self, sequence_number: u32) -> Option<u32> {
+        let next = sequence_number.wrapping_add(1) & 0x7FFF_FFFF;
+        self.packets
+            .range(next..)
+            .next()
+            .map(|(&seq, _)| seq)
+            .or_else(|| self.packets.keys().next().copied())
+    }
+
+    fn refresh_delivery_seq_hint(&mut self) {
+        self.delivery_seq_hint = self
+            .packets
+            .keys()
+            .copied()
+            .reduce(|a, b| if sequence_less_than(a, b) { a } else { b });
+    }
+
+    #[cfg(test)]
+    fn delivery_scan_calls(&self) -> usize {
+        self.delivery_scan_calls.get()
+    }
+
+    #[cfg(test)]
+    fn receive_expected_sequence_scans(&self) -> usize {
+        self.receive_expected_sequence_scans.get()
     }
 
     /// ACK を生成すべきかチェック
@@ -1311,6 +1387,57 @@ mod tests {
         // now=700_000 < 820_000 なので配送されない
         let delivered = buf.pop_ready(Timestamp::from_micros(700_000));
         assert!(delivered.is_none());
+    }
+
+    #[test]
+    fn test_tsbpd_ready_search_is_not_repeated_for_the_buffered_window() {
+        let mut buf = ReceiverBuffer::new(0, 250, Timestamp::from_micros(0), 0);
+
+        for seq in 0..512u32 {
+            let now_us = (u64::from(seq) + 1) * 1_316;
+            let now = Timestamp::from_micros(now_us);
+            buf.receive(make_packet(seq, now_us as u32), now);
+            let _ = buf.pop_ready(now);
+        }
+
+        assert!(
+            buf.delivery_scan_calls() < 256,
+            "buffered TSBPD search scanned {} times",
+            buf.delivery_scan_calls()
+        );
+    }
+
+    #[test]
+    fn test_in_order_receive_does_not_search_for_a_future_sequence() {
+        let mut buf = ReceiverBuffer::new(0, 250, Timestamp::from_micros(0), 0);
+
+        for seq in 0..512u32 {
+            let now_us = (u64::from(seq) + 1) * 1_316;
+            let now = Timestamp::from_micros(now_us);
+            buf.receive(make_packet(seq, now_us as u32), now);
+        }
+
+        assert_eq!(buf.receive_expected_sequence_scans(), 0);
+    }
+
+    #[test]
+    fn test_tsbpd_ready_search_falls_back_for_out_of_order_timestamps() {
+        let mut buf = ReceiverBuffer::new(0, 120, Timestamp::from_micros(0), 0);
+        let received_at = Timestamp::from_micros(0);
+
+        buf.receive(make_packet(0, 1_000_000), received_at);
+        buf.receive(make_packet(1, 0), received_at);
+
+        assert_eq!(
+            buf.pop_ready(Timestamp::from_micros(200_000))
+                .map(|packet| packet.sequence_number),
+            Some(1)
+        );
+        assert_eq!(
+            buf.pop_ready(Timestamp::from_micros(1_200_000))
+                .map(|packet| packet.sequence_number),
+            Some(0)
+        );
     }
 
     #[test]
