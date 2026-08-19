@@ -25,6 +25,7 @@
 - [Receiver bookkeeping optimization and current scale boundary — 2026-08-19](#receiver-bookkeeping-optimization-and-current-scale-boundary--2026-08-19)
 - [Rust egress paired scale boundary and rejected timer candidate — 2026-08-19](#rust-egress-paired-scale-boundary-and-rejected-timer-candidate--2026-08-19)
 - [Rust egress and per-stream-port sink worker boundary — 2026-08-19](#rust-egress-and-per-stream-port-sink-worker-boundary--2026-08-19)
+- [Passing-topology flame evidence and profiler perturbation — 2026-08-19](#passing-topology-flame-evidence-and-profiler-perturbation--2026-08-19)
 
 ## Current migration policy
 
@@ -1190,3 +1191,40 @@ Evidence retained under:
 - `.local/artifacts/msr-rust-egress-rust-sink-per-stream-1200-workers8-concurrency256-20260819/`
 - `.local/artifacts/msr-rust-egress-rust-sink-ports-concurrency256-1200-20260819/`
 - `.local/artifacts/msr-rust-egress-rust-sink-ports-concurrency512-1200-20260819/`
+
+## Passing-topology flame evidence and profiler perturbation — 2026-08-19
+
+A paired low-frequency (`19Hz`) DWARF perf capture was attached to restream
+and the Rust sink for the eight-worker, per-stream-port configuration. It is
+diagnostic only: the capture reached `1174/1200` at the 180-second timeout, so
+it is not a PASS or a sustained zero-drop result. The raw data and generated
+flame graphs are retained under
+`.local/artifacts/msr-rust-egress-rust-sink-per-stream-1200-workers8-concurrency256-profile-20260819/`.
+
+The restream folded stack points to transport service and per-datagram work:
+
+- `SrtRustSingleMessageSender::service` was 47.90% inclusive.
+- `flush_outputs` was 42.97% inclusive and the kernel send path was about 38%
+  inclusive.
+- `transport_wakeup` was 41.23% inclusive, with
+  `next_timer_deadline` at 4.63% inclusive. This is evidence of repeated
+  wakeup/service traversal and UDP syscall cost, not evidence that the timer
+  map scan alone is the dominant limiter.
+
+The sink folded stack points to receive/send syscall pressure in the worker
+pool:
+
+- `run_rust_sink_pool` was 76.45% inclusive.
+- `drain_rust_outputs_mode` was 44.27% inclusive, with the UDP send path about
+  42% inclusive and UDP receive about 30% inclusive.
+- `process_rust_connections_mode` was 7.56% inclusive; HashMap operations
+  were 2.10% and `BuildHasher::hash_one` 2.76% inclusive.
+
+This makes the current fix order evidence-based: first separate and reduce
+unnecessary egress service/wakeup work and verify the per-message syscall
+floor; then test whether the sink's all-slot connection/timer pass is the
+remaining worker-count bottleneck. A timer-deadline cache remains rejected
+until it changes the paired outcome rather than only its isolated lookup
+cost. Kernel call frames were attributable, but the host still restricts
+kernel symbol maps; unresolved kernel attribution is called out in the
+artifact reports rather than inferred away.
