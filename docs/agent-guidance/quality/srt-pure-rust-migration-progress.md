@@ -24,6 +24,7 @@
 - [Interop crate layering audit — 2026-08-19](#interop-crate-layering-audit--2026-08-19)
 - [Receiver bookkeeping optimization and current scale boundary — 2026-08-19](#receiver-bookkeeping-optimization-and-current-scale-boundary--2026-08-19)
 - [Rust egress paired scale boundary and rejected timer candidate — 2026-08-19](#rust-egress-paired-scale-boundary-and-rejected-timer-candidate--2026-08-19)
+- [Rust egress and per-stream-port sink worker boundary — 2026-08-19](#rust-egress-and-per-stream-port-sink-worker-boundary--2026-08-19)
 
 ## Current migration policy
 
@@ -1150,3 +1151,42 @@ Next egress loop: capture lower-overhead paired admission/handshake timing
 and correlate sink-worker receive/ACK saturation with caller restart events;
 then test the smallest source-backed fix before resuming the full six-driver,
 four-topology, bonding, and differential matrices.
+
+## Rust egress and per-stream-port sink worker boundary — 2026-08-19
+
+The next receiver-topology sweep kept the Rust egress path fixed, used 1,200
+distinct sink ports, raised the experimental Rust egress connect-admission
+limit to 256, and varied only the number of Rust sink workers. All runs used
+the optimized x86-64-v3 bench binaries. This isolates sink worker ownership
+from the earlier eight-port workaround.
+
+| Sink topology | Workers | Result | Restream CPU | Restream RSS | Sink drops | Diagnostic evidence |
+|---|---:|---|---:|---:|---:|---|
+| per-stream port | 1 | failed before a stable 1,200-output report | not admissible | not admissible | not admissible | output count fell after early progress; repeated feed overruns and inactivity disconnects |
+| per-stream port | 2 | failed; no valid MSR report | not admissible | not admissible | not admissible | 461 failed jobs, 461 Rust disconnects, 533 feed-overrun events; 739 jobs still running at teardown |
+| per-stream port | 4 | `PASS`, 1,200/1,200 | 324.95% avg, 330.28% peak | 436,012 KiB peak | 0 | sink observed all 1,200 outputs |
+| per-stream port | 8 | `PASS`, 1,200/1,200 | 311.45% avg, 321.56% peak | 423,328 KiB peak | 0 | sink observed all 1,200 outputs |
+
+The current evidence-backed lower bound is therefore four sink workers for
+1,200 per-stream-port Rust connections at this workload. Eight workers are
+the better measured operating point so far, with about 4.2% lower average
+restream CPU and 2.9% lower peak RSS than four workers, but both passing runs
+were short acceptance checks (`sampleSecs=5`, two aggregate samples), not yet
+the sustained 8 Mbps zero-drop gate.
+
+The admission limit is also material: the default limit of 64 collapsed the
+Rust/Rust eight-port topology; 256 materially improved that topology but left
+31 handshake timeouts and 1,195/1,200 outputs; 512 was slightly worse at
+1,192/1,200. Per-stream-port with four or eight workers and 256 passed. This
+does not justify changing the production default yet: the next gate is a
+lower-overhead paired profile of the passing topology plus a controlled
+admission sweep, followed by a sustained run.
+
+Evidence retained under:
+
+- `.local/artifacts/msr-rust-egress-rust-sink-per-stream-1200-workers1-concurrency256-20260819/`
+- `.local/artifacts/msr-rust-egress-rust-sink-per-stream-1200-workers2-concurrency256-20260819/`
+- `.local/artifacts/msr-rust-egress-rust-sink-per-stream-1200-workers4-concurrency256-20260819/`
+- `.local/artifacts/msr-rust-egress-rust-sink-per-stream-1200-workers8-concurrency256-20260819/`
+- `.local/artifacts/msr-rust-egress-rust-sink-ports-concurrency256-1200-20260819/`
+- `.local/artifacts/msr-rust-egress-rust-sink-ports-concurrency512-1200-20260819/`
