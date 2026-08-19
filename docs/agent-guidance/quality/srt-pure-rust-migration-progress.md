@@ -29,6 +29,7 @@
 - [Rejected ready-socket scheduling candidate — 2026-08-19](#rejected-ready-socket-scheduling-candidate--2026-08-19)
 - [Rejected leaf-indexed wakeup lookup candidate — 2026-08-19](#rejected-leaf-indexed-wakeup-lookup-candidate--2026-08-19)
 - [Rejected packet-encode capacity candidate — 2026-08-19](#rejected-packet-encode-capacity-candidate--2026-08-19)
+- [Rejected ACK prefix-removal candidate — 2026-08-19](#rejected-ack-prefix-removal-candidate--2026-08-19)
 
 ## Current migration policy
 
@@ -1319,3 +1320,42 @@ Evidence retained under:
 - `.local/artifacts/srt-packet-encode-capacity-candidate-20260819/`
 - `.local/artifacts/msr-srt-packet-encode-capacity-rust-rust-700-workers8-concurrency256-20260819/`
 - `.local/artifacts/msr-srt-packet-encode-capacity-rust-rust-1200-workers8-concurrency256-20260819/`
+
+## Rejected ACK prefix-removal candidate — 2026-08-19
+
+The Rust sender ACK path was experimentally changed from a full
+`BTreeMap::retain` scan to a wrap-safe pair of `split_off` operations for the
+contiguous cumulative-ACK prefix. The implementation passed the complete
+`shiguredo_srt` suite (`109` unit tests, allocation guard, connection/group/
+crypto tests, and doctests), including wrap-around and bonding coverage.
+
+The isolated optimized benchmark improved substantially:
+
+| Case | Retain baseline | Prefix candidate |
+|---|---:|---:|
+| 8,192 in-flight, ACK +1 | 2.690 ms | 1.058 ms |
+| 8,192 in-flight, ACK +64 | 2.892 ms | 1.077 ms |
+| 8,192 in-flight, full ACK | 3.190 ms | 1.037 ms |
+| wrap, 256 in-flight, ACK +64 | 83.89 µs | 30.66 µs |
+
+The paired live controls both completed with 0 sink drops, but the target
+1,200-output result regressed against the retained eight-worker baseline:
+
+| Configuration | Result | Restream CPU | Restream RSS | Restream PSS | Sink drops |
+|---|---|---:|---:|---:|---:|
+| 700 outputs, 8 workers | `PASS`, 700/700 | 248.56% avg | 210,764 KiB | 198,136 KiB | 0 |
+| 1,200 outputs, 8 workers | `PASS`, 1,200/1,200 | 320.44% avg | 433,156 KiB | 409,864 KiB | 0 |
+
+The matched retained 1,200-output baseline is `311.45%` CPU, `423,328 KiB`
+RSS, and `400,351 KiB` PSS. The candidate therefore increased CPU by 8.99
+percentage points, RSS by 9,828 KiB, and PSS by 9,513 KiB. The isolated ACK
+win does not survive the restream/harness workload, so the source change and
+temporary benchmark are reverted. ACK reclamation remains a profile signal,
+but this data does not justify changing the production path.
+
+Evidence retained under:
+
+- `.local/artifacts/srt-sender-ack-baseline-20260819/`
+- `.local/artifacts/srt-sender-ack-prefix-candidate-20260819/`
+- `.local/artifacts/msr-srt-sender-ack-prefix-rust-rust-700-workers8-concurrency256-20260819/`
+- `.local/artifacts/msr-srt-sender-ack-prefix-rust-rust-1200-workers8-concurrency256-20260819/`
