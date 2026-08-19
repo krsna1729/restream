@@ -28,6 +28,7 @@
 - [Passing-topology flame evidence and profiler perturbation — 2026-08-19](#passing-topology-flame-evidence-and-profiler-perturbation--2026-08-19)
 - [Rejected ready-socket scheduling candidate — 2026-08-19](#rejected-ready-socket-scheduling-candidate--2026-08-19)
 - [Rejected leaf-indexed wakeup lookup candidate — 2026-08-19](#rejected-leaf-indexed-wakeup-lookup-candidate--2026-08-19)
+- [Rejected packet-encode capacity candidate — 2026-08-19](#rejected-packet-encode-capacity-candidate--2026-08-19)
 
 ## Current migration policy
 
@@ -1284,3 +1285,37 @@ Evidence retained under:
 
 - `.local/artifacts/msr-rust-egress-wakeup-index-rust-sink-per-stream-700-workers8-concurrency256-20260819/`
 - `.local/artifacts/msr-rust-egress-wakeup-index-rust-sink-per-stream-1200-workers8-concurrency256-20260819/`
+
+## Rejected packet-encode capacity candidate — 2026-08-19
+
+The Rust protocol sender was experimentally changed to reserve each encoded
+SRT packet's exact `encoded_size()` instead of starting its output `Vec` at
+zero capacity. Protocol behavior remained unchanged: the full
+`shiguredo_srt` test suite passed (`109` unit tests, allocation guard,
+connection/group/crypto tests, and doctests). The direct optimized core
+benchmark improved the plain path at batch sizes representative of steady
+traffic (`9.275µs` to `7.833µs` at batch 8, `59.171µs` to `56.597µs` at batch
+64), while batch 1 was unchanged and the AES cases did not show a consistent
+gain.
+
+The paired MSR result did not improve:
+
+| Configuration | Result | Restream CPU | Restream RSS | Restream PSS | Sink drops |
+|---|---|---:|---:|---:|---:|
+| 700 outputs, 8 workers | `PASS`, 700/700 | 249.49% avg | 219,884 KiB | 207,953 KiB | 0 |
+| 1,200 outputs, 8 workers | `PASS`, 1,200/1,200 | 313.13% avg | 431,412 KiB | 411,317 KiB | 0 |
+
+The matched retained 1,200-output baseline is `311.45%` CPU, `423,328 KiB`
+RSS, and `400,351 KiB` PSS. The candidate therefore increased CPU by 1.68
+percentage points, RSS by 8,084 KiB, and PSS by 10,966 KiB, with no change to
+completion or zero-drop behavior. The isolated benchmark win does not
+survive the full restream/harness workload, so the source candidate is not
+retained. This keeps packet allocation/reclamation as an open profiling
+question, but does not justify this change as the fix.
+
+Evidence retained under:
+
+- `.local/artifacts/srt-packet-encode-capacity-baseline-20260819/`
+- `.local/artifacts/srt-packet-encode-capacity-candidate-20260819/`
+- `.local/artifacts/msr-srt-packet-encode-capacity-rust-rust-700-workers8-concurrency256-20260819/`
+- `.local/artifacts/msr-srt-packet-encode-capacity-rust-rust-1200-workers8-concurrency256-20260819/`
