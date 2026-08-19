@@ -27,6 +27,7 @@
 - [Rust egress and per-stream-port sink worker boundary — 2026-08-19](#rust-egress-and-per-stream-port-sink-worker-boundary--2026-08-19)
 - [Passing-topology flame evidence and profiler perturbation — 2026-08-19](#passing-topology-flame-evidence-and-profiler-perturbation--2026-08-19)
 - [Rejected ready-socket scheduling candidate — 2026-08-19](#rejected-ready-socket-scheduling-candidate--2026-08-19)
+- [Rejected leaf-indexed wakeup lookup candidate — 2026-08-19](#rejected-leaf-indexed-wakeup-lookup-candidate--2026-08-19)
 
 ## Current migration policy
 
@@ -1255,3 +1256,31 @@ Evidence retained under:
 - `.local/artifacts/msr-rust-egress-ready-scheduler-rust-sink-per-stream-700-workers8-concurrency256-20260819/`
 - `.local/artifacts/msr-rust-egress-ready-scheduler-rust-sink-per-stream-1200-workers8-concurrency256-20260819/`
 - `.local/artifacts/msr-rust-egress-ready-scheduler-rust-sink-per-stream-1200-workers2-concurrency256-20260819/`
+
+## Rejected leaf-indexed wakeup lookup candidate — 2026-08-19
+
+The Rust egress wakeup path was experimentally changed to keep a leaf-indexed
+socket table, replacing the per-wakeup `output_sockets.values().find(...)`
+lookup with direct `LeafKey` indexing. A red cleanup test failed to compile
+before the index existed; after implementation the targeted test and the full
+SRT backend test group passed (`63` tests). The candidate was then measured
+with clean optimized bench binaries and reverted.
+
+| Configuration | Result | Restream CPU | Restream RSS | Restream PSS | Sink drops |
+|---|---|---:|---:|---:|---:|
+| 700 outputs, 8 workers | `PASS`, 700/700 | 244.01% avg | 201,116 KiB | 189,746 KiB | 0 |
+| 1,200 outputs, 8 workers | `PASS`, 1,200/1,200 | 342.48% avg | 429,376 KiB | 410,320 KiB | 0 |
+
+The matched retained 1,200-output baseline is `311.45%` CPU, `423,328 KiB`
+RSS, and `400,351 KiB` PSS. The candidate therefore increased CPU by 31.03
+percentage points (about 10.0%), RSS by 6,048 KiB (about 1.4%), and PSS by
+9,969 KiB (about 2.5%), without changing the 1,200-output completion or
+zero-drop result. This rejects the isolated map lookup as a production fix:
+the flamegraph's `transport_wakeup` share represents broader service,
+wakeup, and per-datagram send work, not a proven dominant cost in the hash-map
+lookup alone.
+
+Evidence retained under:
+
+- `.local/artifacts/msr-rust-egress-wakeup-index-rust-sink-per-stream-700-workers8-concurrency256-20260819/`
+- `.local/artifacts/msr-rust-egress-wakeup-index-rust-sink-per-stream-1200-workers8-concurrency256-20260819/`
