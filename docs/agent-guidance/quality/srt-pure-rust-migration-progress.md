@@ -30,6 +30,7 @@
 - [Rejected leaf-indexed wakeup lookup candidate — 2026-08-19](#rejected-leaf-indexed-wakeup-lookup-candidate--2026-08-19)
 - [Rejected packet-encode capacity candidate — 2026-08-19](#rejected-packet-encode-capacity-candidate--2026-08-19)
 - [Rejected ACK prefix-removal candidate — 2026-08-19](#rejected-ack-prefix-removal-candidate--2026-08-19)
+- [Real 8 Mbps Rust/Rust scale boundary — 2026-08-19](#real-8-mbps-rustrust-scale-boundary--2026-08-19)
 
 ## Current migration policy
 
@@ -1359,3 +1360,49 @@ Evidence retained under:
 - `.local/artifacts/srt-sender-ack-prefix-candidate-20260819/`
 - `.local/artifacts/msr-srt-sender-ack-prefix-rust-rust-700-workers8-concurrency256-20260819/`
 - `.local/artifacts/msr-srt-sender-ack-prefix-rust-rust-1200-workers8-concurrency256-20260819/`
+
+## Real 8 Mbps Rust/Rust scale boundary — 2026-08-19
+
+The earlier short MSR controls used the checked-in colorbar fixture. The
+production-shaped fixture override was then verified with `ffprobe` at
+`7,993,015` bits/sec, 1080p60, and 31 streams (one video plus 30 audio
+tracks). The following controls used that fixture, explicit non-overlapping
+ports, Rust egress, the Rust harness sink, eight sink workers, and
+`per-stream-port` receiver scaling:
+
+| Outputs | Result | Progress at timeout | Handshake timeouts | Inactivity timeouts | Sink drops |
+|---:|---|---:|---:|---:|---:|
+| 120 | `PASS` | 120/120 | 0 | 0 | 0 |
+| 300 | `FAIL` after 180s | 44/300 | 791 | 174 | not reached |
+| 600 | `FAIL` after 240s | 30/600 | 2,458 | 158 | not reached |
+| 1,200 | `FAIL` after 300s | 132/1,200 | 633 | 261 | not reached |
+
+The first failure signature is not packet-loss accounting: the harness
+reports `stalled=unregistered-cell`, while the restream log records Rust SRT
+handshake/inactivity timeouts and repeated `SRT fabric leaf terminated
+unexpectedly` failures. The output count decays during retry churn, so this is
+an admission/connection-service cliff before a valid steady-state zero-drop
+measurement.
+
+Two mixed controls separate the sides of the seam:
+
+| Egress | Sink | Outputs | Result | Key evidence |
+|---|---|---:|---|---|
+| Rust | libsrt | 600 | `FAIL` after 180s at 525/600 | 538 handshake timeouts |
+| libsrt | libsrt | 600 | admits 600/600, not zero-drop | 18,789,119 sender drops; 276.76% CPU; 1,970,200 KiB RSS |
+
+Therefore the Rust sink is a major limiter at real bitrate, but Rust egress
+also fails to reach the native admission boundary. The native control is not
+a pass for the production target because its sender drop counter is non-zero.
+No source optimization is promoted from these runs; the next loop must profile
+the real-bitrate 120-output pass and the 300-output failure on both restream
+and sink, then tune receiver admission/service and re-run the same differential
+controls.
+
+Evidence retained under:
+
+- `.local/artifacts/msr-real-120-rust-rust-20260819/`
+- `.local/artifacts/msr-real-300-rust-rust-20260819/`
+- `.local/artifacts/msr-real-600-rust-rust-20260819/`
+- `.local/artifacts/msr-real-600-rust-libsrt-20260819/`
+- `.local/artifacts/msr-real-600-libsrt-libsrt-20260819/`
