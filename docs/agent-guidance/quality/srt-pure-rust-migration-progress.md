@@ -23,6 +23,7 @@
 - [Six runtime adapter contract and compio ownership — 2026-08-18](#six-runtime-adapter-contract-and-compio-ownership--2026-08-18)
 - [Interop crate layering audit — 2026-08-19](#interop-crate-layering-audit--2026-08-19)
 - [Receiver bookkeeping optimization and current scale boundary — 2026-08-19](#receiver-bookkeeping-optimization-and-current-scale-boundary--2026-08-19)
+- [Rust egress paired scale boundary and rejected timer candidate — 2026-08-19](#rust-egress-paired-scale-boundary-and-rejected-timer-candidate--2026-08-19)
 
 ## Current migration policy
 
@@ -1092,3 +1093,51 @@ that run was terminated and retained under
 `.local/artifacts/msr-rust-sink-scale-ports-threads8-fastpath-20260819/`.
 Therefore this optimization moves the proven Rust/Rust knee through 700 but
 does not close the 1,200-output, 8Mbps, zero-drop gate.
+
+## Rust egress paired scale boundary and rejected timer candidate — 2026-08-19
+
+The matched egress comparison held the Rust sink topology constant at eight
+sink ports and eight Rust sink workers, used optimized bench binaries, and
+varied only the restream SRT backend. The binaries used the repository bench
+profile (`opt-level=3`, thin LTO, 16 codegen units, and
+`target-cpu=x86-64-v3`). Perf was attached to both restream and the sink, so
+profiled output counts are diagnostic rather than acceptance gates when
+profiler overhead changes scheduling.
+
+| Egress | Outputs | Result | Restream profile signal | Sink profile signal |
+|---|---:|---|---|---|
+| Rust | 1,200 | stalled/runner failure; output count declined after early progress | `SrtRustMessageSender::next_timer_deadline` was the largest Rust-specific egress symbol (447 flat samples); allocation, sender-buffer expiry, and wakeup scans were also visible | `ReceiverBuffer::receive` had 2,250 flat samples; `feed_recv_buf` was about 38% inclusive in the full report |
+| libsrt | 1,200 | 1,199/1,200 under profile; unprofiled control reached 1,200 with heavy sender drops | `pthread_mutex_lock`, `locateSocket_LOCKED`, and `CUDT::updateCC` dominated native egress | Rust sink receive/ACK attribution was materially lower than with Rust egress |
+| Rust | 700 | 695/700 under heavy profile; unprofiled control passed 700/700 | `next_timer_deadline` remained the largest Rust-specific egress symbol | `ReceiverBuffer::receive` and hash lookup remained the main Rust sink costs |
+| libsrt | 700 | 700/700 under profile | native mutex/socket lookup path | Rust sink receive/ACK work remained lower |
+
+The unprofiled Rust/Rust 1,200 control still failed while the unprofiled 700
+control passed, so Rust egress is a real contributor to the scale boundary.
+The paired evidence does not prove that one timer lookup is the root cause:
+the timer function was only about 1.75% of flat restream samples, and the
+sink becomes much hotter when driven by Rust egress. The 1,200 Rust-egress
+run also recorded repeated caller handshake timeouts and output restart
+churn, which must be explained at the admission/transport boundary.
+
+A red/green unit test validated a proposed earliest-deadline cache, including
+replacement of the current earliest timer and clear invalidation. Optimized
+700-output QA preserved 700/700 and zero sender drops, but measured 242.75%
+average CPU and 210,224 KiB RSS versus the prior 241.68% and 199,316 KiB
+control. The 1,200 candidate run stalled at 1,190/1,200 and produced repeated
+handshake timeouts without a valid PASS report. The candidate was reverted;
+no timer-cache production improvement is claimed.
+
+Evidence retained under:
+
+- `.local/artifacts/msr-egress-paired-profile-rust-1200-20260819/`
+- `.local/artifacts/msr-egress-paired-profile-libsrt-1200-20260819/`
+- `.local/artifacts/msr-egress-paired-profile-rust-700-20260819/`
+- `.local/artifacts/msr-egress-paired-profile-libsrt-700-20260819/`
+- `.local/artifacts/msr-egress-unprofiled-control-rust-700-20260819/`
+- `.local/artifacts/msr-egress-timercache-control-rust-700-20260819/`
+- `.local/artifacts/msr-egress-timercache-control-rust-1200-20260819/`
+
+Next egress loop: capture lower-overhead paired admission/handshake timing
+and correlate sink-worker receive/ACK saturation with caller restart events;
+then test the smallest source-backed fix before resuming the full six-driver,
+four-topology, bonding, and differential matrices.
