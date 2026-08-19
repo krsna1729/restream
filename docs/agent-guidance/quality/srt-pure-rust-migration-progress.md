@@ -1119,6 +1119,15 @@ sink becomes much hotter when driven by Rust egress. The 1,200 Rust-egress
 run also recorded repeated caller handshake timeouts and output restart
 churn, which must be explained at the admission/transport boundary.
 
+The log count makes that distinction concrete. The profiled Rust 1,200 run
+recorded 475 handshake-timeout warnings, 673 inactivity disconnects, 1,179
+`egress.failed` events, 2,379 `egress.started` events, and 84 feed overruns.
+The matched libsrt 1,200 run recorded no handshake-timeout warnings, 16
+egress failures, and 1,214 starts. The timer-cache 1,200 attempt still
+recorded 17 handshake timeouts and 17 failures. This is admission and
+transport churn, not evidence that the O(number-of-timers) deadline scan was
+the dominant failure mechanism.
+
 A red/green unit test validated a proposed earliest-deadline cache, including
 replacement of the current earliest timer and clear invalidation. Optimized
 700-output QA preserved 700/700 and zero sender drops, but measured 242.75%
