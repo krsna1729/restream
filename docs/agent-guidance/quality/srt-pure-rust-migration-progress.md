@@ -26,6 +26,7 @@
 - [Rust egress paired scale boundary and rejected timer candidate — 2026-08-19](#rust-egress-paired-scale-boundary-and-rejected-timer-candidate--2026-08-19)
 - [Rust egress and per-stream-port sink worker boundary — 2026-08-19](#rust-egress-and-per-stream-port-sink-worker-boundary--2026-08-19)
 - [Passing-topology flame evidence and profiler perturbation — 2026-08-19](#passing-topology-flame-evidence-and-profiler-perturbation--2026-08-19)
+- [Rejected ready-socket scheduling candidate — 2026-08-19](#rejected-ready-socket-scheduling-candidate--2026-08-19)
 
 ## Current migration policy
 
@@ -1228,3 +1229,29 @@ until it changes the paired outcome rather than only its isolated lookup
 cost. Kernel call frames were attributable, but the host still restricts
 kernel symbol maps; unresolved kernel attribution is called out in the
 artifact reports rather than inferred away.
+
+## Rejected ready-socket scheduling candidate — 2026-08-19
+
+The sink worker was experimentally changed to process only sockets reported
+ready by Mio, while falling back to all sockets when the timer wait expired.
+A focused red/green test covered the timer-starvation boundary. The candidate
+was then measured with the optimized bench binaries and reverted.
+
+| Configuration | Result | Restream CPU | Restream RSS | Sink drops |
+|---|---|---:|---:|---:|
+| 700 outputs, 8 workers | `PASS`, 700/700 | 240.96% avg | 201,308 KiB | 0 |
+| 1,200 outputs, 8 workers | `PASS`, 1,200/1,200 | 321.79% avg | 423,172 KiB | 0 |
+| 1,200 outputs, 2 workers | failed at 982/1,200 after 180s | not admissible | not admissible | not admissible |
+
+The same-topology eight-worker baseline was `311.45%` CPU and `423,328 KiB`
+RSS, so the candidate increased CPU by about 3.3% without changing the
+memory boundary. It also did not move the failed two-worker boundary. The
+candidate is therefore not retained; the source tree is clean and the next
+source loop returns to Rust egress service/wakeup work and per-datagram
+transport cost.
+
+Evidence retained under:
+
+- `.local/artifacts/msr-rust-egress-ready-scheduler-rust-sink-per-stream-700-workers8-concurrency256-20260819/`
+- `.local/artifacts/msr-rust-egress-ready-scheduler-rust-sink-per-stream-1200-workers8-concurrency256-20260819/`
+- `.local/artifacts/msr-rust-egress-ready-scheduler-rust-sink-per-stream-1200-workers2-concurrency256-20260819/`
