@@ -17,7 +17,7 @@
     "test:e2e": "./scripts/harness/frontend-e2e.sh"
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.12.1",
+    "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/cli": "^4.3.3",
     "@types/react": "^19.2.18",
