@@ -57,11 +57,6 @@ interface StatusData {
       license?: string;
       bondingAvailable?: boolean;
     };
-    mbedtls?: {
-      version?: string;
-      buildVersion?: string;
-      license?: string;
-    };
     sqlite?: {
       version?: string;
       sourceId?: string;
@@ -640,7 +635,6 @@ function renderStatusSnapshot(): void {
   const processLogs = statusProcessLogs;
   const ffmpeg = data.nativeLibraries?.ffmpeg;
   const srt = data.nativeLibraries?.srt;
-  const mbedtls = data.nativeLibraries?.mbedtls;
   const sqlite = data.nativeLibraries?.sqlite;
   const sbomEndpoint = getEngineSbomEndpoint(data);
   const search = normalizeStatusSearch(statusLogSearchQuery);
@@ -668,8 +662,6 @@ function renderStatusSnapshot(): void {
     versionRows("libsrt", srt?.version, srt?.buildVersion),
     row("libsrt License", srt?.license),
     row("SRT Bonding Available", srt?.bondingAvailable),
-    versionRows("Mbed TLS", mbedtls?.version, mbedtls?.buildVersion),
-    row("Mbed TLS License", mbedtls?.license),
     row("SQLite Version", sqlite?.version),
     row("SQLite License", sqlite?.license),
     row("x264 Version", data.nativeLibraries?.x264?.version),

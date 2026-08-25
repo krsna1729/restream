@@ -64,7 +64,6 @@ esac
 
 native_state_ready() {
     [[ -f .local/build/static/env.sh ]] &&
-        [[ -f .local/build/static/prefix/lib/libsrt.a ]] &&
         [[ -f .local/build/static/prefix/lib/libavcodec.a ]] &&
         [[ -f .local/build/static/prefix/lib/libavformat.a ]] &&
         [[ -x .local/build/static/prefix/bin/restream-ffmpeg-capabilities ]] &&

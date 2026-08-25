@@ -560,7 +560,7 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
                 "version": srt_version,
                 "buildVersion": env!("RESTREAM_BUILD_SRT_VERSION"),
                 "license": "MIT",
-                "bondingAvailable": false,
+                "bondingAvailable": bonding_available,
             },
             "sqlite": {
                 "version": sqlite_version,

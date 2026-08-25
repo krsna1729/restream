@@ -106,10 +106,6 @@ fn release_policy_metadata_is_declared_and_enforced() {
     assert!(build_rs.contains("assert_pinned_paths(package, prefix, &library.include_paths)"));
     assert!(build_rs.contains("cargo:rustc-link-arg=-Wl,-Bdynamic"));
     for native_input in [
-        "libsrt.a",
-        "libmbedtls.a",
-        "libmbedx509.a",
-        "libmbedcrypto.a",
         "libavcodec.a",
         "libavformat.a",
         "libavfilter.a",
@@ -118,15 +114,17 @@ fn release_policy_metadata_is_declared_and_enforced() {
         "libavutil.a",
         "libx264.a",
         "libx265.a",
-        "mbedtls",
-        "mbedx509",
-        "mbedcrypto",
     ] {
         assert!(
             build_rs.contains(native_input),
             "build.rs missing native input policy for {native_input}"
         );
     }
+    // SRT moved from the vendored libsrt+mbedTLS static stack to the
+    // pure-Rust srt-rs workspace consumed as a pinned git dependency.
+    assert!(cargo_toml.contains("git = \"https://github.com/krsna1729/srt-rs\""));
+    assert!(cargo_toml.contains("shiguredo_srt"));
+    assert!(cargo_toml.contains("srt-transport"));
 
     let deny_toml = include_str!("../deny.toml");
     assert!(deny_toml.contains("unknown-registry = \"deny\""));
@@ -138,18 +136,12 @@ fn release_policy_metadata_is_declared_and_enforced() {
 
     let native_build = include_str!("../scripts/build/native-deps.sh");
     assert!(native_build.contains("scripts/build/native/native-inputs.lock"));
-    assert!(native_build.contains("require_locked_value MBEDTLS_SHA256"));
-    assert!(native_build.contains("require_source_commit \"SRT\""));
     assert!(native_build.contains("require_source_commit \"FFmpeg\""));
-    assert!(native_build.contains("Mbed TLS config SHA-256"));
     assert!(native_build.contains("reset_cmake_build_if_moved"));
     assert!(native_build.contains("RESTREAM_VERIFY_NATIVE_INPUT_LOCK_ONLY"));
 
     let native_lock = include_str!("../scripts/build/native/native-inputs.lock");
     for required in [
-        "RESTREAM_LOCK_MBEDTLS_TARBALL_SHA256",
-        "RESTREAM_LOCK_MBEDTLS_CONFIG_SHA256",
-        "RESTREAM_LOCK_SRT_COMMIT",
         "RESTREAM_LOCK_FFMPEG_COMMIT",
         "RESTREAM_LOCK_X264_COMMIT",
         "RESTREAM_LOCK_X265_COMMIT",

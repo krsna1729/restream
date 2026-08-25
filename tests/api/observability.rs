@@ -26,7 +26,7 @@ async fn status_returns_version_info() {
     assert!(engine["nativeLibraries"]["ffmpeg"]["version"].is_string());
     assert!(engine["nativeLibraries"]["ffmpeg"]["configuration"].is_string());
     assert!(engine["nativeLibraries"]["srt"]["version"].is_string());
-    assert!(engine["nativeLibraries"]["mbedtls"]["version"].is_string());
+    assert!(engine["nativeLibraries"]["srt"]["bondingAvailable"].is_boolean());
     assert!(engine["nativeLibraries"]["sqlite"]["version"].is_string());
     assert!(engine["nativeLibraries"]["x264"]["version"].is_string());
     assert!(engine["nativeLibraries"]["x265"]["version"].is_string());
@@ -127,10 +127,7 @@ async fn status_sbom_is_authenticated_cyclonedx_with_licenses() {
         "libswscale",
         "libswresample",
         "libavutil",
-        "libsrt",
-        "libmbedtls",
-        "libmbedx509",
-        "libmbedcrypto",
+        "srt-rs",
         "SQLite",
         "x264",
         "x265",
@@ -154,14 +151,9 @@ async fn status_sbom_is_authenticated_cyclonedx_with_licenses() {
     }
 
     for (name, expected_inputs) in [
-        ("libsrt", &["lib/libsrt.a", "lib/pkgconfig/srt.pc"][..]),
         (
             "libavcodec",
             &["lib/libavcodec.a", "lib/pkgconfig/libavcodec.pc"][..],
-        ),
-        (
-            "libmbedcrypto",
-            &["lib/libmbedcrypto.a", "lib/pkgconfig/mbedcrypto.pc"][..],
         ),
         ("x264", &["lib/libx264.a", "lib/pkgconfig/x264.pc"][..]),
     ] {
@@ -210,30 +202,11 @@ async fn status_sbom_is_authenticated_cyclonedx_with_licenses() {
                     refs.iter().any(|reference| {
                         reference
                             .as_str()
-                            .is_some_and(|reference| reference.starts_with("native:libsrt@"))
+                            .is_some_and(|reference| reference.starts_with("native:srt-rs@"))
                     })
                 })
         }),
         "SBOM dependencies should link the application to native components"
-    );
-    let libsrt_ref = components
-        .iter()
-        .find(|component| component["name"] == "libsrt")
-        .unwrap()["bom-ref"]
-        .as_str()
-        .unwrap();
-    assert!(
-        dependencies.iter().any(|dependency| {
-            dependency["ref"] == libsrt_ref
-                && dependency["dependsOn"].as_array().is_some_and(|refs| {
-                    refs.iter().any(|reference| {
-                        reference
-                            .as_str()
-                            .is_some_and(|reference| reference.starts_with("native:libmbedcrypto@"))
-                    })
-                })
-        }),
-        "SBOM dependencies should link libsrt to Mbed TLS crypto"
     );
 
     let cargo_component = components
