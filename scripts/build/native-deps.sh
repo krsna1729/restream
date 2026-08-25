@@ -43,7 +43,7 @@ require_locked_value FFMPEG_VERSION "$FFMPEG_VERSION" "$RESTREAM_LOCK_FFMPEG_VER
 require_locked_value X264_COMMIT "$X264_COMMIT" "$RESTREAM_LOCK_X264_COMMIT"
 require_locked_value X265_COMMIT "$X265_COMMIT" "$RESTREAM_LOCK_X265_COMMIT"
 
-mkdir -p "$TOOLS" "$SOURCES" "$PREFIX" "$STAMPS"
+mkdir -p "$TOOLS" "$SOURCES" "$PREFIX/bin" "$PREFIX/lib" "$STAMPS"
 
 # Make the static prefix's pkg-config metadata take priority over any system
 # copy for every native dependency built here.
