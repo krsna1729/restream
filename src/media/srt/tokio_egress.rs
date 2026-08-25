@@ -22,8 +22,6 @@ use srt_transport::tokio_transport::{Conn, GroupConn as TokioGroupConn};
 use srt_transport::{LogicalCallerId, LogicalCallerState, LogicalCallerStats};
 use tokio::net::UdpSocket;
 
-const SRT_MESSAGE_PAYLOAD_MAX: usize = 1316;
-
 #[allow(clippy::upper_case_acronyms)]
 pub(crate) type SRTSOCKET = i32;
 
