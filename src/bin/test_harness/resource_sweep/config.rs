@@ -43,10 +43,10 @@ impl ResourceSweepLifecycle {
 
 /// The peer process a resource-sweep (and, in particular, `msr`) stack
 /// publishes egress outputs into. `Mediamtx` (the default) preserves
-/// existing behavior for every resource-sweep scenario. `Sink` swaps in
-/// `restream` binaries running in `RESTREAM_SINK_MODE=1` — a minimal
-/// accept-and-discard listener with far lower per-connection memory than a
-/// full mediamtx pipeline — for scale runs where raw connection count
+/// existing behavior for every resource-sweep scenario. `Sink` swaps in an
+/// in-process Tokio/srt-rs SRT listener plus the generalized RTMP sink — a
+/// minimal accept-and-discard peer with far lower per-connection memory than
+/// a full MediaMTX pipeline — for scale runs where raw connection count
 /// matters more than a readable path.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ResourceSweepPeer {

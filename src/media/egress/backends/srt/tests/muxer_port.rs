@@ -1,11 +1,6 @@
 //! Regression coverage for `SrtShardBackend::with_srt_egress_muxer_port_reuse`
-//! (`docs/egress-implementation.md` Phase 4 status): the fabric path used to
-//! always pass `None` for the libsrt egress-multiplexer local-port claim,
-//! losing the ~1.25-core saving the legacy path gets from sharing one local
-//! UDP port across compatible SRT egress sockets. These tests prove the
-//! claim actually reaches `connect_config` once reuse is enabled, and that
-//! it stays absent when reuse is left off (the default for every other
-//! backend constructor/test).
+//! (`docs/egress-implementation.md` Phase 4 status): shared callers receive
+//! the same per-shard application-owned UDP socket/table state.
 //!
 //! These drive `complete_pending_connect` — the same function production
 //! uses — with a fake supplied through the backend's own connector type
@@ -16,7 +11,6 @@ use super::support::{FakeReadinessPoller, FakeSocketConfigurator, FakeSocketConn
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::policy::{LeafPolicy, WorkBudget};
 use bytes::Bytes;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 fn peer_addrs() -> Vec<std::net::SocketAddr> {
@@ -38,7 +32,7 @@ fn output_spec(id: &str, generation: u64) -> OutputSpec {
 
 fn backend_with_pending_connect(
     connector: FakeSocketConnector,
-    reuse_state: Option<(Arc<Mutex<Option<u16>>>, bool)>,
+    reuse_state: Option<(muxer_ports::SrtEgressMuxerPortState, bool)>,
 ) -> SrtShardBackend<
     FakeReadinessPoller,
     FakeSocketConfigurator,
@@ -63,7 +57,7 @@ fn backend_with_pending_connect(
 }
 
 #[test]
-fn complete_pending_connect_with_reuse_disabled_passes_no_muxer_port_claim() {
+fn complete_pending_connect_with_reuse_disabled_passes_no_shared_state() {
     let peer_addrs = peer_addrs();
     let connector = FakeSocketConnector::returning(42);
     let connector_handle = connector.clone();
@@ -78,38 +72,34 @@ fn complete_pending_connect_with_reuse_disabled_passes_no_muxer_port_claim() {
 }
 
 #[test]
-fn complete_pending_connect_with_reuse_enabled_and_empty_state_claims_first() {
+fn complete_pending_connect_with_reuse_enabled_passes_shared_state() {
     let peer_addrs = peer_addrs();
-    let state = Arc::new(Mutex::new(None));
+    let state = std::sync::Arc::new(std::sync::Mutex::new(None));
     let connector = FakeSocketConnector::returning(42);
     let connector_handle = connector.clone();
-    let mut backend = backend_with_pending_connect(connector, Some((state, true)));
+    let mut backend = backend_with_pending_connect(connector, Some((state.clone(), true)));
 
     backend
         .complete_pending_connect(&OutputId::new("out-a"), 7, &peer_addrs)
         .unwrap();
 
-    // A claim is present, but with nothing recorded yet in the shared state
-    // this is the `First` variant: there is no port to bind to yet (that
-    // only happens once a real connect records the port it landed on, in
-    // `connect_single_srt_egress_socket_with` — outside what a fake
-    // connector exercises).
     let claims = connector_handle.muxer_port_claims();
     assert_eq!(claims, vec![(true, None)]);
 }
 
 #[test]
-fn complete_pending_connect_with_reuse_enabled_and_recorded_port_claims_reuse() {
+fn complete_pending_connect_with_reuse_enabled_keeps_state_lazy() {
     let peer_addrs = peer_addrs();
-    let state = Arc::new(Mutex::new(Some(9000)));
+    let state = std::sync::Arc::new(std::sync::Mutex::new(None));
     let connector = FakeSocketConnector::returning(42);
     let connector_handle = connector.clone();
-    let mut backend = backend_with_pending_connect(connector, Some((state, true)));
+    let mut backend = backend_with_pending_connect(connector, Some((state.clone(), true)));
 
     backend
         .complete_pending_connect(&OutputId::new("out-a"), 7, &peer_addrs)
         .unwrap();
 
     let claims = connector_handle.muxer_port_claims();
-    assert_eq!(claims, vec![(true, Some(9000))]);
+    assert_eq!(claims, vec![(true, None)]);
+    assert!(state.lock().unwrap().is_none());
 }

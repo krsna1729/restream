@@ -55,6 +55,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 percent-encoding = "2"
 shiguredo_mp4 = "2026.3.0"
+# Local integration against the external srt-rs workspace. Pin this to the
+# reviewed srt-rs revision before publishing the branch.
+shiguredo_srt = { path = "/home/dev/srt-rs/crates/srt-protocol" }
+srt-transport = { path = "/home/dev/srt-rs/crates/srt-transport", features = ["tokio"] }
 tracing = { version = "0.1", features = ["max_level_debug"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"
@@ -112,10 +116,6 @@ name = "matrix_throughput"
 harness = false
 
 [[bench]]
-name = "srt_ingest_latency"
-harness = false
-
-[[bench]]
 name = "codec_conversions"
 harness = false
 
@@ -141,9 +141,6 @@ harness = false
 
 [[bench]]
 name = "input_gate"
-harness = false
-[[bench]]
-name = "srt_lifecycle"
 harness = false
 
 [profile.dev]

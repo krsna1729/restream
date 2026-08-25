@@ -1,6 +1,7 @@
 import {
   getEngineSbom,
   getEngineSbomEndpoint,
+  getEngineHealth,
   getEngineStatus,
   getRestreamHistory,
 } from "../../core/api.js";
@@ -19,7 +20,7 @@ import {
   statusExportActionsHtml,
   statusQuickNavHtml,
 } from "./presentation.js";
-import type { AppLogRow } from "../../types.js";
+import type { AppLogRow, HealthData, HostSettingRow } from "../../types.js";
 import type { StatusCheckpointModel } from "../status-view-model.js";
 
 interface StatusData {
@@ -99,6 +100,7 @@ const STATUS_PROCESS_LOG_LIMIT = 80;
 const STATUS_PROCESS_LOG_VISIBLE_LIMIT = 20;
 const STATUS_ACTIVITY_LIMIT = 12;
 let statusDataSnapshot: StatusData | null = null;
+let statusHealthSnapshot: HealthData | null = null;
 let statusProcessLogs: AppLogRow[] = [];
 const statusStream = createManagedLogStream();
 let statusStreamActive = false;
@@ -241,6 +243,51 @@ function section(id: string, title: string, rows: string): string {
             </table>
         </div>
     </section>`;
+}
+
+function formatHostCapacityValue(value: unknown, unit: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value !== "number" || !Number.isFinite(value)) return "--";
+  return unit === "bytes" ? formatByteAmount(value) : value.toLocaleString();
+}
+
+function hostCapacityTone(status: unknown): string {
+  if (status === "ok") return "badge-success";
+  if (status === "warning") return "badge-warning";
+  return "badge-ghost";
+}
+
+function hostCapacityRows(settings: readonly HostSettingRow[] | undefined): string {
+  if (!settings?.length) {
+    return `<tr><td colspan="5" class="dashboard-muted py-2">Host-capacity data is unavailable.</td></tr>`;
+  }
+  return settings
+    .map(
+      (setting) => `<tr>
+        <td class="py-2 pr-3 align-top"><div class="font-medium">${escapeHtml(setting.label || setting.key)}</div><div class="text-base-content/55 font-mono text-xs">${escapeHtml(setting.key)}</div></td>
+        <td class="py-2 pr-3 align-top font-mono text-sm">${escapeHtml(formatHostCapacityValue(setting.current, setting.unit))}</td>
+        <td class="py-2 pr-3 align-top font-mono text-sm">${escapeHtml(formatHostCapacityValue(setting.required, setting.unit))}</td>
+        <td class="py-2 pr-3 align-top"><span class="badge badge-sm ${hostCapacityTone(setting.status)}">${escapeHtml(setting.status || "unknown")}</span></td>
+        <td class="text-base-content/70 py-2 align-top text-sm">${escapeHtml(setting.detail || "--")}</td>
+      </tr>`,
+    )
+    .join("");
+}
+
+function hostCapacitySection(health: HealthData | null): string {
+  const settings = health?.hostSettings;
+  const warnings = settings?.filter((setting) => setting.status === "warning").length ?? 0;
+  const summary = settings?.length
+    ? `${settings.length} host settings · ${warnings ? `${warnings} need attention` : "all reported limits satisfied"}`
+    : "Loading host runtime limits and kernel ceilings";
+  const rows = `<div class="overflow-x-auto" role="region" aria-label="Host capacity settings" tabindex="0">
+      <table class="w-full min-w-[52rem] table-fixed text-sm">
+        <colgroup><col class="w-56" /><col class="w-32" /><col class="w-32" /><col class="w-24" /><col /></colgroup>
+        <thead><tr class="text-base-content/60 text-left text-xs"><th class="pb-2 pr-3">Setting</th><th class="pb-2 pr-3">Current</th><th class="pb-2 pr-3">Required</th><th class="pb-2 pr-3">Status</th><th class="pb-2">Why</th></tr></thead>
+        <tbody>${hostCapacityRows(settings)}</tbody>
+      </table>
+    </div>`;
+  return advancedSection("status-host-capacity-section", "Host Capacity", summary, rows);
 }
 
 function advancedSectionActionLabel(
@@ -855,6 +902,7 @@ function renderStatusSnapshot(): void {
         row("Acceleration Features", formatFlags(data.os?.cpu?.flags)),
       ].join(""),
     ),
+    hostCapacitySection(statusHealthSnapshot),
     advancedSection(
       "status-toolchain-section",
       "Toolchain",
@@ -924,8 +972,9 @@ export async function loadStatus(): Promise<void> {
   const container = document.getElementById("status-versions");
   if (!container) return;
 
-  const [data, processHistory] = await Promise.all([
+  const [data, health, processHistory] = await Promise.all([
     getEngineStatus<StatusData>(),
+    getEngineHealth<HealthData>(),
     getRestreamHistory({ limit: STATUS_PROCESS_LOG_LIMIT, order: "desc" }),
   ]);
   if (!data) {
@@ -934,6 +983,7 @@ export async function loadStatus(): Promise<void> {
     return;
   }
   statusDataSnapshot = data;
+  statusHealthSnapshot = health;
   statusProcessLogs = Array.isArray(processHistory?.logs)
     ? (processHistory?.logs as AppLogRow[])
     : [];

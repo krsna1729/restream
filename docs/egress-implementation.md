@@ -905,57 +905,13 @@ Current branch status:
   down. RSS remains favorable throughout (2,575KB vs legacy's 3,426KB per
   output); correctness held (`srt-crypto-matrix` still passes cleanly with
   batching applied).
-  **Correction: the syscall-count framing above was incomplete — the fabric
-  path was also missing native UDP-multiplexer-port reuse entirely,
-  independent of fragment count.** A later external review of this branch
-  pointed out that `src/media/egress/backends/srt.rs`'s two connect call
-  sites (`complete_pending_connect_with`, `complete_pending_connect`) always
-  called `pending.connect_spec.connect_config(peer_addrs, None)` — passing
-  no muxer-port claim at all, unlike the legacy path
-  (`src/media/srt_egress.rs`), which passes
-  `reuse_local_srt_egress_port.then(|| claim_srt_egress_muxer_port(&srt_egress_muxer_port))`.
-  Without that claim, every fabric SRT socket binds its own local UDP port,
-  so libsrt cannot share one multiplexer (and its `RcvQ`/`SndQ` worker
-  threads) across sockets the way the legacy path does. This repository had
-  already measured that exact optimization's value independently of the
-  fabric work: at 60 legacy SRT outputs, port reuse took `RcvQ`/`SndQ`
-  thread counts from 61 to 2 each and total process CPU from 4.243 to 2.992
-  cores — a ~1.25-core saving. The `w2-fabric-batched` regression above
-  (149% fabric vs 41.7% legacy, ~107 percentage points) is the right order
-  of magnitude for this to be the dominant cause, not fragment count: both
-  paths call `srt_send()` at the same ~1316-byte granularity (the fabric's
-  `MAX_SRT_MESSAGE_PAYLOAD` matches the legacy re-chunk size), so raising
-  the message-size ceiling — the "next lever" this section previously
-  named — could only ever recover a single-digit percentage (a 74KB
-  keyframe goes from ~57 calls at 1316 bytes to ~51-52 at the documented
-  1456-byte SRT live-mode maximum), nowhere near the measured gap.
-  **Fixed:** `SrtShardBackend` now carries a shared
-  `Arc<Mutex<Option<u16>>>` (`srt_egress_muxer_port` field) and a
-  `reuse_local_srt_egress_port` flag, defaulting to a fresh mutex with reuse
-  disabled so every existing constructor and test is unaffected; a new
-  `with_srt_egress_muxer_port_reuse(state, enabled)` builder step opts a
-  backend in, and both connect call sites now build a real
-  `claim_srt_egress_muxer_port(&state)` claim when enabled instead of
-  passing `None`. Production wiring
-  (`MediaEngine::retain_srt_fabric_runtime` in
-  `src/media/engine_egress_fabric.rs`) passes the *same*
-  `Arc<Mutex<Option<u16>>>` the legacy path already shares via
-  `MediaEngine::srt_egress_muxer_port_handle()`, gated by the same
-  `srt_egress_reuse_local_port` config flag — so a socket connected by
-  either path can be reused by the other, matching legacy's process-wide
-  sharing semantics exactly rather than creating a second, fabric-only pool.
-  Four new tests (`backends/srt/tests/muxer_port.rs`) prove the claim
-  plumbing itself: reuse disabled passes no claim; reuse enabled with empty
-  shared state passes a `First` claim (present, no port yet); reuse enabled
-  with a pre-recorded port passes a `Reuse` claim carrying that exact port;
-  and the `complete_pending_connect` call site (driving
-  `self.socket_connector` instead of an injected connector — a distinct
-  code path from `complete_pending_connect_with`) is covered separately
-  since it has its own copy of the same claim-construction logic. This is
-  shard-level plumbing proof only — it does not yet re-measure live CPU/RSS
-  with the fix applied; that re-measurement (repeating the
-  `w2-fabric-batched`-style capture) is still needed before revising the
-  `EgressRolloutMode` default-`Off` decision above.
+  **Shared egress:** when `RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT` is enabled,
+  each `(pipeline, shard)` owns one Tokio UDP socket and an srt-rs
+  `CallerTable`. Direct and bonded callers are demultiplexed by SRT socket ID;
+  logical caller removal retires all associated routes and timers atomically.
+  Disabling the setting retains a per-output socket. Focused backend tests
+  cover both configuration paths; scale measurement remains the gate for
+  changing any rollout default.
   **CPU/RSS re-measurement at scale done, decisively — but the default is
   still correctly `Off` on a different, unresolved exit-gate criterion.**
   The N=500/N=1000 captures recorded later in this phase (commit
@@ -1209,37 +1165,18 @@ Status against each criterion, as of the retry-wiring fix above:
   re-scoped to prove what `SIGSTOP` actually produces — RSS stays bounded
   (~21-30MB growth, well under a 64MB budget) across 120s of continuous
   connect-failure retry cycling against an unreachable destination — and
-  the backpressured path got its own receiver, below.
-- **Backpressured-but-connected SRT stall path: proven live.** The receiver
-  shape `SIGSTOP` could not produce is now built on purpose:
-  `src/bin/test_harness/srt_raw_sink.rs`, a raw SRT listener with
-  hand-written libsrt FFI (the library crate's bindings are internal to
-  `src/media/srt`, and widening a production module's public API for a test
-  tool was not worth it). It accepts a real connection, lets libsrt keep
-  ACKing and keepaliving normally, and never calls `srt_recv`. Two
-  inherited socket options turn "nobody is reading" into sender-visible
-  backpressure: `SRTO_TLPKTDROP = 0`, because sender-side too-late-packet
-  dropping is gated on the *peer's* handshake flag (`m_bPeerTLPktDrop` in
-  libsrt's `CUDT::sndDropTooLate`) and otherwise the sender discards its
-  backlog instead of building one, and `SRTO_FC`/`SRTO_RCVBUF` at libsrt's
-  32-packet minimum so the flow window closes after tens of kilobytes
-  rather than megabytes. `srt_egress_backpressured_receiver`
-  (`fault.srt-output-stall`) drives it: the leaf is classified
-  `backpressured` while the sink is still `SRTS_CONNECTED` with its receive
-  window pinned full (31 of 32 packets unread, zero bytes ever read), then
-  `stalled` once it passes the 15s no-progress deadline, then closed into
-  the retry cycle — with two healthy SRT siblings progressing throughout.
-  One nuance worth recording: `bytesOut` keeps climbing for ~10.9MB after
-  the receive window closes, because it counts bytes *admitted to libsrt*,
-  not bytes acknowledged — it stops exactly when the sender's own native
-  send buffer fills. That is precisely why the fabric classifies stalls
-  from the native backlog (`srt_bistats`) rather than from that counter,
-  and the test asserts admission has stopped at the moment the engine says
-  `stalled` rather than assuming the byte counter freezes earlier.
-All four Phase 4 exit-gate criteria now have real evidence, live and
-deterministic: the stall-sweep/`classify_stall` mechanism is proven both in
-`leaf_termination.rs` and, since the raw sink exists, end to end against a
-real undrained SRT receiver.
+  the supported direct receiver path got its own srt-rs listener, below.
+- **Direct srt-rs receiver path: proven live.**
+  `src/bin/test_harness/srt_raw_sink.rs` now uses the Tokio-enabled srt-rs
+  listener directly. `srt_egress_srt_rs_receiver_delivery`
+  (`fault.srt-output-stall`) proves a real handshake and delivered
+  `DataReceived` events without making MediaMTX part of the receiver path,
+  while two healthy SRT siblings continue progressing. Bounded unread
+  delivery consumes advertised receive-window capacity, so receiver-side
+  backpressure no longer relies on a native-library-specific test double.
+  The deterministic `classify_stall` contract remains covered by
+  `leaf_termination.rs`, and the live frozen-destination proof above covers
+  retry, cleanup, and bounded RSS.
 
 **Default flip attempted, then reverted** — see Phase 6's "Rollout
 order" for the full story: CI's own live-scenario gate caught a real
@@ -3425,17 +3362,16 @@ Actions CI jobs are **GREEN** on run `30517640919` following root-cause fixes:
    with 22/22 green CI (normal operation), `fault.resilience` (destination failure),
    and Phase 5 live proof (~660ms SIGTERM graceful restart), all canary criteria
    are met without legacy fallback.
-5. ~~**Phase 4: close or explicitly defer the live SRT backpressured-but-connected receiver proof.**~~ **RESOLVED**:
-   first deferred, then actually closed. The custom-FFI raw SRT receiver was
-   built (`src/bin/test_harness/srt_raw_sink.rs`) and
-   `srt_egress_backpressured_receiver` (`fault.srt-output-stall`) proves the
-   path live — `backpressured` while the peer is still `SRTS_CONNECTED` with
-   an unread full receive window, then `stalled` and closed, siblings
-   unaffected. The deterministic unit tests in
+5. ~~**Phase 4: close or explicitly defer the live SRT receiver proof.**~~
+   **RESOLVED for the supported srt-rs surface**: the direct Tokio/srt-rs
+   receiver (`src/bin/test_harness/srt_raw_sink.rs`) and
+   `srt_egress_srt_rs_receiver_delivery` (`fault.srt-output-stall`) prove a
+   real handshake plus delivered data events with healthy siblings
+   unaffected. Bounded unread delivery provides the receiver-side
+   backpressure shape directly. The deterministic unit tests in
    `src/media/egress/backends/srt/tests/leaf_termination.rs`
    (`stall_sweep_marks_terminated_unexpectedly_on_the_closed_leaf`) still
-   own the `classify_stall` contract at the unit level; see Phase 4's status
-   section for the receiver's mechanics and the `bytesOut` nuance.
+   own the `classify_stall` contract at the unit level.
 6. ~~**Phase 6: repeated-resync alert.**~~ **RESOLVED**: the leaf-level
    `EngineProgress::FeedOverrun` resync count now flows to both observability
    surfaces. Per-output: `visit.rs`'s `FeedOverrun` handler calls

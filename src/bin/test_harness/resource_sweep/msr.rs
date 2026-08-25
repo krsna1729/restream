@@ -236,6 +236,9 @@ async fn run_msr_phase(
     profile: MsrRunProfile,
 ) -> Result<MsrPhaseResult, String> {
     let plan = msr_output_plan_for_mix_and_profile(protocol_mix, profile);
+    let max_outputs = *checkpoints
+        .last()
+        .ok_or("MSR checkpoint list unexpectedly empty".to_string())?;
     let plan_json = msr_plan_json(&plan, checkpoints, protocol_mix, profile);
 
     std::fs::create_dir_all(&env.work_dir).map_err(|error| error.to_string())?;
@@ -265,9 +268,6 @@ async fn run_msr_phase(
     )
     .await?;
 
-    let max_outputs = *checkpoints
-        .last()
-        .ok_or("MSR checkpoint list unexpectedly empty".to_string())?;
     let mut output_ids = Vec::with_capacity(max_outputs);
     let mut aggregates = Vec::with_capacity(checkpoints.len());
     let mut signal_checks = Vec::new();

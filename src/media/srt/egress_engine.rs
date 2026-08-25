@@ -11,11 +11,11 @@ use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::policy::WorkBudget;
 
-use super::srt_egress_sender::{SrtMessageSender, SrtSendResult};
+use super::{SrtMessageSender, SrtSendResult};
 
 /// Maximum bytes per `srt_send()` call in message mode: 7 × 188-byte MPEG-TS
 /// packets, matching legacy SRT egress's fixed send buffer
-/// (`src/media/srt_egress.rs`) and libsrt's live-mode payload ceiling.
+/// (the historical SRT egress path) and the live-mode payload ceiling.
 ///
 /// A muxed TS feed unit is one chunk boundary from the shared muxer
 /// (`src/media/srt/shared_muxer.rs`), which can span many packets — a
@@ -92,11 +92,6 @@ impl<T> SrtEgressEngine<T> {
             .map_or(0, PendingSrtMessage::remaining_len)
     }
 
-    #[cfg(test)]
-    pub(crate) fn pending_units_len(&self) -> usize {
-        self.pending_units.len()
-    }
-
     /// Send as many `MAX_SRT_MESSAGE_PAYLOAD` fragments of the pending unit
     /// as the budget allows in one visit, instead of exactly one. A single
     /// fragment per visit is correct but costs a full wake/poll/visit cycle
@@ -161,11 +156,15 @@ impl<T> SrtEgressEngine<T> {
                     };
                 }
                 SrtSendResult::PeerClosed => return EngineProgress::PeerClosed,
-                SrtSendResult::Failed(failure) => {
+                SrtSendResult::Failed {
+                    reason,
+                    detail,
+                    retryable,
+                } => {
                     return EngineProgress::Failed(ProtocolFailure {
-                        reason: failure.reason,
-                        detail: failure.detail,
-                        retryable: failure.retryable,
+                        reason,
+                        detail,
+                        retryable,
                     });
                 }
             }

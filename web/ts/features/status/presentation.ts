@@ -10,6 +10,10 @@ const STATUS_SECTION_NAV = [
     label: "System",
   },
   {
+    id: "status-host-capacity-section",
+    label: "Host capacity",
+  },
+  {
     id: "status-toolchain-section",
     label: "Toolchain",
   },

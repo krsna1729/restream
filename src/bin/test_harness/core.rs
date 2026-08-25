@@ -31,9 +31,10 @@ pub(crate) use process::{
 #[allow(unused_imports)]
 pub(crate) use profile::{
     default_restream_bin, default_work_db_path, ensure_measurement_profile,
-    harness_runtime_max_blocking_threads, harness_runtime_worker_threads, is_optimized_profile,
-    maybe_reexec_in_port_namespace, measurement_profile_ok, measurement_profile_ok_with_explicit,
-    netns_available, restream_bin_is_explicit, strip_netns_opt,
+    ensure_msr_nofile_limit, harness_runtime_max_blocking_threads, harness_runtime_worker_threads,
+    is_optimized_profile, maybe_reexec_in_port_namespace, measurement_profile_ok,
+    measurement_profile_ok_with_explicit, netns_available, restream_bin_is_explicit,
+    strip_netns_opt,
 };
 #[allow(unused_imports)]
 pub(crate) use setup::{

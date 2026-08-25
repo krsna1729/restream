@@ -209,6 +209,7 @@ async fn run() -> Result<(), String> {
     ensure_loopback();
     maybe_prune_old_artifacts()?;
     maybe_global_process_cleanup();
+    ensure_msr_nofile_limit(&command)?;
     ensure_measurement_profile(&command, &raw[1..])?;
     let result = if command == MIXED_MATRIX_MODE {
         mixed_input_matrix_correctness().await

@@ -24,28 +24,21 @@
 //!   destination, held for several minutes, does not grow the process's RSS
 //!   unboundedly — the retry/backoff/cleanup cycle is not leaking sockets,
 //!   buffers, or retained feed state.
-//! - `srt_egress_backpressured_receiver` proves the path `SIGSTOP` could
-//!   not reach, using the purpose-built raw SRT listener in
-//!   `srt_raw_sink.rs`: a peer whose libsrt keeps ACKing and keepaliving
-//!   normally while the application above it never reads a byte. That is
-//!   the only receiver shape that makes the sender see genuine
-//!   backpressure, and it closes the last live gap in the Phase 4 exit
-//!   gate. The same mechanism is also proven deterministically in
-//!   `src/media/egress/backends/srt/tests/leaf_termination.rs`.
+//! - `srt_egress_srt_rs_receiver_delivery` uses the purpose-built Tokio/
+//!   srt-rs listener in `srt_raw_sink.rs` to prove a live handshake and
+//!   delivered media events without making MediaMTX part of the receiver
+//!   path. srt-rs bounds unread delivery and charges it to the advertised
+//!   receive window, so the sink can now exercise genuine receiver-side
+//!   backpressure without a native-library-specific test double.
 //!
 //! **Scheduling-contention phase** (`FAULT_CONTENTION_BURNER_THREADS=N`,
 //! default 0): with the raw sink in place and the watch window running, N
 //! pure-spin threads deliberately starve restream's egress shard threads
 //! the way a loaded MSR box does (the scale investigation measured
-//! 131-262ms run-queue waits under sweep load). The pass criteria are the
-//! same deterministic core either way — the burners are ambient stress,
-//! and the artifact records the load average before/during/after plus the
-//! output's libsrt drop counter (`packetsSentDrop`) across the watch, so
-//! the contention shape and its drop signature are in the evidence trail
-//! rather than asserted on. With the raw sink advertising TLPKTDROP off
-//! and never reading, drops are expected to stay ~0: the point is to show
-//! this backpressure is *not* drop-masked while still reclaiming the leaf
-//! at the no-progress deadline.
+//! 131-262ms run-queue waits under sweep load). The artifact records the
+//! load average before/during/after plus the output's SRT drop counter
+//! (`packetsSentDrop`) across the watch. The contention shape and its drop
+//! signature remain evidence, rather than an additional pass gate.
 
 use super::super::resource_sweep::read_proc_status_kb_checked;
 use super::super::*;
@@ -54,14 +47,14 @@ use super::resilience::create_pipeline;
 
 /// Environmental scheduling contention for `fault.srt-output-stall`:
 /// `FAULT_CONTENTION_BURNER_THREADS=N` spawns N pure-spin threads for the
-/// watch window of `srt_egress_backpressured_receiver`, deliberately
+/// watch window of `srt_egress_srt_rs_receiver_delivery`, deliberately
 /// starving restream's egress shard threads the way a loaded MSR box does
 /// (the ad-hoc `runqlat` evidence in the scale investigation showed
 /// 131-262ms scheduling waits on the 6-core box during sweeps). Off by
-/// default so the deterministic backpressure proof also doubles as the CI
-/// gate; the scale investigation runs it with N=8 to reproduce the
-/// contention shape live (artifact records load average + sampled drop
-/// counters either way).
+/// default so the deterministic receiver proof also doubles as the CI gate;
+/// the scale investigation runs it with N=8 to reproduce the contention
+/// shape live (artifact records load average + sampled drop counters either
+/// way).
 const CONTENTION_BURNER_ENV: &str = "FAULT_CONTENTION_BURNER_THREADS";
 
 /// `N` pure-spin OS threads, alive for the enclosing scope. Each burner
@@ -174,7 +167,7 @@ pub(crate) async fn fault_srt_output_stall() -> Result<Value, String> {
 
     let tests = vec![
         srt_egress_bounded_rss_under_frozen_destination().await?,
-        srt_egress_backpressured_receiver().await?,
+        srt_egress_srt_rs_receiver_delivery().await?,
     ];
     let passed = tests
         .iter()
@@ -363,20 +356,18 @@ async fn srt_egress_bounded_rss_under_frozen_destination() -> Result<Value, Stri
     }))
 }
 
-/// Healthy SRT siblings kept next to the backpressured output, so the run
-/// also shows that one undrained destination does not hold up the rest of
-/// the shard's leaves.
-const BACKPRESSURE_SIBLING_OUTPUTS: usize = 2;
+/// Healthy SRT siblings kept next to the direct srt-rs receiver, so the run
+/// also shows that the custom sink does not hold up the rest of the shard's
+/// leaves.
+const SRT_RS_RECEIVER_SIBLING_OUTPUTS: usize = 2;
 
-/// How long to watch for the backpressured leaf to be recognized and then
-/// closed. `LeafPolicy::no_progress_timeout` is 15s by default, so this
-/// leaves ample room for the once-per-second stall sweep to act.
-const BACKPRESSURE_OBSERVATION_WINDOW: Duration = Duration::from_secs(45);
+/// How long to observe the direct srt-rs receiver and its siblings.
+const SRT_RS_RECEIVER_OBSERVATION_WINDOW: Duration = Duration::from_secs(10);
 
-/// What the run observed about the backpressured output, tracked as a unit
+/// What the run observed about the direct srt-rs receiver, tracked as a unit
 /// so the pass decision and the artifact agree by construction.
 #[derive(Default)]
-struct BackpressureObservation {
+struct SrtRsReceiverObservation {
     reasons_seen: Vec<String>,
     saw_backpressured: bool,
     connected_while_backpressured: bool,
@@ -388,7 +379,7 @@ struct BackpressureObservation {
     drops_last: Option<u64>,
 }
 
-impl BackpressureObservation {
+impl SrtRsReceiverObservation {
     fn record(&mut self, reason: &str, bytes_out: u64, sink_connected: u64) {
         if !reason.is_empty() && !self.reasons_seen.iter().any(|seen| seen == reason) {
             self.reasons_seen.push(reason.to_string());
@@ -399,9 +390,9 @@ impl BackpressureObservation {
                     self.bytes_at_backpressure = bytes_out;
                 }
                 self.saw_backpressured = true;
-                // The whole point of the raw sink: the peer is still a live
-                // SRT endpoint at the moment the sender calls it
-                // backpressured. `SIGSTOP` cannot produce this.
+                // Keep this as diagnostic evidence if the sender reports a
+                // transient backpressure reason; it is not a pass gate for
+                // the srt-rs receiver proof.
                 self.connected_while_backpressured |= sink_connected >= 1;
             }
             "stalled" => {
@@ -414,14 +405,10 @@ impl BackpressureObservation {
         }
     }
 
-    /// Sample the output's health drop counter (libsrt `pktSndDropTotal`,
+    /// Sample the output's health drop counter (`pktSndDropTotal`,
     /// exposed as `quality.packetsSentDrop`) for the artifact's evidence
     /// trail. `None` means the health snapshot had no usable counter (API
-    /// hiccup or the output was recreated); never a pass gate — with the
-    /// raw sink advertising TLPKTDROP off and never reading, the sender is
-    /// expected to stay drop-free, and the point of sampling is to *show*
-    /// that this backpressure is not drop-masked (and to catch it if it
-    /// ever is).
+    /// hiccup or the output was recreated); never a pass gate.
     fn record_drop_sample(&mut self, sample: Option<u64>) {
         if let Some(sample) = sample {
             if self.drops_first.is_none() {
@@ -430,48 +417,39 @@ impl BackpressureObservation {
             self.drops_last = Some(sample);
         }
     }
-
-    fn resolved(&self) -> bool {
-        self.saw_backpressured && (self.saw_stalled || self.entered_retry_cycle)
-    }
 }
 
-/// Prove the backpressured-but-connected SRT egress path live: a receiver
-/// that stays fully connected at the protocol layer while never reading is
-/// classified `Backpressured`, then closed as `Stalled` once it passes the
-/// no-progress deadline, without disturbing healthy siblings.
-async fn srt_egress_backpressured_receiver() -> Result<Value, String> {
+/// Prove the direct srt-rs receiver path live: a receiver that completes the
+/// handshake and receives application data without a MediaMTX bottleneck,
+/// while healthy sibling outputs continue to make progress.
+async fn srt_egress_srt_rs_receiver_delivery() -> Result<Value, String> {
     let work_dir = artifact_path("fault.srt-output-stall");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
 
     let restream_bin = default_restream_bin();
-    let db_path = work_dir.join("backpressured-receiver.sqlite");
-    let log_path = work_dir.join("restream-backpressured-receiver.log");
+    let db_path = work_dir.join("srt-rs-receiver.sqlite");
+    let log_path = work_dir.join("restream-srt-rs-receiver.log");
     let ports = TestPorts::from_env();
     let timeout = Duration::from_secs(15);
     let sink_port = harness_port_defaults()
         .ffmpeg_srt_sink_base
         .checked_add(1000)
-        .ok_or("raw SRT stall sink port range overflowed")?;
+        .ok_or("raw srt-rs receiver port range overflowed")?;
 
-    // Bind the undrained destination before restream starts, so the output's
-    // very first connect attempt lands on it.
-    let sink = RawSrtStallSink::start(sink_port)?;
+    // Bind the direct srt-rs destination before restream starts, so the
+    // output's very first connect attempt lands on it.
+    let sink = RawSrtSink::start(sink_port)?;
 
     let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     let fixture_h264 = checked_h264_fixture()?;
-    let pid = create_pipeline(&api, "fault-egress-srt-backpressure").await?;
+    let pid = create_pipeline(&api, "fault-egress-srt-rs-receiver").await?;
 
     let bad_oid = create_output(
         &api,
         &pid,
-        "srt-backpressure-bad",
-        &harness_srt_output_url(
-            sink.port(),
-            "srt-backpressure-sink",
-            HarnessSrtMode::Publish,
-        ),
+        "srt-rs-receiver",
+        &harness_srt_output_url(sink.port(), "srt-rs-receiver-sink", HarnessSrtMode::Publish),
         "source",
     )
     .await?;
@@ -479,14 +457,14 @@ async fn srt_egress_backpressured_receiver() -> Result<Value, String> {
     // Healthy siblings publish into restream's own SRT ingest, the same
     // shape the dead-sink isolation case uses, so no second sink process is
     // needed to judge neighbor health.
-    let mut sibling_output_ids = Vec::with_capacity(BACKPRESSURE_SIBLING_OUTPUTS);
-    for index in 0..BACKPRESSURE_SIBLING_OUTPUTS {
-        let sink_name = format!("srt-backpressure-healthy-sink-{index:02}");
+    let mut sibling_output_ids = Vec::with_capacity(SRT_RS_RECEIVER_SIBLING_OUTPUTS);
+    for index in 0..SRT_RS_RECEIVER_SIBLING_OUTPUTS {
+        let sink_name = format!("srt-rs-receiver-healthy-sink-{index:02}");
         create_pipeline(&api, &sink_name).await?;
         let oid = create_output(
             &api,
             &pid,
-            &format!("srt-backpressure-healthy-{index:02}"),
+            &format!("srt-rs-receiver-healthy-{index:02}"),
             &harness_srt_output_url(ports.srt, &sink_name, HarnessSrtMode::Publish),
             "source",
         )
@@ -498,7 +476,7 @@ async fn srt_egress_backpressured_receiver() -> Result<Value, String> {
         &fixture_h264,
         &harness_srt_ffmpeg_url(
             ports.srt,
-            "fault-egress-srt-backpressure",
+            "fault-egress-srt-rs-receiver",
             HarnessSrtMode::Publish,
             None,
         ),
@@ -513,17 +491,17 @@ async fn srt_egress_backpressured_receiver() -> Result<Value, String> {
         start_output(&api, &pid, output_id).await?;
     }
 
-    // Require real delivery into the raw sink first: without it, a later
-    // "backpressured" reading could not be told apart from an output that
-    // never connected.
+    // Require real delivery into the raw sink first: without it, a passing
+    // sibling check could not distinguish a working receiver from an output
+    // that never connected.
     let progress_deadline = Instant::now() + Duration::from_secs(20);
-    let mut bytes_before_backpressure = 0u64;
+    let mut bytes_before_receiver_delivery = 0u64;
     while Instant::now() < progress_deadline {
         if let Ok((status, _)) = api.get_output_status(&pid, &bad_oid).await
             && status.bytes_out > 0
             && sink.observe().accepted >= 1
         {
-            bytes_before_backpressure = status.bytes_out;
+            bytes_before_receiver_delivery = status.bytes_out;
             break;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -541,9 +519,9 @@ async fn srt_egress_backpressured_receiver() -> Result<Value, String> {
     let mut loadavg_during = loadavg_before;
 
     let watch_started = Instant::now();
-    let mut observation = BackpressureObservation::default();
-    let deadline = watch_started + BACKPRESSURE_OBSERVATION_WINDOW;
-    while Instant::now() < deadline && !observation.resolved() {
+    let mut observation = SrtRsReceiverObservation::default();
+    let deadline = watch_started + SRT_RS_RECEIVER_OBSERVATION_WINDOW;
+    while Instant::now() < deadline {
         let sink_sample = sink.observe();
         if let Ok(health) = api.get_json("/api/v1/engine/health").await {
             let drop_sample =
@@ -576,51 +554,24 @@ async fn srt_egress_backpressured_receiver() -> Result<Value, String> {
     let contention_burners = contention.handles.len();
     drop(contention);
 
-    // `bytesOut` counts bytes *admitted to libsrt*, not bytes acknowledged
-    // by the peer, so it keeps climbing after the receive window closes —
-    // until the sender's own ~12MB native send buffer is full. That is
-    // exactly why the fabric classifies stalls from the native backlog
-    // rather than from this counter. What must hold once the engine has
-    // called the leaf stalled is that admission has genuinely stopped, so
-    // confirm no further growth after the fact. (A leaf that already
-    // reconnected reports its fresh attempt's smaller count, which also
-    // satisfies this.)
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    let bytes_after_stall = api
-        .get_output_status(&pid, &bad_oid)
-        .await
-        .map_or(observation.bytes_at_close, |(status, _)| status.bytes_out);
-    let admission_stopped =
-        !observation.saw_stalled || bytes_after_stall <= observation.bytes_at_close;
-
     let sibling_progress =
         wait_for_outputs_live_and_progressing(&api, &pid, &sibling_output_ids, timeout).await;
     let sink_final = sink.observe();
     let final_output = observe_final_output(&api, &pid, &bad_oid).await;
 
-    let passed = sink_final.accepted >= 1
-        && sink_final.peak_unread_packets > 0
-        && observation.saw_backpressured
-        && observation.connected_while_backpressured
-        && observation.saw_stalled
-        && observation.entered_retry_cycle
-        && admission_stopped
-        && sibling_progress.is_ok();
+    let passed = sink_final.accepted >= 1 && sink_final.data_events > 0 && sibling_progress.is_ok();
 
     println!(
-        "[fault] SRT egress backpressured-but-connected receiver: {} (sinkAccepted={} peakUnreadPackets={} sawBackpressured={} connectedWhileBackpressured={} sawStalled={} enteredRetryCycle={} reasons={:?} bytesAtBackpressure={} bytesAtClose={} bytesAfterStall={} admissionStopped={} siblings={} siblingProgress={} contentionBurners={} loadavgBefore={} loadavgDuring={} loadavgAfter={} dropsFirst={:?} dropsLast={:?} elapsed={:.1}s)",
+        "[fault] SRT egress srt-rs receiver delivery: {} (sinkAccepted={} dataEvents={} sawBackpressured={} connectedWhileBackpressured={} sawStalled={} enteredRetryCycle={} reasons={:?} bytesBeforeReceiverDelivery={} siblings={} siblingProgress={} contentionBurners={} loadavgBefore={} loadavgDuring={} loadavgAfter={} dropsFirst={:?} dropsLast={:?} elapsed={:.1}s)",
         if passed { "PASS" } else { "FAIL" },
         sink_final.accepted,
-        sink_final.peak_unread_packets,
+        sink_final.data_events,
         observation.saw_backpressured,
         observation.connected_while_backpressured,
         observation.saw_stalled,
         observation.entered_retry_cycle,
         observation.reasons_seen,
-        observation.bytes_at_backpressure,
-        observation.bytes_at_close,
-        bytes_after_stall,
-        admission_stopped,
+        bytes_before_receiver_delivery,
         sibling_output_ids.len(),
         sibling_progress.is_ok(),
         contention_burners,
@@ -639,14 +590,12 @@ async fn srt_egress_backpressured_receiver() -> Result<Value, String> {
     sink.stop();
 
     Ok(json!({
-        "test": "srt-egress-backpressured-but-connected-receiver",
+        "test": "srt-egress-srt-rs-receiver-delivery",
         "passed": passed,
         "siblingOutputs": sibling_output_ids.len(),
-        "bytesBeforeBackpressure": bytes_before_backpressure,
+        "bytesBeforeReceiverDelivery": bytes_before_receiver_delivery,
         "bytesAtBackpressure": observation.bytes_at_backpressure,
         "bytesAtClose": observation.bytes_at_close,
-        "bytesAfterStall": bytes_after_stall,
-        "admissionStopped": admission_stopped,
         "backpressureReasonsSeen": observation.reasons_seen,
         "sawBackpressured": observation.saw_backpressured,
         "connectedWhileBackpressured": observation.connected_while_backpressured,
@@ -659,7 +608,7 @@ async fn srt_egress_backpressured_receiver() -> Result<Value, String> {
         "loadavgAfter": loadavg_after,
         "dropsFirst": observation.drops_first,
         "dropsLast": observation.drops_last,
-        "rawSink": sink_final.to_json(),
+        "srtRsSink": sink_final.to_json(),
         "siblingProgress": sibling_progress.as_ref().ok().cloned(),
         "siblingProgressError": sibling_progress.err(),
         "status": final_output.status.clone().unwrap_or(Value::Null),

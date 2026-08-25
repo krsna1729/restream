@@ -301,6 +301,10 @@ async function getEngineStatus<T = unknown>(): Promise<T | null> {
   return apiRequest<T>("/api/v1/engine");
 }
 
+async function getEngineHealth<T = unknown>(): Promise<T | null> {
+  return apiRequest<T>("/api/v1/engine/health");
+}
+
 function getEngineSbomEndpoint(
   status: { sbom?: { endpoint?: string | null } } | null | undefined,
 ): string {
@@ -894,6 +898,7 @@ export {
   getResourceMap,
   getStreamKeys,
   getEngineStatus,
+  getEngineHealth,
   getEngineSbomEndpoint,
   getEngineSbom,
   getAudioCapsPayload,

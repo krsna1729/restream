@@ -415,9 +415,10 @@ Names are provisional until the mode is implemented:
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `MSR_OUTPUT_COUNTS` | `30` | Ramp checkpoints; overrides `MSR_FULL` |
+| `MSR_OUTPUT_COUNTS` | `30` | Ramp checkpoints; overrides `MSR_FULL`. The harness raises its own soft `RLIMIT_NOFILE` from the largest requested checkpoint before starting MSR, so its in-process peer can accept the requested scale. |
 | `MSR_FULL` | unset | Use `30,120,300,600,900,1200` checkpoints when set to `1` |
 | `MSR_PLAN_ONLY` | unset | Emit the deterministic 1,200-output plan without starting media |
+| `RESTREAM_MSR_FIXTURE_OVERRIDE` | unset | Opt-in source media for the canonical MSR profile. CI keeps the checked-in ~2 Mb/s fixture. For the 1080p60/~8 Mb/s envelope, first run `scripts/fixtures/generate-msr-1080p-fixture.sh`, then set this to `.local/fixtures/bbb-1080p60-30a.mp4`. |
 | `MSR_SAMPLE_SECS` | `6` | Stable sampling window per checkpoint |
 | `MSR_SAMPLE_INTERVAL_MS` | `1000` | Raw resource sample interval |
 | `MSR_SETTLE_SECS` | `4` | Settle time before sampling |
@@ -425,16 +426,23 @@ Names are provisional until the mode is implemented:
 | `MSR_PROGRESS_TIMEOUT_PER_OUTPUT_SECS` | `2` | Additional progress allowance per output |
 | `MSR_PROGRESS_TIMEOUT_CAP_SECS` | `900` | Maximum progress wait |
 | `MSR_NO_CLEANUP` | unset | Leave the final stack for inspection |
-| `PEER_COUNT` | `1` | Number of peer instances (`MTX_RTMP`/`MTX_SRT`/`MTX_API` + instance offset each); outputs distribute round-robin by ordinal (`ordinal % PEER_COUNT`) |
+| `PEER_COUNT` | `1` | Number of peer instances (`MTX_RTMP`/`MTX_SRT`/`MTX_API` + instance offset each); outputs distribute round-robin by ordinal (`ordinal % PEER_COUNT`). |
 | `PEER_SKIP_START` | unset | Meaningful only for `MSR_PEER=mediamtx`: peer instances are pre-started externally, and the harness verifies all `PEER_COUNT` instances are live instead of spawning them. No effect on `MSR_PEER=sink` — an in-process listener has no external-process equivalent to skip-start; it is always bound fresh by the harness. |
 | `MSR_PEER` | `mediamtx` | `mediamtx` (default) or `sink` — see "Peer modes" below |
-| `HARNESS_SRT_SINK_THREADS` | `PEER_COUNT` | `MSR_PEER=sink` only: **total** discard-thread count for the shared SRT sink pool, partitioned into exclusively-owned port chunks (`PEER_COUNT / HARNESS_SRT_SINK_THREADS` ports/thread) — not a per-port count. Default reproduces the historical 1-port-per-thread behavior |
-| `HARNESS_SRT_SINK_UDP_BUFFER` | `8388608` (8MB) | `MSR_PEER=sink` only: `SRTO_UDP_RCVBUF`/`SRTO_UDP_SNDBUF` for each SRT sink-peer instance |
+| `HARNESS_SRT_SINK_THREADS` | up to `4` host CPUs | `MSR_PEER=sink` only: **total** Tokio thread/socket budget for the shared SRT sink pool. With one peer (the default), it creates that many `SO_REUSEPORT` sockets on one UDP port. |
+| `HARNESS_SRT_SINK_UDP_BUFFER` | `8388608` (8MB) | `MSR_PEER=sink` only: requested `SO_RCVBUF`/`SO_SNDBUF` per SRT socket; `0` preserves host defaults. Linux may clamp this to `net.core.rmem_max`/`wmem_max`. |
 | `MSR_SKIP_FFPROBE` | unset | Skip ffprobe read-back checks (always forced on when `MSR_PEER=sink`) |
 | `MSR_SINK_SAMPLE_SECS` | `3` | mediamtx path-health sample window before the resource-window sample |
 | `MSR_SINK_POST_SAMPLE_SECS` | `2` | mediamtx path-health sample window after the resource-window sample |
 | `MSR_SINK_TIMEOUT_SECS` | `60` | Timeout for mediamtx path-health verification (both windows above) |
 | `MSR_SINK_ENGINE_SAMPLE_SECS` | `2` | Engine-health bytesOut sample window used only when `MSR_PEER=sink` |
+
+Before a 1,200-output run, use the [production and scale-host capacity
+contract](configuration.md#production-and-scale-host-capacity-contract).
+In particular, the harness raises its own soft descriptor limit from the
+largest `MSR_OUTPUT_COUNTS` value, but its inherited hard limit must still be
+at least 65,536; `net.core.somaxconn` must accommodate the RTMP accept burst;
+and the SRT UDP buffer maxima must meet the configured socket buffers.
 
 ### Peer modes (`MSR_PEER`)
 
@@ -467,22 +475,13 @@ never expected to be started by hand outside `PEER_SKIP_START`.
 
   The SRT side is a single shared `harness_srt_sink.rs::HarnessSrtSinkPool`
   spanning every `PEER_COUNT` port, not one listener per instance.
-  `HARNESS_SRT_SINK_THREADS` is a **total** thread budget for that pool
-  (default: `PEER_COUNT`, i.e. one thread per port), partitioned into
-  contiguous, **exclusively owned** port chunks — `ports.len() /
-  HARNESS_SRT_SINK_THREADS` ports per thread, remainder spread one-per-thread
-  to the first few. No two threads ever call anything on the same listener
-  socket. This replaced an earlier design where every thread shared one
-  listener per instance via concurrent `srt_accept()`/`srt_recv()`, which
-  the tunable sweep in `srt-scaling-investigation.md` found to be a severe
-  regression (a listening port in unpatched libsrt has one shared
-  multiplexer; multiple threads hammering it concurrently contends against
-  its internal locking rather than adding capacity). Exclusive ownership
-  fixed that and, per that doc's follow-up sweep, 2 ports/thread
-  outperforms 1 port/thread at every port count tested, with a measured
-  local optimum around 8 ports / 4 threads on a 6-core host — pushing
-  either axis further can get worse again once total discard-thread count
-  starts competing with the sender for CPU.
+  `HARNESS_SRT_SINK_THREADS` is a **total** Tokio thread/socket budget for
+  that pool (default: up to four host CPUs). With the default one peer it
+  binds that many `SO_REUSEPORT` sockets to a single UDP port, allowing the
+  kernel to distribute SRT flows by 4-tuple while each socket and peer table
+  stays exclusively owned by one runtime. Each Tokio wake drains its socket
+  before driving SRT timers and outbound control packets, matching srt-bench's
+  reuseport receiver strategy without multiplying externally visible ports.
 
   Because a sink peer discards data below the RTMP/SRT protocol layer, mediamtx
   path-health and ffprobe read-back are skipped entirely; each checkpoint
