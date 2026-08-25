@@ -171,6 +171,7 @@ above remain the better way to learn the system.
 - [MSR 1,200-output resource attribution — 2026-08-13](agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md)
 - [MSR 1,200-output netns confound investigation — 2026-08-14](agent-guidance/quality/msr-1200-netns-confound-investigation-2026-08-14.md)
 - [SRT fan-in scaling investigation — 2026-08-15](agent-guidance/quality/srt-scaling-investigation.md)
+- [SRT-RS MSR protocol-mix matrix and egress bottleneck attribution — 2026-08-25](agent-guidance/quality/srt-rs-msr-matrix-2026-08-25.md)
 
 ### Canonical agent skills and references
 
