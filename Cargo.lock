@@ -2717,7 +2717,7 @@ dependencies = [
  "aes-kw",
  "cipher 0.5.2",
  "ctr",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "hmac 0.13.0",
  "pbkdf2 0.13.0",
  "rustc-hash",
@@ -2966,7 +2966,7 @@ dependencies = [
 name = "srt-transport"
 version = "0.1.0"
 dependencies = [
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "libc",
  "shiguredo_srt",
  "socket2",
