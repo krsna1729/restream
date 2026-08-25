@@ -2712,6 +2712,7 @@ checksum = "6f4ddf515b74c7fd601854cf7ae57094635f3795b0d5028b11cc4e32fb8d4098"
 [[package]]
 name = "shiguredo_srt"
 version = "2026.1.0-canary.1"
+source = "git+https://github.com/krsna1729/srt-rs?rev=0821257b402b08219aaaf38a62f5fa655a7e4947#0821257b402b08219aaaf38a62f5fa655a7e4947"
 dependencies = [
  "aes",
  "aes-kw",
@@ -2958,6 +2959,7 @@ dependencies = [
 [[package]]
 name = "srt-lifecycle"
 version = "0.1.0"
+source = "git+https://github.com/krsna1729/srt-rs?rev=0821257b402b08219aaaf38a62f5fa655a7e4947#0821257b402b08219aaaf38a62f5fa655a7e4947"
 dependencies = [
  "shiguredo_srt",
 ]
@@ -2965,6 +2967,7 @@ dependencies = [
 [[package]]
 name = "srt-transport"
 version = "0.1.0"
+source = "git+https://github.com/krsna1729/srt-rs?rev=0821257b402b08219aaaf38a62f5fa655a7e4947#0821257b402b08219aaaf38a62f5fa655a7e4947"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
