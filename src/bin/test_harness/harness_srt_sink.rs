@@ -184,11 +184,15 @@ async fn sink_port(
     let options = config.admission_options();
     let mut peers = config.peer_table();
     let telemetry = IngressTelemetry::default();
+    let batch_count = 64;
     let mut input = vec![0u8; 2048];
+    let mut bufs: Vec<Vec<u8>> = (0..batch_count).map(|_| vec![0u8; 2048]).collect();
+    let mut sizes = vec![0usize; batch_count];
+    let mut addrs = vec![None; batch_count];
+    let raw_fd = std::os::fd::AsRawFd::as_raw_fd(&socket);
     let mut outputs = Vec::with_capacity(64);
     let mut events = Vec::with_capacity(64);
     let mut tick = tokio::time::interval(Duration::from_millis(5));
-
     while !stop.load(Ordering::Acquire) {
         tokio::select! {
             _ = tick.tick() => {}
@@ -203,16 +207,31 @@ async fn sink_port(
                     1,
                     &telemetry,
                 );
-                while let Ok((size, peer)) = socket.try_recv_from(&mut input) {
-                    let _ = peers.admit(
-                        peer,
-                        &input[..size],
-                        srt_now(),
-                        &options,
-                        0,
-                        1,
-                        &telemetry,
-                    );
+                // Drain the rest of the kernel queue in one recvmmsg
+                // syscall instead of one try_recv_from per datagram.
+                loop {
+                    match srt_transport::recvmsg_batch(raw_fd, &mut bufs, &mut sizes, &mut addrs)
+                    {
+                        Ok(0) | Err(_) => break,
+                        Ok(count) => {
+                            for index in 0..count {
+                                if let Some(peer) = addrs[index] {
+                                    let _ = peers.admit(
+                                        peer,
+                                        &bufs[index][..sizes[index]],
+                                        srt_now(),
+                                        &options,
+                                        0,
+                                        1,
+                                        &telemetry,
+                                    );
+                                }
+                            }
+                            if count < batch_count {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
