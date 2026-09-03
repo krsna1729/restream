@@ -12,9 +12,8 @@
 
 This document preserves the original 2026-08-25 MSR matrix and adds a separate
 2026-08-28 rebaseline for the cutover. Restream consumes only
-`https://github.com/krsna1729/srt-rs`, moving from exact revision
-`0821257b402b08219aaaf38a62f5fa655a7e4947` to exact revision
-`7663f1a11f905e4ae17e7188ae4f90240cc0ca0b`. Fixture:
+`https://github.com/krsna1729/srt-rs`.
+The 2026-08-28 rebaseline moved the then-current experiment from `0821257b402b08219aaaf38a62f5fa655a7e4947` to `7663f1a11f905e4ae17e7188ae4f90240cc0ca0b` as a historical step. Current Restream cutover revision is `91d0f4bf02671aa81dd07b76b88cb9630388546c` (documented in `Cargo.toml`/`distribution/THIRD_PARTY_COMPONENTS.md` and PR #137). Fixture:
 `bbb-1080p60-30a.mp4` (BBB 1080p60, 1 video + 30 AAC tracks, **7,993,015
 bps** aggregate — the real 8 Mb/s envelope). Ladder: 30/200/600/1200
 outputs, one pipeline, continuous lifecycle. Host loopback, `--no-netns`
@@ -24,7 +23,7 @@ The historical matrix below ran on the bench-profile harness at `e1f1e769` and
 therefore describes the old pin. It is not evidence for the new revision.
 
 
-## Exact-pin rebaseline — 2026-08-28
+## Exact-pin rebaseline — 2026-08-28 (historical; current pin is 91d0f4bf)
 
 The new revision was rebuilt and exercised with the canonical 8 Mb/s fixture.
 These results are deliberately separate from the historical matrix:
