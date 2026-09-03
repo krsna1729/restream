@@ -42,6 +42,25 @@ test("status mode reuses restream log SSE, pauses it while hidden, and resumes f
         { status: 200, headers: { "content-type": "application/json" } },
       );
     }
+    if (href === "/api/v1/engine/health") {
+      return new Response(
+        JSON.stringify({
+          status: "ready",
+          hostSettings: [
+            {
+              key: "runtime.nofile",
+              label: "Open file descriptors",
+              current: 65536,
+              required: 65536,
+              unit: "fds",
+              status: "ok",
+              detail: "hard limit 1048576",
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
     if (href === "/api/v1/logs?scope=restream&limit=80&order=desc") {
       return new Response(
         JSON.stringify({
@@ -106,6 +125,7 @@ test("status mode reuses restream log SSE, pauses it while hidden, and resumes f
 
   assert.deepEqual(requests, [
     "/api/v1/engine",
+    "/api/v1/engine/health",
     "/api/v1/logs?scope=restream&limit=80&order=desc",
   ]);
   assert.equal(streams.length, 1);
@@ -117,9 +137,11 @@ test("status mode reuses restream log SSE, pauses it while hidden, and resumes f
   assert.match(container.innerHTML, /aria-label="Jump to status section"/);
   assert.match(container.innerHTML, /value="status-build-section"/);
   assert.match(container.innerHTML, /value="status-system-section"/);
+  assert.match(container.innerHTML, /value="status-host-capacity-section"/);
   assert.match(container.innerHTML, /value="status-native-section"/);
   assert.match(container.innerHTML, /value="status-log-section"/);
   assert.match(container.innerHTML, /id="status-build-section"/);
+  assert.match(container.innerHTML, /id="status-host-capacity-section"/);
   assert.match(container.innerHTML, /id="status-log-section"/);
   assert.match(container.innerHTML, /Search process logs and activity/);
   assert.match(container.innerHTML, /1 activity · 1 process log visible/);

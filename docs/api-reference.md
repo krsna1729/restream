@@ -973,15 +973,10 @@ Authenticated build/runtime information:
       "x86Assembly": true
     },
     "srt": {
-      "version": "1.5.5",
-      "buildVersion": "1.5.5",
-      "license": "MPL-2.0",
+      "version": "srt-rs",
+      "buildVersion": "srt-rs",
+      "license": "Apache-2.0",
       "bondingAvailable": true
-    },
-    "mbedtls": {
-      "version": "Mbed TLS 3.6.6",
-      "buildVersion": "3.6.6",
-      "license": "Apache-2.0"
     },
     "sqlite": { "version": "3.x", "sourceId": "...", "license": "blessing" },
     "x264": {
@@ -1048,8 +1043,9 @@ content type `application/vnd.cyclonedx+json; version=1.5` and contains:
 - the Restream application component and build identity;
 - every resolved normal/runtime Rust crate from Cargo's locked dependency
   graph, including version, Cargo package URL, source, and declared license;
-- FFmpeg component libraries, SRT, libmbedcrypto, SQLite, x264, x265, glibc
-  when applicable, Rust's standard library, libstdc++, and libgcc;
+- FFmpeg component libraries, the srt-rs protocol core and Tokio transport,
+  SQLite, x264, x265, glibc when applicable, Rust's standard library,
+  libstdc++, and libgcc;
 - runtime-reported versions where an API exists, with explicit provenance for
   build-resolved versions;
 - SPDX license expressions or `NOASSERTION` when upstream metadata does not

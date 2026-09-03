@@ -22,10 +22,9 @@ fn main() {
     embed_toolchain_versions();
     embed_rust_dependency_inventory();
 
-    // SRT, FFmpeg, Mbed TLS, x264, and x265 are always linked statically from
-    // the repo-managed static prefix built by setup-static-build.sh. The C++
-    // runtime is resolved from the active compiler toolchain and linked
-    // explicitly below.
+    // FFmpeg, x264, and x265 are linked statically from the repo-managed
+    // prefix. SRT is pure Rust in this build and must not pull native SRT or
+    // Mbed TLS archives into the application.
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
     let prefix = manifest_dir.join(".local/build/static/prefix");
@@ -51,24 +50,12 @@ fn main() {
     check_required_static_inputs(&prefix);
     embed_native_input_inventory(&prefix);
 
-    let pc_path = pkgconfig_dir.join("srt.pc");
-
     println!(
         "cargo:rustc-env=RESTREAM_NATIVE_BUILD_ID={}",
         native_build_id(&prefix)
     );
 
-    let srt_version = std::fs::read_to_string(&pc_path)
-        .ok()
-        .and_then(|pc| {
-            pc.lines()
-                .find_map(|line| line.strip_prefix("Version: ").map(str::to_owned))
-        })
-        .unwrap_or_else(|| "unknown".to_string());
-    println!("cargo:rustc-env=RESTREAM_BUILD_SRT_VERSION={srt_version}");
-
-    // SRT is C++; place libstdc++ after all Rust/native objects so GNU ld
-    // resolves C++ symbols from SRT before closing the static archive group.
+    // x264/x265 are C++; place libstdc++ after all Rust/native objects.
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     let output = std::process::Command::new("c++")
         .arg("-print-file-name=libstdc++.a")
@@ -82,29 +69,6 @@ fn main() {
         .filter(|p| archive_path.is_absolute() && p.exists())
         .expect("C++ compiler did not return an absolute libstdc++.a path");
     println!("cargo:rustc-link-search=native={}", stdcxx_dir.display());
-
-    let mbedtls = probe_pinned_package("mbedcrypto", &prefix, false);
-    for path in &mbedtls.link_paths {
-        println!("cargo:rustc-link-search=native={}", path.display());
-    }
-
-    println!("cargo:rustc-link-lib=static=srt");
-    // SRT references symbols from all three Mbed TLS archives; mbedtls depends
-    // on mbedx509 which depends on mbedcrypto, so list them in that order.
-    println!("cargo:rustc-link-lib=static=mbedtls");
-    println!("cargo:rustc-link-lib=static=mbedx509");
-    println!("cargo:rustc-link-lib=static=mbedcrypto");
-    println!("cargo:rustc-link-arg=-Wl,-Bstatic");
-    println!("cargo:rustc-link-arg=-Wl,--start-group");
-    println!("cargo:rustc-link-arg=-lstdc++");
-    println!("cargo:rustc-link-arg=-lm");
-    println!("cargo:rustc-link-arg=-lpthread");
-    println!("cargo:rustc-link-arg=-ldl");
-    println!("cargo:rustc-link-arg=-lc");
-    println!("cargo:rustc-link-arg=-lgcc_eh");
-    println!("cargo:rustc-link-arg=-lgcc");
-    println!("cargo:rustc-link-arg=-Wl,--end-group");
-    println!("cargo:rustc-link-arg=-Wl,-Bdynamic");
 
     let avcodec = probe_pinned_package("libavcodec", &prefix, true);
     if avcodec
@@ -129,7 +93,7 @@ fn main() {
 
     embed_pkg_version("RESTREAM_BUILD_X264_VERSION", "x264");
     embed_pkg_version("RESTREAM_BUILD_X265_VERSION", "x265");
-    embed_pkg_version("RESTREAM_BUILD_MBEDTLS_VERSION", "mbedcrypto");
+    println!("cargo:rustc-env=RESTREAM_BUILD_SRT_VERSION=srt-rs");
 }
 
 fn emit_ffmpeg_static_archive_group() {
@@ -174,10 +138,6 @@ fn embed_pkg_version(env_name: &str, package: &str) {
 }
 
 const REQUIRED_PKG_CONFIG_PACKAGES: &[&str] = &[
-    "srt",
-    "mbedtls",
-    "mbedx509",
-    "mbedcrypto",
     "libavcodec",
     "libavformat",
     "libavfilter",
@@ -189,12 +149,6 @@ const REQUIRED_PKG_CONFIG_PACKAGES: &[&str] = &[
 ];
 
 const REQUIRED_STATIC_ARCHIVES: &[&str] = &[
-    "libsrt.a",
-    "libmbedtls.a",
-    "libmbedx509.a",
-    "libmbedcrypto.a",
-    "libp256m.a",
-    "libeverest.a",
     "libavcodec.a",
     "libavformat.a",
     "libavfilter.a",

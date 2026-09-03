@@ -1,13 +1,13 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum SrtConnectionMode {
+pub(crate) enum SrtConnectionMode {
     Publish,
     Read,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ParsedStreamId {
-    pub(super) mode: SrtConnectionMode,
-    pub(super) stream_key: String,
+pub(crate) struct ParsedStreamId {
+    pub(crate) mode: SrtConnectionMode,
+    pub(crate) stream_key: String,
 }
 
 pub(super) fn strip_query(value: &str) -> &str {
@@ -45,7 +45,7 @@ pub(super) fn percent_decode(s: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
-pub(super) fn parse_srt_stream_id(streamid: &str) -> ParsedStreamId {
+pub(crate) fn parse_srt_stream_id(streamid: &str) -> ParsedStreamId {
     let raw = streamid.trim_matches('\0').trim();
     if raw.is_empty() {
         return ParsedStreamId {

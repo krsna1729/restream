@@ -165,7 +165,7 @@ pub(crate) fn resolving_srt_shard_backend<P>(
     poller: P,
     feed: TsFeed,
     budget: WorkBudget,
-    srt_egress_muxer_port_reuse: Option<std::sync::Arc<std::sync::Mutex<Option<u16>>>>,
+    srt_egress_muxer_port_reuse: Option<super::muxer_ports::SrtEgressMuxerPortState>,
     drain_timeout: std::time::Duration,
     connect_admission: Option<std::sync::Arc<tokio::sync::Semaphore>>,
 ) -> ResolvingSrtShardBackend<
@@ -196,13 +196,13 @@ pub(crate) fn resolving_srt_shard_backend_with_configurator<P, C>(
     feed: TsFeed,
     budget: WorkBudget,
     socket_configurator: C,
-    // This shard's local-UDP-port reuse state for the libsrt egress
-    // multiplexer (see `SrtShardBackend::with_srt_egress_muxer_port_reuse`).
+    // This shard's application-owned UDP socket and logical caller table
+    // (see `SrtShardBackend::with_srt_egress_muxer_port_reuse`).
     // `None` leaves reuse disabled (every existing test/no-config caller);
     // `Some` is the per-shard state minted by `SrtEgressMuxerPorts::shard`
     // in `factory.rs`/`engine_egress_fabric.rs`, so leaves on this shard
-    // share one libsrt multiplexer and other shards get their own.
-    srt_egress_muxer_port_reuse: Option<std::sync::Arc<std::sync::Mutex<Option<u16>>>>,
+    // share one srt-rs socket/table and other shards get their own.
+    srt_egress_muxer_port_reuse: Option<super::muxer_ports::SrtEgressMuxerPortState>,
     drain_timeout: std::time::Duration,
     // Engine-wide connect-concurrency admission control (see
     // `srt_connect_admission.rs`). `None` leaves connects unthrottled

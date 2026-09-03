@@ -17,8 +17,7 @@ use crate::media::snapshots::PublisherQuality;
 use crate::media::srt::{
     NativeSendBacklog, SRTSOCKET, SrtEgressEngine, SrtEgressInterest, SrtEgressPollError,
     SrtEgressSendMode, SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec, SrtFabricPoller,
-    SrtMessageSender, SrtReadyLeaf, SrtSenderCounterSnapshot, claim_srt_egress_muxer_port,
-    connect_fabric_srt_egress_socket, srt_fabric_message_sender, srt_sender_quality_from_stats,
+    SrtMessageSender, SrtReadyLeaf, connect_fabric_srt_egress_socket, srt_fabric_message_sender,
 };
 
 /// Combined application and native pending state for one SRT fabric leaf.
@@ -132,7 +131,6 @@ where
     draining_reason: Option<crate::media::egress::backend::CloseReason>,
     /// Sender-side counters from the previous quality sample, needed to
     /// compute per-second rates (loss/drop/retrans) on the next one.
-    quality_snapshot: Option<SrtSenderCounterSnapshot>,
     /// Effective `SRTO_SNDBUF` this leaf connected with (PREBIND — read
     /// once, reported on every quality sample without a per-tick FFI call).
     configured_sndbuf_bytes: Option<i32>,
@@ -154,7 +152,6 @@ where
             observed_since: Instant::now(),
             draining_since: None,
             draining_reason: None,
-            quality_snapshot: None,
             configured_sndbuf_bytes: None,
             handshake_permit: None,
         }
@@ -244,13 +241,16 @@ where
     /// its own quality reporting. Returns `None` when the transport has no
     /// native stats to offer (fakes, closed sockets); the caller should
     /// leave the previously published quality in place in that case.
-    pub(crate) fn sample_quality(&mut self, now: Instant) -> Option<PublisherQuality> {
-        let stats = self.transport.sender_quality_stats()?;
-        let (mut quality, snapshot) =
-            srt_sender_quality_from_stats(&stats, self.quality_snapshot, now);
-        self.quality_snapshot = Some(snapshot);
-        quality.srt_sndbuf_configured_bytes = self.configured_sndbuf_bytes;
-        Some(quality)
+    pub(crate) fn sample_quality(&mut self, _now: Instant) -> Option<PublisherQuality> {
+        self.transport
+            .sender_quality_stats()
+            .map(|stats| PublisherQuality {
+                ms_rtt: Some(stats.ms_rtt),
+                mbps_send_rate: Some(stats.mbps_send_rate),
+                packets_sent_loss: Some(stats.pkt_snd_loss_total.max(0) as u64),
+                packets_sent_drop: Some(stats.pkt_snd_drop_total.max(0) as u64),
+                ..PublisherQuality::default()
+            })
     }
 
     pub(crate) fn visit_ready(
@@ -458,15 +458,9 @@ pub(crate) struct SrtShardBackend<
     poll_buffer: Vec<SrtReadyLeaf>,
     pending_connects: HashMap<OutputId, PendingSrtConnect>,
     last_stall_sweep: Option<Instant>,
-    /// This shard's local-UDP-port state for libsrt egress-multiplexer
-    /// reuse, handed out per shard by
-    /// `SrtEgressMuxerPorts::shard` (`muxer_ports.rs`) so every leaf on this
-    /// shard shares one libsrt multiplexer — and therefore one `CSndQueue`
-    /// worker thread — while other shards get their own. Defaults to a
-    /// fresh, backend-local mutex with reuse disabled so every existing
-    /// constructor (tests included) keeps building unconfigured sockets
-    /// unless `with_srt_egress_muxer_port_reuse` opts in explicitly.
-    srt_egress_muxer_port: Arc<Mutex<Option<u16>>>,
+    /// This shard's application-owned shared UDP socket and srt-rs
+    /// `CallerTable`, created lazily by the first egress connection.
+    srt_egress_muxer_port: muxer_ports::SrtEgressMuxerPortState,
     reuse_local_srt_egress_port: bool,
     /// Connect-concurrency admission; see `srt_connect_admission.rs`.
     connect_admission: Option<Arc<tokio::sync::Semaphore>>,
@@ -592,7 +586,7 @@ where
     /// (`resolving_srt_shard_backend_with_configurator`) calls this.
     pub(crate) fn with_srt_egress_muxer_port_reuse(
         mut self,
-        state: Arc<Mutex<Option<u16>>>,
+        state: muxer_ports::SrtEgressMuxerPortState,
         enabled: bool,
     ) -> Self {
         self.srt_egress_muxer_port = state;
@@ -604,7 +598,7 @@ where
     /// tests can prove distinct shards were handed distinct per-shard state
     /// (`Arc::ptr_eq`) without a second construction path.
     #[cfg(test)]
-    pub(crate) fn srt_egress_muxer_port_state(&self) -> &Arc<Mutex<Option<u16>>> {
+    pub(crate) fn srt_egress_muxer_port_state(&self) -> &muxer_ports::SrtEgressMuxerPortState {
         &self.srt_egress_muxer_port
     }
 
@@ -662,13 +656,12 @@ where
         // same way an established leaf's unexpected close does (see
         // `EgressProgressSink::terminated_unexpectedly`).
         let progress_sink = pending.common.progress_sink.clone();
-        let muxer_port_state = self.srt_egress_muxer_port.clone();
-        let muxer_port_claim = self
+        let shared_state = self
             .reuse_local_srt_egress_port
-            .then(|| claim_srt_egress_muxer_port(&muxer_port_state));
+            .then(|| self.srt_egress_muxer_port.clone());
         let config = pending
             .connect_spec
-            .connect_config(peer_addrs, muxer_port_claim);
+            .connect_config(peer_addrs, shared_state);
         let socket = self.socket_connector.connect(config).map_err(|error| {
             tracing::warn!(
                 output_id = %output_id,

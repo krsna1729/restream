@@ -148,7 +148,7 @@ fn srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry() {
         .srt_egress_muxer_port_state()
         .clone();
     assert!(!Arc::ptr_eq(&first, &second));
-    assert_eq!(*first.lock().unwrap(), None);
+    assert!(first.lock().unwrap().is_none());
 }
 
 #[test]

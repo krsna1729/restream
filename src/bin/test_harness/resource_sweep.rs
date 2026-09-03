@@ -332,9 +332,8 @@ async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>
 /// equivalent of -- a harness sink peer is always started fresh, bound
 /// directly by this harness process.
 ///
-/// `HARNESS_SRT_SINK_THREADS` defaults to `env.peer_count` -- one thread
-/// per port, exactly reproducing the historical single-threaded-per-port
-/// default -- and is a *total* thread budget for the shared SRT pool
+/// `HARNESS_SRT_SINK_THREADS` defaults to up to four host CPUs and is a
+/// *total* thread budget for the shared SRT pool
 /// (`HarnessSrtSinkPool`), partitioned with exclusive port ownership
 /// across every `PEER_COUNT` port, not a per-port thread count.
 async fn start_harness_sink_peers(env: &ResourceSweepEnv) -> Result<SinkPeerStack, String> {
@@ -355,8 +354,10 @@ async fn start_harness_sink_peers(env: &ResourceSweepEnv) -> Result<SinkPeerStac
         srt_ports.push(srt_port);
     }
 
-    let discard_threads = env_usize("HARNESS_SRT_SINK_THREADS", env.peer_count);
-    let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024) as i32;
+    let default_sink_threads =
+        std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
+    let discard_threads = env_usize("HARNESS_SRT_SINK_THREADS", default_sink_threads);
+    let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024);
     let srt_pool = match HarnessSrtSinkPool::start(&srt_ports, udp_buffer, discard_threads) {
         Ok(pool) => pool,
         Err(err) => {

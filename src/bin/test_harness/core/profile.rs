@@ -135,6 +135,79 @@ pub(crate) fn ensure_measurement_profile(command: &str, raw: &[String]) -> Resul
     ))
 }
 
+/// The MSR harness can own one sink socket per RTMP output. Raise its own
+/// descriptor ceiling before the in-process peer starts accepting so a normal
+/// shell default (often 1024) cannot become the scale-test bottleneck.
+pub(crate) fn ensure_msr_nofile_limit(command: &str) -> Result<(), String> {
+    if command != "msr" && command != "msr.dashboard" {
+        return Ok(());
+    }
+
+    let target = msr_nofile_target(msr_requested_output_count());
+    let mut current = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `current` is initialized storage valid for the duration of the
+    // call, and `getrlimit` only writes the provided structure.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut current) } != 0 {
+        return Err(format!(
+            "failed to inspect the harness file-descriptor limit: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if current.rlim_cur >= target {
+        return Ok(());
+    }
+    if current.rlim_max < target {
+        return Err(format!(
+            "MSR needs at least {target} open files for {} requested outputs, but the harness hard limit is {}; raise the host/container RLIMIT_NOFILE",
+            msr_requested_output_count(),
+            current.rlim_max
+        ));
+    }
+
+    let raised = libc::rlimit {
+        rlim_cur: target,
+        rlim_max: current.rlim_max,
+    };
+    // SAFETY: `raised` is initialized storage valid for the duration of the
+    // call, and `setrlimit` does not retain the pointer.
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raised) } != 0 {
+        return Err(format!(
+            "failed to raise the harness file-descriptor limit to {target}: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    println!("[harness] raised RLIMIT_NOFILE soft limit to {target} for MSR");
+    Ok(())
+}
+
+fn msr_requested_output_count() -> usize {
+    let default = if std::env::var("MSR_FULL").ok().as_deref() == Some("1") {
+        1_200
+    } else {
+        30
+    };
+    std::env::var("MSR_OUTPUT_COUNTS")
+        .ok()
+        .and_then(|value| {
+            value
+                .split(',')
+                .filter_map(|entry| entry.trim().parse::<usize>().ok())
+                .max()
+        })
+        .unwrap_or(default)
+}
+
+fn msr_nofile_target(outputs: usize) -> libc::rlim_t {
+    // One server-side RTMP descriptor per output, plus a full additional
+    // connection's worth of headroom for the harness, publishers, logs, and
+    // retries. Keep ordinary MSR invocations safely above typical 1024-FD
+    // shells too.
+    outputs.saturating_mul(2).saturating_add(1_024).max(4_096) as libc::rlim_t
+}
+
 pub(crate) fn harness_runtime_worker_threads() -> usize {
     let cpus = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
@@ -167,4 +240,16 @@ pub(crate) fn default_restream_bin() -> PathBuf {
         }
     }
     PathBuf::from("target/release/restream")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::msr_nofile_target;
+
+    #[test]
+    fn msr_nofile_target_covers_full_scale_with_headroom() {
+        assert_eq!(msr_nofile_target(30), 4_096);
+        assert_eq!(msr_nofile_target(1_200), 4_096);
+        assert_eq!(msr_nofile_target(2_000), 5_024);
+    }
 }

@@ -493,29 +493,26 @@ at 1,200 outputs.
 
 ### Ingest
 
-The SRT listener requests `SRTO_GROUPCONNECT=1`. A publisher-created bonded
-connection is accepted as one logical group: the first member returns a group
-ID from `srt_accept`, later members attach in the background, and one
-`srt_recv(group_id)` loop feeds one demuxer/ring producer. `srt_group_data()`
-reports member state through health/diagnostics.
-
-StreamID alone does not create a group. Two independent sockets with matching
-StreamIDs are rejected as duplicate publishers.
-
-Requires libsrt compiled with `ENABLE_BONDING=ON`; startup warns and retains
-single-link ingest otherwise. All builds link against the repo-managed static
-SRT build from `.local/build/static/prefix`, so bonded-ingest support no longer
-depends on the distro `libsrt` package.
+The srt-rs listener explicitly accepts publisher-created Broadcast and Backup
+groups. Their authenticated matching legs feed one stable logical input,
+deduplicate received MPEG-TS payloads, and retain per-leg health plus logical
+aggregate telemetry. Matching StreamIDs on independent sockets do not create a
+bond.
 
 ### Egress
 
-Backup links via `bond=` URL parameter:
+Backup links use the established `bond=` URL parameter:
 
 ```text
 srt://primary:10080?streamid=publish:key&bond=backup1:10080,backup2:10080
 ```
 
-Creates an `SRT_GTYPE_BACKUP` group. Both single-connection and bonded egress groups now call `srt_set_highbitrate_opts(client_sock)` immediately after creation to prevent packet drops and buffer overflows under high bitrates.
+This creates an SRT Backup group with the URL authority as the primary leg and
+the listed peers as standbys. Add `type=broadcast` to duplicate each media
+message over every healthy leg. The egress adapter uses srt-rs's Tokio-native
+group transport, so each leg is a Tokio UDP socket and all group I/O remains
+nonblocking.
+
 
 ## Protocol correctness requirements
 

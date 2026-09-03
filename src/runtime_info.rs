@@ -6,12 +6,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-// SAFETY: mbedtls_version_get_string_full writes a NUL-terminated version
-// string (e.g. "Mbed TLS 3.6.6") into the caller-provided buffer. The Mbed TLS
-// docs guarantee the output never exceeds 18 bytes including the NUL, so the
-// 32-byte buffer at the call site is always large enough.
 unsafe extern "C" {
-    fn mbedtls_version_get_string_full(string: *mut c_char);
     fn sqlite3_libversion() -> *const c_char;
     fn sqlite3_sourceid() -> *const c_char;
 }
@@ -171,12 +166,6 @@ fn sbom_dependencies(
     })];
 
     for (name, depends_on) in [
-        (
-            "libsrt",
-            &["libmbedtls", "libmbedx509", "libmbedcrypto"][..],
-        ),
-        ("libmbedtls", &["libmbedx509", "libmbedcrypto"][..]),
-        ("libmbedx509", &["libmbedcrypto"][..]),
         ("libavformat", &["libavcodec", "libavutil"][..]),
         (
             "libavfilter",
@@ -394,14 +383,6 @@ fn libc_component() -> Option<Value> {
 pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
     let native_inputs = native_build_inputs();
     let (sqlite_version, sqlite_source_id) = sqlite_runtime_info();
-    // SAFETY: mbedtls_version_get_string_full writes at most 18 bytes
-    // (including the NUL) into the 32-byte buffer, then c_string reads it back
-    // as a NUL-terminated C string. The buffer outlives the read.
-    let mbedtls_version = {
-        let mut buffer = [0 as c_char; 32];
-        unsafe { mbedtls_version_get_string_full(buffer.as_mut_ptr()) };
-        c_string(buffer.as_ptr())
-    };
     let srt_version = crate::media::srt::linked_srt_version();
     let x264_version = env!("RESTREAM_BUILD_X264_VERSION").to_string();
     let x265_version = env!("RESTREAM_BUILD_X265_VERSION").to_string();
@@ -410,9 +391,9 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
 
     native_components.extend([
         native_component_with_inputs(
-            "libsrt",
+            "srt-rs",
             srt_version.clone(),
-            "MPL-2.0",
+            "MIT",
             "runtime API",
             vec![
                 json!({
@@ -424,43 +405,7 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
                     "value": env!("RESTREAM_BUILD_SRT_VERSION")
                 }),
             ],
-            &["lib/libsrt.a", "lib/pkgconfig/srt.pc"],
-            &native_inputs,
-        ),
-        native_component_with_inputs(
-            "libmbedtls",
-            mbedtls_version.clone(),
-            "Apache-2.0",
-            "runtime API",
-            vec![json!({
-                "name": "restream:buildResolvedVersion",
-                "value": env!("RESTREAM_BUILD_MBEDTLS_VERSION")
-            })],
-            &["lib/libmbedtls.a", "lib/pkgconfig/mbedtls.pc"],
-            &native_inputs,
-        ),
-        native_component_with_inputs(
-            "libmbedx509",
-            mbedtls_version.clone(),
-            "Apache-2.0",
-            "runtime API",
-            vec![json!({
-                "name": "restream:buildResolvedVersion",
-                "value": env!("RESTREAM_BUILD_MBEDTLS_VERSION")
-            })],
-            &["lib/libmbedx509.a", "lib/pkgconfig/mbedx509.pc"],
-            &native_inputs,
-        ),
-        native_component_with_inputs(
-            "libmbedcrypto",
-            mbedtls_version.clone(),
-            "Apache-2.0",
-            "runtime API",
-            vec![json!({
-                "name": "restream:buildResolvedVersion",
-                "value": env!("RESTREAM_BUILD_MBEDTLS_VERSION")
-            })],
-            &["lib/libmbedcrypto.a", "lib/pkgconfig/mbedcrypto.pc"],
+            &[],
             &native_inputs,
         ),
         native_component(
@@ -614,13 +559,8 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
             "srt": {
                 "version": srt_version,
                 "buildVersion": env!("RESTREAM_BUILD_SRT_VERSION"),
-                "license": "MPL-2.0",
+                "license": "MIT",
                 "bondingAvailable": bonding_available,
-            },
-            "mbedtls": {
-                "version": mbedtls_version,
-                "buildVersion": env!("RESTREAM_BUILD_MBEDTLS_VERSION"),
-                "license": "Apache-2.0",
             },
             "sqlite": {
                 "version": sqlite_version,

@@ -53,11 +53,11 @@ in SQLite.
 `EgressFabricConfig::validate` runs once at startup after per-field clamping and logs non-fatal `restream.config.warning` events for cross-field issues among the egress fabric settings above — e.g. `RESTREAM_EGRESS_MAX_PENDING_BYTES` smaller than `RESTREAM_EGRESS_VISIT_MAX_BYTES`, `RESTREAM_EGRESS_SHARDS` more than 4x the effective CPU count, `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` under 50ms, or `RESTREAM_EGRESS_COMMAND_BATCH` exceeding `RESTREAM_EGRESS_COMMAND_CAPACITY`. See `docs/egress-implementation.md` Phase 6.
 | SRT egress muxer max outputs per shard | `0` | `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` (disabled at `0`; when set, SRT egress creates a new shared TS muxer shard as each pipeline+encoding cohort crosses this many outputs) |
 | SRT egress muxer max shards | `64` | `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` (hard guardrail for dynamic SRT muxer sharding; once reached, new outputs are assigned to the least-loaded existing shard and a warning is emitted) |
-| SRT egress local-port reuse | Enabled | `RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT` (`0`/`false` disables reuse; when enabled the reused local UDP port is scoped per egress-fabric shard, so libsrt creates one multiplexer — and one `SndQ`/`RcvQ` worker thread pair — per shard rather than one for the whole process. Unrelated to `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD`, which shards the shared TS muxer stage) |
-| SRT egress local-port reuse pipeline scoping | Enabled | `RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED` (`0`/`false` reverts to the pre-2026-08-14 engine-wide-shared behavior, where every pipeline's shard *N* shares one libsrt multiplexer; enabled by default so two unrelated pipelines' shard *N* never share a `CSndQueue` worker thread purely because their shard-assignment formulas produced the same numeric shard id. Multiplexer count scales with `shard_count x active_pipeline_count` when enabled, a flat `shard_count` when disabled) |
+| SRT egress local-port reuse | Enabled | `RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT` (`0`/`false` gives every SRT output its own UDP socket; enabled creates one Tokio-owned UDP socket and srt-rs logical caller table per egress-fabric shard. Unrelated to `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD`, which shards the shared TS muxer stage.) |
+| SRT egress reuse pipeline scoping | Enabled | `RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED` (`0`/`false` shares shard *N* across pipelines; enabled by default keeps each pipeline's shard state separate. Shared socket count scales with `shard_count x active_pipeline_count` when enabled, otherwise with `shard_count`.) |
 | SRT egress connect timeout | `10000` ms | `RESTREAM_SRT_CONNECT_TIMEOUT_MS` (raised from a 3s default: a live scale run showed a burst of 600+ simultaneous handshakes to one peer still completing the SRT handshake when the old 3s timeout tore the socket down first, surfacing as `SRT_ENOCONN` on the next send — see `docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`) |
 | SRT egress connect concurrency | `64` | `RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` (clamped to `1..=4096`; engine-wide bound on concurrent in-flight SRT egress handshakes, held per leaf from connect initiation until its first poller visit resolves the handshake — decouples connection-*establishment* concurrency from shard count, since SRT's `connect()` is non-blocking-initiate and returns before the handshake completes) |
-| Require libsrt bonding support | Disabled | `RESTREAM_REQUIRE_SRT_BONDING` (presence makes unavailable bonding support a startup/test prerequisite) |
+| Require SRT bonding support | Disabled | `RESTREAM_REQUIRE_SRT_BONDING` (retained compatibility setting; srt-rs bonded ingress is enabled by the listener) |
 | SRT encryption | Disabled | `RESTREAM_SRT_PASSPHRASE`; `RESTREAM_SRT_PBKEYLEN` selects the key length and defaults to `16` |
 | AVIO queue capacity (async↔OS-thread bridge) | `524288` bytes (512 KiB) | `RESTREAM_AVIO_QUEUE_CAPACITY` (measured peak HWM = 398 KiB at 8 Mb/s RTMP with zero blocked writes; raise only for very high-latency SRT links) |
 | File descriptor limit | `65536` | `RESTREAM_NOFILE_LIMIT` |
@@ -366,6 +366,35 @@ sysctl policy cannot drift. They do not disable AppArmor or other host security
 policy; use `--no-netns` as a temporary fallback when the host administrator
 has not approved unprivileged namespaces.
 
+### Production and scale-host capacity contract
+
+Restream and the live harness deliberately depend on host capacity settings.
+They expose effective SRT buffer and open-file limits in runtime health, and
+`scripts/dev/harness-host-prereqs.sh` prints the complete harness-side
+diagnostic. Run it before a scale capture:
+
+```sh
+scripts/dev/harness-host-prereqs.sh
+```
+
+| Setting | Required policy | Why it matters |
+|---|---:|---|
+| `RLIMIT_NOFILE` hard limit | at least `65536` | Restream requests this at startup; the MSR harness raises its soft limit based on the largest requested checkpoint but cannot exceed the inherited hard limit. For systemd, set `LimitNOFILE=65536` or higher. |
+| `net.core.rmem_max` | at least `26214400` | Lets the shared SRT ingest socket obtain its requested 8 MiB receive buffer after Linux accounting/clamping. |
+| `net.core.wmem_max` | at least `8388608` | Lets SRT sockets obtain their requested send-buffer ceiling. |
+| `net.core.somaxconn` | at least `4096` for the 1,200-output MSR | Bounds pending TCP accepts during the RTMP connection burst. |
+| `net.ipv4.ip_local_port_range` | at least `4096` ports | Bounds concurrent outbound loopback/egress connections; the normal Linux range is ample. |
+| `fs.file-max` | above aggregate process demand | Host-wide file-descriptor ceiling; it must leave room for Restream, harness peers, MediaMTX, and publishers. |
+| `kernel.unprivileged_userns_clone=1`, `user.max_user_namespaces=28633` | required for default live-harness isolation | Enables the private user/network namespace used by integration tests. `--no-netns` is only a host-network fallback. |
+
+`net.core.rmem_default`, `net.core.wmem_default`, `net.core.netdev_max_backlog`,
+`net.ipv4.udp_mem`, CPU affinity/quota, cgroup memory/pid limits, and available
+RAM do not have one portable minimum: they are workload-dependent. Record them
+alongside scale artifacts because they cap burst tolerance, SRT packet loss,
+scheduler capacity, and process fan-out. The prerequisite script prints the
+network values; process limits, affinity, cgroup quota, and memory are exposed
+by Restream's runtime health endpoints.
+
 SRT egress backup links can be supplied with:
 
 ```text
@@ -462,18 +491,15 @@ about who benefits from, and who should control, this kind of override.
 Ingest encryption is configured through the API/pipeline settings, not the
 streamid.
 
-Inbound bonding uses the same single listener. When the publisher initiates a
-real SRT group, `srt_accept` returns one group ID and libsrt attaches later
-links in the background. Merely opening two independent sockets with the same
-StreamID does not create a bond.
+Inbound bonding is enabled through the srt-rs listener's explicit group-input
+policy. A publisher-created Broadcast or Backup group is authenticated as one
+logical SRT input; matching independent sockets remain independent publishers.
+The logical input retains its identity when a physical leg fails, and exposes
+both per-leg and deduplicated aggregate telemetry.
 
-The linked libsrt must be built with `ENABLE_BONDING=ON`. The listener checks
-`SRTO_GROUPCONNECT` at startup and logs a warning when the linked binary does
-not expose working bonding support; ordinary single-link SRT remains enabled.
-The repo-managed native prefix builds pinned SRT 1.5.5 with bonding enabled and
-runs separate-process broadcast and backup/failover tests before packaging.
-This does not require a second ingest endpoint: all member tuples join the
-group accepted from the shared listener.
+Bonded egress URLs use `bond=` plus the standard optional `type=`. The default is
+`backup`: the URL authority is primary and comma-separated `bond=` values are
+standbys. Set `type=broadcast` to send media over every healthy leg.
 
 Practical note: if you validate bonded ingest or egress across multiple NICs or
 WAN paths with one wildcard listener, upstream SRT recommends a build with

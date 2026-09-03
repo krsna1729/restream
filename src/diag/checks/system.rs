@@ -163,10 +163,7 @@ pub(in crate::diag) async fn check_srt_listener_socket(
         ));
     }
     if !bonding_available {
-        issues.push(
-            "Linked libsrt rejected SRTO_GROUPCONNECT; rebuild it with ENABLE_BONDING=ON for bonded ingest."
-                .to_string(),
-        );
+        issues.push("The srt-rs listener has not started with bonded-input support.".to_string());
     }
     if rx_queue > configured * 3 / 4 {
         issues.push(format!(

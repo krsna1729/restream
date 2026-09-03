@@ -57,10 +57,12 @@ Use the narrowest proof that can actually catch the bug:
      surfaces `stalled` in both output status and health instead of looking
      healthy or failing immediately.
      `fault.srt-output-stall` proves the SRT equivalents: bounded RSS while
-     retrying against a frozen receiver, and — against the harness's raw
-     undrained SRT listener (`src/bin/test_harness/srt_raw_sink.rs`) — the
-     backpressured-but-connected leaf being classified `backpressured`, then
-     `stalled`, then closed, while healthy siblings keep progressing.
+     retrying against a frozen receiver, and — against the harness's direct
+     Tokio/srt-rs listener (`src/bin/test_harness/srt_raw_sink.rs`) — a real
+     handshake plus delivered data events while healthy siblings keep
+     progressing. srt-rs does not currently expose a native-libsrt-style
+     application-unread receive-buffer hook, so the live test does not claim
+     that unsupported backpressure shape.
      `recovery` also covers hung HLS PUT destinations timing out, surfacing
      retry/error state, recovering after the sink restarts, rapid same-pipeline
      SRT publisher replacement races, and repeated RTMP and SRT downstream sink

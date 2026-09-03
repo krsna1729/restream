@@ -192,6 +192,21 @@ fn srt_shard_backend_add_srt_command_queues_pending_connect() {
         &["primary:9000".to_string(), "backup:9001".to_string()]
     );
     assert_eq!(pending.connect_spec.stream_id(), "publish:key");
+    assert_eq!(
+        pending.connect_spec.bond_type(),
+        shiguredo_srt::GroupType::Backup,
+        "bonded URLs retain the historical Backup default"
+    );
+}
+
+#[test]
+fn srt_shard_backend_parses_broadcast_bond_mode() {
+    let spec = SrtFabricEgressConnectSpec::from_url(
+        "srt://primary:9000?bond=backup:9001&type=broadcast",
+        10_000,
+    );
+
+    assert_eq!(spec.bond_type(), shiguredo_srt::GroupType::Broadcast);
 }
 
 #[test]
