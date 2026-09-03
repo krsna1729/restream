@@ -404,8 +404,8 @@ struct RustSrtPublisher {
 }
 
 impl RustSrtPublisher {
-    async fn accept_payload(&mut self, engine: &MediaEngine, payload: Vec<u8>) {
-        self.demuxer.feed(&payload);
+    async fn accept_payload(&mut self, engine: &MediaEngine, payload: Bytes) {
+        self.demuxer.feed(payload.as_ref());
         if self.demuxer.drain_into(&mut self.packets) > 0 {
             ingest_packets::forward_ingest_packets(
                 &mut self.packets,

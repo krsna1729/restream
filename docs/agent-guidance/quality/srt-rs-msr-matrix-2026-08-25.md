@@ -2,24 +2,49 @@
 
 ## Contents
 
-- [Results matrix](#results-matrix)
+- [Exact-pin rebaseline — 2026-08-28](#exact-pin-rebaseline--2026-08-28)
+- [Historical results matrix — old pin](#historical-results-matrix--old-pin)
 - [Where the pure-SRT ceiling actually is: attribution](#where-the-pure-srt-ceiling-actually-is-attribution)
 - [Knob matrix: what srt-rs offers vs what the engine uses](#knob-matrix-what-srt-rs-offers-vs-what-the-engine-uses)
 - [State-stuffing assessment (socket_id / cookie)](#state-stuffing-assessment-socket_id--cookie)
+- [Architecture verdict](#architecture-verdict)
 - [Next actions (ordered, each independently verifiable)](#next-actions-ordered-each-independently-verifiable)
 
-First full MSR (Mahashivratri hero scenario) protocol-mix matrix against the
-srt-rs transport cutover (`codex/srt-rs-cutover`, PR #137), plus a
-Gregg/Sites-style attribution of the pure-SRT ceiling. Fixture:
+This document preserves the original 2026-08-25 MSR matrix and adds a separate
+2026-08-28 rebaseline for the cutover. Restream consumes only
+`https://github.com/krsna1729/srt-rs`, moving from exact revision
+`0821257b402b08219aaaf38a62f5fa655a7e4947` to exact revision
+`7663f1a11f905e4ae17e7188ae4f90240cc0ca0b`. Fixture:
 `bbb-1080p60-30a.mp4` (BBB 1080p60, 1 video + 30 AAC tracks, **7,993,015
 bps** aggregate — the real 8 Mb/s envelope). Ladder: 30/200/600/1200
 outputs, one pipeline, continuous lifecycle. Host loopback, `--no-netns`
 (netns unavailable in this sandbox). 6 cores.
 
-All runs on bench-profile harness at `e1f1e769`.
+The historical matrix below ran on the bench-profile harness at `e1f1e769` and
+therefore describes the old pin. It is not evidence for the new revision.
 
 
-## Results matrix
+## Exact-pin rebaseline — 2026-08-28
+
+The new revision was rebuilt and exercised with the canonical 8 Mb/s fixture.
+These results are deliberately separate from the historical matrix:
+
+| peer | 30 | 200 | 600 | interpretation |
+|---|---|---|---|---|
+| MediaMTX×4, SRT-only | PASS | FAIL | not reached | 200 registered, then path stalls/reconnects; 252 Restream fabric-leaf terminations make this a mixed sender/receiver failure, not a receiver-only result |
+| native sink×8/thread4, SRT-only | PASS | transient | FAIL | 200 reached the progress and five-second sink gates but active egresses decayed 195→172; 600 peaked at 540 and decayed to 139 before the deterministic timeout |
+
+At the failed native-sink checkpoint Restream recorded 2,764
+`CommandChannelFull`, 9,590 unexpected fabric-leaf terminations, and 12,354
+`egress.failed` events. Raising the 1,024-entry command queue would only hide
+the retry storm, so queue capacity is not a cutover fix. The 30-output run was
+stable; 200 is not yet a sustained-capacity claim.
+
+Artifacts:
+`.local/artifacts/msr-krsna-pin-7663f1a-mediamtx-srt-only/` and
+`.local/artifacts/msr-krsna-pin-7663f1a-sink8-thread4-srt-only/`.
+
+## Historical results matrix — old pin
 
 | mix | peer | 30 | 200 | 600 | 1200 | first failing gate |
 |---|---|---|---|---|---|---|
@@ -34,7 +59,7 @@ All runs on bench-profile harness at `e1f1e769`.
 
 \* the 600 checkpoint itself never stabilized; the run aborted there.
 
-### Mediamtx-side failures are receiver-placement, not engine defects
+### Historical MediaMTX attribution (old pin)
 
 With `PEER_COUNT=4` peers assigned by `ordinal % 4`, every even ordinal
 under `srt-every:2` is SRT → all 600 SRT outputs land on **peer instance 0**
@@ -91,6 +116,14 @@ every protocol send does `payload.to_vec()` — one heap alloc + copy per
 456 k pps this is ~600 MB/s of memcpy and ~456 k allocs/s before any
 protocol work; the profile's malloc/BTreeMap dominance is consistent.
 
+For the cutover write-up: TSBPD, pacing, and ACK behavior improve in the new
+pin; bonded shared-sequence handling also comes across in-scope. Preserve
+CTR/default behavior, keep KM rejection and crypto hardening mandatory, and
+treat optional AES-GCM plus input-bandwidth pacing as separate opt-in
+follow-ups that still need their own measurement work. The remaining known
+engine-side bottlenecks are unchanged here: tokio per-datagram sends and
+protocol-side `Vec`/copy churn.
+
 Why the harness sink passes where the engine egress doesn't: the sink only
 receives and discards (no per-leaf ACK-clocked application send loop, no
 TS-ring feed coupling), and its pool spreads load over 8 ports × 4 threads.
@@ -104,7 +137,7 @@ sockets driven by a round-robin poller — a different, harder problem.
 | `OutputDrainBudget` (transport) | 64 actions/32 pkts/256 KiB, hardcoded `::default()` at both call sites in `tokio_egress.rs` | constructor takes any budget | Tune up for TX-heavy leaves; budget-exhaustion then reschedules instead of starving |
 | Tokio TX batching | per-datagram `.send().await` | mio path already has `sendmmsg` batching (`drain_outputs_with` + scratch); tokio `Conn::drain_outputs_bounded` does not | Port `sendmmsg` batching into the tokio drain (or use `try_send` loops over `Vec<SocketAddr>` batches). Highest-leverage single change |
 | `payload.to_vec()` on push (protocol) | alloc+copy per packet, clone per retransmit | sans-I/O API owns bytes | Upstream: `Bytes`/`BytesMut` or caller-owned buffer pool through `SenderBuffer`. Removes most of the malloc profile |
-| `SessionConfig` egress defaults | FC window 8192 pkts, TSBPD 120 ms, maxbw None (=1 Gbps pacing cap), live CC | `set_flow_control`, `set_latency`, `set_bandwidth`, `PolicyOverride` | Explicitly set `max_bandwidth_bytes_per_sec` per leaf (~1.5–2× bitrate) so pacing spaces bursts instead of BW_INFINITE clumping; raise FC only if loss analysis demands it |
+| `SessionConfig` bandwidth/pacing | SRT pacing is always active; unspecified max bandwidth retains the protocol default ceiling, while input-bandwidth mode adds configurable overhead | bytes/s, bits/s, or measured input bandwidth plus 5–100% overhead | Defer configuration until Restream exposes a trustworthy per-output mux bitrate; guessing from fixture or declared profile risks under-pacing variable-rate output |
 | `PeerTableConfig` (ingress/sink) | max_peers 4096, half-open 1024, per-IP 4096 | `PeerTable::with_config` | For 1200-connection runs raise table bounds above the connection count; per-IP bound matters on loopback where all peers share one IP |
 | Cookie routing (`AdmissionOptions.cookie_routing`) | on | off switch exists (measurement only) | Keep on — `IngressTelemetry.cookie_routed` vs `stranded_conclusions` quantifies it; never disable in production |
 | `recvmsg_batch` (transport free fn) | used by mio paths | available to any fd owner | Use in harness sink `drive()` receive burst (currently `try_recv_from` loop) — one syscall per 64 packets |
@@ -112,7 +145,8 @@ sockets driven by a round-robin poller — a different, harder problem.
 | `ListenerTopology::ReusePortMulti` | sink uses it | engine ingress too | Already proven; keep |
 
 Non-goals kept as non-goals: changing wire semantics, weakening admission
-(StreamID/KM checks stay mandatory), or bypassing `catch_unwind` isolation.
+(StreamID/KM checks stay mandatory), bypassing `catch_unwind` isolation, or
+presenting AES-GCM / input-bandwidth pacing as default-on cutover behavior.
 
 ## State-stuffing assessment (socket_id / cookie)
 
@@ -136,20 +170,60 @@ Verdict: **do not stuff state into either field.** The measurable costs are
 per-datagram syscalls and payload copies; both have direct fixes listed in
 the knob matrix without touching wire-visible identity.
 
+## Architecture verdict
+
+Restream is not broadly over-engineered around the previous native SRT stack.
+Keep the shared TS muxer, `TsChunkRing` fanout, lifecycle/retry policy, shard
+ownership, desired-state manager, stream-ID admission, crypto policy, and feed
+overrun/stall handling: those are product responsibilities, not transport
+reimplementations.
+
+The excess compatibility surface is concentrated at the adapter seam:
+`SRTSOCKET = i32`, the global socket registry, an always-writable compatibility
+poller, synthetic trace stats, and a private Tokio runtime hosted on SRT shard
+threads. Contain that seam now; do not rewrite product lifecycle around it. The
+target is a shard-owned transport using upstream connection/group types
+directly. For high-density egress, use upstream Mio shared-socket batching as
+implementation and measurement evidence; the product runtime is Tokio. For ingress, retain the current
+listener until a scale experiment justifies `ReusePortMulti` or shared-pool
+cookie routing.
+
+The exact-pin `srt-bench` run is diagnostic, not acceptance evidence. Its custom
+Mio/shared-socket profile established only one connection at 30 and 200, while
+Tokio established 30/30 but only 88/200 callers at the larger point and recorded
+UDP receive-buffer errors. Use the checked-in upstream sentinel plans and their
+five-repetition/full-delivery method before making a runtime claim. Restream MSR
+remains the product gate.
+
 ## Next actions (ordered, each independently verifiable)
 
-1. **Batch tokio TX** (`drain_outputs_bounded`): reuse the mio path's
-   `sendmmsg` design. Expect the largest single win; verify with the same
-   `strace -c` + Recv-Q instrumentation and an msr srt-only@600 rerun.
-2. **Raise/tune `OutputDrainBudget`** per-leaf-class (TX-heavy leaves get
-   larger budgets) instead of hardcoded default.
-3. **Explicit per-leaf `max_bandwidth_bytes_per_sec`** derived from output
-   bitrate (pacing smooths bursts; reduces transient FC stalls).
-4. **Upstream protocol-side `to_vec` elimination** (Bytes ownership through
-   SenderBuffer/ReceiverBuffer) — bigger lift, allocator-profile win.
-5. **Sink `recvmsg_batch` adoption** + `PeerTableConfig` sizing for 1200.
-6. Re-run the full matrix after 1–3; target: srt-only@1200 with
-   packetsSentDrop ≈ 0 and no leaf terminations.
+1. **Land the exact pin and bonded correctness fix.** Shared `CallerTable` state
+   is single-peer only; broadcast/backup outputs use upstream `TokioGroupConn`
+   so group sequence state is not split across direct callers. Run focused bond,
+   policy, concurrency, and full Rust gates.
+2. **Add observability before tuning.** Record caller-table budget exhaustion,
+   backpressure, retry reason/rate, active-versus-desired leaves, and per-shard
+   visit latency. Do not enlarge the command channel or change the connect
+   admission semaphore as a blind mitigation.
+3. **Prototype a shard-owned high-density egress adapter.** First compare the
+   exact-pin Mio per-connection/shared-socket sentinel with the current Tokio
+   adapter at 30/200/600; then implement the winning upstream topology behind
+   the existing transport boundary. Acceptance requires full delivery, clean
+   teardown, and a Restream MSR improvement, not connection count alone.
+4. **Tune `OutputDrainBudget` only with telemetry.** A larger budget can improve
+   one leaf while starving neighbors; test a bounded matrix and retain the
+   smallest value that lowers visit latency and leaf churn.
+5. **Move payload ownership upstream.** Eliminate protocol-side per-packet
+   `Vec` copies/clones through `Bytes` or equivalent ownership, then re-profile.
+6. **Choose listener topology per workload.** Keep the proven ingress default;
+   evaluate shared-pool/cookie routing and `ReusePortMulti` for dense listeners,
+   including same-IP admission limits and teardown behavior.
+7. **Add bandwidth hints only after measurement exists.** Feed a measured mux
+   bitrate into upstream input-bandwidth mode with measured overhead. GCM and
+   pacing configuration remain opt-in follow-ups, not cutover blockers.
+8. Re-run the canonical 30/200/600/1200 ladder after steps 2–4; target sustained
+   active egresses, near-zero send drops, no command retry storm, and no
+   unexpected leaf terminations.
 
 Artifacts: `.local/artifacts/msr-{rtmp-only,canonical,srt-every-2,srt-only}/`,
 `.local/artifacts/msr-sink-{rtmp-only,canonical,srt-every-2,srt-only}/`,

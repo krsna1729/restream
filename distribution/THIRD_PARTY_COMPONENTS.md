@@ -12,7 +12,7 @@ component. It is intentionally not a replacement for the license texts in
 | FFmpeg | tag `n8.1.2`, commit `38b88335f99e76ed89ff3c93f877fdefce736c13` | GPL-2.0-or-later when configured with `--enable-gpl` | <https://github.com/FFmpeg/FFmpeg> |
 | x264 | commit `b35605ace3ddf7c1a5d67a2eb553f034aef41d55` | GPL-2.0-or-later | <https://code.videolan.org/videolan/x264> |
 | x265 | commit `e444744c03978c1fb4e037168967020cf2648427` | GPL-2.0-or-later | <https://bitbucket.org/multicoreware/x265_git> |
-| srt-rs | git commit `0821257b402b08219aaaf38a62f5fa655a7e4947` ([krsna1729/srt-rs](https://github.com/krsna1729/srt-rs), pinned in `Cargo.toml`) | Apache-2.0 | <https://github.com/krsna1729/srt-rs> |
+| srt-rs | git commit `91d0f4bf02671aa81dd07b76b88cb9630388546c` ([krsna1729/srt-rs](https://github.com/krsna1729/srt-rs), pinned in `Cargo.toml`) | Apache-2.0 | <https://github.com/krsna1729/srt-rs> |
 | hls.js | npm package `hls.js@1.6.16` | Apache-2.0 | <https://github.com/video-dev/hls.js> |
 
 The native FFmpeg build used for release binaries enables GPL components and

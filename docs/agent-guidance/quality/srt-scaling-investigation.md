@@ -390,15 +390,14 @@ threading model as three separable layers, so the application (not libsrt)
 owns thread/socket placement. It surveys two existing Rust SRT crates
 (`russelltg/srt-rs`: mature 5-crate layering, differential-tested against
 libsrt's own unit tests, but stale since mid-2024 and self-flagged
-not-production-ready; `shiguredo/srt-rs`: younger, genuinely sans-I/O,
-LIVE-mode-scoped matching restream's usage, but excludes group/bonding
-support — restream's one real gap against that crate's current scope, since
-restream actively uses SRT bonding on both ingest and egress) and audits
-restream's full `SRTO_*`/`srt_*` FFI dependency surface against both.
-Forward-looking research only; no code from it has been adopted. It is not
-committed to the repository because it lives entirely outside `src/`, `docs/`,
-or any tracked path — anyone continuing this line of work should copy the
-relevant sections into a tracked doc first.
+not-production-ready; `krsna1729/srt-rs`: the active upstream consumed by
+Restream, genuinely sans-I/O and LIVE-mode-scoped, now including group/bonding
+support plus multiple transport runtimes and listener topologies) and audits
+Restream.s full `SRTO_*`/`srt_*` FFI dependency surface against both. The
+proposal itself remains an external research artifact; Restream has since
+adopted the exact-pinned upstream transport through the tracked cutover work.
+Anyone continuing the original proposal should first move the relevant material
+from `.local/` into a tracked document.
 
 ## Live verification
 

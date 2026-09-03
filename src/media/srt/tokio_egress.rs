@@ -20,6 +20,7 @@ use shiguredo_srt::{ConnectionState, Timestamp};
 use srt_transport::OutputDrainBudget;
 use srt_transport::tokio_transport::{Conn, GroupConn as TokioGroupConn};
 use srt_transport::{LogicalCallerId, LogicalCallerState, LogicalCallerStats};
+use tokio::io::Interest;
 use tokio::net::UdpSocket;
 
 #[allow(clippy::upper_case_acronyms)]
@@ -44,6 +45,10 @@ pub(crate) struct SrtEgressInterest {
 
 impl SrtEgressInterest {
     pub const WRITE: Self = Self { writable: true };
+}
+
+fn should_use_shared_srt_egress_state(peer_count: usize, has_shared_state: bool) -> bool {
+    peer_count == 1 && has_shared_state
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +193,7 @@ pub(crate) struct SharedSrtEgress {
     socket: UdpSocket,
     callers: srt_transport::CallerTable,
     outbound: Vec<(SocketAddr, Vec<u8>)>,
+    outbound_cursor: usize,
 }
 
 impl SharedSrtEgress {
@@ -196,7 +202,7 @@ impl SharedSrtEgress {
         self.socket.local_addr().ok().map(|address| address.port())
     }
 
-    fn bind(peer: SocketAddr) -> Result<Self, String> {
+    fn bind(peer: SocketAddr, runtime: &tokio::runtime::Runtime) -> Result<Self, String> {
         let bind = match peer.ip() {
             IpAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
             IpAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
@@ -208,14 +214,18 @@ impl SharedSrtEgress {
         srt_transport::set_sock_bufs(socket.as_raw_fd(), DESIRED_UDP_BUF)
             .map_err(|error| error.to_string())?;
         let socket = UdpSocket::from_std(socket).map_err(|error| error.to_string())?;
+        runtime
+            .block_on(socket.writable())
+            .map_err(|error| error.to_string())?;
         Ok(Self {
             socket,
             callers: srt_transport::CallerTable::new(),
             outbound: Vec::new(),
+            outbound_cursor: 0,
         })
     }
 
-    fn drive(&mut self, now: Timestamp, runtime: &tokio::runtime::Runtime) -> Result<(), String> {
+    fn drive(&mut self, now: Timestamp) -> Result<(), String> {
         let mut buffer = [0_u8; 2048];
         loop {
             match self.socket.try_recv_from(&mut buffer) {
@@ -227,14 +237,70 @@ impl SharedSrtEgress {
                 Err(error) => return Err(error.to_string()),
             };
         }
+        if !self.flush_outbound()? {
+            return Ok(());
+        }
         self.callers
             .poll_outbound_bounded(now, OutputDrainBudget::default(), &mut self.outbound);
-        for (peer, packet) in self.outbound.drain(..) {
-            runtime
-                .block_on(self.socket.send_to(&packet, peer))
-                .map_err(|error| error.to_string())?;
-        }
+        self.outbound_cursor = 0;
+        let _ = self.flush_outbound()?;
         Ok(())
+    }
+
+    fn flush_outbound(&mut self) -> Result<bool, String> {
+        while let Some((peer, packet)) = self.outbound.get(self.outbound_cursor) {
+            if peer.is_ipv4() {
+                let empty = (
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+                    &[][..],
+                );
+                let mut batch = [empty; SHARED_IO_BATCH_CAPACITY];
+                let mut count = 0;
+                for (slot, (peer, packet)) in batch.iter_mut().zip(
+                    self.outbound[self.outbound_cursor..]
+                        .iter()
+                        .take(SHARED_IO_BATCH_CAPACITY)
+                        .take_while(|(peer, _)| peer.is_ipv4()),
+                ) {
+                    *slot = (*peer, packet.as_slice());
+                    count += 1;
+                }
+                let sent = match self.socket.try_io(Interest::WRITABLE, || {
+                    let sent =
+                        srt_transport::sendmsg_batch(self.socket.as_raw_fd(), &batch[..count])?;
+                    if sent == 0 {
+                        Err(std::io::ErrorKind::WouldBlock.into())
+                    } else {
+                        Ok(sent)
+                    }
+                }) {
+                    Ok(sent) => sent,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        return Ok(false);
+                    }
+                    Err(error) => return Err(error.to_string()),
+                };
+                self.outbound_cursor += sent;
+                if sent < count {
+                    return Ok(false);
+                }
+                continue;
+            }
+            match self.socket.try_send_to(packet, *peer) {
+                Ok(sent) if sent == packet.len() => self.outbound_cursor += 1,
+                Ok(sent) => {
+                    return Err(format!(
+                        "short UDP datagram send: wrote {sent} of {} bytes",
+                        packet.len()
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(false),
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        self.outbound.clear();
+        self.outbound_cursor = 0;
+        Ok(true)
     }
 }
 
@@ -260,7 +326,7 @@ impl RustSrtSocket {
                 .ok()
                 .and_then(|mut state| {
                     let shared = state.as_mut()?;
-                    let _ = shared.drive(now, runtime);
+                    let _ = shared.drive(now);
                     shared.callers.logical_caller(caller)?.state()
                 })
                 .is_some_and(|state| state != LogicalCallerState::Disconnected),
@@ -286,7 +352,7 @@ impl RustSrtSocket {
                 if !conn.can_send() {
                     return SrtSendResult::WouldBlock;
                 }
-                match conn.send(message, timestamp_now()) {
+                match conn.send_shared(message.clone(), timestamp_now()) {
                     Ok(_) => match conn.drive(timestamp_now(), OutputDrainBudget::default()) {
                         Ok(_) => SrtSendResult::Accepted {
                             bytes: message.len(),
@@ -325,8 +391,8 @@ impl RustSrtSocket {
                         SrtSendResult::WouldBlock
                     }
                     Some(LogicalCallerState::Connected) => {
-                        match caller.send(message, timestamp_now()) {
-                            Ok(_) => match shared.drive(timestamp_now(), runtime) {
+                        match caller.send_shared(message.clone(), timestamp_now()) {
+                            Ok(_) => match shared.drive(timestamp_now()) {
                                 Ok(()) => SrtSendResult::Accepted {
                                     bytes: message.len(),
                                 },
@@ -408,7 +474,9 @@ impl RustSrtSocket {
     }
 }
 
-static SOCKETS: OnceLock<Mutex<HashMap<SRTSOCKET, RustSrtSocket>>> = OnceLock::new();
+type SharedRustSrtSocket = Arc<Mutex<RustSrtSocket>>;
+
+static SOCKETS: OnceLock<Mutex<HashMap<SRTSOCKET, SharedRustSrtSocket>>> = OnceLock::new();
 static NEXT_SOCKET: OnceLock<Mutex<SRTSOCKET>> = OnceLock::new();
 static CLOCK: OnceLock<Instant> = OnceLock::new();
 static SRT_RUNTIME: OnceLock<Result<std::sync::Arc<tokio::runtime::Runtime>, String>> =
@@ -427,7 +495,7 @@ fn srt_runtime() -> Result<std::sync::Arc<tokio::runtime::Runtime>, String> {
         .clone()
 }
 
-fn registry() -> &'static Mutex<HashMap<SRTSOCKET, RustSrtSocket>> {
+fn registry() -> &'static Mutex<HashMap<SRTSOCKET, SharedRustSrtSocket>> {
     SOCKETS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -437,8 +505,9 @@ pub(super) fn timestamp_now() -> Timestamp {
 }
 
 fn with_socket<R>(socket: SRTSOCKET, f: impl FnOnce(&mut RustSrtSocket) -> R) -> Option<R> {
-    let mut sockets = registry().lock().ok()?;
-    sockets.get_mut(&socket).map(f)
+    let socket = registry().lock().ok()?.get(&socket)?.clone();
+    let mut socket = socket.lock().ok()?;
+    Some(f(&mut socket))
 }
 
 fn send_direct_message(
@@ -452,7 +521,11 @@ fn send_direct_message(
     if conn.conn.state() != ConnectionState::Connected {
         return SrtSendResult::WouldBlock;
     }
-    match conn.conn.send(message, timestamp_now()) {
+    let now = timestamp_now();
+    if !conn.conn.can_send_with_pacing(now) {
+        return SrtSendResult::WouldBlock;
+    }
+    match conn.conn.send_shared(message.clone(), now) {
         Ok(()) => match runtime
             .block_on(conn.drain_outputs_bounded(timestamp_now(), OutputDrainBudget::default()))
         {
@@ -557,19 +630,27 @@ impl SrtMessageSender for RustSrtMessageSender {
 
     fn close(&mut self, _reason: CloseReason) {
         if let Some(socket) = self.socket.take() {
-            let _ = registry().lock().map(|mut sockets| {
-                if let Some(RustSrtSocket::Shared { state, caller }) = sockets.remove(&socket)
-                    && let Ok(mut shared) = state.lock()
-                {
-                    let Some(shared) = shared.as_mut() else {
-                        return;
-                    };
-                    if let Some(mut caller) = shared.callers.logical_caller_mut(&caller) {
-                        caller.disconnect(timestamp_now());
-                    }
-                    let _ = shared.callers.remove(caller);
+            let transport = registry()
+                .lock()
+                .ok()
+                .and_then(|mut sockets| sockets.remove(&socket));
+            let Some(transport) = transport else {
+                return;
+            };
+            let Ok(mut transport) = transport.lock() else {
+                return;
+            };
+            if let RustSrtSocket::Shared { state, caller } = &mut *transport
+                && let Ok(mut shared) = state.lock()
+            {
+                let Some(shared) = shared.as_mut() else {
+                    return;
+                };
+                if let Some(mut logical_caller) = shared.callers.logical_caller_mut(caller) {
+                    logical_caller.disconnect(timestamp_now());
                 }
-            });
+                let _ = shared.callers.remove(*caller);
+            }
         }
     }
 
@@ -856,55 +937,33 @@ pub(crate) fn connect_fabric_srt_egress_socket(
         *next = next.saturating_add(1);
         id
     };
-    let transport = if let Some(state) = config.shared_state.clone() {
+    let transport = if should_use_shared_srt_egress_state(
+        config.peer_addrs.len(),
+        config.shared_state.is_some(),
+    ) {
+        let state = config
+            .shared_state
+            .clone()
+            .expect("shared SRT egress state selected by predicate");
         let caller = {
             let mut shared = state
                 .lock()
                 .map_err(|_| "shared SRT egress state is poisoned".to_string())?;
             if shared.is_none() {
-                *shared = Some(SharedSrtEgress::bind(config.peer_addrs[0])?);
+                *shared = Some(SharedSrtEgress::bind(config.peer_addrs[0], &runtime)?);
             }
             let shared = shared.as_mut().expect("initialized above");
-            let caller = if config.peer_addrs.len() == 1 {
-                let connection = session
-                    .caller(timestamp_now())
-                    .map_err(|error| error.to_string())?;
-                shared
-                    .callers
-                    .add_direct(srt_transport::CallerLeg::new(
-                        config.peer_addrs[0],
-                        connection,
-                    ))
-                    .map_err(|error| error.to_string())?
-            } else {
-                let mode = shiguredo_srt::GroupMode::from_group_type(config.bond_type).ok_or_else(
-                    || "bonded SRT egress requires broadcast or backup mode".to_string(),
-                )?;
-                let legs = config
-                    .peer_addrs
-                    .iter()
-                    .enumerate()
-                    .map(|(index, peer)| {
-                        session
-                            .caller(timestamp_now())
-                            .map(|connection| {
-                                srt_transport::CallerGroupLeg::new(
-                                    u32::try_from(index + 1).unwrap_or(u32::MAX),
-                                    u16::try_from(config.peer_addrs.len() - index)
-                                        .unwrap_or(u16::MAX),
-                                    *peer,
-                                    connection,
-                                )
-                            })
-                            .map_err(|error| error.to_string())
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                shared
-                    .callers
-                    .add_group(id as u32, mode, legs)
-                    .map_err(|error| error.to_string())?
-            };
-            shared.drive(timestamp_now(), &runtime)?;
+            let connection = session
+                .caller(timestamp_now())
+                .map_err(|error| error.to_string())?;
+            let caller = shared
+                .callers
+                .add_direct(srt_transport::CallerLeg::new(
+                    config.peer_addrs[0],
+                    connection,
+                ))
+                .map_err(|error| error.to_string())?;
+            shared.drive(timestamp_now())?;
             caller
         };
         RustSrtSocket::Shared { state, caller }
@@ -954,14 +1013,118 @@ pub(crate) fn connect_fabric_srt_egress_socket(
     registry()
         .lock()
         .map_err(|_| "SRT registry poisoned".to_string())?
-        .insert(id, transport);
+        .insert(id, Arc::new(Mutex::new(transport)));
     Ok(id)
 }
 
 pub(crate) const DESIRED_UDP_BUF: usize = 8 * 1024 * 1024;
+const SHARED_IO_BATCH_CAPACITY: usize = 64;
 
 fn percent_decode(value: &str) -> String {
     percent_encoding::percent_decode_str(value)
         .decode_utf8_lossy()
         .into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::{
+        Conn, Mutex, RustSrtSocket, SharedRustSrtSocket, SharedSrtEgress, Timestamp, registry,
+        should_use_shared_srt_egress_state, with_socket,
+    };
+
+    fn disconnected_test_socket() -> SharedRustSrtSocket {
+        let runtime = super::srt_runtime().expect("test Tokio runtime");
+        let _guard = runtime.enter();
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind test UDP socket");
+        socket
+            .set_nonblocking(true)
+            .expect("make test UDP socket nonblocking");
+        let socket = tokio::net::UdpSocket::from_std(socket).expect("wrap test UDP socket");
+        let connection = srt_transport::SessionConfig::default()
+            .caller(Timestamp::from_micros(0))
+            .expect("build test SRT connection");
+        std::sync::Arc::new(Mutex::new(RustSrtSocket::Direct(Box::new(Conn::new(
+            connection, socket,
+        )))))
+    }
+
+    #[test]
+    fn shared_srt_egress_state_selection_is_single_peer_only() {
+        assert!(!should_use_shared_srt_egress_state(0, true));
+        assert!(should_use_shared_srt_egress_state(1, true));
+        assert!(
+            !should_use_shared_srt_egress_state(2, true),
+            "multi-peer outputs must route through bonded TokioGroupConn setup"
+        );
+        assert!(!should_use_shared_srt_egress_state(1, false));
+    }
+
+    #[test]
+    fn socket_work_does_not_hold_the_registry_lock() {
+        let (first, second) = {
+            let mut next = super::NEXT_SOCKET
+                .get_or_init(|| Mutex::new(10))
+                .lock()
+                .expect("socket id lock");
+            let first = *next;
+            let second = first.saturating_add(1);
+            *next = second.saturating_add(1);
+            (first, second)
+        };
+        registry().lock().expect("registry lock").extend([
+            (first, disconnected_test_socket()),
+            (second, disconnected_test_socket()),
+        ]);
+
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let first_worker = std::thread::spawn(move || {
+            with_socket(first, |_| {
+                entered_tx.send(()).expect("signal first socket lock");
+                release_rx.recv().expect("release first socket lock");
+            })
+            .expect("first socket present");
+        });
+        entered_rx.recv().expect("first socket lock entered");
+
+        let (completed_tx, completed_rx) = mpsc::sync_channel(0);
+        let second_worker = std::thread::spawn(move || {
+            with_socket(second, |_| ()).expect("second socket present");
+            completed_tx.send(()).expect("signal second socket work");
+        });
+        completed_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("independent socket work must not wait for the first socket");
+
+        release_tx.send(()).expect("release first socket");
+        first_worker.join().expect("first socket worker");
+        second_worker.join().expect("second socket worker");
+        let mut sockets = registry().lock().expect("registry cleanup lock");
+        sockets.remove(&first);
+        sockets.remove(&second);
+    }
+
+    #[test]
+    fn shared_outbound_flush_sends_without_entering_the_runtime() {
+        let sink = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind UDP sink");
+        sink.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .expect("set sink timeout");
+        let peer = sink.local_addr().expect("sink address");
+        let mut shared = {
+            let runtime = super::srt_runtime().expect("test Tokio runtime");
+            let _guard = runtime.enter();
+            SharedSrtEgress::bind(peer, &runtime).expect("bind shared SRT socket")
+        };
+        shared.outbound.push((peer, vec![1, 2, 3, 4]));
+
+        assert!(shared.flush_outbound().expect("flush outbound datagram"));
+        assert!(shared.outbound.is_empty());
+        let mut received = [0_u8; 4];
+        let (size, _) = sink.recv_from(&mut received).expect("receive datagram");
+        assert_eq!(size, received.len());
+        assert_eq!(received, [1, 2, 3, 4]);
+    }
 }

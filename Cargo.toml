@@ -57,8 +57,8 @@ percent-encoding = "2"
 shiguredo_mp4 = "2026.3.0"
 # srt-rs (github.com/krsna1729/srt-rs): sans-I/O SRT protocol core + Tokio
 # transport adapter. Pinned to a reviewed revision; bump deliberately.
-shiguredo_srt = { git = "https://github.com/krsna1729/srt-rs", rev = "0821257b402b08219aaaf38a62f5fa655a7e4947" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "0821257b402b08219aaaf38a62f5fa655a7e4947", features = ["tokio"] }
+shiguredo_srt = { git = "https://github.com/krsna1729/srt-rs", rev = "91d0f4bf02671aa81dd07b76b88cb9630388546c" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "91d0f4bf02671aa81dd07b76b88cb9630388546c", features = ["tokio"] }
 tracing = { version = "0.1", features = ["max_level_debug"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"
