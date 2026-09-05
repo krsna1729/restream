@@ -7,7 +7,7 @@
 //! parameter, so there is no second claim-construction path to cover.
 
 use super::super::*;
-use super::support::{FakeReadinessPoller, FakeSocketConfigurator, FakeSocketConnector, feed};
+use super::support::{FakeSocketConnector, feed};
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::policy::{LeafPolicy, WorkBudget};
 use bytes::Bytes;
@@ -33,19 +33,10 @@ fn output_spec(id: &str, generation: u64) -> OutputSpec {
 fn backend_with_pending_connect(
     connector: FakeSocketConnector,
     reuse_state: Option<(muxer_ports::SrtEgressMuxerPortState, bool)>,
-) -> SrtShardBackend<
-    FakeReadinessPoller,
-    FakeSocketConfigurator,
-    FakeSocketConnector,
-    NoopSrtResolveCompletionSource,
-> {
-    let poller = FakeReadinessPoller::default();
-    let configurator = FakeSocketConfigurator::default();
+) -> SrtShardBackend<FakeSocketConnector, NoopSrtResolveCompletionSource> {
     let mut backend = SrtShardBackend::with_runtime_components(
-        poller,
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        configurator,
         connector,
         NoopSrtResolveCompletionSource,
     );
@@ -59,7 +50,7 @@ fn backend_with_pending_connect(
 #[test]
 fn complete_pending_connect_with_reuse_disabled_passes_no_shared_state() {
     let peer_addrs = peer_addrs();
-    let connector = FakeSocketConnector::returning(42);
+    let connector = FakeSocketConnector::returning();
     let connector_handle = connector.clone();
     let mut backend = backend_with_pending_connect(connector, None);
 
@@ -75,7 +66,7 @@ fn complete_pending_connect_with_reuse_disabled_passes_no_shared_state() {
 fn complete_pending_connect_with_reuse_enabled_passes_shared_state() {
     let peer_addrs = peer_addrs();
     let state = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let connector = FakeSocketConnector::returning(42);
+    let connector = FakeSocketConnector::returning();
     let connector_handle = connector.clone();
     let mut backend = backend_with_pending_connect(connector, Some((state.clone(), true)));
 
@@ -91,7 +82,7 @@ fn complete_pending_connect_with_reuse_enabled_passes_shared_state() {
 fn complete_pending_connect_with_reuse_enabled_keeps_state_lazy() {
     let peer_addrs = peer_addrs();
     let state = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let connector = FakeSocketConnector::returning(42);
+    let connector = FakeSocketConnector::returning();
     let connector_handle = connector.clone();
     let mut backend = backend_with_pending_connect(connector, Some((state.clone(), true)));
 

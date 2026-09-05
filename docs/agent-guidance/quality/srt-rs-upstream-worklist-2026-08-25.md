@@ -8,7 +8,7 @@
 - [P3 — expose a tokio-native batch receive helper](#p3--expose-a-tokio-native-batch-receive-helper)
 - [P4 — shared-listener ACK servicing under many peers](#p4--shared-listener-ack-servicing-under-many-peers)
 - [P5 — smaller items noticed during integration](#p5--smaller-items-noticed-during-integration)
-- [2026-08-29 exact-pin status](#2026-08-29-exact-pin-status)
+- [2026-08-29 exact-pin status (historical at 901a912; current is 91d0f4bf)](#2026-08-29-exact-pin-status-historical-at-901a912-current-is-91d0f4bf)
 - [Non-goals (evaluated and rejected — do not spend time)](#non-goals-evaluated-and-rejected--do-not-spend-time)
 
 Context for the next agent working in `https://github.com/krsna1729/srt-rs`:

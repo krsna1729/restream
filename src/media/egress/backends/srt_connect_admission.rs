@@ -38,10 +38,8 @@
 
 use super::*;
 
-impl<P, C, K, R> SrtShardBackend<P, C, K, R>
+impl<K, R> SrtShardBackend<K, R>
 where
-    P: SrtReadinessPoller,
-    C: SrtSocketConfigurator,
     K: SrtSocketConnector,
     R: SrtResolveCompletionSource,
 {
@@ -49,7 +47,7 @@ where
     /// `admission` semaphore. Kept as a separate builder step, mirroring
     /// `with_srt_egress_muxer_port_reuse`, so every existing constructor
     /// and test call site is unaffected; only production wiring
-    /// (`resolving_srt_shard_backend_with_configurator`) calls this.
+    /// (`resolving_srt_shard_backend`) calls this.
     /// `None` leaves connects fully unthrottled -- the pre-existing
     /// behavior for every caller that does not opt in.
     pub(crate) fn with_connect_admission(
@@ -122,7 +120,7 @@ where
     pub(crate) fn leaf_holds_handshake_permit(&self, output_id: &OutputId) -> bool {
         self.output_sockets
             .get(output_id)
-            .and_then(|socket_ref| self.leaves.get(socket_ref.key.0))
+            .and_then(|key| self.leaves.get(key.0))
             .and_then(Option::as_ref)
             .is_some_and(|leaf| leaf.handshake_permit.is_some())
     }
@@ -136,7 +134,7 @@ where
         if let Some(leaf) = self
             .output_sockets
             .get(output_id)
-            .and_then(|socket_ref| self.leaves.get_mut(socket_ref.key.0))
+            .and_then(|key| self.leaves.get_mut(key.0))
             .and_then(Option::as_mut)
         {
             leaf.handshake_permit = None;

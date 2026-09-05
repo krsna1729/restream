@@ -1,23 +1,11 @@
 use super::super::*;
-use super::support::{budget, common, feed, leaf, wrapped_feed};
+use super::support::{budget, feed, leaf, wrapped_feed};
 use crate::media::egress::backend::{EngineProgress, Readiness, WaitCondition};
 use crate::media::egress::scheduler::VisitDecision;
 use crate::media::egress::visit::EngineVisitResult;
 use crate::media::srt::SrtTraceBStats;
 use bytes::Bytes;
 use std::time::Instant;
-
-#[test]
-fn srt_fabric_leaf_from_socket_keeps_native_sender_opaque() {
-    let feed = feed([Bytes::from_static(b"abc")]);
-    let mut leaf = srt_fabric_leaf_from_socket(common(9), 42);
-
-    let result = leaf.visit_ready(8, Readiness::WRITABLE, &feed, budget());
-
-    assert!(matches!(result, EngineVisitResult::StaleGeneration));
-    assert_eq!(leaf.common().cursor.next_sequence, 0);
-    assert_eq!(leaf.common().progress.total_bytes_sent, 0);
-}
 
 #[test]
 fn srt_fabric_leaf_visits_ready_ts_feed_through_common_engine_visit() {

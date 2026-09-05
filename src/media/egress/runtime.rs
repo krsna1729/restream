@@ -73,14 +73,17 @@ impl EgressFabricRuntime {
     /// rehoming) on the common case where the target hasn't changed.
     ///
     /// `backend_for` is fallible because constructing a real shard's
-    /// readiness poller is (`TcpEgressPoller::new`/`SrtFabricPoller::new`
-    /// both do a real `epoll_create1`/equivalent syscall that can fail
-    /// under resource exhaustion) — a failed grow attempt stops growing
-    /// for this call (logged by the caller via the returned `Err`) rather
-    /// than panicking or silently continuing with fewer shards than
-    /// `touched` would suggest; whatever grew successfully before the
-    /// failure stays, so this call can simply be retried on the next
-    /// `Add`/`Remove`.
+    /// readiness poller can fail: `TcpEgressPoller::new` (RTMP/TCP) does a
+    /// real `epoll_create1` syscall that can fail under resource
+    /// exhaustion. The SRT path has no such per-shard construction step —
+    /// its one fallible resource (the shared `srt-rs` Tokio runtime) is
+    /// checked once at initial fabric spawn, not per grown shard, so its
+    /// `backend_for` closure is effectively infallible. Either way, a
+    /// failed grow attempt stops growing for this call (logged by the
+    /// caller via the returned `Err`) rather than panicking or silently
+    /// continuing with fewer shards than `touched` would suggest; whatever
+    /// grew successfully before the failure stays, so this call can simply
+    /// be retried on the next `Add`/`Remove`.
     ///
     /// Returns the shard ids touched (grown or shut down) on success, for
     /// logging.

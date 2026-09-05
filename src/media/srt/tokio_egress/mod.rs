@@ -5,23 +5,23 @@
 //! socket, one protocol connection, and one manual timer store. The egress
 //! fabric continues to own scheduling and lifecycle; this adapter only moves
 //! datagrams through Tokio-owned UDP sockets and `SrtConnection`.
+//!
+//! Each `srt-rs` connection (`RustSrtSocket`) is owned directly by the
+//! `SrtFabricLeaf` that connected it (boxed as `dyn SrtMessageSender`, since
+//! `RustSrtSocket` implements that trait directly below) -- there is no
+//! socket-id indirection or process-global connection registry.
 
-use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::media::egress::backend::CloseReason;
 use crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPortState;
-use crate::media::egress::scheduler::LeafKey;
 use bytes::Bytes;
 use shiguredo_srt::{ConnectionState, Timestamp};
 use srt_transport::OutputDrainBudget;
 use srt_transport::tokio_transport::{Conn, GroupConn as TokioGroupConn};
 use srt_transport::{LogicalCallerId, LogicalCallerState, LogicalCallerStats};
-
-#[allow(clippy::upper_case_acronyms)]
-pub(crate) type SRTSOCKET = i32;
 
 /// Compatibility snapshot retained for the egress quality/test contract.
 /// srt-rs does not expose the native `BStats` ABI; live transport metrics are
@@ -35,144 +35,8 @@ pub(crate) struct SrtTraceBStats {
     pub pkt_snd_drop_total: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct SrtEgressInterest {
-    pub writable: bool,
-}
-
-impl SrtEgressInterest {
-    pub const WRITE: Self = Self { writable: true };
-}
-
 fn should_use_shared_srt_egress_state(peer_count: usize, has_shared_state: bool) -> bool {
     peer_count == 1 && has_shared_state
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SrtReadyLeaf {
-    pub socket: SRTSOCKET,
-    pub key: LeafKey,
-    pub generation: u64,
-    pub writable: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SrtEgressPollError {
-    pub operation: &'static str,
-    pub code: i32,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SrtEgressSendMode {
-    FabricNonblocking,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SrtEgressSocketError {
-    pub(crate) option: &'static str,
-    pub(crate) code: i32,
-    pub(crate) message: String,
-}
-
-impl std::fmt::Display for SrtEgressSocketError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.message.fmt(f)
-    }
-}
-
-impl std::error::Error for SrtEgressSocketError {}
-
-pub(crate) struct SrtFabricPoller {
-    runtime: std::sync::Arc<tokio::runtime::Runtime>,
-    registered: HashMap<SRTSOCKET, (LeafKey, u64)>,
-}
-
-impl SrtFabricPoller {
-    pub(crate) fn new(_max_events: usize) -> Result<Self, SrtEgressPollError> {
-        Ok(Self {
-            runtime: srt_runtime().map_err(|e| SrtEgressPollError {
-                operation: "tokio_runtime_create",
-                code: -1,
-                message: e,
-            })?,
-            registered: HashMap::new(),
-        })
-    }
-
-    pub(crate) fn register_leaf(
-        &mut self,
-        socket: SRTSOCKET,
-        key: LeafKey,
-        generation: u64,
-        interest: SrtEgressInterest,
-    ) -> Result<(), SrtEgressPollError> {
-        if !registry()
-            .lock()
-            .map_err(|_| SrtEgressPollError {
-                operation: "srt_registry_lock",
-                code: -1,
-                message: "SRT registry poisoned".to_string(),
-            })?
-            .contains_key(&socket)
-        {
-            return Err(SrtEgressPollError {
-                operation: "srt_register_leaf",
-                code: -1,
-                message: format!("unknown srt-rs socket {socket}"),
-            });
-        }
-        let _ = interest;
-        self.registered.insert(socket, (key, generation));
-        Ok(())
-    }
-
-    pub(crate) fn remove(&mut self, socket: SRTSOCKET) -> Result<(), SrtEgressPollError> {
-        self.registered.remove(&socket);
-        Ok(())
-    }
-
-    pub(crate) fn poll_leaves(
-        &mut self,
-        timeout_ms: i64,
-        ready: &mut Vec<SrtReadyLeaf>,
-    ) -> Result<usize, SrtEgressPollError> {
-        ready.clear();
-        if timeout_ms > 0 && self.registered.is_empty() {
-            self.runtime
-                .block_on(tokio::time::sleep(Duration::from_millis(timeout_ms as u64)));
-        }
-        let registered: Vec<_> = self.registered.iter().map(|(s, v)| (*s, *v)).collect();
-        let mut driven_shared = HashSet::new();
-        for (socket, (key, generation)) in registered {
-            let _live = with_socket(socket, |conn| {
-                let now = timestamp_now();
-                match conn {
-                    RustSrtSocket::Shared { state, .. } => {
-                        let identity = Arc::as_ptr(state) as usize;
-                        if driven_shared.insert(identity) {
-                            conn.drive(now, &self.runtime)
-                        } else {
-                            true
-                        }
-                    }
-                    _ => conn.drive(now, &self.runtime),
-                }
-            })
-            .unwrap_or(false);
-            // Keep terminal connections ready as well. The egress leaf must
-            // visit a disconnected connection once so `send_message` can
-            // return `PeerClosed` and drive the normal retry/cleanup path;
-            // dropping it from readiness strands the leaf in `sending`.
-            ready.push(SrtReadyLeaf {
-                socket,
-                key,
-                generation,
-                writable: true,
-            });
-        }
-        Ok(ready.len())
-    }
 }
 
 enum RustSrtSocket {
@@ -188,7 +52,7 @@ mod shared;
 pub(crate) use shared::SharedSrtEgress;
 
 impl RustSrtSocket {
-    fn drive(&mut self, now: Timestamp, runtime: &tokio::runtime::Runtime) -> bool {
+    fn drive_connection(&mut self, now: Timestamp, runtime: &tokio::runtime::Runtime) -> bool {
         match self {
             Self::Direct(conn) => {
                 receive_conn(conn, now);
@@ -216,11 +80,7 @@ impl RustSrtSocket {
         }
     }
 
-    fn send_message(
-        &mut self,
-        message: &Bytes,
-        runtime: &tokio::runtime::Runtime,
-    ) -> SrtSendResult {
+    fn send(&mut self, message: &Bytes, runtime: &tokio::runtime::Runtime) -> SrtSendResult {
         match self {
             Self::Direct(conn) => send_direct_message(conn, message, runtime),
             Self::Bonded(conn) => {
@@ -297,7 +157,7 @@ impl RustSrtSocket {
         }
     }
 
-    fn native_send_backlog(&self) -> Option<NativeSendBacklog> {
+    fn native_send_backlog_inner(&self) -> Option<NativeSendBacklog> {
         match self {
             Self::Direct(conn) => conn.conn.sender_stats().map(|stats| NativeSendBacklog {
                 bytes: stats.payload_bytes_in_buffer,
@@ -357,10 +217,150 @@ impl RustSrtSocket {
     }
 }
 
-type SharedRustSrtSocket = Arc<Mutex<RustSrtSocket>>;
+impl SrtMessageSender for RustSrtSocket {
+    fn send_message(&mut self, message: &Bytes) -> SrtSendResult {
+        let Ok(runtime) = srt_runtime() else {
+            return SrtSendResult::Failed {
+                reason: "srt-rs-runtime",
+                detail: "Tokio runtime unavailable".to_string(),
+                retryable: true,
+            };
+        };
+        self.send(message, &runtime)
+    }
 
-static SOCKETS: OnceLock<Mutex<HashMap<SRTSOCKET, SharedRustSrtSocket>>> = OnceLock::new();
-static NEXT_SOCKET: OnceLock<Mutex<SRTSOCKET>> = OnceLock::new();
+    /// Feeds inbound datagrams into the connection, fires expired timers,
+    /// and drains pending outbound datagrams -- called once per leaf on
+    /// every `poll_ready()` pass (see `egress/backends/srt.rs`), independent
+    /// of whether `send_message` is called that pass. Without this, a
+    /// `Direct`/`Bonded` connection would never process incoming ACKs/NAKs
+    /// or advance its congestion/RTT state between sends.
+    fn drive(&mut self) {
+        let Ok(runtime) = srt_runtime() else {
+            return;
+        };
+        self.drive_connection(timestamp_now(), &runtime);
+    }
+
+    /// For `Shared`, disconnects this leaf's logical caller from the
+    /// shard's shared UDP socket/table without tearing down the socket
+    /// other callers on this shard still use. `Direct`/`Bonded` need no
+    /// explicit close: dropping the leaf drops this value, which drops the
+    /// owned `Conn`/`GroupConn` (and its Tokio `UdpSocket`) -- exactly the
+    /// behavior this had before, just via ownership instead of a registry
+    /// removal.
+    fn close(&mut self, _reason: CloseReason) {
+        if let Self::Shared { state, caller } = self
+            && let Ok(mut shared) = state.lock()
+        {
+            let Some(shared) = shared.as_mut() else {
+                return;
+            };
+            if let Some(mut logical_caller) = shared.callers.logical_caller_mut(caller) {
+                logical_caller.disconnect(timestamp_now());
+            }
+            let _ = shared.callers.remove(*caller);
+        }
+    }
+
+    fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
+        self.native_send_backlog_inner()
+    }
+
+    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
+        match self {
+            Self::Direct(conn) => {
+                let stats = conn.conn.sender_stats()?;
+                Some(SrtTraceBStats {
+                    ms_rtt: stats.peer_rtt_micros.map_or(0.0, f64::from) / 1_000.0,
+                    mbps_send_rate: stats
+                        .peer_receiving_rate_bytes_per_second
+                        .map_or(0.0, |rate| rate as f64 / 1_000_000.0),
+                    pkt_snd_loss_total: i32::try_from(stats.total_lost).unwrap_or(i32::MAX),
+                    pkt_snd_drop_total: i32::try_from(stats.total_dropped).unwrap_or(i32::MAX),
+                })
+            }
+            Self::Bonded(conn) => {
+                let stats = conn.stats();
+                let mut rtt_total = 0_f64;
+                let mut rtt_count = 0_u64;
+                let mut rate = 0_f64;
+                for leg in &stats.legs {
+                    if let Some(sender) = &leg.connection.sender {
+                        if let Some(rtt) = sender.peer_rtt_micros {
+                            rtt_total += f64::from(rtt);
+                            rtt_count += 1;
+                        }
+                        rate += sender
+                            .peer_receiving_rate_bytes_per_second
+                            .map_or(0.0, |value| value as f64);
+                    }
+                }
+                Some(SrtTraceBStats {
+                    ms_rtt: if rtt_count == 0 {
+                        0.0
+                    } else {
+                        rtt_total / rtt_count as f64 / 1_000.0
+                    },
+                    mbps_send_rate: rate / 1_000_000.0,
+                    pkt_snd_loss_total: i32::try_from(stats.aggregate.wire_sender_packets_lost)
+                        .unwrap_or(i32::MAX),
+                    pkt_snd_drop_total: 0,
+                })
+            }
+            Self::Shared { state, caller } => {
+                let shared = state.lock().ok()?;
+                let shared = shared.as_ref()?;
+                match shared.callers.logical_caller(caller)?.stats()? {
+                    LogicalCallerStats::Direct(stats) => {
+                        let sender = stats.sender?;
+                        Some(SrtTraceBStats {
+                            ms_rtt: sender.peer_rtt_micros.map_or(0.0, f64::from) / 1_000.0,
+                            mbps_send_rate: sender
+                                .peer_receiving_rate_bytes_per_second
+                                .map_or(0.0, |rate| rate as f64 / 1_000_000.0),
+                            pkt_snd_loss_total: i32::try_from(sender.total_lost)
+                                .unwrap_or(i32::MAX),
+                            pkt_snd_drop_total: i32::try_from(sender.total_dropped)
+                                .unwrap_or(i32::MAX),
+                        })
+                    }
+                    LogicalCallerStats::Group(stats) => {
+                        let mut rtt_total = 0_f64;
+                        let mut rtt_count = 0_u64;
+                        let mut rate = 0_f64;
+                        for leg in &stats.legs {
+                            if let Some(sender) = &leg.connection.sender {
+                                if let Some(rtt) = sender.peer_rtt_micros {
+                                    rtt_total += f64::from(rtt);
+                                    rtt_count += 1;
+                                }
+                                rate += sender
+                                    .peer_receiving_rate_bytes_per_second
+                                    .map_or(0.0, |value| value as f64);
+                            }
+                        }
+                        Some(SrtTraceBStats {
+                            ms_rtt: if rtt_count == 0 {
+                                0.0
+                            } else {
+                                rtt_total / rtt_count as f64 / 1_000.0
+                            },
+                            mbps_send_rate: rate / 1_000_000.0,
+                            pkt_snd_loss_total: i32::try_from(
+                                stats.aggregate.wire_sender_packets_lost,
+                            )
+                            .unwrap_or(i32::MAX),
+                            pkt_snd_drop_total: 0,
+                        })
+                    }
+                }
+            }
+        }
+    }
+}
+
+static NEXT_GROUP_ID: OnceLock<Mutex<u32>> = OnceLock::new();
 static CLOCK: OnceLock<Instant> = OnceLock::new();
 static SRT_RUNTIME: OnceLock<Result<std::sync::Arc<tokio::runtime::Runtime>, String>> =
     OnceLock::new();
@@ -378,19 +378,25 @@ fn srt_runtime() -> Result<std::sync::Arc<tokio::runtime::Runtime>, String> {
         .clone()
 }
 
-fn registry() -> &'static Mutex<HashMap<SRTSOCKET, SharedRustSrtSocket>> {
-    SOCKETS.get_or_init(|| Mutex::new(HashMap::new()))
+/// Forces the shared `srt-rs` Tokio runtime to exist (building it on first
+/// call, cheaply reusing it afterward), surfacing a build failure -- so a
+/// resource-exhaustion failure is caught once at fabric-spawn time instead of
+/// silently deferred to the first real connect attempt.
+pub(crate) fn ensure_srt_runtime() -> Result<(), String> {
+    srt_runtime().map(|_| ())
+}
+
+fn next_group_id() -> u32 {
+    let next = NEXT_GROUP_ID.get_or_init(|| Mutex::new(10));
+    let mut next = next.lock().unwrap_or_else(|error| error.into_inner());
+    let id = *next;
+    *next = next.saturating_add(1);
+    id
 }
 
 pub(super) fn timestamp_now() -> Timestamp {
     let start = CLOCK.get_or_init(Instant::now);
     Timestamp::from_micros(start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64)
-}
-
-fn with_socket<R>(socket: SRTSOCKET, f: impl FnOnce(&mut RustSrtSocket) -> R) -> Option<R> {
-    let socket = registry().lock().ok()?.get(&socket)?.clone();
-    let mut socket = socket.lock().ok()?;
-    Some(f(&mut socket))
 }
 
 fn send_direct_message(
@@ -451,6 +457,10 @@ pub(crate) trait SrtMessageSender {
     fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
         None
     }
+    /// Drives this transport's I/O for one tick (receive, timers, drain) --
+    /// called once per leaf per `poll_ready()` pass. Fakes have no real I/O
+    /// to drive, so the default is a no-op.
+    fn drive(&mut self) {}
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -487,180 +497,9 @@ impl<T: SrtMessageSender + ?Sized> SrtMessageSender for Box<T> {
     fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
         (**self).sender_quality_stats()
     }
-}
-
-struct RustSrtMessageSender {
-    socket: Option<SRTSOCKET>,
-}
-
-impl SrtMessageSender for RustSrtMessageSender {
-    fn send_message(&mut self, message: &Bytes) -> SrtSendResult {
-        let Some(socket) = self.socket else {
-            return SrtSendResult::PeerClosed;
-        };
-        let Ok(runtime) = srt_runtime() else {
-            return SrtSendResult::Failed {
-                reason: "srt-rs-runtime",
-                detail: "Tokio runtime unavailable".to_string(),
-                retryable: true,
-            };
-        };
-        let Some(result) = with_socket(socket, |conn| conn.send_message(message, &runtime)) else {
-            return SrtSendResult::PeerClosed;
-        };
-        result
+    fn drive(&mut self) {
+        (**self).drive()
     }
-
-    fn close(&mut self, _reason: CloseReason) {
-        if let Some(socket) = self.socket.take() {
-            let transport = registry()
-                .lock()
-                .ok()
-                .and_then(|mut sockets| sockets.remove(&socket));
-            let Some(transport) = transport else {
-                return;
-            };
-            let Ok(mut transport) = transport.lock() else {
-                return;
-            };
-            if let RustSrtSocket::Shared { state, caller } = &mut *transport
-                && let Ok(mut shared) = state.lock()
-            {
-                let Some(shared) = shared.as_mut() else {
-                    return;
-                };
-                if let Some(mut logical_caller) = shared.callers.logical_caller_mut(caller) {
-                    logical_caller.disconnect(timestamp_now());
-                }
-                let _ = shared.callers.remove(*caller);
-            }
-        }
-    }
-
-    fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
-        let socket = self.socket?;
-        with_socket(socket, |conn| conn.native_send_backlog()).flatten()
-    }
-
-    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
-        let socket = self.socket?;
-        with_socket(socket, |conn| match conn {
-            RustSrtSocket::Direct(conn) => {
-                let stats = conn.conn.sender_stats()?;
-                Some(SrtTraceBStats {
-                    ms_rtt: stats.peer_rtt_micros.map_or(0.0, f64::from) / 1_000.0,
-                    mbps_send_rate: stats
-                        .peer_receiving_rate_bytes_per_second
-                        .map_or(0.0, |rate| rate as f64 / 1_000_000.0),
-                    pkt_snd_loss_total: i32::try_from(stats.total_lost).unwrap_or(i32::MAX),
-                    pkt_snd_drop_total: i32::try_from(stats.total_dropped).unwrap_or(i32::MAX),
-                })
-            }
-            RustSrtSocket::Bonded(conn) => {
-                let stats = conn.stats();
-                let mut rtt_total = 0_f64;
-                let mut rtt_count = 0_u64;
-                let mut rate = 0_f64;
-                for leg in &stats.legs {
-                    if let Some(sender) = &leg.connection.sender {
-                        if let Some(rtt) = sender.peer_rtt_micros {
-                            rtt_total += f64::from(rtt);
-                            rtt_count += 1;
-                        }
-                        rate += sender
-                            .peer_receiving_rate_bytes_per_second
-                            .map_or(0.0, |value| value as f64);
-                    }
-                }
-                Some(SrtTraceBStats {
-                    ms_rtt: if rtt_count == 0 {
-                        0.0
-                    } else {
-                        rtt_total / rtt_count as f64 / 1_000.0
-                    },
-                    mbps_send_rate: rate / 1_000_000.0,
-                    pkt_snd_loss_total: i32::try_from(stats.aggregate.wire_sender_packets_lost)
-                        .unwrap_or(i32::MAX),
-                    pkt_snd_drop_total: 0,
-                })
-            }
-            RustSrtSocket::Shared { state, caller } => {
-                let shared = state.lock().ok()?;
-                let shared = shared.as_ref()?;
-                match shared.callers.logical_caller(caller)?.stats()? {
-                    LogicalCallerStats::Direct(stats) => {
-                        let sender = stats.sender?;
-                        Some(SrtTraceBStats {
-                            ms_rtt: sender.peer_rtt_micros.map_or(0.0, f64::from) / 1_000.0,
-                            mbps_send_rate: sender
-                                .peer_receiving_rate_bytes_per_second
-                                .map_or(0.0, |rate| rate as f64 / 1_000_000.0),
-                            pkt_snd_loss_total: i32::try_from(sender.total_lost)
-                                .unwrap_or(i32::MAX),
-                            pkt_snd_drop_total: i32::try_from(sender.total_dropped)
-                                .unwrap_or(i32::MAX),
-                        })
-                    }
-                    LogicalCallerStats::Group(stats) => {
-                        let mut rtt_total = 0_f64;
-                        let mut rtt_count = 0_u64;
-                        let mut rate = 0_f64;
-                        for leg in &stats.legs {
-                            if let Some(sender) = &leg.connection.sender {
-                                if let Some(rtt) = sender.peer_rtt_micros {
-                                    rtt_total += f64::from(rtt);
-                                    rtt_count += 1;
-                                }
-                                rate += sender
-                                    .peer_receiving_rate_bytes_per_second
-                                    .map_or(0.0, |value| value as f64);
-                            }
-                        }
-                        Some(SrtTraceBStats {
-                            ms_rtt: if rtt_count == 0 {
-                                0.0
-                            } else {
-                                rtt_total / rtt_count as f64 / 1_000.0
-                            },
-                            mbps_send_rate: rate / 1_000_000.0,
-                            pkt_snd_loss_total: i32::try_from(
-                                stats.aggregate.wire_sender_packets_lost,
-                            )
-                            .unwrap_or(i32::MAX),
-                            pkt_snd_drop_total: 0,
-                        })
-                    }
-                }
-            }
-        })
-        .flatten()
-    }
-}
-
-pub(crate) fn srt_fabric_message_sender(socket: SRTSOCKET) -> Box<dyn SrtMessageSender + Send> {
-    Box::new(RustSrtMessageSender {
-        socket: Some(socket),
-    })
-}
-
-pub(crate) fn configure_connected_srt_egress_socket(
-    socket: SRTSOCKET,
-    _mode: SrtEgressSendMode,
-) -> Result<(), SrtEgressSocketError> {
-    registry()
-        .lock()
-        .map_err(|_| SrtEgressSocketError {
-            option: "srt-rs",
-            code: -1,
-            message: "SRT registry poisoned".to_string(),
-        })?
-        .contains_key(&socket)
-        .then_some(())
-        .ok_or_else(|| SrtEgressSocketError {
-            option: "srt-rs",
-            code: -1,
-            message: format!("unknown srt-rs socket {socket}"),
-        })
 }
 
 #[derive(Clone)]
@@ -792,9 +631,13 @@ impl SrtFabricEgressConnectConfig<'_> {
     }
 }
 
+/// Connects a new SRT egress transport and hands it back directly -- the
+/// caller (`SrtSocketConnector::connect`) boxes it as `dyn SrtMessageSender`
+/// and the leaf owns it for its whole lifetime; there is no id-keyed
+/// registry to look it back up through.
 pub(crate) fn connect_fabric_srt_egress_socket(
     config: SrtFabricEgressConnectConfig<'_>,
-) -> Result<SRTSOCKET, String> {
+) -> Result<Box<dyn SrtMessageSender + Send>, String> {
     if config.peer_addrs.is_empty() {
         return Err("SRT connect requires a peer address".to_string());
     }
@@ -813,13 +656,6 @@ pub(crate) fn connect_fabric_srt_egress_socket(
     };
     let runtime = srt_runtime()?;
     let _runtime_guard = runtime.enter();
-    let id = {
-        let next = NEXT_SOCKET.get_or_init(|| Mutex::new(10));
-        let mut next = next.lock().map_err(|_| "SRT socket id lock poisoned")?;
-        let id = *next;
-        *next = next.saturating_add(1);
-        id
-    };
     let transport = if should_use_shared_srt_egress_state(
         config.peer_addrs.len(),
         config.shared_state.is_some(),
@@ -886,18 +722,14 @@ pub(crate) fn connect_fabric_srt_egress_socket(
             .collect::<Result<Vec<_>, _>>()?;
         RustSrtSocket::Bonded(
             TokioGroupConn::caller(
-                srt_transport::GroupConfig::new(id as u32, config.bond_type),
+                srt_transport::GroupConfig::new(next_group_id(), config.bond_type),
                 legs,
                 timestamp_now(),
             )
             .map_err(|error| error.to_string())?,
         )
     };
-    registry()
-        .lock()
-        .map_err(|_| "SRT registry poisoned".to_string())?
-        .insert(id, Arc::new(Mutex::new(transport)));
-    Ok(id)
+    Ok(Box::new(transport))
 }
 
 pub(crate) const DESIRED_UDP_BUF: usize = 8 * 1024 * 1024;

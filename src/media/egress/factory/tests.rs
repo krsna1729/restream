@@ -1,39 +1,10 @@
 use super::*;
 use crate::media::egress::command::ShardId;
 use crate::media::egress::journal::FeedEpoch;
-use crate::media::srt::{SRTSOCKET, SrtEgressInterest, SrtEgressPollError, SrtReadyLeaf};
 use crate::media::ts_chunk_ring::TsChunkRing;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-
-#[derive(Clone, Default)]
-struct FakeSrtPoller;
-
-impl SrtReadinessPoller for FakeSrtPoller {
-    fn register_leaf(
-        &mut self,
-        _socket: SRTSOCKET,
-        _key: crate::media::egress::scheduler::LeafKey,
-        _generation: u64,
-        _interest: SrtEgressInterest,
-    ) -> Result<(), SrtEgressPollError> {
-        Ok(())
-    }
-
-    fn remove(&mut self, _socket: SRTSOCKET) -> Result<(), SrtEgressPollError> {
-        Ok(())
-    }
-
-    fn poll_leaves(
-        &mut self,
-        _timeout_ms: i64,
-        ready: &mut Vec<SrtReadyLeaf>,
-    ) -> Result<usize, SrtEgressPollError> {
-        ready.clear();
-        Ok(0)
-    }
-}
 
 fn feed() -> TsFeed {
     let ring = TsChunkRing::new(8, CancellationToken::new());
@@ -50,26 +21,17 @@ fn shard_config() -> EgressShardConfig {
 
 #[test]
 fn srt_fabric_shard_backends_build_one_backend_per_shard() {
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let seen_for_poller = Arc::clone(&seen);
-
-    let backends = srt_fabric_shard_backends_with_poller(
+    let backends = srt_fabric_shard_backends(
         "pipeline-a",
         NonZeroU32::new(3).unwrap(),
         budget(),
         |_| feed(),
-        move |shard_id| {
-            seen_for_poller.lock().unwrap().push(shard_id.index());
-            Ok::<_, &'static str>(FakeSrtPoller)
-        },
         None,
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
         None,
-    )
-    .unwrap();
+    );
 
     assert_eq!(backends.len(), 3);
-    assert_eq!(*seen.lock().unwrap(), vec![0, 1, 2]);
 }
 
 #[test]
@@ -79,17 +41,15 @@ fn srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state() {
     // sockets through one libsrt sender thread. Each shard must get its own.
     let ports = SrtEgressMuxerPorts::default();
 
-    let backends = srt_fabric_shard_backends_with_poller(
+    let backends = srt_fabric_shard_backends(
         "pipeline-a",
         NonZeroU32::new(3).unwrap(),
         budget(),
         |_| feed(),
-        |_| Ok::<_, &'static str>(FakeSrtPoller),
         Some(ports.clone()),
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
         None,
-    )
-    .unwrap();
+    );
 
     assert_eq!(
         ports.tracked_shards(),
@@ -126,17 +86,15 @@ fn srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state() {
 
 #[test]
 fn srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry() {
-    let backends = srt_fabric_shard_backends_with_poller(
+    let backends = srt_fabric_shard_backends(
         "pipeline-a",
         NonZeroU32::new(2).unwrap(),
         budget(),
         |_| feed(),
-        |_| Ok::<_, &'static str>(FakeSrtPoller),
         None,
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
         None,
-    )
-    .unwrap();
+    );
 
     // Reuse disabled still means backend-local, never-shared state.
     let first = backends[0]
@@ -153,13 +111,13 @@ fn srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry() {
 
 #[test]
 fn spawn_srt_fabric_shard_group_starts_requested_shards() {
-    let group = spawn_srt_fabric_shard_group_with_poller(
+    let group = spawn_srt_fabric_shard_group_with_runtime_check(
         "pipeline-a",
         NonZeroU32::new(2).unwrap(),
         shard_config(),
         budget(),
         |_| feed(),
-        |_| Ok::<_, &'static str>(FakeSrtPoller),
+        || Ok::<(), &'static str>(()),
         None,
         None,
     )
@@ -172,26 +130,21 @@ fn spawn_srt_fabric_shard_group_starts_requested_shards() {
 }
 
 #[test]
-fn spawn_srt_fabric_shard_group_reports_poller_creation_error() {
-    let result = spawn_srt_fabric_shard_group_with_poller(
+fn spawn_srt_fabric_shard_group_reports_runtime_check_error() {
+    let result = spawn_srt_fabric_shard_group_with_runtime_check(
         "pipeline-a",
         NonZeroU32::new(2).unwrap(),
         shard_config(),
         budget(),
         |_| feed(),
-        |shard_id| {
-            if shard_id.index() == 1 {
-                return Err("poller failed");
-            }
-            Ok(FakeSrtPoller)
-        },
+        || Err("runtime failed"),
         None,
         None,
     );
 
     assert!(matches!(
         result,
-        Err(SrtFabricShardGroupError::Backend("poller failed"))
+        Err(SrtFabricShardGroupError::Backend("runtime failed"))
     ));
 }
 
@@ -203,17 +156,15 @@ fn srt_fabric_shard_backends_share_one_connect_admission_semaphore_across_shards
     // `srt_connect_admission.rs`).
     let admission = Arc::new(tokio::sync::Semaphore::new(1));
 
-    let backends = srt_fabric_shard_backends_with_poller(
+    let backends = srt_fabric_shard_backends(
         "pipeline-a",
         NonZeroU32::new(3).unwrap(),
         budget(),
         |_| feed(),
-        |_| Ok::<_, &'static str>(FakeSrtPoller),
         None,
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
         Some(admission.clone()),
-    )
-    .unwrap();
+    );
 
     assert_eq!(backends.len(), 3);
     assert_eq!(admission.available_permits(), 1);

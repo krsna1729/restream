@@ -2,7 +2,7 @@
 
 ## Contents
 
-- [Exact-pin rebaseline — 2026-08-28](#exact-pin-rebaseline--2026-08-28)
+- [Exact-pin rebaseline — 2026-08-28 (historical; current pin is 91d0f4bf)](#exact-pin-rebaseline--2026-08-28-historical-current-pin-is-91d0f4bf)
 - [Historical results matrix — old pin](#historical-results-matrix--old-pin)
 - [Where the pure-SRT ceiling actually is: attribution](#where-the-pure-srt-ceiling-actually-is-attribution)
 - [Knob matrix: what srt-rs offers vs what the engine uses](#knob-matrix-what-srt-rs-offers-vs-what-the-engine-uses)
@@ -177,12 +177,20 @@ ownership, desired-state manager, stream-ID admission, crypto policy, and feed
 overrun/stall handling: those are product responsibilities, not transport
 reimplementations.
 
-The excess compatibility surface is concentrated at the adapter seam:
+The excess compatibility surface was concentrated at the adapter seam:
 `SRTSOCKET = i32`, the global socket registry, an always-writable compatibility
-poller, synthetic trace stats, and a private Tokio runtime hosted on SRT shard
-threads. Contain that seam now; do not rewrite product lifecycle around it. The
-target is a shard-owned transport using upstream connection/group types
-directly. For high-density egress, use upstream Mio shared-socket batching as
+poller, and the id-keyed `SrtSocketConfigurator`/`SrtSocketConnector` plumbing
+built to serve that registry. **2026-09-05: contained.** Each
+`SrtFabricLeaf` now owns its `RustSrtSocket` connection directly (boxed as
+`dyn SrtMessageSender`, implemented on `RustSrtSocket` itself); the registry,
+`SrtFabricPoller`/`SrtReadinessPoller`, and `SrtSocketConfigurator` are
+deleted outright (`src/media/srt/tokio_egress/mod.rs`,
+`src/media/egress/backends/srt.rs`). Still open: the private 2-thread Tokio
+runtime hosted on SRT shard threads (`srt_runtime()`) remains a shared
+singleton rather than shard-owned — a "shard-owned transport using upstream
+connection/group types directly" is now true for the connection itself, not
+yet for the runtime driving it. For high-density egress, use upstream Mio
+shared-socket batching as
 implementation and measurement evidence; the product runtime is Tokio. For ingress, retain the current
 listener until a scale experiment justifies `ReusePortMulti` or shared-pool
 cookie routing.

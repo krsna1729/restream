@@ -7,7 +7,7 @@
 //! the way `rtmp_shard_tests.rs` fakes a TCP peer.
 
 use super::super::*;
-use super::support::{FakeReadinessPoller, FakeSocketConfigurator, common, feed};
+use super::support::{common, feed};
 use bytes::Bytes;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -46,16 +46,13 @@ fn backlog(bytes: u64) -> NativeSendBacklog {
 }
 
 fn backend_with_one_leaf() -> (
-    SrtShardBackend<FakeReadinessPoller, FakeSocketConfigurator>,
+    SrtShardBackend,
     OutputId,
     Arc<Mutex<Option<NativeSendBacklog>>>,
 ) {
-    let poller = FakeReadinessPoller::default();
-    let mut backend = SrtShardBackend::with_socket_configurator(
-        poller,
+    let mut backend = SrtShardBackend::new(
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
     );
     let native_backlog = Arc::new(Mutex::new(Some(backlog(4_096))));
     let leaf_common = common(7);
@@ -66,7 +63,7 @@ fn backend_with_one_leaf() -> (
             native_backlog: native_backlog.clone(),
         }) as Box<dyn SrtMessageSender + Send>,
     );
-    backend.add_leaf(42, leaf).unwrap();
+    backend.add_leaf(leaf);
     (backend, output_id, native_backlog)
 }
 
@@ -87,8 +84,8 @@ fn remove_defers_close_until_pending_bytes_are_flushed() {
         "a leaf with pending bytes must not be closed immediately on Remove"
     );
     {
-        let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
-        let leaf = backend.leaves[socket_ref.key.0].as_ref().unwrap();
+        let key = *backend.output_sockets.get(&output_id).unwrap();
+        let leaf = backend.leaves[key.0].as_ref().unwrap();
         assert!(
             leaf.draining_since.is_some(),
             "a deferred close must mark the leaf as draining"
@@ -139,8 +136,8 @@ fn draining_leaf_force_closes_once_the_drain_deadline_passes() {
     // flaky for no benefit.
     let long_ago = Instant::now() - Duration::from_secs(3600);
     {
-        let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
-        let leaf = backend.leaves[socket_ref.key.0].as_mut().unwrap();
+        let key = *backend.output_sockets.get(&output_id).unwrap();
+        let leaf = backend.leaves[key.0].as_mut().unwrap();
         leaf.draining_since = Some(long_ago);
     }
     // Still nonzero — proves the close is deadline-driven, not
@@ -167,8 +164,8 @@ fn shutdown_marks_every_connected_leaf_draining() {
         backend.output_sockets.contains_key(&output_id),
         "Shutdown must not close a leaf with pending bytes immediately"
     );
-    let socket_ref = *backend.output_sockets.get(&output_id).unwrap();
-    let leaf = backend.leaves[socket_ref.key.0].as_ref().unwrap();
+    let key = *backend.output_sockets.get(&output_id).unwrap();
+    let leaf = backend.leaves[key.0].as_ref().unwrap();
     assert!(leaf.draining_since.is_some());
     assert_eq!(leaf.draining_reason, Some(CloseReason::ShardShutdown));
 }
@@ -182,11 +179,9 @@ fn shutdown_marks_every_connected_leaf_draining() {
 fn stall_sweep_reports_no_feed_lag_for_a_leaf_that_has_not_been_visited_yet() {
     use super::support::wrapped_feed;
 
-    let mut backend = SrtShardBackend::with_socket_configurator(
-        FakeReadinessPoller::default(),
+    let mut backend = SrtShardBackend::new(
         wrapped_feed(40, 5),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
     );
     let feed_lag_units = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
     let leaf = SrtFabricLeaf::new(
@@ -198,7 +193,7 @@ fn stall_sweep_reports_no_feed_lag_for_a_leaf_that_has_not_been_visited_yet() {
             native_backlog: Arc::new(Mutex::new(None)),
         }) as Box<dyn SrtMessageSender + Send>,
     );
-    backend.add_leaf(42, leaf).unwrap();
+    backend.add_leaf(leaf);
 
     backend.sweep_stalled_leaves(Instant::now());
 

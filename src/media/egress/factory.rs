@@ -11,17 +11,15 @@ use crate::media::egress::backends::rtmp_shard_resolve_runtime::{
     ResolvingRtmpShardBackendWithPoller, resolving_rtmp_shard_backend,
 };
 use crate::media::egress::backends::sink_shard::SinkShardBackend;
-use crate::media::egress::backends::srt::SrtReadinessPoller;
 use crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPorts;
 use crate::media::egress::backends::srt::resolve_runtime::{
-    ResolvingSrtShardBackendWithPoller, resolving_srt_shard_backend,
+    ResolvingSrtShardBackendDefault, resolving_srt_shard_backend,
 };
 use crate::media::egress::backends::tcp::{TcpEgressPollError, TcpEgressPoller};
 use crate::media::egress::command::ShardId;
 use crate::media::egress::journal::{RingFeed, TsFeed};
 use crate::media::egress::policy::WorkBudget;
 use crate::media::egress::shard::{EgressShardConfig, EgressShardGroup, EgressShardGroupError};
-use crate::media::srt::{SrtEgressPollError, SrtFabricPoller};
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SrtFabricShardGroupError<E> {
@@ -29,88 +27,74 @@ pub(crate) enum SrtFabricShardGroupError<E> {
     Group(EgressShardGroupError),
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_srt_fabric_shard_group<F>(
     pipeline_id: &str,
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
-    poller_max_events: usize,
     budget: WorkBudget,
     feed_for: F,
     srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
     connect_admission: Option<Arc<tokio::sync::Semaphore>>,
-) -> Result<EgressShardGroup, SrtFabricShardGroupError<SrtEgressPollError>>
+) -> Result<EgressShardGroup, SrtFabricShardGroupError<String>>
 where
     F: FnMut(ShardId) -> TsFeed,
 {
-    spawn_srt_fabric_shard_group_with_poller(
+    spawn_srt_fabric_shard_group_with_runtime_check(
         pipeline_id,
         shard_count,
         shard_config,
         budget,
         feed_for,
-        |shard_id| {
-            let _ = shard_id;
-            SrtFabricPoller::new(poller_max_events)
-        },
+        crate::media::srt::ensure_srt_runtime,
         srt_egress_muxer_port_reuse,
         connect_admission,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_srt_fabric_shard_group_with_poller<P, E, F, G>(
+fn spawn_srt_fabric_shard_group_with_runtime_check<F, E>(
     pipeline_id: &str,
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
     budget: WorkBudget,
     feed_for: F,
-    poller_for: G,
+    runtime_check: impl FnOnce() -> Result<(), E>,
     srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
     connect_admission: Option<Arc<tokio::sync::Semaphore>>,
 ) -> Result<EgressShardGroup, SrtFabricShardGroupError<E>>
 where
-    P: SrtReadinessPoller + Send + 'static,
     F: FnMut(ShardId) -> TsFeed,
-    G: FnMut(ShardId) -> Result<P, E>,
 {
-    let backends = srt_fabric_shard_backends_with_poller(
+    runtime_check().map_err(SrtFabricShardGroupError::Backend)?;
+    let backends = srt_fabric_shard_backends(
         pipeline_id,
         shard_count,
         budget,
         feed_for,
-        poller_for,
         srt_egress_muxer_port_reuse,
         shard_config.drain_timeout(),
         connect_admission,
-    )
-    .map_err(SrtFabricShardGroupError::Backend)?;
+    );
     EgressShardGroup::spawn(shard_count, shard_config, backends)
         .map_err(SrtFabricShardGroupError::Group)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn srt_fabric_shard_backends_with_poller<P, E, F, G>(
+fn srt_fabric_shard_backends<F>(
     pipeline_id: &str,
     shard_count: NonZeroU32,
     budget: WorkBudget,
     mut feed_for: F,
-    mut poller_for: G,
     srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
     drain_timeout: std::time::Duration,
     connect_admission: Option<Arc<tokio::sync::Semaphore>>,
-) -> Result<Vec<ResolvingSrtShardBackendWithPoller<P>>, E>
+) -> Vec<ResolvingSrtShardBackendDefault>
 where
-    P: SrtReadinessPoller,
     F: FnMut(ShardId) -> TsFeed,
-    G: FnMut(ShardId) -> Result<P, E>,
 {
     let mut backends = Vec::with_capacity(shard_count.get() as usize);
     for shard_index in 0..shard_count.get() {
         let shard_id = ShardId::new(shard_index);
-        let poller = poller_for(shard_id)?;
         backends.push(resolving_srt_shard_backend(
-            poller,
             feed_for(shard_id),
             budget,
             // Per (pipeline, shard), not one state shared engine-wide or
@@ -129,7 +113,7 @@ where
             connect_admission.clone(),
         ));
     }
-    Ok(backends)
+    backends
 }
 
 #[derive(Debug, PartialEq, Eq)]

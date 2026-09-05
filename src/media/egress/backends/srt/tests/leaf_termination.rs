@@ -9,7 +9,7 @@
 //! leaf that stays healthy.
 
 use super::super::*;
-use super::support::{FakeReadinessPoller, FakeSocketConfigurator, common, feed};
+use super::support::{common, feed};
 use bytes::Bytes;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -67,12 +67,9 @@ fn leaf_common_with_sink(generation: u64) -> (LeafCommon, Arc<AtomicBool>) {
 
 #[test]
 fn stall_sweep_marks_terminated_unexpectedly_on_the_closed_leaf() {
-    let poller = FakeReadinessPoller::default();
-    let mut backend = SrtShardBackend::with_socket_configurator(
-        poller,
+    let mut backend = SrtShardBackend::new(
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
     );
 
     let (leaf_common, terminated) = leaf_common_with_sink(7);
@@ -81,7 +78,7 @@ fn stall_sweep_marks_terminated_unexpectedly_on_the_closed_leaf() {
         leaf_common,
         Box::new(NeverDrainsSender) as Box<dyn SrtMessageSender + Send>,
     );
-    backend.add_leaf(42, leaf).unwrap();
+    backend.add_leaf(leaf);
 
     assert!(!terminated.load(Ordering::Relaxed));
 
@@ -97,12 +94,9 @@ fn stall_sweep_marks_terminated_unexpectedly_on_the_closed_leaf() {
 
 #[test]
 fn stall_sweep_leaves_a_healthy_leaf_unmarked() {
-    let poller = FakeReadinessPoller::default();
-    let mut backend = SrtShardBackend::with_socket_configurator(
-        poller,
+    let mut backend = SrtShardBackend::new(
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
     );
 
     let (leaf_common, terminated) = leaf_common_with_sink(7);
@@ -111,7 +105,7 @@ fn stall_sweep_leaves_a_healthy_leaf_unmarked() {
         leaf_common,
         Box::new(NoBacklogSender) as Box<dyn SrtMessageSender + Send>,
     );
-    backend.add_leaf(42, leaf).unwrap();
+    backend.add_leaf(leaf);
 
     backend.sweep_stalled_leaves(Instant::now() + deadline + Duration::from_secs(2));
 

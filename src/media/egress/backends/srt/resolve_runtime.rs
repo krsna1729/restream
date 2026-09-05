@@ -1,9 +1,8 @@
 use std::thread::JoinHandle;
 
 use super::{
-    NativeSrtSocketConfigurator, NativeSrtSocketConnector, SrtResolveCompletionQueue,
-    SrtResolveRequest, SrtResolveWorkerError, SrtResolvedConnect, SrtShardBackend,
-    duration_millis_u64, srt_resolve_completion_queue,
+    NativeSrtSocketConnector, SrtResolveCompletionQueue, SrtResolveRequest, SrtResolveWorkerError,
+    SrtResolvedConnect, SrtShardBackend, duration_millis_u64, srt_resolve_completion_queue,
 };
 use crate::media::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
@@ -14,14 +13,8 @@ use std::sync::mpsc::SyncSender;
 
 const SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY: usize = 1024;
 
-pub(crate) type ResolvingSrtShardBackendWithPoller<P> = ResolvingSrtShardBackend<
-    SrtShardBackend<
-        P,
-        NativeSrtSocketConfigurator,
-        NativeSrtSocketConnector,
-        SrtResolveCompletionQueue,
-    >,
->;
+pub(crate) type ResolvingSrtShardBackendDefault =
+    ResolvingSrtShardBackend<SrtShardBackend<NativeSrtSocketConnector, SrtResolveCompletionQueue>>;
 
 #[derive(Debug)]
 pub(crate) struct SrtResolveWorkerSet {
@@ -152,42 +145,9 @@ where
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn resolving_srt_shard_backend<P>(
-    poller: P,
+pub(crate) fn resolving_srt_shard_backend(
     feed: TsFeed,
     budget: WorkBudget,
-    srt_egress_muxer_port_reuse: Option<super::muxer_ports::SrtEgressMuxerPortState>,
-    drain_timeout: std::time::Duration,
-    connect_admission: Option<std::sync::Arc<tokio::sync::Semaphore>>,
-) -> ResolvingSrtShardBackend<
-    SrtShardBackend<
-        P,
-        NativeSrtSocketConfigurator,
-        NativeSrtSocketConnector,
-        SrtResolveCompletionQueue,
-    >,
->
-where
-    P: super::SrtReadinessPoller,
-{
-    resolving_srt_shard_backend_with_configurator(
-        poller,
-        feed,
-        budget,
-        NativeSrtSocketConfigurator,
-        srt_egress_muxer_port_reuse,
-        drain_timeout,
-        connect_admission,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn resolving_srt_shard_backend_with_configurator<P, C>(
-    poller: P,
-    feed: TsFeed,
-    budget: WorkBudget,
-    socket_configurator: C,
     // This shard's application-owned UDP socket and logical caller table
     // (see `SrtShardBackend::with_srt_egress_muxer_port_reuse`).
     // `None` leaves reuse disabled (every existing test/no-config caller);
@@ -201,20 +161,12 @@ pub(crate) fn resolving_srt_shard_backend_with_configurator<P, C>(
     // (every existing test/no-config caller); `Some` is the one shared
     // handle from `MediaEngine::srt_egress_connect_admission_handle`.
     connect_admission: Option<std::sync::Arc<tokio::sync::Semaphore>>,
-) -> ResolvingSrtShardBackend<
-    SrtShardBackend<P, C, NativeSrtSocketConnector, SrtResolveCompletionQueue>,
->
-where
-    P: super::SrtReadinessPoller,
-    C: super::SrtSocketConfigurator,
-{
+) -> ResolvingSrtShardBackendDefault {
     let (completion_sender, completion_queue) =
         srt_resolve_completion_queue(SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY);
     let mut backend = SrtShardBackend::with_runtime_components(
-        poller,
         feed,
         budget,
-        socket_configurator,
         NativeSrtSocketConnector,
         completion_queue,
     )

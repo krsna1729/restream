@@ -1,10 +1,11 @@
 //! Raw-epoll TCP readiness backend for the RTMP/RTMPS fabric.
 //!
-//! Mirrors `src/media/srt/egress_poller.rs`'s shape (one epoll container per
-//! shard, generation-tagged registration, an `Ops` trait so the native
-//! syscalls can be faked in tests) but talks to a real Linux `epoll` instance
-//! via `libc` instead of libsrt's own epoll wrapper, since a TCP fd has no
-//! native poller of its own.
+//! One epoll container per shard, generation-tagged registration, an `Ops`
+//! trait so the native syscalls can be faked in tests, talking to a real
+//! Linux `epoll` instance via `libc`. SRT egress has no equivalent poller:
+//! `srt-rs` connections have no epoll-style readiness to multiplex (see
+//! `src/media/egress/backends/srt.rs`'s `poll_ready` — every leaf is simply
+//! visited each pass), so there is nothing here for it to mirror.
 
 use std::collections::HashMap;
 use std::os::raw::c_int;

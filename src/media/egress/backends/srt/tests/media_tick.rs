@@ -6,7 +6,7 @@
 //! but unvisited until an unrelated `FeedWake` happened to arrive.
 
 use super::super::*;
-use super::support::{FakeReadinessPoller, FakeSocketConfigurator, FakeSocketConnector, feed};
+use super::support::{FakeSocketConnector, feed};
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::policy::{LeafPolicy, WorkBudget};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
@@ -30,11 +30,9 @@ fn output_spec(id: &str, generation: u64) -> OutputSpec {
 fn on_media_tick_schedules_ready_work_when_a_connect_completes() {
     let (sender, queue) = srt_resolve_completion_queue(4);
     let mut backend = SrtShardBackend::with_runtime_components(
-        FakeReadinessPoller::default(),
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
-        FakeSocketConnector::returning(42),
+        FakeSocketConnector::returning(),
         queue,
     );
     let output_id = OutputId::new("media-tick-leaf");
@@ -65,11 +63,9 @@ fn on_media_tick_schedules_ready_work_when_a_connect_completes() {
 fn on_media_tick_is_a_no_op_when_nothing_resolved() {
     let (_sender, queue) = srt_resolve_completion_queue(4);
     let mut backend = SrtShardBackend::with_runtime_components(
-        FakeReadinessPoller::default(),
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
-        FakeSocketConnector::returning(42),
+        FakeSocketConnector::returning(),
         queue,
     );
 
@@ -99,11 +95,9 @@ fn on_media_tick_backlogs_resolved_connects_once_admission_is_exhausted() {
     let (sender, queue) = srt_resolve_completion_queue(4);
     let admission = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
     let mut backend = SrtShardBackend::with_runtime_components(
-        FakeReadinessPoller::default(),
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
-        FakeSocketConnector::returning(42),
+        FakeSocketConnector::returning(),
         queue,
     )
     .with_connect_admission(Some(admission.clone()));
@@ -188,11 +182,9 @@ fn on_media_tick_connects_every_resolved_completion_without_admission_configured
     // exactly as before this change: fully unthrottled.
     let (sender, queue) = srt_resolve_completion_queue(4);
     let mut backend = SrtShardBackend::with_runtime_components(
-        FakeReadinessPoller::default(),
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
-        FakeSocketConnector::returning(42),
+        FakeSocketConnector::returning(),
         queue,
     );
 
@@ -223,11 +215,9 @@ fn removing_an_unvisited_leaf_releases_its_handshake_permit() {
     let (sender, queue) = srt_resolve_completion_queue(4);
     let admission = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
     let mut backend = SrtShardBackend::with_runtime_components(
-        FakeReadinessPoller::default(),
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
-        FakeSocketConnector::returning(42),
+        FakeSocketConnector::returning(),
         queue,
     )
     .with_connect_admission(Some(admission.clone()));
