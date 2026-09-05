@@ -63,8 +63,6 @@ pub(crate) struct SrtEgressPollError {
     pub message: String,
 }
 
-impl SrtEgressPollError {}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SrtEgressSendMode {
     FabricNonblocking,

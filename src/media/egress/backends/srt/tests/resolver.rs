@@ -6,7 +6,7 @@ use std::sync::mpsc;
 fn srt_resolve_worker_sends_resolved_primary_and_backup_hosts() {
     let (sender, mut queue) = srt_resolve_completion_queue(4);
 
-    let handle = spawn_srt_resolve_worker(
+    let result = resolve_srt_peer_hosts(
         SrtResolveRequest::new(
             OutputId::new("out-a"),
             7,
@@ -15,7 +15,7 @@ fn srt_resolve_worker_sends_resolved_primary_and_backup_hosts() {
         sender,
     );
 
-    assert_eq!(handle.join().unwrap(), Ok(()));
+    assert_eq!(result, Ok(()));
     let mut resolved = Vec::new();
     queue.drain_resolved(&mut resolved);
     assert_eq!(
@@ -35,22 +35,19 @@ fn srt_resolve_worker_sends_resolved_primary_and_backup_hosts() {
 fn srt_resolve_worker_rejects_empty_peer_list() {
     let (sender, _queue) = srt_resolve_completion_queue(4);
 
-    let handle = spawn_srt_resolve_worker(
+    let result = resolve_srt_peer_hosts(
         SrtResolveRequest::new(OutputId::new("out-a"), 7, Vec::new()),
         sender,
     );
 
-    assert_eq!(
-        handle.join().unwrap(),
-        Err(SrtResolveWorkerError::EmptyPeerList)
-    );
+    assert_eq!(result, Err(SrtResolveWorkerError::EmptyPeerList));
 }
 
 #[test]
 fn srt_resolve_worker_reports_unresolvable_host_without_completion() {
     let (sender, mut queue) = srt_resolve_completion_queue(4);
 
-    let handle = spawn_srt_resolve_worker(
+    let result = resolve_srt_peer_hosts(
         SrtResolveRequest::new(
             OutputId::new("out-a"),
             7,
@@ -60,7 +57,7 @@ fn srt_resolve_worker_reports_unresolvable_host_without_completion() {
     );
 
     assert_eq!(
-        handle.join().unwrap(),
+        result,
         Err(SrtResolveWorkerError::ResolveFailed {
             host: "256.256.256.256:9000".to_string(),
         })
@@ -74,7 +71,7 @@ fn srt_resolve_worker_reports_unresolvable_host_without_completion() {
 fn srt_resolve_worker_reports_full_completion_queue_without_blocking() {
     let (sender, _receiver) = mpsc::sync_channel(0);
 
-    let handle = spawn_srt_resolve_worker(
+    let result = resolve_srt_peer_hosts(
         SrtResolveRequest::new(
             OutputId::new("out-a"),
             7,
@@ -83,8 +80,5 @@ fn srt_resolve_worker_reports_full_completion_queue_without_blocking() {
         sender,
     );
 
-    assert_eq!(
-        handle.join().unwrap(),
-        Err(SrtResolveWorkerError::CompletionQueueFull)
-    );
+    assert_eq!(result, Err(SrtResolveWorkerError::CompletionQueueFull));
 }

@@ -3,7 +3,7 @@ use std::thread::JoinHandle;
 use super::{
     NativeSrtSocketConfigurator, NativeSrtSocketConnector, SrtResolveCompletionQueue,
     SrtResolveRequest, SrtResolveWorkerError, SrtResolvedConnect, SrtShardBackend,
-    duration_millis_u64, spawn_srt_resolve_worker, srt_resolve_completion_queue,
+    duration_millis_u64, srt_resolve_completion_queue,
 };
 use crate::media::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
@@ -35,14 +35,6 @@ impl SrtResolveWorkerSet {
             completion_sender,
             workers: Vec::new(),
         }
-    }
-
-    #[allow(dead_code)]
-    fn spawn(&mut self, request: SrtResolveRequest) {
-        self.workers.push(spawn_srt_resolve_worker(
-            request,
-            self.completion_sender.clone(),
-        ));
     }
 
     /// Spawn a single worker that resolves a batch of requests, collapsing

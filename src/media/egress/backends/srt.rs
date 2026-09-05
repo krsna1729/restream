@@ -2,7 +2,6 @@ use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::media::egress::backend::{ProtocolEngine, Readiness};
@@ -129,11 +128,6 @@ where
     /// at the moment draining started so the real cause survives to the
     /// eventual close call.
     draining_reason: Option<crate::media::egress::backend::CloseReason>,
-    /// Sender-side counters from the previous quality sample, needed to
-    /// compute per-second rates (loss/drop/retrans) on the next one.
-    /// Effective `SRTO_SNDBUF` this leaf connected with (PREBIND — read
-    /// once, reported on every quality sample without a per-tick FFI call).
-    configured_sndbuf_bytes: Option<i32>,
     /// Connect-admission permit; see `srt_connect_admission.rs`.
     handshake_permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
@@ -152,15 +146,8 @@ where
             observed_since: Instant::now(),
             draining_since: None,
             draining_reason: None,
-            configured_sndbuf_bytes: None,
             handshake_permit: None,
         }
-    }
-
-    /// Sets the value read back from libsrt post-connect; see field doc.
-    pub(crate) fn with_configured_sndbuf(mut self, bytes: Option<i32>) -> Self {
-        self.configured_sndbuf_bytes = bytes;
-        self
     }
 
     pub(crate) fn common(&self) -> &LeafCommon {
@@ -279,8 +266,7 @@ pub(crate) fn requeue_after_srt_visit(decision: VisitDecision) -> bool {
 }
 
 pub(crate) fn srt_fabric_leaf_from_socket(common: LeafCommon, socket: SRTSOCKET) -> NativeSrtLeaf {
-    let sndbuf = Some(crate::media::srt::srt_get_configured_sndbuf(socket));
-    SrtFabricLeaf::new(common, srt_fabric_message_sender(socket)).with_configured_sndbuf(sndbuf)
+    SrtFabricLeaf::new(common, srt_fabric_message_sender(socket))
 }
 
 pub(crate) trait SrtReadinessPoller {
@@ -319,24 +305,6 @@ pub(crate) fn srt_resolve_completion_queue(
 ) -> (SyncSender<SrtResolvedConnect>, SrtResolveCompletionQueue) {
     let (sender, receiver) = mpsc::sync_channel(capacity);
     (sender, SrtResolveCompletionQueue { receiver })
-}
-
-#[allow(dead_code)]
-pub(crate) fn spawn_srt_resolve_worker(
-    request: SrtResolveRequest,
-    completion_sender: SyncSender<SrtResolvedConnect>,
-) -> JoinHandle<Result<(), SrtResolveWorkerError>> {
-    // Fast path: if the peer is already a raw IP address, resolve it
-    // synchronously without spawning a thread. Most SRT egress destinations
-    // (local sinks, peered restream instances) use IP addresses, so this
-    // avoids 1,200 thread creations at scale — each thread costs ~2 MB of
-    // virtual address space and a clone() syscall.
-    if request.peer_hosts.len() == 1 && request.peer_hosts[0].parse::<SocketAddr>().is_ok() {
-        let result = resolve_srt_peer_hosts(request, completion_sender);
-        return thread::spawn(move || result);
-    }
-    // Hostname resolution needs blocking I/O.
-    thread::spawn(move || resolve_srt_peer_hosts(request, completion_sender))
 }
 
 fn resolve_srt_peer_hosts(
