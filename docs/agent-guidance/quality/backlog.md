@@ -18,6 +18,71 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 
 ## Open
 
+### Q-023 [performance] [opus] Batch the shared SRT egress table drive per visit
+- Goal: a connected shared-muxer leaf stops driving the whole shared
+  `CallerTable` after every accepted fragment. Logical callers enqueue their
+  sends under the existing `WorkBudget`, and the common socket/table is
+  flushed once per visit (or per pass), with backpressure and acceptance
+  semantics unchanged. Needs before/after evidence at shared-muxer density,
+  not just a smaller call count.
+- Files: `src/media/srt/tokio_egress/mod.rs` (`RustSrtSocket::send`'s
+  `Shared` arm, `drive_shared_srt_egress`), `src/media/srt/egress_engine.rs`
+  (`send_pending`'s fragment loop), `src/media/srt/tokio_egress/shared.rs`.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib srt`;
+  `scripts/check/concurrency/contract.sh`; `benches/matrix_throughput.rs`
+  before/after; MSR shared-muxer ladder for the density claim.
+- Context: `RustSrtSocket::send`'s `Shared` arm calls `shared.drive(...)`
+  after each successful `send_shared`, and `SrtEgressEngine::send_pending`
+  loops several ≤1316-byte fragments per visit, so a busy pass performs many
+  whole-table drives (drain shared socket, flush shared outbound, poll every
+  caller) under one mutex. Predates the srt-rs cutover; PR #141 bounded only
+  the *readiness* path (`poll_ready` drives the table once regardless of leaf
+  count, proven by
+  `poll_ready_drive_of_the_shared_muxer_does_not_scale_with_leaf_count`) and
+  deliberately did not touch the send path.
+- Status: open (Filed: 2026-09-05 by claude, from PR #141 review)
+
+### Q-024 [modularity] [sonnet] Collapse the connector/completion test seams in both egress backends
+- Goal: remove production traits that exist only so tests can substitute a
+  fake, in SRT *and* RTMP together: `SrtSocketConnector`
+  (`NativeSrtSocketConnector` + `FakeSocketConnector`) and the
+  `SrtResolveCompletionSource`/`RtmpResolveCompletionSource` pair with their
+  `Noop*` defaults. Connect-failure and connect-config assertions move onto
+  pure-function tests of `SrtFabricEgressConnectSpec`/`connect_config`;
+  completion tests use the real queue, which most already do.
+- Files: `src/media/egress/backends/srt.rs`,
+  `src/media/egress/backends/srt/resolve_runtime.rs`,
+  `src/media/egress/backends/rtmp_shard.rs`,
+  `src/media/egress/backends/rtmp_shard_resolve_runtime.rs`, plus the shard
+  test modules for both backends.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib`;
+  `scripts/check/concurrency/contract.sh`; standard fmt/clippy/source-audit.
+- Context: RTMP already calls `connect_fabric_tcp_egress_socket` directly, so
+  SRT's connector generic is asymmetric residue; the completion-source trait
+  is duplicated mock-only architecture in *both* backends. Symmetry between
+  the two backends is not itself a justification for keeping it — do both in
+  one coherent change rather than diverging them one at a time.
+- Status: open (Filed: 2026-09-05 by claude, from PR #141 review)
+
+### Q-025 [performance] [opus] Remeasure the SRT shard-count scaling law after the srt-rs cutover
+- Goal: either re-justify `EgressShardProfile::SrtCpuParallel` (always claim
+  the CPU-derived shard ceiling for SRT feeds) with post-cutover evidence, or
+  replace it with a law derived from the current mechanism. Same for
+  `srt_egress_connect_concurrency`, still sized under a libsrt
+  `CSndQueue` saturation point that no longer exists.
+- Files: `src/config.rs` (`target_egress_fabric_shards`,
+  `EgressShardProfile`, `srt_egress_connect_concurrency`), plus a matrix
+  document under `docs/agent-guidance/quality/`.
+- Gates: MSR shard-count x caller-density matrix at 30/200/600/1200 with
+  full delivery and clean teardown; no code change without it.
+- Context: the current policy was derived from libsrt's
+  one-`CSndQueue`-worker-per-multiplexer model. After #137/#141 a shard owns
+  an application-owned UDP socket plus `CallerTable` driven from the shard
+  thread — no per-multiplexer worker — so shard count is no longer buying
+  the thing the policy assumed. The comments in `config.rs` now mark the
+  policy provisional; this item is the measurement that resolves it.
+- Status: open (Filed: 2026-09-05 by claude, from PR #141 review)
+
 ### Q-001 [proof] [sonnet] Establish the per-module coverage map
 - Goal: a per-module line/branch coverage table for `src/` recorded in the
   journal, with follow-up `[proof]` items filed for the 3 weakest

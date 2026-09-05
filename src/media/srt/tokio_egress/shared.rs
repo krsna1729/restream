@@ -13,11 +13,11 @@ pub(crate) struct SharedSrtEgress {
     pub(crate) callers: srt_transport::CallerTable,
     pub(crate) outbound: Vec<(SocketAddr, Vec<u8>)>,
     pub(crate) outbound_cursor: usize,
-    /// Times `drive` has run. This is whole-table work (drain the shared
-    /// socket, flush shared outbound, poll every caller), so it must happen
-    /// once per shard readiness pass, not once per leaf sharing this state
-    /// — see `drive_shared_srt_egress`. Counted so that invariant is
-    /// directly assertable instead of inferred.
+    /// Times `drive` has run, so the readiness-path invariant in
+    /// `drive_shared_srt_egress` (driving does not scale with the number of
+    /// leaves sharing this state) is directly assertable instead of
+    /// inferred. Test-only: production carries no counter.
+    #[cfg(test)]
     drive_calls: u64,
 }
 
@@ -55,12 +55,16 @@ impl SharedSrtEgress {
             callers: srt_transport::CallerTable::new(),
             outbound: Vec::new(),
             outbound_cursor: 0,
+            #[cfg(test)]
             drive_calls: 0,
         })
     }
 
     pub(crate) fn drive(&mut self, now: Timestamp) -> Result<(), String> {
-        self.drive_calls = self.drive_calls.saturating_add(1);
+        #[cfg(test)]
+        {
+            self.drive_calls = self.drive_calls.saturating_add(1);
+        }
         let mut buffer = [0_u8; 2048];
         loop {
             match self.socket.try_recv_from(&mut buffer) {

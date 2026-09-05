@@ -49,8 +49,15 @@ pub(crate) use shared::SharedSrtEgress;
 /// operation (drain the common UDP socket, flush common outbound packets,
 /// poll every logical caller). Driving it per leaf would take the shared
 /// mutex and redo that table-wide work N times per readiness pass for N
-/// leaves sharing one multiplexer. The shard calls this once per pass
-/// instead (`SrtShardBackend::poll_ready`).
+/// leaves sharing one multiplexer, so the shard calls this once instead
+/// (`SrtShardBackend::poll_ready`).
+///
+/// This bounds *readiness* driving only. The send path still drives the
+/// table after each accepted message (see `RustSrtSocket::send`'s `Shared`
+/// arm), and `SrtEgressEngine::send_pending` sends several fragments per
+/// visit, so a busy pass performs more than one table drive in total.
+/// Batching those into one flush per visit is a separate, older scaling
+/// question this does not address.
 pub(crate) fn drive_shared_srt_egress(state: &SrtEgressMuxerPortState) {
     let Ok(mut state) = state.lock() else {
         return;
@@ -77,8 +84,8 @@ impl RustSrtSocket {
                     .iter()
                     .any(|member| member.connection().state() != ConnectionState::Disconnected)
             }
-            // Shared leaves are driven table-wide by `drive_shared_srt_egress`
-            // once per shard pass; there is no per-leaf I/O left to do here.
+            // Shared leaves get their table-wide driving from
+            // `drive_shared_srt_egress`; there is no per-leaf I/O to do here.
             Self::Shared { state, caller } => state
                 .lock()
                 .ok()
@@ -244,8 +251,9 @@ impl SrtMessageSender for RustSrtSocket {
     /// or advance its congestion/RTT state between sends.
     ///
     /// `Shared` leaves do nothing here: their socket and caller table are
-    /// shared with every other shared leaf on the shard and are driven once
-    /// per pass by `drive_shared_srt_egress`, not once per leaf.
+    /// shared with every other shared leaf on the shard, so readiness
+    /// driving happens once in `drive_shared_srt_egress` rather than once
+    /// per leaf.
     fn drive(&mut self) {
         if matches!(self, Self::Shared { .. }) {
             return;

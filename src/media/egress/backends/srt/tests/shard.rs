@@ -437,18 +437,25 @@ fn on_ready_does_not_strand_a_second_ready_leaf_behind_a_would_block_leaf() {
 
 /// The shared socket/`CallerTable` a shard's leaves reuse is whole-table
 /// state: driving it drains the common UDP socket, flushes common outbound
-/// packets, and polls every logical caller. It must therefore be driven once
-/// per readiness pass, not once per leaf — otherwise a shard with N shared
-/// leaves relocks the shared mutex and redoes that table-wide work N times
-/// per pass. (`SrtFabricPoller` used to dedup this with a `driven_shared`
-/// set keyed on the state's `Arc` identity; the shard now owns the single
-/// state directly and drives it once, see `poll_ready`.)
+/// packets, and polls every logical caller. Readiness driving must therefore
+/// not scale with the number of leaves sharing it — otherwise a shard with N
+/// shared leaves relocks the shared mutex and redoes that table-wide work N
+/// times per pass. (`SrtFabricPoller` used to dedup this with a
+/// `driven_shared` set keyed on the state's `Arc` identity; the shard now
+/// owns the single state directly and drives it once, see `poll_ready`.)
+///
+/// Scope: this pins the *readiness* path only. The send path drives the
+/// table again per accepted message, so total drives during a pass that
+/// actually sends is higher — batching that is a separate, pre-existing
+/// question (see `drive_shared_srt_egress`). The leaves here are idle
+/// (unconnected callers accept no data), which is what isolates the
+/// readiness count.
 ///
 /// Drives real `RustSrtSocket::Shared` leaves through the production
 /// connector — a fake sender's `drive` is a no-op, so it could not tell the
 /// per-leaf and per-pass behaviors apart.
 #[test]
-fn poll_ready_drives_the_shared_muxer_once_per_pass_not_once_per_leaf() {
+fn poll_ready_drive_of_the_shared_muxer_does_not_scale_with_leaf_count() {
     let state: muxer_ports::SrtEgressMuxerPortState = Arc::new(Mutex::new(None));
     let mut backend = SrtShardBackend::new(
         feed([Bytes::from_static(b"abc")]),
@@ -472,7 +479,7 @@ fn poll_ready_drives_the_shared_muxer_once_per_pass_not_once_per_leaf() {
     assert_eq!(
         after - before,
         1,
-        "four leaves sharing one multiplexer must drive it once per pass, not once each"
+        "readiness driving must not scale with the number of leaves sharing one multiplexer"
     );
 }
 

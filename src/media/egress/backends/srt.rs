@@ -609,11 +609,15 @@ where
     /// Driving is split in two because the work is: leaves owning their own
     /// connection (`Direct`/`Bonded`) are driven individually, while every
     /// leaf reusing this shard's local port shares one UDP socket and
-    /// `CallerTable`, so that one is driven exactly once per pass here
-    /// rather than once per leaf (`SrtMessageSender::drive` is a no-op for
-    /// those leaves). This is the dedup the old `SrtFabricPoller` did with
-    /// its `driven_shared` set, made structural: a shard has exactly one
+    /// `CallerTable`, so that one is driven once here rather than once per
+    /// leaf (`SrtMessageSender::drive` is a no-op for those leaves). This
+    /// is the dedup the old `SrtFabricPoller` did with its `driven_shared`
+    /// set, made structural: a shard has exactly one
     /// `srt_egress_muxer_port`, so there is nothing to deduplicate against.
+    ///
+    /// Only readiness driving is bounded this way — the send path drives
+    /// the shared table again per accepted message, so a busy pass is not
+    /// literally one table drive.
     fn poll_ready(&mut self) {
         drive_shared_srt_egress(&self.srt_egress_muxer_port);
         for (index, leaf) in self.leaves.iter_mut().enumerate() {
