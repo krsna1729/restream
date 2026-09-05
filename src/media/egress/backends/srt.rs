@@ -2,7 +2,6 @@ use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::media::egress::backend::{ProtocolEngine, Readiness};
@@ -15,9 +14,8 @@ use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::snapshots::PublisherQuality;
 use crate::media::srt::{
-    NativeSendBacklog, SRTSOCKET, SrtEgressEngine, SrtEgressInterest, SrtEgressPollError,
-    SrtEgressSendMode, SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec, SrtFabricPoller,
-    SrtMessageSender, SrtReadyLeaf, connect_fabric_srt_egress_socket, srt_fabric_message_sender,
+    NativeSendBacklog, SrtEgressEngine, SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec,
+    SrtMessageSender, connect_fabric_srt_egress_socket, drive_shared_srt_egress,
 };
 
 /// Combined application and native pending state for one SRT fabric leaf.
@@ -42,27 +40,16 @@ impl SrtLeafPressure {
     }
 }
 
-mod add_error;
 pub(crate) mod muxer_ports;
 pub(crate) mod resolve_runtime;
-mod socket_config;
-
-pub(crate) use add_error::SrtBackendAddError;
-pub(crate) use socket_config::{NativeSrtSocketConfigurator, SrtSocketConfigurator};
 
 type NativeSrtLeaf = SrtFabricLeaf<Box<dyn SrtMessageSender + Send>>;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SrtBackendConnectError {
-    Connect(String),
-    Add(SrtBackendAddError),
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SrtPendingConnectError {
     Missing,
     Stale,
-    Connect(SrtBackendConnectError),
+    Connect(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,11 +116,6 @@ where
     /// at the moment draining started so the real cause survives to the
     /// eventual close call.
     draining_reason: Option<crate::media::egress::backend::CloseReason>,
-    /// Sender-side counters from the previous quality sample, needed to
-    /// compute per-second rates (loss/drop/retrans) on the next one.
-    /// Effective `SRTO_SNDBUF` this leaf connected with (PREBIND — read
-    /// once, reported on every quality sample without a per-tick FFI call).
-    configured_sndbuf_bytes: Option<i32>,
     /// Connect-admission permit; see `srt_connect_admission.rs`.
     handshake_permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
@@ -152,15 +134,8 @@ where
             observed_since: Instant::now(),
             draining_since: None,
             draining_reason: None,
-            configured_sndbuf_bytes: None,
             handshake_permit: None,
         }
-    }
-
-    /// Sets the value read back from libsrt post-connect; see field doc.
-    pub(crate) fn with_configured_sndbuf(mut self, bytes: Option<i32>) -> Self {
-        self.configured_sndbuf_bytes = bytes;
-        self
     }
 
     pub(crate) fn common(&self) -> &LeafCommon {
@@ -235,22 +210,12 @@ where
         )
     }
 
-    /// Sample sender-side connection quality (RTT, loss, retransmits,
-    /// bandwidth) from libsrt, for the once-per-second stall sweep — the
-    /// same `srt_bistats` mechanism and cadence legacy SRT egress used for
-    /// its own quality reporting. Returns `None` when the transport has no
-    /// native stats to offer (fakes, closed sockets); the caller should
-    /// leave the previously published quality in place in that case.
+    /// Sample sender-side connection quality (RTT, loss, drops, bandwidth)
+    /// for the once-per-second stall sweep. Returns `None` when the
+    /// transport has no stats to offer (fakes, closed sockets); the caller
+    /// should leave the previously published quality in place in that case.
     pub(crate) fn sample_quality(&mut self, _now: Instant) -> Option<PublisherQuality> {
-        self.transport
-            .sender_quality_stats()
-            .map(|stats| PublisherQuality {
-                ms_rtt: Some(stats.ms_rtt),
-                mbps_send_rate: Some(stats.mbps_send_rate),
-                packets_sent_loss: Some(stats.pkt_snd_loss_total.max(0) as u64),
-                packets_sent_drop: Some(stats.pkt_snd_drop_total.max(0) as u64),
-                ..PublisherQuality::default()
-            })
+        self.transport.sender_quality()
     }
 
     pub(crate) fn visit_ready(
@@ -278,31 +243,24 @@ pub(crate) fn requeue_after_srt_visit(decision: VisitDecision) -> bool {
     matches!(decision, VisitDecision::Continue)
 }
 
-pub(crate) fn srt_fabric_leaf_from_socket(common: LeafCommon, socket: SRTSOCKET) -> NativeSrtLeaf {
-    let sndbuf = Some(crate::media::srt::srt_get_configured_sndbuf(socket));
-    SrtFabricLeaf::new(common, srt_fabric_message_sender(socket)).with_configured_sndbuf(sndbuf)
-}
-
-pub(crate) trait SrtReadinessPoller {
-    fn register_leaf(
-        &mut self,
-        socket: SRTSOCKET,
-        key: LeafKey,
-        generation: u64,
-        interest: SrtEgressInterest,
-    ) -> Result<(), SrtEgressPollError>;
-
-    fn remove(&mut self, socket: SRTSOCKET) -> Result<(), SrtEgressPollError>;
-
-    fn poll_leaves(
-        &mut self,
-        timeout_ms: i64,
-        ready: &mut Vec<SrtReadyLeaf>,
-    ) -> Result<usize, SrtEgressPollError>;
+/// One shard's internal readiness marker for a leaf due a visit. There is no
+/// real readiness multiplexing to report — `srt-rs` has no epoll equivalent,
+/// so `poll_ready()` marks every not-yet-enqueued leaf ready on every pass —
+/// this only exists to carry `(key, generation, writable)` through
+/// `self.ready` between `poll_ready()`/`enqueue_feed_waiting_leaves()` and
+/// `visit_one_ready_leaf()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SrtReadyLeaf {
+    key: LeafKey,
+    generation: u64,
+    writable: bool,
 }
 
 pub(crate) trait SrtSocketConnector {
-    fn connect(&mut self, config: SrtFabricEgressConnectConfig<'_>) -> Result<SRTSOCKET, String>;
+    fn connect(
+        &mut self,
+        config: SrtFabricEgressConnectConfig<'_>,
+    ) -> Result<Box<dyn SrtMessageSender + Send>, String>;
 }
 
 pub(crate) trait SrtResolveCompletionSource {
@@ -319,24 +277,6 @@ pub(crate) fn srt_resolve_completion_queue(
 ) -> (SyncSender<SrtResolvedConnect>, SrtResolveCompletionQueue) {
     let (sender, receiver) = mpsc::sync_channel(capacity);
     (sender, SrtResolveCompletionQueue { receiver })
-}
-
-#[allow(dead_code)]
-pub(crate) fn spawn_srt_resolve_worker(
-    request: SrtResolveRequest,
-    completion_sender: SyncSender<SrtResolvedConnect>,
-) -> JoinHandle<Result<(), SrtResolveWorkerError>> {
-    // Fast path: if the peer is already a raw IP address, resolve it
-    // synchronously without spawning a thread. Most SRT egress destinations
-    // (local sinks, peered restream instances) use IP addresses, so this
-    // avoids 1,200 thread creations at scale — each thread costs ~2 MB of
-    // virtual address space and a clone() syscall.
-    if request.peer_hosts.len() == 1 && request.peer_hosts[0].parse::<SocketAddr>().is_ok() {
-        let result = resolve_srt_peer_hosts(request, completion_sender);
-        return thread::spawn(move || result);
-    }
-    // Hostname resolution needs blocking I/O.
-    thread::spawn(move || resolve_srt_peer_hosts(request, completion_sender))
 }
 
 fn resolve_srt_peer_hosts(
@@ -388,7 +328,10 @@ impl SrtResolveCompletionSource for SrtResolveCompletionQueue {
 pub(crate) struct NativeSrtSocketConnector;
 
 impl SrtSocketConnector for NativeSrtSocketConnector {
-    fn connect(&mut self, config: SrtFabricEgressConnectConfig<'_>) -> Result<SRTSOCKET, String> {
+    fn connect(
+        &mut self,
+        config: SrtFabricEgressConnectConfig<'_>,
+    ) -> Result<Box<dyn SrtMessageSender + Send>, String> {
         connect_fabric_srt_egress_socket(config)
     }
 }
@@ -400,43 +343,11 @@ impl SrtResolveCompletionSource for NoopSrtResolveCompletionSource {
     fn drain_resolved(&mut self, _resolved: &mut Vec<SrtResolvedConnect>) {}
 }
 
-impl SrtReadinessPoller for SrtFabricPoller {
-    fn register_leaf(
-        &mut self,
-        socket: SRTSOCKET,
-        key: LeafKey,
-        generation: u64,
-        interest: SrtEgressInterest,
-    ) -> Result<(), SrtEgressPollError> {
-        self.register_leaf(socket, key, generation, interest)
-    }
-
-    fn remove(&mut self, socket: SRTSOCKET) -> Result<(), SrtEgressPollError> {
-        self.remove(socket)
-    }
-
-    fn poll_leaves(
-        &mut self,
-        timeout_ms: i64,
-        ready: &mut Vec<SrtReadyLeaf>,
-    ) -> Result<usize, SrtEgressPollError> {
-        self.poll_leaves(timeout_ms, ready)
-    }
-}
-
-pub(crate) struct SrtShardBackend<
-    P,
-    C = NativeSrtSocketConfigurator,
-    K = NativeSrtSocketConnector,
-    R = NoopSrtResolveCompletionSource,
-> where
-    P: SrtReadinessPoller,
-    C: SrtSocketConfigurator,
+pub(crate) struct SrtShardBackend<K = NativeSrtSocketConnector, R = NoopSrtResolveCompletionSource>
+where
     K: SrtSocketConnector,
     R: SrtResolveCompletionSource,
 {
-    poller: P,
-    socket_configurator: C,
     socket_connector: K,
     resolve_completions: R,
     feed: TsFeed,
@@ -453,9 +364,8 @@ pub(crate) struct SrtShardBackend<
     budget_max_bytes: usize,
     budget_window: Duration,
     leaves: Vec<Option<NativeSrtLeaf>>,
-    output_sockets: HashMap<OutputId, SrtLeafSocket>,
+    output_sockets: HashMap<OutputId, LeafKey>,
     ready: VecDeque<SrtReadyLeaf>,
-    poll_buffer: Vec<SrtReadyLeaf>,
     pending_connects: HashMap<OutputId, PendingSrtConnect>,
     last_stall_sweep: Option<Instant>,
     /// This shard's application-owned shared UDP socket and srt-rs
@@ -477,77 +387,38 @@ pub(crate) struct SrtShardBackend<
     resync_count: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SrtLeafSocket {
-    key: LeafKey,
-    socket: SRTSOCKET,
-}
-
 struct PendingSrtConnect {
     common: LeafCommon,
     connect_spec: SrtFabricEgressConnectSpec,
 }
 
 // Production always constructs via `with_runtime_components` directly (see
-// resolve_runtime.rs); these convenience constructors are only used by tests.
+// resolve_runtime.rs); this convenience constructor is only used by tests.
 #[cfg(test)]
-impl<P>
-    SrtShardBackend<
-        P,
-        NativeSrtSocketConfigurator,
-        NativeSrtSocketConnector,
-        NoopSrtResolveCompletionSource,
-    >
-where
-    P: SrtReadinessPoller,
-{
-    pub(crate) fn new(poller: P, feed: TsFeed, budget: WorkBudget) -> Self {
-        Self::with_socket_configurator(poller, feed, budget, NativeSrtSocketConfigurator)
-    }
-}
-
-#[cfg(test)]
-impl<P, C> SrtShardBackend<P, C, NativeSrtSocketConnector, NoopSrtResolveCompletionSource>
-where
-    P: SrtReadinessPoller,
-    C: SrtSocketConfigurator,
-{
-    pub(crate) fn with_socket_configurator(
-        poller: P,
-        feed: TsFeed,
-        budget: WorkBudget,
-        socket_configurator: C,
-    ) -> Self {
+impl SrtShardBackend<NativeSrtSocketConnector, NoopSrtResolveCompletionSource> {
+    pub(crate) fn new(feed: TsFeed, budget: WorkBudget) -> Self {
         Self::with_runtime_components(
-            poller,
             feed,
             budget,
-            socket_configurator,
             NativeSrtSocketConnector,
             NoopSrtResolveCompletionSource,
         )
     }
 }
 
-impl<P, C, K, R> SrtShardBackend<P, C, K, R>
+impl<K, R> SrtShardBackend<K, R>
 where
-    P: SrtReadinessPoller,
-    C: SrtSocketConfigurator,
     K: SrtSocketConnector,
     R: SrtResolveCompletionSource,
 {
     pub(crate) fn with_runtime_components(
-        poller: P,
         feed: TsFeed,
         budget: WorkBudget,
-        socket_configurator: C,
         socket_connector: K,
         resolve_completions: R,
     ) -> Self {
         let budget_window = budget.deadline.saturating_duration_since(Instant::now());
         Self {
-            poller,
-            socket_configurator,
             socket_connector,
             resolve_completions,
             feed,
@@ -557,7 +428,6 @@ where
             leaves: Vec::new(),
             output_sockets: HashMap::new(),
             ready: VecDeque::new(),
-            poll_buffer: Vec::new(),
             pending_connects: HashMap::new(),
             last_stall_sweep: None,
             srt_egress_muxer_port: Arc::new(Mutex::new(None)),
@@ -583,7 +453,7 @@ where
     /// a separate builder step rather than a `with_runtime_components`
     /// parameter so every existing constructor and test call site is
     /// unaffected; only production wiring
-    /// (`resolving_srt_shard_backend_with_configurator`) calls this.
+    /// (`resolving_srt_shard_backend`) calls this.
     pub(crate) fn with_srt_egress_muxer_port_reuse(
         mut self,
         state: muxer_ports::SrtEgressMuxerPortState,
@@ -602,31 +472,22 @@ where
         &self.srt_egress_muxer_port
     }
 
-    pub(crate) fn add_connected_socket(
+    pub(crate) fn add_connected_leaf(
         &mut self,
         common: LeafCommon,
-        socket: SRTSOCKET,
-    ) -> Result<LeafKey, SrtBackendAddError> {
-        self.socket_configurator
-            .configure_connected(socket, SrtEgressSendMode::FabricNonblocking)?;
-
+        transport: Box<dyn SrtMessageSender + Send>,
+    ) -> LeafKey {
         let key = LeafKey(self.leaves.len());
-        self.poller
-            .register_leaf(socket, key, common.generation, SrtEgressInterest::WRITE)
-            .map_err(SrtBackendAddError::Poller)?;
         let output_id = common.output_id.clone();
-        let leaf = srt_fabric_leaf_from_socket(common, socket);
+        let leaf = SrtFabricLeaf::new(common, transport);
         self.leaves.push(Some(leaf));
-        if let Some(previous) = self
-            .output_sockets
-            .insert(output_id, SrtLeafSocket { key, socket })
-        {
-            self.remove_leaf_socket(
+        if let Some(previous) = self.output_sockets.insert(output_id, key) {
+            self.remove_leaf(
                 previous,
                 crate::media::egress::backend::CloseReason::Removed,
             );
         }
-        Ok(key)
+        key
     }
 
     /// Resolve-completion entry point: turn a queued `PendingSrtConnect`
@@ -662,58 +523,38 @@ where
         let config = pending
             .connect_spec
             .connect_config(peer_addrs, shared_state);
-        let socket = self.socket_connector.connect(config).map_err(|error| {
+        let transport = self.socket_connector.connect(config).map_err(|error| {
             tracing::warn!(
                 output_id = %output_id,
                 error = %error,
                 "srt fabric leaf connect failed"
             );
             progress_sink.mark_terminated_unexpectedly();
-            SrtPendingConnectError::Connect(SrtBackendConnectError::Connect(error))
+            SrtPendingConnectError::Connect(error)
         })?;
-        self.add_connected_socket(pending.common, socket)
-            .map_err(|error| {
-                progress_sink.mark_terminated_unexpectedly();
-                SrtPendingConnectError::Connect(SrtBackendConnectError::Add(error))
-            })
+        Ok(self.add_connected_leaf(pending.common, transport))
     }
 
     #[cfg(test)]
-    pub(crate) fn add_leaf(
-        &mut self,
-        socket: SRTSOCKET,
-        leaf: NativeSrtLeaf,
-    ) -> Result<LeafKey, SrtEgressPollError> {
+    pub(crate) fn add_leaf(&mut self, leaf: NativeSrtLeaf) -> LeafKey {
         let key = LeafKey(self.leaves.len());
         let output_id = leaf.common.output_id.clone();
-        self.poller.register_leaf(
-            socket,
-            key,
-            leaf.common.generation,
-            SrtEgressInterest::WRITE,
-        )?;
         self.leaves.push(Some(leaf));
-        if let Some(previous) = self
-            .output_sockets
-            .insert(output_id, SrtLeafSocket { key, socket })
-        {
-            self.remove_leaf_socket(
+        if let Some(previous) = self.output_sockets.insert(output_id, key) {
+            self.remove_leaf(
                 previous,
                 crate::media::egress::backend::CloseReason::Removed,
             );
         }
-        Ok(key)
+        key
     }
 
     fn remove_leaf_by_output(&mut self, output_id: &OutputId) -> bool {
         self.pending_connects.remove(output_id);
-        let Some(socket_ref) = self.output_sockets.remove(output_id) else {
+        let Some(key) = self.output_sockets.remove(output_id) else {
             return false;
         };
-        self.remove_leaf_socket(
-            socket_ref,
-            crate::media::egress::backend::CloseReason::Removed,
-        )
+        self.remove_leaf(key, crate::media::egress::backend::CloseReason::Removed)
     }
 
     fn queue_pending_srt_connect(&mut self, spec: OutputSpec, target_url: &str) {
@@ -746,13 +587,12 @@ where
         self.pending_connects.get(output_id)
     }
 
-    fn remove_leaf_socket(
+    fn remove_leaf(
         &mut self,
-        socket_ref: SrtLeafSocket,
+        key: LeafKey,
         reason: crate::media::egress::backend::CloseReason,
     ) -> bool {
-        let _ = self.poller.remove(socket_ref.socket);
-        let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) else {
+        let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) else {
             return false;
         };
         let mut leaf = leaf;
@@ -760,26 +600,39 @@ where
         true
     }
 
+    /// Drives this shard's transports, then marks every not-yet-enqueued
+    /// leaf ready. There is no readiness to multiplex -- `srt-rs` has no
+    /// epoll equivalent, and every leaf always registers write interest --
+    /// so this is a direct walk of owned leaves rather than a poll of an
+    /// external readiness source.
+    ///
+    /// Driving is split in two because the work is: leaves owning their own
+    /// connection (`Direct`/`Bonded`) are driven individually, while every
+    /// leaf reusing this shard's local port shares one UDP socket and
+    /// `CallerTable`, so that one is driven once here rather than once per
+    /// leaf (`SrtMessageSender::drive` is a no-op for those leaves). This
+    /// is the dedup the old `SrtFabricPoller` did with its `driven_shared`
+    /// set, made structural: a shard has exactly one
+    /// `srt_egress_muxer_port`, so there is nothing to deduplicate against.
+    ///
+    /// Only readiness driving is bounded this way — the send path drives
+    /// the shared table again per accepted message, so a busy pass is not
+    /// literally one table drive.
     fn poll_ready(&mut self) {
-        if self.poller.poll_leaves(0, &mut self.poll_buffer).is_err() {
-            return;
-        }
-
-        let events: Vec<_> = self.poll_buffer.drain(..).collect();
-        for event in events {
-            let Some(leaf) = self.leaf_mut(event.key) else {
-                continue;
-            };
+        drive_shared_srt_egress(&self.srt_egress_muxer_port);
+        for (index, leaf) in self.leaves.iter_mut().enumerate() {
+            let Some(leaf) = leaf else { continue };
+            leaf.transport.drive();
             if leaf.common.schedule.enqueued {
                 continue;
             }
             leaf.common.schedule.enqueued = true;
-            self.ready.push_back(event);
+            self.ready.push_back(SrtReadyLeaf {
+                key: LeafKey(index),
+                generation: leaf.common.generation,
+                writable: true,
+            });
         }
-    }
-
-    fn leaf_mut(&mut self, key: LeafKey) -> Option<&mut NativeSrtLeaf> {
-        self.leaves.get_mut(key.0).and_then(Option::as_mut)
     }
 
     /// Visit the next ready leaf.  Returns the output ID alongside the
@@ -840,8 +693,8 @@ where
                     .draining_reason
                     .unwrap_or(crate::media::egress::backend::CloseReason::Removed);
                 let output_id = leaf.common().output_id.clone();
-                if let Some(socket_ref) = self.output_sockets.remove(&output_id) {
-                    self.remove_leaf_socket(socket_ref, reason);
+                if let Some(key) = self.output_sockets.remove(&output_id) {
+                    self.remove_leaf(key, reason);
                 }
                 return Some((None, VisitDecision::Suspend));
             }
@@ -853,10 +706,8 @@ where
     }
 }
 
-impl<P, C, K, R> EgressShardBackend for SrtShardBackend<P, C, K, R>
+impl<K, R> EgressShardBackend for SrtShardBackend<K, R>
 where
-    P: SrtReadinessPoller + Send + 'static,
-    C: SrtSocketConfigurator + Send + 'static,
     K: SrtSocketConnector + Send + 'static,
     R: SrtResolveCompletionSource + Send + 'static,
 {
@@ -906,8 +757,8 @@ where
     /// Visit one ready leaf, then decide whether to ask for another
     /// `on_ready` pass immediately.
     ///
-    /// `poll_ready()` can enqueue several ready leaves from one poll — SRT
-    /// always registers write interest, so a single poll commonly finds
+    /// `poll_ready()` can enqueue several ready leaves from one pass — SRT
+    /// always registers write interest, so a single pass commonly finds
     /// every leaf on the shard writable at once. If the leaf visited
     /// *this* call suspends (would block) or closes, that alone must not
     /// stop the shard from draining the rest of an already-nonempty
@@ -931,8 +782,8 @@ where
             // explicit `EgressCommand::Remove` never reaches this path — so
             // every close observed here is unexpected from the
             // application's point of view.
-            if let Some(socket_ref) = self.output_sockets.get(output_id)
-                && let Some(leaf) = self.leaves.get(socket_ref.key.0).and_then(Option::as_ref)
+            if let Some(key) = self.output_sockets.get(output_id)
+                && let Some(leaf) = self.leaves.get(key.0).and_then(Option::as_ref)
             {
                 leaf.common.progress_sink.mark_terminated_unexpectedly();
             }
@@ -960,14 +811,9 @@ where
     }
 
     fn on_shutdown(&mut self) {
-        let sockets: Vec<_> = self
-            .output_sockets
-            .drain()
-            .map(|(_, socket_ref)| socket_ref)
-            .collect();
-        for socket_ref in sockets {
-            let _ = self.poller.remove(socket_ref.socket);
-            if let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) {
+        let keys: Vec<LeafKey> = self.output_sockets.drain().map(|(_, key)| key).collect();
+        for key in keys {
+            if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) {
                 let mut leaf = leaf;
                 leaf.engine.close(
                     &mut leaf.transport,

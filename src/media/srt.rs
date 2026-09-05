@@ -14,10 +14,6 @@ pub(crate) use srt_egress_engine::SrtEgressEngine;
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 pub(crate) use tokio_egress::*;
 pub(crate) use tokio_ingress::*;
-pub(crate) fn teardown_srt() {}
 pub(crate) fn linked_srt_version() -> String {
     "srt-rs".to_string()
-}
-pub(crate) fn srt_get_configured_sndbuf(_socket: SRTSOCKET) -> i32 {
-    0
 }

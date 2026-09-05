@@ -83,7 +83,6 @@ pub(super) async fn cleanup(
         let _ = srt_handle.await;
     }
 
-    crate::media::srt::teardown_srt();
     info!(
         event_class = "lifecycle",
         event_type = "restream.shutdown.completed",

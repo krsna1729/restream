@@ -13,12 +13,23 @@ pub(crate) struct SharedSrtEgress {
     pub(crate) callers: srt_transport::CallerTable,
     pub(crate) outbound: Vec<(SocketAddr, Vec<u8>)>,
     pub(crate) outbound_cursor: usize,
+    /// Times `drive` has run, so the readiness-path invariant in
+    /// `drive_shared_srt_egress` (driving does not scale with the number of
+    /// leaves sharing this state) is directly assertable instead of
+    /// inferred. Test-only: production carries no counter.
+    #[cfg(test)]
+    drive_calls: u64,
 }
 
 impl SharedSrtEgress {
     #[cfg(test)]
     pub(crate) fn local_port(&self) -> Option<u16> {
         self.socket.local_addr().ok().map(|address| address.port())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn drive_calls(&self) -> u64 {
+        self.drive_calls
     }
 
     pub(crate) fn bind(
@@ -44,10 +55,16 @@ impl SharedSrtEgress {
             callers: srt_transport::CallerTable::new(),
             outbound: Vec::new(),
             outbound_cursor: 0,
+            #[cfg(test)]
+            drive_calls: 0,
         })
     }
 
     pub(crate) fn drive(&mut self, now: Timestamp) -> Result<(), String> {
+        #[cfg(test)]
+        {
+            self.drive_calls = self.drive_calls.saturating_add(1);
+        }
         let mut buffer = [0_u8; 2048];
         loop {
             match self.socket.try_recv_from(&mut buffer) {

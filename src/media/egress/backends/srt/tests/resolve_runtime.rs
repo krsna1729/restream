@@ -1,12 +1,9 @@
 use super::super::resolve_runtime::{ResolvingSrtShardBackend, SrtResolveWorkerSet};
 use super::super::*;
-use super::support::{
-    FakeConnectCall, FakeReadinessPoller, FakeSocketConfigurator, FakeSocketConnector, feed,
-};
+use super::support::{FakeConnectCall, FakeSocketConnector, feed};
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::policy::{LeafPolicy, WorkBudget};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
-use crate::media::srt::{SrtEgressInterest, SrtEgressSendMode};
 use bytes::Bytes;
 use std::thread;
 use std::time::Duration;
@@ -25,17 +22,11 @@ fn output_spec(id: &str, generation: u64, protocol: ProtocolSpec) -> OutputSpec 
 #[test]
 fn resolving_srt_backend_spawns_resolver_and_completes_add() {
     let (completion_sender, completion_queue) = srt_resolve_completion_queue(4);
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
-    let configurator = FakeSocketConfigurator::default();
-    let configurator_handle = configurator.clone();
-    let connector = FakeSocketConnector::returning(42);
+    let connector = FakeSocketConnector::returning();
     let connector_handle = connector.clone();
     let inner = SrtShardBackend::with_runtime_components(
-        poller,
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        configurator,
         connector,
         completion_queue,
     );
@@ -69,19 +60,6 @@ fn resolving_srt_backend_spawns_resolver_and_completes_add() {
             connect_timeout_ms: 30000,
         }]
     );
-    assert_eq!(
-        configurator_handle.calls(),
-        vec![(42, SrtEgressSendMode::FabricNonblocking)]
-    );
-    assert_eq!(
-        poller_handle.registered(),
-        vec![(
-            42,
-            crate::media::egress::scheduler::LeafKey(0),
-            7,
-            SrtEgressInterest::WRITE
-        )]
-    );
     assert_eq!(backend.worker_count(), 0);
 }
 
@@ -89,11 +67,9 @@ fn resolving_srt_backend_spawns_resolver_and_completes_add() {
 fn resolving_srt_backend_does_not_spawn_for_non_srt_add() {
     let (completion_sender, completion_queue) = srt_resolve_completion_queue(4);
     let inner = SrtShardBackend::with_runtime_components(
-        FakeReadinessPoller::default(),
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
-        FakeSocketConnector::returning(42),
+        FakeSocketConnector::returning(),
         completion_queue,
     );
     let mut backend =

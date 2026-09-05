@@ -7,10 +7,8 @@
 
 use super::*;
 
-impl<P, C, K, R> SrtShardBackend<P, C, K, R>
+impl<K, R> SrtShardBackend<K, R>
 where
-    P: SrtReadinessPoller,
-    C: SrtSocketConfigurator,
     K: SrtSocketConnector,
     R: SrtResolveCompletionSource,
 {
@@ -29,19 +27,15 @@ where
         reason: crate::media::egress::backend::CloseReason,
     ) {
         self.pending_connects.remove(output_id);
-        let Some(socket_ref) = self.output_sockets.get(output_id).copied() else {
+        let Some(key) = self.output_sockets.get(output_id).copied() else {
             return;
         };
-        let Some(leaf) = self
-            .leaves
-            .get_mut(socket_ref.key.0)
-            .and_then(Option::as_mut)
-        else {
+        let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
             return;
         };
         if !leaf.pressure().is_backpressured() {
             self.output_sockets.remove(output_id);
-            self.remove_leaf_socket(socket_ref, reason);
+            self.remove_leaf(key, reason);
             return;
         }
         leaf.draining_since = Some(Instant::now());
@@ -59,8 +53,8 @@ where
         let expired: Vec<OutputId> = self
             .output_sockets
             .iter()
-            .filter_map(|(output_id, socket_ref)| {
-                let leaf = self.leaves.get_mut(socket_ref.key.0)?.as_mut()?;
+            .filter_map(|(output_id, key)| {
+                let leaf = self.leaves.get_mut(key.0)?.as_mut()?;
                 let draining_since = leaf.draining_since?;
                 let flushed = !leaf.pressure().is_backpressured();
                 let expired = now.saturating_duration_since(draining_since) >= self.drain_timeout;
@@ -68,16 +62,16 @@ where
             })
             .collect();
         for output_id in expired {
-            let Some(socket_ref) = self.output_sockets.remove(&output_id) else {
+            let Some(key) = self.output_sockets.remove(&output_id) else {
                 continue;
             };
             let reason = self
                 .leaves
-                .get(socket_ref.key.0)
+                .get(key.0)
                 .and_then(Option::as_ref)
                 .and_then(|leaf| leaf.draining_reason)
                 .unwrap_or(crate::media::egress::backend::CloseReason::Removed);
-            self.remove_leaf_socket(socket_ref, reason);
+            self.remove_leaf(key, reason);
         }
     }
 
@@ -131,8 +125,8 @@ where
         let stalled: Vec<OutputId> = self
             .output_sockets
             .iter()
-            .filter_map(|(output_id, socket_ref)| {
-                let leaf = self.leaves.get_mut(socket_ref.key.0)?.as_mut()?;
+            .filter_map(|(output_id, key)| {
+                let leaf = self.leaves.get_mut(key.0)?.as_mut()?;
                 let lag_units = if leaf.common().cursor_primed {
                     head_sequence.saturating_sub(leaf.common().cursor.next_sequence)
                 } else {
@@ -144,11 +138,10 @@ where
             .collect();
 
         for output_id in stalled {
-            let Some(socket_ref) = self.output_sockets.remove(&output_id) else {
+            let Some(key) = self.output_sockets.remove(&output_id) else {
                 continue;
             };
-            let _ = self.poller.remove(socket_ref.socket);
-            if let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) {
+            if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) {
                 let mut leaf = leaf;
                 leaf.common.progress_sink.mark_terminated_unexpectedly();
                 leaf.engine.close(
@@ -178,13 +171,9 @@ where
     /// same direct-enqueue latency improvement RTMP gets, at the cost of
     /// doing real work per feed wake instead of none.
     pub(super) fn enqueue_feed_waiting_leaves(&mut self) {
-        let sockets: Vec<SrtLeafSocket> = self.output_sockets.values().copied().collect();
-        for socket_ref in sockets {
-            let Some(leaf) = self
-                .leaves
-                .get_mut(socket_ref.key.0)
-                .and_then(Option::as_mut)
-            else {
+        let keys: Vec<LeafKey> = self.output_sockets.values().copied().collect();
+        for key in keys {
+            let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
                 continue;
             };
             if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
@@ -192,8 +181,7 @@ where
             }
             leaf.common.schedule.enqueued = true;
             self.ready.push_back(SrtReadyLeaf {
-                socket: socket_ref.socket,
-                key: socket_ref.key,
+                key,
                 generation: leaf.common.generation,
                 writable: false,
             });

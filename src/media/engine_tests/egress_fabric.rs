@@ -180,7 +180,18 @@ async fn srt_fabric_registry_retains_native_runtime_once_per_feed() {
 /// multiplexer (the cross-tenant isolation fix).
 #[tokio::test]
 async fn srt_fabric_runtime_claims_one_libsrt_muxer_port_per_shard_shared_across_feeds() {
-    let engine = MediaEngine::new();
+    // Explicit config, not `MediaEngine::new()`'s `AppConfig::from_env()`:
+    // the process environment is shared with the config tests, which
+    // temporarily set `RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED=false`
+    // while asserting the override. Reading env here raced that window and
+    // silently flipped this test's premise (both pipelines then share one
+    // scope key, so the cross-tenant assertion below sees `shard_count`
+    // entries instead of `shard_count * 2`). Mirrors the sibling
+    // `..._shares_muxer_ports_across_pipelines_when_scoping_disabled`.
+    let engine = MediaEngine::new_with_config(Arc::new(crate::AppConfig {
+        srt_egress_muxer_port_pipeline_scoped: true,
+        ..crate::AppConfig::default()
+    }));
     assert!(
         engine.config.srt_egress_reuse_local_port,
         "this test covers the reuse-enabled default"

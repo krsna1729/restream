@@ -4,15 +4,12 @@ use crate::media::egress::command::{FeedId, OutputId};
 use crate::media::egress::journal::{FeedEpoch, TsFeed};
 use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::policy::{LeafLimits, WorkBudget};
-use crate::media::egress::scheduler::LeafKey;
+use crate::media::snapshots::PublisherQuality;
 use crate::media::srt::{
-    NativeSendBacklog, SRTSOCKET, SrtEgressInterest, SrtEgressPollError, SrtEgressSendMode,
-    SrtEgressSocketError, SrtFabricEgressConnectConfig, SrtMessageSender, SrtReadyLeaf,
-    SrtSendResult, SrtTraceBStats,
+    NativeSendBacklog, SrtFabricEgressConnectConfig, SrtMessageSender, SrtSendResult,
 };
 use crate::media::ts_chunk_ring::TsChunkRing;
 use bytes::Bytes;
-use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -22,7 +19,7 @@ pub(super) struct FakeSender {
     sends: Vec<Bytes>,
     closed: u32,
     pub(super) native_backlog: Option<NativeSendBacklog>,
-    pub(super) quality_stats: Option<SrtTraceBStats>,
+    pub(super) quality: Option<PublisherQuality>,
 }
 
 impl FakeSender {
@@ -47,15 +44,14 @@ impl SrtMessageSender for FakeSender {
         self.native_backlog
     }
 
-    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
-        self.quality_stats
+    fn sender_quality(&self) -> Option<PublisherQuality> {
+        self.quality.clone()
     }
 }
 
 pub(super) struct SharedFakeSender {
     sends: Arc<Mutex<Vec<Bytes>>>,
     closed: Arc<Mutex<u32>>,
-    events: Option<Arc<Mutex<Vec<&'static str>>>>,
 }
 
 impl SrtMessageSender for SharedFakeSender {
@@ -67,9 +63,6 @@ impl SrtMessageSender for SharedFakeSender {
     }
 
     fn close(&mut self, _reason: CloseReason) {
-        if let Some(events) = &self.events {
-            events.lock().unwrap().push("close");
-        }
         let mut closed = self.closed.lock().unwrap();
         *closed = closed.saturating_add(1);
     }
@@ -81,133 +74,7 @@ pub(super) struct SharedSenderProbe {
     pub(super) closed: Arc<Mutex<u32>>,
 }
 
-#[derive(Clone, Default)]
-pub(super) struct FakeReadinessPoller {
-    inner: Arc<Mutex<FakeReadinessState>>,
-}
-
-#[derive(Default)]
-struct FakeReadinessState {
-    registered: Vec<(SRTSOCKET, LeafKey, u64, SrtEgressInterest)>,
-    removed: Vec<SRTSOCKET>,
-    ready: VecDeque<SrtReadyLeaf>,
-    events: Option<Arc<Mutex<Vec<&'static str>>>>,
-}
-
-impl FakeReadinessPoller {
-    pub(super) fn with_events(events: Arc<Mutex<Vec<&'static str>>>) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(FakeReadinessState {
-                events: Some(events),
-                ..FakeReadinessState::default()
-            })),
-        }
-    }
-
-    pub(super) fn push_ready(&self, event: SrtReadyLeaf) {
-        self.inner.lock().unwrap().ready.push_back(event);
-    }
-
-    pub(super) fn registered(&self) -> Vec<(SRTSOCKET, LeafKey, u64, SrtEgressInterest)> {
-        self.inner.lock().unwrap().registered.clone()
-    }
-
-    pub(super) fn removed(&self) -> Vec<SRTSOCKET> {
-        self.inner.lock().unwrap().removed.clone()
-    }
-}
-
-impl SrtReadinessPoller for FakeReadinessPoller {
-    fn register_leaf(
-        &mut self,
-        socket: SRTSOCKET,
-        key: LeafKey,
-        generation: u64,
-        interest: SrtEgressInterest,
-    ) -> Result<(), SrtEgressPollError> {
-        self.inner
-            .lock()
-            .unwrap()
-            .registered
-            .push((socket, key, generation, interest));
-        Ok(())
-    }
-
-    fn remove(&mut self, socket: SRTSOCKET) -> Result<(), SrtEgressPollError> {
-        let mut state = self.inner.lock().unwrap();
-        state.removed.push(socket);
-        if let Some(events) = &state.events {
-            events.lock().unwrap().push("remove");
-        }
-        Ok(())
-    }
-
-    fn poll_leaves(
-        &mut self,
-        _timeout_ms: i64,
-        ready: &mut Vec<SrtReadyLeaf>,
-    ) -> Result<usize, SrtEgressPollError> {
-        ready.clear();
-        let mut state = self.inner.lock().unwrap();
-        while let Some(event) = state.ready.pop_front() {
-            ready.push(event);
-        }
-        Ok(ready.len())
-    }
-}
-
-#[derive(Clone, Default)]
-pub(super) struct FakeSocketConfigurator {
-    calls: Arc<Mutex<Vec<(SRTSOCKET, SrtEgressSendMode)>>>,
-    fail: bool,
-}
-
-impl FakeSocketConfigurator {
-    pub(super) fn failing() -> Self {
-        Self {
-            calls: Arc::new(Mutex::new(Vec::new())),
-            fail: true,
-        }
-    }
-
-    pub(super) fn calls(&self) -> Vec<(SRTSOCKET, SrtEgressSendMode)> {
-        self.calls.lock().unwrap().clone()
-    }
-}
-
-impl SrtSocketConfigurator for FakeSocketConfigurator {
-    fn configure_connected(
-        &mut self,
-        socket: SRTSOCKET,
-        mode: SrtEgressSendMode,
-    ) -> Result<(), SrtEgressSocketError> {
-        self.calls.lock().unwrap().push((socket, mode));
-        if self.fail {
-            return Err(SrtEgressSocketError {
-                option: "SRTO_SNDSYN",
-                code: 1234,
-                message: "fake socket setup failure".to_owned(),
-            });
-        }
-        Ok(())
-    }
-}
-
-/// `(has_muxer_port_claim, muxer_port_claim_bind_port)` per `connect()` call.
-type MuxerPortClaims = Arc<Mutex<Vec<(bool, Option<u16>)>>>;
-
-#[derive(Clone)]
-pub(super) struct FakeSocketConnector {
-    socket: Result<SRTSOCKET, String>,
-    calls: Arc<Mutex<Vec<FakeConnectCall>>>,
-    // Recorded separately from `FakeConnectCall` (present/bind-port, one
-    // entry per `connect()` call) so the many existing `FakeConnectCall`
-    // literals across the SRT backend tests don't all need two new fields
-    // just for the small number of tests that care about the muxer-port
-    // claim (see `tests/muxer_port.rs`).
-    muxer_port_claims: MuxerPortClaims,
-}
-
+/// One `connect()` call's peer/stream/timeout inputs, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct FakeConnectCall {
     pub(super) peer_addrs: Vec<std::net::SocketAddr>,
@@ -215,10 +82,20 @@ pub(super) struct FakeConnectCall {
     pub(super) connect_timeout_ms: u64,
 }
 
+/// `(has_muxer_port_claim, muxer_port_claim_bind_port)` per `connect()` call.
+type MuxerPortClaims = Arc<Mutex<Vec<(bool, Option<u16>)>>>;
+
+#[derive(Clone)]
+pub(super) struct FakeSocketConnector {
+    should_fail: Option<String>,
+    calls: Arc<Mutex<Vec<FakeConnectCall>>>,
+    muxer_port_claims: MuxerPortClaims,
+}
+
 impl FakeSocketConnector {
-    pub(super) fn returning(socket: SRTSOCKET) -> Self {
+    pub(super) fn returning() -> Self {
         Self {
-            socket: Ok(socket),
+            should_fail: None,
             calls: Arc::new(Mutex::new(Vec::new())),
             muxer_port_claims: Arc::new(Mutex::new(Vec::new())),
         }
@@ -226,9 +103,8 @@ impl FakeSocketConnector {
 
     pub(super) fn failing(error: &str) -> Self {
         Self {
-            socket: Err(error.to_string()),
-            calls: Arc::new(Mutex::new(Vec::new())),
-            muxer_port_claims: Arc::new(Mutex::new(Vec::new())),
+            should_fail: Some(error.to_string()),
+            ..Self::returning()
         }
     }
 
@@ -244,7 +120,10 @@ impl FakeSocketConnector {
 }
 
 impl SrtSocketConnector for FakeSocketConnector {
-    fn connect(&mut self, config: SrtFabricEgressConnectConfig<'_>) -> Result<SRTSOCKET, String> {
+    fn connect(
+        &mut self,
+        config: SrtFabricEgressConnectConfig<'_>,
+    ) -> Result<Box<dyn SrtMessageSender + Send>, String> {
         self.calls.lock().unwrap().push(FakeConnectCall {
             peer_addrs: config.peer_addrs().to_vec(),
             stream_id: config.stream_id().to_string(),
@@ -254,7 +133,10 @@ impl SrtSocketConnector for FakeSocketConnector {
             config.has_muxer_port_claim(),
             config.muxer_port_claim_bind_port(),
         ));
-        self.socket.clone()
+        match &self.should_fail {
+            Some(error) => Err(error.clone()),
+            None => Ok(Box::new(FakeSender::default())),
+        }
     }
 }
 
@@ -310,21 +192,12 @@ pub(super) fn budget() -> WorkBudget {
 }
 
 pub(super) fn shared_sender() -> SharedSenderProbe {
-    shared_sender_with_events(None)
-}
-
-pub(super) fn shared_sender_recording(events: Arc<Mutex<Vec<&'static str>>>) -> SharedSenderProbe {
-    shared_sender_with_events(Some(events))
-}
-
-fn shared_sender_with_events(events: Option<Arc<Mutex<Vec<&'static str>>>>) -> SharedSenderProbe {
     let sends = Arc::new(Mutex::new(Vec::new()));
     let closed = Arc::new(Mutex::new(0));
     SharedSenderProbe {
         sender: SharedFakeSender {
             sends: Arc::clone(&sends),
             closed: Arc::clone(&closed),
-            events,
         },
         sends,
         closed,

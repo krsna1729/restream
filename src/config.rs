@@ -41,7 +41,10 @@ pub struct EgressFabricConfig {
     pub readiness_batch_budget: usize,
     pub timer_batch_budget: usize,
     pub idle_wait_ms: u64,
-    pub srt_poller_max_events: usize,
+    /// Max epoll events per `epoll_wait` for the RTMP/RTMPS fabric's TCP
+    /// readiness poller (`TcpEgressPoller`). SRT egress has no poller: its
+    /// leaves own their `srt-rs` connections and are driven directly.
+    pub tcp_poller_max_events: usize,
     pub visit_max_units: usize,
     pub visit_max_bytes: usize,
     pub visit_max_us: u64,
@@ -89,7 +92,7 @@ impl Default for EgressFabricConfig {
             readiness_batch_budget: 64,
             timer_batch_budget: 64,
             idle_wait_ms: 25,
-            srt_poller_max_events: 1024,
+            tcp_poller_max_events: 1024,
             visit_max_units: 32,
             visit_max_bytes: 256 * 1024,
             visit_max_us: 2_000,
@@ -146,9 +149,9 @@ impl EgressFabricConfig {
             .clamp(1, 4096),
             idle_wait_ms: env_u64("RESTREAM_EGRESS_IDLE_WAIT_MS", defaults.idle_wait_ms)
                 .clamp(1, 1_000),
-            srt_poller_max_events: env_usize(
-                "RESTREAM_EGRESS_SRT_POLLER_MAX_EVENTS",
-                defaults.srt_poller_max_events,
+            tcp_poller_max_events: env_usize(
+                "RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS",
+                defaults.tcp_poller_max_events,
             )
             .clamp(1, 65_536),
             visit_max_units: env_usize("RESTREAM_EGRESS_VISIT_MAX_UNITS", defaults.visit_max_units)
@@ -297,9 +300,11 @@ pub struct AppConfig {
     /// or per shard alone, shared engine-wide across every pipeline
     /// (`false`, the pre-2026-08-14 behavior). Per-pipeline scoping closes
     /// a real cross-tenant coupling: two unrelated pipelines' shard *N*
-    /// would otherwise share one libsrt multiplexer and `CSndQueue` worker
-    /// thread purely because their shard-assignment formulas both produced
-    /// the same numeric shard id. Numerically a no-op for any
+    /// would otherwise share one egress multiplexer — today one
+    /// application-owned UDP socket and `srt-rs` `CallerTable`, formerly
+    /// one libsrt multiplexer and its `CSndQueue` worker thread — purely
+    /// because their shard-assignment formulas both produced the same
+    /// numeric shard id. Numerically a no-op for any
     /// single-pipeline deployment (including every MSR measurement to
     /// date); multiplexer count scales with `shard_count x
     /// active_pipeline_count` instead of a flat `shard_count` when enabled.
@@ -308,10 +313,14 @@ pub struct AppConfig {
     /// (`srt_connect_admission.rs`). Decouples connection-*establishment*
     /// concurrency from shard count: a mass output-creation burst (all of
     /// MSR's outputs added together) can resolve far more connects at once
-    /// than shard count alone would ever expose to libsrt without this.
-    /// Sized with margin under the measured ~120-connections-per-
-    /// multiplexer libsrt `CSndQueue` saturation point
-    /// (`docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`).
+    /// than shard count alone would ever expose to the transport without
+    /// this. **Provisional after the srt-rs cutover**: the current value was
+    /// sized with margin under the measured ~120-connections-per-multiplexer
+    /// libsrt `CSndQueue` saturation point
+    /// (`docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`),
+    /// a mechanism that no longer exists — egress now drives an
+    /// application-owned socket and `CallerTable` explicitly. Retained
+    /// pending remeasurement rather than re-derived without evidence.
     pub srt_egress_connect_concurrency: usize,
     pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
@@ -386,11 +395,21 @@ const OUTPUTS_PER_SHARD: u32 = 128;
 /// to buy parallelism per connection.
 ///
 /// SRT egress is different: every leaf on one shard shares that shard's
-/// libsrt egress multiplexer (`SrtEgressMuxerPorts`, `muxer_ports.rs`) and
-/// therefore one `CSndQueue` worker thread, and every send races a hard
-/// 250ms TSBPD delivery deadline. The right shard count for SRT is a
+/// egress multiplexer (`SrtEgressMuxerPorts`, `muxer_ports.rs`) — since the
+/// srt-rs cutover, one application-owned UDP socket and `CallerTable` driven
+/// from the shard thread; previously one libsrt multiplexer and its own
+/// `CSndQueue` worker thread — and every send races a hard 250ms TSBPD
+/// delivery deadline. The right shard count for SRT is a
 /// multiplexer-parallelism budget — bounded by CPU count, not by how many
-/// outputs happen to land on one feed. A feed with ~60 SRT outputs (MSR's
+/// outputs happen to land on one feed.
+///
+/// **This policy is provisional.** It was derived from the libsrt
+/// one-`CSndQueue`-worker-per-multiplexer model, which no longer describes
+/// the mechanism; the srt-rs path has no per-multiplexer worker thread.
+/// It is retained unchanged because changing a scaling law without a
+/// matched shard-count/caller-density remeasurement would be worse than a
+/// stale rationale — see the follow-up in
+/// `docs/agent-guidance/quality/backlog.md`. A feed with ~60 SRT outputs (MSR's
 /// real 5% slice at n=1,200) must not be capped at 1 shard / 1 multiplexer
 /// by an RTMP-shaped 128-outputs-per-shard threshold — that is the
 /// documented blocker for scaling SRT egress past the low hundreds
@@ -420,8 +439,9 @@ pub(crate) enum EgressShardProfile {
     /// outputs, bounded by the CPU-derived ceiling.
     OutputCount,
     /// SRT feeds: always claim the CPU-derived ceiling, independent of
-    /// output count — shard count is a libsrt-multiplexer parallelism
-    /// budget, and CPU count is its natural ceiling.
+    /// output count — shard count is an egress-multiplexer parallelism
+    /// budget, and CPU count is its natural ceiling. Provisional after the
+    /// srt-rs cutover; see `target_egress_fabric_shards`' note.
     SrtCpuParallel,
 }
 
@@ -815,7 +835,7 @@ impl AppConfig {
                 "readinessBatchBudget": self.egress_fabric.readiness_batch_budget,
                 "timerBatchBudget": self.egress_fabric.timer_batch_budget,
                 "idleWaitMs": self.egress_fabric.idle_wait_ms,
-                "srtPollerMaxEvents": self.egress_fabric.srt_poller_max_events,
+                "tcpPollerMaxEvents": self.egress_fabric.tcp_poller_max_events,
                 "visitMaxUnits": self.egress_fabric.visit_max_units,
                 "visitMaxBytes": self.egress_fabric.visit_max_bytes,
                 "visitMaxUs": self.egress_fabric.visit_max_us,

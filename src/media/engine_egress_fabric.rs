@@ -12,11 +12,10 @@ use crate::media::egress::shard::EgressShardGroupError;
 #[cfg(test)]
 use crate::media::egress::shard::EgressShardSnapshot;
 use crate::media::engine::MediaEngine;
-use crate::media::srt::SrtEgressPollError;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SrtFabricEnsureError {
-    Spawn(SrtFabricShardGroupError<SrtEgressPollError>),
+    Spawn(SrtFabricShardGroupError<String>),
     Runtime(EgressFabricRuntimeError),
 }
 
@@ -66,7 +65,6 @@ impl MediaEngine {
                 self.srt_egress_muxer_scope_key(pipeline_id),
                 config.shard_count(),
                 config.shard_config(),
-                config.srt_poller_max_events,
                 config.work_budget(),
                 |_| feed.clone_reader(),
                 srt_egress_muxer_port_reuse.clone(),
@@ -161,7 +159,6 @@ impl MediaEngine {
         let config = &self.config.egress_fabric;
         let shard_config = config.shard_config();
         let budget = config.work_budget();
-        let poller_max_events = config.srt_poller_max_events;
         let effective_cpus = crate::system_sampling::effective_cpu_count();
         let scope_key = self.srt_egress_muxer_scope_key(&pipeline_id).to_string();
         let connect_admission = self.srt_egress_connect_admission_handle();
@@ -170,10 +167,8 @@ impl MediaEngine {
             effective_cpus,
             shard_config,
             |shard_id| {
-                let poller = crate::media::srt::SrtFabricPoller::new(poller_max_events)?;
-                Ok::<_, crate::media::srt::SrtEgressPollError>(
+                Ok::<_, std::convert::Infallible>(
                     crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
-                        poller,
                         feed.clone_reader(),
                         budget,
                         // Same per-(pipeline, shard) scoping the initial

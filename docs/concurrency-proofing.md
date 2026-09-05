@@ -197,9 +197,9 @@ surface already covers it.
   - `first_visit_primes_the_cursor_epoch_from_the_feed`
   - `fresh_leaf_first_visit_starts_at_the_retained_keyframe_not_sequence_zero`
   - `fresh_leaf_first_visit_starts_at_the_live_edge_when_no_keyframe_is_retained`
-- `src/media/egress/backends/srt/muxer_ports.rs` (per-shard libsrt
-  multiplexer scoping — one `CSndQueue`/`CRcvQueue` worker pair per shard
-  instead of one for the whole process; gate step
+- `src/media/egress/backends/srt/muxer_ports.rs` (per-shard SRT egress
+  multiplexer scoping — one shared `srt-rs` UDP socket/`CallerTable` per
+  shard instead of one for the whole process; gate step
   `lib-srt-egress-muxer-port-shard-scoping`)
   - `distinct_shards_get_distinct_reuse_state`
   - `repeated_lookups_for_one_shard_share_reuse_state`
@@ -207,10 +207,6 @@ surface already covers it.
   - `srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state`
   - `srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry`
   - `srt_fabric_runtime_claims_one_libsrt_muxer_port_per_shard_shared_across_feeds`
-  - `srt_egress_muxer_port_claim_forgets_only_the_port_it_was_issued`
-  - `srt_egress_muxer_port_first_claim_never_forgets_a_port`
-  - `single_socket_connect_closes_socket_and_forgets_port_when_muxer_port_bind_fails`
-  - `single_socket_connect_after_a_failed_muxer_port_bind_records_a_freshly_autoselected_port`
 - `src/media/avio.rs`
   - close/wake/backpressure loom coverage in `tests/avio_loom.rs`
   - `media::avio::tests`

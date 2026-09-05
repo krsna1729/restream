@@ -119,8 +119,7 @@ impl TcpReceiverStats {
 /// Throughput in Mbps from two cumulative byte-counter samples, for turning
 /// `TCP_INFO`'s `tcpi_bytes_sent`/`tcpi_bytes_received` (a running total, not
 /// a rate) into a per-second figure the same way `rtmp/ingest.rs`'s inline
-/// receive-side computation and `media::srt_quality::counter_rate`'s
-/// sender-side computation both already do. `None` when the counter went
+/// receive-side computation already does. `None` when the counter went
 /// backward (a reset, not real regression — TCP byte counters do not wrap
 /// in practice) or the sample interval was zero or negative (clock not
 /// actually advancing between samples).
@@ -800,9 +799,7 @@ mod tests {
     /// two `TCP_INFO` samples the same way `rtmp/ingest.rs` computes
     /// `tcp_receive_rate_mbps` — both now share this function, but before
     /// the shared extraction the RTMP-egress side's copy of this exact math
-    /// had no dedicated test, unlike SRT's `counter_rate` (see
-    /// `srt_quality.rs`'s regression/zero-elapsed tests), which this
-    /// mirrors.
+    /// had no dedicated test.
     #[test]
     fn bytes_delta_rate_mbps_computes_megabits_per_second() {
         // 1,000,000 bytes over 1 second = 8 Mbps.

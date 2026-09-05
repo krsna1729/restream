@@ -1,23 +1,11 @@
 use super::super::*;
-use super::support::{budget, common, feed, leaf, wrapped_feed};
+use super::support::{budget, feed, leaf, wrapped_feed};
 use crate::media::egress::backend::{EngineProgress, Readiness, WaitCondition};
 use crate::media::egress::scheduler::VisitDecision;
 use crate::media::egress::visit::EngineVisitResult;
-use crate::media::srt::SrtTraceBStats;
+use crate::media::snapshots::PublisherQuality;
 use bytes::Bytes;
 use std::time::Instant;
-
-#[test]
-fn srt_fabric_leaf_from_socket_keeps_native_sender_opaque() {
-    let feed = feed([Bytes::from_static(b"abc")]);
-    let mut leaf = srt_fabric_leaf_from_socket(common(9), 42);
-
-    let result = leaf.visit_ready(8, Readiness::WRITABLE, &feed, budget());
-
-    assert!(matches!(result, EngineVisitResult::StaleGeneration));
-    assert_eq!(leaf.common().cursor.next_sequence, 0);
-    assert_eq!(leaf.common().progress.total_bytes_sent, 0);
-}
 
 #[test]
 fn srt_fabric_leaf_visits_ready_ts_feed_through_common_engine_visit() {
@@ -205,7 +193,7 @@ fn observe_stall_uses_native_drain_as_progress() {
 /// resetting its clock every sweep.
 #[test]
 fn observe_stall_does_not_count_drop_backlog_decline_as_progress() {
-    use crate::media::srt::{NativeSendBacklog, SrtTraceBStats};
+    use crate::media::srt::NativeSendBacklog;
     use std::time::{Duration, Instant};
 
     let deadline = leaf(3).common().limits.max_backpressure_duration;
@@ -218,9 +206,9 @@ fn observe_stall_does_not_count_drop_backlog_decline_as_progress() {
         packets: 8,
         ms: 40,
     });
-    leaf.transport_mut().quality_stats = Some(SrtTraceBStats {
-        pkt_snd_drop_total: 1_000,
-        ..unsafe { std::mem::zeroed() }
+    leaf.transport_mut().quality = Some(PublisherQuality {
+        packets_sent_drop: Some(1_000),
+        ..PublisherQuality::default()
     });
     assert_eq!(
         leaf.observe_stall(start, Some(1_000), 0),
@@ -235,9 +223,9 @@ fn observe_stall_does_not_count_drop_backlog_decline_as_progress() {
         packets: 5,
         ms: 25,
     });
-    leaf.transport_mut().quality_stats = Some(SrtTraceBStats {
-        pkt_snd_drop_total: 1_037,
-        ..unsafe { std::mem::zeroed() }
+    leaf.transport_mut().quality = Some(PublisherQuality {
+        packets_sent_drop: Some(1_037),
+        ..PublisherQuality::default()
     });
     let near_deadline = start + deadline - Duration::from_millis(1);
     assert_eq!(
@@ -279,7 +267,7 @@ fn observe_stall_lag_over_limit_is_stalled_despite_native_drain() {
     );
 }
 
-/// The gap this closes: fabric SRT egress never called `sender_quality_stats`
+/// The gap this closes: fabric SRT egress never called `sender_quality`
 /// at all before this, so `ActiveEgress.quality` stayed at its all-`None`
 /// default for every fabric-owned SRT output, unlike legacy egress which
 /// sampled `srt_bistats` every second. Proves the leaf actually converts a
@@ -287,11 +275,11 @@ fn observe_stall_lag_over_limit_is_stalled_despite_native_drain() {
 #[test]
 fn srt_fabric_leaf_samples_quality_from_transport_stats() {
     let mut leaf = leaf(1);
-    leaf.transport_mut().quality_stats = Some(SrtTraceBStats {
-        ms_rtt: 42.5,
-        mbps_send_rate: 12.0,
-        pkt_snd_loss_total: 3,
-        ..unsafe { std::mem::zeroed() }
+    leaf.transport_mut().quality = Some(PublisherQuality {
+        ms_rtt: Some(42.5),
+        mbps_send_rate: Some(12.0),
+        packets_sent_loss: Some(3),
+        ..PublisherQuality::default()
     });
 
     let quality = leaf

@@ -1,13 +1,11 @@
 use super::super::*;
 use super::support::{
-    FakeConnectCall, FakeReadinessPoller, FakeResolveCompletionSource, FakeSocketConfigurator,
-    FakeSocketConnector, common, feed, shared_sender, shared_sender_recording,
+    FakeConnectCall, FakeResolveCompletionSource, FakeSocketConnector, common, feed, shared_sender,
 };
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::policy::{LeafPolicy, WorkBudget};
 use crate::media::egress::scheduler::LeafKey;
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
-use crate::media::srt::{SrtEgressInterest, SrtEgressSendMode, SrtReadyLeaf};
 use bytes::Bytes;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -45,21 +43,12 @@ fn srt_output_spec(id: &str, generation: u64) -> OutputSpec {
 /// end-to-end. `SrtShardBackend` is generic over its connector, so this
 /// needs no test-only entry point on the backend itself.
 fn backend_with_pending_connect(
-    poller: FakeReadinessPoller,
-    configurator: FakeSocketConfigurator,
     connector: FakeSocketConnector,
     spec: OutputSpec,
-) -> SrtShardBackend<
-    FakeReadinessPoller,
-    FakeSocketConfigurator,
-    FakeSocketConnector,
-    NoopSrtResolveCompletionSource,
-> {
+) -> SrtShardBackend<FakeSocketConnector, NoopSrtResolveCompletionSource> {
     let mut backend = SrtShardBackend::with_runtime_components(
-        poller,
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        configurator,
         connector,
         NoopSrtResolveCompletionSource,
     );
@@ -81,53 +70,22 @@ fn srt_output_spec_with_termination_flag(
 }
 
 #[test]
-fn srt_shard_backend_configures_connected_socket_for_fabric_nonblocking() {
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
-    let configurator = FakeSocketConfigurator::default();
-    let configurator_handle = configurator.clone();
-    let mut backend = SrtShardBackend::with_socket_configurator(
-        poller,
-        feed([Bytes::from_static(b"abc")]),
-        WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        configurator,
-    );
-
-    let key = backend.add_connected_socket(common(7), 42).unwrap();
-
-    assert_eq!(key, LeafKey(0));
-    assert_eq!(
-        configurator_handle.calls(),
-        vec![(42, SrtEgressSendMode::FabricNonblocking)]
-    );
-    assert_eq!(
-        poller_handle.registered(),
-        vec![(42, LeafKey(0), 7, SrtEgressInterest::WRITE)]
-    );
-}
-
-#[test]
 fn srt_shard_backend_complete_pending_connect_returns_connect_error_before_registering() {
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
-    let configurator = FakeSocketConfigurator::default();
-    let configurator_handle = configurator.clone();
     let connector = FakeSocketConnector::failing("connect failed");
     let connector_handle = connector.clone();
     let (spec, terminated) = srt_output_spec_with_termination_flag("out-a", 7);
-    let mut backend = backend_with_pending_connect(poller, configurator, connector, spec);
+    let mut backend = backend_with_pending_connect(connector, spec);
 
     let result = backend.complete_pending_connect(&OutputId::new("out-a"), 7, &peer_addrs());
 
     assert_eq!(
         result,
         Err(SrtPendingConnectError::Connect(
-            SrtBackendConnectError::Connect("connect failed".to_string())
+            "connect failed".to_string()
         ))
     );
     assert_eq!(connector_handle.calls().len(), 1);
-    assert!(configurator_handle.calls().is_empty());
-    assert!(poller_handle.registered().is_empty());
+    assert!(backend.output_sockets.is_empty());
     // The application never sees a leaf for a connect that failed outright,
     // so nothing else would report the attempt died — only this path marks
     // it. Previously unexercised, because the test-only sibling this test
@@ -136,39 +94,8 @@ fn srt_shard_backend_complete_pending_connect_returns_connect_error_before_regis
 }
 
 #[test]
-fn srt_shard_backend_complete_pending_connect_returns_add_error_after_connect() {
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
-    let configurator = FakeSocketConfigurator::failing();
-    let configurator_handle = configurator.clone();
-    let connector = FakeSocketConnector::returning(42);
-    let connector_handle = connector.clone();
-    let (spec, terminated) = srt_output_spec_with_termination_flag("out-a", 7);
-    let mut backend = backend_with_pending_connect(poller, configurator, connector, spec);
-
-    let result = backend.complete_pending_connect(&OutputId::new("out-a"), 7, &peer_addrs());
-
-    assert!(matches!(
-        result,
-        Err(SrtPendingConnectError::Connect(
-            SrtBackendConnectError::Add(_)
-        ))
-    ));
-    assert_eq!(connector_handle.calls().len(), 1);
-    assert_eq!(
-        configurator_handle.calls(),
-        vec![(42, SrtEgressSendMode::FabricNonblocking)]
-    );
-    assert!(poller_handle.registered().is_empty());
-    // A socket that connected but could not be adopted is the same
-    // application-visible outcome as a failed connect.
-    assert!(terminated.load(std::sync::atomic::Ordering::Relaxed));
-}
-
-#[test]
 fn srt_shard_backend_add_srt_command_queues_pending_connect() {
     let mut backend = SrtShardBackend::new(
-        FakeReadinessPoller::default(),
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
     );
@@ -212,7 +139,6 @@ fn srt_shard_backend_parses_broadcast_bond_mode() {
 #[test]
 fn srt_shard_backend_ignores_non_srt_add_command() {
     let mut backend = SrtShardBackend::new(
-        FakeReadinessPoller::default(),
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
     );
@@ -230,7 +156,6 @@ fn srt_shard_backend_ignores_non_srt_add_command() {
 #[test]
 fn srt_shard_backend_update_srt_command_replaces_pending_connect() {
     let mut backend = SrtShardBackend::new(
-        FakeReadinessPoller::default(),
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
     );
@@ -261,7 +186,6 @@ fn srt_shard_backend_update_srt_command_replaces_pending_connect() {
 #[test]
 fn srt_shard_backend_remove_command_clears_pending_connect() {
     let mut backend = SrtShardBackend::new(
-        FakeReadinessPoller::default(),
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
     );
@@ -282,14 +206,9 @@ fn srt_shard_backend_remove_command_clears_pending_connect() {
 #[test]
 fn srt_shard_backend_complete_pending_connect_registers_resolved_socket() {
     let peer_addrs = peer_addrs();
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
-    let configurator = FakeSocketConfigurator::default();
-    let configurator_handle = configurator.clone();
-    let connector = FakeSocketConnector::returning(42);
+    let connector = FakeSocketConnector::returning();
     let connector_handle = connector.clone();
-    let mut backend =
-        backend_with_pending_connect(poller, configurator, connector, srt_output_spec("out-a", 7));
+    let mut backend = backend_with_pending_connect(connector, srt_output_spec("out-a", 7));
 
     let key = backend
         .complete_pending_connect(&OutputId::new("out-a"), 7, &peer_addrs)
@@ -305,26 +224,14 @@ fn srt_shard_backend_complete_pending_connect_registers_resolved_socket() {
             connect_timeout_ms: 30000,
         }]
     );
-    assert_eq!(
-        configurator_handle.calls(),
-        vec![(42, SrtEgressSendMode::FabricNonblocking)]
-    );
-    assert_eq!(
-        poller_handle.registered(),
-        vec![(42, LeafKey(0), 7, SrtEgressInterest::WRITE)]
-    );
+    assert!(backend.output_sockets.contains_key(&OutputId::new("out-a")));
 }
 
 #[test]
 fn srt_shard_backend_complete_pending_connect_rejects_stale_generation() {
-    let connector = FakeSocketConnector::returning(42);
+    let connector = FakeSocketConnector::returning();
     let connector_handle = connector.clone();
-    let mut backend = backend_with_pending_connect(
-        FakeReadinessPoller::default(),
-        FakeSocketConfigurator::default(),
-        connector,
-        srt_output_spec("out-a", 7),
-    );
+    let mut backend = backend_with_pending_connect(connector, srt_output_spec("out-a", 7));
 
     let result = backend.complete_pending_connect(&OutputId::new("out-a"), 6, &peer_addrs());
 
@@ -335,14 +242,9 @@ fn srt_shard_backend_complete_pending_connect_rejects_stale_generation() {
 
 #[test]
 fn srt_shard_backend_complete_pending_connect_rejects_missing_output() {
-    let connector = FakeSocketConnector::returning(42);
+    let connector = FakeSocketConnector::returning();
     let connector_handle = connector.clone();
-    let mut backend = backend_with_pending_connect(
-        FakeReadinessPoller::default(),
-        FakeSocketConfigurator::default(),
-        connector,
-        srt_output_spec("out-a", 7),
-    );
+    let mut backend = backend_with_pending_connect(connector, srt_output_spec("out-a", 7));
 
     let result = backend.complete_pending_connect(&OutputId::new("out-missing"), 7, &peer_addrs());
 
@@ -353,17 +255,11 @@ fn srt_shard_backend_complete_pending_connect_rejects_missing_output() {
 #[test]
 fn srt_shard_backend_media_tick_completes_resolved_connect() {
     let peer_addrs = peer_addrs();
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
-    let configurator = FakeSocketConfigurator::default();
-    let configurator_handle = configurator.clone();
-    let connector = FakeSocketConnector::returning(42);
+    let connector = FakeSocketConnector::returning();
     let connector_handle = connector.clone();
     let mut backend = SrtShardBackend::with_runtime_components(
-        poller,
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        configurator,
         connector,
         FakeResolveCompletionSource::with(vec![SrtResolvedConnect {
             output_id: OutputId::new("out-a"),
@@ -390,14 +286,7 @@ fn srt_shard_backend_media_tick_completes_resolved_connect() {
             connect_timeout_ms: 30000,
         }]
     );
-    assert_eq!(
-        configurator_handle.calls(),
-        vec![(42, SrtEgressSendMode::FabricNonblocking)]
-    );
-    assert_eq!(
-        poller_handle.registered(),
-        vec![(42, LeafKey(0), 7, SrtEgressInterest::WRITE)]
-    );
+    assert!(backend.output_sockets.contains_key(&OutputId::new("out-a")));
 }
 
 #[test]
@@ -442,15 +331,11 @@ fn srt_shard_backend_media_tick_drains_resolve_completion_queue() {
             peer_addrs: peer_addrs.clone(),
         })
         .unwrap();
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
-    let connector = FakeSocketConnector::returning(42);
+    let connector = FakeSocketConnector::returning();
     let connector_handle = connector.clone();
     let mut backend = SrtShardBackend::with_runtime_components(
-        poller,
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
         connector,
         queue,
     );
@@ -473,21 +358,15 @@ fn srt_shard_backend_media_tick_drains_resolve_completion_queue() {
             connect_timeout_ms: 30000,
         }]
     );
-    assert_eq!(
-        poller_handle.registered(),
-        vec![(42, LeafKey(0), 7, SrtEgressInterest::WRITE)]
-    );
 }
 
 #[test]
 fn srt_shard_backend_media_tick_ignores_stale_resolved_connect() {
-    let connector = FakeSocketConnector::returning(42);
+    let connector = FakeSocketConnector::returning();
     let connector_handle = connector.clone();
     let mut backend = SrtShardBackend::with_runtime_components(
-        FakeReadinessPoller::default(),
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
         connector,
         FakeResolveCompletionSource::with(vec![SrtResolvedConnect {
             output_id: OutputId::new("out-a"),
@@ -509,65 +388,6 @@ fn srt_shard_backend_media_tick_ignores_stale_resolved_connect() {
     assert!(connector_handle.calls().is_empty());
 }
 
-#[test]
-fn srt_shard_backend_rejects_socket_setup_failure_before_registering_leaf() {
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
-    let configurator = FakeSocketConfigurator::failing();
-    let configurator_handle = configurator.clone();
-    let mut backend = SrtShardBackend::with_socket_configurator(
-        poller,
-        feed([Bytes::from_static(b"abc")]),
-        WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        configurator,
-    );
-
-    let result = backend.add_connected_socket(common(7), 42);
-
-    assert!(matches!(result, Err(SrtBackendAddError::Socket(_))));
-    assert_eq!(
-        configurator_handle.calls(),
-        vec![(42, SrtEgressSendMode::FabricNonblocking)]
-    );
-    assert!(poller_handle.registered().is_empty());
-}
-
-#[test]
-fn srt_shard_backend_socket_setup_failure_preserves_existing_leaf() {
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
-    let configurator = FakeSocketConfigurator::failing();
-    let mut backend = SrtShardBackend::with_socket_configurator(
-        poller,
-        feed([Bytes::from_static(b"abc")]),
-        WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        configurator,
-    );
-    let probe = shared_sender();
-    let key = backend
-        .add_leaf(42, SrtFabricLeaf::new(common(7), Box::new(probe.sender)))
-        .unwrap();
-
-    let result = backend.add_connected_socket(common(8), 99);
-    poller_handle.push_ready(SrtReadyLeaf {
-        socket: 42,
-        key,
-        generation: 7,
-        writable: true,
-    });
-
-    assert!(matches!(result, Err(SrtBackendAddError::Socket(_))));
-    assert_eq!(
-        backend.on_ready(),
-        EgressShardCommandEffect::ScheduleReady { count: 1 }
-    );
-    assert_eq!(
-        probe.sends.lock().unwrap().as_slice(),
-        &[Bytes::from_static(b"abc")]
-    );
-    assert_eq!(*probe.closed.lock().unwrap(), 0);
-}
-
 // A blocked leaf must not strand an already-ready neighbor behind it: one
 // poll batch reports both ready (blocked first), the first on_ready() call
 // must ask for another pass (ScheduleReady) instead of reporting Continue,
@@ -582,10 +402,7 @@ impl SrtMessageSender for WouldBlockSender {
 
 #[test]
 fn on_ready_does_not_strand_a_second_ready_leaf_behind_a_would_block_leaf() {
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
     let mut backend = SrtShardBackend::new(
-        poller,
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
     );
@@ -599,25 +416,14 @@ fn on_ready_does_not_strand_a_second_ready_leaf_behind_a_would_block_leaf() {
     );
     let blocked_sender: Box<dyn SrtMessageSender + Send> = Box::new(WouldBlockSender);
     let blocked = SrtFabricLeaf::new(blocked_common, blocked_sender);
-    let blocked_key = backend.add_leaf(41, blocked).unwrap();
+    backend.add_leaf(blocked);
     let probe = shared_sender();
-    let healthy_key = backend
-        .add_leaf(42, SrtFabricLeaf::new(common(7), Box::new(probe.sender)))
-        .unwrap();
+    backend.add_leaf(SrtFabricLeaf::new(common(7), Box::new(probe.sender)));
 
-    poller_handle.push_ready(SrtReadyLeaf {
-        socket: 41,
-        key: blocked_key,
-        generation: 6,
-        writable: true,
-    });
-    poller_handle.push_ready(SrtReadyLeaf {
-        socket: 42,
-        key: healthy_key,
-        generation: 7,
-        writable: true,
-    });
-
+    // Both leaves are freshly added (neither enqueued yet), so the first
+    // `on_ready()` call's internal `poll_ready()` batches both -- blocked
+    // first (added first), healthy second -- exactly like a poller
+    // reporting both writable in one pass used to.
     let effect = backend.on_ready();
     assert_eq!(effect, EgressShardCommandEffect::ScheduleReady { count: 1 });
     assert!(probe.sends.lock().unwrap().is_empty(), "not skipped yet");
@@ -629,25 +435,62 @@ fn on_ready_does_not_strand_a_second_ready_leaf_behind_a_would_block_leaf() {
     );
 }
 
+/// The shared socket/`CallerTable` a shard's leaves reuse is whole-table
+/// state: driving it drains the common UDP socket, flushes common outbound
+/// packets, and polls every logical caller. Readiness driving must therefore
+/// not scale with the number of leaves sharing it — otherwise a shard with N
+/// shared leaves relocks the shared mutex and redoes that table-wide work N
+/// times per pass. (`SrtFabricPoller` used to dedup this with a
+/// `driven_shared` set keyed on the state's `Arc` identity; the shard now
+/// owns the single state directly and drives it once, see `poll_ready`.)
+///
+/// Scope: this pins the *readiness* path only. The send path drives the
+/// table again per accepted message, so total drives during a pass that
+/// actually sends is higher — batching that is a separate, pre-existing
+/// question (see `drive_shared_srt_egress`). The leaves here are idle
+/// (unconnected callers accept no data), which is what isolates the
+/// readiness count.
+///
+/// Drives real `RustSrtSocket::Shared` leaves through the production
+/// connector — a fake sender's `drive` is a no-op, so it could not tell the
+/// per-leaf and per-pass behaviors apart.
+#[test]
+fn poll_ready_drive_of_the_shared_muxer_does_not_scale_with_leaf_count() {
+    let state: muxer_ports::SrtEgressMuxerPortState = Arc::new(Mutex::new(None));
+    let mut backend = SrtShardBackend::new(
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    )
+    .with_srt_egress_muxer_port_reuse(Arc::clone(&state), true);
+    let peer = ["127.0.0.1:9000".parse().unwrap()];
+    for id in ["out-a", "out-b", "out-c", "out-d"] {
+        backend.on_command(EgressCommand::Add(srt_output_spec(id, 7)));
+        backend
+            .complete_pending_connect(&OutputId::new(id), 7, &peer)
+            .expect("shared SRT connect");
+    }
+
+    // Connecting drives the table too, so measure the delta across exactly
+    // one readiness pass rather than the absolute count.
+    let before = state.lock().unwrap().as_ref().unwrap().drive_calls();
+    backend.on_ready();
+    let after = state.lock().unwrap().as_ref().unwrap().drive_calls();
+
+    assert_eq!(
+        after - before,
+        1,
+        "readiness driving must not scale with the number of leaves sharing one multiplexer"
+    );
+}
+
 #[test]
 fn srt_shard_backend_ready_event_visits_registered_leaf() {
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
     let mut backend = SrtShardBackend::new(
-        poller,
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
     );
     let probe = shared_sender();
-    let key = backend
-        .add_leaf(42, SrtFabricLeaf::new(common(7), Box::new(probe.sender)))
-        .unwrap();
-    poller_handle.push_ready(SrtReadyLeaf {
-        socket: 42,
-        key,
-        generation: 7,
-        writable: true,
-    });
+    backend.add_leaf(SrtFabricLeaf::new(common(7), Box::new(probe.sender)));
 
     let effect = backend.on_ready();
 
@@ -660,19 +503,15 @@ fn srt_shard_backend_ready_event_visits_registered_leaf() {
 
 #[test]
 fn srt_shard_backend_ignores_unregistered_ready_leaf() {
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
     let mut backend = SrtShardBackend::new(
-        poller,
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
     );
     let probe = shared_sender();
-    backend
-        .add_leaf(42, SrtFabricLeaf::new(common(7), Box::new(probe.sender)))
-        .unwrap();
-    poller_handle.push_ready(SrtReadyLeaf {
-        socket: 99,
+    backend.add_leaf(SrtFabricLeaf::new(common(7), Box::new(probe.sender)));
+    // A ready event for a key nothing was ever assigned to -- must not
+    // panic or visit anything.
+    backend.ready.push_back(SrtReadyLeaf {
         key: LeafKey(9),
         generation: 7,
         writable: true,
@@ -685,45 +524,18 @@ fn srt_shard_backend_ignores_unregistered_ready_leaf() {
 }
 
 #[test]
-fn srt_shard_backend_remove_command_deregisters_before_closing_leaf() {
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let poller = FakeReadinessPoller::with_events(Arc::clone(&events));
-    let poller_handle = poller.clone();
-    let mut backend = SrtShardBackend::new(
-        poller,
-        feed([Bytes::from_static(b"abc")]),
-        WorkBudget::new(8, 1024, Duration::from_millis(1)),
-    );
-    let probe = shared_sender_recording(Arc::clone(&events));
-    backend
-        .add_leaf(42, SrtFabricLeaf::new(common(7), Box::new(probe.sender)))
-        .unwrap();
-
-    let effect = backend.on_command(EgressCommand::Remove(OutputId::new("out-srt")));
-
-    assert_eq!(effect, EgressShardCommandEffect::Continue);
-    assert_eq!(poller_handle.removed(), vec![42]);
-    assert_eq!(*probe.closed.lock().unwrap(), 1);
-    assert_eq!(events.lock().unwrap().as_slice(), &["remove", "close"]);
-}
-
-#[test]
 fn srt_shard_backend_removed_leaf_ignores_late_readiness() {
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
     let mut backend = SrtShardBackend::new(
-        poller,
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
     );
     let probe = shared_sender();
-    let key = backend
-        .add_leaf(42, SrtFabricLeaf::new(common(7), Box::new(probe.sender)))
-        .unwrap();
+    let key = backend.add_leaf(SrtFabricLeaf::new(common(7), Box::new(probe.sender)));
 
     backend.on_command(EgressCommand::Remove(OutputId::new("out-srt")));
-    poller_handle.push_ready(SrtReadyLeaf {
-        socket: 42,
+    // Simulates a ready event that was already queued before the leaf was
+    // removed -- the slot at `key` is now `None`.
+    backend.ready.push_back(SrtReadyLeaf {
         key,
         generation: 7,
         writable: true,
@@ -736,42 +548,16 @@ fn srt_shard_backend_removed_leaf_ignores_late_readiness() {
 
 #[test]
 fn srt_shard_backend_shutdown_closes_registered_leaves() {
-    let poller = FakeReadinessPoller::default();
     let mut backend = SrtShardBackend::new(
-        poller,
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
     );
     let probe = shared_sender();
-    backend
-        .add_leaf(42, SrtFabricLeaf::new(common(7), Box::new(probe.sender)))
-        .unwrap();
+    backend.add_leaf(SrtFabricLeaf::new(common(7), Box::new(probe.sender)));
 
     backend.on_shutdown();
 
     assert_eq!(*probe.closed.lock().unwrap(), 1);
-}
-
-#[test]
-fn srt_shard_backend_shutdown_deregisters_before_closing_leaves() {
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let poller = FakeReadinessPoller::with_events(Arc::clone(&events));
-    let poller_handle = poller.clone();
-    let mut backend = SrtShardBackend::new(
-        poller,
-        feed([Bytes::from_static(b"abc")]),
-        WorkBudget::new(8, 1024, Duration::from_millis(1)),
-    );
-    let probe = shared_sender_recording(Arc::clone(&events));
-    backend
-        .add_leaf(42, SrtFabricLeaf::new(common(7), Box::new(probe.sender)))
-        .unwrap();
-
-    backend.on_shutdown();
-
-    assert_eq!(poller_handle.removed(), vec![42]);
-    assert_eq!(*probe.closed.lock().unwrap(), 1);
-    assert_eq!(events.lock().unwrap().as_slice(), &["remove", "close"]);
 }
 
 /// Test-local sender whose native backlog is settable from outside the
@@ -796,20 +582,16 @@ impl SrtMessageSender for SharedBacklogSender {
 }
 
 /// Stall-driven recovery: a leaf whose native sender buffer holds data
-/// without declining past the no-progress deadline is closed by the sweep,
-/// deregistered from the poller, and leaves no socket mapping behind.
+/// without declining past the no-progress deadline is closed by the sweep
+/// and leaves no socket mapping behind.
 #[test]
 fn stall_sweep_closes_leaf_with_stuck_native_backlog() {
     use crate::media::srt::NativeSendBacklog;
     use std::time::Instant;
 
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
-    let mut backend = SrtShardBackend::with_socket_configurator(
-        poller,
+    let mut backend = SrtShardBackend::new(
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
     );
 
     let sender = SharedBacklogSender::default();
@@ -823,18 +605,16 @@ fn stall_sweep_closes_leaf_with_stuck_native_backlog() {
         Box::new(sender) as Box<dyn SrtMessageSender + Send>,
     );
     let deadline = leaf.common().limits.max_backpressure_duration;
-    backend.add_leaf(42, leaf).unwrap();
+    backend.add_leaf(leaf);
 
     // First sweep: backpressured, within the deadline — nothing closes.
     let start = Instant::now();
     backend.sweep_stalled_leaves(start);
     assert_eq!(backend.output_sockets.len(), 1);
 
-    // Past the no-progress deadline with no native decline: closed and
-    // deregistered.
+    // Past the no-progress deadline with no native decline: closed.
     backend.sweep_stalled_leaves(start + deadline + Duration::from_secs(2));
     assert!(backend.output_sockets.is_empty());
-    assert_eq!(poller_handle.removed(), vec![42]);
 }
 
 /// The sweep leaves healthy leaves alone: a declining native backlog keeps
@@ -845,12 +625,9 @@ fn stall_sweep_spares_leaf_with_draining_native_backlog() {
     use crate::media::srt::NativeSendBacklog;
     use std::time::Instant;
 
-    let poller = FakeReadinessPoller::default();
-    let mut backend = SrtShardBackend::with_socket_configurator(
-        poller,
+    let mut backend = SrtShardBackend::new(
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
     );
 
     let sender = SharedBacklogSender::default();
@@ -865,7 +642,7 @@ fn stall_sweep_spares_leaf_with_draining_native_backlog() {
         Box::new(sender) as Box<dyn SrtMessageSender + Send>,
     );
     let deadline = leaf.common().limits.max_backpressure_duration;
-    backend.add_leaf(42, leaf).unwrap();
+    backend.add_leaf(leaf);
 
     let start = Instant::now();
     backend.sweep_stalled_leaves(start);
@@ -894,16 +671,13 @@ fn feed_wake_drives_connected_leaf_to_send_on_shard_thread() {
     use crate::media::egress::shard::{EgressShardConfig, EgressShardHandle};
     use std::time::Instant;
 
-    let poller = FakeReadinessPoller::default();
     let probe = shared_sender();
-    let mut backend = SrtShardBackend::with_socket_configurator(
-        poller.clone(),
+    let mut backend = SrtShardBackend::new(
         feed([
             Bytes::from_static(b"payload-1"),
             Bytes::from_static(b"payload-2"),
         ]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
     );
     let bytes_out = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let last_progress_ms = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -916,9 +690,8 @@ fn feed_wake_drives_connected_leaf_to_send_on_shard_thread() {
         common(7).with_progress_sink(sink),
         Box::new(probe.sender) as Box<dyn SrtMessageSender + Send>,
     );
-    let key = backend.add_leaf(42, leaf).unwrap();
-    poller.push_ready(SrtReadyLeaf {
-        socket: 42,
+    let key = backend.add_leaf(leaf);
+    backend.ready.push_back(SrtReadyLeaf {
         key,
         generation: 7,
         writable: true,
@@ -962,13 +735,9 @@ fn feed_wake_drives_connected_leaf_to_send_on_shard_thread() {
 /// stalling the output with zero delivered bytes.
 #[test]
 fn on_ready_removes_leaf_on_close_decision() {
-    let poller = FakeReadinessPoller::default();
-    let poller_handle = poller.clone();
-    let mut backend = SrtShardBackend::with_socket_configurator(
-        poller,
+    let mut backend = SrtShardBackend::new(
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConfigurator::default(),
     );
 
     struct PeerClosedSender;
@@ -983,16 +752,9 @@ fn on_ready_removes_leaf_on_close_decision() {
         common(7),
         Box::new(PeerClosedSender) as Box<dyn SrtMessageSender + Send>,
     );
-    let key = backend.add_leaf(42, leaf).unwrap();
-    poller_handle.push_ready(SrtReadyLeaf {
-        socket: 42,
-        key,
-        generation: 7,
-        writable: true,
-    });
+    backend.add_leaf(leaf);
 
     backend.on_ready();
 
     assert!(backend.output_sockets.is_empty());
-    assert_eq!(poller_handle.removed(), vec![42]);
 }
