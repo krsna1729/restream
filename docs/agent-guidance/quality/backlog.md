@@ -35,8 +35,10 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   after each successful `send_shared`, and `SrtEgressEngine::send_pending`
   loops several ≤1316-byte fragments per visit, so a busy pass performs many
   whole-table drives (drain shared socket, flush shared outbound, poll every
-  caller) under one mutex. Predates the srt-rs cutover; PR #141 bounded only
-  the *readiness* path (`poll_ready` drives the table once regardless of leaf
+  caller) under one mutex. Predates PR #141 (it arrived with the srt-rs
+  cutover itself — the `Shared`/`CallerTable` path is post-cutover
+  architecture — and was already on #141's base); #141 bounded only the
+  *readiness* path (`poll_ready` drives the table once regardless of leaf
   count, proven by
   `poll_ready_drive_of_the_shared_muxer_does_not_scale_with_leaf_count`) and
   deliberately did not touch the send path.
