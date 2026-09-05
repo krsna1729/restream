@@ -1419,7 +1419,9 @@ Current branch status:
     (not just stored in a registry no one reads).
   - Reused `srt_poller_max_events` for the RTMP TCP poller's max-events
     tuning rather than adding a duplicate config knob; split them later
-    if tuning needs diverge.
+    if tuning needs diverge. (Later renamed `tcp_poller_max_events` /
+    `RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS` once the SRT poller was deleted
+    and RTMP became its only consumer.)
 
 #### Three shard-liveness bugs found and fixed after an external code review
 

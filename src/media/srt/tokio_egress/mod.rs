@@ -17,23 +17,12 @@ use std::time::{Duration, Instant};
 
 use crate::media::egress::backend::CloseReason;
 use crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPortState;
+use crate::media::snapshots::PublisherQuality;
 use bytes::Bytes;
 use shiguredo_srt::{ConnectionState, Timestamp};
 use srt_transport::OutputDrainBudget;
 use srt_transport::tokio_transport::{Conn, GroupConn as TokioGroupConn};
 use srt_transport::{LogicalCallerId, LogicalCallerState, LogicalCallerStats};
-
-/// Compatibility snapshot retained for the egress quality/test contract.
-/// srt-rs does not expose the native `BStats` ABI; live transport metrics are
-/// currently optional, while fakes can still exercise quality conversion.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct SrtTraceBStats {
-    pub ms_rtt: f64,
-    pub mbps_send_rate: f64,
-    pub pkt_snd_loss_total: i32,
-    pub pkt_snd_drop_total: i32,
-}
 
 fn should_use_shared_srt_egress_state(peer_count: usize, has_shared_state: bool) -> bool {
     peer_count == 1 && has_shared_state
@@ -50,6 +39,26 @@ enum RustSrtSocket {
 
 mod shared;
 pub(crate) use shared::SharedSrtEgress;
+
+/// Drives one shard's shared SRT egress socket and `CallerTable` once, if a
+/// leaf has bound it yet.
+///
+/// This is deliberately *not* reachable through `SrtMessageSender::drive`:
+/// every `Shared` leaf on a shard holds a clone of the same
+/// `SrtEgressMuxerPortState`, and `SharedSrtEgress::drive` is a whole-table
+/// operation (drain the common UDP socket, flush common outbound packets,
+/// poll every logical caller). Driving it per leaf would take the shared
+/// mutex and redo that table-wide work N times per readiness pass for N
+/// leaves sharing one multiplexer. The shard calls this once per pass
+/// instead (`SrtShardBackend::poll_ready`).
+pub(crate) fn drive_shared_srt_egress(state: &SrtEgressMuxerPortState) {
+    let Ok(mut state) = state.lock() else {
+        return;
+    };
+    if let Some(shared) = state.as_mut() {
+        let _ = shared.drive(timestamp_now());
+    }
+}
 
 impl RustSrtSocket {
     fn drive_connection(&mut self, now: Timestamp, runtime: &tokio::runtime::Runtime) -> bool {
@@ -68,14 +77,12 @@ impl RustSrtSocket {
                     .iter()
                     .any(|member| member.connection().state() != ConnectionState::Disconnected)
             }
+            // Shared leaves are driven table-wide by `drive_shared_srt_egress`
+            // once per shard pass; there is no per-leaf I/O left to do here.
             Self::Shared { state, caller } => state
                 .lock()
                 .ok()
-                .and_then(|mut state| {
-                    let shared = state.as_mut()?;
-                    let _ = shared.drive(now);
-                    shared.callers.logical_caller(caller)?.state()
-                })
+                .and_then(|state| state.as_ref()?.callers.logical_caller(caller)?.state())
                 .is_some_and(|state| state != LogicalCallerState::Disconnected),
         }
     }
@@ -235,7 +242,14 @@ impl SrtMessageSender for RustSrtSocket {
     /// of whether `send_message` is called that pass. Without this, a
     /// `Direct`/`Bonded` connection would never process incoming ACKs/NAKs
     /// or advance its congestion/RTT state between sends.
+    ///
+    /// `Shared` leaves do nothing here: their socket and caller table are
+    /// shared with every other shared leaf on the shard and are driven once
+    /// per pass by `drive_shared_srt_egress`, not once per leaf.
     fn drive(&mut self) {
+        if matches!(self, Self::Shared { .. }) {
+            return;
+        }
         let Ok(runtime) = srt_runtime() else {
             return;
         };
@@ -267,46 +281,30 @@ impl SrtMessageSender for RustSrtSocket {
         self.native_send_backlog_inner()
     }
 
-    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
+    fn sender_quality(&self) -> Option<PublisherQuality> {
         match self {
             Self::Direct(conn) => {
                 let stats = conn.conn.sender_stats()?;
-                Some(SrtTraceBStats {
-                    ms_rtt: stats.peer_rtt_micros.map_or(0.0, f64::from) / 1_000.0,
-                    mbps_send_rate: stats
-                        .peer_receiving_rate_bytes_per_second
-                        .map_or(0.0, |rate| rate as f64 / 1_000_000.0),
-                    pkt_snd_loss_total: i32::try_from(stats.total_lost).unwrap_or(i32::MAX),
-                    pkt_snd_drop_total: i32::try_from(stats.total_dropped).unwrap_or(i32::MAX),
-                })
+                Some(sender_quality(
+                    stats.peer_rtt_micros.map(f64::from),
+                    stats.peer_receiving_rate_bytes_per_second,
+                    stats.total_lost,
+                    stats.total_dropped,
+                ))
             }
             Self::Bonded(conn) => {
                 let stats = conn.stats();
-                let mut rtt_total = 0_f64;
-                let mut rtt_count = 0_u64;
-                let mut rate = 0_f64;
-                for leg in &stats.legs {
-                    if let Some(sender) = &leg.connection.sender {
-                        if let Some(rtt) = sender.peer_rtt_micros {
-                            rtt_total += f64::from(rtt);
-                            rtt_count += 1;
-                        }
-                        rate += sender
-                            .peer_receiving_rate_bytes_per_second
-                            .map_or(0.0, |value| value as f64);
-                    }
-                }
-                Some(SrtTraceBStats {
-                    ms_rtt: if rtt_count == 0 {
-                        0.0
-                    } else {
-                        rtt_total / rtt_count as f64 / 1_000.0
-                    },
-                    mbps_send_rate: rate / 1_000_000.0,
-                    pkt_snd_loss_total: i32::try_from(stats.aggregate.wire_sender_packets_lost)
-                        .unwrap_or(i32::MAX),
-                    pkt_snd_drop_total: 0,
-                })
+                Some(group_sender_quality(
+                    stats.legs.iter().filter_map(|leg| {
+                        leg.connection.sender.as_ref().map(|sender| {
+                            (
+                                sender.peer_rtt_micros.map(f64::from),
+                                sender.peer_receiving_rate_bytes_per_second,
+                            )
+                        })
+                    }),
+                    stats.aggregate.wire_sender_packets_lost,
+                ))
             }
             Self::Shared { state, caller } => {
                 let shared = state.lock().ok()?;
@@ -314,49 +312,83 @@ impl SrtMessageSender for RustSrtSocket {
                 match shared.callers.logical_caller(caller)?.stats()? {
                     LogicalCallerStats::Direct(stats) => {
                         let sender = stats.sender?;
-                        Some(SrtTraceBStats {
-                            ms_rtt: sender.peer_rtt_micros.map_or(0.0, f64::from) / 1_000.0,
-                            mbps_send_rate: sender
-                                .peer_receiving_rate_bytes_per_second
-                                .map_or(0.0, |rate| rate as f64 / 1_000_000.0),
-                            pkt_snd_loss_total: i32::try_from(sender.total_lost)
-                                .unwrap_or(i32::MAX),
-                            pkt_snd_drop_total: i32::try_from(sender.total_dropped)
-                                .unwrap_or(i32::MAX),
-                        })
+                        Some(sender_quality(
+                            sender.peer_rtt_micros.map(f64::from),
+                            sender.peer_receiving_rate_bytes_per_second,
+                            sender.total_lost,
+                            sender.total_dropped,
+                        ))
                     }
-                    LogicalCallerStats::Group(stats) => {
-                        let mut rtt_total = 0_f64;
-                        let mut rtt_count = 0_u64;
-                        let mut rate = 0_f64;
-                        for leg in &stats.legs {
-                            if let Some(sender) = &leg.connection.sender {
-                                if let Some(rtt) = sender.peer_rtt_micros {
-                                    rtt_total += f64::from(rtt);
-                                    rtt_count += 1;
-                                }
-                                rate += sender
-                                    .peer_receiving_rate_bytes_per_second
-                                    .map_or(0.0, |value| value as f64);
-                            }
-                        }
-                        Some(SrtTraceBStats {
-                            ms_rtt: if rtt_count == 0 {
-                                0.0
-                            } else {
-                                rtt_total / rtt_count as f64 / 1_000.0
-                            },
-                            mbps_send_rate: rate / 1_000_000.0,
-                            pkt_snd_loss_total: i32::try_from(
-                                stats.aggregate.wire_sender_packets_lost,
-                            )
-                            .unwrap_or(i32::MAX),
-                            pkt_snd_drop_total: 0,
-                        })
-                    }
+                    LogicalCallerStats::Group(stats) => Some(group_sender_quality(
+                        stats.legs.iter().filter_map(|leg| {
+                            leg.connection.sender.as_ref().map(|sender| {
+                                (
+                                    sender.peer_rtt_micros.map(f64::from),
+                                    sender.peer_receiving_rate_bytes_per_second,
+                                )
+                            })
+                        }),
+                        stats.aggregate.wire_sender_packets_lost,
+                    )),
                 }
             }
         }
+    }
+}
+
+/// One sender's srt-rs counters as the cross-protocol quality snapshot the
+/// status layer publishes -- `rtmp/ingest.rs` builds the same type from its
+/// own protocol counters, so SRT reports through it directly rather than
+/// through an intermediate transport-shaped struct.
+fn sender_quality<L, D>(
+    peer_rtt_micros: Option<f64>,
+    peer_receiving_rate_bytes_per_second: Option<L>,
+    total_lost: D,
+    total_dropped: D,
+) -> PublisherQuality
+where
+    L: Into<f64>,
+    D: TryInto<u64>,
+{
+    PublisherQuality {
+        ms_rtt: Some(peer_rtt_micros.unwrap_or(0.0) / 1_000.0),
+        mbps_send_rate: Some(
+            peer_receiving_rate_bytes_per_second.map_or(0.0, Into::into) / 1_000_000.0,
+        ),
+        packets_sent_loss: Some(total_lost.try_into().unwrap_or(u64::MAX)),
+        packets_sent_drop: Some(total_dropped.try_into().unwrap_or(u64::MAX)),
+        ..PublisherQuality::default()
+    }
+}
+
+/// Bonded/group equivalent, over each leg's `(rtt_micros, send_rate_bytes)`:
+/// RTT averaged across legs reporting one, send rate summed across legs,
+/// loss taken from the group's own aggregate. Groups report no aggregate
+/// TLPKTDROP counter, so drops read as zero.
+fn group_sender_quality<L: Into<f64>>(
+    legs: impl Iterator<Item = (Option<f64>, Option<L>)>,
+    wire_packets_lost: u64,
+) -> PublisherQuality {
+    let mut rtt_total = 0_f64;
+    let mut rtt_count = 0_u64;
+    let mut rate = 0_f64;
+    for (peer_rtt_micros, peer_receiving_rate_bytes_per_second) in legs {
+        if let Some(rtt) = peer_rtt_micros {
+            rtt_total += rtt;
+            rtt_count += 1;
+        }
+        rate += peer_receiving_rate_bytes_per_second.map_or(0.0, Into::into);
+    }
+    PublisherQuality {
+        ms_rtt: Some(if rtt_count == 0 {
+            0.0
+        } else {
+            rtt_total / rtt_count as f64 / 1_000.0
+        }),
+        mbps_send_rate: Some(rate / 1_000_000.0),
+        packets_sent_loss: Some(wire_packets_lost),
+        packets_sent_drop: Some(0),
+        ..PublisherQuality::default()
     }
 }
 
@@ -454,7 +486,9 @@ pub(crate) trait SrtMessageSender {
     fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
         None
     }
-    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
+    /// This transport's sender-side quality snapshot, already in the
+    /// cross-protocol shape the status layer publishes.
+    fn sender_quality(&self) -> Option<PublisherQuality> {
         None
     }
     /// Drives this transport's I/O for one tick (receive, timers, drain) --
@@ -494,8 +528,8 @@ impl<T: SrtMessageSender + ?Sized> SrtMessageSender for Box<T> {
     fn native_send_backlog(&mut self) -> Option<NativeSendBacklog> {
         (**self).native_send_backlog()
     }
-    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
-        (**self).sender_quality_stats()
+    fn sender_quality(&self) -> Option<PublisherQuality> {
+        (**self).sender_quality()
     }
     fn drive(&mut self) {
         (**self).drive()

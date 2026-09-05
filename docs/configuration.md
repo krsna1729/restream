@@ -43,7 +43,7 @@ in SQLite.
 | Egress fabric readiness batch | `64` ready leaves per loop | `RESTREAM_EGRESS_READY_BATCH` |
 | Egress fabric timer batch | `64` timers per loop | `RESTREAM_EGRESS_TIMER_BATCH` |
 | Egress fabric idle wait | `1` ms | `RESTREAM_EGRESS_IDLE_WAIT_MS` |
-| SRT fabric poll events | `1024` events per shard poller | `RESTREAM_EGRESS_SRT_POLLER_MAX_EVENTS` |
+| RTMP fabric poll events | `1024` events per shard poller | `RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS` |
 | Egress fabric visit units | `32` units per visit | `RESTREAM_EGRESS_VISIT_MAX_UNITS` |
 | Egress fabric visit bytes | `262144` bytes per visit | `RESTREAM_EGRESS_VISIT_MAX_BYTES` |
 | Egress fabric visit time | `2000` µs per visit | `RESTREAM_EGRESS_VISIT_MAX_US` |

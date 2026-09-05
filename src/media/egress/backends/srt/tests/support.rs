@@ -4,9 +4,9 @@ use crate::media::egress::command::{FeedId, OutputId};
 use crate::media::egress::journal::{FeedEpoch, TsFeed};
 use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::policy::{LeafLimits, WorkBudget};
+use crate::media::snapshots::PublisherQuality;
 use crate::media::srt::{
     NativeSendBacklog, SrtFabricEgressConnectConfig, SrtMessageSender, SrtSendResult,
-    SrtTraceBStats,
 };
 use crate::media::ts_chunk_ring::TsChunkRing;
 use bytes::Bytes;
@@ -19,7 +19,7 @@ pub(super) struct FakeSender {
     sends: Vec<Bytes>,
     closed: u32,
     pub(super) native_backlog: Option<NativeSendBacklog>,
-    pub(super) quality_stats: Option<SrtTraceBStats>,
+    pub(super) quality: Option<PublisherQuality>,
 }
 
 impl FakeSender {
@@ -44,8 +44,8 @@ impl SrtMessageSender for FakeSender {
         self.native_backlog
     }
 
-    fn sender_quality_stats(&self) -> Option<SrtTraceBStats> {
-        self.quality_stats
+    fn sender_quality(&self) -> Option<PublisherQuality> {
+        self.quality.clone()
     }
 }
 

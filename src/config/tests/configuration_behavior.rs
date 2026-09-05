@@ -241,7 +241,7 @@ fn egress_fabric_config_defaults_disabled_and_builds_runtime_values() {
             "RESTREAM_EGRESS_READY_BATCH",
             "RESTREAM_EGRESS_TIMER_BATCH",
             "RESTREAM_EGRESS_IDLE_WAIT_MS",
-            "RESTREAM_EGRESS_SRT_POLLER_MAX_EVENTS",
+            "RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS",
             "RESTREAM_EGRESS_VISIT_MAX_UNITS",
             "RESTREAM_EGRESS_VISIT_MAX_BYTES",
             "RESTREAM_EGRESS_VISIT_MAX_US",
@@ -272,7 +272,7 @@ fn egress_fabric_config_loads_and_clamps_env() {
             ("RESTREAM_EGRESS_READY_BATCH", "0"),
             ("RESTREAM_EGRESS_TIMER_BATCH", "0"),
             ("RESTREAM_EGRESS_IDLE_WAIT_MS", "0"),
-            ("RESTREAM_EGRESS_SRT_POLLER_MAX_EVENTS", "0"),
+            ("RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS", "0"),
             ("RESTREAM_EGRESS_VISIT_MAX_UNITS", "0"),
             ("RESTREAM_EGRESS_VISIT_MAX_BYTES", "1"),
             ("RESTREAM_EGRESS_VISIT_MAX_US", "0"),
@@ -286,7 +286,7 @@ fn egress_fabric_config_loads_and_clamps_env() {
             assert_eq!(fabric.readiness_batch_budget, 1);
             assert_eq!(fabric.timer_batch_budget, 1);
             assert_eq!(fabric.idle_wait_ms, 1);
-            assert_eq!(fabric.srt_poller_max_events, 1);
+            assert_eq!(fabric.tcp_poller_max_events, 1);
             assert_eq!(fabric.visit_max_units, 1);
             assert_eq!(fabric.visit_max_bytes, 188);
             assert_eq!(fabric.visit_max_us, 1);

@@ -15,7 +15,7 @@ use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::snapshots::PublisherQuality;
 use crate::media::srt::{
     NativeSendBacklog, SrtEgressEngine, SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec,
-    SrtMessageSender, connect_fabric_srt_egress_socket,
+    SrtMessageSender, connect_fabric_srt_egress_socket, drive_shared_srt_egress,
 };
 
 /// Combined application and native pending state for one SRT fabric leaf.
@@ -210,22 +210,12 @@ where
         )
     }
 
-    /// Sample sender-side connection quality (RTT, loss, retransmits,
-    /// bandwidth) from libsrt, for the once-per-second stall sweep — the
-    /// same `srt_bistats` mechanism and cadence legacy SRT egress used for
-    /// its own quality reporting. Returns `None` when the transport has no
-    /// native stats to offer (fakes, closed sockets); the caller should
-    /// leave the previously published quality in place in that case.
+    /// Sample sender-side connection quality (RTT, loss, drops, bandwidth)
+    /// for the once-per-second stall sweep. Returns `None` when the
+    /// transport has no stats to offer (fakes, closed sockets); the caller
+    /// should leave the previously published quality in place in that case.
     pub(crate) fn sample_quality(&mut self, _now: Instant) -> Option<PublisherQuality> {
-        self.transport
-            .sender_quality_stats()
-            .map(|stats| PublisherQuality {
-                ms_rtt: Some(stats.ms_rtt),
-                mbps_send_rate: Some(stats.mbps_send_rate),
-                packets_sent_loss: Some(stats.pkt_snd_loss_total.max(0) as u64),
-                packets_sent_drop: Some(stats.pkt_snd_drop_total.max(0) as u64),
-                ..PublisherQuality::default()
-            })
+        self.transport.sender_quality()
     }
 
     pub(crate) fn visit_ready(
@@ -610,15 +600,22 @@ where
         true
     }
 
-    /// Drives every leaf's transport (receive, timers, drain -- see
-    /// `SrtMessageSender::drive`), then marks every not-yet-enqueued one
-    /// ready. There is no readiness to multiplex -- `srt-rs` has no epoll
-    /// equivalent, and every leaf always registers write interest -- so
-    /// this is a direct walk of owned leaves rather than a poll of an
-    /// external readiness source. Mirrors the old `SrtFabricPoller`
-    /// exactly: every registered leaf was driven on every poll, but only
-    /// leaves not already enqueued were pushed into the ready queue.
+    /// Drives this shard's transports, then marks every not-yet-enqueued
+    /// leaf ready. There is no readiness to multiplex -- `srt-rs` has no
+    /// epoll equivalent, and every leaf always registers write interest --
+    /// so this is a direct walk of owned leaves rather than a poll of an
+    /// external readiness source.
+    ///
+    /// Driving is split in two because the work is: leaves owning their own
+    /// connection (`Direct`/`Bonded`) are driven individually, while every
+    /// leaf reusing this shard's local port shares one UDP socket and
+    /// `CallerTable`, so that one is driven exactly once per pass here
+    /// rather than once per leaf (`SrtMessageSender::drive` is a no-op for
+    /// those leaves). This is the dedup the old `SrtFabricPoller` did with
+    /// its `driven_shared` set, made structural: a shard has exactly one
+    /// `srt_egress_muxer_port`, so there is nothing to deduplicate against.
     fn poll_ready(&mut self) {
+        drive_shared_srt_egress(&self.srt_egress_muxer_port);
         for (index, leaf) in self.leaves.iter_mut().enumerate() {
             let Some(leaf) = leaf else { continue };
             leaf.transport.drive();

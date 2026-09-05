@@ -41,7 +41,10 @@ pub struct EgressFabricConfig {
     pub readiness_batch_budget: usize,
     pub timer_batch_budget: usize,
     pub idle_wait_ms: u64,
-    pub srt_poller_max_events: usize,
+    /// Max epoll events per `epoll_wait` for the RTMP/RTMPS fabric's TCP
+    /// readiness poller (`TcpEgressPoller`). SRT egress has no poller: its
+    /// leaves own their `srt-rs` connections and are driven directly.
+    pub tcp_poller_max_events: usize,
     pub visit_max_units: usize,
     pub visit_max_bytes: usize,
     pub visit_max_us: u64,
@@ -89,7 +92,7 @@ impl Default for EgressFabricConfig {
             readiness_batch_budget: 64,
             timer_batch_budget: 64,
             idle_wait_ms: 25,
-            srt_poller_max_events: 1024,
+            tcp_poller_max_events: 1024,
             visit_max_units: 32,
             visit_max_bytes: 256 * 1024,
             visit_max_us: 2_000,
@@ -146,9 +149,9 @@ impl EgressFabricConfig {
             .clamp(1, 4096),
             idle_wait_ms: env_u64("RESTREAM_EGRESS_IDLE_WAIT_MS", defaults.idle_wait_ms)
                 .clamp(1, 1_000),
-            srt_poller_max_events: env_usize(
-                "RESTREAM_EGRESS_SRT_POLLER_MAX_EVENTS",
-                defaults.srt_poller_max_events,
+            tcp_poller_max_events: env_usize(
+                "RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS",
+                defaults.tcp_poller_max_events,
             )
             .clamp(1, 65_536),
             visit_max_units: env_usize("RESTREAM_EGRESS_VISIT_MAX_UNITS", defaults.visit_max_units)
@@ -815,7 +818,7 @@ impl AppConfig {
                 "readinessBatchBudget": self.egress_fabric.readiness_batch_budget,
                 "timerBatchBudget": self.egress_fabric.timer_batch_budget,
                 "idleWaitMs": self.egress_fabric.idle_wait_ms,
-                "srtPollerMaxEvents": self.egress_fabric.srt_poller_max_events,
+                "tcpPollerMaxEvents": self.egress_fabric.tcp_poller_max_events,
                 "visitMaxUnits": self.egress_fabric.visit_max_units,
                 "visitMaxBytes": self.egress_fabric.visit_max_bytes,
                 "visitMaxUs": self.egress_fabric.visit_max_us,

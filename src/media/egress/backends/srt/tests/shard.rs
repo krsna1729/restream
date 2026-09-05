@@ -435,6 +435,47 @@ fn on_ready_does_not_strand_a_second_ready_leaf_behind_a_would_block_leaf() {
     );
 }
 
+/// The shared socket/`CallerTable` a shard's leaves reuse is whole-table
+/// state: driving it drains the common UDP socket, flushes common outbound
+/// packets, and polls every logical caller. It must therefore be driven once
+/// per readiness pass, not once per leaf — otherwise a shard with N shared
+/// leaves relocks the shared mutex and redoes that table-wide work N times
+/// per pass. (`SrtFabricPoller` used to dedup this with a `driven_shared`
+/// set keyed on the state's `Arc` identity; the shard now owns the single
+/// state directly and drives it once, see `poll_ready`.)
+///
+/// Drives real `RustSrtSocket::Shared` leaves through the production
+/// connector — a fake sender's `drive` is a no-op, so it could not tell the
+/// per-leaf and per-pass behaviors apart.
+#[test]
+fn poll_ready_drives_the_shared_muxer_once_per_pass_not_once_per_leaf() {
+    let state: muxer_ports::SrtEgressMuxerPortState = Arc::new(Mutex::new(None));
+    let mut backend = SrtShardBackend::new(
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    )
+    .with_srt_egress_muxer_port_reuse(Arc::clone(&state), true);
+    let peer = ["127.0.0.1:9000".parse().unwrap()];
+    for id in ["out-a", "out-b", "out-c", "out-d"] {
+        backend.on_command(EgressCommand::Add(srt_output_spec(id, 7)));
+        backend
+            .complete_pending_connect(&OutputId::new(id), 7, &peer)
+            .expect("shared SRT connect");
+    }
+
+    // Connecting drives the table too, so measure the delta across exactly
+    // one readiness pass rather than the absolute count.
+    let before = state.lock().unwrap().as_ref().unwrap().drive_calls();
+    backend.on_ready();
+    let after = state.lock().unwrap().as_ref().unwrap().drive_calls();
+
+    assert_eq!(
+        after - before,
+        1,
+        "four leaves sharing one multiplexer must drive it once per pass, not once each"
+    );
+}
+
 #[test]
 fn srt_shard_backend_ready_event_visits_registered_leaf() {
     let mut backend = SrtShardBackend::new(

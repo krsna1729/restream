@@ -50,7 +50,7 @@ impl MediaEngine {
             let group = spawn_rtmp_fabric_shard_group(
                 config.shard_count(),
                 config.shard_config(),
-                config.srt_poller_max_events,
+                config.tcp_poller_max_events,
                 config.work_budget(),
                 self.config.rtmp_egress_chunk_size,
                 rtmps_client_config.clone(),
@@ -176,7 +176,7 @@ impl MediaEngine {
         let shard_config = config.shard_config();
         let budget = config.work_budget();
         let chunk_size = self.config.rtmp_egress_chunk_size;
-        let poller_max_events = config.srt_poller_max_events;
+        let poller_max_events = config.tcp_poller_max_events;
         let effective_cpus = crate::system_sampling::effective_cpu_count();
         let result = runtime.rescale(
             crate::config::EgressShardProfile::OutputCount,
