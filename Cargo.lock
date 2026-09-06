@@ -2751,9 +2751,9 @@ dependencies = [
 
 [[package]]
 name = "shiguredo_mp4"
-version = "2026.4.0"
+version = "2026.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f4ddf515b74c7fd601854cf7ae57094635f3795b0d5028b11cc4e32fb8d4098"
+checksum = "82e773aead88d11a806c8b78dbc2577afb3a20fcc80108aafb3724f6dbb9fbe0"
 
 [[package]]
 name = "shiguredo_srt"
@@ -3119,7 +3119,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
