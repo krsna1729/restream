@@ -670,15 +670,36 @@ async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_th
         .await;
     assert!(set, "target must be recorded against a live runtime");
 
+    let commands_before = engine
+        .pipeline_fabric_runtime_snapshots(&feed_id)
+        .await
+        .map(|snapshots| snapshots.iter().map(|s| s.commands_processed).sum::<u64>())
+        .unwrap_or(0);
     engine
         .dispatch_pipeline_fabric_command(&feed_id, EgressCommand::Add(spec))
         .await
         .unwrap();
-    // Give the shard thread a chance to install the leaf before the
-    // first unit lands. Under a loaded libtest host the publish wait
-    // has expired with the leaf not yet visiting (same flake class as
-    // the env-lock / shard-pool note above).
-    tokio::task::yield_now().await;
+    // The retain-time FeedWake is consumed before Add. A unit pushed
+    // before the shard has processed Add is a lost wake: the leaf is
+    // not there yet, and nothing will republish. Wait for this Add to
+    // increment `commands_processed`, then push so the watcher notifies
+    // an installed leaf.
+    let add_deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let processed = engine
+            .pipeline_fabric_runtime_snapshots(&feed_id)
+            .await
+            .map(|snapshots| snapshots.iter().map(|s| s.commands_processed).sum::<u64>())
+            .unwrap_or(0);
+        if processed > commands_before {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < add_deadline,
+            "pipeline shard never processed Add"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 
     source_ring.push(MediaPacket {
         media_type: MediaType::Video,
