@@ -30,7 +30,7 @@ fn should_use_shared_srt_egress_state(peer_count: usize, has_shared_state: bool)
 
 enum RustSrtSocket {
     Direct(Box<Conn>),
-    Bonded(TokioGroupConn),
+    Bonded(Box<TokioGroupConn>),
     Shared {
         state: SrtEgressMuxerPortState,
         caller: LogicalCallerId,
@@ -753,14 +753,14 @@ pub(crate) fn connect_fabric_srt_egress_socket(
                     .map_err(|error| error.to_string())
             })
             .collect::<Result<Vec<_>, _>>()?;
-        RustSrtSocket::Bonded(
+        RustSrtSocket::Bonded(Box::new(
             TokioGroupConn::caller(
                 srt_transport::GroupConfig::new(next_group_id(), config.bond_type),
                 legs,
                 timestamp_now(),
             )
             .map_err(|error| error.to_string())?,
-        )
+        ))
     };
     Ok(Box::new(transport))
 }
