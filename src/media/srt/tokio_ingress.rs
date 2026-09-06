@@ -2,15 +2,17 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
+use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
 use shiguredo_srt::{ConnectionEvent, Timestamp};
 use srt_transport::{
-    AdmissionEvent, AdmissionResolution, BondedInputPolicy, IngressTelemetry, ListenerConfig,
-    ListenerEncryptionConfig, ListenerPeerPolicy, ListenerTopology, LogicalPeerId, PeerTable,
-    PolicyOverride, RecvBatch, RecvBudget, RejectionReason, RuntimeFlavor,
+    AdmissionEvent, AdmissionResolution, BondedInputPolicy, HighResWaiter, IngressTelemetry,
+    ListenerConfig, ListenerEncryptionConfig, ListenerPeerPolicy, ListenerTopology, LogicalPeerId,
+    MonotonicDeadline, PeerTable, PolicyOverride, RecvBatch, RecvBudget, RejectionReason,
+    RuntimeFlavor,
 };
 use tokio::net::UdpSocket;
 use tracing::{error, info, warn};
@@ -33,6 +35,9 @@ pub(crate) use super::srt_policy::SrtIngestPolicyStore;
 mod ingest_packets;
 
 const SRT_MESSAGE_PAYLOAD_MAX: usize = 1316;
+/// Upper bound for listener parks so reader pull and shutdown stay responsive
+/// when the next protocol deadline is farther out.
+const LISTENER_IDLE: Duration = Duration::from_millis(5);
 
 pub(crate) struct SrtServer {
     pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
@@ -112,53 +117,64 @@ impl SrtServer {
         let mut events = Vec::new();
         let mut outbound = Vec::new();
         let mut recv_batch = RecvBatch::new();
-        let mut tick = tokio::time::interval(Duration::from_millis(5));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut waiter = match HighResWaiter::<()>::new() {
+            Ok(waiter) => waiter,
+            Err(error) => {
+                error!(port, %error, "failed to create SRT listener HighResWaiter");
+                return;
+            }
+        };
+        if let Err(error) = waiter.register((), socket.as_raw_fd()) {
+            error!(port, %error, "failed to register SRT listener with HighResWaiter");
+            return;
+        }
+        let mut due = Vec::new();
+        let mut ready = Vec::new();
 
         info!(port, "SRT listener ready (srt-rs/Tokio)");
         while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
-            tokio::select! {
-                readable = socket.readable() => {
-                    match readable {
-                        Ok(()) => {
-                            let now = timestamp_now();
-                            match srt_transport::tokio_transport::drain_readable(
-                                &socket,
-                                &mut recv_batch,
-                                RecvBudget::default(),
-                                |addr, data| {
-                                    let Some(peer) = addr else {
-                                        return;
-                                    };
-                                    let policy_store = self.ingest_policy_store.clone();
-                                    let _ = peers.admit_with_resolver(
-                                        peer,
-                                        data,
-                                        now,
-                                        &admission,
-                                        0,
-                                        1,
-                                        &telemetry,
-                                        move |request| resolve_listener_policy(&policy_store, request),
-                                    );
-                                },
-                            ) {
-                                Ok(_) => {}
-                                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                                Err(error) => {
-                                    warn!(%error, "SRT listener receive failed");
-                                    tokio::time::sleep(Duration::from_millis(10)).await;
-                                }
+            let wait = listener_wait_duration(&mut peers, timestamp_now());
+            match tokio::task::block_in_place(|| {
+                park_listener(&mut waiter, &mut due, &mut ready, wait)
+            }) {
+                Ok(socket_ready) => {
+                    if socket_ready {
+                        let now = timestamp_now();
+                        match srt_transport::tokio_transport::drain_readable(
+                            &socket,
+                            &mut recv_batch,
+                            RecvBudget::default(),
+                            |addr, data| {
+                                let Some(peer) = addr else {
+                                    return;
+                                };
+                                let policy_store = self.ingest_policy_store.clone();
+                                let _ = peers.admit_with_resolver(
+                                    peer,
+                                    data,
+                                    now,
+                                    &admission,
+                                    0,
+                                    1,
+                                    &telemetry,
+                                    move |request| resolve_listener_policy(&policy_store, request),
+                                );
+                            },
+                        ) {
+                            Ok(_) => {}
+                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                            Err(error) => {
+                                warn!(%error, "SRT listener receive failed");
+                                tokio::time::sleep(Duration::from_millis(10)).await;
                             }
-                        }
-                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                        Err(error) => {
-                            warn!(%error, "SRT listener receive failed");
-                            tokio::time::sleep(Duration::from_millis(10)).await;
                         }
                     }
                 }
-                _ = tick.tick() => {}
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => {
+                    warn!(%error, "SRT listener wait failed");
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
             }
 
             let now = timestamp_now();
@@ -662,4 +678,71 @@ fn resolve_listener_policy(
         policy.encryption = PolicyOverride::Set(Some(encryption));
     }
     AdmissionResolution::Configure(policy)
+}
+
+fn listener_wait_duration(peers: &mut PeerTable, now: Timestamp) -> Duration {
+    Duration::from_micros(
+        peers
+            .time_until_next_deadline(now, listener_idle_micros())
+            .min(listener_idle_micros()),
+    )
+}
+
+fn listener_idle_micros() -> u64 {
+    u64::try_from(LISTENER_IDLE.as_micros()).unwrap_or(u64::MAX)
+}
+
+fn park_listener(
+    waiter: &mut HighResWaiter<()>,
+    due: &mut Vec<()>,
+    ready: &mut Vec<()>,
+    wait: Duration,
+) -> std::io::Result<bool> {
+    waiter.set_deadline((), MonotonicDeadline::after(wait));
+    waiter.wait(due, ready)?;
+    Ok(!ready.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_peer_table_caps_listener_wait_at_idle() {
+        let mut peers = PeerTable::new();
+        assert_eq!(
+            listener_wait_duration(&mut peers, timestamp_now()),
+            LISTENER_IDLE
+        );
+    }
+
+    #[test]
+    fn high_res_waiter_wakes_the_listener_socket() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .expect("Tokio runtime builds");
+        runtime.block_on(async {
+            let receiver = std::net::UdpSocket::bind("127.0.0.1:0").expect("receiver binds");
+            receiver
+                .set_nonblocking(true)
+                .expect("receiver is nonblocking");
+            let dest = receiver.local_addr().expect("receiver address");
+            let sender = std::net::UdpSocket::bind("127.0.0.1:0").expect("sender binds");
+            let sock = UdpSocket::from_std(receiver).expect("tokio adopts the socket");
+
+            let mut waiter = HighResWaiter::<()>::new().expect("waiter");
+            waiter
+                .register((), sock.as_raw_fd())
+                .expect("register listener fd");
+            sender.send_to(b"ping", dest).expect("send datagram");
+
+            let mut due = Vec::new();
+            let mut ready = Vec::new();
+            assert!(
+                park_listener(&mut waiter, &mut due, &mut ready, LISTENER_IDLE).expect("wait"),
+                "listener fd should be ready after a datagram"
+            );
+        });
+    }
 }

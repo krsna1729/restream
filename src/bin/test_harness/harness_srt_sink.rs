@@ -6,6 +6,7 @@
 
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
@@ -14,8 +15,8 @@ use std::time::Duration;
 
 use shiguredo_srt::ConnectionEvent;
 use srt_transport::{
-    IngressTelemetry, ListenerConfig, ListenerTopology, RecvBatch, RecvBudget, RuntimeFlavor,
-    SocketBufferConfig, WorkerCount,
+    HighResWaiter, IngressTelemetry, ListenerConfig, ListenerTopology, MonotonicDeadline,
+    PeerTable, RecvBatch, RecvBudget, RuntimeFlavor, SocketBufferConfig, WorkerCount,
 };
 use tokio::net::UdpSocket;
 
@@ -187,34 +188,32 @@ async fn sink_port(
     let mut recv_batch = RecvBatch::with_capacity(64, 2048);
     let mut outputs = Vec::with_capacity(64);
     let mut events = Vec::with_capacity(64);
-    let mut tick = tokio::time::interval(Duration::from_millis(5));
+    let mut waiter = HighResWaiter::<()>::new().map_err(|error| error.to_string())?;
+    waiter
+        .register((), socket.as_raw_fd())
+        .map_err(|error| error.to_string())?;
+    let mut due = Vec::new();
+    let mut ready = Vec::new();
     while !stop.load(Ordering::Acquire) {
-        tokio::select! {
-            _ = tick.tick() => {}
-            readable = socket.readable() => {
-                readable.map_err(|error| error.to_string())?;
-                // Drain the kernel queue through the reusable recvmmsg
-                // adapter instead of one try_recv_from per datagram.
-                let _ = srt_transport::tokio_transport::drain_readable(
-                    &socket,
-                    &mut recv_batch,
-                    RecvBudget::new(8, 512),
-                    |addr, data| {
-                        let Some(peer) = addr else {
-                            return;
-                        };
-                        let _ = peers.admit(
-                            peer,
-                            data,
-                            srt_now(),
-                            &options,
-                            0,
-                            1,
-                            &telemetry,
-                        );
-                    },
-                );
-            }
+        let wait = listener_wait_duration(&mut peers, srt_now());
+        // Dedicated current-thread runtime: park directly. `block_in_place`
+        // panics on this flavor.
+        let socket_ready = park_listener(&mut waiter, &mut due, &mut ready, wait)
+            .map_err(|error| error.to_string())?;
+        if socket_ready {
+            // Drain the kernel queue through the reusable recvmmsg
+            // adapter instead of one try_recv_from per datagram.
+            let _ = srt_transport::tokio_transport::drain_readable(
+                &socket,
+                &mut recv_batch,
+                RecvBudget::new(8, 512),
+                |addr, data| {
+                    let Some(peer) = addr else {
+                        return;
+                    };
+                    let _ = peers.admit(peer, data, srt_now(), &options, 0, 1, &telemetry);
+                },
+            );
         }
 
         peers.poll_outbound(srt_now(), &mut outputs);
@@ -240,6 +239,31 @@ async fn sink_port(
         }
     }
     Ok(())
+}
+
+const LISTENER_IDLE: Duration = Duration::from_millis(5);
+
+fn listener_wait_duration(peers: &mut PeerTable, now: shiguredo_srt::Timestamp) -> Duration {
+    Duration::from_micros(
+        peers
+            .time_until_next_deadline(now, listener_idle_micros())
+            .min(listener_idle_micros()),
+    )
+}
+
+fn listener_idle_micros() -> u64 {
+    u64::try_from(LISTENER_IDLE.as_micros()).unwrap_or(u64::MAX)
+}
+
+fn park_listener(
+    waiter: &mut HighResWaiter<()>,
+    due: &mut Vec<()>,
+    ready: &mut Vec<()>,
+    wait: Duration,
+) -> std::io::Result<bool> {
+    waiter.set_deadline((), MonotonicDeadline::after(wait));
+    waiter.wait(due, ready)?;
+    Ok(!ready.is_empty())
 }
 
 fn srt_now() -> shiguredo_srt::Timestamp {
