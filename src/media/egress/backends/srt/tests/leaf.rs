@@ -289,6 +289,43 @@ fn srt_fabric_leaf_samples_quality_from_transport_stats() {
     assert_eq!(quality.ms_rtt, Some(42.5));
     assert_eq!(quality.mbps_send_rate, Some(12.0));
     assert_eq!(quality.packets_sent_loss, Some(3));
+    assert_eq!(quality.srt_send_buf_bytes, None);
+    assert_eq!(quality.ms_send_buf, None);
+}
+
+#[test]
+fn srt_fabric_leaf_samples_quality_includes_native_send_backlog() {
+    use crate::media::srt::NativeSendBacklog;
+
+    let mut leaf = leaf(1);
+    leaf.transport_mut().quality = Some(PublisherQuality {
+        ms_rtt: Some(12.0),
+        ..PublisherQuality::default()
+    });
+    leaf.transport_mut().native_backlog = Some(NativeSendBacklog {
+        bytes: 1_250_000,
+        packets: 96,
+        ms: 180,
+    });
+
+    let quality = leaf
+        .sample_quality(Instant::now())
+        .expect("transport has quality stats");
+    assert_eq!(quality.ms_rtt, Some(12.0));
+    assert_eq!(quality.srt_send_buf_bytes, Some(1_250_000));
+    assert_eq!(quality.ms_send_buf, Some(180.0));
+    assert_eq!(quality.srt_flight_size_pkts, Some(96));
+
+    leaf.transport_mut().native_backlog = Some(NativeSendBacklog {
+        bytes: u64::from(u32::MAX) + 1,
+        packets: u32::MAX,
+        ms: 1,
+    });
+    let saturated = leaf
+        .sample_quality(Instant::now())
+        .expect("transport has quality stats");
+    assert_eq!(saturated.srt_send_buf_bytes, Some(i32::MAX));
+    assert_eq!(saturated.srt_flight_size_pkts, Some(i32::MAX));
 }
 
 /// A transport with nothing to report (no connected native socket) must not

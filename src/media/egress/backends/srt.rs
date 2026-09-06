@@ -40,6 +40,12 @@ impl SrtLeafPressure {
     }
 }
 
+fn apply_native_send_backlog(quality: &mut PublisherQuality, backlog: NativeSendBacklog) {
+    quality.srt_send_buf_bytes = i32::try_from(backlog.bytes.min(i32::MAX as u64)).ok();
+    quality.ms_send_buf = Some(f64::from(backlog.ms));
+    quality.srt_flight_size_pkts = i32::try_from(backlog.packets.min(i32::MAX as u32)).ok();
+}
+
 pub(crate) mod muxer_ports;
 pub(crate) mod resolve_runtime;
 
@@ -214,8 +220,21 @@ where
     /// for the once-per-second stall sweep. Returns `None` when the
     /// transport has no stats to offer (fakes, closed sockets); the caller
     /// should leave the previously published quality in place in that case.
+    ///
+    /// Occupancy is only folded in when `sender_quality()` is `Some`.
+    /// Production Direct/Bonded/Shared variants derive both from the same
+    /// `sender_stats()` / `logical_caller().stats()` snapshot, so a known
+    /// backlog with no quality snapshot is not a reachable live state.
+    /// `sender_quality()` fills RTT/rate/loss and leaves buffer fields
+    /// unset; `native_send_backlog` supplies `srtSendBufBytes` /
+    /// `msSendBuf` / `srtFlightSizePkts` so `/telemetry` can be summed
+    /// against process RSS on the shared Tokio path.
     pub(crate) fn sample_quality(&mut self, _now: Instant) -> Option<PublisherQuality> {
-        self.transport.sender_quality()
+        let mut quality = self.transport.sender_quality()?;
+        if let Some(backlog) = self.transport.native_send_backlog() {
+            apply_native_send_backlog(&mut quality, backlog);
+        }
+        Some(quality)
     }
 
     pub(crate) fn visit_ready(

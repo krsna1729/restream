@@ -614,7 +614,7 @@ async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_th
     // Config tests temporarily overlay `RESTREAM_EGRESS_*` (including
     // `RESTREAM_EGRESS_SHARDS`) under a process-wide env lock this test
     // does not hold. Reading env here raced that window and could spawn a
-    // huge shard pool, then shrink-join it on the first `Add`, so the 5s
+    // huge shard pool, then shrink-join it on the first `Add`, so the
     // publish wait expired before the leaf ever visited. Same class of
     // flake as `srt_fabric_runtime_claims_one_libsrt_muxer_port_per_shard_shared_across_feeds`.
     // `shards: 1` also matches `target_egress_fabric_shards(OutputCount, 0, _)`,
@@ -670,10 +670,36 @@ async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_th
         .await;
     assert!(set, "target must be recorded against a live runtime");
 
+    let commands_before = engine
+        .pipeline_fabric_runtime_snapshots(&feed_id)
+        .await
+        .map(|snapshots| snapshots.iter().map(|s| s.commands_processed).sum::<u64>())
+        .unwrap_or(0);
     engine
         .dispatch_pipeline_fabric_command(&feed_id, EgressCommand::Add(spec))
         .await
         .unwrap();
+    // The retain-time FeedWake is consumed before Add. A unit pushed
+    // before the shard has processed Add is a lost wake: the leaf is
+    // not there yet, and nothing will republish. Wait for this Add to
+    // increment `commands_processed`, then push so the watcher notifies
+    // an installed leaf.
+    let add_deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let processed = engine
+            .pipeline_fabric_runtime_snapshots(&feed_id)
+            .await
+            .map(|snapshots| snapshots.iter().map(|s| s.commands_processed).sum::<u64>())
+            .unwrap_or(0);
+        if processed > commands_before {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < add_deadline,
+            "pipeline shard never processed Add"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 
     source_ring.push(MediaPacket {
         media_type: MediaType::Video,
@@ -685,7 +711,7 @@ async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_th
         payload: bytes::Bytes::from_static(b"abcde"),
     });
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
     while bytes_sent.load(Ordering::Relaxed) == 0 {
         assert!(
             std::time::Instant::now() < deadline,
