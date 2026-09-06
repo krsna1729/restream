@@ -361,16 +361,19 @@ Linux startup checks warn when `net.core.rmem_max` or `net.core.wmem_max` cannot
 support the requested UDP buffers. The listener's `/proc/net/udp` receive queue
 and drop count are exported in `/api/v1/engine/health`.
 
-To A/B whether post-#144 MSR `unattributedPeakKb` is kernel `skmem` from
-`DESIRED_UDP_BUF` × socket count versus RecvBudget/batch scratch, leave the
-three knobs unset for the baseline, then rerun one change at a time. Each
-override logs once at info (`SRT A/B knob override`) with the value used:
+To A/B remaining BBB-600 RSS (live quiet sampling already rejects kernel UDP
+`skmem` as the primary cause: ~15 shared Tokio egress sockets / ~50MB
+sockstat UDP mem vs ~2.2GB `RssAnon`), leave the three knobs unset for the
+baseline, then rerun one change at a time. Each override logs once at info
+(`SRT A/B knob override`) with the value used:
 
 ```sh
-# Smaller kernel UDP buffers (hypothesis: RSS drops if skmem dominates)
+# Cut kernel UDP buffers. If the skmem rejection holds, unattributedPeakKb
+# should not move much.
 RESTREAM_SRT_UDP_BUF_BYTES=262144
 
-# Tiny receive budget / send batch (hypothesis: RSS unchanged if not RecvBatch)
+# Cut receive budget / send batch. Tests whether batch drain retains more
+# app/protocol heap (sender windows / payload_bytes_in_buffer).
 RESTREAM_SRT_RECV_BUDGET_DATAGRAMS=8
 RESTREAM_SRT_IO_BATCH_CAPACITY=8
 ```
