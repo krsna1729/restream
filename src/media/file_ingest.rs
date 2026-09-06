@@ -272,7 +272,9 @@ fn run_internal_file_ingest_once(
     timestamps: &mut LoopTimestampState,
     switch_timestamps: &mut crate::media::input_gate::InputTimestampMapper,
 ) -> Result<(), String> {
-    let mut ictx = format::input_with_interrupt(&file_path, || pass.cancel.is_cancelled())
+    // ffmpeg-next 9 boxes this callback onto the format context (`Send + 'static`).
+    let cancel = pass.cancel.clone();
+    let mut ictx = format::input_with_interrupt(file_path, move || cancel.is_cancelled())
         .map_err(|e| format!("Failed to open input file: {e}"))?;
     let has_video_stream = ictx
         .streams()
