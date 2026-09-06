@@ -11,7 +11,8 @@ use shiguredo_srt::{ConnectionEvent, Timestamp};
 use srt_transport::{
     AdmissionEvent, AdmissionResolution, BondedInputPolicy, HighResWaiter, IngressTelemetry,
     ListenerConfig, ListenerEncryptionConfig, ListenerPeerPolicy, ListenerTopology, LogicalPeerId,
-    MonotonicDeadline, PeerTable, PolicyOverride, RecvBatch, RejectionReason, RuntimeFlavor,
+    MonotonicDeadline, PeerTable, PolicyOverride, RecvBatch, RecvBudget, RejectionReason,
+    RuntimeFlavor,
 };
 use tokio::net::UdpSocket;
 use tracing::{error, info, warn};

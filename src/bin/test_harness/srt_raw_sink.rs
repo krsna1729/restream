@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use shiguredo_srt::{ConnectionEvent, Timestamp};
 use srt_transport::{
     HighResWaiter, IngressTelemetry, ListenerConfig, ListenerTopology, MonotonicDeadline,
-    PeerTable, RecvBatch, RuntimeFlavor,
+    PeerTable, RecvBatch, RecvBudget, RuntimeFlavor,
 };
 use tokio::net::UdpSocket;
 
