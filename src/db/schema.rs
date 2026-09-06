@@ -1,6 +1,9 @@
 use sqlx::SqlitePool;
 
 pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    // WAL is also set on every pooled connection via `create_pool`. Keep this
+    // schema-time pragma so existing files stay in WAL even if an older
+    // process created them before the connect-option change.
     sqlx::query("PRAGMA journal_mode = WAL;")
         .execute(pool)
         .await?;

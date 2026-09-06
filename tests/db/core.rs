@@ -756,13 +756,15 @@ async fn list_sessions_returns_err_not_empty_on_db_failure() {
     );
 }
 
-// M4: Per-connection PRAGMAs — every pooled connection must have busy_timeout
-// set so SQLITE_BUSY retries rather than failing immediately. Verify via the
+// Per-connection PRAGMAs — every pooled connection must have busy_timeout
+// set so SQLITE_BUSY waits rather than failing immediately. Verify via the
 // PRAGMA value read back from the pool (not just the setup connection).
 #[tokio::test]
 async fn pool_connections_have_busy_timeout_set() {
     let pool = db::create_pool("sqlite::memory:").await.unwrap();
     db::setup_database_schema(&pool).await.unwrap();
+
+    let expected_ms = i64::try_from(db::SQLITE_BUSY_TIMEOUT.as_millis()).unwrap();
 
     // Acquire two distinct connections and check both have busy_timeout.
     let conn1 = sqlx::query_scalar::<_, i64>("PRAGMA busy_timeout")
@@ -775,13 +777,70 @@ async fn pool_connections_have_busy_timeout_set() {
         .unwrap();
 
     assert_eq!(
-        conn1, 5000,
-        "busy_timeout must be 5000ms on every connection"
+        conn1, expected_ms,
+        "busy_timeout must be {expected_ms}ms on every connection"
     );
     assert_eq!(
-        conn2, 5000,
-        "busy_timeout must be 5000ms on every connection"
+        conn2, expected_ms,
+        "busy_timeout must be {expected_ms}ms on every connection"
     );
+}
+
+#[tokio::test]
+async fn file_backed_pool_enables_wal_and_survives_concurrent_writers() {
+    let dir = std::env::temp_dir().join(format!(
+        "restream-db-wal-busy-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = dir.join("restream.db");
+    let url = format!("sqlite:{}?mode=rwc", db_path.display());
+
+    let pool = db::create_pool(&url).await.unwrap();
+    db::setup_database_schema(&pool).await.unwrap();
+
+    let journal_mode = sqlx::query_scalar::<_, String>("PRAGMA journal_mode")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        journal_mode.to_ascii_lowercase(),
+        "wal",
+        "file-backed harness DBs must use WAL on the connect path"
+    );
+
+    let expected_ms = i64::try_from(db::SQLITE_BUSY_TIMEOUT.as_millis()).unwrap();
+    let busy_timeout = sqlx::query_scalar::<_, i64>("PRAGMA busy_timeout")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(busy_timeout, expected_ms);
+
+    let mut tasks = Vec::new();
+    for i in 0..24 {
+        let pool = pool.clone();
+        tasks.push(tokio::spawn(async move {
+            db::set_meta(&pool, &format!("k{i}"), &format!("v{i}")).await?;
+            db::create_pipeline(
+                &pool,
+                &format!("p{i}"),
+                &format!("Pipeline {i}"),
+                &format!("key{i:02}"),
+                None,
+                None,
+            )
+            .await?;
+            db::set_meta(&pool, &format!("k{i}"), &format!("v{i}-updated")).await
+        }));
+    }
+    for task in tasks {
+        task.await
+            .expect("writer task should join")
+            .expect("concurrent file-backed writes should not return SQLITE_BUSY");
+    }
+
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 // M5: NULL legacy encoding in DB must not cause a decode failure. A row with

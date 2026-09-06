@@ -165,16 +165,25 @@ covers Tokio scheduler, blocking, and replacement worker threads.
 
 ## SQLite Performance Settings
 
-The following PRAGMAs are applied at startup after WAL mode is enabled:
+WAL, busy-wait, and the other per-connection PRAGMAs are applied through
+`SqliteConnectOptions` in `db::create_pool`, so every pooled connection —
+including the first — gets the same tuning. Schema setup still re-asserts
+`PRAGMA journal_mode = WAL` for files created before that connect-option
+path existed.
 
 | PRAGMA | Value | Effect |
 |---|---|---|
+| `journal_mode` | `WAL` | Concurrent readers during a writer; set on connect, not only at schema setup |
 | `synchronous` | `NORMAL` | fsync only at WAL checkpoints; safe with WAL |
-| `busy_timeout` | 5000 ms | Retry on locked database before returning SQLITE_BUSY |
+| `busy_timeout` | 30000 ms | Wait on a locked database before returning SQLITE_BUSY |
 | `journal_size_limit` | 64 MiB | Caps WAL file growth; excess is reclaimed at checkpoint |
 | `cache_size` | -16384 (16 MiB) | Page cache kept in process memory |
 | `temp_store` | `MEMORY` | Temporary tables and indices use memory, not disk |
 | `mmap_size` | 128 MiB | Read pages via memory-mapped I/O on supported platforms |
+
+Write transactions that still lose a SQLITE_BUSY race after that wait
+(typically a deferred-transaction upgrade deadlock, which SQLite returns
+immediately) are retried at the repository boundary.
 
 ## Ingest URLs
 

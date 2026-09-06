@@ -55,20 +55,96 @@ pub use meta_repo::get_meta;
 pub use meta_repo::set_ingest_host;
 pub use meta_repo::set_meta;
 
-/// Create a connection pool with all per-connection PRAGMAs baked in via
-/// `SqliteConnectOptions`. This ensures every pooled connection gets the same
-/// tuning, not just the setup connection (M4 fix).
+use std::future::Future;
+use std::time::Duration;
+
+/// How long each pooled connection waits on `SQLITE_BUSY` before failing.
+///
+/// sqlx defaults to 5s. Hosted concurrency-harness CI can starve a writer
+/// longer than that when the live fault slices, FFmpeg, and the app-log
+/// drain share a runner, which surfaces as HTTP 500
+/// `database is locked` (SQLite code 5).
+pub const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
+
+const BUSY_RETRY_ATTEMPTS: u32 = 8;
+const BUSY_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(5);
+const BUSY_RETRY_MAX_DELAY: Duration = Duration::from_millis(100);
+
+/// Create a connection pool with WAL, busy-wait, and the rest of the
+/// per-connection PRAGMAs baked in via `SqliteConnectOptions`.
+///
+/// Every pooled connection gets the same tuning, including the first
+/// connection — WAL is not left to a later `setup_database_schema` query
+/// that only runs on one checkout.
 pub async fn create_pool(url: &str) -> Result<sqlx::SqlitePool, sqlx::Error> {
-    use sqlx::sqlite::SqliteConnectOptions;
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
     use std::str::FromStr;
 
     let opts = SqliteConnectOptions::from_str(url)?
-        .pragma("foreign_keys", "ON")
-        .pragma("synchronous", "NORMAL")
-        .pragma("busy_timeout", "5000")
+        .create_if_missing(true)
+        .foreign_keys(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(SQLITE_BUSY_TIMEOUT)
         .pragma("cache_size", "-16384")
         .pragma("temp_store", "MEMORY")
         .pragma("mmap_size", "134217728");
 
     sqlx::SqlitePool::connect_with(opts).await
+}
+
+pub(crate) fn is_database_locked(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::Database(db_err) => {
+            db_err.code().as_deref() == Some("5") || db_err.message().contains("database is locked")
+        }
+        _ => false,
+    }
+}
+
+/// Retry a DB operation that lost the SQLITE_BUSY race after the
+/// connection-level busy timeout (typically a deferred-transaction
+/// upgrade deadlock, which SQLite returns immediately).
+pub(crate) async fn with_busy_retry<T, F, Fut>(mut op: F) -> Result<T, sqlx::Error>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, sqlx::Error>>,
+{
+    let mut delay = BUSY_RETRY_INITIAL_DELAY;
+    for attempt in 0..BUSY_RETRY_ATTEMPTS {
+        match op().await {
+            Err(err) if is_database_locked(&err) && attempt + 1 < BUSY_RETRY_ATTEMPTS => {
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(BUSY_RETRY_MAX_DELAY);
+            }
+            other => return other,
+        }
+    }
+    unreachable!("busy retry loop always returns on the last attempt")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_database_errors_are_not_treated_as_locked() {
+        assert!(!is_database_locked(&sqlx::Error::RowNotFound));
+        assert!(!is_database_locked(&sqlx::Error::Protocol(
+            "unrelated failure".into()
+        )));
+    }
+
+    #[tokio::test]
+    async fn busy_retry_returns_first_success_without_extra_attempts() {
+        let mut calls = 0;
+        let result = with_busy_retry(|| {
+            calls += 1;
+            async { Ok::<_, sqlx::Error>(7) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, 7);
+        assert_eq!(calls, 1);
+    }
 }
