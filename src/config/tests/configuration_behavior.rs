@@ -4,7 +4,7 @@ use super::{
     AppConfig, DEFAULT_MEDIA_DIR, EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR, EgressFabricConfig,
     EgressShardProfile, RuntimeTuning, ServerPorts, TokioRuntimeConfig, backend_policy_from_env,
     default_egress_fabric_shards, default_tokio_worker_threads, derive_external_ffmpeg_permits,
-    target_egress_fabric_shards,
+    env_optional_positive_usize, target_egress_fabric_shards,
 };
 use crate::planner::BackendPolicy;
 
@@ -457,6 +457,34 @@ fn srt_connect_timeout_defaults_and_allows_override() {
     });
     with_env_vars(&[("RESTREAM_SRT_CONNECT_TIMEOUT_MS", "500")], || {
         assert_eq!(AppConfig::from_env().srt_connect_timeout_ms, 500);
+    });
+}
+
+#[test]
+fn env_optional_positive_usize_rejects_zero_and_garbage() {
+    with_env_overlay(&[], &["RESTREAM_SRT_UDP_BUF_BYTES"], || {
+        assert_eq!(
+            env_optional_positive_usize("RESTREAM_SRT_UDP_BUF_BYTES"),
+            None
+        );
+    });
+    with_env_vars(&[("RESTREAM_SRT_UDP_BUF_BYTES", "0")], || {
+        assert_eq!(
+            env_optional_positive_usize("RESTREAM_SRT_UDP_BUF_BYTES"),
+            None
+        );
+    });
+    with_env_vars(&[("RESTREAM_SRT_UDP_BUF_BYTES", "nope")], || {
+        assert_eq!(
+            env_optional_positive_usize("RESTREAM_SRT_UDP_BUF_BYTES"),
+            None
+        );
+    });
+    with_env_vars(&[("RESTREAM_SRT_UDP_BUF_BYTES", "262144")], || {
+        assert_eq!(
+            env_optional_positive_usize("RESTREAM_SRT_UDP_BUF_BYTES"),
+            Some(262144)
+        );
     });
 }
 

@@ -154,7 +154,7 @@ async fn run_sink(
                     let _ = srt_transport::tokio_transport::drain_readable(
                         &socket,
                         &mut recv_batch,
-                        RecvBudget::default(),
+                        restream::media::srt::srt_knobs::recv_budget(),
                         |addr, data| {
                             let Some(peer) = addr else {
                                 return;

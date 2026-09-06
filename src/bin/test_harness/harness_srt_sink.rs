@@ -198,7 +198,7 @@ async fn sink_port(
                 let _ = srt_transport::tokio_transport::drain_readable(
                     &socket,
                     &mut recv_batch,
-                    RecvBudget::new(8, 512),
+                    restream::media::srt::srt_knobs::recv_budget_or(RecvBudget::new(8, 512)),
                     |addr, data| {
                         let Some(peer) = addr else {
                             return;
