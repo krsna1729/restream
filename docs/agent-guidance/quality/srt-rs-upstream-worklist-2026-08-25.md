@@ -14,7 +14,7 @@
 Context for the next agent working in `https://github.com/krsna1729/srt-rs`:
 restream consumed the old pin
 `0821257b402b08219aaaf38a62f5fa655a7e4947` and at the time of this worklist cut over to the exact
-pin `901a912778e8b4fee6c8c122a6dec963282a8e8a` for both ingest and egress. **Current Restream pin is `f2f46b968a1c46cd3f1ea3044687d3d4920c93a4`** (batched UDP adapters + bench integrity). This worklist is historical for 901a912 and the subsequent DSA closure through `91d0f4bf`.
+pin `901a912778e8b4fee6c8c122a6dec963282a8e8a` for both ingest and egress. **Current Restream pin is `14042682c75a75ce02c2c34420608ef9d2f8b1a7`** (A2 HighResWaiter + batched UDP adapters). This worklist is historical for 901a912 and the subsequent DSA closure through `91d0f4bf`.
 Full attribution evidence:
 `docs/agent-guidance/quality/srt-rs-msr-matrix-2026-08-25.md` on the
 restream side. Target workload that exposes every item below: 1,200 SRT
@@ -27,7 +27,7 @@ and a suggested shape; none require wire-format changes.
 ## 2026-08-29 exact-pin status (historical at 901a912; current is 91d0f4bf)
 
 Measured pin at that time:
-`901a912778e8b4fee6c8c122a6dec963282a8e8a`. Restream later cut over to `91d0f4bf02671aa81dd07b76b88cb9630388546c` (DSA closure, PR #137); current pin is `f2f46b968a1c46cd3f1ea3044687d3d4920c93a4`.
+`901a912778e8b4fee6c8c122a6dec963282a8e8a`. Restream later cut over to `91d0f4bf02671aa81dd07b76b88cb9630388546c` (DSA closure, PR #137); current pin is `14042682c75a75ce02c2c34420608ef9d2f8b1a7`.
 
 - Transport plumbing, including `LogicalCallerMut::send_shared`, merged in
   [PR 24](https://github.com/krsna1729/srt-rs/pull/24) and is consumed by both

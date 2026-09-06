@@ -57,9 +57,9 @@ percent-encoding = "2"
 shiguredo_mp4 = "2026.3.0"
 # srt-rs (github.com/krsna1729/srt-rs): sans-I/O SRT protocol core + Tokio
 # transport adapter. Pinned to a reviewed revision; bump deliberately.
-# f2f46b96: batched UDP reusable adapters (#85) + host-contention bench integrity (#84).
-shiguredo_srt = { git = "https://github.com/krsna1729/srt-rs", rev = "f2f46b968a1c46cd3f1ea3044687d3d4920c93a4" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "f2f46b968a1c46cd3f1ea3044687d3d4920c93a4", features = ["tokio"] }
+# 14042682: A2 HighResWaiter / pacing surfaces (#86) on top of batched UDP (#85).
+shiguredo_srt = { git = "https://github.com/krsna1729/srt-rs", rev = "14042682c75a75ce02c2c34420608ef9d2f8b1a7" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "14042682c75a75ce02c2c34420608ef9d2f8b1a7", features = ["tokio"] }
 tracing = { version = "0.1", features = ["max_level_debug"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"

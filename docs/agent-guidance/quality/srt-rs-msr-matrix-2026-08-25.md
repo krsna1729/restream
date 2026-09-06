@@ -13,7 +13,7 @@
 This document preserves the original 2026-08-25 MSR matrix and adds a separate
 2026-08-28 rebaseline for the cutover. Restream consumes only
 `https://github.com/krsna1729/srt-rs`.
-The 2026-08-28 rebaseline moved the then-current experiment from `0821257b402b08219aaaf38a62f5fa655a7e4947` to `7663f1a11f905e4ae17e7188ae4f90240cc0ca0b` as a historical step. Restream later cut over to `91d0f4bf02671aa81dd07b76b88cb9630388546c` (PR #137). Current pin is `f2f46b968a1c46cd3f1ea3044687d3d4920c93a4` (documented in `Cargo.toml`/`distribution/THIRD_PARTY_COMPONENTS.md`). Fixture:
+The 2026-08-28 rebaseline moved the then-current experiment from `0821257b402b08219aaaf38a62f5fa655a7e4947` to `7663f1a11f905e4ae17e7188ae4f90240cc0ca0b` as a historical step. Restream later cut over to `91d0f4bf02671aa81dd07b76b88cb9630388546c` (PR #137). Current pin is `14042682c75a75ce02c2c34420608ef9d2f8b1a7` (documented in `Cargo.toml`/`distribution/THIRD_PARTY_COMPONENTS.md`). Fixture:
 `bbb-1080p60-30a.mp4` (BBB 1080p60, 1 video + 30 AAC tracks, **7,993,015
 bps** aggregate — the real 8 Mb/s envelope). Ladder: 30/200/600/1200
 outputs, one pipeline, continuous lifecycle. Host loopback, `--no-netns`
