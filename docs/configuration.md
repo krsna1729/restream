@@ -362,7 +362,8 @@ support the requested UDP buffers. The listener's `/proc/net/udp` receive queue
 and drop count are exported in `/api/v1/engine/health`.
 
 Tokio SRT UDP buffer, RecvBudget, and shared send-batch defaults stay
-unchanged when the three A/B knobs are unset. Leave them unset for a
+unchanged when the three A/B knobs are unset. This measurement branch is
+post-#144 (`9a9cd8c3`) plus the knobs only. Leave them unset for a
 baseline, then rerun one change at a time. Each override logs once at info
 (`SRT A/B knob override`) with the value used:
 
