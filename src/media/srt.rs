@@ -6,7 +6,7 @@ mod shared_muxer;
 pub(crate) mod srt_egress_engine;
 #[path = "srt_policy.rs"]
 mod srt_policy;
-mod tokio_egress;
+pub(crate) mod tokio_egress;
 mod tokio_ingress;
 
 pub(crate) use shared_muxer::start_shared_ts_muxer;
