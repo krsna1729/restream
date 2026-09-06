@@ -72,6 +72,7 @@ impl SrtServer {
         let prepared = match ListenerConfig::builder(bind)
             .topology(ListenerTopology::PerPort)
             .bonded_inputs(BondedInputPolicy::Accept)
+            .configure_transport(super::tokio_egress::apply_optional_udp_buf)
             .build()
             .and_then(|config| config.prepare(RuntimeFlavor::Tokio))
         {
@@ -146,7 +147,7 @@ impl SrtServer {
                         match drain_woken_listener(
                             &socket,
                             &mut recv_batch,
-                            RecvBudget::default(),
+                            super::tokio_egress::recv_budget(),
                             |addr, data| {
                                 let Some(peer) = addr else {
                                     return;
