@@ -1,4 +1,4 @@
-use super::{should_use_shared_srt_egress_state, SharedSrtEgress};
+use super::{SharedSrtEgress, should_use_shared_srt_egress_state};
 
 #[test]
 fn shared_srt_egress_state_selection_is_single_peer_only() {

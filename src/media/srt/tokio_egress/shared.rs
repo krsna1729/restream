@@ -2,7 +2,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::AsRawFd;
 
 use shiguredo_srt::Timestamp;
-use srt_transport::{apply_send_result, OutputDrainBudget, RecvBatch};
+use srt_transport::{OutputDrainBudget, RecvBatch, apply_send_result};
 use tokio::io::Interest;
 use tokio::net::UdpSocket;
 
