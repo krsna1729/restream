@@ -9,6 +9,7 @@ import {
 } from "../../core/api.js";
 import { state } from "../../core/state.js";
 import { escapeHtml, showErrorAlert } from "../../core/utils.js";
+import type { IngestSecurityConfig } from "../../types.js";
 
 const AUTH_ATTEMPT_VISIBLE_LIMIT = 8;
 let lastRateLimitAttemptCount = 0;
@@ -34,22 +35,44 @@ function showSavedFeedback(id: string): void {
 }
 
 export function populateIngestSecuritySettings(): void {
-  const modeSelect = document.getElementById("settings-ingest-auth-mode") as HTMLSelectElement | null;
-  const staticKeyInput = document.getElementById("settings-ingest-static-key") as HTMLInputElement | null;
-  const mode = (state.config as any)?.ingestSecurity?.mode || "none";
-  if (modeSelect) modeSelect.value = mode;
-  if (staticKeyInput) staticKeyInput.value = (state.config as any)?.ingestSecurity?.staticKey || "";
+  const failureLimitInput = document.getElementById(
+    "ingest-security-failure-limit",
+  ) as HTMLInputElement | null;
+  const failureWindowInput = document.getElementById(
+    "ingest-security-failure-window-ms",
+  ) as HTMLInputElement | null;
+  const banMsInput = document.getElementById("ingest-security-ban-ms") as HTMLInputElement | null;
+  const trackedIpLimitInput = document.getElementById(
+    "ingest-security-tracked-ip-limit",
+  ) as HTMLInputElement | null;
+
+  const ingestSecurity = state.config?.ingestSecurity;
+  if (failureLimitInput) failureLimitInput.value = String(ingestSecurity?.failureLimit ?? "");
+  if (failureWindowInput) failureWindowInput.value = String(ingestSecurity?.failureWindowMs ?? "");
+  if (banMsInput) banMsInput.value = String(ingestSecurity?.banMs ?? "");
+  if (trackedIpLimitInput) trackedIpLimitInput.value = String(ingestSecurity?.trackedIpLimit ?? "");
 }
 
 export async function saveIngestSecurity(): Promise<void> {
-  const modeSelect = document.getElementById("settings-ingest-auth-mode") as HTMLSelectElement | null;
-  const staticKeyInput = document.getElementById("settings-ingest-static-key") as HTMLInputElement | null;
-  const mode = (modeSelect?.value || "none") as "none" | "static_key";
-  const staticKey = staticKeyInput?.value || "";
+  const failureLimitInput = document.getElementById(
+    "ingest-security-failure-limit",
+  ) as HTMLInputElement | null;
+  const failureWindowInput = document.getElementById(
+    "ingest-security-failure-window-ms",
+  ) as HTMLInputElement | null;
+  const banMsInput = document.getElementById("ingest-security-ban-ms") as HTMLInputElement | null;
+  const trackedIpLimitInput = document.getElementById(
+    "ingest-security-tracked-ip-limit",
+  ) as HTMLInputElement | null;
 
-  const res = await patchConfig({
-    ingestSecurity: { mode, staticKey } as any,
-  });
+  const ingestSecurity: IngestSecurityConfig = {
+    failureLimit: parseInt(failureLimitInput?.value || "0", 10) || 0,
+    failureWindowMs: parseInt(failureWindowInput?.value || "0", 10) || 0,
+    banMs: parseInt(banMsInput?.value || "0", 10) || 0,
+    trackedIpLimit: parseInt(trackedIpLimitInput?.value || "0", 10) || 0,
+  };
+
+  const res = await patchConfig({ ingestSecurity });
   if (res) {
     state.config = {
       ...state.config,
@@ -353,9 +376,9 @@ export async function resetRateLimitStateFromUi(scope: "all" | "ip" | "username"
 }
 
 export async function saveDashboardPassword(): Promise<void> {
-  const currentInput = document.getElementById("settings-current-password") as HTMLInputElement | null;
-  const newInput = document.getElementById("settings-new-password") as HTMLInputElement | null;
-  const confirmInput = document.getElementById("settings-confirm-password") as HTMLInputElement | null;
+  const currentInput = document.getElementById("current-password-input") as HTMLInputElement | null;
+  const newInput = document.getElementById("new-password-input") as HTMLInputElement | null;
+  const confirmInput = document.getElementById("confirm-password-input") as HTMLInputElement | null;
 
   const currentPassword = currentInput?.value || "";
   const newPassword = newInput?.value || "";
@@ -375,7 +398,7 @@ export async function saveDashboardPassword(): Promise<void> {
     if (currentInput) currentInput.value = "";
     if (newInput) newInput.value = "";
     if (confirmInput) confirmInput.value = "";
-    showSavedFeedback("password-changed-saved");
+    showSavedFeedback("dashboard-password-saved");
     syncDashboardPasswordPrompt();
   }
 }
@@ -393,10 +416,10 @@ export async function logoutUser(): Promise<void> {
 }
 
 export function syncDashboardPasswordPrompt(): void {
-  const promptEl = document.getElementById("dashboard-password-change-prompt");
+  const promptEl = document.getElementById("dashboard-password-prompt");
   if (!promptEl) return;
 
-  const promptRequired = (state.config as any)?.passwordChangeRequired ?? false;
+  const promptRequired = state.config?.dashboardPasswordChangeRecommended ?? false;
   if (promptRequired) {
     promptEl.classList.remove("hidden");
   } else {

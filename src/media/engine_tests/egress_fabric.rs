@@ -610,7 +610,22 @@ async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_th
     use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
     use tokio_util::sync::CancellationToken;
 
-    let engine = MediaEngine::new();
+    // Explicit config, not `MediaEngine::new()`'s `AppConfig::from_env()`.
+    // Config tests temporarily overlay `RESTREAM_EGRESS_*` (including
+    // `RESTREAM_EGRESS_SHARDS`) under a process-wide env lock this test
+    // does not hold. Reading env here raced that window and could spawn a
+    // huge shard pool, then shrink-join it on the first `Add`, so the 5s
+    // publish wait expired before the leaf ever visited. Same class of
+    // flake as `srt_fabric_runtime_claims_one_libsrt_muxer_port_per_shard_shared_across_feeds`.
+    // `shards: 1` also matches `target_egress_fabric_shards(OutputCount, 0, _)`,
+    // so the first Add does not shrink the pool.
+    let engine = MediaEngine::new_with_config(Arc::new(crate::AppConfig {
+        egress_fabric: crate::config::EgressFabricConfig {
+            shards: 1,
+            ..crate::config::EgressFabricConfig::default()
+        },
+        ..crate::AppConfig::default()
+    }));
     let feed_id = FeedId::new("feed-engine-pipeline-dispatch");
     let source_ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8));
     let feed = RingFeed::new(source_ring.clone(), Arc::new(FeedEpoch::new()));
@@ -620,6 +635,9 @@ async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_th
         .retain_pipeline_fabric_runtime(feed_id.clone(), &feed)
         .await
         .unwrap();
+    // Let the current-thread runtime poll the wake watcher once so its
+    // first-iteration FeedWake is delivered before we Add and publish.
+    tokio::task::yield_now().await;
 
     let bytes_sent = Arc::new(AtomicU64::new(0));
     let mut spec = output_spec("out-pipeline-1", &feed_id);

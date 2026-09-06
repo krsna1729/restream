@@ -469,15 +469,6 @@ function buildInspectCheckpointModel(
   };
 }
 
-function updateInspectRouteSummary(
-  pipe: PipelineView | null,
-  invalidPipelineSelection = false,
-): void {
-  const summary = document.getElementById("inspect-route-summary");
-  if (!summary) return;
-  summary.textContent = inspectSummaryText(pipe, invalidPipelineSelection);
-}
-
 function renderInspectCheckpointPresentation(
   pipe: PipelineView | null,
   invalidPipelineSelection = false,
@@ -494,7 +485,6 @@ export function renderPipelineInspector(): void {
   const root = pipelineInspectorContainer();
   if (!root) return;
   ensurePipelineInspectorShell(root);
-  updateInspectRouteSummary(pipe, invalidPipelineSelection);
   const stateKey = graphStateKey(pipe);
   const select = document.getElementById(
     "inspect-pipeline-select",

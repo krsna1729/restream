@@ -1,6 +1,6 @@
 import { patchConfig } from "../../core/api.js";
 import { state } from "../../core/state.js";
-import type { SrtGlobalIngestConfig } from "../../types.js";
+import type { BackendPolicy, RecordingSettings, SrtGlobalIngestConfig } from "../../types.js";
 
 function showSavedFeedback(id: string): void {
   const el = document.getElementById(id);
@@ -32,36 +32,24 @@ export async function saveIngestHost(): Promise<void> {
 }
 
 export function populateRecordingSettings(): void {
-  const enabledInput = document.getElementById("settings-rec-enabled") as HTMLInputElement | null;
-  const dirInput = document.getElementById("settings-rec-dir") as HTMLInputElement | null;
-  const formatInput = document.getElementById("settings-rec-format") as HTMLSelectElement | null;
-  const patternInput = document.getElementById("settings-rec-pattern") as HTMLInputElement | null;
-  const segmentInput = document.getElementById("settings-rec-segment") as HTMLInputElement | null;
+  const retainSourceTsInput = document.getElementById(
+    "recording-retain-source-ts",
+  ) as HTMLInputElement | null;
 
-  const rec = (state.config as any)?.recordingSettings;
-  if (enabledInput) enabledInput.checked = rec?.enabled ?? false;
-  if (dirInput) dirInput.value = rec?.outputDir ?? "./recordings";
-  if (formatInput) formatInput.value = rec?.format ?? "flv";
-  if (patternInput) patternInput.value = rec?.filenamePattern ?? "{stream_key}_{timestamp}";
-  if (segmentInput) segmentInput.value = String(rec?.segmentDurationSecs ?? 0);
+  const rec = state.config?.recordingSettings;
+  if (retainSourceTsInput) retainSourceTsInput.checked = rec?.retainSourceTs ?? false;
 }
 
 export async function saveRecordingSettings(): Promise<void> {
-  const enabledInput = document.getElementById("settings-rec-enabled") as HTMLInputElement | null;
-  const dirInput = document.getElementById("settings-rec-dir") as HTMLInputElement | null;
-  const formatInput = document.getElementById("settings-rec-format") as HTMLSelectElement | null;
-  const patternInput = document.getElementById("settings-rec-pattern") as HTMLInputElement | null;
-  const segmentInput = document.getElementById("settings-rec-segment") as HTMLInputElement | null;
+  const retainSourceTsInput = document.getElementById(
+    "recording-retain-source-ts",
+  ) as HTMLInputElement | null;
 
-  const recordingSettings = {
-    enabled: enabledInput?.checked ?? false,
-    outputDir: dirInput?.value.trim() || "./recordings",
-    format: formatInput?.value || "flv",
-    filenamePattern: patternInput?.value.trim() || "{stream_key}_{timestamp}",
-    segmentDurationSecs: parseInt(segmentInput?.value || "0", 10) || 0,
+  const recordingSettings: RecordingSettings = {
+    retainSourceTs: retainSourceTsInput?.checked ?? false,
   };
 
-  const res = await patchConfig({ recordingSettings: recordingSettings as any });
+  const res = await patchConfig({ recordingSettings });
   if (res) {
     state.config = { ...state.config, ...res };
     showSavedFeedback("recording-settings-saved");
@@ -120,28 +108,48 @@ export async function saveSrtIngest(): Promise<void> {
 }
 
 export function populateBackendPolicySettings(): void {
-  const allowExecInput = document.getElementById("settings-backend-allow-exec") as HTMLInputElement | null;
-  const preferredEngineInput = document.getElementById("settings-backend-preferred-engine") as HTMLSelectElement | null;
-  const strictModeInput = document.getElementById("settings-backend-strict-mode") as HTMLInputElement | null;
+  const videoPresetsInput = document.getElementById(
+    "backend-policy-internal-video-presets",
+  ) as HTMLInputElement | null;
+  const hevcToH264Input = document.getElementById(
+    "backend-policy-internal-hevc-to-h264",
+  ) as HTMLInputElement | null;
+  const hlsPreviewInput = document.getElementById(
+    "backend-policy-internal-hls-preview",
+  ) as HTMLInputElement | null;
+  const complexAudioInput = document.getElementById(
+    "backend-policy-internal-complex-audio",
+  ) as HTMLInputElement | null;
 
-  const policy = (state.config as any)?.backendPolicy;
-  if (allowExecInput) allowExecInput.checked = policy?.allowExternalTranscoderExec ?? true;
-  if (preferredEngineInput) preferredEngineInput.value = policy?.preferredEngine ?? "auto";
-  if (strictModeInput) strictModeInput.checked = policy?.strictMode ?? false;
+  const policy = state.config?.backendPolicy;
+  if (videoPresetsInput) videoPresetsInput.checked = policy?.internalVideoPresets ?? false;
+  if (hevcToH264Input) hevcToH264Input.checked = policy?.internalHevcToH264 ?? false;
+  if (hlsPreviewInput) hlsPreviewInput.checked = policy?.internalHlsPreview ?? false;
+  if (complexAudioInput) complexAudioInput.checked = policy?.internalComplexAudio ?? false;
 }
 
 export async function saveBackendPolicy(): Promise<void> {
-  const allowExecInput = document.getElementById("settings-backend-allow-exec") as HTMLInputElement | null;
-  const preferredEngineInput = document.getElementById("settings-backend-preferred-engine") as HTMLSelectElement | null;
-  const strictModeInput = document.getElementById("settings-backend-strict-mode") as HTMLInputElement | null;
+  const videoPresetsInput = document.getElementById(
+    "backend-policy-internal-video-presets",
+  ) as HTMLInputElement | null;
+  const hevcToH264Input = document.getElementById(
+    "backend-policy-internal-hevc-to-h264",
+  ) as HTMLInputElement | null;
+  const hlsPreviewInput = document.getElementById(
+    "backend-policy-internal-hls-preview",
+  ) as HTMLInputElement | null;
+  const complexAudioInput = document.getElementById(
+    "backend-policy-internal-complex-audio",
+  ) as HTMLInputElement | null;
 
-  const backendPolicy = {
-    allowExternalTranscoderExec: allowExecInput?.checked ?? true,
-    preferredEngine: (preferredEngineInput?.value as "auto" | "builtin" | "ffmpeg") || "auto",
-    strictMode: strictModeInput?.checked ?? false,
+  const backendPolicy: BackendPolicy = {
+    internalVideoPresets: videoPresetsInput?.checked ?? false,
+    internalHevcToH264: hevcToH264Input?.checked ?? false,
+    internalHlsPreview: hlsPreviewInput?.checked ?? false,
+    internalComplexAudio: complexAudioInput?.checked ?? false,
   };
 
-  const res = await patchConfig({ backendPolicy: backendPolicy as any });
+  const res = await patchConfig({ backendPolicy });
   if (res) {
     state.config = { ...state.config, ...res };
     showSavedFeedback("backend-policy-saved");
