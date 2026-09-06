@@ -12,7 +12,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use shiguredo_srt::{ConnectionEvent, Timestamp};
-use srt_transport::{IngressTelemetry, ListenerConfig, ListenerTopology, RuntimeFlavor};
+use srt_transport::{
+    IngressTelemetry, ListenerConfig, ListenerTopology, RecvBatch, RecvBudget, RuntimeFlavor,
+};
 use tokio::net::UdpSocket;
 
 #[derive(Default)]
@@ -138,7 +140,7 @@ async fn run_sink(
     };
     let mut peers = srt_transport::PeerTable::new();
     let telemetry = IngressTelemetry::default();
-    let mut datagram = vec![0u8; 2048];
+    let mut recv_batch = RecvBatch::new();
     let mut outbound = Vec::new();
     let mut events = Vec::new();
     let mut tick = tokio::time::interval(Duration::from_millis(5));
@@ -146,16 +148,27 @@ async fn run_sink(
     let started = Instant::now();
     while !stop.load(Ordering::Acquire) {
         tokio::select! {
-            received = socket.recv_from(&mut datagram) => {
-                if let Ok((size, peer)) = received {
-                    let _ = peers.admit(
-                        peer,
-                        &datagram[..size],
-                        sink_timestamp(started),
-                        &admission,
-                        0,
-                        1,
-                        &telemetry,
+            readable = socket.readable() => {
+                if readable.is_ok() {
+                    let now = sink_timestamp(started);
+                    let _ = srt_transport::tokio_transport::drain_readable(
+                        &socket,
+                        &mut recv_batch,
+                        RecvBudget::default(),
+                        |addr, data| {
+                            let Some(peer) = addr else {
+                                return;
+                            };
+                            let _ = peers.admit(
+                                peer,
+                                data,
+                                now,
+                                &admission,
+                                0,
+                                1,
+                                &telemetry,
+                            );
+                        },
                     );
                 }
             }

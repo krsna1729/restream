@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use shiguredo_srt::ConnectionEvent;
 use srt_transport::{
-    IngressTelemetry, ListenerConfig, ListenerTopology, RuntimeFlavor, SocketBufferConfig,
-    WorkerCount,
+    IngressTelemetry, ListenerConfig, ListenerTopology, RecvBatch, RecvBudget, RuntimeFlavor,
+    SocketBufferConfig, WorkerCount,
 };
 use tokio::net::UdpSocket;
 
@@ -184,55 +184,36 @@ async fn sink_port(
     let options = config.admission_options();
     let mut peers = config.peer_table();
     let telemetry = IngressTelemetry::default();
-    let batch_count = 64;
-    let mut input = vec![0u8; 2048];
-    let mut bufs: Vec<Vec<u8>> = (0..batch_count).map(|_| vec![0u8; 2048]).collect();
-    let mut sizes = vec![0usize; batch_count];
-    let mut addrs = vec![None; batch_count];
-    let raw_fd = std::os::fd::AsRawFd::as_raw_fd(&socket);
+    let mut recv_batch = RecvBatch::with_capacity(64, 2048);
     let mut outputs = Vec::with_capacity(64);
     let mut events = Vec::with_capacity(64);
     let mut tick = tokio::time::interval(Duration::from_millis(5));
     while !stop.load(Ordering::Acquire) {
         tokio::select! {
             _ = tick.tick() => {}
-            received = socket.recv_from(&mut input) => {
-                let (size, peer) = received.map_err(|e| e.to_string())?;
-                let _ = peers.admit(
-                    peer,
-                    &input[..size],
-                    srt_now(),
-                    &options,
-                    0,
-                    1,
-                    &telemetry,
+            readable = socket.readable() => {
+                readable.map_err(|error| error.to_string())?;
+                // Drain the kernel queue through the reusable recvmmsg
+                // adapter instead of one try_recv_from per datagram.
+                let _ = srt_transport::tokio_transport::drain_readable(
+                    &socket,
+                    &mut recv_batch,
+                    RecvBudget::new(8, 512),
+                    |addr, data| {
+                        let Some(peer) = addr else {
+                            return;
+                        };
+                        let _ = peers.admit(
+                            peer,
+                            data,
+                            srt_now(),
+                            &options,
+                            0,
+                            1,
+                            &telemetry,
+                        );
+                    },
                 );
-                // Drain the rest of the kernel queue in one recvmmsg
-                // syscall instead of one try_recv_from per datagram.
-                loop {
-                    match srt_transport::recvmsg_batch(raw_fd, &mut bufs, &mut sizes, &mut addrs)
-                    {
-                        Ok(0) | Err(_) => break,
-                        Ok(count) => {
-                            for index in 0..count {
-                                if let Some(peer) = addrs[index] {
-                                    let _ = peers.admit(
-                                        peer,
-                                        &bufs[index][..sizes[index]],
-                                        srt_now(),
-                                        &options,
-                                        0,
-                                        1,
-                                        &telemetry,
-                                    );
-                                }
-                            }
-                            if count < batch_count {
-                                break;
-                            }
-                        }
-                    }
-                }
             }
         }
 

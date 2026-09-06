@@ -10,7 +10,7 @@ use shiguredo_srt::{ConnectionEvent, Timestamp};
 use srt_transport::{
     AdmissionEvent, AdmissionResolution, BondedInputPolicy, IngressTelemetry, ListenerConfig,
     ListenerEncryptionConfig, ListenerPeerPolicy, ListenerTopology, LogicalPeerId, PeerTable,
-    PolicyOverride, RejectionReason, RuntimeFlavor,
+    PolicyOverride, RecvBatch, RecvBudget, RejectionReason, RuntimeFlavor,
 };
 use tokio::net::UdpSocket;
 use tracing::{error, info, warn};
@@ -111,29 +111,45 @@ impl SrtServer {
         let mut peer_sessions = HashMap::new();
         let mut events = Vec::new();
         let mut outbound = Vec::new();
-        let mut datagram = vec![0u8; 2048];
+        let mut recv_batch = RecvBatch::new();
         let mut tick = tokio::time::interval(Duration::from_millis(5));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         info!(port, "SRT listener ready (srt-rs/Tokio)");
         while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
             tokio::select! {
-                received = socket.recv_from(&mut datagram) => {
-                    match received {
-                        Ok((size, peer)) => {
+                readable = socket.readable() => {
+                    match readable {
+                        Ok(()) => {
                             let now = timestamp_now();
-                            let data = &datagram[..size];
-                            let policy_store = self.ingest_policy_store.clone();
-                            let _ = peers.admit_with_resolver(
-                                peer,
-                                data,
-                                now,
-                                &admission,
-                                0,
-                                1,
-                                &telemetry,
-                                move |request| resolve_listener_policy(&policy_store, request),
-                            );
+                            match srt_transport::tokio_transport::drain_readable(
+                                &socket,
+                                &mut recv_batch,
+                                RecvBudget::default(),
+                                |addr, data| {
+                                    let Some(peer) = addr else {
+                                        return;
+                                    };
+                                    let policy_store = self.ingest_policy_store.clone();
+                                    let _ = peers.admit_with_resolver(
+                                        peer,
+                                        data,
+                                        now,
+                                        &admission,
+                                        0,
+                                        1,
+                                        &telemetry,
+                                        move |request| resolve_listener_policy(&policy_store, request),
+                                    );
+                                },
+                            ) {
+                                Ok(_) => {}
+                                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                                Err(error) => {
+                                    warn!(%error, "SRT listener receive failed");
+                                    tokio::time::sleep(Duration::from_millis(10)).await;
+                                }
+                            }
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                         Err(error) => {

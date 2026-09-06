@@ -22,7 +22,7 @@ use bytes::Bytes;
 use shiguredo_srt::{ConnectionState, Timestamp};
 use srt_transport::OutputDrainBudget;
 use srt_transport::tokio_transport::{Conn, GroupConn as TokioGroupConn};
-use srt_transport::{LogicalCallerId, LogicalCallerState, LogicalCallerStats};
+use srt_transport::{LogicalCallerId, LogicalCallerState, LogicalCallerStats, RecvBudget};
 
 fn should_use_shared_srt_egress_state(peer_count: usize, has_shared_state: bool) -> bool {
     peer_count == 1 && has_shared_state
@@ -30,7 +30,7 @@ fn should_use_shared_srt_egress_state(peer_count: usize, has_shared_state: bool)
 
 enum RustSrtSocket {
     Direct(Box<Conn>),
-    Bonded(TokioGroupConn),
+    Bonded(Box<TokioGroupConn>),
     Shared {
         state: SrtEgressMuxerPortState,
         caller: LogicalCallerId,
@@ -476,16 +476,7 @@ fn send_direct_message(
 }
 
 fn receive_conn(conn: &mut Conn, now: Timestamp) {
-    let mut buf = [0u8; 2048];
-    loop {
-        match conn.sock.try_recv(&mut buf) {
-            Ok(size) => {
-                let _ = conn.conn.feed_recv_buf(&buf[..size], now);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-            Err(_) => break,
-        }
-    }
+    let _ = conn.recv_ready(now, RecvBudget::default());
 }
 
 pub(crate) trait SrtMessageSender {
@@ -762,14 +753,14 @@ pub(crate) fn connect_fabric_srt_egress_socket(
                     .map_err(|error| error.to_string())
             })
             .collect::<Result<Vec<_>, _>>()?;
-        RustSrtSocket::Bonded(
+        RustSrtSocket::Bonded(Box::new(
             TokioGroupConn::caller(
                 srt_transport::GroupConfig::new(next_group_id(), config.bond_type),
                 legs,
                 timestamp_now(),
             )
             .map_err(|error| error.to_string())?,
-        )
+        ))
     };
     Ok(Box::new(transport))
 }

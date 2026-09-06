@@ -845,7 +845,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2514,7 +2514,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2758,7 +2758,7 @@ checksum = "6f4ddf515b74c7fd601854cf7ae57094635f3795b0d5028b11cc4e32fb8d4098"
 [[package]]
 name = "shiguredo_srt"
 version = "2026.1.0-canary.1"
-source = "git+https://github.com/krsna1729/srt-rs?rev=91d0f4bf02671aa81dd07b76b88cb9630388546c#91d0f4bf02671aa81dd07b76b88cb9630388546c"
+source = "git+https://github.com/krsna1729/srt-rs?rev=f2f46b968a1c46cd3f1ea3044687d3d4920c93a4#f2f46b968a1c46cd3f1ea3044687d3d4920c93a4"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3007,7 +3007,7 @@ dependencies = [
 [[package]]
 name = "srt-lifecycle"
 version = "0.1.0"
-source = "git+https://github.com/krsna1729/srt-rs?rev=91d0f4bf02671aa81dd07b76b88cb9630388546c#91d0f4bf02671aa81dd07b76b88cb9630388546c"
+source = "git+https://github.com/krsna1729/srt-rs?rev=f2f46b968a1c46cd3f1ea3044687d3d4920c93a4#f2f46b968a1c46cd3f1ea3044687d3d4920c93a4"
 dependencies = [
  "shiguredo_srt",
 ]
@@ -3015,7 +3015,7 @@ dependencies = [
 [[package]]
 name = "srt-transport"
 version = "0.1.0"
-source = "git+https://github.com/krsna1729/srt-rs?rev=91d0f4bf02671aa81dd07b76b88cb9630388546c#91d0f4bf02671aa81dd07b76b88cb9630388546c"
+source = "git+https://github.com/krsna1729/srt-rs?rev=f2f46b968a1c46cd3f1ea3044687d3d4920c93a4#f2f46b968a1c46cd3f1ea3044687d3d4920c93a4"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
@@ -3122,7 +3122,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3742,7 +3742,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
