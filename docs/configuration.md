@@ -373,7 +373,8 @@ baseline, then rerun one change at a time. Each override logs once at info
 RESTREAM_SRT_UDP_BUF_BYTES=262144
 
 # Cut receive budget / send batch. Tests whether batch drain retains more
-# app/protocol heap (sender windows / payload_bytes_in_buffer).
+# egress-backpressure / sender-window anonymous heap
+# (`payload_bytes_in_buffer`).
 RESTREAM_SRT_RECV_BUDGET_DATAGRAMS=8
 RESTREAM_SRT_IO_BATCH_CAPACITY=8
 ```

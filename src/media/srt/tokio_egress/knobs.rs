@@ -64,15 +64,6 @@ fn udp_buf_override() -> Option<usize> {
     })
 }
 
-fn resolve_positive_usize(raw: Option<&str>, default: usize) -> usize {
-    parse_positive_usize(raw).unwrap_or(default)
-}
-
-fn parse_positive_usize(raw: Option<&str>) -> Option<usize> {
-    raw.and_then(|value| value.parse().ok())
-        .filter(|&value| value >= 1)
-}
-
 fn resolve_recv_budget(datagrams: Option<usize>) -> Option<RecvBudget> {
     let datagrams = datagrams.filter(|&value| value >= 1)?;
     Some(RecvBudget::new(
@@ -92,26 +83,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unset_udp_buf_keeps_eight_mib() {
-        assert_eq!(
-            resolve_positive_usize(None, DESIRED_UDP_BUF),
-            DESIRED_UDP_BUF
-        );
-        assert_eq!(
-            resolve_positive_usize(Some("not-a-number"), DESIRED_UDP_BUF),
-            DESIRED_UDP_BUF
-        );
-        assert_eq!(
-            resolve_positive_usize(Some("0"), DESIRED_UDP_BUF),
-            DESIRED_UDP_BUF
-        );
-        assert_eq!(
-            resolve_positive_usize(Some("1048576"), DESIRED_UDP_BUF),
-            1_048_576
-        );
-    }
-
-    #[test]
     fn unset_recv_budget_matches_srt_rs_default() {
         assert_eq!(resolve_recv_budget(None), None);
         assert_eq!(RecvBudget::default().max_datagrams, 64);
@@ -128,17 +99,5 @@ mod tests {
         assert_eq!(large.max_rounds, 8);
         let default_shaped = resolve_recv_budget(Some(64)).expect("parsed");
         assert_eq!(default_shaped, RecvBudget::default());
-    }
-
-    #[test]
-    fn unset_io_batch_keeps_64() {
-        assert_eq!(
-            resolve_positive_usize(None, DEFAULT_IO_BATCH_CAPACITY),
-            DEFAULT_IO_BATCH_CAPACITY
-        );
-        assert_eq!(
-            resolve_positive_usize(Some("16"), DEFAULT_IO_BATCH_CAPACITY),
-            16
-        );
     }
 }
