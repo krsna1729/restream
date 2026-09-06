@@ -57,7 +57,9 @@ percent-encoding = "2"
 shiguredo_mp4 = "2026.3.0"
 # srt-rs (github.com/krsna1729/srt-rs): sans-I/O SRT protocol core + Tokio
 # transport adapter. Pinned to a reviewed revision; bump deliberately.
-# 14042682: A2 HighResWaiter / pacing surfaces (#86) on top of batched UDP (#85).
+# 14042682: A2 HighResWaiter primitive (#86) on top of batched UDP (#85).
+# Listener loops stay on Tokio readable()+5ms tick; HighResWaiter.wait() on a
+# Tokio UdpSocket failed quiet BBB N=30 sink/srt-only after #153.
 shiguredo_srt = { git = "https://github.com/krsna1729/srt-rs", rev = "14042682c75a75ce02c2c34420608ef9d2f8b1a7" }
 srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "14042682c75a75ce02c2c34420608ef9d2f8b1a7", features = ["tokio"] }
 tracing = { version = "0.1", features = ["max_level_debug"] }

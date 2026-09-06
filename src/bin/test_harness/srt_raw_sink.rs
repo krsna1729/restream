@@ -6,7 +6,6 @@
 //! window remains a real source of sender backpressure.
 
 use std::net::SocketAddr;
-use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
@@ -14,8 +13,7 @@ use std::time::{Duration, Instant};
 
 use shiguredo_srt::{ConnectionEvent, Timestamp};
 use srt_transport::{
-    HighResWaiter, IngressTelemetry, ListenerConfig, ListenerTopology, MonotonicDeadline,
-    PeerTable, RecvBatch, RecvBudget, RuntimeFlavor,
+    IngressTelemetry, ListenerConfig, ListenerTopology, RecvBatch, RecvBudget, RuntimeFlavor,
 };
 use tokio::net::UdpSocket;
 
@@ -145,37 +143,38 @@ async fn run_sink(
     let mut recv_batch = RecvBatch::new();
     let mut outbound = Vec::new();
     let mut events = Vec::new();
-    let Ok(mut waiter) = HighResWaiter::<()>::new() else {
-        return;
-    };
-    if waiter.register((), socket.as_raw_fd()).is_err() {
-        return;
-    }
-    let mut due = Vec::new();
-    let mut ready = Vec::new();
+    // Same park as the measurement sink / production ingress. Do not use
+    // HighResWaiter.wait() on this Tokio UdpSocket (see #153 N=30 regress).
+    let mut tick = tokio::time::interval(Duration::from_millis(5));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let started = Instant::now();
     while !stop.load(Ordering::Acquire) {
-        let now = sink_timestamp(started);
-        let wait = listener_wait_duration(&mut peers, now);
-        // Dedicated current-thread runtime: park directly. `block_in_place`
-        // panics on this flavor.
-        let socket_ready = match park_listener(&mut waiter, &mut due, &mut ready, wait) {
-            Ok(ready) => ready,
-            Err(_) => continue,
-        };
-        if socket_ready {
-            let now = sink_timestamp(started);
-            let _ = srt_transport::tokio_transport::drain_readable(
-                &socket,
-                &mut recv_batch,
-                RecvBudget::default(),
-                |addr, data| {
-                    let Some(peer) = addr else {
-                        return;
-                    };
-                    let _ = peers.admit(peer, data, now, &admission, 0, 1, &telemetry);
-                },
-            );
+        tokio::select! {
+            readable = socket.readable() => {
+                if readable.is_ok() {
+                    let now = sink_timestamp(started);
+                    let _ = srt_transport::tokio_transport::drain_readable(
+                        &socket,
+                        &mut recv_batch,
+                        RecvBudget::default(),
+                        |addr, data| {
+                            let Some(peer) = addr else {
+                                return;
+                            };
+                            let _ = peers.admit(
+                                peer,
+                                data,
+                                now,
+                                &admission,
+                                0,
+                                1,
+                                &telemetry,
+                            );
+                        },
+                    );
+                }
+            }
+            _ = tick.tick() => {}
         }
         let now = sink_timestamp(started);
         peers.poll_outbound(now, &mut outbound);
@@ -202,31 +201,6 @@ async fn run_sink(
             }
         }
     }
-}
-
-const LISTENER_IDLE: Duration = Duration::from_millis(5);
-
-fn listener_wait_duration(peers: &mut PeerTable, now: Timestamp) -> Duration {
-    Duration::from_micros(
-        peers
-            .time_until_next_deadline(now, listener_idle_micros())
-            .min(listener_idle_micros()),
-    )
-}
-
-fn listener_idle_micros() -> u64 {
-    u64::try_from(LISTENER_IDLE.as_micros()).unwrap_or(u64::MAX)
-}
-
-fn park_listener(
-    waiter: &mut HighResWaiter<()>,
-    due: &mut Vec<()>,
-    ready: &mut Vec<()>,
-    wait: Duration,
-) -> std::io::Result<bool> {
-    waiter.set_deadline((), MonotonicDeadline::after(wait));
-    waiter.wait(due, ready)?;
-    Ok(!ready.is_empty())
 }
 
 fn sink_timestamp(started: Instant) -> Timestamp {
