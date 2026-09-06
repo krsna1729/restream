@@ -10,7 +10,7 @@ use shiguredo_srt::{ConnectionEvent, Timestamp};
 use srt_transport::{
     AdmissionEvent, AdmissionResolution, BondedInputPolicy, IngressTelemetry, ListenerConfig,
     ListenerEncryptionConfig, ListenerPeerPolicy, ListenerTopology, LogicalPeerId, PeerTable,
-    PolicyOverride, RecvBatch, RecvBudget, RejectionReason, RuntimeFlavor,
+    PolicyOverride, RecvBatch, RejectionReason, RuntimeFlavor,
 };
 use tokio::net::UdpSocket;
 use tracing::{error, info, warn};
@@ -67,6 +67,7 @@ impl SrtServer {
         let prepared = match ListenerConfig::builder(bind)
             .topology(ListenerTopology::PerPort)
             .bonded_inputs(BondedInputPolicy::Accept)
+            .configure_transport(super::tokio_egress::apply_optional_udp_buf)
             .build()
             .and_then(|config| config.prepare(RuntimeFlavor::Tokio))
         {
@@ -125,7 +126,7 @@ impl SrtServer {
                             match srt_transport::tokio_transport::drain_readable(
                                 &socket,
                                 &mut recv_batch,
-                                RecvBudget::default(),
+                                super::tokio_egress::recv_budget(),
                                 |addr, data| {
                                     let Some(peer) = addr else {
                                         return;

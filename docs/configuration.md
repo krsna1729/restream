@@ -59,6 +59,9 @@ in SQLite.
 | SRT egress connect concurrency | `64` | `RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` (clamped to `1..=4096`; engine-wide bound on concurrent in-flight SRT egress handshakes, held per leaf from connect initiation until its first poller visit resolves the handshake — decouples connection-*establishment* concurrency from shard count, since SRT's `connect()` is non-blocking-initiate and returns before the handshake completes) |
 | Require SRT bonding support | Disabled | `RESTREAM_REQUIRE_SRT_BONDING` (retained compatibility setting; srt-rs bonded ingress is enabled by the listener) |
 | SRT encryption | Disabled | `RESTREAM_SRT_PASSPHRASE`; `RESTREAM_SRT_PBKEYLEN` selects the key length and defaults to `16` |
+| Tokio SRT UDP socket buffer | `8388608` bytes on shared egress (`DESIRED_UDP_BUF` / `set_sock_bufs`) | `RESTREAM_SRT_UDP_BUF_BYTES` (A/B knob; unset keeps the current 8 MiB shared-egress request and leaves Caller/Listener `SocketBufferConfig::Auto` alone. When set to a positive `usize`, shared egress uses that request and Tokio ingress/direct/bonded sockets apply the same `SO_RCVBUF`/`SO_SNDBUF`. Distinct from leftover `RESTREAM_SRT_UDP_BUFFER`, which is still parsed into AppConfig but is unused on the Tokio path.) |
+| Tokio SRT RecvBudget datagrams | `64` (`RecvBudget::default()`, 2 recvmmsg rounds) | `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` (A/B knob; unset keeps `RecvBudget::default()` on Tokio ingress/egress/shared and the raw harness sink. The measurement sink keeps `RecvBudget::new(8, 512)` unless this env is set. Rounds scale as `datagrams.div_ceil(32)`.) |
+| Tokio SRT shared send batch | `64` datagrams | `RESTREAM_SRT_IO_BATCH_CAPACITY` (A/B knob; unset keeps the current shared-egress `sendmmsg` prefix cap.) |
 | AVIO queue capacity (async↔OS-thread bridge) | `524288` bytes (512 KiB) | `RESTREAM_AVIO_QUEUE_CAPACITY` (measured peak HWM = 398 KiB at 8 Mb/s RTMP with zero blocked writes; raise only for very high-latency SRT links) |
 | File descriptor limit | `65536` | `RESTREAM_NOFILE_LIMIT` |
 | Output reconciliation interval | 1 second | `RESTREAM_RECONCILE_INTERVAL_MS` |
@@ -357,6 +360,20 @@ libsrt does not validate the peer's proposed latency at all.
 Linux startup checks warn when `net.core.rmem_max` or `net.core.wmem_max` cannot
 support the requested UDP buffers. The listener's `/proc/net/udp` receive queue
 and drop count are exported in `/api/v1/engine/health`.
+
+Tokio SRT UDP buffer, RecvBudget, and shared send-batch defaults stay
+unchanged when the three A/B knobs are unset. Leave them unset for a
+baseline, then rerun one change at a time. Each override logs once at info
+(`SRT A/B knob override`) with the value used:
+
+```sh
+# Cut kernel UDP buffers.
+RESTREAM_SRT_UDP_BUF_BYTES=262144
+
+# Cut receive budget / send batch.
+RESTREAM_SRT_RECV_BUDGET_DATAGRAMS=8
+RESTREAM_SRT_IO_BATCH_CAPACITY=8
+```
 
 For a fresh Linux host, both `scripts/dev/bootstrap.sh` and
 `scripts/dev/bootstrap-runtime.sh` report whether private user/network
