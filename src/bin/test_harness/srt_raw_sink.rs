@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use shiguredo_srt::{ConnectionEvent, Timestamp};
 use srt_transport::{
     HighResWaiter, IngressTelemetry, ListenerConfig, ListenerTopology, MonotonicDeadline,
-    PeerTable, RecvBatch, RecvBudget, RuntimeFlavor,
+    PeerTable, RecvBatch, RuntimeFlavor,
 };
 use tokio::net::UdpSocket;
 
@@ -170,7 +170,7 @@ async fn run_sink(
             let _ = drain_woken_listener(
                 &socket,
                 &mut recv_batch,
-                RecvBudget::default(),
+                restream::media::srt::recv_budget(),
                 |addr, data| {
                     let Some(peer) = addr else {
                         return;

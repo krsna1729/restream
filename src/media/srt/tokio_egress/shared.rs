@@ -2,11 +2,11 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::AsRawFd;
 
 use shiguredo_srt::Timestamp;
-use srt_transport::{OutputDrainBudget, RecvBatch, RecvBudget, apply_send_result};
+use srt_transport::{OutputDrainBudget, RecvBatch, apply_send_result};
 use tokio::io::Interest;
 use tokio::net::UdpSocket;
 
-use super::{DESIRED_UDP_BUF, SHARED_IO_BATCH_CAPACITY};
+use super::{desired_udp_buf, recv_budget, shared_io_batch_capacity};
 
 pub(crate) struct SharedSrtEgress {
     pub(crate) socket: UdpSocket,
@@ -44,7 +44,7 @@ impl SharedSrtEgress {
         socket
             .set_nonblocking(true)
             .map_err(|error| error.to_string())?;
-        srt_transport::set_sock_bufs(socket.as_raw_fd(), DESIRED_UDP_BUF)
+        srt_transport::set_sock_bufs(socket.as_raw_fd(), desired_udp_buf())
             .map_err(|error| error.to_string())?;
         let socket = UdpSocket::from_std(socket).map_err(|error| error.to_string())?;
         runtime
@@ -73,7 +73,7 @@ impl SharedSrtEgress {
             srt_transport::tokio_transport::drain_readable(
                 socket,
                 recv_batch,
-                RecvBudget::default(),
+                recv_budget(),
                 |addr, data| {
                     let Some(peer) = addr else {
                         return;
@@ -103,7 +103,7 @@ impl SharedSrtEgress {
                 let count = self
                     .outbound
                     .iter()
-                    .take(SHARED_IO_BATCH_CAPACITY)
+                    .take(shared_io_batch_capacity())
                     .take_while(|(peer, _)| peer.is_ipv4())
                     .count();
                 let result =
