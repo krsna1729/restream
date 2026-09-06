@@ -201,9 +201,10 @@ async fn sink_port(
         let socket_ready = park_listener(&mut waiter, &mut due, &mut ready, wait)
             .map_err(|error| error.to_string())?;
         if socket_ready {
-            // Drain the kernel queue through the reusable recvmmsg
-            // adapter instead of one try_recv_from per datagram.
-            let _ = srt_transport::tokio_transport::drain_readable(
+            // HighResWaiter observed the raw fd. Do not use
+            // `drain_readable` here: Tokio READABLE is unset after a
+            // waiter park, so handshake datagrams become WouldBlock.
+            let _ = drain_woken_listener(
                 &socket,
                 &mut recv_batch,
                 RecvBudget::new(8, 512),
@@ -266,6 +267,15 @@ fn park_listener(
     Ok(!ready.is_empty())
 }
 
+fn drain_woken_listener(
+    socket: &UdpSocket,
+    recv_batch: &mut RecvBatch,
+    budget: RecvBudget,
+    on_datagram: impl FnMut(Option<SocketAddr>, &[u8]),
+) -> std::io::Result<srt_transport::RecvDrainReport> {
+    srt_transport::drain_recv_fd(socket.as_raw_fd(), recv_batch, budget, on_datagram)
+}
+
 fn srt_now() -> shiguredo_srt::Timestamp {
     use std::sync::OnceLock;
     use std::time::Instant;
@@ -312,5 +322,41 @@ mod tests {
         let pool = HarnessSrtSinkPool::start(&free_udp_ports(2), 0, 8).expect("start sink pool");
         assert_eq!(pool.threads.len(), 8);
         pool.stop();
+    }
+
+    #[test]
+    fn woken_sink_drains_without_tokio_readable() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .expect("Tokio runtime builds");
+        runtime.block_on(async {
+            let receiver = std::net::UdpSocket::bind("127.0.0.1:0").expect("receiver binds");
+            receiver
+                .set_nonblocking(true)
+                .expect("receiver is nonblocking");
+            let dest = receiver.local_addr().expect("receiver address");
+            let sender = std::net::UdpSocket::bind("127.0.0.1:0").expect("sender binds");
+            sender.send_to(b"ping", dest).expect("send datagram");
+            let sock = UdpSocket::from_std(receiver).expect("tokio adopts the socket");
+
+            let mut waiter = HighResWaiter::<()>::new().expect("waiter");
+            waiter
+                .register((), sock.as_raw_fd())
+                .expect("register listener fd");
+            let mut due = Vec::new();
+            let mut ready = Vec::new();
+            assert!(park_listener(&mut waiter, &mut due, &mut ready, LISTENER_IDLE).expect("wait"));
+
+            let mut batch = RecvBatch::new();
+            let mut got = Vec::new();
+            let report =
+                drain_woken_listener(&sock, &mut batch, RecvBudget::new(8, 512), |_, data| {
+                    got.push(data.to_vec())
+                })
+                .expect("drain after waiter");
+            assert_eq!(report.datagrams, 1);
+            assert_eq!(got, [b"ping".to_vec()]);
+        });
     }
 }

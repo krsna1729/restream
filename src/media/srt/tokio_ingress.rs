@@ -140,7 +140,10 @@ impl SrtServer {
                 Ok(socket_ready) => {
                     if socket_ready {
                         let now = timestamp_now();
-                        match srt_transport::tokio_transport::drain_readable(
+                        // HighResWaiter observed the raw fd. `drain_readable`
+                        // requires Tokio READABLE, which is still unset here,
+                        // so handshake datagrams would be dropped as WouldBlock.
+                        match drain_woken_listener(
                             &socket,
                             &mut recv_batch,
                             RecvBudget::default(),
@@ -703,6 +706,21 @@ fn park_listener(
     Ok(!ready.is_empty())
 }
 
+/// Drain a socket that `HighResWaiter` already reported readable.
+///
+/// Must not use [`srt_transport::tokio_transport::drain_readable`]: that
+/// helper's `try_io(READABLE)` returns WouldBlock unless Tokio itself saw
+/// the wake. After a waiter park the kernel queue is full and Tokio is
+/// not, which is the post-#153 MSR sink/ingress handshake stall.
+fn drain_woken_listener(
+    socket: &UdpSocket,
+    recv_batch: &mut RecvBatch,
+    budget: RecvBudget,
+    on_datagram: impl FnMut(Option<std::net::SocketAddr>, &[u8]),
+) -> std::io::Result<srt_transport::RecvDrainReport> {
+    srt_transport::drain_recv_fd(socket.as_raw_fd(), recv_batch, budget, on_datagram)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -716,33 +734,79 @@ mod tests {
         );
     }
 
-    #[test]
-    fn high_res_waiter_wakes_the_listener_socket() {
+    fn pending_datagram_socket() -> std::net::UdpSocket {
+        let receiver = std::net::UdpSocket::bind("127.0.0.1:0").expect("receiver binds");
+        receiver
+            .set_nonblocking(true)
+            .expect("receiver is nonblocking");
+        let dest = receiver.local_addr().expect("receiver address");
+        let sender = std::net::UdpSocket::bind("127.0.0.1:0").expect("sender binds");
+        sender.send_to(b"ping", dest).expect("send datagram");
+        receiver
+    }
+
+    fn with_woken_listener(
+        test: impl FnOnce(UdpSocket, &mut HighResWaiter<()>, &mut Vec<()>, &mut Vec<()>),
+    ) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_io()
             .build()
             .expect("Tokio runtime builds");
+        let receiver = pending_datagram_socket();
         runtime.block_on(async {
-            let receiver = std::net::UdpSocket::bind("127.0.0.1:0").expect("receiver binds");
-            receiver
-                .set_nonblocking(true)
-                .expect("receiver is nonblocking");
-            let dest = receiver.local_addr().expect("receiver address");
-            let sender = std::net::UdpSocket::bind("127.0.0.1:0").expect("sender binds");
             let sock = UdpSocket::from_std(receiver).expect("tokio adopts the socket");
-
             let mut waiter = HighResWaiter::<()>::new().expect("waiter");
             waiter
                 .register((), sock.as_raw_fd())
                 .expect("register listener fd");
-            sender.send_to(b"ping", dest).expect("send datagram");
-
             let mut due = Vec::new();
             let mut ready = Vec::new();
             assert!(
                 park_listener(&mut waiter, &mut due, &mut ready, LISTENER_IDLE).expect("wait"),
                 "listener fd should be ready after a datagram"
             );
+            test(sock, &mut waiter, &mut due, &mut ready);
+        });
+    }
+
+    #[test]
+    fn high_res_waiter_wakes_the_listener_socket() {
+        with_woken_listener(|_, _, _, _| {});
+    }
+
+    #[test]
+    fn woken_listener_drains_without_tokio_readable() {
+        with_woken_listener(|sock, _, _, _| {
+            let mut batch = RecvBatch::new();
+            let mut got = Vec::new();
+            let report =
+                drain_woken_listener(&sock, &mut batch, RecvBudget::default(), |_, data| {
+                    got.push(data.to_vec())
+                })
+                .expect("drain after waiter");
+            assert_eq!(report.datagrams, 1);
+            assert_eq!(got, [b"ping".to_vec()]);
+        });
+    }
+
+    #[test]
+    fn drain_readable_misses_a_waiter_wake_without_tokio_readable() {
+        with_woken_listener(|sock, _, _, _| {
+            let mut batch = RecvBatch::new();
+            let mut got = Vec::new();
+            let report = srt_transport::tokio_transport::drain_readable(
+                &sock,
+                &mut batch,
+                RecvBudget::default(),
+                |_, data| got.push(data.to_vec()),
+            )
+            .expect("drain_readable after waiter");
+            assert_eq!(
+                report.datagrams, 0,
+                "Tokio try_io is unset after HighResWaiter; this is the #153 MSR stall"
+            );
+            assert!(report.would_block);
+            assert!(got.is_empty());
         });
     }
 }

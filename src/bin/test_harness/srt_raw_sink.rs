@@ -165,7 +165,9 @@ async fn run_sink(
         };
         if socket_ready {
             let now = sink_timestamp(started);
-            let _ = srt_transport::tokio_transport::drain_readable(
+            // HighResWaiter observed the raw fd. `drain_readable` needs
+            // Tokio READABLE, which is still unset after a waiter park.
+            let _ = drain_woken_listener(
                 &socket,
                 &mut recv_batch,
                 RecvBudget::default(),
@@ -229,6 +231,15 @@ fn park_listener(
     Ok(!ready.is_empty())
 }
 
+fn drain_woken_listener(
+    socket: &UdpSocket,
+    recv_batch: &mut RecvBatch,
+    budget: RecvBudget,
+    on_datagram: impl FnMut(Option<SocketAddr>, &[u8]),
+) -> std::io::Result<srt_transport::RecvDrainReport> {
+    srt_transport::drain_recv_fd(socket.as_raw_fd(), recv_batch, budget, on_datagram)
+}
+
 fn sink_timestamp(started: Instant) -> Timestamp {
     Timestamp::from_micros(started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64)
 }
@@ -261,5 +272,41 @@ mod tests {
             "second sink on port {port} unexpectedly bound"
         );
         sink.stop();
+    }
+
+    #[test]
+    fn woken_raw_sink_drains_without_tokio_readable() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .expect("Tokio runtime builds");
+        runtime.block_on(async {
+            let receiver = std::net::UdpSocket::bind("127.0.0.1:0").expect("receiver binds");
+            receiver
+                .set_nonblocking(true)
+                .expect("receiver is nonblocking");
+            let dest = receiver.local_addr().expect("receiver address");
+            let sender = std::net::UdpSocket::bind("127.0.0.1:0").expect("sender binds");
+            sender.send_to(b"ping", dest).expect("send datagram");
+            let sock = UdpSocket::from_std(receiver).expect("tokio adopts the socket");
+
+            let mut waiter = HighResWaiter::<()>::new().expect("waiter");
+            waiter
+                .register((), sock.as_raw_fd())
+                .expect("register listener fd");
+            let mut due = Vec::new();
+            let mut ready = Vec::new();
+            assert!(park_listener(&mut waiter, &mut due, &mut ready, LISTENER_IDLE).expect("wait"));
+
+            let mut batch = RecvBatch::new();
+            let mut got = Vec::new();
+            let report =
+                drain_woken_listener(&sock, &mut batch, RecvBudget::default(), |_, data| {
+                    got.push(data.to_vec())
+                })
+                .expect("drain after waiter");
+            assert_eq!(report.datagrams, 1);
+            assert_eq!(got, [b"ping".to_vec()]);
+        });
     }
 }
