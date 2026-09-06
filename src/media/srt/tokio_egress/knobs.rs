@@ -22,8 +22,8 @@ pub(crate) fn desired_udp_buf() -> usize {
 pub(crate) fn shared_io_batch_capacity() -> usize {
     static VALUE: OnceLock<usize> = OnceLock::new();
     *VALUE.get_or_init(|| {
-        let value =
-            resolve_positive_usize(env_raw(IO_BATCH_ENV).as_deref(), DEFAULT_IO_BATCH_CAPACITY);
+        let value = crate::config::env_optional_positive_usize(IO_BATCH_ENV)
+            .unwrap_or(DEFAULT_IO_BATCH_CAPACITY);
         log_override(IO_BATCH_ENV, value, DEFAULT_IO_BATCH_CAPACITY);
         value
     })
@@ -37,13 +37,14 @@ pub(crate) fn recv_budget_or(fallback: RecvBudget) -> RecvBudget {
     static VALUE: OnceLock<Option<RecvBudget>> = OnceLock::new();
     VALUE
         .get_or_init(|| {
-            resolve_recv_budget(env_raw(RECV_BUDGET_ENV).as_deref()).inspect(|budget| {
-                log_override(
-                    RECV_BUDGET_ENV,
-                    budget.max_datagrams,
-                    fallback.max_datagrams,
-                );
-            })
+            resolve_recv_budget(crate::config::env_optional_positive_usize(RECV_BUDGET_ENV))
+                .inspect(|budget| {
+                    log_override(
+                        RECV_BUDGET_ENV,
+                        budget.max_datagrams,
+                        fallback.max_datagrams,
+                    );
+                })
         })
         .unwrap_or(fallback)
 }
@@ -57,14 +58,14 @@ pub(crate) fn apply_optional_udp_buf(transport: &mut TransportConfig) {
 fn udp_buf_override() -> Option<usize> {
     static VALUE: OnceLock<Option<usize>> = OnceLock::new();
     *VALUE.get_or_init(|| {
-        parse_positive_usize(env_raw(UDP_BUF_ENV).as_deref()).inspect(|value| {
+        crate::config::env_optional_positive_usize(UDP_BUF_ENV).inspect(|value| {
             log_override(UDP_BUF_ENV, *value, DESIRED_UDP_BUF);
         })
     })
 }
 
-fn env_raw(name: &str) -> Option<String> {
-    std::env::var(name).ok()
+fn resolve_positive_usize(raw: Option<&str>, default: usize) -> usize {
+    parse_positive_usize(raw).unwrap_or(default)
 }
 
 fn parse_positive_usize(raw: Option<&str>) -> Option<usize> {
@@ -72,12 +73,8 @@ fn parse_positive_usize(raw: Option<&str>) -> Option<usize> {
         .filter(|&value| value >= 1)
 }
 
-fn resolve_positive_usize(raw: Option<&str>, default: usize) -> usize {
-    parse_positive_usize(raw).unwrap_or(default)
-}
-
-fn resolve_recv_budget(raw: Option<&str>) -> Option<RecvBudget> {
-    let datagrams = parse_positive_usize(raw)?;
+fn resolve_recv_budget(datagrams: Option<usize>) -> Option<RecvBudget> {
+    let datagrams = datagrams.filter(|&value| value >= 1)?;
     Some(RecvBudget::new(
         datagrams.div_ceil(RecvBatch::DEFAULT_CAPACITY).max(1),
         datagrams,
@@ -123,13 +120,13 @@ mod tests {
 
     #[test]
     fn recv_budget_override_scales_rounds_to_cover_datagrams() {
-        let small = resolve_recv_budget(Some("8")).expect("parsed");
+        let small = resolve_recv_budget(Some(8)).expect("parsed");
         assert_eq!(small.max_datagrams, 8);
         assert_eq!(small.max_rounds, 1);
-        let large = resolve_recv_budget(Some("256")).expect("parsed");
+        let large = resolve_recv_budget(Some(256)).expect("parsed");
         assert_eq!(large.max_datagrams, 256);
         assert_eq!(large.max_rounds, 8);
-        let default_shaped = resolve_recv_budget(Some("64")).expect("parsed");
+        let default_shaped = resolve_recv_budget(Some(64)).expect("parsed");
         assert_eq!(default_shaped, RecvBudget::default());
     }
 

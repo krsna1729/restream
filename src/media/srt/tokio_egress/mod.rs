@@ -481,7 +481,7 @@ fn send_direct_message(
 }
 
 fn receive_conn(conn: &mut Conn, now: Timestamp) {
-    let _ = conn.recv_ready(now, recv_budget());
+    let _ = conn.recv_ready(now, recv_budget_or(srt_transport::RecvBudget::default()));
 }
 
 pub(crate) trait SrtMessageSender {
