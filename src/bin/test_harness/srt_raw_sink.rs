@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use shiguredo_srt::{ConnectionEvent, Timestamp};
 use srt_transport::{
-    IngressTelemetry, ListenerConfig, ListenerTopology, RecvBatch, RecvBudget, RuntimeFlavor,
+    IngressTelemetry, ListenerConfig, ListenerTopology, RecvBatch, RuntimeFlavor,
 };
 use tokio::net::UdpSocket;
 
