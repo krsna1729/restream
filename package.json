@@ -29,7 +29,7 @@
     "vite": "^8.2.2"
   },
   "dependencies": {
-    "hls.js": "^1.7.1",
+    "hls.js": "^1.7.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.8"
   }
