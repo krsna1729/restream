@@ -25,9 +25,8 @@ use srt_transport::tokio_transport::{Conn, GroupConn as TokioGroupConn};
 use srt_transport::{LogicalCallerId, LogicalCallerState, LogicalCallerStats};
 
 mod knobs;
-pub(crate) use knobs::{
-    apply_optional_udp_buf, desired_udp_buf, recv_budget, recv_budget_or, shared_io_batch_capacity,
-};
+pub(crate) use knobs::{apply_optional_udp_buf, desired_udp_buf, shared_io_batch_capacity};
+pub use knobs::{recv_budget, recv_budget_or};
 
 fn should_use_shared_srt_egress_state(peer_count: usize, has_shared_state: bool) -> bool {
     peer_count == 1 && has_shared_state

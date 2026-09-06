@@ -29,11 +29,11 @@ pub(crate) fn shared_io_batch_capacity() -> usize {
     })
 }
 
-pub(crate) fn recv_budget() -> RecvBudget {
+pub fn recv_budget() -> RecvBudget {
     recv_budget_or(RecvBudget::default())
 }
 
-pub(crate) fn recv_budget_or(fallback: RecvBudget) -> RecvBudget {
+pub fn recv_budget_or(fallback: RecvBudget) -> RecvBudget {
     static VALUE: OnceLock<Option<RecvBudget>> = OnceLock::new();
     VALUE
         .get_or_init(|| {

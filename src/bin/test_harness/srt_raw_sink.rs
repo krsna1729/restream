@@ -170,7 +170,7 @@ async fn run_sink(
             let _ = drain_woken_listener(
                 &socket,
                 &mut recv_batch,
-                restream::media::srt::tokio_egress::recv_budget(),
+                restream::media::srt::srt_knobs::recv_budget(),
                 |addr, data| {
                     let Some(peer) = addr else {
                         return;

@@ -207,7 +207,7 @@ async fn sink_port(
             let _ = drain_woken_listener(
                 &socket,
                 &mut recv_batch,
-                restream::media::srt::tokio_egress::recv_budget_or(RecvBudget::new(8, 512)),
+                restream::media::srt::srt_knobs::recv_budget_or(RecvBudget::new(8, 512)),
                 |addr, data| {
                     let Some(peer) = addr else {
                         return;
