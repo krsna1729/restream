@@ -17,23 +17,26 @@ pub async fn create_pipeline(
     input_source: Option<&str>,
     srt_ingest_policy: Option<&str>,
 ) -> Result<PipelineRecord, sqlx::Error> {
-    let mut transaction = pool.begin().await?;
-    sqlx::query(
-        "INSERT INTO pipelines (id, name, input_source, srt_ingest_policy) VALUES (?, ?, ?, ?)",
-    )
-    .bind(id)
-    .bind(name)
-    .bind(input_source)
-    .bind(srt_ingest_policy)
-    .execute(&mut *transaction)
-    .await?;
-    super::pipeline_input_repo::insert_primary_pipeline_input(&mut transaction, id, stream_key)
+    super::with_busy_retry(|| async {
+        let mut transaction = pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO pipelines (id, name, input_source, srt_ingest_policy) VALUES (?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(input_source)
+        .bind(srt_ingest_policy)
+        .execute(&mut *transaction)
         .await?;
-    transaction.commit().await?;
+        super::pipeline_input_repo::insert_primary_pipeline_input(&mut transaction, id, stream_key)
+            .await?;
+        transaction.commit().await?;
 
-    get_pipeline(pool, id)
-        .await?
-        .ok_or_else(|| sqlx::Error::RowNotFound)
+        get_pipeline(pool, id)
+            .await?
+            .ok_or_else(|| sqlx::Error::RowNotFound)
+    })
+    .await
 }
 
 pub async fn get_pipeline(
@@ -84,31 +87,34 @@ pub async fn update_pipeline(
     input_source: Option<&str>,
     srt_ingest_policy: Option<&str>,
 ) -> Result<Option<PipelineRecord>, sqlx::Error> {
-    let mut transaction = pool.begin().await?;
-    let result = sqlx::query(
-        "UPDATE pipelines SET name = ?, input_source = ?, srt_ingest_policy = ? WHERE id = ?",
-    )
-    .bind(name)
-    .bind(input_source)
-    .bind(srt_ingest_policy)
-    .bind(id)
-    .execute(&mut *transaction)
-    .await?;
-
-    if result.rows_affected() > 0 {
-        sqlx::query(
-            "UPDATE pipeline_inputs SET stream_key = ?
-             WHERE pipeline_id = ? AND selected = 1",
+    super::with_busy_retry(|| async {
+        let mut transaction = pool.begin().await?;
+        let result = sqlx::query(
+            "UPDATE pipelines SET name = ?, input_source = ?, srt_ingest_policy = ? WHERE id = ?",
         )
-        .bind(stream_key)
+        .bind(name)
+        .bind(input_source)
+        .bind(srt_ingest_policy)
         .bind(id)
         .execute(&mut *transaction)
         .await?;
-        transaction.commit().await?;
-        get_pipeline(pool, id).await
-    } else {
-        Ok(None)
-    }
+
+        if result.rows_affected() > 0 {
+            sqlx::query(
+                "UPDATE pipeline_inputs SET stream_key = ?
+                 WHERE pipeline_id = ? AND selected = 1",
+            )
+            .bind(stream_key)
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+            get_pipeline(pool, id).await
+        } else {
+            Ok(None)
+        }
+    })
+    .await
 }
 
 /// Updates only `input_source`, leaving `name`, `stream_key`, and

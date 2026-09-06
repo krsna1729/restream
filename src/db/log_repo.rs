@@ -18,39 +18,42 @@ pub async fn append_app_log_batch_returning(
     if entries.is_empty() {
         return Ok(Vec::new());
     }
-    let mut tx = pool.begin().await?;
-    let mut rows = Vec::with_capacity(entries.len());
-    for e in entries {
-        let result = sqlx::query(
-            "INSERT INTO app_logs (ts, level, target, message, fields, pipeline_id, output_id, event_type, event_class)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&e.ts)
-        .bind(&e.level)
-        .bind(&e.target)
-        .bind(&e.message)
-        .bind(&e.fields)
-        .bind(&e.pipeline_id)
-        .bind(&e.output_id)
-        .bind(&e.event_type)
-        .bind(&e.event_class)
-        .execute(&mut *tx)
-        .await?;
-        rows.push(crate::logging::types::AppLogRow {
-            id: result.last_insert_rowid(),
-            ts: e.ts.clone(),
-            level: e.level.clone(),
-            target: e.target.clone(),
-            message: e.message.clone(),
-            fields: e.fields.clone(),
-            pipeline_id: e.pipeline_id.clone(),
-            output_id: e.output_id.clone(),
-            event_type: e.event_type.clone(),
-            event_class: e.event_class.clone(),
-        });
-    }
-    tx.commit().await?;
-    Ok(rows)
+    super::with_busy_retry(|| async {
+        let mut tx = pool.begin().await?;
+        let mut rows = Vec::with_capacity(entries.len());
+        for e in entries {
+            let result = sqlx::query(
+                "INSERT INTO app_logs (ts, level, target, message, fields, pipeline_id, output_id, event_type, event_class)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&e.ts)
+            .bind(&e.level)
+            .bind(&e.target)
+            .bind(&e.message)
+            .bind(&e.fields)
+            .bind(&e.pipeline_id)
+            .bind(&e.output_id)
+            .bind(&e.event_type)
+            .bind(&e.event_class)
+            .execute(&mut *tx)
+            .await?;
+            rows.push(crate::logging::types::AppLogRow {
+                id: result.last_insert_rowid(),
+                ts: e.ts.clone(),
+                level: e.level.clone(),
+                target: e.target.clone(),
+                message: e.message.clone(),
+                fields: e.fields.clone(),
+                pipeline_id: e.pipeline_id.clone(),
+                output_id: e.output_id.clone(),
+                event_type: e.event_type.clone(),
+                event_class: e.event_class.clone(),
+            });
+        }
+        tx.commit().await?;
+        Ok(rows)
+    })
+    .await
 }
 
 /// General query for `/api/v1/logs` — supports level, target, scope, pipeline_id,

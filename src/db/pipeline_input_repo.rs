@@ -132,39 +132,44 @@ pub async fn promote_pipeline_input(
     pipeline_id: &str,
     input_id: &str,
 ) -> Result<Option<PipelineInput>, sqlx::Error> {
-    let mut transaction = pool.begin().await?;
-    let target_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(
+    super::with_busy_retry(|| async {
+        let mut transaction = pool.begin().await?;
+        let target_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
             SELECT 1 FROM pipeline_inputs
             WHERE pipeline_id = ? AND id = ? AND enabled = 1
         )",
-    )
-    .bind(pipeline_id)
-    .bind(input_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    if !target_exists {
-        return Ok(None);
-    }
-    // Two statements, not one CASE-based UPDATE: `idx_pipeline_inputs_one_selected`
-    // is a partial unique index that SQLite checks after each row a
-    // multi-row UPDATE touches, in rowid order, not once at end-of-statement.
-    // A single UPDATE that flips every row's `selected` together can hit a
-    // transient state where the target row is set to 1 before the
-    // currently-selected row (a lower rowid, e.g. the primary input created
-    // first) is cleared, tripping the unique constraint on a perfectly valid
-    // end state. Clearing first removes that transient collision.
-    sqlx::query("UPDATE pipeline_inputs SET selected = 0 WHERE pipeline_id = ? AND selected = 1")
-        .bind(pipeline_id)
-        .execute(&mut *transaction)
-        .await?;
-    sqlx::query("UPDATE pipeline_inputs SET selected = 1 WHERE pipeline_id = ? AND id = ?")
+        )
         .bind(pipeline_id)
         .bind(input_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if !target_exists {
+            return Ok(None);
+        }
+        // Two statements, not one CASE-based UPDATE: `idx_pipeline_inputs_one_selected`
+        // is a partial unique index that SQLite checks after each row a
+        // multi-row UPDATE touches, in rowid order, not once at end-of-statement.
+        // A single UPDATE that flips every row's `selected` together can hit a
+        // transient state where the target row is set to 1 before the
+        // currently-selected row (a lower rowid, e.g. the primary input created
+        // first) is cleared, tripping the unique constraint on a perfectly valid
+        // end state. Clearing first removes that transient collision.
+        sqlx::query(
+            "UPDATE pipeline_inputs SET selected = 0 WHERE pipeline_id = ? AND selected = 1",
+        )
+        .bind(pipeline_id)
         .execute(&mut *transaction)
         .await?;
-    transaction.commit().await?;
-    get_pipeline_input(pool, pipeline_id, input_id).await
+        sqlx::query("UPDATE pipeline_inputs SET selected = 1 WHERE pipeline_id = ? AND id = ?")
+            .bind(pipeline_id)
+            .bind(input_id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        get_pipeline_input(pool, pipeline_id, input_id).await
+    })
+    .await
 }
 
 pub async fn update_pipeline_input(

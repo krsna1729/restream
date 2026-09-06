@@ -229,20 +229,23 @@ pub async fn list_jobs(pool: &SqlitePool) -> Result<Vec<JobRecord>, sqlx::Error>
 }
 
 pub async fn cleanup_old_jobs(pool: &SqlitePool) -> Result<(u64, u64), sqlx::Error> {
-    let mut tx = pool.begin().await?;
+    super::with_busy_retry(|| async {
+        let mut tx = pool.begin().await?;
 
-    let result = sqlx::query(
-        "DELETE FROM jobs
+        let result = sqlx::query(
+            "DELETE FROM jobs
          WHERE (status IN (?, ?) AND ended_at IS NOT NULL AND datetime(ended_at) < datetime('now', '-7 days'))
             OR datetime(COALESCE(ended_at, started_at)) < datetime('now', '-30 days')",
-    )
-    .bind(JobStatusRecord::Stopped.as_str())
-    .bind(JobStatusRecord::Failed.as_str())
-    .execute(&mut *tx)
-    .await?;
+        )
+        .bind(JobStatusRecord::Stopped.as_str())
+        .bind(JobStatusRecord::Failed.as_str())
+        .execute(&mut *tx)
+        .await?;
 
-    tx.commit().await?;
-    Ok((result.rows_affected(), 0))
+        tx.commit().await?;
+        Ok((result.rows_affected(), 0))
+    })
+    .await
 }
 
 pub async fn reset_running_jobs(pool: &SqlitePool, now_ts: &str) -> Result<(), sqlx::Error> {

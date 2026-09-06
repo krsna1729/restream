@@ -21,23 +21,27 @@ impl SqlitePipelineInputStore {
 impl PipelineInputStore for SqlitePipelineInputStore {
     fn get<'a>(&'a self, pipeline_id: &'a str, input_id: &'a str) -> InputLookupFuture<'a> {
         Box::pin(async move {
-            crate::db::get_pipeline_input(&self.pool, pipeline_id, input_id)
-                .await
-                .map_err(map_error)
+            crate::db::with_busy_retry(|| {
+                crate::db::get_pipeline_input(&self.pool, pipeline_id, input_id)
+            })
+            .await
+            .map_err(map_error)
         })
     }
 
     fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> InputLookupFuture<'a> {
         Box::pin(async move {
-            crate::db::get_pipeline_input_by_stream_key(&self.pool, stream_key)
-                .await
-                .map_err(map_error)
+            crate::db::with_busy_retry(|| {
+                crate::db::get_pipeline_input_by_stream_key(&self.pool, stream_key)
+            })
+            .await
+            .map_err(map_error)
         })
     }
 
     fn list<'a>(&'a self, pipeline_id: &'a str) -> InputListFuture<'a> {
         Box::pin(async move {
-            crate::db::list_pipeline_inputs(&self.pool, pipeline_id)
+            crate::db::with_busy_retry(|| crate::db::list_pipeline_inputs(&self.pool, pipeline_id))
                 .await
                 .map_err(map_error)
         })
@@ -51,9 +55,11 @@ impl PipelineInputStore for SqlitePipelineInputStore {
         stream_key: &'a str,
     ) -> InputWriteFuture<'a> {
         Box::pin(async move {
-            crate::db::create_pipeline_input(&self.pool, id, pipeline_id, label, stream_key)
-                .await
-                .map_err(map_error)
+            crate::db::with_busy_retry(|| {
+                crate::db::create_pipeline_input(&self.pool, id, pipeline_id, label, stream_key)
+            })
+            .await
+            .map_err(map_error)
         })
     }
 
@@ -65,25 +71,31 @@ impl PipelineInputStore for SqlitePipelineInputStore {
         enabled: bool,
     ) -> InputUpdateFuture<'a> {
         Box::pin(async move {
-            crate::db::update_pipeline_input(&self.pool, pipeline_id, input_id, label, enabled)
-                .await
-                .map_err(map_error)
+            crate::db::with_busy_retry(|| {
+                crate::db::update_pipeline_input(&self.pool, pipeline_id, input_id, label, enabled)
+            })
+            .await
+            .map_err(map_error)
         })
     }
 
     fn delete<'a>(&'a self, pipeline_id: &'a str, input_id: &'a str) -> InputDeleteFuture<'a> {
         Box::pin(async move {
-            crate::db::delete_pipeline_input(&self.pool, pipeline_id, input_id)
-                .await
-                .map_err(map_error)
+            crate::db::with_busy_retry(|| {
+                crate::db::delete_pipeline_input(&self.pool, pipeline_id, input_id)
+            })
+            .await
+            .map_err(map_error)
         })
     }
 
     fn promote<'a>(&'a self, pipeline_id: &'a str, input_id: &'a str) -> InputUpdateFuture<'a> {
         Box::pin(async move {
-            crate::db::promote_pipeline_input(&self.pool, pipeline_id, input_id)
-                .await
-                .map_err(map_error)
+            crate::db::with_busy_retry(|| {
+                crate::db::promote_pipeline_input(&self.pool, pipeline_id, input_id)
+            })
+            .await
+            .map_err(map_error)
         })
     }
 }
@@ -91,9 +103,11 @@ impl PipelineInputStore for SqlitePipelineInputStore {
 impl PipelineInputLookup for SqlitePipelineInputStore {
     fn get_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineInputLookupFuture<'a> {
         Box::pin(async move {
-            crate::db::get_pipeline_input_by_stream_key(&self.pool, stream_key)
-                .await
-                .map_err(|error| PipelineStoreError::new(error.to_string()))
+            crate::db::with_busy_retry(|| {
+                crate::db::get_pipeline_input_by_stream_key(&self.pool, stream_key)
+            })
+            .await
+            .map_err(|error| PipelineStoreError::new(error.to_string()))
         })
     }
 }
