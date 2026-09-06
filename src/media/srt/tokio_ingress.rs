@@ -734,11 +734,7 @@ mod tests {
         );
     }
 
-    fn waiter_socket_with_datagram() -> (tokio::runtime::Runtime, UdpSocket) {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .build()
-            .expect("Tokio runtime builds");
+    fn pending_datagram_socket() -> std::net::UdpSocket {
         let receiver = std::net::UdpSocket::bind("127.0.0.1:0").expect("receiver binds");
         receiver
             .set_nonblocking(true)
@@ -746,14 +742,19 @@ mod tests {
         let dest = receiver.local_addr().expect("receiver address");
         let sender = std::net::UdpSocket::bind("127.0.0.1:0").expect("sender binds");
         sender.send_to(b"ping", dest).expect("send datagram");
-        let sock = UdpSocket::from_std(receiver).expect("tokio adopts the socket");
-        (runtime, sock)
+        receiver
     }
 
-    #[test]
-    fn high_res_waiter_wakes_the_listener_socket() {
-        let (runtime, sock) = waiter_socket_with_datagram();
+    fn with_woken_listener(
+        test: impl FnOnce(UdpSocket, &mut HighResWaiter<()>, &mut Vec<()>, &mut Vec<()>),
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .expect("Tokio runtime builds");
+        let receiver = pending_datagram_socket();
         runtime.block_on(async {
+            let sock = UdpSocket::from_std(receiver).expect("tokio adopts the socket");
             let mut waiter = HighResWaiter::<()>::new().expect("waiter");
             waiter
                 .register((), sock.as_raw_fd())
@@ -764,21 +765,18 @@ mod tests {
                 park_listener(&mut waiter, &mut due, &mut ready, LISTENER_IDLE).expect("wait"),
                 "listener fd should be ready after a datagram"
             );
+            test(sock, &mut waiter, &mut due, &mut ready);
         });
     }
 
     #[test]
-    fn woken_listener_drains_without_tokio_readable() {
-        let (runtime, sock) = waiter_socket_with_datagram();
-        runtime.block_on(async {
-            let mut waiter = HighResWaiter::<()>::new().expect("waiter");
-            waiter
-                .register((), sock.as_raw_fd())
-                .expect("register listener fd");
-            let mut due = Vec::new();
-            let mut ready = Vec::new();
-            assert!(park_listener(&mut waiter, &mut due, &mut ready, LISTENER_IDLE).expect("wait"));
+    fn high_res_waiter_wakes_the_listener_socket() {
+        with_woken_listener(|_, _, _, _| {});
+    }
 
+    #[test]
+    fn woken_listener_drains_without_tokio_readable() {
+        with_woken_listener(|sock, _, _, _| {
             let mut batch = RecvBatch::new();
             let mut got = Vec::new();
             let report =
@@ -793,16 +791,7 @@ mod tests {
 
     #[test]
     fn drain_readable_misses_a_waiter_wake_without_tokio_readable() {
-        let (runtime, sock) = waiter_socket_with_datagram();
-        runtime.block_on(async {
-            let mut waiter = HighResWaiter::<()>::new().expect("waiter");
-            waiter
-                .register((), sock.as_raw_fd())
-                .expect("register listener fd");
-            let mut due = Vec::new();
-            let mut ready = Vec::new();
-            assert!(park_listener(&mut waiter, &mut due, &mut ready, LISTENER_IDLE).expect("wait"));
-
+        with_woken_listener(|sock, _, _, _| {
             let mut batch = RecvBatch::new();
             let mut got = Vec::new();
             let report = srt_transport::tokio_transport::drain_readable(
