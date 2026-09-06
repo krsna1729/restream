@@ -165,11 +165,13 @@ covers Tokio scheduler, blocking, and replacement worker threads.
 
 ## SQLite Performance Settings
 
-WAL, busy-wait, and the other per-connection PRAGMAs are applied through
-`SqliteConnectOptions` in `db::create_pool`, so every pooled connection —
-including the first — gets the same tuning. Schema setup still re-asserts
-`PRAGMA journal_mode = WAL` for files created before that connect-option
-path existed.
+`db::create_pool` already applied foreign keys, `synchronous=NORMAL`, a
+5s `busy_timeout`, and the cache/temp/mmap PRAGMAs. WAL used to be set
+only later in `setup_database_schema` on one pool checkout. Connect
+options now also set `journal_mode=WAL` and raise `busy_timeout` to 30s
+so every pooled connection — including the first — gets the same tuning.
+Schema setup still re-asserts WAL for files created before that
+connect-option path existed.
 
 | PRAGMA | Value | Effect |
 |---|---|---|

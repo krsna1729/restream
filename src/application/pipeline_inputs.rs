@@ -194,6 +194,11 @@ fn input_not_found(input_id: &str) -> ServiceError {
 fn store_error(error: PipelineInputStoreError) -> ServiceError {
     match error {
         PipelineInputStoreError::Conflict(message) => ServiceError::conflict(message),
+        // Internal messages are the raw sqlx Display. A SQLITE_BUSY failure
+        // here becomes HTTP 500 `{"error":"error returned from database:
+        // (code: 5) database is locked"}` with no service prefix — the
+        // shape seen on the concurrency-contract flake. Retry happens in
+        // `SqlitePipelineInputStore` before this mapping.
         PipelineInputStoreError::Internal(message) => ServiceError::internal(message),
     }
 }

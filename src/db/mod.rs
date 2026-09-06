@@ -60,10 +60,10 @@ use std::time::Duration;
 
 /// How long each pooled connection waits on `SQLITE_BUSY` before failing.
 ///
-/// sqlx defaults to 5s. Hosted concurrency-harness CI can starve a writer
-/// longer than that when the live fault slices, FFmpeg, and the app-log
-/// drain share a runner, which surfaces as HTTP 500
-/// `database is locked` (SQLite code 5).
+/// `create_pool` already set `PRAGMA busy_timeout = 5000` (sqlx's default).
+/// Hosted `--no-netns` concurrency CI still returned code 5 after that wait
+/// when the API, reconciler, and app-log drain shared one file-backed DB
+/// on a starved runner. 30s is the same connect-option, not a new mechanism.
 pub const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 
 const BUSY_RETRY_ATTEMPTS: u32 = 8;
@@ -73,9 +73,11 @@ const BUSY_RETRY_MAX_DELAY: Duration = Duration::from_millis(100);
 /// Create a connection pool with WAL, busy-wait, and the rest of the
 /// per-connection PRAGMAs baked in via `SqliteConnectOptions`.
 ///
-/// Every pooled connection gets the same tuning, including the first
-/// connection — WAL is not left to a later `setup_database_schema` query
-/// that only runs on one checkout.
+/// Production `run_app` is the only non-test pool opener and already used
+/// this function. The remaining gap was WAL: schema setup ran
+/// `PRAGMA journal_mode = WAL` on one checkout, while sqlx does not set a
+/// journal mode on connect. Typed `journal_mode(Wal)` makes WAL stick for
+/// every pooled connection, including the first.
 pub async fn create_pool(url: &str) -> Result<sqlx::SqlitePool, sqlx::Error> {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
     use std::str::FromStr;
