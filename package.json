@@ -21,7 +21,7 @@
     "@playwright/test": "^1.62.1",
     "@tailwindcss/cli": "^4.3.3",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.5",
+    "@types/react-dom": "^19.2.7",
     "daisyui": "^5.7.22",
     "fast-check": "^4.9.0",
     "tailwindcss": "^4.3.3",
