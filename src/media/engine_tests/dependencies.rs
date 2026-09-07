@@ -107,11 +107,11 @@ async fn active_hls_preview_stage_keys_include_hevc_preview_codec_edge() {
 
     assert!(stages.contains(&StageKey::new(
         "pipe-preview-hevc",
-        StageKind::preview("720p", StageKind::source())
+        StageKind::codec_edge("hevc_to_h264", StageKind::source())
     )));
     assert!(stages.contains(&StageKey::new(
         "pipe-preview-hevc",
-        StageKind::hls_segmenter(StageKind::preview("720p", StageKind::source()))
+        StageKind::hls_segmenter(StageKind::codec_edge("hevc_to_h264", StageKind::source(),))
     )));
 }
 
@@ -189,7 +189,10 @@ async fn preview_blocked_by_snapshot_uses_graph_planned_keys() {
         "unplanned preview-looking stages must not drive HLS preview blocked cause"
     );
 
-    let planned_key = StageKey::new(pipeline_id, StageKind::preview("720p", StageKind::source()));
+    let planned_key = StageKey::new(
+        pipeline_id,
+        StageKind::codec_edge("hevc_to_h264", StageKind::source()),
+    );
     let planned_lifecycle = engine
         .get_or_create_stage_lifecycle(planned_key.clone(), StagePhase::Registered)
         .await;

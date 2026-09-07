@@ -4,8 +4,8 @@ use crate::application::hls_preview::{
     HlsPreviewReadError, build_h264_codec_string, build_hevc_codec_string, build_hls_audio_codec,
     build_hls_audio_track_name, build_hls_codec_list, build_hls_master_playlist,
     build_hls_video_codec, estimate_audio_bandwidth, estimate_h264_level_idc,
-    estimate_hls_master_bandwidth, parse_h264_level_idc, parse_h265_level_tenths, primary_playlist,
-    quote_hls_attr, video_segment,
+    estimate_hls_master_bandwidth, master_playlist, merge_hls_codec_lists, parse_h264_level_idc,
+    parse_h265_level_tenths, primary_playlist, quote_hls_attr, video_segment,
 };
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
@@ -13,6 +13,7 @@ use crate::media::metadata::{AudioMeta, VideoMeta};
 use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
 use crate::media::stage_runtime::StageRuntimeManager;
+use bytes::Bytes;
 
 #[tokio::test]
 async fn primary_playlist_reports_graph_planned_blocked_stage_cause() {
@@ -35,7 +36,10 @@ async fn primary_playlist_reports_graph_planned_blocked_stage_cause() {
         .await;
     engine.ensure_hls_preview_segmenter(pipeline_id).await;
 
-    let stage_key = StageKey::new(pipeline_id, StageKind::preview("720p", StageKind::source()));
+    let stage_key = StageKey::new(
+        pipeline_id,
+        StageKind::codec_edge("hevc_to_h264", StageKind::source()),
+    );
     let manager = StageRuntimeManager::new(engine.clone());
     let (handle, _) = manager
         .ensure_stage(stage_key.clone(), Arc::new(RingBuffer::new(16)), None)
@@ -574,4 +578,77 @@ fn master_playlist_omits_resolution_and_frame_rate_when_absent_or_invalid() {
     let playlist = build_hls_master_playlist(Some(&video), &[]);
     assert!(!playlist.contains("RESOLUTION="));
     assert!(!playlist.contains("FRAME-RATE="));
+}
+
+#[test]
+fn merge_hls_codec_lists_fills_audio_when_only_sample_video_is_known() {
+    assert_eq!(
+        merge_hls_codec_lists(
+            Some("avc1.64001f".to_string()),
+            Some("avc1.640028,mp4a.40.2".to_string()),
+        )
+        .as_deref(),
+        Some("avc1.64001f,mp4a.40.2")
+    );
+}
+
+#[test]
+fn merge_hls_codec_lists_prefers_complete_sample_list() {
+    assert_eq!(
+        merge_hls_codec_lists(
+            Some("avc1.64001f,mp4a.40.2".to_string()),
+            Some("avc1.4d401f,mp4a.40.1".to_string()),
+        )
+        .as_deref(),
+        Some("avc1.64001f,mp4a.40.2")
+    );
+}
+
+#[test]
+fn merge_hls_codec_lists_falls_back_to_metadata_when_sample_is_empty() {
+    assert_eq!(
+        merge_hls_codec_lists(None, Some("avc1.64001f,mp4a.40.2".to_string())).as_deref(),
+        Some("avc1.64001f,mp4a.40.2")
+    );
+}
+
+#[tokio::test]
+async fn master_playlist_keeps_audio_codec_when_only_video_sample_codec_is_noted() {
+    let engine = Arc::new(MediaEngine::new());
+    let pipeline_id = "app-hls-preview-codecs-union";
+    engine.ensure_hls_preview_segmenter(pipeline_id).await;
+    let store = engine
+        .get_hls_preview_store(pipeline_id)
+        .await
+        .expect("preview store");
+    store.set_stream_metadata(
+        Some(VideoMeta {
+            codec: "h264".to_string(),
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            ..Default::default()
+        }),
+        vec![AudioMeta {
+            codec: "aac".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            track_index: 0,
+            ..Default::default()
+        }],
+    );
+    store.note_video_codec("avc1.64001f".to_string());
+    store.publish_video_segment(
+        0,
+        1.0,
+        Bytes::from_static(b"init"),
+        Bytes::from_static(b"seg"),
+    );
+
+    let playlist = master_playlist(engine, pipeline_id).await.unwrap();
+    assert!(
+        playlist.contains("CODECS=\"avc1.64001f,mp4a.40.2\""),
+        "master playlist must advertise audio while an audio rendition exists: {playlist}"
+    );
+    assert!(playlist.contains("#EXT-X-MEDIA:TYPE=AUDIO"));
 }

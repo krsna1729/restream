@@ -549,7 +549,10 @@ function renderSettingsRoute(
                         </label>
                         <label class="border-base-content/10 bg-base-100 flex items-start gap-3 rounded-lg border px-3 py-3">
                             <input type="checkbox" id="backend-policy-internal-hls-preview" class="checkbox checkbox-sm mt-0.5" />
-                            <span class="text-sm">Use internal backend for HLS preview</span>
+                            <span>
+                                <span class="text-sm">Use internal backend for HLS preview</span>
+                                <span class="text-base-content/60 mt-1 block text-xs">Applies only to a dedicated preview stage. HEVC dashboard preview follows the HEVC to H.264 setting.</span>
+                            </span>
                         </label>
                         <label class="border-base-content/10 bg-base-100 flex items-start gap-3 rounded-lg border px-3 py-3">
                             <input type="checkbox" id="backend-policy-internal-complex-audio" class="checkbox checkbox-sm mt-0.5" />

@@ -88,7 +88,15 @@ pub async fn master_playlist(
         return Err(no_segments_error(engine, pipeline_id).await);
     }
     let (video, audio_tracks) = store.stream_metadata();
-    Ok(build_hls_master_playlist(video.as_ref(), &audio_tracks))
+    let codecs = merge_hls_codec_lists(
+        store.sample_codec_list(),
+        build_hls_codec_list(video.as_ref(), &audio_tracks),
+    );
+    Ok(build_hls_master_playlist_with_codecs(
+        video.as_ref(),
+        &audio_tracks,
+        codecs,
+    ))
 }
 
 pub async fn video_playlist(
@@ -276,6 +284,18 @@ pub fn quote_hls_attr(value: &str) -> String {
 }
 
 pub fn build_hls_master_playlist(video: Option<&VideoMeta>, audio_tracks: &[AudioMeta]) -> String {
+    build_hls_master_playlist_with_codecs(
+        video,
+        audio_tracks,
+        build_hls_codec_list(video, audio_tracks),
+    )
+}
+
+pub fn build_hls_master_playlist_with_codecs(
+    video: Option<&VideoMeta>,
+    audio_tracks: &[AudioMeta],
+    codecs: Option<String>,
+) -> String {
     let mut playlist = "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-INDEPENDENT-SEGMENTS\n".to_string();
     if !audio_tracks.is_empty() {
         for (ordinal, track) in audio_tracks.iter().enumerate() {
@@ -324,7 +344,7 @@ pub fn build_hls_master_playlist(video: Option<&VideoMeta>, audio_tracks: &[Audi
             stream_attrs.push(format!("FRAME-RATE={:.3}", video.fps));
         }
     }
-    if let Some(codecs) = build_hls_codec_list(video, audio_tracks) {
+    if let Some(codecs) = codecs {
         stream_attrs.push(format!("CODECS={}", quote_hls_attr(&codecs)));
     }
     if !audio_tracks.is_empty() {
@@ -409,6 +429,46 @@ pub fn build_hls_codec_list(
         }
     }
     (!codecs.is_empty()).then(|| codecs.join(","))
+}
+
+pub fn merge_hls_codec_lists(sample: Option<String>, metadata: Option<String>) -> Option<String> {
+    let mut codecs = Vec::new();
+    if let Some(sample) = sample.as_deref() {
+        for codec in sample.split(',') {
+            push_unique_hls_codec(&mut codecs, codec);
+        }
+    }
+    if let Some(metadata) = metadata.as_deref() {
+        let sample_has_video = codecs.iter().any(|existing| !is_hls_audio_codec(existing));
+        let sample_has_audio = codecs.iter().any(|existing| is_hls_audio_codec(existing));
+        for codec in metadata.split(',') {
+            let codec = codec.trim();
+            let fills_gap = if is_hls_audio_codec(codec) {
+                !sample_has_audio
+            } else {
+                !sample_has_video
+            };
+            if fills_gap {
+                push_unique_hls_codec(&mut codecs, codec);
+            }
+        }
+    }
+    (!codecs.is_empty()).then(|| codecs.join(","))
+}
+
+fn push_unique_hls_codec(codecs: &mut Vec<String>, codec: &str) {
+    let codec = codec.trim();
+    if !codec.is_empty() && !codecs.iter().any(|existing| existing == codec) {
+        codecs.push(codec.to_string());
+    }
+}
+
+fn is_hls_audio_codec(codec: &str) -> bool {
+    let codec = codec.trim().to_ascii_lowercase();
+    codec.starts_with("mp4a")
+        || codec.starts_with("ac-3")
+        || codec.starts_with("ec-3")
+        || codec == "opus"
 }
 
 pub fn build_hls_video_codec(video: &VideoMeta) -> Option<String> {

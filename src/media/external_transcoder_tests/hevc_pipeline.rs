@@ -459,7 +459,7 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
 
     let stage_key = StageKey::new(
         "pipe-hevc-preview-input",
-        StageKind::preview("720p", StageKind::source()),
+        StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
     let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
     let (handle, is_new) = manager
@@ -475,7 +475,7 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
     let mut reader = Reader::new_live("test_hevc_preview_output".to_string(), output_ring);
     let cancel = handle.cancel.clone();
 
-    manager.spawn_preview_stage(handle, source_ring.clone());
+    manager.spawn_codec_edge_stage(handle, source_ring.clone());
 
     let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
@@ -524,7 +524,101 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
     assert!(
         output_packets
             .iter()
-            .all(|packet| packet.media_type == MediaType::Video),
-        "preview stage should drop audio packets"
+            .any(|packet| packet.media_type == MediaType::Audio),
+        "shared hevc_to_h264 codec edge must keep audio on the same ring"
+    );
+}
+
+#[tokio::test]
+async fn hevc_codec_edge_starts_for_video_only_ingest() {
+    let (video, _audio_tracks, mut packets) =
+        crate::test_fixtures::primary_av_packets_for_codec("h265")
+            .expect("single-audio HEVC fixture");
+
+    let engine = Arc::new(MediaEngine::new());
+    ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Quiet);
+    engine
+        .try_register_ingest("pipe-hevc-video-only", "stream-key", "srt")
+        .await
+        .unwrap();
+    engine
+        .update_ingest_meta("pipe-hevc-video-only", Some(video), None, None)
+        .await;
+
+    let source_ring = Arc::new(RingBuffer::new(16_384));
+    source_ring.set_codec_hint("hevc");
+    packets.retain(|packet| packet.media_type == MediaType::Video);
+    if let Some(parameter_sets) = packets.iter().find_map(|packet| {
+        (packet.media_type == MediaType::Video)
+            .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            .flatten()
+    }) {
+        source_ring.set_video_parameter_sets(parameter_sets);
+    }
+
+    let stage_key = StageKey::new(
+        "pipe-hevc-video-only",
+        StageKind::codec_edge("hevc_to_h264", StageKind::source()),
+    );
+    let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
+    let (handle, is_new) = manager
+        .ensure_stage(stage_key.clone(), source_ring.clone(), None)
+        .await;
+    assert!(is_new);
+    let output_ring = handle.ring.clone();
+    let mut reader = Reader::new_live("test_hevc_video_only_output".to_string(), output_ring);
+    let cancel = handle.cancel.clone();
+
+    manager.spawn_codec_edge_stage(handle, source_ring.clone());
+
+    let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+    loop {
+        if source_ring
+            .reader_snapshots()
+            .iter()
+            .any(|snapshot| snapshot.name.contains(&stage_key.to_string()))
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < ready_deadline,
+            "video-only HEVC codec edge reader did not attach after the audio-absence grace"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    source_ring.push_batch(packets.drain(..));
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    cancel.cancel();
+
+    let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(16);
+    let mut output_packets = Vec::new();
+    loop {
+        while let Ok(Some(packet)) = reader.pull() {
+            output_packets.push(packet);
+        }
+        if output_packets
+            .iter()
+            .any(|packet| packet.media_type == MediaType::Video)
+        {
+            break;
+        }
+        if tokio::time::Instant::now() >= output_deadline {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    assert!(
+        output_packets
+            .iter()
+            .any(|packet| packet.media_type == MediaType::Video),
+        "video-only HEVC ingest must still emit H.264 preview video"
+    );
+    assert!(
+        output_packets
+            .iter()
+            .all(|packet| packet.media_type != MediaType::Audio),
+        "video-only HEVC ingest must not invent an audio track"
     );
 }

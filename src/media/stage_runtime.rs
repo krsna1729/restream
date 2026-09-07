@@ -6,6 +6,7 @@
 //! `docs/architecture.md` and `docs/implementation.md`.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -425,6 +426,11 @@ fn stage_audio_tracks_ready(audio_tracks: &[AudioMeta]) -> bool {
             .all(|track| track.sample_rate > 0 && track.channels > 0)
 }
 
+/// How long a codec-edge/video stage waits for audio after video is ready
+/// before starting as video-only. Incomplete tracks (present, zero channels)
+/// keep waiting; only a truly empty track list takes this grace path.
+pub(crate) const AUDIO_ABSENCE_GRACE: Duration = Duration::from_secs(1);
+
 pub(crate) async fn wait_for_stage_metadata(
     engine: &Arc<MediaEngine>,
     pipeline_id: &str,
@@ -434,6 +440,7 @@ pub(crate) async fn wait_for_stage_metadata(
     input_codec_override: Option<&str>,
     cancel: &CancellationToken,
 ) -> Option<(VideoMeta, std::sync::Arc<Vec<AudioMeta>>)> {
+    let mut audio_absent_deadline: Option<tokio::time::Instant> = None;
     loop {
         if cancel.is_cancelled() {
             return None;
@@ -501,10 +508,6 @@ pub(crate) async fn wait_for_stage_metadata(
                     std::sync::Arc::new(Vec::new())
                 };
 
-                if include_audio && !stage_audio_tracks_ready(&audio_tracks) {
-                    return None;
-                }
-
                 // Size the external probe from the stream Restream has already
                 // demuxed, not from resolution/codec guesses. The source ring
                 // normally contains at least one reconciler interval of media
@@ -520,8 +523,25 @@ pub(crate) async fn wait_for_stage_metadata(
             })
         };
 
-        if let Some(meta) = ingest_result {
-            return Some(meta);
+        if let Some((video, audio_tracks)) = ingest_result {
+            if !include_audio || stage_audio_tracks_ready(&audio_tracks) {
+                return Some((video, audio_tracks));
+            }
+            if audio_tracks.is_empty() {
+                let deadline = *audio_absent_deadline
+                    .get_or_insert_with(|| tokio::time::Instant::now() + AUDIO_ABSENCE_GRACE);
+                if tokio::time::Instant::now() >= deadline {
+                    info!(
+                        pipeline_id = %pipeline_id,
+                        "starting video-only after audio-absence grace"
+                    );
+                    return Some((video, audio_tracks));
+                }
+            } else {
+                audio_absent_deadline = None;
+            }
+        } else {
+            audio_absent_deadline = None;
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;

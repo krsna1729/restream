@@ -19,7 +19,6 @@ pub async fn start_hls_fmp4_segmenter(
     pipeline_id: String,
     store: Arc<Fmp4HlsStore>,
     ring_buffer: Arc<RingBuffer>,
-    audio_ring_buffer: Option<Arc<RingBuffer>>,
     engine: Arc<MediaEngine>,
     cancel_token: CancellationToken,
     start: HlsSegmenterStart,
@@ -50,11 +49,7 @@ pub async fn start_hls_fmp4_segmenter(
         });
 
     let mut reader = Reader::new(format!("hls-fmp4:{pipeline_id}"), ring_buffer.clone());
-    let mut audio_reader = audio_ring_buffer
-        .clone()
-        .map(|ring| Reader::new(format!("hls-fmp4-audio:{pipeline_id}"), ring));
     let mut packets = Vec::with_capacity(32);
-    let mut audio_packets = Vec::with_capacity(32);
     let (video_sequence_header, audio_sequence_header) =
         resolve_hls_sequence_headers(&engine, &pipeline_id).await;
     let config = store.config();
@@ -79,23 +74,13 @@ pub async fn start_hls_fmp4_segmenter(
                         Ok(_) => {}
                     }
 
-                    if let Some(audio_reader) = audio_reader.as_mut() {
-                        audio_packets.clear();
-                        let _ = audio_reader.pull_burst(&mut audio_packets, 32);
-                    }
-
-                    for packet in packets.iter().chain(
-                        audio_packets
-                            .iter()
-                            .filter(|packet| packet.media_type == MediaType::Audio),
-                    ) {
+                    for packet in packets.iter() {
                         metrics.record_in(packet.payload.len() as u64);
 
                         if video_state.is_none() {
                             let Some((video, audio_tracks)) = resolve_hls_preview_metadata(
                                 &engine,
                                 &ring_buffer,
-                                audio_ring_buffer.as_ref(),
                                 &cancel_token,
                                 &pipeline_id,
                                 preview_video_meta.clone(),
@@ -109,24 +94,21 @@ pub async fn start_hls_fmp4_segmenter(
                                 return;
                             };
 
-                            let supported_audio_tracks: Vec<AudioMeta> = audio_tracks
-                                .into_iter()
-                                .filter(|track| track.codec.eq_ignore_ascii_case("aac"))
-                                .collect();
-                            store.set_stream_metadata(Some(video.clone()), supported_audio_tracks.clone());
+                            let (bound_audio_states, advertised_audio_tracks) =
+                                bind_preview_audio_tracks(
+                                    audio_tracks,
+                                    audio_sequence_header.as_deref(),
+                                    &pipeline_id,
+                                );
+                            store.set_stream_metadata(
+                                Some(video.clone()),
+                                advertised_audio_tracks,
+                            );
                             video_state = Some(VideoRenditionState::new(
                                 &video,
                                 video_sequence_header.as_deref(),
                             ));
-                            for track in supported_audio_tracks {
-                                audio_states.insert(
-                                    track.track_index,
-                                    AudioRenditionState::new(
-                                        &track,
-                                        audio_sequence_header.as_deref(),
-                                    ),
-                                );
-                            }
+                            audio_states = bound_audio_states;
                         }
 
                         let t0 = Instant::now();
@@ -227,10 +209,37 @@ pub async fn start_hls_fmp4_segmenter(
         });
 }
 
+fn bind_preview_audio_tracks(
+    audio_tracks: Vec<AudioMeta>,
+    audio_sequence_header: Option<&[u8]>,
+    pipeline_id: &str,
+) -> (HashMap<u32, AudioRenditionState>, Vec<AudioMeta>) {
+    let mut audio_states = HashMap::new();
+    let mut advertised = Vec::new();
+    for track in audio_tracks {
+        if !track.codec.eq_ignore_ascii_case("aac") {
+            continue;
+        }
+        match AudioRenditionState::new(&track, audio_sequence_header) {
+            Some(state) => {
+                audio_states.insert(track.track_index, state);
+                advertised.push(track);
+            }
+            None => {
+                warn!(
+                    pipeline_id = %pipeline_id,
+                    track_index = track.track_index,
+                    "dropping HLS preview audio track; no mp4a sample entry"
+                );
+            }
+        }
+    }
+    (audio_states, advertised)
+}
+
 async fn resolve_hls_preview_metadata(
     engine: &MediaEngine,
     ring_buffer: &Arc<RingBuffer>,
-    audio_ring_buffer: Option<&Arc<RingBuffer>>,
     cancel_token: &CancellationToken,
     pipeline_id: &str,
     preview_video_meta: Option<VideoMeta>,
@@ -242,23 +251,6 @@ async fn resolve_hls_preview_metadata(
         if let Some(tracks) = ring_buffer
             .audio_tracks()
             .filter(|tracks| !tracks.is_empty())
-        {
-            let video = if let Some(video) = preview_video_meta.clone() {
-                Some(video)
-            } else {
-                let ingests = engine.ingests.active.read().await;
-                ingests
-                    .get(pipeline_id)
-                    .and_then(|ingest| ingest.metadata().video)
-            };
-            if let Some(video) = video {
-                return Some((video, tracks.to_vec()));
-            }
-        }
-        if let Some(audio_ring_buffer) = audio_ring_buffer
-            && let Some(tracks) = audio_ring_buffer
-                .audio_tracks()
-                .filter(|tracks| !tracks.is_empty())
         {
             let video = if let Some(video) = preview_video_meta.clone() {
                 Some(video)
@@ -319,4 +311,51 @@ pub(super) async fn resolve_hls_sequence_headers(
 
 fn segment_duration_secs(start_pts_ms: i64, end_pts_ms: i64) -> f64 {
     end_pts_ms.saturating_sub(start_pts_ms).max(1) as f64 / 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::media::metadata::AudioMeta;
+
+    fn aac_track(track_index: u32) -> AudioMeta {
+        AudioMeta {
+            codec: "aac".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            channel_layout: None,
+            track_index,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+        }
+    }
+
+    fn opus_track(track_index: u32) -> AudioMeta {
+        AudioMeta {
+            codec: "opus".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            channel_layout: None,
+            track_index,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+        }
+    }
+
+    #[test]
+    fn bind_preview_audio_tracks_advertises_only_bound_aac() {
+        let (states, advertised) = bind_preview_audio_tracks(
+            vec![opus_track(1), aac_track(2)],
+            None,
+            "pipe-preview-audio",
+        );
+        assert_eq!(advertised.len(), 1);
+        assert_eq!(advertised[0].track_index, 2);
+        assert!(states.contains_key(&2));
+        assert!(!states.contains_key(&1));
+    }
 }

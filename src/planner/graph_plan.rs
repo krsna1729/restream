@@ -71,16 +71,13 @@ pub fn plan_pipeline_graph(
 
     if hls_preview_active
         && let Some(codec) = ingest_codec
-        && (codec.eq_ignore_ascii_case("hevc") || codec.eq_ignore_ascii_case("h265"))
+        && is_hevc_preview_codec(codec)
     {
-        let preview_key = StageKey::new(
-            pipeline_id_typed.clone(),
-            StageKind::preview("720p", StageKind::source()),
-        );
-        let backend = policy.select_backend(&preview_key.kind);
-        plan.add_stage(preview_key.clone(), backend);
+        let bridge_key = StageKey::new(pipeline_id_typed.clone(), hevc_source_bridge_kind());
+        let backend = policy.select_backend(&bridge_key.kind);
+        plan.add_stage(bridge_key.clone(), backend);
         if outputs.is_empty() {
-            plan.terminal_stage = preview_key;
+            plan.terminal_stage = bridge_key;
         }
     }
 
@@ -130,26 +127,24 @@ pub fn plan_hls_preview_graph(
     let codec = ingest_codec?;
     let pipeline_id_typed = PipelineId::new(pipeline_id);
     let source_kind = StageKind::source();
-    let terminal_kind = if is_hevc_preview_codec(codec) {
-        StageKind::hls_segmenter(StageKind::preview("720p", source_kind.clone()))
+    let media_kind = if is_hevc_preview_codec(codec) {
+        hevc_source_bridge_kind()
     } else {
-        StageKind::hls_segmenter(source_kind.clone())
+        source_kind.clone()
     };
+    let terminal_kind = StageKind::hls_segmenter(media_kind.clone());
     let terminal = StageKey::new(pipeline_id_typed.clone(), terminal_kind.clone());
 
     let mut plan = StageGraphPlan::new(pipeline_id_typed.clone(), GraphRole::HlsPreview, terminal);
 
     plan.add_stage(
-        StageKey::new(pipeline_id_typed.clone(), source_kind.clone()),
+        StageKey::new(pipeline_id_typed.clone(), source_kind),
         StageBackendKind::AudioRouter,
     );
     if is_hevc_preview_codec(codec) {
-        let preview_key = StageKey::new(
-            pipeline_id_typed.clone(),
-            StageKind::preview("720p", source_kind),
-        );
-        let backend = policy.select_backend(&preview_key.kind);
-        plan.add_stage(preview_key, backend);
+        let bridge_key = StageKey::new(pipeline_id_typed.clone(), media_kind);
+        let backend = policy.select_backend(&bridge_key.kind);
+        plan.add_stage(bridge_key, backend);
     }
     let hls_backend = policy.select_backend(&terminal_kind);
     plan.add_stage(StageKey::new(pipeline_id_typed, terminal_kind), hls_backend);
@@ -184,6 +179,11 @@ pub fn plan_recording_graph(pipeline_id: &str, policy: &BackendPolicy) -> StageG
 
 fn is_hevc_preview_codec(codec: &str) -> bool {
     codec.eq_ignore_ascii_case("hevc") || codec.eq_ignore_ascii_case("h265")
+}
+
+/// Shared HEVC→H.264 bridge used by legacy RTMP and HLS preview.
+fn hevc_source_bridge_kind() -> StageKind {
+    StageKind::codec_edge("hevc_to_h264", StageKind::source())
 }
 
 #[cfg(test)]
@@ -247,7 +247,7 @@ mod tests {
             plan.terminal_stage,
             StageKey::new(
                 "pipe_1",
-                StageKind::hls_segmenter(StageKind::preview("720p", StageKind::source()))
+                StageKind::hls_segmenter(hevc_source_bridge_kind())
             )
         );
         assert_eq!(plan.stages.len(), 3);
@@ -255,22 +255,19 @@ mod tests {
         assert!(
             plan.stages
                 .iter()
-                .any(|s| matches!(s.kind, StageKind::Preview { .. }))
+                .any(|s| s.kind == hevc_source_bridge_kind())
         );
-        assert!(plan.stages.iter().any(|s| {
-            matches!(
-                s.kind,
-                StageKind::HlsSegmenter {
-                    ref upstream
-                } if matches!(upstream.as_ref(), StageKind::Preview { .. })
-            )
-        }));
+        assert!(
+            plan.stages
+                .iter()
+                .any(|s| s.kind == StageKind::hls_segmenter(hevc_source_bridge_kind()))
+        );
         assert!(plan.edges.iter().any(|edge| {
-            edge.from == StageKey::new("pipe_1", StageKind::preview("720p", StageKind::source()))
+            edge.from == StageKey::new("pipe_1", hevc_source_bridge_kind())
                 && edge.to
                     == StageKey::new(
                         "pipe_1",
-                        StageKind::hls_segmenter(StageKind::preview("720p", StageKind::source())),
+                        StageKind::hls_segmenter(hevc_source_bridge_kind()),
                     )
         }));
     }
@@ -357,13 +354,63 @@ mod tests {
     }
 
     #[test]
-    fn plan_pipeline_graph_sets_preview_terminal_when_preview_only() {
+    fn plan_pipeline_graph_h264_preview_only_keeps_source_terminal() {
+        let policy = BackendPolicy::default();
+        let plan = plan_pipeline_graph("pipe_1", Some("h264"), &[], true, &policy);
+
+        assert_eq!(
+            plan.terminal_stage,
+            StageKey::new("pipe_1", StageKind::source())
+        );
+        assert!(
+            plan.stages
+                .iter()
+                .all(|stage| !matches!(stage.kind, StageKind::HlsSegmenter { .. })),
+            "HLS segmenter belongs to plan_hls_preview_graph, not the pipeline graph"
+        );
+    }
+
+    #[test]
+    fn plan_pipeline_graph_hevc_preview_only_reuses_codec_edge() {
         let policy = BackendPolicy::default();
         let plan = plan_pipeline_graph("pipe_1", Some("hevc"), &[], true, &policy);
 
         assert_eq!(
             plan.terminal_stage,
-            StageKey::new("pipe_1", StageKind::preview("720p", StageKind::source()))
+            StageKey::new("pipe_1", hevc_source_bridge_kind())
+        );
+    }
+
+    #[test]
+    fn hevc_hls_preview_reuses_legacy_rtmp_codec_edge() {
+        let policy = BackendPolicy::default();
+        let preview = plan_hls_preview_graph("pipe_1", Some("hevc"), &policy).unwrap();
+        let output = PlannedOutput::new("out_1", OutputConfig::source(), "rtmp://example/live");
+        let pipeline = plan_pipeline_graph("pipe_1", Some("hevc"), &[output], true, &policy);
+        let bridge = hevc_source_bridge_kind();
+
+        assert_eq!(
+            preview
+                .stages
+                .iter()
+                .filter(|stage| stage.kind == bridge)
+                .count(),
+            1
+        );
+        assert_eq!(
+            pipeline
+                .stages
+                .iter()
+                .filter(|stage| stage.kind == bridge)
+                .count(),
+            1
+        );
+        assert!(
+            preview
+                .stages
+                .iter()
+                .all(|stage| { !matches!(stage.kind, StageKind::Preview { .. }) }),
+            "HLS preview must reuse the shared codec edge, not a dedicated preview stage"
         );
     }
 
@@ -572,18 +619,27 @@ mod tests {
             prop_assert!(terminal_has_hls_backend);
 
             let is_hevc = is_hevc_preview_codec(codec);
+            prop_assert!(
+                plan.stages
+                    .iter()
+                    .all(|stage| { !matches!(stage.kind, StageKind::Preview { .. }) }),
+                "HLS preview must not insert a dedicated Preview stage"
+            );
             prop_assert_eq!(
-                plan.stages.iter().any(|stage| matches!(stage.kind, StageKind::Preview { .. })),
-                is_hevc,
-                "only HEVC preview should insert a preview transcode stage"
+                plan.stages
+                    .iter()
+                    .filter(|stage| matches!(stage.kind, StageKind::CodecEdge { .. }))
+                    .count(),
+                usize::from(is_hevc),
+                "only HEVC preview should reuse the shared hevc_to_h264 codec edge"
             );
             if is_hevc {
                 prop_assert!(
                     plan.edges.iter().any(|edge| {
-                        matches!(edge.from.kind, StageKind::Preview { .. })
+                        matches!(edge.from.kind, StageKind::CodecEdge { .. })
                             && edge.to == plan.terminal_stage
                     }),
-                    "HEVC preview segmenter should consume the preview stage"
+                    "HEVC preview segmenter should consume the shared codec edge"
                 );
             } else {
                 prop_assert!(

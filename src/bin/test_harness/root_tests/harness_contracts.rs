@@ -464,6 +464,6 @@ fn hls_preview_plan_uses_graph_planner() {
     assert!(planner.contains("pub fn plan_hls_preview_graph("));
     assert!(runtime.contains("plan_hls_preview_graph("));
     assert!(runtime.contains("preview_plan"));
-    assert!(runtime.contains(".stages"));
-    assert!(runtime.contains("spawn_preview_stage"));
+    assert!(runtime.contains("preview_transcode_key"));
+    assert!(runtime.contains("spawn_codec_edge_stage"));
 }

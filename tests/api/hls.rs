@@ -391,7 +391,7 @@ async fn hls_playlist_route_returns_blocked_stage_cause_when_applicable() {
     // Register a blocked preview stage
     let stage_key = StageKey::new(
         "test_blocked_pipe",
-        StageKind::preview("720p", StageKind::source()),
+        StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
     let source_ring = Arc::new(RingBuffer::new(16));
     let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine.clone());
