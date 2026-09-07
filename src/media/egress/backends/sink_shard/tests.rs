@@ -43,7 +43,7 @@ fn push_video_packet(ring: &RingBuffer) {
 /// Proves `SinkShardBackend` actually runs `SinkEngine` on a real shard OS
 /// thread through the same `EgressCommand`/`EgressShardHandle` path
 /// SRT/RTMP use — the production wiring `start_sink_egress`'s plain
-/// `tokio::spawn` task never exercised (`docs/egress-implementation.md`
+/// `tokio::spawn` task never exercised (`docs/archive/egress/implementation.md`
 /// Phase 4a status).
 #[test]
 fn sink_shard_backend_discards_a_real_unit_on_a_real_shard_thread() {

@@ -1,10 +1,9 @@
 # Egress architecture
 
-This document is the target architecture for Restream's high-fan-out egress
-path. It is a proposal until the migration described in
-[egress implementation](egress-implementation.md) is complete. Once adopted,
-it becomes the normative ownership and concurrency contract for RTMP, RTMPS,
-SRT, and future live egress protocols.
+This document is the normative ownership and concurrency contract for
+Restream's high-fan-out egress path (RTMP, RTMPS, SRT, and future live egress
+protocols). The fabric has shipped; the completed migration plan is archived
+as [egress implementation](archive/egress/implementation.md).
 
 The central decision is to use one protocol-neutral egress fabric for
 ownership, scheduling, lifecycle, backpressure, retries, observability, and
@@ -16,7 +15,7 @@ state, and readiness mechanisms.
 - [Goals](#goals)
 - [Non-goals](#non-goals)
 - [Architectural decision](#architectural-decision)
-- [Current constraints](#current-constraints)
+- [Shipped constraints](#shipped-constraints)
 - [Layer model](#layer-model)
 - [Data-path topology](#data-path-topology)
 - [Shared preparation graph](#shared-preparation-graph)
@@ -38,8 +37,7 @@ state, and readiness mechanisms.
 - [Configuration](#configuration)
 - [Correctness invariants](#correctness-invariants)
 - [Performance invariants](#performance-invariants)
-- [Compatibility and migration](#compatibility-and-migration)
-- [Tradeoffs](#tradeoffs)
+- [History and tradeoffs](#history-and-tradeoffs)
 - [Decision summary](#decision-summary)
 
 ## Goals
@@ -70,7 +68,8 @@ The architecture must:
 This design does not:
 
 - make RTMP and SRT wire operations identical;
-- force TCP readiness and SRT epoll into one physical polling API;
+- force TCP epoll and SRT's drive-owned-leaves readiness into one physical
+  polling API;
 - move the API, database, reconciler, ingest, recording, or codec execution onto
   an egress thread-per-core runtime;
 - guarantee hard isolation from a native library call that violates its
@@ -114,36 +113,28 @@ The stable boundary is policy versus mechanism:
 Protocol implementations must not create their own long-lived application
 threads, destination tasks, media queues, retry loops, or lifecycle policy.
 
-## Current constraints
+## Shipped constraints
 
-The current codebase already has useful high-fan-out properties that this design
-must preserve:
+Properties the fabric must keep preserving:
 
 - encoded packets are shared through bounded `RingBuffer` instances;
 - expensive transforms are shared by typed stage identity;
 - compatible SRT outputs share MPEG-TS preparation through `TsChunkRing`;
-- RTMP outputs use asynchronous TCP or TLS I/O and independent protocol state;
-- slow ring readers can recover after bounded overflow.
+- RTMP/RTMPS and SRT leaves share fabric lifecycle, backpressure, and retry
+  policy while retaining protocol-specialized engines and readiness backends;
+- slow ring readers can recover after bounded overflow;
+- Tokio worker count and egress shard count are independent,
+  measurement-driven knobs (separate sweeps). SRT keeps a CPU-derived shard
+  ceiling as a shared UDP socket / `CallerTable` parallelism budget rather
+  than scaling shards purely with output count.
 
-The current implementations also expose the migration targets:
-
-- `src/media/rtmp/egress.rs` owns one Tokio task per RTMP destination and awaits
-  complete `write_all` operations;
-- `src/media/srt_egress.rs` owns an asynchronous feeder, a `MemoryQueue`, and a
-  dedicated blocking sender thread per SRT destination;
-- `src/media/engine_registries.rs` caps application SRT sender threads at 512;
-- per-destination readers wait on shared ring notifications, which can amplify
-  one publication into many runnable consumers;
-- SRT bytes cross multiple application-owned buffers before reaching libsrt.
-
-The repository's recorded 1,200-output workload shows that a small Tokio worker
-count can outperform a larger worker count. The target is therefore not a
-blanket thread-per-core rewrite. It is fixed ownership and bounded scheduling
-for the egress hot path.
+Legacy per-destination RTMP tasks and per-destination SRT sender threads are
+gone; see [archive/egress/implementation.md](archive/egress/implementation.md)
+for the migration record.
 
 ## Layer model
 
-The target layering is:
+The layering is:
 
 ```mermaid
 flowchart TD
@@ -203,10 +194,11 @@ flowchart LR
 There is no protocol-specific bypass around the manager, shard scheduler,
 common lifecycle, or backpressure policy.
 
-A shard may use a protocol-native poller. For example, RTMP shards can use OS
-TCP readiness while SRT shards use SRT epoll. This is implementation
-specialization under the same application topology, not a separate egress
-architecture.
+A shard may use a protocol-native readiness path. RTMP shards use Linux epoll
+for TCP/TLS readiness. SRT shards do not: `srt-rs` has no epoll equivalent, so
+the SRT backend drives owned sockets and the shared `CallerTable` directly and
+treats every pending leaf as write-interested. That specialization stays under
+the same application topology, not a separate egress architecture.
 
 ## Shared preparation graph
 
@@ -232,8 +224,9 @@ RTMP leaves consume encoded audio and video units. Each leaf still owns RTMP
 chunking, acknowledgement, connection, and optional TLS state.
 
 SRT leaves consume immutable MPEG-TS messages produced once for compatible
-outputs. Each leaf still owns SRT connection, congestion, retransmission, and
-encryption state inside libsrt.
+outputs. Each leaf still owns SRT connection and protocol state in the
+`srt-rs` stack (congestion, retransmission, encryption) rather than in a
+separate libsrt multiplexer thread pair.
 
 Sink leaves consume prepared media and discard it after accounting progress.
 They have no transport readiness adapter, but they still run through the same
@@ -314,8 +307,7 @@ It owns:
 - command routing;
 - shard health supervision;
 - reconnect admission shared across shards;
-- output snapshots for API and reconciliation;
-- feature-gated coexistence with the legacy egress path during migration.
+- output snapshots for API and reconciliation.
 
 The manager does not own packet hot loops or connection-local protocol state.
 
@@ -353,7 +345,9 @@ pub struct EgressShard<B: EgressBackend> {
 
 A shard owns:
 
-- its native poller;
+- its protocol-specific readiness backend (RTMP/RTMPS: a Linux epoll
+  instance; SRT: drive-based readiness with no poller — owned sockets and
+  the shared `CallerTable`);
 - all leaf protocol and transport state assigned to it;
 - its ready queue and scheduling flags;
 - connect, handshake, progress, and retry timers;
@@ -367,13 +361,15 @@ Mutable leaf state does not migrate between threads during normal operation.
 A shard loop performs bounded work in this order:
 
 1. process a limited batch of high-priority control commands;
-2. consume readiness events;
+2. invoke backend readiness processing (`on_ready` / `poll_ready`) and
+   consume any ready-leaf events the backend produced;
 3. process expired timers;
 4. schedule leaves whose feeds advanced;
 5. service ready leaves under per-leaf and per-loop budgets;
 6. publish aggregated metrics when due;
-7. block in the native poller until readiness, command wakeup, timer expiry, or
-   feed notification.
+7. when idle, wait on the command channel with a bounded timeout
+   (`recv_timeout(idle_wait)`), then resume from step 1 so quiet shards
+   still rediscover write-interested leaves on the next readiness pass.
 
 Control processing itself is budgeted so a large update burst cannot starve
 media progress.
@@ -489,35 +485,27 @@ retained by the connection are both included in per-leaf memory limits.
 
 ### SRT backend
 
-SRT uses non-blocking socket mode and SRT epoll. Sender synchronization is
-disabled for egress sockets so a full sender buffer returns the asynchronous
-send condition instead of blocking the shard.
+SRT egress runs on `srt-rs` (Tokio UDP plus in-process protocol state), not
+libsrt epoll. `srt-rs` has no epoll-style readiness multiplexer: each shard's
+`poll_ready()` drives owned transports, then marks every not-yet-enqueued leaf
+writable so the common scheduler can visit it.
 
-A pending SRT write retains one immutable transport message. On sender-buffer
-saturation, the leaf waits for SRT writable readiness. Application-owned
-per-destination byte queues and sender threads are removed.
+Local-port reuse still scopes one shared UDP socket and `CallerTable` per
+`(pipeline, shard)` (`SrtEgressMuxerPorts`). Direct or bonded leaves drive
+their own sockets; shared-port leaves share one table that the shard drives
+once per `poll_ready` pass (and again on the send path per accepted message).
+Application-owned per-destination byte queues and sender threads remain
+removed.
 
-SRT internal sender-buffer limits remain part of the leaf's total buffering
-policy; moving buffering into libsrt does not make it free or unbounded.
+SRT sender-buffer limits remain part of the leaf's total buffering policy;
+moving buffering into the protocol stack does not make it free or unbounded.
 
-libsrt runs its own protocol engine on threads the fabric does not own: one
-`CSndQueue` worker and one `CRcvQueue` worker per multiplexer, where a
-multiplexer is one bound local UDP endpoint. Local-port reuse
-(`RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT`) exists so egress sockets do not each
-create their own multiplexer and thread pair. That reuse is scoped per
-`(pipeline, shard)`, not engine-wide: every leaf on a shard of one pipeline
-shares that shard's multiplexer, and shard *N* is shared across feeds of that
-pipeline so the libsrt thread count tracks shard count rather than feed or
-output count. Scoping it engine-wide instead put every SRT egress connection
-on one libsrt sender thread, which saturated well before CPU did and let
-libsrt's TLPKTDROP discard packets that missed their delivery deadline.
-Scoping it per shard alone (dropping the pipeline key) closes that but opens
-a narrower one: two unrelated pipelines' shard *N* would then share one
-multiplexer purely because their shard-assignment formulas produced the same
-numeric id — a real cross-tenant coupling for any multi-pipeline deployment.
-`RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED` (default enabled) is the
-opt-out back to the flat per-shard-only behavior for operators who prefer
-fewer multiplexers over that isolation guarantee.
+`RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT` and
+`RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED` keep the isolation rule:
+reuse is per `(pipeline, shard)` by default so unrelated pipelines do not
+share a contention or failure domain merely because their shard-assignment
+formulas produced the same numeric id. Disabling pipeline scoping is an
+operator opt-out toward fewer shared sockets at the cost of that isolation.
 
 ### Future backends
 
@@ -699,9 +687,9 @@ CPU or memory growth.
 
 ### Cross-shard isolation
 
-Each shard owns an independent thread, poller, ready queue, timer structure,
-command inbox, and mutable leaf registry. Hot-path operations do not acquire a
-process-wide leaf lock.
+Each shard owns an independent thread, protocol-specific readiness backend,
+ready queue, timer structure, command inbox, and mutable leaf registry.
+Hot-path operations do not acquire a process-wide leaf lock.
 
 Shared feeds are immutable and bounded. Cross-shard interaction is limited to
 feed sequence observation, coalesced wakeups, configuration snapshots, and
@@ -808,7 +796,7 @@ repository measurements found that strategy regressive.
 
 SRT leaves must not copy shared TS data into a byte-oriented `MemoryQueue` and
 then into a sender buffer. They retain immutable transport-message references
-until accepted by libsrt.
+until accepted by the `srt-rs` sender path.
 
 ## Observability
 
@@ -925,64 +913,31 @@ Performance acceptance is based on behavior under load, not socket count alone:
   additional shards are rejected if they increase CPU without improving tail
   behavior.
 
-The implementation plan defines the concrete workload and thresholds used to
-prove these invariants.
+Concrete workload thresholds used to prove these invariants live with the
+harness and the archived migration plan.
 
-## Compatibility and migration
+## History and tradeoffs
 
-The fabric shipped behind a rollout selector, migrated SRT first (the
-existing per-leaf sender thread and byte queue were the largest structural
-limit), then RTMP once the common fabric was proven with a fake engine and
-live SRT load, then removed the legacy per-output path and the rollout
-selector entirely once both protocols shared the common lifecycle and
-policy, live parity and rollback gates passed, operational dashboards
-exposed fabric metrics, and the 1,000-plus-leaf isolation workload passed
-repeatedly. See `docs/egress-implementation.md` for the full migration
-record.
+The fabric is shipped. Migration narrative (rollout selector, SRT-then-RTMP,
+legacy path removal) lives only in
+[`docs/archive/egress/implementation.md`](archive/egress/implementation.md).
+Control-plane identity, persisted outputs, API contracts, stage keys, and
+`MediaPacket` behavior stayed stable through that change.
 
-The control plane, persisted output configuration, API contracts, stage keys,
-and canonical `MediaPacket` behavior stayed stable throughout — migration
-changed runtime ownership and scheduling, not user-visible output identity.
+Retained tradeoffs of the fabric itself:
 
-## Tradeoffs
-
-### Benefits
-
-- one lifecycle and failure policy for all protocols;
-- fixed application thread count;
-- bounded memory under slow consumers;
-- fewer wakeups and less per-leaf queueing;
-- protocol parity in metrics and operational behavior;
-- clear ownership and test seams;
-- easier addition of future protocols;
-- explicit shard-level failure domains.
-
-### Costs
-
-- substantial rewrite of connection ownership;
-- more explicit partial-I/O and readiness state;
-- two native poller implementations under one fabric;
-- careful feed synchronization and overrun recovery;
-- new scheduler and timer correctness obligations;
-- a temporary dual-path migration period;
-- possible loss of simplicity compared with one independent async task per
-  RTMP destination at small scale.
-
-### Risks
-
-- over-generalizing before two protocols prove the boundary;
-- hiding protocol semantics behind a vague universal transport trait;
-- moving reusable preparation back into per-leaf engines;
-- replacing application queues with unbounded native transport buffers;
-- treating average throughput as proof while tail fairness regresses;
-- adding shards or CPU affinity without measured benefit.
-
-The implementation must prefer narrow abstractions proven by RTMP and SRT over
-an extensible framework designed for hypothetical protocols.
+- one lifecycle and failure policy, fixed application thread count, and
+  bounded memory under slow consumers;
+- more explicit partial-I/O (RTMP/TLS epoll plus SRT drive-owned-leaves), and
+  scheduler/timer obligations versus one independent async task per
+  destination at tiny scale;
+- prefer narrow abstractions proven by RTMP and SRT over a framework for
+  hypothetical protocols; do not hide wire semantics behind a vague transport
+  trait or treat average throughput as proof of tail fairness.
 
 ## Decision summary
 
-Restream's target egress architecture is:
+Restream's egress architecture is:
 
 - shared, keyed preparation before the destination edge;
 - immutable bounded feeds with non-pinning sequence cursors;

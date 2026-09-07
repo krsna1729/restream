@@ -1,8 +1,12 @@
 # Egress implementation
 
 This document is the executable migration plan for the target described in
-[egress architecture](egress-architecture.md). It is intentionally organized
+[egress architecture](../../egress-architecture.md). It is intentionally organized
 as independently reviewable slices with explicit proof and rollback gates.
+
+> Archived: the fabric migration described here is complete. Prefer
+> [`docs/egress-architecture.md`](../../egress-architecture.md) for current
+> ownership and concurrency contracts.
 
 The plan preserves the current production path until the common egress fabric
 has demonstrated protocol correctness, slow-neighbor isolation, bounded memory,
@@ -3696,7 +3700,7 @@ CPU ceiling:
     budget, not an output-count amortization — a ~60-output SRT feed must
     not be capped at 1 shard/1 multiplexer by the RTMP-shaped 128-output
     threshold (see
-    `docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`).
+    `docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`).
 - `assign_output_to_shard` (`src/media/egress/manager.rs`) is rendezvous
   (highest-random-weight) hashing rather than `hash % shard_count`, so
   changing `shard_count` remaps only the ~`1/shard_count` fraction of
@@ -3878,8 +3882,8 @@ split requirement.
 
 ## Testing strategy
 
-The proof ladder follows [concurrency proofing](concurrency-proofing.md) and
-[testing](testing.md), with focused additions for the fabric.
+The proof ladder follows [concurrency proofing](../../concurrency-proofing.md) and
+[testing](../../testing.md), with focused additions for the fabric.
 
 ### Pure unit tests
 

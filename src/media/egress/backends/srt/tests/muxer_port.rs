@@ -1,5 +1,5 @@
 //! Regression coverage for `SrtShardBackend::with_srt_egress_muxer_port_reuse`
-//! (`docs/egress-implementation.md` Phase 4 status): shared callers receive
+//! (`docs/archive/egress/implementation.md` Phase 4 status): shared callers receive
 //! the same per-shard application-owned UDP socket/table state.
 //!
 //! These drive `complete_pending_connect` — the same function production

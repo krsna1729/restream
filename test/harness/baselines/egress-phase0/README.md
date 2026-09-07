@@ -2,7 +2,7 @@
 
 This directory records the deterministic workload manifest and captured
 baseline artifacts required by the egress fabric migration plan
-([egress-implementation](../../../../docs/egress-implementation.md), Phase 0).
+([egress-implementation](../../../../docs/archive/egress/implementation.md), Phase 0).
 
 ## Contents
 

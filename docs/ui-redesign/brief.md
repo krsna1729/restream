@@ -3,57 +3,41 @@
 ## Contents
 
 - [Purpose](#purpose)
-- [Outcome](#outcome)
-- [Baseline deliverables](#baseline-deliverables)
+- [Active contracts](#active-contracts)
 - [Acceptance boundary](#acceptance-boundary)
 
 ## Purpose
 
-Freeze the operator workflows and runtime semantics that a future visual
-redesign must preserve. This baseline is deliberately framework-neutral: it
-adds specifications and deterministic browser setup without changing the
-production dashboard.
+Preserve operator workflows and runtime semantics while the dashboard evolves.
+Framework and visual choices may change; these contracts must not silently
+drift.
 
-## Outcome
+## Active contracts
 
-The redesign may change layout, styling, component boundaries, and internal
-rendering technology. It must not silently change:
+- [`operator-task-model.md`](operator-task-model.md) — workflows an operator
+  must finish;
+- [`state-matrix.yaml`](state-matrix.yaml) — important states and proof status;
+- [`route-contract.md`](route-contract.md) — URL ownership and compatibility;
+- [`migration-map.md`](migration-map.md) — ownership stop rules and build
+  artifact paths that remain in force;
+- [`visual-accessibility-baseline.md`](visual-accessibility-baseline.md) —
+  viewport, screenshot, keyboard, ARIA, and axe policy;
+- `test/frontend/redesign/` — deterministic Playwright seeds and executable
+  specs.
+
+Dated experiments (Overview slice, build seam, live MSR operator review) and
+the pre-cutover framework ADR live under
+[`docs/archive/ui-redesign/`](../archive/ui-redesign/overview-slice.md).
+
+## Acceptance boundary
+
+Changes must not silently alter:
 
 - query-string routes or deep links;
-- the API transport owner in `web/ts/core/api.ts`;
+- API transport ownership in `web/ts/core/api.ts`;
 - lifecycle-SSE filtering, replay, or fallback polling;
 - visibility-sensitive refresh behavior;
 - mutation intent and runtime-convergence feedback;
 - authentication, base-path, embedded-asset, or HLS behavior;
 - operator-visible distinctions between pending, retrying, degraded, failed,
   and intentionally stopped states.
-
-## Baseline deliverables
-
-- `operator-task-model.md`: the workflows an operator must be able to finish;
-- `state-matrix.yaml`: important states and their proof status;
-- `route-contract.md`: canonical URL ownership and compatibility behavior;
-- `migration-map.md`: safe slice order and ownership boundaries;
-- `decisions/0001-baseline-before-framework.md`: why the framework decision is
-  deferred;
-- `test/frontend/redesign/`: a deterministic, redacted Playwright seed and an
-  executable-spec starting point.
-- `visual-accessibility-baseline.md`: pinned viewport, screenshot, keyboard,
-  ARIA, and axe acceptance policy.
-- `overview-slice.md`: the first priority-first production experiment and its
-  architecture finding.
-- `build-seam.md`: the opt-in React/Vite build contract, typed read-only bridge,
-  measured cost, and framework-decision checkpoint.
-
-## Acceptance boundary
-
-This baseline is complete when:
-
-1. every required state has an existing proof or an explicitly recorded gap;
-2. the seeded Overview is deterministic and contains no production secrets;
-3. existing frontend, fixture, API-contract, and test-hygiene gates pass;
-4. no production frontend or backend file changes.
-
-The baseline does not select React, Lit, TanStack Query, a design tool, or a
-replacement design system. Those choices require evidence from a bounded
-Overview experiment.

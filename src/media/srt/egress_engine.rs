@@ -97,7 +97,7 @@ impl<T> SrtEgressEngine<T> {
     /// fragment per visit is correct but costs a full wake/poll/visit cycle
     /// per fragment — for a keyframe-sized unit (tens of KB) that is dozens
     /// of cycles instead of one, which live measurement showed as a real
-    /// CPU regression (see `docs/egress-implementation.md` Phase 4 status).
+    /// CPU regression (see `docs/archive/egress/implementation.md` Phase 4 status).
     /// Looping here amortizes that cost across one scheduler visit while
     /// still respecting the visit's byte/deadline budget, so one slow or
     /// always-writable leaf still cannot monopolize the shard.

@@ -352,7 +352,7 @@ and holds regardless of egress routing.
 
 "Independent sender" above describes protocol/retry state ownership, not a
 literal OS thread per destination: under the egress fabric (see
-`docs/egress-implementation.md`), each output is a leaf serviced by a
+`docs/archive/egress/implementation.md`), each output is a leaf serviced by a
 shared shard OS thread alongside other outputs, not a dedicated thread.
 
 Current measurements belong in the
@@ -409,7 +409,7 @@ thread count — exact counts depend on live CPU count, feed count, and
 output count. A fully worked, measured example for one 1,200-output MSR run
 (exact thread histogram, RSS breakdown, and a per-connection memory model)
 lives in
-[the MSR resource-attribution investigation](agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md).
+[the MSR resource-attribution investigation](archive/quality/msr-1200-resource-attribution-2026-08-13.md).
 
 ### RTMP: ingest to egress
 
@@ -485,7 +485,7 @@ small SRT feed at 1 shard / 1 libsrt multiplexer, and one multiplexer's
 single `CSndQueue` thread became a hard bottleneck once concurrent SRT
 egress connections crossed roughly 120, triggering continuous `TLPKTDROP`
 packet loss (full account in
-[the SRT egress scale investigation](agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md)).
+[the SRT egress scale investigation](archive/quality/srt-egress-scale-investigation-2026-08-10.md)).
 The corresponding cost is that egress-shard thread count for SRT scales with
 **distinct SRT feed count** times the CPU-derived shard ceiling — a
 process with many small, distinct SRT track selections pays the same

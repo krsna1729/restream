@@ -6,10 +6,8 @@ an active repo: narrow seams first, broader packaging later.
 ## Contents
 
 - [Current Shape](#current-shape)
-- [Historical Size-Limit Regression](#historical-size-limit-regression)
 - [Size Policy](#size-policy)
 - [Ownership Matrix](#ownership-matrix)
-- [What We Already Moved](#what-we-already-moved)
 - [Layering Ladder](#layering-ladder)
 - [Crate Readiness](#crate-readiness)
 - [Refactor Order](#refactor-order)
@@ -62,43 +60,6 @@ Frontend examples:
 - some feature modules still import peer features because the composition owner is not yet narrow enough
 - globals/window hooks remain as a compatibility surface that should stay edge-facing
 
-## Historical Size-Limit Regression
-
-The first global cap was useful but became a substitute for architectural
-completion:
-
-1. Before `aa139026`, split commits already improved navigation without always
-   finishing ownership. `9ad55101` created `src/media/srt_egress.rs` at exactly
-   1,000 lines, while `6594db34`, `409da728`, and `2ae8f6f8` transferred large
-   test bodies into dedicated files that remained close to the emerging cap.
-2. Commit `aa139026` then replaced two file-specific growth baselines with a
-   global 2,000-line check. The check rejected only files greater than 2,000,
-   codifying rather than originating the threshold-seeking pattern.
-3. The same pattern continued after the audit in `63d44602`: a file move and a
-   passing count could still stand in for a finished ownership seam.
-4. A later audit found production files clustered from roughly 1,900 to 2,000
-   lines. That clustering was pressure against the guardrail, not proof that
-   the seams were optimal.
-
-The lesson is not that extraction was wrong. Splitting API route families, DB
-repositories, protocol helpers, engine snapshots, and test ownership was a
-valuable first pass. The regression was treating a lexical file move and a
-passing line count as sufficient evidence of an ownership boundary.
-
-Feature topology produced a second historical lesson. Commit `72f9441e`
-introduced `mcp-core = ["agent-plane"]`. That feature edge meant the lower MCP
-surface was never compiled without the higher agent plane, so upward
-agent-core dependencies could remain hidden. The durable rule is:
-
-- compile a lower feature with the higher feature disabled
-- keep the HTTP MCP adapter `cfg` gate beside its module
-  (`mcp-http-backend`); there is no in-process MCP adapter module
-- treat a feature dependency as an architectural edge, not merely build
-  configuration
-- record both the intended feature closure and the compile command that
-  proves it (including when a named combo intentionally enables a higher
-  feature)
-
 ## Size Policy
 
 `scripts/check/source-audit.sh` measures raw physical lines for authored Rust
@@ -106,6 +67,9 @@ in the root `build.rs` and in `src/`, `test/`, `tests/`, and `benches/`.
 Fixtures and generated artifacts remain outside this metric. Authored
 TypeScript and JavaScript now share the same 1,000-line hard maximum as the
 backend Rust policy.
+
+Durable lessons from earlier size-limit and feature-topology mistakes:
+a lexical file move and a passing line count are not ownership proof; compile a lower Cargo feature with the higher feature disabled; treat a feature dependency as an architectural edge; record the intended feature closure and the compile command that proves it (`mcp-core` no longer enables `agent-plane`; `mcp-embedded` is an intentional combo).
 
 The backend Rust bands are:
 
@@ -254,64 +218,6 @@ Does not own:
 - unrelated dashboard composition
 - shared transport primitives beyond what it consumes from `core`
 
-## What We Already Moved
-
-Backend low-risk extractions already landed:
-
-1. Audio-routing grammar now lives in `domain`.
-2. Transcode-profile schema now lives in `domain`.
-3. SRT ingest config and validation live in `domain`.
-4. Ingest security policy config lives in `domain`.
-5. Logging DTOs live in `logging::types`.
-
-Frontend low-risk extractions already landed:
-
-1. Dashboard feature wiring now has an `app` composition root.
-2. Pipeline output-list rendering and delegated actions now live outside `pipeline-view.ts`.
-3. Four oversized feature files (`pipeline-view-*`, `control-room-*`, `editor-*`,
-   `pipeline-inspector-*`) moved into `features/<name>/` subdirectories with
-   barrel `index.ts` re-exports (2026-07-21). Only `pipeline-inspector/index.ts`
-   (~1,272 lines) remains above the 1,000-line hard cap; the other three are
-   within bounds.
-
-These moves are useful because they move "how the app is composed" away from
-"how one feature renders."
-
-Backend file-level splits already landed and remain worth keeping:
-
-1. The former API monolith is split by route family.
-2. DB access is split into repository modules.
-3. RTMP FLV, egress transport, timestamps, metadata, and enhanced-codec helpers
-   have focused homes.
-4. SRT policy, Stream ID, monitoring/quality, crypto, and egress concerns have
-   focused homes.
-5. Engine HLS, snapshot, lifecycle, test, and registry-access concerns are no
-   longer all in one physical file.
-
-These are not all finished ownership boundaries. Re-export facades and
-extension `impl MediaEngine` blocks should be reassessed after their consumers
-move, rather than preserved merely because they reduced one file's length.
-
-Wave 2 also completed dependency-direction work that changes crate readiness:
-
-1. `runtime::snapshots` and `runtime::health` compatibility owners were removed;
-   the remaining runtime contracts depend on domain only.
-2. The 973-line `domain::output_spec` was split into configuration, encoding,
-   protocol, and video owners behind a curated facade.
-3. `EncodingStagePlan` and its configuration-derived inherent implementation
-   now live together in planner.
-4. Agent request and proposed-change types moved into `agent_core`; Reqwest
-   conversion moved to the HTTP adapter and MCP-only inputs moved to `agent_mcp`.
-5. `mcp-core` no longer enables `agent-plane`. The HTTP MCP adapter carries a
-   local `mcp-http-backend` gate. `mcp-embedded` is a named compile combo of
-   `mcp-core` + `agent-plane` (no in-process backend module).
-6. DB repositories return DB-owned records; infrastructure owns conversion to
-   application models.
-7. `ServiceError` is application-owned and transport-neutral; `ApiError` owns
-   Axum mapping.
-8. `media::packet`, `media::metadata`, and the ring reader now own their
-   respective vocabulary and behavior without engine-metadata back-dependencies.
-
 ## Layering Ladder
 
 When deciding whether to use a file, module, trait/interface, crate, or frontend
@@ -459,21 +365,8 @@ Current work:
 
 ### 2. Keep runtime views out of the engine core — done (2026-07-18)
 
-Goal: `MediaEngine` should return typed state and snapshots, not primarily
-`serde_json::Value`.
-
-Success condition:
-
-- engine code no longer needs to know UI/HTTP serialization details
-- JSON assembly happens at the edge
-
-`StageMetrics::snapshot()` and `PipeMetrics::snapshot()` (`src/media/`) now
-return typed `StageMetricsSnapshot` / `PipeMetricsSnapshot` structs instead of
-hand-built `serde_json::Value`. Callers in `src/api_runtime_views/` and
-`src/api_view_models.rs` convert to JSON at the edge via
-`serde_json::to_value(...)` (or implicitly through the `json!` macro). No
-`serde_json::Value` or `json!` usage remains in `src/media/` outside tests.
-See `docs/agent-guidance/quality/journal.md` Q-008.
+Typed stage/pipe metric snapshots; JSON assembly stays at the API edge.
+See archived journal Q-008.
 
 ### 3. Continue frontend composition cleanup
 
@@ -488,11 +381,7 @@ Still-useful next candidates:
 
 ### 4. Keep protocol persistence behind owned capabilities — done (2026-07-19)
 
-Goal: RTMP and SRT should depend on lookup ports, not query text.
-
-RTMP and SRT now consume media-owned authentication/policy capabilities.
-Infrastructure/application adapters own persistence access; protocol modules no
-longer contain raw SQL or import DB/application layers.
+RTMP/SRT use media-owned auth/policy capabilities; adapters own persistence.
 
 ### 5. Keep API route families thin
 

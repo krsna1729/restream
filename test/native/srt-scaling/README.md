@@ -4,7 +4,7 @@ Standalone C benchmarks used to investigate SRT connection-fan-in scaling
 against stock libsrt, TCP, and raw UDP, isolated from restream/mediamtx/
 Tokio entirely. Manual investigation tools, not part of the automated test
 suite or CI — build and run on demand. Full writeup and status:
-[`docs/agent-guidance/quality/srt-scaling-investigation.md`](../../../docs/agent-guidance/quality/srt-scaling-investigation.md).
+[`docs/archive/quality/srt-scaling-investigation.md`](../../../docs/archive/quality/srt-scaling-investigation.md).
 
 ## Contents
 

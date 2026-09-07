@@ -356,7 +356,7 @@ pub(super) fn read_proc_stat_ticks(pid: u32) -> Result<u64, String> {
 /// Cumulative context-switch counters from `/proc/<pid>/status`, sampled and
 /// diffed the same way `read_proc_stat_ticks` diffs CPU ticks. Closes the
 /// "context-switch/allocator instrumentation" gap noted throughout Phase 5's
-/// live captures (`docs/egress-implementation.md`) — a directly observable
+/// live captures (`docs/archive/egress/implementation.md`) — a directly observable
 /// proxy for the thread-topology/allocator-contention tradeoffs found there
 /// (more concurrently active OS threads doing the same work show up here as
 /// more switches, the same signature `perf`'s `try_to_wake_up`/`futex`

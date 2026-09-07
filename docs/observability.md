@@ -159,7 +159,7 @@ Active native egresses appear in `pipelines[id].outputs`:
 | `quality` | Egress transport quality. RTMP/RTMPS expose sender-side `TCP_INFO`/`SO_MEMINFO`; SRT exposes sender-side `srt_bistats()` and bonded group member state when available. |
 | `endedAt`, `endedAgeMs` | Present on recent output snapshots after unregister/cleanup so operators can tell when the last classified egress state ended |
 | `fabric`, `shardId` | `true` and the owning shard index for every network egress output — the egress fabric runtime is now the only egress path |
-| `resyncCount` | Total feed resynchronizations for this leaf (see `docs/egress-implementation.md` Phase 6); a leaf that falls behind its retained feed window resyncs to the latest sync point in place rather than closing |
+| `resyncCount` | Total feed resynchronizations for this leaf (see `docs/archive/egress/implementation.md` Phase 6); a leaf that falls behind its retained feed window resyncs to the latest sync point in place rather than closing |
 | `feedLagUnits` | Feed units this leaf's cursor is currently behind the feed head; updated once per second by the shard's stall sweep for every live leaf, not just ones about to be force-closed |
 | `backpressureReason` | `null` when idle/healthy, `"backpressured"` when send-path bytes are queued but within the no-progress deadline, `"stalled"` when that deadline has passed (the same classification the stall sweep uses to decide force-close) |
 
@@ -221,7 +221,7 @@ This list describes the current, verified state. The `StageMetrics` output
 counters and both quality rows were silently unreachable for every
 fabric-owned output for a time after the egress fabric migration — the
 fabric never called the code that populates them — before being found by
-an explicit audit and fixed; see `docs/egress-implementation.md`'s Phase 7
+an explicit audit and fixed; see `docs/archive/egress/implementation.md`'s Phase 7
 "Legacy removal" section for the full mechanism and what changed.
 
 Implemented egress parity:

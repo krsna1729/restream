@@ -1,5 +1,5 @@
 //! Regression coverage for `EgressProgressSink::terminated_unexpectedly`
-//! (`docs/egress-implementation.md` Phase 4 status): a fabric leaf closed
+//! (`docs/archive/egress/implementation.md` Phase 4 status): a fabric leaf closed
 //! for any reason the application did not request (stall recovery, peer
 //! close, connect failure) used to vanish silently — nothing told the
 //! application task, so the shared retry/backoff bookkeeping in

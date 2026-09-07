@@ -176,7 +176,7 @@ async fn sweep_unused_stages_retains_active_readers() {
 /// registry), so the reader-count check alone would sweep it on the very
 /// next reconcile tick regardless of how recently it started — starving the
 /// fabric leaves of all media before they ever see a byte. Live evidence:
-/// `docs/egress-implementation.md` Phase 4 status.
+/// `docs/archive/egress/implementation.md` Phase 4 status.
 #[tokio::test]
 async fn sweep_unused_stages_retains_stage_with_live_fabric_consumer_and_no_readers() {
     let engine = MediaEngine::new();

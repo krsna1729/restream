@@ -20,8 +20,31 @@ green gates, an honest journal entry, and no collateral edits.
 
 - `docs/agent-guidance/quality/backlog.md` — prioritized work items
 - `docs/agent-guidance/quality/journal.md` — append-only iteration log
+  (rotate older months into `docs/archive/quality/journal-YYYY-MM.md`; do not
+  edit past entries)
 - `docs/agent-guidance/quality/baselines.md` — benchmark/resource ledger
 - `docs/agent-guidance/quality/README.md` — operator manual (humans)
+
+### Journal continuity across archive rotation
+
+New entries always append to the active `journal.md`. Older months may move
+into dated archive files, but selection and failure-recovery still cross that
+boundary:
+
+1. Read the active journal first (newest entries at the bottom).
+2. If it contains fewer than three completed iteration entries (`DONE`,
+   `FAILED`, `SKIPPED`, or `GROOMED` — ignore bare `STARTED` claims), read the
+   tail of the newest archived journal(s) under
+   `docs/archive/quality/journal-*.md` (newest archive filename / date first)
+   until the **three-entry selection window** is complete.
+3. “Previous journal entry” for unresolved-`FAILED` cleanup is the newest
+   completed entry in that same combined window (active first, then archive
+   tails) — not “newest entry in the active file only.”
+4. Dimension rotation (“prefer a dimension not touched in the last 3 journal
+   entries”) uses that same three-entry window.
+
+Do not duplicate archived entries back into the active file; read across the
+boundary instead.
 
 ## Hard safety rules (read every iteration, no exceptions)
 
@@ -56,7 +79,8 @@ eligible one. Never "just try" an above-tier item.
 
 - `git status --short` — note pre-existing modifications (leave them alone).
 - Media-process check per hard rule 1.
-- Read the most recent journal entries and all of `backlog.md`.
+- Read the most recent journal entries (active file, then archived tails per
+  § Journal continuity across archive rotation) and all of `backlog.md`.
 - If the previous journal entry is an unresolved `FAILED` for an item still
   marked `in-progress`, your first job is to finish cleaning it up (revert
   stray edits, mark it `blocked` with notes) — that is this iteration's work.
@@ -66,7 +90,8 @@ eligible one. Never "just try" an above-tier item.
 - Pick the highest-priority `open` item eligible for your tier. Priority =
   file order in `backlog.md` (top is most important), but prefer a dimension
   not touched in the last 3 journal entries when priorities tie (rotation
-  keeps all six dimensions moving).
+  keeps all six dimensions moving; the three-entry window crosses the
+  archive boundary per § Journal continuity).
 - Mark it `in-progress` in `backlog.md` with today's date, and append a
   one-line `STARTED` journal entry. This is the claim; if a competing loop
   already marked it, pick the next item.

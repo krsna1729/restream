@@ -105,7 +105,14 @@ for (const filename of files) {
 
   // Skill packages optimize for immediate execution, so a TOC is needless
   // preamble. Legal text and one-section shims also need no navigation.
-  const requiresContents = h2.length > 0 && path.basename(filename) !== "SKILL.md";
+  // Archived evidence is frozen; do not enforce TOC churn on historical docs.
+  const isArchive =
+    relative === "docs/archive/README.md" ||
+    relative.startsWith("docs/archive/");
+  const requiresContents =
+    h2.length > 0 &&
+    path.basename(filename) !== "SKILL.md" &&
+    !isArchive;
   if (requiresContents) {
     if (h1.length !== 1) {
       errors.push(`${relative}: expected one H1, found ${h1.length}`);
@@ -176,24 +183,50 @@ for (const filename of files) {
   });
 }
 
-// The central index must reach every Markdown file except itself.
+// The central index must reach every maintained Markdown file except itself.
+// Archived evidence is indexed from docs/archive/README.md instead.
 const indexRelative = "docs/README.md";
+const archiveIndexRelative = "docs/archive/README.md";
 const index = path.join(root, indexRelative);
-if (fs.existsSync(index)) {
+const archiveIndex = path.join(root, archiveIndexRelative);
+
+function collectMarkdownLinks(fromFile) {
   const linked = new Set();
-  const text = fs.readFileSync(index, "utf8");
+  if (!fs.existsSync(fromFile)) return linked;
+  const text = fs.readFileSync(fromFile, "utf8");
   for (const match of text.matchAll(linkPattern)) {
     const target = match[2].split("#", 1)[0];
     if (target.endsWith(".md")) {
-      linked.add(path.resolve(path.dirname(index), target));
+      linked.add(path.resolve(path.dirname(fromFile), target));
     }
   }
+  return linked;
+}
+
+const linkedFromDocsIndex = collectMarkdownLinks(index);
+const linkedFromArchiveIndex = collectMarkdownLinks(archiveIndex);
+
+if (fs.existsSync(index)) {
   for (const filename of files) {
-    if (relativePath(filename) === indexRelative) continue;
-    if (!linked.has(path.resolve(filename))) {
-      errors.push(`${relativePath(filename)}: not linked from docs/README.md`);
+    const relative = relativePath(filename);
+    if (relative === indexRelative) continue;
+    if (
+      relative.startsWith("docs/archive/") &&
+      relative !== archiveIndexRelative
+    ) {
+      if (!linkedFromArchiveIndex.has(path.resolve(filename))) {
+        errors.push(`${relative}: not linked from docs/archive/README.md`);
+      }
+      continue;
+    }
+    if (!linkedFromDocsIndex.has(path.resolve(filename))) {
+      errors.push(`${relative}: not linked from docs/README.md`);
     }
   }
+}
+
+if (fs.existsSync(archiveIndex) && !fs.existsSync(index)) {
+  errors.push(`${archiveIndexRelative}: docs/README.md is missing`);
 }
 
 if (errors.length > 0) {

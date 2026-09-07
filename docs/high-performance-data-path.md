@@ -91,7 +91,7 @@ stays outside the shared stage:
 | Source packet ring | Independent reader position and lag counters |
 | HLS pipeline store | Request authorization and response transfer |
 
-Under the egress fabric (see `docs/egress-implementation.md`), RTMP/RTMPS
+Under the egress fabric (see `docs/archive/egress/implementation.md`), RTMP/RTMPS
 and SRT egress additionally share a small, CPU-derived and output-count-
 scaled pool of shard OS threads across many destinations, each
 multiplexed through native non-blocking readiness polling rather than one

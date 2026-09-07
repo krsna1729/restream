@@ -29,14 +29,14 @@
 - **Baseline status:** all three protocol mixes clean at the full
   1,200-output target with real 1080p60/8Mbps media, recorded 2026-08-13 —
   see
-  [1,200-output resource attribution](agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md)
+  [1,200-output resource attribution](archive/quality/msr-1200-resource-attribution-2026-08-13.md)
   for the measured CPU/RSS/thread footprint and
-  [the SRT egress scale investigation](agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md)
+  [the SRT egress scale investigation](archive/quality/srt-egress-scale-investigation-2026-08-10.md)
   for the correctness fixes that made this run clean. The earlier
   2026-07-11 connection-scale baseline (synthetic low-bitrate fixture) is
   superseded by this real-bitrate result; see
-  `docs/agent-guidance/quality/baselines.md` § "Mahashivratri msr
-  full-scale ramp" for the historical entry.
+  [archived baselines campaigns](archive/quality/baselines-campaigns-2026-07.md)
+  for the historical entry.
 
 This document tracks the Mahashivratri production scenario for the current
 backend: one high-resolution SRT contribution carrying one video stream and 30
@@ -185,10 +185,8 @@ per second.
 
 ## Measured Baselines
 
-**Real-bitrate full-scale run (2026-08-13, dedicated 6-core VPS, 1080p60
-H.264 source passthrough at 8 Mbps, 30 audio tracks, sink-mode verification
-peer with real RTMP/SRT protocol negotiation)**: all three canonical
-protocol mixes clean at every checkpoint through 1,200 outputs —
+**Current connection-scale evidence (2026-08-13, dedicated 6-core VPS,
+1080p60 H.264 passthrough at 8 Mbps, 30 audio tracks, sink-mode peers):**
 
 | Mix | Outputs | CPU (of 6 cores) | RSS | Threads |
 |---|---:|---:|---:|---:|
@@ -196,33 +194,17 @@ protocol mixes clean at every checkpoint through 1,200 outputs —
 | pure RTMP | 1200/1200 | ~2.4 | 1.51 GB | 55 |
 | canonical 95/5 | 1200/1200 | ~3.2 | 1.97 GB | 223 |
 
-Full thread/memory/CPU attribution, including why SRT's footprint differs
-so much from RTMP's, lives in
-[1,200-output resource attribution](agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md).
-This closes connection-scale evidence for MSR-02, MSR-03, and MSR-07 at
-real 1080p60 bitrate (superseding the synthetic-bitrate run below) and
-covers the 1080p slice of Phase 3's bitrate envelope. MSR-01 (external-link
-certification), the 4K/HEVC slice of Phase 3, and Phase 4 (degradation
-slices) remain open.
+Attribution and earlier synthetic-bitrate / profiling campaigns:
+[msr-1200-resource-attribution](archive/quality/msr-1200-resource-attribution-2026-08-13.md),
+[srt-egress-scale-investigation](archive/quality/srt-egress-scale-investigation-2026-08-10.md),
+[archived baselines campaigns](archive/quality/baselines-campaigns-2026-07.md),
+[archived profiling notes](archive/quality/baselines-profiling-2026-07.md).
+Live Criterion/resource ledger:
+[baselines.md](agent-guidance/quality/baselines.md).
 
-First full-scale Phase 2 ramp (2026-07-11, commit 6fc2f254, dedicated 6-vCPU
-EPYC gen1 VPS, 1080p30 H.264 passthrough, loopback sink, synthetic
-low-bitrate fixture): PASS at every checkpoint through 1,200 outputs with no
-capacity knee — ~2.4 cores average / 2.8 peak and 447 MB RSS at 1,200
-outputs, sublinear CPU scaling, zero warnings or errors. Full per-checkpoint
-table and caveats live in `docs/agent-guidance/quality/baselines.md`
-§ "Mahashivratri msr full-scale ramp — 2026-07-11 (VPS)".
-
-Hardware-counter profiling during that 2026-07-11 soak (same host, same
-commit) attributed two structural CPU costs inside the ~2.4-core total:
-the SRT ingest epoll waiter busy-spins for ~1 core per ingest
-(`src/media/srt.rs:1536`; fix filed), and libsrt allocates one multiplexer
-(2 OS threads) per SRT egress — 122 threads and ~1 core of RcvQ work at 60
-SRT outputs. Details and the tokio locality dataset live in
-`docs/agent-guidance/quality/baselines.md` § "Profiling notes (VPS)". The
-per-SRT-egress-connection multiplexer cost this profiling described was
-since fixed to be per-*shard* instead (see the SRT egress scale
-investigation); the 2026-08-13 run above reflects that fix.
+This closes connection-scale evidence for MSR-02, MSR-03, and MSR-07 at real
+1080p60 bitrate. MSR-01 (external-link certification), the 4K/HEVC slice of
+Phase 3, and Phase 4 (degradation slices) remain open.
 
 ## Risks To Track
 
@@ -463,7 +445,7 @@ never expected to be started by hand outside `PEER_SKIP_START`.
   instance) in place of mediamtx, bound directly by the `test_harness`
   process itself — far lower per-connection memory than a real mediamtx
   path, for runs where raw connection count matters more than a readable
-  path. As of `docs/agent-guidance/quality/srt-scaling-investigation.md`'s
+  path. As of `docs/archive/quality/srt-scaling-investigation.md`'s
   sink-mode extraction, this replaced spawning a separate `restream
   --sink-mode` process per instance; `RESTREAM_SINK_MODE` no longer exists
   in production restream (see that doc for why the two "sink" concepts —
@@ -549,6 +531,6 @@ Eventually, a passing canonical run should require:
 - [Resource sweep](resource-sweep.md)
 - [Matrix resource constraints](matrix-resource-constraints.md)
 - [Performance and resource baselines](agent-guidance/quality/baselines.md)
-- [SRT egress scale investigation](agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md)
-- [1,200-output resource attribution (thread/memory/CPU by mix)](agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md)
-- [netns confound investigation (4-worktree controlled campaign)](agent-guidance/quality/msr-1200-netns-confound-investigation-2026-08-14.md)
+- [SRT egress scale investigation](archive/quality/srt-egress-scale-investigation-2026-08-10.md)
+- [1,200-output resource attribution (thread/memory/CPU by mix)](archive/quality/msr-1200-resource-attribution-2026-08-13.md)
+- [netns confound investigation (4-worktree controlled campaign)](archive/quality/msr-1200-netns-confound-investigation-2026-08-14.md)

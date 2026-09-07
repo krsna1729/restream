@@ -1,7 +1,7 @@
 //! Pipeline recirculation fabric shard backend: wires [`PipelineEngine`]
 //! into [`EgressShardBackend`] — the production home
 //! `crate::media::recirculation::start_pipeline_recirculation`'s plain
-//! per-output `tokio::spawn` task never had (`docs/egress-implementation.md`
+//! per-output `tokio::spawn` task never had (`docs/archive/egress/implementation.md`
 //! Phase 6a status). Structurally this mirrors `SinkShardBackend` closely
 //! (same no-socket, `FeedWake`-is-the-only-readiness-signal shape — see
 //! that module's doc comment) with one addition: a pipeline leaf needs its

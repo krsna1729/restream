@@ -491,7 +491,7 @@ async fn sink_fabric_registry_retains_runtime_once_per_feed() {
 /// End-to-end proof that a `Sink` output added through the same
 /// `EgressCommand::Add`/`dispatch_sink_fabric_command` path production
 /// code uses actually discards real feed units on a real shard thread —
-/// closing the Phase 4a gap (`docs/egress-implementation.md`): `Sink` used
+/// closing the Phase 4a gap (`docs/archive/egress/implementation.md`): `Sink` used
 /// to reach this registry's API surface without ever routing onto shard
 /// OS threads.
 #[tokio::test]
@@ -597,7 +597,7 @@ async fn pipeline_fabric_registry_retains_runtime_once_per_feed() {
 /// `EgressCommand::Add`/`dispatch_pipeline_fabric_command` path production
 /// code uses actually publishes real feed units into the claimed target
 /// ring on a real shard thread — closing the Phase 6a gap
-/// (`docs/egress-implementation.md`): recirculation used to run on a
+/// (`docs/archive/egress/implementation.md`): recirculation used to run on a
 /// plain per-output `tokio::spawn` task, never the fabric.
 #[tokio::test]
 async fn pipeline_fabric_registry_dispatches_add_and_the_shard_publishes_into_the_target_ring() {

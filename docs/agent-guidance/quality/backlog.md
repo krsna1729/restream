@@ -314,7 +314,8 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: Criterion state in `target/criterion/` is scratch; the ledger is
   the durable regression guard perf-sweep Mode A depends on. Without it every
   future comparison is blind.
-- Status: done (2026-07-18) — see `docs/agent-guidance/quality/journal.md`
+- Status: done (2026-07-18) — see archived
+  `docs/archive/quality/journal-2026-07.md`
   Q-003 DONE (Claimed: 2026-07-18 by codex; Filed: 2026-07-03 by bootstrap)
 
 ### Q-011 [performance] [sonnet] Prove or reject RTMP video payload ownership transfer
@@ -460,7 +461,8 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: known cross-layer flows still open: planner→media backend parsing,
   runtime core emitting API-shaped JSON, protocol handlers reading raw SQL
   (`docs/layering-roadmap.md` § Current Shape).
-- Status: done (2026-07-18) — see `docs/agent-guidance/quality/journal.md`
+- Status: done (2026-07-18) — see archived
+  `docs/archive/quality/journal-2026-07.md`
   Q-008 DONE (Filed: 2026-07-03 by bootstrap)
 
 ### Q-009 [performance] [opus] Eliminate one copy in the AVIO→TsMux path
