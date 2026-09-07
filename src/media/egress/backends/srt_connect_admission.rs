@@ -126,8 +126,8 @@ where
             .is_some_and(|leaf| leaf.handshake_permit.is_some())
     }
 
-    /// Simulates this leaf's first poller visit resolving its pending
-    /// handshake, without driving the full readiness/visit pipeline
+    /// Simulates this leaf's first shard readiness visit resolving its
+    /// pending handshake, without driving the full readiness/visit pipeline
     /// (already covered by the other `media_tick`/`visit` tests). Mirrors
     /// exactly the one line `visit_one_ready_leaf` runs before visiting.
     #[cfg(test)]
