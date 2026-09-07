@@ -22,7 +22,11 @@ use bytes::Bytes;
 use shiguredo_srt::{ConnectionState, Timestamp};
 use srt_transport::OutputDrainBudget;
 use srt_transport::tokio_transport::{Conn, GroupConn as TokioGroupConn};
-use srt_transport::{LogicalCallerId, LogicalCallerState, LogicalCallerStats, RecvBudget};
+use srt_transport::{LogicalCallerId, LogicalCallerState, LogicalCallerStats};
+
+mod knobs;
+pub(crate) use knobs::{apply_optional_udp_buf, desired_udp_buf, shared_io_batch_capacity};
+pub use knobs::{recv_budget, recv_budget_or};
 
 fn should_use_shared_srt_egress_state(peer_count: usize, has_shared_state: bool) -> bool {
     peer_count == 1 && has_shared_state
@@ -476,7 +480,7 @@ fn send_direct_message(
 }
 
 fn receive_conn(conn: &mut Conn, now: Timestamp) {
-    let _ = conn.recv_ready(now, RecvBudget::default());
+    let _ = conn.recv_ready(now, recv_budget_or(srt_transport::RecvBudget::default()));
 }
 
 pub(crate) trait SrtMessageSender {
@@ -723,6 +727,7 @@ pub(crate) fn connect_fabric_srt_egress_socket(
         let caller = srt_transport::CallerConfig::builder(config.peer_addrs[0])
             .session(session)
             .connect(connect)
+            .configure_transport(apply_optional_udp_buf)
             .build()
             .map_err(|e| e.to_string())?
             .prepare(srt_transport::RuntimeFlavor::Tokio)
@@ -742,6 +747,7 @@ pub(crate) fn connect_fabric_srt_egress_socket(
                 srt_transport::CallerConfig::builder(*peer)
                     .session(session.clone())
                     .connect(connect)
+                    .configure_transport(apply_optional_udp_buf)
                     .build()
                     .map(|caller| {
                         srt_transport::GroupCallerLeg::new(
@@ -764,9 +770,6 @@ pub(crate) fn connect_fabric_srt_egress_socket(
     };
     Ok(Box::new(transport))
 }
-
-pub(crate) const DESIRED_UDP_BUF: usize = 8 * 1024 * 1024;
-const SHARED_IO_BATCH_CAPACITY: usize = 64;
 
 fn percent_decode(value: &str) -> String {
     percent_encoding::percent_decode_str(value)

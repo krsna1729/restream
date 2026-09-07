@@ -14,6 +14,11 @@ pub(crate) use srt_egress_engine::SrtEgressEngine;
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 pub(crate) use tokio_egress::*;
 pub(crate) use tokio_ingress::*;
+
+/// Public A/B knob accessors for the test harness (a separate crate).
+pub mod srt_knobs {
+    pub use super::tokio_egress::{recv_budget, recv_budget_or};
+}
 pub(crate) fn linked_srt_version() -> String {
     "srt-rs".to_string()
 }

@@ -131,7 +131,7 @@ pub(in crate::diag) async fn check_srt_listener_socket(
     let rx_peak = stats.rx_queue_peak_bytes;
     let drops = stats.drops;
     let bonding_available = stats.bonding_available;
-    let configured = crate::media::srt::DESIRED_UDP_BUF as u64;
+    let configured = crate::media::srt::desired_udp_buf() as u64;
     let active_count = stats.active_ingest_count;
 
     let mut lines = vec![];

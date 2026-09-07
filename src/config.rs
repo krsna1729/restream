@@ -349,6 +349,15 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+/// Positive `usize` override for thin A/B knobs. Unset, unparseable, or `0`
+/// means "leave the caller default alone".
+pub(crate) fn env_optional_positive_usize(name: &str) -> Option<usize> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|&value| value >= 1)
+}
+
 fn default_tokio_worker_threads(effective_cpus: usize) -> usize {
     let effective_cpus = effective_cpus.max(1);
     if effective_cpus <= 2 {
