@@ -15,7 +15,7 @@ state, and readiness mechanisms.
 - [Goals](#goals)
 - [Non-goals](#non-goals)
 - [Architectural decision](#architectural-decision)
-- [Current constraints](#current-constraints)
+- [Shipped constraints](#shipped-constraints)
 - [Layer model](#layer-model)
 - [Data-path topology](#data-path-topology)
 - [Shared preparation graph](#shared-preparation-graph)
@@ -37,8 +37,7 @@ state, and readiness mechanisms.
 - [Configuration](#configuration)
 - [Correctness invariants](#correctness-invariants)
 - [Performance invariants](#performance-invariants)
-- [Compatibility and migration](#compatibility-and-migration)
-- [Tradeoffs](#tradeoffs)
+- [History and tradeoffs](#history-and-tradeoffs)
 - [Decision summary](#decision-summary)
 
 ## Goals
@@ -113,36 +112,26 @@ The stable boundary is policy versus mechanism:
 Protocol implementations must not create their own long-lived application
 threads, destination tasks, media queues, retry loops, or lifecycle policy.
 
-## Current constraints
+## Shipped constraints
 
-The current codebase already has useful high-fan-out properties that this design
-must preserve:
+Properties the fabric must keep preserving:
 
 - encoded packets are shared through bounded `RingBuffer` instances;
 - expensive transforms are shared by typed stage identity;
 - compatible SRT outputs share MPEG-TS preparation through `TsChunkRing`;
-- RTMP outputs use asynchronous TCP or TLS I/O and independent protocol state;
-- slow ring readers can recover after bounded overflow.
+- RTMP/RTMPS and SRT leaves share fabric lifecycle, backpressure, and retry
+  policy while retaining protocol-specialized engines and readiness backends;
+- slow ring readers can recover after bounded overflow;
+- shard count is measurement-driven — a small Tokio worker count can outperform
+  a larger one at the recorded 1,200-output workload.
 
-The current implementations also expose the migration targets:
-
-- `src/media/rtmp/egress.rs` owns one Tokio task per RTMP destination and awaits
-  complete `write_all` operations;
-- `src/media/srt_egress.rs` owns an asynchronous feeder, a `MemoryQueue`, and a
-  dedicated blocking sender thread per SRT destination;
-- `src/media/engine_registries.rs` caps application SRT sender threads at 512;
-- per-destination readers wait on shared ring notifications, which can amplify
-  one publication into many runnable consumers;
-- SRT bytes cross multiple application-owned buffers before reaching libsrt.
-
-The repository's recorded 1,200-output workload shows that a small Tokio worker
-count can outperform a larger worker count. The target is therefore not a
-blanket thread-per-core rewrite. It is fixed ownership and bounded scheduling
-for the egress hot path.
+Legacy per-destination RTMP tasks and per-destination SRT sender threads are
+gone; see [archive/egress/implementation.md](archive/egress/implementation.md)
+for the migration record.
 
 ## Layer model
 
-The target layering is:
+The layering is:
 
 ```mermaid
 flowchart TD
@@ -924,64 +913,30 @@ Performance acceptance is based on behavior under load, not socket count alone:
   additional shards are rejected if they increase CPU without improving tail
   behavior.
 
-The implementation plan defines the concrete workload and thresholds used to
-prove these invariants.
+Concrete workload thresholds used to prove these invariants live with the
+harness and the archived migration plan.
 
-## Compatibility and migration
+## History and tradeoffs
 
-The fabric shipped behind a rollout selector, migrated SRT first (the
-existing per-leaf sender thread and byte queue were the largest structural
-limit), then RTMP once the common fabric was proven with a fake engine and
-live SRT load, then removed the legacy per-output path and the rollout
-selector entirely once both protocols shared the common lifecycle and
-policy, live parity and rollback gates passed, operational dashboards
-exposed fabric metrics, and the 1,000-plus-leaf isolation workload passed
-repeatedly. See `docs/archive/egress/implementation.md` for the full
-migration record.
+The fabric is shipped. Migration narrative (rollout selector, SRT-then-RTMP,
+legacy path removal) lives only in
+[`docs/archive/egress/implementation.md`](archive/egress/implementation.md).
+Control-plane identity, persisted outputs, API contracts, stage keys, and
+`MediaPacket` behavior stayed stable through that change.
 
-The control plane, persisted output configuration, API contracts, stage keys,
-and canonical `MediaPacket` behavior stayed stable throughout — migration
-changed runtime ownership and scheduling, not user-visible output identity.
+Retained tradeoffs of the fabric itself:
 
-## Tradeoffs
-
-### Benefits
-
-- one lifecycle and failure policy for all protocols;
-- fixed application thread count;
-- bounded memory under slow consumers;
-- fewer wakeups and less per-leaf queueing;
-- protocol parity in metrics and operational behavior;
-- clear ownership and test seams;
-- easier addition of future protocols;
-- explicit shard-level failure domains.
-
-### Costs
-
-- substantial rewrite of connection ownership;
-- more explicit partial-I/O and readiness state;
-- two native poller implementations under one fabric;
-- careful feed synchronization and overrun recovery;
-- new scheduler and timer correctness obligations;
-- a temporary dual-path migration period;
-- possible loss of simplicity compared with one independent async task per
-  RTMP destination at small scale.
-
-### Risks
-
-- over-generalizing before two protocols prove the boundary;
-- hiding protocol semantics behind a vague universal transport trait;
-- moving reusable preparation back into per-leaf engines;
-- replacing application queues with unbounded native transport buffers;
-- treating average throughput as proof while tail fairness regresses;
-- adding shards or CPU affinity without measured benefit.
-
-The implementation must prefer narrow abstractions proven by RTMP and SRT over
-an extensible framework designed for hypothetical protocols.
+- one lifecycle and failure policy, fixed application thread count, and
+  bounded memory under slow consumers;
+- more explicit partial-I/O, dual native pollers, and scheduler/timer
+  obligations versus one independent async task per destination at tiny scale;
+- prefer narrow abstractions proven by RTMP and SRT over a framework for
+  hypothetical protocols; do not hide wire semantics behind a vague transport
+  trait or treat average throughput as proof of tail fairness.
 
 ## Decision summary
 
-Restream's target egress architecture is:
+Restream's egress architecture is:
 
 - shared, keyed preparation before the destination edge;
 - immutable bounded feeds with non-pinning sequence cursors;

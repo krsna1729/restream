@@ -1,9 +1,9 @@
 # Documentation archive
 
-Dated investigations, completed migration plans, and frozen UI redesign
-experiments live here so the maintained documentation set stays short. These
-files remain linked for evidence and Git history; they are not prerequisites
-for normal development or operation.
+Dated investigations, completed migration plans, frozen UI redesign
+experiments, and rotated quality ledgers live here so the maintained
+documentation set stays short. These files remain linked for evidence and Git
+history; they are not prerequisites for normal development or operation.
 
 Current guidance stays under [`docs/`](../README.md). Active quality-program
 state (`backlog`, `journal`, `baselines`) stays under
@@ -15,6 +15,7 @@ UI redesign contracts stay under [`docs/ui-redesign/`](../ui-redesign/brief.md).
 - [Egress](#egress)
 - [Quality evidence](#quality-evidence)
 - [UI redesign experiments](#ui-redesign-experiments)
+- [Audits](#audits)
 - [Archive rules](#archive-rules)
 
 ## Egress
@@ -25,6 +26,9 @@ The normative live contract is [`docs/egress-architecture.md`](../egress-archite
 
 ## Quality evidence
 
+- [Quality loop journal — 2026-07](quality/journal-2026-07.md)
+- [Baselines dated campaigns — 2026-07](quality/baselines-campaigns-2026-07.md)
+- [Baselines profiling notes — 2026-07](quality/baselines-profiling-2026-07.md)
 - [MSR final report — 2026-07-12](quality/msr-final-report-2026-07-12.md)
 - [RTMP egress experiments — 2026-07-13](quality/rtmp-egress-experiments-2026-07-13.md)
 - [SRT egress correctness-at-scale investigation — 2026-08-10](quality/srt-egress-scale-investigation-2026-08-10.md)
@@ -40,6 +44,11 @@ The normative live contract is [`docs/egress-architecture.md`](../egress-archite
 - [Live MSR operator review — 2026-07-16](ui-redesign/operator-msr-live-review-2026-07-16.md)
 - [Overview vertical slice](ui-redesign/overview-slice.md)
 - [Component build seam](ui-redesign/build-seam.md)
+- [Decision 0001: freeze behavior before framework](ui-redesign/decisions/0001-baseline-before-framework.md)
+
+## Audits
+
+- [Frontend layering audit — 2026-07-21](audits/frontend-layering-audit-2026-07-21.md)
 
 ## Archive rules
 
@@ -47,5 +56,7 @@ The normative live contract is [`docs/egress-architecture.md`](../egress-archite
   evidence" framing; do not treat archived numbers as current baselines.
 - New dated measurements belong in the archive once the active quality ledger
   (`baselines.md` / `journal.md`) has absorbed the durable conclusion.
+- Rotate oversized append-only ledgers (journal) into dated archive files
+  rather than editing past entries.
 - `node scripts/check/docs.mjs` requires every archive Markdown file to be
   linked from this page, and this page to be linked from `docs/README.md`.

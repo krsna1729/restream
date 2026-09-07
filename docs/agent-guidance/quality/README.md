@@ -28,8 +28,8 @@ The skills provide the rails; the state files provide the memory.
 | perf-sweep | `docs/agent-guidance/skills/perf-sweep/` | Bench ledger, resource guard, measured optimization |
 | backlog-groom | `docs/agent-guidance/skills/backlog-groom/` | Refill/re-prioritize the backlog from repo evidence |
 | backlog.md | here | Prioritized, tier-tagged work queue |
-| journal.md | here | Append-only iteration log (the loop's memory) |
-| baselines.md | here | Durable bench/resource ledger |
+| journal.md | here | Append-only iteration log (older months rotate to `docs/archive/quality/`) |
+| baselines.md | here | Durable Criterion/resource ledger (dated dumps rotate to archive) |
 
 Supporting task skills (also usable standalone): `check`, `bench`,
 `media-test`, `protocol-test`, `concurrency-proof`, `log-audit`, `respin` —
@@ -79,8 +79,9 @@ coordination rules:
 ## Reviewing what the loop did
 
 - `git log --oneline --grep "quality("` — every loop commit, one item each.
-- `journal.md` — the narrative, including failures and skips (honesty is
-  enforced: a FAILED entry with numbers is a valid, useful outcome).
+- `journal.md` — recent narrative, including failures and skips (honesty is
+  enforced: a FAILED entry with numbers is a valid, useful outcome). Older
+  months live under `docs/archive/quality/`.
 - `backlog.md` § Blocked — where the loop wants human or opus help.
 
 Loops never push; publishing is always a human decision.

@@ -20,6 +20,8 @@ green gates, an honest journal entry, and no collateral edits.
 
 - `docs/agent-guidance/quality/backlog.md` — prioritized work items
 - `docs/agent-guidance/quality/journal.md` — append-only iteration log
+  (rotate older months into `docs/archive/quality/journal-YYYY-MM.md`; do not
+  edit past entries)
 - `docs/agent-guidance/quality/baselines.md` — benchmark/resource ledger
 - `docs/agent-guidance/quality/README.md` — operator manual (humans)
 

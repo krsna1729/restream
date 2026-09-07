@@ -72,7 +72,7 @@ write-ups live in the [documentation archive](archive/README.md).
 - [Current priorities](current-priorities.md) — maintained forward-looking
   priorities.
 - [Layering roadmap](layering-roadmap.md) — maintained refactor sequence.
-- [Frontend layering audit](../audits/frontend-layering-audit-2026-07-21.md) — three-lens frontend architecture audit.
+- [Frontend layering audit](archive/audits/frontend-layering-audit-2026-07-21.md) — dated three-lens frontend architecture audit.
 - [Testing decision record](testing-strategy.md) — accepted rationale for the
   unit/live tier boundary. Use [testing.md](testing.md) for current commands.
 - [Mahashivratri scenario](mahashivratri-hero-scenario.md) — durable scale
@@ -156,7 +156,6 @@ Markdown is indexed only from [archive/README.md](archive/README.md).
 - [UI redesign state matrix](ui-redesign/state-matrix.yaml)
 - [UI redesign route contract](ui-redesign/route-contract.md)
 - [UI redesign migration map](ui-redesign/migration-map.md)
-- [UI redesign framework decision](ui-redesign/decisions/0001-baseline-before-framework.md)
 - [UI redesign visual and accessibility baseline](ui-redesign/visual-accessibility-baseline.md)
 - [UI redesign operator baseline test plan](../test/frontend/redesign/specs/operator-baseline.md)
 - [Quality program](agent-guidance/quality/README.md)
