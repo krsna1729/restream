@@ -361,23 +361,29 @@ Linux startup checks warn when `net.core.rmem_max` or `net.core.wmem_max` cannot
 support the requested UDP buffers. The listener's `/proc/net/udp` receive queue
 and drop count are exported in `/api/v1/engine/health`.
 
-To A/B remaining BBB-600 RSS (live quiet sampling already rejects kernel UDP
-`skmem` as the primary cause: ~15 shared Tokio egress sockets / ~50MB
-sockstat UDP mem vs ~2.2GB `RssAnon`), leave the three knobs unset for the
-baseline, then rerun one change at a time. Each override logs once at info
-(`SRT A/B knob override`) with the value used:
+Quiet-host A/B of these knobs (BBB fixture, `MSR_PEER=sink`,
+`srt-only`, 2026-09-07, see
+[srt-tokio-ab-knobs-2026-09-07.md](agent-guidance/quality/srt-tokio-ab-knobs-2026-09-07.md))
+is N=200, not 600: N=600 reached 600/600 then failed sink verification
+with no `msr.json`. At N=200 with a 20 s sample, one change at a time:
 
 ```sh
-# Cut kernel UDP buffers. If the skmem rejection holds, unattributedPeakKb
-# should not move much.
+# Measured: rssPeak −156 MB (−34%), unattributedPeakKb −155 MB (−37%).
+# This is not a kernel-skmem-only knob — Caller/Listener switch from
+# SocketBufferConfig::Auto to Bytes, which can size userspace buffers.
 RESTREAM_SRT_UDP_BUF_BYTES=262144
 
-# Cut receive budget / send batch. Tests whether batch drain retains more
-# egress-backpressure / sender-window anonymous heap
-# (`payload_bytes_in_buffer`).
+# Measured: rssPeak +73 MB (+16%) and 5 fabric-leaf deaths (baseline 0).
 RESTREAM_SRT_RECV_BUDGET_DATAGRAMS=8
+
+# Measured null at N=200 (rssPeak +44 MB / +9%, under the 10%+50 MB floor).
+# Send-path prefix cap, not a retention test.
 RESTREAM_SRT_IO_BATCH_CAPACITY=8
 ```
+
+Each override logs once at info (`SRT A/B knob override`). Sender-window
+occupancy against RssAnon still uses `#155`'s `srtSendBufBytes` /
+`msSendBuf` / `srtFlightSizePkts`.
 
 For a fresh Linux host, both `scripts/dev/bootstrap.sh` and
 `scripts/dev/bootstrap-runtime.sh` report whether private user/network

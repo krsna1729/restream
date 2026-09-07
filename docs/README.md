@@ -173,6 +173,7 @@ above remain the better way to learn the system.
 - [SRT fan-in scaling investigation — 2026-08-15](agent-guidance/quality/srt-scaling-investigation.md)
 - [SRT-RS MSR protocol-mix matrix and egress bottleneck attribution — 2026-08-25](agent-guidance/quality/srt-rs-msr-matrix-2026-08-25.md)
 - [SRT-RS upstream work list — 2026-08-25](agent-guidance/quality/srt-rs-upstream-worklist-2026-08-25.md)
+- [Tokio SRT A/B knobs quiet-host matrix — 2026-09-07](agent-guidance/quality/srt-tokio-ab-knobs-2026-09-07.md)
 
 ### Canonical agent skills and references
 
