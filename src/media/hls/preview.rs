@@ -26,7 +26,6 @@ impl MediaEngine {
                 Some(graph) => graph,
                 None => crate::media::hls::preview_graph::HlsPreviewGraph {
                     video_ring: self.get_or_create_pipeline(pipeline_id).await,
-                    audio_ring: None,
                     video_meta: None,
                 },
             };
@@ -36,7 +35,6 @@ impl MediaEngine {
                     pid.clone(),
                     store_for_task,
                     graph.video_ring,
-                    graph.audio_ring,
                     engine.clone(),
                     cancel_token,
                     crate::media::hls::HlsSegmenterStart {
@@ -78,7 +76,6 @@ impl MediaEngine {
                     segmenter_id.clone(),
                     store_for_task,
                     graph.video_ring,
-                    graph.audio_ring,
                     engine.clone(),
                     cancel_token,
                     crate::media::hls::HlsSegmenterStart {

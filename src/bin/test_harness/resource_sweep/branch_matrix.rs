@@ -136,7 +136,9 @@ impl BackendPolicyVariant {
     }
 
     fn needs_hls_probe(self) -> bool {
-        self.internal_hls_preview
+        // HEVC dashboard preview reuses the hevc_to_h264 codec edge, so the
+        // in-process preview transcode is owned by that family flag.
+        self.internal_hevc_to_h264
     }
 
     fn needs_complex_audio_probe(self) -> bool {

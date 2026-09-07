@@ -260,7 +260,8 @@ and complex audio stages are controlled separately by
 HEVC HLS preview reuses the shared `hevc_to_h264` bridge (that HEVC-to-H.264
 flag), not a dedicated preview stage. `RESTREAM_INTERNAL_HLS_PREVIEW` remains
 a backend-family toggle for `StageKind::Preview`, but the current planner does
-not create that kind.
+not create that kind. The Admin → Backend checkbox for HLS preview is therefore
+inert until a dedicated preview stage exists again.
 These environment variables are startup defaults. Operators can override the
 same four backend-family choices from Admin -> Backend or by patching
 `backendPolicy` through `/api/v1/settings`; persisted settings take precedence

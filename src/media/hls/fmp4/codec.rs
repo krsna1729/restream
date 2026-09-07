@@ -77,7 +77,13 @@ pub(super) fn build_h264_sample_entry_from_video_packet(
     packet: &MediaPacket,
 ) -> Option<SampleEntry> {
     match packet.format {
-        PayloadFormat::Flv => build_h264_sample_entry_from_flv_sequence_header(&packet.payload),
+        PayloadFormat::Flv => {
+            if packet.payload.len() > 1 && packet.payload[1] == 0 {
+                build_h264_sample_entry_from_flv_sequence_header(&packet.payload)
+            } else {
+                None
+            }
+        }
         PayloadFormat::Raw => build_avc1_box_from_annexb(
             &packet.payload,
             &H264SampleEntryConfig {
@@ -140,9 +146,9 @@ pub(super) fn sample_entry_codec_string(sample_entry: &SampleEntry) -> Option<St
 pub(super) fn build_aac_sample_entry(
     track: &AudioMeta,
     audio_sequence_header: Option<&[u8]>,
-) -> SampleEntry {
+) -> Option<SampleEntry> {
     let asc = aac_specific_config(track, audio_sequence_header);
-    let mp4a = build_mp4a_box(
+    build_mp4a_box(
         &asc,
         &Mp4aSampleEntryConfig {
             es_id: EsDescriptor::MIN_ES_ID,
@@ -151,8 +157,8 @@ pub(super) fn build_aac_sample_entry(
             avg_bitrate: 0,
         },
     )
-    .expect("valid AAC-LC sample-entry config");
-    SampleEntry::Mp4a(mp4a)
+    .ok()
+    .map(SampleEntry::Mp4a)
 }
 
 fn aac_specific_config(track: &AudioMeta, header: Option<&[u8]>) -> AudioSpecificConfig {

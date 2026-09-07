@@ -88,9 +88,10 @@ pub async fn master_playlist(
         return Err(no_segments_error(engine, pipeline_id).await);
     }
     let (video, audio_tracks) = store.stream_metadata();
-    let codecs = store
-        .sample_codec_list()
-        .or_else(|| build_hls_codec_list(video.as_ref(), &audio_tracks));
+    let codecs = merge_hls_codec_lists(
+        store.sample_codec_list(),
+        build_hls_codec_list(video.as_ref(), &audio_tracks),
+    );
     Ok(build_hls_master_playlist_with_codecs(
         video.as_ref(),
         &audio_tracks,
@@ -428,6 +429,40 @@ pub fn build_hls_codec_list(
         }
     }
     (!codecs.is_empty()).then(|| codecs.join(","))
+}
+
+pub fn merge_hls_codec_lists(sample: Option<String>, metadata: Option<String>) -> Option<String> {
+    let mut codecs = Vec::new();
+    if let Some(sample) = sample.as_deref() {
+        for codec in sample.split(',') {
+            push_unique_hls_codec(&mut codecs, codec);
+        }
+    }
+    if let Some(metadata) = metadata.as_deref() {
+        let sample_has_video = codecs.iter().any(|existing| !is_hls_audio_codec(existing));
+        for codec in metadata.split(',') {
+            let codec = codec.trim();
+            if is_hls_audio_codec(codec) || !sample_has_video {
+                push_unique_hls_codec(&mut codecs, codec);
+            }
+        }
+    }
+    (!codecs.is_empty()).then(|| codecs.join(","))
+}
+
+fn push_unique_hls_codec(codecs: &mut Vec<String>, codec: &str) {
+    let codec = codec.trim();
+    if !codec.is_empty() && !codecs.iter().any(|existing| existing == codec) {
+        codecs.push(codec.to_string());
+    }
+}
+
+fn is_hls_audio_codec(codec: &str) -> bool {
+    let codec = codec.trim().to_ascii_lowercase();
+    codec.starts_with("mp4a")
+        || codec.starts_with("ac-3")
+        || codec.starts_with("ec-3")
+        || codec == "opus"
 }
 
 pub fn build_hls_video_codec(video: &VideoMeta) -> Option<String> {

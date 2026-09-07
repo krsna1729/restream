@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use shiguredo_mp4::{TrackKind, boxes::SampleEntry, mux::Fmp4SegmentMuxer};
+use tracing::warn;
 
 use super::codec::{
     VIDEO_TIMESCALE, audio_default_duration, build_aac_sample_entry,
@@ -46,12 +47,19 @@ pub(super) struct VideoRenditionState {
     timestamps: MonotonicTimestampState,
     default_duration: u32,
     current_segment_start_ms: Option<i64>,
+    logged_missing_sample_entry: bool,
 }
 
 impl VideoRenditionState {
     pub(super) fn new(video: &VideoMeta, video_sequence_header: Option<&[u8]>) -> Self {
         let sample_entry =
             video_sequence_header.and_then(build_h264_sample_entry_from_flv_sequence_header);
+        let logged_missing_sample_entry = sample_entry.is_none() && video_sequence_header.is_some();
+        if logged_missing_sample_entry {
+            warn!(
+                "fMP4 preview could not build an avc1 sample entry from the video sequence header"
+            );
+        }
         Self {
             muxer: Fmp4SegmentMuxer::new().expect("fmp4 muxer must construct"),
             sample_entry,
@@ -60,13 +68,21 @@ impl VideoRenditionState {
             timestamps: MonotonicTimestampState::default(),
             default_duration: default_video_duration(video),
             current_segment_start_ms: None,
+            logged_missing_sample_entry,
         }
     }
 
     pub(super) fn push_packet(&mut self, packet: &MediaPacket, zero_ms: i64) -> Result<(), String> {
         if packet.format == PayloadFormat::Flv && packet.payload.len() > 1 && packet.payload[1] == 0
         {
-            self.sample_entry = build_h264_sample_entry_from_flv_sequence_header(&packet.payload);
+            let parsed = build_h264_sample_entry_from_flv_sequence_header(&packet.payload);
+            if parsed.is_none() && !self.logged_missing_sample_entry {
+                self.logged_missing_sample_entry = true;
+                warn!(
+                    "fMP4 preview could not parse an avc1 sample entry from an FLV sequence header"
+                );
+            }
+            self.sample_entry = parsed;
             return Ok(());
         }
 
@@ -76,7 +92,11 @@ impl VideoRenditionState {
             self.sample_entry = Some(sample_entry);
         }
         if self.sample_entry.is_none() {
-            return Err("missing avc1 sample entry".to_string());
+            if !self.logged_missing_sample_entry {
+                self.logged_missing_sample_entry = true;
+                warn!("fMP4 preview is dropping packets until an avc1 sample entry can be built");
+            }
+            return Ok(());
         }
 
         let payload_start = self.payload.len() as u64;
@@ -188,17 +208,17 @@ pub(super) struct AudioRenditionState {
 }
 
 impl AudioRenditionState {
-    pub(super) fn new(track: &AudioMeta, audio_sequence_header: Option<&[u8]>) -> Self {
-        Self {
+    pub(super) fn new(track: &AudioMeta, audio_sequence_header: Option<&[u8]>) -> Option<Self> {
+        Some(Self {
             track_index: track.track_index,
             sample_rate: track.sample_rate.max(1),
             muxer: Fmp4SegmentMuxer::new().expect("fmp4 muxer must construct"),
-            sample_entry: build_aac_sample_entry(track, audio_sequence_header),
+            sample_entry: build_aac_sample_entry(track, audio_sequence_header)?,
             payload: Vec::new(),
             samples: Vec::new(),
             timestamps: MonotonicTimestampState::default(),
             current_segment_start_ms: None,
-        }
+        })
     }
 
     pub(super) fn push_packet(&mut self, packet: &MediaPacket, zero_ms: i64) -> Result<(), String> {
@@ -247,6 +267,9 @@ impl AudioRenditionState {
         }
         let result = (|| {
             let timescale = self.sample_rate.max(1);
+            if let Some(codec) = sample_entry_codec_string(&self.sample_entry) {
+                store.note_audio_codec(codec);
+            }
             let samples = build_mux_samples(
                 &self.samples,
                 TrackKind::Audio,
@@ -271,9 +294,6 @@ impl AudioRenditionState {
                 Bytes::from(init),
                 Bytes::from(segment),
             );
-            if let Some(codec) = sample_entry_codec_string(&self.sample_entry) {
-                store.note_audio_codec(codec);
-            }
             Ok(())
         })();
         // See VideoRenditionState::flush_segment: buffers must be cleared on

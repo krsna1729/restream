@@ -19,7 +19,6 @@ pub async fn start_hls_fmp4_segmenter(
     pipeline_id: String,
     store: Arc<Fmp4HlsStore>,
     ring_buffer: Arc<RingBuffer>,
-    audio_ring_buffer: Option<Arc<RingBuffer>>,
     engine: Arc<MediaEngine>,
     cancel_token: CancellationToken,
     start: HlsSegmenterStart,
@@ -50,11 +49,7 @@ pub async fn start_hls_fmp4_segmenter(
         });
 
     let mut reader = Reader::new(format!("hls-fmp4:{pipeline_id}"), ring_buffer.clone());
-    let mut audio_reader = audio_ring_buffer
-        .clone()
-        .map(|ring| Reader::new(format!("hls-fmp4-audio:{pipeline_id}"), ring));
     let mut packets = Vec::with_capacity(32);
-    let mut audio_packets = Vec::with_capacity(32);
     let (video_sequence_header, audio_sequence_header) =
         resolve_hls_sequence_headers(&engine, &pipeline_id).await;
     let config = store.config();
@@ -79,23 +74,13 @@ pub async fn start_hls_fmp4_segmenter(
                         Ok(_) => {}
                     }
 
-                    if let Some(audio_reader) = audio_reader.as_mut() {
-                        audio_packets.clear();
-                        let _ = audio_reader.pull_burst(&mut audio_packets, 32);
-                    }
-
-                    for packet in packets.iter().chain(
-                        audio_packets
-                            .iter()
-                            .filter(|packet| packet.media_type == MediaType::Audio),
-                    ) {
+                    for packet in packets.iter() {
                         metrics.record_in(packet.payload.len() as u64);
 
                         if video_state.is_none() {
                             let Some((video, audio_tracks)) = resolve_hls_preview_metadata(
                                 &engine,
                                 &ring_buffer,
-                                audio_ring_buffer.as_ref(),
                                 &cancel_token,
                                 &pipeline_id,
                                 preview_video_meta.clone(),
@@ -119,13 +104,12 @@ pub async fn start_hls_fmp4_segmenter(
                                 video_sequence_header.as_deref(),
                             ));
                             for track in supported_audio_tracks {
-                                audio_states.insert(
-                                    track.track_index,
-                                    AudioRenditionState::new(
-                                        &track,
-                                        audio_sequence_header.as_deref(),
-                                    ),
-                                );
+                                if let Some(state) = AudioRenditionState::new(
+                                    &track,
+                                    audio_sequence_header.as_deref(),
+                                ) {
+                                    audio_states.insert(track.track_index, state);
+                                }
                             }
                         }
 
@@ -230,7 +214,6 @@ pub async fn start_hls_fmp4_segmenter(
 async fn resolve_hls_preview_metadata(
     engine: &MediaEngine,
     ring_buffer: &Arc<RingBuffer>,
-    audio_ring_buffer: Option<&Arc<RingBuffer>>,
     cancel_token: &CancellationToken,
     pipeline_id: &str,
     preview_video_meta: Option<VideoMeta>,
@@ -242,23 +225,6 @@ async fn resolve_hls_preview_metadata(
         if let Some(tracks) = ring_buffer
             .audio_tracks()
             .filter(|tracks| !tracks.is_empty())
-        {
-            let video = if let Some(video) = preview_video_meta.clone() {
-                Some(video)
-            } else {
-                let ingests = engine.ingests.active.read().await;
-                ingests
-                    .get(pipeline_id)
-                    .and_then(|ingest| ingest.metadata().video)
-            };
-            if let Some(video) = video {
-                return Some((video, tracks.to_vec()));
-            }
-        }
-        if let Some(audio_ring_buffer) = audio_ring_buffer
-            && let Some(tracks) = audio_ring_buffer
-                .audio_tracks()
-                .filter(|tracks| !tracks.is_empty())
         {
             let video = if let Some(video) = preview_video_meta.clone() {
                 Some(video)

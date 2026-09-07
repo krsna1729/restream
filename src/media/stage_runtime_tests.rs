@@ -500,3 +500,103 @@ async fn wait_for_stage_metadata_backfills_bandwidth_from_observed_ring_bitrate(
         .expect("ring must report an observed bitrate for this fixture");
     assert_eq!(resolved_video.bw, Some(observed as f64));
 }
+
+#[tokio::test(start_paused = true)]
+async fn wait_for_stage_metadata_starts_video_only_after_audio_absence_grace() {
+    let engine = Arc::new(MediaEngine::new());
+    let source = Arc::new(RingBuffer::new(16));
+    let cancel = CancellationToken::new();
+    let pipeline_id = "pipe-video-only-grace";
+
+    engine
+        .try_register_ingest_attempt(pipeline_id, "key", "rtmp")
+        .await
+        .expect("first registration for a fresh pipeline id must succeed");
+    engine
+        .update_ingest_meta(pipeline_id, Some(ready_video_meta("hevc")), None, None)
+        .await;
+
+    let engine_clone = engine.clone();
+    let source_clone = source.clone();
+    let cancel_clone = cancel.clone();
+    let waiter = tokio::spawn(async move {
+        wait_for_stage_metadata(
+            &engine_clone,
+            pipeline_id,
+            &source_clone,
+            true,
+            false,
+            Some("hevc"),
+            &cancel_clone,
+        )
+        .await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    assert!(
+        !waiter.is_finished(),
+        "video-only ingest must wait the audio-absence grace before starting"
+    );
+
+    tokio::time::advance(AUDIO_ABSENCE_GRACE).await;
+    tokio::time::advance(std::time::Duration::from_millis(50)).await;
+
+    let result = tokio::time::timeout(std::time::Duration::from_millis(200), waiter)
+        .await
+        .expect("must resolve once the audio-absence grace elapses")
+        .expect("waiter task must not panic")
+        .expect("video-only ingest must start without audio tracks");
+    let (_, resolved_audio) = result;
+    assert!(
+        resolved_audio.is_empty(),
+        "video-only ingest should proceed with an empty audio track list"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_for_stage_metadata_still_prefers_late_audio_before_grace() {
+    let engine = Arc::new(MediaEngine::new());
+    let source = Arc::new(RingBuffer::new(16));
+    let cancel = CancellationToken::new();
+    let pipeline_id = "pipe-late-audio";
+
+    engine
+        .try_register_ingest_attempt(pipeline_id, "key", "rtmp")
+        .await
+        .expect("first registration for a fresh pipeline id must succeed");
+    engine
+        .update_ingest_meta(pipeline_id, Some(ready_video_meta("hevc")), None, None)
+        .await;
+
+    let engine_clone = engine.clone();
+    let source_clone = source.clone();
+    let cancel_clone = cancel.clone();
+    let waiter = tokio::spawn(async move {
+        wait_for_stage_metadata(
+            &engine_clone,
+            pipeline_id,
+            &source_clone,
+            true,
+            false,
+            Some("hevc"),
+            &cancel_clone,
+        )
+        .await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    assert!(!waiter.is_finished());
+
+    engine
+        .update_ingest_meta(pipeline_id, None, Some(ready_audio_meta(2)), None)
+        .await;
+
+    let result = tokio::time::timeout(std::time::Duration::from_millis(500), waiter)
+        .await
+        .expect("late audio arriving before the grace deadline must be accepted")
+        .expect("waiter task must not panic")
+        .expect("metadata must resolve to Some");
+    let (_, resolved_audio) = result;
+    assert_eq!(resolved_audio.len(), 1);
+    assert_eq!(resolved_audio[0].channels, 2);
+}

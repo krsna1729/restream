@@ -442,6 +442,18 @@ mod tests {
         assert_eq!(avc1.visual.width, 1280);
         assert_eq!(avc1.visual.height, 720);
 
+        let nal_packet = MediaPacket {
+            format: PayloadFormat::Flv,
+            payload: Bytes::from(vec![
+                0x17, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x65,
+            ]),
+            ..packet.clone()
+        };
+        assert!(
+            build_h264_sample_entry_from_video_packet(&nal_packet).is_none(),
+            "FLV NALU packets must not be parsed as avcC sequence headers"
+        );
+
         let raw_packet = MediaPacket {
             format: PayloadFormat::Raw,
             payload: Bytes::from(high_profile_annexb_keyframe()),

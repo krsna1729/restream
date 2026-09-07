@@ -17,11 +17,8 @@ use crate::runtime::graph::StageGraphPlan;
 
 /// Resolved HLS preview graph.
 pub struct HlsPreviewGraph {
-    /// Ring to read video packets from.
+    /// Ring to read video and audio packets from.
     pub video_ring: Arc<RingBuffer>,
-    /// Separate ring for audio when video comes from a transcoding stage.
-    /// `None` when audio is already on `video_ring`.
-    pub audio_ring: Option<Arc<RingBuffer>>,
     /// Override video metadata to use in the HLS master playlist.
     pub video_meta: Option<VideoMeta>,
 }
@@ -61,14 +58,12 @@ pub async fn resolve_hls_preview_graph(
                 let Some(preview_plan) = preview_plan else {
                     return Some(HlsPreviewGraph {
                         video_ring: source_ring,
-                        audio_ring: None,
                         video_meta: None,
                     });
                 };
                 let Some(key) = preview_transcode_key(&preview_plan) else {
                     return Some(HlsPreviewGraph {
                         video_ring: source_ring,
-                        audio_ring: None,
                         video_meta: None,
                     });
                 };
@@ -116,7 +111,6 @@ pub async fn resolve_input_hls_preview_graph(
     let Some(key) = preview_plan.as_ref().and_then(preview_transcode_key) else {
         return HlsPreviewGraph {
             video_ring: source_ring,
-            audio_ring: None,
             video_meta: source_video,
         };
     };
@@ -151,7 +145,6 @@ async fn ensure_shared_bridge_graph(
     }
     HlsPreviewGraph {
         video_ring: handle.ring,
-        audio_ring: None,
         video_meta: Some(h264_preview_video_meta(source_video)),
     }
 }
@@ -168,6 +161,7 @@ fn h264_preview_video_meta(source_video: Option<VideoMeta>) -> VideoMeta {
     preview_video.codec = "h264".to_string();
     preview_video.profile = None;
     preview_video.level = None;
+    preview_video.pixel_format = None;
     preview_video
 }
 
@@ -235,6 +229,7 @@ mod tests {
             fps: 30.0,
             profile: Some("Main".to_string()),
             level: Some("4.0".to_string()),
+            pixel_format: Some("yuv420p10le".to_string()),
             ..Default::default()
         };
         let preview = h264_preview_video_meta(Some(source));
@@ -243,5 +238,6 @@ mod tests {
         assert_eq!(preview.height, 1080);
         assert!(preview.profile.is_none());
         assert!(preview.level.is_none());
+        assert!(preview.pixel_format.is_none());
     }
 }
