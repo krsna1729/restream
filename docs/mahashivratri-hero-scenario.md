@@ -29,9 +29,9 @@
 - **Baseline status:** all three protocol mixes clean at the full
   1,200-output target with real 1080p60/8Mbps media, recorded 2026-08-13 —
   see
-  [1,200-output resource attribution](agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md)
+  [1,200-output resource attribution](archive/quality/msr-1200-resource-attribution-2026-08-13.md)
   for the measured CPU/RSS/thread footprint and
-  [the SRT egress scale investigation](agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md)
+  [the SRT egress scale investigation](archive/quality/srt-egress-scale-investigation-2026-08-10.md)
   for the correctness fixes that made this run clean. The earlier
   2026-07-11 connection-scale baseline (synthetic low-bitrate fixture) is
   superseded by this real-bitrate result; see
@@ -198,7 +198,7 @@ protocol mixes clean at every checkpoint through 1,200 outputs —
 
 Full thread/memory/CPU attribution, including why SRT's footprint differs
 so much from RTMP's, lives in
-[1,200-output resource attribution](agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md).
+[1,200-output resource attribution](archive/quality/msr-1200-resource-attribution-2026-08-13.md).
 This closes connection-scale evidence for MSR-02, MSR-03, and MSR-07 at
 real 1080p60 bitrate (superseding the synthetic-bitrate run below) and
 covers the 1080p slice of Phase 3's bitrate envelope. MSR-01 (external-link
@@ -463,7 +463,7 @@ never expected to be started by hand outside `PEER_SKIP_START`.
   instance) in place of mediamtx, bound directly by the `test_harness`
   process itself — far lower per-connection memory than a real mediamtx
   path, for runs where raw connection count matters more than a readable
-  path. As of `docs/agent-guidance/quality/srt-scaling-investigation.md`'s
+  path. As of `docs/archive/quality/srt-scaling-investigation.md`'s
   sink-mode extraction, this replaced spawning a separate `restream
   --sink-mode` process per instance; `RESTREAM_SINK_MODE` no longer exists
   in production restream (see that doc for why the two "sink" concepts —
@@ -549,6 +549,6 @@ Eventually, a passing canonical run should require:
 - [Resource sweep](resource-sweep.md)
 - [Matrix resource constraints](matrix-resource-constraints.md)
 - [Performance and resource baselines](agent-guidance/quality/baselines.md)
-- [SRT egress scale investigation](agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md)
-- [1,200-output resource attribution (thread/memory/CPU by mix)](agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md)
-- [netns confound investigation (4-worktree controlled campaign)](agent-guidance/quality/msr-1200-netns-confound-investigation-2026-08-14.md)
+- [SRT egress scale investigation](archive/quality/srt-egress-scale-investigation-2026-08-10.md)
+- [1,200-output resource attribution (thread/memory/CPU by mix)](archive/quality/msr-1200-resource-attribution-2026-08-13.md)
+- [netns confound investigation (4-worktree controlled campaign)](archive/quality/msr-1200-netns-confound-investigation-2026-08-14.md)

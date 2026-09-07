@@ -16,7 +16,7 @@ restream consumed the old pin
 `0821257b402b08219aaaf38a62f5fa655a7e4947` and at the time of this worklist cut over to the exact
 pin `901a912778e8b4fee6c8c122a6dec963282a8e8a` for both ingest and egress. **Current Restream pin is `14042682c75a75ce02c2c34420608ef9d2f8b1a7`** (A2 HighResWaiter + batched UDP adapters). This worklist is historical for 901a912 and the subsequent DSA closure through `91d0f4bf`.
 Full attribution evidence:
-`docs/agent-guidance/quality/srt-rs-msr-matrix-2026-08-25.md` on the
+`docs/archive/quality/srt-rs-msr-matrix-2026-08-25.md` on the
 restream side. Target workload that exposes every item below: 1,200 SRT
 egress leaves × 8 Mb/s each (~456k pps TX), and 1,200-connection ingress,
 host loopback, 6 cores.

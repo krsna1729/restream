@@ -85,6 +85,12 @@ coordination rules:
 
 Loops never push; publishing is always a human decision.
 
+Dated investigation write-ups (MSR scale, SRT/RTMP egress experiments, and
+related evidence) live under
+[`docs/archive/`](../../archive/README.md#quality-evidence).
+Keep current numbers in `baselines.md`; treat archived reports as historical
+context unless you rerun the documented command.
+
 ## Extending
 
 Add work by writing well-formed items into `backlog.md` (format in

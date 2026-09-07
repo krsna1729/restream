@@ -701,7 +701,7 @@ rather than anything specific to the harness sink's own threading model.
   vendored libsrt source confirms libsrt itself never calls `sendmmsg()`
   either (its own sender thread uses singular `::sendmsg()`,
   asynchronously, regardless of application-side call count).
-  `docs/egress-implementation.md` already investigated this exact CPU gap
+  `docs/archive/egress/implementation.md` already investigated this exact CPU gap
   (3.6x vs. legacy) and found the dominant cause was not send-path call
   count at all — batching fragments per scheduler visit only moved the
   number from 158% to 149%, and raising the message ceiling to 1456 was

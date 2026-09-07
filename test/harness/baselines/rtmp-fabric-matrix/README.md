@@ -7,7 +7,7 @@ per-connection sender and once with the RTMP fabric routed
 (`RESTREAM_EGRESS_FABRIC=rtmp`) — each in its own isolated mediamtx+restream
 stack, and compares CPU/RSS.
 
-See [egress-implementation](../../../../docs/egress-implementation.md)
+See [egress-implementation](../../../../docs/archive/egress/implementation.md)
 Phase 5 status for how this fits the migration plan. This is a bounded,
 default-N=10 smoke-scale A/B, not the exhaustive 1,000+-output parity proof
 Phase 5's exit gate ultimately requires before a default-mode flip; see

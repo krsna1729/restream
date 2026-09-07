@@ -12,7 +12,7 @@
 //! `src/media/rtmp/egress_engine.rs`), here driven from non-blocking
 //! readiness instead of `.await`. Not yet wired into a shard backend (leaf
 //! registration, poller integration, application-layer startup handoff) —
-//! see `docs/egress-implementation.md` Phase 5 status.
+//! see `docs/archive/egress/implementation.md` Phase 5 status.
 
 use std::collections::VecDeque;
 use std::io::{ErrorKind, Read, Write};
@@ -243,7 +243,7 @@ pub(crate) struct RtmpPublishStartup {
 /// visit's [`WorkBudget`] — mirroring the SRT fabric engine's fragment
 /// batching (`src/media/srt/egress_engine.rs`), which existed precisely
 /// because one-wake-per-unit caused a measured CPU regression (see
-/// `docs/egress-implementation.md` Phase 4 status).
+/// `docs/archive/egress/implementation.md` Phase 4 status).
 struct MediaPublisher {
     core: RtmpSessionCore,
     encoder: RtmpMediaEncoder,
@@ -269,7 +269,7 @@ struct MediaPublisher {
     /// traffic) per unit — matching the legacy Tokio path's up-to-32-packet
     /// pull (`src/media/rtmp/egress.rs`) and avoiding the class of
     /// per-unit-call overhead an earlier optimization already removed once
-    /// (see `docs/egress-implementation.md` Phase 5 status).
+    /// (see `docs/archive/egress/implementation.md` Phase 5 status).
     pending_units: VecDeque<Arc<MediaPacket>>,
 }
 

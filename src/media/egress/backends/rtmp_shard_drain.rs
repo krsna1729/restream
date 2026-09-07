@@ -79,7 +79,7 @@ where
     /// `SrtShardBackend::sweep_stalled_leaves` exactly (same
     /// `classify_stall` policy, same closed-leaves-retry-via-reconnect
     /// contract) — this is what makes `LeafCommon::pending_application_bytes`
-    /// (wired up in `visit_one_ready_leaf`, `docs/egress-implementation.md`
+    /// (wired up in `visit_one_ready_leaf`, `docs/archive/egress/implementation.md`
     /// Phase 5 status) actually mean something: previously nothing read it,
     /// so a leaf that fell arbitrarily far behind a slow or wedged peer was
     /// never closed for that reason alone.

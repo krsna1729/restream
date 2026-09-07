@@ -1,10 +1,9 @@
 # Egress architecture
 
-This document is the target architecture for Restream's high-fan-out egress
-path. It is a proposal until the migration described in
-[egress implementation](egress-implementation.md) is complete. Once adopted,
-it becomes the normative ownership and concurrency contract for RTMP, RTMPS,
-SRT, and future live egress protocols.
+This document is the normative ownership and concurrency contract for
+Restream's high-fan-out egress path (RTMP, RTMPS, SRT, and future live egress
+protocols). The fabric has shipped; the completed migration plan is archived
+as [egress implementation](archive/egress/implementation.md).
 
 The central decision is to use one protocol-neutral egress fabric for
 ownership, scheduling, lifecycle, backpressure, retries, observability, and
@@ -937,8 +936,8 @@ live SRT load, then removed the legacy per-output path and the rollout
 selector entirely once both protocols shared the common lifecycle and
 policy, live parity and rollback gates passed, operational dashboards
 exposed fabric metrics, and the 1,000-plus-leaf isolation workload passed
-repeatedly. See `docs/egress-implementation.md` for the full migration
-record.
+repeatedly. See `docs/archive/egress/implementation.md` for the full
+migration record.
 
 The control plane, persisted output configuration, API contracts, stage keys,
 and canonical `MediaPacket` behavior stayed stable throughout — migration

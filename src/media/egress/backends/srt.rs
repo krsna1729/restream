@@ -376,7 +376,7 @@ where
     /// permanently `true` once that one deadline passes, silently stopping
     /// every leaf on this shard from reading or sending anything ever
     /// again (found and fixed for `RtmpShardBackend`; this is the same bug
-    /// in the SRT shard — see `docs/egress-implementation.md` Phase 5
+    /// in the SRT shard — see `docs/archive/egress/implementation.md` Phase 5
     /// status). A fresh `WorkBudget` is constructed from these fields for
     /// every visit instead (see `visit_one_ready_leaf`).
     budget_max_units: usize,
@@ -787,7 +787,7 @@ where
     /// is still nonempty (in addition to the existing "this leaf wants to
     /// continue" case) fixes that: a blocked leaf never blocks its
     /// already-ready neighbors. (Same bug, same fix, as
-    /// `RtmpShardBackend::on_ready` — see `docs/egress-implementation.md`
+    /// `RtmpShardBackend::on_ready` — see `docs/archive/egress/implementation.md`
     /// Phase 5 status.)
     fn on_ready(&mut self) -> EgressShardCommandEffect {
         if self.ready.is_empty() {

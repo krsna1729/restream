@@ -795,7 +795,7 @@ fn advance_pulls_a_burst_of_feed_units_in_one_read_from_call() {
     // per feed unit (`ReadBudget::new(1, ..)`), each call carrying its own
     // `Vec` allocation and ring-atomic traffic (the exact class of overhead
     // an earlier RTMP optimization already removed once — see
-    // `docs/egress-implementation.md` Phase 5 status). It now pulls up to
+    // `docs/archive/egress/implementation.md` Phase 5 status). It now pulls up to
     // `FEED_READ_BURST` units into a local `pending_units` buffer per
     // `read_from` call. Proven here by blocking the write side (readiness
     // `writable: false`) so `advance` can pull from the feed but cannot

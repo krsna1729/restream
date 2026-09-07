@@ -37,7 +37,7 @@ in SQLite.
 | Media packet ring depth (source/ingest) | `1024` packets | `RESTREAM_RING_CAPACITY` |
 | Media packet ring depth (transcoder output) | `512` packets | `RESTREAM_TRANSCODER_RING_CAPACITY` (720p30 output ≈ 80 pkt/s → 512 slots ≈ 6.4 s jitter headroom; lower than source ring because I-frame payloads are large) |
 | Shared SRT TS ring depth | `256` chunks | `RESTREAM_TS_RING_CAPACITY` (SRT protocol's own send buffer absorbs network jitter; this ring only bridges muxer → socket write, typically sub-millisecond) |
-| Egress fabric shard count | Derived from the effective CPU count (clamped `2..=8`); RTMP/sink/pipeline feeds then scale down live to match output count (128 outputs per shard), while SRT feeds always keep the CPU-derived ceiling (SRT shard count is a libsrt-multiplexer parallelism budget — see `docs/egress-implementation.md`'s "Dynamic shard scaling" section) | `RESTREAM_EGRESS_SHARDS` (clamped to `1..=1024`; overrides the initial shard count every feed starts with) |
+| Egress fabric shard count | Derived from the effective CPU count (clamped `2..=8`); RTMP/sink/pipeline feeds then scale down live to match output count (128 outputs per shard), while SRT feeds always keep the CPU-derived ceiling (SRT shard count is a libsrt-multiplexer parallelism budget — see `docs/archive/egress/implementation.md`'s "Dynamic shard scaling" section) | `RESTREAM_EGRESS_SHARDS` (clamped to `1..=1024`; overrides the initial shard count every feed starts with) |
 | Egress fabric command capacity | `1024` commands per shard | `RESTREAM_EGRESS_COMMAND_CAPACITY` |
 | Egress fabric command batch | `32` commands per loop | `RESTREAM_EGRESS_COMMAND_BATCH` |
 | Egress fabric readiness batch | `64` ready leaves per loop | `RESTREAM_EGRESS_READY_BATCH` |
@@ -48,14 +48,14 @@ in SQLite.
 | Egress fabric visit bytes | `262144` bytes per visit | `RESTREAM_EGRESS_VISIT_MAX_BYTES` |
 | Egress fabric visit time | `2000` µs per visit | `RESTREAM_EGRESS_VISIT_MAX_US` |
 | Egress pending write limit | `262144` bytes per output | `RESTREAM_EGRESS_MAX_PENDING_BYTES` (application-owned protocol bytes; distinct from `RESTREAM_RTMP_STREAM_BUFFER_BYTES`, which configures the TCP socket buffers) |
-| Egress fabric drain timeout | `3000` ms | `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` (clamped `1..=60000`; on shutdown, how long a shard keeps running to let leaves with queued bytes flush before force-closing — currently drives real per-leaf draining for RTMP and SRT, see `docs/egress-implementation.md` Phase 6) |
+| Egress fabric drain timeout | `3000` ms | `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` (clamped `1..=60000`; on shutdown, how long a shard keeps running to let leaves with queued bytes flush before force-closing — currently drives real per-leaf draining for RTMP and SRT, see `docs/archive/egress/implementation.md` Phase 6) |
 
-`EgressFabricConfig::validate` runs once at startup after per-field clamping and logs non-fatal `restream.config.warning` events for cross-field issues among the egress fabric settings above — e.g. `RESTREAM_EGRESS_MAX_PENDING_BYTES` smaller than `RESTREAM_EGRESS_VISIT_MAX_BYTES`, `RESTREAM_EGRESS_SHARDS` more than 4x the effective CPU count, `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` under 50ms, or `RESTREAM_EGRESS_COMMAND_BATCH` exceeding `RESTREAM_EGRESS_COMMAND_CAPACITY`. See `docs/egress-implementation.md` Phase 6.
+`EgressFabricConfig::validate` runs once at startup after per-field clamping and logs non-fatal `restream.config.warning` events for cross-field issues among the egress fabric settings above — e.g. `RESTREAM_EGRESS_MAX_PENDING_BYTES` smaller than `RESTREAM_EGRESS_VISIT_MAX_BYTES`, `RESTREAM_EGRESS_SHARDS` more than 4x the effective CPU count, `RESTREAM_EGRESS_DRAIN_TIMEOUT_MS` under 50ms, or `RESTREAM_EGRESS_COMMAND_BATCH` exceeding `RESTREAM_EGRESS_COMMAND_CAPACITY`. See `docs/archive/egress/implementation.md` Phase 6.
 | SRT egress muxer max outputs per shard | `0` | `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` (disabled at `0`; when set, SRT egress creates a new shared TS muxer shard as each pipeline+encoding cohort crosses this many outputs) |
 | SRT egress muxer max shards | `64` | `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` (hard guardrail for dynamic SRT muxer sharding; once reached, new outputs are assigned to the least-loaded existing shard and a warning is emitted) |
 | SRT egress local-port reuse | Enabled | `RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT` (`0`/`false` gives every SRT output its own UDP socket; enabled creates one Tokio-owned UDP socket and srt-rs logical caller table per egress-fabric shard. Unrelated to `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD`, which shards the shared TS muxer stage.) |
 | SRT egress reuse pipeline scoping | Enabled | `RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED` (`0`/`false` shares shard *N* across pipelines; enabled by default keeps each pipeline's shard state separate. Shared socket count scales with `shard_count x active_pipeline_count` when enabled, otherwise with `shard_count`.) |
-| SRT egress connect timeout | `10000` ms | `RESTREAM_SRT_CONNECT_TIMEOUT_MS` (raised from a 3s default: a live scale run showed a burst of 600+ simultaneous handshakes to one peer still completing the SRT handshake when the old 3s timeout tore the socket down first, surfacing as `SRT_ENOCONN` on the next send — see `docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`) |
+| SRT egress connect timeout | `10000` ms | `RESTREAM_SRT_CONNECT_TIMEOUT_MS` (raised from a 3s default: a live scale run showed a burst of 600+ simultaneous handshakes to one peer still completing the SRT handshake when the old 3s timeout tore the socket down first, surfacing as `SRT_ENOCONN` on the next send — see `docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`) |
 | SRT egress connect concurrency | `64` | `RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` (clamped to `1..=4096`; engine-wide bound on concurrent in-flight SRT egress handshakes, held per leaf from connect initiation until its first poller visit resolves the handshake — decouples connection-*establishment* concurrency from shard count, since SRT's `connect()` is non-blocking-initiate and returns before the handshake completes) |
 | Require SRT bonding support | Disabled | `RESTREAM_REQUIRE_SRT_BONDING` (retained compatibility setting; srt-rs bonded ingress is enabled by the listener) |
 | SRT encryption | Disabled | `RESTREAM_SRT_PASSPHRASE`; `RESTREAM_SRT_PBKEYLEN` selects the key length and defaults to `16` |
@@ -367,7 +367,7 @@ and drop count are exported in `/api/v1/engine/health`.
 
 Quiet-host A/B of these knobs (BBB fixture, `MSR_PEER=sink`,
 `srt-only`, 2026-09-07, see
-[srt-tokio-ab-knobs-2026-09-07.md](agent-guidance/quality/srt-tokio-ab-knobs-2026-09-07.md))
+[srt-tokio-ab-knobs-2026-09-07.md](archive/quality/srt-tokio-ab-knobs-2026-09-07.md))
 is N=200, not 600: N=600 reached 600/600 then failed sink verification
 with no `msr.json`. At N=200 with a 20 s sample, one change at a time:
 

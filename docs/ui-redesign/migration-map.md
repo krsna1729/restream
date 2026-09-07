@@ -30,11 +30,14 @@
 9. Legacy removal only after all state-matrix rows have executable proofs.
 
 The optional build experiment in step 2 is implemented and measured in
-`build-seam.md`. It began as an opt-in `ui=v2` seam; the cutover pass now boots
+[`docs/archive/ui-redesign/build-seam.md`](../archive/ui-redesign/build-seam.md).
+It began as an opt-in `ui=v2` seam; the cutover pass now boots
 the v2 dashboard unconditionally. Obsolete UI-version query parameters are
 ignored instead of reviving the old surface.
 
-The follow-up typed snapshot in `build-seam.md` proved the first real data
+The follow-up typed snapshot in
+[`docs/archive/ui-redesign/build-seam.md`](../archive/ui-redesign/build-seam.md)
+proved the first real data
 boundary without moving runtime ownership. That same boundary still holds:
 `core/api.ts`, polling, SSE, URL state, and mutation lifecycle remain owned by
 the existing dashboard runtime, while the v2 shell now owns the mounted route

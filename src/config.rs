@@ -201,7 +201,7 @@ impl EgressFabricConfig {
             warnings.push(format!(
                 "RESTREAM_EGRESS_SHARDS ({}) is more than 4x this host's effective CPU count ({effective_cpus}) \
                  — more shard threads than cores usually costs CPU without buying throughput \
-                 (see docs/egress-implementation.md Phase 5/7's shard-count findings)",
+                 (see docs/archive/egress/implementation.md Phase 5/7's shard-count findings)",
                 self.shards
             ));
         }
@@ -288,7 +288,7 @@ pub struct AppConfig {
     /// past 3s hit libsrt's own connect-timeout ENOCONN and paid a full
     /// retry+backoff cycle instead of just finishing. 10s cleared the
     /// same burst with zero failures
-    /// (`docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`,
+    /// (`docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`,
     /// "sink-mode bugs fixed; real ~600-connection SRT egress ceiling
     /// characterized"). Not scale-tested past 700 in one pipeline.
     pub srt_connect_timeout_ms: u64,
@@ -317,7 +317,7 @@ pub struct AppConfig {
     /// this. **Provisional after the srt-rs cutover**: the current value was
     /// sized with margin under the measured ~120-connections-per-multiplexer
     /// libsrt `CSndQueue` saturation point
-    /// (`docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`),
+    /// (`docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`),
     /// a mechanism that no longer exists — egress now drives an
     /// application-owned socket and `CallerTable` explicitly. Retained
     /// pending remeasurement rather than re-derived without evidence.
@@ -369,7 +369,7 @@ fn default_tokio_worker_threads(effective_cpus: usize) -> usize {
 
 /// Egress fabric shard threads scale with host cores instead of a flat
 /// constant. A live legacy-vs-fabric `perf` comparison at a combined
-/// 1,140 RTMP + 60 SRT workload (`docs/egress-implementation.md` Phase 5)
+/// 1,140 RTMP + 60 SRT workload (`docs/archive/egress/implementation.md` Phase 5)
 /// measured the previous flat default of 4 costing fabric ~12% more avg
 /// CPU and ~23% more peak CPU than legacy on a 6-CPU host; raising the
 /// shard count toward the host's own core count (matching
@@ -422,7 +422,7 @@ const OUTPUTS_PER_SHARD: u32 = 128;
 /// real 5% slice at n=1,200) must not be capped at 1 shard / 1 multiplexer
 /// by an RTMP-shaped 128-outputs-per-shard threshold — that is the
 /// documented blocker for scaling SRT egress past the low hundreds
-/// (`docs/agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md`,
+/// (`docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`,
 /// "The real scalability ceiling").
 ///
 /// An output-count-scaled variant of this profile (a much smaller
@@ -437,7 +437,7 @@ const OUTPUTS_PER_SHARD: u32 = 128;
 /// non-isolated network namespace; a measured ~90% UDP receive-buffer
 /// overflow rate at 1,200 concurrent real-bitrate SRT flows over that
 /// shared loopback), not to this profile's shard-count formula. See
-/// `docs/agent-guidance/quality/msr-1200-netns-confound-investigation-2026-08-14.md`
+/// `docs/archive/quality/msr-1200-netns-confound-investigation-2026-08-14.md`
 /// for the full campaign data. Output-count scaling for `SrtCpuParallel`
 /// therefore remains unshipped only for lack of a *valid* live re-proof
 /// (one run under real network-namespace isolation), not because it was

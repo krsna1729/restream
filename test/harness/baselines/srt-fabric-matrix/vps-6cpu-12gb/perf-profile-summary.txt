@@ -50,7 +50,7 @@ allocation/dispatch concerns, all negligible:
 | `bytes::bytes_mut::shared_v_to_vec` | 0.01% |
 | `Vec<T>::drop` | 0.02% |
 
-## Conclusion for `docs/egress-implementation.md` task #12 remainder
+## Conclusion for `docs/archive/egress/implementation.md` task #12 remainder
 
 The hot-path audit's medium-confidence candidates —
 `Vec<Bytes>`/`Vec<Arc<MediaPacket>>` allocation per feed read,

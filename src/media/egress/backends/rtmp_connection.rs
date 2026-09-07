@@ -82,7 +82,7 @@ impl RtmpConnection {
     /// getter for its internal plaintext/TLS-record buffers —
     /// `ConnectionCommon::set_buffer_limit` is the only related API, a cap
     /// *setter* with no matching getter (checked against rustls 0.23.41's
-    /// actual public API; see `docs/egress-implementation.md` Phase 5
+    /// actual public API; see `docs/archive/egress/implementation.md` Phase 5
     /// status). Returns rustls's own default 64KB `sendable_plaintext`/
     /// `sendable_tls` cap whenever the connection still wants to write
     /// (`wants_write()` — i.e. it is holding data this leaf hasn't

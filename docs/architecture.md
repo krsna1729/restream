@@ -83,7 +83,7 @@ of the async scheduler is isolated:
   CPU-derived and output-count-scaled pool of dedicated shard OS threads,
   each multiplexing many outputs through native non-blocking readiness
   polling (`epoll` for RTMP/RTMPS, libsrt's own poller for SRT) instead of
-  one OS thread per destination; see `docs/egress-implementation.md` for
+  one OS thread per destination; see `docs/archive/egress/implementation.md` for
   the full design;
 - in-process FFmpeg codec work runs on guarded OS threads;
 - recording uses a feeder task and a writer thread;
@@ -254,7 +254,7 @@ owns volatile inventory; these paths identify stable owners.
 | `src/media/engine.rs`, `src/media/engine_*` | Media lifecycle, reconciliation-facing state, snapshots |
 | `src/media/ring_buffer.rs`, `src/media/ts_chunk_ring.rs`, `src/media/avio.rs` | Bounded packet and byte transport |
 | `src/media/rtmp.rs`, `src/media/srt*.rs`, `src/media/mpegts.rs` | Protocol and container adapters |
-| `src/media/egress/` | Egress fabric: shard runtime/scheduler, protocol-neutral leaf lifecycle, RTMP/RTMPS/SRT/sink/pipeline backends. The only egress path; see `docs/egress-implementation.md` |
+| `src/media/egress/` | Egress fabric: shard runtime/scheduler, protocol-neutral leaf lifecycle, RTMP/RTMPS/SRT/sink/pipeline backends. The only egress path; see `docs/archive/egress/implementation.md` |
 | `src/media/hls/`, `src/media/recording/` | HLS and recording lifecycle |
 | `src/media/transcoder.rs`, `src/media/external_transcoder.rs` | In-process and child-process transform backends |
 | `src/agent_core/`, `src/agent_backends/`, `src/agent_mcp/` | Agent contracts, backends, and MCP transport |

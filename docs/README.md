@@ -1,9 +1,9 @@
 # Documentation Guide
 
 This page is the table of contents for Restream's maintained documentation.
-Start with the reading path that matches your task; the dated reports and
-design records are useful evidence, but they are not prerequisites for normal
-development or operation.
+Start with the reading path that matches your task. Dated investigations and
+completed migration plans live under [archive/](archive/README.md); they are
+evidence, not prerequisites for normal development or operation.
 
 ## Contents
 
@@ -60,13 +60,14 @@ media behavior or a hot path.
   [MCP Rust architecture](mcp-rust-architecture.md) — agent-plane contracts.
 - [Parallel agent framework](parallel-agent-framework.md) — isolated worktree,
   build, harness, and measurement policy.
+- [Egress architecture](egress-architecture.md) — normative fabric ownership
+  and concurrency contract.
 
 ## Plans, decisions, and evidence
 
 These documents own active plans, durable decisions, workload definitions, or
-dated measurements. Completed migration plans and superseded implementation
-snapshots are intentionally left to Git history instead of remaining in the
-active documentation set.
+current measurement ledgers. Completed migration plans and dated experiment
+write-ups live in the [documentation archive](archive/README.md).
 
 - [Current priorities](current-priorities.md) — maintained forward-looking
   priorities.
@@ -76,16 +77,15 @@ active documentation set.
   unit/live tier boundary. Use [testing.md](testing.md) for current commands.
 - [Mahashivratri scenario](mahashivratri-hero-scenario.md) — durable scale
   workload definition.
-- [Dashboard v2 live MSR operator review](ui-redesign/operator-msr-live-review-2026-07-16.md)
-  — dated browser/CDP evidence for the v2 Overview and Pipeline / Operate
-  readiness boundary.
 - [Regression artifact index](regression-artifacts.md) — durable replay map for
   historical failures.
+- [Documentation archive](archive/README.md) — dated quality investigations,
+  completed egress migration plan, and frozen UI redesign experiments.
 
-Performance experiment records live under
+Active quality ledgers live under
 [`agent-guidance/quality/`](agent-guidance/quality/README.md). Their dates and
-commit identifiers are part of the evidence boundary; do not treat old numbers
-as current baselines without rerunning the documented command.
+commit identifiers are part of the evidence boundary; do not treat archived
+numbers as current baselines without rerunning the documented command.
 
 ## Agent and quality-program documentation
 
@@ -100,8 +100,9 @@ as current baselines without rerunning the documented command.
 
 ## Complete file index
 
-This inventory makes every tracked Markdown document reachable. Reading paths
-above remain the better way to learn the system.
+This inventory makes every tracked maintained Markdown document reachable.
+Reading paths above remain the better way to learn the system. Archived
+Markdown is indexed only from [archive/README.md](archive/README.md).
 
 ### Root, legal, distribution, and local guidance
 
@@ -111,7 +112,7 @@ above remain the better way to learn the system.
 - [Architecture guardrails](../ARCHITECTURE_GUARDRAILS.md)
 - [Claude compatibility shim](../CLAUDE.md)
 - [Egress architecture](egress-architecture.md)
-- [Egress implementation](egress-implementation.md)
+- [Documentation archive](archive/README.md)
 - [MIT license](../LICENSE.md)
 - [Third-party component manifest](../distribution/THIRD_PARTY_COMPONENTS.md)
 - [Harness manifest README](../test/harness/README.md)
@@ -146,34 +147,22 @@ above remain the better way to learn the system.
 - [Stage boundary proof map](stage-boundary-proof-map.md)
 - [Testing](testing.md)
 
-### Plans, scenarios, and evidence
+### Plans, scenarios, and active evidence
 
 - [Mahashivratri hero scenario](mahashivratri-hero-scenario.md)
 - [Testing decision record](testing-strategy.md)
 - [UI redesign baseline](ui-redesign/brief.md)
-- [UI redesign live MSR operator review](ui-redesign/operator-msr-live-review-2026-07-16.md)
 - [UI redesign operator task model](ui-redesign/operator-task-model.md)
 - [UI redesign state matrix](ui-redesign/state-matrix.yaml)
 - [UI redesign route contract](ui-redesign/route-contract.md)
 - [UI redesign migration map](ui-redesign/migration-map.md)
 - [UI redesign framework decision](ui-redesign/decisions/0001-baseline-before-framework.md)
 - [UI redesign visual and accessibility baseline](ui-redesign/visual-accessibility-baseline.md)
-- [UI redesign Overview slice](ui-redesign/overview-slice.md)
-- [UI redesign component build seam](ui-redesign/build-seam.md)
 - [UI redesign operator baseline test plan](../test/frontend/redesign/specs/operator-baseline.md)
 - [Quality program](agent-guidance/quality/README.md)
 - [Quality backlog](agent-guidance/quality/backlog.md)
 - [Performance and resource baselines](agent-guidance/quality/baselines.md)
 - [Quality journal](agent-guidance/quality/journal.md)
-- [MSR final report — 2026-07-12](agent-guidance/quality/msr-final-report-2026-07-12.md)
-- [RTMP egress experiments — 2026-07-13](agent-guidance/quality/rtmp-egress-experiments-2026-07-13.md)
-- [SRT egress correctness-at-scale investigation — 2026-08-10](agent-guidance/quality/srt-egress-scale-investigation-2026-08-10.md)
-- [MSR 1,200-output resource attribution — 2026-08-13](agent-guidance/quality/msr-1200-resource-attribution-2026-08-13.md)
-- [MSR 1,200-output netns confound investigation — 2026-08-14](agent-guidance/quality/msr-1200-netns-confound-investigation-2026-08-14.md)
-- [SRT fan-in scaling investigation — 2026-08-15](agent-guidance/quality/srt-scaling-investigation.md)
-- [SRT-RS MSR protocol-mix matrix and egress bottleneck attribution — 2026-08-25](agent-guidance/quality/srt-rs-msr-matrix-2026-08-25.md)
-- [SRT-RS upstream work list — 2026-08-25](agent-guidance/quality/srt-rs-upstream-worklist-2026-08-25.md)
-- [Tokio SRT A/B knobs quiet-host matrix — 2026-09-07](agent-guidance/quality/srt-tokio-ab-knobs-2026-09-07.md)
 
 ### Canonical agent skills and references
 
@@ -201,7 +190,9 @@ above remain the better way to learn the system.
 
 - Every maintained multi-section Markdown document has a local `Contents`
   section. Operational `SKILL.md` packages are exempt so their instructions
-  begin immediately. The central index on this page lists the whole
+  begin immediately. Archived evidence under `docs/archive/` is exempt from
+  the Contents rule; index those files from `docs/archive/README.md` instead
+  of this page. The central index on this page lists the maintained
   documentation set.
 - Start with one H1 title, use sentence-case headings, and use `sh` for shell
   command fences unless syntax specific to Bash is required.

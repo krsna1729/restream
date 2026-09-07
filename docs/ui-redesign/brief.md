@@ -40,10 +40,13 @@ rendering technology. It must not silently change:
   executable-spec starting point.
 - `visual-accessibility-baseline.md`: pinned viewport, screenshot, keyboard,
   ARIA, and axe acceptance policy.
-- `overview-slice.md`: the first priority-first production experiment and its
-  architecture finding.
-- `build-seam.md`: the opt-in React/Vite build contract, typed read-only bridge,
-  measured cost, and framework-decision checkpoint.
+- `overview-slice.md` (archived): the first priority-first production experiment
+  and its architecture finding.
+- `build-seam.md` (archived): the opt-in React/Vite build contract, typed
+  read-only bridge, measured cost, and framework-decision checkpoint.
+
+Dated write-ups for those experiments live under
+[`docs/archive/ui-redesign/`](../archive/ui-redesign/overview-slice.md).
 
 ## Acceptance boundary
 

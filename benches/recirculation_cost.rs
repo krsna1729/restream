@@ -1,7 +1,7 @@
 //! Phase 6a exit gate: "the accepted [recirculation] implementation must
 //! be cheaper than routing through a loopback network output and input
 //! for the same compatible media path"
-//! (`docs/egress-implementation.md`).
+//! (`docs/archive/egress/implementation.md`).
 //!
 //! Measures the one cost recirculation (`RecirculationInputPublisher`,
 //! `src/media/recirculation.rs`) structurally cannot pay and a loopback
@@ -20,7 +20,7 @@
 //! `benches/rtmp_serializer.rs` already takes for the same reason).
 //!
 //! Real socket I/O (the send/recv syscalls a loopback path also pays) is
-//! not measured here — see `docs/egress-implementation.md` Phase 5's SRT
+//! not measured here — see `docs/archive/egress/implementation.md` Phase 5's SRT
 //! profiling writeup for why that cost is real but a fabric-layer
 //! benchmark cannot usefully isolate it from kernel/NIC-loopback
 //! variance. The wire-encoding cost measured here is the part that is
