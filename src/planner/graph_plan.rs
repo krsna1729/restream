@@ -354,13 +354,19 @@ mod tests {
     }
 
     #[test]
-    fn plan_pipeline_graph_sets_preview_terminal_when_preview_only() {
+    fn plan_pipeline_graph_h264_preview_only_keeps_source_terminal() {
         let policy = BackendPolicy::default();
         let plan = plan_pipeline_graph("pipe_1", Some("h264"), &[], true, &policy);
 
         assert_eq!(
             plan.terminal_stage,
-            StageKey::new("pipe_1", StageKind::hls_segmenter(StageKind::source()))
+            StageKey::new("pipe_1", StageKind::source())
+        );
+        assert!(
+            plan.stages
+                .iter()
+                .all(|stage| !matches!(stage.kind, StageKind::HlsSegmenter { .. })),
+            "HLS segmenter belongs to plan_hls_preview_graph, not the pipeline graph"
         );
     }
 
