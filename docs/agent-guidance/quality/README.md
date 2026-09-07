@@ -81,7 +81,9 @@ coordination rules:
 - `git log --oneline --grep "quality("` — every loop commit, one item each.
 - `journal.md` — recent narrative, including failures and skips (honesty is
   enforced: a FAILED entry with numbers is a valid, useful outcome). Older
-  months live under `docs/archive/quality/`.
+  months live under `docs/archive/quality/`. Selection and unresolved-`FAILED`
+  recovery still read across that archive boundary (see the quality-loop
+  skill § Journal continuity across archive rotation).
 - `backlog.md` § Blocked — where the loop wants human or opus help.
 
 Loops never push; publishing is always a human decision.

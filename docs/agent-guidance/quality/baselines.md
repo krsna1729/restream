@@ -161,8 +161,10 @@ supported at the process/cgroup layer only (systemd `CPUAffinity`, Docker
 exists or is added. This closes Q-012, which the 2026-07-12 series had narrowed
 to "an opt-in runtime affinity design."
 
-Evidence already on record (2026-07-12 VPS/local MSR series, detailed in the
-Profiling-notes sections below and the journal Q-012 entries):
+Evidence already on record (2026-07-12 VPS/local MSR series, detailed in
+[archived profiling notes](../../archive/quality/baselines-profiling-2026-07.md)
+and the archived journal Q-012 entries in
+[journal-2026-07.md](../../archive/quality/journal-2026-07.md)):
 
 | Config | CPU (cores) | IPC | Cache misses | Ctx switches | Migrations |
 |---|---|---|---|---|---|
