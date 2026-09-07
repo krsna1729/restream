@@ -68,10 +68,9 @@ impl MixedVideoCodec {
 
     pub(crate) const fn hls_preview_expected_dimensions(self) -> &'static str {
         match self {
-            // HEVC preview is browser-compat today: HEVC input is converted to the
-            // 720p H.264 preview ring before the MPEG-TS HLS segmenter sees it.
+            // HEVC preview reuses the shared hevc_to_h264 ring at source size.
             Self::H264 => "1920x1080",
-            Self::H265 => "1280x720",
+            Self::H265 => "1920x1080",
         }
     }
 

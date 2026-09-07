@@ -254,10 +254,13 @@ conversion profile. `source` is passthrough and bypasses the video transcoder.
 For non-source built-in video profiles, the default backend is an external
 FFmpeg subprocess that performs decode/scale/encode. Set
 `RESTREAM_INTERNAL_VIDEO_PRESETS=1` to opt those video-preset stages into the
-in-process backend; audio streams are copied. HEVC-to-H.264 bridge stages,
-HLS preview transcode stages, and complex audio stages are controlled
-separately by `RESTREAM_INTERNAL_HEVC_TO_H264`,
-`RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX`.
+in-process backend; audio streams are copied. HEVC-to-H.264 bridge stages
+and complex audio stages are controlled separately by
+`RESTREAM_INTERNAL_HEVC_TO_H264` and `RESTREAM_INTERNAL_AUDIO_COMPLEX`.
+HEVC HLS preview reuses the shared `hevc_to_h264` bridge (that HEVC-to-H.264
+flag), not a dedicated preview stage. `RESTREAM_INTERNAL_HLS_PREVIEW` remains
+a backend-family toggle for `StageKind::Preview`, but the current planner does
+not create that kind.
 These environment variables are startup defaults. Operators can override the
 same four backend-family choices from Admin -> Backend or by patching
 `backendPolicy` through `/api/v1/settings`; persisted settings take precedence

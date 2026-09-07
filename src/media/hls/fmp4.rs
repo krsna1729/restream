@@ -44,7 +44,8 @@ pub use store::Fmp4HlsStore;
 #[cfg(test)]
 use codec::{
     VIDEO_TIMESCALE, build_h264_sample_entry_from_flv_sequence_header,
-    build_h264_sample_entry_from_video_packet, build_mux_samples, parse_avcc_box, rescale_ms,
+    build_h264_sample_entry_from_video_packet, build_mux_samples, parse_avcc_nal_lists, rescale_ms,
+    sample_entry_codec_string,
 };
 #[cfg(test)]
 use rendition::BufferedSample;
@@ -289,11 +290,18 @@ mod tests {
 
     #[test]
     fn high_profile_sequence_header_supports_init_segment_generation() {
-        let sample_entry = build_h264_sample_entry_from_flv_sequence_header(
-            &high_profile_sequence_header(),
-            &test_video_meta(),
-        )
-        .expect("sample entry");
+        let sample_entry =
+            build_h264_sample_entry_from_flv_sequence_header(&high_profile_sequence_header())
+                .expect("sample entry");
+        let SampleEntry::Avc1(ref avc1) = sample_entry else {
+            panic!("expected Avc1 sample entry");
+        };
+        assert_eq!(avc1.visual.width, 1280);
+        assert_eq!(avc1.visual.height, 720);
+        assert_eq!(
+            sample_entry_codec_string(&sample_entry).as_deref(),
+            Some("avc1.64001f")
+        );
         let mut muxer = Fmp4SegmentMuxer::new().expect("muxer");
         let samples = vec![Sample {
             track_kind: TrackKind::Video,
@@ -319,9 +327,7 @@ mod tests {
         // (playback can't decode without a PPS), so this must fail closed.
         let mut header = high_profile_sequence_header();
         header.truncate(38);
-        assert!(
-            build_h264_sample_entry_from_flv_sequence_header(&header, &test_video_meta()).is_none()
-        );
+        assert!(build_h264_sample_entry_from_flv_sequence_header(&header).is_none());
     }
 
     #[test]
@@ -329,9 +335,7 @@ mod tests {
         // numPPS = 1 is present but the PPS length/body never arrives.
         let mut header = high_profile_sequence_header();
         header.truncate(39);
-        assert!(
-            build_h264_sample_entry_from_flv_sequence_header(&header, &test_video_meta()).is_none()
-        );
+        assert!(build_h264_sample_entry_from_flv_sequence_header(&header).is_none());
     }
 
     #[test]
@@ -342,18 +346,13 @@ mod tests {
         header[11] = 0xFF;
         header[12] = 0xFF;
         header.truncate(15);
-        assert!(
-            build_h264_sample_entry_from_flv_sequence_header(&header, &test_video_meta()).is_none()
-        );
+        assert!(build_h264_sample_entry_from_flv_sequence_header(&header).is_none());
     }
 
     #[test]
     fn sps_exp_golomb_run_of_32_zero_bits_fails_closed_instead_of_panicking() {
-        // seq_parameter_set_id is the first ue(v) field read from the SPS,
-        // before the profile_idc early-return check. A run of 32 leading
-        // zero bits there used to overflow `1u32 << leading_zero_bits` in
-        // H264BitReader::read_exp_golomb (checked-shift panic in debug
-        // builds, silent wraparound to a wrong value in release builds).
+        // Crate `build_avc1_box` parses the first SPS. A 32-bit exp-golomb run
+        // there must fail closed as `None`, not panic.
         let malformed_sps: Vec<u8> = vec![
             0x67, 0x64, 0x00, 0x1F, // nal header, profile_idc, constraints, level_idc
             0x00, 0x00, 0x00, 0x00, // 32 leading zero bits for seq_parameter_set_id's ue(v)
@@ -371,28 +370,25 @@ mod tests {
         ];
         header.extend_from_slice(&(malformed_sps.len() as u16).to_be_bytes());
         header.extend_from_slice(&malformed_sps);
-        header.push(0); // num PPS = 0
+        header.push(1); // num PPS = 1
+        header.extend_from_slice(&4u16.to_be_bytes());
+        header.extend_from_slice(&[0x68, 0xEE, 0x3C, 0x80]);
 
-        let sample_entry =
-            build_h264_sample_entry_from_flv_sequence_header(&header, &test_video_meta())
-                .expect("SPS/PPS list itself is well-formed and must still parse");
-        let SampleEntry::Avc1(avc1) = sample_entry else {
-            panic!("expected Avc1 sample entry");
-        };
+        let sample_entry = build_h264_sample_entry_from_flv_sequence_header(&header);
         assert!(
-            avc1.avcc_box.chroma_format.is_none(),
-            "malformed exp-golomb run must fail closed (no profile fields), not panic or wrap"
+            sample_entry.is_none(),
+            "malformed SPS must fail closed (no sample entry), not panic or wrap"
         );
     }
 
     proptest! {
         #[test]
-        fn parse_avcc_box_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..128)) {
-            let _ = parse_avcc_box(&bytes);
+        fn parse_avcc_nal_lists_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..128)) {
+            let _ = parse_avcc_nal_lists(&bytes);
         }
 
         #[test]
-        fn parse_avcc_box_truncation_always_fails_closed(
+        fn parse_avcc_nal_lists_truncation_always_fails_closed(
             profile in any::<u8>(),
             compat in any::<u8>(),
             level in any::<u8>(),
@@ -412,15 +408,15 @@ mod tests {
                 data.extend_from_slice(pps);
             }
 
-            let parsed = parse_avcc_box(&data).expect("well-formed input must parse");
-            prop_assert_eq!(&parsed.sps_list, &sps_bodies);
-            prop_assert_eq!(&parsed.pps_list, &pps_bodies);
+            let parsed = parse_avcc_nal_lists(&data).expect("well-formed input must parse");
+            prop_assert_eq!(&parsed.sps, &sps_bodies);
+            prop_assert_eq!(&parsed.pps, &pps_bodies);
 
             // Any strict prefix of a well-formed box must fail closed, never
             // yielding a partial SPS/PPS list.
             for cut in 0..data.len() {
                 prop_assert!(
-                    parse_avcc_box(&data[..cut]).is_none(),
+                    parse_avcc_nal_lists(&data[..cut]).is_none(),
                     "truncated at {cut} produced Some(..)"
                 );
             }
@@ -438,13 +434,13 @@ mod tests {
             format: PayloadFormat::Flv,
             track_index: 0,
         };
-        let sample_entry = build_h264_sample_entry_from_video_packet(&packet, &test_video_meta())
-            .expect("flv sample entry");
+        let sample_entry =
+            build_h264_sample_entry_from_video_packet(&packet).expect("flv sample entry");
         let SampleEntry::Avc1(avc1) = sample_entry else {
             panic!("expected avc1 sample entry");
         };
-        assert_eq!(avc1.visual.width, 1920);
-        assert_eq!(avc1.visual.height, 1080);
+        assert_eq!(avc1.visual.width, 1280);
+        assert_eq!(avc1.visual.height, 720);
 
         let raw_packet = MediaPacket {
             format: PayloadFormat::Raw,
@@ -452,13 +448,12 @@ mod tests {
             ..packet
         };
         let raw_sample_entry =
-            build_h264_sample_entry_from_video_packet(&raw_packet, &test_video_meta())
-                .expect("raw sample entry");
+            build_h264_sample_entry_from_video_packet(&raw_packet).expect("raw sample entry");
         let SampleEntry::Avc1(raw_avc1) = raw_sample_entry else {
             panic!("expected raw avc1 sample entry");
         };
-        assert_eq!(raw_avc1.visual.width, 1920);
-        assert_eq!(raw_avc1.visual.height, 1080);
+        assert_eq!(raw_avc1.visual.width, 1280);
+        assert_eq!(raw_avc1.visual.height, 720);
 
         let mut muxer = Fmp4SegmentMuxer::new().expect("muxer");
         let samples = vec![Sample {

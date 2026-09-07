@@ -104,6 +104,8 @@ struct Fmp4HlsStoreInner {
     audio: HashMap<u32, RenditionPlaylistState>,
     video_meta: Option<VideoMeta>,
     audio_tracks: Vec<AudioMeta>,
+    video_codec: Option<String>,
+    audio_codecs: Vec<String>,
 }
 
 impl Default for Fmp4HlsStore {
@@ -124,6 +126,8 @@ impl Fmp4HlsStore {
                 audio: HashMap::new(),
                 video_meta: None,
                 audio_tracks: Vec::new(),
+                video_codec: None,
+                audio_codecs: Vec::new(),
             }),
             config,
         }
@@ -137,12 +141,16 @@ impl Fmp4HlsStore {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.video.clear();
         inner.audio.clear();
+        inner.video_codec = None;
+        inner.audio_codecs.clear();
     }
 
     pub fn set_stream_metadata(&self, video: Option<VideoMeta>, audio_tracks: Vec<AudioMeta>) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.video_meta = video;
         inner.audio_tracks = audio_tracks.clone();
+        inner.video_codec = None;
+        inner.audio_codecs.clear();
         inner.audio.retain(|track_index, _| {
             audio_tracks
                 .iter()
@@ -156,6 +164,32 @@ impl Fmp4HlsStore {
     pub fn stream_metadata(&self) -> (Option<VideoMeta>, Vec<AudioMeta>) {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         (inner.video_meta.clone(), inner.audio_tracks.clone())
+    }
+
+    pub fn note_video_codec(&self, codec: String) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.video_codec = Some(codec);
+    }
+
+    pub fn note_audio_codec(&self, codec: String) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if !inner.audio_codecs.iter().any(|existing| existing == &codec) {
+            inner.audio_codecs.push(codec);
+        }
+    }
+
+    pub fn sample_codec_list(&self) -> Option<String> {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut codecs = Vec::new();
+        if let Some(video) = &inner.video_codec {
+            codecs.push(video.clone());
+        }
+        for codec in &inner.audio_codecs {
+            if !codecs.iter().any(|existing| existing == codec) {
+                codecs.push(codec.clone());
+            }
+        }
+        (!codecs.is_empty()).then(|| codecs.join(","))
     }
 
     pub fn put_video_init_segment(&self, data: Bytes) {

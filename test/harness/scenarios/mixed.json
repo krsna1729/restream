@@ -159,7 +159,7 @@
       "expect": {
         "videoCodec": "hevc",
         "audioTracks": 1,
-        "hlsPreviewDimensions": "1280x720",
+        "hlsPreviewDimensions": "1920x1080",
         "stages": {
           "video": 2,
           "audio": 0,
@@ -193,7 +193,7 @@
       "expect": {
         "videoCodec": "hevc",
         "audioTracks": 1,
-        "hlsPreviewDimensions": "1280x720",
+        "hlsPreviewDimensions": "1920x1080",
         "stages": {
           "video": 2,
           "audio": 0,
@@ -227,7 +227,7 @@
       "expect": {
         "videoCodec": "hevc",
         "audioTracks": 2,
-        "hlsPreviewDimensions": "1280x720",
+        "hlsPreviewDimensions": "1920x1080",
         "stages": {
           "video": 2,
           "audio": 10,
@@ -261,7 +261,7 @@
       "expect": {
         "videoCodec": "hevc",
         "audioTracks": 2,
-        "hlsPreviewDimensions": "1280x720",
+        "hlsPreviewDimensions": "1920x1080",
         "stages": {
           "video": 2,
           "audio": 10,
@@ -503,7 +503,7 @@
       "expect": {
         "videoCodec": "hevc",
         "audioTracks": 1,
-        "hlsPreviewDimensions": "1280x720",
+        "hlsPreviewDimensions": "1920x1080",
         "stages": {
           "video": 2,
           "audio": 0,
@@ -537,7 +537,7 @@
       "expect": {
         "videoCodec": "hevc",
         "audioTracks": 1,
-        "hlsPreviewDimensions": "1280x720",
+        "hlsPreviewDimensions": "1920x1080",
         "stages": {
           "video": 2,
           "audio": 0,
@@ -571,7 +571,7 @@
       "expect": {
         "videoCodec": "hevc",
         "audioTracks": 2,
-        "hlsPreviewDimensions": "1280x720",
+        "hlsPreviewDimensions": "1920x1080",
         "stages": {
           "video": 2,
           "audio": 10,
@@ -605,7 +605,7 @@
       "expect": {
         "videoCodec": "hevc",
         "audioTracks": 2,
-        "hlsPreviewDimensions": "1280x720",
+        "hlsPreviewDimensions": "1920x1080",
         "stages": {
           "video": 2,
           "audio": 10,

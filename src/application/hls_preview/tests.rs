@@ -35,7 +35,10 @@ async fn primary_playlist_reports_graph_planned_blocked_stage_cause() {
         .await;
     engine.ensure_hls_preview_segmenter(pipeline_id).await;
 
-    let stage_key = StageKey::new(pipeline_id, StageKind::preview("720p", StageKind::source()));
+    let stage_key = StageKey::new(
+        pipeline_id,
+        StageKind::codec_edge("hevc_to_h264", StageKind::source()),
+    );
     let manager = StageRuntimeManager::new(engine.clone());
     let (handle, _) = manager
         .ensure_stage(stage_key.clone(), Arc::new(RingBuffer::new(16)), None)

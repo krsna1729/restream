@@ -4,7 +4,7 @@ use shiguredo_mp4::{TrackKind, boxes::SampleEntry, mux::Fmp4SegmentMuxer};
 use super::codec::{
     VIDEO_TIMESCALE, audio_default_duration, build_aac_sample_entry,
     build_h264_sample_entry_from_flv_sequence_header, build_h264_sample_entry_from_video_packet,
-    build_mux_samples, default_video_duration, rescale_ms, sample_entry_to_avcc_bytes,
+    build_mux_samples, default_video_duration, rescale_ms, sample_entry_codec_string,
 };
 use super::store::Fmp4HlsStore;
 use crate::media::codec::{annexb_to_avcc_into, strip_adts};
@@ -39,10 +39,8 @@ impl MonotonicTimestampState {
 }
 
 pub(super) struct VideoRenditionState {
-    video_meta: VideoMeta,
     muxer: Fmp4SegmentMuxer,
     sample_entry: Option<SampleEntry>,
-    config_bytes: Option<Vec<u8>>,
     payload: Vec<u8>,
     samples: Vec<BufferedSample>,
     timestamps: MonotonicTimestampState,
@@ -52,14 +50,11 @@ pub(super) struct VideoRenditionState {
 
 impl VideoRenditionState {
     pub(super) fn new(video: &VideoMeta, video_sequence_header: Option<&[u8]>) -> Self {
-        let sample_entry = video_sequence_header
-            .and_then(|bytes| build_h264_sample_entry_from_flv_sequence_header(bytes, video));
-        let config_bytes = sample_entry.as_ref().and_then(sample_entry_to_avcc_bytes);
+        let sample_entry =
+            video_sequence_header.and_then(build_h264_sample_entry_from_flv_sequence_header);
         Self {
-            video_meta: video.clone(),
             muxer: Fmp4SegmentMuxer::new().expect("fmp4 muxer must construct"),
             sample_entry,
-            config_bytes,
             payload: Vec::new(),
             samples: Vec::new(),
             timestamps: MonotonicTimestampState::default(),
@@ -71,25 +66,18 @@ impl VideoRenditionState {
     pub(super) fn push_packet(&mut self, packet: &MediaPacket, zero_ms: i64) -> Result<(), String> {
         if packet.format == PayloadFormat::Flv && packet.payload.len() > 1 && packet.payload[1] == 0
         {
-            self.sample_entry =
-                build_h264_sample_entry_from_flv_sequence_header(&packet.payload, &self.video_meta);
-            self.config_bytes = self
-                .sample_entry
-                .as_ref()
-                .and_then(sample_entry_to_avcc_bytes);
+            self.sample_entry = build_h264_sample_entry_from_flv_sequence_header(&packet.payload);
             return Ok(());
         }
 
         if self.sample_entry.is_none()
-            && let Some(sample_entry) =
-                build_h264_sample_entry_from_video_packet(packet, &self.video_meta)
+            && let Some(sample_entry) = build_h264_sample_entry_from_video_packet(packet)
         {
-            self.config_bytes = sample_entry_to_avcc_bytes(&sample_entry);
             self.sample_entry = Some(sample_entry);
         }
-        let Some(sample_entry) = self.sample_entry.clone() else {
+        if self.sample_entry.is_none() {
             return Err("missing avc1 sample entry".to_string());
-        };
+        }
 
         let payload_start = self.payload.len() as u64;
         match packet.format {
@@ -121,7 +109,6 @@ impl VideoRenditionState {
             data_size: payload_size,
             default_duration: self.default_duration,
         });
-        let _ = sample_entry;
         Ok(())
     }
 
@@ -143,6 +130,9 @@ impl VideoRenditionState {
             };
             let next_dts = next_segment_first_relative_dts_ms
                 .map(|dts_ms| rescale_ms(dts_ms, VIDEO_TIMESCALE));
+            if let Some(codec) = sample_entry_codec_string(&sample_entry) {
+                store.note_video_codec(codec);
+            }
             let samples = build_mux_samples(
                 &self.samples,
                 TrackKind::Video,
@@ -281,6 +271,9 @@ impl AudioRenditionState {
                 Bytes::from(init),
                 Bytes::from(segment),
             );
+            if let Some(codec) = sample_entry_codec_string(&self.sample_entry) {
+                store.note_audio_codec(codec);
+            }
             Ok(())
         })();
         // See VideoRenditionState::flush_segment: buffers must be cleared on

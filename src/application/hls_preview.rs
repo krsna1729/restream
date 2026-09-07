@@ -88,7 +88,14 @@ pub async fn master_playlist(
         return Err(no_segments_error(engine, pipeline_id).await);
     }
     let (video, audio_tracks) = store.stream_metadata();
-    Ok(build_hls_master_playlist(video.as_ref(), &audio_tracks))
+    let codecs = store
+        .sample_codec_list()
+        .or_else(|| build_hls_codec_list(video.as_ref(), &audio_tracks));
+    Ok(build_hls_master_playlist_with_codecs(
+        video.as_ref(),
+        &audio_tracks,
+        codecs,
+    ))
 }
 
 pub async fn video_playlist(
@@ -276,6 +283,18 @@ pub fn quote_hls_attr(value: &str) -> String {
 }
 
 pub fn build_hls_master_playlist(video: Option<&VideoMeta>, audio_tracks: &[AudioMeta]) -> String {
+    build_hls_master_playlist_with_codecs(
+        video,
+        audio_tracks,
+        build_hls_codec_list(video, audio_tracks),
+    )
+}
+
+pub fn build_hls_master_playlist_with_codecs(
+    video: Option<&VideoMeta>,
+    audio_tracks: &[AudioMeta],
+    codecs: Option<String>,
+) -> String {
     let mut playlist = "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-INDEPENDENT-SEGMENTS\n".to_string();
     if !audio_tracks.is_empty() {
         for (ordinal, track) in audio_tracks.iter().enumerate() {
@@ -324,7 +343,7 @@ pub fn build_hls_master_playlist(video: Option<&VideoMeta>, audio_tracks: &[Audi
             stream_attrs.push(format!("FRAME-RATE={:.3}", video.fps));
         }
     }
-    if let Some(codecs) = build_hls_codec_list(video, audio_tracks) {
+    if let Some(codecs) = codecs {
         stream_attrs.push(format!("CODECS={}", quote_hls_attr(&codecs)));
     }
     if !audio_tracks.is_empty() {

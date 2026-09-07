@@ -459,7 +459,7 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
 
     let stage_key = StageKey::new(
         "pipe-hevc-preview-input",
-        StageKind::preview("720p", StageKind::source()),
+        StageKind::codec_edge("hevc_to_h264", StageKind::source()),
     );
     let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
     let (handle, is_new) = manager
@@ -475,7 +475,7 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
     let mut reader = Reader::new_live("test_hevc_preview_output".to_string(), output_ring);
     let cancel = handle.cancel.clone();
 
-    manager.spawn_preview_stage(handle, source_ring.clone());
+    manager.spawn_codec_edge_stage(handle, source_ring.clone());
 
     let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
@@ -524,7 +524,7 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
     assert!(
         output_packets
             .iter()
-            .all(|packet| packet.media_type == MediaType::Video),
-        "preview stage should drop audio packets"
+            .any(|packet| packet.media_type == MediaType::Audio),
+        "shared hevc_to_h264 codec edge must keep audio on the same ring"
     );
 }

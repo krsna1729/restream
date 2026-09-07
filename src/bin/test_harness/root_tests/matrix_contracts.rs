@@ -58,22 +58,12 @@ fn mixed_input_matrix_covers_bf0_and_bf2_for_every_supported_shape() {
 #[test]
 fn mixed_hls_preview_expectations_match_current_hevc_preview_contract() {
     for case in mixed_input_cases() {
-        let expected = case.hls_preview_expected_dimensions();
-        if matches!(case.codec(), MixedVideoCodec::H265) {
-            assert_eq!(
-                expected,
-                "1280x720",
-                "{} should assert HEVC preview transcode dimensions",
-                case.scenario_id()
-            );
-        } else {
-            assert_eq!(
-                expected,
-                "1920x1080",
-                "{} should assert source-size H.264 preview",
-                case.scenario_id()
-            );
-        }
+        assert_eq!(
+            case.hls_preview_expected_dimensions(),
+            "1920x1080",
+            "{} should assert source-size HLS preview",
+            case.scenario_id()
+        );
     }
 }
 

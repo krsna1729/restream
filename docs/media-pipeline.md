@@ -133,11 +133,13 @@ flowchart TD
     Output --> Egresses
 ```
 
-The `hevc_to_h264` stage is used only for source passthrough into legacy RTMP
-when the ingest is H.265. Preset outputs resolve the codec first: legacy RTMP
-`codec:auto` creates an H.264 preset stage (for example
-`video:720p:codec:h264`), while Enhanced RTMP and SRT can create or share an
-H.265 preset stage (for example `video:720p:codec:hevc`).
+The `hevc_to_h264` stage converts H.265 ingest to H.264 at source resolution
+for consumers that cannot carry HEVC: legacy RTMP egress and HLS preview.
+Both share `hevc_to_h264:from:source` so audio and video stay on one ring.
+Preset outputs resolve the codec first: legacy RTMP `codec:auto` creates an
+H.264 preset stage (for example `video:720p:codec:h264`), while Enhanced RTMP
+and SRT can create or share an H.265 preset stage (for example
+`video:720p:codec:hevc`).
 
 ### Passthrough rule
 
@@ -156,8 +158,7 @@ for future implementation but not applied by the runtime.
 | Audio filter | `audio:<op>:from:<video_key>` | `audio:atrack:0:from:video:720p:codec:h264` |
 
 The `upstream_key` in the `hevc_to_h264` key encodes what ring feeds the
-converter. Today that converter is reserved for source passthrough RTMP, so the
-normal upstream key is `source`.
+converter. Legacy RTMP source outputs and HEVC HLS preview both use `source`.
 
 The video-preset key is shared across all compound encodings with the same
 resolved video part (for example `720p+atrack:0` and `720p+remap:0:1` can both
@@ -192,11 +193,13 @@ the next reconciler cycle.
 
 Set `RESTREAM_INTERNAL_VIDEO_PRESETS=1` to use the in-process libavcodec path
 (`src/media/transcoder.rs`) for video-preset stages. HEVC-to-H.264 bridge
-stages, HLS preview transcode stages, and complex audio stages have separate
-rollout flags: `RESTREAM_INTERNAL_HEVC_TO_H264`,
-`RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX`. The
-data flow is identical — the same `source_ring → output_ring` contract holds —
-but uses `MemoryQueue`/`avio` callbacks instead of a subprocess pipe.
+stages and complex audio stages have separate rollout flags:
+`RESTREAM_INTERNAL_HEVC_TO_H264` and `RESTREAM_INTERNAL_AUDIO_COMPLEX`.
+`RESTREAM_INTERNAL_HLS_PREVIEW` still exists as a backend-family toggle for
+`StageKind::Preview`, but HLS preview now reuses the shared HEVC→H.264 codec
+edge (or source) instead of creating that kind. The data flow is identical —
+the same `source_ring → output_ring` contract holds — but uses
+`MemoryQueue`/`avio` callbacks instead of a subprocess pipe.
 
 Current behavior: for `video:*` presets, the internal path uses
 `run_ffmpeg_transcode_with_scale` and performs decode→scale→encode in-process
@@ -262,7 +265,7 @@ Standard RTMP (non-Enhanced) does not carry H.265. The reconciler enforces:
 | Enhanced RTMP | H.265 source/preset | HEVC is packetized as Enhanced FLV `hvc1`; encoded presets are keyed as `video:<preset>:codec:hevc` |
 | SRT | H.265 source | Passthrough (MPEG-TS carries HEVC natively) — **working** |
 | SRT | H.265 + video preset | `video:<preset>:codec:hevc` with libx265; same ring can be shared with Enhanced RTMP — **working** |
-| HLS preview | H.265 source | Preview-only `hevc_preview_h264` stage converts to H.264 720p before served fMP4 HLS — **current path** |
+| HLS preview | H.265 source | Reuses shared `hevc_to_h264:from:source` (same ring as legacy RTMP) at source resolution, then serves H.264+AAC fMP4 — **current path** |
 
 Output configuration is symmetric at the model boundary: video mode, video
 codec, audio routing, and protocol mode are typed fields. Protocol capability
@@ -277,14 +280,17 @@ codec/protocol combinations are rejected before persistence.
 | RTMP H.264 | Basic interop; B-frame timestamp gate | Implemented; full matrix gate | fMP4 HLS preview with alternate-audio renditions | Input-scoped mixed gate validates final MP4 |
 | RTMP H.265 | Enhanced RTMP egress supported; legacy RTMP uses H.265→H.264 bridge | Not assumed | Not assumed | Not assumed |
 | SRT H.264 | Packetization implemented; live matrix gate | Locally validated | fMP4 HLS preview with alternate-audio renditions | Input-scoped mixed gate validates final MP4 |
-| SRT H.265 | RTMP: `hevc_to_h264` conversion working; SRT: passthrough working | Passthrough implemented; E2E gate | HEVC preview converts to H.264 720p before served fMP4 HLS | Input-scoped mixed gate validates final MP4 |
-| File | RTMP-shaped via child FFmpeg | Implemented for compatible FLV codecs | Native fMP4 preview packager; HEVC uses preview transcode | Input-scoped mixed gate validates final MP4 |
+| SRT H.265 | RTMP: `hevc_to_h264` conversion working; SRT: passthrough working | Passthrough implemented; E2E gate | HEVC preview reuses `hevc_to_h264` at source size, then serves H.264+AAC fMP4 | Input-scoped mixed gate validates final MP4 |
+| File | RTMP-shaped via child FFmpeg | Implemented for compatible FLV codecs | Native fMP4 preview packager; HEVC reuses the shared `hevc_to_h264` bridge | Input-scoped mixed gate validates final MP4 |
 
-HLS preview is now served as fragmented MP4 with `EXT-X-MAP`, `init.mp4`, and
-`.m4s` media segments. The preview path uses one fMP4 muxer per HLS rendition:
-one video-only rendition plus separate audio-only playlists for alternate
-tracks. Remote HLS outputs intentionally remain MPEG-TS because HTTP PUT ingest
-targets commonly require `.ts` media segments.
+HLS preview is served as fragmented MP4 with `EXT-X-MAP`, `init.mp4`, and
+`.m4s` media segments. The preview packager builds H.264 `avc1` / AAC `mp4a`
+sample entries with `shiguredo_mp4` bitstream helpers and advertises RFC 6381
+`CODECS` from those sample entries when they exist. Packet conversion stays on
+the existing Annex B↔AVCC hot path. The preview path uses one fMP4 muxer per
+HLS rendition: one video-only rendition plus separate audio-only playlists for
+alternate tracks. Remote HLS outputs intentionally remain MPEG-TS because HTTP
+PUT ingest targets commonly require `.ts` media segments.
 
 ## Minimum work per consumer
 

@@ -54,7 +54,7 @@ webpki-roots = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 url = "2"
 percent-encoding = "2"
-shiguredo_mp4 = "2026.3.0"
+shiguredo_mp4 = "2026.5.0"
 # srt-rs (github.com/krsna1729/srt-rs): sans-I/O SRT protocol core + Tokio
 # transport adapter. Pinned to a reviewed revision; bump deliberately.
 # 14042682: A2 HighResWaiter / pacing surfaces (#86) on top of batched UDP (#85).
