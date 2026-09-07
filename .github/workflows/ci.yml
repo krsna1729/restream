@@ -60,6 +60,20 @@ jobs:
             --all-targets \
             --features mcp-server,mcp-http-backend \
             -- -D warnings
+      - name: Prove MCP feature matrix
+        run: |
+          # Lower-layer isolation: agent-plane/agent-execution stay disabled.
+          scripts/build/resource-limit.sh cargo check \
+            --lib --no-default-features --features mcp-core
+          scripts/build/resource-limit.sh cargo check \
+            --lib --no-default-features --features mcp-server
+          scripts/build/resource-limit.sh cargo check \
+            --bin restream-mcp --no-default-features \
+            --features mcp-server,mcp-http-backend
+          # Compatibility combo: mcp-embedded = mcp-core + agent-plane.
+          # Must compile; must not invent an in-process MCP backend.
+          scripts/build/resource-limit.sh cargo check \
+            --lib --no-default-features --features mcp-embedded
 
   architecture-guardrails:
     name: Source architecture audit

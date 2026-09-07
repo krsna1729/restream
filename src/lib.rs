@@ -2,7 +2,7 @@
 
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
-#[cfg(any(feature = "mcp-http-backend", feature = "mcp-embedded"))]
+#[cfg(feature = "mcp-http-backend")]
 pub mod agent_backends;
 #[cfg(any(feature = "agent-plane", feature = "mcp-core"))]
 pub mod agent_core;

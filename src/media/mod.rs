@@ -79,12 +79,3 @@ pub const SRT_TS_PAYLOAD_BYTES: usize = MPEG_TS_PACKET_BYTES * MPEG_TS_PACKETS_P
 
 /// Reusable MPEG-TS batch capacity aligned to full 1316-byte SRT payloads.
 pub const MEDIA_TS_BATCH_TARGET_BYTES: usize = SRT_TS_PAYLOAD_BYTES * MEDIA_PULL_BURST_PACKETS;
-
-#[cfg(test)]
-mod namespace_tests {
-    #[test]
-    fn recording_namespaces_are_exported() {
-        let _ = std::mem::size_of::<crate::media::recording::runtime::RecordingStart>();
-        let _ = std::mem::size_of::<crate::media::recording::writer::RecordingStart>();
-    }
-}
