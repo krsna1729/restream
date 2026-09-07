@@ -1,10 +1,6 @@
 #[test]
 fn selected_runtime_contracts_stay_ready_for_extraction() {
     for (name, source) in [
-        (
-            "runtime/capacity.rs",
-            include_str!("../src/runtime/capacity.rs"),
-        ),
         ("runtime/graph.rs", include_str!("../src/runtime/graph.rs")),
         (
             "runtime/output.rs",

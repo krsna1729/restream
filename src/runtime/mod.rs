@@ -4,7 +4,6 @@
 //! graph plans. Domain types describe what *should* happen; runtime types
 //! describe what *is* happening.
 
-pub mod capacity;
 pub mod graph;
 pub mod output;
 pub mod stage;

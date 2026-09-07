@@ -1,7 +1,6 @@
 //! Central startup/join policy for live readers and FFmpeg probe budgets.
 
-use crate::domain::output_spec::{OutputEncodingSpec, VideoCodecKind, VideoSelector};
-use crate::media::profiles;
+use crate::domain::output_spec::VideoCodecKind;
 
 const DEFAULT_KEYFRAME_PREROLL_PACKETS: usize = 32;
 // These are fallbacks, not the normal live policy. Restream measures the
@@ -50,23 +49,8 @@ impl ExtStageProbeContext {
     }
 }
 
-pub fn rtmp_egress_keyframe_preroll_packets() -> usize {
-    DEFAULT_KEYFRAME_PREROLL_PACKETS
-}
-
 pub fn recording_keyframe_preroll_packets() -> usize {
     DEFAULT_KEYFRAME_PREROLL_PACKETS
-}
-
-pub fn srt_egress_keyframe_preroll_packets(encoding: &str) -> usize {
-    let spec = OutputEncodingSpec::parse(encoding);
-    match spec.video() {
-        VideoSelector::Preset(preset) => profiles::dimensions_for_preset(preset)
-            .filter(|(_, height)| *height >= 1080)
-            .map(|_| DEFAULT_KEYFRAME_PREROLL_PACKETS)
-            .unwrap_or(0),
-        VideoSelector::Source | VideoSelector::Custom => 0,
-    }
 }
 
 pub fn ext_stage_probe_budget(codec: VideoCodecKind) -> (u64, usize) {
@@ -133,35 +117,6 @@ pub fn ext_stage_passthrough_probe_budget() -> (u64, usize) {
 mod tests {
     use super::*;
     use proptest::prelude::*;
-
-    #[test]
-    fn srt_preroll_is_reserved_for_hd_presets_by_dimensions() {
-        assert_eq!(srt_egress_keyframe_preroll_packets("source"), 0);
-        assert_eq!(srt_egress_keyframe_preroll_packets("720p+atrack:0"), 0);
-        assert_eq!(
-            srt_egress_keyframe_preroll_packets("1080p"),
-            DEFAULT_KEYFRAME_PREROLL_PACKETS
-        );
-    }
-
-    #[test]
-    fn srt_preroll_falls_back_to_zero_for_unknown_or_malformed_presets() {
-        for encoding in ["", "not-a-real-preset", "1080p-typo", "custom"] {
-            assert_eq!(
-                srt_egress_keyframe_preroll_packets(encoding),
-                0,
-                "encoding={encoding:?} must fail safe to no preroll rather than panic"
-            );
-        }
-    }
-
-    #[test]
-    fn rtmp_egress_preroll_matches_the_shared_default() {
-        assert_eq!(
-            rtmp_egress_keyframe_preroll_packets(),
-            DEFAULT_KEYFRAME_PREROLL_PACKETS
-        );
-    }
 
     #[test]
     fn recording_preroll_matches_the_shared_default() {

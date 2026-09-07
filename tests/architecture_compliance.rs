@@ -287,7 +287,10 @@ fn agent_core_stays_independent_of_edge_and_runtime_layers() {
     );
     let backends_mod = include_str!("../src/agent_backends/mod.rs");
     assert!(backends_mod.contains("#[cfg(feature = \"mcp-http-backend\")]"));
-    assert!(backends_mod.contains("#[cfg(feature = \"mcp-embedded\")]"));
+    assert!(
+        !backends_mod.contains("in_process"),
+        "mcp-embedded must not compile an in-process MCP backend scaffold"
+    );
 }
 
 #[test]

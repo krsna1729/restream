@@ -11,7 +11,7 @@ it does not bypass approval or mutate raw control-plane routes.
 - [Build and run](#build-and-run)
 - [Authentication and compatibility](#authentication-and-compatibility)
 - [Feature boundaries](#feature-boundaries)
-- [Deferred embedded mode](#deferred-embedded-mode)
+- [Embedded mode](#embedded-mode)
 - [Source ownership](#source-ownership)
 
 ## Current shape
@@ -102,22 +102,17 @@ Cargo features keep the optional surface explicit:
 | `mcp-core` | Shared MCP-facing backend and type contract |
 | `mcp-server` | MCP transport/server implementation |
 | `mcp-http-backend` | HTTP adapter to `/api/v1/agent/*` |
-| `mcp-embedded` | In-process backend scaffold |
+| `mcp-embedded` | Compile combo of `mcp-core` + `agent-plane` (no in-process backend) |
 
 The `restream-mcp` binary requires the server and HTTP-backend feature set to
 run. The exact dependency edges and binary requirements are owned by
 `Cargo.toml`.
 
-## Deferred embedded mode
+## Embedded mode
 
-`InProcessBackend` exists to preserve a future embedded boundary, but only its
-capabilities call is wired. Other operations return `NotYetImplemented`, and
-the main `restream` binary does not mount an MCP transport. Therefore embedded
-MCP is not a supported deployment mode today.
-
-Completing it requires routing the existing application workflows through the
-backend without duplicating HTTP handler policy. Until that happens, use the
-HTTP-backed sidecar.
+There is no in-process MCP backend. The `mcp-embedded` feature only compiles
+`mcp-core` together with `agent-plane`; it does not mount an MCP transport in
+the main `restream` binary. Use the HTTP-backed `restream-mcp` sidecar.
 
 ## Source ownership
 
@@ -125,7 +120,6 @@ HTTP-backed sidecar.
 |---|---|
 | `src/agent_core/` | Shared backend contract, request types, and errors |
 | `src/agent_backends/http.rs` | Current HTTP-backed execution adapter |
-| `src/agent_backends/in_process.rs` | Deferred embedded adapter scaffold |
 | `src/agent_mcp/` | Tool catalog, dispatch, and transports |
 | `src/bin/restream-mcp.rs` | CLI, environment, compatibility check, backend selection |
 | `src/agent_plane.rs`, `src/agent_execution.rs` | Product-native agent behavior |
