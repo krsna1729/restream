@@ -80,8 +80,9 @@ of the async scheduler is isolated:
 
 - libsrt accept calls run at dedicated blocking boundaries where the ingest
   path still uses them;
-- RTMP/RTMPS and SRT **egress** run on the egress fabric: a small,
-  CPU-derived and output-count-scaled pool of dedicated shard OS threads,
+- RTMP/RTMPS and SRT **egress** run on the egress fabric: a small
+  CPU-derived pool of dedicated shard OS threads, output-count-scaled for
+  RTMP/RTMPS/sink/pipeline feeds while SRT retains the CPU-derived ceiling,
   each multiplexing many outputs (`epoll` for RTMP/RTMPS; for SRT, the shard
   directly drives `srt-rs` sockets and the shared `CallerTable` — there is no
   libsrt epoll) instead of one OS thread per destination; see

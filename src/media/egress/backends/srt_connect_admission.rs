@@ -15,12 +15,13 @@
 //! (`src/media/srt/egress_connect/single.rs`), which calls
 //! `set_nonblocking_connect` before `ops.connect(...)` and returns
 //! `Ok(socket)` immediately after. The real handshake completes
-//! asynchronously in the background, observed later via epoll `WRITE`
-//! readiness. A permit released right after the `connect()` call returns
-//! would therefore throttle almost nothing -- it would be held for
-//! microseconds regardless of real handshake duration. The permit has to
-//! live on the leaf itself (`SrtFabricLeaf::handshake_permit`) until that
-//! leaf's first poller visit resolves the handshake one way or another
+//! asynchronously in the background and observed later when the shard's
+//! readiness pass visits the leaf. A permit released right after the
+//! `connect()` call returns would therefore throttle almost nothing -- it
+//! would be held for microseconds regardless of real handshake duration.
+//! The permit has to live on the leaf itself
+//! (`SrtFabricLeaf::handshake_permit`) until that leaf's first shard
+//! readiness visit resolves the handshake one way or another
 //! (`SrtShardBackend::visit_one_ready_leaf` clears it unconditionally, a
 //! no-op after the first visit).
 //!

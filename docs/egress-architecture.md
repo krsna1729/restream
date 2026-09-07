@@ -307,8 +307,7 @@ It owns:
 - command routing;
 - shard health supervision;
 - reconnect admission shared across shards;
-- output snapshots for API and reconciliation;
-- feature-gated coexistence with the legacy egress path during migration.
+- output snapshots for API and reconciliation.
 
 The manager does not own packet hot loops or connection-local protocol state.
 
@@ -346,7 +345,9 @@ pub struct EgressShard<B: EgressBackend> {
 
 A shard owns:
 
-- its native poller;
+- its protocol-specific readiness backend (RTMP/RTMPS: a Linux epoll
+  instance; SRT: drive-based readiness with no poller — owned sockets and
+  the shared `CallerTable`);
 - all leaf protocol and transport state assigned to it;
 - its ready queue and scheduling flags;
 - connect, handshake, progress, and retry timers;
@@ -360,13 +361,15 @@ Mutable leaf state does not migrate between threads during normal operation.
 A shard loop performs bounded work in this order:
 
 1. process a limited batch of high-priority control commands;
-2. consume readiness events;
+2. invoke backend readiness processing (`on_ready` / `poll_ready`) and
+   consume any ready-leaf events the backend produced;
 3. process expired timers;
 4. schedule leaves whose feeds advanced;
 5. service ready leaves under per-leaf and per-loop budgets;
 6. publish aggregated metrics when due;
-7. block in the native poller until readiness, command wakeup, timer expiry, or
-   feed notification.
+7. when idle, wait on the command channel with a bounded timeout
+   (`recv_timeout(idle_wait)`), then resume from step 1 so quiet shards
+   still rediscover write-interested leaves on the next readiness pass.
 
 Control processing itself is budgeted so a large update burst cannot starve
 media progress.
@@ -684,9 +687,9 @@ CPU or memory growth.
 
 ### Cross-shard isolation
 
-Each shard owns an independent thread, poller, ready queue, timer structure,
-command inbox, and mutable leaf registry. Hot-path operations do not acquire a
-process-wide leaf lock.
+Each shard owns an independent thread, protocol-specific readiness backend,
+ready queue, timer structure, command inbox, and mutable leaf registry.
+Hot-path operations do not acquire a process-wide leaf lock.
 
 Shared feeds are immutable and bounded. Cross-shard interaction is limited to
 feed sequence observation, coalesced wakeups, configuration snapshots, and
