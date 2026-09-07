@@ -91,10 +91,13 @@ surface was never compiled without the higher agent plane, so upward
 agent-core dependencies could remain hidden. The durable rule is:
 
 - compile a lower feature with the higher feature disabled
-- keep HTTP and in-process adapter `cfg` gates on their own modules
+- keep the HTTP MCP adapter `cfg` gate beside its module
+  (`mcp-http-backend`); there is no in-process MCP adapter module
 - treat a feature dependency as an architectural edge, not merely build
   configuration
-- record both the intended feature closure and the negative compile command
+- record both the intended feature closure and the compile command that
+  proves it (including when a named combo intentionally enables a higher
+  feature)
 
 ## Size Policy
 
@@ -299,8 +302,9 @@ Wave 2 also completed dependency-direction work that changes crate readiness:
    now live together in planner.
 4. Agent request and proposed-change types moved into `agent_core`; Reqwest
    conversion moved to the HTTP adapter and MCP-only inputs moved to `agent_mcp`.
-5. `mcp-core` no longer enables `agent-plane`, while HTTP and embedded adapters
-   carry local feature gates.
+5. `mcp-core` no longer enables `agent-plane`. The HTTP MCP adapter carries a
+   local `mcp-http-backend` gate. `mcp-embedded` is a named compile combo of
+   `mcp-core` + `agent-plane` (no in-process backend module).
 6. DB repositories return DB-owned records; infrastructure owns conversion to
    application models.
 7. `ServiceError` is application-owned and transport-neutral; `ApiError` owns
@@ -595,19 +599,25 @@ without a second bespoke Rust-import parser to keep in sync with the
 language. Use the Layering Ladder and Ownership Matrix in this document as
 the ownership rules to check the graph against.
 
-After MCP/agent feature-boundary changes, prove the topology by running the
-negative-matrix commands directly rather than inspecting a generated claim:
+After MCP/agent feature-boundary changes, prove the topology by running these
+commands directly rather than inspecting a generated claim:
 
 ```sh
+# Lower-layer isolation: agent-plane and agent-execution must stay disabled.
 scripts/build/resource-limit.sh cargo check --lib --no-default-features --features mcp-core
 scripts/build/resource-limit.sh cargo check --lib --no-default-features --features mcp-server
 scripts/build/resource-limit.sh cargo check --bin restream-mcp --no-default-features --features mcp-server,mcp-http-backend
+
+# Compatibility combo: mcp-embedded intentionally enables agent-plane (with
+# mcp-core). It must compile, must not enable agent-execution, and must not
+# mount an in-process MCP backend (HTTP sidecar remains the only backend).
 scripts/build/resource-limit.sh cargo check --lib --no-default-features --features mcp-embedded
 ```
 
-Each should succeed while `agent-plane`/`agent-execution` stay disabled. That
-compiler run is the proof; a topology-only claim about the feature graph is
-not a substitute for it.
+The first three commands prove lower MCP surfaces compile without
+`agent-plane`/`agent-execution`. The fourth proves the named combo compiles as
+`mcp-core` + `agent-plane` without inventing a backend. A topology-only claim
+about the feature graph is not a substitute for these compiler runs.
 
 Do not turn every external inherent implementation into a failure. Same-layer
 engine/protocol extension impls and infrastructure constructors can be

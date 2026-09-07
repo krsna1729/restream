@@ -93,8 +93,10 @@ left to the tool contract and skill.
 
 The current `restream-mcp` sidecar uses the shared Rust backend trait and calls
 the product-native HTTP surface. MCP remains a transport adapter rather than a
-second implementation of planning or execution policy. The in-process backend
-is scaffolding and is not a supported deployment mode.
+second implementation of planning or execution policy. The HTTP-backed sidecar
+is the only MCP backend and deployment mode; there is no in-process MCP
+backend.
 
 See [MCP architecture](mcp-rust-architecture.md) for current module ownership,
-feature boundaries, authentication, and the deferred embedded boundary.
+feature boundaries (including what `mcp-embedded` means as a compile combo),
+and authentication.

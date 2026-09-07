@@ -67,8 +67,10 @@ Feature topology can hide the same regression. Commit `72f9441e` declared
 `mcp-core = ["agent-plane"]`, so compiling the supposed lower feature also
 compiled the higher layer and concealed upward agent-core dependencies. A
 lower feature boundary is proven only when it compiles without the higher
-feature. Keep HTTP/in-process adapter `cfg` gates beside the adapter modules,
-not on a parent feature that silently pulls the higher layer in.
+feature. Keep the HTTP MCP adapter `cfg` gate (`mcp-http-backend`) beside its
+module, not on a parent feature that silently pulls a higher layer in. There
+is no in-process MCP adapter module; `mcp-embedded` is only a named compile
+combo of `mcp-core` + `agent-plane`.
 
 ## Good Extractions In This Repo
 
@@ -195,13 +197,13 @@ When auditing a candidate seam:
     `graphify path "<A>" "<B>"` show the real dependency edges. A
     lower-to-higher edge blocks the audit; a facade re-export or an external
     inherent impl is review evidence, not an automatic failure.
-11. After MCP/agent feature-boundary changes, run the negative feature-matrix
-    compile commands from `docs/layering-roadmap.md` directly (`cargo check
-    --lib --no-default-features --features mcp-core`, `mcp-server`,
-    `mcp-embedded`, and the `restream-mcp` binary with
-    `mcp-server,mcp-http-backend`). The proof is that lower features compile
-    while `agent-plane`/`agent-execution` stay disabled — run the compiler,
-    do not infer it from the feature graph.
+11. After MCP/agent feature-boundary changes, run the feature-matrix compile
+    commands from `docs/layering-roadmap.md` directly. Prove
+    `mcp-core`/`mcp-server`/`restream-mcp` (with `mcp-server,mcp-http-backend`)
+    compile with `agent-plane`/`agent-execution` disabled. Prove
+    `mcp-embedded` separately as the intentional `mcp-core` + `agent-plane`
+    combo (no `agent-execution`, no in-process backend). Run the compiler; do
+    not infer topology from the feature graph alone.
 
 ## Verification
 
@@ -210,9 +212,9 @@ When auditing a candidate seam:
 - keep API contract tests when edge behavior still depends on the seam
 - keep frontend DOM/render tests around refactored UI seams
 - if the change touches hot runtime code or high-frequency frontend refresh paths, follow the benchmark/proof rules in `AGENTS.md`
-- after MCP/agent feature-boundary changes, run at least the `mcp-core`
-  and standalone sidecar (`mcp-server,mcp-http-backend`) negative feature-matrix
-  compile commands from `docs/layering-roadmap.md`
+- after MCP/agent feature-boundary changes, run the MCP feature-matrix
+  compile commands from `docs/layering-roadmap.md` (lower-layer isolation plus
+  the `mcp-embedded` combo check)
 
 ## Read This Reference
 
