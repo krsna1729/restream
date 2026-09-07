@@ -216,8 +216,11 @@ Failure isolation follows these rules:
 - HLS state is in memory unless a design change explicitly introduces durable
   storage. MPEG-TS `HlsStore` evicts at `max_segments` (default 20) and drops
   matching variant-cache entries; fMP4 preview retains
-  `max_segments + 6` grace segments and advertises only `max_segments`. In-memory
-  is safe because those windows are bounded, not because segments are small.
+  `max_segments + 6` grace segments and advertises only `max_segments`.
+  Retained **segment count** is bounded. Per-segment memory still depends on
+  encoded bitrate and keyframe cadence: the MPEG-TS accumulator is initialized
+  at `segment_capacity` and may grow until a later keyframe splits the
+  segment; there is no hard byte ceiling on this path.
 
 Concurrency proof expectations and the stage coverage map live in
 [Concurrency proofing](concurrency-proofing.md) and

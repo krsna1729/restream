@@ -7,9 +7,10 @@
 //!
 //! MPEG-TS live/upload storage evicts when the deque exceeds `HlsConfig.max_segments`
 //! (default `MAX_SEGMENTS`, 20) and drops associated `variant_segments` entries
-//! for the evicted index. Playlist target duration is derived from retained
-//! segment durations (`TARGET_DURATION_SECS` in `store.rs` is the initial
-//! estimate). fMP4 preview storage is a separate policy: see `hls/fmp4`.
+//! for the evicted index. `EXT-X-TARGETDURATION` starts at 6s
+//! (`TARGET_DURATION_SECS`) and rises to the largest segment duration observed
+//! since create/clear; eviction does not recompute it. fMP4 preview storage is a
+//! separate retention policy: see `hls/fmp4`.
 //!
 //! # Segment Lifecycle
 //!

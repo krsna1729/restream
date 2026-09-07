@@ -47,9 +47,11 @@
 //!
 //! `push()` is not exclusive in the type system: a second caller compiles. The
 //! ingest contract is runtime discipline. [`super::input_gate::InputPacketGate`]
-//! plus reconciler promotion ensure only the selected input forwards into a
-//! pipeline ring. Monotonic `write_idx` orders slots for readers; it does not
-//! prove a unique producer.
+//! plus selection serialized by [`crate::media::engine::MediaEngine`]
+//! (`select_pipeline_input`, `selection_lock`) ensure only the selected input
+//! forwards into a pipeline ring. HTTP promotion persists the choice and calls
+//! the engine directly; it does not wait for the reconciler. Monotonic
+//! `write_idx` orders slots for readers; it does not prove a unique producer.
 
 use arc_swap::ArcSwapOption;
 use std::sync::Arc;

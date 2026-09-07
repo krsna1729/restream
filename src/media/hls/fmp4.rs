@@ -3,7 +3,9 @@
 //! Retention is not the MPEG-TS `HlsStore` algorithm. Each fMP4 rendition
 //! keeps `max_segments + PLAYLIST_RETENTION_GRACE_SEGMENTS` (grace is 6) so a
 //! player fetching the oldest advertised segment is not racing immediate
-//! eviction; playlists advertise only the newest `max_segments`.
+//! eviction; playlists advertise only the newest `max_segments`. Target
+//! duration starts from the first media segment and is a nondecreasing
+//! high-water mark until clear; eviction does not shrink it.
 //!
 //! The served preview path intentionally diverges from remote HLS PUT uploads:
 //! preview uses native fMP4 so we can expose one muxer per HLS rendition

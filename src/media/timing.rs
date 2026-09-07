@@ -2,8 +2,9 @@
 //!
 //! Production use is the external-transcoder stdin/stdout pipe-stall path
 //! (`external_transcoder` / `ffmpeg_process`): [`calibrate`] at stage start,
-//! then [`Clock`] / [`now`] / [`delta_us`] around those pipe I/O waits. This is
-//! not a packet-inner-loop clock and is not used throughout the media stack.
+//! then [`Clock::now`] / [`Clock::delta_us`] around those pipe I/O waits. The
+//! free [`now`] / [`delta_us`] helpers exist for benches. This is not a
+//! packet-inner-loop clock and is not used throughout the media stack.
 //! [`Instant`] is the fallback when invariant TSC is missing or calibration is
 //! out of bounds.
 //!
