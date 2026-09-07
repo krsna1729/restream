@@ -73,12 +73,16 @@ pub(super) fn build_mux_samples(
     Ok(samples)
 }
 
+pub(super) fn is_flv_avc_sequence_header(payload: &[u8]) -> bool {
+    payload.len() > 1 && (payload[0] & 0x0F) == 7 && payload[1] == 0
+}
+
 pub(super) fn build_h264_sample_entry_from_video_packet(
     packet: &MediaPacket,
 ) -> Option<SampleEntry> {
     match packet.format {
         PayloadFormat::Flv => {
-            if packet.payload.len() > 1 && packet.payload[1] == 0 {
+            if is_flv_avc_sequence_header(&packet.payload) {
                 build_h264_sample_entry_from_flv_sequence_header(&packet.payload)
             } else {
                 None
@@ -98,6 +102,9 @@ pub(super) fn build_h264_sample_entry_from_video_packet(
 pub(super) fn build_h264_sample_entry_from_flv_sequence_header(
     sequence_header: &[u8],
 ) -> Option<SampleEntry> {
+    if !is_flv_avc_sequence_header(sequence_header) {
+        return None;
+    }
     let avcc = sequence_header.get(5..)?;
     let lists = parse_avcc_nal_lists(avcc)?;
     let length_size = LengthSize::from_length_size_minus_one(lists.length_size).ok()?;

@@ -597,7 +597,7 @@ fn merge_hls_codec_lists_prefers_complete_sample_list() {
     assert_eq!(
         merge_hls_codec_lists(
             Some("avc1.64001f,mp4a.40.2".to_string()),
-            Some("avc1.4d401f,mp4a.40.2".to_string()),
+            Some("avc1.4d401f,mp4a.40.1".to_string()),
         )
         .as_deref(),
         Some("avc1.64001f,mp4a.40.2")

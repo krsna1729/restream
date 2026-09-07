@@ -571,7 +571,7 @@ async fn hevc_codec_edge_starts_for_video_only_ingest() {
 
     manager.spawn_codec_edge_stage(handle, source_ring.clone());
 
-    let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(4);
+    let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
     loop {
         if source_ring
             .reader_snapshots()

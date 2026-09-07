@@ -440,9 +440,15 @@ pub fn merge_hls_codec_lists(sample: Option<String>, metadata: Option<String>) -
     }
     if let Some(metadata) = metadata.as_deref() {
         let sample_has_video = codecs.iter().any(|existing| !is_hls_audio_codec(existing));
+        let sample_has_audio = codecs.iter().any(|existing| is_hls_audio_codec(existing));
         for codec in metadata.split(',') {
             let codec = codec.trim();
-            if is_hls_audio_codec(codec) || !sample_has_video {
+            let fills_gap = if is_hls_audio_codec(codec) {
+                !sample_has_audio
+            } else {
+                !sample_has_video
+            };
+            if fills_gap {
                 push_unique_hls_codec(&mut codecs, codec);
             }
         }

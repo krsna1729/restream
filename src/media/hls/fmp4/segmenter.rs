@@ -94,23 +94,21 @@ pub async fn start_hls_fmp4_segmenter(
                                 return;
                             };
 
-                            let supported_audio_tracks: Vec<AudioMeta> = audio_tracks
-                                .into_iter()
-                                .filter(|track| track.codec.eq_ignore_ascii_case("aac"))
-                                .collect();
-                            store.set_stream_metadata(Some(video.clone()), supported_audio_tracks.clone());
+                            let (bound_audio_states, advertised_audio_tracks) =
+                                bind_preview_audio_tracks(
+                                    audio_tracks,
+                                    audio_sequence_header.as_deref(),
+                                    &pipeline_id,
+                                );
+                            store.set_stream_metadata(
+                                Some(video.clone()),
+                                advertised_audio_tracks,
+                            );
                             video_state = Some(VideoRenditionState::new(
                                 &video,
                                 video_sequence_header.as_deref(),
                             ));
-                            for track in supported_audio_tracks {
-                                if let Some(state) = AudioRenditionState::new(
-                                    &track,
-                                    audio_sequence_header.as_deref(),
-                                ) {
-                                    audio_states.insert(track.track_index, state);
-                                }
-                            }
+                            audio_states = bound_audio_states;
                         }
 
                         let t0 = Instant::now();
@@ -211,6 +209,34 @@ pub async fn start_hls_fmp4_segmenter(
         });
 }
 
+fn bind_preview_audio_tracks(
+    audio_tracks: Vec<AudioMeta>,
+    audio_sequence_header: Option<&[u8]>,
+    pipeline_id: &str,
+) -> (HashMap<u32, AudioRenditionState>, Vec<AudioMeta>) {
+    let mut audio_states = HashMap::new();
+    let mut advertised = Vec::new();
+    for track in audio_tracks {
+        if !track.codec.eq_ignore_ascii_case("aac") {
+            continue;
+        }
+        match AudioRenditionState::new(&track, audio_sequence_header) {
+            Some(state) => {
+                audio_states.insert(track.track_index, state);
+                advertised.push(track);
+            }
+            None => {
+                warn!(
+                    pipeline_id = %pipeline_id,
+                    track_index = track.track_index,
+                    "dropping HLS preview audio track; no mp4a sample entry"
+                );
+            }
+        }
+    }
+    (audio_states, advertised)
+}
+
 async fn resolve_hls_preview_metadata(
     engine: &MediaEngine,
     ring_buffer: &Arc<RingBuffer>,
@@ -285,4 +311,51 @@ pub(super) async fn resolve_hls_sequence_headers(
 
 fn segment_duration_secs(start_pts_ms: i64, end_pts_ms: i64) -> f64 {
     end_pts_ms.saturating_sub(start_pts_ms).max(1) as f64 / 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::media::metadata::AudioMeta;
+
+    fn aac_track(track_index: u32) -> AudioMeta {
+        AudioMeta {
+            codec: "aac".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            channel_layout: None,
+            track_index,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+        }
+    }
+
+    fn opus_track(track_index: u32) -> AudioMeta {
+        AudioMeta {
+            codec: "opus".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            channel_layout: None,
+            track_index,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+        }
+    }
+
+    #[test]
+    fn bind_preview_audio_tracks_advertises_only_bound_aac() {
+        let (states, advertised) = bind_preview_audio_tracks(
+            vec![opus_track(1), aac_track(2)],
+            None,
+            "pipe-preview-audio",
+        );
+        assert_eq!(advertised.len(), 1);
+        assert_eq!(advertised[0].track_index, 2);
+        assert!(states.contains_key(&2));
+        assert!(!states.contains_key(&1));
+    }
 }

@@ -5,7 +5,8 @@ use tracing::warn;
 use super::codec::{
     VIDEO_TIMESCALE, audio_default_duration, build_aac_sample_entry,
     build_h264_sample_entry_from_flv_sequence_header, build_h264_sample_entry_from_video_packet,
-    build_mux_samples, default_video_duration, rescale_ms, sample_entry_codec_string,
+    build_mux_samples, default_video_duration, is_flv_avc_sequence_header, rescale_ms,
+    sample_entry_codec_string,
 };
 use super::store::Fmp4HlsStore;
 use crate::media::codec::{annexb_to_avcc_into, strip_adts};
@@ -52,9 +53,11 @@ pub(super) struct VideoRenditionState {
 
 impl VideoRenditionState {
     pub(super) fn new(video: &VideoMeta, video_sequence_header: Option<&[u8]>) -> Self {
+        let avc_sequence_header =
+            video_sequence_header.filter(|payload| is_flv_avc_sequence_header(payload));
         let sample_entry =
-            video_sequence_header.and_then(build_h264_sample_entry_from_flv_sequence_header);
-        let logged_missing_sample_entry = sample_entry.is_none() && video_sequence_header.is_some();
+            avc_sequence_header.and_then(build_h264_sample_entry_from_flv_sequence_header);
+        let logged_missing_sample_entry = sample_entry.is_none() && avc_sequence_header.is_some();
         if logged_missing_sample_entry {
             warn!(
                 "fMP4 preview could not build an avc1 sample entry from the video sequence header"
@@ -73,8 +76,7 @@ impl VideoRenditionState {
     }
 
     pub(super) fn push_packet(&mut self, packet: &MediaPacket, zero_ms: i64) -> Result<(), String> {
-        if packet.format == PayloadFormat::Flv && packet.payload.len() > 1 && packet.payload[1] == 0
-        {
+        if packet.format == PayloadFormat::Flv && is_flv_avc_sequence_header(&packet.payload) {
             let parsed = build_h264_sample_entry_from_flv_sequence_header(&packet.payload);
             if parsed.is_none() && !self.logged_missing_sample_entry {
                 self.logged_missing_sample_entry = true;
@@ -82,7 +84,9 @@ impl VideoRenditionState {
                     "fMP4 preview could not parse an avc1 sample entry from an FLV sequence header"
                 );
             }
-            self.sample_entry = parsed;
+            if let Some(parsed) = parsed {
+                self.sample_entry = Some(parsed);
+            }
             return Ok(());
         }
 
@@ -320,7 +324,8 @@ mod tests {
     use super::*;
     use crate::media::hls::HlsConfig;
     use crate::media::metadata::VideoMeta;
-    use crate::media::packet::MediaType;
+    use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+    use bytes::Bytes;
 
     fn test_video_meta() -> VideoMeta {
         VideoMeta {
@@ -392,5 +397,64 @@ mod tests {
         // A subsequent flush with no buffered samples must be a cheap no-op,
         // not another attempt to mux the stale (already-cleared) data.
         assert!(state.flush_segment(&store, 1, 1.0, None).is_ok());
+    }
+
+    fn high_profile_sequence_header() -> Vec<u8> {
+        vec![
+            0x17, 0x00, 0x00, 0x00, 0x00, // FLV video header + AVC sequence header
+            0x01, // configurationVersion
+            0x64, // profile = High
+            0x00, // profile compatibility
+            0x1F, // level = 3.1
+            0xFF, // lengthSizeMinusOne = 3
+            0xE1, // num SPS = 1
+            0x00, 0x19, // SPS length = 25
+            0x67, 0x64, 0x00, 0x1F, 0xAC, 0xD9, 0x40, 0x50, 0x05, 0xBB, 0x01, 0x10, 0x00, 0x00,
+            0x03, 0x00, 0x10, 0x00, 0x00, 0x03, 0x03, 0xC0, 0xF1, 0x62, 0xE4,
+            0x01, // num PPS = 1
+            0x00, 0x04, // PPS length = 4
+            0x68, 0xEE, 0x3C, 0x80,
+        ]
+    }
+
+    fn flv_packet(payload: Vec<u8>) -> MediaPacket {
+        MediaPacket {
+            media_type: MediaType::Video,
+            payload: Bytes::from(payload),
+            is_keyframe: true,
+            pts: 0,
+            dts: 0,
+            format: PayloadFormat::Flv,
+            track_index: 0,
+        }
+    }
+
+    #[test]
+    fn video_rendition_ignores_non_avc_sequence_header() {
+        let mut hevc_header = high_profile_sequence_header();
+        hevc_header[0] = 0x1C; // HEVC codec id 12, still packet type 0
+        let state = VideoRenditionState::new(&test_video_meta(), Some(&hevc_header));
+        assert!(state.sample_entry.is_none());
+        assert!(
+            !state.logged_missing_sample_entry,
+            "HEVC ingest headers must not consume the one-shot avc1 warning"
+        );
+    }
+
+    #[test]
+    fn video_rendition_keeps_sample_entry_when_later_sequence_header_fails() {
+        let mut state =
+            VideoRenditionState::new(&test_video_meta(), Some(&high_profile_sequence_header()));
+        let codec = sample_entry_codec_string(state.sample_entry.as_ref().expect("avc1"))
+            .expect("codec string");
+        assert_eq!(codec, "avc1.64001f");
+
+        state
+            .push_packet(&flv_packet(vec![0x17, 0x00]), 0)
+            .expect("malformed AVC sequence header is skipped");
+        assert_eq!(
+            sample_entry_codec_string(state.sample_entry.as_ref().expect("kept avc1")).as_deref(),
+            Some("avc1.64001f")
+        );
     }
 }

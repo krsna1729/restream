@@ -167,7 +167,7 @@ fn backend_policy_matrix_is_separate_from_symmetric_mixed_matrix() {
 }
 
 #[test]
-fn backend_policy_matrix_default_variants_cover_four_internal_stage_families() {
+fn backend_policy_matrix_default_variants_cover_internal_stage_families() {
     let variants = selected_backend_policy_variants().expect("default variants should parse");
     let names: Vec<_> = variants.iter().map(|variant| variant.name()).collect();
 
@@ -177,7 +177,6 @@ fn backend_policy_matrix_default_variants_cover_four_internal_stage_families() {
             "external-all",
             "internal-video-presets",
             "internal-hevc-to-h264",
-            "internal-hls-preview",
             "internal-complex-audio",
             "internal-all",
         ]

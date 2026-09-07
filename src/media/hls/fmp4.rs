@@ -44,8 +44,8 @@ pub use store::Fmp4HlsStore;
 #[cfg(test)]
 use codec::{
     VIDEO_TIMESCALE, build_h264_sample_entry_from_flv_sequence_header,
-    build_h264_sample_entry_from_video_packet, build_mux_samples, parse_avcc_nal_lists, rescale_ms,
-    sample_entry_codec_string,
+    build_h264_sample_entry_from_video_packet, build_mux_samples, is_flv_avc_sequence_header,
+    parse_avcc_nal_lists, rescale_ms, sample_entry_codec_string,
 };
 #[cfg(test)]
 use rendition::BufferedSample;
@@ -318,6 +318,21 @@ mod tests {
             .expect("media metadata");
         let init = muxer.init_segment_bytes().expect("init segment");
         assert!(!init.is_empty());
+    }
+
+    #[test]
+    fn flv_avc_sequence_header_requires_avc_codec_and_packet_type_zero() {
+        let header = high_profile_sequence_header();
+        assert!(is_flv_avc_sequence_header(&header));
+
+        let mut hevc = header.clone();
+        hevc[0] = 0x1C;
+        assert!(!is_flv_avc_sequence_header(&hevc));
+        assert!(build_h264_sample_entry_from_flv_sequence_header(&hevc).is_none());
+
+        let mut nalu = header;
+        nalu[1] = 1;
+        assert!(!is_flv_avc_sequence_header(&nalu));
     }
 
     #[test]

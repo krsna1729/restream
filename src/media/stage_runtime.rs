@@ -531,6 +531,10 @@ pub(crate) async fn wait_for_stage_metadata(
                 let deadline = *audio_absent_deadline
                     .get_or_insert_with(|| tokio::time::Instant::now() + AUDIO_ABSENCE_GRACE);
                 if tokio::time::Instant::now() >= deadline {
+                    info!(
+                        pipeline_id = %pipeline_id,
+                        "starting video-only after audio-absence grace"
+                    );
                     return Some((video, audio_tracks));
                 }
             } else {

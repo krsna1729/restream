@@ -137,7 +137,9 @@ impl BackendPolicyVariant {
 
     fn needs_hls_probe(self) -> bool {
         // HEVC dashboard preview reuses the hevc_to_h264 codec edge, so the
-        // in-process preview transcode is owned by that family flag.
+        // in-process preview transcode is owned by that family flag. The
+        // leftover `RESTREAM_INTERNAL_HLS_PREVIEW` toggle is not a default
+        // matrix row: the planner no longer creates `StageKind::Preview`.
         self.internal_hevc_to_h264
     }
 
@@ -154,8 +156,9 @@ const BACKEND_POLICY_VARIANTS: &[BackendPolicyVariant] = &[
     BackendPolicyVariant::new("external-all", false, false, false, false),
     BackendPolicyVariant::new("internal-video-presets", true, false, false, false),
     BackendPolicyVariant::new("internal-hevc-to-h264", false, true, false, false),
-    BackendPolicyVariant::new("internal-hls-preview", false, false, true, false),
     BackendPolicyVariant::new("internal-complex-audio", false, false, false, true),
+    // `internal-all` still sets `RESTREAM_INTERNAL_HLS_PREVIEW` so the leftover
+    // Preview-family flag stays covered; there is no dedicated preview probe.
     BackendPolicyVariant::new("internal-all", true, true, true, true),
 ];
 
