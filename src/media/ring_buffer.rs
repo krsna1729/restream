@@ -39,10 +39,17 @@
 //!
 //! # Why ArcSwap
 //!
-//! Single-writer is guaranteed by the monotonic `write_idx` — only the ingest
-//! thread ever calls `push()`. Multiple readers call `load_full()` concurrently
-//! without any locking. This eliminates the per-slot RwLock contention that
-//! would otherwise be the bottleneck at 500+ concurrent egress readers.
+//! Multiple readers call `load_full()` concurrently without locking. That
+//! eliminates per-slot `RwLock` contention that would otherwise dominate at
+//! hundreds of concurrent egress readers.
+//!
+//! # Single writer
+//!
+//! `push()` is not exclusive in the type system: a second caller compiles. The
+//! ingest contract is runtime discipline. [`super::input_gate::InputPacketGate`]
+//! plus reconciler promotion ensure only the selected input forwards into a
+//! pipeline ring. Monotonic `write_idx` orders slots for readers; it does not
+//! prove a unique producer.
 
 use arc_swap::ArcSwapOption;
 use std::sync::Arc;

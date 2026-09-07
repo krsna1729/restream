@@ -60,6 +60,14 @@ before adding another abstraction.
 | `infrastructure` | Concrete adapters and process-level wiring | Domain policy |
 | `lib` | Application bootstrap and top-level task composition | Reusable workflows that belong in an owner layer |
 
+The table is the intended ownership. Two production **workflow** paths still
+call `crate::db::*` with a pool instead of going through application ports:
+log persistence in `src/logging.rs`, and bootstrap reconcile/egress job plus
+desired-state writes under `src/infrastructure/bootstrap/`. Those are the
+bypasses. SQLite adapters calling `db::*` is the intended shape, not a
+breach — including `infrastructure/sqlite_ports.rs`,
+`pipeline_input_store.rs`, and `recording_metadata.rs`.
+
 The current layering sequence and stop rules live in
 [Layering roadmap](layering-roadmap.md) and the
 [layering audit skill](agent-guidance/skills/layering-audit/SKILL.md).
@@ -206,7 +214,10 @@ Failure isolation follows these rules:
 - teardown cancels dependents before removing shared state;
 - file-ingest children are tracked and reaped;
 - HLS state is in memory unless a design change explicitly introduces durable
-  storage.
+  storage. MPEG-TS `HlsStore` evicts at `max_segments` (default 20) and drops
+  matching variant-cache entries; fMP4 preview retains
+  `max_segments + 6` grace segments and advertises only `max_segments`. In-memory
+  is safe because those windows are bounded, not because segments are small.
 
 Concurrency proof expectations and the stage coverage map live in
 [Concurrency proofing](concurrency-proofing.md) and

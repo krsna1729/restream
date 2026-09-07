@@ -1,8 +1,13 @@
 //! Portable elapsed-time measurement for instrumentation.
 //!
-//! Provides [`now`] / [`delta_us`] as the single timing primitive used throughout
-//! the media stack. The implementation selects the fastest reliable source at
-//! startup and is transparent to callers:
+//! Production use is the external-transcoder stdin/stdout pipe-stall path
+//! (`external_transcoder` / `ffmpeg_process`): [`calibrate`] at stage start,
+//! then [`Clock`] / [`now`] / [`delta_us`] around those pipe I/O waits. This is
+//! not a packet-inner-loop clock and is not used throughout the media stack.
+//! [`Instant`] is the fallback when invariant TSC is missing or calibration is
+//! out of bounds.
+//!
+//! The implementation selects the fastest reliable source at startup:
 //!
 //! - **x86_64 with invariant TSC** (`CPUID[0x80000007].EDX[8]`): uses `rdtsc`
 //!   (≈3 cycles) instead of `Instant::now()` (≈20-40 cycles via VDSO).
@@ -13,11 +18,11 @@
 //! # Why not always use `Instant`?
 //!
 //! `Instant::now()` on Linux calls `clock_gettime(CLOCK_MONOTONIC)` via VDSO,
-//! which IS TSC-backed but adds calibration scaling (~15-35 extra cycles). For
-//! counters updated on every packet (e.g. pipe stall detection), those cycles
-//! accumulate. At the same time, the paths where this module is used are not
-//! tight inner loops, so either implementation is correct — the rdtsc path is
-//! just a measured improvement.
+//! which IS TSC-backed but adds calibration scaling (~15-35 extra cycles). On
+//! the pipe-stall counters this module actually samples, those cycles can
+//! accumulate. The path is not a tight packet inner loop, so either
+//! implementation is correct — the rdtsc path is a measured improvement for
+//! that instrumentation, not a stack-wide clock policy.
 //!
 //! # Calibration
 //!

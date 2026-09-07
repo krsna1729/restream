@@ -1,7 +1,15 @@
 //! In-memory HLS segmenter — muxes to MPEG-TS via in-house `TsMuxer`, splits on
-//! keyframe boundaries, and stores segments in `HlsStore`. No disk I/O, no FFmpeg,
-//! no OS threads on the hot path. Segments are served directly from memory by the
-//! Axum API.
+//! keyframe boundaries, and stores segments in [`HlsStore`]. No disk I/O, no
+//! FFmpeg, no OS threads on the hot path. Segments are served from memory by
+//! the Axum API.
+//!
+//! # Window
+//!
+//! MPEG-TS live/upload storage evicts when the deque exceeds `HlsConfig.max_segments`
+//! (default `MAX_SEGMENTS`, 20) and drops associated `variant_segments` entries
+//! for the evicted index. Playlist target duration is derived from retained
+//! segment durations (`TARGET_DURATION_SECS` in `store.rs` is the initial
+//! estimate). fMP4 preview storage is a separate policy: see `hls/fmp4`.
 //!
 //! # Segment Lifecycle
 //!
