@@ -103,29 +103,6 @@ impl PipelineService {
             .map_err(|e| ServiceError::internal(format!("delete pipeline: {e}")))
     }
 
-    /// Rewrites only the input-source field while carrying forward the rest of
-    /// the persisted pipeline record unchanged.
-    pub async fn set_input_source(
-        &self,
-        id: &str,
-        input_source: Option<&str>,
-    ) -> ServiceResult<Pipeline> {
-        // Preserve the existing pipeline fields here so callers can update only
-        // the transport input source without reconstructing the whole record.
-        let pipeline = self.get_by_id(id).await?;
-        self.store
-            .update_pipeline(
-                id,
-                &pipeline.name,
-                &pipeline.stream_key,
-                input_source,
-                pipeline.srt_ingest_policy.as_deref(),
-            )
-            .await
-            .map_err(|e| ServiceError::internal(format!("set input source: {e}")))?
-            .ok_or_else(|| Self::pipeline_not_found(id))
-    }
-
     /// List all pipeline IDs (used by health and settings).
     pub async fn list_pipeline_ids(&self) -> ServiceResult<Vec<String>> {
         let pipelines = self.list_pipelines().await?;

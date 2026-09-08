@@ -68,9 +68,7 @@ impl StageInputPump {
         let feeder = TsPacketFeeder::new(
             video_meta,
             Arc::new(audio_tracks.to_vec()),
-            PacketFeedConfig {
-                ..PacketFeedConfig::default()
-            },
+            PacketFeedConfig::default(),
         );
 
         Self {

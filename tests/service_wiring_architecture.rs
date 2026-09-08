@@ -23,7 +23,6 @@ fn infrastructure_owns_sqlite_service_composition() {
         "IngestService",
         "AuthService",
         "SettingsService",
-        "HealthService",
         "FileIngestService",
         "MediaLibraryService",
         "LogService",

@@ -77,12 +77,6 @@ impl TryFrom<JobRow> for JobRecord {
     }
 }
 
-impl JobRecord {
-    pub const fn status_typed(&self) -> Option<JobStatusRecord> {
-        Some(self.status)
-    }
-}
-
 async fn fetch_job_optional(
     pool: &SqlitePool,
     query: &str,

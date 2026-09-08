@@ -116,12 +116,6 @@ impl TryFrom<&str> for JobStatus {
     }
 }
 
-impl Job {
-    pub fn status_typed(&self) -> Option<JobStatus> {
-        Some(self.status)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn job_status_accessor_parses_known_status() {
+    fn job_status_is_already_typed_on_job() {
         let job = Job {
             id: "job-1".to_string(),
             pipeline_id: "pipe".to_string(),
@@ -151,6 +145,6 @@ mod tests {
             exit_signal: None,
         };
 
-        assert_eq!(job.status_typed(), Some(JobStatus::Running));
+        assert_eq!(job.status, JobStatus::Running);
     }
 }
