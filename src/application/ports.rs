@@ -1,9 +1,7 @@
 //! Application-layer port traits defining the storage and catalog capabilities
 //! that orchestration code depends on.
 
-use crate::application::models::{Ingest, Job, Output, Pipeline};
-use crate::domain::output_spec::OutputConfig;
-use crate::domain::state::DesiredOutputState;
+use crate::application::models::{Ingest, Job, Pipeline};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -42,16 +40,6 @@ pub type JobListFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<Job>, JobStoreError>> + Send + 'a>>;
 pub type PipelineUpdateFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Pipeline>, PipelineStoreError>> + Send + 'a>>;
-pub type OutputLookupFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Option<Output>, OutputStoreError>> + Send + 'a>>;
-pub type OutputListFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<Output>, OutputStoreError>> + Send + 'a>>;
-pub type OutputCreateFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Output, OutputStoreError>> + Send + 'a>>;
-pub type OutputUpdateFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Option<Output>, OutputStoreError>> + Send + 'a>>;
-pub type OutputDeleteFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<bool, OutputStoreError>> + Send + 'a>>;
 pub type RecordingListFuture<'a> = Pin<
     Box<dyn Future<Output = Result<Vec<RecordingCatalogRow>, RecordingStoreError>> + Send + 'a>,
 >;
@@ -89,27 +77,6 @@ impl fmt::Display for PipelineStoreError {
 }
 
 impl std::error::Error for PipelineStoreError {}
-
-#[derive(Debug, Clone)]
-pub struct OutputStoreError {
-    message: String,
-}
-
-impl OutputStoreError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for OutputStoreError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for OutputStoreError {}
 
 #[derive(Debug, Clone)]
 pub struct IngestLookupError {
@@ -264,39 +231,6 @@ pub trait PipelineStore: Send + Sync {
         pipeline: &'a Pipeline,
         input_source: Option<&'a str>,
     ) -> PipelineUpdateFuture<'a>;
-}
-
-pub trait OutputStore: Send + Sync {
-    fn list_outputs<'a>(&'a self) -> OutputListFuture<'a>;
-    fn list_outputs_for_pipeline<'a>(&'a self, pipeline_id: &'a str) -> OutputListFuture<'a>;
-    fn get_output<'a>(&'a self, pipeline_id: &'a str, id: &'a str) -> OutputLookupFuture<'a>;
-    #[allow(clippy::too_many_arguments)]
-    fn create_output<'a>(
-        &'a self,
-        id: &'a str,
-        pipeline_id: &'a str,
-        name: &'a str,
-        url: &'a str,
-        monitoring_url: Option<&'a str>,
-        desired_state: DesiredOutputState,
-        config: &'a OutputConfig,
-    ) -> OutputCreateFuture<'a>;
-    fn update_output<'a>(
-        &'a self,
-        pipeline_id: &'a str,
-        id: &'a str,
-        name: &'a str,
-        url: &'a str,
-        monitoring_url: Option<&'a str>,
-        config: &'a OutputConfig,
-    ) -> OutputUpdateFuture<'a>;
-    fn delete_output<'a>(&'a self, pipeline_id: &'a str, id: &'a str) -> OutputDeleteFuture<'a>;
-    fn set_output_desired_state<'a>(
-        &'a self,
-        pipeline_id: &'a str,
-        id: &'a str,
-        desired_state: DesiredOutputState,
-    ) -> OutputCreateFuture<'a>;
 }
 
 pub trait IngestLookup: Send + Sync {

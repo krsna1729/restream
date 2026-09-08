@@ -1,8 +1,9 @@
 use crate::application::models::Output;
 use crate::application::pipeline_inputs::PipelineInputService;
-use crate::application::services::{OutputService, ServiceError, ServiceResult};
+use crate::application::services::{ServiceError, ServiceResult};
 use crate::domain::output_spec::RecirculationTarget;
 use crate::domain::pipeline_input::PipelineInput;
+use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,17 +22,14 @@ pub enum RecirculationTargetInputError {
 
 #[derive(Clone)]
 pub struct RecirculationService {
-    output_service: OutputService,
+    db: SqlitePool,
     pipeline_input_service: PipelineInputService,
 }
 
 impl RecirculationService {
-    pub fn with_services(
-        output_service: OutputService,
-        pipeline_input_service: PipelineInputService,
-    ) -> Self {
+    pub fn with_services(db: SqlitePool, pipeline_input_service: PipelineInputService) -> Self {
         Self {
-            output_service,
+            db,
             pipeline_input_service,
         }
     }
@@ -41,7 +39,7 @@ impl RecirculationService {
         source_pipeline_id: &str,
         target: &RecirculationTarget,
     ) -> ServiceResult<()> {
-        let outputs = self.output_service.list_outputs().await?;
+        let outputs = crate::application::outputs::list_outputs(&self.db).await?;
         validate_recirculation_topology(source_pipeline_id, target, &outputs)
             .map_err(recirculation_topology_service_error)?;
 
@@ -156,89 +154,14 @@ mod tests {
     use super::*;
     use crate::application::models::Pipeline;
     use crate::application::ports::{
-        OutputCreateFuture, OutputDeleteFuture, OutputListFuture, OutputLookupFuture, OutputStore,
-        OutputStoreError, OutputUpdateFuture, PipelineCreateFuture, PipelineDeleteFuture,
-        PipelineIngestHostFuture, PipelineListFuture, PipelineLookupFuture, PipelineStore,
-        PipelineStoreError, PipelineUpdateFuture,
+        PipelineCreateFuture, PipelineDeleteFuture, PipelineIngestHostFuture, PipelineListFuture,
+        PipelineLookupFuture, PipelineStore, PipelineStoreError, PipelineUpdateFuture,
     };
     use crate::application::services::PipelineService;
     use crate::domain::output_spec::OutputConfig;
     use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole};
     use crate::domain::state::DesiredOutputState;
     use std::sync::Arc;
-
-    struct ReadOnlyOutputStore {
-        outputs: Vec<Output>,
-    }
-
-    impl OutputStore for ReadOnlyOutputStore {
-        fn list_outputs<'a>(&'a self) -> OutputListFuture<'a> {
-            Box::pin(async move { Ok(self.outputs.clone()) })
-        }
-
-        fn list_outputs_for_pipeline<'a>(&'a self, pipeline_id: &'a str) -> OutputListFuture<'a> {
-            Box::pin(async move {
-                Ok(self
-                    .outputs
-                    .iter()
-                    .filter(|output| output.pipeline_id == pipeline_id)
-                    .cloned()
-                    .collect())
-            })
-        }
-
-        fn get_output<'a>(&'a self, pipeline_id: &'a str, id: &'a str) -> OutputLookupFuture<'a> {
-            Box::pin(async move {
-                Ok(self
-                    .outputs
-                    .iter()
-                    .find(|output| output.pipeline_id == pipeline_id && output.id == id)
-                    .cloned())
-            })
-        }
-
-        fn create_output<'a>(
-            &'a self,
-            _id: &'a str,
-            _pipeline_id: &'a str,
-            _name: &'a str,
-            _url: &'a str,
-            _monitoring_url: Option<&'a str>,
-            _desired_state: DesiredOutputState,
-            _config: &'a OutputConfig,
-        ) -> OutputCreateFuture<'a> {
-            Box::pin(async move { Err(OutputStoreError::new("read-only output store")) })
-        }
-
-        fn update_output<'a>(
-            &'a self,
-            _pipeline_id: &'a str,
-            _id: &'a str,
-            _name: &'a str,
-            _url: &'a str,
-            _monitoring_url: Option<&'a str>,
-            _config: &'a OutputConfig,
-        ) -> OutputUpdateFuture<'a> {
-            Box::pin(async move { Err(OutputStoreError::new("read-only output store")) })
-        }
-
-        fn delete_output<'a>(
-            &'a self,
-            _pipeline_id: &'a str,
-            _id: &'a str,
-        ) -> OutputDeleteFuture<'a> {
-            Box::pin(async move { Err(OutputStoreError::new("read-only output store")) })
-        }
-
-        fn set_output_desired_state<'a>(
-            &'a self,
-            _pipeline_id: &'a str,
-            _id: &'a str,
-            _desired_state: DesiredOutputState,
-        ) -> OutputCreateFuture<'a> {
-            Box::pin(async move { Err(OutputStoreError::new("read-only output store")) })
-        }
-    }
 
     struct ReadOnlyInputStore {
         inputs: Vec<PipelineInput>,
@@ -436,14 +359,48 @@ mod tests {
         }
     }
 
-    fn service(outputs: Vec<Output>, inputs: Vec<PipelineInput>) -> RecirculationService {
-        let output_service = OutputService::with_store(Arc::new(ReadOnlyOutputStore { outputs }));
+    async fn service(outputs: Vec<Output>, inputs: Vec<PipelineInput>) -> RecirculationService {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        let mut pipelines = std::collections::BTreeSet::new();
+        for output in &outputs {
+            pipelines.insert(output.pipeline_id.clone());
+        }
+        for input in &inputs {
+            pipelines.insert(input.pipeline_id.clone());
+        }
+        for pipeline_id in pipelines {
+            crate::db::create_pipeline(
+                &pool,
+                &pipeline_id,
+                &pipeline_id,
+                &format!("sk_{pipeline_id}"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        for output in &outputs {
+            crate::db::create_output(
+                &pool,
+                &output.id,
+                &output.pipeline_id,
+                &output.name,
+                &output.url,
+                output.monitoring_url.as_deref(),
+                output.desired_state,
+                &output.config,
+            )
+            .await
+            .unwrap();
+        }
         let pipeline_service = PipelineService::with_store(Arc::new(PipelineCatalogStore));
         let pipeline_input_service = PipelineInputService::with_store(
             Arc::new(ReadOnlyInputStore { inputs }),
             pipeline_service,
         );
-        RecirculationService::with_services(output_service, pipeline_input_service)
+        RecirculationService::with_services(pool, pipeline_input_service)
     }
 
     #[test]
@@ -536,7 +493,7 @@ mod tests {
     #[tokio::test]
     async fn recirculation_service_accepts_valid_candidate() {
         let target = RecirculationTarget::parse("pipeline://pipe-b/input-backup").unwrap();
-        let service = service(Vec::new(), vec![input("pipe-b", "input-backup")]);
+        let service = service(Vec::new(), vec![input("pipe-b", "input-backup")]).await;
 
         let result = service.validate_output_candidate("pipe-a", &target).await;
 
@@ -549,7 +506,8 @@ mod tests {
         let service = service(
             vec![output("pipe-b", "b-to-a", "pipeline://pipe-a/input-backup")],
             vec![input("pipe-b", "input-backup")],
-        );
+        )
+        .await;
 
         let error = service
             .validate_output_candidate("pipe-a", &target)
@@ -565,7 +523,7 @@ mod tests {
     #[tokio::test]
     async fn recirculation_service_rejects_missing_target_input() {
         let target = RecirculationTarget::parse("pipeline://pipe-b/input-backup").unwrap();
-        let service = service(Vec::new(), Vec::new());
+        let service = service(Vec::new(), Vec::new()).await;
 
         let error = service
             .validate_output_candidate("pipe-a", &target)

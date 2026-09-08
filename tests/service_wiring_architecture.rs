@@ -19,7 +19,6 @@ fn infrastructure_owns_sqlite_service_composition() {
     for application_service in [
         "PipelineService",
         "PipelineInputService",
-        "OutputService",
         "IngestService",
         "AuthService",
         "SettingsService",
@@ -39,6 +38,10 @@ fn infrastructure_owns_sqlite_service_composition() {
         !source.contains("LogService"),
         "LogService was collapsed to application::logs + AppState.db (Wave 1 A-lite)"
     );
+    assert!(
+        !source.contains("OutputService"),
+        "OutputService was collapsed to application::outputs + AppState.db (Wave 1 B)"
+    );
 
     let services_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/application/services");
     let mut storage_coupled_services = Vec::new();
@@ -47,15 +50,25 @@ fn infrastructure_owns_sqlite_service_composition() {
             return;
         }
         let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
-        if production_source.contains("use sqlx::")
-            || production_source.contains("sqlx::SqlitePool")
-        {
-            storage_coupled_services.push(path.display().to_string());
+        // Collapsed #149 slices may hold SqlitePool; still forbid infrastructure adapters.
+        for forbidden in [
+            "crate::infrastructure::sqlite_ports",
+            "SqlitePipelineStore",
+            "SqliteOutputStore",
+            "SqliteIngestLookup",
+            "SqliteMetaStore",
+            "SqliteSessionStore",
+            "SqliteJobStore",
+            "SqliteRecordingStore",
+        ] {
+            if production_source.contains(forbidden) {
+                storage_coupled_services.push(format!("{} uses {forbidden}", path.display()));
+            }
         }
     });
     assert!(
         storage_coupled_services.is_empty(),
-        "application services must accept storage-neutral ports: {storage_coupled_services:?}"
+        "application services must not import SQLite adapters: {storage_coupled_services:?}"
     );
 }
 

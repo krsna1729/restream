@@ -71,7 +71,8 @@ pub async fn pipeline_graph_handler(
         return Ok((StatusCode::NOT_FOUND, "Pipeline not found").into_response());
     }
 
-    let pipeline_outputs = state.output_service.list_for_pipeline(&pipeline_id).await?;
+    let pipeline_outputs =
+        crate::application::outputs::list_for_pipeline(&state.db, &pipeline_id).await?;
     let mut graph =
         crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
             .await;
@@ -149,7 +150,8 @@ pub async fn pipeline_diagnostics_context_handler(
     let health = pipeline_health_snapshot(&state, &pipeline_id).await;
     let generated_at = snapshot_generated_at(&health);
 
-    let pipeline_outputs = state.output_service.list_for_pipeline(&pipeline_id).await?;
+    let pipeline_outputs =
+        crate::application::outputs::list_for_pipeline(&state.db, &pipeline_id).await?;
     let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
     let backend_policy = state.engine.backend_policy();
     let desired_graphs = crate::application::graph::desired_pipeline_graphs(
@@ -230,7 +232,8 @@ pub async fn v1_pipeline_summary_handler(
     let generated_at = snapshot_generated_at(&snapshot);
 
     let pip = &snapshot["pipelines"][&pipeline_id];
-    let pipeline_outputs = state.output_service.list_for_pipeline(&pipeline_id).await?;
+    let pipeline_outputs =
+        crate::application::outputs::list_for_pipeline(&state.db, &pipeline_id).await?;
     let graph =
         crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
             .await;

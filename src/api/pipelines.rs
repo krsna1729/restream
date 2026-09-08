@@ -170,7 +170,7 @@ pub async fn pipeline_detail_handler(
         Ok(pipeline) => pipeline,
         Err(error) => return ApiError::from(error).into_response(),
     };
-    let outputs = match state.output_service.list_for_pipeline(&id).await {
+    let outputs = match crate::application::outputs::list_for_pipeline(&state.db, &id).await {
         Ok(outputs) => outputs,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -390,7 +390,7 @@ pub async fn pipelines_delete_handler(
 
     // The engine owns live runtime state, so we tear that down before removing
     // the persisted pipeline row.
-    if let Ok(outputs) = state.output_service.list_outputs().await {
+    if let Ok(outputs) = crate::application::outputs::list_outputs(&state.db).await {
         for output in outputs.iter().filter(|o| o.pipeline_id == id) {
             state.engine.unregister_egress(&output.id).await;
         }

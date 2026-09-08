@@ -384,7 +384,10 @@ fn application_ports_are_abstract_and_sqlite_adapters_live_in_infrastructure() {
     let sqlite_ports = include_str!("../src/infrastructure/sqlite_ports.rs");
     assert!(sqlite_ports.contains("SqlitePool"));
     assert!(sqlite_ports.contains("impl PipelineStore for SqlitePipelineStore"));
-    assert!(sqlite_ports.contains("impl OutputStore for SqliteOutputStore"));
+    assert!(
+        !sqlite_ports.contains("SqliteOutputStore"),
+        "OutputStore lattice collapsed to application::outputs + AppState.db (#149 B)"
+    );
 }
 
 #[test]
@@ -733,7 +736,6 @@ async fn test_phase_4_5_services_and_repositories_flow() {
     let services =
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&db).compose();
     let pipeline_service = services.pipeline_service;
-    let output_service = services.output_service;
 
     let pid = "test-pipe-service";
     pipeline_service
@@ -746,18 +748,18 @@ async fn test_phase_4_5_services_and_repositories_flow() {
 
     let oid = "test-out-service";
     let config = OutputConfig::default();
-    output_service
-        .create_output(
-            oid,
-            pid,
-            "rtmp-push",
-            "rtmp://localhost/live",
-            None,
-            "running",
-            &config,
-        )
-        .await
-        .unwrap();
+    restream::application::outputs::create_output(
+        &db,
+        oid,
+        pid,
+        "rtmp-push",
+        "rtmp://localhost/live",
+        None,
+        "running",
+        &config,
+    )
+    .await
+    .unwrap();
 
     let output = restream::db::get_output(&db, pid, oid)
         .await

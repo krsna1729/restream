@@ -9,13 +9,13 @@ use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
     AgentService, AuthService, FileIngestService, IngestService, MediaLibraryService,
-    OutputService, PipelineService, SettingsService,
+    PipelineService, SettingsService,
 };
 use crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore;
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
 use crate::infrastructure::sqlite_ports::{
-    SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqliteOutputStore, SqlitePipelineStore,
-    SqliteRecordingStore, SqliteSessionStore,
+    SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqlitePipelineStore, SqliteRecordingStore,
+    SqliteSessionStore,
 };
 
 /// Infrastructure-owned factory for SQLite application-port adapters.
@@ -31,15 +31,11 @@ impl<'pool> SqliteServiceFactory<'pool> {
     /// Builds the complete service graph used by the API state.
     pub fn compose(&self) -> AppServices {
         let pipeline_service = self.pipeline_service();
-        let output_service = self.output_service();
         let pipeline_input_service = self.pipeline_input_service(pipeline_service.clone());
-        let recirculation_service = RecirculationService::with_services(
-            output_service.clone(),
-            pipeline_input_service.clone(),
-        );
+        let recirculation_service =
+            RecirculationService::with_services(self.db.clone(), pipeline_input_service.clone());
         let ingest_service = self.ingest_service();
-        let settings_service =
-            self.settings_service_with(pipeline_service.clone(), output_service.clone());
+        let settings_service = self.settings_service_with(pipeline_service.clone());
 
         AppServices {
             pipeline_input_service,
@@ -51,7 +47,6 @@ impl<'pool> SqliteServiceFactory<'pool> {
                 .media_library_service(pipeline_service.clone(), ingest_service.clone()),
             agent_service: self.agent_service(),
             pipeline_service,
-            output_service,
             ingest_service,
         }
     }
@@ -65,10 +60,6 @@ impl<'pool> SqliteServiceFactory<'pool> {
             Arc::new(SqlitePipelineInputStore::new(self.db.clone())),
             pipelines,
         )
-    }
-
-    pub fn output_service(&self) -> OutputService {
-        OutputService::with_store(Arc::new(SqliteOutputStore::new(self.db.clone())))
     }
 
     pub fn ingest_service(&self) -> IngestService {
@@ -86,14 +77,10 @@ impl<'pool> SqliteServiceFactory<'pool> {
     }
 
     pub fn settings_service(&self) -> SettingsService {
-        self.settings_service_with(self.pipeline_service(), self.output_service())
+        self.settings_service_with(self.pipeline_service())
     }
 
-    fn settings_service_with(
-        &self,
-        pipeline_service: PipelineService,
-        output_service: OutputService,
-    ) -> SettingsService {
+    fn settings_service_with(&self, pipeline_service: PipelineService) -> SettingsService {
         let meta_store = Arc::new(SqliteMetaStore::new(self.db.clone()));
         SettingsService::with_stores(
             meta_store.clone(),
@@ -102,7 +89,6 @@ impl<'pool> SqliteServiceFactory<'pool> {
             Arc::new(SqliteJobStore::new(self.db.clone())),
             Arc::new(SqlitePipelineInputStore::new(self.db.clone())),
             pipeline_service,
-            output_service,
         )
     }
 
@@ -136,8 +122,8 @@ impl<'pool> SqliteServiceFactory<'pool> {
     pub fn agent_service(&self) -> AgentService {
         let meta_store = Arc::new(SqliteMetaStore::new(self.db.clone()));
         AgentService::with_stores(
+            self.db.clone(),
             Arc::new(SqlitePipelineStore::new(self.db.clone())),
-            Arc::new(SqliteOutputStore::new(self.db.clone())),
             Arc::new(SqliteJobStore::new(self.db.clone())),
             Arc::new(SqliteIngestLookup::new(self.db.clone())),
             meta_store.clone(),
