@@ -7,7 +7,6 @@ use crate::application::models::Pipeline;
 use crate::application::ports::*;
 use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;
-use crate::logging::types::AppLogFilters;
 use sqlx::SqlitePool;
 
 #[derive(Clone)]
@@ -37,11 +36,6 @@ pub struct SqliteSessionStore {
 
 #[derive(Clone)]
 pub struct SqliteJobStore {
-    pool: SqlitePool,
-}
-
-#[derive(Clone)]
-pub struct SqliteLogStore {
     pool: SqlitePool,
 }
 
@@ -81,12 +75,6 @@ impl SqliteSessionStore {
 }
 
 impl SqliteJobStore {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
-}
-
-impl SqliteLogStore {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -524,16 +512,6 @@ impl JobStore for SqliteJobStore {
                 .await
                 .map(|records| records.into_iter().map(job_model).collect())
                 .map_err(|err| JobStoreError::new(err.to_string()))
-        })
-    }
-}
-
-impl LogStore for SqliteLogStore {
-    fn list_app_logs<'a>(&'a self, filters: &'a AppLogFilters) -> LogListFuture<'a> {
-        Box::pin(async move {
-            crate::db::list_app_logs(&self.pool, filters)
-                .await
-                .map_err(|err| LogStoreError::new(err.to_string()))
         })
     }
 }

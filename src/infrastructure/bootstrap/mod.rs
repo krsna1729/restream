@@ -175,6 +175,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         crate::infrastructure::service_wiring::SqliteServiceFactory::new(&pool).compose();
     let state = Arc::new(crate::api::AppState::new(
         services,
+        pool.clone(),
         security.clone(),
         srt_ingest_policy_store.clone(),
         sessions,

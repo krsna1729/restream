@@ -8,14 +8,14 @@ use crate::api::AppServices;
 use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
-    AgentService, AuthService, FileIngestService, IngestService, LogService, MediaLibraryService,
+    AgentService, AuthService, FileIngestService, IngestService, MediaLibraryService,
     OutputService, PipelineService, SettingsService,
 };
 use crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore;
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
 use crate::infrastructure::sqlite_ports::{
-    SqliteIngestLookup, SqliteJobStore, SqliteLogStore, SqliteMetaStore, SqliteOutputStore,
-    SqlitePipelineStore, SqliteRecordingStore, SqliteSessionStore,
+    SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqliteOutputStore, SqlitePipelineStore,
+    SqliteRecordingStore, SqliteSessionStore,
 };
 
 /// Infrastructure-owned factory for SQLite application-port adapters.
@@ -49,7 +49,6 @@ impl<'pool> SqliteServiceFactory<'pool> {
             file_ingest_service: self.file_ingest_service(pipeline_service.clone()),
             media_library_service: self
                 .media_library_service(pipeline_service.clone(), ingest_service.clone()),
-            log_service: self.log_service(),
             agent_service: self.agent_service(),
             pipeline_service,
             output_service,
@@ -132,10 +131,6 @@ impl<'pool> SqliteServiceFactory<'pool> {
             ingest_service,
         )
         .with_recording_metadata(spawn_recording_metadata_reporter(self.db.clone()))
-    }
-
-    pub fn log_service(&self) -> LogService {
-        LogService::with_store(Arc::new(SqliteLogStore::new(self.db.clone())))
     }
 
     pub fn agent_service(&self) -> AgentService {
