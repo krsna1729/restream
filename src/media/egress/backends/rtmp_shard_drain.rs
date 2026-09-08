@@ -5,10 +5,9 @@
 
 use super::*;
 
-impl<P, R, S> RtmpShardBackend<P, R, S>
+impl<P, S> RtmpShardBackend<P, S>
 where
     P: RtmpReadinessPoller,
-    R: RtmpResolveCompletionSource,
     S: RtmpPublishStartupSource,
 {
     /// Ask a leaf to close, gracefully if it still has application bytes

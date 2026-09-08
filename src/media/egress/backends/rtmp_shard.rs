@@ -127,18 +127,6 @@ pub(crate) enum RtmpResolveWorkerError {
     CompletionQueueClosed,
 }
 
-pub(crate) trait RtmpResolveCompletionSource {
-    fn drain_resolved(&mut self, resolved: &mut Vec<RtmpResolvedConnect>);
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct NoopRtmpResolveCompletionSource;
-
-impl RtmpResolveCompletionSource for NoopRtmpResolveCompletionSource {
-    fn drain_resolved(&mut self, _resolved: &mut Vec<RtmpResolvedConnect>) {}
-}
-
-#[derive(Debug)]
 pub(crate) struct RtmpResolveCompletionQueue {
     receiver: Receiver<RtmpResolvedConnect>,
 }
@@ -150,8 +138,8 @@ pub(crate) fn rtmp_resolve_completion_queue(
     (sender, RtmpResolveCompletionQueue { receiver })
 }
 
-impl RtmpResolveCompletionSource for RtmpResolveCompletionQueue {
-    fn drain_resolved(&mut self, resolved: &mut Vec<RtmpResolvedConnect>) {
+impl RtmpResolveCompletionQueue {
+    pub(crate) fn drain_resolved(&mut self, resolved: &mut Vec<RtmpResolvedConnect>) {
         while let Ok(completion) = self.receiver.try_recv() {
             resolved.push(completion);
         }
@@ -398,17 +386,13 @@ struct PendingRtmpConnect {
     connect_timeout: Duration,
 }
 
-pub(crate) struct RtmpShardBackend<
-    P,
-    R = NoopRtmpResolveCompletionSource,
-    S = EmptyRtmpPublishStartupSource,
-> where
+pub(crate) struct RtmpShardBackend<P, S = EmptyRtmpPublishStartupSource>
+where
     P: RtmpReadinessPoller,
-    R: RtmpResolveCompletionSource,
     S: RtmpPublishStartupSource,
 {
     poller: P,
-    resolve_completions: R,
+    resolve_completions: RtmpResolveCompletionQueue,
     startup_source: S,
     feed: RingFeed,
     /// Per-visit limits. `WorkBudget::deadline` is an absolute `Instant`
@@ -441,31 +425,9 @@ pub(crate) struct RtmpShardBackend<
     resync_count: u64,
 }
 
-impl<P> RtmpShardBackend<P, NoopRtmpResolveCompletionSource, EmptyRtmpPublishStartupSource>
+impl<P, S> RtmpShardBackend<P, S>
 where
     P: RtmpReadinessPoller,
-{
-    // Production always constructs via `with_runtime_components` directly
-    // (see rtmp_shard_resolve_runtime.rs); this convenience constructor is
-    // only used by tests.
-    #[cfg(test)]
-    pub(crate) fn new(poller: P, feed: RingFeed, budget: WorkBudget, chunk_size: u32) -> Self {
-        Self::with_runtime_components(
-            poller,
-            feed,
-            budget,
-            chunk_size,
-            crate::media::rtmp::rustls_client_config(),
-            NoopRtmpResolveCompletionSource,
-            EmptyRtmpPublishStartupSource,
-        )
-    }
-}
-
-impl<P, R, S> RtmpShardBackend<P, R, S>
-where
-    P: RtmpReadinessPoller,
-    R: RtmpResolveCompletionSource,
     S: RtmpPublishStartupSource,
 {
     pub(crate) fn with_runtime_components(
@@ -474,7 +436,7 @@ where
         budget: WorkBudget,
         chunk_size: u32,
         rtmps_client_config: Arc<ClientConfig>,
-        resolve_completions: R,
+        resolve_completions: RtmpResolveCompletionQueue,
         startup_source: S,
     ) -> Self {
         let budget_window = budget
@@ -854,10 +816,9 @@ where
     }
 }
 
-impl<P, R, S> EgressShardBackend for RtmpShardBackend<P, R, S>
+impl<P, S> EgressShardBackend for RtmpShardBackend<P, S>
 where
     P: RtmpReadinessPoller + Send + 'static,
-    R: RtmpResolveCompletionSource + Send + 'static,
     S: RtmpPublishStartupSource + Send + 'static,
 {
     fn resync_count(&self) -> u64 {
@@ -974,6 +935,28 @@ where
                 );
             }
         }
+    }
+}
+
+impl<P> RtmpShardBackend<P, EmptyRtmpPublishStartupSource>
+where
+    P: RtmpReadinessPoller,
+{
+    // Production always constructs via `with_runtime_components` directly
+    // (see rtmp_shard_resolve_runtime.rs); this convenience constructor is
+    // only used by tests.
+    #[cfg(test)]
+    pub(crate) fn new(poller: P, feed: RingFeed, budget: WorkBudget, chunk_size: u32) -> Self {
+        let (_sender, queue) = rtmp_resolve_completion_queue(1);
+        Self::with_runtime_components(
+            poller,
+            feed,
+            budget,
+            chunk_size,
+            crate::media::rtmp::rustls_client_config(),
+            queue,
+            EmptyRtmpPublishStartupSource,
+        )
     }
 }
 

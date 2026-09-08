@@ -7,11 +7,7 @@
 
 use super::*;
 
-impl<K, R> SrtShardBackend<K, R>
-where
-    K: SrtSocketConnector,
-    R: SrtResolveCompletionSource,
-{
+impl SrtShardBackend {
     /// Ask a leaf to close, gracefully if it still has send-path bytes
     /// queued: rather than tearing down the transport immediately (losing
     /// whatever the application message queue or native libsrt sender

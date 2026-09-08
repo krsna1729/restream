@@ -1,6 +1,6 @@
 use super::super::resolve_runtime::{ResolvingSrtShardBackend, SrtResolveWorkerSet};
 use super::super::*;
-use super::support::{FakeConnectCall, FakeSocketConnector, feed};
+use super::support::feed;
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::policy::{LeafPolicy, WorkBudget};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
@@ -22,12 +22,9 @@ fn output_spec(id: &str, generation: u64, protocol: ProtocolSpec) -> OutputSpec 
 #[test]
 fn resolving_srt_backend_spawns_resolver_and_completes_add() {
     let (completion_sender, completion_queue) = srt_resolve_completion_queue(4);
-    let connector = FakeSocketConnector::returning();
-    let connector_handle = connector.clone();
     let inner = SrtShardBackend::with_runtime_components(
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        connector,
         completion_queue,
     );
     let mut backend =
@@ -44,21 +41,20 @@ fn resolving_srt_backend_spawns_resolver_and_completes_add() {
     assert_eq!(effect, EgressShardCommandEffect::Continue);
     for _ in 0..50 {
         backend.on_media_tick();
-        if !connector_handle.calls().is_empty() {
+        if backend
+            .inner_backend()
+            .output_sockets
+            .contains_key(&OutputId::new("out-a"))
+        {
             break;
         }
         thread::sleep(Duration::from_millis(1));
     }
-    assert_eq!(
-        connector_handle.calls(),
-        vec![FakeConnectCall {
-            peer_addrs: vec![
-                "127.0.0.1:9000".parse().unwrap(),
-                "127.0.0.2:9001".parse().unwrap(),
-            ],
-            stream_id: "publish:key".to_string(),
-            connect_timeout_ms: 30000,
-        }]
+    assert!(
+        backend
+            .inner_backend()
+            .output_sockets
+            .contains_key(&OutputId::new("out-a"))
     );
     assert_eq!(backend.worker_count(), 0);
 }
@@ -69,7 +65,6 @@ fn resolving_srt_backend_does_not_spawn_for_non_srt_add() {
     let inner = SrtShardBackend::with_runtime_components(
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        FakeSocketConnector::returning(),
         completion_queue,
     );
     let mut backend =

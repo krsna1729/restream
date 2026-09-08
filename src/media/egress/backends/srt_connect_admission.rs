@@ -39,11 +39,7 @@
 
 use super::*;
 
-impl<K, R> SrtShardBackend<K, R>
-where
-    K: SrtSocketConnector,
-    R: SrtResolveCompletionSource,
-{
+impl SrtShardBackend {
     /// Opts this backend's resolved-connect draining into the shared
     /// `admission` semaphore. Kept as a separate builder step, mirroring
     /// `with_srt_egress_muxer_port_reuse`, so every existing constructor

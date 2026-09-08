@@ -5,9 +5,7 @@ use crate::media::egress::journal::{FeedEpoch, TsFeed};
 use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::policy::{LeafLimits, WorkBudget};
 use crate::media::snapshots::PublisherQuality;
-use crate::media::srt::{
-    NativeSendBacklog, SrtFabricEgressConnectConfig, SrtMessageSender, SrtSendResult,
-};
+use crate::media::srt::{NativeSendBacklog, SrtMessageSender, SrtSendResult};
 use crate::media::ts_chunk_ring::TsChunkRing;
 use bytes::Bytes;
 use std::sync::{Arc, Mutex};
@@ -72,89 +70,6 @@ pub(super) struct SharedSenderProbe {
     pub(super) sender: SharedFakeSender,
     pub(super) sends: Arc<Mutex<Vec<Bytes>>>,
     pub(super) closed: Arc<Mutex<u32>>,
-}
-
-/// One `connect()` call's peer/stream/timeout inputs, in order.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct FakeConnectCall {
-    pub(super) peer_addrs: Vec<std::net::SocketAddr>,
-    pub(super) stream_id: String,
-    pub(super) connect_timeout_ms: u64,
-}
-
-/// `(has_muxer_port_claim, muxer_port_claim_bind_port)` per `connect()` call.
-type MuxerPortClaims = Arc<Mutex<Vec<(bool, Option<u16>)>>>;
-
-#[derive(Clone)]
-pub(super) struct FakeSocketConnector {
-    should_fail: Option<String>,
-    calls: Arc<Mutex<Vec<FakeConnectCall>>>,
-    muxer_port_claims: MuxerPortClaims,
-}
-
-impl FakeSocketConnector {
-    pub(super) fn returning() -> Self {
-        Self {
-            should_fail: None,
-            calls: Arc::new(Mutex::new(Vec::new())),
-            muxer_port_claims: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    pub(super) fn failing(error: &str) -> Self {
-        Self {
-            should_fail: Some(error.to_string()),
-            ..Self::returning()
-        }
-    }
-
-    pub(super) fn calls(&self) -> Vec<FakeConnectCall> {
-        self.calls.lock().unwrap().clone()
-    }
-
-    /// One `(has_muxer_port_claim, muxer_port_claim_bind_port)` pair per
-    /// `connect()` call, in order.
-    pub(super) fn muxer_port_claims(&self) -> Vec<(bool, Option<u16>)> {
-        self.muxer_port_claims.lock().unwrap().clone()
-    }
-}
-
-impl SrtSocketConnector for FakeSocketConnector {
-    fn connect(
-        &mut self,
-        config: SrtFabricEgressConnectConfig<'_>,
-    ) -> Result<Box<dyn SrtMessageSender + Send>, String> {
-        self.calls.lock().unwrap().push(FakeConnectCall {
-            peer_addrs: config.peer_addrs().to_vec(),
-            stream_id: config.stream_id().to_string(),
-            connect_timeout_ms: config.connect_timeout_ms(),
-        });
-        self.muxer_port_claims.lock().unwrap().push((
-            config.has_muxer_port_claim(),
-            config.muxer_port_claim_bind_port(),
-        ));
-        match &self.should_fail {
-            Some(error) => Err(error.clone()),
-            None => Ok(Box::new(FakeSender::default())),
-        }
-    }
-}
-
-#[derive(Default)]
-pub(super) struct FakeResolveCompletionSource {
-    completions: Vec<SrtResolvedConnect>,
-}
-
-impl FakeResolveCompletionSource {
-    pub(super) fn with(completions: Vec<SrtResolvedConnect>) -> Self {
-        Self { completions }
-    }
-}
-
-impl SrtResolveCompletionSource for FakeResolveCompletionSource {
-    fn drain_resolved(&mut self, resolved: &mut Vec<SrtResolvedConnect>) {
-        resolved.append(&mut self.completions);
-    }
 }
 
 pub(super) fn leaf(generation: u64) -> SrtFabricLeaf<FakeSender> {

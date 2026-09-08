@@ -13,7 +13,17 @@ July 2026 bootstrap and hunt entries are frozen in
 ## Contents
 
 - [Archived July 2026 journal](../../archive/quality/journal-2026-07.md)
+- [2026-09-08 Q-024 DONE [composer]](#2026-09-08-q-024-done-composer)
 
 ---
 
 <!-- New entries append below this line. -->
+
+## 2026-09-08 Q-024 DONE [composer]
+- What: collapse SRT/RTMP connector and resolve-completion test seams;
+  backends call `connect_fabric_*` directly and hold concrete completion queues
+- Gates: deferred to CI (`cargo test --lib`, concurrency/contract, clippy);
+  local FFmpeg prefix unavailable
+- Commit: 83a7a34f
+- Follow-ups: none (Q-025 / #132 remain separate)
+- Notes: FakeSender/add_leaf kept; Resolving* decorators unchanged

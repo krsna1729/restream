@@ -668,10 +668,9 @@ impl SrtFabricEgressConnectConfig<'_> {
     }
 }
 
-/// Connects a new SRT egress transport and hands it back directly -- the
-/// caller (`SrtSocketConnector::connect`) boxes it as `dyn SrtMessageSender`
-/// and the leaf owns it for its whole lifetime; there is no id-keyed
-/// registry to look it back up through.
+/// Connects a new SRT egress transport and hands it back directly — the
+/// caller boxes it as `dyn SrtMessageSender` and the leaf owns it for its
+/// whole lifetime; there is no id-keyed registry to look it back up through.
 pub(crate) fn connect_fabric_srt_egress_socket(
     config: SrtFabricEgressConnectConfig<'_>,
 ) -> Result<Box<dyn SrtMessageSender + Send>, String> {
