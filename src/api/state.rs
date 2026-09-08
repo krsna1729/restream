@@ -18,7 +18,7 @@ use crate::alerts;
 use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
-    AgentService, AuthService, FileIngestService, IngestService, LogService, MediaLibraryService,
+    AgentService, AuthService, FileIngestService, IngestService, MediaLibraryService,
     OutputService, PipelineService, SettingsService,
 };
 use crate::config::AppConfig;
@@ -26,6 +26,7 @@ use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::media::engine::MediaEngine;
 use crate::media::security::{IngestSecurityService, RateLimitScope, RateLimitSnapshot};
 use crate::media::srt::SrtIngestPolicyStore;
+use sqlx::SqlitePool;
 
 use super::AppServices;
 
@@ -90,6 +91,9 @@ pub struct AppState {
     ingest_policy_store: Arc<SrtIngestPolicyStore>,
     sessions: Arc<TokioRwLock<HashSet<String>>>,
     pub engine: Arc<MediaEngine>,
+    /// Concrete SQLite pool for application helpers that call `db::*` directly
+    /// (Wave 1 A-lite Logs; expands as other services collapse).
+    pub db: SqlitePool,
     pub ingest_disconnect_grace_ms: u64,
     pub ports: PortConfig,
     pub media_dir: String,
@@ -105,7 +109,6 @@ pub struct AppState {
     pub settings_service: SettingsService,
     pub file_ingest_service: FileIngestService,
     pub media_library_service: MediaLibraryService,
-    pub log_service: LogService,
     pub agent_service: AgentService,
     pub alert_tracker: alerts::AlertTracker,
     pub log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
@@ -116,8 +119,14 @@ pub struct AppState {
 
 impl AppState {
     /// Wires storage-neutral application services into shared HTTP state.
+    ///
+    /// `db` is a temporary extra until more control-plane slices collapse onto
+    /// the same concrete pool (#149). Keep this as the single App root rather
+    /// than introducing another deps bag.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         services: AppServices,
+        db: SqlitePool,
         security: Arc<IngestSecurityService>,
         ingest_policy_store: Arc<SrtIngestPolicyStore>,
         sessions: Arc<TokioRwLock<HashSet<String>>>,
@@ -135,7 +144,6 @@ impl AppState {
             settings_service,
             file_ingest_service,
             media_library_service,
-            log_service,
             agent_service,
         } = services;
 
@@ -144,6 +152,7 @@ impl AppState {
             ingest_policy_store,
             sessions,
             engine,
+            db,
             ingest_disconnect_grace_ms: runtime.ingest_disconnect_grace_ms,
             ports: runtime.ports,
             media_dir: runtime.media_dir,
@@ -159,7 +168,6 @@ impl AppState {
             settings_service,
             file_ingest_service,
             media_library_service,
-            log_service,
             agent_service,
             alert_tracker: alerts::AlertTracker::new(),
             log_broadcast,
@@ -309,6 +317,7 @@ impl AppState {
     ) -> Self {
         Self::new(
             services,
+            test_sqlite_pool(),
             security,
             ingest_policy_store,
             sessions,
@@ -334,6 +343,7 @@ impl AppState {
         };
         Self::new(
             services,
+            test_sqlite_pool(),
             security,
             ingest_policy_store,
             sessions,
@@ -342,6 +352,10 @@ impl AppState {
             runtime,
         )
     }
+}
+
+fn test_sqlite_pool() -> SqlitePool {
+    SqlitePool::connect_lazy("sqlite::memory:").expect("lazy in-memory sqlite pool")
 }
 
 /// Shared length guard for request fields that should fail fast at the HTTP

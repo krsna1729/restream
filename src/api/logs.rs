@@ -242,9 +242,7 @@ pub async fn logs_handler(
 
     let filters = build_logs_filters(query);
 
-    let logs = state
-        .log_service
-        .list_logs(&filters)
+    let logs = crate::application::logs::list_logs(&state.db, &filters)
         .await
         .unwrap_or_default();
     let has_more = logs.len()
@@ -282,19 +280,19 @@ pub async fn logs_stream_handler(
 
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
 
-    let log_service = state.log_service.clone();
+    let db = state.db.clone();
     let mut broadcast_rx = state.log_broadcast.subscribe();
 
     tokio::spawn(async move {
         let mut delivered_through = resume_from.unwrap_or(0);
         if resume_from.is_some() {
             loop {
-                let Ok(backfill) = log_service
-                    .list_stream_backfill(
-                        &filter.backfill_filters(delivered_through),
-                        filter.include_restream,
-                    )
-                    .await
+                let Ok(backfill) = crate::application::logs::list_stream_backfill(
+                    &db,
+                    &filter.backfill_filters(delivered_through),
+                    filter.include_restream,
+                )
+                .await
                 else {
                     // End the response so EventSource reconnects with its prior
                     // cursor instead of silently treating a failed page as empty.

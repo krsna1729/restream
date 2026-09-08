@@ -25,7 +25,6 @@ fn infrastructure_owns_sqlite_service_composition() {
         "SettingsService",
         "FileIngestService",
         "MediaLibraryService",
-        "LogService",
         "AgentService",
     ] {
         assert!(
@@ -36,6 +35,10 @@ fn infrastructure_owns_sqlite_service_composition() {
     assert!(source.contains("pub struct SqliteServiceFactory"));
     assert!(source.contains("use crate::api::AppServices;"));
     assert!(!source.contains("pub struct AppServices"));
+    assert!(
+        !source.contains("LogService"),
+        "LogService was collapsed to application::logs + AppState.db (Wave 1 A-lite)"
+    );
 
     let services_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/application/services");
     let mut storage_coupled_services = Vec::new();
@@ -57,19 +60,33 @@ fn infrastructure_owns_sqlite_service_composition() {
 }
 
 #[test]
-fn api_state_and_auth_do_not_depend_on_sqlite_infrastructure() {
+fn api_modules_keep_sqlite_at_the_app_state_root() {
     let api_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/api");
     let mut offenders = Vec::new();
     collect_rust_sources(&api_dir, &mut |path, source| {
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
         let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
-        for forbidden in ["sqlx::", "crate::infrastructure::", "SqliteServiceFactory"] {
+        // Concrete App root may hold SqlitePool; handlers must not reach into
+        // infrastructure adapters or the service factory.
+        for forbidden in ["crate::infrastructure::", "SqliteServiceFactory"] {
             if production_source.contains(forbidden) {
                 offenders.push(format!("{} depends on {forbidden}", path.display()));
             }
         }
+        if file_name != "state.rs"
+            && (production_source.contains("sqlx::") || production_source.contains("SqlitePool"))
+        {
+            offenders.push(format!(
+                "{} must not import sqlx; use AppState.db / application helpers",
+                path.display()
+            ));
+        }
     });
     assert!(
         offenders.is_empty(),
-        "API modules must receive storage-neutral services: {offenders:?}"
+        "API modules must keep SQLite at the AppState root: {offenders:?}"
     );
 }

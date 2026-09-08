@@ -4,7 +4,6 @@
 use crate::application::models::{Ingest, Job, Output, Pipeline};
 use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;
-use crate::logging::types::{AppLogFilters, AppLogRow};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -53,8 +52,6 @@ pub type OutputUpdateFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Output>, OutputStoreError>> + Send + 'a>>;
 pub type OutputDeleteFuture<'a> =
     Pin<Box<dyn Future<Output = Result<bool, OutputStoreError>> + Send + 'a>>;
-pub type LogListFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<AppLogRow>, LogStoreError>> + Send + 'a>>;
 pub type RecordingListFuture<'a> = Pin<
     Box<dyn Future<Output = Result<Vec<RecordingCatalogRow>, RecordingStoreError>> + Send + 'a>,
 >;
@@ -113,27 +110,6 @@ impl fmt::Display for OutputStoreError {
 }
 
 impl std::error::Error for OutputStoreError {}
-
-#[derive(Debug, Clone)]
-pub struct LogStoreError {
-    message: String,
-}
-
-impl LogStoreError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for LogStoreError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for LogStoreError {}
 
 #[derive(Debug, Clone)]
 pub struct IngestLookupError {
@@ -389,10 +365,6 @@ pub trait SessionStore: Send + Sync {
     fn get_session_created_at<'a>(&'a self, token: &'a str) -> SessionLookupFuture<'a>;
     fn prune_expired_sessions<'a>(&'a self, max_age_ms: i64) -> SessionWriteFuture<'a>;
     fn list_sessions<'a>(&'a self) -> SessionListFuture<'a>;
-}
-
-pub trait LogStore: Send + Sync {
-    fn list_app_logs<'a>(&'a self, filters: &'a AppLogFilters) -> LogListFuture<'a>;
 }
 
 pub trait JobStore: Send + Sync {

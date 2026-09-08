@@ -167,25 +167,27 @@ pub async fn pipeline_diagnostics_context_handler(
         .alert_tracker
         .track_pipeline(&pipeline_id, &mut alert_list);
     let recent_events = state.engine.recent_events(100, Some(&pipeline_id));
-    let recent_logs = state
-        .log_service
-        .list_logs(&AppLogFilters {
+    let recent_logs = crate::application::logs::list_logs(
+        &state.db,
+        &AppLogFilters {
             pipeline_id: Some(pipeline_id.clone()),
             limit: Some(100),
             order: Some("desc".to_string()),
             ..empty_log_filters()
-        })
-        .await?;
-    let backend_stderr_tail = state
-        .log_service
-        .list_logs(&AppLogFilters {
+        },
+    )
+    .await?;
+    let backend_stderr_tail = crate::application::logs::list_logs(
+        &state.db,
+        &AppLogFilters {
             pipeline_id: Some(pipeline_id.clone()),
             prefix: Some("[ext-transcoder] ffmpeg stderr".to_string()),
             limit: Some(20),
             order: Some("desc".to_string()),
             ..empty_log_filters()
-        })
-        .await?;
+        },
+    )
+    .await?;
 
     Ok(Json(serde_json::json!({
         "generatedAt": generated_at,
