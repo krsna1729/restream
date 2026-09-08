@@ -463,7 +463,6 @@ async fn drain_ready_bursts(
                             .video_parameter_sets()
                             .map(|v| v.to_vec()),
                         service_metadata: Some(service_metadata.clone()),
-                        ..PacketFeedConfig::default()
                     },
                 ));
             }
