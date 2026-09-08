@@ -19,7 +19,7 @@ use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
     AgentService, AuthService, FileIngestService, IngestService, MediaLibraryService,
-    OutputService, PipelineService, SettingsService,
+    PipelineService, SettingsService,
 };
 use crate::config::AppConfig;
 use crate::domain::ingest_security::IngestSecurityConfig;
@@ -103,7 +103,6 @@ pub struct AppState {
     pub pipeline_service: PipelineService,
     pub pipeline_input_service: PipelineInputService,
     pub recirculation_service: RecirculationService,
-    pub output_service: OutputService,
     pub ingest_service: IngestService,
     pub auth_service: AuthService,
     pub settings_service: SettingsService,
@@ -138,7 +137,6 @@ impl AppState {
             pipeline_service,
             pipeline_input_service,
             recirculation_service,
-            output_service,
             ingest_service,
             auth_service,
             settings_service,
@@ -162,7 +160,6 @@ impl AppState {
             pipeline_service,
             pipeline_input_service,
             recirculation_service,
-            output_service,
             ingest_service,
             auth_service,
             settings_service,

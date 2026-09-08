@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crate::application::models::{Job, Output, Pipeline};
+use crate::application::models::{Job, Pipeline};
 use crate::application::pipeline_inputs::PipelineInputStore;
 use crate::application::ports::{IngestHostStore, JobStore, MetaStore, MetaStoreWriter};
 use crate::application::recording::load_recording_enabled_map;
@@ -26,7 +26,6 @@ use crate::media::srt::SrtIngestPolicyStore;
 use crate::planner::BackendPolicy;
 
 use super::error::{ServiceError, ServiceResult};
-use super::output_service::OutputService;
 use super::pipeline_service::PipelineService;
 
 const SERVER_NAME_META_KEY: &str = "server_name";
@@ -40,7 +39,6 @@ pub struct SettingsService {
     job_store: Arc<dyn JobStore>,
     input_store: Arc<dyn PipelineInputStore>,
     pipeline_service: PipelineService,
-    output_service: OutputService,
 }
 
 impl SettingsService {
@@ -53,7 +51,6 @@ impl SettingsService {
         job_store: Arc<dyn JobStore>,
         input_store: Arc<dyn PipelineInputStore>,
         pipeline_service: PipelineService,
-        output_service: OutputService,
     ) -> Self {
         Self {
             meta_store,
@@ -62,7 +59,6 @@ impl SettingsService {
             job_store,
             input_store,
             pipeline_service,
-            output_service,
         }
     }
 
@@ -87,12 +83,6 @@ impl SettingsService {
     /// staying independent of pipeline-store details.
     pub async fn list_pipelines(&self) -> ServiceResult<Vec<Pipeline>> {
         self.pipeline_service.list_pipelines().await
-    }
-
-    /// Lists outputs for settings surfaces that need to summarize configured
-    /// egress targets alongside global settings.
-    pub async fn list_outputs(&self) -> ServiceResult<Vec<Output>> {
-        self.output_service.list_outputs().await
     }
 
     /// Lists background jobs that should appear in the operator settings view.
@@ -326,7 +316,6 @@ mod tests {
                 ),
             ),
             SqliteServiceFactory::new(&pool).pipeline_service(),
-            SqliteServiceFactory::new(&pool).output_service(),
         );
 
         service.set_server_name("Studio").await.unwrap();
@@ -362,7 +351,6 @@ mod tests {
         assert_eq!(service.get_ingest_host_raw().await.unwrap(), "edge.local");
         assert_eq!(service.list_jobs().await.unwrap()[0].id, "job-1");
         assert!(service.list_pipelines().await.unwrap().is_empty());
-        assert!(service.list_outputs().await.unwrap().is_empty());
 
         let recording_enabled = service.recording_enabled_map(&["pipe-1".to_string()]).await;
         assert_eq!(recording_enabled.get("pipe-1"), Some(&false));

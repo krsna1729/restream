@@ -9,11 +9,12 @@ use std::sync::Arc;
 
 use crate::application::models::{Ingest, Job, Output, Pipeline};
 use crate::application::ports::{
-    IngestHostStore, IngestLookup, JobStore, MetaStore, OutputStore, PipelineStore,
+    IngestHostStore, IngestLookup, JobStore, MetaStore, PipelineStore,
 };
 use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
 use crate::media::security::IngestSecurityService;
 use crate::planner::BackendPolicy;
+use sqlx::SqlitePool;
 
 #[cfg(feature = "agent-execution")]
 use crate::domain::output_spec::OutputConfig;
@@ -21,9 +22,6 @@ use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;
 #[cfg(feature = "agent-execution")]
 use crate::media::engine::MediaEngine;
-
-#[cfg(feature = "agent-execution")]
-use super::output_service::OutputService;
 
 const CUSTOM_ENCODING_META_KEY: &str = "custom_encoding";
 
@@ -85,38 +83,31 @@ pub(crate) enum AgentOutputMutationOutcome {
 /// Application service for agent catalog reads and validated output mutations.
 #[derive(Clone)]
 pub struct AgentService {
+    db: SqlitePool,
     pipeline_store: Arc<dyn PipelineStore>,
-    output_store: Arc<dyn OutputStore>,
     job_store: Arc<dyn JobStore>,
     ingest_store: Arc<dyn IngestLookup>,
     meta_store: Arc<dyn MetaStore>,
     ingest_host_store: Arc<dyn IngestHostStore>,
-    #[cfg(feature = "agent-execution")]
-    output_service: OutputService,
 }
 
 impl AgentService {
     /// Builds the service from the stores used by agent catalogs and mutations.
     pub fn with_stores(
+        db: SqlitePool,
         pipeline_store: Arc<dyn PipelineStore>,
-        output_store: Arc<dyn OutputStore>,
         job_store: Arc<dyn JobStore>,
         ingest_store: Arc<dyn IngestLookup>,
         meta_store: Arc<dyn MetaStore>,
         ingest_host_store: Arc<dyn IngestHostStore>,
     ) -> Self {
-        #[cfg(feature = "agent-execution")]
-        let output_service = OutputService::with_store(output_store.clone());
-
         Self {
+            db,
             pipeline_store,
-            output_store,
             job_store,
             ingest_store,
             meta_store,
             ingest_host_store,
-            #[cfg(feature = "agent-execution")]
-            output_service,
         }
     }
 
@@ -131,7 +122,9 @@ impl AgentService {
             .list_pipelines()
             .await
             .unwrap_or_default();
-        let outputs = self.output_store.list_outputs().await.unwrap_or_default();
+        let outputs = crate::application::outputs::list_outputs(&self.db)
+            .await
+            .unwrap_or_default();
         let jobs = self.job_store.list_jobs().await.unwrap_or_default();
         let ingests = self.ingest_store.list_ingests().await.unwrap_or_default();
 
@@ -180,9 +173,7 @@ impl AgentService {
             .list_pipelines()
             .await
             .map_err(|error| format!("failed to list pipelines: {error}"))?;
-        let outputs = self
-            .output_store
-            .list_outputs()
+        let outputs = crate::application::outputs::list_outputs(&self.db)
             .await
             .map_err(|error| format!("failed to list outputs: {error}"))?;
 
@@ -195,8 +186,7 @@ impl AgentService {
         pipeline_id: &str,
         output_id: &str,
     ) -> Result<Output, String> {
-        self.output_service
-            .get_by_id(pipeline_id, output_id)
+        crate::application::outputs::get_by_id(&self.db, pipeline_id, output_id)
             .await
             .map_err(|err| format!("failed to read output: {err}"))
     }
@@ -217,19 +207,18 @@ impl AgentService {
                 desired_state,
                 config,
             } => {
-                let output = self
-                    .output_service
-                    .create_output(
-                        &output_id,
-                        pipeline_id,
-                        &name,
-                        &url,
-                        monitoring_url.as_deref(),
-                        desired_state.as_str(),
-                        &config,
-                    )
-                    .await
-                    .map_err(|err| format!("failed to create output: {err}"))?;
+                let output = crate::application::outputs::create_output(
+                    &self.db,
+                    &output_id,
+                    pipeline_id,
+                    &name,
+                    &url,
+                    monitoring_url.as_deref(),
+                    desired_state,
+                    &config,
+                )
+                .await
+                .map_err(|err| format!("failed to create output: {err}"))?;
                 Ok(AgentOutputMutationOutcome::Created(output))
             }
             AgentOutputMutation::Update {
@@ -243,30 +232,33 @@ impl AgentService {
                 let previous = self
                     .load_output_for_mutation(pipeline_id, &output_id)
                     .await?;
-                let mut current = self
-                    .output_service
-                    .update_output(
-                        pipeline_id,
-                        &output_id,
-                        &name,
-                        &url,
-                        monitoring_url.as_deref(),
-                        &config,
-                    )
-                    .await
-                    .map_err(|err| format!("failed to update output: {err}"))?;
+                let mut current = crate::application::outputs::update_output(
+                    &self.db,
+                    pipeline_id,
+                    &output_id,
+                    &name,
+                    &url,
+                    monitoring_url.as_deref(),
+                    &config,
+                )
+                .await
+                .map_err(|err| format!("failed to update output: {err}"))?;
                 if desired_state != previous.desired_state {
                     current = match desired_state {
-                        DesiredOutputState::Running => self
-                            .output_service
-                            .request_start(pipeline_id, &output_id)
-                            .await
-                            .map_err(|err| format!("failed to update desired state: {err}"))?,
-                        DesiredOutputState::Stopped => self
-                            .output_service
-                            .request_stop(pipeline_id, &output_id)
-                            .await
-                            .map_err(|err| format!("failed to update desired state: {err}"))?,
+                        DesiredOutputState::Running => crate::application::outputs::request_start(
+                            &self.db,
+                            pipeline_id,
+                            &output_id,
+                        )
+                        .await
+                        .map_err(|err| format!("failed to update desired state: {err}"))?,
+                        DesiredOutputState::Stopped => crate::application::outputs::request_stop(
+                            &self.db,
+                            pipeline_id,
+                            &output_id,
+                        )
+                        .await
+                        .map_err(|err| format!("failed to update desired state: {err}"))?,
                         DesiredOutputState::Failed => {
                             return Err(
                                 "agent output updates cannot request failed state".to_string()
@@ -281,11 +273,10 @@ impl AgentService {
                     .load_output_for_mutation(pipeline_id, &output_id)
                     .await?;
                 engine.unregister_egress(&output_id).await;
-                let deleted = self
-                    .output_service
-                    .delete_output(pipeline_id, &output_id)
-                    .await
-                    .map_err(|err| format!("failed to delete output: {err}"))?;
+                let deleted =
+                    crate::application::outputs::delete_output(&self.db, pipeline_id, &output_id)
+                        .await
+                        .map_err(|err| format!("failed to delete output: {err}"))?;
                 if !deleted {
                     return Err(format!(
                         "output '{output_id}' not found on pipeline '{pipeline_id}'"
@@ -301,16 +292,18 @@ impl AgentService {
                     .load_output_for_mutation(pipeline_id, &output_id)
                     .await?;
                 let current = match desired_state {
-                    DesiredOutputState::Running => self
-                        .output_service
-                        .request_start(pipeline_id, &output_id)
-                        .await
-                        .map_err(|err| format!("failed to set desired state: {err}"))?,
-                    DesiredOutputState::Stopped => self
-                        .output_service
-                        .request_stop(pipeline_id, &output_id)
-                        .await
-                        .map_err(|err| format!("failed to set desired state: {err}"))?,
+                    DesiredOutputState::Running => crate::application::outputs::request_start(
+                        &self.db,
+                        pipeline_id,
+                        &output_id,
+                    )
+                    .await
+                    .map_err(|err| format!("failed to set desired state: {err}"))?,
+                    DesiredOutputState::Stopped => {
+                        crate::application::outputs::request_stop(&self.db, pipeline_id, &output_id)
+                            .await
+                            .map_err(|err| format!("failed to set desired state: {err}"))?
+                    }
                     DesiredOutputState::Failed => {
                         return Err("agent output actions cannot request failed state".to_string());
                     }

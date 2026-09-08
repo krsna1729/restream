@@ -232,9 +232,7 @@ pub async fn config_get_handler(
         ));
     }
 
-    let outputs = state
-        .settings_service
-        .list_outputs()
+    let outputs = crate::application::outputs::list_outputs(&state.db)
         .await
         .unwrap_or_default();
     let settings = match state.settings_snapshot().await {
