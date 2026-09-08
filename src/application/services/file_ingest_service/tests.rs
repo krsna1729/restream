@@ -1,9 +1,8 @@
 use super::*;
 use crate::application::ports::{
     IngestCatalogFuture, IngestDeleteFuture, IngestLookupError, IngestLookupFuture,
-    IngestUpdateFuture, IngestWriteError, IngestWriteFuture, PipelineCreateFuture,
-    PipelineDeleteFuture, PipelineIngestHostFuture, PipelineListFuture, PipelineLookupFuture,
-    PipelineStoreError, PipelineUpdateFuture,
+    IngestUpdateFuture, IngestWriteError, IngestWriteFuture, PipelineListFuture,
+    PipelineLookupFuture, PipelineUpdateFuture,
 };
 use crate::infrastructure::service_wiring::SqliteServiceFactory;
 use sqlx::SqlitePool;
@@ -21,8 +20,7 @@ fn ingest_with(live_optimized: bool) -> Ingest {
 }
 
 fn service(pool: SqlitePool) -> FileIngestService {
-    let factory = SqliteServiceFactory::new(&pool);
-    factory.file_ingest_service(factory.pipeline_service())
+    SqliteServiceFactory::new(&pool).file_ingest_service()
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -127,10 +125,6 @@ struct StaticPipelineStore {
 }
 
 impl PipelineStore for StaticPipelineStore {
-    fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a> {
-        Box::pin(async move { Ok((self.pipeline.id == id).then(|| self.pipeline.clone())) })
-    }
-
     fn get_pipeline_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineLookupFuture<'a> {
         Box::pin(async move {
             Ok((self.pipeline.stream_key == stream_key).then(|| self.pipeline.clone()))
@@ -139,36 +133,6 @@ impl PipelineStore for StaticPipelineStore {
 
     fn list_pipelines<'a>(&'a self) -> PipelineListFuture<'a> {
         Box::pin(async move { Ok(vec![self.pipeline.clone()]) })
-    }
-
-    fn create_pipeline<'a>(
-        &'a self,
-        _id: &'a str,
-        _name: &'a str,
-        _stream_key: &'a str,
-        _input_source: Option<&'a str>,
-        _srt_ingest_policy: Option<&'a str>,
-    ) -> PipelineCreateFuture<'a> {
-        Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
-    }
-
-    fn update_pipeline<'a>(
-        &'a self,
-        _id: &'a str,
-        _name: &'a str,
-        _stream_key: &'a str,
-        _input_source: Option<&'a str>,
-        _srt_ingest_policy: Option<&'a str>,
-    ) -> PipelineUpdateFuture<'a> {
-        Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
-    }
-
-    fn delete_pipeline<'a>(&'a self, _id: &'a str) -> PipelineDeleteFuture<'a> {
-        Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
-    }
-
-    fn get_ingest_host<'a>(&'a self) -> PipelineIngestHostFuture<'a> {
-        Box::pin(async move { Ok(None) })
     }
 
     fn update_pipeline_input_source<'a>(
@@ -215,7 +179,6 @@ async fn apply_file_ingest_payload_surfaces_persist_failure() {
         srt_ingest_policy: None,
     };
     let ingest = ingest_with(false);
-    let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
     let pipeline_store = Arc::new(StaticPipelineStore {
         pipeline: pipeline.clone(),
     });
@@ -224,7 +187,6 @@ async fn apply_file_ingest_payload_surfaces_persist_failure() {
         Arc::new(NoopIngestWriter),
         pipeline_store.clone(),
         pipeline_store,
-        SqliteServiceFactory::new(&pool).pipeline_service(),
     );
     let engine = Arc::new(MediaEngine::new());
 
@@ -260,7 +222,6 @@ async fn apply_file_ingest_payload_preserves_runtime_when_persist_fails() {
         srt_ingest_policy: None,
     };
     let ingest = ingest_with(false);
-    let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
     let pipeline_store = Arc::new(StaticPipelineStore {
         pipeline: pipeline.clone(),
     });
@@ -271,7 +232,6 @@ async fn apply_file_ingest_payload_preserves_runtime_when_persist_fails() {
         Arc::new(NoopIngestWriter),
         pipeline_store.clone(),
         pipeline_store,
-        SqliteServiceFactory::new(&pool).pipeline_service(),
     );
     let engine = Arc::new(MediaEngine::new());
     let _registration = engine

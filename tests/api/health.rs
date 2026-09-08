@@ -372,9 +372,7 @@ async fn health_and_dashboard_runtime_fail_when_pipeline_list_fails() {
         engine,
         log_broadcast,
     );
-    state.pipeline_service =
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&pipeline_pool)
-            .pipeline_service();
+    state.db = pipeline_pool.clone();
     pipeline_pool.close().await;
     let app = api::create_router(Arc::new(state));
     let cookie = login(&app).await;

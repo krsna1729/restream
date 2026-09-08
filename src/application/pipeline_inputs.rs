@@ -3,8 +3,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::application::services::{PipelineService, ServiceError, ServiceResult};
+use crate::application::services::{ServiceError, ServiceResult};
 use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole};
+use sqlx::SqlitePool;
 
 pub const MAX_PIPELINE_INPUTS: usize = 4;
 
@@ -62,16 +63,16 @@ pub trait PipelineInputStore: Send + Sync {
 #[derive(Clone)]
 pub struct PipelineInputService {
     store: Arc<dyn PipelineInputStore>,
-    pipelines: PipelineService,
+    db: SqlitePool,
 }
 
 impl PipelineInputService {
-    pub fn with_store(store: Arc<dyn PipelineInputStore>, pipelines: PipelineService) -> Self {
-        Self { store, pipelines }
+    pub fn with_store(store: Arc<dyn PipelineInputStore>, db: SqlitePool) -> Self {
+        Self { store, db }
     }
 
     pub async fn list(&self, pipeline_id: &str) -> ServiceResult<Vec<PipelineInput>> {
-        self.pipelines.get_by_id(pipeline_id).await?;
+        crate::application::pipelines::get_by_id(&self.db, pipeline_id).await?;
         self.store
             .list(pipeline_id)
             .await

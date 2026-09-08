@@ -74,15 +74,6 @@ impl SqliteRecordingStore {
 }
 
 impl PipelineStore for SqlitePipelineStore {
-    fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a> {
-        Box::pin(async move {
-            crate::db::get_pipeline(&self.pool, id)
-                .await
-                .map(|record| record.map(pipeline_model))
-                .map_err(|err| PipelineStoreError::new(err.to_string()))
-        })
-    }
-
     fn get_pipeline_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineLookupFuture<'a> {
         Box::pin(async move {
             crate::db::get_pipeline_by_stream_key(&self.pool, stream_key)
@@ -97,68 +88,6 @@ impl PipelineStore for SqlitePipelineStore {
             crate::db::list_pipelines(&self.pool)
                 .await
                 .map(|records| records.into_iter().map(pipeline_model).collect())
-                .map_err(|err| PipelineStoreError::new(err.to_string()))
-        })
-    }
-
-    fn create_pipeline<'a>(
-        &'a self,
-        id: &'a str,
-        name: &'a str,
-        stream_key: &'a str,
-        input_source: Option<&'a str>,
-        srt_ingest_policy: Option<&'a str>,
-    ) -> PipelineCreateFuture<'a> {
-        Box::pin(async move {
-            crate::db::create_pipeline(
-                &self.pool,
-                id,
-                name,
-                stream_key,
-                input_source,
-                srt_ingest_policy,
-            )
-            .await
-            .map(pipeline_model)
-            .map_err(|err| PipelineStoreError::new(err.to_string()))
-        })
-    }
-
-    fn update_pipeline<'a>(
-        &'a self,
-        id: &'a str,
-        name: &'a str,
-        stream_key: &'a str,
-        input_source: Option<&'a str>,
-        srt_ingest_policy: Option<&'a str>,
-    ) -> PipelineUpdateFuture<'a> {
-        Box::pin(async move {
-            crate::db::update_pipeline(
-                &self.pool,
-                id,
-                name,
-                stream_key,
-                input_source,
-                srt_ingest_policy,
-            )
-            .await
-            .map(|record| record.map(pipeline_model))
-            .map_err(|err| PipelineStoreError::new(err.to_string()))
-        })
-    }
-
-    fn delete_pipeline<'a>(&'a self, id: &'a str) -> PipelineDeleteFuture<'a> {
-        Box::pin(async move {
-            crate::db::delete_pipeline(&self.pool, id)
-                .await
-                .map_err(|err| PipelineStoreError::new(err.to_string()))
-        })
-    }
-
-    fn get_ingest_host<'a>(&'a self) -> PipelineIngestHostFuture<'a> {
-        Box::pin(async move {
-            crate::db::get_ingest_host(&self.pool)
-                .await
                 .map_err(|err| PipelineStoreError::new(err.to_string()))
         })
     }
@@ -476,7 +405,11 @@ mod tests {
             .await
             .unwrap();
         let store = SqlitePipelineStore::new(pool.clone());
-        let stale_snapshot = store.get_pipeline("p1").await.unwrap().unwrap();
+        let stale_snapshot = crate::db::get_pipeline(&pool, "p1")
+            .await
+            .unwrap()
+            .map(pipeline_model)
+            .unwrap();
 
         // Simulate a concurrent request rotating the stream key and renaming
         // the pipeline after the snapshot above was taken, but before the
@@ -490,7 +423,11 @@ mod tests {
             .await
             .unwrap();
 
-        let after = store.get_pipeline("p1").await.unwrap().unwrap();
+        let after = crate::db::get_pipeline(&pool, "p1")
+            .await
+            .unwrap()
+            .map(pipeline_model)
+            .unwrap();
         assert_eq!(after.name, "Renamed");
         assert_eq!(after.stream_key, "sk_rotated");
         assert_eq!(after.input_source.as_deref(), Some("file:clip.ts"));

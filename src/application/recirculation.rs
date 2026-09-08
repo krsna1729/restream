@@ -152,12 +152,6 @@ fn recirculation_edges(outputs: &[Output]) -> HashMap<&str, Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::models::Pipeline;
-    use crate::application::ports::{
-        PipelineCreateFuture, PipelineDeleteFuture, PipelineIngestHostFuture, PipelineListFuture,
-        PipelineLookupFuture, PipelineStore, PipelineStoreError, PipelineUpdateFuture,
-    };
-    use crate::application::services::PipelineService;
     use crate::domain::output_spec::OutputConfig;
     use crate::domain::pipeline_input::{PipelineInput, PipelineInputRole};
     use crate::domain::state::DesiredOutputState;
@@ -270,71 +264,6 @@ mod tests {
         }
     }
 
-    struct PipelineCatalogStore;
-
-    impl PipelineStore for PipelineCatalogStore {
-        fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a> {
-            Box::pin(async move {
-                Ok(Some(Pipeline {
-                    id: id.to_string(),
-                    name: id.to_string(),
-                    stream_key: format!("sk-{id}"),
-                    input_source: None,
-                    srt_ingest_policy: None,
-                }))
-            })
-        }
-
-        fn get_pipeline_by_stream_key<'a>(
-            &'a self,
-            _stream_key: &'a str,
-        ) -> PipelineLookupFuture<'a> {
-            Box::pin(async move { Ok(None) })
-        }
-
-        fn list_pipelines<'a>(&'a self) -> PipelineListFuture<'a> {
-            Box::pin(async move { Ok(Vec::new()) })
-        }
-
-        fn create_pipeline<'a>(
-            &'a self,
-            _id: &'a str,
-            _name: &'a str,
-            _stream_key: &'a str,
-            _input_source: Option<&'a str>,
-            _srt_ingest_policy: Option<&'a str>,
-        ) -> PipelineCreateFuture<'a> {
-            Box::pin(async move { Err(PipelineStoreError::new("read-only pipeline store")) })
-        }
-
-        fn update_pipeline<'a>(
-            &'a self,
-            _id: &'a str,
-            _name: &'a str,
-            _stream_key: &'a str,
-            _input_source: Option<&'a str>,
-            _srt_ingest_policy: Option<&'a str>,
-        ) -> PipelineUpdateFuture<'a> {
-            Box::pin(async move { Err(PipelineStoreError::new("read-only pipeline store")) })
-        }
-
-        fn delete_pipeline<'a>(&'a self, _id: &'a str) -> PipelineDeleteFuture<'a> {
-            Box::pin(async move { Err(PipelineStoreError::new("read-only pipeline store")) })
-        }
-
-        fn get_ingest_host<'a>(&'a self) -> PipelineIngestHostFuture<'a> {
-            Box::pin(async move { Ok(None) })
-        }
-
-        fn update_pipeline_input_source<'a>(
-            &'a self,
-            _pipeline: &'a Pipeline,
-            _input_source: Option<&'a str>,
-        ) -> PipelineUpdateFuture<'a> {
-            Box::pin(async move { Err(PipelineStoreError::new("read-only pipeline store")) })
-        }
-    }
-
     fn output(source_pipeline: &str, id: &str, url: &str) -> Output {
         Output {
             id: id.to_string(),
@@ -395,11 +324,8 @@ mod tests {
             .await
             .unwrap();
         }
-        let pipeline_service = PipelineService::with_store(Arc::new(PipelineCatalogStore));
-        let pipeline_input_service = PipelineInputService::with_store(
-            Arc::new(ReadOnlyInputStore { inputs }),
-            pipeline_service,
-        );
+        let pipeline_input_service =
+            PipelineInputService::with_store(Arc::new(ReadOnlyInputStore { inputs }), pool.clone());
         RecirculationService::with_services(pool, pipeline_input_service)
     }
 
