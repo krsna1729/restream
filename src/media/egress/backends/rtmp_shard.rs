@@ -463,23 +463,6 @@ where
         }
     }
 
-    // Production always constructs via `with_runtime_components` directly
-    // (see rtmp_shard_resolve_runtime.rs); this convenience constructor is
-    // only used by tests.
-    #[cfg(test)]
-    pub(crate) fn new(poller: P, feed: RingFeed, budget: WorkBudget, chunk_size: u32) -> Self {
-        let (_sender, queue) = rtmp_resolve_completion_queue(1);
-        Self::with_runtime_components(
-            poller,
-            feed,
-            budget,
-            chunk_size,
-            crate::media::rtmp::rustls_client_config(),
-            queue,
-            EmptyRtmpPublishStartupSource,
-        )
-    }
-
     /// Override the per-leaf drain deadline. Production threads the
     /// configured `EgressFabricConfig::drain_timeout_ms` through here (see
     /// `resolving_rtmp_shard_backend`); tests use it for fast, deterministic
@@ -952,6 +935,28 @@ where
                 );
             }
         }
+    }
+}
+
+impl<P> RtmpShardBackend<P, EmptyRtmpPublishStartupSource>
+where
+    P: RtmpReadinessPoller,
+{
+    // Production always constructs via `with_runtime_components` directly
+    // (see rtmp_shard_resolve_runtime.rs); this convenience constructor is
+    // only used by tests.
+    #[cfg(test)]
+    pub(crate) fn new(poller: P, feed: RingFeed, budget: WorkBudget, chunk_size: u32) -> Self {
+        let (_sender, queue) = rtmp_resolve_completion_queue(1);
+        Self::with_runtime_components(
+            poller,
+            feed,
+            budget,
+            chunk_size,
+            crate::media::rtmp::rustls_client_config(),
+            queue,
+            EmptyRtmpPublishStartupSource,
+        )
     }
 }
 

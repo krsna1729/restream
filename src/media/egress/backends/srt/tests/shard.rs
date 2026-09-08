@@ -208,7 +208,8 @@ fn srt_shard_backend_complete_pending_connect_registers_resolved_socket() {
 #[test]
 fn srt_pending_connect_spec_builds_expected_connect_config() {
     let peer_addrs = peer_addrs();
-    let pending = backend_with_pending_connect(srt_output_spec("out-a", 7))
+    let backend = backend_with_pending_connect(srt_output_spec("out-a", 7));
+    let pending = backend
         .pending_connect(&OutputId::new("out-a"))
         .expect("pending connect");
     let config = pending.connect_spec.connect_config(&peer_addrs, None);

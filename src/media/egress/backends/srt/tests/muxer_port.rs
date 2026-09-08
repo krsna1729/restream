@@ -18,7 +18,8 @@ fn connect_spec() -> SrtFabricEgressConnectSpec {
 #[test]
 fn connect_config_with_reuse_disabled_passes_no_shared_state() {
     let peer_addrs = peer_addrs();
-    let config = connect_spec().connect_config(&peer_addrs, None);
+    let connect_spec = connect_spec();
+    let config = connect_spec.connect_config(&peer_addrs, None);
 
     assert!(!config.has_muxer_port_claim());
     assert_eq!(config.muxer_port_claim_bind_port(), None);
@@ -28,7 +29,8 @@ fn connect_config_with_reuse_disabled_passes_no_shared_state() {
 fn connect_config_with_reuse_enabled_passes_shared_state() {
     let peer_addrs = peer_addrs();
     let state = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let config = connect_spec().connect_config(&peer_addrs, Some(state.clone()));
+    let connect_spec = connect_spec();
+    let config = connect_spec.connect_config(&peer_addrs, Some(state.clone()));
 
     assert!(config.has_muxer_port_claim());
     assert_eq!(config.muxer_port_claim_bind_port(), None);
@@ -36,7 +38,7 @@ fn connect_config_with_reuse_enabled_passes_shared_state() {
 }
 
 #[test]
-fn complete_pending_connect_with_reuse_enabled_keeps_state_lazy() {
+fn complete_pending_connect_with_reuse_enabled_initializes_shared_state() {
     let peer_addrs = peer_addrs();
     let state = std::sync::Arc::new(std::sync::Mutex::new(None));
     let mut backend = SrtShardBackend::new(
@@ -57,6 +59,11 @@ fn complete_pending_connect_with_reuse_enabled_keeps_state_lazy() {
         },
     ));
 
+    assert!(
+        state.lock().unwrap().is_none(),
+        "shared muxer state must stay lazy until the first real connect"
+    );
+
     backend
         .complete_pending_connect(
             &crate::media::egress::command::OutputId::new("out-a"),
@@ -65,5 +72,8 @@ fn complete_pending_connect_with_reuse_enabled_keeps_state_lazy() {
         )
         .unwrap();
 
-    assert!(state.lock().unwrap().is_none());
+    assert!(
+        state.lock().unwrap().is_some(),
+        "first successful fabric connect must initialize the per-shard shared UDP state"
+    );
 }
