@@ -1,7 +1,5 @@
 use super::super::*;
-use super::support::{
-    FakeConnectCall, FakeResolveCompletionSource, FakeSocketConnector, common, feed, shared_sender,
-};
+use super::support::{common, feed, shared_sender};
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::policy::{LeafPolicy, WorkBudget};
 use crate::media::egress::scheduler::LeafKey;
@@ -38,19 +36,12 @@ fn srt_output_spec(id: &str, generation: u64) -> OutputSpec {
     )
 }
 
-/// Backend wired to an injected connector plus one queued pending connect,
-/// so tests can drive the production `complete_pending_connect` path
-/// end-to-end. `SrtShardBackend` is generic over its connector, so this
-/// needs no test-only entry point on the backend itself.
-fn backend_with_pending_connect(
-    connector: FakeSocketConnector,
-    spec: OutputSpec,
-) -> SrtShardBackend<FakeSocketConnector, NoopSrtResolveCompletionSource> {
-    let mut backend = SrtShardBackend::with_runtime_components(
+/// Backend with one queued pending connect so tests can drive the
+/// production `complete_pending_connect` path end-to-end.
+fn backend_with_pending_connect(spec: OutputSpec) -> SrtShardBackend {
+    let mut backend = SrtShardBackend::new(
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        connector,
-        NoopSrtResolveCompletionSource,
     );
     backend.on_command(EgressCommand::Add(spec));
     backend
@@ -71,20 +62,17 @@ fn srt_output_spec_with_termination_flag(
 
 #[test]
 fn srt_shard_backend_complete_pending_connect_returns_connect_error_before_registering() {
-    let connector = FakeSocketConnector::failing("connect failed");
-    let connector_handle = connector.clone();
     let (spec, terminated) = srt_output_spec_with_termination_flag("out-a", 7);
-    let mut backend = backend_with_pending_connect(connector, spec);
+    let mut backend = backend_with_pending_connect(spec);
 
-    let result = backend.complete_pending_connect(&OutputId::new("out-a"), 7, &peer_addrs());
+    let result = backend.complete_pending_connect(&OutputId::new("out-a"), 7, &[]);
 
     assert_eq!(
         result,
         Err(SrtPendingConnectError::Connect(
-            "connect failed".to_string()
+            "SRT connect requires a peer address".to_string()
         ))
     );
-    assert_eq!(connector_handle.calls().len(), 1);
     assert!(backend.output_sockets.is_empty());
     // The application never sees a leaf for a connect that failed outright,
     // so nothing else would report the attempt died — only this path marks
@@ -206,9 +194,7 @@ fn srt_shard_backend_remove_command_clears_pending_connect() {
 #[test]
 fn srt_shard_backend_complete_pending_connect_registers_resolved_socket() {
     let peer_addrs = peer_addrs();
-    let connector = FakeSocketConnector::returning();
-    let connector_handle = connector.clone();
-    let mut backend = backend_with_pending_connect(connector, srt_output_spec("out-a", 7));
+    let mut backend = backend_with_pending_connect(srt_output_spec("out-a", 7));
 
     let key = backend
         .complete_pending_connect(&OutputId::new("out-a"), 7, &peer_addrs)
@@ -216,56 +202,50 @@ fn srt_shard_backend_complete_pending_connect_registers_resolved_socket() {
 
     assert_eq!(key, LeafKey(0));
     assert!(backend.pending_connect(&OutputId::new("out-a")).is_none());
-    assert_eq!(
-        connector_handle.calls(),
-        vec![FakeConnectCall {
-            peer_addrs,
-            stream_id: "publish:key".to_string(),
-            connect_timeout_ms: 30000,
-        }]
-    );
     assert!(backend.output_sockets.contains_key(&OutputId::new("out-a")));
 }
 
 #[test]
+fn srt_pending_connect_spec_builds_expected_connect_config() {
+    let peer_addrs = peer_addrs();
+    let pending = backend_with_pending_connect(srt_output_spec("out-a", 7))
+        .pending_connect(&OutputId::new("out-a"))
+        .expect("pending connect");
+    let config = pending.connect_spec.connect_config(&peer_addrs, None);
+    assert_eq!(config.peer_addrs(), &peer_addrs);
+    assert_eq!(config.stream_id(), "publish:key");
+    assert_eq!(config.connect_timeout_ms(), 30000);
+}
+
+#[test]
 fn srt_shard_backend_complete_pending_connect_rejects_stale_generation() {
-    let connector = FakeSocketConnector::returning();
-    let connector_handle = connector.clone();
-    let mut backend = backend_with_pending_connect(connector, srt_output_spec("out-a", 7));
+    let mut backend = backend_with_pending_connect(srt_output_spec("out-a", 7));
 
     let result = backend.complete_pending_connect(&OutputId::new("out-a"), 6, &peer_addrs());
 
     assert_eq!(result, Err(SrtPendingConnectError::Stale));
     assert!(backend.pending_connect(&OutputId::new("out-a")).is_some());
-    assert!(connector_handle.calls().is_empty());
+    assert!(backend.output_sockets.is_empty());
 }
 
 #[test]
 fn srt_shard_backend_complete_pending_connect_rejects_missing_output() {
-    let connector = FakeSocketConnector::returning();
-    let connector_handle = connector.clone();
-    let mut backend = backend_with_pending_connect(connector, srt_output_spec("out-a", 7));
+    let mut backend = backend_with_pending_connect(srt_output_spec("out-a", 7));
 
     let result = backend.complete_pending_connect(&OutputId::new("out-missing"), 7, &peer_addrs());
 
     assert_eq!(result, Err(SrtPendingConnectError::Missing));
-    assert!(connector_handle.calls().is_empty());
+    assert!(backend.output_sockets.is_empty());
 }
 
 #[test]
 fn srt_shard_backend_media_tick_completes_resolved_connect() {
     let peer_addrs = peer_addrs();
-    let connector = FakeSocketConnector::returning();
-    let connector_handle = connector.clone();
+    let (sender, queue) = srt_resolve_completion_queue(4);
     let mut backend = SrtShardBackend::with_runtime_components(
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        connector,
-        FakeResolveCompletionSource::with(vec![SrtResolvedConnect {
-            output_id: OutputId::new("out-a"),
-            generation: 7,
-            peer_addrs: peer_addrs.clone(),
-        }]),
+        queue,
     );
     backend.on_command(EgressCommand::Add(output_spec(
         "out-a",
@@ -274,18 +254,17 @@ fn srt_shard_backend_media_tick_completes_resolved_connect() {
             url: "srt://primary:9000?streamid=publish%3Akey".to_string(),
         },
     )));
+    sender
+        .try_send(SrtResolvedConnect {
+            output_id: OutputId::new("out-a"),
+            generation: 7,
+            peer_addrs: peer_addrs.clone(),
+        })
+        .unwrap();
 
     backend.on_media_tick();
 
     assert!(backend.pending_connect(&OutputId::new("out-a")).is_none());
-    assert_eq!(
-        connector_handle.calls(),
-        vec![FakeConnectCall {
-            peer_addrs,
-            stream_id: "publish:key".to_string(),
-            connect_timeout_ms: 30000,
-        }]
-    );
     assert!(backend.output_sockets.contains_key(&OutputId::new("out-a")));
 }
 
@@ -331,12 +310,9 @@ fn srt_shard_backend_media_tick_drains_resolve_completion_queue() {
             peer_addrs: peer_addrs.clone(),
         })
         .unwrap();
-    let connector = FakeSocketConnector::returning();
-    let connector_handle = connector.clone();
     let mut backend = SrtShardBackend::with_runtime_components(
         feed([Bytes::from_static(b"abc")]),
         WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        connector,
         queue,
     );
     backend.on_command(EgressCommand::Add(output_spec(
@@ -350,29 +326,23 @@ fn srt_shard_backend_media_tick_drains_resolve_completion_queue() {
     backend.on_media_tick();
 
     assert!(backend.pending_connect(&OutputId::new("out-a")).is_none());
-    assert_eq!(
-        connector_handle.calls(),
-        vec![FakeConnectCall {
-            peer_addrs,
-            stream_id: "publish:key".to_string(),
-            connect_timeout_ms: 30000,
-        }]
-    );
+    assert!(backend.output_sockets.contains_key(&OutputId::new("out-a")));
 }
 
 #[test]
 fn srt_shard_backend_media_tick_ignores_stale_resolved_connect() {
-    let connector = FakeSocketConnector::returning();
-    let connector_handle = connector.clone();
-    let mut backend = SrtShardBackend::with_runtime_components(
-        feed([Bytes::from_static(b"abc")]),
-        WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        connector,
-        FakeResolveCompletionSource::with(vec![SrtResolvedConnect {
+    let (sender, queue) = srt_resolve_completion_queue(4);
+    sender
+        .try_send(SrtResolvedConnect {
             output_id: OutputId::new("out-a"),
             generation: 6,
             peer_addrs: peer_addrs(),
-        }]),
+        })
+        .unwrap();
+    let mut backend = SrtShardBackend::with_runtime_components(
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+        queue,
     );
     backend.on_command(EgressCommand::Add(output_spec(
         "out-a",
@@ -385,7 +355,7 @@ fn srt_shard_backend_media_tick_ignores_stale_resolved_connect() {
     backend.on_media_tick();
 
     assert!(backend.pending_connect(&OutputId::new("out-a")).is_some());
-    assert!(connector_handle.calls().is_empty());
+    assert!(backend.output_sockets.is_empty());
 }
 
 // A blocked leaf must not strand an already-ready neighbor behind it: one

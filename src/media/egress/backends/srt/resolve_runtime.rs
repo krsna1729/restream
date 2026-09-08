@@ -1,8 +1,8 @@
 use std::thread::JoinHandle;
 
 use super::{
-    NativeSrtSocketConnector, SrtResolveCompletionQueue, SrtResolveRequest, SrtResolveWorkerError,
-    SrtResolvedConnect, SrtShardBackend, duration_millis_u64, srt_resolve_completion_queue,
+    SrtResolveCompletionQueue, SrtResolveRequest, SrtResolveWorkerError, SrtResolvedConnect,
+    SrtShardBackend, duration_millis_u64, srt_resolve_completion_queue,
 };
 use crate::media::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
@@ -13,8 +13,7 @@ use std::sync::mpsc::SyncSender;
 
 const SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY: usize = 1024;
 
-pub(crate) type ResolvingSrtShardBackendDefault =
-    ResolvingSrtShardBackend<SrtShardBackend<NativeSrtSocketConnector, SrtResolveCompletionQueue>>;
+pub(crate) type ResolvingSrtShardBackendDefault = ResolvingSrtShardBackend<SrtShardBackend>;
 
 #[derive(Debug)]
 pub(crate) struct SrtResolveWorkerSet {
@@ -164,14 +163,9 @@ pub(crate) fn resolving_srt_shard_backend(
 ) -> ResolvingSrtShardBackendDefault {
     let (completion_sender, completion_queue) =
         srt_resolve_completion_queue(SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY);
-    let mut backend = SrtShardBackend::with_runtime_components(
-        feed,
-        budget,
-        NativeSrtSocketConnector,
-        completion_queue,
-    )
-    .with_drain_timeout(drain_timeout)
-    .with_connect_admission(connect_admission);
+    let mut backend = SrtShardBackend::with_runtime_components(feed, budget, completion_queue)
+        .with_drain_timeout(drain_timeout)
+        .with_connect_admission(connect_admission);
     if let Some(state) = srt_egress_muxer_port_reuse {
         backend = backend.with_srt_egress_muxer_port_reuse(state, true);
     }

@@ -128,7 +128,7 @@ where
 }
 
 pub(crate) type ResolvingRtmpShardBackendWithPoller<P, S> =
-    ResolvingRtmpShardBackend<RtmpShardBackend<P, RtmpResolveCompletionQueue, S>>;
+    ResolvingRtmpShardBackend<RtmpShardBackend<P, S>>;
 
 pub(crate) fn resolving_rtmp_shard_backend<P, S>(
     poller: P,

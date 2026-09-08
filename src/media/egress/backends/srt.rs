@@ -275,17 +275,6 @@ struct SrtReadyLeaf {
     writable: bool,
 }
 
-pub(crate) trait SrtSocketConnector {
-    fn connect(
-        &mut self,
-        config: SrtFabricEgressConnectConfig<'_>,
-    ) -> Result<Box<dyn SrtMessageSender + Send>, String>;
-}
-
-pub(crate) trait SrtResolveCompletionSource {
-    fn drain_resolved(&mut self, resolved: &mut Vec<SrtResolvedConnect>);
-}
-
 #[derive(Debug)]
 pub(crate) struct SrtResolveCompletionQueue {
     receiver: Receiver<SrtResolvedConnect>,
@@ -331,8 +320,8 @@ fn resolve_srt_peer_host(host: &str) -> Option<SocketAddr> {
         .or_else(|| host.to_socket_addrs().ok()?.next())
 }
 
-impl SrtResolveCompletionSource for SrtResolveCompletionQueue {
-    fn drain_resolved(&mut self, resolved: &mut Vec<SrtResolvedConnect>) {
+impl SrtResolveCompletionQueue {
+    pub(crate) fn drain_resolved(&mut self, resolved: &mut Vec<SrtResolvedConnect>) {
         loop {
             match self.receiver.try_recv() {
                 Ok(completion) => resolved.push(completion),
@@ -343,32 +332,8 @@ impl SrtResolveCompletionSource for SrtResolveCompletionQueue {
     }
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct NativeSrtSocketConnector;
-
-impl SrtSocketConnector for NativeSrtSocketConnector {
-    fn connect(
-        &mut self,
-        config: SrtFabricEgressConnectConfig<'_>,
-    ) -> Result<Box<dyn SrtMessageSender + Send>, String> {
-        connect_fabric_srt_egress_socket(config)
-    }
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct NoopSrtResolveCompletionSource;
-
-impl SrtResolveCompletionSource for NoopSrtResolveCompletionSource {
-    fn drain_resolved(&mut self, _resolved: &mut Vec<SrtResolvedConnect>) {}
-}
-
-pub(crate) struct SrtShardBackend<K = NativeSrtSocketConnector, R = NoopSrtResolveCompletionSource>
-where
-    K: SrtSocketConnector,
-    R: SrtResolveCompletionSource,
-{
-    socket_connector: K,
-    resolve_completions: R,
+pub(crate) struct SrtShardBackend {
+    resolve_completions: SrtResolveCompletionQueue,
     feed: TsFeed,
     /// Per-visit limits. `WorkBudget::deadline` is an absolute `Instant`
     /// computed at construction time — storing one `WorkBudget` and reusing
@@ -411,34 +376,14 @@ struct PendingSrtConnect {
     connect_spec: SrtFabricEgressConnectSpec,
 }
 
-// Production always constructs via `with_runtime_components` directly (see
-// resolve_runtime.rs); this convenience constructor is only used by tests.
-#[cfg(test)]
-impl SrtShardBackend<NativeSrtSocketConnector, NoopSrtResolveCompletionSource> {
-    pub(crate) fn new(feed: TsFeed, budget: WorkBudget) -> Self {
-        Self::with_runtime_components(
-            feed,
-            budget,
-            NativeSrtSocketConnector,
-            NoopSrtResolveCompletionSource,
-        )
-    }
-}
-
-impl<K, R> SrtShardBackend<K, R>
-where
-    K: SrtSocketConnector,
-    R: SrtResolveCompletionSource,
-{
+impl SrtShardBackend {
     pub(crate) fn with_runtime_components(
         feed: TsFeed,
         budget: WorkBudget,
-        socket_connector: K,
-        resolve_completions: R,
+        resolve_completions: SrtResolveCompletionQueue,
     ) -> Self {
         let budget_window = budget.deadline.saturating_duration_since(Instant::now());
         Self {
-            socket_connector,
             resolve_completions,
             feed,
             budget_max_units: budget.max_units,
@@ -456,6 +401,15 @@ where
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
         }
+    }
+
+    // Production always constructs via `with_runtime_components` directly
+    // (see resolve_runtime.rs); this convenience constructor is only used
+    // by tests.
+    #[cfg(test)]
+    pub(crate) fn new(feed: TsFeed, budget: WorkBudget) -> Self {
+        let (_sender, queue) = srt_resolve_completion_queue(1);
+        Self::with_runtime_components(feed, budget, queue)
     }
 
     /// Override the per-leaf drain deadline. Production threads the
@@ -510,14 +464,7 @@ where
     }
 
     /// Resolve-completion entry point: turn a queued `PendingSrtConnect`
-    /// into a live leaf using this backend's own `socket_connector`.
-    ///
-    /// Tests drive this same function rather than a parallel injectable
-    /// variant — `SrtShardBackend` is already generic over its connector
-    /// (`K: SrtSocketConnector`), so a fake is supplied by constructing the
-    /// backend with `with_runtime_components`. Keeping one path means the
-    /// progress-sink bookkeeping below stays covered instead of being
-    /// silently skipped by a test-only sibling.
+    /// into a live leaf via `connect_fabric_srt_egress_socket`.
     fn complete_pending_connect(
         &mut self,
         output_id: &OutputId,
@@ -542,7 +489,7 @@ where
         let config = pending
             .connect_spec
             .connect_config(peer_addrs, shared_state);
-        let transport = self.socket_connector.connect(config).map_err(|error| {
+        let transport = connect_fabric_srt_egress_socket(config).map_err(|error| {
             tracing::warn!(
                 output_id = %output_id,
                 error = %error,
@@ -725,11 +672,7 @@ where
     }
 }
 
-impl<K, R> EgressShardBackend for SrtShardBackend<K, R>
-where
-    K: SrtSocketConnector + Send + 'static,
-    R: SrtResolveCompletionSource + Send + 'static,
-{
+impl EgressShardBackend for SrtShardBackend {
     fn resync_count(&self) -> u64 {
         self.resync_count
     }

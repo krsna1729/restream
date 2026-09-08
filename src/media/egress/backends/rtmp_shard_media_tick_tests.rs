@@ -15,12 +15,11 @@
 
 use super::*;
 
-/// Builds a backend wired to a real `RtmpResolveCompletionQueue` (not the
-/// `NoopRtmpResolveCompletionSource` the other tests in this file use) so
-/// this test can push a connect completion the same way the production
-/// resolve worker does, then observe `on_media_tick`'s real return value.
+/// Builds a backend wired to a real `RtmpResolveCompletionQueue` so this
+/// test can push a connect completion the same way the production resolve
+/// worker does, then observe `on_media_tick`'s real return value.
 fn backend_with_resolve_queue() -> (
-    RtmpShardBackend<TcpEgressPoller, RtmpResolveCompletionQueue>,
+    RtmpShardBackend<TcpEgressPoller>,
     std::sync::mpsc::SyncSender<RtmpResolvedConnect>,
 ) {
     let (sender, queue) = rtmp_resolve_completion_queue(4);
