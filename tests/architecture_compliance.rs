@@ -3,7 +3,7 @@ use restream::domain::ids::OutputId;
 use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 use restream::domain::output_spec::OutputConfig;
 use restream::domain::srt_ingest::SrtGlobalIngestConfig;
-use restream::domain::state::EgressPhase;
+use restream::domain::state::{DesiredOutputState, EgressPhase};
 use restream::media::security::IngestSecurityService;
 use sqlx::SqlitePool;
 use std::collections::BTreeSet;
@@ -755,7 +755,7 @@ async fn test_phase_4_5_services_and_repositories_flow() {
         "rtmp-push",
         "rtmp://localhost/live",
         None,
-        "running",
+        DesiredOutputState::Running,
         &config,
     )
     .await

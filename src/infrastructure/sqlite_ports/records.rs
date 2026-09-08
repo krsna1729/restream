@@ -1,4 +1,4 @@
-use crate::application::models::{Ingest, Job, JobStatus, Output, Pipeline};
+use crate::application::models::{Ingest, Job, JobStatus, Pipeline};
 
 impl From<JobStatus> for crate::db::JobStatusRecord {
     fn from(status: JobStatus) -> Self {
@@ -33,18 +33,6 @@ pub(super) fn pipeline_model(record: crate::db::PipelineRecord) -> Pipeline {
         stream_key: record.stream_key,
         input_source: record.input_source,
         srt_ingest_policy: record.srt_ingest_policy,
-    }
-}
-
-pub(in crate::infrastructure) fn output_model(record: crate::db::OutputRecord) -> Output {
-    Output {
-        id: record.id,
-        pipeline_id: record.pipeline_id,
-        name: record.name,
-        url: record.url,
-        monitoring_url: record.monitoring_url,
-        desired_state: record.desired_state,
-        config: record.config,
     }
 }
 

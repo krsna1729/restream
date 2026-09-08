@@ -476,7 +476,7 @@ pub async fn outputs_create_handler(
         &payload.name,
         &validated.url,
         validated.monitoring_url.as_deref(),
-        DesiredOutputState::Stopped.as_str(),
+        DesiredOutputState::Stopped,
         &validated.output_config,
     )
     .await?;

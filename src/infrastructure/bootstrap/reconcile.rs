@@ -75,7 +75,7 @@ impl Reconciler {
             let outputs = match crate::db::list_outputs(&self.pool).await {
                 Ok(records) => records
                     .into_iter()
-                    .map(crate::infrastructure::sqlite_ports::records::output_model)
+                    .map(crate::application::outputs::from_record)
                     .collect::<Vec<_>>(),
                 Err(error) => {
                     warn!(tick, err = %error, "DB error reading outputs");

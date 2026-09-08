@@ -214,7 +214,7 @@ impl AgentService {
                     &name,
                     &url,
                     monitoring_url.as_deref(),
-                    desired_state.as_str(),
+                    desired_state,
                     &config,
                 )
                 .await

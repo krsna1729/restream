@@ -22,6 +22,11 @@ fn output_from_record(record: crate::db::OutputRecord) -> Output {
     }
 }
 
+/// Maps a persisted output row into the application catalog model.
+pub(crate) fn from_record(record: crate::db::OutputRecord) -> Output {
+    output_from_record(record)
+}
+
 fn output_not_found(id: &str) -> ServiceError {
     ServiceError::not_found(format!("output {id} not found"))
 }
@@ -52,8 +57,7 @@ pub async fn get_by_id(pool: &SqlitePool, pipeline_id: &str, id: &str) -> Servic
         .ok_or_else(|| output_not_found(id))
 }
 
-/// Persists a new output after translating transport-facing desired state
-/// text into the domain enum expected by storage.
+/// Persists a new output with an already-typed desired-state value.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_output(
     pool: &SqlitePool,
@@ -62,12 +66,9 @@ pub async fn create_output(
     name: &str,
     url: &str,
     monitoring_url: Option<&str>,
-    desired_state: &str,
+    desired_state: DesiredOutputState,
     config: &OutputConfig,
 ) -> ServiceResult<Output> {
-    // API callers still pass desired state as transport text; convert it to
-    // the domain enum once here before persistence sees it.
-    let desired_state = DesiredOutputState::from(desired_state);
     crate::db::create_output(
         pool,
         id,
@@ -193,7 +194,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_output_translates_desired_state_text() {
+    async fn create_output_persists_typed_desired_state() {
         let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
         crate::db::setup_database_schema(&pool).await.unwrap();
         crate::db::create_pipeline(&pool, "pipe-1", "Pipeline", "key-1", None, None)
@@ -207,7 +208,7 @@ mod tests {
             "Created",
             "rtmp://localhost/live/two",
             None,
-            "stopped",
+            DesiredOutputState::Stopped,
             &OutputConfig::default(),
         )
         .await
