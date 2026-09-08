@@ -8,8 +8,8 @@ use crate::api::AppServices;
 use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
-    AgentService, AuthService, FileIngestService, IngestService, MediaLibraryService,
-    PipelineService, SettingsService,
+    AgentService, AuthService, FileIngestService, MediaLibraryService, PipelineService,
+    SettingsService,
 };
 use crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore;
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
@@ -34,7 +34,6 @@ impl<'pool> SqliteServiceFactory<'pool> {
         let pipeline_input_service = self.pipeline_input_service(pipeline_service.clone());
         let recirculation_service =
             RecirculationService::with_services(self.db.clone(), pipeline_input_service.clone());
-        let ingest_service = self.ingest_service();
         let settings_service = self.settings_service_with(pipeline_service.clone());
 
         AppServices {
@@ -43,11 +42,9 @@ impl<'pool> SqliteServiceFactory<'pool> {
             auth_service: self.auth_service(),
             settings_service,
             file_ingest_service: self.file_ingest_service(pipeline_service.clone()),
-            media_library_service: self
-                .media_library_service(pipeline_service.clone(), ingest_service.clone()),
+            media_library_service: self.media_library_service(pipeline_service.clone()),
             agent_service: self.agent_service(),
             pipeline_service,
-            ingest_service,
         }
     }
 
@@ -60,11 +57,6 @@ impl<'pool> SqliteServiceFactory<'pool> {
             Arc::new(SqlitePipelineInputStore::new(self.db.clone())),
             pipelines,
         )
-    }
-
-    pub fn ingest_service(&self) -> IngestService {
-        let store = Arc::new(SqliteIngestLookup::new(self.db.clone()));
-        IngestService::with_ports(store.clone(), store)
     }
 
     pub fn auth_service(&self) -> AuthService {
@@ -103,18 +95,14 @@ impl<'pool> SqliteServiceFactory<'pool> {
         )
     }
 
-    pub fn media_library_service(
-        &self,
-        pipeline_service: PipelineService,
-        ingest_service: IngestService,
-    ) -> MediaLibraryService {
+    pub fn media_library_service(&self, pipeline_service: PipelineService) -> MediaLibraryService {
         let meta_store = Arc::new(SqliteMetaStore::new(self.db.clone()));
         MediaLibraryService::with_stores(
             meta_store.clone(),
             meta_store,
             Arc::new(SqliteRecordingStore::new(self.db.clone())),
             pipeline_service,
-            ingest_service,
+            self.db.clone(),
         )
         .with_recording_metadata(spawn_recording_metadata_reporter(self.db.clone()))
     }

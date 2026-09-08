@@ -1,25 +1,16 @@
 use super::*;
-use crate::application::ports::{
-    IngestCatalogFuture, IngestDeleteFuture, IngestLookup, IngestLookupFuture, IngestUpdateFuture,
-    IngestWriteError, IngestWriteFuture, IngestWriter, MetaLookupError, MetaStoreWriter,
-    MetaWriteFuture,
-};
+use crate::application::ports::{MetaLookupError, MetaStoreWriter, MetaWriteFuture};
 use crate::domain::ids::RecordingId;
 use crate::infrastructure::service_wiring::SqliteServiceFactory;
 use crate::infrastructure::sqlite_ports::{SqliteMetaStore, SqliteRecordingStore};
-use std::sync::Mutex;
 
 fn sqlite_pipeline_service(pool: &sqlx::SqlitePool) -> PipelineService {
     SqliteServiceFactory::new(pool).pipeline_service()
 }
 
-fn sqlite_ingest_service(pool: &sqlx::SqlitePool) -> IngestService {
-    SqliteServiceFactory::new(pool).ingest_service()
-}
-
 fn sqlite_media_library_service(pool: &sqlx::SqlitePool) -> MediaLibraryService {
     let factory = SqliteServiceFactory::new(pool);
-    factory.media_library_service(factory.pipeline_service(), factory.ingest_service())
+    factory.media_library_service(factory.pipeline_service())
 }
 
 async fn service_with_pipeline() -> MediaLibraryService {
@@ -50,155 +41,11 @@ async fn service_with_pipeline() -> MediaLibraryService {
     sqlite_media_library_service(&pool)
 }
 
-struct RenameRollbackIngestStore {
-    ingests: Mutex<Vec<Ingest>>,
-    fail_id: String,
-    fail_filename: String,
-}
-
 struct FailingMetaWriter;
 
 impl MetaStoreWriter for FailingMetaWriter {
     fn set_meta<'a>(&'a self, _key: &'a str, _value: &'a str) -> MetaWriteFuture<'a> {
         Box::pin(async move { Err(MetaLookupError::new("injected meta write failure")) })
-    }
-}
-
-impl RenameRollbackIngestStore {
-    fn new(ingests: Vec<Ingest>, fail_id: &str, fail_filename: &str) -> Self {
-        Self {
-            ingests: Mutex::new(ingests),
-            fail_id: fail_id.to_string(),
-            fail_filename: fail_filename.to_string(),
-        }
-    }
-
-    fn snapshot(&self) -> Vec<Ingest> {
-        self.ingests
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
-    }
-}
-
-impl IngestLookup for RenameRollbackIngestStore {
-    fn get_ingest<'a>(&'a self, id: &'a str) -> IngestLookupFuture<'a> {
-        Box::pin(async move {
-            Ok(self
-                .ingests
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .iter()
-                .find(|ingest| ingest.id == id)
-                .cloned())
-        })
-    }
-
-    fn get_ingest_by_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestLookupFuture<'a> {
-        Box::pin(async move {
-            Ok(self
-                .ingests
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .iter()
-                .find(|ingest| ingest.stream_key == stream_key)
-                .cloned())
-        })
-    }
-
-    fn list_ingests<'a>(&'a self) -> IngestCatalogFuture<'a> {
-        Box::pin(async move { Ok(self.snapshot()) })
-    }
-
-    fn list_ingests_for_filename<'a>(&'a self, filename: &'a str) -> IngestCatalogFuture<'a> {
-        Box::pin(async move {
-            Ok(self
-                .snapshot()
-                .into_iter()
-                .filter(|ingest| ingest.filename == filename)
-                .collect())
-        })
-    }
-
-    fn list_ingests_for_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestCatalogFuture<'a> {
-        Box::pin(async move {
-            Ok(self
-                .snapshot()
-                .into_iter()
-                .filter(|ingest| ingest.stream_key == stream_key)
-                .collect())
-        })
-    }
-}
-
-impl IngestWriter for RenameRollbackIngestStore {
-    fn create_ingest<'a>(
-        &'a self,
-        _id: &'a str,
-        _filename: &'a str,
-        _stream_key: &'a str,
-        _loop_flag: bool,
-        _start_time: &'a str,
-        _live_optimized: bool,
-        _target_gop_seconds: u32,
-    ) -> IngestWriteFuture<'a> {
-        Box::pin(async move { Err(IngestWriteError::new("not implemented")) })
-    }
-
-    fn update_ingest<'a>(
-        &'a self,
-        id: &'a str,
-        filename: &'a str,
-        stream_key: &'a str,
-        loop_flag: bool,
-        start_time: &'a str,
-        live_optimized: bool,
-        target_gop_seconds: u32,
-    ) -> IngestUpdateFuture<'a> {
-        Box::pin(async move {
-            if id == self.fail_id && filename == self.fail_filename {
-                return Err(IngestWriteError::new("injected update failure"));
-            }
-            let mut ingests = self
-                .ingests
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            let Some(ingest) = ingests.iter_mut().find(|ingest| ingest.id == id) else {
-                return Ok(None);
-            };
-            ingest.filename = filename.to_string();
-            ingest.stream_key = stream_key.to_string();
-            ingest.loop_flag = loop_flag;
-            ingest.start_time = start_time.to_string();
-            ingest.live_optimized = live_optimized;
-            ingest.target_gop_seconds = target_gop_seconds;
-            Ok(Some(ingest.clone()))
-        })
-    }
-
-    fn update_ingest_filename<'a>(
-        &'a self,
-        id: &'a str,
-        filename: &'a str,
-    ) -> IngestUpdateFuture<'a> {
-        Box::pin(async move {
-            if id == self.fail_id && filename == self.fail_filename {
-                return Err(IngestWriteError::new("injected update failure"));
-            }
-            let mut ingests = self
-                .ingests
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            let Some(ingest) = ingests.iter_mut().find(|ingest| ingest.id == id) else {
-                return Ok(None);
-            };
-            ingest.filename = filename.to_string();
-            Ok(Some(ingest.clone()))
-        })
-    }
-
-    fn delete_ingest<'a>(&'a self, _id: &'a str) -> IngestDeleteFuture<'a> {
-        Box::pin(async move { Ok(false) })
     }
 }
 
@@ -412,38 +259,56 @@ async fn rename_media_file_moves_companions_and_updates_ingests() {
 
 #[tokio::test]
 async fn rename_media_file_rolls_back_prior_ingest_updates_on_later_failure() {
+    // After the first ingest filename update succeeds, a SQLite trigger aborts
+    // the second rename so rename_media_file must roll back the first ingest
+    // write and the filesystem rename.
     let old_name = "source.ts";
     let new_name = "renamed.ts";
-    let first = Ingest {
-        id: "ing-1".to_string(),
-        filename: old_name.to_string(),
-        stream_key: "stream-key-1".to_string(),
-        loop_flag: true,
-        start_time: "00:00:01".to_string(),
-        live_optimized: true,
-        target_gop_seconds: 2,
-    };
-    let second = Ingest {
-        id: "ing-2".to_string(),
-        filename: old_name.to_string(),
-        stream_key: "stream-key-2".to_string(),
-        loop_flag: false,
-        start_time: String::new(),
-        live_optimized: false,
-        target_gop_seconds: 4,
-    };
-    let ingest_store = Arc::new(RenameRollbackIngestStore::new(
-        vec![first.clone(), second.clone()],
-        "ing-2",
-        new_name,
-    ));
     let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+    crate::db::setup_database_schema(&pool).await.unwrap();
+    crate::db::create_ingest(
+        &pool,
+        "ing-1",
+        old_name,
+        "stream-key-1",
+        true,
+        "00:00:01",
+        true,
+        2,
+    )
+    .await
+    .unwrap();
+    crate::db::create_ingest(
+        &pool,
+        "ing-2",
+        old_name,
+        "stream-key-2",
+        false,
+        "",
+        false,
+        4,
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER fail_second_ingest_rename
+         AFTER UPDATE OF filename ON ingests
+         WHEN NEW.filename = 'renamed.ts'
+           AND (SELECT COUNT(*) FROM ingests WHERE filename = 'renamed.ts') >= 2
+         BEGIN
+           SELECT RAISE(ABORT, 'injected second rename failure');
+         END;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
     let service = MediaLibraryService::with_stores(
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(SqliteRecordingStore::new(pool.clone())),
         sqlite_pipeline_service(&pool),
-        IngestService::with_ports(ingest_store.clone(), ingest_store.clone()),
+        pool.clone(),
     );
     let temp_dir = tempfile_dir("media-rename-ingest-rollback");
     let source = temp_dir.join(old_name);
@@ -463,190 +328,65 @@ async fn rename_media_file_rolls_back_prior_ingest_updates_on_later_failure() {
     assert!(matches!(err, MediaRenameError::IngestUpdate(_)));
     assert!(source.exists());
     assert!(!destination.exists());
-    let restored = ingest_store.snapshot();
+    let restored = crate::db::list_ingests(&pool).await.unwrap();
     assert_eq!(restored.len(), 2);
-    assert_eq!(restored[0].id, first.id);
-    assert_eq!(restored[0].filename, first.filename);
-    assert_eq!(restored[0].stream_key, first.stream_key);
-    assert_eq!(restored[0].loop_flag, first.loop_flag);
-    assert_eq!(restored[0].start_time, first.start_time);
-    assert_eq!(restored[0].live_optimized, first.live_optimized);
-    assert_eq!(restored[0].target_gop_seconds, first.target_gop_seconds);
-    assert_eq!(restored[1].id, second.id);
-    assert_eq!(restored[1].filename, second.filename);
-    assert_eq!(restored[1].stream_key, second.stream_key);
-    assert_eq!(restored[1].loop_flag, second.loop_flag);
-    assert_eq!(restored[1].start_time, second.start_time);
-    assert_eq!(restored[1].live_optimized, second.live_optimized);
-    assert_eq!(restored[1].target_gop_seconds, second.target_gop_seconds);
+    for ingest in &restored {
+        assert_eq!(ingest.filename, old_name);
+    }
+    let first = restored.iter().find(|row| row.id == "ing-1").unwrap();
+    assert_eq!(first.stream_key, "stream-key-1");
+    assert!(first.loop_flag);
+    assert_eq!(first.start_time, "00:00:01");
+    assert!(first.live_optimized);
+    assert_eq!(first.target_gop_seconds, 2);
+    let second = restored.iter().find(|row| row.id == "ing-2").unwrap();
+    assert_eq!(second.stream_key, "stream-key-2");
+    assert!(!second.loop_flag);
+    assert!(second.start_time.is_empty());
+    assert!(!second.live_optimized);
+    assert_eq!(second.target_gop_seconds, 4);
     let _ = std::fs::remove_dir_all(temp_dir);
-}
-
-struct ConcurrentWriteIngestStore {
-    ingests: Mutex<Vec<Ingest>>,
-    concurrent_stream_key: String,
-}
-
-impl ConcurrentWriteIngestStore {
-    fn new(ingest: Ingest, concurrent_stream_key: &str) -> Self {
-        Self {
-            ingests: Mutex::new(vec![ingest]),
-            concurrent_stream_key: concurrent_stream_key.to_string(),
-        }
-    }
-
-    fn snapshot(&self) -> Vec<Ingest> {
-        self.ingests
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
-    }
-}
-
-impl IngestLookup for ConcurrentWriteIngestStore {
-    fn get_ingest<'a>(&'a self, id: &'a str) -> IngestLookupFuture<'a> {
-        Box::pin(async move { Ok(self.snapshot().into_iter().find(|ingest| ingest.id == id)) })
-    }
-
-    fn get_ingest_by_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestLookupFuture<'a> {
-        Box::pin(async move {
-            Ok(self
-                .snapshot()
-                .into_iter()
-                .find(|ingest| ingest.stream_key == stream_key))
-        })
-    }
-
-    fn list_ingests<'a>(&'a self) -> IngestCatalogFuture<'a> {
-        Box::pin(async move { Ok(self.snapshot()) })
-    }
-
-    fn list_ingests_for_filename<'a>(&'a self, filename: &'a str) -> IngestCatalogFuture<'a> {
-        Box::pin(async move {
-            // Snapshot what a caller of this lookup sees, then simulate a
-            // concurrent request rotating the stream key in the window
-            // between this snapshot and whatever the caller does with it.
-            let snapshot = self
-                .snapshot()
-                .into_iter()
-                .filter(|ingest| ingest.filename == filename)
-                .collect::<Vec<_>>();
-            let mut ingests = self
-                .ingests
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            for ingest in ingests.iter_mut() {
-                ingest.stream_key = self.concurrent_stream_key.clone();
-            }
-            drop(ingests);
-            Ok(snapshot)
-        })
-    }
-
-    fn list_ingests_for_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestCatalogFuture<'a> {
-        Box::pin(async move {
-            Ok(self
-                .snapshot()
-                .into_iter()
-                .filter(|ingest| ingest.stream_key == stream_key)
-                .collect())
-        })
-    }
-}
-
-impl IngestWriter for ConcurrentWriteIngestStore {
-    fn create_ingest<'a>(
-        &'a self,
-        _id: &'a str,
-        _filename: &'a str,
-        _stream_key: &'a str,
-        _loop_flag: bool,
-        _start_time: &'a str,
-        _live_optimized: bool,
-        _target_gop_seconds: u32,
-    ) -> IngestWriteFuture<'a> {
-        Box::pin(async move { Err(IngestWriteError::new("not implemented")) })
-    }
-
-    fn update_ingest<'a>(
-        &'a self,
-        id: &'a str,
-        filename: &'a str,
-        stream_key: &'a str,
-        loop_flag: bool,
-        start_time: &'a str,
-        live_optimized: bool,
-        target_gop_seconds: u32,
-    ) -> IngestUpdateFuture<'a> {
-        Box::pin(async move {
-            let mut ingests = self
-                .ingests
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            let Some(ingest) = ingests.iter_mut().find(|ingest| ingest.id == id) else {
-                return Ok(None);
-            };
-            ingest.filename = filename.to_string();
-            ingest.stream_key = stream_key.to_string();
-            ingest.loop_flag = loop_flag;
-            ingest.start_time = start_time.to_string();
-            ingest.live_optimized = live_optimized;
-            ingest.target_gop_seconds = target_gop_seconds;
-            Ok(Some(ingest.clone()))
-        })
-    }
-
-    fn update_ingest_filename<'a>(
-        &'a self,
-        id: &'a str,
-        filename: &'a str,
-    ) -> IngestUpdateFuture<'a> {
-        Box::pin(async move {
-            let mut ingests = self
-                .ingests
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            let Some(ingest) = ingests.iter_mut().find(|ingest| ingest.id == id) else {
-                return Ok(None);
-            };
-            ingest.filename = filename.to_string();
-            Ok(Some(ingest.clone()))
-        })
-    }
-
-    fn delete_ingest<'a>(&'a self, _id: &'a str) -> IngestDeleteFuture<'a> {
-        Box::pin(async move { Ok(false) })
-    }
 }
 
 #[tokio::test]
 async fn rename_media_file_does_not_revert_concurrent_ingest_field_changes() {
-    // Regression test: rename_media_file fetches an Ingest snapshot via
-    // list_for_filename, then updates the renamed ingest from that
-    // snapshot. If that update wrote every field back from the stale
-    // snapshot (as it did before this fix, via the shared full-row
-    // update_ingest), a concurrent stream-key rotation landing in the
-    // window between the snapshot and the write would be silently
-    // reverted -- reviving a possibly-leaked stream key.
+    // Regression: rename must update only the filename column. A concurrent
+    // stream-key rotation that lands before the rename write must survive.
     let old_name = "source.ts";
     let new_name = "renamed.ts";
-    let ingest = Ingest {
-        id: "ing-1".to_string(),
-        filename: old_name.to_string(),
-        stream_key: "sk-original".to_string(),
-        loop_flag: true,
-        start_time: "00:00:01".to_string(),
-        live_optimized: true,
-        target_gop_seconds: 2,
-    };
-    let ingest_store = Arc::new(ConcurrentWriteIngestStore::new(ingest, "sk-rotated"));
     let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+    crate::db::setup_database_schema(&pool).await.unwrap();
+    crate::db::create_ingest(
+        &pool,
+        "ing-1",
+        old_name,
+        "sk-original",
+        true,
+        "00:00:01",
+        true,
+        2,
+    )
+    .await
+    .unwrap();
+    crate::db::update_ingest(
+        &pool,
+        "ing-1",
+        old_name,
+        "sk-rotated",
+        true,
+        "00:00:01",
+        true,
+        2,
+    )
+    .await
+    .unwrap();
+
     let service = MediaLibraryService::with_stores(
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(SqliteRecordingStore::new(pool.clone())),
         sqlite_pipeline_service(&pool),
-        IngestService::with_ports(ingest_store.clone(), ingest_store.clone()),
+        pool.clone(),
     );
     let temp_dir = tempfile_dir("media-rename-concurrent-write");
     let source = temp_dir.join(old_name);
@@ -664,10 +404,16 @@ async fn rename_media_file_does_not_revert_concurrent_ingest_field_changes() {
         .unwrap();
 
     assert_eq!(updated, 1);
-    let after = ingest_store.snapshot();
-    assert_eq!(after.len(), 1);
-    assert_eq!(after[0].filename, new_name);
-    assert_eq!(after[0].stream_key, "sk-rotated");
+    let after = crate::db::get_ingest(&pool, "ing-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.filename, new_name);
+    assert_eq!(after.stream_key, "sk-rotated");
+    assert!(after.loop_flag);
+    assert_eq!(after.start_time, "00:00:01");
+    assert!(after.live_optimized);
+    assert_eq!(after.target_gop_seconds, 2);
     let _ = std::fs::remove_dir_all(temp_dir);
 }
 
@@ -680,7 +426,7 @@ async fn recording_start_does_not_touch_runtime_when_persistence_fails() {
         Arc::new(FailingMetaWriter),
         Arc::new(SqliteRecordingStore::new(pool.clone())),
         sqlite_pipeline_service(&pool),
-        sqlite_ingest_service(&pool),
+        pool.clone(),
     );
     let engine = Arc::new(MediaEngine::new());
     let _registration = engine
@@ -714,7 +460,7 @@ async fn recording_stop_does_not_touch_runtime_when_persistence_fails() {
         Arc::new(FailingMetaWriter),
         Arc::new(SqliteRecordingStore::new(pool.clone())),
         sqlite_pipeline_service(&pool),
-        sqlite_ingest_service(&pool),
+        pool.clone(),
     );
     let engine = Arc::new(MediaEngine::new());
     let _token = engine.register_recording("pipe-recording").await;

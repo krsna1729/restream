@@ -19,7 +19,6 @@ fn infrastructure_owns_sqlite_service_composition() {
     for application_service in [
         "PipelineService",
         "PipelineInputService",
-        "IngestService",
         "AuthService",
         "SettingsService",
         "FileIngestService",
@@ -41,6 +40,10 @@ fn infrastructure_owns_sqlite_service_composition() {
     assert!(
         !source.contains("OutputService"),
         "OutputService was collapsed to application::outputs + AppState.db (Wave 1 B)"
+    );
+    assert!(
+        !source.contains("IngestService"),
+        "IngestService was collapsed to application::ingests + AppState.db (Wave 1 C)"
     );
 
     let services_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/application/services");

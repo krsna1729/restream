@@ -1,6 +1,7 @@
-//! File-ingest HTTP handlers translate dashboard requests into ingest-service
-//! operations. Validation and error mapping stay in this module so the service
-//! layer can focus on ingest lifecycle and runtime coordination.
+//! File-ingest HTTP handlers translate dashboard requests into application
+//! ingest helpers and file-ingest runtime operations. Validation and error
+//! mapping stay in this module so helpers can focus on catalog writes and
+//! runtime coordination.
 
 use axum::{
     Json,
@@ -166,7 +167,7 @@ pub async fn ingests_get_handler(
         return Ok(response);
     }
 
-    let ingests = state.ingest_service.list_ingests().await?;
+    let ingests = crate::application::ingests::list_ingests(&state.db).await?;
     let mut res = Vec::new();
     for i in ingests {
         let running = state.engine.is_file_ingest_running(&i.id).await;
@@ -192,18 +193,17 @@ pub async fn ingests_post_handler(
     };
     let id = format!("ingest_{}", to_hex(&rand::random::<[u8; 8]>()));
 
-    let ingest = state
-        .ingest_service
-        .create_ingest(
-            &id,
-            &normalized.filename,
-            &normalized.stream_key,
-            normalized.loop_flag,
-            &normalized.start_time,
-            normalized.live_optimized,
-            normalized.target_gop_seconds,
-        )
-        .await?;
+    let ingest = crate::application::ingests::create_ingest(
+        &state.db,
+        &id,
+        &normalized.filename,
+        &normalized.stream_key,
+        normalized.loop_flag,
+        &normalized.start_time,
+        normalized.live_optimized,
+        normalized.target_gop_seconds,
+    )
+    .await?;
 
     Ok(ingest_json_response(&ingest, false))
 }
@@ -225,18 +225,17 @@ pub async fn ingests_update_handler(
         Err(response) => return Ok(*response),
     };
 
-    let ingest = state
-        .ingest_service
-        .update_ingest(
-            &id,
-            &normalized.filename,
-            &normalized.stream_key,
-            normalized.loop_flag,
-            &normalized.start_time,
-            normalized.live_optimized,
-            normalized.target_gop_seconds,
-        )
-        .await?;
+    let ingest = crate::application::ingests::update_ingest(
+        &state.db,
+        &id,
+        &normalized.filename,
+        &normalized.stream_key,
+        normalized.loop_flag,
+        &normalized.start_time,
+        normalized.live_optimized,
+        normalized.target_gop_seconds,
+    )
+    .await?;
 
     let running = state.engine.is_file_ingest_running(&ingest.id).await;
     Ok(ingest_json_response(&ingest, running))

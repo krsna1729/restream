@@ -7,8 +7,8 @@
 use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
-    AgentService, AuthService, FileIngestService, IngestService, MediaLibraryService,
-    PipelineService, SettingsService,
+    AgentService, AuthService, FileIngestService, MediaLibraryService, PipelineService,
+    SettingsService,
 };
 
 pub mod agent;
@@ -36,7 +36,6 @@ pub struct AppServices {
     pub pipeline_service: PipelineService,
     pub pipeline_input_service: PipelineInputService,
     pub recirculation_service: RecirculationService,
-    pub ingest_service: IngestService,
     pub auth_service: AuthService,
     pub settings_service: SettingsService,
     pub file_ingest_service: FileIngestService,

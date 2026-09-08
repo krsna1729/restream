@@ -18,9 +18,9 @@ use crate::application::recording::{
 };
 use crate::media::engine::MediaEngine;
 use crate::media::recording::RecordingMetadataReporter;
+use sqlx::SqlitePool;
 
 use super::error::{ServiceError, ServiceResult};
-use super::ingest_service::IngestService;
 use super::pipeline_service::PipelineService;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,7 +43,7 @@ pub struct MediaLibraryService {
     meta_writer: Arc<dyn MetaStoreWriter>,
     recording_store: Arc<dyn RecordingStore>,
     pipeline_service: PipelineService,
-    ingest_service: IngestService,
+    db: SqlitePool,
     recording_metadata: Option<RecordingMetadataReporter>,
 }
 
@@ -131,14 +131,14 @@ impl MediaLibraryService {
         meta_writer: Arc<dyn MetaStoreWriter>,
         recording_store: Arc<dyn RecordingStore>,
         pipeline_service: PipelineService,
-        ingest_service: IngestService,
+        db: SqlitePool,
     ) -> Self {
         Self {
             meta_store,
             meta_writer,
             recording_store,
             pipeline_service,
-            ingest_service,
+            db,
             recording_metadata: None,
         }
     }
@@ -212,9 +212,7 @@ impl MediaLibraryService {
                 }
             }
 
-            let ingests = self
-                .ingest_service
-                .list_for_filename(&name)
+            let ingests = crate::application::ingests::list_for_filename(&self.db, &name)
                 .await
                 .unwrap_or_default();
             let lower_name = name.to_ascii_lowercase();
@@ -463,9 +461,7 @@ impl MediaLibraryService {
         filename: &str,
         canonical_path: &Path,
     ) -> Result<(), MediaDeleteError> {
-        let ingests = self
-            .ingest_service
-            .list_for_filename(filename)
+        let ingests = crate::application::ingests::list_for_filename(&self.db, filename)
             .await
             .map_err(|error| MediaDeleteError::Dependency(error.to_string()))?;
         if !ingests.is_empty() {
@@ -549,7 +545,8 @@ impl MediaLibraryService {
             completed.push((from.clone(), to.clone()));
         }
 
-        let ingests = match self.ingest_service.list_for_filename(filename).await {
+        let ingests = match crate::application::ingests::list_for_filename(&self.db, filename).await
+        {
             Ok(ingests) => ingests,
             Err(error) => {
                 rollback_renames(completed).await;
@@ -558,12 +555,11 @@ impl MediaLibraryService {
         };
         let mut updated_ingests = Vec::new();
         for ingest in &ingests {
-            if let Err(error) = self
-                .ingest_service
-                .update_ingest_filename(&ingest.id, new_name)
-                .await
+            if let Err(error) =
+                crate::application::ingests::update_ingest_filename(&self.db, &ingest.id, new_name)
+                    .await
             {
-                rollback_ingest_updates(&self.ingest_service, updated_ingests).await;
+                rollback_ingest_updates(&self.db, updated_ingests).await;
                 rollback_renames(completed).await;
                 return Err(MediaRenameError::IngestUpdate(error.to_string()));
             }
@@ -589,11 +585,11 @@ fn recording_fields(recording_meta: Option<&MediaRecordingMetadata>) -> Recordin
 
 /// Best-effort rollback for ingest filename updates after a later rename step
 /// fails.
-async fn rollback_ingest_updates(ingest_service: &IngestService, updated_ingests: Vec<Ingest>) {
+async fn rollback_ingest_updates(pool: &SqlitePool, updated_ingests: Vec<Ingest>) {
     for ingest in updated_ingests.into_iter().rev() {
-        let _ = ingest_service
-            .update_ingest_filename(&ingest.id, &ingest.filename)
-            .await;
+        let _ =
+            crate::application::ingests::update_ingest_filename(pool, &ingest.id, &ingest.filename)
+                .await;
     }
 }
 
