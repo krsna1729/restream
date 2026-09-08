@@ -96,12 +96,16 @@ fn release_policy_metadata_is_declared_and_enforced() {
     assert!(build_rs.contains("remove_var(\"PKG_CONFIG_PATH\")"));
     assert!(build_rs.contains("RESTREAM_NATIVE_BUILD_ID"));
     assert!(build_rs.contains("native_build_id(&prefix)"));
-    assert!(build_rs.contains("embed_native_input_inventory(&prefix)"));
+    assert!(build_rs.contains("embed_native_input_inventory(&prefix,"));
     assert!(build_rs.contains("native-build-inputs.json"));
     assert!(build_rs.contains("\"features\": features"));
     assert!(build_rs.contains("\"dependencyRefs\": dependency_refs"));
     assert!(build_rs.contains("REQUIRED_STATIC_ARCHIVES"));
     assert!(build_rs.contains("check_required_static_inputs(&prefix)"));
+    // Local/agent shared BtbN path is allowed beside the release static contract.
+    assert!(build_rs.contains("REQUIRED_SHARED_LIBS"));
+    assert!(build_rs.contains("check_required_shared_inputs(&prefix)"));
+    assert!(build_rs.contains(".restream-native-link-shared"));
     assert!(build_rs.contains("assert_pinned_paths(package, prefix, &library.link_paths)"));
     assert!(build_rs.contains("assert_pinned_paths(package, prefix, &library.include_paths)"));
     assert!(build_rs.contains("cargo:rustc-link-arg=-Wl,-Bdynamic"));
