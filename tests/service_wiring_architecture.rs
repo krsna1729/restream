@@ -41,8 +41,12 @@ fn infrastructure_owns_sqlite_service_composition() {
         !source.contains("OutputService"),
         "OutputService was collapsed to application::outputs + AppState.db (Wave 1 B)"
     );
+    // Strip FileIngestService first — it still exists and contains the
+    // "IngestService" substring.
     assert!(
-        !source.contains("IngestService"),
+        !source
+            .replace("FileIngestService", "")
+            .contains("IngestService"),
         "IngestService was collapsed to application::ingests + AppState.db (Wave 1 C)"
     );
 
