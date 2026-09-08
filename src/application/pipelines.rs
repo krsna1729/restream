@@ -31,24 +31,13 @@ pub async fn list_pipelines(pool: &SqlitePool) -> ServiceResult<Vec<Pipeline>> {
         .map_err(|e| ServiceError::internal(format!("list pipelines: {e}")))
 }
 
-/// Resolves one pipeline by ID; missing rows become a stable not-found error.
+/// Looks up a pipeline by ID; missing rows become a stable not-found error.
 pub async fn get_by_id(pool: &SqlitePool, id: &str) -> ServiceResult<Pipeline> {
     crate::db::get_pipeline(pool, id)
         .await
         .map_err(|e| ServiceError::internal(format!("get pipeline: {e}")))?
         .map(pipeline_from_record)
         .ok_or_else(|| pipeline_not_found(id))
-}
-
-/// Looks up a pipeline by publish stream key for ingest routing.
-pub async fn get_by_stream_key(
-    pool: &SqlitePool,
-    stream_key: &str,
-) -> ServiceResult<Option<Pipeline>> {
-    crate::db::get_pipeline_by_stream_key(pool, stream_key)
-        .await
-        .map(|record| record.map(pipeline_from_record))
-        .map_err(|e| ServiceError::internal(format!("get pipeline by stream key: {e}")))
 }
 
 /// Persists a new pipeline record with the caller-provided stream key and policy.

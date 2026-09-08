@@ -87,7 +87,6 @@ impl<'pool> SqliteServiceFactory<'pool> {
             ingest_store,
             Arc::new(SqlitePipelineStore::new(self.db.clone())),
             Arc::new(SqlitePipelineInputStore::new(self.db.clone())),
-            self.db.clone(),
         )
     }
 
@@ -97,7 +96,6 @@ impl<'pool> SqliteServiceFactory<'pool> {
             meta_store.clone(),
             meta_store,
             Arc::new(SqliteRecordingStore::new(self.db.clone())),
-            self.db.clone(),
             ingest_service,
         )
         .with_recording_metadata(spawn_recording_metadata_reporter(self.db.clone()))

@@ -339,6 +339,7 @@ mod tests {
         assert_eq!(snapshot.server_name, "Studio");
         assert_eq!(snapshot.ingest_host, "edge.local");
         assert!(snapshot.recording_settings.retain_source_ts);
+        assert!(service.list_pipelines().await.unwrap().is_empty());
         assert_eq!(
             service
                 .get_meta("custom_encoding")

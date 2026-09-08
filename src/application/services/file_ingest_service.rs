@@ -21,7 +21,6 @@ use crate::media::external_file_ingest::{
 };
 
 use super::error::{ServiceError, ServiceResult};
-use sqlx::SqlitePool;
 
 /// Transport-facing payload for creating or updating one persisted file ingest
 /// configuration before it is translated into the domain/storage model.
@@ -55,7 +54,6 @@ pub struct FileIngestService {
     ingest_writer: Arc<dyn IngestWriter>,
     pipeline_store: Arc<dyn PipelineStore>,
     pipeline_input_lookup: Arc<dyn PipelineInputLookup>,
-    db: SqlitePool,
 }
 
 impl FileIngestService {
@@ -66,14 +64,12 @@ impl FileIngestService {
         ingest_writer: Arc<dyn IngestWriter>,
         pipeline_store: Arc<dyn PipelineStore>,
         pipeline_input_lookup: Arc<dyn PipelineInputLookup>,
-        db: SqlitePool,
     ) -> Self {
         Self {
             ingest_lookup,
             ingest_writer,
             pipeline_store,
             pipeline_input_lookup,
-            db,
         }
     }
 
@@ -112,12 +108,6 @@ impl FileIngestService {
         }
 
         Ok(canonical_file)
-    }
-
-    /// Resolves one pipeline through the shared catalog helpers so file-ingest
-    /// handlers can validate pipeline ownership before touching ingest state.
-    pub async fn get_pipeline(&self, id: &str) -> ServiceResult<Pipeline> {
-        crate::application::pipelines::get_by_id(&self.db, id).await
     }
 
     /// Rebuilds the derived file-ingest view for one pipeline after a create,

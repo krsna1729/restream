@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::application::models::{Ingest, Pipeline};
+use crate::application::models::Ingest;
 use crate::application::ports::{MetaStore, MetaStoreWriter, RecordingStore};
 use crate::application::recording::{
     load_recording_settings, recording_enabled_meta_key, spawn_recording_task,
@@ -21,7 +21,6 @@ use crate::media::recording::RecordingMetadataReporter;
 
 use super::error::{ServiceError, ServiceResult};
 use super::ingest_service::IngestService;
-use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Recording metadata projected onto a media-library row when a file is backed
@@ -42,7 +41,6 @@ pub struct MediaLibraryService {
     meta_store: Arc<dyn MetaStore>,
     meta_writer: Arc<dyn MetaStoreWriter>,
     recording_store: Arc<dyn RecordingStore>,
-    db: SqlitePool,
     ingest_service: IngestService,
     recording_metadata: Option<RecordingMetadataReporter>,
 }
@@ -130,14 +128,12 @@ impl MediaLibraryService {
         meta_store: Arc<dyn MetaStore>,
         meta_writer: Arc<dyn MetaStoreWriter>,
         recording_store: Arc<dyn RecordingStore>,
-        db: SqlitePool,
         ingest_service: IngestService,
     ) -> Self {
         Self {
             meta_store,
             meta_writer,
             recording_store,
-            db,
             ingest_service,
             recording_metadata: None,
         }
@@ -151,12 +147,6 @@ impl MediaLibraryService {
     ) -> Self {
         self.recording_metadata = Some(recording_metadata);
         self
-    }
-
-    /// Resolves one pipeline so media-library flows can verify ownership before
-    /// starting or stopping recording work.
-    pub async fn get_pipeline(&self, id: &str) -> ServiceResult<Pipeline> {
-        crate::application::pipelines::get_by_id(&self.db, id).await
     }
 
     /// Lists visible media files and folds companion recording artifacts into a

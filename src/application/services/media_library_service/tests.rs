@@ -438,7 +438,6 @@ async fn rename_media_file_rolls_back_prior_ingest_updates_on_later_failure() {
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(SqliteRecordingStore::new(pool.clone())),
-        pool.clone(),
         IngestService::with_ports(ingest_store.clone(), ingest_store.clone()),
     );
     let temp_dir = tempfile_dir("media-rename-ingest-rollback");
@@ -641,7 +640,6 @@ async fn rename_media_file_does_not_revert_concurrent_ingest_field_changes() {
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(SqliteRecordingStore::new(pool.clone())),
-        pool.clone(),
         IngestService::with_ports(ingest_store.clone(), ingest_store.clone()),
     );
     let temp_dir = tempfile_dir("media-rename-concurrent-write");
@@ -675,7 +673,6 @@ async fn recording_start_does_not_touch_runtime_when_persistence_fails() {
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(FailingMetaWriter),
         Arc::new(SqliteRecordingStore::new(pool.clone())),
-        pool.clone(),
         sqlite_ingest_service(&pool),
     );
     let engine = Arc::new(MediaEngine::new());
@@ -709,7 +706,6 @@ async fn recording_stop_does_not_touch_runtime_when_persistence_fails() {
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(FailingMetaWriter),
         Arc::new(SqliteRecordingStore::new(pool.clone())),
-        pool.clone(),
         sqlite_ingest_service(&pool),
     );
     let engine = Arc::new(MediaEngine::new());
