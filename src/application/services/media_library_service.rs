@@ -21,7 +21,7 @@ use crate::media::recording::RecordingMetadataReporter;
 
 use super::error::{ServiceError, ServiceResult};
 use super::ingest_service::IngestService;
-use super::pipeline_service::PipelineService;
+use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Recording metadata projected onto a media-library row when a file is backed
@@ -42,7 +42,7 @@ pub struct MediaLibraryService {
     meta_store: Arc<dyn MetaStore>,
     meta_writer: Arc<dyn MetaStoreWriter>,
     recording_store: Arc<dyn RecordingStore>,
-    pipeline_service: PipelineService,
+    db: SqlitePool,
     ingest_service: IngestService,
     recording_metadata: Option<RecordingMetadataReporter>,
 }
@@ -130,14 +130,14 @@ impl MediaLibraryService {
         meta_store: Arc<dyn MetaStore>,
         meta_writer: Arc<dyn MetaStoreWriter>,
         recording_store: Arc<dyn RecordingStore>,
-        pipeline_service: PipelineService,
+        db: SqlitePool,
         ingest_service: IngestService,
     ) -> Self {
         Self {
             meta_store,
             meta_writer,
             recording_store,
-            pipeline_service,
+            db,
             ingest_service,
             recording_metadata: None,
         }
@@ -156,7 +156,7 @@ impl MediaLibraryService {
     /// Resolves one pipeline so media-library flows can verify ownership before
     /// starting or stopping recording work.
     pub async fn get_pipeline(&self, id: &str) -> ServiceResult<Pipeline> {
-        self.pipeline_service.get_by_id(id).await
+        crate::application::pipelines::get_by_id(&self.db, id).await
     }
 
     /// Lists visible media files and folds companion recording artifacts into a

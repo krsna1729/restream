@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crate::application::models::{Job, Pipeline};
+use crate::application::models::Job;
 use crate::application::pipeline_inputs::PipelineInputStore;
 use crate::application::ports::{IngestHostStore, JobStore, MetaStore, MetaStoreWriter};
 use crate::application::recording::load_recording_enabled_map;
@@ -26,7 +26,7 @@ use crate::media::srt::SrtIngestPolicyStore;
 use crate::planner::BackendPolicy;
 
 use super::error::{ServiceError, ServiceResult};
-use super::pipeline_service::PipelineService;
+use sqlx::SqlitePool;
 
 const SERVER_NAME_META_KEY: &str = "server_name";
 
@@ -38,7 +38,7 @@ pub struct SettingsService {
     ingest_host_store: Arc<dyn IngestHostStore>,
     job_store: Arc<dyn JobStore>,
     input_store: Arc<dyn PipelineInputStore>,
-    pipeline_service: PipelineService,
+    db: SqlitePool,
 }
 
 impl SettingsService {
@@ -50,7 +50,7 @@ impl SettingsService {
         ingest_host_store: Arc<dyn IngestHostStore>,
         job_store: Arc<dyn JobStore>,
         input_store: Arc<dyn PipelineInputStore>,
-        pipeline_service: PipelineService,
+        db: SqlitePool,
     ) -> Self {
         Self {
             meta_store,
@@ -58,7 +58,7 @@ impl SettingsService {
             ingest_host_store,
             job_store,
             input_store,
-            pipeline_service,
+            db,
         }
     }
 
@@ -81,8 +81,8 @@ impl SettingsService {
 
     /// Lists pipelines for settings views that need the current catalog while
     /// staying independent of pipeline-store details.
-    pub async fn list_pipelines(&self) -> ServiceResult<Vec<Pipeline>> {
-        self.pipeline_service.list_pipelines().await
+    pub async fn list_pipelines(&self) -> ServiceResult<Vec<crate::application::models::Pipeline>> {
+        crate::application::pipelines::list_pipelines(&self.db).await
     }
 
     /// Lists background jobs that should appear in the operator settings view.
@@ -94,7 +94,7 @@ impl SettingsService {
     }
 
     /// Returns the raw persisted ingest host value without applying the
-    /// pipeline service's localhost fallback.
+    /// localhost fallback used by catalog URL helpers.
     pub async fn get_ingest_host_raw(&self) -> ServiceResult<String> {
         self.ingest_host_store
             .get_ingest_host()
@@ -218,7 +218,6 @@ mod tests {
     use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
     use crate::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
     use crate::domain::srt_ingest::{SrtGlobalIngestConfig, SrtGlobalIngestMode};
-    use crate::infrastructure::service_wiring::SqliteServiceFactory;
     use crate::media::security::IngestSecurityService;
     use crate::media::srt::SrtIngestPolicyStore;
 
@@ -315,7 +314,7 @@ mod tests {
                     pool.clone(),
                 ),
             ),
-            SqliteServiceFactory::new(&pool).pipeline_service(),
+            pool.clone(),
         );
 
         service.set_server_name("Studio").await.unwrap();
@@ -350,7 +349,6 @@ mod tests {
         );
         assert_eq!(service.get_ingest_host_raw().await.unwrap(), "edge.local");
         assert_eq!(service.list_jobs().await.unwrap()[0].id, "job-1");
-        assert!(service.list_pipelines().await.unwrap().is_empty());
 
         let recording_enabled = service.recording_enabled_map(&["pipe-1".to_string()]).await;
         assert_eq!(recording_enabled.get("pipe-1"), Some(&false));

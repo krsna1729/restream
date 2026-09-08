@@ -9,7 +9,7 @@ use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
     AgentService, AuthService, FileIngestService, IngestService, MediaLibraryService,
-    PipelineService, SettingsService,
+    SettingsService,
 };
 use crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore;
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
@@ -30,35 +30,27 @@ impl<'pool> SqliteServiceFactory<'pool> {
 
     /// Builds the complete service graph used by the API state.
     pub fn compose(&self) -> AppServices {
-        let pipeline_service = self.pipeline_service();
-        let pipeline_input_service = self.pipeline_input_service(pipeline_service.clone());
+        let pipeline_input_service = self.pipeline_input_service();
         let recirculation_service =
             RecirculationService::with_services(self.db.clone(), pipeline_input_service.clone());
         let ingest_service = self.ingest_service();
-        let settings_service = self.settings_service_with(pipeline_service.clone());
 
         AppServices {
             pipeline_input_service,
             recirculation_service,
             auth_service: self.auth_service(),
-            settings_service,
-            file_ingest_service: self.file_ingest_service(pipeline_service.clone()),
-            media_library_service: self
-                .media_library_service(pipeline_service.clone(), ingest_service.clone()),
+            settings_service: self.settings_service(),
+            file_ingest_service: self.file_ingest_service(),
+            media_library_service: self.media_library_service(ingest_service.clone()),
             agent_service: self.agent_service(),
-            pipeline_service,
             ingest_service,
         }
     }
 
-    pub fn pipeline_service(&self) -> PipelineService {
-        PipelineService::with_store(Arc::new(SqlitePipelineStore::new(self.db.clone())))
-    }
-
-    pub fn pipeline_input_service(&self, pipelines: PipelineService) -> PipelineInputService {
+    pub fn pipeline_input_service(&self) -> PipelineInputService {
         PipelineInputService::with_store(
             Arc::new(SqlitePipelineInputStore::new(self.db.clone())),
-            pipelines,
+            self.db.clone(),
         )
     }
 
@@ -77,10 +69,6 @@ impl<'pool> SqliteServiceFactory<'pool> {
     }
 
     pub fn settings_service(&self) -> SettingsService {
-        self.settings_service_with(self.pipeline_service())
-    }
-
-    fn settings_service_with(&self, pipeline_service: PipelineService) -> SettingsService {
         let meta_store = Arc::new(SqliteMetaStore::new(self.db.clone()));
         SettingsService::with_stores(
             meta_store.clone(),
@@ -88,32 +76,28 @@ impl<'pool> SqliteServiceFactory<'pool> {
             meta_store,
             Arc::new(SqliteJobStore::new(self.db.clone())),
             Arc::new(SqlitePipelineInputStore::new(self.db.clone())),
-            pipeline_service,
+            self.db.clone(),
         )
     }
 
-    pub fn file_ingest_service(&self, pipeline_service: PipelineService) -> FileIngestService {
+    pub fn file_ingest_service(&self) -> FileIngestService {
         let ingest_store = Arc::new(SqliteIngestLookup::new(self.db.clone()));
         FileIngestService::with_ports(
             ingest_store.clone(),
             ingest_store,
             Arc::new(SqlitePipelineStore::new(self.db.clone())),
             Arc::new(SqlitePipelineInputStore::new(self.db.clone())),
-            pipeline_service,
+            self.db.clone(),
         )
     }
 
-    pub fn media_library_service(
-        &self,
-        pipeline_service: PipelineService,
-        ingest_service: IngestService,
-    ) -> MediaLibraryService {
+    pub fn media_library_service(&self, ingest_service: IngestService) -> MediaLibraryService {
         let meta_store = Arc::new(SqliteMetaStore::new(self.db.clone()));
         MediaLibraryService::with_stores(
             meta_store.clone(),
             meta_store,
             Arc::new(SqliteRecordingStore::new(self.db.clone())),
-            pipeline_service,
+            self.db.clone(),
             ingest_service,
         )
         .with_recording_metadata(spawn_recording_metadata_reporter(self.db.clone()))

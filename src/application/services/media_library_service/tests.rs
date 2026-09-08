@@ -9,17 +9,13 @@ use crate::infrastructure::service_wiring::SqliteServiceFactory;
 use crate::infrastructure::sqlite_ports::{SqliteMetaStore, SqliteRecordingStore};
 use std::sync::Mutex;
 
-fn sqlite_pipeline_service(pool: &sqlx::SqlitePool) -> PipelineService {
-    SqliteServiceFactory::new(pool).pipeline_service()
-}
-
 fn sqlite_ingest_service(pool: &sqlx::SqlitePool) -> IngestService {
     SqliteServiceFactory::new(pool).ingest_service()
 }
 
 fn sqlite_media_library_service(pool: &sqlx::SqlitePool) -> MediaLibraryService {
     let factory = SqliteServiceFactory::new(pool);
-    factory.media_library_service(factory.pipeline_service(), factory.ingest_service())
+    factory.media_library_service(factory.ingest_service())
 }
 
 async fn service_with_pipeline() -> MediaLibraryService {
@@ -442,7 +438,7 @@ async fn rename_media_file_rolls_back_prior_ingest_updates_on_later_failure() {
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(SqliteRecordingStore::new(pool.clone())),
-        sqlite_pipeline_service(&pool),
+        pool.clone(),
         IngestService::with_ports(ingest_store.clone(), ingest_store.clone()),
     );
     let temp_dir = tempfile_dir("media-rename-ingest-rollback");
@@ -645,7 +641,7 @@ async fn rename_media_file_does_not_revert_concurrent_ingest_field_changes() {
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(SqliteRecordingStore::new(pool.clone())),
-        sqlite_pipeline_service(&pool),
+        pool.clone(),
         IngestService::with_ports(ingest_store.clone(), ingest_store.clone()),
     );
     let temp_dir = tempfile_dir("media-rename-concurrent-write");
@@ -679,7 +675,7 @@ async fn recording_start_does_not_touch_runtime_when_persistence_fails() {
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(FailingMetaWriter),
         Arc::new(SqliteRecordingStore::new(pool.clone())),
-        sqlite_pipeline_service(&pool),
+        pool.clone(),
         sqlite_ingest_service(&pool),
     );
     let engine = Arc::new(MediaEngine::new());
@@ -713,7 +709,7 @@ async fn recording_stop_does_not_touch_runtime_when_persistence_fails() {
         Arc::new(SqliteMetaStore::new(pool.clone())),
         Arc::new(FailingMetaWriter),
         Arc::new(SqliteRecordingStore::new(pool.clone())),
-        sqlite_pipeline_service(&pool),
+        pool.clone(),
         sqlite_ingest_service(&pool),
     );
     let engine = Arc::new(MediaEngine::new());

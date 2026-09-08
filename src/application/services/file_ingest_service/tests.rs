@@ -21,8 +21,7 @@ fn ingest_with(live_optimized: bool) -> Ingest {
 }
 
 fn service(pool: SqlitePool) -> FileIngestService {
-    let factory = SqliteServiceFactory::new(&pool);
-    factory.file_ingest_service(factory.pipeline_service())
+    SqliteServiceFactory::new(&pool).file_ingest_service()
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -224,7 +223,7 @@ async fn apply_file_ingest_payload_surfaces_persist_failure() {
         Arc::new(NoopIngestWriter),
         pipeline_store.clone(),
         pipeline_store,
-        SqliteServiceFactory::new(&pool).pipeline_service(),
+        pool,
     );
     let engine = Arc::new(MediaEngine::new());
 
@@ -271,7 +270,7 @@ async fn apply_file_ingest_payload_preserves_runtime_when_persist_fails() {
         Arc::new(NoopIngestWriter),
         pipeline_store.clone(),
         pipeline_store,
-        SqliteServiceFactory::new(&pool).pipeline_service(),
+        pool,
     );
     let engine = Arc::new(MediaEngine::new());
     let _registration = engine
