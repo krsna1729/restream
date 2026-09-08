@@ -64,7 +64,10 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   is duplicated mock-only architecture in *both* backends. Symmetry between
   the two backends is not itself a justification for keeping it — do both in
   one coherent change rather than diverging them one at a time.
-- Status: open (Filed: 2026-09-05 by claude, from PR #141 review)
+- Status: done (2026-09-08) — see PR collapsing SrtSocketConnector and
+  *ResolveCompletionSource traits; backends hold concrete completion queues
+  and call connect_fabric_* directly. Filed: 2026-09-05 by claude, from PR
+  #141 review.
 
 ### Q-025 [performance] [opus] Remeasure the SRT shard-count scaling law after the srt-rs cutover
 - Goal: either re-justify `EgressShardProfile::SrtCpuParallel` (always claim
