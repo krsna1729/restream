@@ -288,6 +288,7 @@ async fn delete_pipeline_storage_failure_is_internal_error() {
     let engine = Arc::new(MediaEngine::new());
     let mut state = api::AppState::test_new(
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&auth_pool).compose(),
+        auth_pool.clone(),
         security,
         ingest_policy_store,
         sessions,

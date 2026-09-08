@@ -307,8 +307,12 @@ impl AppState {
     }
 
     /// Construct an AppState with all default services wired, for testing.
+    ///
+    /// Callers must pass the same `db` pool used to compose `services` so HTTP
+    /// helpers that read `AppState.db` see rows the test inserted.
     pub fn test_new(
         services: AppServices,
+        db: SqlitePool,
         security: Arc<IngestSecurityService>,
         ingest_policy_store: Arc<SrtIngestPolicyStore>,
         sessions: Arc<TokioRwLock<HashSet<String>>>,
@@ -317,7 +321,7 @@ impl AppState {
     ) -> Self {
         Self::new(
             services,
-            test_sqlite_pool(),
+            db,
             security,
             ingest_policy_store,
             sessions,
@@ -328,8 +332,10 @@ impl AppState {
     }
 
     /// Construct an AppState with default services and an isolated media directory.
+    #[allow(clippy::too_many_arguments)]
     pub fn test_new_with_media_dir(
         services: AppServices,
+        db: SqlitePool,
         security: Arc<IngestSecurityService>,
         ingest_policy_store: Arc<SrtIngestPolicyStore>,
         sessions: Arc<TokioRwLock<HashSet<String>>>,
@@ -343,7 +349,7 @@ impl AppState {
         };
         Self::new(
             services,
-            test_sqlite_pool(),
+            db,
             security,
             ingest_policy_store,
             sessions,
@@ -352,10 +358,6 @@ impl AppState {
             runtime,
         )
     }
-}
-
-fn test_sqlite_pool() -> SqlitePool {
-    SqlitePool::connect_lazy("sqlite::memory:").expect("lazy in-memory sqlite pool")
 }
 
 /// Shared length guard for request fields that should fail fast at the HTTP

@@ -39,6 +39,7 @@ async fn test_phase_3_routing_resolves_all_major_routes() {
 
     let state = Arc::new(restream::api::AppState::test_new(
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&db).compose(),
+        db.clone(),
         security,
         ingest_policy_store,
         sessions,

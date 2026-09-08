@@ -306,6 +306,7 @@ async fn config_patch_ingest_security_does_not_mutate_runtime_when_persist_fails
     let engine = Arc::new(MediaEngine::new());
     let mut state = api::AppState::test_new(
         restream::infrastructure::service_wiring::SqliteServiceFactory::new(&auth_pool).compose(),
+        auth_pool.clone(),
         security.clone(),
         ingest_policy_store,
         sessions,
