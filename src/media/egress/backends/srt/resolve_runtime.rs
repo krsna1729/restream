@@ -1,8 +1,8 @@
 use std::thread::JoinHandle;
 
 use super::{
-    SrtResolveCompletionQueue, SrtResolveRequest, SrtResolveWorkerError, SrtResolvedConnect,
-    SrtShardBackend, duration_millis_u64, srt_resolve_completion_queue,
+    SrtResolveRequest, SrtResolveWorkerError, SrtResolvedConnect, SrtShardBackend,
+    duration_millis_u64, srt_resolve_completion_queue,
 };
 use crate::media::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;

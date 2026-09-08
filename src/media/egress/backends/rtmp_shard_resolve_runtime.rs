@@ -13,9 +13,8 @@ use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::rtmp::parse_rtmp_url;
 
 use super::rtmp_shard::{
-    RtmpPublishStartupSource, RtmpReadinessPoller, RtmpResolveCompletionQueue,
-    RtmpResolveWorkerError, RtmpResolvedConnect, RtmpShardBackend, rtmp_resolve_completion_queue,
-    spawn_rtmp_resolve_worker,
+    RtmpPublishStartupSource, RtmpReadinessPoller, RtmpResolveWorkerError, RtmpResolvedConnect,
+    RtmpShardBackend, rtmp_resolve_completion_queue, spawn_rtmp_resolve_worker,
 };
 
 const RTMP_RESOLVE_COMPLETION_QUEUE_CAPACITY: usize = 1024;

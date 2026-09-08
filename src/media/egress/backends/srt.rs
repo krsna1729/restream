@@ -14,8 +14,8 @@ use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::snapshots::PublisherQuality;
 use crate::media::srt::{
-    NativeSendBacklog, SrtEgressEngine, SrtFabricEgressConnectConfig, SrtFabricEgressConnectSpec,
-    SrtMessageSender, connect_fabric_srt_egress_socket, drive_shared_srt_egress,
+    NativeSendBacklog, SrtEgressEngine, SrtFabricEgressConnectSpec, SrtMessageSender,
+    connect_fabric_srt_egress_socket, drive_shared_srt_egress,
 };
 
 /// Combined application and native pending state for one SRT fabric leaf.
