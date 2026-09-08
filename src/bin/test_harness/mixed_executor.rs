@@ -62,55 +62,6 @@ pub(crate) trait ScenarioExecutor {
         self.steps().iter().map(|step| step.as_str()).collect()
     }
 
-    fn prepare<'a>(
-        &'a mut self,
-        _ctx: &'a mut ScenarioExecutionContext<'a>,
-    ) -> ScenarioExecutorFuture<'a, ()> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn start_input<'a>(
-        &'a mut self,
-        _ctx: &'a mut ScenarioExecutionContext<'a>,
-    ) -> ScenarioExecutorFuture<'a, ()> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn pre_fanout_checks<'a>(
-        &'a mut self,
-        _ctx: &'a mut ScenarioExecutionContext<'a>,
-    ) -> ScenarioExecutorFuture<'a, ()> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn create_outputs<'a>(
-        &'a mut self,
-        _ctx: &'a mut ScenarioExecutionContext<'a>,
-    ) -> ScenarioExecutorFuture<'a, ()> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn wait_for_progress<'a>(
-        &'a mut self,
-        _ctx: &'a mut ScenarioExecutionContext<'a>,
-    ) -> ScenarioExecutorFuture<'a, ()> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn run_probes<'a>(
-        &'a mut self,
-        _ctx: &'a mut ScenarioExecutionContext<'a>,
-    ) -> ScenarioExecutorFuture<'a, ()> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn cleanup<'a>(
-        &'a mut self,
-        _ctx: &'a mut ScenarioExecutionContext<'a>,
-    ) -> ScenarioExecutorFuture<'a, ()> {
-        Box::pin(async { Ok(()) })
-    }
-
     fn execute<'a>(
         &'a mut self,
         ctx: ScenarioExecutionContext<'a>,

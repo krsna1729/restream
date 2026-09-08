@@ -275,7 +275,7 @@ async fn job_lifecycle() {
     )
     .await
     .unwrap();
-    assert_eq!(job.status_typed(), Some(JobStatusRecord::Running));
+    assert_eq!(job.status, JobStatusRecord::Running);
     assert_eq!(job.pid, Some(1234));
 
     let running = db::get_running_job_for(&pool, "p1", "o1").await.unwrap();
@@ -293,7 +293,7 @@ async fn job_lifecycle() {
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(updated.status_typed(), Some(JobStatusRecord::Stopped));
+    assert_eq!(updated.status, JobStatusRecord::Stopped);
     assert_eq!(updated.exit_code, Some(0));
 
     let no_running = db::get_running_job_for(&pool, "p1", "o1").await.unwrap();
@@ -410,7 +410,7 @@ async fn stale_job_update_cannot_clobber_replacement_attempt() {
         .unwrap()
         .unwrap();
     assert_eq!(running.id, "j2");
-    assert_eq!(running.status_typed(), Some(JobStatusRecord::Running));
+    assert_eq!(running.status, JobStatusRecord::Running);
     assert_eq!(running.pid, Some(200));
     assert!(running.ended_at.is_none());
     assert!(running.exit_code.is_none());
@@ -500,7 +500,7 @@ async fn multiple_stale_job_updates_cannot_clobber_newest_attempt() {
         .unwrap()
         .unwrap();
     assert_eq!(running.id, "j3");
-    assert_eq!(running.status_typed(), Some(JobStatusRecord::Running));
+    assert_eq!(running.status, JobStatusRecord::Running);
     assert_eq!(running.pid, Some(300));
     assert_eq!(running.started_at, "2024-01-01T00:20:00Z");
     assert!(running.ended_at.is_none());
@@ -637,7 +637,7 @@ async fn reset_running_jobs() {
         .unwrap();
 
     let job = db::get_job(&pool, "j1").await.unwrap().unwrap();
-    assert_eq!(job.status_typed(), Some(JobStatusRecord::Stopped));
+    assert_eq!(job.status, JobStatusRecord::Stopped);
     assert_eq!(job.exit_signal.as_deref(), Some("SIGKILL"));
 }
 
@@ -726,7 +726,7 @@ async fn cleanup_old_jobs_removes_only_old_terminal_jobs() {
     assert!(db::get_job(&pool, "old-failed").await.unwrap().is_none());
 
     let running = db::get_job(&pool, "keep-running").await.unwrap().unwrap();
-    assert_eq!(running.status_typed(), Some(JobStatusRecord::Running));
+    assert_eq!(running.status, JobStatusRecord::Running);
 }
 
 // ── Regression tests for Round 10 audit fixes ────────────────────────────────

@@ -8,8 +8,8 @@ use crate::api::AppServices;
 use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
-    AgentService, AuthService, FileIngestService, HealthService, IngestService, LogService,
-    MediaLibraryService, OutputService, PipelineService, SettingsService,
+    AgentService, AuthService, FileIngestService, IngestService, LogService, MediaLibraryService,
+    OutputService, PipelineService, SettingsService,
 };
 use crate::infrastructure::pipeline_input_store::SqlitePipelineInputStore;
 use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
@@ -46,7 +46,6 @@ impl<'pool> SqliteServiceFactory<'pool> {
             recirculation_service,
             auth_service: self.auth_service(),
             settings_service,
-            health_service: self.health_service(),
             file_ingest_service: self.file_ingest_service(pipeline_service.clone()),
             media_library_service: self
                 .media_library_service(pipeline_service.clone(), ingest_service.clone()),
@@ -106,10 +105,6 @@ impl<'pool> SqliteServiceFactory<'pool> {
             pipeline_service,
             output_service,
         )
-    }
-
-    pub fn health_service(&self) -> HealthService {
-        HealthService::with_store(Arc::new(SqlitePipelineStore::new(self.db.clone())))
     }
 
     pub fn file_ingest_service(&self, pipeline_service: PipelineService) -> FileIngestService {

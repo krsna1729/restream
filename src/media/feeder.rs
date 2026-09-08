@@ -14,45 +14,11 @@ use crate::media::mpegts::{TsMuxer, TsServiceMetadata};
 use crate::media::packet::{MediaPacket, MediaType};
 use crate::media::ring_buffer::DtsEnforcer;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FeedAction {
-    Continue,
-    Stop,
-}
-
-pub trait FeedSink {
-    fn on_ts_bytes(&mut self, bytes: &[u8]) -> FeedAction;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TrackPolicy {
-    All,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FeedWriteMode {
-    Batch,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PacketFeedConfig {
-    pub track_policy: TrackPolicy,
-    pub write_mode: FeedWriteMode,
     pub video_sequence_header: Option<Vec<u8>>,
     pub raw_video_parameter_sets: Option<Vec<u8>>,
     pub service_metadata: Option<TsServiceMetadata>,
-}
-
-impl Default for PacketFeedConfig {
-    fn default() -> Self {
-        Self {
-            track_policy: TrackPolicy::All,
-            write_mode: FeedWriteMode::Batch,
-            video_sequence_header: None,
-            raw_video_parameter_sets: None,
-            service_metadata: None,
-        }
-    }
 }
 
 pub struct TsPacketFeeder {
