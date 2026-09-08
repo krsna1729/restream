@@ -107,7 +107,6 @@ impl<'pool> SqliteServiceFactory<'pool> {
         let meta_store = Arc::new(SqliteMetaStore::new(self.db.clone()));
         AgentService::with_stores(
             self.db.clone(),
-            Arc::new(SqlitePipelineStore::new(self.db.clone())),
             Arc::new(SqliteJobStore::new(self.db.clone())),
             Arc::new(SqliteIngestLookup::new(self.db.clone())),
             meta_store.clone(),
