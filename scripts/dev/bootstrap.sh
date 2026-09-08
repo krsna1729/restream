@@ -159,6 +159,10 @@ cat <<EOF
 bootstrap-dev: done
 
 Next steps:
+  # Local/agent lint (shared BtbN FFmpeg, ~1 min):
+  scripts/dev/fetch-btbn-ffmpeg.sh
+  # Release/static native prefix (slow):
+  # scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
   scripts/build/resource-limit.sh ./scripts/build/app-native.sh
   cargo run
 EOF

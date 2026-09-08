@@ -39,6 +39,20 @@ when one is needed. Application build entrypoints consume the generated
 environment; callers should not reconstruct it with manual `pkg-config`,
 compiler, or copy commands.
 
+### Local/agent shared FFmpeg (not for release)
+
+Cloud agents and fast local lint can install a BtbN gpl-shared n8.1 tree
+instead of compiling the static prefix:
+
+```sh
+scripts/dev/fetch-btbn-ffmpeg.sh
+```
+
+That writes `.local/build/static/prefix` with shared `libav*` plus a
+`.restream-native-link-shared` marker so `build.rs` links dynamically. It is
+intentionally not a substitute for `native-deps.sh`: release/static CI still
+requires the archive-based prefix (including separate libx264/libx265).
+
 ## Update the version
 
 A native-version change should be one reviewed change set:
@@ -68,6 +82,10 @@ changed with the runtime executable override.
 
 ## Troubleshooting
 
+- If Rust compilation fails with a missing native FFmpeg prefix, run
+  `scripts/dev/fetch-btbn-ffmpeg.sh` for local/agent shared linking, or
+  `scripts/build/resource-limit.sh scripts/build/native-deps.sh` for the
+  release static prefix.
 - If native setup rejects a version, compare the requested value with
   `scripts/build/native/native-inputs.lock`; an unreviewed override is
   intentionally unsupported.

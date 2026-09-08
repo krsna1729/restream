@@ -22,24 +22,25 @@ fn main() {
     embed_toolchain_versions();
     embed_rust_dependency_inventory();
 
-    // FFmpeg, x264, and x265 are linked statically from the repo-managed
-    // prefix. SRT is pure Rust in this build and must not pull native SRT or
-    // Mbed TLS archives into the application.
+    // FFmpeg is linked from the repo-managed prefix. Release/CI use the
+    // static archives from scripts/build/native-deps.sh. Local/agent trees may
+    // instead install a BtbN gpl-shared prefix via scripts/dev/fetch-btbn-ffmpeg.sh.
+    // SRT is pure Rust in this build and must not pull native SRT or Mbed TLS.
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
     let prefix = manifest_dir.join(".local/build/static/prefix");
     let lib_dir = prefix.join("lib");
     let pkgconfig_dir = lib_dir.join("pkgconfig");
+    let link_mode = resolve_native_link_mode(&prefix);
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux")
         || std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("gnu")
     {
-        panic!("restream static native build is currently supported only for linux-gnu targets");
+        panic!("restream native build is currently supported only for linux-gnu targets");
     }
 
-    // Keep pkg-config inside the generated static prefix. A host fallback would
-    // make release binaries depend on whichever native packages happen to be
-    // installed on the build machine.
+    // Keep pkg-config inside the generated prefix. A host fallback would make
+    // binaries depend on whichever native packages happen to be installed.
     // SAFETY: build scripts are single-threaded at the point this runs.
     unsafe {
         std::env::set_var("PKG_CONFIG_LIBDIR", pkgconfig_dir.display().to_string());
@@ -47,30 +48,52 @@ fn main() {
         std::env::remove_var("PKG_CONFIG_SYSROOT_DIR");
     }
 
-    check_required_static_inputs(&prefix);
-    embed_native_input_inventory(&prefix);
+    match link_mode {
+        NativeLinkMode::Static => {
+            check_required_static_inputs(&prefix);
+            embed_native_input_inventory(&prefix, NativeLinkMode::Static);
+        }
+        NativeLinkMode::Shared => {
+            check_required_shared_inputs(&prefix);
+            embed_native_input_inventory(&prefix, NativeLinkMode::Shared);
+            println!(
+                "cargo:rerun-if-changed={}",
+                shared_link_marker(&prefix).display()
+            );
+        }
+    }
 
     println!(
         "cargo:rustc-env=RESTREAM_NATIVE_BUILD_ID={}",
         native_build_id(&prefix)
     );
+    println!(
+        "cargo:rustc-env=RESTREAM_NATIVE_LINK_MODE={}",
+        link_mode.as_str()
+    );
 
-    // x264/x265 are C++; place libstdc++ after all Rust/native objects.
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
-    let output = std::process::Command::new("c++")
-        .arg("-print-file-name=libstdc++.a")
-        .output()
-        .expect("failed to ask C++ compiler for libstdc++.a");
-    let archive_path = String::from_utf8(output.stdout)
-        .expect("C++ compiler returned a non-UTF-8 libstdc++.a path");
-    let archive_path = Path::new(archive_path.trim());
-    let stdcxx_dir = archive_path
-        .parent()
-        .filter(|p| archive_path.is_absolute() && p.exists())
-        .expect("C++ compiler did not return an absolute libstdc++.a path");
-    println!("cargo:rustc-link-search=native={}", stdcxx_dir.display());
+    if link_mode == NativeLinkMode::Shared {
+        // Keep clippy/test binaries runnable without requiring callers to
+        // source .local/build/static/env.sh first.
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+    } else {
+        // x264/x265 are C++; place libstdc++ after all Rust/native objects.
+        let output = std::process::Command::new("c++")
+            .arg("-print-file-name=libstdc++.a")
+            .output()
+            .expect("failed to ask C++ compiler for libstdc++.a");
+        let archive_path = String::from_utf8(output.stdout)
+            .expect("C++ compiler returned a non-UTF-8 libstdc++.a path");
+        let archive_path = Path::new(archive_path.trim());
+        let stdcxx_dir = archive_path
+            .parent()
+            .filter(|p| archive_path.is_absolute() && p.exists())
+            .expect("C++ compiler did not return an absolute libstdc++.a path");
+        println!("cargo:rustc-link-search=native={}", stdcxx_dir.display());
+    }
 
-    let avcodec = probe_pinned_package("libavcodec", &prefix, true);
+    let avcodec = probe_pinned_package("libavcodec", &prefix, true, link_mode);
     if avcodec
         .version
         .split('.')
@@ -87,12 +110,21 @@ fn main() {
         "libswresample",
         "libavutil",
     ] {
-        probe_pinned_package(package, &prefix, true);
+        probe_pinned_package(package, &prefix, true, link_mode);
     }
-    emit_ffmpeg_static_archive_group();
-
-    embed_pkg_version("RESTREAM_BUILD_X264_VERSION", "x264");
-    embed_pkg_version("RESTREAM_BUILD_X265_VERSION", "x265");
+    match link_mode {
+        NativeLinkMode::Static => {
+            emit_ffmpeg_static_archive_group();
+            embed_pkg_version("RESTREAM_BUILD_X264_VERSION", "x264", link_mode);
+            embed_pkg_version("RESTREAM_BUILD_X265_VERSION", "x265", link_mode);
+        }
+        NativeLinkMode::Shared => {
+            // BtbN shared libavcodec already pulls in its codec deps; there is
+            // no separate libx264/libx265 pkg-config in that layout.
+            println!("cargo:rustc-env=RESTREAM_BUILD_X264_VERSION=btbn-bundled");
+            println!("cargo:rustc-env=RESTREAM_BUILD_X265_VERSION=btbn-bundled");
+        }
+    }
     println!("cargo:rustc-env=RESTREAM_BUILD_SRT_VERSION=srt-rs");
 }
 
@@ -128,13 +160,67 @@ fn emit_ffmpeg_static_archive_group() {
     println!("cargo:rustc-link-arg=-Wl,-Bdynamic");
 }
 
-fn embed_pkg_version(env_name: &str, package: &str) {
+fn embed_pkg_version(env_name: &str, package: &str, link_mode: NativeLinkMode) {
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
     let prefix = manifest_dir.join(".local/build/static/prefix");
     let cargo_metadata = matches!(package, "x264" | "x265");
-    let version = probe_pinned_package(package, &prefix, cargo_metadata).version;
+    let version = probe_pinned_package(package, &prefix, cargo_metadata, link_mode).version;
     println!("cargo:rustc-env={env_name}={version}");
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeLinkMode {
+    Static,
+    Shared,
+}
+
+impl NativeLinkMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Static => "static",
+            Self::Shared => "shared",
+        }
+    }
+}
+
+fn shared_link_marker(prefix: &Path) -> PathBuf {
+    prefix.join(".restream-native-link-shared")
+}
+
+fn resolve_native_link_mode(prefix: &Path) -> NativeLinkMode {
+    println!("cargo:rerun-if-env-changed=RESTREAM_NATIVE_LINK_MODE");
+    match std::env::var("RESTREAM_NATIVE_LINK_MODE")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "shared" => return NativeLinkMode::Shared,
+        "static" => return NativeLinkMode::Static,
+        "" => {}
+        other => {
+            panic!("unknown RESTREAM_NATIVE_LINK_MODE={other:?}; expected \"static\" or \"shared\"")
+        }
+    }
+
+    if prefix.join("lib/libavcodec.a").is_file() {
+        NativeLinkMode::Static
+    } else if shared_link_marker(prefix).is_file() && prefix.join("lib/libavcodec.so").is_file() {
+        NativeLinkMode::Shared
+    } else if prefix.join("lib/libavcodec.so").is_file() {
+        // Shared libs without the marker: refuse rather than silently drifting
+        // away from the release static contract.
+        panic!(
+            "found shared FFmpeg libs under {} but missing {}; run `scripts/dev/fetch-btbn-ffmpeg.sh` (local/agent) or `scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` (static/release)",
+            prefix.display(),
+            shared_link_marker(prefix).display()
+        );
+    } else {
+        panic!(
+            "native FFmpeg prefix missing under {}. For local/agent clippy use `scripts/dev/fetch-btbn-ffmpeg.sh`; for release/static builds use `scripts/build/resource-limit.sh ./scripts/build/native-deps.sh`.",
+            prefix.display()
+        );
+    }
 }
 
 const REQUIRED_PKG_CONFIG_PACKAGES: &[&str] = &[
@@ -157,6 +243,24 @@ const REQUIRED_STATIC_ARCHIVES: &[&str] = &[
     "libavutil.a",
     "libx264.a",
     "libx265.a",
+];
+
+const REQUIRED_SHARED_LIBS: &[&str] = &[
+    "libavcodec.so",
+    "libavformat.so",
+    "libavfilter.so",
+    "libswscale.so",
+    "libswresample.so",
+    "libavutil.so",
+];
+
+const REQUIRED_SHARED_PKG_CONFIG_PACKAGES: &[&str] = &[
+    "libavcodec",
+    "libavformat",
+    "libavfilter",
+    "libswscale",
+    "libswresample",
+    "libavutil",
 ];
 
 struct BuildIdentity {
@@ -211,20 +315,72 @@ fn git_output_checked<const N: usize>(args: [&str; N]) -> Result<String, String>
     String::from_utf8(output.stdout).map_err(|error| format!("git output was not UTF-8: {error}"))
 }
 
-fn probe_pinned_package(package: &str, prefix: &Path, cargo_metadata: bool) -> pkg_config::Library {
+fn probe_pinned_package(
+    package: &str,
+    prefix: &Path,
+    cargo_metadata: bool,
+    link_mode: NativeLinkMode,
+) -> pkg_config::Library {
     let library = pkg_config::Config::new()
-        .statik(true)
+        .statik(link_mode == NativeLinkMode::Static)
         .cargo_metadata(cargo_metadata)
         .probe(package)
         .unwrap_or_else(|error| {
+            let hint = match link_mode {
+                NativeLinkMode::Static => {
+                    "Run `scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` first."
+                }
+                NativeLinkMode::Shared => {
+                    "Run `scripts/dev/fetch-btbn-ffmpeg.sh` first (local/agent shared FFmpeg)."
+                }
+            };
             panic!(
-                "{package} not found in repo static prefix {}: {error}. Run `scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` first.",
+                "{package} not found in repo native prefix {}: {error}. {hint}",
                 prefix.display()
             )
         });
     assert_pinned_paths(package, prefix, &library.link_paths);
     assert_pinned_paths(package, prefix, &library.include_paths);
     library
+}
+
+fn check_required_shared_inputs(prefix: &Path) {
+    let lib_dir = prefix.join("lib");
+    let pkgconfig_dir = lib_dir.join("pkgconfig");
+    let marker = shared_link_marker(prefix);
+
+    assert_required_file(
+        &marker,
+        &format!(
+            "shared-link marker missing: {}. Run `scripts/dev/fetch-btbn-ffmpeg.sh` first.",
+            marker.display()
+        ),
+    );
+    println!("cargo:rerun-if-changed={}", marker.display());
+
+    for library in REQUIRED_SHARED_LIBS {
+        let path = lib_dir.join(library);
+        println!("cargo:rerun-if-changed={}", path.display());
+        assert_required_file(
+            &path,
+            &format!(
+                "shared FFmpeg library missing: {}. Run `scripts/dev/fetch-btbn-ffmpeg.sh` first.",
+                path.display()
+            ),
+        );
+    }
+
+    for package in REQUIRED_SHARED_PKG_CONFIG_PACKAGES {
+        let path = pkgconfig_dir.join(format!("{package}.pc"));
+        println!("cargo:rerun-if-changed={}", path.display());
+        assert_required_file(
+            &path,
+            &format!(
+                "shared FFmpeg pkg-config file missing: {}. Run `scripts/dev/fetch-btbn-ffmpeg.sh` first.",
+                path.display()
+            ),
+        );
+    }
 }
 
 fn check_required_static_inputs(prefix: &Path) {
@@ -263,24 +419,49 @@ fn assert_required_file(path: &Path, message: &str) {
     }
 }
 
-fn embed_native_input_inventory(prefix: &Path) {
+fn embed_native_input_inventory(prefix: &Path, link_mode: NativeLinkMode) {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR missing"));
     let path = out_dir.join("native-build-inputs.json");
     let mut inputs = Vec::new();
 
-    for archive in REQUIRED_STATIC_ARCHIVES {
-        inputs.push(native_input(
-            prefix,
-            &format!("lib/{archive}"),
-            "static-archive",
-        ));
-    }
-    for package in REQUIRED_PKG_CONFIG_PACKAGES {
-        inputs.push(native_input(
-            prefix,
-            &format!("lib/pkgconfig/{package}.pc"),
-            "pkg-config",
-        ));
+    match link_mode {
+        NativeLinkMode::Static => {
+            for archive in REQUIRED_STATIC_ARCHIVES {
+                inputs.push(native_input(
+                    prefix,
+                    &format!("lib/{archive}"),
+                    "static-archive",
+                ));
+            }
+            for package in REQUIRED_PKG_CONFIG_PACKAGES {
+                inputs.push(native_input(
+                    prefix,
+                    &format!("lib/pkgconfig/{package}.pc"),
+                    "pkg-config",
+                ));
+            }
+        }
+        NativeLinkMode::Shared => {
+            inputs.push(native_input(
+                prefix,
+                ".restream-native-link-shared",
+                "shared-link-marker",
+            ));
+            for library in REQUIRED_SHARED_LIBS {
+                inputs.push(native_input(
+                    prefix,
+                    &format!("lib/{library}"),
+                    "shared-library",
+                ));
+            }
+            for package in REQUIRED_SHARED_PKG_CONFIG_PACKAGES {
+                inputs.push(native_input(
+                    prefix,
+                    &format!("lib/pkgconfig/{package}.pc"),
+                    "pkg-config",
+                ));
+            }
+        }
     }
     inputs.sort_by(|left, right| left["path"].as_str().cmp(&right["path"].as_str()));
 
@@ -388,7 +569,7 @@ fn collect_native_inputs(dir: &Path, files: &mut Vec<PathBuf>) {
             collect_native_inputs(&path, files);
         } else if matches!(
             path.extension().and_then(|ext| ext.to_str()),
-            Some("a" | "pc" | "h" | "hpp")
+            Some("a" | "so" | "pc" | "h" | "hpp")
         ) {
             files.push(path);
         }
