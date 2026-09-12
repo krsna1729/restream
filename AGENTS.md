@@ -89,6 +89,9 @@ in on demand, and verify with the narrowest gate first.
   `scripts/agent/worktree.sh` runs it automatically in new worktrees). After
   adding or editing a canonical skill, run `scripts/agent/setup-skills.sh` to
   refresh local shims.
+- Skills supply task-specific guidance within the user's scope and existing
+  authorization. Do not start quality loops, turn reviews into fixes, or add
+  approval stops merely because a skill is relevant.
 - Pick the first gate by files touched, then broaden to full
   `scripts/build/resource-limit.sh cargo test` only when the change crosses module
   boundaries or shared contracts. Treat unrelated full-suite failures as
@@ -109,16 +112,21 @@ in on demand, and verify with the narrowest gate first.
 
 ## Build and Worktree Safety
 
-**Never run `cargo build`, `cargo test`, or `cargo clippy` while a live pipeline is running.**
+**Never run Cargo builds, tests, checks, clippy, or benchmarks while a live pipeline is running.**
 Static FFmpeg libraries can push WSL2 into OOM territory.
 
 Before heavy builds in multi-worktree sessions:
 
 ```sh
 export RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock
-pkill -x restream; pkill -x mediamtx; pkill -x ffmpeg
+pgrep -a -x restream
+pgrep -a -x mediamtx
+pgrep -a -x ffmpeg
 ```
 
+- Stop only processes owned by this task or covered by the user's restart
+  request, after checking their PIDs and command lines. A matching process
+  name does not establish ownership. Defer heavy work while other media runs.
 - Prefer `scripts/agent/worktree.sh <id>` over manual setup.
 - Use one worktree per agent or task.
 - Treat `target/`, `.cargo/`, and `node_modules/` as copied caches owned by the destination worktree; do not point multiple worktrees at one live `target/`.
@@ -169,7 +177,9 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 - Use `cargo fmt --all` and `cargo fmt --all --check`; do not run `rustfmt` directly.
 - Resolve media through `src/test_fixtures.rs`; add new committed assets to `REQUIRED_CHECKED_IN_FIXTURES`.
 - Prefer checked-in fixtures over inline media generation for tests, benches, and harness runs.
-- Test-only code may adapt or observe production code, never re-implement it: inject fakes through an existing type parameter or constructor and call the production function, rather than adding a `#[cfg(test)]` sibling that repeats its logic (see the test-guardrails skill).
+- Test-only code may adapt or observe production code, never re-implement it: inject fakes through an existing type parameter or constructor and call the production function, rather than adding a `#[cfg(test)]` sibling that repeats its logic.
+- Route dashboard API calls through `web/ts/core/api.ts`; update contract tests when routes or payloads change.
+- Run `scripts/check/test-hygiene.sh` for test-heavy changes; suppress expected noise at the test helper, not in CI.
 - For concurrency or thread-hop changes, extend `scripts/check/concurrency/fast.sh` or explain why the existing proof gate already covers the change.
 - If teardown or recovery semantics change, update the live harness assertion and the operator-visible status contract in the same change.
 - Gate selection by files touched: see the Inner Loop table above.
@@ -180,19 +190,17 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 
 - The autonomous quality program lives in `docs/agent-guidance/quality/`
   (README, backlog, journal, baselines) with agent-neutral skills under
-  `docs/agent-guidance/skills/` (quality-loop, proof-sweep, resilience-sweep,
-  modularity-sweep, perf-sweep, backlog-groom, plus supporting task skills).
-- The `docs/agent-guidance/skills/<name>/SKILL.md` files are canonical for
-  every agent. Claude Code registration shims in `.claude/skills/` are
-  generated locally by `scripts/agent/setup-skills.sh` (not checked in);
-  agents without a skill system follow the canonical files directly.
-- One loop iteration = one backlog item, verified by gates, journaled, and
-  committed on its own. Loops never push.
+  `docs/agent-guidance/skills/`; the quality-loop skill routes each dimension
+  to its maintained guidance. Start a loop only when requested.
+- One loop iteration = one backlog item, verified by gates and journaled.
+  Commit each item separately only when commits are authorized for the run.
+  Loops never push.
 - One quality loop per host. Multi-agent work goes through
   `scripts/agent/worktree.sh` with a host-global
   `RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock`.
 - Loops skip (never kill) media processes they did not start.
-- Backlog items are tier-tagged; do not attempt items above your model tier.
+- Backlog tiers describe required capability; select work the available model
+  can reliably execute and verify, using the guidance below.
 
 ## Merge Strategy
 
@@ -213,9 +221,12 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 - If the user starts a clearly new, unrelated task, suggest a fresh session to keep context costs down.
 - Do not suggest that mid-task or for follow-up questions on the same topic.
 - Use the lowest model class that can reliably do the work, and do not use a higher tier for helpers than the main session already has.
-- `haiku` / `gpt-5.4-mini` / `gpt-5.4-nano`: retrieval, repo navigation, simple explanations, tiny wording edits.
-- `sonnet` / `gpt-5.4`: default for scoped fixes, features, tests, and medium repo edits.
-- `opus` / `gpt-5.5`: concurrency or lifecycle redesign, hot-path architecture, benchmark-driven decisions, or novel protocol behavior.
+- Legacy backlog tags are capability labels, not fixed model/version requirements:
+  `haiku` means retrieval, audits, or small documentation edits; `sonnet` means
+  scoped implementation and tests; `opus` means concurrency/lifecycle design,
+  hot-path architecture, benchmark attribution, or novel protocol behavior.
+  Match the available model to the task and required evidence; do not infer
+  capability from an obsolete model-name table.
 
 ## Key References
 

@@ -1,53 +1,46 @@
-# MCP Tool Contract
+# Agent Operation Contract
 
-This reference file supports the `restream-ops-agent` skill.
+Read this when constructing agent-plane requests. Discover current tool names,
+schemas, and compiled features from `get_agent_capabilities`
+(`GET /api/v1/agent/capabilities`).
+The [catalog source](../../../../../src/agent_plane/catalog.rs) and
+[API reference](../../../../api-reference.md#optional-agent-plane) own the full contract.
 
 ## Contents
 
-- [Tool mapping](#tool-mapping)
-- [Common request patterns](#common-request-patterns)
-- [Interpretation guidance](#interpretation-guidance)
-- [Output change kinds currently supported](#output-change-kinds-currently-supported)
+- [Operation sequence](#operation-sequence)
+- [Request shape](#request-shape)
+- [Result interpretation](#result-interpretation)
 
-## Tool mapping
+## Operation sequence
 
-| Tool | Route | Use for |
-|---|---|---|
-| `get_agent_capabilities` | `GET /api/v1/agent/capabilities` | discover whether read/planning/execution are compiled in |
-| `get_agent_context` | `GET /api/v1/agent/context` | fetch one redacted state bundle for reasoning |
-| `investigate_pipeline_issue` | `POST /api/v1/agent/investigations` | incident triage and evidence collection |
-| `plan_pipeline_change` | `POST /api/v1/agent/plans` | generate a draft plan plus graph and impact preview |
-| `validate_change` | `POST /api/v1/agent/plans/validate` | return validation only |
-| `preview_graph_diff` | `POST /api/v1/agent/graph-diff-preview` | show graph impact when the client wants preview only |
-| `create_agent_operation` | `POST /api/v1/agent/operations` | create an approval-gated execution object |
-| `get_agent_operation` | `GET /api/v1/agent/operations/:operation_id` | read operation status, audit, execution, and verification |
-| `approve_agent_operation` | `POST /api/v1/agent/operations/:operation_id/approve` | record explicit human approval |
-| `apply_agent_operation` | `POST /api/v1/agent/operations/:operation_id/apply` | apply approved changes |
-| `verify_agent_operation` | `POST /api/v1/agent/operations/:operation_id/verify` | perform post-change verification |
+Use `get_agent_context` for redacted state and `investigate_pipeline_issue`
+for incident evidence. For changes:
 
-## Common request patterns
+`plan_pipeline_change` → `create_agent_operation` →
+`approve_agent_operation` → `apply_agent_operation` →
+`verify_agent_operation`.
 
-### Investigate
+The plan returns validation and graph impact; use `validate_change` or
+`preview_graph_diff` when only those views are needed. Read existing operation
+state with `get_agent_operation` before retrying an uncertain apply.
 
-```json
-{
-  "workflow": "investigatePipelineIssue",
-  "pipelineId": "p1",
-  "outputId": "out_123",
-  "eventLimit": 25
-}
-```
+Recording approval must reflect actual user authorization for the concrete
+operation. Creating an operation or requesting a plan does not supply that
+approval.
 
-### Plan a new output
+## Request shape
+
+A plan includes `intent`, `pipelineId`, and `proposedChanges`. For example:
 
 ```json
 {
-  "intent": "Attach a stopped YouTube RTMP output",
+  "intent": "Attach a stopped local output",
   "pipelineId": "p1",
   "proposedChanges": [{
     "kind": "addOutput",
-    "name": "YouTube Primary",
-    "url": "rtmp://a.rtmp.youtube.com/live2/xxxx-xxxx",
+    "name": "Local sink",
+    "url": "rtmp://127.0.0.1:1935/live/demo",
     "config": {
       "video": { "mode": "source" },
       "audio": { "mode": "all" }
@@ -57,48 +50,16 @@ This reference file supports the `restream-ops-agent` skill.
 }
 ```
 
-### Create an operation
+Operation creation uses the same change payload plus an `idempotencyKey`
+unique to that intended request. Preserve it across retries; do not reuse it
+for a different change. Supply actor/tool identity fields according to the
+current schema. Obtain supported change kinds from capabilities.
 
-```json
-{
-  "intent": "Attach a stopped YouTube RTMP output",
-  "pipelineId": "p1",
-  "idempotencyKey": "req-123",
-  "actor": "ops-agent",
-  "agentId": "codex-restream",
-  "toolIdentity": "restream-mcp",
-  "proposedChanges": [{
-    "kind": "addOutput",
-    "name": "YouTube Primary",
-    "url": "rtmp://a.rtmp.youtube.com/live2/xxxx-xxxx",
-    "config": {
-      "video": { "mode": "source" },
-      "audio": { "mode": "all" }
-    },
-    "desiredState": "stopped"
-  }]
-}
-```
+## Result interpretation
 
-## Interpretation guidance
-
-- `validation.valid == false`
-  - Do not proceed to apply. Explain the errors and stop.
-- `executionEnabled == false`
-  - Planning is available, but apply/verify routes may be compiled out.
-- `approvalRequired == true`
-  - Do not call apply until approval is recorded.
-- verification reason `pendingInput`
-  - Config is present, but runtime cannot be live until ingest is on.
-- verification reason `stopped`
-  - Desired stopped state is satisfied.
-
-## Output change kinds currently supported
-
-- `addOutput`
-- `updateOutput`
-- `removeOutput`
-- `startOutput`
-- `stopOutput`
-
-Do not invent unsupported change kinds.
+- Invalid validation prevents apply; correct the plan within the requested scope.
+- `executionEnabled=false` leaves planning available; execution may be compiled out.
+- `approvalRequired=true` prevents apply until approval is recorded.
+- `pendingInput` means persistence succeeded but ingest is needed for live activation.
+- `stopped` satisfies a requested stopped state.
+- Verify running state and report any remaining convergence or health failure.

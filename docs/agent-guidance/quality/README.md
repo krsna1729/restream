@@ -1,107 +1,93 @@
 # Autonomous Quality Program
 
-Infrastructure that lets small models work this repo autonomously toward:
-**correct (proven) · reliable · resilient · modular · efficient · performant**
-— hardened enough to carry the biggest broadcast events.
-
-The design premise: a small model is safe and productive when every step is
-(1) small, (2) pre-scoped by a well-formed backlog item, (3) verified by
-mechanical gates, and (4) journaled so the next iteration starts informed.
-The skills provide the rails; the state files provide the memory.
+The quality loop completes one evidence-backed backlog item per invocation.
+[AGENTS.md](../../../AGENTS.md) owns shared safety and verification rules;
+skills hold only task-specific procedures.
 
 ## Contents
 
-- [Pieces](#pieces)
+- [Skills and state](#skills-and-state)
 - [Running it](#running-it)
-- [Host safety (why loops are conservative here)](#host-safety-why-loops-are-conservative-here)
-- [Reviewing what the loop did](#reviewing-what-the-loop-did)
-- [Extending](#extending)
+- [Host safety](#host-safety)
+- [Maintaining the guidance](#maintaining-the-guidance)
 
-## Pieces
+## Skills and state
 
-| Piece | Where | Role |
-|---|---|---|
-| quality-loop skill | `docs/agent-guidance/skills/quality-loop/` | One iteration: select → execute → verify → journal → commit |
-| proof-sweep | `docs/agent-guidance/skills/proof-sweep/` | Correctness proofs (unit/proptest/loom/harness) |
-| resilience-sweep | `docs/agent-guidance/skills/resilience-sweep/` | Fault injection, recovery, panic containment |
-| modularity-sweep | `docs/agent-guidance/skills/modularity-sweep/` | Layering/boundary moves with stop rules |
-| perf-sweep | `docs/agent-guidance/skills/perf-sweep/` | Bench ledger, resource guard, measured optimization |
-| backlog-groom | `docs/agent-guidance/skills/backlog-groom/` | Refill/re-prioritize the backlog from repo evidence |
-| backlog.md | here | Prioritized, tier-tagged work queue |
-| journal.md | here | Append-only iteration log (older months rotate to `docs/archive/quality/`) |
-| baselines.md | here | Durable Criterion/resource ledger (dated dumps rotate to archive) |
+| Skill | Purpose |
+|---|---|
+| [quality-loop](../skills/quality-loop/SKILL.md) | Select, execute, verify, and journal one backlog item |
+| [backlog-groom](../skills/backlog-groom/SKILL.md) | Find and prioritize concrete work |
+| [proof-sweep](../skills/proof-sweep/SKILL.md) | Correctness, fault isolation, and recovery proofs |
+| [concurrency-proof](../skills/concurrency-proof/SKILL.md) | Synchronization and lifecycle proof gates |
+| [layering-audit](../skills/layering-audit/SKILL.md) | Ownership and dependency boundaries |
+| [perf-sweep](../skills/perf-sweep/SKILL.md) | Criterion benchmarks, resource checks, and attribution |
+| [protocol-test](../skills/protocol-test/SKILL.md) | Live protocol and fault scenarios |
+| [respin](../skills/respin/SKILL.md) | Local live demo |
+| [restream-ops-agent](../skills/restream-ops-agent/SKILL.md) | Platform operations with recorded approval and verification |
 
-Supporting task skills (also usable standalone): `check`, `bench`,
-`media-test`, `protocol-test`, `concurrency-proof`, `log-audit`, `respin` —
-same location, one directory per skill.
+[Backlog](backlog.md) holds prioritized items and active claims;
+[journal](journal.md) records outcomes and blockers;
+[baselines](baselines.md) preserves measurements and negative results.
 
-All skill bodies are agent-neutral: the canonical instructions are the
-`docs/agent-guidance/skills/<name>/SKILL.md` files. Claude Code registers
-them through thin shims in `.claude/skills/<name>/SKILL.md`, generated
-locally by `scripts/agent/setup-skills.sh` (`.claude/` is gitignored;
-`scripts/agent/worktree.sh` runs the generator automatically). Agents without a
-skill system read the canonical files directly (wired via `AGENTS.md`
-§ Autonomous Quality Loops).
+The September 2026 audit consolidated 16 skills into these 9:
+
+| Removed skill | Maintained replacement |
+|---|---|
+| `check`, `media-test` | AGENTS.md command and gate selection |
+| `test-guardrails` | AGENTS.md testing rules and [testing guide](../../testing.md) |
+| `bench` | `perf-sweep` |
+| `resilience-sweep` | `proof-sweep`, with `concurrency-proof` for lifecycle changes |
+| `modularity-sweep` | `layering-audit` |
+| `log-audit` | [Logging policy and callsite audit](../../logging.md#callsite-rules) |
+
+The removed slash commands no longer register. Their useful constraints remain
+in the listed owners; historical journal entries keep their original names.
 
 ## Running it
 
-One verified iteration (any Claude Code session in this repo):
+Request one `quality-loop` iteration, or read its canonical file in an agent
+without skill discovery. A scheduler may repeat it when the user requests that.
+State whether commits are authorized for the run; otherwise each iteration
+leaves a verified working diff and journal entry. Loops never push.
 
-```
-/quality-loop
-```
+Read the item outcome, gate results, and remaining work in the journal. For
+runs authorized to commit, `git log --oneline --grep 'quality('` lists deliveries.
 
-Continuous, self-paced (recommended):
+Canonical bodies live in `docs/agent-guidance/skills/<name>/SKILL.md`.
+Run `scripts/agent/setup-skills.sh` after changes to refresh local Claude Code
+shims and prune removed registrations. Worktree setup runs it automatically;
+`.claude/` is generated and gitignored.
 
-```
-claude --model sonnet
-> /loop /quality-loop
-```
+The active journal is the current source. Older months may be rotated into
+`docs/archive/quality/`; read the newest archived tail when the active file has
+fewer than three completed iterations. Dated performance investigations live
+under `docs/archive/` and are historical evidence until their commands are
+rerun.
 
-Fixed cadence: `/loop 45m /quality-loop`. Overnight grooming on a cheap model:
-`claude --model haiku` → `/loop /backlog-groom` (haiku takes only `[haiku]`
-items and read-only discovery, enforced by the tier gate in the skill).
+## Host safety
 
-## Host safety (why loops are conservative here)
+One quality loop runs per host. Use the worktree helper and its
+`.agent-state/setup.env` for isolated caches and the shared build lock.
+Respect active claims regardless of age.
 
-Static native links and live media processes make concurrent heavy work unsafe
-on constrained hosts. The repository therefore uses these non-negotiable
-coordination rules:
+Loops skip heavy builds while another task's media processes run and defer
+measurements until the host is otherwise idle. They never kill unowned media
+processes. A docs-only iteration need not wait for an idle media host.
 
-- **One quality loop per host.** For parallel agents, use
-  `scripts/agent/worktree.sh` and source the generated
-  `.agent-state/setup.env`; the helper owns the host-global build-lock value.
-- Loops never kill media processes they didn't start; they skip the iteration
-  instead (a human may be mid-demo via `/respin`).
-- Measurement iterations require an otherwise idle host, so bench items may
-  skip repeatedly during busy hours. That is correct behavior, not a bug.
+## Maintaining the guidance
 
-## Reviewing what the loop did
+Keep repository facts, fragile commands, acceptance criteria, and task routing.
+Remove duplicated rules, stale source inventories, fixed model-version tables,
+and mandatory ceremony that does not establish correctness. Read references
+only when the task needs their details. Preserve user scope and existing
+authorization; do not treat skill selection as permission to mutate or commit.
 
-- `git log --oneline --grep "quality("` — every loop commit, one item each.
-- `journal.md` — recent narrative, including failures and skips (honesty is
-  enforced: a FAILED entry with numbers is a valid, useful outcome). Older
-  months live under `docs/archive/quality/`. Selection and unresolved-`FAILED`
-  recovery still read across that archive boundary (see the quality-loop
-  skill § Journal continuity across archive rotation).
-- `backlog.md` § Blocked — where the loop wants human or opus help.
+This follows current [skill-authoring guidance](https://learn.chatgpt.com/docs/build-skills)
+and [model guidance](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra)
+on focused skills and conflicting instructions. Model capability is assessed
+against the task and its proof requirements; legacy backlog tier tags remain
+for compatibility.
 
-Loops never push; publishing is always a human decision.
-
-Dated investigation write-ups (MSR scale, SRT/RTMP egress experiments, and
-related evidence) live under
-[`docs/archive/`](../../archive/README.md#quality-evidence).
-Keep current numbers in `baselines.md`; treat archived reports as historical
-context unless you rerun the documented command.
-
-## Extending
-
-Add work by writing well-formed items into `backlog.md` (format in
-backlog-groom). Add a new dimension by writing a sweep skill with the same
-shape — discovery recipe + execution recipe + binding rules — into
-`docs/agent-guidance/skills/<name>/SKILL.md`, mapping its tag in the
-quality-loop dispatch table, and re-running `scripts/agent/setup-skills.sh`
-to refresh the local registration shims.
-
-Model-tier definitions and task routing belong in `AGENTS.md`; do not maintain
-a second model-capability table here.
+Add a skill only for a distinct reusable workflow that existing guidance does
+not cover. Validate frontmatter, local links, and generated registrations;
+run `node scripts/check/docs.mjs`.

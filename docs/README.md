@@ -167,23 +167,16 @@ Markdown is indexed only from [archive/README.md](archive/README.md).
 
 - [Graphify local index](agent-guidance/graphify.md)
 - [Backlog groom](agent-guidance/skills/backlog-groom/SKILL.md)
-- [Bench](agent-guidance/skills/bench/SKILL.md)
-- [Check](agent-guidance/skills/check/SKILL.md)
 - [Concurrency proof](agent-guidance/skills/concurrency-proof/SKILL.md)
 - [Layering audit](agent-guidance/skills/layering-audit/SKILL.md)
-- [Log audit](agent-guidance/skills/log-audit/SKILL.md)
-- [Media test](agent-guidance/skills/media-test/SKILL.md)
-- [Modularity sweep](agent-guidance/skills/modularity-sweep/SKILL.md)
 - [Performance sweep](agent-guidance/skills/perf-sweep/SKILL.md)
 - [Advanced performance attribution](agent-guidance/skills/perf-sweep/references/advanced-attribution.md)
 - [Proof sweep](agent-guidance/skills/proof-sweep/SKILL.md)
 - [Protocol test](agent-guidance/skills/protocol-test/SKILL.md)
 - [Quality loop](agent-guidance/skills/quality-loop/SKILL.md)
-- [Resilience sweep](agent-guidance/skills/resilience-sweep/SKILL.md)
 - [Respin](agent-guidance/skills/respin/SKILL.md)
 - [Restream ops agent](agent-guidance/skills/restream-ops-agent/SKILL.md)
 - [Restream ops tool contract](agent-guidance/skills/restream-ops-agent/references/tool-contract.md)
-- [Test guardrails](agent-guidance/skills/test-guardrails/SKILL.md)
 
 ## Documentation rules
 

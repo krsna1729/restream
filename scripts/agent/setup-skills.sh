@@ -75,7 +75,7 @@ for skill_md in "$canon_dir"/*/SKILL.md; do
         echo "warn: $name description mixes double quotes and ': '; check the shim parses" >&2
     fi
     mkdir -p "$dest_dir/$name"
-    printf -- '---\nname: %s\n%s\n---\n\nClaude Code registration shim (%s).\nThe canonical, agent-neutral skill lives at\n[docs/agent-guidance/skills/%s/SKILL.md](../../../docs/agent-guidance/skills/%s/SKILL.md).\n\nRead that file now and follow its instructions exactly.\n' \
+    printf -- '---\nname: %s\n%s\n---\n\nClaude Code registration shim (%s).\nThe canonical, agent-neutral skill lives at\n[docs/agent-guidance/skills/%s/SKILL.md](../../../docs/agent-guidance/skills/%s/SKILL.md).\n\nRead that file and apply the relevant guidance within the user\x27s requested scope and existing authorization.\n' \
         "$name" "$desc_line" "$shim_marker" "$name" "$name" >"$dest_dir/$name/SKILL.md"
     count=$((count + 1))
 done
