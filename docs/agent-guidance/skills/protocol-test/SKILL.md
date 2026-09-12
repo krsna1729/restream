@@ -1,37 +1,31 @@
 ---
 name: protocol-test
-description: Run the live protocol correctness matrix (RTMP/SRT/HEVC harness modes) and the bounded media validation suite. Use after changes to RTMP, SRT, HLS, or mux/demux logic, or when asked to validate protocol behavior end to end.
+description: Validate restream RTMP/SRT/HLS, codec, mux/demux, or live fault-recovery behavior using the harness catalog and bounded media suite.
 ---
 
-# Skill: protocol-test
+# Protocol Test
 
-Run the live protocol correctness matrix and media validation suites. Use after changes to RTMP, SRT, HLS, or mux/demux logic.
+Run relevant scoped unit tests first (`av_sync` for timestamps). Follow
+[AGENTS.md](../../../../AGENTS.md) for host/build safety, then prepare and inspect
+the canonical harness:
 
-## Steps
+```sh
+scripts/harness/run.sh --prepare
+target/bench/test_harness catalog help
+target/bench/test_harness catalog plan <mode>
+scripts/harness/run.sh <mode>
+```
 
-1. Preflight: confirm no live pipeline is running (`pgrep -x restream`,
-   `pgrep -x mediamtx`, `pgrep -x ffmpeg` all empty). Build the canonical
-   harness with `scripts/build/bench-harness.sh`.
+Choose scenarios whose plans cover the changed protocol, codec, timestamp,
+encryption, audio-track, or recovery contract. Use the live catalog rather than
+a copied list of mode names. Run `scripts/harness/media-validation.sh` for
+cross-codec/mux changes or when the bounded validation suite is requested.
 
-2. Inspect the current catalog and select the narrowest scenarios whose plans
-   cover the changed protocols, codecs, timestamp shape, encryption policy, or
-   multi-audio behavior:
-   ```sh
-   target/bench/test_harness catalog help
-   target/bench/test_harness catalog plan <mode>
-   scripts/harness/run.sh <mode>
-   ```
-   - If a mode fails: report failures and ask whether to continue to media validation.
+Private loopback namespaces are the default; use `--no-netns` only when
+required and report why. Correctness scenarios may overlap when isolated;
+measurements must run serially.
 
-3. Run the bounded media validation suite:
-   `scripts/harness/media-validation.sh`. The suite delegates each mode to the
-   harness wrapper, which owns build-lock handling.
-
-4. Report a summary of all runs: pass/fail counts, any failures with their output.
-
-## Notes
-- Live modes run in a private loopback namespace by default. Only pass `--no-netns` if the user explicitly requests host networking.
-- For SRT-specific changes, also run `/media-test srt` (scoped unit tests) before this suite.
-- For RTMP-specific changes, also run `/media-test rtmp` first.
-- These tests can take several minutes. Report progress as each mode completes.
-- Correctness modes may overlap when isolated; measurement modes (bench, bitrate-sweep, resource-sweep) must stay serial and use the bench-profile harness (`scripts/build/bench-harness.sh` → `target/bench/test_harness`).
+Investigate a relevant failure before broadening the suite. Fix within the
+authorized task or report the blocker and remaining verification; a failed
+check is not itself a reason to ask permission to continue useful work.
+Report commands, results, and uncovered behavior.

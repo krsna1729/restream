@@ -1,70 +1,45 @@
 ---
 name: backlog-groom
-description: Mine the repo's docs, gates, coverage, and journal for new quality-backlog items; re-prioritize, merge duplicates, unblock or escalate stale items. Use for backlog items tagged [groom], when the quality backlog is empty for a dimension, or when asked to groom/refill/reprioritize the quality backlog.
+description: Groom the quality backlog when asked to find, prioritize, merge, or rescope maintenance work, or when a quality-loop iteration has no eligible item.
 ---
 
-# Skill: backlog-groom
+# Backlog Groom
 
-The backlog is the loop's fuel. Grooming keeps it honest: every item small
-enough for one iteration, verifiable, correctly tiered, and worth doing.
-One invocation = one grooming pass (≤5 new items, plus hygiene).
+Update [the backlog](../../quality/backlog.md) from current evidence. This is a
+planning pass; do not implement the items it discovers.
 
-## Item quality bar (reject drafts that miss any of these)
+A new item needs a concrete failure, missing proof, measured regression, or
+ownership problem. Age, file size, and coverage percentage alone are not reasons
+to create work. Inspect relevant source and gates before filing it.
 
-A well-formed item in `docs/agent-guidance/quality/backlog.md`:
+Use the existing format:
 
+```text
+### Q-NNN [dimension] [tier] <action>
+- Goal: <observable result>
+- Files: <starting files or modules>
+- Gates: <runnable commands and acceptance criteria>
+- Context: <evidence and relevant references>
+- Status: open (Filed: YYYY-MM-DD)
 ```
-### Q-NNN [dimension] [tier] <short imperative title>
-- Goal: <observable end state, one sentence>
-- Files: <the files/modules involved, so no exploration is needed to start>
-- Gates: <the exact commands that must pass to call it done>
-- Context: <why it matters + pointers to docs/commits; enough to work cold>
-- Status: open
-```
 
-- Dimension ∈ `proof | resilience | modularity | efficiency | performance | groom`
-- Tier ∈ `haiku` (read-only audit/inventory/docs) · `sonnet` (scoped code+test)
-  · `opus` (concurrency/lifecycle redesign, hot-path architecture,
-  benchmark-driven decisions — per AGENTS.md model guidance)
-- Sized for ONE iteration. If it needs "and then", split it.
-- No item may instruct weakening a gate, skipping verification, or touching
-  another agent's in-flight work.
+Dimensions are `proof`, `resilience`, `modularity`, `efficiency`,
+`performance`, and `groom`. Keep the legacy tier tags; interpret them by
+task capability in [AGENTS.md](../../../../AGENTS.md), not a fixed model version.
 
-## Source mines (pick the dimension that needs items, run its mines)
+For discovery, inspect the relevant source of evidence:
 
-- **proof:** discovery recipes in the proof-sweep skill (coverage map,
-  panic-path inventory, invariant cross-check, gate-coverage diff against
-  `docs/stage-boundary-proof-map.md`).
-- **resilience:** discovery recipes in resilience-sweep; plus
-  `docs/stage-boundary-proof-map.md`, `docs/regression-artifacts.md`, and
-  `docs/resource-sweep.md` for documented-but-unasserted behaviors.
-- **modularity:** discovery recipes in modularity-sweep;
-  `docs/layering-roadmap.md` topmost undone steps.
-- **efficiency/performance:** stale ledger rows and standing opportunities in
-  `docs/agent-guidance/quality/baselines.md`.
-- **all:** `journal.md` FAILED/blocked entries older than 3 days — either
-  write a sharper re-scoped item, escalate the tier tag, or record why it
-  should stay parked.
-- **all:** `git log --oneline -30` — recent changes in hot paths or lifecycle
-  code with no accompanying proof/bench are candidate items.
+- Proof/recovery: [stage boundary proof map](../../../stage-boundary-proof-map.md)
+  and [regression artifacts](../../../regression-artifacts.md); check whether
+  production invariants and observable recovery have executable assertions.
+- Ownership: [layering roadmap](../../../layering-roadmap.md); verify the
+  coupling still exists.
+- Performance: [baselines](../../quality/baselines.md); distinguish old
+  measurements from a demonstrated regression.
+- Blocked work: [journal](../../quality/journal.md); preserve useful negative
+  results and rescope items whose blockers have changed.
 
-## Hygiene pass (every groom)
-
-1. Move `done` items older than ~2 weeks into the "Archive" section at the
-   bottom of `backlog.md` (never delete — commit hashes live there).
-2. Merge duplicates; keep the better-specified one, note the merge.
-3. Confirm tier tags: anything touching Tokio↔OS-thread handoff, wake/cancel,
-   stage registries, or packet-loop architecture is `[opus]`, no exceptions.
-4. Re-order: highest leverage first. Proof gaps on invariants that guard live
-   broadcasts outrank cosmetic wins. Keep all dimensions represented in the
-   top 10 if material exists.
-5. Cap: if >10 open items exist for one dimension, stop mining that dimension.
-
-## Rules
-
-- Grooming files work; it never does the work. No code edits in a groom pass.
-- Every filed item must be executable cold by a model that has read nothing
-  but the item and its skill — test each draft against that bar.
-- Date-stamp filed items (`Filed: YYYY-MM-DD by groom`).
-- Journal the pass (`GROOMED`, list of ids filed/merged/archived) per the
-  quality-loop format.
+Keep items small enough to validate independently. Merge duplicates, preserve
+completion/commit evidence in the archive, and prioritize broadcast correctness
+over cosmetic cleanup. Respect active claims. Journal a grooming pass without
+creating work merely to fill every dimension or meet a quota.

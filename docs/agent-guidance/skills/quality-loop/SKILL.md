@@ -1,172 +1,66 @@
 ---
 name: quality-loop
-description: Run ONE bounded, verified iteration of the autonomous quality program — pick the next open backlog item matching your model tier, execute it with the matching sweep skill, verify with the required gates, journal the result, and commit only the item's files. Use when asked to "run the quality loop", "work the backlog", "keep hardening the project", or when invoked repeatedly via /loop.
+description: Execute one bounded quality-backlog iteration when the user requests backlog work or an autonomous quality loop.
 ---
 
-# Skill: quality-loop
+# Quality Loop
 
-One invocation = **one backlog item**, taken from selection to verified commit
-(or to a clean, journaled failure). Never more. The loop harness (`/loop`) or a
-scheduler provides repetition; this skill provides one safe, auditable step.
+One invocation handles one backlog item, including verification and a journal
+entry. A scheduler or explicit user request controls repetition. Ordinary
+coding, reviews, and checks do not start this workflow.
 
-## Mission
+State lives in [backlog](../../quality/backlog.md),
+[journal](../../quality/journal.md), and [baselines](../../quality/baselines.md).
+Use [AGENTS.md](../../../../AGENTS.md) for build safety, capability tiers,
+worktree isolation, and gate selection.
 
-Drive this project toward: **correct (proven), reliable, resilient, modular,
-efficient, performant** — able to carry the biggest broadcast events in history.
-Every iteration must leave the repo strictly better and never worse: verified
-green gates, an honest journal entry, and no collateral edits.
+Read the active journal first. If it has fewer than three completed entries,
+read the newest archived journal tails under `docs/archive/quality/` as needed
+for selection, failure recovery, and recent-dimension rotation. Do not copy
+archived entries back into the active file.
 
-## State files (the loop's memory)
+## Select and execute
 
-- `docs/agent-guidance/quality/backlog.md` — prioritized work items
-- `docs/agent-guidance/quality/journal.md` — append-only iteration log
-  (rotate older months into `docs/archive/quality/journal-YYYY-MM.md`; do not
-  edit past entries)
-- `docs/agent-guidance/quality/baselines.md` — benchmark/resource ledger
-- `docs/agent-guidance/quality/README.md` — operator manual (humans)
+1. Check the working tree and recent journal entries. Respect another loop's
+   active claim; elapsed time alone does not release it. Resolve the ownership
+   of an interrupted iteration before touching its diff.
+2. Pick the highest-priority open item within the available model's capability.
+   Mark it `in-progress` and journal `STARTED`. If none is eligible, use
+   [backlog-groom](../backlog-groom/SKILL.md) for evidence-backed discovery and
+   end this iteration.
+3. Read only the guidance the item requires:
 
-### Journal continuity across archive rotation
+   | Dimension | Guidance |
+   |---|---|
+   | proof / resilience | [proof-sweep](../proof-sweep/SKILL.md) |
+   | modularity | [layering-audit](../layering-audit/SKILL.md) |
+   | efficiency / performance | [perf-sweep](../perf-sweep/SKILL.md) |
+   | groom | [backlog-groom](../backlog-groom/SKILL.md) |
 
-New entries always append to the active `journal.md`. Older months may move
-into dated archive files, but selection and failure-recovery still cross that
-boundary:
+4. Complete the item's observable goal. File separate discoveries without
+   expanding the current item.
+5. Run its acceptance gates and the applicable AGENTS.md gates, starting
+   narrow. Do not repeat a passing gate unless a new change or unresolved
+   concern justifies it. Fix relevant failures; do not weaken assertions to
+   obtain a pass.
 
-1. Read the active journal first (newest entries at the bottom).
-2. If it contains fewer than three completed iteration entries (`DONE`,
-   `FAILED`, `SKIPPED`, or `GROOMED` — ignore bare `STARTED` claims), read the
-   tail of the newest archived journal(s) under
-   `docs/archive/quality/journal-*.md` (newest archive filename / date first)
-   until the **three-entry selection window** is complete.
-3. “Previous journal entry” for unresolved-`FAILED` cleanup is the newest
-   completed entry in that same combined window (active first, then archive
-   tails) — not “newest entry in the active file only.”
-4. Dimension rotation (“prefer a dimension not touched in the last 3 journal
-   entries”) uses that same three-entry window.
+## Finish or hand off
 
-Do not duplicate archived entries back into the active file; read across the
-boundary instead.
+Mark `done` only when the goal and gates pass. Journal the result and leave a
+reviewable diff. Commit only when the user has authorized commits for this run;
+then stage only the item's own hunks and use
+`quality(<dimension>): <item-id> <summary>`. Never push from the loop.
 
-## Hard safety rules (read every iteration, no exceptions)
+If progress needs unavailable resources, ownership resolution, or work beyond
+the item's scope, record the blocker and verification still needed. Preserve
+useful work with clear state; remove failed experimental edits only with an
+inverse patch to your own hunks. Do not erase another iteration's work.
 
-1. **Never run `cargo build/test/clippy/check/bench` while restream, mediamtx,
-   or ffmpeg are running.** Static native builds and live media processes can
-   exhaust constrained hosts. Preflight check: `pgrep -x restream; pgrep -x mediamtx; pgrep -x ffmpeg`.
-   If any are running and you did not start them, **skip the iteration**
-   (journal `SKIPPED: host busy`) — do not kill processes you don't own.
-2. Prefix every heavy command with `scripts/build/resource-limit.sh`.
-3. Never use `--release`; use the default profile for tests, `--profile bench`
-   for benchmarks.
-4. Never `git push`. Never rewrite history. Never touch files outside your item.
-5. Preserve other agents' in-flight work: if `git status` shows modifications
-   you didn't make, leave them unstaged and use hunk-based `git add -p`-style
-   staging (or explicit file paths) for your own edits only.
-6. Never delete or weaken an existing test, gate, or assertion to make
-   something pass. If a gate seems wrong, mark the item `blocked` and journal it.
-7. Measurement work (benches, resource sweeps) must be serial: nothing else
-   building or running on the host.
+Skip an iteration that requires a heavy build while unowned media processes
+are running, or measurement while the host is busy. Do not kill those processes.
+Do not start an item during an unresolved merge/rebase or another active loop.
 
-## Model tier gate
-
-Backlog items carry a tier tag. `AGENTS.md` owns the current model-to-tier
-mapping; this skill enforces that mapping rather than copying it.
-
-If the top item is above your tier, skip it (leave it open) and take the next
-eligible one. Never "just try" an above-tier item.
-
-## Iteration protocol
-
-### 1. Preflight
-
-- `git status --short` — note pre-existing modifications (leave them alone).
-- Media-process check per hard rule 1.
-- Read the most recent journal entries (active file, then archived tails per
-  § Journal continuity across archive rotation) and all of `backlog.md`.
-- If the previous journal entry is an unresolved `FAILED` for an item still
-  marked `in-progress`, your first job is to finish cleaning it up (revert
-  stray edits, mark it `blocked` with notes) — that is this iteration's work.
-
-### 2. Select
-
-- Pick the highest-priority `open` item eligible for your tier. Priority =
-  file order in `backlog.md` (top is most important), but prefer a dimension
-  not touched in the last 3 journal entries when priorities tie (rotation
-  keeps all six dimensions moving; the three-entry window crosses the
-  archive boundary per § Journal continuity).
-- Mark it `in-progress` in `backlog.md` with today's date, and append a
-  one-line `STARTED` journal entry. This is the claim; if a competing loop
-  already marked it, pick the next item.
-- If no eligible item exists, run the `backlog-groom` skill's discovery step
-  for the most stale dimension, file 1–3 new items, journal `GROOMED`, and end
-  the iteration.
-
-### 3. Execute
-
-Dispatch to the matching sweep skill and follow it exactly:
-
-| Dimension tag | Skill |
-|---|---|
-| `[proof]` | proof-sweep |
-| `[resilience]` | resilience-sweep |
-| `[modularity]` | modularity-sweep |
-| `[efficiency]` / `[performance]` | perf-sweep |
-| `[groom]` | backlog-groom |
-
-Scope discipline: touch only what the item names. If mid-work you discover a
-second problem, do **not** fix it — file it as a new backlog item and continue.
-
-### 4. Verify
-
-Run, in order, stopping at first failure:
-
-1. The item's own listed gates (each item names its gates).
-2. `cargo fmt --all --check`
-3. `scripts/build/resource-limit.sh cargo clippy -- -D warnings`
-4. `scripts/build/resource-limit.sh cargo test <scoped filter for the touched modules>`
-5. Frontend touched? → `npm run test:frontend`. Contract touched? →
-   `./scripts/check/api-contract.sh`. Concurrency touched? →
-   `bash ./scripts/check/concurrency/fast.sh`.
-
-**Two-strike rule:** if a gate fails, you get one focused fix attempt. If it
-fails again, undo only your own hunks with an explicit inverse patch, mark the
-item `blocked` with a precise note of what failed and why, journal `FAILED`,
-and end the iteration. Never use a whole-file restore when unrelated work may
-share that file.
-
-### 5. Record and commit
-
-- Mark the item `done` in `backlog.md` (keep the entry, add commit hash after
-  committing).
-- Append the journal entry (format below).
-- Stage **only** the files your item touched, plus `backlog.md` and
-  `journal.md` (and `baselines.md` if updated).
-- Commit: `quality(<dimension>): <item-id> <one-line summary>`
-- Do not push.
-
-### 6. Report
-
-End with a short human-readable summary: item taken, what changed, gate
-results, follow-ups filed. If running under `/loop`, this is the iteration
-report.
-
-## Journal entry format
-
-```
-## <YYYY-MM-DD HH:MM> <item-id> <STARTED|DONE|FAILED|SKIPPED|GROOMED> [model-tier]
-- What: <one line>
-- Gates: <gate → pass/fail, one line>
-- Commit: <hash or "none">
-- Follow-ups: <new item ids filed, or "none">
-- Notes: <anything the next iteration must know; omit if empty>
-```
-
-## Absolute stop conditions
-
-End the iteration immediately (journal `SKIPPED` with the reason) if:
-
-- media processes you don't own are running (hard rule 1)
-- another loop's `in-progress` claim is fresher than 4 hours
-- the working tree has conflicts or a rebase/merge in progress
-- an item requires credentials, external services, or a destructive action
-- you have already completed one item this invocation
-
-When in doubt, do less: a small verified step beats a large unverified one.
+Journal entries record timestamp, item ID, outcome
+(`STARTED|DONE|FAILED|SKIPPED|GROOMED`), capability tier, what changed, gate
+results, commit (or `none`), and follow-ups. If a commit is created, record its
+hash afterward without amending/recreating the commit just to embed its own hash.

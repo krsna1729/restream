@@ -1,48 +1,31 @@
 ---
 name: concurrency-proof
-description: Use when changing concurrency primitives, cancellation/wake paths, shared stage registries, thread-hop boundaries, or teardown/recovery status behavior in this repository. Adds the required proof workflow, gate commands, and status-contract checks that must land with the code change.
+description: Prove changes to synchronization, task/thread handoffs, cancellation, stage registries, or teardown/recovery status in restream.
 ---
 
 # Concurrency Proof
 
-Use this skill when the task touches:
+Identify the ordering or ownership invariant and the observable failure.
+Use production code through existing seams; a separate test implementation
+does not prove the production path.
 
-- task ↔ thread handoff
-- wait/cancel or close/wake behavior
-- shared stage create/reuse/cancel/recreate logic
-- live teardown/recovery semantics
-- operator-visible runtime status after cleanup
+- Add deterministic lifecycle/status tests.
+- Use loom for relevant wake/cancel or registry interleavings; bound the model.
+- For recovery or teardown changes, update the live harness fault assertion
+  and operator-visible status contract together.
+- Extend the proof gate for a new primitive or thread hop, or explain how
+  existing coverage enforces it.
+- Benchmark hot-path changes; otherwise state that the change is off the hot path.
 
-## Workflow
-
-1. Identify the narrowest synchronization rule that can fail.
-2. Add the right proof layer:
-   - unit/regression test for visible lifecycle or status
-   - loom model for wake/cancel or registry ordering
-   - harness test for real sockets/processes/threads
-3. Extend the mandatory gate if the new proof must stay enforced.
-4. If runtime status semantics changed, update API/frontend-facing contract tests and docs in the same change — typically `tests/api.rs`, `docs/api-reference.md`, `docs/observability.md`, and any frontend status badges that render the changed state.
-
-## Mandatory Gates
-
-Run the focused proof gate first:
+Follow [AGENTS.md](../../../../AGENTS.md) for host/build safety. Run the focused
+proof gate, then the live contract gate before signing off on lifecycle or
+recovery changes:
 
 ```sh
-bash ./scripts/check/concurrency/fast.sh
+scripts/check/concurrency/fast.sh
+scripts/check/concurrency/contract.sh
 ```
 
-Run the full live contract gate before sign-off:
-
-```sh
-bash ./scripts/check/concurrency/contract.sh
-```
-
-## Rules
-
-- Do not rely on only one proof layer when the bug spans more than one boundary.
-- Do not change teardown/recovery behavior without updating the live harness assertion.
-- Do not add a new proof artifact and leave it outside the mandatory gate.
-
-## Read this reference when needed
-
-- [../../../concurrency-proofing.md](../../../concurrency-proofing.md)
+Read [concurrency proofing](../../../concurrency-proofing.md) for model targets,
+gate coverage, and status-contract details. Select API/frontend checks from the
+changed contract; do not infer recovery success solely from process survival.
