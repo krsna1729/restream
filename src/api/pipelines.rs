@@ -397,7 +397,7 @@ pub async fn pipelines_delete_handler(
     }
 
     if let Ok(pipeline) = state.pipeline_service.get_by_id(&id).await
-        && let Ok(ingests) = state.ingest_service.list_ingests().await
+        && let Ok(ingests) = crate::application::ingests::list_ingests(&state.db).await
     {
         for ingest in ingests
             .iter()

@@ -18,8 +18,8 @@ use crate::alerts;
 use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
-    AgentService, AuthService, FileIngestService, IngestService, MediaLibraryService,
-    PipelineService, SettingsService,
+    AgentService, AuthService, FileIngestService, MediaLibraryService, PipelineService,
+    SettingsService,
 };
 use crate::config::AppConfig;
 use crate::domain::ingest_security::IngestSecurityConfig;
@@ -92,7 +92,7 @@ pub struct AppState {
     sessions: Arc<TokioRwLock<HashSet<String>>>,
     pub engine: Arc<MediaEngine>,
     /// Concrete SQLite pool for application helpers that call `db::*` directly
-    /// (Wave 1 A-lite Logs; expands as other services collapse).
+    /// (Wave 1 logs/outputs/ingests; expands as other services collapse).
     pub db: SqlitePool,
     pub ingest_disconnect_grace_ms: u64,
     pub ports: PortConfig,
@@ -103,7 +103,6 @@ pub struct AppState {
     pub pipeline_service: PipelineService,
     pub pipeline_input_service: PipelineInputService,
     pub recirculation_service: RecirculationService,
-    pub ingest_service: IngestService,
     pub auth_service: AuthService,
     pub settings_service: SettingsService,
     pub file_ingest_service: FileIngestService,
@@ -137,7 +136,6 @@ impl AppState {
             pipeline_service,
             pipeline_input_service,
             recirculation_service,
-            ingest_service,
             auth_service,
             settings_service,
             file_ingest_service,
@@ -160,7 +158,6 @@ impl AppState {
             pipeline_service,
             pipeline_input_service,
             recirculation_service,
-            ingest_service,
             auth_service,
             settings_service,
             file_ingest_service,
