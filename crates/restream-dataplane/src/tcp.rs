@@ -527,6 +527,12 @@ impl UringTcpPoller {
                 "TCP send already in flight",
             ));
         }
+        if self.send_completions[index].is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "TCP send completion must be drained first",
+            ));
+        }
         let message = {
             let operation = &mut self.pending_sends[index];
             let _total = operation.prepare(buffers)?;

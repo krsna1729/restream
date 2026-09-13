@@ -3,11 +3,11 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::time::Duration;
 
-use restream_dataplane::udp::{UdpInterest, UdpReadyEvent, UringUdpPoller};
+use restream_dataplane::udp::{UdpInterest, UdpReadyEvent, UdpSendCompletion, UringUdpPoller};
 use shiguredo_srt::Timestamp;
 use srt_transport::{DatagramSink, OutputDrainBudget, RecvBatch};
 
-use super::{desired_udp_buf, recv_budget, shared_io_batch_capacity};
+use super::{desired_udp_buf, recv_budget};
 
 pub(crate) struct SharedSrtEgress {
     pub(crate) socket: UdpSocket,
@@ -16,6 +16,7 @@ pub(crate) struct SharedSrtEgress {
     free_outbound: Vec<Vec<u8>>,
     recv_batch: RecvBatch,
     poller: UringUdpPoller,
+    send_completions: [UdpSendCompletion; 1],
     /// Times `drive` has run, so the readiness-path invariant in
     /// `drive_shared_srt_egress` (driving does not scale with the number of
     /// leaves sharing this state) is directly assertable instead of
@@ -57,6 +58,11 @@ impl SharedSrtEgress {
             free_outbound: (0..256).map(|_| Vec::with_capacity(64 * 1024)).collect(),
             recv_batch: RecvBatch::new(),
             poller,
+            send_completions: [UdpSendCompletion {
+                slot: 0,
+                generation: 0,
+                result: 0,
+            }],
             #[cfg(test)]
             drive_calls: 0,
         })
@@ -123,48 +129,40 @@ impl SharedSrtEgress {
     }
 
     pub(crate) fn flush_outbound(&mut self) -> Result<bool, String> {
-        while let Some((peer, _)) = self.outbound.front() {
-            if peer.is_ipv4() {
-                let (front, _) = self.outbound.as_slices();
-                let count = front
-                    .iter()
-                    .take(shared_io_batch_capacity())
-                    .take_while(|(peer, _)| peer.is_ipv4())
-                    .count();
-                let sent =
-                    match srt_transport::sendmsg_batch(self.socket.as_raw_fd(), &front[..count]) {
-                        Ok(sent) if sent <= count => sent,
-                        Ok(_) => return Err("sendmmsg reported too many packets".to_owned()),
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => 0,
-                        Err(error) => return Err(error.to_string()),
-                    };
-                self.recycle_front(sent);
-                if sent < count {
-                    return Ok(false);
+        let completed = self
+            .poller
+            .drain_send_completions(&mut self.send_completions);
+        if completed != 0 {
+            let completion = self.send_completions[0];
+            if completion.result < 0 {
+                let error = std::io::Error::from_raw_os_error(-completion.result);
+                if error.kind() != std::io::ErrorKind::WouldBlock {
+                    return Err(error.to_string());
                 }
-                continue;
-            }
-            let (peer, packet_len) = {
-                let (peer, packet) = self.outbound.front().expect("checked above");
-                (*peer, packet.len())
-            };
-            match self
-                .socket
-                .send_to(&self.outbound.front().expect("checked above").1, peer)
+            } else if self
+                .outbound
+                .front()
+                .is_some_and(|(_, packet)| completion.result as usize == packet.len())
             {
-                Ok(sent) if sent == packet_len => {
-                    self.recycle_front(1);
-                }
-                Ok(sent) => {
-                    return Err(format!(
-                        "short UDP datagram send: wrote {sent} of {packet_len} bytes"
-                    ));
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(false),
-                Err(error) => return Err(error.to_string()),
+                self.recycle_front(1);
+            } else {
+                return Err(format!(
+                    "short UDP datagram send: wrote {} bytes",
+                    completion.result
+                ));
             }
         }
-        Ok(true)
+        let Some((peer, packet)) = self.outbound.front() else {
+            return Ok(true);
+        };
+        match self
+            .poller
+            .submit_send(self.socket.as_raw_fd(), 0, 1, *peer, packet)
+        {
+            Ok(()) => Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
+            Err(error) => Err(error.to_string()),
+        }
     }
 
     fn recycle_front(&mut self, count: usize) {

@@ -10,23 +10,11 @@ use tracing::info;
 
 /// Requested `SO_RCVBUF`/`SO_SNDBUF` for shared Tokio SRT egress sockets.
 pub(crate) const DESIRED_UDP_BUF: usize = 8 * 1024 * 1024;
-const DEFAULT_IO_BATCH_CAPACITY: usize = 64;
 const UDP_BUF_ENV: &str = "RESTREAM_SRT_UDP_BUF_BYTES";
 const RECV_BUDGET_ENV: &str = "RESTREAM_SRT_RECV_BUDGET_DATAGRAMS";
-const IO_BATCH_ENV: &str = "RESTREAM_SRT_IO_BATCH_CAPACITY";
 
 pub(crate) fn desired_udp_buf() -> usize {
     udp_buf_override().unwrap_or(DESIRED_UDP_BUF)
-}
-
-pub(crate) fn shared_io_batch_capacity() -> usize {
-    static VALUE: OnceLock<usize> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        let value = crate::config::env_optional_positive_usize(IO_BATCH_ENV)
-            .unwrap_or(DEFAULT_IO_BATCH_CAPACITY);
-        log_override(IO_BATCH_ENV, value, DEFAULT_IO_BATCH_CAPACITY);
-        value
-    })
 }
 
 pub fn recv_budget() -> RecvBudget {

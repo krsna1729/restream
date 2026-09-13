@@ -1,6 +1,8 @@
 //! One-owner UDP readiness over `io_uring`.
 
+use std::collections::VecDeque;
 use std::io;
+use std::net::SocketAddr;
 use std::os::fd::RawFd;
 use std::time::Duration;
 
@@ -55,6 +57,15 @@ pub struct UdpReadyEvent {
     pub writable: bool,
 }
 
+/// Completion of one owner-thread UDP send. The caller retains the submitted
+/// datagram until this result is drained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UdpSendCompletion {
+    pub slot: u32,
+    pub generation: u32,
+    pub result: i32,
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct UdpPollerMetrics {
     pub completions: u64,
@@ -71,6 +82,62 @@ struct Registration {
     fixed: Option<types::Fixed>,
 }
 
+struct PendingSend {
+    generation: u32,
+    active: bool,
+    destination: libc::sockaddr_storage,
+    destination_len: libc::socklen_t,
+    iovec: libc::iovec,
+    message: libc::msghdr,
+}
+
+// SAFETY: the poller is single-owner. The raw pointers are only populated
+// immediately before an SQE is submitted and the owner retains the datagram
+// until the matching CQE.
+unsafe impl Send for PendingSend {}
+
+impl PendingSend {
+    fn new() -> Self {
+        Self {
+            generation: 0,
+            active: false,
+            destination: unsafe { std::mem::zeroed() },
+            destination_len: 0,
+            iovec: libc::iovec {
+                iov_base: std::ptr::null_mut(),
+                iov_len: 0,
+            },
+            message: unsafe { std::mem::zeroed() },
+        }
+    }
+
+    fn prepare(&mut self, peer: SocketAddr, bytes: &[u8]) -> io::Result<()> {
+        if bytes.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot submit an empty UDP send",
+            ));
+        }
+        let (destination, destination_len) = sockaddr(peer);
+        self.destination = destination;
+        self.destination_len = destination_len;
+        self.iovec = libc::iovec {
+            iov_base: bytes.as_ptr().cast_mut().cast(),
+            iov_len: bytes.len(),
+        };
+        self.message = libc::msghdr {
+            msg_name: (&mut self.destination as *mut libc::sockaddr_storage).cast(),
+            msg_namelen: self.destination_len,
+            msg_iov: &mut self.iovec,
+            msg_iovlen: 1,
+            msg_control: std::ptr::null_mut(),
+            msg_controllen: 0,
+            msg_flags: 0,
+        };
+        Ok(())
+    }
+}
+
 /// Single-owner, fixed-registration UDP readiness poller.
 ///
 /// UDP payloads stay in protocol-owned fixed buffers. This type only reports
@@ -79,6 +146,9 @@ pub struct UringUdpPoller {
     ring: IoUring,
     registrations: Box<[Option<Registration>]>,
     fixed_files: Option<FixedFileTable>,
+    pending_sends: Box<[PendingSend]>,
+    send_completions: Box<[Option<UdpSendCompletion>]>,
+    send_completion_order: VecDeque<u32>,
     timeout_armed: bool,
     metrics: UdpPollerMetrics,
 }
@@ -102,6 +172,12 @@ impl UringUdpPoller {
             ring,
             registrations: vec![None; max_slots].into_boxed_slice(),
             fixed_files: None,
+            pending_sends: std::iter::repeat_with(PendingSend::new)
+                .take(max_slots)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            send_completions: vec![None; max_slots].into_boxed_slice(),
+            send_completion_order: VecDeque::with_capacity(max_slots),
             timeout_armed: false,
             metrics: UdpPollerMetrics::default(),
         })
@@ -130,6 +206,12 @@ impl UringUdpPoller {
             ring,
             registrations: vec![None; max_slots].into_boxed_slice(),
             fixed_files: Some(files),
+            pending_sends: std::iter::repeat_with(PendingSend::new)
+                .take(max_slots)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            send_completions: vec![None; max_slots].into_boxed_slice(),
+            send_completion_order: VecDeque::with_capacity(max_slots),
             timeout_armed: false,
             metrics: UdpPollerMetrics::default(),
         })
@@ -236,6 +318,23 @@ impl UringUdpPoller {
                 match tag.kind {
                     OpKind::Timeout => self.timeout_armed = false,
                     OpKind::PollCancel => {}
+                    OpKind::UdpTx => {
+                        let Some(operation) = self.pending_sends.get_mut(tag.slot as usize) else {
+                            self.metrics.stale_completions += 1;
+                            continue;
+                        };
+                        operation.active = false;
+                        if operation.generation != tag.generation {
+                            self.metrics.stale_completions += 1;
+                            continue;
+                        }
+                        self.send_completions[tag.slot as usize] = Some(UdpSendCompletion {
+                            slot: tag.slot,
+                            generation: tag.generation,
+                            result: completion.result(),
+                        });
+                        self.send_completion_order.push_back(tag.slot);
+                    }
                     _ => {
                         let Some(registration) = self
                             .registrations
@@ -287,6 +386,69 @@ impl UringUdpPoller {
 
     pub fn metrics(&self) -> UdpPollerMetrics {
         self.metrics
+    }
+
+    /// Submit one caller-owned datagram against a registered socket. The
+    /// caller must keep `bytes` alive and unchanged until the matching
+    /// completion is drained. One send is allowed per registration slot.
+    pub fn submit_send(
+        &mut self,
+        fd: RawFd,
+        slot: u32,
+        generation: u32,
+        peer: SocketAddr,
+        bytes: &[u8],
+    ) -> io::Result<()> {
+        let index = self.registration_index(slot)?;
+        let registration = self.registrations[index].ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "UDP registration is not live")
+        })?;
+        if registration.fd != fd || registration.generation != generation {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "UDP send generation or descriptor mismatch",
+            ));
+        }
+        if self.pending_sends[index].active || self.send_completions[index].is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "UDP send is still in flight",
+            ));
+        }
+        self.pending_sends[index].prepare(peer, bytes)?;
+        let message = &self.pending_sends[index].message as *const libc::msghdr;
+        let tag = OpTag::new(OpKind::UdpTx, slot, generation)
+            .expect("validated UDP send slot")
+            .encode();
+        let entry = match registration.fixed {
+            Some(fixed) => opcode::SendMsg::new(fixed, message).build().user_data(tag),
+            None => opcode::SendMsg::new(types::Fd(fd), message)
+                .build()
+                .user_data(tag),
+        };
+        if let Err(error) = unsafe { self.push(&entry) } {
+            self.pending_sends[index].active = false;
+            return Err(error);
+        }
+        self.pending_sends[index].generation = generation;
+        self.pending_sends[index].active = true;
+        Ok(())
+    }
+
+    /// Drain send completions without scanning all registered sockets.
+    pub fn drain_send_completions(&mut self, completions: &mut [UdpSendCompletion]) -> usize {
+        let mut count = 0;
+        while count < completions.len() {
+            let Some(slot) = self.send_completion_order.pop_front() else {
+                break;
+            };
+            let Some(completion) = self.send_completions[slot as usize].take() else {
+                continue;
+            };
+            completions[count] = completion;
+            count += 1;
+        }
+        count
     }
 
     fn registration_index(&self, slot: u32) -> io::Result<usize> {
@@ -341,9 +503,58 @@ impl UringUdpPoller {
     }
 }
 
+fn sockaddr(peer: SocketAddr) -> (libc::sockaddr_storage, libc::socklen_t) {
+    match peer {
+        SocketAddr::V4(peer) => {
+            let address = libc::sockaddr_in {
+                sin_family: libc::AF_INET as libc::sa_family_t,
+                sin_port: peer.port().to_be(),
+                sin_addr: libc::in_addr {
+                    s_addr: u32::from_ne_bytes(peer.ip().octets()),
+                },
+                sin_zero: [0; 8],
+            };
+            let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+            unsafe {
+                std::ptr::write(
+                    (&mut storage as *mut libc::sockaddr_storage).cast(),
+                    address,
+                );
+            }
+            (
+                storage,
+                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            )
+        }
+        SocketAddr::V6(peer) => {
+            let address = libc::sockaddr_in6 {
+                sin6_family: libc::AF_INET6 as libc::sa_family_t,
+                sin6_port: peer.port().to_be(),
+                sin6_flowinfo: peer.flowinfo(),
+                sin6_addr: libc::in6_addr {
+                    s6_addr: peer.ip().octets(),
+                },
+                sin6_scope_id: peer.scope_id(),
+            };
+            let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+            unsafe {
+                std::ptr::write(
+                    (&mut storage as *mut libc::sockaddr_storage).cast(),
+                    address,
+                );
+            }
+            (
+                storage,
+                std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::UdpSocket;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
     fn udp_pair() -> Option<(OwnedFd, OwnedFd)> {
@@ -492,6 +703,64 @@ mod tests {
         assert_eq!(ready[0].slot, 1);
         assert_eq!(ready[0].generation, 7);
         assert!(ready[0].readable);
+    }
+
+    #[test]
+    fn fixed_file_poller_completes_owner_thread_send() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut poller = match UringUdpPoller::new_fixed(1, 32) {
+            Ok(poller) => poller,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
+                ) =>
+            {
+                return;
+            }
+            Err(error) => panic!("fixed-file io_uring unavailable: {error}"),
+        };
+        poller
+            .register_fixed(receiver.as_raw_fd(), 0, 7, UdpInterest::READ)
+            .unwrap();
+        poller
+            .submit_send(
+                receiver.as_raw_fd(),
+                0,
+                7,
+                sender.local_addr().unwrap(),
+                b"native",
+            )
+            .unwrap();
+
+        let mut ready = [UdpReadyEvent {
+            fd: -1,
+            slot: 0,
+            generation: 0,
+            readable: false,
+            writable: false,
+        }; 1];
+        let mut completions = [UdpSendCompletion {
+            slot: 0,
+            generation: 0,
+            result: 0,
+        }; 1];
+        for _ in 0..10 {
+            poller.poll(Duration::from_millis(1), &mut ready).unwrap();
+            if poller.drain_send_completions(&mut completions) == 1 {
+                assert_eq!(completions[0].slot, 0);
+                assert_eq!(completions[0].generation, 7);
+                assert_eq!(completions[0].result, 6);
+                let mut received = [0_u8; 6];
+                let (count, peer) = sender.recv_from(&mut received).unwrap();
+                assert_eq!(count, 6);
+                assert_eq!(peer, receiver.local_addr().unwrap());
+                assert_eq!(&received, b"native");
+                return;
+            }
+        }
+        panic!("owner-thread UDP send did not complete");
     }
 
     #[test]
