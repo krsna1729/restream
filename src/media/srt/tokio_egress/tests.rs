@@ -19,7 +19,7 @@ fn shared_outbound_flush_supports_ipv6() {
         .expect("set sink timeout");
     let peer = sink.local_addr().expect("sink address");
     let mut shared = SharedSrtEgress::bind(peer).expect("bind shared SRT socket");
-    shared.outbound.push((peer, vec![1, 2, 3, 4]));
+    shared.outbound.push_back((peer, vec![1, 2, 3, 4]));
 
     assert!(shared.flush_outbound().expect("flush IPv6 datagram"));
     let mut received = [0u8; 4];
@@ -34,7 +34,7 @@ fn shared_outbound_flush_sends_without_entering_the_runtime() {
         .expect("set sink timeout");
     let peer = sink.local_addr().expect("sink address");
     let mut shared = SharedSrtEgress::bind(peer).expect("bind shared SRT socket");
-    shared.outbound.push((peer, vec![1, 2, 3, 4]));
+    shared.outbound.push_back((peer, vec![1, 2, 3, 4]));
 
     shared
         .drive(shiguredo_srt::Timestamp::default())

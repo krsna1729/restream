@@ -1,17 +1,19 @@
+use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::time::Duration;
 
 use restream_dataplane::udp::{UdpInterest, UdpReadyEvent, UringUdpPoller};
 use shiguredo_srt::Timestamp;
-use srt_transport::{OutputDrainBudget, RecvBatch, apply_send_result};
+use srt_transport::{DatagramSink, OutputDrainBudget, RecvBatch};
 
 use super::{desired_udp_buf, recv_budget, shared_io_batch_capacity};
 
 pub(crate) struct SharedSrtEgress {
     pub(crate) socket: UdpSocket,
     pub(crate) callers: srt_transport::CallerTable,
-    pub(crate) outbound: Vec<(SocketAddr, Vec<u8>)>,
+    pub(crate) outbound: VecDeque<(SocketAddr, Vec<u8>)>,
+    free_outbound: Vec<Vec<u8>>,
     recv_batch: RecvBatch,
     poller: UringUdpPoller,
     /// Times `drive` has run, so the readiness-path invariant in
@@ -51,7 +53,8 @@ impl SharedSrtEgress {
         Ok(Self {
             socket,
             callers: srt_transport::CallerTable::new(),
-            outbound: Vec::with_capacity(256),
+            outbound: VecDeque::with_capacity(256),
+            free_outbound: (0..256).map(|_| Vec::with_capacity(64 * 1024)).collect(),
             recv_batch: RecvBatch::new(),
             poller,
             #[cfg(test)]
@@ -109,42 +112,47 @@ impl SharedSrtEgress {
             return Ok(());
         }
         let budget = OutputDrainBudget::default();
-        if self.outbound.len().saturating_add(budget.max_packets) <= self.outbound.capacity() {
-            self.callers
-                .poll_outbound_bounded(now, budget, &mut self.outbound);
-        }
+        let mut sink = SharedTxSink {
+            outbound: &mut self.outbound,
+            free: &mut self.free_outbound,
+        };
+        self.callers.poll_outbound_into(now, budget, &mut sink);
         let _ = self.flush_outbound()?;
         Ok(())
     }
 
     pub(crate) fn flush_outbound(&mut self) -> Result<bool, String> {
-        while let Some((peer, _)) = self.outbound.first() {
+        while let Some((peer, _)) = self.outbound.front() {
             if peer.is_ipv4() {
-                let count = self
-                    .outbound
+                let (front, _) = self.outbound.as_slices();
+                let count = front
                     .iter()
                     .take(shared_io_batch_capacity())
                     .take_while(|(peer, _)| peer.is_ipv4())
                     .count();
-                let result =
-                    srt_transport::sendmsg_batch(self.socket.as_raw_fd(), &self.outbound[..count]);
-                let report = apply_send_result(&mut self.outbound, result)
-                    .map_err(|error| error.to_string())?;
-                // `apply_send_result` compares against the whole queue. A full
-                // prefix send of `count` with more packets still queued is not
-                // kernel backpressure — keep offering the next IPv4 run.
-                if report.sent < count {
+                let sent =
+                    match srt_transport::sendmsg_batch(self.socket.as_raw_fd(), &front[..count]) {
+                        Ok(sent) if sent <= count => sent,
+                        Ok(_) => return Err("sendmmsg reported too many packets".to_owned()),
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => 0,
+                        Err(error) => return Err(error.to_string()),
+                    };
+                self.recycle_front(sent);
+                if sent < count {
                     return Ok(false);
                 }
                 continue;
             }
             let (peer, packet_len) = {
-                let (peer, packet) = &self.outbound[0];
+                let (peer, packet) = self.outbound.front().expect("checked above");
                 (*peer, packet.len())
             };
-            match self.socket.send_to(&self.outbound[0].1, peer) {
+            match self
+                .socket
+                .send_to(&self.outbound.front().expect("checked above").1, peer)
+            {
                 Ok(sent) if sent == packet_len => {
-                    self.outbound.remove(0);
+                    self.recycle_front(1);
                 }
                 Ok(sent) => {
                     return Err(format!(
@@ -156,5 +164,37 @@ impl SharedSrtEgress {
             }
         }
         Ok(true)
+    }
+
+    fn recycle_front(&mut self, count: usize) {
+        for _ in 0..count {
+            let Some((_, packet)) = self.outbound.pop_front() else {
+                break;
+            };
+            if self.free_outbound.len() < 256 {
+                self.free_outbound.push(packet);
+            }
+        }
+    }
+}
+
+struct SharedTxSink<'a> {
+    outbound: &'a mut VecDeque<(SocketAddr, Vec<u8>)>,
+    free: &'a mut Vec<Vec<u8>>,
+}
+
+impl DatagramSink for SharedTxSink<'_> {
+    fn send(&mut self, peer: SocketAddr, packet: &[u8]) -> bool {
+        let Some(mut storage) = self.free.pop() else {
+            return false;
+        };
+        if packet.len() > storage.capacity() {
+            self.free.push(storage);
+            return false;
+        }
+        storage.clear();
+        storage.extend_from_slice(packet);
+        self.outbound.push_back((peer, storage));
+        true
     }
 }
