@@ -24,3 +24,10 @@ path = "fuzz_targets/media_ring.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "tx_pool"
+path = "fuzz_targets/tx_pool.rs"
+test = false
+doc = false
+bench = false

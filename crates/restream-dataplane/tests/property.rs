@@ -1,5 +1,5 @@
 use proptest::prelude::*;
-use restream_dataplane::{MediaArena, MediaRing, OpKind, OpTag, ReadyQueue};
+use restream_dataplane::{MediaArena, MediaRing, OpKind, OpTag, ReadyQueue, TxPool};
 
 proptest! {
     #[test]
@@ -35,6 +35,25 @@ proptest! {
             }
             prop_assert!(ring.len() <= ring.capacity());
             prop_assert!(ring.bytes() <= 24);
+        }
+    }
+
+    #[test]
+    fn tx_pool_rejects_stale_leases_after_reuse(cycles in 1usize..128) {
+        let mut pool = TxPool::new(1, 64).unwrap();
+        let stale = pool.acquire().unwrap();
+        assert!(pool.submit(stale));
+        assert!(pool.complete(stale));
+        assert!(pool.release(stale));
+
+        for _ in 0..cycles {
+            let current = pool.acquire().unwrap();
+            prop_assert_ne!(current.generation, stale.generation);
+            prop_assert!(!pool.submit(stale));
+            prop_assert!(!pool.complete(stale));
+            prop_assert!(pool.submit(current));
+            prop_assert!(pool.complete(current));
+            prop_assert!(pool.release(current));
         }
     }
 }
