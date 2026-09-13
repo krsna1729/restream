@@ -23,11 +23,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_TAG_SLOTS: usize = 1 << 24;
 
+pub mod capabilities;
+pub mod files;
 pub mod media;
 pub mod tcp;
+pub mod tx;
 pub mod udp;
 
+pub use capabilities::UringCapabilities;
+pub use files::{FixedFile, FixedFileTable};
 pub use media::{CursorError, FeedCursor, MediaArena, MediaError, MediaRef, MediaRing};
+pub use tx::{TxLease, TxPool, TxState};
 
 // ---------------------------------------------------------------------------
 // Operation identity
@@ -384,6 +390,10 @@ impl BufferPool {
     pub fn slot(&self, slot: u32) -> Option<&[u8]> {
         self.slots.get(slot as usize).map(Box::as_ref)
     }
+
+    pub fn slot_mut(&mut self, slot: u32) -> Option<&mut [u8]> {
+        self.slots.get_mut(slot as usize).map(Box::as_mut)
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -611,7 +621,7 @@ struct ShardState {
     ready: ReadyQueue,
     deadlines: DeadlineIndex,
     _rx: BufferPool,
-    tx: BufferPool,
+    tx: TxPool,
     metrics: ShardMetrics,
     budget: WorkBudgetConfig,
 }
@@ -623,7 +633,7 @@ impl ShardState {
             ready: ReadyQueue::new(config.ready_capacity, config.max_leaves).unwrap(),
             deadlines: DeadlineIndex::new(config.max_leaves),
             _rx: BufferPool::new(config.rx_slots, config.buffer_size).unwrap(),
-            tx: BufferPool::new(config.tx_slots, config.buffer_size).unwrap(),
+            tx: TxPool::new(config.tx_slots, config.buffer_size).unwrap(),
             metrics: ShardMetrics::default(),
             budget: config.leaf_budget,
         }
@@ -663,8 +673,10 @@ impl ShardState {
             leaf.pending = false;
             leaf.visits += 1;
             self.metrics.ready_visits += 1;
-            if let Some(tx_slot) = self.tx.acquire() {
-                let _ = self.tx.release(tx_slot);
+            if let Some(tx_lease) = self.tx.acquire() {
+                let _ = self.tx.submit(tx_lease);
+                let _ = self.tx.complete(tx_lease);
+                let _ = self.tx.release(tx_lease);
                 self.metrics.tx_packets += 1;
             } else {
                 self.metrics.tx_pool_empty += 1;
@@ -886,10 +898,12 @@ fn run_shard(
     startup: SyncSender<Result<(), io::Error>>,
 ) -> io::Result<ShardMetrics> {
     let mut ring = build_ring(config.ring_entries)?;
-    ring.submitter().register_files(&[wake_fd.as_raw_fd()])?;
+    let mut files = FixedFileTable::new(1)?;
+    files.register(&ring.submitter())?;
+    let wake_file = files.install(&ring.submitter(), wake_fd.as_raw_fd())?;
 
     let mut state = ShardState::new(config);
-    arm_control_poll(&mut ring)?;
+    arm_control_poll(&mut ring, wake_file.index)?;
     ring.submit()?;
     let _ = startup.send(Ok(()));
     let mut poll_in_flight = true;
@@ -953,12 +967,18 @@ fn run_shard(
         while state.deadlines.pop_due(Instant::now()).is_some() {}
         state.service_ready(Instant::now() + config.leaf_budget.window);
         if !poll_in_flight {
-            arm_control_poll(&mut ring)?;
+            arm_control_poll(&mut ring, wake_file.index)?;
             poll_in_flight = true;
         }
         state.metrics.sqes += ring.submit_and_wait(1)? as u64;
     };
 
+    if poll_in_flight {
+        cancel_control_poll(&mut ring)?;
+        ring.submit_and_wait(1)?;
+        for _ in ring.completion() {}
+    }
+    let _ = files.remove(&ring.submitter(), wake_file);
     let _ = ring.submitter().unregister_files();
     result
 }
@@ -976,10 +996,23 @@ fn build_ring(entries: u32) -> io::Result<IoUring> {
     }
 }
 
-fn arm_control_poll(ring: &mut IoUring) -> io::Result<()> {
-    let entry = opcode::PollAdd::new(types::Fixed(0), libc::POLLIN as _)
+fn arm_control_poll(ring: &mut IoUring, file_index: u32) -> io::Result<()> {
+    let entry = opcode::PollAdd::new(types::Fixed(file_index), libc::POLLIN as _)
         .build()
         .user_data(OpTag::new(OpKind::ControlWake, 0, 0).unwrap().encode());
+    unsafe {
+        ring.submission()
+            .push(&entry)
+            .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "io_uring SQ full"))?;
+    }
+    Ok(())
+}
+
+fn cancel_control_poll(ring: &mut IoUring) -> io::Result<()> {
+    let target = OpTag::new(OpKind::ControlWake, 0, 0).unwrap().encode();
+    let entry = opcode::PollRemove::new(target)
+        .build()
+        .user_data(OpTag::new(OpKind::PollCancel, 0, 0).unwrap().encode());
     unsafe {
         ring.submission()
             .push(&entry)

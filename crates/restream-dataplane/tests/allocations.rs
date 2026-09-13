@@ -1,7 +1,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use restream_dataplane::{FeedCursor, MediaArena, MediaRing, ReadyQueue};
+use restream_dataplane::{FeedCursor, MediaArena, MediaRing, ReadyQueue, TxPool};
 
 struct CountingAllocator;
 
@@ -53,5 +53,16 @@ fn dataplane_hot_paths_do_not_allocate() {
         assert!(ring.release(current));
     }
 
+    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+
+    let mut tx = TxPool::new(8, 256).unwrap();
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    for _ in 0..10_000 {
+        let lease = tx.acquire().unwrap();
+        tx.slot_mut(lease).unwrap()[0] = 1;
+        assert!(tx.submit(lease));
+        assert!(tx.complete(lease));
+        assert!(tx.release(lease));
+    }
     assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
 }
