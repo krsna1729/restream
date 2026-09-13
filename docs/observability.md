@@ -20,7 +20,7 @@ It does not expose a Prometheus text endpoint, proxy Grafana, or poll a sidecar.
 | `GET /healthz` | None | Process liveness: `{ "status": "ok" }` |
 | `GET /api/v1/engine/health` | Session | Pipeline input/output state, transport quality, recording state, SRT listener pressure |
 | `GET /api/v1/engine/resource-map` | Session | Runtime or pipeline-scoped resource attribution: CPU/RSS/thread summary plus measured/derived resource nodes; defaults to grouped top-N for large fleets |
-| `GET /metrics/system` | Session | Host CPU/memory/disk/network plus restream engine self metrics, including child FFmpeg CPU/RSS (JSON, not Prometheus) |
+| `GET /metrics/system` | Session | Host CPU/memory/disk/network plus restream engine self metrics, including child FFmpeg CPU/RSS and observe-only service-center capacity (JSON, not Prometheus) |
 | `GET /api/v1/engine` | Session | Restream build/toolchain, linked native-library versions, SBOM summary, and System information: OS, kernel, memory, CPU topology/features, and virtualization context |
 | `GET /api/v1/engine/sbom` | Session | CycloneDX 1.5 runtime SBOM for resolved Rust crates and linked native libraries |
 | `GET /api/v1/pipelines/:id/probe` | Session | Active input codec, dimensions, audio tracks, bitrate, and GOP summary |
@@ -288,6 +288,32 @@ means ordinary SRT works but the pinned repo-managed libsrt build was not
 prepared with bonding support or the wrong binary was linked.
 
 ## Diagnostic checks
+
+`GET /metrics/system` also includes an observe-only `capacity` object. It
+projects measured ingest bitrate/packet rate, active fanout, stage count, and
+egress shard count onto calibrated service centers; it does not reject or
+defer work. `hottestCenter` identifies the largest projected utilization, and
+the per-center `*Util` fields are ratios (`1.0` means fully occupied).
+
+```json
+{
+  "capacity": {
+    "ingressPps": 1200,
+    "mediaBps": 2400000,
+    "egressPps": 3600,
+    "hottestShardUtil": 0.0048,
+    "nicUtil": 0.0007,
+    "memoryUtil": 0.0008,
+    "ffmpegUtil": 0,
+    "diskUtil": 0,
+    "activeLeaves": 3,
+    "uniqueStages": 0,
+    "hottestCenter": "egress",
+    "projectedUtilization": 0.0048,
+    "observeOnly": true
+  }
+}
+```
 
 The JSON diagnostic run (`POST /api/v1/pipelines/:id/diagnostics/run`) is
 protocol-aware and infers the protocol from the active ingest; the request has

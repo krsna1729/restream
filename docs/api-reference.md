@@ -948,6 +948,13 @@ This route remains the generic host-metrics surface. The dashboard now prefers
 `/api/v1/dashboard/runtime` whenever it also needs engine health in the same
 refresh.
 
+Every response includes an observe-only `capacity` object with measured
+`ingressPps`, `mediaBps`, and fanout `egressPps`, plus calibrated service-center
+utilization (`hottestShardUtil`, `nicUtil`, `memoryUtil`, `ffmpegUtil`, and
+`diskUtil`). `hottestCenter` and `projectedUtilization` identify the projected
+bottleneck; `activeLeaves`, `uniqueStages`, and `observeOnly` provide context.
+The capacity model is diagnostic only and does not make admission decisions.
+
 ### `GET /api/v1/engine`
 
 Authenticated build/runtime information:
