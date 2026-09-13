@@ -277,6 +277,17 @@ pub trait DatagramSink {
         false
     }
 
+    /// Transfer an already-encoded packet into the sink without copying it.
+    /// Sinks with caller-owned final storage can keep the buffer until the
+    /// socket completion; the default preserves compatibility by borrowing it.
+    fn send_owned(&mut self, peer: std::net::SocketAddr, packet: Vec<u8>) -> Result<(), Vec<u8>> {
+        if self.send(peer, &packet) {
+            Ok(())
+        } else {
+            Err(packet)
+        }
+    }
+
     /// Compatibility convenience for runtimes that already own a packet.
     /// Native sinks should implement `acquire`/`commit` so protocol output can
     /// be written into final TX storage without an adapter allocation.
@@ -365,11 +376,7 @@ struct BorrowedPacketSink<'a, S: DatagramSink + ?Sized> {
 
 impl<S: DatagramSink + ?Sized> PacketSink for BorrowedPacketSink<'_, S> {
     fn push(&mut self, peer: std::net::SocketAddr, packet: Vec<u8>) -> Result<(), Vec<u8>> {
-        if self.sink.send(peer, &packet) {
-            Ok(())
-        } else {
-            Err(packet)
-        }
+        self.sink.send_owned(peer, packet)
     }
 }
 

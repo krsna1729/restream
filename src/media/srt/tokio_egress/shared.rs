@@ -184,6 +184,18 @@ struct SharedTxSink<'a> {
 }
 
 impl DatagramSink for SharedTxSink<'_> {
+    fn send_owned(&mut self, peer: SocketAddr, packet: Vec<u8>) -> Result<(), Vec<u8>> {
+        if self.leased.is_some() || packet.len() > 64 * 1024 {
+            return Err(packet);
+        }
+        let Some(token) = self.free.pop() else {
+            return Err(packet);
+        };
+        drop(token);
+        self.outbound.push_back((peer, packet));
+        Ok(())
+    }
+
     fn acquire(&mut self, max_len: usize) -> Option<&mut [std::mem::MaybeUninit<u8>]> {
         if self.leased.is_some() {
             return None;
@@ -218,5 +230,32 @@ impl DatagramSink for SharedTxSink<'_> {
         unsafe { storage.set_len(len) };
         self.outbound.push_back((peer, storage));
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owned_datagrams_reuse_the_protocol_buffer_without_copying() {
+        let peer = "127.0.0.1:9000".parse().unwrap();
+        let mut outbound = VecDeque::new();
+        let mut free = vec![Vec::with_capacity(64)];
+        let packet = Vec::from([1_u8, 2, 3]);
+        let pointer = packet.as_ptr();
+        let mut sink = SharedTxSink {
+            outbound: &mut outbound,
+            free: &mut free,
+            leased: None,
+        };
+
+        DatagramSink::send_owned(&mut sink, peer, packet).unwrap();
+
+        assert_eq!(free.len(), 0);
+        assert_eq!(
+            outbound.front().map(|(_, packet)| packet.as_ptr()),
+            Some(pointer)
+        );
     }
 }
