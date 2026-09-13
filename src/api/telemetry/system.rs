@@ -26,6 +26,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     let core_count = sys.cpus().len();
     let load_avg = System::load_average();
     let engine = engine_metrics(&sys, core_count);
+    let capacity = state.engine.capacity_snapshot().await;
 
     let media_root = {
         let absolute = configured_media_root(&state.media_dir);
@@ -127,6 +128,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
                 "usedPercent": mem_pct
             },
             "engine": engine,
+            "capacity": capacity,
             "disk": {
                 "usedPercent": disk_pct,
             },
@@ -150,6 +152,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
                 "usedPercent": mem_pct
             },
             "engine": engine,
+            "capacity": capacity,
             "disk": {
                 "totalBytes": total_disk,
                 "usedBytes": used_disk,

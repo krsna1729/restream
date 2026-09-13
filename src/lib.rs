@@ -17,6 +17,7 @@ pub mod api;
 pub(crate) mod api_runtime_views;
 pub mod api_view_models;
 pub mod application;
+pub mod capacity;
 pub mod config;
 pub mod db;
 pub mod diag;
