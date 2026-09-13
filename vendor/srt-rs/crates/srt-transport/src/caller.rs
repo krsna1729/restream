@@ -3415,6 +3415,41 @@ mod tests {
         caller
     }
 
+    fn new_connected_encrypted_pair(socket_id: u32) -> (SrtConnection, SrtConnection) {
+        let mut caller = SrtConnection::new_caller(ConnectionOptions {
+            socket_id,
+            passphrase: Some("caller-owned-wire-test".to_owned()),
+            tsbpd_delay: 0,
+            ..ConnectionOptions::default()
+        });
+        let mut listener = SrtConnection::new_listener(ConnectionOptions {
+            socket_id: socket_id.wrapping_add(100_000).max(1),
+            passphrase: Some("caller-owned-wire-test".to_owned()),
+            tsbpd_delay: 0,
+            ..ConnectionOptions::default()
+        });
+        caller.connect(Timestamp::default()).expect("connect");
+        for i in 0..20 {
+            let now = Timestamp::from_micros(i * 10_000);
+            while let Some(output) = caller.poll_output() {
+                if let ConnectionOutput::SendPacket(data) = output {
+                    let _ = listener.feed_recv_buf(&data, now);
+                }
+            }
+            while let Some(output) = listener.poll_output() {
+                if let ConnectionOutput::SendPacket(data) = output {
+                    let _ = caller.feed_recv_buf(&data, now);
+                }
+            }
+            if caller.state() == shiguredo_srt::ConnectionState::Connected {
+                break;
+            }
+        }
+        assert_eq!(caller.state(), shiguredo_srt::ConnectionState::Connected);
+        assert_eq!(listener.state(), shiguredo_srt::ConnectionState::Connected);
+        (caller, listener)
+    }
+
     fn mk_table(n: usize) -> CallerTable {
         let mut t = CallerTable::new();
         for i in 0..n {
@@ -3514,6 +3549,49 @@ mod tests {
         assert!(
             matches!(packet, shiguredo_srt::SrtPacket::Data(data) if data.payload.as_ref() == b"native-data")
         );
+    }
+
+    #[test]
+    fn direct_caller_encrypts_inside_final_sink_storage() {
+        let (connection, mut listener) = new_connected_encrypted_pair(7_777);
+        let mut table = CallerTable::new();
+        let id = table
+            .add_direct(CallerLeg::new(
+                std::net::SocketAddr::from(([127, 0, 0, 1], 4_000)),
+                connection,
+            ))
+            .unwrap();
+        let mut sink = RecordingSink {
+            accepted: true,
+            storage: vec![MaybeUninit::uninit(); 2048],
+            packets: Vec::new(),
+        };
+
+        let sent = table
+            .logical_caller_mut(&id)
+            .unwrap()
+            .send_shared_into(
+                Bytes::from_static(b"encrypted-data"),
+                Timestamp::from_micros(200_000),
+                &mut sink,
+            )
+            .unwrap();
+        assert_eq!(sent, 1);
+        assert!(matches!(
+            shiguredo_srt::SrtPacket::decode(&sink.packets[0]),
+            Ok(shiguredo_srt::SrtPacket::Data(ref packet)) if packet.encryption_flag != 0
+        ));
+
+        listener
+            .feed_recv_buf(&sink.packets[0], Timestamp::from_micros(200_000))
+            .unwrap();
+        let mut received = None;
+        while let Some(event) = listener.poll_event() {
+            if let ConnectionEvent::DataReceived { payload, .. } = event {
+                received = Some(payload);
+            }
+        }
+        assert_eq!(received.as_deref(), Some(&b"encrypted-data"[..]));
     }
 
     #[test]
