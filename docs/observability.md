@@ -331,6 +331,11 @@ deadline slack, errors, and retransmit amplification.
 }
 ```
 
+The same response includes `ioUring`, a cached startup capability probe for
+the native dataplane (`pollAdd`, fixed-path protocol operations, multishot
+receive, `sendZc`, and related kernel features). `available: false` means the
+host denied or lacks io_uring; it does not change control-plane behavior.
+
 The JSON diagnostic run (`POST /api/v1/pipelines/:id/diagnostics/run`) is
 protocol-aware and infers the protocol from the active ingest; the request has
 no body. Checks are a short, ordered batch; SSE should return only if genuinely progressive multi-second

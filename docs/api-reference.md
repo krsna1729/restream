@@ -958,6 +958,8 @@ utilization (`hottestShardUtil`, `nicUtil`, `memoryUtil`, `ffmpegUtil`, and
 bottleneck. `flow` is the Flow Doctor view of the hottest observed shard;
 `activeLeaves`, `uniqueStages`, and `observeOnly` provide context.
 The capacity model is diagnostic only and does not make admission decisions.
+The response also includes a cached `ioUring` capability object from startup;
+`available: false` records a host without usable io_uring support.
 
 ### `GET /api/v1/engine`
 
