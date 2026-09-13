@@ -225,6 +225,17 @@ impl UringUdpPoller {
         interest: UdpInterest,
     ) -> io::Result<()> {
         let index = self.registration_index(slot)?;
+        let send_in_flight =
+            self.pending_sends[index].active || self.send_completions[index].is_some();
+        if send_in_flight
+            && !self.registrations[index]
+                .is_some_and(|previous| previous.fd == fd && previous.generation == generation)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "UDP send must be drained before registration reuse",
+            ));
+        }
         if let Some(previous) = self.registrations[index]
             && previous.armed
         {
@@ -286,6 +297,12 @@ impl UringUdpPoller {
 
     pub fn remove(&mut self, slot: u32) -> io::Result<()> {
         let index = self.registration_index(slot)?;
+        if self.pending_sends[index].active || self.send_completions[index].is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "UDP send must be drained before registration removal",
+            ));
+        }
         let Some(previous) = self.registrations[index].take() else {
             return Ok(());
         };
@@ -733,6 +750,10 @@ mod tests {
                 b"native",
             )
             .unwrap();
+        assert_eq!(
+            poller.remove(0).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
 
         let mut ready = [UdpReadyEvent {
             fd: -1,
