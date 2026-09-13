@@ -32,9 +32,13 @@ use crate::media::egress::backend::Interest;
 #[cfg(test)]
 use crate::media::rtmp::rustls_client_config;
 
+#[path = "rtmp_ktls.rs"]
+mod rtmp_ktls;
+
 pub(crate) enum RtmpConnection {
     Plain(TcpStream),
-    Tls(Box<StreamOwned<ClientConnection, TcpStream>>),
+    Ktls(TcpStream),
+    Tls(Option<Box<StreamOwned<ClientConnection, TcpStream>>>),
 }
 
 impl RtmpConnection {
@@ -61,15 +65,20 @@ impl RtmpConnection {
     ) -> Result<Self, String> {
         let server_name = ServerName::try_from(host.to_string())
             .map_err(|_| format!("invalid RTMPS host name: {host}"))?;
-        let connection = ClientConnection::new(config, server_name)
+        let mut config = (*config).clone();
+        config.enable_secret_extraction = true;
+        let connection = ClientConnection::new(Arc::new(config), server_name)
             .map_err(|error| format!("rustls client connection init failed: {error}"))?;
-        Ok(Self::Tls(Box::new(StreamOwned::new(connection, stream))))
+        Ok(Self::Tls(Some(Box::new(StreamOwned::new(
+            connection, stream,
+        )))))
     }
 
     fn tcp_stream(&self) -> &TcpStream {
         match self {
-            Self::Plain(stream) => stream,
-            Self::Tls(stream) => &stream.sock,
+            Self::Plain(stream) | Self::Ktls(stream) => stream,
+            Self::Tls(Some(stream)) => &stream.sock,
+            Self::Tls(None) => unreachable!("TLS stream is only temporarily taken during handoff"),
         }
     }
 
@@ -94,14 +103,15 @@ impl RtmpConnection {
     pub(crate) fn rustls_pending_bytes_estimate(&self) -> usize {
         const RUSTLS_DEFAULT_BUFFER_LIMIT: usize = 64 * 1024;
         match self {
-            Self::Plain(_) => 0,
-            Self::Tls(stream) => {
+            Self::Plain(_) | Self::Ktls(_) => 0,
+            Self::Tls(Some(stream)) => {
                 if stream.conn.wants_write() {
                     RUSTLS_DEFAULT_BUFFER_LIMIT
                 } else {
                     0
                 }
             }
+            Self::Tls(None) => 0,
         }
     }
 
@@ -117,23 +127,86 @@ impl RtmpConnection {
     /// unblocks it (see module docs).
     pub(crate) fn interest_hint(&self, fallback: Interest) -> Interest {
         match self {
-            Self::Plain(_) => fallback,
-            Self::Tls(stream) => {
+            Self::Plain(_) | Self::Ktls(_) => fallback,
+            Self::Tls(Some(stream)) => {
                 let hint = Interest {
                     readable: stream.conn.wants_read(),
                     writable: stream.conn.wants_write(),
                 };
                 if hint.is_empty() { fallback } else { hint }
             }
+            Self::Tls(None) => fallback,
         }
+    }
+
+    fn maybe_handoff_ktls(&mut self) -> io::Result<()> {
+        let (version, suite) = {
+            let Self::Tls(Some(stream)) = self else {
+                return Ok(());
+            };
+            if stream.conn.is_handshaking()
+                || stream.conn.wants_write()
+                || stream
+                    .conn
+                    .reader()
+                    .into_first_chunk()
+                    .is_ok_and(|chunk| !chunk.is_empty())
+            {
+                return Ok(());
+            }
+            let Some(version) = stream.conn.protocol_version() else {
+                return Ok(());
+            };
+            let Some(suite) = stream.conn.negotiated_cipher_suite() else {
+                return Ok(());
+            };
+            (version, suite)
+        };
+        if version != tokio_rustls::rustls::ProtocolVersion::TLSv1_2
+            || !matches!(
+                suite.suite(),
+                tokio_rustls::rustls::CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+                    | tokio_rustls::rustls::CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+                    | tokio_rustls::rustls::CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+                    | tokio_rustls::rustls::CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+            )
+            || !rtmp_ktls::available()
+        {
+            return Ok(());
+        }
+
+        let stream = match self {
+            Self::Tls(stream) => stream.take().expect("TLS stream was checked above"),
+            Self::Plain(_) | Self::Ktls(_) => return Ok(()),
+        };
+        let (connection, socket) = stream.into_parts();
+        #[allow(deprecated)]
+        let secrets = connection
+            .dangerous_extract_secrets()
+            .map_err(|error| io::Error::other(format!("rustls kTLS handoff: {error}")))?;
+        rtmp_ktls::install(socket.as_raw_fd(), version, suite.suite(), &secrets)?;
+        *self = Self::Ktls(socket);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_ktls(&self) -> bool {
+        matches!(self, Self::Ktls(_))
     }
 }
 
 impl Read for RtmpConnection {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
-            Self::Plain(stream) => stream.read(buf),
-            Self::Tls(stream) => stream.read(buf),
+            Self::Plain(stream) | Self::Ktls(stream) => stream.read(buf),
+            Self::Tls(Some(stream)) => {
+                let result = stream.read(buf);
+                if result.is_ok() {
+                    self.maybe_handoff_ktls()?;
+                }
+                result
+            }
+            Self::Tls(None) => Err(io::Error::other("TLS stream unavailable during handoff")),
         }
     }
 }
@@ -141,15 +214,29 @@ impl Read for RtmpConnection {
 impl Write for RtmpConnection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
-            Self::Plain(stream) => stream.write(buf),
-            Self::Tls(stream) => stream.write(buf),
+            Self::Plain(stream) | Self::Ktls(stream) => stream.write(buf),
+            Self::Tls(Some(stream)) => {
+                let result = stream.write(buf);
+                if result.is_ok() {
+                    self.maybe_handoff_ktls()?;
+                }
+                result
+            }
+            Self::Tls(None) => Err(io::Error::other("TLS stream unavailable during handoff")),
         }
     }
 
     fn flush(&mut self) -> io::Result<()> {
         match self {
-            Self::Plain(stream) => stream.flush(),
-            Self::Tls(stream) => stream.flush(),
+            Self::Plain(stream) | Self::Ktls(stream) => stream.flush(),
+            Self::Tls(Some(stream)) => {
+                let result = stream.flush();
+                if result.is_ok() {
+                    self.maybe_handoff_ktls()?;
+                }
+                result
+            }
+            Self::Tls(None) => Err(io::Error::other("TLS stream unavailable during handoff")),
         }
     }
 }
