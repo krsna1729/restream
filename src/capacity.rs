@@ -101,6 +101,7 @@ pub struct CapacitySnapshot {
     pub unique_stages: u32,
     pub hottest_center: ServiceCenter,
     pub projected_utilization: f32,
+    pub flow: FlowDiagnosis,
     pub observe_only: bool,
 }
 
@@ -154,6 +155,17 @@ impl CapacityModel {
             .into_iter()
             .max_by(|left, right| left.1.total_cmp(&right.1))
             .unwrap_or((ServiceCenter::Ingress, 0.0));
+        let flow = diagnose(FlowSample {
+            center: hottest_center,
+            arrival_rate: projected_utilization,
+            service_rate: 1.0,
+            queue: 0.0,
+            backlog_slope: 0.0,
+            delay_ms: 0.0,
+            deadline_slack_ms: f64::INFINITY,
+            errors: 0,
+            amplification: 1.0,
+        });
         CapacitySnapshot {
             ingress_pps: workload.media_pps as f64,
             media_bps: workload.media_bps as f64,
@@ -167,6 +179,7 @@ impl CapacityModel {
             unique_stages: workload.stage_count,
             hottest_center,
             projected_utilization: projected_utilization as f32,
+            flow,
             observe_only: true,
         }
     }
@@ -206,6 +219,9 @@ pub struct FlowDiagnosis {
     pub queue: f64,
     pub backlog_slope: f64,
     pub deadline_slack_ms: f64,
+    pub delay_ms: f64,
+    pub errors: u64,
+    pub amplification: f64,
     pub status: FlowStatus,
 }
 
@@ -224,6 +240,9 @@ pub fn diagnose(sample: FlowSample) -> FlowDiagnosis {
         queue: sample.queue,
         backlog_slope: sample.backlog_slope,
         deadline_slack_ms: sample.deadline_slack_ms,
+        delay_ms: sample.delay_ms,
+        errors: sample.errors,
+        amplification: sample.amplification,
         status,
     }
 }
@@ -279,7 +298,40 @@ impl MediaEngine {
             .len()
             .min(u32::MAX as usize) as u32;
         workload.shard_count = self.config.egress_fabric.shards.max(1);
-        CapacityModel::default().project(workload)
+        let mut snapshot = CapacityModel::default().project(workload);
+        if let Some((queue, capacity, progress_age_ms, stalled)) = self
+            .egress_fabric_shard_statuses(std::time::Duration::from_secs(5))
+            .await
+            .iter()
+            .map(|status| {
+                (
+                    f64::from(status.command_depth),
+                    f64::from(status.command_capacity.max(1)),
+                    status.progress_age_ms.unwrap_or_default() as f64,
+                    !matches!(
+                        status.state,
+                        crate::media::egress::shard::EgressShardHealth::Healthy
+                    ),
+                )
+            })
+            .max_by(|left, right| left.0.total_cmp(&right.0))
+        {
+            let flow = diagnose(FlowSample {
+                center: ServiceCenter::Egress,
+                arrival_rate: queue,
+                service_rate: capacity,
+                queue,
+                backlog_slope: if stalled { 1.0 } else { 0.0 },
+                delay_ms: progress_age_ms,
+                deadline_slack_ms: 1_000.0 - progress_age_ms,
+                errors: u64::from(stalled),
+                amplification: 1.0,
+            });
+            snapshot.projected_utilization =
+                snapshot.projected_utilization.max(flow.utilization as f32);
+            snapshot.flow = flow;
+        }
+        snapshot
     }
 }
 

@@ -296,7 +296,9 @@ prepared with bonding support or the wrong binary was linked.
 projects measured ingest bitrate/packet rate, active fanout, stage count, and
 egress shard count onto calibrated service centers; it does not reject or
 defer work. `hottestCenter` identifies the largest projected utilization, and
-the per-center `*Util` fields are ratios (`1.0` means fully occupied).
+the per-center `*Util` fields are ratios (`1.0` means fully occupied). `flow`
+is the Flow Doctor view of the hottest observed shard, including queue growth,
+deadline slack, errors, and retransmit amplification.
 
 ```json
 {
@@ -313,6 +315,17 @@ the per-center `*Util` fields are ratios (`1.0` means fully occupied).
     "uniqueStages": 0,
     "hottestCenter": "egress",
     "projectedUtilization": 0.0048,
+    "flow": {
+      "center": "egress",
+      "utilization": 0.0048,
+      "queue": 0,
+      "backlogSlope": 0,
+      "deadlineSlackMs": 1000,
+      "delayMs": 0,
+      "errors": 0,
+      "amplification": 1,
+      "status": "healthy"
+    },
     "observeOnly": true
   }
 }

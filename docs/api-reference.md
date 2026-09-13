@@ -955,7 +955,8 @@ Every response includes an observe-only `capacity` object with measured
 `ingressPps`, `mediaBps`, and fanout `egressPps`, plus calibrated service-center
 utilization (`hottestShardUtil`, `nicUtil`, `memoryUtil`, `ffmpegUtil`, and
 `diskUtil`). `hottestCenter` and `projectedUtilization` identify the projected
-bottleneck; `activeLeaves`, `uniqueStages`, and `observeOnly` provide context.
+bottleneck. `flow` is the Flow Doctor view of the hottest observed shard;
+`activeLeaves`, `uniqueStages`, and `observeOnly` provide context.
 The capacity model is diagnostic only and does not make admission decisions.
 
 ### `GET /api/v1/engine`
