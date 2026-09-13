@@ -34,7 +34,7 @@ use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::rtmp::parse_rtmp_url;
 
-use super::rtmp::{RtmpFabricEngine, RtmpPublishStartup};
+use super::rtmp::{RtmpFabricEngine, RtmpNativeSend, RtmpPublishStartup};
 use super::rtmp_connection::RtmpConnection;
 #[cfg(test)]
 use super::tcp::TcpConnectAttempt;
@@ -216,16 +216,20 @@ struct RtmpFabricLeaf {
     /// needed to compute `tcp_send_rate_mbps` as a two-sample delta —
     /// mirrors `rtmp/ingest.rs`'s `previous_tcp_bytes` for the receive side.
     previous_tcp_bytes: Option<(u64, Instant)>,
+    pending_send_result: Option<i32>,
 }
 
 impl RtmpFabricLeaf {
-    fn visit_ready(
+    fn visit_ready<P: RtmpReadinessPoller>(
         &mut self,
         generation: u64,
         readiness: Readiness,
         feed: &RingFeed,
         budget: WorkBudget,
+        poller: &mut P,
+        key: LeafKey,
     ) -> EngineVisitResult {
+        let send_result = self.pending_send_result.take();
         EngineVisit {
             generation,
             common: &mut self.common,
@@ -235,7 +239,25 @@ impl RtmpFabricLeaf {
             feed,
             budget,
         }
-        .run()
+        .run_with(|engine, transport, readiness, feed, cursor, budget| {
+            if poller.supports_native_send() && transport.supports_native_send() {
+                engine.advance_native(
+                    transport,
+                    readiness,
+                    feed,
+                    cursor,
+                    budget,
+                    RtmpNativeSend {
+                        sender: poller,
+                        slot: key.0 as u32,
+                        generation,
+                        send_result,
+                    },
+                )
+            } else {
+                engine.advance(transport, readiness, feed, cursor, budget)
+            }
+        })
     }
 
     /// Classify this leaf's send-path health from its pending application
@@ -359,6 +381,7 @@ where
     ready: VecDeque<TcpReadyLeaf>,
     feed_waiting: VecDeque<LeafKey>,
     poll_buffer: Vec<TcpReadyLeaf>,
+    send_completions: Vec<restream_dataplane::tcp::TcpSendCompletion>,
     pending_connects: HashMap<OutputId, PendingRtmpConnect>,
     connecting: HashMap<LeafKey, ConnectingRtmpConnect>,
     connecting_by_output: HashMap<OutputId, LeafKey>,
@@ -408,6 +431,7 @@ where
             ready: VecDeque::with_capacity(ready_capacity),
             feed_waiting: VecDeque::with_capacity(ready_capacity),
             poll_buffer: Vec::with_capacity(ready_capacity),
+            send_completions: Vec::with_capacity(ready_capacity),
             pending_connects: HashMap::new(),
             connecting: HashMap::new(),
             connecting_by_output: HashMap::new(),
@@ -501,6 +525,30 @@ where
         if self.poller.poll_leaves(0, &mut self.poll_buffer).is_err() {
             return;
         }
+        self.send_completions.clear();
+        self.poller
+            .drain_send_completions(&mut self.send_completions);
+        for completion in self.send_completions.drain(..) {
+            let key = LeafKey(completion.slot as usize);
+            let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+                continue;
+            };
+            if leaf.common.generation != completion.generation as u64 {
+                continue;
+            }
+            leaf.pending_send_result = Some(completion.result);
+            if leaf.common.schedule.enqueued {
+                continue;
+            }
+            leaf.common.schedule.enqueued = true;
+            self.ready.push_back(TcpReadyLeaf {
+                fd: leaf.transport.raw_fd(),
+                key,
+                generation: leaf.common.generation,
+                readable: false,
+                writable: true,
+            });
+        }
         let mut poll_buffer = std::mem::take(&mut self.poll_buffer);
         for event in poll_buffer.drain(..) {
             if self.connecting.contains_key(&event.key) {
@@ -550,6 +598,8 @@ where
             },
             feed,
             budget,
+            &mut self.poller,
+            event.key,
         );
 
         let (progress, decision) = match result {

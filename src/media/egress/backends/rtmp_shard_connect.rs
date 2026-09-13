@@ -177,6 +177,7 @@ where
             draining_since: None,
             draining_reason: None,
             previous_tcp_bytes: None,
+            pending_send_result: None,
         }));
         if let Some(previous) = self
             .output_sockets

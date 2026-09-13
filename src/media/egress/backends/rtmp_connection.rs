@@ -86,6 +86,13 @@ impl RtmpConnection {
         self.tcp_stream().as_raw_fd()
     }
 
+    /// Plain TCP and post-handshake kTLS can be submitted directly to the
+    /// shard-owned `io_uring`. Rustls userspace records still need the normal
+    /// `Write` path until (and unless) the kTLS handoff completes.
+    pub(crate) fn supports_native_send(&self) -> bool {
+        matches!(self, Self::Plain(_) | Self::Ktls(_))
+    }
+
     /// Conservative estimate of rustls-internal buffered bytes not visible
     /// to `MediaPublisher::pending_bytes()`. rustls exposes no occupancy
     /// getter for its internal plaintext/TLS-record buffers —

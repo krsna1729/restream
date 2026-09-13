@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use crate::media::egress::scheduler::LeafKey;
 
+use super::rtmp::RtmpNativeSender;
 use super::tcp::{TcpConnectAttempt, TcpEgressInterest, TcpEgressPollError, TcpReadyLeaf};
+use restream_dataplane::tcp::TcpSendCompletion;
 
 pub(crate) trait RtmpReadinessPoller {
     fn ready_capacity(&self) -> usize;
@@ -32,6 +34,40 @@ pub(crate) trait RtmpReadinessPoller {
         timeout_ms: i32,
         ready: &mut Vec<TcpReadyLeaf>,
     ) -> Result<usize, TcpEgressPollError>;
+
+    fn supports_native_send(&self) -> bool {
+        false
+    }
+
+    fn submit_native_send(
+        &mut self,
+        _fd: RawFd,
+        _slot: u32,
+        _generation: u64,
+        _bytes: &[u8],
+    ) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "poller has no native send owner",
+        ))
+    }
+
+    fn drain_send_completions(&mut self, _completions: &mut Vec<TcpSendCompletion>) {}
+}
+
+impl<P> RtmpNativeSender for P
+where
+    P: RtmpReadinessPoller,
+{
+    fn submit_send(
+        &mut self,
+        fd: RawFd,
+        slot: u32,
+        generation: u64,
+        bytes: &[u8],
+    ) -> std::io::Result<()> {
+        self.submit_native_send(fd, slot, generation, bytes)
+    }
 }
 
 #[cfg(test)]
@@ -122,5 +158,23 @@ impl RtmpReadinessPoller for super::tcp::IoUringTcpPoller {
         ready: &mut Vec<TcpReadyLeaf>,
     ) -> Result<usize, TcpEgressPollError> {
         self.poll_leaves(timeout_ms, ready)
+    }
+
+    fn supports_native_send(&self) -> bool {
+        true
+    }
+
+    fn submit_native_send(
+        &mut self,
+        fd: RawFd,
+        slot: u32,
+        generation: u64,
+        bytes: &[u8],
+    ) -> std::io::Result<()> {
+        self.submit_native_send(fd, slot, generation, bytes)
+    }
+
+    fn drain_send_completions(&mut self, completions: &mut Vec<TcpSendCompletion>) {
+        self.drain_native_send_completions(completions);
     }
 }

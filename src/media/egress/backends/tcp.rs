@@ -92,6 +92,7 @@ where
 pub(crate) struct IoUringTcpPoller {
     inner: restream_dataplane::tcp::UringTcpPoller,
     ready: Box<[restream_dataplane::tcp::TcpReadyEvent]>,
+    send_completions: Box<[restream_dataplane::tcp::TcpSendCompletion]>,
     registrations: HashMap<RawFd, u32>,
 }
 
@@ -135,8 +136,43 @@ impl IoUringTcpPoller {
                 max_events
             ]
             .into_boxed_slice(),
+            send_completions: vec![
+                restream_dataplane::tcp::TcpSendCompletion {
+                    slot: 0,
+                    generation: 0,
+                    result: 0,
+                };
+                max_events
+            ]
+            .into_boxed_slice(),
             registrations: HashMap::with_capacity(max_events),
         })
+    }
+
+    pub(crate) fn submit_native_send(
+        &mut self,
+        fd: RawFd,
+        slot: u32,
+        generation: u64,
+        bytes: &[u8],
+    ) -> std::io::Result<()> {
+        let generation = u32::try_from(generation).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "leaf generation exceeds io_uring tag width",
+            )
+        })?;
+        self.inner.submit_send(fd, slot, generation, bytes)
+    }
+
+    pub(crate) fn drain_native_send_completions(
+        &mut self,
+        completions: &mut Vec<restream_dataplane::tcp::TcpSendCompletion>,
+    ) {
+        let count = self
+            .inner
+            .drain_send_completions(&mut self.send_completions);
+        completions.extend_from_slice(&self.send_completions[..count]);
     }
 
     pub(crate) fn register_leaf(
