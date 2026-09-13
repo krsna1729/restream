@@ -1,13 +1,11 @@
 use super::{SharedSrtEgress, should_use_shared_srt_egress_state};
 
 #[test]
-fn shared_srt_egress_state_selection_is_single_peer_only() {
+fn shared_srt_egress_state_selection_accepts_direct_and_bonded_ipv4() {
     assert!(!should_use_shared_srt_egress_state(0, true));
     assert!(should_use_shared_srt_egress_state(1, true));
-    assert!(
-        !should_use_shared_srt_egress_state(2, true),
-        "multi-peer outputs must route through bonded TokioGroupConn setup"
-    );
+    assert!(should_use_shared_srt_egress_state(2, true));
+    assert!(!should_use_shared_srt_egress_state(0, true));
     assert!(!should_use_shared_srt_egress_state(1, false));
 }
 

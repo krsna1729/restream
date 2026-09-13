@@ -29,7 +29,7 @@ pub(crate) use knobs::{apply_optional_udp_buf, desired_udp_buf, shared_io_batch_
 pub use knobs::{recv_budget, recv_budget_or};
 
 fn should_use_shared_srt_egress_state(peer_count: usize, has_shared_state: bool) -> bool {
-    peer_count == 1 && has_shared_state
+    peer_count != 0 && has_shared_state
 }
 
 enum RustSrtSocket {
@@ -699,7 +699,8 @@ pub(crate) fn connect_fabric_srt_egress_socket(
     let transport = if should_use_shared_srt_egress_state(
         config.peer_addrs.len(),
         config.shared_state.is_some(),
-    ) {
+    ) && config.peer_addrs.iter().all(SocketAddr::is_ipv4)
+    {
         let state = config
             .shared_state
             .clone()
@@ -712,16 +713,49 @@ pub(crate) fn connect_fabric_srt_egress_socket(
                 *shared = Some(SharedSrtEgress::bind(config.peer_addrs[0])?);
             }
             let shared = shared.as_mut().expect("initialized above");
-            let connection = session
-                .caller(timestamp_now())
-                .map_err(|error| error.to_string())?;
-            let caller = shared
-                .callers
-                .add_direct(srt_transport::CallerLeg::new(
-                    config.peer_addrs[0],
-                    connection,
-                ))
-                .map_err(|error| error.to_string())?;
+            let caller = if config.peer_addrs.len() == 1 {
+                let connection = session
+                    .caller(timestamp_now())
+                    .map_err(|error| error.to_string())?;
+                shared
+                    .callers
+                    .add_direct(srt_transport::CallerLeg::new(
+                        config.peer_addrs[0],
+                        connection,
+                    ))
+                    .map_err(|error| error.to_string())?
+            } else {
+                let mode = shiguredo_srt::GroupMode::from_group_type(config.bond_type)
+                    .ok_or_else(|| "invalid SRT group type".to_string())?;
+                let legs = config
+                    .peer_addrs
+                    .iter()
+                    .enumerate()
+                    .map(|(index, peer)| {
+                        let caller = srt_transport::CallerConfig::builder(*peer)
+                            .session(session.clone())
+                            .connect(connect)
+                            .configure_transport(apply_optional_udp_buf)
+                            .build()
+                            .map_err(|error| error.to_string())?
+                            .prepare(srt_transport::RuntimeFlavor::Mio)
+                            .map_err(|error| error.to_string())?;
+                        let connection = caller
+                            .connection(timestamp_now())
+                            .map_err(|error| error.to_string())?;
+                        Ok(srt_transport::CallerGroupLeg::new(
+                            u32::try_from(index + 1).unwrap_or(u32::MAX),
+                            u16::try_from(config.peer_addrs.len() - index).unwrap_or(u16::MAX),
+                            *peer,
+                            connection,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                shared
+                    .callers
+                    .add_group(next_group_id(), mode, legs)
+                    .map_err(|error| error.to_string())?
+            };
             shared.drive(timestamp_now())?;
             caller
         };
