@@ -1,9 +1,9 @@
 //! TCP readiness backends for the RTMP/RTMPS fabric.
 //!
-//! Production uses one `io_uring` poller per shard. The legacy epoll
-//! implementation remains as a deterministic differential seam while the
-//! cutover settles. Both use generation-tagged registration and an `Ops`
-//! trait so the epoll syscalls can be faked in tests. SRT egress has no
+//! Production uses one fixed-file `io_uring` poller per shard. The epoll
+//! implementation is test-only deterministic differential coverage. Both use
+//! generation-tagged registration and an `Ops` trait so the epoll syscalls can
+//! be faked in tests. SRT egress has no
 //! equivalent poller:
 //! `srt-rs` connections have no epoll-style readiness to multiplex (see
 //! `src/media/egress/backends/srt.rs`'s `poll_ready` — every leaf is simply
@@ -88,8 +88,7 @@ where
 }
 
 /// Production RTMP readiness backend. The epoll implementation above remains
-/// available to deterministic tests while the native dataplane cutover is
-/// staged one protocol at a time.
+/// available only to deterministic differential tests.
 pub(crate) struct IoUringTcpPoller {
     inner: restream_dataplane::tcp::UringTcpPoller,
     ready: Box<[restream_dataplane::tcp::TcpReadyEvent]>,
@@ -115,7 +114,7 @@ impl IoUringTcpPoller {
                     "io_uring entry count overflow".to_owned(),
                 )
             })?;
-        let inner = restream_dataplane::tcp::UringTcpPoller::new(max_events, ring_entries)
+        let inner = restream_dataplane::tcp::UringTcpPoller::new_fixed(max_events, ring_entries)
             .map_err(|error| {
                 TcpEgressPollError::new(
                     "io_uring_setup",
@@ -162,7 +161,7 @@ impl IoUringTcpPoller {
             )
         })?;
         self.inner
-            .register(
+            .register_fixed(
                 fd,
                 slot,
                 generation,

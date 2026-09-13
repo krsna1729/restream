@@ -52,6 +52,7 @@ pub enum OpKind {
     Timeout = 7,
     ControlWake = 8,
     PollCancel = 9,
+    TimeoutCancel = 10,
 }
 
 impl OpKind {
@@ -66,6 +67,7 @@ impl OpKind {
             7 => Self::Timeout,
             8 => Self::ControlWake,
             9 => Self::PollCancel,
+            10 => Self::TimeoutCancel,
             _ => return None,
         })
     }
@@ -1045,7 +1047,7 @@ mod tests {
     fn operation_tags_round_trip_and_reject_invalid_kind() {
         let tag = OpTag::new(OpKind::TcpTx, 0x00ab_cdef, u32::MAX).unwrap();
         assert_eq!(OpTag::decode(tag.encode()), Some(tag));
-        assert!(OpTag::decode(0x0a).is_none());
+        assert!(OpTag::decode(0x0b).is_none());
         assert!(OpTag::new(OpKind::TcpTx, MAX_TAG_SLOTS as u32, 0).is_none());
     }
 

@@ -195,6 +195,7 @@ struct Registration {
     fd: RawFd,
     generation: u32,
     armed: bool,
+    fixed: Option<FixedFile>,
 }
 
 /// Single-owner, fixed-registration TCP readiness poller.
@@ -205,6 +206,9 @@ struct Registration {
 pub struct UringTcpPoller {
     ring: IoUring,
     registrations: Box<[Option<Registration>]>,
+    fixed_files: Option<FixedFileTable>,
+    fixed_releases: Box<[Option<FixedFile>]>,
+    release_slots: Vec<u32>,
     timeout_armed: bool,
     metrics: TcpPollerMetrics,
 }
@@ -226,6 +230,40 @@ impl UringTcpPoller {
         Ok(Self {
             ring: build_ring(ring_entries)?,
             registrations: vec![None; max_slots].into_boxed_slice(),
+            fixed_files: None,
+            fixed_releases: vec![None; max_slots].into_boxed_slice(),
+            release_slots: Vec::with_capacity(max_slots),
+            timeout_armed: false,
+            metrics: TcpPollerMetrics::default(),
+        })
+    }
+
+    /// Construct a poller whose registrations use the ring's fixed file
+    /// table. Fixed slots are released only after the matching poll-cancel
+    /// completion, so a descriptor cannot be reused while the kernel still
+    /// owns an outstanding poll operation.
+    pub fn new_fixed(max_slots: usize, ring_entries: u32) -> io::Result<Self> {
+        if max_slots == 0 || max_slots >= MAX_TAG_SLOTS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid TCP registration capacity",
+            ));
+        }
+        if !ring_entries.is_power_of_two() || ring_entries < 8 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "io_uring entries must be a power of two >= 8",
+            ));
+        }
+        let ring = build_ring(ring_entries)?;
+        let files = FixedFileTable::new(max_slots)?;
+        files.register(&ring.submitter())?;
+        Ok(Self {
+            ring,
+            registrations: vec![None; max_slots].into_boxed_slice(),
+            fixed_files: Some(files),
+            fixed_releases: vec![None; max_slots].into_boxed_slice(),
+            release_slots: Vec::with_capacity(max_slots),
             timeout_armed: false,
             metrics: TcpPollerMetrics::default(),
         })
@@ -248,9 +286,61 @@ impl UringTcpPoller {
             fd,
             generation,
             armed: !interest.is_empty(),
+            fixed: None,
         });
         if !interest.is_empty() {
-            self.push_poll(fd, slot, generation, interest)?;
+            self.push_poll(fd, None, slot, generation, interest)?;
+        }
+        Ok(())
+    }
+
+    pub fn register_fixed(
+        &mut self,
+        fd: RawFd,
+        slot: u32,
+        generation: u32,
+        interest: TcpInterest,
+    ) -> io::Result<()> {
+        let slot_index = self.registration_index(slot)?;
+        if self.fixed_files.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "poller has no fixed file table",
+            ));
+        }
+        if self.registrations[slot_index].is_some() || self.fixed_releases[slot_index].is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "TCP fixed registration slot is still in use",
+            ));
+        }
+        let fixed = self
+            .fixed_files
+            .as_mut()
+            .expect("fixed file table checked above")
+            .install(&self.ring.submitter(), fd)?;
+        self.registrations[slot_index] = Some(Registration {
+            fd,
+            generation,
+            armed: !interest.is_empty(),
+            fixed: Some(fixed),
+        });
+        if !interest.is_empty()
+            && let Err(error) = self.push_poll(
+                fd,
+                self.fixed_files.as_ref().and_then(|files| files.get(fixed)),
+                slot,
+                generation,
+                interest,
+            )
+        {
+            self.registrations[slot_index] = None;
+            let _ = self
+                .fixed_files
+                .as_mut()
+                .expect("fixed file table remains installed")
+                .remove(&self.ring.submitter(), fixed);
+            return Err(error);
         }
         Ok(())
     }
@@ -262,6 +352,17 @@ impl UringTcpPoller {
         };
         if previous.armed {
             self.cancel_poll(slot, previous.generation)?;
+        }
+        if let Some(fixed) = previous.fixed {
+            if previous.armed {
+                self.fixed_releases[slot_index] = Some(fixed);
+            } else {
+                let _ = self
+                    .fixed_files
+                    .as_mut()
+                    .expect("fixed file table remains installed")
+                    .remove(&self.ring.submitter(), fixed)?;
+            }
         }
         Ok(())
     }
@@ -290,7 +391,17 @@ impl UringTcpPoller {
                     OpKind::Timeout => {
                         self.timeout_armed = false;
                     }
-                    OpKind::PollCancel => {}
+                    OpKind::TimeoutCancel => {}
+                    OpKind::PollCancel => {
+                        if let Some(fixed) = self
+                            .fixed_releases
+                            .get_mut(tag.slot as usize)
+                            .and_then(Option::take)
+                        {
+                            self.fixed_releases[tag.slot as usize] = Some(fixed);
+                            self.release_slots.push(tag.slot);
+                        }
+                    }
                     _ => {
                         let Some(registration) = self
                             .registrations
@@ -328,11 +439,21 @@ impl UringTcpPoller {
             }
         }
 
+        for slot in self.release_slots.drain(..) {
+            if let Some(fixed) = self.fixed_releases[slot as usize].take() {
+                let _ = self
+                    .fixed_files
+                    .as_mut()
+                    .expect("fixed file table remains installed")
+                    .remove(&self.ring.submitter(), fixed)?;
+            }
+        }
+
         if self.timeout_armed {
             let entry =
                 opcode::TimeoutRemove::new(OpTag::new(OpKind::Timeout, 0, 0).unwrap().encode())
                     .build()
-                    .user_data(OpTag::new(OpKind::PollCancel, 0, 0).unwrap().encode());
+                    .user_data(OpTag::new(OpKind::TimeoutCancel, 0, 0).unwrap().encode());
             unsafe { self.push(&entry)? };
             self.ring.submit()?;
             self.timeout_armed = false;
@@ -359,17 +480,22 @@ impl UringTcpPoller {
     fn push_poll(
         &mut self,
         fd: RawFd,
+        fixed: Option<types::Fixed>,
         slot: u32,
         generation: u32,
         interest: TcpInterest,
     ) -> io::Result<()> {
-        let entry = opcode::PollAdd::new(types::Fd(fd), interest.poll_flags())
-            .build()
-            .user_data(
-                OpTag::new(OpKind::TcpRx, slot, generation)
-                    .unwrap()
-                    .encode(),
-            );
+        let user_data = OpTag::new(OpKind::TcpRx, slot, generation)
+            .unwrap()
+            .encode();
+        let entry = match fixed {
+            Some(fixed) => opcode::PollAdd::new(fixed, interest.poll_flags())
+                .build()
+                .user_data(user_data),
+            None => opcode::PollAdd::new(types::Fd(fd), interest.poll_flags())
+                .build()
+                .user_data(user_data),
+        };
         unsafe { self.push(&entry) }
     }
 
@@ -478,6 +604,63 @@ mod tests {
         assert_eq!(ready[0].slot, 2);
         assert_eq!(ready[0].generation, 9);
         assert!(ready[0].readable);
+    }
+
+    #[test]
+    fn fixed_file_poller_reports_socket_readiness_and_releases_after_cancel() {
+        let Some((receiver, sender)) = socket_pair() else {
+            return;
+        };
+        let mut poller = match UringTcpPoller::new_fixed(2, 32) {
+            Ok(poller) => poller,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
+                ) =>
+            {
+                return;
+            }
+            Err(error) => panic!("fixed-file io_uring unavailable: {error}"),
+        };
+        poller
+            .register_fixed(receiver.as_raw_fd(), 0, 1, TcpInterest::READ)
+            .unwrap();
+        let byte = [9_u8];
+        assert_eq!(
+            unsafe {
+                libc::write(
+                    sender.as_raw_fd(),
+                    byte.as_ptr().cast::<libc::c_void>(),
+                    byte.len(),
+                )
+            },
+            1
+        );
+        let mut ready = [TcpReadyEvent {
+            fd: -1,
+            slot: 0,
+            generation: 0,
+            readable: false,
+            writable: false,
+        }; 2];
+        assert_eq!(poller.poll(Duration::ZERO, &mut ready).unwrap(), 1);
+        assert_eq!(ready[0].generation, 1);
+
+        poller.remove(0).unwrap();
+        poller
+            .register_fixed(receiver.as_raw_fd(), 0, 2, TcpInterest::READ)
+            .unwrap();
+        poller.remove(0).unwrap();
+        assert!(
+            poller
+                .register_fixed(receiver.as_raw_fd(), 0, 3, TcpInterest::READ)
+                .is_err()
+        );
+        let _ = poller.poll(Duration::ZERO, &mut ready).unwrap();
+        poller
+            .register_fixed(receiver.as_raw_fd(), 0, 3, TcpInterest::READ)
+            .unwrap();
     }
 
     #[test]
