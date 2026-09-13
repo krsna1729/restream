@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 fn ready_queue(c: &mut Criterion) {
     let mut group = c.benchmark_group("dataplane/ready_queue");
-    for leaves in [1_usize, 4, 32, 256, 1024] {
+    for leaves in [1_usize, 4, 32, 256, 1024, 4096] {
         group.bench_with_input(
             BenchmarkId::from_parameter(leaves),
             &leaves,
