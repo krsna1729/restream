@@ -393,12 +393,11 @@ impl UringTcpPoller {
                     }
                     OpKind::TimeoutCancel => {}
                     OpKind::PollCancel => {
-                        if let Some(fixed) = self
+                        if self
                             .fixed_releases
-                            .get_mut(tag.slot as usize)
-                            .and_then(Option::take)
+                            .get(tag.slot as usize)
+                            .is_some_and(Option::is_some)
                         {
-                            self.fixed_releases[tag.slot as usize] = Some(fixed);
                             self.release_slots.push(tag.slot);
                         }
                     }
