@@ -357,6 +357,7 @@ where
     leaves: Vec<Option<RtmpFabricLeaf>>,
     output_sockets: HashMap<OutputId, RtmpLeafSocket>,
     ready: VecDeque<TcpReadyLeaf>,
+    feed_waiting: VecDeque<LeafKey>,
     poll_buffer: Vec<TcpReadyLeaf>,
     pending_connects: HashMap<OutputId, PendingRtmpConnect>,
     connecting: HashMap<LeafKey, ConnectingRtmpConnect>,
@@ -405,6 +406,7 @@ where
             leaves: Vec::new(),
             output_sockets: HashMap::new(),
             ready: VecDeque::with_capacity(ready_capacity),
+            feed_waiting: VecDeque::with_capacity(ready_capacity),
             poll_buffer: Vec::with_capacity(ready_capacity),
             pending_connects: HashMap::new(),
             connecting: HashMap::new(),
@@ -474,23 +476,20 @@ where
     /// never touches them — they remain discoverable only via real
     /// `poll_ready()`, exactly as before.
     fn enqueue_feed_waiting_leaves(&mut self) {
-        let sockets: Vec<RtmpLeafSocket> = self.output_sockets.values().copied().collect();
-        for socket_ref in sockets {
-            let Some(leaf) = self
-                .leaves
-                .get_mut(socket_ref.key.0)
-                .and_then(Option::as_mut)
-            else {
+        while let Some(key) = self.feed_waiting.pop_front() {
+            let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
                 continue;
             };
             if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
                 continue;
             }
             leaf.common.schedule.enqueued = true;
+            let fd = leaf.transport.raw_fd();
+            let generation = leaf.common.generation;
             self.ready.push_back(TcpReadyLeaf {
-                fd: socket_ref.fd,
-                key: socket_ref.key,
-                generation: leaf.common.generation,
+                fd,
+                key,
+                generation,
                 readable: false,
                 writable: false,
             });
@@ -566,6 +565,12 @@ where
             .engine
             .pending_application_bytes()
             .saturating_add(leaf.transport.rustls_pending_bytes_estimate());
+        let feed_waiting = matches!(decision, VisitDecision::Suspend)
+            && leaf.common.schedule.wants_feed_wake
+            && !leaf.common.schedule.enqueued;
+        if feed_waiting {
+            self.feed_waiting.push_back(event.key);
+        }
 
         // A draining leaf (see `begin_graceful_close`) that has now flushed
         // everything it had queued closes right here — no need to wait for
