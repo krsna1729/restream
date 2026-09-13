@@ -167,6 +167,10 @@ pub trait EgressShardBackend: Send + 'static {
     fn resync_count(&self) -> u64 {
         0
     }
+
+    /// Copy protocol-native counters into the shard snapshot. Backends that
+    /// do not own a native dataplane keep the default no-op.
+    fn observe_metrics(&self, _metrics: &mut ShardMetrics) {}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -582,6 +586,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             .observe_ready_depth(u32::try_from(self.ready_backlog.len()).unwrap_or(u32::MAX));
         self.metrics.media_ticks = self.metrics.media_ticks.saturating_add(1);
         self.metrics.feed_resyncs = self.backend.resync_count();
+        self.backend.observe_metrics(&mut self.metrics);
         self.metrics.collected_at = Some(Instant::now());
 
         let mut snapshot = self.snapshot.lock().unwrap();

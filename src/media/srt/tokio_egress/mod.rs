@@ -49,7 +49,7 @@ enum RustSrtSocket {
 }
 
 mod shared;
-pub(crate) use shared::SharedSrtEgress;
+pub(crate) use shared::{SharedSrtEgress, SrtNativeMetrics};
 
 /// Drives one shard's shared SRT egress socket and `CallerTable` once, if a
 /// leaf has bound it yet.

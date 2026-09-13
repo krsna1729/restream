@@ -12,6 +12,19 @@ use super::{desired_udp_buf, recv_budget};
 const SRT_UDP_SEND_CAPACITY: usize = 16;
 type PendingDatagram = (SocketAddr, Vec<u8>);
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SrtNativeMetrics {
+    pub rx_packets: u64,
+    pub rx_bytes: u64,
+    pub tx_packets: u64,
+    pub tx_bytes: u64,
+    pub sqes: u64,
+    pub tx_pool_empty: u64,
+    pub cqes: u64,
+    pub stale_completions: u64,
+    pub cq_overflows: u64,
+}
+
 pub(crate) struct SharedSrtEgress {
     pub(crate) socket: UdpSocket,
     pub(crate) callers: srt_transport::CallerTable,
@@ -21,6 +34,7 @@ pub(crate) struct SharedSrtEgress {
     poller: UringUdpPoller,
     send_completions: Box<[UdpSendCompletion]>,
     inflight: Box<[Option<PendingDatagram>]>,
+    native_metrics: SrtNativeMetrics,
     /// Times `drive` has run, so the readiness-path invariant in
     /// `drive_shared_srt_egress` (driving does not scale with the number of
     /// leaves sharing this state) is directly assertable instead of
@@ -76,6 +90,7 @@ impl SharedSrtEgress {
                 .take(SRT_UDP_SEND_CAPACITY)
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
+            native_metrics: SrtNativeMetrics::default(),
             #[cfg(test)]
             drive_calls: 0,
         })
@@ -110,6 +125,12 @@ impl SharedSrtEgress {
                     .map_err(|error| error.to_string())?;
                 for (addr, data) in self.recv_batch.iter(received) {
                     let Some(peer) = addr else { continue };
+                    self.native_metrics.rx_packets =
+                        self.native_metrics.rx_packets.saturating_add(1);
+                    self.native_metrics.rx_bytes = self
+                        .native_metrics
+                        .rx_bytes
+                        .saturating_add(data.len() as u64);
                     if let Err(error) = self.callers.feed(peer, data, now) {
                         feed_error.get_or_insert(error);
                     }
@@ -134,6 +155,7 @@ impl SharedSrtEgress {
         let mut sink = SharedTxSink {
             outbound: &mut self.outbound,
             free: &mut self.free_outbound,
+            pool_empty: &mut self.native_metrics.tx_pool_empty,
             leased: None,
         };
         self.callers.poll_outbound_into(now, budget, &mut sink);
@@ -166,6 +188,7 @@ impl SharedSrtEgress {
                 let mut sink = SharedTxSink {
                     outbound: &mut self.outbound,
                     free: &mut self.free_outbound,
+                    pool_empty: &mut self.native_metrics.tx_pool_empty,
                     leased: None,
                 };
                 caller.send_shared_into(message.clone(), now, &mut sink)
@@ -194,6 +217,11 @@ impl SharedSrtEgress {
                     return Err(error.to_string());
                 }
             } else if completion.result as usize == packet.len() {
+                self.native_metrics.tx_packets = self.native_metrics.tx_packets.saturating_add(1);
+                self.native_metrics.tx_bytes = self
+                    .native_metrics
+                    .tx_bytes
+                    .saturating_add(packet.len() as u64);
                 self.recycle_packet(packet);
             } else {
                 return Err(format!(
@@ -214,7 +242,10 @@ impl SharedSrtEgress {
                 peer,
                 &packet,
             ) {
-                Ok(()) => self.inflight[operation_slot] = Some((peer, packet)),
+                Ok(()) => {
+                    self.native_metrics.sqes = self.native_metrics.sqes.saturating_add(1);
+                    self.inflight[operation_slot] = Some((peer, packet));
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     self.outbound.push_front((peer, packet));
                     break;
@@ -228,6 +259,16 @@ impl SharedSrtEgress {
         Ok(self.outbound.is_empty() && self.inflight.iter().all(Option::is_none))
     }
 
+    pub(crate) fn native_metrics(&self) -> SrtNativeMetrics {
+        let poller = self.poller.metrics();
+        SrtNativeMetrics {
+            cqes: poller.completions,
+            stale_completions: poller.stale_completions,
+            cq_overflows: poller.ready_overflows,
+            ..self.native_metrics
+        }
+    }
+
     fn recycle_packet(&mut self, packet: Vec<u8>) {
         if self.free_outbound.len() < 256 {
             self.free_outbound.push(packet);
@@ -238,6 +279,7 @@ impl SharedSrtEgress {
 struct SharedTxSink<'a> {
     outbound: &'a mut VecDeque<(SocketAddr, Vec<u8>)>,
     free: &'a mut Vec<Vec<u8>>,
+    pool_empty: &'a mut u64,
     leased: Option<Vec<u8>>,
 }
 
@@ -247,6 +289,7 @@ impl DatagramSink for SharedTxSink<'_> {
             return Err(packet);
         }
         let Some(token) = self.free.pop() else {
+            *self.pool_empty = self.pool_empty.saturating_add(1);
             return Err(packet);
         };
         drop(token);
@@ -258,7 +301,10 @@ impl DatagramSink for SharedTxSink<'_> {
         if self.leased.is_some() {
             return None;
         }
-        let mut storage = self.free.pop()?;
+        let Some(mut storage) = self.free.pop() else {
+            *self.pool_empty = self.pool_empty.saturating_add(1);
+            return None;
+        };
         if max_len > storage.capacity() {
             self.free.push(storage);
             return None;
@@ -306,11 +352,13 @@ mod tests {
         let peer = "127.0.0.1:9000".parse().unwrap();
         let mut outbound = VecDeque::new();
         let mut free = vec![Vec::with_capacity(64)];
+        let mut pool_empty = 0;
         let packet = Vec::from([1_u8, 2, 3]);
         let pointer = packet.as_ptr();
         let mut sink = SharedTxSink {
             outbound: &mut outbound,
             free: &mut free,
+            pool_empty: &mut pool_empty,
             leased: None,
         };
 

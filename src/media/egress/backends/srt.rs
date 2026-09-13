@@ -8,6 +8,7 @@ use crate::media::egress::backend::{ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::leaf::LeafCommon;
+use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::{LeafLimits, LeafStallClass, WorkBudget, classify_stall};
 use crate::media::egress::scheduler::{LeafKey, VisitDecision};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
@@ -15,7 +16,7 @@ use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::snapshots::PublisherQuality;
 use crate::media::srt::{
     NativeSendBacklog, SrtEgressEngine, SrtFabricEgressConnectSpec, SrtMessageSender,
-    connect_fabric_srt_egress_socket, drive_shared_srt_egress,
+    SrtNativeMetrics, connect_fabric_srt_egress_socket, drive_shared_srt_egress,
 };
 
 /// Combined application and native pending state for one SRT fabric leaf.
@@ -701,6 +702,25 @@ impl SrtShardBackend {
 impl EgressShardBackend for SrtShardBackend {
     fn resync_count(&self) -> u64 {
         self.resync_count
+    }
+
+    fn observe_metrics(&self, metrics: &mut ShardMetrics) {
+        let Ok(state) = self.srt_egress_muxer_port.lock() else {
+            return;
+        };
+        let Some(shared) = state.as_ref() else {
+            return;
+        };
+        let native: SrtNativeMetrics = shared.native_metrics();
+        metrics.rx_packets = native.rx_packets;
+        metrics.rx_bytes = native.rx_bytes;
+        metrics.tx_packets = native.tx_packets;
+        metrics.tx_bytes = native.tx_bytes;
+        metrics.sqes = native.sqes;
+        metrics.cqes = native.cqes;
+        metrics.stale_completions = native.stale_completions;
+        metrics.tx_pool_empty = native.tx_pool_empty;
+        metrics.cq_overflows = native.cq_overflows;
     }
 
     fn on_command(

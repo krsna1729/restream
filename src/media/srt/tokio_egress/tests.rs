@@ -89,4 +89,8 @@ fn shared_outbound_flush_sends_an_ipv4_batch_and_clears_leftover() {
         assert_eq!(size, received.len());
         assert_eq!(received, expected);
     }
+    let metrics = shared.native_metrics();
+    assert_eq!(metrics.sqes, 3);
+    assert_eq!(metrics.tx_packets, 3);
+    assert_eq!(metrics.tx_bytes, 12);
 }

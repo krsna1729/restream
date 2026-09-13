@@ -73,6 +73,22 @@ pub struct ShardMetrics {
     /// Total wall time spent in overrunning advance() calls.
     pub driver_overrun_us: u64,
 
+    // --- Native dataplane counters ---
+    pub rx_packets: u64,
+    pub rx_bytes: u64,
+    pub tx_packets: u64,
+    pub tx_bytes: u64,
+    pub cqes: u64,
+    pub sqes: u64,
+    pub ready_visits: u64,
+    pub budget_exhaustions: u64,
+    pub stale_completions: u64,
+    pub rx_pool_empty: u64,
+    pub tx_pool_empty: u64,
+    pub send_zc_attempts: u64,
+    pub send_zc_fallbacks: u64,
+    pub cq_overflows: u64,
+
     /// Time this snapshot was collected.
     pub collected_at: Option<Instant>,
 }
