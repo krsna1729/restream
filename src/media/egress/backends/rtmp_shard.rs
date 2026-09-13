@@ -397,6 +397,7 @@ where
     /// `EgressShardRuntime::record_iteration` into `ShardMetrics::feed_resyncs`
     /// for the repeated-resync alert (`derive_alerts`, `src/alerts.rs`).
     resync_count: u64,
+    budget_exhaustions: u64,
     native_tx_packets: u64,
     native_tx_bytes: u64,
 }
@@ -441,6 +442,7 @@ where
             last_stall_sweep: None,
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
+            budget_exhaustions: 0,
             native_tx_packets: 0,
             native_tx_bytes: 0,
         }
@@ -615,7 +617,15 @@ where
 
         let (progress, decision) = match result {
             EngineVisitResult::StaleGeneration => return Some((None, VisitDecision::Suspend)),
-            EngineVisitResult::Visited(outcome) => (outcome.progress, outcome.decision),
+            EngineVisitResult::Visited(outcome) => {
+                if matches!(
+                    &outcome.progress,
+                    crate::media::egress::backend::EngineProgress::Yield
+                ) {
+                    self.budget_exhaustions = self.budget_exhaustions.saturating_add(1);
+                }
+                (outcome.progress, outcome.decision)
+            }
         };
         if matches!(
             progress,
@@ -709,6 +719,10 @@ where
         self.resync_count
     }
 
+    fn budget_exhaustion_count(&self) -> u64 {
+        self.budget_exhaustions
+    }
+
     fn observe_metrics(&self, metrics: &mut ShardMetrics) {
         let native = self.poller.native_metrics();
         metrics.tx_packets = self.native_tx_packets;
@@ -717,6 +731,7 @@ where
         metrics.cqes = native.completions;
         metrics.stale_completions = native.stale_completions;
         metrics.cq_overflows = native.ready_overflows;
+        metrics.budget_exhaustions = self.budget_exhaustions;
     }
 
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {

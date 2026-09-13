@@ -369,6 +369,7 @@ pub(crate) struct SrtShardBackend {
     /// across every leaf this backend has ever visited. Mirrors
     /// `RtmpShardBackend::resync_count` exactly.
     resync_count: u64,
+    budget_exhaustions: u64,
 }
 
 struct PendingSrtConnect {
@@ -402,6 +403,7 @@ impl SrtShardBackend {
             connect_backlog: VecDeque::new(),
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
+            budget_exhaustions: 0,
         }
     }
 
@@ -663,7 +665,13 @@ impl SrtShardBackend {
             }
             EngineVisitResult::Visited(outcome) => {
                 if matches!(
-                    outcome.progress,
+                    &outcome.progress,
+                    crate::media::egress::backend::EngineProgress::Yield
+                ) {
+                    self.budget_exhaustions = self.budget_exhaustions.saturating_add(1);
+                }
+                if matches!(
+                    &outcome.progress,
                     crate::media::egress::backend::EngineProgress::FeedOverrun
                 ) {
                     self.resync_count = self.resync_count.saturating_add(1);
@@ -704,6 +712,10 @@ impl EgressShardBackend for SrtShardBackend {
         self.resync_count
     }
 
+    fn budget_exhaustion_count(&self) -> u64 {
+        self.budget_exhaustions
+    }
+
     fn observe_metrics(&self, metrics: &mut ShardMetrics) {
         let Ok(state) = self.srt_egress_muxer_port.lock() else {
             return;
@@ -721,6 +733,7 @@ impl EgressShardBackend for SrtShardBackend {
         metrics.stale_completions = native.stale_completions;
         metrics.tx_pool_empty = native.tx_pool_empty;
         metrics.cq_overflows = native.cq_overflows;
+        metrics.budget_exhaustions = self.budget_exhaustions;
     }
 
     fn on_command(

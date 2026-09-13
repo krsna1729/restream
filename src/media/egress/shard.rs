@@ -168,6 +168,11 @@ pub trait EgressShardBackend: Send + 'static {
         0
     }
 
+    /// Total visits that stopped because their finite work budget was spent.
+    fn budget_exhaustion_count(&self) -> u64 {
+        0
+    }
+
     /// Copy protocol-native counters into the shard snapshot. Backends that
     /// do not own a native dataplane keep the default no-op.
     fn observe_metrics(&self, _metrics: &mut ShardMetrics) {}
@@ -525,6 +530,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 break;
             }
         }
+        self.metrics.ready_visits = self.metrics.ready_visits.saturating_add(processed as u64);
         processed
     }
 
@@ -586,6 +592,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             .observe_ready_depth(u32::try_from(self.ready_backlog.len()).unwrap_or(u32::MAX));
         self.metrics.media_ticks = self.metrics.media_ticks.saturating_add(1);
         self.metrics.feed_resyncs = self.backend.resync_count();
+        self.metrics.budget_exhaustions = self.backend.budget_exhaustion_count();
         self.backend.observe_metrics(&mut self.metrics);
         self.metrics.collected_at = Some(Instant::now());
 
