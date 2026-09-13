@@ -1,6 +1,6 @@
 //! RTMP fabric shard backend: wires [`RtmpFabricEngine`] into
 //! [`EgressShardBackend`], mirroring [`crate::media::egress::backends::srt::SrtShardBackend`]'s
-//! shape — a real `TcpEgressPoller`-backed poller, leaf slab, ready queue,
+//! shape — a real `io_uring`-backed poller, leaf slab, ready queue,
 //! and a bounded blocking connect on the shard's own OS thread (acceptable
 //! there, per `tcp_connect.rs`, since it blocks only that shard's own leaves
 //! for at most the connect timeout) — with DNS resolution split onto a
@@ -38,7 +38,9 @@ use crate::media::rtmp::parse_rtmp_url;
 
 use super::rtmp::{RtmpFabricEngine, RtmpPublishStartup};
 use super::rtmp_connection::RtmpConnection;
-use super::tcp::{TcpEgressInterest, TcpEgressPollError, TcpEgressPoller, TcpReadyLeaf};
+#[cfg(test)]
+use super::tcp::TcpEgressPoller;
+use super::tcp::{TcpEgressInterest, TcpEgressPollError, TcpReadyLeaf};
 use super::tcp_connect::{TcpFabricConnectConfig, connect_fabric_tcp_egress_socket};
 
 // ---------------------------------------------------------------------------
@@ -176,11 +178,8 @@ fn resolve_rtmp_peer_host(host: &str, port: u16) -> Option<SocketAddr> {
     (host, port).to_socket_addrs().ok()?.next()
 }
 
-// ---------------------------------------------------------------------------
-// Poller trait (fake-able)
-// ---------------------------------------------------------------------------
-
 pub(crate) trait RtmpReadinessPoller {
+    fn ready_capacity(&self) -> usize;
     fn register_leaf(
         &mut self,
         fd: RawFd,
@@ -198,10 +197,14 @@ pub(crate) trait RtmpReadinessPoller {
     ) -> Result<usize, TcpEgressPollError>;
 }
 
+#[cfg(test)]
 impl<O> RtmpReadinessPoller for TcpEgressPoller<O>
 where
     O: super::tcp::TcpPollOps,
 {
+    fn ready_capacity(&self) -> usize {
+        self.ready_capacity()
+    }
     fn register_leaf(
         &mut self,
         fd: RawFd,
@@ -226,6 +229,9 @@ where
 }
 
 impl RtmpReadinessPoller for super::tcp::IoUringTcpPoller {
+    fn ready_capacity(&self) -> usize {
+        self.ready_capacity()
+    }
     fn register_leaf(
         &mut self,
         fd: RawFd,
@@ -248,10 +254,6 @@ impl RtmpReadinessPoller for super::tcp::IoUringTcpPoller {
         self.poll_leaves(timeout_ms, ready)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Leaf
-// ---------------------------------------------------------------------------
 
 struct RtmpFabricLeaf {
     common: LeafCommon,
@@ -466,6 +468,7 @@ where
         let budget_window = budget
             .deadline
             .saturating_duration_since(std::time::Instant::now());
+        let ready_capacity = poller.ready_capacity();
         Self {
             poller,
             resolve_completions,
@@ -478,8 +481,8 @@ where
             rtmps_client_config,
             leaves: Vec::new(),
             output_sockets: HashMap::new(),
-            ready: VecDeque::new(),
-            poll_buffer: Vec::new(),
+            ready: VecDeque::with_capacity(ready_capacity),
+            poll_buffer: Vec::with_capacity(ready_capacity),
             pending_connects: HashMap::new(),
             last_stall_sweep: None,
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
@@ -720,8 +723,8 @@ where
         if self.poller.poll_leaves(0, &mut self.poll_buffer).is_err() {
             return;
         }
-        let events: Vec<_> = self.poll_buffer.drain(..).collect();
-        for event in events {
+        let mut poll_buffer = std::mem::take(&mut self.poll_buffer);
+        for event in poll_buffer.drain(..) {
             let Some(leaf) = self.leaf_mut(event.key) else {
                 continue;
             };
@@ -731,6 +734,7 @@ where
             leaf.common.schedule.enqueued = true;
             self.ready.push_back(event);
         }
+        self.poll_buffer = poll_buffer;
     }
 
     /// Visit the next ready leaf, then re-register its poller interest to

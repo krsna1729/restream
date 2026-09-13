@@ -14,6 +14,10 @@ struct CountingPoller {
 }
 
 impl RtmpReadinessPoller for CountingPoller {
+    fn ready_capacity(&self) -> usize {
+        self.inner.ready_capacity()
+    }
+
     fn register_leaf(
         &mut self,
         fd: RawFd,
@@ -163,6 +167,10 @@ struct FailingRegisterPoller {
 }
 
 impl RtmpReadinessPoller for FailingRegisterPoller {
+    fn ready_capacity(&self) -> usize {
+        self.inner.ready_capacity()
+    }
+
     fn register_leaf(
         &mut self,
         fd: RawFd,

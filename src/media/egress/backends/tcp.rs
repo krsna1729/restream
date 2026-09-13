@@ -67,12 +67,14 @@ impl TcpEgressPollError {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TcpRegisteredLeaf {
     key: LeafKey,
     generation: u64,
 }
 
+#[cfg(test)]
 pub(crate) struct TcpEgressPoller<O = LibcTcpPollOps>
 where
     O: TcpPollOps,
@@ -167,6 +169,10 @@ impl IoUringTcpPoller {
         Ok(())
     }
 
+    pub(crate) fn ready_capacity(&self) -> usize {
+        self.ready.len()
+    }
+
     pub(crate) fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError> {
         let Some(slot) = self.registrations.remove(&fd) else {
             return Ok(());
@@ -210,12 +216,14 @@ impl IoUringTcpPoller {
     }
 }
 
+#[cfg(test)]
 impl TcpEgressPoller<LibcTcpPollOps> {
     pub(crate) fn new(max_events: usize) -> Result<Self, TcpEgressPollError> {
         Self::with_ops(max_events, LibcTcpPollOps)
     }
 }
 
+#[cfg(test)]
 impl<O> TcpEgressPoller<O>
 where
     O: TcpPollOps,
@@ -232,6 +240,10 @@ where
             events: vec![empty_event(); max_events.max(1)],
             registered: HashMap::new(),
         })
+    }
+
+    pub(crate) fn ready_capacity(&self) -> usize {
+        self.events.len()
     }
 
     /// Register or update interest for `fd`. Registration is keyed by the
@@ -317,6 +329,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<O> Drop for TcpEgressPoller<O>
 where
     O: TcpPollOps,
@@ -326,10 +339,12 @@ where
     }
 }
 
+#[cfg(test)]
 fn empty_event() -> libc::epoll_event {
     libc::epoll_event { events: 0, u64: 0 }
 }
 
+#[cfg(test)]
 fn events_for(interest: TcpEgressInterest) -> u32 {
     let mut events = (libc::EPOLLERR | libc::EPOLLHUP) as u32;
     if interest.readable {
@@ -341,6 +356,7 @@ fn events_for(interest: TcpEgressInterest) -> u32 {
     events
 }
 
+#[cfg(test)]
 pub(crate) trait TcpPollOps {
     fn create(&self) -> RawFd;
     fn ctl_add(&self, epoll_fd: RawFd, fd: RawFd, events: u32) -> c_int;
@@ -351,8 +367,10 @@ pub(crate) trait TcpPollOps {
     fn error(&self, operation: &'static str) -> TcpEgressPollError;
 }
 
+#[cfg(test)]
 pub(crate) struct LibcTcpPollOps;
 
+#[cfg(test)]
 impl TcpPollOps for LibcTcpPollOps {
     fn create(&self) -> RawFd {
         // SAFETY: no arguments to validate; returns a fresh epoll fd or -1.
@@ -402,6 +420,7 @@ impl TcpPollOps for LibcTcpPollOps {
     }
 }
 
+#[cfg(test)]
 fn ctl(epoll_fd: RawFd, op: c_int, fd: RawFd, events: u32) -> c_int {
     // SAFETY: `epoll_fd` and `fd` are live descriptors owned by the caller.
     // `u64` is set to the raw fd value so `poll_leaves` can recover it from
