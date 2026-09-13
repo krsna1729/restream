@@ -194,8 +194,8 @@ flowchart LR
 There is no protocol-specific bypass around the manager, shard scheduler,
 common lifecycle, or backpressure policy.
 
-A shard may use a protocol-native readiness path. RTMP shards use Linux epoll
-for TCP/TLS readiness. SRT shared egress uses the application's bounded
+A shard may use a protocol-native readiness path. RTMP shards use one native
+`io_uring` TCP readiness owner per shard. SRT shared egress uses the application's bounded
 io_uring UDP readiness path and drives the shared `CallerTable` from the shard
 owner thread. Direct and mixed-family bonded links retain the runtime adapter
 path. All variants stay under the same application topology, not a separate
@@ -229,7 +229,8 @@ outputs. Each leaf still owns SRT connection and protocol state in the
 `srt-rs` stack (congestion, retransmission, encryption). Shared egress owns one
 application UDP socket, native readiness poller, and `CallerTable` per
 `(pipeline, shard)`; homogeneous IPv4 and IPv6 peer groups use that path, while
-mixed-family groups fall back to the runtime adapter.
+mixed-family groups retain the bounded runtime adapter because one UDP socket
+cannot serve both address families.
 
 Sink leaves consume prepared media and discard it after accounting progress.
 They have no transport readiness adapter, but they still run through the same

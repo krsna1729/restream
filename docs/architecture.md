@@ -74,21 +74,26 @@ The current layering sequence and stop rules live in
 
 ## Runtime ownership
 
-Tokio tasks own non-blocking sockets, Axum, timers, reconciliation, native
-mux/demux work, and child-process pipe I/O. Work that can block independently
+Tokio tasks own Axum, reconciliation, application protocol state, native
+mux/demux work, and child-process pipe I/O. Native ingress/egress workers own
+their sockets and readiness rings. Work that can block independently
 of the async scheduler is isolated:
 
-- libsrt accept calls run at dedicated blocking boundaries where the ingest
-  path still uses them;
+- srt-rs protocol state stays on its async owner while native ingress workers
+  own UDP/TCP descriptors and bounded handoff buffers;
 - RTMP/RTMPS and SRT **egress** run on the egress fabric: a small
   CPU-derived pool of dedicated shard OS threads, output-count-scaled for
   RTMP/RTMPS/sink/pipeline feeds while SRT retains the CPU-derived ceiling,
-  each multiplexing many outputs (`epoll` for RTMP/RTMPS; for SRT, the shard
+  each multiplexing many outputs (`io_uring` for RTMP/RTMPS; for SRT, the shard
   directly drives `srt-rs` sockets and the shared `CallerTable` — there is no
   libsrt epoll) instead of one OS thread per destination; see
   [egress architecture](egress-architecture.md) for the live contract and
   [archive/egress/implementation.md](archive/egress/implementation.md) for
   migration history;
+- RTMP ingress accepts on a native `io_uring` owner thread and hands bounded
+  nonblocking streams to the existing authenticated connection workflow;
+- SRT ingress receives on a native `io_uring` UDP owner thread and hands fixed
+  packet buffers to the async `srt-rs` admission/protocol owner;
 - in-process FFmpeg codec work runs on guarded OS threads;
 - recording uses a feeder task and a writer thread;
 - the default transcoder and file-ingest paths use managed FFmpeg child

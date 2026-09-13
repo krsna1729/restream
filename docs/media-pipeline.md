@@ -447,7 +447,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph L1["SRT ingest runtime: listener-owned UDP\nplus one protocol task per live ingest connection"]
+    subgraph L1["SRT ingest runtime: native io_uring UDP owner\nplus one bounded protocol owner"]
         SS["SRT socket accept/recv"]
     end
     subgraph T2["Tokio worker pool"]
@@ -471,17 +471,18 @@ flowchart LR
 
 | Hop | Thread/process model | Memory owner |
 |---|---|---|
-| SRT ingest socket and protocol tasks | Listener-owned UDP socket plus one runtime protocol task per live ingest connection | srt-rs receive state per connection; kernel `SO_RCVBUF` is separate and kernel-owned |
+| SRT ingest socket and protocol tasks | One native io_uring UDP owner thread with bounded packet handoff to the async `PeerTable`/protocol owner | Fixed receive-buffer reserve plus srt-rs receive state per connection; kernel `SO_RCVBUF` is separate and kernel-owned |
 | `TsDemuxer` → `source_ring` | Tokio worker, inline async | Shared `source_ring`, same structure as RTMP |
 | Shared `TsMuxer` (SRT preparation) | 1 Tokio task per `(pipeline, preset)`, inline async | `TsChunkRing` (256-chunk shared ring, `RESTREAM_TS_RING_CAPACITY`) |
 | Egress shard (SRT) | Fixed OS-thread pool per feed; each shard owner drives the shared homogeneous-family native UDP readiness socket and queued leaf visits, while direct/mixed-family links retain runtime adapters | Per-leaf protocol state and bounded application scratch |
-| Shared SRT transport | 1 application UDP socket + io_uring readiness poller + `CallerTable` per `(pipeline, shard)`; shared TS muxing remains per `(pipeline, preset)` | srt-rs caller/protocol state plus kernel `SO_SNDBUF`; upstream caller-owned TX storage is not available, so the adapter still materializes bounded protocol output |
+| Shared SRT transport | 1 application UDP socket + io_uring readiness poller + `CallerTable` per `(pipeline, shard)`; shared TS muxing remains per `(pipeline, preset)` | srt-rs caller/protocol state plus kernel `SO_SNDBUF`; Restream supplies bounded caller-owned TX storage through `poll_outbound_into`, while the protocol still materializes its internal packet before the sink |
 
 The shared native path bounds work per shard with receive/send budgets and
-explicit ready/feed-wait queues. It currently retains a bounded per-message
-protocol-output vector because the pinned upstream `srt-rs` API does not expose
-caller-owned transmit storage. That is the remaining allocation ceiling for
-shared SRT egress; it is separate from socket ownership and readiness.
+explicit ready/feed-wait queues. The transport boundary no longer stages a
+second unbounded output vector: the caller-owned sink takes packets directly
+into a fixed Restream pool. The pinned protocol still builds each packet
+internally; eliminating that final allocation requires an upstream encoder API,
+separate from socket ownership and readiness.
 
 ## SRT bonding
 
