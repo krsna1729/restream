@@ -55,7 +55,10 @@ recording settings in SQLite.
     "bondingAvailable": false,
     "udpRxQueueBytes": 0,
     "udpRxQueuePeakBytes": 0,
-    "udpDrops": 0
+    "udpDrops": 0,
+    "nativeRxDatagrams": 0,
+    "nativeTxDatagrams": 0,
+    "nativeRxPoolDrops": 0
   }
 }
 ```

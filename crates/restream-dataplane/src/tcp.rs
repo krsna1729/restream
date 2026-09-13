@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use io_uring::{IoUring, opcode, types};
 
-use crate::{MAX_TAG_SLOTS, OpKind, OpTag, build_ring};
+use crate::{FixedFile, FixedFileTable, MAX_TAG_SLOTS, OpKind, OpTag, build_ring};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TcpInterest {
@@ -91,7 +91,8 @@ pub struct TcpAcceptorMetrics {
 /// syscall or a blocking accept loop.
 pub struct UringTcpAcceptor {
     ring: IoUring,
-    listener_fd: RawFd,
+    files: FixedFileTable,
+    listener_file: FixedFile,
     armed: bool,
     generation: u32,
     metrics: TcpAcceptorMetrics,
@@ -105,9 +106,14 @@ impl UringTcpAcceptor {
                 "io_uring entries must be a power of two >= 8",
             ));
         }
+        let ring = build_ring(ring_entries)?;
+        let mut files = FixedFileTable::new(1)?;
+        files.register(&ring.submitter())?;
+        let listener_file = files.install(&ring.submitter(), listener_fd)?;
         Ok(Self {
-            ring: build_ring(ring_entries)?,
-            listener_fd,
+            ring,
+            files,
+            listener_file,
             armed: false,
             generation: 0,
             metrics: TcpAcceptorMetrics::default(),
@@ -125,7 +131,9 @@ impl UringTcpAcceptor {
                 .expect("accept tag slot is fixed")
                 .encode();
             let entry = opcode::Accept::new(
-                types::Fd(self.listener_fd),
+                self.files
+                    .get(self.listener_file)
+                    .expect("listener fixed file remains installed"),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             )

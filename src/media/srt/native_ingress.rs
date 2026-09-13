@@ -17,6 +17,8 @@ use srt_transport::{RecvBatch, RecvBudget, drain_recv_fd, flush_destined};
 use tokio::sync::mpsc;
 use tracing::error;
 
+use crate::media::snapshots::ListenerSocketStats;
+
 const CHANNEL_CAPACITY: usize = 256;
 const BUFFER_SIZE: usize = RecvBatch::DEFAULT_BUF_LEN;
 const MAX_OUTBOUND: usize = 1024;
@@ -49,7 +51,10 @@ pub(crate) struct NativeSrtIngress {
 }
 
 impl NativeSrtIngress {
-    pub(crate) fn start(socket: UdpSocket) -> io::Result<Self> {
+    pub(crate) fn start(
+        socket: UdpSocket,
+        listener_stats: Arc<ListenerSocketStats>,
+    ) -> io::Result<Self> {
         socket.set_nonblocking(true)?;
         let (inbound_tx, inbound) = mpsc::channel(CHANNEL_CAPACITY);
         let (recycled, recycled_rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -59,9 +64,14 @@ impl NativeSrtIngress {
         thread::Builder::new()
             .name("restream-srt-ingress".to_string())
             .spawn(move || {
-                if let Err(error) =
-                    run_worker(socket, inbound_tx, recycled_rx, outbound_rx, worker_stats)
-                {
+                if let Err(error) = run_worker(
+                    socket,
+                    inbound_tx,
+                    recycled_rx,
+                    outbound_rx,
+                    worker_stats,
+                    listener_stats,
+                ) {
                     error!(%error, "native SRT ingress stopped");
                 }
             })
@@ -81,6 +91,7 @@ fn run_worker(
     mut recycled_rx: mpsc::Receiver<Box<[u8]>>,
     mut outbound_rx: mpsc::Receiver<(SocketAddr, Vec<u8>)>,
     stats: Arc<NativeSrtIngressStats>,
+    listener_stats: Arc<ListenerSocketStats>,
 ) -> io::Result<()> {
     let fd = socket.as_raw_fd();
     let mut poller = UringUdpPoller::new(1, 256)?;
@@ -117,6 +128,9 @@ fn run_worker(
             stats
                 .sent_datagrams
                 .fetch_add(report.sent as u64, Ordering::Relaxed);
+            listener_stats
+                .native_tx_datagrams
+                .fetch_add(report.sent as u64, Ordering::Relaxed);
         }
 
         if inbound_tx.is_closed() && outbound.is_empty() {
@@ -130,8 +144,14 @@ fn run_worker(
             let report = drain_recv_fd(fd, &mut recv_batch, budget, |peer, data| {
                 let Some(peer) = peer else { return };
                 stats.recv_datagrams.fetch_add(1, Ordering::Relaxed);
+                listener_stats
+                    .native_rx_datagrams
+                    .fetch_add(1, Ordering::Relaxed);
                 let Some(mut buffer) = free.pop() else {
                     stats.dropped_pool.fetch_add(1, Ordering::Relaxed);
+                    listener_stats
+                        .native_rx_pool_drops
+                        .fetch_add(1, Ordering::Relaxed);
                     return;
                 };
                 buffer[..data.len()].copy_from_slice(data);
@@ -160,18 +180,19 @@ mod tests {
     async fn native_ingress_delivers_and_recycles_bounded_datagram() {
         let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
         let peer = receiver.local_addr().unwrap();
-        let mut ingress = match NativeSrtIngress::start(receiver) {
-            Ok(ingress) => ingress,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
-                ) =>
-            {
-                return;
-            }
-            Err(error) => panic!("native UDP unavailable: {error}"),
-        };
+        let mut ingress =
+            match NativeSrtIngress::start(receiver, Arc::new(ListenerSocketStats::default())) {
+                Ok(ingress) => ingress,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
+                    ) =>
+                {
+                    return;
+                }
+                Err(error) => panic!("native UDP unavailable: {error}"),
+            };
         let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
         sender.send_to(b"srt", peer).unwrap();
         let mut packet = ingress.inbound.recv().await.unwrap();

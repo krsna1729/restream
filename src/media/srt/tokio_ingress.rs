@@ -94,7 +94,7 @@ impl SrtServer {
             error!(port, "srt-rs listener produced no UDP socket");
             return;
         };
-        let native = match NativeSrtIngress::start(socket) {
+        let native = match NativeSrtIngress::start(socket, self.engine.listener_stats_handle()) {
             Ok(native) => native,
             Err(error) => {
                 error!(port, %error, "failed to start native SRT ingress");
