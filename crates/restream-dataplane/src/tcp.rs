@@ -1,5 +1,6 @@
 //! One-owner TCP readiness over `io_uring`.
 
+use std::collections::VecDeque;
 use std::io;
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::time::Duration;
@@ -53,6 +54,15 @@ pub struct TcpReadyEvent {
     pub generation: u32,
     pub readable: bool,
     pub writable: bool,
+}
+
+/// Completion of one owner-thread TCP send. The caller retains the submitted
+/// buffer until this result is drained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TcpSendCompletion {
+    pub slot: u32,
+    pub generation: u32,
+    pub result: i32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -198,6 +208,18 @@ struct Registration {
     fixed: Option<FixedFile>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PendingSend {
+    generation: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FixedRelease {
+    file: FixedFile,
+    poll_cancel_pending: bool,
+    tx_cancel_pending: bool,
+}
+
 /// Single-owner, fixed-registration TCP readiness poller.
 ///
 /// Registration and completion state are mutated only by the thread that
@@ -207,8 +229,11 @@ pub struct UringTcpPoller {
     ring: IoUring,
     registrations: Box<[Option<Registration>]>,
     fixed_files: Option<FixedFileTable>,
-    fixed_releases: Box<[Option<FixedFile>]>,
+    fixed_releases: Box<[Option<FixedRelease>]>,
     release_slots: Vec<u32>,
+    pending_sends: Box<[Option<PendingSend>]>,
+    send_completions: Box<[Option<TcpSendCompletion>]>,
+    send_completion_order: VecDeque<u32>,
     timeout_armed: bool,
     metrics: TcpPollerMetrics,
 }
@@ -233,6 +258,9 @@ impl UringTcpPoller {
             fixed_files: None,
             fixed_releases: vec![None; max_slots].into_boxed_slice(),
             release_slots: Vec::with_capacity(max_slots),
+            pending_sends: vec![None; max_slots].into_boxed_slice(),
+            send_completions: vec![None; max_slots].into_boxed_slice(),
+            send_completion_order: VecDeque::with_capacity(max_slots),
             timeout_armed: false,
             metrics: TcpPollerMetrics::default(),
         })
@@ -264,6 +292,9 @@ impl UringTcpPoller {
             fixed_files: Some(files),
             fixed_releases: vec![None; max_slots].into_boxed_slice(),
             release_slots: Vec::with_capacity(max_slots),
+            pending_sends: vec![None; max_slots].into_boxed_slice(),
+            send_completions: vec![None; max_slots].into_boxed_slice(),
+            send_completion_order: VecDeque::with_capacity(max_slots),
             timeout_armed: false,
             metrics: TcpPollerMetrics::default(),
         })
@@ -350,21 +381,97 @@ impl UringTcpPoller {
         let Some(previous) = self.registrations[slot_index].take() else {
             return Ok(());
         };
-        if previous.armed {
+        let poll_cancel_pending = previous.armed;
+        if poll_cancel_pending {
             self.cancel_poll(slot, previous.generation)?;
         }
+        let tx_cancel_pending = self.pending_sends[slot_index].is_some();
+        if tx_cancel_pending {
+            self.cancel_send(slot, previous.generation)?;
+        }
         if let Some(fixed) = previous.fixed {
-            if previous.armed {
-                self.fixed_releases[slot_index] = Some(fixed);
-            } else {
-                let _ = self
-                    .fixed_files
-                    .as_mut()
-                    .expect("fixed file table remains installed")
-                    .remove(&self.ring.submitter(), fixed)?;
-            }
+            self.fixed_releases[slot_index] = Some(FixedRelease {
+                file: fixed,
+                poll_cancel_pending,
+                tx_cancel_pending,
+            });
+            self.release_fixed_if_ready(slot as usize)?;
         }
         Ok(())
+    }
+
+    /// Submit one bounded send against a registered socket. The caller must
+    /// keep `bytes` alive and unchanged until the matching completion is
+    /// drained. One send is allowed per leaf slot, which bounds kernel-owned
+    /// TX state and makes generation reuse explicit.
+    pub fn submit_send(
+        &mut self,
+        fd: RawFd,
+        slot: u32,
+        generation: u32,
+        bytes: &[u8],
+    ) -> io::Result<()> {
+        if bytes.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot submit an empty TCP send",
+            ));
+        }
+        let index = self.registration_index(slot)?;
+        let registration = self.registrations[index].ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "TCP registration is not live")
+        })?;
+        if registration.fd != fd || registration.generation != generation {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "TCP send generation or descriptor mismatch",
+            ));
+        }
+        if self.pending_sends[index].is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "TCP send already in flight",
+            ));
+        }
+        let entry = match registration
+            .fixed
+            .and_then(|fixed| self.fixed_files.as_ref().and_then(|files| files.get(fixed)))
+        {
+            Some(fixed) => opcode::Send::new(fixed, bytes.as_ptr(), bytes.len() as _)
+                .build()
+                .user_data(
+                    OpTag::new(OpKind::TcpTx, slot, generation)
+                        .expect("validated TCP send slot")
+                        .encode(),
+                ),
+            None => opcode::Send::new(types::Fd(fd), bytes.as_ptr(), bytes.len() as _)
+                .build()
+                .user_data(
+                    OpTag::new(OpKind::TcpTx, slot, generation)
+                        .expect("validated TCP send slot")
+                        .encode(),
+                ),
+        };
+        unsafe { self.push(&entry)? };
+        self.pending_sends[index] = Some(PendingSend { generation });
+        Ok(())
+    }
+
+    /// Drain send completions into caller-owned storage without scanning all
+    /// registrations.
+    pub fn drain_send_completions(&mut self, completions: &mut [TcpSendCompletion]) -> usize {
+        let mut count = 0;
+        while count < completions.len() {
+            let Some(slot) = self.send_completion_order.pop_front() else {
+                break;
+            };
+            let Some(completion) = self.send_completions[slot as usize].take() else {
+                continue;
+            };
+            completions[count] = completion;
+            count += 1;
+        }
+        count
     }
 
     pub fn poll(&mut self, timeout: Duration, ready: &mut [TcpReadyEvent]) -> io::Result<usize> {
@@ -393,11 +500,55 @@ impl UringTcpPoller {
                     }
                     OpKind::TimeoutCancel => {}
                     OpKind::PollCancel => {
-                        if self
+                        if let Some(release) = self
                             .fixed_releases
-                            .get(tag.slot as usize)
-                            .is_some_and(Option::is_some)
+                            .get_mut(tag.slot as usize)
+                            .and_then(Option::as_mut)
                         {
+                            release.poll_cancel_pending = false;
+                            self.release_slots.push(tag.slot);
+                        }
+                    }
+                    OpKind::TcpTxCancel => {
+                        if let Some(release) = self
+                            .fixed_releases
+                            .get_mut(tag.slot as usize)
+                            .and_then(Option::as_mut)
+                        {
+                            release.tx_cancel_pending = false;
+                            self.release_slots.push(tag.slot);
+                        }
+                    }
+                    OpKind::TcpTx => {
+                        let Some(pending) = self
+                            .pending_sends
+                            .get_mut(tag.slot as usize)
+                            .and_then(Option::take)
+                        else {
+                            self.metrics.stale_completions += 1;
+                            continue;
+                        };
+                        if pending.generation != tag.generation {
+                            self.metrics.stale_completions += 1;
+                            continue;
+                        }
+                        let Some(completion_slot) =
+                            self.send_completions.get_mut(tag.slot as usize)
+                        else {
+                            self.metrics.stale_completions += 1;
+                            continue;
+                        };
+                        if completion_slot.is_some() {
+                            self.metrics.stale_completions += 1;
+                            continue;
+                        }
+                        *completion_slot = Some(TcpSendCompletion {
+                            slot: tag.slot,
+                            generation: tag.generation,
+                            result: completion.result(),
+                        });
+                        self.send_completion_order.push_back(tag.slot);
+                        if self.fixed_releases[tag.slot as usize].is_some() {
                             self.release_slots.push(tag.slot);
                         }
                     }
@@ -438,15 +589,11 @@ impl UringTcpPoller {
             }
         }
 
-        for slot in self.release_slots.drain(..) {
-            if let Some(fixed) = self.fixed_releases[slot as usize].take() {
-                let _ = self
-                    .fixed_files
-                    .as_mut()
-                    .expect("fixed file table remains installed")
-                    .remove(&self.ring.submitter(), fixed)?;
-            }
+        let mut release_slots = std::mem::take(&mut self.release_slots);
+        while let Some(slot) = release_slots.pop() {
+            self.release_fixed_if_ready(slot as usize)?;
         }
+        self.release_slots = release_slots;
 
         if self.timeout_armed {
             let entry =
@@ -508,6 +655,37 @@ impl UringTcpPoller {
                 .encode(),
         );
         unsafe { self.push(&entry) }
+    }
+
+    fn cancel_send(&mut self, slot: u32, generation: u32) -> io::Result<()> {
+        let target = OpTag::new(OpKind::TcpTx, slot, generation)
+            .unwrap()
+            .encode();
+        let entry = opcode::AsyncCancel::new(target).build().user_data(
+            OpTag::new(OpKind::TcpTxCancel, slot, generation)
+                .unwrap()
+                .encode(),
+        );
+        unsafe { self.push(&entry) }
+    }
+
+    fn release_fixed_if_ready(&mut self, slot: usize) -> io::Result<()> {
+        let Some(release) = self.fixed_releases[slot] else {
+            return Ok(());
+        };
+        if release.poll_cancel_pending
+            || release.tx_cancel_pending
+            || self.pending_sends[slot].is_some()
+        {
+            return Ok(());
+        }
+        self.fixed_releases[slot] = None;
+        let _ = self
+            .fixed_files
+            .as_mut()
+            .expect("fixed file table remains installed")
+            .remove(&self.ring.submitter(), release.file)?;
+        Ok(())
     }
 
     unsafe fn push(&mut self, entry: &io_uring::squeue::Entry) -> io::Result<()> {
@@ -660,6 +838,64 @@ mod tests {
         poller
             .register_fixed(receiver.as_raw_fd(), 0, 3, TcpInterest::READ)
             .unwrap();
+    }
+
+    #[test]
+    fn fixed_file_poller_completes_owner_thread_send() {
+        let Some((receiver, sender)) = socket_pair() else {
+            return;
+        };
+        let mut poller = match UringTcpPoller::new_fixed(2, 32) {
+            Ok(poller) => poller,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
+                ) =>
+            {
+                return;
+            }
+            Err(error) => panic!("fixed-file io_uring unavailable: {error}"),
+        };
+        poller
+            .register_fixed(receiver.as_raw_fd(), 0, 7, TcpInterest::READ)
+            .unwrap();
+        poller
+            .submit_send(receiver.as_raw_fd(), 0, 7, b"native")
+            .unwrap();
+
+        let mut ready = [TcpReadyEvent {
+            fd: -1,
+            slot: 0,
+            generation: 0,
+            readable: false,
+            writable: false,
+        }; 2];
+        let mut completions = [TcpSendCompletion {
+            slot: 0,
+            generation: 0,
+            result: 0,
+        }; 2];
+        for _ in 0..10 {
+            poller.poll(Duration::from_millis(1), &mut ready).unwrap();
+            if poller.drain_send_completions(&mut completions) == 1 {
+                assert_eq!(completions[0].slot, 0);
+                assert_eq!(completions[0].generation, 7);
+                assert_eq!(completions[0].result, 6);
+                let mut received = [0_u8; 6];
+                let count = unsafe {
+                    libc::read(
+                        sender.as_raw_fd(),
+                        received.as_mut_ptr().cast::<libc::c_void>(),
+                        received.len(),
+                    )
+                };
+                assert_eq!(count, 6);
+                assert_eq!(&received, b"native");
+                return;
+            }
+        }
+        panic!("owner-thread send did not complete");
     }
 
     #[test]

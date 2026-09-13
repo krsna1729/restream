@@ -53,6 +53,7 @@ pub enum OpKind {
     ControlWake = 8,
     PollCancel = 9,
     TimeoutCancel = 10,
+    TcpTxCancel = 11,
 }
 
 impl OpKind {
@@ -68,6 +69,7 @@ impl OpKind {
             8 => Self::ControlWake,
             9 => Self::PollCancel,
             10 => Self::TimeoutCancel,
+            11 => Self::TcpTxCancel,
             _ => return None,
         })
     }
