@@ -378,6 +378,7 @@ where
     chunk_size: u32,
     rtmps_client_config: Arc<ClientConfig>,
     leaves: Vec<Option<RtmpFabricLeaf>>,
+    free_leaf_keys: Vec<LeafKey>,
     output_sockets: HashMap<OutputId, RtmpLeafSocket>,
     ready: VecDeque<TcpReadyLeaf>,
     feed_waiting: VecDeque<LeafKey>,
@@ -431,6 +432,7 @@ where
             chunk_size,
             rtmps_client_config,
             leaves: Vec::new(),
+            free_leaf_keys: Vec::new(),
             output_sockets: HashMap::new(),
             ready: VecDeque::with_capacity(ready_capacity),
             feed_waiting: VecDeque::with_capacity(ready_capacity),
@@ -460,16 +462,28 @@ where
     fn remove_leaf_socket(&mut self, socket_ref: RtmpLeafSocket, reason: CloseReason) -> bool {
         let _ = self.poller.remove(socket_ref.fd);
         self.feed_waiting.retain(|key| *key != socket_ref.key);
+        self.ready.retain(|event| event.key != socket_ref.key);
+        self.poll_buffer.retain(|event| event.key != socket_ref.key);
         let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) else {
             return false;
         };
         let mut leaf = leaf;
         leaf.engine.close(&mut leaf.transport, reason);
+        self.free_leaf_keys.push(socket_ref.key);
         true
     }
 
     fn leaf_mut(&mut self, key: LeafKey) -> Option<&mut RtmpFabricLeaf> {
         self.leaves.get_mut(key.0).and_then(Option::as_mut)
+    }
+
+    fn allocate_leaf_key(&mut self) -> LeafKey {
+        if let Some(key) = self.free_leaf_keys.pop() {
+            return key;
+        }
+        let key = LeafKey(self.leaves.len());
+        self.leaves.push(None);
+        key
     }
 
     /// Minimum interval between stall sweeps — no per-leaf FFI probe to

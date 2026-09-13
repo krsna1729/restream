@@ -346,6 +346,7 @@ pub(crate) struct SrtShardBackend {
     budget_max_bytes: usize,
     budget_window: Duration,
     leaves: Vec<Option<NativeSrtLeaf>>,
+    free_leaf_keys: Vec<LeafKey>,
     output_sockets: HashMap<OutputId, LeafKey>,
     ready: VecDeque<SrtReadyLeaf>,
     ready_candidates: VecDeque<LeafKey>,
@@ -391,6 +392,7 @@ impl SrtShardBackend {
             budget_max_bytes: budget.max_bytes,
             budget_window,
             leaves: Vec::new(),
+            free_leaf_keys: Vec::new(),
             output_sockets: HashMap::new(),
             ready: VecDeque::new(),
             ready_candidates: VecDeque::new(),
@@ -454,10 +456,10 @@ impl SrtShardBackend {
         common: LeafCommon,
         transport: Box<dyn SrtMessageSender + Send>,
     ) -> LeafKey {
-        let key = LeafKey(self.leaves.len());
+        let key = self.allocate_leaf_key();
         let output_id = common.output_id.clone();
         let leaf = SrtFabricLeaf::new(common, transport);
-        self.leaves.push(Some(leaf));
+        self.leaves[key.0] = Some(leaf);
         self.ready_candidates.push_back(key);
         if let Some(previous) = self.output_sockets.insert(output_id, key) {
             self.remove_leaf(
@@ -508,9 +510,9 @@ impl SrtShardBackend {
 
     #[cfg(test)]
     pub(crate) fn add_leaf(&mut self, leaf: NativeSrtLeaf) -> LeafKey {
-        let key = LeafKey(self.leaves.len());
+        let key = self.allocate_leaf_key();
         let output_id = leaf.common.output_id.clone();
-        self.leaves.push(Some(leaf));
+        self.leaves[key.0] = Some(leaf);
         self.ready_candidates.push_back(key);
         if let Some(previous) = self.output_sockets.insert(output_id, key) {
             self.remove_leaf(
@@ -565,12 +567,24 @@ impl SrtShardBackend {
         reason: crate::media::egress::backend::CloseReason,
     ) -> bool {
         self.feed_waiting.retain(|queued| *queued != key);
+        self.ready.retain(|event| event.key != key);
+        self.ready_candidates.retain(|queued| *queued != key);
         let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) else {
             return false;
         };
         let mut leaf = leaf;
         leaf.engine.close(&mut leaf.transport, reason);
+        self.free_leaf_keys.push(key);
         true
+    }
+
+    fn allocate_leaf_key(&mut self) -> LeafKey {
+        if let Some(key) = self.free_leaf_keys.pop() {
+            return key;
+        }
+        let key = LeafKey(self.leaves.len());
+        self.leaves.push(None);
+        key
     }
 
     /// Drives the shared table once and advances one registered leaf from the

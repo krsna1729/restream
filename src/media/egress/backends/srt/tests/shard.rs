@@ -518,6 +518,27 @@ fn srt_shard_backend_removed_leaf_ignores_late_readiness() {
 }
 
 #[test]
+fn srt_shard_reuses_removed_leaf_slots() {
+    let mut backend = SrtShardBackend::new(
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    );
+    let first = shared_sender();
+    let first_key = backend.add_leaf(SrtFabricLeaf::new(common(7), Box::new(first.sender)));
+    backend.on_command(EgressCommand::Remove(OutputId::new("out-srt")));
+
+    assert_eq!(backend.leaves.len(), 1);
+    assert!(backend.leaves[first_key.0].is_none());
+
+    let second = shared_sender();
+    let second_key = backend.add_leaf(SrtFabricLeaf::new(common(8), Box::new(second.sender)));
+
+    assert_eq!(second_key, first_key);
+    assert_eq!(backend.leaves.len(), 1);
+    assert_eq!(backend.ready_candidates.len(), 1);
+}
+
+#[test]
 fn srt_shard_backend_shutdown_closes_registered_leaves() {
     let mut backend = SrtShardBackend::new(
         feed([Bytes::from_static(b"abc")]),
