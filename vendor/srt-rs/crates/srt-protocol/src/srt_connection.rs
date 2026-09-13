@@ -1098,6 +1098,19 @@ impl SrtConnection {
         now: Timestamp,
         sink: &mut S,
     ) -> Result<bool, Error> {
+        self.send_shared_into_with_sequence(payload, None, now, sink)
+    }
+
+    /// Send one connected DATA packet with a caller-supplied sequence number
+    /// directly into caller-owned wire storage. Groups use this to keep every
+    /// physical leg aligned while retaining the same final-buffer path.
+    pub fn send_shared_into_with_sequence<S: WireSink>(
+        &mut self,
+        payload: Bytes,
+        sequence_number: Option<u32>,
+        now: Timestamp,
+        sink: &mut S,
+    ) -> Result<bool, Error> {
         if self.state != ConnectionState::Connected {
             return Err(Error::invalid_state("not connected"));
         }
@@ -1127,7 +1140,16 @@ impl SrtConnection {
                 .sender
                 .as_mut()
                 .ok_or_else(|| Error::invalid_state("sender buffer not initialized"))?;
-            sender.push_shared(payload, timestamp, peer_socket_id, now)
+            match sequence_number {
+                Some(sequence_number) => sender.push_shared_with_sequence(
+                    payload,
+                    timestamp,
+                    peer_socket_id,
+                    now,
+                    sequence_number,
+                ),
+                None => sender.push_shared(payload, timestamp, peer_socket_id, now),
+            }
         };
         let Some((header, payload)) = packet else {
             sink.discard();

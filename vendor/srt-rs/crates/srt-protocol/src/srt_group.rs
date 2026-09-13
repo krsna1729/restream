@@ -303,6 +303,26 @@ impl SrtGroup {
         }
     }
 
+    /// Send shared payload data through the group while letting the caller
+    /// place each selected leg's wire packet into its own final TX slot.
+    /// Returning `Ok(false)` from the callback means bounded sink
+    /// backpressure; it does not make that leg unstable.
+    pub fn send_shared_into<F>(
+        &mut self,
+        payload: Bytes,
+        now: Timestamp,
+        mut send: F,
+    ) -> Result<usize, Error>
+    where
+        F: FnMut(u32, &mut SrtConnection, Bytes, u32, Timestamp) -> Result<bool, Error>,
+    {
+        self.refresh_states();
+        match self.mode {
+            GroupMode::Broadcast => self.send_broadcast_with(payload, now, &mut send),
+            GroupMode::Backup => self.send_backup_with(payload, now, &mut send),
+        }
+    }
+
     /// Whether at least one active member can accept the next logical send.
     ///
     /// Broadcast attempts every active leg, but its logical send succeeds as
@@ -420,6 +440,26 @@ impl SrtGroup {
     }
 
     fn send_broadcast(&mut self, payload: Bytes, now: Timestamp) -> Result<usize, Error> {
+        self.send_broadcast_with(
+            payload,
+            now,
+            &mut |_, connection, payload, sequence, now| {
+                connection
+                    .send_shared_with_sequence(payload, sequence, now)
+                    .map(|()| true)
+            },
+        )
+    }
+
+    fn send_broadcast_with<F>(
+        &mut self,
+        payload: Bytes,
+        now: Timestamp,
+        send: &mut F,
+    ) -> Result<usize, Error>
+    where
+        F: FnMut(u32, &mut SrtConnection, Bytes, u32, Timestamp) -> Result<bool, Error>,
+    {
         let active = self.active_indices();
         if active.is_empty() {
             return Err(Error::invalid_state("no active Broadcast group members"));
@@ -427,18 +467,31 @@ impl SrtGroup {
         let sequence_number = self.sequence_for_send(&active)?;
         let mut sent = 0;
         for index in active {
-            let sent_on_member = self.members[index].connection.can_send()
-                && self.members[index]
-                    .connection
-                    .send_shared_with_sequence(payload.clone(), sequence_number, now)
-                    .is_ok();
-            if sent_on_member {
-                sent += 1;
-            } else {
+            let member_id = self.members[index].id;
+            if !self.members[index].connection.can_send() {
                 self.mark_send_failure(index);
+                continue;
+            }
+            match send(
+                member_id,
+                &mut self.members[index].connection,
+                payload.clone(),
+                sequence_number,
+                now,
+            ) {
+                Ok(true) => sent += 1,
+                Ok(false) => {}
+                Err(_) => self.mark_send_failure(index),
             }
         }
         if sent == 0 {
+            if self
+                .active_indices()
+                .iter()
+                .any(|&index| self.members[index].connection.can_send())
+            {
+                return Ok(0);
+            }
             return Err(Error::invalid_state("all Broadcast group members failed"));
         }
         self.next_send_sequence = Some(sequence_number.wrapping_add(1) & 0x7FFF_FFFF);
@@ -446,6 +499,26 @@ impl SrtGroup {
     }
 
     fn send_backup(&mut self, payload: Bytes, now: Timestamp) -> Result<usize, Error> {
+        self.send_backup_with(
+            payload,
+            now,
+            &mut |_, connection, payload, sequence, now| {
+                connection
+                    .send_shared_with_sequence(payload, sequence, now)
+                    .map(|()| true)
+            },
+        )
+    }
+
+    fn send_backup_with<F>(
+        &mut self,
+        payload: Bytes,
+        now: Timestamp,
+        send: &mut F,
+    ) -> Result<usize, Error>
+    where
+        F: FnMut(u32, &mut SrtConnection, Bytes, u32, Timestamp) -> Result<bool, Error>,
+    {
         let mut active = self.active_indices().into_iter().next();
         if active.is_none() {
             self.promote_backup_member();
@@ -460,22 +533,42 @@ impl SrtGroup {
             self.align_member_sequence(member_id)?;
         }
         let sequence_number = self.sequence_for_send(&[index])?;
-        if !self.members[index].connection.can_send()
-            || self.members[index]
-                .connection
-                .send_shared_with_sequence(payload.clone(), sequence_number, now)
-                .is_err()
-        {
-            self.mark_send_failure(index);
-            self.promote_backup_member();
-            let Some(index) = self.active_indices().into_iter().next() else {
-                return Err(Error::invalid_state("all Backup group members failed"));
-            };
-            self.align_member_sequence(self.members[index].id)?;
-            self.members[index]
-                .connection
-                .send_shared_with_sequence(payload, sequence_number, now)
-                .map_err(|_| Error::invalid_state("Backup promotion send failed"))?;
+        let first_attempt = if !self.members[index].connection.can_send() {
+            Err(Error::invalid_state("Backup group member send buffer full"))
+        } else {
+            send(
+                self.members[index].id,
+                &mut self.members[index].connection,
+                payload.clone(),
+                sequence_number,
+                now,
+            )
+        };
+        match first_attempt {
+            Ok(true) => {}
+            Ok(false) => return Ok(0),
+            Err(_) => {
+                self.mark_send_failure(index);
+                self.promote_backup_member();
+                let Some(index) = self.active_indices().into_iter().next() else {
+                    return Err(Error::invalid_state("all Backup group members failed"));
+                };
+                self.align_member_sequence(self.members[index].id)?;
+                if !self.members[index].connection.can_send() {
+                    self.mark_send_failure(index);
+                    return Err(Error::invalid_state("Backup promotion send failed"));
+                }
+                match send(
+                    self.members[index].id,
+                    &mut self.members[index].connection,
+                    payload,
+                    sequence_number,
+                    now,
+                )? {
+                    true => {}
+                    false => return Ok(0),
+                }
+            }
         }
         self.next_send_sequence = Some(sequence_number.wrapping_add(1) & 0x7FFF_FFFF);
         Ok(1)

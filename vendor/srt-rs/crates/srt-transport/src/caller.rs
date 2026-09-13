@@ -542,7 +542,36 @@ impl CallerSession {
                     leg.connection.send_shared_into(payload, now, &mut wire)?,
                 ))
             }
-            Self::Group(_) => self.send_shared(payload, now),
+            Self::Group(group) => {
+                let payload_len = payload.len() as u64;
+                let (core, legs) = (&mut group.group, &group.legs);
+                let sent = core.send_shared_into(
+                    payload,
+                    now,
+                    |member_id, connection, payload, sequence, now| {
+                        let peer = legs
+                            .get(&member_id)
+                            .expect("group and caller legs are built together")
+                            .peer;
+                        let mut wire = WirePacketSink { sink, peer };
+                        connection.send_shared_into_with_sequence(
+                            payload,
+                            Some(sequence),
+                            now,
+                            &mut wire,
+                        )
+                    },
+                )?;
+                group.logical.payloads_sent = group
+                    .logical
+                    .payloads_sent
+                    .saturating_add(u64::from(sent != 0));
+                group.logical.payload_bytes_sent = group
+                    .logical
+                    .payload_bytes_sent
+                    .saturating_add(payload_len * u64::from(sent != 0));
+                Ok(sent)
+            }
         }
     }
 
@@ -3592,6 +3621,49 @@ mod tests {
             }
         }
         assert_eq!(received.as_deref(), Some(&b"encrypted-data"[..]));
+    }
+
+    #[test]
+    fn broadcast_caller_writes_each_leg_into_final_sink_storage() {
+        let mut table = CallerTable::new();
+        let group_id = shiguredo_srt::SRTGROUP_MASK | 7_777;
+        let first_peer = std::net::SocketAddr::from(([127, 0, 0, 1], 4_001));
+        let second_peer = std::net::SocketAddr::from(([127, 0, 0, 1], 4_002));
+        let id = table
+            .add_group(
+                group_id,
+                shiguredo_srt::GroupMode::Broadcast,
+                [
+                    CallerGroupLeg::new(1, 1, first_peer, new_connected_caller_connection(8_001)),
+                    CallerGroupLeg::new(2, 1, second_peer, new_connected_caller_connection(8_002)),
+                ],
+            )
+            .expect("broadcast caller");
+        let mut sink = RecordingSink {
+            accepted: true,
+            storage: vec![MaybeUninit::uninit(); 2048],
+            packets: Vec::new(),
+        };
+
+        let sent = table
+            .logical_caller_mut(&id)
+            .expect("broadcast caller")
+            .send_shared_into(
+                Bytes::from_static(b"broadcast-data"),
+                Timestamp::default(),
+                &mut sink,
+            )
+            .expect("broadcast wire send");
+
+        assert_eq!(sent, 2);
+        assert_eq!(sink.packets.len(), 2);
+        for packet in &sink.packets {
+            assert!(matches!(
+                shiguredo_srt::SrtPacket::decode(packet),
+                Ok(shiguredo_srt::SrtPacket::Data(ref data))
+                    if data.payload.as_ref() == b"broadcast-data"
+            ));
+        }
     }
 
     #[test]
