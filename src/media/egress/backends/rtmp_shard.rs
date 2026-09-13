@@ -445,10 +445,9 @@ where
     /// reason to walk every leaf on every media tick either.
     const STALL_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 
-    /// Directly enqueue every connected leaf whose last `WaitCondition`
-    /// wants a feed wake (`Feed`/`FeedOrIo`) — set in
-    /// `apply_progress_to_common` (`visit.rs`) from its own most recent
-    /// `EngineProgress` — without any poller call.
+    /// Directly enqueue leaves parked on `Feed`/`FeedOrIo` when the shared
+    /// feed publishes more media. The queue is populated at visit time, so a
+    /// feed wake does not scan every output on the shard.
     ///
     /// Mirrors `poll_ready()`'s push-with-dedup shape exactly (same
     /// `enqueued` check and set), using `self.ready` directly instead of a
