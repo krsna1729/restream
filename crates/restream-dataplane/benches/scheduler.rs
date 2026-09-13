@@ -10,12 +10,16 @@ fn ready_queue(c: &mut Criterion) {
             BenchmarkId::from_parameter(leaves),
             &leaves,
             |b, &leaves| {
+                let mut queue = ReadyQueue::new(leaves, leaves).unwrap();
                 b.iter(|| {
-                    let mut queue = ReadyQueue::new(leaves, leaves).unwrap();
                     for slot in 0..leaves as u32 {
                         assert!(queue.enqueue(slot));
                     }
-                    while queue.pop().is_some() {}
+                    let mut popped = 0;
+                    while queue.pop().is_some() {
+                        popped += 1;
+                    }
+                    black_box(popped);
                 });
             },
         );
