@@ -192,6 +192,10 @@ impl IoUringTcpPoller {
         completions.extend_from_slice(&self.send_completions[..count]);
     }
 
+    pub(crate) fn metrics(&self) -> restream_dataplane::tcp::TcpPollerMetrics {
+        self.inner.metrics()
+    }
+
     pub(crate) fn register_leaf(
         &mut self,
         fd: RawFd,

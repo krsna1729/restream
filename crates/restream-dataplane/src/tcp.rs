@@ -71,6 +71,7 @@ pub struct TcpPollerMetrics {
     pub stale_completions: u64,
     pub ready_overflows: u64,
     pub poll_errors: u64,
+    pub sqes: u64,
 }
 
 /// One accepted socket returned by the owner-thread acceptor.
@@ -556,6 +557,7 @@ impl UringTcpPoller {
                 ),
         };
         unsafe { self.push(&entry)? };
+        self.metrics.sqes = self.metrics.sqes.saturating_add(1);
         self.pending_sends[index].generation = generation;
         self.pending_sends[index].active = true;
         Ok(())
@@ -998,6 +1000,8 @@ mod tests {
                 };
                 assert_eq!(count, 6);
                 assert_eq!(&received, b"native");
+                assert_eq!(poller.metrics().sqes, 1);
+                assert!(poller.metrics().completions >= 1);
                 return;
             }
         }

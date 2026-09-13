@@ -28,6 +28,7 @@ use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, Protoco
 use crate::media::egress::feed::EgressFeed;
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::leaf::LeafCommon;
+use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::{LeafLimits, LeafStallClass, WorkBudget, classify_stall};
 use crate::media::egress::scheduler::{LeafKey, VisitDecision};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
@@ -396,6 +397,8 @@ where
     /// `EgressShardRuntime::record_iteration` into `ShardMetrics::feed_resyncs`
     /// for the repeated-resync alert (`derive_alerts`, `src/alerts.rs`).
     resync_count: u64,
+    native_tx_packets: u64,
+    native_tx_bytes: u64,
 }
 
 impl<P, S> RtmpShardBackend<P, S>
@@ -438,6 +441,8 @@ where
             last_stall_sweep: None,
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
+            native_tx_packets: 0,
+            native_tx_bytes: 0,
         }
     }
 
@@ -529,6 +534,12 @@ where
         self.poller
             .drain_send_completions(&mut self.send_completions);
         for completion in self.send_completions.drain(..) {
+            if completion.result >= 0 {
+                self.native_tx_packets = self.native_tx_packets.saturating_add(1);
+                self.native_tx_bytes = self
+                    .native_tx_bytes
+                    .saturating_add(completion.result as u64);
+            }
             let key = LeafKey(completion.slot as usize);
             let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
                 continue;
@@ -696,6 +707,16 @@ where
 {
     fn resync_count(&self) -> u64 {
         self.resync_count
+    }
+
+    fn observe_metrics(&self, metrics: &mut ShardMetrics) {
+        let native = self.poller.native_metrics();
+        metrics.tx_packets = self.native_tx_packets;
+        metrics.tx_bytes = self.native_tx_bytes;
+        metrics.sqes = native.sqes;
+        metrics.cqes = native.completions;
+        metrics.stale_completions = native.stale_completions;
+        metrics.cq_overflows = native.ready_overflows;
     }
 
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {

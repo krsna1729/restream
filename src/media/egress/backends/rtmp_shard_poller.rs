@@ -66,6 +66,10 @@ pub(crate) trait RtmpReadinessPoller {
     }
 
     fn drain_send_completions(&mut self, _completions: &mut Vec<TcpSendCompletion>) {}
+
+    fn native_metrics(&self) -> restream_dataplane::tcp::TcpPollerMetrics {
+        restream_dataplane::tcp::TcpPollerMetrics::default()
+    }
 }
 
 impl<P> RtmpNativeSender for P
@@ -211,5 +215,9 @@ impl RtmpReadinessPoller for super::tcp::IoUringTcpPoller {
 
     fn drain_send_completions(&mut self, completions: &mut Vec<TcpSendCompletion>) {
         self.drain_native_send_completions(completions);
+    }
+
+    fn native_metrics(&self) -> restream_dataplane::tcp::TcpPollerMetrics {
+        self.metrics()
     }
 }
