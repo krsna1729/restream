@@ -55,7 +55,7 @@ pub async fn recording_start_handler(
         return Ok(response);
     }
 
-    let pipeline = state.pipeline_service.get_by_id(&pipeline_id).await?;
+    let pipeline = crate::application::pipelines::get_by_id(&state.db, &pipeline_id).await?;
 
     let active = state
         .media_library_service
@@ -82,7 +82,7 @@ pub async fn recording_stop_handler(
         return Ok(response);
     }
 
-    let _ = state.pipeline_service.get_by_id(&pipeline_id).await?;
+    let _ = crate::application::pipelines::get_by_id(&state.db, &pipeline_id).await?;
 
     state
         .media_library_service

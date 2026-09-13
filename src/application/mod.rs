@@ -11,6 +11,7 @@ pub mod logs;
 pub mod models;
 pub mod outputs;
 pub mod pipeline_inputs;
+pub mod pipelines;
 pub mod ports;
 pub mod recirculation;
 pub mod reconcile;

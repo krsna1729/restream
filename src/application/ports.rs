@@ -10,12 +10,6 @@ pub type PipelineLookupFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Pipeline>, PipelineStoreError>> + Send + 'a>>;
 pub type PipelineListFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<Pipeline>, PipelineStoreError>> + Send + 'a>>;
-pub type PipelineCreateFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Pipeline, PipelineStoreError>> + Send + 'a>>;
-pub type PipelineDeleteFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<bool, PipelineStoreError>> + Send + 'a>>;
-pub type PipelineIngestHostFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Option<String>, PipelineStoreError>> + Send + 'a>>;
 pub type IngestLookupFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Ingest>, IngestLookupError>> + Send + 'a>>;
 pub type IngestCatalogFuture<'a> =
@@ -205,27 +199,8 @@ impl fmt::Display for RecordingStoreError {
 impl std::error::Error for RecordingStoreError {}
 
 pub trait PipelineStore: Send + Sync {
-    fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a>;
     fn get_pipeline_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineLookupFuture<'a>;
     fn list_pipelines<'a>(&'a self) -> PipelineListFuture<'a>;
-    fn create_pipeline<'a>(
-        &'a self,
-        id: &'a str,
-        name: &'a str,
-        stream_key: &'a str,
-        input_source: Option<&'a str>,
-        srt_ingest_policy: Option<&'a str>,
-    ) -> PipelineCreateFuture<'a>;
-    fn update_pipeline<'a>(
-        &'a self,
-        id: &'a str,
-        name: &'a str,
-        stream_key: &'a str,
-        input_source: Option<&'a str>,
-        srt_ingest_policy: Option<&'a str>,
-    ) -> PipelineUpdateFuture<'a>;
-    fn delete_pipeline<'a>(&'a self, id: &'a str) -> PipelineDeleteFuture<'a>;
-    fn get_ingest_host<'a>(&'a self) -> PipelineIngestHostFuture<'a>;
     fn update_pipeline_input_source<'a>(
         &'a self,
         pipeline: &'a Pipeline,

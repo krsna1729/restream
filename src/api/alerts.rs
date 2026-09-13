@@ -17,9 +17,7 @@ use super::state::{AppState, recording_enabled_map, require_authenticated};
 // Alerts are always derived from the dashboard health view so the alert list
 // reflects the same pipeline set and desired-recording state operators see.
 async fn dashboard_alert_snapshot(state: &AppState) -> serde_json::Value {
-    let pipeline_ids = state
-        .pipeline_service
-        .list_pipeline_ids()
+    let pipeline_ids = crate::application::pipelines::list_pipeline_ids(&state.db)
         .await
         .unwrap_or_default();
     let recording_enabled = recording_enabled_map(state, &pipeline_ids).await;

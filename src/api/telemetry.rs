@@ -129,7 +129,9 @@ pub async fn build_file_diagnostics_context(
     state: &AppState,
     pipeline_id: &str,
 ) -> Option<diag::FileDiagnosticsContext> {
-    let pipeline = state.pipeline_service.get_by_id(pipeline_id).await.ok()?;
+    let pipeline = crate::application::pipelines::get_by_id(&state.db, pipeline_id)
+        .await
+        .ok()?;
     let ingest = state
         .file_ingest_service
         .load_pipeline_file_ingest_state(&state.engine, &pipeline)
@@ -421,9 +423,7 @@ pub async fn v1_overview_handler(
         return response;
     }
 
-    let pipelines = state
-        .pipeline_service
-        .list_pipelines()
+    let pipelines = crate::application::pipelines::list_pipelines(&state.db)
         .await
         .unwrap_or_default();
     let pipeline_ids: Vec<String> = pipelines.iter().map(|p| p.id.clone()).collect();

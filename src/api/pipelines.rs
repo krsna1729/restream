@@ -135,9 +135,9 @@ pub async fn pipelines_get_handler(
         return response;
     }
 
-    match state.pipeline_service.list_pipelines().await {
+    match crate::application::pipelines::list_pipelines(&state.db).await {
         Ok(pipelines) => {
-            let ingest_host = state.pipeline_service.get_ingest_host().await;
+            let ingest_host = crate::application::pipelines::get_ingest_host(&state.db).await;
             let pipelines = pipelines
                 .iter()
                 .map(|pipeline| {
@@ -166,7 +166,7 @@ pub async fn pipeline_detail_handler(
         return response;
     }
 
-    let pipeline = match state.pipeline_service.get_by_id(&id).await {
+    let pipeline = match crate::application::pipelines::get_by_id(&state.db, &id).await {
         Ok(pipeline) => pipeline,
         Err(error) => return ApiError::from(error).into_response(),
     };
@@ -174,7 +174,7 @@ pub async fn pipeline_detail_handler(
         Ok(outputs) => outputs,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let ingest_host = state.pipeline_service.get_ingest_host().await;
+    let ingest_host = crate::application::pipelines::get_ingest_host(&state.db).await;
 
     Json(serde_json::json!({
         "pipeline": api_view_models::pipeline_response_json(
@@ -226,16 +226,15 @@ pub async fn pipelines_post_handler(
             .clone()
             .unwrap_or_else(generate_stream_key);
         let id = format!("pipeline_{}", to_hex(&rand::random::<[u8; 8]>()));
-        match state
-            .pipeline_service
-            .create_pipeline(
-                &id,
-                &payload.name,
-                &stream_key,
-                input_source,
-                srt_ingest_policy.as_deref(),
-            )
-            .await
+        match crate::application::pipelines::create_pipeline(
+            &state.db,
+            &id,
+            &payload.name,
+            &stream_key,
+            input_source,
+            srt_ingest_policy.as_deref(),
+        )
+        .await
         {
             Ok(pipeline) => {
                 refresh_srt_ingest_policy_store(&state).await;
@@ -250,7 +249,7 @@ pub async fn pipelines_post_handler(
                     Ok(file_ingest) => file_ingest,
                     Err(response) => return response,
                 };
-                let ingest_host = state.pipeline_service.get_ingest_host().await;
+                let ingest_host = crate::application::pipelines::get_ingest_host(&state.db).await;
                 return (
                     StatusCode::CREATED,
                     Json(serde_json::json!({
@@ -302,7 +301,7 @@ pub async fn pipelines_update_handler(
         return response;
     }
 
-    let existing = match state.pipeline_service.get_by_id(&id).await {
+    let existing = match crate::application::pipelines::get_by_id(&state.db, &id).await {
         Ok(p) => p,
         Err(_) => return (StatusCode::NOT_FOUND, "Pipeline not found").into_response(),
     };
@@ -321,7 +320,7 @@ pub async fn pipelines_update_handler(
         Err(response) => return *response,
     };
 
-    if let Ok(active_pipelines) = state.pipeline_service.list_pipelines().await
+    if let Ok(active_pipelines) = crate::application::pipelines::list_pipelines(&state.db).await
         && active_pipelines
             .iter()
             .any(|p| p.id != id && p.stream_key == stream_key)
@@ -329,16 +328,15 @@ pub async fn pipelines_update_handler(
         return duplicate_stream_key_response();
     }
 
-    match state
-        .pipeline_service
-        .update_pipeline(
-            &id,
-            &payload.name,
-            &stream_key,
-            input_source.as_deref(),
-            srt_ingest_policy.as_deref(),
-        )
-        .await
+    match crate::application::pipelines::update_pipeline(
+        &state.db,
+        &id,
+        &payload.name,
+        &stream_key,
+        input_source.as_deref(),
+        srt_ingest_policy.as_deref(),
+    )
+    .await
     {
         Ok(updated) => {
             refresh_srt_ingest_policy_store(&state).await;
@@ -353,7 +351,7 @@ pub async fn pipelines_update_handler(
                 Ok(file_ingest) => file_ingest,
                 Err(response) => return response,
             };
-            let ingest_host = state.pipeline_service.get_ingest_host().await;
+            let ingest_host = crate::application::pipelines::get_ingest_host(&state.db).await;
             Json(serde_json::json!({
                 "message": "Pipeline updated",
                 "pipeline": api_view_models::pipeline_response_json_with_file_ingest(
@@ -396,7 +394,7 @@ pub async fn pipelines_delete_handler(
         }
     }
 
-    if let Ok(pipeline) = state.pipeline_service.get_by_id(&id).await
+    if let Ok(pipeline) = crate::application::pipelines::get_by_id(&state.db, &id).await
         && let Ok(ingests) = state.ingest_service.list_ingests().await
     {
         for ingest in ingests
@@ -413,7 +411,7 @@ pub async fn pipelines_delete_handler(
     state.engine.shutdown_hls_preview_segmenter(&id).await;
     state.engine.shutdown_hls_segmenter(&id).await;
 
-    match state.pipeline_service.delete_pipeline(&id).await {
+    match crate::application::pipelines::delete_pipeline(&state.db, &id).await {
         Ok(true) => {
             refresh_srt_ingest_policy_store(&state).await;
             Json(serde_json::json!({"message": format!("Pipeline {} deleted", id)})).into_response()

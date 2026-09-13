@@ -8,9 +8,7 @@
 use std::sync::Arc;
 
 use crate::application::models::{Ingest, Job, Output, Pipeline};
-use crate::application::ports::{
-    IngestHostStore, IngestLookup, JobStore, MetaStore, PipelineStore,
-};
+use crate::application::ports::{IngestHostStore, IngestLookup, JobStore, MetaStore};
 use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
 use crate::media::security::IngestSecurityService;
 use crate::planner::BackendPolicy;
@@ -84,7 +82,6 @@ pub(crate) enum AgentOutputMutationOutcome {
 #[derive(Clone)]
 pub struct AgentService {
     db: SqlitePool,
-    pipeline_store: Arc<dyn PipelineStore>,
     job_store: Arc<dyn JobStore>,
     ingest_store: Arc<dyn IngestLookup>,
     meta_store: Arc<dyn MetaStore>,
@@ -95,7 +92,6 @@ impl AgentService {
     /// Builds the service from the stores used by agent catalogs and mutations.
     pub fn with_stores(
         db: SqlitePool,
-        pipeline_store: Arc<dyn PipelineStore>,
         job_store: Arc<dyn JobStore>,
         ingest_store: Arc<dyn IngestLookup>,
         meta_store: Arc<dyn MetaStore>,
@@ -103,7 +99,6 @@ impl AgentService {
     ) -> Self {
         Self {
             db,
-            pipeline_store,
             job_store,
             ingest_store,
             meta_store,
@@ -117,9 +112,7 @@ impl AgentService {
         &self,
         security: &IngestSecurityService,
     ) -> AgentContextCatalog {
-        let pipelines = self
-            .pipeline_store
-            .list_pipelines()
+        let pipelines = crate::application::pipelines::list_pipelines(&self.db)
             .await
             .unwrap_or_default();
         let outputs = crate::application::outputs::list_outputs(&self.db)
@@ -168,9 +161,7 @@ impl AgentService {
     pub async fn try_load_pipeline_output_catalog(
         &self,
     ) -> Result<AgentPipelineOutputCatalog, String> {
-        let pipelines = self
-            .pipeline_store
-            .list_pipelines()
+        let pipelines = crate::application::pipelines::list_pipelines(&self.db)
             .await
             .map_err(|error| format!("failed to list pipelines: {error}"))?;
         let outputs = crate::application::outputs::list_outputs(&self.db)

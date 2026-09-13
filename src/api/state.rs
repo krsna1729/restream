@@ -19,7 +19,7 @@ use crate::application::pipeline_inputs::PipelineInputService;
 use crate::application::recirculation::RecirculationService;
 use crate::application::services::{
     AgentService, AuthService, FileIngestService, IngestService, MediaLibraryService,
-    PipelineService, SettingsService,
+    SettingsService,
 };
 use crate::config::AppConfig;
 use crate::domain::ingest_security::IngestSecurityConfig;
@@ -100,7 +100,6 @@ pub struct AppState {
     pub db_path: String,
     srt_passphrase: Option<String>,
     srt_pbkeylen: i32,
-    pub pipeline_service: PipelineService,
     pub pipeline_input_service: PipelineInputService,
     pub recirculation_service: RecirculationService,
     pub ingest_service: IngestService,
@@ -134,7 +133,6 @@ impl AppState {
         runtime: AppStateRuntimeConfig,
     ) -> Self {
         let AppServices {
-            pipeline_service,
             pipeline_input_service,
             recirculation_service,
             ingest_service,
@@ -157,7 +155,6 @@ impl AppState {
             db_path: runtime.db_path,
             srt_passphrase: runtime.srt_passphrase,
             srt_pbkeylen: runtime.srt_pbkeylen,
-            pipeline_service,
             pipeline_input_service,
             recirculation_service,
             ingest_service,

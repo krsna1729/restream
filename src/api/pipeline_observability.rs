@@ -62,9 +62,7 @@ pub async fn pipeline_graph_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return Ok(response);
     }
-    if state
-        .pipeline_service
-        .get_by_id(&pipeline_id)
+    if crate::application::pipelines::get_by_id(&state.db, &pipeline_id)
         .await
         .is_err()
     {
@@ -138,9 +136,7 @@ pub async fn pipeline_diagnostics_context_handler(
         return Ok(response);
     }
 
-    if state
-        .pipeline_service
-        .get_by_id(&pipeline_id)
+    if crate::application::pipelines::get_by_id(&state.db, &pipeline_id)
         .await
         .is_err()
     {
@@ -219,9 +215,7 @@ pub async fn v1_pipeline_summary_handler(
         return Ok(response);
     }
 
-    if state
-        .pipeline_service
-        .get_by_id(&pipeline_id)
+    if crate::application::pipelines::get_by_id(&state.db, &pipeline_id)
         .await
         .is_err()
     {

@@ -733,13 +733,8 @@ async fn test_phase_4_5_services_and_repositories_flow() {
     let db = SqlitePool::connect("sqlite::memory:").await.unwrap();
     restream::db::setup_database_schema(&db).await.unwrap();
 
-    let services =
-        restream::infrastructure::service_wiring::SqliteServiceFactory::new(&db).compose();
-    let pipeline_service = services.pipeline_service;
-
     let pid = "test-pipe-service";
-    pipeline_service
-        .create_pipeline(pid, "name", "stream-key", None, None)
+    restream::application::pipelines::create_pipeline(&db, pid, "name", "stream-key", None, None)
         .await
         .unwrap();
 

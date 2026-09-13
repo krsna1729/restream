@@ -111,7 +111,7 @@ pub async fn pipeline_inputs_get_handler(
         Ok(inputs) => inputs,
         Err(error) => return ApiError::from(error).into_response(),
     };
-    let host = state.pipeline_service.get_ingest_host().await;
+    let host = crate::application::pipelines::get_ingest_host(&state.db).await;
     let selected_input_id = inputs
         .iter()
         .find(|input| input.selected)
@@ -148,7 +148,7 @@ pub async fn pipeline_inputs_post_handler(
         Err(error) => return ApiError::from(error).into_response(),
     };
     refresh_srt_ingest_policy_store(&state).await;
-    let host = state.pipeline_service.get_ingest_host().await;
+    let host = crate::application::pipelines::get_ingest_host(&state.db).await;
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
@@ -202,7 +202,7 @@ pub async fn pipeline_input_patch_handler(
         state.engine.cancel_pipeline_input(&input.id).await;
     }
     refresh_srt_ingest_policy_store(&state).await;
-    let host = state.pipeline_service.get_ingest_host().await;
+    let host = crate::application::pipelines::get_ingest_host(&state.db).await;
     Json(serde_json::json!({
         "input": input_json(&state, &input, &host).await
     }))
@@ -252,7 +252,7 @@ pub async fn pipeline_input_promote_handler(
         .engine
         .select_pipeline_input(&pipeline_id, &input_id)
         .await;
-    let host = state.pipeline_service.get_ingest_host().await;
+    let host = crate::application::pipelines::get_ingest_host(&state.db).await;
     Json(serde_json::json!({
         "input": input_json(&state, &input, &host).await,
         "connected": connected,
