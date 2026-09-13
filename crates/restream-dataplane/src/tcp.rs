@@ -1,7 +1,7 @@
 //! One-owner TCP readiness over `io_uring`.
 
 use std::io;
-use std::os::fd::RawFd;
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::time::Duration;
 
 use io_uring::{IoUring, opcode, types};
@@ -61,6 +61,125 @@ pub struct TcpPollerMetrics {
     pub stale_completions: u64,
     pub ready_overflows: u64,
     pub poll_errors: u64,
+}
+
+/// One accepted socket returned by the owner-thread acceptor.
+#[derive(Debug)]
+pub struct AcceptedTcp {
+    fd: OwnedFd,
+}
+
+impl AcceptedTcp {
+    /// Take ownership of the accepted socket as a nonblocking standard
+    /// library stream. The caller remains responsible for runtime adoption.
+    pub fn into_std(self) -> std::net::TcpStream {
+        self.fd.into()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TcpAcceptorMetrics {
+    pub accepted: u64,
+    pub errors: u64,
+    pub stale_completions: u64,
+}
+
+/// Single-owner TCP acceptor backed by one `io_uring`.
+///
+/// The accepted socket is returned with `CLOEXEC|NONBLOCK` already set, so a
+/// bounded handoff can adopt it into an async runtime without a second setup
+/// syscall or a blocking accept loop.
+pub struct UringTcpAcceptor {
+    ring: IoUring,
+    listener_fd: RawFd,
+    armed: bool,
+    generation: u32,
+    metrics: TcpAcceptorMetrics,
+}
+
+impl UringTcpAcceptor {
+    pub fn new(listener_fd: RawFd, ring_entries: u32) -> io::Result<Self> {
+        if !ring_entries.is_power_of_two() || ring_entries < 8 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "io_uring entries must be a power of two >= 8",
+            ));
+        }
+        Ok(Self {
+            ring: build_ring(ring_entries)?,
+            listener_fd,
+            armed: false,
+            generation: 0,
+            metrics: TcpAcceptorMetrics::default(),
+        })
+    }
+
+    /// Wait for one connection and write it into caller-owned storage.
+    pub fn accept(&mut self, accepted: &mut [Option<AcceptedTcp>]) -> io::Result<usize> {
+        if accepted.is_empty() {
+            return Ok(0);
+        }
+        if !self.armed {
+            self.generation = self.generation.wrapping_add(1);
+            let tag = OpTag::new(OpKind::Accept, 0, self.generation)
+                .expect("accept tag slot is fixed")
+                .encode();
+            let entry = opcode::Accept::new(
+                types::Fd(self.listener_fd),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+            .flags(libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK)
+            .build()
+            .user_data(tag);
+            unsafe { self.push(&entry)? };
+            self.armed = true;
+        }
+
+        self.ring.submit_and_wait(1)?;
+        let mut count = 0;
+        {
+            let cq = self.ring.completion();
+            for completion in cq {
+                let Some(tag) = OpTag::decode(completion.user_data()) else {
+                    self.metrics.stale_completions += 1;
+                    continue;
+                };
+                if tag.kind != OpKind::Accept || tag.generation != self.generation {
+                    self.metrics.stale_completions += 1;
+                    continue;
+                }
+                self.armed = false;
+                let result = completion.result();
+                if result < 0 {
+                    self.metrics.errors += 1;
+                    let error = io::Error::from_raw_os_error(-result);
+                    if matches!(
+                        error.raw_os_error(),
+                        Some(libc::EINTR | libc::ECONNABORTED | libc::EPROTO)
+                    ) {
+                        return Ok(0);
+                    }
+                    return Err(error);
+                }
+                let fd = unsafe { OwnedFd::from_raw_fd(result) };
+                accepted[count] = Some(AcceptedTcp { fd });
+                count += 1;
+                self.metrics.accepted += 1;
+                break;
+            }
+        }
+        Ok(count)
+    }
+
+    pub fn metrics(&self) -> TcpAcceptorMetrics {
+        self.metrics
+    }
+
+    unsafe fn push(&mut self, entry: &io_uring::squeue::Entry) -> io::Result<()> {
+        unsafe { self.ring.submission().push(entry) }
+            .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "io_uring SQ full"))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -281,6 +400,34 @@ mod tests {
         };
         (result == 0)
             .then(|| unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+    }
+
+    #[test]
+    fn acceptor_returns_nonblocking_loopback_socket() {
+        let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(_) => return,
+        };
+        let address = listener.local_addr().unwrap();
+        let _client = std::net::TcpStream::connect(address).unwrap();
+        let mut acceptor = match UringTcpAcceptor::new(listener.as_raw_fd(), 32) {
+            Ok(acceptor) => acceptor,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
+                ) =>
+            {
+                return;
+            }
+            Err(error) => panic!("io_uring unavailable: {error}"),
+        };
+        let mut accepted = [None];
+        assert_eq!(acceptor.accept(&mut accepted).unwrap(), 1);
+        let stream = accepted[0].take().unwrap().into_std();
+        stream.set_nonblocking(true).unwrap();
+        assert!(stream.peer_addr().is_ok());
+        assert_eq!(acceptor.metrics().accepted, 1);
     }
 
     #[test]
