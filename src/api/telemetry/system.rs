@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use sysinfo::{Disks, Networks, System};
 
 use crate::api::state::AppState;
 use crate::system_sampling::{ProcessResourceSnapshot, sample_process_resources};
+use restream_dataplane::UringCapabilities;
 
 use super::configured_media_root;
 
@@ -27,6 +29,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     let load_avg = System::load_average();
     let engine = engine_metrics(&sys, core_count);
     let capacity = state.engine.capacity_snapshot().await;
+    let io_uring = uring_capabilities();
 
     let media_root = {
         let absolute = configured_media_root(&state.media_dir);
@@ -129,6 +132,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             },
             "engine": engine,
             "capacity": capacity,
+            "ioUring": io_uring,
             "disk": {
                 "usedPercent": disk_pct,
             },
@@ -153,6 +157,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             },
             "engine": engine,
             "capacity": capacity,
+            "ioUring": io_uring,
             "disk": {
                 "totalBytes": total_disk,
                 "usedBytes": used_disk,
@@ -175,6 +180,31 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             }
         })
     }
+}
+
+fn uring_capabilities() -> &'static serde_json::Value {
+    static CAPABILITIES: OnceLock<serde_json::Value> = OnceLock::new();
+    CAPABILITIES.get_or_init(|| match UringCapabilities::probe(8) {
+        Ok(caps) => serde_json::json!({
+            "available": true,
+            "pollAdd": caps.poll_add,
+            "accept": caps.accept,
+            "acceptMultishot": caps.accept_multishot,
+            "connect": caps.connect,
+            "recv": caps.recv,
+            "recvMsg": caps.recv_msg,
+            "recvMultishot": caps.recv_multishot,
+            "recvBundle": caps.recv_bundle,
+            "send": caps.send,
+            "sendMsg": caps.send_msg,
+            "sendZc": caps.send_zc,
+            "sendBundle": caps.send_bundle,
+        }),
+        Err(error) => serde_json::json!({
+            "available": false,
+            "error": error.kind().to_string(),
+        }),
+    })
 }
 
 fn disk_usage_for_path(disks: &Disks, path: &Path) -> Option<(u64, u64, String)> {
