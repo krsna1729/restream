@@ -29,6 +29,13 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     let load_avg = System::load_average();
     let engine = engine_metrics(&sys, core_count);
     let capacity = state.engine.capacity_snapshot().await;
+    let egress_shards = state
+        .engine
+        .egress_fabric_shard_statuses(std::time::Duration::from_secs(5))
+        .await
+        .into_iter()
+        .map(|status| status.to_json())
+        .collect::<Vec<_>>();
     let io_uring = uring_capabilities();
 
     let media_root = {
@@ -132,6 +139,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             },
             "engine": engine,
             "capacity": capacity,
+            "egressShards": egress_shards,
             "ioUring": io_uring,
             "disk": {
                 "usedPercent": disk_pct,
@@ -157,6 +165,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             },
             "engine": engine,
             "capacity": capacity,
+            "egressShards": egress_shards,
             "ioUring": io_uring,
             "disk": {
                 "totalBytes": total_disk,
