@@ -26,7 +26,7 @@ fn shared_outbound_flush_supports_ipv6() {
         shared
             .drive(shiguredo_srt::Timestamp::default())
             .expect("drive IPv6 datagram");
-        if shared.outbound.is_empty() {
+        if shared.flush_outbound().expect("complete IPv6 datagram") {
             break;
         }
     }
@@ -49,7 +49,7 @@ fn shared_outbound_flush_sends_without_entering_the_runtime() {
         shared
             .drive(shiguredo_srt::Timestamp::default())
             .expect("drive native UDP readiness");
-        if shared.outbound.is_empty() {
+        if shared.flush_outbound().expect("complete datagram") {
             break;
         }
     }
@@ -78,7 +78,7 @@ fn shared_outbound_flush_sends_an_ipv4_batch_and_clears_leftover() {
         shared
             .drive(shiguredo_srt::Timestamp::default())
             .expect("drive outbound batch");
-        if shared.outbound.is_empty() {
+        if shared.flush_outbound().expect("complete outbound batch") {
             break;
         }
     }

@@ -9,6 +9,9 @@ use srt_transport::{DatagramSink, OutputDrainBudget, RecvBatch};
 
 use super::{desired_udp_buf, recv_budget};
 
+const SRT_UDP_SEND_CAPACITY: usize = 16;
+type PendingDatagram = (SocketAddr, Vec<u8>);
+
 pub(crate) struct SharedSrtEgress {
     pub(crate) socket: UdpSocket,
     pub(crate) callers: srt_transport::CallerTable,
@@ -16,7 +19,8 @@ pub(crate) struct SharedSrtEgress {
     free_outbound: Vec<Vec<u8>>,
     recv_batch: RecvBatch,
     poller: UringUdpPoller,
-    send_completions: [UdpSendCompletion; 1],
+    send_completions: Box<[UdpSendCompletion]>,
+    inflight: Box<[Option<PendingDatagram>]>,
     /// Times `drive` has run, so the readiness-path invariant in
     /// `drive_shared_srt_egress` (driving does not scale with the number of
     /// leaves sharing this state) is directly assertable instead of
@@ -47,7 +51,8 @@ impl SharedSrtEgress {
             .map_err(|error| error.to_string())?;
         srt_transport::set_sock_bufs(socket.as_raw_fd(), desired_udp_buf())
             .map_err(|error| error.to_string())?;
-        let mut poller = UringUdpPoller::new_fixed(1, 32).map_err(|error| error.to_string())?;
+        let mut poller = UringUdpPoller::new_fixed_with_send_capacity(1, 32, SRT_UDP_SEND_CAPACITY)
+            .map_err(|error| error.to_string())?;
         poller
             .register_fixed(socket.as_raw_fd(), 0, 1, UdpInterest::READ_WRITE)
             .map_err(|error| error.to_string())?;
@@ -58,11 +63,19 @@ impl SharedSrtEgress {
             free_outbound: (0..256).map(|_| Vec::with_capacity(64 * 1024)).collect(),
             recv_batch: RecvBatch::new(),
             poller,
-            send_completions: [UdpSendCompletion {
-                slot: 0,
-                generation: 0,
-                result: 0,
-            }],
+            send_completions: vec![
+                UdpSendCompletion {
+                    slot: 0,
+                    generation: 0,
+                    result: 0,
+                };
+                SRT_UDP_SEND_CAPACITY
+            ]
+            .into_boxed_slice(),
+            inflight: std::iter::repeat_with(|| None)
+                .take(SRT_UDP_SEND_CAPACITY)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
             #[cfg(test)]
             drive_calls: 0,
         })
@@ -132,19 +145,24 @@ impl SharedSrtEgress {
         let completed = self
             .poller
             .drain_send_completions(&mut self.send_completions);
-        if completed != 0 {
-            let completion = self.send_completions[0];
+        for completion_index in 0..completed {
+            let completion = self.send_completions[completion_index];
+            let slot = completion.slot as usize;
+            let Some((peer, packet)) = self.inflight.get_mut(slot).and_then(Option::take) else {
+                return Err(format!(
+                    "UDP completion {} has no in-flight datagram",
+                    completion.slot
+                ));
+            };
             if completion.result < 0 {
                 let error = std::io::Error::from_raw_os_error(-completion.result);
-                if error.kind() != std::io::ErrorKind::WouldBlock {
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    self.outbound.push_front((peer, packet));
+                } else {
                     return Err(error.to_string());
                 }
-            } else if self
-                .outbound
-                .front()
-                .is_some_and(|(_, packet)| completion.result as usize == packet.len())
-            {
-                self.recycle_front(1);
+            } else if completion.result as usize == packet.len() {
+                self.recycle_packet(packet);
             } else {
                 return Err(format!(
                     "short UDP datagram send: wrote {} bytes",
@@ -152,27 +170,35 @@ impl SharedSrtEgress {
                 ));
             }
         }
-        let Some((peer, packet)) = self.outbound.front() else {
-            return Ok(true);
-        };
-        match self
-            .poller
-            .submit_send(self.socket.as_raw_fd(), 0, 1, *peer, packet)
-        {
-            Ok(()) => Ok(false),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
-            Err(error) => Err(error.to_string()),
-        }
-    }
-
-    fn recycle_front(&mut self, count: usize) {
-        for _ in 0..count {
-            let Some((_, packet)) = self.outbound.pop_front() else {
+        while let Some(operation_slot) = self.inflight.iter().position(Option::is_none) {
+            let Some((peer, packet)) = self.outbound.pop_front() else {
                 break;
             };
-            if self.free_outbound.len() < 256 {
-                self.free_outbound.push(packet);
+            match self.poller.submit_send_on_slot(
+                self.socket.as_raw_fd(),
+                0,
+                operation_slot as u32,
+                1,
+                peer,
+                &packet,
+            ) {
+                Ok(()) => self.inflight[operation_slot] = Some((peer, packet)),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    self.outbound.push_front((peer, packet));
+                    break;
+                }
+                Err(error) => {
+                    self.outbound.push_front((peer, packet));
+                    return Err(error.to_string());
+                }
             }
+        }
+        Ok(self.outbound.is_empty() && self.inflight.iter().all(Option::is_none))
+    }
+
+    fn recycle_packet(&mut self, packet: Vec<u8>) {
+        if self.free_outbound.len() < 256 {
+            self.free_outbound.push(packet);
         }
     }
 }

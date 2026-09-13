@@ -83,6 +83,7 @@ struct Registration {
 }
 
 struct PendingSend {
+    registration_slot: u32,
     generation: u32,
     active: bool,
     destination: libc::sockaddr_storage,
@@ -99,6 +100,7 @@ unsafe impl Send for PendingSend {}
 impl PendingSend {
     fn new() -> Self {
         Self {
+            registration_slot: 0,
             generation: 0,
             active: false,
             destination: unsafe { std::mem::zeroed() },
@@ -155,6 +157,17 @@ pub struct UringUdpPoller {
 
 impl UringUdpPoller {
     pub fn new(max_slots: usize, ring_entries: u32) -> io::Result<Self> {
+        Self::new_with_send_capacity(max_slots, ring_entries, max_slots)
+    }
+
+    /// Construct a readiness poller with an independent bounded UDP send
+    /// slot pool. Send slots may exceed registration slots when one socket
+    /// should keep several datagrams in flight.
+    pub fn new_with_send_capacity(
+        max_slots: usize,
+        ring_entries: u32,
+        send_capacity: usize,
+    ) -> io::Result<Self> {
         if max_slots == 0 || max_slots >= MAX_TAG_SLOTS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -167,17 +180,23 @@ impl UringUdpPoller {
                 "io_uring entries must be a power of two >= 8",
             ));
         }
+        if send_capacity == 0 || send_capacity >= MAX_TAG_SLOTS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid UDP send capacity",
+            ));
+        }
         let ring = build_ring(ring_entries)?;
         Ok(Self {
             ring,
             registrations: vec![None; max_slots].into_boxed_slice(),
             fixed_files: None,
             pending_sends: std::iter::repeat_with(PendingSend::new)
-                .take(max_slots)
+                .take(send_capacity)
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
-            send_completions: vec![None; max_slots].into_boxed_slice(),
-            send_completion_order: VecDeque::with_capacity(max_slots),
+            send_completions: vec![None; send_capacity].into_boxed_slice(),
+            send_completion_order: VecDeque::with_capacity(send_capacity),
             timeout_armed: false,
             metrics: UdpPollerMetrics::default(),
         })
@@ -187,6 +206,15 @@ impl UringUdpPoller {
     /// table. Fixed slots live for the poller's lifetime; this matches native
     /// shard sockets, which are opened once and owned by one thread.
     pub fn new_fixed(max_slots: usize, ring_entries: u32) -> io::Result<Self> {
+        Self::new_fixed_with_send_capacity(max_slots, ring_entries, max_slots)
+    }
+
+    /// Fixed-file variant with an independent bounded UDP send slot pool.
+    pub fn new_fixed_with_send_capacity(
+        max_slots: usize,
+        ring_entries: u32,
+        send_capacity: usize,
+    ) -> io::Result<Self> {
         if max_slots == 0 || max_slots >= MAX_TAG_SLOTS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -197,6 +225,12 @@ impl UringUdpPoller {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "io_uring entries must be a power of two >= 8",
+            ));
+        }
+        if send_capacity == 0 || send_capacity >= MAX_TAG_SLOTS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid UDP send capacity",
             ));
         }
         let ring = build_ring(ring_entries)?;
@@ -207,11 +241,11 @@ impl UringUdpPoller {
             registrations: vec![None; max_slots].into_boxed_slice(),
             fixed_files: Some(files),
             pending_sends: std::iter::repeat_with(PendingSend::new)
-                .take(max_slots)
+                .take(send_capacity)
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
-            send_completions: vec![None; max_slots].into_boxed_slice(),
-            send_completion_order: VecDeque::with_capacity(max_slots),
+            send_completions: vec![None; send_capacity].into_boxed_slice(),
+            send_completion_order: VecDeque::with_capacity(send_capacity),
             timeout_armed: false,
             metrics: UdpPollerMetrics::default(),
         })
@@ -225,9 +259,7 @@ impl UringUdpPoller {
         interest: UdpInterest,
     ) -> io::Result<()> {
         let index = self.registration_index(slot)?;
-        let send_in_flight =
-            self.pending_sends[index].active || self.send_completions[index].is_some();
-        if send_in_flight
+        if self.send_in_flight_for_registration(slot)
             && !self.registrations[index]
                 .is_some_and(|previous| previous.fd == fd && previous.generation == generation)
         {
@@ -297,7 +329,7 @@ impl UringUdpPoller {
 
     pub fn remove(&mut self, slot: u32) -> io::Result<()> {
         let index = self.registration_index(slot)?;
-        if self.pending_sends[index].active || self.send_completions[index].is_some() {
+        if self.send_in_flight_for_registration(slot) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "UDP send must be drained before registration removal",
@@ -407,7 +439,8 @@ impl UringUdpPoller {
 
     /// Submit one caller-owned datagram against a registered socket. The
     /// caller must keep `bytes` alive and unchanged until the matching
-    /// completion is drained. One send is allowed per registration slot.
+    /// completion is drained. The operation slot is independent from the
+    /// registration slot, so one socket can have several sends in flight.
     pub fn submit_send(
         &mut self,
         fd: RawFd,
@@ -416,8 +449,21 @@ impl UringUdpPoller {
         peer: SocketAddr,
         bytes: &[u8],
     ) -> io::Result<()> {
-        let index = self.registration_index(slot)?;
-        let registration = self.registrations[index].ok_or_else(|| {
+        self.submit_send_on_slot(fd, slot, slot, generation, peer, bytes)
+    }
+
+    pub fn submit_send_on_slot(
+        &mut self,
+        fd: RawFd,
+        registration_slot: u32,
+        operation_slot: u32,
+        generation: u32,
+        peer: SocketAddr,
+        bytes: &[u8],
+    ) -> io::Result<()> {
+        let registration_index = self.registration_index(registration_slot)?;
+        let operation_index = self.send_index(operation_slot)?;
+        let registration = self.registrations[registration_index].ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "UDP registration is not live")
         })?;
         if registration.fd != fd || registration.generation != generation {
@@ -426,15 +472,17 @@ impl UringUdpPoller {
                 "UDP send generation or descriptor mismatch",
             ));
         }
-        if self.pending_sends[index].active || self.send_completions[index].is_some() {
+        if self.pending_sends[operation_index].active
+            || self.send_completions[operation_index].is_some()
+        {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "UDP send is still in flight",
             ));
         }
-        self.pending_sends[index].prepare(peer, bytes)?;
-        let message = &self.pending_sends[index].message as *const libc::msghdr;
-        let tag = OpTag::new(OpKind::UdpTx, slot, generation)
+        self.pending_sends[operation_index].prepare(peer, bytes)?;
+        let message = &self.pending_sends[operation_index].message as *const libc::msghdr;
+        let tag = OpTag::new(OpKind::UdpTx, operation_slot, generation)
             .expect("validated UDP send slot")
             .encode();
         let entry = match registration.fixed {
@@ -444,11 +492,12 @@ impl UringUdpPoller {
                 .user_data(tag),
         };
         if let Err(error) = unsafe { self.push(&entry) } {
-            self.pending_sends[index].active = false;
+            self.pending_sends[operation_index].active = false;
             return Err(error);
         }
-        self.pending_sends[index].generation = generation;
-        self.pending_sends[index].active = true;
+        self.pending_sends[operation_index].registration_slot = registration_slot;
+        self.pending_sends[operation_index].generation = generation;
+        self.pending_sends[operation_index].active = true;
         Ok(())
     }
 
@@ -459,7 +508,11 @@ impl UringUdpPoller {
             let Some(slot) = self.send_completion_order.pop_front() else {
                 break;
             };
-            let Some(completion) = self.send_completions[slot as usize].take() else {
+            let Some(completion) = self
+                .send_completions
+                .get_mut(slot as usize)
+                .and_then(Option::take)
+            else {
                 continue;
             };
             completions[count] = completion;
@@ -478,6 +531,25 @@ impl UringUdpPoller {
         } else {
             Ok(index)
         }
+    }
+
+    fn send_index(&self, slot: u32) -> io::Result<usize> {
+        let index = slot as usize;
+        if index >= self.pending_sends.len() {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "UDP send slot out of range",
+            ))
+        } else {
+            Ok(index)
+        }
+    }
+
+    fn send_in_flight_for_registration(&self, registration_slot: u32) -> bool {
+        self.pending_sends.iter().enumerate().any(|(index, send)| {
+            send.registration_slot == registration_slot
+                && (send.active || self.send_completions[index].is_some())
+        })
     }
 
     fn push_poll(
@@ -782,6 +854,71 @@ mod tests {
             }
         }
         panic!("owner-thread UDP send did not complete");
+    }
+
+    #[test]
+    fn fixed_file_poller_completes_batched_owner_thread_sends() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut poller = match UringUdpPoller::new_fixed_with_send_capacity(1, 32, 2) {
+            Ok(poller) => poller,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
+                ) =>
+            {
+                return;
+            }
+            Err(error) => panic!("fixed-file io_uring unavailable: {error}"),
+        };
+        poller
+            .register_fixed(receiver.as_raw_fd(), 0, 7, UdpInterest::READ)
+            .unwrap();
+        let peer = sender.local_addr().unwrap();
+        poller
+            .submit_send_on_slot(receiver.as_raw_fd(), 0, 0, 7, peer, b"one")
+            .unwrap();
+        poller
+            .submit_send_on_slot(receiver.as_raw_fd(), 0, 1, 7, peer, b"two")
+            .unwrap();
+
+        let mut ready = [UdpReadyEvent {
+            fd: -1,
+            slot: 0,
+            generation: 0,
+            readable: false,
+            writable: false,
+        }; 1];
+        let mut completions = [UdpSendCompletion {
+            slot: 0,
+            generation: 0,
+            result: 0,
+        }; 2];
+        for _ in 0..10 {
+            poller.poll(Duration::from_millis(1), &mut ready).unwrap();
+            if poller.drain_send_completions(&mut completions) == 2 {
+                assert_eq!(
+                    completions
+                        .iter()
+                        .map(|completion| (
+                            completion.slot,
+                            completion.generation,
+                            completion.result
+                        ))
+                        .collect::<Vec<_>>(),
+                    vec![(0, 7, 3), (1, 7, 3)]
+                );
+                let mut received = [[0_u8; 3]; 2];
+                for packet in &mut received {
+                    assert_eq!(sender.recv(&mut packet[..]).unwrap(), 3);
+                }
+                received.sort_unstable();
+                assert_eq!(received, [*b"one", *b"two"]);
+                return;
+            }
+        }
+        panic!("owner-thread UDP sends did not complete");
     }
 
     #[test]
