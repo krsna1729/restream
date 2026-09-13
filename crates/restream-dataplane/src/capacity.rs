@@ -47,19 +47,23 @@ pub struct CapacityModel {
 impl CapacityModel {
     pub fn new(rates: CapacityRates) -> Result<Self, CapacityRates> {
         let valid = rates.shards != 0
-            && rates.ingress_pps.is_sign_positive()
-            && rates.media_bps.is_sign_positive()
-            && rates.egress_pps.is_sign_positive()
-            && rates.nic_bps.is_sign_positive()
-            && rates.memory_bytes.is_sign_positive()
-            && rates.ffmpeg_stages.is_sign_positive()
-            && rates.disk_bps.is_sign_positive()
-            && rates.tx_bytes_per_output.is_sign_positive();
+            && [
+                rates.ingress_pps,
+                rates.media_bps,
+                rates.egress_pps,
+                rates.nic_bps,
+                rates.memory_bytes,
+                rates.ffmpeg_stages,
+                rates.disk_bps,
+                rates.tx_bytes_per_output,
+            ]
+            .into_iter()
+            .all(|rate| rate.is_finite() && rate.is_sign_positive());
         valid.then_some(Self { rates }).ok_or(rates)
     }
 
     pub fn snapshot(&self, workload: Workload) -> CapacitySnapshot {
-        let outputs = f64::from(workload.outputs.max(1));
+        let outputs = f64::from(workload.outputs);
         let loss_multiplier = 1.0 + workload.loss_rate.max(0.0);
         let egress_pps = workload.media_pps as f64 * outputs * loss_multiplier;
         let egress_bps = workload.media_bps as f64 * outputs * loss_multiplier;
@@ -83,12 +87,16 @@ impl CapacityModel {
 
     pub fn hottest_utilization(&self, workload: Workload) -> f32 {
         let snapshot = self.snapshot(workload);
+        let ingress_util = snapshot.ingress_pps / self.rates.ingress_pps;
+        let media_util = snapshot.media_bps / self.rates.media_bps;
         snapshot
             .hottest_shard_util
             .max(snapshot.nic_util)
             .max(snapshot.memory_util)
             .max(snapshot.ffmpeg_util)
             .max(snapshot.disk_util)
+            .max(ingress_util.min(f32::MAX as f64) as f32)
+            .max(media_util.min(f32::MAX as f64) as f32)
     }
 }
 
@@ -146,6 +154,38 @@ mod tests {
     }
 
     #[test]
+    fn zero_outputs_have_no_egress_load() {
+        let workload = Workload {
+            outputs: 0,
+            media_bps: 10_000,
+            media_pps: 10,
+            rtmp_outputs: 0,
+            rtmps_outputs: 0,
+            srt_outputs: 0,
+            loss_rate: 0.0,
+            stage_count: 0,
+        };
+        let snapshot = model().snapshot(workload);
+        assert_eq!(snapshot.egress_pps, 0.0);
+        assert_eq!(snapshot.active_leaves, 0);
+    }
+
+    #[test]
+    fn hottest_utilization_includes_ingress_and_media_centers() {
+        let workload = Workload {
+            outputs: 0,
+            media_bps: 1_000_000_000,
+            media_pps: 10_000,
+            rtmp_outputs: 0,
+            rtmps_outputs: 0,
+            srt_outputs: 0,
+            loss_rate: 0.0,
+            stage_count: 0,
+        };
+        assert_eq!(model().hottest_utilization(workload), 1.0);
+    }
+
+    #[test]
     fn invalid_rates_are_rejected() {
         assert!(
             CapacityModel::new(CapacityRates {
@@ -161,6 +201,20 @@ mod tests {
                     tx_bytes_per_output: 1.0,
                     shards: 1,
                 }
+            })
+            .is_err()
+        );
+        assert!(
+            CapacityModel::new(CapacityRates {
+                ingress_pps: f64::INFINITY,
+                media_bps: 1.0,
+                egress_pps: 1.0,
+                nic_bps: 1.0,
+                memory_bytes: 1.0,
+                ffmpeg_stages: 1.0,
+                disk_bps: 1.0,
+                tx_bytes_per_output: 1.0,
+                shards: 1,
             })
             .is_err()
         );
