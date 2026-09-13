@@ -761,6 +761,8 @@ pub struct PeerTable {
     deadlines: DenseDueIndex,
     ready: VecDeque<PeerSlotId>,
     event_ready: VecDeque<PeerSlotId>,
+    due: Vec<PeerSlotId>,
+    rejected: Vec<PhysicalPeerKey>,
     groups: HashMap<srt_lifecycle::LogicalGroupKey, InboundGroup>,
     last_now: Timestamp,
     config: PeerTableConfig,
@@ -796,6 +798,8 @@ impl PeerTable {
             deadlines: DenseDueIndex::default(),
             ready: VecDeque::new(),
             event_ready: VecDeque::new(),
+            due: Vec::with_capacity(config.max_peers),
+            rejected: Vec::with_capacity(config.max_peers),
             groups: HashMap::new(),
             last_now: Timestamp::default(),
             config,
@@ -1849,17 +1853,15 @@ impl PeerTable {
     ) {
         self.last_now = now;
         out.clear();
-        let mut rejected = Vec::new();
         self.mark_due_peers(now);
-        self.poll_direct_outbound(now, out, &mut rejected);
-        self.remove_rejected_peers(rejected);
+        self.poll_direct_outbound(now, out);
+        self.remove_rejected_peers();
         self.poll_group_outbound(now, out);
     }
 
     fn mark_due_peers(&mut self, now: Timestamp) {
-        let mut due = Vec::new();
-        self.deadlines.pop_due(now, &mut self.slots, &mut due);
-        for slot_id in due {
+        self.deadlines.pop_due(now, &mut self.slots, &mut self.due);
+        for slot_id in self.due.drain(..) {
             let slot_idx = slot_id.slot_idx as usize;
             if let Some(id) = self.slots.mark_ready(slot_idx) {
                 self.ready.push_back(id);
@@ -1874,7 +1876,6 @@ impl PeerTable {
         &mut self,
         now: Timestamp,
         out: &mut Vec<(std::net::SocketAddr, Vec<u8>)>,
-        rejected: &mut Vec<PhysicalPeerKey>,
     ) {
         while let Some(slot_id) = self.ready.pop_front() {
             let slot_idx = slot_id.slot_idx as usize;
@@ -1900,7 +1901,7 @@ impl PeerTable {
                 }
             }
             if entry.rejected {
-                rejected.push(peer_key);
+                self.rejected.push(peer_key);
                 continue;
             }
             if let Some(deadline) = entry.timers.next_deadline() {
@@ -1911,8 +1912,8 @@ impl PeerTable {
         }
     }
 
-    fn remove_rejected_peers(&mut self, rejected: Vec<PhysicalPeerKey>) {
-        for peer in rejected {
+    fn remove_rejected_peers(&mut self) {
+        while let Some(peer) = self.rejected.pop() {
             let _ = self.remove_physical(peer);
         }
     }
@@ -2741,8 +2742,7 @@ mod tests {
 
         // 2. Poll direct outbound drains ready queue and clears flags
         let mut out = Vec::new();
-        let mut rejected = Vec::new();
-        table.poll_direct_outbound(Timestamp::default(), &mut out, &mut rejected);
+        table.poll_direct_outbound(Timestamp::default(), &mut out);
         assert!(table.ready.is_empty());
 
         // Rearm outbound for peer_b and peer_a
@@ -2795,10 +2795,9 @@ mod tests {
 
         // Poll outbound -> stale entry for peer_a is popped and skipped without clearing peer_b's flag
         let mut out = Vec::new();
-        let mut rejected = Vec::new();
-        table.poll_direct_outbound(Timestamp::default(), &mut out, &mut rejected);
+        table.poll_direct_outbound(Timestamp::default(), &mut out);
         assert!(table.ready.is_empty());
-        assert!(rejected.is_empty());
+        assert!(table.rejected.is_empty());
 
         // Dequeue cleared peer_b's flag, allowing peer_b to rearm
         table.mark_ready_physical(peer_b);
@@ -2839,11 +2838,10 @@ mod tests {
 
         // 3. Dequeue in poll_direct_outbound safely clears flag and skips direct processing
         let mut out = Vec::new();
-        let mut rejected = Vec::new();
-        table.poll_direct_outbound(Timestamp::default(), &mut out, &mut rejected);
+        table.poll_direct_outbound(Timestamp::default(), &mut out);
         assert!(table.ready.is_empty());
         assert!(out.is_empty());
-        assert!(rejected.is_empty());
+        assert!(table.rejected.is_empty());
 
         // 4. Group leg can be re-armed
         table.mark_ready_physical(peer);
