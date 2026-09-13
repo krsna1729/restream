@@ -17,3 +17,10 @@ path = "fuzz_targets/ready_queue.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "media_ring"
+path = "fuzz_targets/media_ring.rs"
+test = false
+doc = false
+bench = false

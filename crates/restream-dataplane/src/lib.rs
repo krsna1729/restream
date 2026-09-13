@@ -23,8 +23,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_TAG_SLOTS: usize = 1 << 24;
 
+pub mod media;
 pub mod tcp;
 pub mod udp;
+
+pub use media::{CursorError, FeedCursor, MediaArena, MediaError, MediaRef, MediaRing};
 
 // ---------------------------------------------------------------------------
 // Operation identity

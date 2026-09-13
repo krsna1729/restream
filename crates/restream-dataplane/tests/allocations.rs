@@ -1,7 +1,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use restream_dataplane::ReadyQueue;
+use restream_dataplane::{FeedCursor, MediaArena, MediaRing, ReadyQueue};
 
 struct CountingAllocator;
 
@@ -22,13 +22,35 @@ unsafe impl GlobalAlloc for CountingAllocator {
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 #[test]
-fn ready_queue_hot_path_does_not_allocate() {
+fn dataplane_hot_paths_do_not_allocate() {
     let mut queue = ReadyQueue::new(64, 64).unwrap();
     ALLOCATIONS.store(0, Ordering::Relaxed);
 
     for _ in 0..10_000 {
         assert!(queue.enqueue(0));
         assert_eq!(queue.pop(), Some(0));
+    }
+
+    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+
+    let mut ring = MediaRing::new(
+        MediaArena::new(128, 256).unwrap(),
+        64,
+        16 * 1024,
+        std::time::Duration::from_secs(60),
+    )
+    .unwrap();
+    let payload = [7_u8; 128];
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+
+    for sequence in 0..10_000_u64 {
+        let reference = ring.arena_mut().acquire_copy(&payload).unwrap();
+        ring.push(reference, std::time::Instant::now(), sequence % 30 == 0)
+            .unwrap();
+        let cursor = FeedCursor::new(ring.epoch(), ring.next_sequence().saturating_sub(1));
+        let current = ring.read_cursor(cursor).unwrap();
+        assert!(ring.retain(current));
+        assert!(ring.release(current));
     }
 
     assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);

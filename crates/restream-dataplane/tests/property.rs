@@ -1,5 +1,5 @@
 use proptest::prelude::*;
-use restream_dataplane::{OpKind, OpTag, ReadyQueue};
+use restream_dataplane::{MediaArena, MediaRing, OpKind, OpTag, ReadyQueue};
 
 proptest! {
     #[test]
@@ -18,6 +18,23 @@ proptest! {
         while let Some(slot) = queue.pop() {
             prop_assert!(!seen[slot as usize]);
             seen[slot as usize] = true;
+        }
+    }
+
+    #[test]
+    fn media_ring_never_exceeds_bounds(lengths in prop::collection::vec(1usize..8, 1..32)) {
+        let mut ring = MediaRing::new(
+            MediaArena::new(32, 8).unwrap(),
+            8,
+            24,
+            std::time::Duration::from_secs(60),
+        ).unwrap();
+        for length in lengths {
+            if let Some(reference) = ring.arena_mut().acquire(length) {
+                let _ = ring.push(reference, std::time::Instant::now(), length == 1);
+            }
+            prop_assert!(ring.len() <= ring.capacity());
+            prop_assert!(ring.bytes() <= 24);
         }
     }
 }
