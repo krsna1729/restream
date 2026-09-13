@@ -2406,6 +2406,7 @@ dependencies = [
  "rand 0.10.2",
  "rcgen",
  "reqwest",
+ "restream-dataplane",
  "rml_rtmp",
  "rust-embed",
  "rustls-pki-types",
