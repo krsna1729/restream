@@ -226,6 +226,18 @@ impl Write for RtmpConnection {
         }
     }
 
+    fn write_vectored(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        let result = match self {
+            Self::Plain(stream) | Self::Ktls(stream) => stream.write_vectored(bufs),
+            Self::Tls(Some(stream)) => stream.write_vectored(bufs),
+            Self::Tls(None) => Err(io::Error::other("TLS stream unavailable during handoff")),
+        };
+        if result.is_ok() {
+            self.maybe_handoff_ktls()?;
+        }
+        result
+    }
+
     fn flush(&mut self) -> io::Result<()> {
         match self {
             Self::Plain(stream) | Self::Ktls(stream) => stream.flush(),

@@ -10,12 +10,11 @@
 //! — the same pure, socket-independent state the existing Tokio-adapted
 //! egress path uses in `src/media/rtmp/egress_connection.rs` and
 //! `src/media/rtmp/egress_engine.rs`), here driven from non-blocking
-//! readiness instead of `.await`. Not yet wired into a shard backend (leaf
-//! registration, poller integration, application-layer startup handoff) —
-//! see `docs/archive/egress/implementation.md` Phase 5 status.
+//! readiness instead of `.await`, with shard registration and application
+//! startup handoff supplied by the surrounding RTMP backend.
 
 use std::collections::VecDeque;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{ErrorKind, IoSlice, Read, Write};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -40,6 +39,7 @@ use super::rtmp_connection::RtmpConnection;
 use super::rtmp_handshake::{HandshakeOutcome, NonBlockingRtmpHandshake};
 
 const SESSION_READ_BUFFER: usize = 4096;
+const MAX_VECTORED_PACKETS: usize = 16;
 
 struct PendingWrite {
     bytes: Bytes,
@@ -345,6 +345,24 @@ impl MediaPublisher {
         pending_write_remaining + queued_batch
     }
 
+    fn consume_vectored_bytes(&mut self, mut written: usize) {
+        while written != 0 {
+            let Some(packet_len) = self.current_batch.front().map(Bytes::len) else {
+                return;
+            };
+            if written < packet_len {
+                let bytes = self.current_batch.pop_front().expect("front was present");
+                self.pending_write = Some(PendingWrite {
+                    bytes,
+                    offset: written,
+                });
+                return;
+            }
+            written -= packet_len;
+            self.current_batch.pop_front();
+        }
+    }
+
     /// Encode one feed unit into zero or more wire packets in
     /// `current_batch`. Mirrors the per-packet dispatch in
     /// `src/media/rtmp/egress.rs`'s media-write arm: deferred/gated audio,
@@ -474,6 +492,62 @@ impl MediaPublisher {
                                 readable: true,
                                 writable: hint.writable,
                             }),
+                        );
+                    }
+                    Err(error) => {
+                        return EngineProgress::Failed(ProtocolFailure {
+                            reason: "rtmp_media_write",
+                            detail: error.to_string(),
+                            retryable: true,
+                        });
+                    }
+                }
+            }
+
+            if self.pending_write.is_none() && self.current_batch.len() > 1 && readiness.writable {
+                let result = {
+                    let mut slices = [IoSlice::new(&[]); MAX_VECTORED_PACKETS];
+                    let mut remaining = budget.remaining_bytes(total_bytes);
+                    let mut count = 0;
+                    for packet in self.current_batch.iter().take(MAX_VECTORED_PACKETS) {
+                        if remaining == 0 {
+                            break;
+                        }
+                        let len = packet.len().min(remaining);
+                        slices[count] = IoSlice::new(&packet[..len]);
+                        count += 1;
+                        remaining -= len;
+                        if len < packet.len() {
+                            break;
+                        }
+                    }
+                    stream.write_vectored(&slices[..count])
+                };
+                match result {
+                    Ok(0) => {
+                        return EngineProgress::Failed(ProtocolFailure {
+                            reason: "rtmp_media_write",
+                            detail: "peer closed during write".to_string(),
+                            retryable: true,
+                        });
+                    }
+                    Ok(written) => {
+                        total_bytes += written;
+                        self.consume_vectored_bytes(written);
+                        if self.pending_write.is_some() {
+                            return Self::finish(
+                                total_bytes,
+                                total_units,
+                                WaitCondition::Io(Interest::READ_WRITE),
+                            );
+                        }
+                        continue;
+                    }
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                        return Self::finish(
+                            total_bytes,
+                            total_units,
+                            WaitCondition::Io(Interest::READ_WRITE),
                         );
                     }
                     Err(error) => {

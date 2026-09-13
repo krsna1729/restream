@@ -40,6 +40,22 @@ fn plain_connection_delegates_read_and_write() {
 }
 
 #[test]
+fn plain_connection_delegates_vectored_write() {
+    let (client, mut server) = connected_pair();
+    let mut connection = RtmpConnection::plain(client);
+    let buffers = [
+        std::io::IoSlice::new(b"hello"),
+        std::io::IoSlice::new(b" "),
+        std::io::IoSlice::new(b"world"),
+    ];
+
+    assert_eq!(connection.write_vectored(&buffers).unwrap(), 11);
+    let mut received = [0u8; 11];
+    server.read_exact(&mut received).unwrap();
+    assert_eq!(&received, b"hello world");
+}
+
+#[test]
 fn plain_connection_interest_hint_always_returns_the_fallback() {
     let (client, _server) = connected_pair();
     let connection = RtmpConnection::plain(client);
