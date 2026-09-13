@@ -121,9 +121,11 @@ fn release_policy_metadata_is_declared_and_enforced() {
             "build.rs missing native input policy for {native_input}"
         );
     }
-    // SRT moved from the vendored libsrt+mbedTLS static stack to the
-    // pure-Rust srt-rs workspace consumed as a pinned git dependency.
-    assert!(cargo_toml.contains("git = \"https://github.com/krsna1729/srt-rs\""));
+    // SRT is the pinned pure-Rust srt-rs workspace vendored for reproducible
+    // builds. Keep the revision visible in the root manifest so release
+    // metadata cannot silently drift back to an unpinned dependency.
+    assert!(cargo_toml.contains("path = \"vendor/srt-rs/crates/srt-protocol\""));
+    assert!(cargo_toml.contains("14042682c75a75ce02c2c34420608ef9d2f8b1a7"));
     assert!(cargo_toml.contains("shiguredo_srt"));
     assert!(cargo_toml.contains("srt-transport"));
 
