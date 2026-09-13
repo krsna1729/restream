@@ -1,0 +1,328 @@
+# srt-transport
+
+Application-facing configuration and adapter plumbing between
+[`srt-protocol`](../srt-protocol) (sans-I/O) and runtime-specific I/O.
+Per-runtime `Conn` structs are feature-gated; the configuration, admission,
+socket preparation, and lifecycle surfaces are runtime-neutral.
+
+## Charter: this crate owns *things*
+
+The dividing line against [`srt-lifecycle`](../srt-lifecycle) is
+ownership, not subject matter. Both crates deal with admission:
+
+* **lifecycle takes values and returns decisions.** No sockets, no
+  clocks, no protocol objects; time is passed in.
+* **transport owns things.** Live `SrtConnection`s, their timers, file
+  descriptors, counters.
+
+So the admission peer table lives here, even though the promotion rule it
+consults lives there. This crate depends on lifecycle (mechanism uses
+policy); lifecycle never depends on this one.
+
+```
+   srt-bench ──► srt-transport ──► srt-lifecycle ──► srt-protocol
+                      │                                   ▲
+                      └───────────────────────────────────┘
+```
+
+## What's inside
+
+Three layers:
+
+1. **Shared utilities** (always compiled, no runtime deps)
+   - `NativeTimer` — `Pin<Box<dyn Future<Output = ()>>>`, the common shape
+     of every async runtime's per-connection timer.
+   - `is_ready(&mut NativeTimer)` — noop-waker poll; the one pattern that
+     is genuinely identical across all five async runtimes.
+   - `ManualTimerStore` — `HashMap<TimerId, Timestamp>` with O(n) scan on
+     fire. The correct primitive for mio (no timer wheel) and the explicit
+     fallback elsewhere.
+   - `DueIndex<K>` — a lazy-deletion deadline heap for shared loops that
+     own many connections. Per-connection timer maps stay small; the index
+     prevents a separate O(peers) scan just to find which maps are due.
+   - `DeadlineHeap<K>` / `HighResWaiter<K>` — one high-resolution waiter
+     per worker (issue #82 A2). Absolute `CLOCK_MONOTONIC` deadlines in a
+     min-heap, `epoll_pwait2` (nanosecond timeout) with absolute-`timerfd`
+     fallback, no per-connection spin. After a single wake the caller
+     services every due connection. This is the alternative that must be
+     tried before Route B ownership/debt changes to `SrtConnection`. See
+     [high-res-waiter.md](../../docs/perf/high-res-waiter.md).
+   - `OutputDrainBudget` / `OutputDrainReport` — explicit per-tick action,
+     packet, and byte limits shared by all six output pumps. Send failures
+     are returned and unsent datagrams remain queued in protocol order.
+   - `RecvBatch` / `drain_recv_fd` / `tokio_transport::drain_readable` —
+     reusable readiness-runtime batch receive (`recvmmsg` + optional
+     `try_io`). `flush_destined` / `sendmsg_batch` /
+     `sendmsg_connected_batch` are the matching destined and connected
+     `sendmmsg` helpers. Partial send and `EAGAIN` keep the unsent suffix
+     in protocol order. `BatchIoStats` exposes datagrams/wake,
+     datagrams/syscall, packets/drain visit, and `WouldBlock` rate.
+   - `SessionConfig`, `TransportConfig`, `AdmissionConfig`, `CallerConfig`,
+     and `ListenerConfig` — layered application configuration with capability-
+     checked `Auto` policies, profiles, typed units, and raw escape hatches.
+   - `SrtStackConfig` — retained low-level compatibility surface for existing
+     consumers; new applications should use the layered types above.
+
+2. **Admission machinery** (always compiled, runtime-neutral, does no I/O
+   of its own — the caller performs every send)
+   - `PeerTable` / `AdmissionPeer` — the peers one acceptor is servicing
+     off its shared listener socket, from first datagram until the
+     connection is promoted, relocated, or retired. Mints each
+     connection's SYN cookie, applies cookie routing, and answers
+     `all_terminal()`.
+   - `poll_outbound()` uses a ready queue plus `DueIndex` to service only
+     peers with input/output work or a due timer.
+   - `poll_events()` returns unmodified `AdmissionEvent`s (including data
+     payloads) for production consumers. `drain_events()` is the legacy
+     benchmark adapter that folds those events into counters and promotion
+     timing.
+   - Bonded input is an explicit `BondedInputPolicy`: `Reject` is the default,
+     preventing silent degradation into unrelated single-leg publishers.
+     With `Accept`, `PeerTable` validates each leg normally, groups matching
+     `(group_id, normalized StreamID)` legs, and emits one ordinary logical
+     `AdmissionEvent` stream. Consumers retain `event.logical_peer` for
+     steady-state operations; its group identity stays valid if the first
+     physical leg disappears. `event.peer` is only that first leg's routing
+     address, retained for compatibility.
+   - `logical_peer()` / `logical_peer_mut()` give direct and bonded sessions
+     the same StreamID, send, orderly-close, and stats surface. Group stats
+     retain both the aggregate and every physical leg rather than flattening
+     a path failure into a single number.
+   - `Handoff` / `WorkerMessage` — the acceptor-to-worker protocol. A
+     `Handoff` carries a plain `std::net::UdpSocket` plus a bare
+     `SrtConnection` because both are `Send`, whereas every runtime's own
+     `Conn` holds a `!Send` timer future. The cross-thread move is
+     correct *by construction*: the type has no field a `!Send` timer
+     could occupy.
+   - `IngressTelemetry` — promotion/routing plus invalid-input, cookie,
+     capacity, authorization, and half-open-expiry counters, defined once
+     so two backends' output means the same thing. `snapshot()` returns a
+     plain exporter-friendly `IngressTelemetrySnapshot`; `report()` is only
+     the human-readable view.
+
+3. **Bonded transport** (always compiled, runtime-neutral)
+   - `CallerTable` is the shared-socket counterpart to `PeerTable`. Add a
+     direct `CallerLeg` or a bonded set of `CallerGroupLeg`s, retain the
+     returned `LogicalCallerId`, then use `logical_caller_mut()` for the same
+     `can_send` / `send` / orderly-close / stats lifecycle as ingress. The
+     application performs `recv_from` and `send_to`; `feed()` routes replies
+     by SRT Socket ID and validates the configured source address, while
+     `poll_outbound()` advances every timer and returns datagrams to send.
+     A bonded group can therefore share exactly one application UDP socket
+     without leaking 4-tuples, Socket IDs, or leg selection into application
+     code.
+   - `GroupConn` owns a real UDP socket, timer store, output queue, and
+     `SrtConnection` for every Broadcast or Backup leg. `drive()` is
+     synchronous/nonblocking so an application registers `leg_sockets()` in
+     its existing reactor rather than paying for a hidden second runtime.
+     `tokio_transport::GroupConn` is the equivalent Tokio-native driver and
+     owns `tokio::net::UdpSocket`s directly. It remains useful when each group
+     intentionally owns its physical sockets; `CallerTable` is the shared-port
+     alternative for every runtime.
+   - Broadcast attempts every active leg with the same sequence number, but
+     succeeds when at least one accepts the payload. A full sender window
+     makes that leg `Unstable`, not broken: once its in-flight packets drain,
+     the shared group core aligns its sequence and restores it automatically.
+     The remaining legs keep the logical stream moving. Backup promotes a
+     standby leg while an unstable leg requalifies. This matches libsrt's
+     nonblocking group behavior: report backpressure only when no active
+     member accepts the payload.
+   - `GroupConnectionStats` exposes both **per-leg** connection snapshots and
+     a group aggregate. `logical_*` counts media once at the group API;
+     `wire_*` sums physical legs, so Broadcast's duplicate egress and each
+     path's retransmit/loss remain visible instead of being averaged away.
+     `PeerTable::bonded_stats()` returns the same view for admitted ingress
+     groups, paired with their logical `(group_id, StreamID)` key. Listener
+     sockets are shared, so inbound per-leg `local_addr` is intentionally
+     `None`; the listening socket itself owns that address.
+
+4. **Per-runtime `Conn`** (feature-gated): wraps an `SrtConnection`
+   + that runtime's UDP socket + its native timer. Each exposes the same
+   small verb set: `fire_expired`, `drain_outputs`, `send_paced`,
+   `recv_with_timeout` (async runtimes also get a combined `tick`).
+
+## Feature flags
+
+| Feature | Runtime | Timer inside Conn | I/O model |
+|---|---|---|---|
+| `mio` | raw epoll, no task model | `ManualTimerStore` + `poll_timeout()` | readiness |
+| `tokio` | current-thread + tasks | native `Pin<Box<Sleep>>` | readiness |
+| `smol` | async-executor tasks | `smol::Timer` future | readiness |
+| `monoio` | thread-per-core | io_uring kernel timeouts | completion (owned buffers) |
+| `glommio` | thread-per-core (Linux-only) | `glommio::timer` wheel | completion, shared SQ ring |
+| `compio` | single runtime | `compio::time::sleep` | completion (owned buffers) |
+
+Features are additive: enable exactly the ones your binary links.
+
+```toml
+[dependencies]
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "<audited-commit>", features = ["tokio"] }
+```
+
+Use a pinned revision until the runtime crates pass the separate crates.io
+publication gate. Path dependencies are equivalent for workspace consumers.
+
+## Design: deliberately no lowest-common-denominator trait
+
+A shared `trait Conn` spanning readiness-based (mio/smol/tokio) and
+completion-based (monoio/glommio/compio) execution would force an LCD API
+that defeats the point of comparing the runtimes on their own terms.
+Instead each `Conn` uses its runtime's idiomatic primitives directly, and
+"swappable" is achieved at the **binary/CLI level**: `srt-bench` selects a
+backend by argument, not by trait object. Same rationale as
+[`crates/srt-bench/README.md`](../srt-bench/README.md).
+
+## Usage sketch (mio)
+
+```rust
+use srt_transport::mio_transport::Conn;
+
+let mut conn = Conn::new(srt_connection, mio_socket);
+let report = conn.drain_outputs_bounded(now, Default::default())?;
+// A BudgetExhausted/Backpressured report means yield and service it again;
+// unsent datagrams remain queued in order.
+let timeout = conn.poll_timeout(Duration::from_millis(20), now);
+// poll.poll(&mut events, Some(timeout)); ... feed datagrams to conn.conn
+conn.fire_expired(now);                        // service due timers
+```
+
+Async runtimes instead offer `Conn::tick(&mut buf, &payload, now)` —
+one event-loop iteration: fire timers → recv → drain outputs → send all
+paced packets → return `io::Result<TickResult>`. Every adapter also exposes
+`drain_outputs_bounded`; a budget or backpressure yield retains the tail.
+
+## Application configuration
+
+```rust
+use std::num::{NonZeroU64, NonZeroUsize};
+use std::time::Duration;
+use srt_transport::{
+    Bandwidth, BatchingPolicy, EncryptionConfig, ListenerConfig,
+    PromotionPolicy, SessionConfig, TransportProfile,
+};
+
+let mut session = SessionConfig::default();
+session.set_latency(Duration::from_millis(120))?;
+session.set_bandwidth(Bandwidth::BitsPerSecond(
+    NonZeroU64::new(100_000_000).unwrap(),
+));
+// For a source with a known production rate, replace the fixed ceiling above
+// with input-relative pacing (libsrt's INPUTBW plus OHEADBW):
+// session.set_bandwidth(Bandwidth::InputBytesPerSecond {
+//     input: NonZeroU64::new(8_000_000).unwrap(),
+//     overhead_percent: 25,
+// });
+session.set_encryption(Some(EncryptionConfig::new("production secret")));
+session.set_stream_id(Some("publish/live".to_owned()));
+
+let listener = ListenerConfig::builder("0.0.0.0:9000".parse()?)
+    .session(session)
+    .profile(TransportProfile::HighDensity)
+    .configure_transport(|transport| {
+        // Presets are ordinary configs: override any decision.
+        transport.promotion = PromotionPolicy::Bonded;
+        transport.batching = BatchingPolicy::MaxDatagrams(
+            NonZeroUsize::new(32).unwrap(),
+        );
+    })
+    .configure_admission(|admission| {
+        admission.limits.max_peers = 8_192;
+        admission.limits.max_half_open_peers = 1_024;
+        admission.limits.max_peers_per_ip = 256;
+    })
+    .build()?;
+
+// Inside a Tokio runtime. The returned prepared policy owns no event loop:
+// use the supplied sockets/PeerTable directly or compose your own workers.
+let runtime_listener = srt_transport::tokio_transport::bind_listener(&listener)?;
+let mut peers = runtime_listener.prepared.peer_table();
+let admission = runtime_listener.prepared.admission_options();
+```
+
+Input-relative overhead must be 5 through 100 percent. `ProtocolDefault` and
+the `BytesPerSecond`/`BitsPerSecond` variants retain fixed `MAXBW` behavior.
+
+### Per-StreamID listener policy
+
+The listener sees the caller's claimed StreamID in CONCLUSION, after cookie
+validation but before KM processing. A cached resolver can select a tenant
+passphrase and other handshake policy atomically. The complete contract,
+including handshake ordering, composition, resolver outcomes, reuseport,
+telemetry, security, and escape hatches, is in the workspace
+[`listener admission guide`](../../docs/listener-admission-policy.md).
+
+The core resolver shape is:
+
+```rust
+use shiguredo_srt::KeyLength;
+use srt_transport::{
+    AdmissionResolution, ListenerEncryptionConfig, ListenerPeerPolicy,
+    PolicyOverride, RejectionReason,
+};
+
+let outcome = peers.admit_with_resolver(
+    peer,
+    datagram,
+    now,
+    &admission,
+    worker_index,
+    worker_count,
+    &telemetry,
+    |request| {
+        let Some(user) = request
+            .access_control
+            .as_ref()
+            .and_then(|access| access.user_name())
+        else {
+            return AdmissionResolution::Reject {
+                reason: RejectionReason::BAD_REQUEST,
+            };
+        };
+        let Some(passphrase) = cached_tenant_passphrase(user) else {
+            return AdmissionResolution::Defer;
+        };
+        AdmissionResolution::Configure(ListenerPeerPolicy {
+            encryption: PolicyOverride::Set(Some(
+                ListenerEncryptionConfig::new(passphrase, KeyLength::Aes128)
+                    .expect("validated secret store entry"),
+            )),
+            ..ListenerPeerPolicy::default()
+        })
+    },
+);
+```
+
+StreamID and access-control fields remain application claims; successful KM
+proves possession of the selected shared credential, not general identity.
+Resolvers run synchronously and should perform only bounded cached work.
+`Defer` leaves the peer's original hard TTL unchanged. Multiple policy sources
+can compose with `ListenerPeerPolicy::overlay`; `Inherit` never erases a
+lower-priority decision. `admit_with_connection_hook` exposes
+`&mut SrtConnection` in the same guarded window for future or
+application-specific protocol controls;
+`admit_with_authorizer` remains the raw rejection-code compatibility API.
+Reuseport loops can use `admit_and_forward_with_resolver` so only the worker
+that owns the half-open peer performs credential resolution.
+
+The ten reusable benchmark controls are represented: latency, bandwidth,
+group/bond metadata, promotion, cookie routing, socket buffers, ingress
+topology, receive batching, workers, and caller-pool concurrency. The 15-second
+attempt deadline and bounded output drain are advanced controls. CPU affinity,
+connection count/workload generation, link impairment, run duration,
+repetitions, and result paths remain application/deployment concerns.
+
+`Auto` is resolved against `RuntimeFlavor`/`TransportCapabilities` and the
+result is exposed as `ResolvedTransportConfig`; an explicitly requested
+unsupported mechanism is an error, never a silent no-op. Applications with a
+custom executor can pass `RuntimeFlavor::Custom`. Consumers that need more
+control can mutate the complete raw `ConnectionOptions`, use the returned
+`std::net::UdpSocket`s, instantiate any runtime `Conn` directly, or bypass the
+builders entirely. Those are supported composition points, not private
+implementation details.
+
+## Consumers
+
+- [`srt-bench`](../srt-bench) — enables **all six features** and builds
+  one adapter binary per runtime for the bake-off.
+- Application code should pick one feature and depend on only that
+  module (`srt_transport::<runtime>_transport::Conn`).

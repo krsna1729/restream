@@ -1,0 +1,129 @@
+[package]
+name = "shiguredo_srt"
+version = "2026.1.0-canary.1"
+edition = "2024"
+rust-version = "1.93"
+description = "SRT (Secure Reliable Transport) library"
+readme = "README.md"
+homepage = "https://github.com/krsna1729/srt-rs"
+repository = "https://github.com/krsna1729/srt-rs"
+license = "Apache-2.0"
+include = [
+    "/src/**",
+    "/challengers/**",
+    "/tests/**",
+    "/benches/**",
+    "LICENSE",
+    "README.md",
+    "TELEMETRY.md",
+    "SECURITY.md",
+    "VENDOR.md",
+]
+
+[features]
+# Test-only hooks for black-box interop validation. They are intentionally
+# opt-in so production connections always use the protocol refresh cadence.
+test-support = []
+
+[dependencies]
+# local patch (crates/srt-protocol/VENDOR.md): replaced aws-lc-rs
+# (pulls in aws-lc-sys, a cmake+C-compiler native build step -- exactly the
+# kind of native toolchain dependency this whole migration exists to move
+# away from) with a pure-Rust RustCrypto stack. All audited crates, no
+# hand-rolled AES-CTR or AES Key Wrap -- see crypto.rs's module doc comment
+# for the exact primitive-to-crate mapping.
+aes = "0.9"
+aes-gcm = "0.11"
+cipher = "0.5"
+ctr = "0.10"
+aes-kw = "0.3"
+hmac = "0.13"
+sha1 = "0.11"
+pbkdf2 = "0.13"
+getrandom = "0.4"
+zeroize = "1.8"
+# Hot-path hash for loss_list: SipHash is DoS-resistant but costly for
+# small integer keys; FxHash is non-cryptographic and faster (tokio
+# profile showed hash_one as #2 at 1200 conns).
+rustc-hash = "2.1"
+bytes = "1"
+tracing = "0.1"
+
+[dev-dependencies]
+# local patch (crates/srt-protocol/VENDOR.md): Core-only benchmark for
+# comparing Rust protocol cost with libsrt without I/O in the way. Same
+# criterion version this repo's root Cargo.toml pins.
+criterion = "0.8"
+
+[[bench]]
+name = "core_packet_loop"
+harness = false
+
+[[bench]]
+name = "core_packet_loop_io"
+harness = false
+
+[[bench]]
+name = "receiver_loss_scan"
+harness = false
+
+[[bench]]
+name = "receiver_tsbpd_scan"
+harness = false
+
+[[bench]]
+name = "receiver_ack_tracker"
+harness = false
+
+[[bench]]
+name = "receiver_ackack_lookup"
+harness = false
+
+[[bench]]
+name = "collection_tradeoffs"
+harness = false
+
+[[bench]]
+name = "group_requalification"
+harness = false
+
+[[bench]]
+name = "message_reassembly"
+harness = false
+
+[[bench]]
+name = "fanout"
+harness = false
+
+[[bench]]
+name = "sender_ack"
+harness = false
+
+[[bench]]
+name = "nak_chunking"
+harness = false
+
+[[bench]]
+name = "sender_nak"
+harness = false
+
+[[bench]]
+name = "receiver_packet_window"
+harness = false
+
+[[bench]]
+name = "adaptive_receiver_packet_window"
+harness = false
+
+[[bench]]
+name = "receiver_window_validation"
+harness = false
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+cognitive_complexity = "warn"
+undocumented_unsafe_blocks = "deny"
