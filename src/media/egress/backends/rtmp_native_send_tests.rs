@@ -17,6 +17,22 @@ fn publishing_can_hold_a_wire_buffer_across_native_send_completion() {
             self.submitted.push(bytes.to_vec());
             Ok(())
         }
+
+        fn submit_send_vectored(
+            &mut self,
+            _fd: std::os::unix::io::RawFd,
+            _slot: u32,
+            _generation: u64,
+            buffers: &[&[u8]],
+        ) -> std::io::Result<()> {
+            self.submitted.push(
+                buffers
+                    .iter()
+                    .flat_map(|buffer| buffer.iter().copied())
+                    .collect(),
+            );
+            Ok(())
+        }
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -33,6 +49,8 @@ fn publishing_can_hold_a_wire_buffer_across_native_send_completion() {
     metadata.encoder = Some("native-send-test".to_string());
     let startup = RtmpPublishStartup {
         publish_metadata: Some(metadata),
+        startup_video_sequence_header: Some(Bytes::from_static(&[0x01; 32])),
+        startup_audio_sequence_header: Some(Bytes::from_static(&[0x02; 16])),
         ..RtmpPublishStartup::default()
     };
     let mut engine = RtmpFabricEngine::new_client(test_parts(), 4096, false, startup).unwrap();
@@ -68,6 +86,7 @@ fn publishing_can_hold_a_wire_buffer_across_native_send_completion() {
         progress,
         EngineProgress::Needs(WaitCondition::Io(_))
     ));
+    assert_eq!(sender.submitted.len(), 1);
     assert_eq!(sender.submitted.iter().map(Vec::len).sum::<usize>(), queued);
     assert_eq!(engine.pending_application_bytes(), queued);
 

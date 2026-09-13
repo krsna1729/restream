@@ -52,6 +52,19 @@ pub(crate) trait RtmpReadinessPoller {
         ))
     }
 
+    fn submit_native_send_vectored(
+        &mut self,
+        _fd: RawFd,
+        _slot: u32,
+        _generation: u64,
+        _buffers: &[&[u8]],
+    ) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "poller has no native send owner",
+        ))
+    }
+
     fn drain_send_completions(&mut self, _completions: &mut Vec<TcpSendCompletion>) {}
 }
 
@@ -67,6 +80,16 @@ where
         bytes: &[u8],
     ) -> std::io::Result<()> {
         self.submit_native_send(fd, slot, generation, bytes)
+    }
+
+    fn submit_send_vectored(
+        &mut self,
+        fd: RawFd,
+        slot: u32,
+        generation: u64,
+        buffers: &[&[u8]],
+    ) -> std::io::Result<()> {
+        self.submit_native_send_vectored(fd, slot, generation, buffers)
     }
 }
 
@@ -171,7 +194,19 @@ impl RtmpReadinessPoller for super::tcp::IoUringTcpPoller {
         generation: u64,
         bytes: &[u8],
     ) -> std::io::Result<()> {
-        self.submit_native_send(fd, slot, generation, bytes)
+        super::tcp::IoUringTcpPoller::submit_native_send(self, fd, slot, generation, bytes)
+    }
+
+    fn submit_native_send_vectored(
+        &mut self,
+        fd: RawFd,
+        slot: u32,
+        generation: u64,
+        buffers: &[&[u8]],
+    ) -> std::io::Result<()> {
+        super::tcp::IoUringTcpPoller::submit_native_send_vectored(
+            self, fd, slot, generation, buffers,
+        )
     }
 
     fn drain_send_completions(&mut self, completions: &mut Vec<TcpSendCompletion>) {

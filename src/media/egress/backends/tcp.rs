@@ -165,6 +165,23 @@ impl IoUringTcpPoller {
         self.inner.submit_send(fd, slot, generation, bytes)
     }
 
+    pub(crate) fn submit_native_send_vectored(
+        &mut self,
+        fd: RawFd,
+        slot: u32,
+        generation: u64,
+        buffers: &[&[u8]],
+    ) -> std::io::Result<()> {
+        let generation = u32::try_from(generation).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "leaf generation exceeds io_uring tag width",
+            )
+        })?;
+        self.inner
+            .submit_send_vectored(fd, slot, generation, buffers)
+    }
+
     pub(crate) fn drain_native_send_completions(
         &mut self,
         completions: &mut Vec<restream_dataplane::tcp::TcpSendCompletion>,
