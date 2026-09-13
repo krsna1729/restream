@@ -32,6 +32,13 @@ fn should_use_shared_srt_egress_state(peer_count: usize, has_shared_state: bool)
     peer_count != 0 && has_shared_state
 }
 
+fn has_one_shared_srt_address_family(peers: &[SocketAddr]) -> bool {
+    let Some(first) = peers.first() else {
+        return false;
+    };
+    peers.iter().all(|peer| peer.is_ipv4() == first.is_ipv4())
+}
+
 enum RustSrtSocket {
     Direct(Box<Conn>),
     Bonded(Box<TokioGroupConn>),
@@ -699,7 +706,7 @@ pub(crate) fn connect_fabric_srt_egress_socket(
     let transport = if should_use_shared_srt_egress_state(
         config.peer_addrs.len(),
         config.shared_state.is_some(),
-    ) && config.peer_addrs.iter().all(SocketAddr::is_ipv4)
+    ) && has_one_shared_srt_address_family(config.peer_addrs)
     {
         let state = config
             .shared_state
