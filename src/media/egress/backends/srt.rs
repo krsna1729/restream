@@ -262,12 +262,9 @@ pub(crate) fn requeue_after_srt_visit(decision: VisitDecision) -> bool {
     matches!(decision, VisitDecision::Continue)
 }
 
-/// One shard's internal readiness marker for a leaf due a visit. There is no
-/// real readiness multiplexing to report — `srt-rs` has no epoll equivalent,
-/// so `poll_ready()` marks every not-yet-enqueued leaf ready on every pass —
-/// this only exists to carry `(key, generation, writable)` through
-/// `self.ready` between `poll_ready()`/`enqueue_feed_waiting_leaves()` and
-/// `visit_one_ready_leaf()`.
+/// One shard's internal readiness marker for a leaf due a visit. It carries
+/// `(key, generation, writable)` through `self.ready` between the candidate
+/// queue/feed wake and `visit_one_ready_leaf()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SrtReadyLeaf {
     key: LeafKey,
@@ -350,6 +347,8 @@ pub(crate) struct SrtShardBackend {
     leaves: Vec<Option<NativeSrtLeaf>>,
     output_sockets: HashMap<OutputId, LeafKey>,
     ready: VecDeque<SrtReadyLeaf>,
+    ready_candidates: VecDeque<LeafKey>,
+    feed_waiting: VecDeque<LeafKey>,
     pending_connects: HashMap<OutputId, PendingSrtConnect>,
     last_stall_sweep: Option<Instant>,
     /// This shard's application-owned shared UDP socket and srt-rs
@@ -392,6 +391,8 @@ impl SrtShardBackend {
             leaves: Vec::new(),
             output_sockets: HashMap::new(),
             ready: VecDeque::new(),
+            ready_candidates: VecDeque::new(),
+            feed_waiting: VecDeque::new(),
             pending_connects: HashMap::new(),
             last_stall_sweep: None,
             srt_egress_muxer_port: Arc::new(Mutex::new(None)),
@@ -454,6 +455,7 @@ impl SrtShardBackend {
         let output_id = common.output_id.clone();
         let leaf = SrtFabricLeaf::new(common, transport);
         self.leaves.push(Some(leaf));
+        self.ready_candidates.push_back(key);
         if let Some(previous) = self.output_sockets.insert(output_id, key) {
             self.remove_leaf(
                 previous,
@@ -506,6 +508,7 @@ impl SrtShardBackend {
         let key = LeafKey(self.leaves.len());
         let output_id = leaf.common.output_id.clone();
         self.leaves.push(Some(leaf));
+        self.ready_candidates.push_back(key);
         if let Some(previous) = self.output_sockets.insert(output_id, key) {
             self.remove_leaf(
                 previous,
@@ -566,11 +569,10 @@ impl SrtShardBackend {
         true
     }
 
-    /// Drives this shard's transports, then marks every not-yet-enqueued
-    /// leaf ready. There is no readiness to multiplex -- `srt-rs` has no
-    /// epoll equivalent, and every leaf always registers write interest --
-    /// so this is a direct walk of owned leaves rather than a poll of an
-    /// external readiness source.
+    /// Drives the shared table once and advances one registered leaf from the
+    /// bounded candidate queue. `srt-rs` has no epoll equivalent, so each
+    /// leaf that still needs I/O is returned to that queue by
+    /// `requeue_after_visit`; no normal pass walks the population.
     ///
     /// Driving is split in two because the work is: leaves owning their own
     /// connection (`Direct`/`Bonded`) are driven individually, while every
@@ -581,23 +583,42 @@ impl SrtShardBackend {
     /// set, made structural: a shard has exactly one
     /// `srt_egress_muxer_port`, so there is nothing to deduplicate against.
     ///
-    /// Only readiness driving is bounded this way — the send path drives
-    /// the shared table again per accepted message, so a busy pass is not
-    /// literally one table drive.
+    /// The send path may still drive the shared table after an accepted
+    /// message; this method only owns the readiness-side drive.
     fn poll_ready(&mut self) {
         drive_shared_srt_egress(&self.srt_egress_muxer_port);
-        for (index, leaf) in self.leaves.iter_mut().enumerate() {
-            let Some(leaf) = leaf else { continue };
-            leaf.transport.drive();
+        while let Some(key) = self.ready_candidates.pop_front() {
+            let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+                continue;
+            };
             if leaf.common.schedule.enqueued {
                 continue;
             }
+            leaf.transport.drive();
             leaf.common.schedule.enqueued = true;
             self.ready.push_back(SrtReadyLeaf {
-                key: LeafKey(index),
+                key,
                 generation: leaf.common.generation,
                 writable: true,
             });
+            break;
+        }
+    }
+
+    fn requeue_after_visit(&mut self, key: LeafKey, decision: VisitDecision) {
+        if matches!(decision, VisitDecision::Close) {
+            return;
+        }
+        let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+            return;
+        };
+        if leaf.common.schedule.enqueued {
+            return;
+        }
+        if leaf.common.schedule.wants_feed_wake {
+            self.feed_waiting.push_back(key);
+        } else {
+            self.ready_candidates.push_back(key);
         }
     }
 
@@ -633,7 +654,10 @@ impl SrtShardBackend {
         );
 
         let decision = match result {
-            EngineVisitResult::StaleGeneration => VisitDecision::Suspend,
+            EngineVisitResult::StaleGeneration => {
+                leaf.common.schedule.enqueued = false;
+                VisitDecision::Suspend
+            }
             EngineVisitResult::Visited(outcome) => {
                 if matches!(
                     outcome.progress,
@@ -737,6 +761,7 @@ impl EgressShardBackend for SrtShardBackend {
             self.poll_ready();
         }
 
+        let ready_key = self.ready.front().map(|event| event.key);
         let outcome = self.visit_one_ready_leaf();
         if let Some((Some(output_id), VisitDecision::Close)) = &outcome {
             // `VisitDecision::Close` is only ever produced from
@@ -752,8 +777,13 @@ impl EgressShardBackend for SrtShardBackend {
             self.remove_leaf_by_output(output_id);
         }
 
-        let leaf_wants_more = matches!(&outcome, Some((_, VisitDecision::Continue)));
-        if leaf_wants_more || !self.ready.is_empty() {
+        if let Some(key) = ready_key
+            && let Some((_, decision)) = outcome.as_ref()
+        {
+            self.requeue_after_visit(key, *decision);
+        }
+
+        if !self.ready.is_empty() || (outcome.is_some() && !self.ready_candidates.is_empty()) {
             EgressShardCommandEffect::ScheduleReady { count: 1 }
         } else {
             EgressShardCommandEffect::Continue

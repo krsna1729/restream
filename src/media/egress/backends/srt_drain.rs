@@ -148,12 +148,9 @@ impl SrtShardBackend {
         }
     }
 
-    /// Directly enqueue every connected leaf whose last `WaitCondition`
-    /// wants a feed wake (`Feed`/`FeedOrIo`) — set in
-    /// `apply_progress_to_common` (`visit.rs`) — without any poller call.
-    /// Mirrors `poll_ready()`'s push-with-dedup shape exactly (same
-    /// `enqueued` check and set), using `self.ready` directly instead of a
-    /// real `srt_epoll_wait()`.
+    /// Move leaves parked on `Feed`/`FeedOrIo` into the ready queue when the
+    /// feed publishes more media. The queue is populated at visit time, so a
+    /// feed wake does not scan every output on the shard.
     ///
     /// `SrtEgressEngine::advance` only ever reports `WaitCondition::Feed`
     /// on an empty feed and `Io(Interest::WRITE)` everywhere else (a
@@ -167,8 +164,7 @@ impl SrtShardBackend {
     /// same direct-enqueue latency improvement RTMP gets, at the cost of
     /// doing real work per feed wake instead of none.
     pub(super) fn enqueue_feed_waiting_leaves(&mut self) {
-        let keys: Vec<LeafKey> = self.output_sockets.values().copied().collect();
-        for key in keys {
+        while let Some(key) = self.feed_waiting.pop_front() {
             let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
                 continue;
             };
