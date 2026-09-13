@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use restream_dataplane::udp::{UdpInterest, UdpReadyEvent, UdpSendCompletion, UringUdpPoller};
 use shiguredo_srt::Timestamp;
-use srt_transport::{DatagramSink, OutputDrainBudget, RecvBatch};
+use srt_transport::{DatagramSink, LogicalCallerState, OutputDrainBudget, RecvBatch};
 
 use super::{desired_udp_buf, recv_budget};
 
@@ -141,6 +141,38 @@ impl SharedSrtEgress {
         Ok(())
     }
 
+    pub(crate) fn send_shared(
+        &mut self,
+        caller_id: srt_transport::LogicalCallerId,
+        message: &shiguredo_srt::Bytes,
+        now: Timestamp,
+    ) -> Result<usize, shiguredo_srt::Error> {
+        let Some(mut caller) = self.callers.logical_caller_mut(&caller_id) else {
+            return Err(shiguredo_srt::Error::with_reason(
+                shiguredo_srt::ErrorKind::InvalidState,
+                "shared SRT caller no longer exists",
+            ));
+        };
+        match caller.state() {
+            Some(LogicalCallerState::Disconnected) | None => {
+                Err(shiguredo_srt::Error::with_reason(
+                    shiguredo_srt::ErrorKind::InvalidState,
+                    "shared SRT caller is disconnected",
+                ))
+            }
+            Some(LogicalCallerState::Connecting) => Ok(0),
+            Some(LogicalCallerState::Connected) if !caller.can_send() => Ok(0),
+            Some(LogicalCallerState::Connected) => {
+                let mut sink = SharedTxSink {
+                    outbound: &mut self.outbound,
+                    free: &mut self.free_outbound,
+                    leased: None,
+                };
+                caller.send_shared_into(message.clone(), now, &mut sink)
+            }
+        }
+    }
+
     pub(crate) fn flush_outbound(&mut self) -> Result<bool, String> {
         let completed = self
             .poller
@@ -256,6 +288,12 @@ impl DatagramSink for SharedTxSink<'_> {
         unsafe { storage.set_len(len) };
         self.outbound.push_back((peer, storage));
         true
+    }
+
+    fn abort(&mut self) {
+        if let Some(storage) = self.leased.take() {
+            self.free.push(storage);
+        }
     }
 }
 

@@ -2,7 +2,7 @@ use crate::{
     GroupConnectionStats, GroupLogicalCounters, ManualTimerStore, OutputDrainBudget,
     OutputDrainReport, OutputDrainStatus, group_connection_stats,
 };
-use shiguredo_srt::{Bytes, ConnectionOutput, SrtConnection, Timestamp};
+use shiguredo_srt::{Bytes, ConnectionOutput, SrtConnection, Timestamp, WireSink};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::mem::MaybeUninit;
 /// Opaque application identity for one outbound SRT stream. A direct caller
@@ -222,6 +222,27 @@ impl LogicalCallerMut<'_> {
         res
     }
 
+    /// Send a direct caller's DATA packet into final caller-owned TX storage.
+    /// Bonded callers retain the existing group fan-out path until each leg
+    /// can provide an independent wire reservation.
+    pub fn send_shared_into<S: DatagramSink + ?Sized>(
+        &mut self,
+        payload: Bytes,
+        now: Timestamp,
+        sink: &mut S,
+    ) -> Result<usize, shiguredo_srt::Error> {
+        let session = self.table.sessions.get_mut(&self.id).ok_or_else(|| {
+            shiguredo_srt::Error::with_reason(
+                shiguredo_srt::ErrorKind::InvalidState,
+                "logical caller no longer exists",
+            )
+        })?;
+        let res = session.send_shared_into(payload, now, sink);
+        self.table.sync_deadline(self.id);
+        self.table.enqueue_ready(self.id);
+        res
+    }
+
     /// Begin an orderly close. A bonded caller closes every physical leg.
     pub fn disconnect(&mut self, now: Timestamp) {
         let exists = self.table.sessions.contains_key(&self.id);
@@ -276,6 +297,9 @@ pub trait DatagramSink {
         let _ = (peer, len);
         false
     }
+
+    /// Release a reservation that could not be encoded or committed.
+    fn abort(&mut self) {}
 
     /// Transfer an already-encoded packet into the sink without copying it.
     /// Sinks with caller-owned final storage can keep the buffer until the
@@ -372,6 +396,25 @@ impl PacketSink for VecPacketSink<'_> {
 
 struct BorrowedPacketSink<'a, S: DatagramSink + ?Sized> {
     sink: &'a mut S,
+}
+
+struct WirePacketSink<'a, S: DatagramSink + ?Sized> {
+    sink: &'a mut S,
+    peer: std::net::SocketAddr,
+}
+
+impl<S: DatagramSink + ?Sized> WireSink for WirePacketSink<'_, S> {
+    fn acquire(&mut self, max_len: usize) -> Option<&mut [MaybeUninit<u8>]> {
+        self.sink.acquire(max_len)
+    }
+
+    fn commit(&mut self, len: usize) -> bool {
+        self.sink.commit(self.peer, len)
+    }
+
+    fn discard(&mut self) {
+        self.sink.abort();
+    }
 }
 
 impl<S: DatagramSink + ?Sized> PacketSink for BorrowedPacketSink<'_, S> {
@@ -480,6 +523,26 @@ impl CallerSession {
                     group.logical.payload_bytes_sent.saturating_add(len);
                 Ok(legs)
             }
+        }
+    }
+
+    fn send_shared_into<S: DatagramSink + ?Sized>(
+        &mut self,
+        payload: Bytes,
+        now: Timestamp,
+        sink: &mut S,
+    ) -> Result<usize, shiguredo_srt::Error> {
+        match self {
+            Self::Direct(leg) => {
+                let mut wire = WirePacketSink {
+                    sink,
+                    peer: leg.peer,
+                };
+                Ok(usize::from(
+                    leg.connection.send_shared_into(payload, now, &mut wire)?,
+                ))
+            }
+            Self::Group(_) => self.send_shared(payload, now),
         }
     }
 
@@ -1344,7 +1407,7 @@ mod tests {
     use crate::*;
     use proptest::prelude::*;
     use shiguredo_srt::{
-        ConnectionEvent, ConnectionOptions, ConnectionOutput, ErrorKind, HandshakePacket,
+        Bytes, ConnectionEvent, ConnectionOptions, ConnectionOutput, ErrorKind, HandshakePacket,
         SrtConnection, SrtPacket, TimerId, Timestamp,
     };
     use std::collections::HashMap;
@@ -3423,6 +3486,34 @@ mod tests {
         let report = table.poll_outbound_into(Timestamp::default(), budget, &mut sink);
         assert_eq!(report.packets, 1);
         assert_eq!(sink.packets, vec![vec![1, 2, 3]]);
+    }
+
+    #[test]
+    fn direct_caller_writes_data_into_final_sink_storage() {
+        let mut table = mk_table(1);
+        let id = table.bench_ids()[0];
+        let mut sink = RecordingSink {
+            accepted: true,
+            storage: vec![MaybeUninit::uninit(); 2048],
+            packets: Vec::new(),
+        };
+
+        let sent = table
+            .logical_caller_mut(&id)
+            .expect("direct caller")
+            .send_shared_into(
+                Bytes::from_static(b"native-data"),
+                Timestamp::default(),
+                &mut sink,
+            )
+            .expect("direct wire send");
+
+        assert_eq!(sent, 1);
+        assert_eq!(sink.packets.len(), 1);
+        let packet = shiguredo_srt::SrtPacket::decode(&sink.packets[0]).expect("SRT packet");
+        assert!(
+            matches!(packet, shiguredo_srt::SrtPacket::Data(data) if data.payload.as_ref() == b"native-data")
+        );
     }
 
     #[test]

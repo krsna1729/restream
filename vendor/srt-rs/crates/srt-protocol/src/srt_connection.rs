@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::fmt;
+use std::mem::MaybeUninit;
 
 use bytes::{Bytes, BytesMut};
 use zeroize::{Zeroize, Zeroizing};
@@ -197,6 +198,17 @@ pub enum ConnectionOutput {
     SetTimer { id: TimerId, duration_micros: u64 },
     /// Clear a timer.
     ClearTimer { id: TimerId },
+}
+
+/// Caller-owned final storage for one wire packet.
+///
+/// The protocol writes the SRT header, payload, and optional authentication
+/// tag directly into this reservation. The transport remains responsible for
+/// retaining the committed storage until its socket completion.
+pub trait WireSink {
+    fn acquire(&mut self, max_len: usize) -> Option<&mut [MaybeUninit<u8>]>;
+    fn commit(&mut self, len: usize) -> bool;
+    fn discard(&mut self);
 }
 
 /// Connection options.
@@ -1078,6 +1090,68 @@ impl SrtConnection {
         self.send_shared_internal(payload, None, now)
     }
 
+    /// Send one connected DATA packet directly into caller-owned wire
+    /// storage. Returns `false` when the sink has no bounded TX slot.
+    pub fn send_shared_into<S: WireSink>(
+        &mut self,
+        payload: Bytes,
+        now: Timestamp,
+        sink: &mut S,
+    ) -> Result<bool, Error> {
+        if self.state != ConnectionState::Connected {
+            return Err(Error::invalid_state("not connected"));
+        }
+        if !self.can_send() {
+            return Err(Error::invalid_state("send buffer full"));
+        }
+
+        let wire_len = SRT_HEADER_SIZE
+            + payload.len()
+            + usize::from(
+                self.crypto
+                    .as_ref()
+                    .is_some_and(|crypto| crypto.cipher_mode() == CipherMode::Gcm),
+            ) * GCM_TAG_LEN;
+        let Some(storage) = sink.acquire(wire_len) else {
+            return Ok(false);
+        };
+        if storage.len() < wire_len {
+            sink.discard();
+            return Ok(false);
+        }
+
+        let timestamp = self.relative_timestamp(now);
+        let peer_socket_id = self.peer_socket_id;
+        let packet = {
+            let sender = self
+                .sender
+                .as_mut()
+                .ok_or_else(|| Error::invalid_state("sender buffer not initialized"))?;
+            sender.push_shared(payload, timestamp, peer_socket_id, now)
+        };
+        let Some((header, payload)) = packet else {
+            sink.discard();
+            return Ok(false);
+        };
+
+        let written = match self.encrypt_into_wire(&header, &payload, storage) {
+            Ok(written) => written,
+            Err(error) => {
+                sink.discard();
+                return Err(error);
+            }
+        };
+        if !sink.commit(written) {
+            sink.discard();
+            return Err(Error::invalid_state("wire sink rejected committed packet"));
+        }
+        if let Some(ref mut sender) = self.sender {
+            sender.record_send_time(now);
+        }
+        self.check_km_refresh(now);
+        Ok(true)
+    }
+
     /// Send shared payload with a caller-supplied SRT sequence number.
     pub fn send_shared_with_sequence(
         &mut self,
@@ -1522,6 +1596,56 @@ impl SrtConnection {
                 buf.extend_from_slice(&tag);
                 Ok(buf)
             }
+        }
+    }
+
+    fn encrypt_into_wire(
+        &mut self,
+        header: &DataHeader,
+        payload: &[u8],
+        storage: &mut [MaybeUninit<u8>],
+    ) -> Result<usize, Error> {
+        // SAFETY: the sink reservation is uninitialized byte storage and the
+        // encoder writes every byte before the sink commits the length.
+        let wire = unsafe {
+            std::slice::from_raw_parts_mut(storage.as_mut_ptr().cast::<u8>(), storage.len())
+        };
+        let mut hdr = [0u8; SRT_HEADER_SIZE];
+        match self.crypto.as_mut() {
+            None => {
+                header.write_header(&mut hdr, 0);
+                wire[..SRT_HEADER_SIZE].copy_from_slice(&hdr);
+                wire[SRT_HEADER_SIZE..SRT_HEADER_SIZE + payload.len()].copy_from_slice(payload);
+                Ok(SRT_HEADER_SIZE + payload.len())
+            }
+            Some(crypto) => match crypto.cipher_mode() {
+                CipherMode::Ctr => {
+                    wire[SRT_HEADER_SIZE..SRT_HEADER_SIZE + payload.len()].copy_from_slice(payload);
+                    let key_flag = crypto.encrypt(
+                        header.sequence_number,
+                        &mut wire[SRT_HEADER_SIZE..SRT_HEADER_SIZE + payload.len()],
+                    )?;
+                    header.write_header(&mut hdr, key_flag.to_kk_field());
+                    wire[..SRT_HEADER_SIZE].copy_from_slice(&hdr);
+                    Ok(SRT_HEADER_SIZE + payload.len())
+                }
+                CipherMode::Gcm => {
+                    let enc_flag = crypto.current_key().to_kk_field();
+                    header.write_header(&mut hdr, enc_flag);
+                    wire[..SRT_HEADER_SIZE].copy_from_slice(&hdr);
+                    wire[SRT_HEADER_SIZE..SRT_HEADER_SIZE + payload.len()].copy_from_slice(payload);
+                    let aad = header.gcm_aad(enc_flag);
+                    let (_, tag) = crypto.encrypt_gcm_detached(
+                        header.sequence_number,
+                        &aad,
+                        &mut wire[SRT_HEADER_SIZE..SRT_HEADER_SIZE + payload.len()],
+                    )?;
+                    wire[SRT_HEADER_SIZE + payload.len()
+                        ..SRT_HEADER_SIZE + payload.len() + GCM_TAG_LEN]
+                        .copy_from_slice(&tag);
+                    Ok(SRT_HEADER_SIZE + payload.len() + GCM_TAG_LEN)
+                }
+            },
         }
     }
 

@@ -156,32 +156,26 @@ impl RustSrtSocket {
         let Some(shared) = shared.as_mut() else {
             return SrtSendResult::PeerClosed;
         };
-        let Some(mut caller) = shared.callers.logical_caller_mut(caller) else {
-            return SrtSendResult::PeerClosed;
-        };
-        match caller.state() {
-            Some(LogicalCallerState::Disconnected) | None => SrtSendResult::PeerClosed,
-            Some(LogicalCallerState::Connecting) => SrtSendResult::WouldBlock,
-            Some(LogicalCallerState::Connected) if !caller.can_send() => SrtSendResult::WouldBlock,
-            Some(LogicalCallerState::Connected) => {
-                match caller.send_shared(message.clone(), timestamp_now()) {
-                    Ok(_) => match shared.drive(timestamp_now()) {
-                        Ok(()) => SrtSendResult::Accepted {
-                            bytes: message.len(),
-                        },
-                        Err(error) => SrtSendResult::Failed {
-                            reason: "srt-rs-send",
-                            detail: error,
-                            retryable: true,
-                        },
-                    },
-                    Err(error) => SrtSendResult::Failed {
-                        reason: "srt-rs-send",
-                        detail: error.to_string(),
-                        retryable: true,
-                    },
-                }
+        match shared.send_shared(*caller, message, timestamp_now()) {
+            Ok(0) => SrtSendResult::WouldBlock,
+            Ok(_) => match shared.drive(timestamp_now()) {
+                Ok(()) => SrtSendResult::Accepted {
+                    bytes: message.len(),
+                },
+                Err(error) => SrtSendResult::Failed {
+                    reason: "srt-rs-send",
+                    detail: error,
+                    retryable: true,
+                },
+            },
+            Err(error) if error.kind == shiguredo_srt::ErrorKind::InvalidState => {
+                SrtSendResult::PeerClosed
             }
+            Err(error) => SrtSendResult::Failed {
+                reason: "srt-rs-send",
+                detail: error.to_string(),
+                retryable: true,
+            },
         }
     }
 
