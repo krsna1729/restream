@@ -168,6 +168,7 @@ impl SrtShardBackend {
             let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
                 continue;
             };
+            leaf.common.schedule.feed_wake_queued = false;
             if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
                 continue;
             }

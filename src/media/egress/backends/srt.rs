@@ -561,6 +561,7 @@ impl SrtShardBackend {
         key: LeafKey,
         reason: crate::media::egress::backend::CloseReason,
     ) -> bool {
+        self.feed_waiting.retain(|queued| *queued != key);
         let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) else {
             return false;
         };
@@ -615,7 +616,8 @@ impl SrtShardBackend {
         if leaf.common.schedule.enqueued {
             return;
         }
-        if leaf.common.schedule.wants_feed_wake {
+        if leaf.common.schedule.wants_feed_wake && !leaf.common.schedule.feed_wake_queued {
+            leaf.common.schedule.feed_wake_queued = true;
             self.feed_waiting.push_back(key);
         } else {
             self.ready_candidates.push_back(key);

@@ -45,6 +45,11 @@ pub struct ScheduleState {
     /// check `!enqueued` before pushing, so this flag being stale between
     /// visits can never cause a double enqueue.
     pub wants_feed_wake: bool,
+    /// Whether this leaf currently has one entry in the shard's feed-waiting
+    /// queue. Unlike `enqueued`, this is queue bookkeeping rather than ready
+    /// visibility; it prevents repeated readiness visits from growing the
+    /// parked queue without bound before the next feed wake.
+    pub feed_wake_queued: bool,
 }
 
 impl ScheduleState {
@@ -54,6 +59,7 @@ impl ScheduleState {
             deficit_bytes: 0,
             last_service_at: None,
             wants_feed_wake: false,
+            feed_wake_queued: false,
         }
     }
 

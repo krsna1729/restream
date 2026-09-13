@@ -428,6 +428,7 @@ where
 
     fn remove_leaf_socket(&mut self, socket_ref: RtmpLeafSocket, reason: CloseReason) -> bool {
         let _ = self.poller.remove(socket_ref.fd);
+        self.feed_waiting.retain(|key| *key != socket_ref.key);
         let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) else {
             return false;
         };
@@ -479,6 +480,7 @@ where
             let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
                 continue;
             };
+            leaf.common.schedule.feed_wake_queued = false;
             if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
                 continue;
             }
@@ -566,8 +568,10 @@ where
             .saturating_add(leaf.transport.rustls_pending_bytes_estimate());
         let feed_waiting = matches!(decision, VisitDecision::Suspend)
             && leaf.common.schedule.wants_feed_wake
-            && !leaf.common.schedule.enqueued;
+            && !leaf.common.schedule.enqueued
+            && !leaf.common.schedule.feed_wake_queued;
         if feed_waiting {
+            leaf.common.schedule.feed_wake_queued = true;
             self.feed_waiting.push_back(event.key);
         }
 
