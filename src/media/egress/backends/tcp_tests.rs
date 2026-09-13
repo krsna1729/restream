@@ -19,6 +19,37 @@ fn close_fd(fd: RawFd) {
 }
 
 #[test]
+fn io_uring_reports_the_same_ready_shape_as_the_legacy_poller() {
+    let (a, b) = socketpair();
+    let mut poller = match IoUringTcpPoller::new(4) {
+        Ok(poller) => poller,
+        Err(error) if matches!(error.code, libc::EPERM | libc::EOPNOTSUPP | libc::ENOSYS) => {
+            close_fd(a);
+            close_fd(b);
+            return;
+        }
+        Err(error) => panic!("io_uring setup failed: {error:?}"),
+    };
+    poller
+        .register_leaf(a, LeafKey(0), 4, TcpEgressInterest::READ)
+        .unwrap();
+    unsafe {
+        libc::write(b, [1u8].as_ptr().cast(), 1);
+    }
+
+    let mut ready = Vec::new();
+    assert_eq!(poller.poll_leaves(0, &mut ready).unwrap(), 1);
+    assert_eq!(ready[0].key, LeafKey(0));
+    assert_eq!(ready[0].generation, 4);
+    assert!(ready[0].readable);
+    assert!(!ready[0].writable);
+
+    poller.remove(a).unwrap();
+    close_fd(a);
+    close_fd(b);
+}
+
+#[test]
 fn real_epoll_reports_writable_for_a_connected_socket() {
     let (a, b) = socketpair();
     let mut poller = TcpEgressPoller::new(4).unwrap();

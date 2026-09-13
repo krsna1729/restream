@@ -15,7 +15,7 @@ use crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPorts;
 use crate::media::egress::backends::srt::resolve_runtime::{
     ResolvingSrtShardBackendDefault, resolving_srt_shard_backend,
 };
-use crate::media::egress::backends::tcp::{TcpEgressPollError, TcpEgressPoller};
+use crate::media::egress::backends::tcp::{IoUringTcpPoller, TcpEgressPollError};
 use crate::media::egress::command::ShardId;
 use crate::media::egress::journal::{RingFeed, TsFeed};
 use crate::media::egress::policy::WorkBudget;
@@ -146,7 +146,7 @@ where
         feed_for,
         |shard_id| {
             let _ = shard_id;
-            TcpEgressPoller::new(poller_max_events)
+            IoUringTcpPoller::new(poller_max_events)
         },
     )
 }

@@ -1,8 +1,10 @@
-//! Raw-epoll TCP readiness backend for the RTMP/RTMPS fabric.
+//! TCP readiness backends for the RTMP/RTMPS fabric.
 //!
-//! One epoll container per shard, generation-tagged registration, an `Ops`
-//! trait so the native syscalls can be faked in tests, talking to a real
-//! Linux `epoll` instance via `libc`. SRT egress has no equivalent poller:
+//! Production uses one `io_uring` poller per shard. The legacy epoll
+//! implementation remains as a deterministic differential seam while the
+//! cutover settles. Both use generation-tagged registration and an `Ops`
+//! trait so the epoll syscalls can be faked in tests. SRT egress has no
+//! equivalent poller:
 //! `srt-rs` connections have no epoll-style readiness to multiplex (see
 //! `src/media/egress/backends/srt.rs`'s `poll_ready` — every leaf is simply
 //! visited each pass), so there is nothing here for it to mirror.
@@ -10,6 +12,7 @@
 use std::collections::HashMap;
 use std::os::raw::c_int;
 use std::os::unix::io::RawFd;
+use std::time::Duration;
 
 use crate::media::egress::scheduler::LeafKey;
 
@@ -78,6 +81,133 @@ where
     ops: O,
     events: Vec<libc::epoll_event>,
     registered: HashMap<RawFd, TcpRegisteredLeaf>,
+}
+
+/// Production RTMP readiness backend. The epoll implementation above remains
+/// available to deterministic tests while the native dataplane cutover is
+/// staged one protocol at a time.
+pub(crate) struct IoUringTcpPoller {
+    inner: restream_dataplane::tcp::UringTcpPoller,
+    ready: Box<[restream_dataplane::tcp::TcpReadyEvent]>,
+    registrations: HashMap<RawFd, u32>,
+}
+
+impl IoUringTcpPoller {
+    pub(crate) fn new(max_events: usize) -> Result<Self, TcpEgressPollError> {
+        let max_events = max_events.max(1);
+        let ring_entries = max_events
+            .next_power_of_two()
+            .max(32)
+            .try_into()
+            .map_err(|_| {
+                TcpEgressPollError::new(
+                    "io_uring_setup",
+                    libc::EINVAL,
+                    "io_uring entry count overflow".to_owned(),
+                )
+            })?;
+        let inner = restream_dataplane::tcp::UringTcpPoller::new(max_events, ring_entries)
+            .map_err(|error| {
+                TcpEgressPollError::new(
+                    "io_uring_setup",
+                    error.raw_os_error().unwrap_or(libc::EINVAL),
+                    error.to_string(),
+                )
+            })?;
+        Ok(Self {
+            inner,
+            ready: vec![
+                restream_dataplane::tcp::TcpReadyEvent {
+                    fd: -1,
+                    slot: 0,
+                    generation: 0,
+                    readable: false,
+                    writable: false,
+                };
+                max_events
+            ]
+            .into_boxed_slice(),
+            registrations: HashMap::with_capacity(max_events),
+        })
+    }
+
+    pub(crate) fn register_leaf(
+        &mut self,
+        fd: RawFd,
+        key: LeafKey,
+        generation: u64,
+        interest: TcpEgressInterest,
+    ) -> Result<(), TcpEgressPollError> {
+        let generation = u32::try_from(generation).map_err(|_| {
+            TcpEgressPollError::new(
+                "io_uring_register",
+                libc::EINVAL,
+                "leaf generation exceeds io_uring tag width".to_owned(),
+            )
+        })?;
+        let slot = u32::try_from(key.0).map_err(|_| {
+            TcpEgressPollError::new(
+                "io_uring_register",
+                libc::EINVAL,
+                "leaf slot exceeds io_uring tag width".to_owned(),
+            )
+        })?;
+        self.inner
+            .register(
+                fd,
+                slot,
+                generation,
+                restream_dataplane::tcp::TcpInterest {
+                    readable: interest.readable,
+                    writable: interest.writable,
+                },
+            )
+            .map_err(|error| Self::error("io_uring_register", error))?;
+        self.registrations.insert(fd, slot);
+        Ok(())
+    }
+
+    pub(crate) fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError> {
+        let Some(slot) = self.registrations.remove(&fd) else {
+            return Ok(());
+        };
+        self.inner
+            .remove(slot)
+            .map_err(|error| Self::error("io_uring_remove", error))
+    }
+
+    pub(crate) fn poll_leaves(
+        &mut self,
+        timeout_ms: i32,
+        ready: &mut Vec<TcpReadyLeaf>,
+    ) -> Result<usize, TcpEgressPollError> {
+        ready.clear();
+        let count = self
+            .inner
+            .poll(
+                Duration::from_millis(timeout_ms.max(0) as u64),
+                &mut self.ready,
+            )
+            .map_err(|error| Self::error("io_uring_poll", error))?;
+        for event in self.ready.iter().take(count) {
+            ready.push(TcpReadyLeaf {
+                fd: event.fd,
+                key: LeafKey(event.slot as usize),
+                generation: event.generation as u64,
+                readable: event.readable,
+                writable: event.writable,
+            });
+        }
+        Ok(count)
+    }
+
+    fn error(operation: &'static str, error: std::io::Error) -> TcpEgressPollError {
+        TcpEgressPollError::new(
+            operation,
+            error.raw_os_error().unwrap_or(libc::EIO),
+            error.to_string(),
+        )
+    }
 }
 
 impl TcpEgressPoller<LibcTcpPollOps> {

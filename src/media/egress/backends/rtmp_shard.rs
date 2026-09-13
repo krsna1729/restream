@@ -225,6 +225,30 @@ where
     }
 }
 
+impl RtmpReadinessPoller for super::tcp::IoUringTcpPoller {
+    fn register_leaf(
+        &mut self,
+        fd: RawFd,
+        key: LeafKey,
+        generation: u64,
+        interest: TcpEgressInterest,
+    ) -> Result<(), TcpEgressPollError> {
+        self.register_leaf(fd, key, generation, interest)
+    }
+
+    fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError> {
+        self.remove(fd)
+    }
+
+    fn poll_leaves(
+        &mut self,
+        timeout_ms: i32,
+        ready: &mut Vec<TcpReadyLeaf>,
+    ) -> Result<usize, TcpEgressPollError> {
+        self.poll_leaves(timeout_ms, ready)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Leaf
 // ---------------------------------------------------------------------------
