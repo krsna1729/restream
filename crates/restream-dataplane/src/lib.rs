@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const MAX_TAG_SLOTS: usize = 1 << 24;
 
 pub mod tcp;
+pub mod udp;
 
 // ---------------------------------------------------------------------------
 // Operation identity
