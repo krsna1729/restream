@@ -23,6 +23,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_TAG_SLOTS: usize = 1 << 24;
 
+pub mod tcp;
+
 // ---------------------------------------------------------------------------
 // Operation identity
 // ---------------------------------------------------------------------------
@@ -39,6 +41,7 @@ pub enum OpKind {
     UdpTx = 6,
     Timeout = 7,
     ControlWake = 8,
+    PollCancel = 9,
 }
 
 impl OpKind {
@@ -52,6 +55,7 @@ impl OpKind {
             6 => Self::UdpTx,
             7 => Self::Timeout,
             8 => Self::ControlWake,
+            9 => Self::PollCancel,
             _ => return None,
         })
     }
@@ -877,16 +881,7 @@ fn run_shard(
     wake_fd: Arc<OwnedFd>,
     startup: SyncSender<Result<(), io::Error>>,
 ) -> io::Result<ShardMetrics> {
-    let mut builder = IoUring::builder();
-    builder
-        .setup_single_issuer()
-        .setup_defer_taskrun()
-        .setup_coop_taskrun()
-        .setup_taskrun_flag();
-    let mut ring = match builder.build(config.ring_entries) {
-        Ok(ring) => ring,
-        Err(_) => IoUring::new(config.ring_entries)?,
-    };
+    let mut ring = build_ring(config.ring_entries)?;
     ring.submitter().register_files(&[wake_fd.as_raw_fd()])?;
 
     let mut state = ShardState::new(config);
@@ -964,6 +959,19 @@ fn run_shard(
     result
 }
 
+fn build_ring(entries: u32) -> io::Result<IoUring> {
+    let mut builder = IoUring::builder();
+    builder
+        .setup_single_issuer()
+        .setup_defer_taskrun()
+        .setup_coop_taskrun()
+        .setup_taskrun_flag();
+    match builder.build(entries) {
+        Ok(ring) => Ok(ring),
+        Err(_) => IoUring::new(entries),
+    }
+}
+
 fn arm_control_poll(ring: &mut IoUring) -> io::Result<()> {
     let entry = opcode::PollAdd::new(types::Fixed(0), libc::POLLIN as _)
         .build()
@@ -1000,7 +1008,7 @@ mod tests {
     fn operation_tags_round_trip_and_reject_invalid_kind() {
         let tag = OpTag::new(OpKind::TcpTx, 0x00ab_cdef, u32::MAX).unwrap();
         assert_eq!(OpTag::decode(tag.encode()), Some(tag));
-        assert!(OpTag::decode(0x09).is_none());
+        assert!(OpTag::decode(0x0a).is_none());
         assert!(OpTag::new(OpKind::TcpTx, MAX_TAG_SLOTS as u32, 0).is_none());
     }
 

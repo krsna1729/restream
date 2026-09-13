@@ -22,7 +22,16 @@ fn owner_thread_services_only_woken_sinks() {
     dataplane.add_sink(7).unwrap();
     dataplane.add_sink(8).unwrap();
     assert!(dataplane.wake_sink(8).unwrap());
-    let snapshot = dataplane.snapshot().unwrap();
+    let snapshot = (0..100)
+        .map(|_| dataplane.snapshot().unwrap())
+        .find(|snapshot| {
+            snapshot
+                .sinks
+                .iter()
+                .find(|sink| sink.id == 8)
+                .is_some_and(|sink| sink.visits == 1)
+        })
+        .expect("owner thread should service the woken sink");
     assert_eq!(snapshot.active_leaves, 2);
     assert_eq!(
         snapshot
