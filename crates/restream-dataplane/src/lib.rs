@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const MAX_TAG_SLOTS: usize = 1 << 24;
 
 pub mod capabilities;
+pub mod capacity;
 pub mod files;
 pub mod media;
 pub mod tcp;
@@ -31,6 +32,7 @@ pub mod tx;
 pub mod udp;
 
 pub use capabilities::UringCapabilities;
+pub use capacity::{CapacityModel, CapacityRates, CapacitySnapshot, Workload};
 pub use files::{FixedFile, FixedFileTable};
 pub use media::{CursorError, FeedCursor, MediaArena, MediaError, MediaRef, MediaRing};
 pub use tx::{TxLease, TxPool, TxState};
@@ -256,12 +258,12 @@ impl DeadlineIndex {
         self.heap.first().copied()
     }
 
-    pub fn pop_due(&mut self, now: Instant) -> Option<DeadlineEntry> {
-        (self.next()?.at <= now).then(|| self.remove_at(0))
-    }
-
     pub fn len(&self) -> usize {
         self.heap.len()
+    }
+
+    pub fn pop_due(&mut self, now: Instant) -> Option<DeadlineEntry> {
+        (self.next()?.at <= now).then(|| self.remove_at(0))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -411,8 +413,12 @@ pub struct ShardMetrics {
     pub ready_visits: u64,
     pub budget_exhaustions: u64,
     pub stale_completions: u64,
+    pub cq_overflows: u64,
     pub rx_pool_empty: u64,
     pub tx_pool_empty: u64,
+    pub send_zc_attempts: u64,
+    pub send_zc_fallbacks: u64,
+    pub feed_overruns: u64,
     pub loop_iterations: u64,
     pub max_ready_depth: u64,
 }
@@ -537,6 +543,9 @@ pub struct SinkSnapshot {
 pub struct ShardSnapshot {
     pub active_leaves: usize,
     pub ready_leaves: usize,
+    pub deadline_count: usize,
+    pub rx_available: usize,
+    pub tx_available: usize,
     pub metrics: ShardMetrics,
     pub sinks: Vec<SinkSnapshot>,
 }
@@ -624,7 +633,7 @@ struct ShardState {
     leaves: LeafSlab,
     ready: ReadyQueue,
     deadlines: DeadlineIndex,
-    _rx: BufferPool,
+    rx: BufferPool,
     tx: TxPool,
     metrics: ShardMetrics,
     budget: WorkBudgetConfig,
@@ -636,7 +645,7 @@ impl ShardState {
             leaves: LeafSlab::new(config.max_leaves),
             ready: ReadyQueue::new(config.ready_capacity, config.max_leaves).unwrap(),
             deadlines: DeadlineIndex::new(config.max_leaves),
-            _rx: BufferPool::new(config.rx_slots, config.buffer_size).unwrap(),
+            rx: BufferPool::new(config.rx_slots, config.buffer_size).unwrap(),
             tx: TxPool::new(config.tx_slots, config.buffer_size).unwrap(),
             metrics: ShardMetrics::default(),
             budget: config.leaf_budget,
@@ -682,6 +691,7 @@ impl ShardState {
                 let _ = self.tx.complete(tx_lease);
                 let _ = self.tx.release(tx_lease);
                 self.metrics.tx_packets += 1;
+                self.metrics.tx_bytes += 1;
             } else {
                 self.metrics.tx_pool_empty += 1;
             }
@@ -698,6 +708,9 @@ impl ShardState {
         ShardSnapshot {
             active_leaves: self.leaves.leaves.iter().flatten().count(),
             ready_leaves: self.ready.len(),
+            deadline_count: self.deadlines.len(),
+            rx_available: self.rx.available(),
+            tx_available: self.tx.available(),
             metrics: self.metrics,
             sinks: self
                 .leaves
@@ -1143,5 +1156,17 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn shard_snapshot_reports_bounded_pool_and_schedule_depths() {
+        let state = ShardState::new(ShardConfig::default());
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.active_leaves, 0);
+        assert_eq!(snapshot.ready_leaves, 0);
+        assert_eq!(snapshot.deadline_count, 0);
+        assert_eq!(snapshot.rx_available, 256);
+        assert_eq!(snapshot.tx_available, 256);
+        assert_eq!(snapshot.metrics.cq_overflows, 0);
     }
 }
