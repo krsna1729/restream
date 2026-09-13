@@ -131,45 +131,48 @@ impl RustSrtSocket {
                     },
                 }
             }
-            Self::Shared { state, caller } => {
-                let Ok(mut shared) = state.lock() else {
-                    return SrtSendResult::Failed {
-                        reason: "srt-rs-shared-lock",
-                        detail: "shared SRT egress state is poisoned".to_string(),
+            Self::Shared { .. } => unreachable!("shared SRT uses send_shared"),
+        }
+    }
+
+    fn send_shared(&mut self, message: &Bytes) -> SrtSendResult {
+        let Self::Shared { state, caller } = self else {
+            unreachable!("send_shared called for a non-shared SRT socket");
+        };
+        let Ok(mut shared) = state.lock() else {
+            return SrtSendResult::Failed {
+                reason: "srt-rs-shared-lock",
+                detail: "shared SRT egress state is poisoned".to_string(),
+                retryable: true,
+            };
+        };
+        let Some(shared) = shared.as_mut() else {
+            return SrtSendResult::PeerClosed;
+        };
+        let Some(mut caller) = shared.callers.logical_caller_mut(caller) else {
+            return SrtSendResult::PeerClosed;
+        };
+        match caller.state() {
+            Some(LogicalCallerState::Disconnected) | None => SrtSendResult::PeerClosed,
+            Some(LogicalCallerState::Connecting) => SrtSendResult::WouldBlock,
+            Some(LogicalCallerState::Connected) if !caller.can_send() => SrtSendResult::WouldBlock,
+            Some(LogicalCallerState::Connected) => {
+                match caller.send_shared(message.clone(), timestamp_now()) {
+                    Ok(_) => match shared.drive(timestamp_now()) {
+                        Ok(()) => SrtSendResult::Accepted {
+                            bytes: message.len(),
+                        },
+                        Err(error) => SrtSendResult::Failed {
+                            reason: "srt-rs-send",
+                            detail: error,
+                            retryable: true,
+                        },
+                    },
+                    Err(error) => SrtSendResult::Failed {
+                        reason: "srt-rs-send",
+                        detail: error.to_string(),
                         retryable: true,
-                    };
-                };
-                let Some(shared) = shared.as_mut() else {
-                    return SrtSendResult::PeerClosed;
-                };
-                let Some(mut caller) = shared.callers.logical_caller_mut(caller) else {
-                    return SrtSendResult::PeerClosed;
-                };
-                match caller.state() {
-                    Some(LogicalCallerState::Disconnected) | None => SrtSendResult::PeerClosed,
-                    Some(LogicalCallerState::Connecting) => SrtSendResult::WouldBlock,
-                    Some(LogicalCallerState::Connected) if !caller.can_send() => {
-                        SrtSendResult::WouldBlock
-                    }
-                    Some(LogicalCallerState::Connected) => {
-                        match caller.send_shared(message.clone(), timestamp_now()) {
-                            Ok(_) => match shared.drive(timestamp_now()) {
-                                Ok(()) => SrtSendResult::Accepted {
-                                    bytes: message.len(),
-                                },
-                                Err(error) => SrtSendResult::Failed {
-                                    reason: "srt-rs-send",
-                                    detail: error,
-                                    retryable: true,
-                                },
-                            },
-                            Err(error) => SrtSendResult::Failed {
-                                reason: "srt-rs-send",
-                                detail: error.to_string(),
-                                retryable: true,
-                            },
-                        }
-                    }
+                    },
                 }
             }
         }
@@ -237,6 +240,9 @@ impl RustSrtSocket {
 
 impl SrtMessageSender for RustSrtSocket {
     fn send_message(&mut self, message: &Bytes) -> SrtSendResult {
+        if matches!(self, Self::Shared { .. }) {
+            return self.send_shared(message);
+        }
         let Ok(runtime) = srt_runtime() else {
             return SrtSendResult::Failed {
                 reason: "srt-rs-runtime",
@@ -690,8 +696,6 @@ pub(crate) fn connect_fabric_srt_egress_socket(
         max_in_flight: std::num::NonZeroUsize::MIN,
         attempt_deadline: Duration::from_millis(config.connect_timeout_ms.max(1)),
     };
-    let runtime = srt_runtime()?;
-    let _runtime_guard = runtime.enter();
     let transport = if should_use_shared_srt_egress_state(
         config.peer_addrs.len(),
         config.shared_state.is_some(),
@@ -705,7 +709,7 @@ pub(crate) fn connect_fabric_srt_egress_socket(
                 .lock()
                 .map_err(|_| "shared SRT egress state is poisoned".to_string())?;
             if shared.is_none() {
-                *shared = Some(SharedSrtEgress::bind(config.peer_addrs[0], &runtime)?);
+                *shared = Some(SharedSrtEgress::bind(config.peer_addrs[0])?);
             }
             let shared = shared.as_mut().expect("initialized above");
             let connection = session
@@ -723,6 +727,8 @@ pub(crate) fn connect_fabric_srt_egress_socket(
         };
         RustSrtSocket::Shared { state, caller }
     } else if config.peer_addrs.len() == 1 {
+        let runtime = srt_runtime()?;
+        let _runtime_guard = runtime.enter();
         let caller = srt_transport::CallerConfig::builder(config.peer_addrs[0])
             .session(session)
             .connect(connect)
@@ -738,6 +744,8 @@ pub(crate) fn connect_fabric_srt_egress_socket(
             .map_err(|e| e.to_string())?;
         RustSrtSocket::Direct(Box::new(Conn::new(conn, tokio_socket)))
     } else {
+        let runtime = srt_runtime()?;
+        let _runtime_guard = runtime.enter();
         let legs = config
             .peer_addrs
             .iter()
