@@ -2,19 +2,16 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
-use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
 use shiguredo_srt::{ConnectionEvent, Timestamp};
 use srt_transport::{
-    AdmissionEvent, AdmissionResolution, BondedInputPolicy, HighResWaiter, IngressTelemetry,
-    ListenerConfig, ListenerEncryptionConfig, ListenerPeerPolicy, ListenerTopology, LogicalPeerId,
-    MonotonicDeadline, PeerTable, PolicyOverride, RecvBatch, RecvBudget, RejectionReason,
-    RuntimeFlavor,
+    AdmissionEvent, AdmissionResolution, BondedInputPolicy, IngressTelemetry, ListenerConfig,
+    ListenerEncryptionConfig, ListenerPeerPolicy, ListenerTopology, LogicalPeerId, PeerTable,
+    PolicyOverride, RejectionReason, RuntimeFlavor,
 };
-use tokio::net::UdpSocket;
 use tracing::{error, info, warn};
 
 use crate::domain::srt_ingest::ResolvedSrtCrypto;
@@ -30,6 +27,10 @@ use crate::media::standby_gop::StandbyGopCache;
 use crate::media::ts_chunk_ring::TsChunkReader;
 
 pub(crate) use super::srt_policy::SrtIngestPolicyStore;
+
+#[path = "native_ingress.rs"]
+mod native_ingress;
+use native_ingress::{NativeSrtDatagram, NativeSrtIngress};
 
 #[path = "ingest_packets.rs"]
 mod ingest_packets;
@@ -93,13 +94,19 @@ impl SrtServer {
             error!(port, "srt-rs listener produced no UDP socket");
             return;
         };
-        let socket = match UdpSocket::from_std(socket) {
-            Ok(socket) => socket,
+        let native = match NativeSrtIngress::start(socket) {
+            Ok(native) => native,
             Err(error) => {
-                error!(port, %error, "failed to adopt SRT listener UDP socket into Tokio");
+                error!(port, %error, "failed to start native SRT ingress");
                 return;
             }
         };
+        let NativeSrtIngress {
+            mut inbound,
+            recycled,
+            outbound: outbound_tx,
+            stats: _stats,
+        } = native;
 
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let shutdown_hook = shutdown.clone();
@@ -117,76 +124,34 @@ impl SrtServer {
         let mut peer_sessions = HashMap::new();
         let mut events = Vec::new();
         let mut outbound = Vec::new();
-        let mut recv_batch = RecvBatch::new();
-        let mut waiter = match HighResWaiter::<()>::new() {
-            Ok(waiter) => waiter,
-            Err(error) => {
-                error!(port, %error, "failed to create SRT listener HighResWaiter");
-                return;
-            }
-        };
-        if let Err(error) = waiter.register((), socket.as_raw_fd()) {
-            error!(port, %error, "failed to register SRT listener with HighResWaiter");
-            return;
-        }
-        let mut due = Vec::new();
-        let mut ready = Vec::new();
 
-        info!(port, "SRT listener ready (srt-rs/Tokio)");
+        info!(port, "SRT listener ready (srt-rs/native io_uring ingress)");
         while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
             let wait = listener_wait_duration(&mut peers, timestamp_now());
-            match tokio::task::block_in_place(|| {
-                park_listener(&mut waiter, &mut due, &mut ready, wait)
-            }) {
-                Ok(socket_ready) => {
-                    if socket_ready {
-                        let now = timestamp_now();
-                        // HighResWaiter observed the raw fd. `drain_readable`
-                        // requires Tokio READABLE, which is still unset here,
-                        // so handshake datagrams would be dropped as WouldBlock.
-                        match drain_woken_listener(
-                            &socket,
-                            &mut recv_batch,
-                            super::tokio_egress::recv_budget(),
-                            |addr, data| {
-                                let Some(peer) = addr else {
-                                    return;
-                                };
-                                let policy_store = self.ingest_policy_store.clone();
-                                let _ = peers.admit_with_resolver(
-                                    peer,
-                                    data,
-                                    now,
-                                    &admission,
-                                    0,
-                                    1,
-                                    &telemetry,
-                                    move |request| resolve_listener_policy(&policy_store, request),
-                                );
-                            },
-                        ) {
-                            Ok(_) => {}
-                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                            Err(error) => {
-                                warn!(%error, "SRT listener receive failed");
-                                tokio::time::sleep(Duration::from_millis(10)).await;
-                            }
-                        }
-                    }
+            match tokio::time::timeout(wait, inbound.recv()).await {
+                Ok(Some(packet)) => {
+                    admit_native_datagram(
+                        &self, &mut peers, packet, &admission, &telemetry, &recycled,
+                    )
+                    .await;
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(error) => {
-                    warn!(%error, "SRT listener wait failed");
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
+                Ok(None) => break,
+                Err(_) => {}
             }
 
             let now = timestamp_now();
+            while let Ok(packet) = inbound.try_recv() {
+                admit_native_datagram(&self, &mut peers, packet, &admission, &telemetry, &recycled)
+                    .await;
+            }
             close_deleted_srt_publishers(&self.engine, &mut peers, &mut peer_sessions, now).await;
             drive_srt_readers(&self.engine, &mut peers, &mut peer_sessions, now).await;
             peers.poll_outbound(now, &mut outbound);
             for (peer, packet) in outbound.drain(..) {
-                let _ = socket.send_to(&packet, peer).await;
+                if outbound_tx.send((peer, packet)).await.is_err() {
+                    warn!(port, "native SRT ingress output worker stopped");
+                    return;
+                }
             }
             peers.poll_events(&mut events);
             for AdmissionEvent {
@@ -684,6 +649,30 @@ fn resolve_listener_policy(
     AdmissionResolution::Configure(policy)
 }
 
+async fn admit_native_datagram(
+    server: &SrtServer,
+    peers: &mut PeerTable,
+    packet: NativeSrtDatagram,
+    admission: &srt_transport::AdmissionOptions,
+    telemetry: &IngressTelemetry,
+    recycled: &tokio::sync::mpsc::Sender<Box<[u8]>>,
+) {
+    let NativeSrtDatagram { peer, buffer, len } = packet;
+    let now = timestamp_now();
+    let policy_store = server.ingest_policy_store.clone();
+    let _ = peers.admit_with_resolver(
+        peer,
+        &buffer[..len],
+        now,
+        admission,
+        0,
+        1,
+        telemetry,
+        move |request| resolve_listener_policy(&policy_store, request),
+    );
+    let _ = recycled.send(buffer).await;
+}
+
 fn listener_wait_duration(peers: &mut PeerTable, now: Timestamp) -> Duration {
     Duration::from_micros(
         peers
@@ -694,32 +683,6 @@ fn listener_wait_duration(peers: &mut PeerTable, now: Timestamp) -> Duration {
 
 fn listener_idle_micros() -> u64 {
     u64::try_from(LISTENER_IDLE.as_micros()).unwrap_or(u64::MAX)
-}
-
-fn park_listener(
-    waiter: &mut HighResWaiter<()>,
-    due: &mut Vec<()>,
-    ready: &mut Vec<()>,
-    wait: Duration,
-) -> std::io::Result<bool> {
-    waiter.set_deadline((), MonotonicDeadline::after(wait));
-    waiter.wait(due, ready)?;
-    Ok(!ready.is_empty())
-}
-
-/// Drain a socket that `HighResWaiter` already reported readable.
-///
-/// Must not use [`srt_transport::tokio_transport::drain_readable`]: that
-/// helper's `try_io(READABLE)` returns WouldBlock unless Tokio itself saw
-/// the wake. After a waiter park the kernel queue is full and Tokio is
-/// not, which is the post-#153 MSR sink/ingress handshake stall.
-fn drain_woken_listener(
-    socket: &UdpSocket,
-    recv_batch: &mut RecvBatch,
-    budget: RecvBudget,
-    on_datagram: impl FnMut(Option<std::net::SocketAddr>, &[u8]),
-) -> std::io::Result<srt_transport::RecvDrainReport> {
-    srt_transport::drain_recv_fd(socket.as_raw_fd(), recv_batch, budget, on_datagram)
 }
 
 #[cfg(test)]
@@ -733,81 +696,5 @@ mod tests {
             listener_wait_duration(&mut peers, timestamp_now()),
             LISTENER_IDLE
         );
-    }
-
-    fn pending_datagram_socket() -> std::net::UdpSocket {
-        let receiver = std::net::UdpSocket::bind("127.0.0.1:0").expect("receiver binds");
-        receiver
-            .set_nonblocking(true)
-            .expect("receiver is nonblocking");
-        let dest = receiver.local_addr().expect("receiver address");
-        let sender = std::net::UdpSocket::bind("127.0.0.1:0").expect("sender binds");
-        sender.send_to(b"ping", dest).expect("send datagram");
-        receiver
-    }
-
-    fn with_woken_listener(
-        test: impl FnOnce(UdpSocket, &mut HighResWaiter<()>, &mut Vec<()>, &mut Vec<()>),
-    ) {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .build()
-            .expect("Tokio runtime builds");
-        let receiver = pending_datagram_socket();
-        runtime.block_on(async {
-            let sock = UdpSocket::from_std(receiver).expect("tokio adopts the socket");
-            let mut waiter = HighResWaiter::<()>::new().expect("waiter");
-            waiter
-                .register((), sock.as_raw_fd())
-                .expect("register listener fd");
-            let mut due = Vec::new();
-            let mut ready = Vec::new();
-            assert!(
-                park_listener(&mut waiter, &mut due, &mut ready, LISTENER_IDLE).expect("wait"),
-                "listener fd should be ready after a datagram"
-            );
-            test(sock, &mut waiter, &mut due, &mut ready);
-        });
-    }
-
-    #[test]
-    fn high_res_waiter_wakes_the_listener_socket() {
-        with_woken_listener(|_, _, _, _| {});
-    }
-
-    #[test]
-    fn woken_listener_drains_without_tokio_readable() {
-        with_woken_listener(|sock, _, _, _| {
-            let mut batch = RecvBatch::new();
-            let mut got = Vec::new();
-            let report =
-                drain_woken_listener(&sock, &mut batch, RecvBudget::default(), |_, data| {
-                    got.push(data.to_vec())
-                })
-                .expect("drain after waiter");
-            assert_eq!(report.datagrams, 1);
-            assert_eq!(got, [b"ping".to_vec()]);
-        });
-    }
-
-    #[test]
-    fn drain_readable_misses_a_waiter_wake_without_tokio_readable() {
-        with_woken_listener(|sock, _, _, _| {
-            let mut batch = RecvBatch::new();
-            let mut got = Vec::new();
-            let report = srt_transport::tokio_transport::drain_readable(
-                &sock,
-                &mut batch,
-                RecvBudget::default(),
-                |_, data| got.push(data.to_vec()),
-            )
-            .expect("drain_readable after waiter");
-            assert_eq!(
-                report.datagrams, 0,
-                "Tokio try_io is unset after HighResWaiter; this is the #153 MSR stall"
-            );
-            assert!(report.would_block);
-            assert!(got.is_empty());
-        });
     }
 }
