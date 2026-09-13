@@ -20,6 +20,7 @@ where
     /// wait for.
     pub(super) fn begin_graceful_close(&mut self, output_id: &OutputId, reason: CloseReason) {
         self.pending_connects.remove(output_id);
+        self.remove_connecting_output(output_id);
         let Some(socket_ref) = self.output_sockets.get(output_id).copied() else {
             return;
         };
@@ -37,6 +38,26 @@ where
         }
         leaf.draining_since = Some(Instant::now());
         leaf.draining_reason = Some(reason);
+    }
+
+    pub(super) fn sweep_connecting_leaves(&mut self, now: Instant) {
+        let expired: Vec<LeafKey> = self
+            .connecting
+            .iter()
+            .filter_map(|(key, connecting)| (connecting.deadline <= now).then_some(*key))
+            .collect();
+        for key in expired {
+            let Some(connecting) = self.connecting.remove(&key) else {
+                continue;
+            };
+            self.connecting_by_output
+                .remove(&connecting.common.output_id);
+            let _ = self.poller.remove(connecting.stream.as_raw_fd());
+            connecting
+                .common
+                .progress_sink
+                .mark_terminated_unexpectedly();
+        }
     }
 
     /// Close every draining leaf (see `begin_graceful_close`) that has

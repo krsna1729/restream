@@ -10,8 +10,10 @@
 //! visited each pass), so there is nothing here for it to mirror.
 
 use std::collections::HashMap;
+use std::io;
+use std::net::{SocketAddr, TcpStream};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::raw::c_int;
-use std::os::unix::io::RawFd;
 use std::time::Duration;
 
 use crate::media::egress::scheduler::LeafKey;
@@ -94,6 +96,11 @@ pub(crate) struct IoUringTcpPoller {
     registrations: HashMap<RawFd, u32>,
 }
 
+pub(crate) enum TcpConnectAttempt {
+    Connected(TcpStream),
+    InProgress(TcpStream),
+}
+
 impl IoUringTcpPoller {
     pub(crate) fn new(max_events: usize) -> Result<Self, TcpEgressPollError> {
         let max_events = max_events.max(1);
@@ -173,6 +180,33 @@ impl IoUringTcpPoller {
         self.ready.len()
     }
 
+    pub(crate) fn start_connect(
+        &mut self,
+        peer_addr: SocketAddr,
+        key: LeafKey,
+        generation: u64,
+    ) -> Result<TcpConnectAttempt, TcpEgressPollError> {
+        let stream = open_nonblocking_tcp(peer_addr)?;
+        let fd = stream.as_raw_fd();
+        let (address, address_len) = socket_address(peer_addr);
+        let result = unsafe {
+            libc::connect(
+                fd,
+                (&address as *const libc::sockaddr_storage).cast(),
+                address_len,
+            )
+        };
+        if result == 0 {
+            return Ok(TcpConnectAttempt::Connected(stream));
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EINPROGRESS) {
+            return Err(Self::error("connect", error));
+        }
+        self.register_leaf(fd, key, generation, TcpEgressInterest::WRITE)?;
+        Ok(TcpConnectAttempt::InProgress(stream))
+    }
+
     pub(crate) fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError> {
         let Some(slot) = self.registrations.remove(&fd) else {
             return Ok(());
@@ -213,6 +247,109 @@ impl IoUringTcpPoller {
             error.raw_os_error().unwrap_or(libc::EIO),
             error.to_string(),
         )
+    }
+}
+
+pub(crate) fn connect_error(fd: RawFd) -> io::Result<()> {
+    let mut error = 0;
+    let mut length = std::mem::size_of::<c_int>() as libc::socklen_t;
+    let result = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ERROR,
+            (&mut error as *mut c_int).cast(),
+            &mut length,
+        )
+    };
+    if result < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if error == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::from_raw_os_error(error))
+    }
+}
+
+fn open_nonblocking_tcp(peer_addr: SocketAddr) -> Result<TcpStream, TcpEgressPollError> {
+    let domain = match peer_addr {
+        SocketAddr::V4(_) => libc::AF_INET,
+        SocketAddr::V6(_) => libc::AF_INET6,
+    };
+    let fd = unsafe {
+        libc::socket(
+            domain,
+            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+            0,
+        )
+    };
+    if fd < 0 {
+        return Err(TcpEgressPollError::new(
+            "socket",
+            io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or(libc::EIO),
+            io::Error::last_os_error().to_string(),
+        ));
+    }
+    let stream = unsafe { TcpStream::from_raw_fd(fd) };
+    stream.set_nodelay(true).map_err(|error| {
+        TcpEgressPollError::new(
+            "set_nodelay",
+            error.raw_os_error().unwrap_or(libc::EIO),
+            error.to_string(),
+        )
+    })?;
+    Ok(stream)
+}
+
+fn socket_address(peer_addr: SocketAddr) -> (libc::sockaddr_storage, libc::socklen_t) {
+    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    match peer_addr {
+        SocketAddr::V4(address) => {
+            let value = libc::sockaddr_in {
+                sin_family: libc::AF_INET as libc::sa_family_t,
+                sin_port: address.port().to_be(),
+                sin_addr: libc::in_addr {
+                    s_addr: u32::from_ne_bytes(address.ip().octets()),
+                },
+                sin_zero: [0; 8],
+            };
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    (&value as *const libc::sockaddr_in).cast::<u8>(),
+                    (&mut storage as *mut libc::sockaddr_storage).cast::<u8>(),
+                    std::mem::size_of::<libc::sockaddr_in>(),
+                );
+            }
+            (
+                storage,
+                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            )
+        }
+        SocketAddr::V6(address) => {
+            let value = libc::sockaddr_in6 {
+                sin6_family: libc::AF_INET6 as libc::sa_family_t,
+                sin6_port: address.port().to_be(),
+                sin6_flowinfo: address.flowinfo(),
+                sin6_addr: libc::in6_addr {
+                    s6_addr: address.ip().octets(),
+                },
+                sin6_scope_id: address.scope_id(),
+            };
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    (&value as *const libc::sockaddr_in6).cast::<u8>(),
+                    (&mut storage as *mut libc::sockaddr_storage).cast::<u8>(),
+                    std::mem::size_of::<libc::sockaddr_in6>(),
+                );
+            }
+            (
+                storage,
+                std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
+            )
+        }
     }
 }
 

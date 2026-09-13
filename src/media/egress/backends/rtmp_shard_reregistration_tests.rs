@@ -18,6 +18,17 @@ impl RtmpReadinessPoller for CountingPoller {
         self.inner.ready_capacity()
     }
 
+    fn start_connect(
+        &mut self,
+        peer_addr: SocketAddr,
+        key: LeafKey,
+        generation: u64,
+        timeout: Duration,
+    ) -> Result<TcpConnectAttempt, TcpEgressPollError> {
+        self.inner
+            .start_connect(peer_addr, key, generation, timeout)
+    }
+
     fn register_leaf(
         &mut self,
         fd: RawFd,
@@ -169,6 +180,17 @@ struct FailingRegisterPoller {
 impl RtmpReadinessPoller for FailingRegisterPoller {
     fn ready_capacity(&self) -> usize {
         self.inner.ready_capacity()
+    }
+
+    fn start_connect(
+        &mut self,
+        peer_addr: SocketAddr,
+        key: LeafKey,
+        generation: u64,
+        timeout: Duration,
+    ) -> Result<TcpConnectAttempt, TcpEgressPollError> {
+        self.inner
+            .start_connect(peer_addr, key, generation, timeout)
     }
 
     fn register_leaf(
