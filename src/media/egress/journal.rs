@@ -378,6 +378,54 @@ impl EgressFeed for RingFeed {
         }
     }
 
+    fn read_from_into(
+        &self,
+        cursor: FeedCursor,
+        budget: ReadBudget,
+        units: &mut Vec<Self::Unit>,
+    ) -> FeedRead<()> {
+        let current_epoch = self.epoch.current();
+        if cursor.epoch != current_epoch {
+            return FeedRead::EpochMismatch { current_epoch };
+        }
+
+        let head = self.ring.get_write_idx() as u64;
+        let oldest = self.refresh_oldest();
+        if cursor.next_sequence < oldest {
+            return FeedRead::Overrun {
+                oldest_sequence: oldest,
+            };
+        }
+        if cursor.next_sequence >= head {
+            return FeedRead::Empty;
+        }
+
+        units.clear();
+        let mut seq = cursor.next_sequence;
+        let mut total_bytes = 0usize;
+        while seq < head && units.len() < budget.max_units && total_bytes < budget.max_bytes {
+            match self.ring.read_at(seq as usize) {
+                Some(pkt) => {
+                    total_bytes += pkt.payload.len();
+                    units.push(pkt);
+                    seq += 1;
+                }
+                None => {
+                    return FeedRead::Overrun {
+                        oldest_sequence: self.refresh_oldest(),
+                    };
+                }
+            }
+        }
+        if units.is_empty() {
+            return FeedRead::Empty;
+        }
+        FeedRead::Units {
+            units: Vec::new(),
+            next_cursor: FeedCursor::new(cursor.epoch, seq),
+        }
+    }
+
     fn latest_sync_point(&self) -> Option<FeedCursor> {
         let epoch = self.epoch.current();
         let head = self.ring.get_write_idx();
@@ -536,6 +584,54 @@ impl EgressFeed for TsFeed {
 
         FeedRead::Units {
             units,
+            next_cursor: FeedCursor::new(cursor.epoch, seq),
+        }
+    }
+
+    fn read_from_into(
+        &self,
+        cursor: FeedCursor,
+        budget: ReadBudget,
+        units: &mut Vec<Self::Unit>,
+    ) -> FeedRead<()> {
+        let current_epoch = self.epoch.current();
+        if cursor.epoch != current_epoch {
+            return FeedRead::EpochMismatch { current_epoch };
+        }
+
+        let head = self.ring.get_write_idx() as u64;
+        let oldest = self.refresh_oldest();
+        if cursor.next_sequence < oldest {
+            return FeedRead::Overrun {
+                oldest_sequence: oldest,
+            };
+        }
+        if cursor.next_sequence >= head {
+            return FeedRead::Empty;
+        }
+
+        units.clear();
+        let mut seq = cursor.next_sequence;
+        let mut total_bytes = 0usize;
+        while seq < head && units.len() < budget.max_units && total_bytes < budget.max_bytes {
+            match self.ring.read_at(seq as usize) {
+                Some(pkt) => {
+                    total_bytes += pkt.payload.len();
+                    units.push(pkt.payload.clone());
+                    seq += 1;
+                }
+                None => {
+                    return FeedRead::Overrun {
+                        oldest_sequence: self.refresh_oldest(),
+                    };
+                }
+            }
+        }
+        if units.is_empty() {
+            return FeedRead::Empty;
+        }
+        FeedRead::Units {
+            units: Vec::new(),
             next_cursor: FeedCursor::new(cursor.epoch, seq),
         }
     }

@@ -139,14 +139,11 @@ struct MediaPublisher {
     /// startup batch is never miscounted as feed progress.
     unit_in_flight: bool,
     actions: Vec<RtmpMediaAction>,
-    /// Units already pulled from the feed but not yet encoded. Refilled from
-    /// `feed.read_from` in bursts of up to `FEED_READ_BURST` units instead of
-    /// one `read_from` call (with its own `Vec` allocation and ring-atomic
-    /// traffic) per unit — matching the legacy Tokio path's up-to-32-packet
-    /// pull (`src/media/rtmp/egress.rs`) and avoiding the class of
-    /// per-unit-call overhead an earlier optimization already removed once
-    /// (see `docs/archive/egress/implementation.md` Phase 5 status).
-    pending_units: VecDeque<Arc<MediaPacket>>,
+    /// Units already pulled from the feed but not yet encoded. Refilled into
+    /// this preallocated storage in bursts of up to `FEED_READ_BURST` units
+    /// instead of allocating a new read vector for every visit.
+    pending_units: Vec<Arc<MediaPacket>>,
+    pending_units_index: usize,
 }
 
 /// Feed units pulled per `feed.read_from` refill once `pending_units` is
@@ -159,7 +156,7 @@ impl MediaPublisher {
             startup.enhanced_hevc_video,
             startup.raw_video_parameter_sets,
         );
-        let mut current_batch = VecDeque::new();
+        let mut current_batch = VecDeque::with_capacity(32);
 
         if let Some(metadata) = startup.publish_metadata.as_ref() {
             current_batch.push_back(
@@ -200,7 +197,8 @@ impl MediaPublisher {
             native_vectored_bytes: None,
             unit_in_flight: false,
             actions: Vec::with_capacity(2),
-            pending_units: VecDeque::new(),
+            pending_units: Vec::with_capacity(FEED_READ_BURST),
+            pending_units_index: 0,
         })
     }
 
@@ -648,12 +646,15 @@ impl MediaPublisher {
                 }
             }
 
-            if self.pending_units.is_empty() {
-                match feed.read_from(*cursor, ReadBudget::new(FEED_READ_BURST, budget.max_bytes)) {
-                    FeedRead::Units { units, next_cursor } => {
-                        *cursor = next_cursor;
-                        self.pending_units.extend(units);
-                    }
+            if self.pending_units_index >= self.pending_units.len() {
+                self.pending_units.clear();
+                self.pending_units_index = 0;
+                match feed.read_from_into(
+                    *cursor,
+                    ReadBudget::new(FEED_READ_BURST, budget.max_bytes),
+                    &mut self.pending_units,
+                ) {
+                    FeedRead::Units { next_cursor, .. } => *cursor = next_cursor,
                     FeedRead::Empty => {
                         return Self::finish(
                             total_bytes,
@@ -667,13 +668,14 @@ impl MediaPublisher {
                 }
             }
 
-            let Some(packet) = self.pending_units.pop_front() else {
+            let Some(packet) = self.pending_units.get(self.pending_units_index).cloned() else {
                 return Self::finish(
                     total_bytes,
                     total_units,
                     WaitCondition::FeedOrIo(Interest::READ),
                 );
             };
+            self.pending_units_index += 1;
             if let Err(detail) = self.encode_unit(&packet) {
                 return EngineProgress::Failed(ProtocolFailure {
                     reason: "rtmp_media_encode",
@@ -759,7 +761,12 @@ impl RtmpFabricEngine {
     #[cfg(test)]
     pub(crate) fn publisher_pending_units_len(&self) -> Option<usize> {
         match &self.state {
-            Some(RtmpFabricState::Publishing(publisher)) => Some(publisher.pending_units.len()),
+            Some(RtmpFabricState::Publishing(publisher)) => Some(
+                publisher
+                    .pending_units
+                    .len()
+                    .saturating_sub(publisher.pending_units_index),
+            ),
             _ => None,
         }
     }
