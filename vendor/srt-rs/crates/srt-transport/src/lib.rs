@@ -164,7 +164,9 @@ pub use caller::{
     RemovedLogicalCaller,
 };
 // Internal helpers used by runtime and group_conn modules.
-pub(crate) use batch::{drain_connected_outputs, drain_output_work};
+pub(crate) use batch::drain_connected_outputs;
+#[cfg(any(feature = "tokio", feature = "smol"))]
+pub(crate) use batch::drain_output_work;
 pub(crate) use caller::{collect_output_work, prepend_outputs};
 
 // --- Public re-exports: group ---

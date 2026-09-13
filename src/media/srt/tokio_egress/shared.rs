@@ -115,6 +115,7 @@ impl SharedSrtEgress {
         let mut sink = SharedTxSink {
             outbound: &mut self.outbound,
             free: &mut self.free_outbound,
+            leased: None,
         };
         self.callers.poll_outbound_into(now, budget, &mut sink);
         let _ = self.flush_outbound()?;
@@ -181,19 +182,42 @@ impl SharedSrtEgress {
 struct SharedTxSink<'a> {
     outbound: &'a mut VecDeque<(SocketAddr, Vec<u8>)>,
     free: &'a mut Vec<Vec<u8>>,
+    leased: Option<Vec<u8>>,
 }
 
 impl DatagramSink for SharedTxSink<'_> {
-    fn send(&mut self, peer: SocketAddr, packet: &[u8]) -> bool {
-        let Some(mut storage) = self.free.pop() else {
+    fn acquire(&mut self, max_len: usize) -> Option<&mut [std::mem::MaybeUninit<u8>]> {
+        if self.leased.is_some() {
+            return None;
+        }
+        let mut storage = self.free.pop()?;
+        if max_len > storage.capacity() {
+            self.free.push(storage);
+            return None;
+        }
+        storage.clear();
+        self.leased = Some(storage);
+        Some(
+            self.leased
+                .as_mut()
+                .map(Vec::spare_capacity_mut)
+                .expect("leased TX storage is present"),
+        )
+    }
+
+    fn commit(&mut self, peer: SocketAddr, len: usize) -> bool {
+        let Some(mut storage) = self.leased.take() else {
             return false;
         };
-        if packet.len() > storage.capacity() {
+        if len > storage.capacity() {
             self.free.push(storage);
             return false;
         }
-        storage.clear();
-        storage.extend_from_slice(packet);
+        // `acquire` exposes exactly this vector's spare capacity and the
+        // default DatagramSink::send initializes every committed byte.
+        // SAFETY: every byte in `0..len` was initialized by that default
+        // implementation before it called commit.
+        unsafe { storage.set_len(len) };
         self.outbound.push_back((peer, storage));
         true
     }

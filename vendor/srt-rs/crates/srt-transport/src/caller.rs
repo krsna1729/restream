@@ -4,6 +4,7 @@ use crate::{
 };
 use shiguredo_srt::{Bytes, ConnectionOutput, SrtConnection, Timestamp};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::mem::MaybeUninit;
 /// Opaque application identity for one outbound SRT stream. A direct caller
 /// and a bonded Broadcast/Backup group have the same steady-state API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -259,7 +260,38 @@ pub struct CallerTable {
 /// the packet queued for a later bounded drain, which lets a native TX pool
 /// apply backpressure without an unbounded intermediate output queue.
 pub trait DatagramSink {
-    fn send(&mut self, peer: std::net::SocketAddr, packet: &[u8]) -> bool;
+    /// Reserve final caller-owned storage for one datagram.
+    ///
+    /// The returned slice is at least `max_len` bytes long when present. The
+    /// sink owns the storage until [`Self::commit`] returns; it must release
+    /// it itself when commit rejects the packet.
+    fn acquire(&mut self, max_len: usize) -> Option<&mut [MaybeUninit<u8>]> {
+        let _ = max_len;
+        None
+    }
+
+    /// Publish the bytes written into the most recent [`Self::acquire`]
+    /// reservation. A rejected commit must release that reservation.
+    fn commit(&mut self, peer: std::net::SocketAddr, len: usize) -> bool {
+        let _ = (peer, len);
+        false
+    }
+
+    /// Compatibility convenience for runtimes that already own a packet.
+    /// Native sinks should implement `acquire`/`commit` so protocol output can
+    /// be written into final TX storage without an adapter allocation.
+    fn send(&mut self, peer: std::net::SocketAddr, packet: &[u8]) -> bool {
+        let Some(storage) = self.acquire(packet.len()) else {
+            return false;
+        };
+        if storage.len() < packet.len() {
+            return false;
+        }
+        for (destination, source) in storage.iter_mut().zip(packet.iter().copied()) {
+            destination.write(source);
+        }
+        self.commit(peer, packet.len())
+    }
 }
 
 #[cfg(any(test, feature = "bench-internals"))]
@@ -1309,6 +1341,7 @@ mod tests {
         SrtConnection, SrtPacket, TimerId, Timestamp,
     };
     use std::collections::HashMap;
+    use std::mem::MaybeUninit;
     use std::sync::atomic::Ordering;
     use std::time::Instant;
 
@@ -3334,15 +3367,28 @@ mod tests {
 
     struct RecordingSink {
         accepted: bool,
+        storage: Vec<MaybeUninit<u8>>,
         packets: Vec<Vec<u8>>,
     }
 
     impl DatagramSink for RecordingSink {
-        fn send(&mut self, _peer: std::net::SocketAddr, packet: &[u8]) -> bool {
-            if !self.accepted {
+        fn acquire(&mut self, max_len: usize) -> Option<&mut [MaybeUninit<u8>]> {
+            self.accepted
+                .then_some(self.storage.as_mut_slice())
+                .filter(|storage| storage.len() >= max_len)
+        }
+
+        fn commit(&mut self, _peer: std::net::SocketAddr, len: usize) -> bool {
+            if len > self.storage.len() {
                 return false;
             }
-            self.packets.push(packet.to_vec());
+            let mut packet = Vec::with_capacity(len);
+            for byte in &self.storage[..len] {
+                // SAFETY: the default DatagramSink::send initializes every
+                // byte in the reservation before calling commit.
+                packet.push(unsafe { byte.assume_init() });
+            }
+            self.packets.push(packet);
             true
         }
     }
@@ -3358,6 +3404,7 @@ mod tests {
         );
         let mut sink = RecordingSink {
             accepted: false,
+            storage: vec![MaybeUninit::uninit(); 2048],
             packets: Vec::new(),
         };
         let budget = OutputDrainBudget::new(4, 4, 64);
