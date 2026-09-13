@@ -447,7 +447,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph L1["libsrt ingest multiplexer: 1 CSndQueue + 1 CRcvQueue\nworker-thread pair (one bound local UDP endpoint),\nplus 1 TsbPd thread per live ingest connection"]
+    subgraph L1["SRT ingest runtime: listener-owned UDP\nplus one protocol task per live ingest connection"]
         SS["SRT socket accept/recv"]
     end
     subgraph T2["Tokio worker pool"]
@@ -459,42 +459,29 @@ flowchart LR
         SR2 -->|"passthrough"| Mux
         Mux --> TCR[("TsChunkRing — shared SPMC\npackage ring")]
     end
-    subgraph S2["Egress fabric shard pool: OS threads per feed,\ncount = SrtCpuParallel profile\n(always the CPU-derived ceiling, independent of that feed's output count)"]
+    subgraph S2["Egress fabric shard pool: OS threads per feed,\neach shard owner drives shared native UDP readiness"]
         Leaf2["SRT leaf: connection,\ncongestion, encryption state"] --> Send2["non-blocking srt_sendmsg2"]
     end
     TCR --> Leaf2
-    subgraph L2["libsrt egress multiplexer: 1 per (pipeline, shard) by default,\nshared across every feed of that pipeline assigned to that shard —\n1 CSndQueue + 1 CRcvQueue worker-thread pair"]
-        Send2 --> Buf["CSndBuffer (~6 MB negotiated\nceiling per socket) + TSBPD\ndeadline enforcement"]
+    subgraph L2["Shared SRT state: 1 application UDP socket +\nio_uring readiness + CallerTable per (pipeline, shard)"]
+        Send2 --> Buf["srt-rs protocol buffers + TSBPD\ndeadline enforcement"]
     end
     Buf --> Dest2["Destination SRT receiver"]
 ```
 
 | Hop | Thread/process model | Memory owner |
 |---|---|---|
-| SRT ingest socket, libsrt multiplexer | 1 multiplexer for the whole ingest listener: 1 `CSndQueue` + 1 `CRcvQueue` thread pair, plus 1 `SRT:TsbPd` delivery-timing thread per live connection | libsrt's own `CRcvBuffer` per connection; kernel `SO_RCVBUF` is separate and kernel-owned |
+| SRT ingest socket and protocol tasks | Listener-owned UDP socket plus one runtime protocol task per live ingest connection | srt-rs receive state per connection; kernel `SO_RCVBUF` is separate and kernel-owned |
 | `TsDemuxer` → `source_ring` | Tokio worker, inline async | Shared `source_ring`, same structure as RTMP |
 | Shared `TsMuxer` (SRT preparation) | 1 Tokio task per `(pipeline, preset)`, inline async | `TsChunkRing` (256-chunk shared ring, `RESTREAM_TS_RING_CAPACITY`) |
-| Egress shard (SRT) | Fixed OS-thread pool **per feed** (a feed is one `(protocol, pipeline, encoding)` selection, e.g. one selected audio track), sized by `EgressShardProfile::SrtCpuParallel`: always the CPU-derived ceiling, **not reduced for a small feed** — this is deliberate, not an oversight; see below | Per-leaf `LeafCommon`, same small bound as RTMP |
-| libsrt egress multiplexer | 1 per `(pipeline, shard id)` by default, shared across every feed of that pipeline on shard *N* — so multiplexer/thread count tracks `shard count x active pipeline count`, not feed count or output count (`src/media/egress/backends/srt/muxer_ports.rs`; `RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED=0` reverts to sharing by shard id alone, engine-wide) | libsrt's own `CSndBuffer`, a real per-**socket** userspace allocation (~6.1 MB negotiated ceiling from `DESIRED_SRT_BUF`, `src/media/srt/socket.rs`) that counts toward process RSS — roughly 2.8x RTMP's per-connection memory cost in the measured example above. Kernel `SO_SNDBUF` (`DESIRED_UDP_BUF`, 8 MiB requested) is separate and does not count toward RSS |
+| Egress shard (SRT) | Fixed OS-thread pool per feed; each shard owner drives the shared homogeneous-family native UDP readiness socket and queued leaf visits, while direct/mixed-family links retain runtime adapters | Per-leaf protocol state and bounded application scratch |
+| Shared SRT transport | 1 application UDP socket + io_uring readiness poller + `CallerTable` per `(pipeline, shard)`; shared TS muxing remains per `(pipeline, preset)` | srt-rs caller/protocol state plus kernel `SO_SNDBUF`; upstream caller-owned TX storage is not available, so the adapter still materializes bounded protocol output |
 
-`SrtCpuParallel` claiming the full CPU-derived shard ceiling for every SRT
-feed regardless of that feed's own output count is the fix for a real,
-previously-shipped bug, not an unexamined default: an earlier
-output-count-scaled formula (matching RTMP's `OutputCount` profile) capped a
-small SRT feed at 1 shard / 1 libsrt multiplexer, and one multiplexer's
-single `CSndQueue` thread became a hard bottleneck once concurrent SRT
-egress connections crossed roughly 120, triggering continuous `TLPKTDROP`
-packet loss (full account in
-[the SRT egress scale investigation](archive/quality/srt-egress-scale-investigation-2026-08-10.md)).
-The corresponding cost is that egress-shard thread count for SRT scales with
-**distinct SRT feed count** times the CPU-derived shard ceiling — a
-process with many small, distinct SRT track selections pays the same
-per-feed shard-thread cost as one with a few large ones. Making that
-cheaper without reopening the fixed bug is an open, unimplemented
-improvement — see the "Efficiency evaluation" note in the resource
-attribution doc linked above for the specific tradeoff and why it was not
-attempted in the same session that just proved the current design correct
-at 1,200 outputs.
+The shared native path bounds work per shard with receive/send budgets and
+explicit ready/feed-wait queues. It currently retains a bounded per-message
+protocol-output vector because the pinned upstream `srt-rs` API does not expose
+caller-owned transmit storage. That is the remaining allocation ceiling for
+shared SRT egress; it is separate from socket ownership and readiness.
 
 ## SRT bonding
 
@@ -516,9 +503,9 @@ srt://primary:10080?streamid=publish:key&bond=backup1:10080,backup2:10080
 
 This creates an SRT Backup group with the URL authority as the primary leg and
 the listed peers as standbys. Add `type=broadcast` to duplicate each media
-message over every healthy leg. The egress adapter uses srt-rs's Tokio-native
-group transport, so each leg is a Tokio UDP socket and all group I/O remains
-nonblocking.
+message over every healthy leg. Homogeneous IPv4 or IPv6 groups use the native
+shared readiness path; mixed-family groups retain the runtime group adapter so
+all group I/O remains nonblocking.
 
 
 ## Protocol correctness requirements
