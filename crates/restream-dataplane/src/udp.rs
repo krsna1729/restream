@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use io_uring::{IoUring, opcode, types};
 
-use crate::{MAX_TAG_SLOTS, OpKind, OpTag, build_ring};
+use crate::{FixedFileTable, MAX_TAG_SLOTS, OpKind, OpTag, build_ring};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UdpInterest {
@@ -68,6 +68,7 @@ struct Registration {
     fd: RawFd,
     generation: u32,
     armed: bool,
+    fixed: Option<types::Fixed>,
 }
 
 /// Single-owner, fixed-registration UDP readiness poller.
@@ -77,6 +78,7 @@ struct Registration {
 pub struct UringUdpPoller {
     ring: IoUring,
     registrations: Box<[Option<Registration>]>,
+    fixed_files: Option<FixedFileTable>,
     timeout_armed: bool,
     metrics: UdpPollerMetrics,
 }
@@ -95,9 +97,39 @@ impl UringUdpPoller {
                 "io_uring entries must be a power of two >= 8",
             ));
         }
+        let ring = build_ring(ring_entries)?;
         Ok(Self {
-            ring: build_ring(ring_entries)?,
+            ring,
             registrations: vec![None; max_slots].into_boxed_slice(),
+            fixed_files: None,
+            timeout_armed: false,
+            metrics: UdpPollerMetrics::default(),
+        })
+    }
+
+    /// Construct a poller whose registrations use the ring's fixed file
+    /// table. Fixed slots live for the poller's lifetime; this matches native
+    /// shard sockets, which are opened once and owned by one thread.
+    pub fn new_fixed(max_slots: usize, ring_entries: u32) -> io::Result<Self> {
+        if max_slots == 0 || max_slots >= MAX_TAG_SLOTS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid UDP registration capacity",
+            ));
+        }
+        if !ring_entries.is_power_of_two() || ring_entries < 8 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "io_uring entries must be a power of two >= 8",
+            ));
+        }
+        let ring = build_ring(ring_entries)?;
+        let files = FixedFileTable::new(max_slots)?;
+        files.register(&ring.submitter())?;
+        Ok(Self {
+            ring,
+            registrations: vec![None; max_slots].into_boxed_slice(),
+            fixed_files: Some(files),
             timeout_armed: false,
             metrics: UdpPollerMetrics::default(),
         })
@@ -120,9 +152,52 @@ impl UringUdpPoller {
             fd,
             generation,
             armed: !interest.is_empty(),
+            fixed: self.registrations[index].and_then(|registration| registration.fixed),
         });
         if !interest.is_empty() {
-            self.push_poll(fd, slot, generation, interest)?;
+            self.push_poll(
+                fd,
+                self.registrations[index].and_then(|registration| registration.fixed),
+                slot,
+                generation,
+                interest,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn register_fixed(
+        &mut self,
+        fd: RawFd,
+        slot: u32,
+        generation: u32,
+        interest: UdpInterest,
+    ) -> io::Result<()> {
+        let index = self.registration_index(slot)?;
+        let files = self.fixed_files.as_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "poller has no fixed file table",
+            )
+        })?;
+        if self.registrations[index].is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "UDP fixed registration slot already used",
+            ));
+        }
+        let file = files.install(&self.ring.submitter(), fd)?;
+        let fixed = files
+            .get(file)
+            .expect("installed fixed UDP file remains valid");
+        self.registrations[index] = Some(Registration {
+            fd,
+            generation,
+            armed: !interest.is_empty(),
+            fixed: Some(fixed),
+        });
+        if !interest.is_empty() {
+            self.push_poll(fd, Some(fixed), slot, generation, interest)?;
         }
         Ok(())
     }
@@ -229,17 +304,22 @@ impl UringUdpPoller {
     fn push_poll(
         &mut self,
         fd: RawFd,
+        fixed: Option<types::Fixed>,
         slot: u32,
         generation: u32,
         interest: UdpInterest,
     ) -> io::Result<()> {
-        let entry = opcode::PollAdd::new(types::Fd(fd), interest.poll_flags())
-            .build()
-            .user_data(
-                OpTag::new(OpKind::UdpRx, slot, generation)
-                    .unwrap()
-                    .encode(),
-            );
+        let user_data = OpTag::new(OpKind::UdpRx, slot, generation)
+            .unwrap()
+            .encode();
+        let entry = match fixed {
+            Some(fixed) => opcode::PollAdd::new(fixed, interest.poll_flags())
+                .build()
+                .user_data(user_data),
+            None => opcode::PollAdd::new(types::Fd(fd), interest.poll_flags())
+                .build()
+                .user_data(user_data),
+        };
         unsafe { self.push(&entry) }
     }
 
@@ -343,6 +423,21 @@ mod tests {
         }
     }
 
+    fn fixed_poller() -> Option<UringUdpPoller> {
+        match UringUdpPoller::new_fixed(4, 32) {
+            Ok(poller) => Some(poller),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
+                ) =>
+            {
+                None
+            }
+            Err(error) => panic!("fixed-file io_uring unavailable: {error}"),
+        }
+    }
+
     #[test]
     fn poll_reports_udp_readiness_with_generation() {
         let Some((receiver, sender)) = udp_pair() else {
@@ -351,6 +446,35 @@ mod tests {
         let Some(mut poller) = poller() else { return };
         poller
             .register(receiver.as_raw_fd(), 1, 7, UdpInterest::READ)
+            .unwrap();
+        let byte = [7_u8];
+        assert_eq!(
+            unsafe { libc::send(sender.as_raw_fd(), byte.as_ptr().cast(), 1, 0) },
+            1
+        );
+        let mut ready = [UdpReadyEvent {
+            fd: -1,
+            slot: 0,
+            generation: 0,
+            readable: false,
+            writable: false,
+        }; 2];
+        assert_eq!(poller.poll(Duration::ZERO, &mut ready).unwrap(), 1);
+        assert_eq!(ready[0].slot, 1);
+        assert_eq!(ready[0].generation, 7);
+        assert!(ready[0].readable);
+    }
+
+    #[test]
+    fn fixed_file_poller_reports_udp_readiness() {
+        let Some((receiver, sender)) = udp_pair() else {
+            return;
+        };
+        let Some(mut poller) = fixed_poller() else {
+            return;
+        };
+        poller
+            .register_fixed(receiver.as_raw_fd(), 1, 7, UdpInterest::READ)
             .unwrap();
         let byte = [7_u8];
         assert_eq!(

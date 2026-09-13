@@ -94,8 +94,8 @@ fn run_worker(
     listener_stats: Arc<ListenerSocketStats>,
 ) -> io::Result<()> {
     let fd = socket.as_raw_fd();
-    let mut poller = UringUdpPoller::new(1, 256)?;
-    poller.register(fd, 0, 1, UdpInterest::READ)?;
+    let mut poller = UringUdpPoller::new_fixed(1, 256)?;
+    poller.register_fixed(fd, 0, 1, UdpInterest::READ)?;
     let mut recv_batch = RecvBatch::new();
     let mut free = (0..CHANNEL_CAPACITY)
         .map(|_| vec![0_u8; BUFFER_SIZE].into_boxed_slice())

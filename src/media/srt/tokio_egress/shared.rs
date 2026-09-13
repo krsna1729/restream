@@ -46,9 +46,9 @@ impl SharedSrtEgress {
             .map_err(|error| error.to_string())?;
         srt_transport::set_sock_bufs(socket.as_raw_fd(), desired_udp_buf())
             .map_err(|error| error.to_string())?;
-        let mut poller = UringUdpPoller::new(1, 32).map_err(|error| error.to_string())?;
+        let mut poller = UringUdpPoller::new_fixed(1, 32).map_err(|error| error.to_string())?;
         poller
-            .register(socket.as_raw_fd(), 0, 1, UdpInterest::READ_WRITE)
+            .register_fixed(socket.as_raw_fd(), 0, 1, UdpInterest::READ_WRITE)
             .map_err(|error| error.to_string())?;
         Ok(Self {
             socket,
