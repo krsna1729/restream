@@ -1062,6 +1062,7 @@ mod tests {
         assert_eq!(pool.available(), 2);
     }
 
+    #[cfg(not(feature = "loom"))]
     #[test]
     fn wake_gate_coalesces_notifications() {
         let gate = WakeGate::new();
@@ -1069,6 +1070,18 @@ mod tests {
         assert!(!gate.notify());
         gate.clear();
         assert!(gate.notify());
+    }
+
+    #[cfg(feature = "loom")]
+    #[test]
+    fn wake_gate_coalesces_notifications_in_model() {
+        loom::model(|| {
+            let gate = WakeGate::new();
+            assert!(gate.notify());
+            assert!(!gate.notify());
+            gate.clear();
+            assert!(gate.notify());
+        });
     }
 
     #[test]
