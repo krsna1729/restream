@@ -222,9 +222,8 @@ impl LogicalCallerMut<'_> {
         res
     }
 
-    /// Send a direct caller's DATA packet into final caller-owned TX storage.
-    /// Bonded callers retain the existing group fan-out path until each leg
-    /// can provide an independent wire reservation.
+    /// Send DATA packets into final caller-owned TX storage. Bonded callers
+    /// reserve one independent slot per selected physical leg.
     pub fn send_shared_into<S: DatagramSink + ?Sized>(
         &mut self,
         payload: Bytes,

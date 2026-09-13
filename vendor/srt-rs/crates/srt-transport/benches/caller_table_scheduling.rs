@@ -1,9 +1,28 @@
 use std::hint::black_box;
+use std::mem::MaybeUninit;
 use std::net::SocketAddr;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use shiguredo_srt::{ConnectionOptions, ConnectionOutput, SRTGROUP_MASK, SrtConnection, Timestamp};
-use srt_transport::{CallerLeg, CallerTable};
+use shiguredo_srt::{
+    Bytes, ConnectionOptions, ConnectionOutput, SRTGROUP_MASK, SrtConnection, Timestamp,
+};
+use srt_transport::{CallerLeg, CallerTable, DatagramSink};
+
+struct WireSink {
+    storage: Vec<MaybeUninit<u8>>,
+    packets: usize,
+}
+
+impl DatagramSink for WireSink {
+    fn acquire(&mut self, max_len: usize) -> Option<&mut [MaybeUninit<u8>]> {
+        (self.storage.len() >= max_len).then_some(self.storage.as_mut_slice())
+    }
+
+    fn commit(&mut self, _peer: SocketAddr, _len: usize) -> bool {
+        self.packets += 1;
+        true
+    }
+}
 
 fn make_peer(idx: usize) -> SocketAddr {
     SocketAddr::from((
@@ -139,6 +158,44 @@ fn bench_one_ready(c: &mut Criterion) {
                         black_box(table.sched_counters());
                     }
                     out
+                },
+                BatchSize::PerIteration,
+            );
+        });
+    }
+    group.finish();
+}
+
+fn bench_direct_wire_send(c: &mut Criterion) {
+    let mut group = c.benchmark_group("caller_direct_wire_send");
+    for n in [1u32, 30, 200, 1000, 4096] {
+        group.throughput(Throughput::Elements(1));
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+            b.iter_batched_ref(
+                || {
+                    let now = Timestamp::from_micros(1_000_000);
+                    let (table, ids) = make_table(n as usize, now);
+                    (
+                        table,
+                        ids[0],
+                        WireSink {
+                            storage: vec![MaybeUninit::uninit(); 64 * 1024],
+                            packets: 0,
+                        },
+                    )
+                },
+                |fixture| {
+                    let (table, id, sink) = fixture;
+                    let result = table
+                        .logical_caller_mut(id)
+                        .expect("caller exists")
+                        .send_shared_into(
+                            Bytes::from_static(b"benchmark-payload-data"),
+                            Timestamp::from_micros(1_000_000),
+                            sink,
+                        )
+                        .expect("wire send");
+                    black_box((result, sink.packets));
                 },
                 BatchSize::PerIteration,
             );
@@ -387,6 +444,7 @@ criterion_group!(
     benches,
     bench_idle_poll,
     bench_one_ready,
+    bench_direct_wire_send,
     bench_one_due,
     bench_sparse_ready,
     bench_all_ready,
