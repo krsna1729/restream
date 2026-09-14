@@ -31,7 +31,7 @@ pub mod tcp;
 pub mod tx;
 pub mod udp;
 
-pub use capabilities::UringCapabilities;
+pub use capabilities::{UringCapabilities, UringCapabilityTier};
 pub use capacity::{CapacityModel, CapacityRates, CapacitySnapshot, Workload};
 pub use files::{FixedFile, FixedFileTable};
 pub use media::{CursorError, FeedCursor, MediaArena, MediaError, MediaRef, MediaRing};

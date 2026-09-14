@@ -204,6 +204,7 @@ fn uring_capabilities() -> &'static serde_json::Value {
             "recvMsg": caps.recv_msg,
             "recvMsgMulti": caps.recv_msg_multi,
             "recvMultishot": caps.recv_multishot,
+            "provideBuffers": caps.provide_buffers,
             "recvBundle": caps.recv_bundle,
             "recvZc": caps.recv_zc,
             "send": caps.send,
@@ -212,6 +213,7 @@ fn uring_capabilities() -> &'static serde_json::Value {
             "sendZc": caps.send_zc,
             "sendBundle": caps.send_bundle,
             "napi": caps.napi,
+            "deploymentTier": caps.deployment_tier().as_str(),
         }),
         Err(error) => serde_json::json!({
             "available": false,
