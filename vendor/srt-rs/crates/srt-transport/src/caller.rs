@@ -268,6 +268,7 @@ pub struct CallerTable {
     routes: HashMap<u32, CallerRoute>,
     ready_queue: VecDeque<LogicalCallerId>,
     deadlines: BTreeSet<DeadlineEntry>,
+    due_ids: Vec<LogicalCallerId>,
     sched: HashMap<LogicalCallerId, SchedEntry>,
     next_logical_caller: u64,
     #[cfg(any(test, feature = "bench-internals"))]
@@ -669,6 +670,7 @@ impl CallerTable {
             routes: HashMap::new(),
             ready_queue: VecDeque::new(),
             deadlines: BTreeSet::new(),
+            due_ids: Vec::with_capacity(64),
             sched: HashMap::new(),
             next_logical_caller: 1,
             #[cfg(any(test, feature = "bench-internals"))]
@@ -952,9 +954,9 @@ impl CallerTable {
         feed_res.map(|()| true)
     }
 
-    fn pop_due_ids(&mut self, now: Timestamp) -> Vec<LogicalCallerId> {
+    fn pop_due_ids(&mut self, now: Timestamp) {
         let now_micros = now.as_micros();
-        let mut due_ids = Vec::new();
+        self.due_ids.clear();
         while let Some(entry) = self.deadlines.first().copied() {
             if entry.deadline_micros > now_micros {
                 break;
@@ -966,13 +968,13 @@ impl CallerTable {
             if !self.sessions.contains_key(&entry.id) {
                 continue;
             }
-            due_ids.push(entry.id);
+            self.due_ids.push(entry.id);
         }
-        due_ids
     }
 
-    fn fire_due_ids(&mut self, ids: Vec<LogicalCallerId>, now: Timestamp) {
-        for id in ids {
+    fn fire_due_ids(&mut self, now: Timestamp) {
+        for index in 0..self.due_ids.len() {
+            let id = self.due_ids[index];
             if let Some(session) = self.sessions.get_mut(&id) {
                 session.fire_timers(now);
                 #[cfg(any(test, feature = "bench-internals"))]
@@ -983,6 +985,7 @@ impl CallerTable {
             self.enqueue_ready(id);
             self.sync_deadline(id);
         }
+        self.due_ids.clear();
     }
 
     /// Drive all protocol timers and collect datagrams for the application to
@@ -993,8 +996,8 @@ impl CallerTable {
         out: &mut Vec<(std::net::SocketAddr, Vec<u8>)>,
     ) {
         out.clear();
-        let due_ids = self.pop_due_ids(now);
-        self.fire_due_ids(due_ids, now);
+        self.pop_due_ids(now);
+        self.fire_due_ids(now);
         while let Some(id) = self.pop_ready() {
             let (drain_result, timers_touched) = {
                 let Some(session) = self.sessions.get_mut(&id) else {
@@ -1042,8 +1045,8 @@ impl CallerTable {
             budget.max_packets.max(1),
             budget.max_bytes.max(1),
         );
-        let due_ids = self.pop_due_ids(now);
-        self.fire_due_ids(due_ids, now);
+        self.pop_due_ids(now);
+        self.fire_due_ids(now);
         let mut output = VecPacketSink { out };
         self.drain_ready_bounded(now, budget, &mut output)
     }
@@ -1064,8 +1067,8 @@ impl CallerTable {
             budget.max_packets.max(1),
             budget.max_bytes.max(1),
         );
-        let due_ids = self.pop_due_ids(now);
-        self.fire_due_ids(due_ids, now);
+        self.pop_due_ids(now);
+        self.fire_due_ids(now);
         let mut output = BorrowedPacketSink { sink };
         self.drain_ready_bounded(now, budget, &mut output)
     }
