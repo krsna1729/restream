@@ -56,6 +56,31 @@ fn command_channel_is_bounded() {
 }
 
 #[test]
+fn failed_feed_wake_delivery_does_not_stick_the_coalescing_gate() {
+    let gate = Gate::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        config(1, 1),
+        BlockingBackend { gate: gate.clone() },
+    );
+
+    handle
+        .try_send(EgressCommand::Add(output_spec("out-a")))
+        .unwrap();
+    gate.wait_until_entered();
+    handle
+        .try_send(EgressCommand::Add(output_spec("out-b")))
+        .unwrap();
+
+    assert_eq!(handle.deliver_feed_wake(), Err(EgressShardSendError::Full));
+    assert!(!handle.wake_gate().is_pending());
+
+    gate.release();
+    let snapshot = handle.shutdown_and_join();
+    assert!(snapshot.stopped);
+}
+
+#[test]
 fn command_batch_budget_allows_media_ticks_during_flood() {
     let probe = Probe::default();
     let handle = EgressShardHandle::spawn(

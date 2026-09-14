@@ -227,13 +227,20 @@ impl FeedWakeHandle {
     /// transition, so at most one wake is in flight per shard.
     pub fn deliver(&self) -> Result<(), EgressShardSendError> {
         if self.gate.notify() {
-            return self
-                .sender
-                .try_send(EgressCommand::FeedWake)
-                .map_err(|err| match err {
-                    TrySendError::Full(_) => EgressShardSendError::Full,
-                    TrySendError::Disconnected(_) => EgressShardSendError::Closed,
-                });
+            return match self.sender.try_send(EgressCommand::FeedWake) {
+                Ok(()) => Ok(()),
+                Err(TrySendError::Full(_)) => {
+                    // No wake was delivered. Leave the gate clear so the
+                    // caller can retry, rather than permanently suppressing
+                    // every later publication for this shard.
+                    self.gate.take();
+                    Err(EgressShardSendError::Full)
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    self.gate.take();
+                    Err(EgressShardSendError::Closed)
+                }
+            };
         }
         Ok(())
     }
