@@ -342,7 +342,12 @@ fn run_shard_thread<B: EgressShardBackend>(
             config,
             receiver,
             backend: &mut backend,
-            ready_backlog: VecDeque::new(),
+            ready_backlog: VecDeque::with_capacity(
+                config
+                    .command_channel_capacity()
+                    .get()
+                    .saturating_add(config.readiness_batch_budget().get()),
+            ),
             timers: TimerWheel::new(),
             metrics: ShardMetrics::new(shard_id),
             snapshot: Arc::clone(&snapshot),
@@ -564,7 +569,16 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 EgressShardCommandEffect::Continue
             }
             EgressShardCommandEffect::ScheduleReady { count } => {
-                self.ready_backlog.extend(std::iter::repeat_n((), count));
+                let available = self
+                    .ready_backlog
+                    .capacity()
+                    .saturating_sub(self.ready_backlog.len());
+                let accepted = count.min(available);
+                self.ready_backlog.extend(std::iter::repeat_n((), accepted));
+                self.metrics.ready_overflows = self
+                    .metrics
+                    .ready_overflows
+                    .saturating_add((count - accepted) as u64);
                 EgressShardCommandEffect::Continue
             }
             effect => effect,

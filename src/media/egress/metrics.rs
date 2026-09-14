@@ -88,6 +88,7 @@ pub struct ShardMetrics {
     pub send_zc_attempts: u64,
     pub send_zc_fallbacks: u64,
     pub cq_overflows: u64,
+    pub ready_overflows: u64,
 
     /// Time this snapshot was collected.
     pub collected_at: Option<Instant>,

@@ -40,6 +40,7 @@ pub(crate) struct EgressFabricShardStatus {
     pub send_zc_attempts: u64,
     pub send_zc_fallbacks: u64,
     pub cq_overflows: u64,
+    pub ready_overflows: u64,
 }
 
 impl EgressFabricShardStatus {
@@ -75,6 +76,7 @@ impl EgressFabricShardStatus {
             send_zc_attempts: heartbeat.send_zc_attempts,
             send_zc_fallbacks: heartbeat.send_zc_fallbacks,
             cq_overflows: heartbeat.cq_overflows,
+            ready_overflows: heartbeat.ready_overflows,
         }
     }
 
@@ -115,6 +117,7 @@ impl EgressFabricShardStatus {
             "sendZcAttempts": self.send_zc_attempts,
             "sendZcFallbacks": self.send_zc_fallbacks,
             "cqOverflows": self.cq_overflows,
+            "readyOverflows": self.ready_overflows,
         })
     }
 }
