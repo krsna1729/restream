@@ -1062,6 +1062,7 @@ fn run_shard(
         let mut stopping = false;
         {
             let cq = ring.completion();
+            state.metrics.cq_overflows = u64::from(cq.overflow());
             for completion in cq {
                 state.metrics.cqes += 1;
                 let tag = OpTag::decode(completion.user_data());
