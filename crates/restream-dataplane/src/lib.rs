@@ -1,10 +1,15 @@
-//! Small Linux-native dataplane primitives.
+//! Small Linux-native dataplane primitives: mechanism, not policy.
 //!
-//! The first slice deliberately owns no product protocol. It proves the
-//! execution model: one owner thread, one `io_uring`, bounded control input,
-//! generation-safe operation tags, fixed ready/deadline storage, and fixed
-//! RX/TX pools. Protocol leaves can be added without changing that ownership
-//! contract.
+//! `media/egress` owns production scheduling policy (stall classification,
+//! drain semantics, feed overrun, reconnect behavior, runtime diagnostics).
+//! This crate owns the kernel/storage mechanism both schedulers share: one
+//! owner thread, one `io_uring`, bounded control input, generation-safe
+//! operation tags, fixed ready/deadline storage, and fixed RX/TX pools.
+//! `Dataplane`/`DataplaneHandle` below are the synthetic proof harness for
+//! that mechanism — fixed-population benchmarks and allocation guards run
+//! against them. Do NOT grow production scheduling policy here; extend the
+//! `media/egress` shard backends and keep this crate to primitives that both
+//! the harness and production consume.
 
 use std::cmp::Ordering as CmpOrdering;
 use std::io;

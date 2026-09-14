@@ -21,7 +21,10 @@ pub struct UringCapabilities {
     pub recv_zc: bool,
     pub send: bool,
     pub send_msg: bool,
-    pub send_vectored: bool,
+    /// Ordinary scatter/gather through `sendmsg` with an iovec array. This is
+    /// NOT the newer `IORING_SEND_VECTORIZED` facility; it is named for what
+    /// the opcode probe actually proves.
+    pub sendmsg_iovec: bool,
     pub send_zc: bool,
     pub send_bundle: bool,
     /// NAPI busy-poll registration is a Linux kernel facility rather than an
@@ -79,7 +82,7 @@ impl UringCapabilities {
             recv_zc: probe.is_supported(opcode::RecvZc::CODE),
             send: probe.is_supported(opcode::Send::CODE),
             send_msg: probe.is_supported(opcode::SendMsg::CODE),
-            send_vectored: probe.is_supported(opcode::SendMsg::CODE),
+            sendmsg_iovec: probe.is_supported(opcode::SendMsg::CODE),
             send_zc: probe.is_supported(opcode::SendZc::CODE),
             send_bundle: probe.is_supported(opcode::SendBundle::CODE),
             // No NAPI busy-poll registration is performed by this crate yet;

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - redevelop
   pull_request:
   workflow_dispatch:
 
@@ -88,6 +89,10 @@ jobs:
           scripts/build/resource-limit.sh cargo bench \
             -p restream-dataplane --bench scheduler -- \
             --noplot --sample-size 10 --warm-up-time 1 --measurement-time 1
+      - name: Assert scheduler cost shape (O(ready), not O(population))
+        run: |
+          scripts/build/resource-limit.sh cargo test \
+            -p restream-dataplane --test scheduler_shape
 
   architecture-guardrails:
     name: Source architecture audit

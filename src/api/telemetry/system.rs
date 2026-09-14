@@ -231,7 +231,7 @@ fn uring_capabilities() -> &'static serde_json::Value {
             "recvZc": caps.recv_zc,
             "send": caps.send,
             "sendMsg": caps.send_msg,
-            "sendVectored": caps.send_vectored,
+            "sendmsgIovec": caps.sendmsg_iovec,
             "sendZc": caps.send_zc,
             "sendBundle": caps.send_bundle,
             "napi": caps.napi,
