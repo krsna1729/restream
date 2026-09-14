@@ -894,8 +894,8 @@ impl DataplaneHandle {
             ));
         }
         let mut shards = Vec::with_capacity(shard_count);
-        for _ in 0..shard_count {
-            shards.push(Dataplane::spawn(config)?);
+        for shard_index in 0..shard_count {
+            shards.push(Dataplane::spawn_named(config, shard_index)?);
         }
         Ok(Self {
             shards: shards.into_boxed_slice(),
@@ -972,6 +972,10 @@ impl DataplaneHandle {
 
 impl Dataplane {
     pub fn spawn(config: ShardConfig) -> io::Result<Self> {
+        Self::spawn_named(config, 0)
+    }
+
+    fn spawn_named(config: ShardConfig, shard_index: usize) -> io::Result<Self> {
         let config = config
             .validate()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
@@ -980,7 +984,7 @@ impl Dataplane {
         let (startup_tx, startup_rx) = mpsc::sync_channel(1);
         let thread_wake_fd = Arc::clone(&wake_fd);
         let join = thread::Builder::new()
-            .name("restream-dataplane-0".to_owned())
+            .name(format!("restream-dataplane-{shard_index}"))
             .spawn(move || run_shard(config, mailbox, thread_wake_fd, startup_tx))?;
         match startup_rx.recv() {
             Ok(Ok(())) => Ok(Self {
