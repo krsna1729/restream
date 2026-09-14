@@ -27,6 +27,43 @@ fn ready_queue(c: &mut Criterion) {
     group.finish();
 }
 
+fn ready_queue_fixed_population(c: &mut Criterion) {
+    const POPULATION: usize = 4_096;
+    let mut group = c.benchmark_group("dataplane/ready_queue_fixed_population");
+    for ready in [1_usize, 4, 32, 256, 1_024, POPULATION] {
+        group.bench_with_input(BenchmarkId::from_parameter(ready), &ready, |b, &ready| {
+            let mut queue = ReadyQueue::new(POPULATION, POPULATION).unwrap();
+            b.iter(|| {
+                for slot in 0..ready as u32 {
+                    assert!(queue.enqueue(slot));
+                }
+                let mut popped = 0;
+                while queue.pop().is_some() {
+                    popped += 1;
+                }
+                black_box(popped);
+            });
+        });
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("dataplane/ready_queue_one_ready_population");
+    for population in [1_024_usize, 4_096, 16_384] {
+        group.bench_with_input(
+            BenchmarkId::from_parameter(population),
+            &population,
+            |b, &population| {
+                let mut queue = ReadyQueue::new(population, population).unwrap();
+                b.iter(|| {
+                    assert!(queue.enqueue(0));
+                    assert_eq!(queue.pop(), Some(0));
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 fn media_fanout(c: &mut Criterion) {
     let mut group = c.benchmark_group("dataplane/media_fanout");
     for fanout in [1_usize, 10, 100, 500, 1_000, 2_000] {
@@ -66,5 +103,11 @@ fn service_fairness(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, ready_queue, media_fanout, service_fairness);
+criterion_group!(
+    benches,
+    ready_queue,
+    ready_queue_fixed_population,
+    media_fanout,
+    service_fairness
+);
 criterion_main!(benches);

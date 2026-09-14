@@ -594,6 +594,7 @@ pub enum CommandError {
     Closed,
     Wake(io::ErrorKind),
     Shard(CapacityError),
+    StaleGeneration,
 }
 
 struct SinkLeaf {
@@ -625,7 +626,7 @@ impl LeafSlab {
         }
     }
 
-    fn add(&mut self, spec: OutputRuntimeSpec) -> Result<u32, CapacityError> {
+    fn add(&mut self, spec: OutputRuntimeSpec) -> Result<(u32, u32), CapacityError> {
         if self.leaves.iter().flatten().any(|leaf| leaf.id == spec.id) {
             return Err(CapacityError::TooManyLeaves(self.leaves.len()));
         }
@@ -640,29 +641,38 @@ impl LeafSlab {
             pending: false,
             visits: 0,
         });
-        Ok(slot)
+        let generation = self.leaves[slot as usize]
+            .as_ref()
+            .expect("new leaf remains live")
+            .generation;
+        Ok((slot, generation))
     }
 
-    fn update(&mut self, id: u64, generation: u32) -> bool {
-        let Some(slot) = self.find_slot(id) else {
-            return false;
-        };
-        let leaf = self.leaves[slot as usize]
-            .as_mut()
-            .expect("find_slot returned a live leaf");
-        if generation <= leaf.generation {
-            return false;
-        }
-        leaf.generation = generation;
-        true
-    }
-
-    fn find_slot(&self, id: u64) -> Option<u32> {
+    fn validate(&self, slot: u32, generation: u32) -> Result<usize, CommandError> {
+        let slot_index = slot as usize;
         self.leaves
-            .iter()
-            .enumerate()
-            .find(|(_, leaf)| leaf.as_ref().is_some_and(|leaf| leaf.id == id))
-            .map(|(slot, _)| slot as u32)
+            .get(slot_index)
+            .and_then(Option::as_ref)
+            .filter(|leaf| leaf.generation == generation)
+            .map(|_| slot_index)
+            .ok_or(CommandError::StaleGeneration)
+    }
+
+    fn update(
+        &mut self,
+        slot: u32,
+        expected_generation: u32,
+        generation: u32,
+    ) -> Result<(), CommandError> {
+        let slot_index = self.validate(slot, expected_generation)?;
+        if generation <= expected_generation {
+            return Err(CommandError::StaleGeneration);
+        }
+        self.leaves[slot_index]
+            .as_mut()
+            .expect("validated leaf remains live")
+            .generation = generation;
+        Ok(())
     }
 
     fn remove_slot(&mut self, slot: u32) -> bool {
@@ -703,64 +713,52 @@ impl ShardState {
         }
     }
 
-    fn wake(&mut self, id: u64) -> bool {
-        let Some(slot) = self.leaves.find_slot(id) else {
-            return false;
-        };
+    fn wake(&mut self, slot: u32, generation: u32) -> Result<bool, CommandError> {
+        let slot_index = self.leaves.validate(slot, generation)?;
         if self.leaves.leaves[slot as usize]
             .as_ref()
             .is_some_and(|leaf| leaf.pending)
         {
-            return true;
+            return Ok(true);
         }
         if !self.ready.enqueue(slot) {
-            return false;
+            return Ok(false);
         }
-        self.leaves.leaves[slot as usize]
+        self.leaves.leaves[slot_index]
             .as_mut()
             .expect("ready slot remains live")
             .pending = true;
-        true
+        Ok(true)
     }
 
-    fn remove(&mut self, id: u64) -> bool {
-        let Some(slot) = self.leaves.find_slot(id) else {
-            return false;
-        };
+    fn remove(&mut self, slot: u32, generation: u32) -> Result<bool, CommandError> {
+        self.leaves.validate(slot, generation)?;
         self.ready.remove(slot);
         self.deadlines.remove(slot);
-        self.leaves.remove_slot(slot)
+        Ok(self.leaves.remove_slot(slot))
     }
 
-    fn remove_if_generation(&mut self, id: u64, generation: u32) -> bool {
-        let Some(slot) = self.leaves.find_slot(id) else {
-            return false;
-        };
-        if self.leaves.leaves[slot as usize]
-            .as_ref()
-            .is_none_or(|leaf| leaf.generation != generation)
-        {
-            return false;
-        }
+    fn remove_if_generation(&mut self, slot: u32, generation: u32) -> Result<bool, CommandError> {
+        self.leaves.validate(slot, generation)?;
         self.ready.remove(slot);
         self.deadlines.remove(slot);
-        self.leaves.remove_slot(slot)
+        Ok(self.leaves.remove_slot(slot))
     }
 
-    fn update(&mut self, id: u64, generation: u32) -> bool {
-        let Some(slot) = self.leaves.find_slot(id) else {
-            return false;
-        };
-        if !self.leaves.update(id, generation) {
-            return false;
-        }
+    fn update(
+        &mut self,
+        slot: u32,
+        expected_generation: u32,
+        generation: u32,
+    ) -> Result<(), CommandError> {
+        self.leaves.update(slot, expected_generation, generation)?;
         self.ready.remove(slot);
         self.deadlines.remove(slot);
         self.leaves.leaves[slot as usize]
             .as_mut()
             .expect("updated slot remains live")
             .pending = false;
-        true
+        Ok(())
     }
 
     fn service_ready(&mut self, loop_deadline: Instant) {
@@ -866,25 +864,28 @@ enum Command {
     Add {
         id: u64,
         generation: u32,
-        reply: SyncSender<Result<(), CommandError>>,
+        reply: SyncSender<Result<(u32, u32), CommandError>>,
     },
     Update {
-        id: u64,
+        slot: u32,
+        expected_generation: u32,
         generation: u32,
-        reply: SyncSender<bool>,
+        reply: SyncSender<Result<(), CommandError>>,
     },
     Remove {
-        id: u64,
-        reply: SyncSender<bool>,
+        slot: u32,
+        generation: u32,
+        reply: SyncSender<Result<bool, CommandError>>,
     },
     RemoveIfGeneration {
-        id: u64,
+        slot: u32,
         generation: u32,
-        reply: SyncSender<bool>,
+        reply: SyncSender<Result<bool, CommandError>>,
     },
     Wake {
-        id: u64,
-        reply: SyncSender<bool>,
+        slot: u32,
+        generation: u32,
+        reply: SyncSender<Result<bool, CommandError>>,
     },
     Snapshot {
         reply: SyncSender<ShardSnapshot>,
@@ -905,7 +906,8 @@ pub struct Dataplane {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutputHandle {
     pub shard: usize,
-    pub id: u64,
+    pub slot: u32,
+    pub generation: u32,
 }
 
 /// Cold-path snapshot of all native owner shards.
@@ -945,34 +947,59 @@ impl DataplaneHandle {
 
     pub fn add_output(&self, id: u64) -> Result<OutputHandle, CommandError> {
         let shard = self.shard_for(id);
-        self.shards[shard].add_sink(id)?;
-        Ok(OutputHandle { shard, id })
+        let (slot, generation) = self.shards[shard].add_sink_with_generation(id, 0)?;
+        Ok(OutputHandle {
+            shard,
+            slot,
+            generation,
+        })
     }
 
     pub fn add_output_spec(&self, spec: OutputRuntimeSpec) -> Result<OutputHandle, CommandError> {
         let shard = self.shard_for(spec.id);
-        self.shards[shard].add_sink_with_generation(spec.id, spec.generation)?;
-        Ok(OutputHandle { shard, id: spec.id })
+        let (slot, generation) =
+            self.shards[shard].add_sink_with_generation(spec.id, spec.generation)?;
+        Ok(OutputHandle {
+            shard,
+            slot,
+            generation,
+        })
     }
 
-    pub fn update_output(&self, id: u64, generation: u32) -> Result<bool, CommandError> {
-        self.shards[self.shard_for(id)].update_sink(id, generation)
-    }
-
-    pub fn remove_output_if_generation(
+    pub fn update_output(
         &self,
-        id: u64,
+        handle: OutputHandle,
         generation: u32,
-    ) -> Result<bool, CommandError> {
-        self.shards[self.shard_for(id)].remove_sink_if_generation(id, generation)
+    ) -> Result<OutputHandle, CommandError> {
+        self.shards
+            .get(handle.shard)
+            .ok_or(CommandError::StaleGeneration)?
+            .update_sink(handle, generation)?;
+        Ok(OutputHandle {
+            generation,
+            ..handle
+        })
     }
 
-    pub fn remove_output(&self, id: u64) -> Result<bool, CommandError> {
-        self.shards[self.shard_for(id)].remove_sink(id)
+    pub fn remove_output_if_generation(&self, handle: OutputHandle) -> Result<bool, CommandError> {
+        self.shards
+            .get(handle.shard)
+            .ok_or(CommandError::StaleGeneration)?
+            .remove_sink_if_generation(handle)
     }
 
-    pub fn wake_output(&self, id: u64) -> Result<bool, CommandError> {
-        self.shards[self.shard_for(id)].wake_sink(id)
+    pub fn remove_output(&self, handle: OutputHandle) -> Result<bool, CommandError> {
+        self.shards
+            .get(handle.shard)
+            .ok_or(CommandError::StaleGeneration)?
+            .remove_sink(handle)
+    }
+
+    pub fn wake_output(&self, handle: OutputHandle) -> Result<bool, CommandError> {
+        self.shards
+            .get(handle.shard)
+            .ok_or(CommandError::StaleGeneration)?
+            .wake_sink(handle)
     }
 
     pub fn snapshot(&self) -> Result<DataplaneSnapshot, CommandError> {
@@ -1043,11 +1070,15 @@ impl Dataplane {
         }
     }
 
-    pub fn add_sink(&self, id: u64) -> Result<(), CommandError> {
+    pub fn add_sink(&self, id: u64) -> Result<(u32, u32), CommandError> {
         self.add_sink_with_generation(id, 0)
     }
 
-    pub fn add_sink_with_generation(&self, id: u64, generation: u32) -> Result<(), CommandError> {
+    pub fn add_sink_with_generation(
+        &self,
+        id: u64,
+        generation: u32,
+    ) -> Result<(u32, u32), CommandError> {
         let (reply, result) = reply_channel();
         self.enqueue(Command::Add {
             id,
@@ -1057,40 +1088,45 @@ impl Dataplane {
         result.recv().map_err(|_| CommandError::Closed)?
     }
 
-    pub fn update_sink(&self, id: u64, generation: u32) -> Result<bool, CommandError> {
+    pub fn update_sink(&self, handle: OutputHandle, generation: u32) -> Result<(), CommandError> {
         let (reply, result) = reply_channel();
         self.enqueue(Command::Update {
-            id,
+            slot: handle.slot,
+            expected_generation: handle.generation,
             generation,
             reply,
         })?;
-        result.recv().map_err(|_| CommandError::Closed)
+        result.recv().map_err(|_| CommandError::Closed)?
     }
 
-    pub fn remove_sink(&self, id: u64) -> Result<bool, CommandError> {
+    pub fn remove_sink(&self, handle: OutputHandle) -> Result<bool, CommandError> {
         let (reply, result) = reply_channel();
-        self.enqueue(Command::Remove { id, reply })?;
-        result.recv().map_err(|_| CommandError::Closed)
+        self.enqueue(Command::Remove {
+            slot: handle.slot,
+            generation: handle.generation,
+            reply,
+        })?;
+        result.recv().map_err(|_| CommandError::Closed)?
     }
 
-    pub fn remove_sink_if_generation(
-        &self,
-        id: u64,
-        generation: u32,
-    ) -> Result<bool, CommandError> {
+    pub fn remove_sink_if_generation(&self, handle: OutputHandle) -> Result<bool, CommandError> {
         let (reply, result) = reply_channel();
         self.enqueue(Command::RemoveIfGeneration {
-            id,
-            generation,
+            slot: handle.slot,
+            generation: handle.generation,
             reply,
         })?;
-        result.recv().map_err(|_| CommandError::Closed)
+        result.recv().map_err(|_| CommandError::Closed)?
     }
 
-    pub fn wake_sink(&self, id: u64) -> Result<bool, CommandError> {
+    pub fn wake_sink(&self, handle: OutputHandle) -> Result<bool, CommandError> {
         let (reply, result) = reply_channel();
-        self.enqueue(Command::Wake { id, reply })?;
-        result.recv().map_err(|_| CommandError::Closed)
+        self.enqueue(Command::Wake {
+            slot: handle.slot,
+            generation: handle.generation,
+            reply,
+        })?;
+        result.recv().map_err(|_| CommandError::Closed)?
     }
 
     pub fn snapshot(&self) -> Result<ShardSnapshot, CommandError> {
@@ -1249,31 +1285,39 @@ fn run_shard(
                     let result = state
                         .leaves
                         .add(OutputRuntimeSpec { id, generation })
-                        .map(|_| ())
                         .map_err(CommandError::Shard);
                     let _ = reply.send(result);
                 }
                 Ok(Command::Update {
-                    id,
+                    slot,
+                    expected_generation,
                     generation,
                     reply,
                 }) => {
-                    let _ = reply.send(state.update(id, generation));
+                    let _ = reply.send(state.update(slot, expected_generation, generation));
                 }
-                Ok(Command::Remove { id, reply }) => {
-                    let removed = state.remove(id);
+                Ok(Command::Remove {
+                    slot,
+                    generation,
+                    reply,
+                }) => {
+                    let removed = state.remove(slot, generation);
                     let _ = reply.send(removed);
                 }
                 Ok(Command::RemoveIfGeneration {
-                    id,
+                    slot,
                     generation,
                     reply,
                 }) => {
-                    let removed = state.remove_if_generation(id, generation);
+                    let removed = state.remove_if_generation(slot, generation);
                     let _ = reply.send(removed);
                 }
-                Ok(Command::Wake { id, reply }) => {
-                    let woken = state.wake(id);
+                Ok(Command::Wake {
+                    slot,
+                    generation,
+                    reply,
+                }) => {
+                    let woken = state.wake(slot, generation);
                     let _ = reply.send(woken);
                 }
                 Ok(Command::Snapshot { reply }) => {
@@ -1410,16 +1454,16 @@ mod tests {
             ready_capacity: 1,
             ..ShardConfig::default()
         });
-        state
+        let first = state
             .leaves
             .add(OutputRuntimeSpec {
                 id: 7,
                 generation: 0,
             })
             .unwrap();
-        assert!(state.wake(7));
-        assert!(state.remove(7));
-        state
+        assert!(state.wake(first.0, first.1).unwrap());
+        assert!(state.remove(first.0, first.1).unwrap());
+        let second = state
             .leaves
             .add(OutputRuntimeSpec {
                 id: 8,
@@ -1428,7 +1472,11 @@ mod tests {
             .unwrap();
         state.service_ready(Instant::now() + Duration::from_millis(1));
         assert_eq!(state.leaves.leaves[0].as_ref().unwrap().visits, 0);
-        assert!(state.wake(8));
+        assert_eq!(
+            state.wake(first.0, first.1),
+            Err(CommandError::StaleGeneration)
+        );
+        assert!(state.wake(second.0, second.1).unwrap());
         state.service_ready(Instant::now() + Duration::from_millis(1));
         assert_eq!(state.leaves.leaves[0].as_ref().unwrap().visits, 1);
     }
@@ -1440,20 +1488,22 @@ mod tests {
             ready_capacity: 2,
             ..ShardConfig::default()
         });
-        for id in 1..=3 {
-            state
-                .leaves
-                .add(OutputRuntimeSpec { id, generation: 0 })
-                .unwrap();
-        }
-        assert!(state.wake(1));
-        assert!(state.wake(2));
-        assert!(!state.wake(3));
+        let handles = (1..=3)
+            .map(|id| {
+                state
+                    .leaves
+                    .add(OutputRuntimeSpec { id, generation: 0 })
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(state.wake(handles[0].0, handles[0].1).unwrap());
+        assert!(state.wake(handles[1].0, handles[1].1).unwrap());
+        assert!(!state.wake(handles[2].0, handles[2].1).unwrap());
 
         // Free one queue slot without servicing the second leaf. A retry for
         // the third leaf must now be admitted.
-        assert!(state.remove(1));
-        assert!(state.wake(3));
+        assert!(state.remove(handles[0].0, handles[0].1).unwrap());
+        assert!(state.wake(handles[2].0, handles[2].1).unwrap());
     }
 
     #[test]
@@ -1463,17 +1513,20 @@ mod tests {
             ready_capacity: 1,
             ..ShardConfig::default()
         });
-        state
+        let handle = state
             .leaves
             .add(OutputRuntimeSpec {
                 id: 7,
                 generation: 4,
             })
             .unwrap();
-        assert!(state.wake(7));
-        assert!(!state.update(7, 3));
+        assert!(state.wake(handle.0, handle.1).unwrap());
+        assert_eq!(
+            state.update(handle.0, handle.1, 3),
+            Err(CommandError::StaleGeneration)
+        );
         assert_eq!(state.ready.len(), 1);
-        assert!(state.update(7, 5));
+        assert!(state.update(handle.0, handle.1, 5).is_ok());
         assert_eq!(state.ready.len(), 0);
         assert_eq!(state.leaves.leaves[0].as_ref().unwrap().generation, 5);
     }

@@ -19,9 +19,17 @@ fn owner_thread_services_only_woken_sinks() {
         Err(error) => panic!("io_uring dataplane unavailable: {error}"),
     };
 
-    dataplane.add_sink(7).unwrap();
-    dataplane.add_sink(8).unwrap();
-    assert!(dataplane.wake_sink(8).unwrap());
+    let _first = dataplane.add_sink(7).unwrap();
+    let second = dataplane.add_sink(8).unwrap();
+    assert!(
+        dataplane
+            .wake_sink(restream_dataplane::OutputHandle {
+                shard: 0,
+                slot: second.0,
+                generation: second.1,
+            })
+            .unwrap()
+    );
     let snapshot = (0..100)
         .map(|_| dataplane.snapshot().unwrap())
         .find(|snapshot| {
@@ -86,10 +94,17 @@ fn multi_shard_handle_keeps_output_placement_stable() {
     let second = dataplane.add_output(8).unwrap();
     assert_eq!(first.shard, 1);
     assert_eq!(second.shard, 0);
-    assert!(dataplane.update_output(7, 2).unwrap());
-    assert!(!dataplane.update_output(7, 1).unwrap());
-    assert!(!dataplane.remove_output_if_generation(7, 1).unwrap());
-    assert!(dataplane.wake_output(7).unwrap());
+    let updated = dataplane.update_output(first, 2).unwrap();
+    assert_eq!(updated.generation, 2);
+    assert_eq!(
+        dataplane.update_output(first, 1),
+        Err(restream_dataplane::CommandError::StaleGeneration)
+    );
+    assert_eq!(
+        dataplane.remove_output_if_generation(first),
+        Err(restream_dataplane::CommandError::StaleGeneration)
+    );
+    assert!(dataplane.wake_output(updated).unwrap());
     let snapshot = (0..100)
         .map(|_| dataplane.snapshot().unwrap())
         .find(|snapshot| {
@@ -109,5 +124,14 @@ fn multi_shard_handle_keeps_output_placement_stable() {
     );
     assert_eq!(snapshot.shards[first.shard].metrics.ready_visits, 1);
     assert_eq!(snapshot.shards[second.shard].metrics.ready_visits, 0);
+    assert!(dataplane.remove_output(updated).unwrap());
+    let recycled = dataplane.add_output(9).unwrap();
+    assert_eq!(recycled.shard, updated.shard);
+    assert_eq!(recycled.slot, updated.slot);
+    assert!(recycled.generation > updated.generation);
+    assert_eq!(
+        dataplane.wake_output(updated),
+        Err(restream_dataplane::CommandError::StaleGeneration)
+    );
     dataplane.shutdown().unwrap();
 }
