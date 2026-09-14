@@ -394,8 +394,14 @@ impl SrtShardBackend {
             budget_max_units: budget.max_units,
             budget_max_bytes: budget.max_bytes,
             budget_window,
-            leaves: Vec::new(),
-            free_leaf_keys: Vec::new(),
+            leaves: (0..crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY)
+                .map(|_| None)
+                .collect(),
+            free_leaf_keys: (0
+                ..crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY as u32)
+                .rev()
+                .map(|slot| LeafKey(slot as usize))
+                .collect(),
             output_sockets: HashMap::new(),
             ready: VecDeque::new(),
             ready_candidates: VecDeque::new(),
@@ -413,6 +419,15 @@ impl SrtShardBackend {
             resync_count: 0,
             budget_exhaustions: 0,
         }
+    }
+
+    pub(crate) fn with_leaf_capacity(mut self, capacity: usize) -> Self {
+        self.leaves = (0..capacity).map(|_| None).collect();
+        self.free_leaf_keys = (0..capacity as u32)
+            .rev()
+            .map(|slot| LeafKey(slot as usize))
+            .collect();
+        self
     }
 
     // Production always constructs via `with_runtime_components` directly
@@ -457,12 +472,12 @@ impl SrtShardBackend {
         &self.srt_egress_muxer_port
     }
 
-    pub(crate) fn add_connected_leaf(
+    fn insert_connected_leaf(
         &mut self,
         common: LeafCommon,
         transport: Box<dyn SrtMessageSender + Send>,
+        key: LeafKey,
     ) -> LeafKey {
-        let key = self.allocate_leaf_key();
         let output_id = common.output_id.clone();
         let leaf = SrtFabricLeaf::new(common, transport);
         self.leaves[key.0] = Some(leaf);
@@ -503,6 +518,12 @@ impl SrtShardBackend {
         let config = pending
             .connect_spec
             .connect_config(peer_addrs, shared_state);
+        let Some(key) = self.allocate_leaf_key() else {
+            progress_sink.mark_terminated_unexpectedly();
+            return Err(SrtPendingConnectError::Connect(
+                "shard leaf capacity exhausted".to_string(),
+            ));
+        };
         let transport = connect_fabric_srt_egress_socket(config).map_err(|error| {
             tracing::warn!(
                 output_id = %output_id,
@@ -510,14 +531,17 @@ impl SrtShardBackend {
                 "srt fabric leaf connect failed"
             );
             progress_sink.mark_terminated_unexpectedly();
+            self.free_leaf_keys.push(key);
             SrtPendingConnectError::Connect(error)
         })?;
-        Ok(self.add_connected_leaf(pending.common, transport))
+        Ok(self.insert_connected_leaf(pending.common, transport, key))
     }
 
     #[cfg(test)]
     pub(crate) fn add_leaf(&mut self, leaf: NativeSrtLeaf) -> LeafKey {
-        let key = self.allocate_leaf_key();
+        let key = self
+            .allocate_leaf_key()
+            .expect("test leaf capacity must be increased before adding a leaf");
         let output_id = leaf.common.output_id.clone();
         self.leaves[key.0] = Some(leaf);
         self.ready_candidates.push_back(key);
@@ -587,13 +611,8 @@ impl SrtShardBackend {
         true
     }
 
-    fn allocate_leaf_key(&mut self) -> LeafKey {
-        if let Some(key) = self.free_leaf_keys.pop() {
-            return key;
-        }
-        let key = LeafKey(self.leaves.len());
-        self.leaves.push(None);
-        key
+    fn allocate_leaf_key(&mut self) -> Option<LeafKey> {
+        self.free_leaf_keys.pop()
     }
 
     /// Drives the shared table once and advances one registered leaf from the

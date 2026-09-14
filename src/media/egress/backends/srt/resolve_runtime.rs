@@ -168,6 +168,7 @@ pub(crate) fn resolving_srt_shard_backend(
     // share one srt-rs socket/table and other shards get their own.
     srt_egress_muxer_port_reuse: Option<super::muxer_ports::SrtEgressMuxerPortState>,
     drain_timeout: std::time::Duration,
+    leaf_capacity: usize,
     // Engine-wide connect-concurrency admission control (see
     // `srt_connect_admission.rs`). `None` leaves connects unthrottled
     // (every existing test/no-config caller); `Some` is the one shared
@@ -177,6 +178,7 @@ pub(crate) fn resolving_srt_shard_backend(
     let (completion_sender, completion_queue) =
         srt_resolve_completion_queue(SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY);
     let mut backend = SrtShardBackend::with_runtime_components(feed, budget, completion_queue)
+        .with_leaf_capacity(leaf_capacity)
         .with_drain_timeout(drain_timeout)
         .with_connect_admission(connect_admission);
     if let Some(state) = srt_egress_muxer_port_reuse {

@@ -28,6 +28,7 @@ pub struct EgressShardConfig {
     command_batch_budget: NonZeroUsize,
     readiness_batch_budget: NonZeroUsize,
     timer_batch_budget: NonZeroUsize,
+    leaf_capacity: NonZeroUsize,
     idle_wait: Duration,
     drain_timeout: Duration,
 }
@@ -37,6 +38,7 @@ impl EgressShardConfig {
     /// leaves before forcing a close, when no explicit
     /// [`Self::with_drain_timeout`] override is given.
     pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
+    pub const DEFAULT_LEAF_CAPACITY: usize = 4096;
 
     pub fn new(
         command_channel_capacity: usize,
@@ -58,9 +60,20 @@ impl EgressShardConfig {
             command_batch_budget,
             readiness_batch_budget,
             timer_batch_budget,
+            leaf_capacity: NonZeroUsize::new(Self::DEFAULT_LEAF_CAPACITY)
+                .expect("default leaf capacity is nonzero"),
             idle_wait,
             drain_timeout: Self::DEFAULT_DRAIN_TIMEOUT,
         })
+    }
+
+    /// Set the fixed number of reusable network leaf slots owned by each
+    /// shard. A shard rejects work after this bound rather than growing its
+    /// per-output storage indefinitely.
+    pub fn with_leaf_capacity(mut self, leaf_capacity: usize) -> Self {
+        self.leaf_capacity =
+            NonZeroUsize::new(leaf_capacity).expect("egress shard leaf capacity must be nonzero");
+        self
     }
 
     /// Override the drain-on-shutdown deadline. Tests use this for fast,
@@ -84,6 +97,10 @@ impl EgressShardConfig {
 
     pub fn readiness_batch_budget(self) -> NonZeroUsize {
         self.readiness_batch_budget
+    }
+
+    pub fn leaf_capacity(self) -> NonZeroUsize {
+        self.leaf_capacity
     }
 
     pub fn idle_wait(self) -> Duration {

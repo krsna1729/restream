@@ -142,6 +142,7 @@ where
 pub(crate) type ResolvingRtmpShardBackendWithPoller<P, S> =
     ResolvingRtmpShardBackend<RtmpShardBackend<P, S>>;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolving_rtmp_shard_backend<P, S>(
     poller: P,
     feed: RingFeed,
@@ -150,6 +151,7 @@ pub(crate) fn resolving_rtmp_shard_backend<P, S>(
     rtmps_client_config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
     startup_source: S,
     drain_timeout: std::time::Duration,
+    leaf_capacity: usize,
 ) -> ResolvingRtmpShardBackendWithPoller<P, S>
 where
     P: RtmpReadinessPoller,
@@ -166,6 +168,7 @@ where
         completion_queue,
         startup_source,
     )
+    .with_leaf_capacity(leaf_capacity)
     .with_drain_timeout(drain_timeout);
     ResolvingRtmpShardBackend::new(backend, RtmpResolveWorkerSet::new(completion_sender))
 }

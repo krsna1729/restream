@@ -40,6 +40,7 @@ pub struct EgressFabricConfig {
     pub command_batch_budget: usize,
     pub readiness_batch_budget: usize,
     pub timer_batch_budget: usize,
+    pub max_leaves_per_shard: usize,
     pub idle_wait_ms: u64,
     /// Max epoll events per `epoll_wait` for the RTMP/RTMPS fabric's TCP
     /// readiness poller (`TcpEgressPoller`). SRT egress has no poller: its
@@ -91,6 +92,7 @@ impl Default for EgressFabricConfig {
             command_batch_budget: 32,
             readiness_batch_budget: 64,
             timer_batch_budget: 64,
+            max_leaves_per_shard: EgressShardConfig::DEFAULT_LEAF_CAPACITY,
             idle_wait_ms: 25,
             tcp_poller_max_events: 1024,
             visit_max_units: 32,
@@ -147,6 +149,11 @@ impl EgressFabricConfig {
                 defaults.timer_batch_budget,
             )
             .clamp(1, 4096),
+            max_leaves_per_shard: env_usize(
+                "RESTREAM_EGRESS_MAX_LEAVES_PER_SHARD",
+                defaults.max_leaves_per_shard,
+            )
+            .clamp(1, 1_000_000),
             idle_wait_ms: env_u64("RESTREAM_EGRESS_IDLE_WAIT_MS", defaults.idle_wait_ms)
                 .clamp(1, 1_000),
             tcp_poller_max_events: env_usize(
@@ -234,6 +241,7 @@ impl EgressFabricConfig {
             Duration::from_millis(self.idle_wait_ms),
         )
         .expect("egress fabric shard config is clamped nonzero")
+        .with_leaf_capacity(self.max_leaves_per_shard)
         .with_drain_timeout(Duration::from_millis(self.drain_timeout_ms))
     }
 
@@ -843,6 +851,7 @@ impl AppConfig {
                 "commandBatchBudget": self.egress_fabric.command_batch_budget,
                 "readinessBatchBudget": self.egress_fabric.readiness_batch_budget,
                 "timerBatchBudget": self.egress_fabric.timer_batch_budget,
+                "maxLeavesPerShard": self.egress_fabric.max_leaves_per_shard,
                 "idleWaitMs": self.egress_fabric.idle_wait_ms,
                 "tcpPollerMaxEvents": self.egress_fabric.tcp_poller_max_events,
                 "visitMaxUnits": self.egress_fabric.visit_max_units,

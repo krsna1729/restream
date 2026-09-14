@@ -527,14 +527,20 @@ fn srt_shard_reuses_removed_leaf_slots() {
     let first_key = backend.add_leaf(SrtFabricLeaf::new(common(7), Box::new(first.sender)));
     backend.on_command(EgressCommand::Remove(OutputId::new("out-srt")));
 
-    assert_eq!(backend.leaves.len(), 1);
+    assert_eq!(
+        backend.leaves.len(),
+        crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY
+    );
     assert!(backend.leaves[first_key.0].is_none());
 
     let second = shared_sender();
     let second_key = backend.add_leaf(SrtFabricLeaf::new(common(8), Box::new(second.sender)));
 
     assert_eq!(second_key, first_key);
-    assert_eq!(backend.leaves.len(), 1);
+    assert_eq!(
+        backend.leaves.len(),
+        crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY
+    );
     assert_eq!(backend.ready_candidates.len(), 1);
 }
 
@@ -749,4 +755,18 @@ fn on_ready_removes_leaf_on_close_decision() {
     backend.on_ready();
 
     assert!(backend.output_sockets.is_empty());
+}
+
+#[test]
+fn leaf_slots_are_fixed_and_exhaustion_does_not_grow_the_slab() {
+    let mut backend = SrtShardBackend::new(
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    )
+    .with_leaf_capacity(1);
+
+    assert_eq!(backend.leaves.len(), 1);
+    assert_eq!(backend.allocate_leaf_key(), Some(LeafKey(0)));
+    assert_eq!(backend.allocate_leaf_key(), None);
+    assert_eq!(backend.leaves.len(), 1);
 }

@@ -73,12 +73,14 @@ where
         feed_for,
         srt_egress_muxer_port_reuse,
         shard_config.drain_timeout(),
+        shard_config.leaf_capacity().get(),
         connect_admission,
     );
     EgressShardGroup::spawn(shard_count, shard_config, backends)
         .map_err(SrtFabricShardGroupError::Group)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn srt_fabric_shard_backends<F>(
     pipeline_id: &str,
     shard_count: NonZeroU32,
@@ -86,6 +88,7 @@ fn srt_fabric_shard_backends<F>(
     mut feed_for: F,
     srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
     drain_timeout: std::time::Duration,
+    leaf_capacity: usize,
     connect_admission: Option<Arc<tokio::sync::Semaphore>>,
 ) -> Vec<ResolvingSrtShardBackendDefault>
 where
@@ -107,6 +110,7 @@ where
                 .as_ref()
                 .map(|ports| ports.shard(pipeline_id, shard_id)),
             drain_timeout,
+            leaf_capacity,
             // Shared engine-wide, not per shard: this bounds total
             // in-flight SRT connect concurrency, independent of shard
             // count (see `srt_connect_admission.rs`).
@@ -174,6 +178,7 @@ where
         rtmps_client_config,
         startup_source,
         shard_config.drain_timeout(),
+        shard_config.leaf_capacity().get(),
         feed_for,
         poller_for,
     )
@@ -190,6 +195,7 @@ fn rtmp_fabric_shard_backends_with_poller<P, E, F, G>(
     rtmps_client_config: Arc<tokio_rustls::rustls::ClientConfig>,
     startup_source: SharedRtmpPublishStartupSource,
     drain_timeout: std::time::Duration,
+    leaf_capacity: usize,
     mut feed_for: F,
     mut poller_for: G,
 ) -> Result<Vec<ResolvingRtmpShardBackendWithPoller<P, SharedRtmpPublishStartupSource>>, E>
@@ -210,6 +216,7 @@ where
             rtmps_client_config.clone(),
             startup_source.clone(),
             drain_timeout,
+            leaf_capacity,
         ));
     }
     Ok(backends)

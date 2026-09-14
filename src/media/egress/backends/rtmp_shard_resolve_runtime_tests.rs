@@ -55,6 +55,7 @@ fn add_command_spawns_a_resolve_worker_reaped_on_next_media_tick() {
         crate::media::rtmp::rustls_client_config(),
         EmptyRtmpPublishStartupSource,
         Duration::from_secs(3),
+        8,
     );
 
     backend.on_command(EgressCommand::Add(output_spec(
@@ -85,6 +86,7 @@ fn invalid_url_spawns_no_resolve_worker() {
         crate::media::rtmp::rustls_client_config(),
         EmptyRtmpPublishStartupSource,
         Duration::from_secs(3),
+        8,
     );
 
     backend.on_command(EgressCommand::Add(output_spec("out-1", "not a url", 1)));
@@ -193,6 +195,7 @@ fn add_command_resolves_connects_and_reaches_publish_accepted_against_a_real_pee
         crate::media::rtmp::rustls_client_config(),
         EmptyRtmpPublishStartupSource,
         Duration::from_secs(3),
+        8,
     );
 
     backend.on_command(EgressCommand::Add(output_spec(

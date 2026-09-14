@@ -31,7 +31,9 @@ use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::{LeafLimits, LeafStallClass, WorkBudget, classify_stall};
 use crate::media::egress::scheduler::{LeafKey, VisitDecision};
-use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
+use crate::media::egress::shard::{
+    EgressShardBackend, EgressShardCommandEffect, EgressShardConfig,
+};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::rtmp::parse_rtmp_url;
 
@@ -434,8 +436,13 @@ where
             budget_window,
             chunk_size,
             rtmps_client_config,
-            leaves: Vec::new(),
-            free_leaf_keys: Vec::new(),
+            leaves: (0..EgressShardConfig::DEFAULT_LEAF_CAPACITY)
+                .map(|_| None)
+                .collect(),
+            free_leaf_keys: (0..EgressShardConfig::DEFAULT_LEAF_CAPACITY as u32)
+                .rev()
+                .map(|slot| LeafKey(slot as usize))
+                .collect(),
             output_sockets: HashMap::new(),
             ready: VecDeque::with_capacity(ready_capacity),
             feed_waiting: VecDeque::with_capacity(ready_capacity),
@@ -452,6 +459,15 @@ where
             native_tx_packets: 0,
             native_tx_bytes: 0,
         }
+    }
+
+    pub(crate) fn with_leaf_capacity(mut self, capacity: usize) -> Self {
+        self.leaves = (0..capacity).map(|_| None).collect();
+        self.free_leaf_keys = (0..capacity as u32)
+            .rev()
+            .map(|slot| LeafKey(slot as usize))
+            .collect();
+        self
     }
 
     /// Override the per-leaf drain deadline. Production threads the
@@ -482,13 +498,8 @@ where
         self.leaves.get_mut(key.0).and_then(Option::as_mut)
     }
 
-    fn allocate_leaf_key(&mut self) -> LeafKey {
-        if let Some(key) = self.free_leaf_keys.pop() {
-            return key;
-        }
-        let key = LeafKey(self.leaves.len());
-        self.leaves.push(None);
-        key
+    fn allocate_leaf_key(&mut self) -> Option<LeafKey> {
+        self.free_leaf_keys.pop()
     }
 
     /// Minimum interval between stall sweeps — no per-leaf FFI probe to

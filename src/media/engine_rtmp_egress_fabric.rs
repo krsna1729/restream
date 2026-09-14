@@ -192,6 +192,7 @@ impl MediaEngine {
                     rtmps_client_config.clone(),
                     startup_source.clone(),
                     shard_config.drain_timeout(),
+                    shard_config.leaf_capacity().get(),
                 ))
             },
         );

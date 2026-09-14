@@ -180,6 +180,7 @@ impl MediaEngine {
                             .as_ref()
                             .map(|ports| ports.shard(&scope_key, shard_id)),
                         shard_config.drain_timeout(),
+                        shard_config.leaf_capacity().get(),
                         // Same shared engine-wide admission handle the
                         // initial spawn uses.
                         Some(connect_admission.clone()),

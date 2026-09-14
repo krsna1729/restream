@@ -66,7 +66,14 @@ where
             return false;
         }
 
-        let key = self.allocate_leaf_key();
+        let Some(key) = self.allocate_leaf_key() else {
+            pending.common.progress_sink.mark_terminated_unexpectedly();
+            tracing::warn!(
+                output_id = %output_id,
+                "rtmp fabric leaf rejected: shard leaf capacity exhausted"
+            );
+            return false;
+        };
         match self.poller.start_connect(
             peer_addr,
             key,
