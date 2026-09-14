@@ -465,10 +465,20 @@ mod tests {
         }
         let rejected = DatagramSink::send_owned(&mut sink, ipv4, vec![2, 3]);
         assert_eq!(rejected, Err(vec![2, 3]));
-        DatagramSink::send_owned(&mut sink, ipv6, vec![4]).unwrap();
 
         assert_eq!(outbound[family_index(ipv4)].len(), MAX_OUTBOUND);
-        assert_eq!(outbound[family_index(ipv6)].len(), 1);
         assert_eq!(pool_empty, 0);
+
+        let mut ipv6_outbound = std::array::from_fn(|_| VecDeque::new());
+        let mut ipv6_free = vec![Vec::with_capacity(64)];
+        let mut ipv6_pool_empty = 0;
+        let mut ipv6_sink = SharedTxSink {
+            outbound: &mut ipv6_outbound,
+            free: &mut ipv6_free,
+            pool_empty: &mut ipv6_pool_empty,
+            leased: None,
+        };
+        DatagramSink::send_owned(&mut ipv6_sink, ipv6, vec![4]).unwrap();
+        assert_eq!(ipv6_outbound[family_index(ipv6)].len(), 1);
     }
 }

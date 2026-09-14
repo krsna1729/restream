@@ -131,7 +131,7 @@ impl SrtShardBackend {
                 continue;
             };
             if !close {
-                self.stall_candidates.push_back(key);
+                self.enqueue_stall_candidate(key);
                 continue;
             }
             let Some(key) = self.output_sockets.remove(&output_id) else {
@@ -165,17 +165,20 @@ impl SrtShardBackend {
     /// doing real work per feed wake instead of none.
     pub(super) fn enqueue_feed_waiting_leaves(&mut self) {
         while let Some(key) = self.feed_waiting.pop_front() {
-            let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
-                continue;
+            let generation = {
+                let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+                    continue;
+                };
+                leaf.common.schedule.feed_wake_queued = false;
+                if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
+                    continue;
+                }
+                leaf.common.schedule.enqueued = true;
+                leaf.common.generation
             };
-            leaf.common.schedule.feed_wake_queued = false;
-            if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
-                continue;
-            }
-            leaf.common.schedule.enqueued = true;
-            self.ready.push_back(SrtReadyLeaf {
+            self.enqueue_ready_event(SrtReadyLeaf {
                 key,
-                generation: leaf.common.generation,
+                generation,
                 writable: false,
             });
         }

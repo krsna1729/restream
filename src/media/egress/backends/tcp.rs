@@ -3,11 +3,8 @@
 //! Production uses one fixed-file `io_uring` poller per shard. The epoll
 //! implementation is test-only deterministic differential coverage. Both use
 //! generation-tagged registration and an `Ops` trait so the epoll syscalls can
-//! be faked in tests. SRT egress has no
-//! equivalent poller:
-//! `srt-rs` connections have no epoll-style readiness to multiplex (see
-//! `src/media/egress/backends/srt.rs`'s `poll_ready` — every leaf is simply
-//! visited each pass), so there is nothing here for it to mirror.
+//! be faked in tests. SRT egress owns native UDP pollers in its shard backend
+//! rather than using this TCP-specific module.
 
 use std::collections::HashMap;
 use std::io;

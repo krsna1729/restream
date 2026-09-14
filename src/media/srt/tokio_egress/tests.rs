@@ -1,14 +1,5 @@
+use super::SharedSrtEgress;
 use super::shared::family_index;
-use super::{SharedSrtEgress, should_use_shared_srt_egress_state};
-
-#[test]
-fn shared_srt_egress_state_selection_accepts_direct_and_bonded_peers() {
-    assert!(!should_use_shared_srt_egress_state(0, true));
-    assert!(should_use_shared_srt_egress_state(1, true));
-    assert!(should_use_shared_srt_egress_state(2, true));
-    assert!(!should_use_shared_srt_egress_state(0, true));
-    assert!(!should_use_shared_srt_egress_state(1, false));
-}
 
 #[test]
 fn shared_outbound_flush_supports_ipv6() {

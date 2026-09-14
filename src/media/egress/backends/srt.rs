@@ -223,13 +223,13 @@ where
     /// should leave the previously published quality in place in that case.
     ///
     /// Occupancy is only folded in when `sender_quality()` is `Some`.
-    /// Production Direct/Bonded/Shared variants derive both from the same
-    /// `sender_stats()` / `logical_caller().stats()` snapshot, so a known
+    /// Production direct and bonded callers derive both from the same
+    /// `logical_caller().stats()` snapshot, so a known
     /// backlog with no quality snapshot is not a reachable live state.
     /// `sender_quality()` fills RTT/rate/loss and leaves buffer fields
     /// unset; `native_send_backlog` supplies `srtSendBufBytes` /
     /// `msSendBuf` / `srtFlightSizePkts` so `/telemetry` can be summed
-    /// against process RSS on the shared Tokio path.
+    /// against process RSS on the native shared path.
     pub(crate) fn sample_quality(&mut self, _now: Instant) -> Option<PublisherQuality> {
         let mut quality = self.transport.sender_quality()?;
         if let Some(backlog) = self.transport.native_send_backlog() {
@@ -375,6 +375,15 @@ pub(crate) struct SrtShardBackend {
     budget_exhaustions: u64,
 }
 
+fn push_bounded<T>(queue: &mut VecDeque<T>, value: T, capacity: usize) -> bool {
+    if queue.len() >= capacity {
+        debug_assert!(false, "SRT shard queue capacity invariant violated");
+        return false;
+    }
+    queue.push_back(value);
+    true
+}
+
 struct PendingSrtConnect {
     common: LeafCommon,
     connect_spec: SrtFabricEgressConnectSpec,
@@ -403,10 +412,18 @@ impl SrtShardBackend {
                 .map(|slot| LeafKey(slot as usize))
                 .collect(),
             output_sockets: HashMap::new(),
-            ready: VecDeque::new(),
-            ready_candidates: VecDeque::new(),
-            feed_waiting: VecDeque::new(),
-            stall_candidates: VecDeque::with_capacity(1024),
+            ready: VecDeque::with_capacity(
+                crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY,
+            ),
+            ready_candidates: VecDeque::with_capacity(
+                crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY,
+            ),
+            feed_waiting: VecDeque::with_capacity(
+                crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY,
+            ),
+            stall_candidates: VecDeque::with_capacity(
+                crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY,
+            ),
             pending_connects: HashMap::new(),
             last_stall_sweep: None,
             srt_egress_muxer_port: Arc::new(Mutex::new(None)),
@@ -427,7 +444,35 @@ impl SrtShardBackend {
             .rev()
             .map(|slot| LeafKey(slot as usize))
             .collect();
+        self.ready = VecDeque::with_capacity(capacity);
+        self.ready_candidates = VecDeque::with_capacity(capacity);
+        self.feed_waiting = VecDeque::with_capacity(capacity);
+        self.stall_candidates = VecDeque::with_capacity(capacity);
         self
+    }
+
+    fn leaf_queue_capacity(&self) -> usize {
+        self.leaves.len().max(1)
+    }
+
+    fn enqueue_ready_candidate(&mut self, key: LeafKey) {
+        let capacity = self.leaf_queue_capacity();
+        let _ = push_bounded(&mut self.ready_candidates, key, capacity);
+    }
+
+    fn enqueue_feed_waiting(&mut self, key: LeafKey) {
+        let capacity = self.leaf_queue_capacity();
+        let _ = push_bounded(&mut self.feed_waiting, key, capacity);
+    }
+
+    fn enqueue_stall_candidate(&mut self, key: LeafKey) {
+        let capacity = self.leaf_queue_capacity();
+        let _ = push_bounded(&mut self.stall_candidates, key, capacity);
+    }
+
+    fn enqueue_ready_event(&mut self, event: SrtReadyLeaf) {
+        let capacity = self.leaf_queue_capacity();
+        let _ = push_bounded(&mut self.ready, event, capacity);
     }
 
     // Production always constructs via `with_runtime_components` directly
@@ -481,8 +526,8 @@ impl SrtShardBackend {
         let output_id = common.output_id.clone();
         let leaf = SrtFabricLeaf::new(common, transport);
         self.leaves[key.0] = Some(leaf);
-        self.ready_candidates.push_back(key);
-        self.stall_candidates.push_back(key);
+        self.enqueue_ready_candidate(key);
+        self.enqueue_stall_candidate(key);
         if let Some(previous) = self.output_sockets.insert(output_id, key) {
             self.remove_leaf(
                 previous,
@@ -544,8 +589,8 @@ impl SrtShardBackend {
             .expect("test leaf capacity must be increased before adding a leaf");
         let output_id = leaf.common.output_id.clone();
         self.leaves[key.0] = Some(leaf);
-        self.ready_candidates.push_back(key);
-        self.stall_candidates.push_back(key);
+        self.enqueue_ready_candidate(key);
+        self.enqueue_stall_candidate(key);
         if let Some(previous) = self.output_sockets.insert(output_id, key) {
             self.remove_leaf(
                 previous,
@@ -632,15 +677,13 @@ impl SrtShardBackend {
     }
 
     /// Drives the shared table once and advances one registered leaf from the
-    /// bounded candidate queue. `srt-rs` has no epoll equivalent, so each
-    /// leaf that still needs I/O is returned to that queue by
-    /// `requeue_after_visit`; no normal pass walks the population.
+    /// bounded candidate queue. A leaf that still needs I/O is returned to
+    /// that queue by `requeue_after_visit`; no normal pass walks the
+    /// population.
     ///
-    /// Driving is split in two because the work is: leaves owning their own
-    /// connection (`Direct`/`Bonded`) are driven individually, while every
-    /// leaf reusing this shard's local port shares one UDP socket and
-    /// `CallerTable`, so that one is driven once here rather than once per
-    /// leaf (`SrtMessageSender::drive` is a no-op for those leaves). This
+    /// Every leaf shares the shard's native UDP socket and `CallerTable`, so
+    /// one table drive happens once here rather than once per leaf
+    /// (`SrtMessageSender::drive` is a no-op). This
     /// is the dedup the old `SrtFabricPoller` did with its `driven_shared`
     /// set, made structural: a shard has exactly one
     /// `srt_egress_muxer_port`, so there is nothing to deduplicate against.
@@ -650,17 +693,20 @@ impl SrtShardBackend {
     fn poll_ready(&mut self) {
         drive_shared_srt_egress(&self.srt_egress_muxer_port);
         while let Some(key) = self.ready_candidates.pop_front() {
-            let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
-                continue;
+            let generation = {
+                let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+                    continue;
+                };
+                if leaf.common.schedule.enqueued {
+                    continue;
+                }
+                leaf.transport.drive();
+                leaf.common.schedule.enqueued = true;
+                leaf.common.generation
             };
-            if leaf.common.schedule.enqueued {
-                continue;
-            }
-            leaf.transport.drive();
-            leaf.common.schedule.enqueued = true;
-            self.ready.push_back(SrtReadyLeaf {
+            self.enqueue_ready_event(SrtReadyLeaf {
                 key,
-                generation: leaf.common.generation,
+                generation,
                 writable: true,
             });
             break;
@@ -679,9 +725,9 @@ impl SrtShardBackend {
         }
         if leaf.common.schedule.wants_feed_wake && !leaf.common.schedule.feed_wake_queued {
             leaf.common.schedule.feed_wake_queued = true;
-            self.feed_waiting.push_back(key);
+            self.enqueue_feed_waiting(key);
         } else {
-            self.ready_candidates.push_back(key);
+            self.enqueue_ready_candidate(key);
         }
     }
 

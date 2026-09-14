@@ -26,11 +26,6 @@ mod knobs;
 pub(crate) use knobs::{apply_optional_udp_buf, desired_udp_buf};
 pub use knobs::{recv_budget, recv_budget_or};
 
-#[cfg(test)]
-fn should_use_shared_srt_egress_state(peer_count: usize, has_shared_state: bool) -> bool {
-    peer_count != 0 && has_shared_state
-}
-
 enum RustSrtSocket {
     Shared {
         state: SrtEgressMuxerPortState,
@@ -271,7 +266,7 @@ pub(crate) fn ensure_srt_native() -> Result<(), String> {
 fn next_group_id() -> u32 {
     let next = NEXT_GROUP_ID.get_or_init(|| Mutex::new(10));
     let mut next = next.lock().unwrap_or_else(|error| error.into_inner());
-    let id = *next;
+    let id = shiguredo_srt::SRTGROUP_MASK | *next;
     *next = next.saturating_add(1);
     id
 }
