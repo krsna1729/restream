@@ -7,6 +7,7 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::mem::MaybeUninit;
 
 const DEFAULT_MAX_LOGICAL_CALLERS: usize = 4096;
+const MAX_PENDING_OUTPUTS: usize = 64;
 /// Opaque application identity for one outbound SRT stream. A direct caller
 /// and a bonded Broadcast/Backup group have the same steady-state API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -269,6 +270,7 @@ pub struct CallerTable {
     sessions: HashMap<LogicalCallerId, CallerSession>,
     routes: HashMap<u32, CallerRoute>,
     ready_queue: VecDeque<LogicalCallerId>,
+    ready_queue_capacity: usize,
     deadlines: BTreeSet<DeadlineEntry>,
     due_ids: Vec<LogicalCallerId>,
     sched: HashMap<LogicalCallerId, SchedEntry>,
@@ -356,13 +358,51 @@ struct CallerLegState {
     peer: std::net::SocketAddr,
     connection: SrtConnection,
     timers: ManualTimerStore,
-    pending: VecDeque<ConnectionOutput>,
+    pending: PendingOutputQueue,
 }
 
 struct CallerGroupLegState {
     peer: std::net::SocketAddr,
     timers: ManualTimerStore,
-    pending: VecDeque<ConnectionOutput>,
+    pending: PendingOutputQueue,
+}
+
+struct PendingOutputQueue {
+    items: VecDeque<ConnectionOutput>,
+}
+
+impl PendingOutputQueue {
+    fn new() -> Self {
+        Self {
+            items: VecDeque::with_capacity(MAX_PENDING_OUTPUTS),
+        }
+    }
+
+    fn pop_front(&mut self) -> Option<ConnectionOutput> {
+        self.items.pop_front()
+    }
+
+    fn push_front(&mut self, output: ConnectionOutput) -> bool {
+        if self.items.len() >= MAX_PENDING_OUTPUTS {
+            return false;
+        }
+        self.items.push_front(output);
+        true
+    }
+
+    #[cfg(any(test, feature = "bench-internals"))]
+    fn push_back(&mut self, output: ConnectionOutput) -> bool {
+        if self.items.len() >= MAX_PENDING_OUTPUTS {
+            return false;
+        }
+        self.items.push_back(output);
+        true
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.items.len()
+    }
 }
 
 struct CallerGroupState {
@@ -680,10 +720,12 @@ impl CallerTable {
     #[must_use]
     pub fn with_capacity(max_logical_callers: usize) -> Self {
         let max_logical_callers = max_logical_callers.max(1);
+        let ready_queue_capacity = max_logical_callers.saturating_mul(4).saturating_add(64);
         Self {
             sessions: HashMap::with_capacity(64),
             routes: HashMap::with_capacity(64),
-            ready_queue: VecDeque::with_capacity(64),
+            ready_queue: VecDeque::with_capacity(ready_queue_capacity),
+            ready_queue_capacity,
             deadlines: BTreeSet::new(),
             due_ids: Vec::with_capacity(max_logical_callers.min(64)),
             sched: HashMap::with_capacity(64),
@@ -735,14 +777,23 @@ impl CallerTable {
     }
 
     fn enqueue_ready(&mut self, id: LogicalCallerId) {
-        let entry = self.sched.entry(id).or_insert(SchedEntry {
-            ready_queued: false,
-            deadline_micros: None,
-        });
-        if entry.ready_queued {
+        if self.sched.get(&id).is_some_and(|entry| entry.ready_queued) {
             return;
         }
-        entry.ready_queued = true;
+        if self.ready_queue.len() >= self.ready_queue_capacity {
+            self.maybe_compact_ready_queue();
+        }
+        if self.ready_queue.len() >= self.ready_queue_capacity {
+            debug_assert!(false, "caller ready queue capacity invariant violated");
+            return;
+        }
+        self.sched
+            .entry(id)
+            .or_insert(SchedEntry {
+                ready_queued: false,
+                deadline_micros: None,
+            })
+            .ready_queued = true;
         self.ready_queue.push_back(id);
     }
 
@@ -807,7 +858,7 @@ impl CallerTable {
                 peer: leg.peer,
                 connection: leg.connection,
                 timers: ManualTimerStore::new(),
-                pending: VecDeque::new(),
+                pending: PendingOutputQueue::new(),
             })),
         );
         self.routes.insert(socket_id, CallerRoute::Direct(id));
@@ -857,7 +908,7 @@ impl CallerTable {
                     CallerGroupLegState {
                         peer: leg.peer,
                         timers: ManualTimerStore::new(),
-                        pending: VecDeque::new(),
+                        pending: PendingOutputQueue::new(),
                     },
                 )
                 .is_some()
@@ -1330,13 +1381,13 @@ impl CallerTable {
         if let Some(session) = self.sessions.get_mut(&id) {
             match session {
                 CallerSession::Direct(leg) => {
-                    leg.pending.push_back(ConnectionOutput::SendPacket(packet));
+                    let _ = leg.pending.push_back(ConnectionOutput::SendPacket(packet));
                 }
                 CallerSession::Group(group) => {
                     if let Some(first) = group.leg_order.first().copied()
                         && let Some(leg) = group.legs.get_mut(&first)
                     {
-                        leg.pending.push_back(ConnectionOutput::SendPacket(packet));
+                        let _ = leg.pending.push_back(ConnectionOutput::SendPacket(packet));
                     }
                 }
             }
@@ -1379,7 +1430,7 @@ fn drain_one_caller_leg_parts<S: PacketSink + ?Sized>(
     peer: std::net::SocketAddr,
     now: Timestamp,
     timers: &mut ManualTimerStore,
-    pending: &mut VecDeque<ConnectionOutput>,
+    pending: &mut PendingOutputQueue,
     connection: &mut SrtConnection,
     sink: &mut DrainSink<'_, S>,
 ) -> (DrainOne, bool) {
@@ -1387,7 +1438,7 @@ fn drain_one_caller_leg_parts<S: PacketSink + ?Sized>(
         return (DrainOne::Empty, false);
     };
     if sink.report.actions >= sink.budget.max_actions {
-        pending.push_front(output);
+        debug_assert!(pending.push_front(output));
         return (DrainOne::Blocked, false);
     }
     match output {
@@ -1396,7 +1447,7 @@ fn drain_one_caller_leg_parts<S: PacketSink + ?Sized>(
             let exceeds_bytes = sink.report.packets > 0
                 && sink.report.bytes.saturating_add(packet.len()) > sink.budget.max_bytes;
             if exceeds_packets || exceeds_bytes {
-                pending.push_front(ConnectionOutput::SendPacket(packet));
+                debug_assert!(pending.push_front(ConnectionOutput::SendPacket(packet)));
                 return (DrainOne::Blocked, false);
             }
             sink.report.actions += 1;
@@ -1408,7 +1459,7 @@ fn drain_one_caller_leg_parts<S: PacketSink + ?Sized>(
                     sink.report.actions = sink.report.actions.saturating_sub(1);
                     sink.report.packets = sink.report.packets.saturating_sub(1);
                     sink.report.bytes = sink.report.bytes.saturating_sub(packet.len());
-                    pending.push_front(ConnectionOutput::SendPacket(packet));
+                    debug_assert!(pending.push_front(ConnectionOutput::SendPacket(packet)));
                     (DrainOne::Blocked, false)
                 }
             }
@@ -1464,6 +1515,7 @@ pub(crate) fn collect_output_work(
 
 #[cfg(test)]
 mod tests {
+    use super::{MAX_PENDING_OUTPUTS, PendingOutputQueue};
     use crate::*;
     use proptest::prelude::*;
     use shiguredo_srt::{
@@ -2015,6 +2067,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn pending_output_queue_has_a_hard_capacity() {
+        let mut pending = PendingOutputQueue::new();
+        for _ in 0..MAX_PENDING_OUTPUTS {
+            assert!(pending.push_back(ConnectionOutput::SendPacket(vec![1])));
+        }
+        assert!(!pending.push_back(ConnectionOutput::SendPacket(vec![2])));
+        assert_eq!(pending.len(), MAX_PENDING_OUTPUTS);
     }
 
     #[test]
