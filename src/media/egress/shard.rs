@@ -491,7 +491,16 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
     }
 
     fn wait_for_command(&mut self, running: &mut bool) -> usize {
-        match self.receiver.recv_timeout(self.config.idle_wait) {
+        let now = Instant::now();
+        let wait = self
+            .timers
+            .next_deadline()
+            .map_or(self.config.idle_wait(), |deadline| {
+                deadline
+                    .saturating_duration_since(now)
+                    .min(self.config.idle_wait())
+            });
+        match self.receiver.recv_timeout(wait) {
             Ok(command) => {
                 let effect = self.process_command(command);
                 if self.apply_effect(effect).stops_shard() {

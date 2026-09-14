@@ -355,6 +355,34 @@ fn stale_timer_generation_is_ignored_on_shard_thread() {
 }
 
 #[test]
+fn earliest_timer_wakes_an_idle_shard_without_waiting_for_idle_poll() {
+    let probe = Probe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        EgressShardConfig::new(8, 4, 4, 4, Duration::from_secs(5)).unwrap(),
+        TimerBackend {
+            probe: probe.clone(),
+            delay: Duration::from_millis(20),
+        },
+    );
+    let sent_at = Instant::now();
+
+    assert_eq!(
+        handle.try_send(EgressCommand::Add(output_spec("out-deadline-wake"))),
+        Ok(())
+    );
+    probe.wait_for_timers(1);
+    assert!(
+        sent_at.elapsed() < Duration::from_secs(1),
+        "deadline waited for the fixed idle interval"
+    );
+
+    let snapshot = handle.shutdown_and_join();
+    assert_eq!(snapshot.timers_processed, 1);
+    assert!(snapshot.stopped);
+}
+
+#[test]
 fn removed_output_timer_is_ignored_on_shard_thread() {
     let probe = Probe::default();
     let handle = EgressShardHandle::spawn(
