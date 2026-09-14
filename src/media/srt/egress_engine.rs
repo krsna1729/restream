@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::time::Instant;
 
@@ -11,7 +10,7 @@ use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::policy::WorkBudget;
 
-use super::{SrtMessageSender, SrtSendResult};
+use super::{SrtMessageSender, SrtOwner, SrtSendResult};
 
 /// Maximum bytes per `srt_send()` call in message mode: 7 × 188-byte MPEG-TS
 /// packets, matching legacy SRT egress's fixed send buffer
@@ -71,7 +70,8 @@ pub(crate) struct SrtEgressEngine<T> {
     pending: Option<PendingSrtMessage>,
     /// Units already pulled from the feed but not yet handed to `pending`
     /// for fragmentation. See `FEED_READ_BURST`.
-    pending_units: VecDeque<Bytes>,
+    pending_units: Vec<Bytes>,
+    pending_units_index: usize,
     _transport: PhantomData<fn() -> T>,
 }
 
@@ -79,7 +79,8 @@ impl<T> Default for SrtEgressEngine<T> {
     fn default() -> Self {
         Self {
             pending: None,
-            pending_units: VecDeque::new(),
+            pending_units: Vec::with_capacity(FEED_READ_BURST),
+            pending_units_index: 0,
             _transport: PhantomData,
         }
     }
@@ -101,7 +102,12 @@ impl<T> SrtEgressEngine<T> {
     /// Looping here amortizes that cost across one scheduler visit while
     /// still respecting the visit's byte/deadline budget, so one slow or
     /// always-writable leaf still cannot monopolize the shard.
-    fn send_pending(&mut self, transport: &mut T, budget: WorkBudget) -> EngineProgress
+    fn send_pending_inner(
+        &mut self,
+        transport: &mut T,
+        budget: WorkBudget,
+        mut owner: Option<&mut SrtOwner<'_>>,
+    ) -> EngineProgress
     where
         T: SrtMessageSender,
     {
@@ -122,7 +128,11 @@ impl<T> SrtEgressEngine<T> {
             };
 
             let fragment = pending.next_fragment();
-            match transport.send_message(&fragment) {
+            let result = match owner.as_deref_mut() {
+                Some(owner) => transport.send_message_with_owner(&fragment, owner),
+                None => transport.send_message(&fragment),
+            };
+            match result {
                 SrtSendResult::Accepted { bytes } => {
                     pending.advance(bytes);
                     total_bytes += bytes;
@@ -170,6 +180,55 @@ impl<T> SrtEgressEngine<T> {
             }
         }
     }
+
+    fn advance_inner(
+        &mut self,
+        transport: &mut T,
+        readiness: Readiness,
+        feed: &TsFeed,
+        cursor: &mut FeedCursor,
+        budget: WorkBudget,
+        owner: Option<&mut SrtOwner<'_>>,
+    ) -> EngineProgress
+    where
+        T: SrtMessageSender,
+    {
+        if self.pending.is_some() {
+            return if readiness.writable {
+                self.send_pending_inner(transport, budget, owner)
+            } else {
+                EngineProgress::Needs(WaitCondition::Io(Interest::WRITE))
+            };
+        }
+
+        if self.pending_units_index >= self.pending_units.len() {
+            self.pending_units.clear();
+            self.pending_units_index = 0;
+            match feed.read_from_into(
+                *cursor,
+                ReadBudget::new(FEED_READ_BURST, budget.max_bytes),
+                &mut self.pending_units,
+            ) {
+                FeedRead::Units { next_cursor, .. } => *cursor = next_cursor,
+                FeedRead::Empty => return EngineProgress::Needs(WaitCondition::Feed),
+                FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
+                    return EngineProgress::FeedOverrun;
+                }
+            }
+        }
+
+        let Some(message) = self.pending_units.get(self.pending_units_index).cloned() else {
+            return EngineProgress::Needs(WaitCondition::Feed);
+        };
+        self.pending_units_index += 1;
+        self.pending = Some(PendingSrtMessage::new(message));
+
+        if readiness.writable {
+            self.send_pending_inner(transport, budget, owner)
+        } else {
+            EngineProgress::Needs(WaitCondition::Io(Interest::WRITE))
+        }
+    }
 }
 
 impl<T> ProtocolEngine for SrtEgressEngine<T>
@@ -187,46 +246,46 @@ where
         cursor: &mut FeedCursor,
         budget: WorkBudget,
     ) -> EngineProgress {
-        if self.pending.is_some() {
-            return if readiness.writable {
-                self.send_pending(transport, budget)
-            } else {
-                EngineProgress::Needs(WaitCondition::Io(Interest::WRITE))
-            };
-        }
-
-        if self.pending_units.is_empty() {
-            let read_budget = ReadBudget::new(FEED_READ_BURST, budget.max_bytes);
-            match feed.read_from(*cursor, read_budget) {
-                FeedRead::Units { units, next_cursor } => {
-                    *cursor = next_cursor;
-                    self.pending_units.extend(units);
-                }
-                FeedRead::Empty => return EngineProgress::Needs(WaitCondition::Feed),
-                FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
-                    return EngineProgress::FeedOverrun;
-                }
-            }
-        }
-
-        let Some(message) = self.pending_units.pop_front() else {
-            return EngineProgress::Needs(WaitCondition::Feed);
-        };
-        self.pending = Some(PendingSrtMessage::new(message));
-
-        if readiness.writable {
-            self.send_pending(transport, budget)
-        } else {
-            EngineProgress::Needs(WaitCondition::Io(Interest::WRITE))
-        }
+        self.advance_inner(transport, readiness, feed, cursor, budget, None)
     }
 
     fn close(&mut self, transport: &mut Self::Transport, reason: CloseReason) {
         self.pending = None;
+        self.pending_units.clear();
+        self.pending_units_index = 0;
         transport.close(reason);
     }
 
     fn recovery_capability(&self) -> RecoveryCapability {
         RecoveryCapability::ReconnectOnly
+    }
+}
+
+impl<T> SrtEgressEngine<T>
+where
+    T: SrtMessageSender,
+{
+    pub(crate) fn advance_with_owner(
+        &mut self,
+        transport: &mut T,
+        readiness: Readiness,
+        feed: &TsFeed,
+        cursor: &mut FeedCursor,
+        budget: WorkBudget,
+        owner: &mut SrtOwner<'_>,
+    ) -> EngineProgress {
+        self.advance_inner(transport, readiness, feed, cursor, budget, Some(owner))
+    }
+
+    pub(crate) fn close_with_owner(
+        &mut self,
+        transport: &mut T,
+        reason: CloseReason,
+        owner: &mut SrtOwner<'_>,
+    ) {
+        self.pending = None;
+        self.pending_units.clear();
+        self.pending_units_index = 0;
+        transport.close_with_owner(reason, owner);
     }
 }

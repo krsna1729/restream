@@ -40,6 +40,22 @@ fn plain_connection_delegates_read_and_write() {
 }
 
 #[test]
+fn plain_connection_delegates_vectored_write() {
+    let (client, mut server) = connected_pair();
+    let mut connection = RtmpConnection::plain(client);
+    let buffers = [
+        std::io::IoSlice::new(b"hello"),
+        std::io::IoSlice::new(b" "),
+        std::io::IoSlice::new(b"world"),
+    ];
+
+    assert_eq!(connection.write_vectored(&buffers).unwrap(), 11);
+    let mut received = [0u8; 11];
+    server.read_exact(&mut received).unwrap();
+    assert_eq!(&received, b"hello world");
+}
+
+#[test]
 fn plain_connection_interest_hint_always_returns_the_fallback() {
     let (client, _server) = connected_pair();
     let connection = RtmpConnection::plain(client);
@@ -212,6 +228,18 @@ fn test_client_config() -> Arc<ClientConfig> {
     )
 }
 
+fn test_client_config_tls12() -> Arc<ClientConfig> {
+    let provider = Arc::new(tokio_rustls::rustls::crypto::ring::default_provider());
+    Arc::new(
+        ClientConfig::builder_with_provider(provider.clone())
+            .with_protocol_versions(&[&tokio_rustls::rustls::version::TLS12])
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AcceptAnyServerCert(provider)))
+            .with_no_client_auth(),
+    )
+}
+
 fn run_tls_server_peer(
     mut stream: TcpStream,
     cert: CertificateDer<'static>,
@@ -221,6 +249,25 @@ fn run_tls_server_peer(
         .with_no_client_auth()
         .with_single_cert(vec![cert], key.into())
         .unwrap();
+    let mut conn = tokio_rustls::rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
+    let mut tls = tokio_rustls::rustls::Stream::new(&mut conn, &mut stream);
+    let mut buf = [0u8; 5];
+    tls.read_exact(&mut buf).unwrap();
+    assert_eq!(&buf, b"hello");
+    tls.write_all(b"world").unwrap();
+    tls.flush().unwrap();
+}
+
+fn run_tls12_server_peer(
+    mut stream: TcpStream,
+    cert: CertificateDer<'static>,
+    key: PrivatePkcs8KeyDer<'static>,
+) {
+    let server_config =
+        ServerConfig::builder_with_protocol_versions(&[&tokio_rustls::rustls::version::TLS12])
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], key.into())
+            .unwrap();
     let mut conn = tokio_rustls::rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
     let mut tls = tokio_rustls::rustls::Stream::new(&mut conn, &mut stream);
     let mut buf = [0u8; 5];
@@ -276,5 +323,61 @@ fn tls_connection_completes_a_real_handshake_and_exchanges_application_data() {
     }
     assert_eq!(&buffer, b"world");
 
+    server.join().unwrap();
+}
+
+#[test]
+fn tls12_connection_hands_off_to_ktls_when_the_kernel_supports_it() {
+    if !super::rtmp_ktls::available() {
+        return;
+    }
+    let cert_key = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let cert = cert_key.cert.der().clone();
+    let key = PrivatePkcs8KeyDer::from(cert_key.signing_key.serialize_der());
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        run_tls12_server_peer(stream, cert, key);
+    });
+
+    let client_stream = TcpStream::connect(addr).unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut connection =
+        RtmpConnection::tls_with_config(client_stream, "localhost", test_client_config_tls12())
+            .unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        assert!(std::time::Instant::now() < deadline, "write timed out");
+        match connection.write(b"hello") {
+            Ok(5) => break,
+            Ok(n) => panic!("unexpected partial write: {n}"),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(error) => panic!("unexpected write error: {error}"),
+        }
+    }
+    assert!(
+        connection.is_ktls(),
+        "TLS 1.2 connection did not enter kTLS"
+    );
+    connection.flush().unwrap();
+
+    let mut buffer = [0u8; 5];
+    let mut read_total = 0;
+    while read_total < 5 {
+        assert!(std::time::Instant::now() < deadline, "read timed out");
+        match connection.read(&mut buffer[read_total..]) {
+            Ok(n) => read_total += n,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(error) => panic!("unexpected read error: {error}"),
+        }
+    }
+    assert_eq!(&buffer, b"world");
     server.join().unwrap();
 }

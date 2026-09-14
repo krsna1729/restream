@@ -194,11 +194,12 @@ flowchart LR
 There is no protocol-specific bypass around the manager, shard scheduler,
 common lifecycle, or backpressure policy.
 
-A shard may use a protocol-native readiness path. RTMP shards use Linux epoll
-for TCP/TLS readiness. SRT shards do not: `srt-rs` has no epoll equivalent, so
-the SRT backend drives owned sockets and the shared `CallerTable` directly and
-treats every pending leaf as write-interested. That specialization stays under
-the same application topology, not a separate egress architecture.
+A shard may use a protocol-native readiness path. RTMP shards use one native
+`io_uring` TCP readiness owner per shard. SRT shared egress uses the application's bounded
+io_uring UDP readiness path and drives the shared `CallerTable` from the shard
+owner thread; mixed IPv4/IPv6 groups use one bounded native owner per local
+address family. All variants stay under the same application topology, not a
+separate egress architecture.
 
 ## Shared preparation graph
 
@@ -225,8 +226,10 @@ chunking, acknowledgement, connection, and optional TLS state.
 
 SRT leaves consume immutable MPEG-TS messages produced once for compatible
 outputs. Each leaf still owns SRT connection and protocol state in the
-`srt-rs` stack (congestion, retransmission, encryption) rather than in a
-separate libsrt multiplexer thread pair.
+`srt-rs` stack (congestion, retransmission, encryption). Shared egress owns one
+application UDP socket per local address family, native readiness pollers, and a
+`CallerTable` per `(pipeline, shard)`; mixed-family groups use both native
+family owners without a runtime adapter.
 
 Sink leaves consume prepared media and discard it after accounting progress.
 They have no transport readiness adapter, but they still run through the same
@@ -485,17 +488,19 @@ retained by the connection are both included in per-leaf memory limits.
 
 ### SRT backend
 
-SRT egress runs on `srt-rs` (Tokio UDP plus in-process protocol state), not
-libsrt epoll. `srt-rs` has no epoll-style readiness multiplexer: each shard's
-`poll_ready()` drives owned transports, then marks every not-yet-enqueued leaf
-writable so the common scheduler can visit it.
+SRT egress runs on `srt-rs` protocol state with an application-owned native UDP
+readiness adapter for shared links. The adapter uses bounded receive/send
+budgets and one-shot generation-tagged readiness events; the shard owner thread
+drives the shared socket and `CallerTable` without a per-leaf population scan.
+Ready candidates and feed-waiting leaves are queued explicitly. Direct and
+bonded callers use the same runtime-neutral table and caller-owned transmit
+storage; mixed-family groups use one native owner per local address family.
 
 Local-port reuse still scopes one shared UDP socket and `CallerTable` per
-`(pipeline, shard)` (`SrtEgressMuxerPorts`). Direct or bonded leaves drive
-their own sockets; shared-port leaves share one table that the shard drives
-once per `poll_ready` pass (and again on the send path per accepted message).
-Application-owned per-destination byte queues and sender threads remain
-removed.
+`(pipeline, shard)` (`SrtEgressMuxerPorts`), with one native socket/poller per
+family when needed. Outputs with reuse disabled own isolated native socket
+state, but still use the same caller table and readiness path. Application-owned
+per-destination byte queues and sender threads remain removed.
 
 SRT sender-buffer limits remain part of the leaf's total buffering policy;
 moving buffering into the protocol stack does not make it free or unbounded.

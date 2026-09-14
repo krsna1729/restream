@@ -56,6 +56,31 @@ fn command_channel_is_bounded() {
 }
 
 #[test]
+fn failed_feed_wake_delivery_does_not_stick_the_coalescing_gate() {
+    let gate = Gate::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        config(1, 1),
+        BlockingBackend { gate: gate.clone() },
+    );
+
+    handle
+        .try_send(EgressCommand::Add(output_spec("out-a")))
+        .unwrap();
+    gate.wait_until_entered();
+    handle
+        .try_send(EgressCommand::Add(output_spec("out-b")))
+        .unwrap();
+
+    assert_eq!(handle.deliver_feed_wake(), Err(EgressShardSendError::Full));
+    assert!(!handle.wake_gate().is_pending());
+
+    gate.release();
+    let snapshot = handle.shutdown_and_join();
+    assert!(snapshot.stopped);
+}
+
+#[test]
 fn command_batch_budget_allows_media_ticks_during_flood() {
     let probe = Probe::default();
     let handle = EgressShardHandle::spawn(
@@ -326,6 +351,34 @@ fn stale_timer_generation_is_ignored_on_shard_thread() {
     assert_eq!(probe.state().timers, vec!["out-stale-timer:2"]);
     assert_eq!(snapshot.timers_processed, 1);
     assert_eq!(snapshot.metrics.timers_processed, 1);
+    assert!(snapshot.stopped);
+}
+
+#[test]
+fn earliest_timer_wakes_an_idle_shard_without_waiting_for_idle_poll() {
+    let probe = Probe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        EgressShardConfig::new(8, 4, 4, 4, Duration::from_secs(5)).unwrap(),
+        TimerBackend {
+            probe: probe.clone(),
+            delay: Duration::from_millis(20),
+        },
+    );
+    let sent_at = Instant::now();
+
+    assert_eq!(
+        handle.try_send(EgressCommand::Add(output_spec("out-deadline-wake"))),
+        Ok(())
+    );
+    probe.wait_for_timers(1);
+    assert!(
+        sent_at.elapsed() < Duration::from_secs(1),
+        "deadline waited for the fixed idle interval"
+    );
+
+    let snapshot = handle.shutdown_and_join();
+    assert_eq!(snapshot.timers_processed, 1);
     assert!(snapshot.stopped);
 }
 

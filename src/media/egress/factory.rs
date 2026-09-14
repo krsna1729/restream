@@ -15,7 +15,7 @@ use crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPorts;
 use crate::media::egress::backends::srt::resolve_runtime::{
     ResolvingSrtShardBackendDefault, resolving_srt_shard_backend,
 };
-use crate::media::egress::backends::tcp::{TcpEgressPollError, TcpEgressPoller};
+use crate::media::egress::backends::tcp::{IoUringTcpPoller, TcpEgressPollError};
 use crate::media::egress::command::ShardId;
 use crate::media::egress::journal::{RingFeed, TsFeed};
 use crate::media::egress::policy::WorkBudget;
@@ -45,7 +45,7 @@ where
         shard_config,
         budget,
         feed_for,
-        crate::media::srt::ensure_srt_runtime,
+        crate::media::srt::ensure_srt_native,
         srt_egress_muxer_port_reuse,
         connect_admission,
     )
@@ -73,12 +73,14 @@ where
         feed_for,
         srt_egress_muxer_port_reuse,
         shard_config.drain_timeout(),
+        shard_config.leaf_capacity().get(),
         connect_admission,
     );
     EgressShardGroup::spawn(shard_count, shard_config, backends)
         .map_err(SrtFabricShardGroupError::Group)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn srt_fabric_shard_backends<F>(
     pipeline_id: &str,
     shard_count: NonZeroU32,
@@ -86,6 +88,7 @@ fn srt_fabric_shard_backends<F>(
     mut feed_for: F,
     srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
     drain_timeout: std::time::Duration,
+    leaf_capacity: usize,
     connect_admission: Option<Arc<tokio::sync::Semaphore>>,
 ) -> Vec<ResolvingSrtShardBackendDefault>
 where
@@ -107,6 +110,7 @@ where
                 .as_ref()
                 .map(|ports| ports.shard(pipeline_id, shard_id)),
             drain_timeout,
+            leaf_capacity,
             // Shared engine-wide, not per shard: this bounds total
             // in-flight SRT connect concurrency, independent of shard
             // count (see `srt_connect_admission.rs`).
@@ -146,7 +150,7 @@ where
         feed_for,
         |shard_id| {
             let _ = shard_id;
-            TcpEgressPoller::new(poller_max_events)
+            IoUringTcpPoller::new(poller_max_events)
         },
     )
 }
@@ -174,6 +178,7 @@ where
         rtmps_client_config,
         startup_source,
         shard_config.drain_timeout(),
+        shard_config.leaf_capacity().get(),
         feed_for,
         poller_for,
     )
@@ -190,6 +195,7 @@ fn rtmp_fabric_shard_backends_with_poller<P, E, F, G>(
     rtmps_client_config: Arc<tokio_rustls::rustls::ClientConfig>,
     startup_source: SharedRtmpPublishStartupSource,
     drain_timeout: std::time::Duration,
+    leaf_capacity: usize,
     mut feed_for: F,
     mut poller_for: G,
 ) -> Result<Vec<ResolvingRtmpShardBackendWithPoller<P, SharedRtmpPublishStartupSource>>, E>
@@ -210,6 +216,7 @@ where
             rtmps_client_config.clone(),
             startup_source.clone(),
             drain_timeout,
+            leaf_capacity,
         ));
     }
     Ok(backends)
@@ -232,7 +239,10 @@ where
     let mut backends = Vec::with_capacity(shard_count.get() as usize);
     for shard_index in 0..shard_count.get() {
         let shard_id = ShardId::new(shard_index);
-        backends.push(SinkShardBackend::new(feed_for(shard_id), budget));
+        backends.push(
+            SinkShardBackend::new(feed_for(shard_id), budget)
+                .with_leaf_capacity(shard_config.leaf_capacity().get()),
+        );
     }
     EgressShardGroup::spawn(shard_count, shard_config, backends)
 }
@@ -254,11 +264,10 @@ where
     let mut backends = Vec::with_capacity(shard_count.get() as usize);
     for shard_index in 0..shard_count.get() {
         let shard_id = ShardId::new(shard_index);
-        backends.push(PipelineShardBackend::new(
-            feed_for(shard_id),
-            budget,
-            target_source.clone(),
-        ));
+        backends.push(
+            PipelineShardBackend::new(feed_for(shard_id), budget, target_source.clone())
+                .with_leaf_capacity(shard_config.leaf_capacity().get()),
+        );
     }
     EgressShardGroup::spawn(shard_count, shard_config, backends)
 }

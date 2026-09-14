@@ -34,6 +34,24 @@ where
     E: ProtocolEngine,
 {
     pub fn run(self) -> EngineVisitResult {
+        self.run_with(|engine, transport, readiness, feed, cursor, budget| {
+            E::advance(engine, transport, readiness, feed, cursor, budget)
+        })
+    }
+
+    /// Variant used by native transports that need to pass one owner-thread
+    /// completion/submission context into the concrete protocol engine.
+    pub fn run_with(
+        self,
+        advance: impl FnOnce(
+            &mut E,
+            &mut E::Transport,
+            Readiness,
+            &E::Feed,
+            &mut FeedCursor,
+            WorkBudget,
+        ) -> EngineProgress,
+    ) -> EngineVisitResult {
         if !self.common.is_current_generation(self.generation) {
             return EngineVisitResult::StaleGeneration;
         }
@@ -56,7 +74,8 @@ where
                 "egress leaf cursor primed to feed live start"
             );
         }
-        let progress = self.engine.advance(
+        let progress = advance(
+            self.engine,
             self.transport,
             self.readiness,
             self.feed,

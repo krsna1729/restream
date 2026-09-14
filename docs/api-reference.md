@@ -802,7 +802,10 @@ Query params:
     "bondingAvailable": false,
     "udpRxQueueBytes": 0,
     "udpRxQueuePeakBytes": 0,
-    "udpDrops": 0
+    "udpDrops": 0,
+    "nativeRxDatagrams": 0,
+    "nativeTxDatagrams": 0,
+    "nativeRxPoolDrops": 0
   },
   "rtmpListener": {
     "acceptErrors": 0,
@@ -947,6 +950,16 @@ Query params:
 This route remains the generic host-metrics surface. The dashboard now prefers
 `/api/v1/dashboard/runtime` whenever it also needs engine health in the same
 refresh.
+
+Every response includes an observe-only `capacity` object with measured
+`ingressPps`, `mediaBps`, and fanout `egressPps`, plus calibrated service-center
+utilization (`hottestShardUtil`, `nicUtil`, `memoryUtil`, `ffmpegUtil`, and
+`diskUtil`). `hottestCenter` and `projectedUtilization` identify the projected
+bottleneck. `flow` is the Flow Doctor view of the hottest observed shard;
+`activeLeaves`, `uniqueStages`, and `observeOnly` provide context.
+The capacity model is diagnostic only and does not make admission decisions.
+The response also includes a cached `ioUring` capability object from startup;
+`available: false` records a host without usable io_uring support.
 
 ### `GET /api/v1/engine`
 

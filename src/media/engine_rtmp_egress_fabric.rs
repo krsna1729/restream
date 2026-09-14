@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::media::egress::backends::rtmp::RtmpPublishStartup;
 use crate::media::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource;
 use crate::media::egress::backends::rtmp_shard_resolve_runtime::resolving_rtmp_shard_backend;
-use crate::media::egress::backends::tcp::{TcpEgressPollError, TcpEgressPoller};
+use crate::media::egress::backends::tcp::{IoUringTcpPoller, TcpEgressPollError};
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId};
 use crate::media::egress::factory::{RtmpFabricShardGroupError, spawn_rtmp_fabric_shard_group};
 use crate::media::egress::journal::RingFeed;
@@ -183,7 +183,7 @@ impl MediaEngine {
             effective_cpus,
             shard_config,
             |_shard_id| {
-                let poller = TcpEgressPoller::new(poller_max_events)?;
+                let poller = IoUringTcpPoller::new(poller_max_events)?;
                 Ok::<_, TcpEgressPollError>(resolving_rtmp_shard_backend(
                     poller,
                     feed.clone_reader(),
@@ -192,6 +192,7 @@ impl MediaEngine {
                     rtmps_client_config.clone(),
                     startup_source.clone(),
                     shard_config.drain_timeout(),
+                    shard_config.leaf_capacity().get(),
                 ))
             },
         );

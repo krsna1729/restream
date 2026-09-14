@@ -1,35 +1,63 @@
-//! Decorator that spawns RTMP DNS resolution on `Add`/`Update`, mirroring
+//! Decorator that queues RTMP DNS resolution on `Add`/`Update`, mirroring
 //! `src/media/egress/backends/srt/resolve_runtime.rs`'s
-//! `ResolvingSrtShardBackend` shape exactly: one resolve worker thread per
-//! pending connect, reaped on the next `on_media_tick`.
+//! `ResolvingSrtShardBackend` shape exactly: one bounded resolver worker per
+//! shard, reaped on shutdown.
 
-use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, SyncSender};
 use std::thread::JoinHandle;
 
 use crate::media::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::RingFeed;
+use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::WorkBudget;
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::rtmp::parse_rtmp_url;
 
 use super::rtmp_shard::{
-    RtmpPublishStartupSource, RtmpReadinessPoller, RtmpResolveWorkerError, RtmpResolvedConnect,
-    RtmpShardBackend, rtmp_resolve_completion_queue, spawn_rtmp_resolve_worker,
+    RtmpPublishStartupSource, RtmpReadinessPoller, RtmpResolvedConnect, RtmpShardBackend,
+    resolve_rtmp_peer_host, rtmp_resolve_completion_queue,
 };
 
 const RTMP_RESOLVE_COMPLETION_QUEUE_CAPACITY: usize = 1024;
+const RTMP_RESOLVE_REQUEST_QUEUE_CAPACITY: usize = 1024;
 
-#[derive(Debug)]
+struct RtmpResolveRequest {
+    output_id: crate::media::egress::command::OutputId,
+    generation: u64,
+    host: String,
+    port: u16,
+}
+
 struct RtmpResolveWorkerSet {
-    completion_sender: SyncSender<RtmpResolvedConnect>,
-    workers: Vec<JoinHandle<Result<(), RtmpResolveWorkerError>>>,
+    request_sender: Option<SyncSender<RtmpResolveRequest>>,
+    pending: Arc<AtomicUsize>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl RtmpResolveWorkerSet {
     fn new(completion_sender: SyncSender<RtmpResolvedConnect>) -> Self {
+        let (request_sender, request_receiver) =
+            mpsc::sync_channel::<RtmpResolveRequest>(RTMP_RESOLVE_REQUEST_QUEUE_CAPACITY);
+        let pending = Arc::new(AtomicUsize::new(0));
+        let worker_pending = Arc::clone(&pending);
+        let worker = std::thread::spawn(move || {
+            while let Ok(request) = request_receiver.recv() {
+                if let Some(peer_addr) = resolve_rtmp_peer_host(&request.host, request.port) {
+                    let _ = completion_sender.try_send(RtmpResolvedConnect {
+                        output_id: request.output_id,
+                        generation: request.generation,
+                        peer_addr,
+                    });
+                }
+                worker_pending.fetch_sub(1, Ordering::Relaxed);
+            }
+        });
         Self {
-            completion_sender,
-            workers: Vec::new(),
+            request_sender: Some(request_sender),
+            pending,
+            worker: Some(worker),
         }
     }
 
@@ -39,31 +67,42 @@ impl RtmpResolveWorkerSet {
         generation: u64,
         host: String,
         port: u16,
-    ) {
-        self.workers.push(spawn_rtmp_resolve_worker(
+    ) -> bool {
+        let Some(sender) = self.request_sender.as_ref() else {
+            return false;
+        };
+        self.pending.fetch_add(1, Ordering::Relaxed);
+        let request = RtmpResolveRequest {
             output_id,
             generation,
             host,
             port,
-            self.completion_sender.clone(),
-        ));
+        };
+        if sender.try_send(request).is_err() {
+            self.pending.fetch_sub(1, Ordering::Relaxed);
+            return false;
+        }
+        true
     }
 
-    fn reap_finished(&mut self) {
-        let mut index = 0;
-        while index < self.workers.len() {
-            if self.workers[index].is_finished() {
-                let worker = self.workers.swap_remove(index);
-                let _ = worker.join();
-            } else {
-                index += 1;
-            }
+    fn shutdown(&mut self) {
+        self.request_sender.take();
+        if let Some(worker) = self.worker.take()
+            && worker.is_finished()
+        {
+            let _ = worker.join();
         }
     }
 
     #[cfg(test)]
     fn worker_count(&self) -> usize {
-        self.workers.len()
+        self.pending.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for RtmpResolveWorkerSet {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -115,20 +154,31 @@ where
     }
 
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
-        let effect = self.backend.on_media_tick();
-        self.resolve_workers.reap_finished();
-        effect
+        self.backend.on_media_tick()
     }
 
     fn on_shutdown(&mut self) {
         self.backend.on_shutdown();
-        self.resolve_workers.reap_finished();
+        self.resolve_workers.shutdown();
+    }
+
+    fn resync_count(&self) -> u64 {
+        self.backend.resync_count()
+    }
+
+    fn budget_exhaustion_count(&self) -> u64 {
+        self.backend.budget_exhaustion_count()
+    }
+
+    fn observe_metrics(&self, metrics: &mut ShardMetrics) {
+        self.backend.observe_metrics(metrics);
     }
 }
 
 pub(crate) type ResolvingRtmpShardBackendWithPoller<P, S> =
     ResolvingRtmpShardBackend<RtmpShardBackend<P, S>>;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolving_rtmp_shard_backend<P, S>(
     poller: P,
     feed: RingFeed,
@@ -137,6 +187,7 @@ pub(crate) fn resolving_rtmp_shard_backend<P, S>(
     rtmps_client_config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
     startup_source: S,
     drain_timeout: std::time::Duration,
+    leaf_capacity: usize,
 ) -> ResolvingRtmpShardBackendWithPoller<P, S>
 where
     P: RtmpReadinessPoller,
@@ -153,6 +204,7 @@ where
         completion_queue,
         startup_source,
     )
+    .with_leaf_capacity(leaf_capacity)
     .with_drain_timeout(drain_timeout);
     ResolvingRtmpShardBackend::new(backend, RtmpResolveWorkerSet::new(completion_sender))
 }

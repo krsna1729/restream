@@ -1,0 +1,76 @@
+[package]
+name = "srt-transport"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+license = "Apache-2.0"
+description = "Layered SRT session, admission, and runtime-specific UDP transport adapters"
+readme = "README.md"
+homepage = "https://github.com/krsna1729/srt-rs"
+repository = "https://github.com/krsna1729/srt-rs"
+include = ["/src/**", "/tests/**", "/benches/**", "LICENSE", "README.md"]
+
+[dependencies]
+shiguredo_srt = { version = "=2026.1.0-canary.1", path = "../srt-protocol" }
+# The admission table applies admission policy (cookie routing, terminal
+# checks), so mechanism depends on policy. Acyclic: lifecycle depends only
+# on the protocol crate and never on this one.
+srt-lifecycle = { version = "=0.1.0", path = "../srt-lifecycle" }
+# Unconditional: `bind_reuseport`/`set_sock_bufs`/`recvmsg_batch` in the
+# shared-utilities section are raw fd/libc mechanics with no runtime
+# dependency, usable by any adapter's ingress strategy (batched admission,
+# SO_REUSEPORT sharing) -- not gated behind any one runtime's feature.
+libc = "0.2"
+# "all" gates set_reuse_port -- explicit here rather than relying on
+# transitive feature unification from a runtime dependency that happens
+# to also pull in socket2/all (e.g. mio).
+socket2 = { version = "0.6", features = ["all"] }
+getrandom = "0.4"
+zeroize = "1.8"
+
+# Runtime-specific dependencies (optional, feature-gated)
+mio = { version = "1", features = ["net"], optional = true }
+tokio = { version = "1", features = ["net", "time", "rt"], optional = true }
+smol = { version = "2", optional = true }
+futures-lite = { version = "2", optional = true }
+monoio = { version = "0.2", features = ["sync"], optional = true }
+glommio = { version = "0.9", optional = true }
+# glommio 0.9 takes `From<socket2::Socket>` at its own pinned 0.4.x, not the
+# 0.6 used above -- Cargo allows both as distinct deps via this rename, so
+# glommio_transport's socket conversions build against the version glommio
+# itself actually expects.
+socket2_glommio = { package = "socket2", version = "0.4", optional = true }
+compio = { version = "0.19", features = ["io", "io-uring", "net", "runtime", "time"], optional = true }
+
+[dev-dependencies]
+criterion = "0.8"
+proptest = "1.11"
+
+[[bench]]
+name = "admission_hardening"
+harness = false
+required-features = ["bench-internals"]
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+cognitive_complexity = "warn"
+undocumented_unsafe_blocks = "deny"
+
+[[bench]]
+name = "caller_table_scheduling"
+harness = false
+required-features = ["bench-internals"]
+
+[features]
+mio = ["dep:mio"]
+tokio = ["dep:tokio"]
+smol = ["dep:smol", "dep:futures-lite"]
+monoio = ["dep:monoio"]
+glommio = ["dep:glommio", "dep:futures-lite", "dep:socket2_glommio"]
+compio = ["dep:compio"]
+bench-internals = []

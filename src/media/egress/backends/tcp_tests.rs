@@ -1,4 +1,6 @@
 use super::*;
+use std::net::TcpListener;
+use std::os::fd::AsRawFd;
 use std::os::unix::io::RawFd;
 
 /// A connected AF_UNIX SOCK_STREAM pair: cheap, always epoll-writable once
@@ -16,6 +18,73 @@ fn close_fd(fd: RawFd) {
     unsafe {
         libc::close(fd);
     }
+}
+
+#[test]
+fn io_uring_reports_the_same_ready_shape_as_the_legacy_poller() {
+    let (a, b) = socketpair();
+    let mut poller = match IoUringTcpPoller::new(4) {
+        Ok(poller) => poller,
+        Err(error) if matches!(error.code, libc::EPERM | libc::EOPNOTSUPP | libc::ENOSYS) => {
+            close_fd(a);
+            close_fd(b);
+            return;
+        }
+        Err(error) => panic!("io_uring setup failed: {error:?}"),
+    };
+    poller
+        .register_leaf(a, LeafKey(0), 4, TcpEgressInterest::READ)
+        .unwrap();
+    unsafe {
+        libc::write(b, [1u8].as_ptr().cast(), 1);
+    }
+
+    let mut ready = Vec::new();
+    assert_eq!(poller.poll_leaves(0, &mut ready).unwrap(), 1);
+    assert_eq!(ready[0].key, LeafKey(0));
+    assert_eq!(ready[0].generation, 4);
+    assert!(ready[0].readable);
+    assert!(!ready[0].writable);
+
+    poller.remove(a).unwrap();
+    close_fd(a);
+    close_fd(b);
+}
+
+#[test]
+fn io_uring_starts_a_nonblocking_tcp_connect() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mut poller = match IoUringTcpPoller::new(4) {
+        Ok(poller) => poller,
+        Err(error) if matches!(error.code, libc::EPERM | libc::EOPNOTSUPP | libc::ENOSYS) => {
+            return;
+        }
+        Err(error) => panic!("io_uring setup failed: {error:?}"),
+    };
+
+    let attempt = poller
+        .start_connect(addr, LeafKey(0), 7)
+        .expect("loopback connect should be accepted");
+    let stream = match attempt {
+        TcpConnectAttempt::Connected(stream) => {
+            poller
+                .register_leaf(stream.as_raw_fd(), LeafKey(0), 7, TcpEgressInterest::WRITE)
+                .unwrap();
+            stream
+        }
+        TcpConnectAttempt::InProgress(stream) => {
+            let mut ready = Vec::new();
+            assert_eq!(poller.poll_leaves(1_000, &mut ready).unwrap(), 1);
+            assert_eq!(ready[0].key, LeafKey(0));
+            assert_eq!(ready[0].generation, 7);
+            assert!(connect_error(stream.as_raw_fd()).is_ok());
+            stream
+        }
+    };
+    poller.remove(stream.as_raw_fd()).unwrap();
+    drop(stream);
+    drop(listener);
 }
 
 #[test]

@@ -1,0 +1,27 @@
+[package]
+name = "srt-lifecycle"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+license = "Apache-2.0"
+description = "Runtime-neutral SRT admission, affinity, and ownership policy"
+readme = "README.md"
+homepage = "https://github.com/krsna1729/srt-rs"
+repository = "https://github.com/krsna1729/srt-rs"
+include = ["/src/**", "LICENSE", "README.md"]
+
+[dependencies]
+shiguredo_srt = { version = "=2026.1.0-canary.1", path = "../srt-protocol" }
+
+[dev-dependencies]
+proptest = "1.11"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+cognitive_complexity = "warn"
+undocumented_unsafe_blocks = "deny"

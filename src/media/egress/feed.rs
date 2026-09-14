@@ -129,6 +129,33 @@ pub trait EgressFeed {
     /// thread also holds for media work.
     fn read_from(&self, cursor: FeedCursor, budget: ReadBudget) -> FeedRead<Self::Unit>;
 
+    /// Read into caller-owned storage. Production feeds override this to
+    /// reuse a bounded batch buffer; the default preserves compatibility for
+    /// small adapters that only implement [`Self::read_from`].
+    fn read_from_into(
+        &self,
+        cursor: FeedCursor,
+        budget: ReadBudget,
+        units: &mut Vec<Self::Unit>,
+    ) -> FeedRead<()> {
+        units.clear();
+        match self.read_from(cursor, budget) {
+            FeedRead::Units {
+                units: read_units,
+                next_cursor,
+            } => {
+                units.extend(read_units);
+                FeedRead::Units {
+                    units: Vec::new(),
+                    next_cursor,
+                }
+            }
+            FeedRead::Empty => FeedRead::Empty,
+            FeedRead::Overrun { oldest_sequence } => FeedRead::Overrun { oldest_sequence },
+            FeedRead::EpochMismatch { current_epoch } => FeedRead::EpochMismatch { current_epoch },
+        }
+    }
+
     /// Returns the most recent known-good synchronization point, if any.
     ///
     /// A synchronization point is a feed position from which a protocol

@@ -28,6 +28,7 @@ fn srt_fabric_shard_backends_build_one_backend_per_shard() {
         |_| feed(),
         None,
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+        EgressShardConfig::DEFAULT_LEAF_CAPACITY,
         None,
     );
 
@@ -48,6 +49,7 @@ fn srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state() {
         |_| feed(),
         Some(ports.clone()),
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+        EgressShardConfig::DEFAULT_LEAF_CAPACITY,
         None,
     );
 
@@ -93,6 +95,7 @@ fn srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry() {
         |_| feed(),
         None,
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+        EgressShardConfig::DEFAULT_LEAF_CAPACITY,
         None,
     );
 
@@ -163,6 +166,7 @@ fn srt_fabric_shard_backends_share_one_connect_admission_semaphore_across_shards
         |_| feed(),
         None,
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
+        EgressShardConfig::DEFAULT_LEAF_CAPACITY,
         Some(admission.clone()),
     );
 

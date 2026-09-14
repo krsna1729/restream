@@ -19,22 +19,19 @@ fn connect_spec() -> SrtFabricEgressConnectSpec {
 fn connect_config_with_reuse_disabled_passes_no_shared_state() {
     let peer_addrs = peer_addrs();
     let connect_spec = connect_spec();
-    let config = connect_spec.connect_config(&peer_addrs, None);
+    let config = connect_spec.connect_config(&peer_addrs);
 
-    assert!(!config.has_muxer_port_claim());
-    assert_eq!(config.muxer_port_claim_bind_port(), None);
+    assert_eq!(config.peer_addrs(), peer_addrs);
 }
 
 #[test]
-fn connect_config_with_reuse_enabled_passes_shared_state() {
+fn connect_config_is_independent_of_the_owner_state() {
     let peer_addrs = peer_addrs();
-    let state = std::sync::Arc::new(std::sync::Mutex::new(None));
     let connect_spec = connect_spec();
-    let config = connect_spec.connect_config(&peer_addrs, Some(state.clone()));
+    let config = connect_spec.connect_config(&peer_addrs);
 
-    assert!(config.has_muxer_port_claim());
-    assert_eq!(config.muxer_port_claim_bind_port(), None);
-    assert!(state.lock().unwrap().is_none());
+    assert_eq!(config.stream_id(), "publish:key");
+    assert_eq!(config.connect_timeout_ms(), 30_000);
 }
 
 #[test]
@@ -61,7 +58,7 @@ fn complete_pending_connect_with_reuse_enabled_initializes_shared_state() {
 
     assert!(
         state.lock().unwrap().is_none(),
-        "shared muxer state must stay lazy until the first real connect"
+        "the registry stays empty until a shard owns the first real connect"
     );
 
     backend
@@ -72,8 +69,6 @@ fn complete_pending_connect_with_reuse_enabled_initializes_shared_state() {
         )
         .unwrap();
 
-    assert!(
-        state.lock().unwrap().is_some(),
-        "first successful fabric connect must initialize the per-shard shared UDP state"
-    );
+    assert!(backend.shared_srt_egress.is_some());
+    assert!(state.lock().unwrap().is_none());
 }

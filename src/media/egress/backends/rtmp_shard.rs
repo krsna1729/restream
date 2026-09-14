@@ -1,12 +1,9 @@
 //! RTMP fabric shard backend: wires [`RtmpFabricEngine`] into
 //! [`EgressShardBackend`], mirroring [`crate::media::egress::backends::srt::SrtShardBackend`]'s
-//! shape — a real `TcpEgressPoller`-backed poller, leaf slab, ready queue,
-//! and a bounded blocking connect on the shard's own OS thread (acceptable
-//! there, per `tcp_connect.rs`, since it blocks only that shard's own leaves
-//! for at most the connect timeout) — with DNS resolution split onto a
-//! dedicated worker thread and completion queue instead, since unlike a
-//! bounded `connect_timeout`, `ToSocketAddrs` has no timeout of its own and
-//! could otherwise stall the shard indefinitely on a slow or hung resolver.
+//! shape — a real `io_uring`-backed poller, leaf slab, ready queue, and
+//! nonblocking descriptor connect — with DNS resolution split onto a
+//! dedicated worker thread and completion queue, since `ToSocketAddrs` has no
+//! timeout of its own and could otherwise stall the shard on a hung resolver.
 //!
 //! Unlike the SRT fabric (always write-registered — libsrt handles
 //! acknowledgement internally), RTMP genuinely alternates between wanting
@@ -17,10 +14,10 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::os::fd::AsRawFd;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::thread::{self, JoinHandle};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
 use tokio_rustls::rustls::ClientConfig;
@@ -30,16 +27,27 @@ use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, Protoco
 use crate::media::egress::feed::EgressFeed;
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::leaf::LeafCommon;
+use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::{LeafLimits, LeafStallClass, WorkBudget, classify_stall};
 use crate::media::egress::scheduler::{LeafKey, VisitDecision};
-use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
+use crate::media::egress::shard::{
+    EgressShardBackend, EgressShardCommandEffect, EgressShardConfig,
+};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::rtmp::parse_rtmp_url;
 
-use super::rtmp::{RtmpFabricEngine, RtmpPublishStartup};
+use super::rtmp::{RtmpFabricEngine, RtmpNativeSend, RtmpPublishStartup};
 use super::rtmp_connection::RtmpConnection;
-use super::tcp::{TcpEgressInterest, TcpEgressPollError, TcpEgressPoller, TcpReadyLeaf};
-use super::tcp_connect::{TcpFabricConnectConfig, connect_fabric_tcp_egress_socket};
+#[cfg(test)]
+use super::tcp::TcpConnectAttempt;
+#[cfg(test)]
+use super::tcp::TcpEgressPollError;
+#[cfg(test)]
+use super::tcp::TcpEgressPoller;
+use super::tcp::{TcpEgressInterest, TcpReadyLeaf};
+
+use self::rtmp_shard_connect::{ConnectingRtmpConnect, PendingRtmpConnect};
+pub(crate) use super::rtmp_shard_poller::RtmpReadinessPoller;
 
 // ---------------------------------------------------------------------------
 // Publish-startup source
@@ -120,13 +128,6 @@ pub(crate) struct RtmpResolvedConnect {
     pub(crate) peer_addr: SocketAddr,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RtmpResolveWorkerError {
-    ResolveFailed { host: String },
-    CompletionQueueFull,
-    CompletionQueueClosed,
-}
-
 pub(crate) struct RtmpResolveCompletionQueue {
     receiver: Receiver<RtmpResolvedConnect>,
 }
@@ -146,88 +147,21 @@ impl RtmpResolveCompletionQueue {
     }
 }
 
-pub(crate) fn spawn_rtmp_resolve_worker(
-    output_id: OutputId,
-    generation: u64,
-    host: String,
-    port: u16,
-    completion_sender: SyncSender<RtmpResolvedConnect>,
-) -> JoinHandle<Result<(), RtmpResolveWorkerError>> {
-    thread::spawn(move || {
-        let peer_addr = resolve_rtmp_peer_host(&host, port)
-            .ok_or_else(|| RtmpResolveWorkerError::ResolveFailed { host: host.clone() })?;
-        completion_sender
-            .try_send(RtmpResolvedConnect {
-                output_id,
-                generation,
-                peer_addr,
-            })
-            .map_err(|error| match error {
-                TrySendError::Full(_) => RtmpResolveWorkerError::CompletionQueueFull,
-                TrySendError::Disconnected(_) => RtmpResolveWorkerError::CompletionQueueClosed,
-            })
-    })
+fn push_bounded<T>(queue: &mut VecDeque<T>, value: T, capacity: usize) -> bool {
+    debug_assert!(queue.len() <= capacity);
+    if queue.len() == capacity {
+        return false;
+    }
+    queue.push_back(value);
+    true
 }
 
-fn resolve_rtmp_peer_host(host: &str, port: u16) -> Option<SocketAddr> {
+pub(crate) fn resolve_rtmp_peer_host(host: &str, port: u16) -> Option<SocketAddr> {
     if let Ok(addr) = host.parse::<std::net::IpAddr>() {
         return Some(SocketAddr::new(addr, port));
     }
     (host, port).to_socket_addrs().ok()?.next()
 }
-
-// ---------------------------------------------------------------------------
-// Poller trait (fake-able)
-// ---------------------------------------------------------------------------
-
-pub(crate) trait RtmpReadinessPoller {
-    fn register_leaf(
-        &mut self,
-        fd: RawFd,
-        key: LeafKey,
-        generation: u64,
-        interest: TcpEgressInterest,
-    ) -> Result<(), TcpEgressPollError>;
-
-    fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError>;
-
-    fn poll_leaves(
-        &mut self,
-        timeout_ms: i32,
-        ready: &mut Vec<TcpReadyLeaf>,
-    ) -> Result<usize, TcpEgressPollError>;
-}
-
-impl<O> RtmpReadinessPoller for TcpEgressPoller<O>
-where
-    O: super::tcp::TcpPollOps,
-{
-    fn register_leaf(
-        &mut self,
-        fd: RawFd,
-        key: LeafKey,
-        generation: u64,
-        interest: TcpEgressInterest,
-    ) -> Result<(), TcpEgressPollError> {
-        self.register_leaf(fd, key, generation, interest)
-    }
-
-    fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError> {
-        self.remove(fd)
-    }
-
-    fn poll_leaves(
-        &mut self,
-        timeout_ms: i32,
-        ready: &mut Vec<TcpReadyLeaf>,
-    ) -> Result<usize, TcpEgressPollError> {
-        self.poll_leaves(timeout_ms, ready)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Leaf
-// ---------------------------------------------------------------------------
 
 struct RtmpFabricLeaf {
     common: LeafCommon,
@@ -263,16 +197,20 @@ struct RtmpFabricLeaf {
     /// needed to compute `tcp_send_rate_mbps` as a two-sample delta —
     /// mirrors `rtmp/ingest.rs`'s `previous_tcp_bytes` for the receive side.
     previous_tcp_bytes: Option<(u64, Instant)>,
+    pending_send_result: Option<i32>,
 }
 
 impl RtmpFabricLeaf {
-    fn visit_ready(
+    fn visit_ready<P: RtmpReadinessPoller>(
         &mut self,
         generation: u64,
         readiness: Readiness,
         feed: &RingFeed,
         budget: WorkBudget,
+        poller: &mut P,
+        key: LeafKey,
     ) -> EngineVisitResult {
+        let send_result = self.pending_send_result.take();
         EngineVisit {
             generation,
             common: &mut self.common,
@@ -282,7 +220,25 @@ impl RtmpFabricLeaf {
             feed,
             budget,
         }
-        .run()
+        .run_with(|engine, transport, readiness, feed, cursor, budget| {
+            if poller.supports_native_send() && transport.supports_native_send() {
+                engine.advance_native(
+                    transport,
+                    readiness,
+                    feed,
+                    cursor,
+                    budget,
+                    RtmpNativeSend {
+                        sender: poller,
+                        slot: key.0 as u32,
+                        generation,
+                        send_result,
+                    },
+                )
+            } else {
+                engine.advance(transport, readiness, feed, cursor, budget)
+            }
+        })
     }
 
     /// Classify this leaf's send-path health from its pending application
@@ -380,12 +336,6 @@ struct RtmpLeafSocket {
     fd: RawFd,
 }
 
-struct PendingRtmpConnect {
-    common: LeafCommon,
-    parts: crate::media::rtmp::RtmpUrlParts,
-    connect_timeout: Duration,
-}
-
 pub(crate) struct RtmpShardBackend<P, S = EmptyRtmpPublishStartupSource>
 where
     P: RtmpReadinessPoller,
@@ -393,6 +343,7 @@ where
 {
     poller: P,
     resolve_completions: RtmpResolveCompletionQueue,
+    resolved_connects: Vec<RtmpResolvedConnect>,
     startup_source: S,
     feed: RingFeed,
     /// Per-visit limits. `WorkBudget::deadline` is an absolute `Instant`
@@ -408,10 +359,17 @@ where
     chunk_size: u32,
     rtmps_client_config: Arc<ClientConfig>,
     leaves: Vec<Option<RtmpFabricLeaf>>,
+    free_leaf_keys: Vec<LeafKey>,
     output_sockets: HashMap<OutputId, RtmpLeafSocket>,
     ready: VecDeque<TcpReadyLeaf>,
+    feed_waiting: VecDeque<LeafKey>,
+    stall_candidates: VecDeque<LeafKey>,
+    queue_capacity: usize,
     poll_buffer: Vec<TcpReadyLeaf>,
+    send_completions: Vec<restream_dataplane::tcp::TcpSendCompletion>,
     pending_connects: HashMap<OutputId, PendingRtmpConnect>,
+    connecting: HashMap<LeafKey, ConnectingRtmpConnect>,
+    connecting_by_output: HashMap<OutputId, LeafKey>,
     last_stall_sweep: Option<Instant>,
     /// Bound on how long a leaf may stay in `draining_since` before it is
     /// force-closed regardless of remaining `pending_application_bytes`.
@@ -423,6 +381,10 @@ where
     /// `EgressShardRuntime::record_iteration` into `ShardMetrics::feed_resyncs`
     /// for the repeated-resync alert (`derive_alerts`, `src/alerts.rs`).
     resync_count: u64,
+    budget_exhaustions: u64,
+    native_tx_packets: u64,
+    native_tx_bytes: u64,
+    queue_overflows: u64,
 }
 
 impl<P, S> RtmpShardBackend<P, S>
@@ -442,9 +404,11 @@ where
         let budget_window = budget
             .deadline
             .saturating_duration_since(std::time::Instant::now());
+        let ready_capacity = poller.ready_capacity();
         Self {
             poller,
             resolve_completions,
+            resolved_connects: Vec::with_capacity(1024),
             startup_source,
             feed,
             budget_max_units: budget.max_units,
@@ -452,15 +416,60 @@ where
             budget_window,
             chunk_size,
             rtmps_client_config,
-            leaves: Vec::new(),
+            leaves: (0..EgressShardConfig::DEFAULT_LEAF_CAPACITY)
+                .map(|_| None)
+                .collect(),
+            free_leaf_keys: (0..EgressShardConfig::DEFAULT_LEAF_CAPACITY as u32)
+                .rev()
+                .map(|slot| LeafKey(slot as usize))
+                .collect(),
             output_sockets: HashMap::new(),
-            ready: VecDeque::new(),
-            poll_buffer: Vec::new(),
+            ready: VecDeque::with_capacity(ready_capacity),
+            feed_waiting: VecDeque::with_capacity(ready_capacity),
+            stall_candidates: VecDeque::with_capacity(ready_capacity),
+            queue_capacity: EgressShardConfig::DEFAULT_LEAF_CAPACITY,
+            poll_buffer: Vec::with_capacity(ready_capacity),
+            send_completions: Vec::with_capacity(ready_capacity),
             pending_connects: HashMap::new(),
+            connecting: HashMap::new(),
+            connecting_by_output: HashMap::new(),
             last_stall_sweep: None,
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
+            budget_exhaustions: 0,
+            native_tx_packets: 0,
+            native_tx_bytes: 0,
+            queue_overflows: 0,
         }
+    }
+
+    pub(crate) fn with_leaf_capacity(mut self, capacity: usize) -> Self {
+        self.leaves = (0..capacity).map(|_| None).collect();
+        self.free_leaf_keys = (0..capacity as u32)
+            .rev()
+            .map(|slot| LeafKey(slot as usize))
+            .collect();
+        self.queue_capacity = capacity;
+        self.ready = VecDeque::with_capacity(capacity);
+        self.feed_waiting = VecDeque::with_capacity(capacity);
+        self.stall_candidates = VecDeque::with_capacity(capacity);
+        self
+    }
+
+    fn enqueue_ready(&mut self, event: TcpReadyLeaf) -> bool {
+        let admitted = push_bounded(&mut self.ready, event, self.queue_capacity);
+        if !admitted {
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
+        }
+        admitted
+    }
+
+    fn enqueue_stall_candidate(&mut self, key: LeafKey) -> bool {
+        let admitted = push_bounded(&mut self.stall_candidates, key, self.queue_capacity);
+        if !admitted {
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
+        }
+        admitted
     }
 
     /// Override the per-leaf drain deadline. Production threads the
@@ -472,160 +481,18 @@ where
         self
     }
 
-    fn queue_pending_rtmp_connect(&mut self, spec: OutputSpec, target_url: &str) {
-        let Some(parts) = parse_rtmp_url(target_url) else {
-            tracing::warn!(output_id = %spec.id, "rtmp fabric leaf rejected: invalid url");
-            return;
-        };
-        let output_id = spec.id.clone();
-        let common = LeafCommon::new(
-            spec.id,
-            spec.generation,
-            spec.feed,
-            LeafLimits::from_policy(&spec.policy),
-        )
-        .with_progress_sink(spec.progress.clone());
-        self.pending_connects.insert(
-            output_id,
-            PendingRtmpConnect {
-                common,
-                parts,
-                connect_timeout: spec.policy.connect_timeout,
-            },
-        );
-    }
-
-    #[cfg(test)]
-    fn pending_connect(&self, output_id: &OutputId) -> Option<&PendingRtmpConnect> {
-        self.pending_connects.get(output_id)
-    }
-
-    /// Complete a pending connect with an already-resolved peer address:
-    /// dials (bounded, blocking on this shard thread — see module docs),
-    /// registers the connected socket with the poller, and constructs the
-    /// engine. Errors are logged and drop the pending connect; the retry
-    /// policy at the application layer owns reconnection.
-    /// Returns `true` when a leaf actually became connected and registered
-    /// this call — the caller uses that to know whether it needs to give
-    /// the new leaf its first look at readiness (see `on_media_tick`'s doc
-    /// comment on the shard trait: nothing else will discover a fresh
-    /// leaf's I/O readiness on its own).
-    fn complete_pending_connect(
-        &mut self,
-        output_id: &OutputId,
-        generation: u64,
-        peer_addr: SocketAddr,
-    ) -> bool {
-        let Some(pending) = self.pending_connects.remove(output_id) else {
-            return false;
-        };
-        if pending.common.generation != generation {
-            self.pending_connects.insert(output_id.clone(), pending);
-            return false;
-        }
-
-        // Any early return below means the application never sees a leaf
-        // at all for this attempt — nothing else will tell it the attempt
-        // died, so mark it the same way an established leaf's unexpected
-        // close does (see `EgressProgressSink::terminated_unexpectedly`).
-        let progress_sink = pending.common.progress_sink.clone();
-
-        let tcp_stream = match connect_fabric_tcp_egress_socket(TcpFabricConnectConfig {
-            peer_addr,
-            connect_timeout: pending.connect_timeout,
-        }) {
-            Ok(stream) => stream,
-            Err(error) => {
-                tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf connect failed");
-                progress_sink.mark_terminated_unexpectedly();
-                return false;
-            }
-        };
-        let stream = if pending.parts.tls {
-            match RtmpConnection::tls_with_config(
-                tcp_stream,
-                &pending.parts.host,
-                self.rtmps_client_config.clone(),
-            ) {
-                Ok(stream) => stream,
-                Err(error) => {
-                    tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf tls init failed");
-                    progress_sink.mark_terminated_unexpectedly();
-                    return false;
-                }
-            }
-        } else {
-            RtmpConnection::plain(tcp_stream)
-        };
-
-        let Some(publish_startup) = self.startup_source.take_startup(output_id) else {
-            tracing::warn!(output_id = %output_id, "rtmp fabric leaf rejected: no publish startup available");
-            progress_sink.mark_terminated_unexpectedly();
-            return false;
-        };
-
-        let engine = match RtmpFabricEngine::new_client(
-            pending.parts,
-            self.chunk_size,
-            false,
-            publish_startup,
-        ) {
-            Ok(engine) => engine,
-            Err(error) => {
-                tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf init failed");
-                progress_sink.mark_terminated_unexpectedly();
-                return false;
-            }
-        };
-
-        let fd = stream.raw_fd();
-        let key = LeafKey(self.leaves.len());
-        if self
-            .poller
-            .register_leaf(fd, key, pending.common.generation, TcpEgressInterest::WRITE)
-            .is_err()
-        {
-            tracing::warn!(output_id = %output_id, "rtmp fabric leaf poller registration failed");
-            progress_sink.mark_terminated_unexpectedly();
-            return false;
-        }
-
-        let leaf = RtmpFabricLeaf {
-            common: pending.common,
-            engine,
-            transport: stream,
-            registered_interest: TcpEgressInterest::WRITE,
-            observed_since: Instant::now(),
-            draining_since: None,
-            draining_reason: None,
-            previous_tcp_bytes: None,
-        };
-        self.leaves.push(Some(leaf));
-        if let Some(previous) = self
-            .output_sockets
-            .insert(output_id.clone(), RtmpLeafSocket { key, fd })
-        {
-            self.remove_leaf_socket(previous, CloseReason::Removed);
-        }
-        tracing::info!(output_id = %output_id, leaf_key = key.0, "rtmp fabric leaf connected");
-        true
-    }
-
-    fn remove_leaf_by_output(&mut self, output_id: &OutputId) -> bool {
-        self.pending_connects.remove(output_id);
-        let Some(socket_ref) = self.output_sockets.remove(output_id) else {
-            return false;
-        };
-        self.remove_leaf_socket(socket_ref, CloseReason::Removed)
-    }
-
     fn remove_leaf_socket(&mut self, socket_ref: RtmpLeafSocket, reason: CloseReason) -> bool {
         let _ = self.poller.remove(socket_ref.fd);
+        self.feed_waiting.retain(|key| *key != socket_ref.key);
+        self.stall_candidates.retain(|key| *key != socket_ref.key);
+        self.ready.retain(|event| event.key != socket_ref.key);
+        self.poll_buffer.retain(|event| event.key != socket_ref.key);
         let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) else {
             return false;
         };
         let mut leaf = leaf;
         leaf.engine.close(&mut leaf.transport, reason);
+        self.free_leaf_keys.push(socket_ref.key);
         true
     }
 
@@ -633,15 +500,18 @@ where
         self.leaves.get_mut(key.0).and_then(Option::as_mut)
     }
 
+    fn allocate_leaf_key(&mut self) -> Option<LeafKey> {
+        self.free_leaf_keys.pop()
+    }
+
     /// Minimum interval between stall sweeps — no per-leaf FFI probe to
     /// throttle here (unlike SRT's native bstats call), but there is no
     /// reason to walk every leaf on every media tick either.
     const STALL_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 
-    /// Directly enqueue every connected leaf whose last `WaitCondition`
-    /// wants a feed wake (`Feed`/`FeedOrIo`) — set in
-    /// `apply_progress_to_common` (`visit.rs`) from its own most recent
-    /// `EngineProgress` — without any poller call.
+    /// Directly enqueue leaves parked on `Feed`/`FeedOrIo` when the shared
+    /// feed publishes more media. The queue is populated at visit time, so a
+    /// feed wake does not scan every output on the shard.
     ///
     /// Mirrors `poll_ready()`'s push-with-dedup shape exactly (same
     /// `enqueued` check and set), using `self.ready` directly instead of a
@@ -669,26 +539,32 @@ where
     /// never touches them — they remain discoverable only via real
     /// `poll_ready()`, exactly as before.
     fn enqueue_feed_waiting_leaves(&mut self) {
-        let sockets: Vec<RtmpLeafSocket> = self.output_sockets.values().copied().collect();
-        for socket_ref in sockets {
-            let Some(leaf) = self
+        while let Some(key) = self.feed_waiting.pop_front() {
+            let event = self
                 .leaves
-                .get_mut(socket_ref.key.0)
+                .get_mut(key.0)
                 .and_then(Option::as_mut)
-            else {
+                .and_then(|leaf| {
+                    leaf.common.schedule.feed_wake_queued = false;
+                    if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
+                        None
+                    } else {
+                        Some(TcpReadyLeaf {
+                            fd: leaf.transport.raw_fd(),
+                            key,
+                            generation: leaf.common.generation,
+                            readable: false,
+                            writable: false,
+                        })
+                    }
+                });
+            let Some(event) = event else {
                 continue;
             };
-            if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
-                continue;
+            let admitted = self.enqueue_ready(event);
+            if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) {
+                leaf.common.schedule.enqueued = admitted;
             }
-            leaf.common.schedule.enqueued = true;
-            self.ready.push_back(TcpReadyLeaf {
-                fd: socket_ref.fd,
-                key: socket_ref.key,
-                generation: leaf.common.generation,
-                readable: false,
-                writable: false,
-            });
         }
     }
 
@@ -696,17 +572,96 @@ where
         if self.poller.poll_leaves(0, &mut self.poll_buffer).is_err() {
             return;
         }
-        let events: Vec<_> = self.poll_buffer.drain(..).collect();
-        for event in events {
-            let Some(leaf) = self.leaf_mut(event.key) else {
+        self.send_completions.clear();
+        self.poller
+            .drain_send_completions(&mut self.send_completions);
+        let mut completions = std::mem::take(&mut self.send_completions);
+        for completion in completions.drain(..) {
+            if completion.result >= 0 {
+                self.native_tx_packets = self.native_tx_packets.saturating_add(1);
+                self.native_tx_bytes = self
+                    .native_tx_bytes
+                    .saturating_add(completion.result as u64);
+            }
+            let key = LeafKey(completion.slot as usize);
+            let event = self
+                .leaves
+                .get_mut(key.0)
+                .and_then(Option::as_mut)
+                .and_then(|leaf| {
+                    if leaf.common.generation != completion.generation as u64 {
+                        None
+                    } else if leaf.common.schedule.enqueued {
+                        leaf.pending_send_result = Some(completion.result);
+                        None
+                    } else {
+                        leaf.pending_send_result = Some(completion.result);
+                        leaf.common.schedule.enqueued = true;
+                        Some(TcpReadyLeaf {
+                            fd: leaf.transport.raw_fd(),
+                            key,
+                            generation: leaf.common.generation,
+                            readable: false,
+                            writable: true,
+                        })
+                    }
+                });
+            let Some(event) = event else {
                 continue;
             };
-            if leaf.common.schedule.enqueued {
+            let admitted = self.enqueue_ready(event);
+            if !admitted && let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) {
+                leaf.common.schedule.enqueued = false;
+            }
+        }
+        self.send_completions = completions;
+        let mut poll_buffer = std::mem::take(&mut self.poll_buffer);
+        for event in poll_buffer.drain(..) {
+            if self.connecting.contains_key(&event.key) {
+                if self.finish_connecting(event)
+                    && self
+                        .leaves
+                        .get(event.key.0)
+                        .and_then(Option::as_ref)
+                        .is_some()
+                {
+                    if let Some(leaf) = self.leaf_mut(event.key) {
+                        leaf.common.schedule.enqueued = true;
+                    }
+                    if !self.enqueue_ready(event)
+                        && let Some(leaf) = self.leaf_mut(event.key)
+                    {
+                        leaf.common.schedule.enqueued = false;
+                    }
+                }
                 continue;
             }
-            leaf.common.schedule.enqueued = true;
-            self.ready.push_back(event);
+            if self
+                .leaves
+                .get(event.key.0)
+                .and_then(Option::as_ref)
+                .is_none()
+            {
+                continue;
+            }
+            if self
+                .leaves
+                .get(event.key.0)
+                .and_then(Option::as_ref)
+                .is_some_and(|leaf| leaf.common.schedule.enqueued)
+            {
+                continue;
+            }
+            if let Some(leaf) = self.leaf_mut(event.key) {
+                leaf.common.schedule.enqueued = true;
+            }
+            if !self.enqueue_ready(event)
+                && let Some(leaf) = self.leaf_mut(event.key)
+            {
+                leaf.common.schedule.enqueued = false;
+            }
         }
+        self.poll_buffer = poll_buffer;
     }
 
     /// Visit the next ready leaf, then re-register its poller interest to
@@ -735,11 +690,21 @@ where
             },
             feed,
             budget,
+            &mut self.poller,
+            event.key,
         );
 
         let (progress, decision) = match result {
             EngineVisitResult::StaleGeneration => return Some((None, VisitDecision::Suspend)),
-            EngineVisitResult::Visited(outcome) => (outcome.progress, outcome.decision),
+            EngineVisitResult::Visited(outcome) => {
+                if matches!(
+                    &outcome.progress,
+                    crate::media::egress::backend::EngineProgress::Yield
+                ) {
+                    self.budget_exhaustions = self.budget_exhaustions.saturating_add(1);
+                }
+                (outcome.progress, outcome.decision)
+            }
         };
         if matches!(
             progress,
@@ -751,6 +716,17 @@ where
             .engine
             .pending_application_bytes()
             .saturating_add(leaf.transport.rustls_pending_bytes_estimate());
+        let feed_waiting = matches!(decision, VisitDecision::Suspend)
+            && leaf.common.schedule.wants_feed_wake
+            && !leaf.common.schedule.enqueued
+            && !leaf.common.schedule.feed_wake_queued;
+        if feed_waiting {
+            let admitted = push_bounded(&mut self.feed_waiting, event.key, self.queue_capacity);
+            if !admitted {
+                self.queue_overflows = self.queue_overflows.saturating_add(1);
+            }
+            leaf.common.schedule.feed_wake_queued = admitted;
+        }
 
         // A draining leaf (see `begin_graceful_close`) that has now flushed
         // everything it had queued closes right here — no need to wait for
@@ -823,6 +799,22 @@ where
 {
     fn resync_count(&self) -> u64 {
         self.resync_count
+    }
+
+    fn budget_exhaustion_count(&self) -> u64 {
+        self.budget_exhaustions
+    }
+
+    fn observe_metrics(&self, metrics: &mut ShardMetrics) {
+        let native = self.poller.native_metrics();
+        metrics.tx_packets = self.native_tx_packets;
+        metrics.tx_bytes = self.native_tx_bytes;
+        metrics.sqes = native.sqes;
+        metrics.cqes = native.completions;
+        metrics.stale_completions = native.stale_completions;
+        metrics.cq_overflows = native.cq_overflows;
+        metrics.budget_exhaustions = self.budget_exhaustions;
+        metrics.queue_overflows = self.queue_overflows;
     }
 
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
@@ -900,10 +892,11 @@ where
     }
 
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
-        let mut resolved = Vec::new();
+        let mut resolved = std::mem::take(&mut self.resolved_connects);
+        resolved.clear();
         self.resolve_completions.drain_resolved(&mut resolved);
         let mut connected_any = false;
-        for completion in resolved {
+        for completion in resolved.drain(..) {
             let connected = self.complete_pending_connect(
                 &completion.output_id,
                 completion.generation,
@@ -911,6 +904,8 @@ where
             );
             connected_any |= connected;
         }
+        self.resolved_connects = resolved;
+        self.sweep_connecting_leaves(Instant::now());
         self.sweep_stalled_leaves(Instant::now());
         if connected_any {
             EgressShardCommandEffect::ScheduleReady { count: 1 }
@@ -934,6 +929,11 @@ where
                     crate::media::egress::backend::CloseReason::ShardShutdown,
                 );
             }
+        }
+        let connecting = std::mem::take(&mut self.connecting);
+        self.connecting_by_output.clear();
+        for (_, connecting) in connecting {
+            let _ = self.poller.remove(connecting.stream.as_raw_fd());
         }
     }
 }
@@ -959,6 +959,9 @@ where
         )
     }
 }
+
+#[path = "rtmp_shard_connect.rs"]
+mod rtmp_shard_connect;
 
 #[path = "rtmp_shard_drain.rs"]
 mod rtmp_shard_drain;

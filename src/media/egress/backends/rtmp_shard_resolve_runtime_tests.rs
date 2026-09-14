@@ -1,10 +1,13 @@
 use super::*;
 use crate::media::egress::backends::rtmp_shard::EmptyRtmpPublishStartupSource;
 use crate::media::egress::backends::tcp::TcpEgressPoller;
+use crate::media::egress::command::ShardId;
 use crate::media::egress::command::{FeedId, OutputId};
 use crate::media::egress::journal::FeedEpoch;
 use crate::media::egress::leaf::EgressProgressSink;
+use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::LeafPolicy;
+use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use rml_rtmp::handshake::{
     Handshake as PeerHandshake, HandshakeProcessResult as PeerResult, PeerType,
 };
@@ -52,6 +55,7 @@ fn add_command_spawns_a_resolve_worker_reaped_on_next_media_tick() {
         crate::media::rtmp::rustls_client_config(),
         EmptyRtmpPublishStartupSource,
         Duration::from_secs(3),
+        8,
     );
 
     backend.on_command(EgressCommand::Add(output_spec(
@@ -59,7 +63,10 @@ fn add_command_spawns_a_resolve_worker_reaped_on_next_media_tick() {
         "rtmp://127.0.0.1:1/live/key",
         1,
     )));
-    assert_eq!(backend.worker_count(), 1);
+    assert!(
+        backend.resolve_workers.worker.is_some(),
+        "each shard owns one resolver worker regardless of output count"
+    );
 
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while backend.worker_count() > 0 {
@@ -82,6 +89,7 @@ fn invalid_url_spawns_no_resolve_worker() {
         crate::media::rtmp::rustls_client_config(),
         EmptyRtmpPublishStartupSource,
         Duration::from_secs(3),
+        8,
     );
 
     backend.on_command(EgressCommand::Add(output_spec("out-1", "not a url", 1)));
@@ -190,6 +198,7 @@ fn add_command_resolves_connects_and_reaches_publish_accepted_against_a_real_pee
         crate::media::rtmp::rustls_client_config(),
         EmptyRtmpPublishStartupSource,
         Duration::from_secs(3),
+        8,
     );
 
     backend.on_command(EgressCommand::Add(output_spec(
@@ -213,4 +222,39 @@ fn add_command_resolves_connects_and_reaches_publish_accepted_against_a_real_pee
     }
 
     server.join().unwrap();
+}
+
+struct ForwardingProbe;
+
+impl EgressShardBackend for ForwardingProbe {
+    fn on_command(&mut self, _command: EgressCommand) -> EgressShardCommandEffect {
+        EgressShardCommandEffect::Continue
+    }
+
+    fn resync_count(&self) -> u64 {
+        7
+    }
+
+    fn budget_exhaustion_count(&self) -> u64 {
+        11
+    }
+
+    fn observe_metrics(&self, metrics: &mut ShardMetrics) {
+        metrics.cq_overflows = 13;
+    }
+}
+
+#[test]
+fn resolving_rtmp_backend_forwards_metrics() {
+    let (completion_sender, _completion_queue) = rtmp_resolve_completion_queue(1);
+    let backend = ResolvingRtmpShardBackend::new(
+        ForwardingProbe,
+        RtmpResolveWorkerSet::new(completion_sender),
+    );
+    let mut metrics = ShardMetrics::new(ShardId::new(0));
+
+    assert_eq!(backend.resync_count(), 7);
+    assert_eq!(backend.budget_exhaustion_count(), 11);
+    backend.observe_metrics(&mut metrics);
+    assert_eq!(metrics.cq_overflows, 13);
 }

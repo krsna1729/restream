@@ -111,6 +111,26 @@ fn ring_feed_reads_pushed_packets() {
 }
 
 #[test]
+fn ring_feed_reuses_caller_owned_batch_storage() {
+    let ring = Arc::new(RingBuffer::new(16));
+    let epoch = Arc::new(FeedEpoch::new());
+    push_packet(&ring, b"first", true);
+    push_packet(&ring, b"second", false);
+
+    let feed = RingFeed::new(ring, epoch);
+    let mut units = Vec::with_capacity(4);
+    let storage = units.as_ptr();
+    let result = feed.read_from_into(FeedCursor::new(0, 0), ReadBudget::default(), &mut units);
+
+    assert!(
+        matches!(result, FeedRead::Units { next_cursor, .. } if next_cursor.next_sequence == 2)
+    );
+    assert_eq!(units.len(), 2);
+    assert_eq!(units.as_ptr(), storage);
+    assert_eq!(&*units[1].payload, b"second");
+}
+
+#[test]
 fn ring_feed_epoch_mismatch() {
     let ring = Arc::new(RingBuffer::new(16));
     let epoch = Arc::new(FeedEpoch::new());

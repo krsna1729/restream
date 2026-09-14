@@ -10,12 +10,12 @@
 //! — the same pure, socket-independent state the existing Tokio-adapted
 //! egress path uses in `src/media/rtmp/egress_connection.rs` and
 //! `src/media/rtmp/egress_engine.rs`), here driven from non-blocking
-//! readiness instead of `.await`. Not yet wired into a shard backend (leaf
-//! registration, poller integration, application-layer startup handoff) —
-//! see `docs/archive/egress/implementation.md` Phase 5 status.
+//! readiness instead of `.await`, with shard registration and application
+//! startup handoff supplied by the surrounding RTMP backend.
 
 use std::collections::VecDeque;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, IoSlice, Read, Write};
+use std::os::unix::io::RawFd;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -32,181 +32,60 @@ use crate::media::egress::policy::WorkBudget;
 use crate::media::metadata::AudioMeta;
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use crate::media::rtmp::{
-    RtmpMediaAction, RtmpMediaEncoder, RtmpSessionCore, RtmpSessionError, RtmpSessionEvent,
-    RtmpUrlParts, resolve_deferred_audio_sequence_header, validate_rtmp_output_audio_packet_track,
+    RtmpMediaAction, RtmpMediaEncoder, RtmpSessionCore, RtmpUrlParts,
+    resolve_deferred_audio_sequence_header, validate_rtmp_output_audio_packet_track,
 };
 
 use super::rtmp_connection::RtmpConnection;
 use super::rtmp_handshake::{HandshakeOutcome, NonBlockingRtmpHandshake};
+use rtmp_negotiation::{SessionAdvanceOutcome, SessionNegotiation};
+
+#[path = "rtmp_negotiation.rs"]
+mod rtmp_negotiation;
+
+#[path = "rtmp_wire.rs"]
+mod rtmp_wire;
+
+use rtmp_wire::RtmpWireMessage;
 
 const SESSION_READ_BUFFER: usize = 4096;
+const MAX_VECTORED_PACKETS: usize = 16;
 
-struct PendingWrite {
-    bytes: Bytes,
-    offset: usize,
-}
-
-impl PendingWrite {
-    fn new(bytes: Bytes) -> Option<Self> {
-        if bytes.is_empty() {
-            None
-        } else {
-            Some(Self { bytes, offset: 0 })
-        }
-    }
-
-    fn remaining(&self) -> &[u8] {
-        &self.bytes[self.offset..]
-    }
-
-    fn is_complete(&self) -> bool {
-        self.offset >= self.bytes.len()
-    }
-}
-
-enum SessionAdvanceOutcome {
-    Pending(Interest),
-    PublishAccepted,
-    Failed(String),
-}
-
-/// Drives connect/publish request negotiation over an already-handshaken
-/// transport, reusing [`RtmpSessionCore`]'s pure protocol calls. Bounded to
-/// at most one read or one write syscall per [`Self::advance`] call, matching
-/// [`NonBlockingRtmpHandshake`]'s per-visit work discipline.
-struct SessionNegotiation {
-    core: RtmpSessionCore,
-    outbound: VecDeque<Bytes>,
-    pending_write: Option<PendingWrite>,
-    unread: Vec<u8>,
-    publish_accepted: bool,
-}
-
-impl SessionNegotiation {
-    fn new(
-        mut core: RtmpSessionCore,
-        carried_over: Vec<u8>,
-        enhanced: bool,
-    ) -> Result<Self, String> {
-        let mut outbound: VecDeque<Bytes> = core.take_initial_packets().into();
-        outbound.push_back(core.request_connection(enhanced)?);
-        Ok(Self {
-            core,
-            outbound,
-            pending_write: None,
-            unread: carried_over,
-            publish_accepted: false,
-        })
-    }
-
-    fn advance(
+/// Shard-owned native TCP submission. The implementation retains the
+/// pointed-to bytes until the matching CQE is delivered; `MediaPublisher`
+/// keeps its `PendingWrite` in place while a send is in flight.
+pub(crate) trait RtmpNativeSender {
+    fn submit_send(
         &mut self,
-        stream: &mut RtmpConnection,
-        readiness: Readiness,
-    ) -> SessionAdvanceOutcome {
-        if let Some(pending) = &mut self.pending_write {
-            if !readiness.writable {
-                return SessionAdvanceOutcome::Pending(Interest::WRITE);
-            }
-            match stream.write(pending.remaining()) {
-                Ok(0) => {
-                    return SessionAdvanceOutcome::Failed("peer closed during write".to_string());
-                }
-                Ok(n) => {
-                    pending.offset += n;
-                    if !pending.is_complete() {
-                        return SessionAdvanceOutcome::Pending(Interest::WRITE);
-                    }
-                    self.pending_write = None;
-                }
-                Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                    return SessionAdvanceOutcome::Pending(stream.interest_hint(Interest::WRITE));
-                }
-                Err(error) => return SessionAdvanceOutcome::Failed(error.to_string()),
-            }
-        }
+        fd: RawFd,
+        slot: u32,
+        generation: u64,
+        bytes: &[u8],
+    ) -> io::Result<()>;
 
-        if self.pending_write.is_none() {
-            while self.pending_write.is_none() {
-                match self.outbound.pop_front() {
-                    Some(next) => self.pending_write = PendingWrite::new(next),
-                    None => break,
-                }
-            }
-            if self.pending_write.is_some() {
-                return SessionAdvanceOutcome::Pending(Interest::WRITE);
-            }
-        }
-
-        if !self.unread.is_empty() {
-            let input = std::mem::take(&mut self.unread);
-            return match self.core.handle_server_input(&input) {
-                Ok((packets, events)) => {
-                    self.outbound.extend(packets);
-                    if events
-                        .iter()
-                        .any(|event| matches!(event, RtmpSessionEvent::PublishRequestAccepted))
-                    {
-                        self.publish_accepted = true;
-                    }
-                    // `pending_write` is guaranteed `None` here (only ever
-                    // set from `outbound`, which is drained to a fresh
-                    // `pending_write` before this branch is ever reached —
-                    // see the loop above). So if the publish-accept response
-                    // needed no further packets queued (`outbound` still
-                    // empty after `extend`), completion is knowable in this
-                    // same call — report it directly instead of returning
-                    // `Pending(READ)` and relying on a *separate* future
-                    // call to notice `self.publish_accepted` was already
-                    // set. That extra call previously depended on the
-                    // poller happening to deliver one more (any) readiness
-                    // event after this one — true by luck under the old
-                    // per-visit registration timing, but not guaranteed,
-                    // and a narrower registration (e.g. read-only, exactly
-                    // what this call itself requests below) could
-                    // legitimately never fire again if the peer has nothing
-                    // further to send, stalling a fully-negotiated
-                    // connection indefinitely.
-                    if self.publish_accepted && self.outbound.is_empty() {
-                        return SessionAdvanceOutcome::PublishAccepted;
-                    }
-                    let interest = if self.outbound.is_empty() {
-                        Interest::READ
-                    } else {
-                        Interest::WRITE
-                    };
-                    SessionAdvanceOutcome::Pending(interest)
-                }
-                Err(RtmpSessionError::ConnectionRejected(description)) => {
-                    SessionAdvanceOutcome::Failed(format!("connection rejected: {description}"))
-                }
-                Err(other) => SessionAdvanceOutcome::Failed(other.to_string()),
-            };
-        }
-
-        if self.publish_accepted && self.outbound.is_empty() && self.pending_write.is_none() {
-            return SessionAdvanceOutcome::PublishAccepted;
-        }
-
-        if !readiness.readable {
-            return SessionAdvanceOutcome::Pending(Interest::READ);
-        }
-
-        let mut buffer = [0u8; SESSION_READ_BUFFER];
-        match stream.read(&mut buffer) {
-            Ok(0) => {
-                SessionAdvanceOutcome::Failed("peer closed during session negotiation".to_string())
-            }
-            Ok(n) => {
-                self.unread = buffer[..n].to_vec();
-                SessionAdvanceOutcome::Pending(Interest::READ_WRITE)
-            }
-            Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                SessionAdvanceOutcome::Pending(stream.interest_hint(Interest::READ))
-            }
-            Err(error) => SessionAdvanceOutcome::Failed(error.to_string()),
+    fn submit_send_vectored(
+        &mut self,
+        fd: RawFd,
+        slot: u32,
+        generation: u64,
+        buffers: &[&[u8]],
+    ) -> io::Result<()> {
+        if buffers.len() == 1 {
+            self.submit_send(fd, slot, generation, buffers[0])
+        } else {
+            Err(io::Error::new(
+                ErrorKind::Unsupported,
+                "native sender has no vectored path",
+            ))
         }
     }
+}
+
+pub(crate) struct RtmpNativeSend<'a> {
+    pub(crate) sender: &'a mut dyn RtmpNativeSender,
+    pub(crate) slot: u32,
+    pub(crate) generation: u64,
+    pub(crate) send_result: Option<i32>,
 }
 
 /// Startup context needed to begin RTMP media publication once the peer
@@ -228,6 +107,60 @@ pub(crate) struct RtmpPublishStartup {
     pub(crate) startup_audio_sequence_header: Option<Bytes>,
     pub(crate) deferred_audio_sequence_header: Option<Bytes>,
     pub(crate) defer_audio_until_video_ready: bool,
+}
+
+#[allow(clippy::large_enum_variant)]
+enum MediaWirePacket {
+    Bytes(Bytes),
+    Vectored(RtmpWireMessage),
+}
+
+impl MediaWirePacket {
+    fn len(&self) -> usize {
+        match self {
+            Self::Bytes(bytes) => bytes.len(),
+            Self::Vectored(message) => message.remaining_len(),
+        }
+    }
+}
+
+#[allow(clippy::large_enum_variant)]
+enum MediaPendingWrite {
+    Bytes { bytes: Bytes, offset: usize },
+    Vectored(RtmpWireMessage),
+}
+
+impl MediaPendingWrite {
+    fn new(packet: MediaWirePacket) -> Option<Self> {
+        match packet {
+            MediaWirePacket::Bytes(bytes) if bytes.is_empty() => None,
+            MediaWirePacket::Bytes(bytes) => Some(Self::Bytes { bytes, offset: 0 }),
+            MediaWirePacket::Vectored(message) => Some(Self::Vectored(message)),
+        }
+    }
+
+    fn remaining_len(&self) -> usize {
+        match self {
+            Self::Bytes { bytes, offset } => bytes.len().saturating_sub(*offset),
+            Self::Vectored(message) => message.remaining_len(),
+        }
+    }
+
+    fn is_complete(&self) -> bool {
+        self.remaining_len() == 0
+    }
+
+    fn consume(&mut self, bytes: usize) {
+        match self {
+            Self::Bytes {
+                bytes: buffer,
+                offset,
+            } => {
+                *offset = offset.saturating_add(bytes).min(buffer.len());
+            }
+            Self::Vectored(message) => message.consume(bytes),
+        }
+    }
 }
 
 /// Drains `RingFeed` media units into non-blocking RTMP wire writes, reusing
@@ -255,22 +188,20 @@ struct MediaPublisher {
     /// startup batch (metadata + sequence headers, queued once in `new` and
     /// never counted against `budget.max_units`) or one feed unit's encoded
     /// packets.
-    current_batch: VecDeque<Bytes>,
-    pending_write: Option<PendingWrite>,
+    current_batch: VecDeque<MediaWirePacket>,
+    pending_write: Option<MediaPendingWrite>,
+    native_send_pending: bool,
     /// True once a feed-derived unit's packets have been queued into
     /// `current_batch` but not yet counted as consumed — distinguishes "just
     /// finished flushing a real unit" from "nothing queued yet" so the
     /// startup batch is never miscounted as feed progress.
     unit_in_flight: bool,
     actions: Vec<RtmpMediaAction>,
-    /// Units already pulled from the feed but not yet encoded. Refilled from
-    /// `feed.read_from` in bursts of up to `FEED_READ_BURST` units instead of
-    /// one `read_from` call (with its own `Vec` allocation and ring-atomic
-    /// traffic) per unit — matching the legacy Tokio path's up-to-32-packet
-    /// pull (`src/media/rtmp/egress.rs`) and avoiding the class of
-    /// per-unit-call overhead an earlier optimization already removed once
-    /// (see `docs/archive/egress/implementation.md` Phase 5 status).
-    pending_units: VecDeque<Arc<MediaPacket>>,
+    /// Units already pulled from the feed but not yet encoded. Refilled into
+    /// this preallocated storage in bursts of up to `FEED_READ_BURST` units
+    /// instead of allocating a new read vector for every visit.
+    pending_units: Vec<Arc<MediaPacket>>,
+    pending_units_index: usize,
 }
 
 /// Feed units pulled per `feed.read_from` refill once `pending_units` is
@@ -283,19 +214,19 @@ impl MediaPublisher {
             startup.enhanced_hevc_video,
             startup.raw_video_parameter_sets,
         );
-        let mut current_batch = VecDeque::new();
+        let mut current_batch = VecDeque::with_capacity(32);
 
         if let Some(metadata) = startup.publish_metadata.as_ref() {
-            current_batch.push_back(
+            current_batch.push_back(MediaWirePacket::Bytes(
                 core.publish_metadata(metadata)
                     .map_err(|error| error.to_string())?,
-            );
+            ));
         }
         if let Some(video_sequence_header) = startup.startup_video_sequence_header {
             let (wire, _) = core
                 .publish_video_data(video_sequence_header, RtmpTimestamp::new(0), false)
                 .map_err(|error| error.to_string())?;
-            current_batch.push_back(wire);
+            current_batch.push_back(MediaWirePacket::Bytes(wire));
             encoder.set_startup_video_config(startup.startup_video_config);
         }
         let mut audio_sequence_header_sent = false;
@@ -303,7 +234,7 @@ impl MediaPublisher {
             let (wire, _) = core
                 .publish_audio_data(audio_sequence_header, RtmpTimestamp::new(0), false)
                 .map_err(|error| error.to_string())?;
-            current_batch.push_back(wire);
+            current_batch.push_back(MediaWirePacket::Bytes(wire));
             audio_sequence_header_sent = true;
         }
 
@@ -320,9 +251,11 @@ impl MediaPublisher {
             defer_audio_until_video_ready: startup.defer_audio_until_video_ready,
             current_batch,
             pending_write: None,
+            native_send_pending: false,
             unit_in_flight: false,
             actions: Vec::with_capacity(2),
-            pending_units: VecDeque::new(),
+            pending_units: Vec::with_capacity(FEED_READ_BURST),
+            pending_units_index: 0,
         })
     }
 
@@ -340,8 +273,8 @@ impl MediaPublisher {
         let pending_write_remaining = self
             .pending_write
             .as_ref()
-            .map_or(0, |pending| pending.remaining().len());
-        let queued_batch: usize = self.current_batch.iter().map(Bytes::len).sum();
+            .map_or(0, MediaPendingWrite::remaining_len);
+        let queued_batch: usize = self.current_batch.iter().map(MediaWirePacket::len).sum();
         pending_write_remaining + queued_batch
     }
 
@@ -366,7 +299,7 @@ impl MediaPublisher {
                     .core
                     .publish_audio_data(sequence_header, RtmpTimestamp::new(0), false)
                     .map_err(|error| error.to_string())?;
-                self.current_batch.push_back(wire);
+                self.current_batch.push_back(MediaWirePacket::Bytes(wire));
                 self.audio_sequence_header_sent = true;
                 self.deferred_audio_sequence_header = None;
             }
@@ -386,23 +319,54 @@ impl MediaPublisher {
                     payload,
                     timestamp,
                     can_be_dropped,
-                } => {
-                    self.core
-                        .publish_video_data(payload, timestamp, can_be_dropped)
-                        .map_err(|error| error.to_string())?
-                        .0
-                }
+                } => self.media_wire_packet(9, payload, timestamp, can_be_dropped)?,
                 RtmpMediaAction::Audio { payload, timestamp } => {
-                    self.core
-                        .publish_audio_data(payload, timestamp, false)
-                        .map_err(|error| error.to_string())?
-                        .0
+                    self.media_wire_packet(8, payload, timestamp, false)?
                 }
             };
             self.current_batch.push_back(wire);
         }
         self.actions = actions;
         Ok(())
+    }
+
+    fn media_wire_packet(
+        &mut self,
+        type_id: u8,
+        payload: Bytes,
+        timestamp: RtmpTimestamp,
+        can_be_dropped: bool,
+    ) -> Result<MediaWirePacket, String> {
+        let generated = if self.core.media_stream_id().is_none() {
+            Some(match type_id {
+                8 => self
+                    .core
+                    .publish_audio_data(payload.clone(), timestamp, can_be_dropped),
+                9 => self
+                    .core
+                    .publish_video_data(payload.clone(), timestamp, can_be_dropped),
+                _ => unreachable!("only RTMP audio and video are media wire messages"),
+            })
+        } else {
+            None
+        };
+        let stream_id = self.core.media_stream_id();
+        let Some(stream_id) = stream_id else {
+            let wire = generated
+                .ok_or_else(|| "RTMP media stream id was not established".to_string())?
+                .map_err(|error| error.to_string())?
+                .0;
+            return Ok(MediaWirePacket::Bytes(wire));
+        };
+        RtmpWireMessage::new(
+            type_id,
+            timestamp,
+            stream_id,
+            payload,
+            self.core.chunk_size(),
+        )
+        .map(MediaWirePacket::Vectored)
+        .map_err(str::to_string)
     }
 
     fn advance(
@@ -412,6 +376,18 @@ impl MediaPublisher {
         feed: &RingFeed,
         cursor: &mut FeedCursor,
         budget: WorkBudget,
+    ) -> EngineProgress {
+        self.advance_with_native(stream, readiness, feed, cursor, budget, None)
+    }
+
+    fn advance_with_native(
+        &mut self,
+        stream: &mut RtmpConnection,
+        readiness: Readiness,
+        feed: &RingFeed,
+        cursor: &mut FeedCursor,
+        budget: WorkBudget,
+        mut native: Option<RtmpNativeSend<'_>>,
     ) -> EngineProgress {
         let mut total_bytes = 0usize;
         let mut total_units = 0usize;
@@ -437,7 +413,94 @@ impl MediaPublisher {
                 );
             }
 
+            if self.native_send_pending {
+                let Some(result) = native.as_mut().and_then(|native| native.send_result.take())
+                else {
+                    return Self::finish(
+                        total_bytes,
+                        total_units,
+                        WaitCondition::Io(Interest::READ_WRITE),
+                    );
+                };
+                self.native_send_pending = false;
+                if result <= 0 {
+                    return EngineProgress::Failed(ProtocolFailure {
+                        reason: "rtmp_media_write",
+                        detail: if result == 0 {
+                            "peer closed during write".to_string()
+                        } else {
+                            io::Error::from_raw_os_error(-result).to_string()
+                        },
+                        retryable: true,
+                    });
+                }
+                let written = usize::try_from(result).unwrap_or(usize::MAX);
+                total_bytes = total_bytes.saturating_add(written);
+                let Some(pending) = &mut self.pending_write else {
+                    return EngineProgress::Failed(ProtocolFailure {
+                        reason: "rtmp_media_write",
+                        detail: "native send completed without a pending buffer".to_string(),
+                        retryable: false,
+                    });
+                };
+                pending.consume(written);
+                if pending.is_complete() {
+                    self.pending_write = None;
+                }
+                if self.pending_write.is_some() {
+                    continue;
+                }
+            }
+
             if let Some(pending) = &mut self.pending_write {
+                if let Some(native) = native.as_mut()
+                    && stream.supports_native_send()
+                {
+                    let result = match pending {
+                        MediaPendingWrite::Bytes { bytes, offset } => native.sender.submit_send(
+                            stream.raw_fd(),
+                            native.slot,
+                            native.generation,
+                            &bytes[*offset..],
+                        ),
+                        MediaPendingWrite::Vectored(message) => {
+                            let mut buffers: [&[u8]; MAX_VECTORED_PACKETS] =
+                                [&[]; MAX_VECTORED_PACKETS];
+                            let (count, _) = message
+                                .fill_buffers(budget.remaining_bytes(total_bytes), &mut buffers);
+                            native.sender.submit_send_vectored(
+                                stream.raw_fd(),
+                                native.slot,
+                                native.generation,
+                                &buffers[..count],
+                            )
+                        }
+                    };
+                    match result {
+                        Ok(()) => {
+                            self.native_send_pending = true;
+                            return Self::finish(
+                                total_bytes,
+                                total_units,
+                                WaitCondition::Io(Interest::READ_WRITE),
+                            );
+                        }
+                        Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                            return Self::finish(
+                                total_bytes,
+                                total_units,
+                                WaitCondition::Io(Interest::READ_WRITE),
+                            );
+                        }
+                        Err(error) => {
+                            return EngineProgress::Failed(ProtocolFailure {
+                                reason: "rtmp_media_submit",
+                                detail: error.to_string(),
+                                retryable: true,
+                            });
+                        }
+                    }
+                }
                 if !readiness.writable {
                     return Self::finish(
                         total_bytes,
@@ -445,7 +508,21 @@ impl MediaPublisher {
                         WaitCondition::Io(Interest::READ_WRITE),
                     );
                 }
-                match stream.write(pending.remaining()) {
+                let result = match pending {
+                    MediaPendingWrite::Bytes { bytes, offset } => stream.write(&bytes[*offset..]),
+                    MediaPendingWrite::Vectored(message) => {
+                        let mut buffers: [&[u8]; MAX_VECTORED_PACKETS] =
+                            [&[]; MAX_VECTORED_PACKETS];
+                        let (count, _) =
+                            message.fill_buffers(budget.remaining_bytes(total_bytes), &mut buffers);
+                        let mut slices = [IoSlice::new(&[]); MAX_VECTORED_PACKETS];
+                        for (slice, buffer) in slices.iter_mut().zip(&buffers[..count]) {
+                            *slice = IoSlice::new(buffer);
+                        }
+                        stream.write_vectored(&slices[..count])
+                    }
+                };
+                match result {
                     Ok(0) => {
                         return EngineProgress::Failed(ProtocolFailure {
                             reason: "rtmp_media_write",
@@ -454,7 +531,7 @@ impl MediaPublisher {
                         });
                     }
                     Ok(n) => {
-                        pending.offset += n;
+                        pending.consume(n);
                         total_bytes += n;
                         if !pending.is_complete() {
                             return Self::finish(
@@ -489,7 +566,7 @@ impl MediaPublisher {
             if self.pending_write.is_none()
                 && let Some(next) = self.current_batch.pop_front()
             {
-                self.pending_write = PendingWrite::new(next);
+                self.pending_write = MediaPendingWrite::new(next);
                 continue;
             }
 
@@ -527,7 +604,8 @@ impl MediaPublisher {
                     }
                     Ok(n) => match self.core.handle_server_input(&buffer[..n]) {
                         Ok((packets, _events)) => {
-                            self.current_batch.extend(packets);
+                            self.current_batch
+                                .extend(packets.into_iter().map(MediaWirePacket::Bytes));
                             continue;
                         }
                         Err(error) => {
@@ -549,12 +627,15 @@ impl MediaPublisher {
                 }
             }
 
-            if self.pending_units.is_empty() {
-                match feed.read_from(*cursor, ReadBudget::new(FEED_READ_BURST, budget.max_bytes)) {
-                    FeedRead::Units { units, next_cursor } => {
-                        *cursor = next_cursor;
-                        self.pending_units.extend(units);
-                    }
+            if self.pending_units_index >= self.pending_units.len() {
+                self.pending_units.clear();
+                self.pending_units_index = 0;
+                match feed.read_from_into(
+                    *cursor,
+                    ReadBudget::new(FEED_READ_BURST, budget.max_bytes),
+                    &mut self.pending_units,
+                ) {
+                    FeedRead::Units { next_cursor, .. } => *cursor = next_cursor,
                     FeedRead::Empty => {
                         return Self::finish(
                             total_bytes,
@@ -568,13 +649,14 @@ impl MediaPublisher {
                 }
             }
 
-            let Some(packet) = self.pending_units.pop_front() else {
+            let Some(packet) = self.pending_units.get(self.pending_units_index).cloned() else {
                 return Self::finish(
                     total_bytes,
                     total_units,
                     WaitCondition::FeedOrIo(Interest::READ),
                 );
             };
+            self.pending_units_index += 1;
             if let Err(detail) = self.encode_unit(&packet) {
                 return EngineProgress::Failed(ProtocolFailure {
                     reason: "rtmp_media_encode",
@@ -660,9 +742,41 @@ impl RtmpFabricEngine {
     #[cfg(test)]
     pub(crate) fn publisher_pending_units_len(&self) -> Option<usize> {
         match &self.state {
-            Some(RtmpFabricState::Publishing(publisher)) => Some(publisher.pending_units.len()),
+            Some(RtmpFabricState::Publishing(publisher)) => Some(
+                publisher
+                    .pending_units
+                    .len()
+                    .saturating_sub(publisher.pending_units_index),
+            ),
             _ => None,
         }
+    }
+
+    /// Advance the publishing state with the shard's native send owner. The
+    /// handshake and negotiation states intentionally keep their synchronous
+    /// Rustls/RTMP writes; they run only during connection setup and may not
+    /// submit raw plaintext through a not-yet-handover RTMPS socket.
+    pub(crate) fn advance_native(
+        &mut self,
+        transport: &mut RtmpConnection,
+        readiness: Readiness,
+        feed: &RingFeed,
+        cursor: &mut FeedCursor,
+        budget: WorkBudget,
+        native: RtmpNativeSend<'_>,
+    ) -> EngineProgress {
+        if !matches!(self.state, Some(RtmpFabricState::Publishing(_))) {
+            return <Self as ProtocolEngine>::advance(
+                self, transport, readiness, feed, cursor, budget,
+            );
+        }
+        let Some(RtmpFabricState::Publishing(mut publisher)) = self.state.take() else {
+            unreachable!("publishing state was checked above")
+        };
+        let progress =
+            publisher.advance_with_native(transport, readiness, feed, cursor, budget, Some(native));
+        self.state = Some(RtmpFabricState::Publishing(publisher));
+        progress
     }
 }
 

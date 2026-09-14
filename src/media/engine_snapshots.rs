@@ -219,6 +219,26 @@ impl MediaEngine {
                 .rx_queue_max_bytes
                 .load(Ordering::Relaxed),
             drops: self.runtime.listener_stats.drops.load(Ordering::Relaxed),
+            native_rx_datagrams: self
+                .runtime
+                .listener_stats
+                .native_rx_datagrams
+                .load(Ordering::Relaxed),
+            native_tx_datagrams: self
+                .runtime
+                .listener_stats
+                .native_tx_datagrams
+                .load(Ordering::Relaxed),
+            native_rx_pool_drops: self
+                .runtime
+                .listener_stats
+                .native_rx_pool_drops
+                .load(Ordering::Relaxed),
+            native_rx_channel_drops: self
+                .runtime
+                .listener_stats
+                .native_rx_channel_drops
+                .load(Ordering::Relaxed),
             active_ingest_count: self.active_ingest_count().await,
         }
     }

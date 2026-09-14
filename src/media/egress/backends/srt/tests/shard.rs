@@ -212,7 +212,7 @@ fn srt_pending_connect_spec_builds_expected_connect_config() {
     let pending = backend
         .pending_connect(&OutputId::new("out-a"))
         .expect("pending connect");
-    let config = pending.connect_spec.connect_config(&peer_addrs, None);
+    let config = pending.connect_spec.connect_config(&peer_addrs);
     assert_eq!(config.peer_addrs(), &peer_addrs);
     assert_eq!(config.stream_id(), "publish:key");
     assert_eq!(config.connect_timeout_ms(), 30000);
@@ -443,9 +443,9 @@ fn poll_ready_drive_of_the_shared_muxer_does_not_scale_with_leaf_count() {
 
     // Connecting drives the table too, so measure the delta across exactly
     // one readiness pass rather than the absolute count.
-    let before = state.lock().unwrap().as_ref().unwrap().drive_calls();
+    let before = backend.shared_srt_egress.as_ref().unwrap().drive_calls();
     backend.on_ready();
-    let after = state.lock().unwrap().as_ref().unwrap().drive_calls();
+    let after = backend.shared_srt_egress.as_ref().unwrap().drive_calls();
 
     assert_eq!(
         after - before,
@@ -515,6 +515,33 @@ fn srt_shard_backend_removed_leaf_ignores_late_readiness() {
     assert_eq!(backend.on_ready(), EgressShardCommandEffect::Continue);
     assert!(probe.sends.lock().unwrap().is_empty());
     assert_eq!(*probe.closed.lock().unwrap(), 1);
+}
+
+#[test]
+fn srt_shard_reuses_removed_leaf_slots() {
+    let mut backend = SrtShardBackend::new(
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    );
+    let first = shared_sender();
+    let first_key = backend.add_leaf(SrtFabricLeaf::new(common(7), Box::new(first.sender)));
+    backend.on_command(EgressCommand::Remove(OutputId::new("out-srt")));
+
+    assert_eq!(
+        backend.leaves.len(),
+        crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY
+    );
+    assert!(backend.leaves[first_key.0].is_none());
+
+    let second = shared_sender();
+    let second_key = backend.add_leaf(SrtFabricLeaf::new(common(8), Box::new(second.sender)));
+
+    assert_eq!(second_key, first_key);
+    assert_eq!(
+        backend.leaves.len(),
+        crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY
+    );
+    assert_eq!(backend.ready_candidates.len(), 1);
 }
 
 #[test]
@@ -728,4 +755,48 @@ fn on_ready_removes_leaf_on_close_decision() {
     backend.on_ready();
 
     assert!(backend.output_sockets.is_empty());
+}
+
+#[test]
+fn leaf_slots_are_fixed_and_exhaustion_does_not_grow_the_slab() {
+    let mut backend = SrtShardBackend::new(
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    )
+    .with_leaf_capacity(1);
+
+    assert_eq!(backend.leaves.len(), 1);
+    assert_eq!(backend.allocate_leaf_key(), Some(LeafKey(0)));
+    assert_eq!(backend.allocate_leaf_key(), None);
+    assert_eq!(backend.leaves.len(), 1);
+}
+
+#[test]
+fn ready_queue_rejection_is_counted_without_growing() {
+    let mut backend = SrtShardBackend::new(
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    )
+    .with_leaf_capacity(1);
+
+    assert!(backend.enqueue_ready_candidate(LeafKey(0)));
+    assert!(!backend.enqueue_ready_candidate(LeafKey(0)));
+    assert_eq!(backend.ready_candidates.len(), 1);
+    assert_eq!(backend.queue_overflows, 1);
+}
+
+#[test]
+fn pending_connect_admission_obeys_fixed_leaf_capacity() {
+    let mut backend = SrtShardBackend::new(
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    )
+    .with_leaf_capacity(1);
+    backend.on_command(EgressCommand::Add(srt_output_spec("out-a", 1)));
+    let (spec, terminated) = srt_output_spec_with_termination_flag("out-b", 1);
+    backend.on_command(EgressCommand::Add(spec));
+
+    assert!(backend.pending_connect(&OutputId::new("out-a")).is_some());
+    assert!(backend.pending_connect(&OutputId::new("out-b")).is_none());
+    assert!(terminated.load(std::sync::atomic::Ordering::Relaxed));
 }

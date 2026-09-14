@@ -28,6 +28,7 @@ pub struct EgressShardConfig {
     command_batch_budget: NonZeroUsize,
     readiness_batch_budget: NonZeroUsize,
     timer_batch_budget: NonZeroUsize,
+    leaf_capacity: NonZeroUsize,
     idle_wait: Duration,
     drain_timeout: Duration,
 }
@@ -37,6 +38,7 @@ impl EgressShardConfig {
     /// leaves before forcing a close, when no explicit
     /// [`Self::with_drain_timeout`] override is given.
     pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
+    pub const DEFAULT_LEAF_CAPACITY: usize = 4096;
 
     pub fn new(
         command_channel_capacity: usize,
@@ -58,9 +60,20 @@ impl EgressShardConfig {
             command_batch_budget,
             readiness_batch_budget,
             timer_batch_budget,
+            leaf_capacity: NonZeroUsize::new(Self::DEFAULT_LEAF_CAPACITY)
+                .expect("default leaf capacity is nonzero"),
             idle_wait,
             drain_timeout: Self::DEFAULT_DRAIN_TIMEOUT,
         })
+    }
+
+    /// Set the fixed number of reusable network leaf slots owned by each
+    /// shard. A shard rejects work after this bound rather than growing its
+    /// per-output storage indefinitely.
+    pub fn with_leaf_capacity(mut self, leaf_capacity: usize) -> Self {
+        self.leaf_capacity =
+            NonZeroUsize::new(leaf_capacity).expect("egress shard leaf capacity must be nonzero");
+        self
     }
 
     /// Override the drain-on-shutdown deadline. Tests use this for fast,
@@ -84,6 +97,10 @@ impl EgressShardConfig {
 
     pub fn readiness_batch_budget(self) -> NonZeroUsize {
         self.readiness_batch_budget
+    }
+
+    pub fn leaf_capacity(self) -> NonZeroUsize {
+        self.leaf_capacity
     }
 
     pub fn idle_wait(self) -> Duration {
@@ -167,6 +184,15 @@ pub trait EgressShardBackend: Send + 'static {
     fn resync_count(&self) -> u64 {
         0
     }
+
+    /// Total visits that stopped because their finite work budget was spent.
+    fn budget_exhaustion_count(&self) -> u64 {
+        0
+    }
+
+    /// Copy protocol-native counters into the shard snapshot. Backends that
+    /// do not own a native dataplane keep the default no-op.
+    fn observe_metrics(&self, _metrics: &mut ShardMetrics) {}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,13 +227,20 @@ impl FeedWakeHandle {
     /// transition, so at most one wake is in flight per shard.
     pub fn deliver(&self) -> Result<(), EgressShardSendError> {
         if self.gate.notify() {
-            return self
-                .sender
-                .try_send(EgressCommand::FeedWake)
-                .map_err(|err| match err {
-                    TrySendError::Full(_) => EgressShardSendError::Full,
-                    TrySendError::Disconnected(_) => EgressShardSendError::Closed,
-                });
+            return match self.sender.try_send(EgressCommand::FeedWake) {
+                Ok(()) => Ok(()),
+                Err(TrySendError::Full(_)) => {
+                    // No wake was delivered. Leave the gate clear so the
+                    // caller can retry, rather than permanently suppressing
+                    // every later publication for this shard.
+                    self.gate.take();
+                    Err(EgressShardSendError::Full)
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    self.gate.take();
+                    Err(EgressShardSendError::Closed)
+                }
+            };
         }
         Ok(())
     }
@@ -333,8 +366,14 @@ fn run_shard_thread<B: EgressShardBackend>(
             config,
             receiver,
             backend: &mut backend,
-            ready_backlog: VecDeque::new(),
-            timers: TimerWheel::new(),
+            ready_backlog: VecDeque::with_capacity(
+                config
+                    .command_channel_capacity()
+                    .get()
+                    .saturating_add(config.readiness_batch_budget().get()),
+            ),
+            timers: TimerWheel::with_capacity(config.leaf_capacity().get()),
+            expired_timers: Vec::with_capacity(config.timer_batch_budget().get()),
             metrics: ShardMetrics::new(shard_id),
             snapshot: Arc::clone(&snapshot),
             wake_gate,
@@ -356,6 +395,7 @@ struct EgressShardRuntime<'a, B: EgressShardBackend> {
     backend: &'a mut B,
     ready_backlog: VecDeque<()>,
     timers: TimerWheel<OutputId>,
+    expired_timers: Vec<(OutputId, u64)>,
     metrics: ShardMetrics,
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
     wake_gate: Arc<WakeGate>,
@@ -451,7 +491,16 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
     }
 
     fn wait_for_command(&mut self, running: &mut bool) -> usize {
-        match self.receiver.recv_timeout(self.config.idle_wait) {
+        let now = Instant::now();
+        let wait = self
+            .timers
+            .next_deadline()
+            .map_or(self.config.idle_wait(), |deadline| {
+                deadline
+                    .saturating_duration_since(now)
+                    .min(self.config.idle_wait())
+            });
+        match self.receiver.recv_timeout(wait) {
             Ok(command) => {
                 let effect = self.process_command(command);
                 if self.apply_effect(effect).stops_shard() {
@@ -521,18 +570,21 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 break;
             }
         }
+        self.metrics.ready_visits = self.metrics.ready_visits.saturating_add(processed as u64);
         processed
     }
 
     fn process_timer_batch(&mut self, running: &mut bool) -> usize {
         let now = Instant::now();
-        let expired = self.timers.drain_expired_limited(
+        let mut expired = std::mem::take(&mut self.expired_timers);
+        self.timers.drain_expired_limited_into(
             now,
             self.config.timer_batch_budget.get(),
             |output_id| self.backend.timer_generation(output_id),
+            &mut expired,
         );
         let mut processed = 0;
-        for (output_id, generation) in expired {
+        for (output_id, generation) in expired.drain(..) {
             processed += 1;
             let effect = self.backend.on_timer(output_id, generation);
             if self.apply_effect(effect).stops_shard() {
@@ -540,6 +592,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 break;
             }
         }
+        self.expired_timers = expired;
         processed
     }
 
@@ -550,11 +603,22 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 generation,
                 fire_at,
             } => {
-                self.timers.insert(fire_at, output_id, generation);
+                if !self.timers.insert(fire_at, output_id, generation) {
+                    self.metrics.queue_overflows = self.metrics.queue_overflows.saturating_add(1);
+                }
                 EgressShardCommandEffect::Continue
             }
             EgressShardCommandEffect::ScheduleReady { count } => {
-                self.ready_backlog.extend(std::iter::repeat_n((), count));
+                let available = self
+                    .ready_backlog
+                    .capacity()
+                    .saturating_sub(self.ready_backlog.len());
+                let accepted = count.min(available);
+                self.ready_backlog.extend(std::iter::repeat_n((), accepted));
+                self.metrics.ready_overflows = self
+                    .metrics
+                    .ready_overflows
+                    .saturating_add((count - accepted) as u64);
                 EgressShardCommandEffect::Continue
             }
             effect => effect,
@@ -582,6 +646,8 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             .observe_ready_depth(u32::try_from(self.ready_backlog.len()).unwrap_or(u32::MAX));
         self.metrics.media_ticks = self.metrics.media_ticks.saturating_add(1);
         self.metrics.feed_resyncs = self.backend.resync_count();
+        self.metrics.budget_exhaustions = self.backend.budget_exhaustion_count();
+        self.backend.observe_metrics(&mut self.metrics);
         self.metrics.collected_at = Some(Instant::now());
 
         let mut snapshot = self.snapshot.lock().unwrap();

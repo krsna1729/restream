@@ -54,7 +54,10 @@ function markdownFiles() {
 
   // Include new documentation before it is staged.
   collectMarkdown(path.join(root, "docs"), files);
-  return [...files].filter(fs.existsSync).sort();
+  return [...files]
+    .filter(fs.existsSync)
+    .filter((filename) => !relativePath(filename).startsWith("vendor/srt-rs/"))
+    .sort();
 }
 
 function proseHeadings(lines) {

@@ -1,0 +1,23 @@
+[package]
+name = "restream-dataplane"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+license = "MIT"
+
+[features]
+loom = ["dep:loom"]
+
+[dependencies]
+io-uring = "0.7.15"
+libc = "0.2"
+loom = { version = "0.7", optional = true }
+
+[dev-dependencies]
+criterion = "0.8"
+proptest = "1"
+
+[[bench]]
+name = "scheduler"
+harness = false

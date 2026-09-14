@@ -2,22 +2,17 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
-use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use shiguredo_srt::{ConnectionEvent, Timestamp};
+use shiguredo_srt::Timestamp;
 use srt_transport::{
-    AdmissionEvent, AdmissionResolution, BondedInputPolicy, HighResWaiter, IngressTelemetry,
-    ListenerConfig, ListenerEncryptionConfig, ListenerPeerPolicy, ListenerTopology, LogicalPeerId,
-    MonotonicDeadline, PeerTable, PolicyOverride, RecvBatch, RecvBudget, RejectionReason,
-    RuntimeFlavor,
+    BondedInputPolicy, IngressTelemetry, ListenerConfig, ListenerTopology, LogicalPeerId,
+    PeerTable, RuntimeFlavor,
 };
-use tokio::net::UdpSocket;
 use tracing::{error, info, warn};
 
-use crate::domain::srt_ingest::ResolvedSrtCrypto;
 use crate::media::engine::MediaEngine;
 use crate::media::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessMode};
 use crate::media::input_gate::InputTimestampMapper;
@@ -30,6 +25,10 @@ use crate::media::standby_gop::StandbyGopCache;
 use crate::media::ts_chunk_ring::TsChunkReader;
 
 pub(crate) use super::srt_policy::SrtIngestPolicyStore;
+
+#[path = "native_ingress.rs"]
+mod native_ingress;
+use native_ingress::NativeSrtIngress;
 
 #[path = "ingest_packets.rs"]
 mod ingest_packets;
@@ -74,7 +73,7 @@ impl SrtServer {
             .bonded_inputs(BondedInputPolicy::Accept)
             .configure_transport(super::tokio_egress::apply_optional_udp_buf)
             .build()
-            .and_then(|config| config.prepare(RuntimeFlavor::Tokio))
+            .and_then(|config| config.prepare(RuntimeFlavor::Mio))
         {
             Ok(prepared) => prepared,
             Err(error) => {
@@ -93,13 +92,28 @@ impl SrtServer {
             error!(port, "srt-rs listener produced no UDP socket");
             return;
         };
-        let socket = match UdpSocket::from_std(socket) {
-            Ok(socket) => socket,
+        let peers = prepared.peer_table();
+        let admission = prepared.admission_options();
+        let telemetry = IngressTelemetry::default();
+        let native = match NativeSrtIngress::start(
+            socket,
+            self.engine.listener_stats_handle(),
+            peers,
+            admission,
+            telemetry,
+            self.ingest_policy_store.clone(),
+        ) {
+            Ok(native) => native,
             Err(error) => {
-                error!(port, %error, "failed to adopt SRT listener UDP socket into Tokio");
+                error!(port, %error, "failed to start native SRT ingress");
                 return;
             }
         };
+        let NativeSrtIngress {
+            mut events,
+            outbound: _outbound,
+            stats: _stats,
+        } = native;
 
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let shutdown_hook = shutdown.clone();
@@ -107,95 +121,37 @@ impl SrtServer {
             shutdown_hook.store(true, std::sync::atomic::Ordering::Release);
         });
 
-        let mut peers = prepared.peer_table();
         self.engine
             .listener_stats_handle()
             .bonding_available
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        let admission = prepared.admission_options();
-        let telemetry = IngressTelemetry::default();
+        // Protocol state (PeerTable, timers, replies) lives on the native
+        // worker now. Tokio keeps session/media lifecycle: it consumes the
+        // worker's bounded control events plus legacy datagrams still in
+        // flight, and drives readers/publishers. A local shadow PeerTable is
+        // NOT kept: `handle_peer_event` takes the worker-owned table's
+        // decisions as events, and session teardown is idempotent.
         let mut peer_sessions = HashMap::new();
-        let mut events = Vec::new();
-        let mut outbound = Vec::new();
-        let mut recv_batch = RecvBatch::new();
-        let mut waiter = match HighResWaiter::<()>::new() {
-            Ok(waiter) => waiter,
-            Err(error) => {
-                error!(port, %error, "failed to create SRT listener HighResWaiter");
-                return;
-            }
-        };
-        if let Err(error) = waiter.register((), socket.as_raw_fd()) {
-            error!(port, %error, "failed to register SRT listener with HighResWaiter");
-            return;
-        }
-        let mut due = Vec::new();
-        let mut ready = Vec::new();
+        // Shadow table for session-lifecycle bookkeeping only (disconnect /
+        // remove by logical id). It never admits or feeds; the worker owns
+        // protocol truth.
+        let mut shadow = PeerTable::new();
 
-        info!(port, "SRT listener ready (srt-rs/Tokio)");
+        info!(port, "SRT listener ready (srt-rs/native io_uring ingress)");
         while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
-            let wait = listener_wait_duration(&mut peers, timestamp_now());
-            match tokio::task::block_in_place(|| {
-                park_listener(&mut waiter, &mut due, &mut ready, wait)
-            }) {
-                Ok(socket_ready) => {
-                    if socket_ready {
-                        let now = timestamp_now();
-                        // HighResWaiter observed the raw fd. `drain_readable`
-                        // requires Tokio READABLE, which is still unset here,
-                        // so handshake datagrams would be dropped as WouldBlock.
-                        match drain_woken_listener(
-                            &socket,
-                            &mut recv_batch,
-                            super::tokio_egress::recv_budget(),
-                            |addr, data| {
-                                let Some(peer) = addr else {
-                                    return;
-                                };
-                                let policy_store = self.ingest_policy_store.clone();
-                                let _ = peers.admit_with_resolver(
-                                    peer,
-                                    data,
-                                    now,
-                                    &admission,
-                                    0,
-                                    1,
-                                    &telemetry,
-                                    move |request| resolve_listener_policy(&policy_store, request),
-                                );
-                            },
-                        ) {
-                            Ok(_) => {}
-                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                            Err(error) => {
-                                warn!(%error, "SRT listener receive failed");
-                                tokio::time::sleep(Duration::from_millis(10)).await;
-                            }
-                        }
-                    }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(error) => {
-                    warn!(%error, "SRT listener wait failed");
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            }
-
             let now = timestamp_now();
-            close_deleted_srt_publishers(&self.engine, &mut peers, &mut peer_sessions, now).await;
-            drive_srt_readers(&self.engine, &mut peers, &mut peer_sessions, now).await;
-            peers.poll_outbound(now, &mut outbound);
-            for (peer, packet) in outbound.drain(..) {
-                let _ = socket.send_to(&packet, peer).await;
+            close_deleted_srt_publishers(&self.engine, &mut shadow, &mut peer_sessions, now).await;
+            drive_srt_readers(&self.engine, &mut shadow, &mut peer_sessions, now).await;
+            match tokio::time::timeout(LISTENER_IDLE, events.recv()).await {
+                Ok(Some(event)) => {
+                    self.handle_ingress_event(&mut shadow, &mut peer_sessions, event)
+                        .await;
+                }
+                Ok(None) => break,
+                Err(_) => {}
             }
-            peers.poll_events(&mut events);
-            for AdmissionEvent {
-                representative_peer: peer,
-                logical_peer,
-                event,
-            } in events.drain(..)
-            {
-                self.handle_peer_event(&mut peers, &mut peer_sessions, peer, logical_peer, event)
+            while let Ok(event) = events.try_recv() {
+                self.handle_ingress_event(&mut shadow, &mut peer_sessions, event)
                     .await;
             }
         }
@@ -212,85 +168,36 @@ impl SrtServer {
         info!(port, "SRT listener stopped");
     }
 
-    async fn handle_peer_event(
+    async fn handle_ingress_event(
         &self,
         peers: &mut PeerTable,
         sessions: &mut HashMap<LogicalPeerId, RustSrtSession>,
-        peer: SocketAddr,
-        logical_peer: LogicalPeerId,
-        event: ConnectionEvent,
+        event: native_ingress::SrtIngressEvent,
     ) {
         match event {
-            ConnectionEvent::Connected => {
-                let stream_id = peers
-                    .logical_peer(&logical_peer)
-                    .and_then(|entry| entry.stream_id().map(str::to_owned))
-                    .unwrap_or_default();
-                let parsed = parse_srt_stream_id(&stream_id);
-                let client_ip = peer.ip().to_string();
-                let access_mode = match parsed.mode {
-                    SrtConnectionMode::Publish => PipelineAccessMode::SrtPublish,
-                    SrtConnectionMode::Read => PipelineAccessMode::SrtRead,
-                };
-                if self
-                    .security
-                    .is_ip_banned_for(RateLimitScope::SrtPublish, &client_ip)
-                    .or_else(|| {
-                        self.security
-                            .is_ip_banned_for(RateLimitScope::SrtRead, &client_ip)
-                    })
-                    .is_some()
-                {
-                    let _ = peers.remove(logical_peer);
-                    return;
-                }
-                let pipeline = match self
-                    .pipeline_access
-                    .authenticate(access_mode, &parsed.stream_key, &client_ip)
-                    .await
-                {
-                    Ok(pipeline) => pipeline,
-                    Err(error) => {
-                        warn!(peer = %peer, error = ?error, "rejecting unauthorized SRT stream");
-                        let _ = peers.remove(logical_peer);
-                        return;
-                    }
-                };
-                match parsed.mode {
-                    SrtConnectionMode::Publish => {
-                        match self
-                            .start_publisher(peer, pipeline, parsed.stream_key)
-                            .await
-                        {
-                            Ok(session) => {
-                                sessions.insert(
-                                    logical_peer,
-                                    RustSrtSession::Publish(Box::new(session)),
-                                );
-                            }
-                            Err(error) => {
-                                warn!(peer = %peer, %error, "rejecting SRT publisher");
-                                let _ = peers.remove(logical_peer);
-                            }
-                        }
-                    }
-                    SrtConnectionMode::Read => match self.start_reader(&pipeline.id).await {
-                        Ok(reader) => {
-                            sessions.insert(logical_peer, RustSrtSession::Read(reader));
-                        }
-                        Err(error) => {
-                            warn!(peer = %peer, %error, "rejecting SRT reader");
-                            let _ = peers.remove(logical_peer);
-                        }
-                    },
-                }
+            native_ingress::SrtIngressEvent::Connected {
+                peer,
+                logical_peer,
+                stream_id,
+            } => {
+                self.handle_connected(peers, sessions, peer, logical_peer, stream_id)
+                    .await;
             }
-            ConnectionEvent::DataReceived { payload, .. } => {
+            native_ingress::SrtIngressEvent::Media {
+                peer,
+                logical_peer,
+                payload,
+            } => {
+                let _ = peer;
                 if let Some(RustSrtSession::Publish(publisher)) = sessions.get_mut(&logical_peer) {
                     publisher.accept_payload(&self.engine, payload).await;
                 }
             }
-            ConnectionEvent::Disconnected { reason } => {
+            native_ingress::SrtIngressEvent::Disconnected {
+                peer,
+                logical_peer,
+                reason,
+            } => {
                 if let Some(session) = sessions.remove(&logical_peer)
                     && let RustSrtSession::Publish(publisher) = session
                 {
@@ -299,9 +206,75 @@ impl SrtServer {
                 info!(peer = %peer, %reason, "SRT peer disconnected");
                 let _ = peers.remove(logical_peer);
             }
-            ConnectionEvent::StateChanged(_)
-            | ConnectionEvent::Error(_)
-            | ConnectionEvent::KeyRefreshNeeded { .. } => {}
+        }
+    }
+
+    async fn handle_connected(
+        &self,
+        peers: &mut PeerTable,
+        sessions: &mut HashMap<LogicalPeerId, RustSrtSession>,
+        peer: SocketAddr,
+        logical_peer: LogicalPeerId,
+        stream_id: String,
+    ) {
+        {
+            let _ = peers.logical_peer(&logical_peer);
+            let parsed = parse_srt_stream_id(&stream_id);
+            let client_ip = peer.ip().to_string();
+            let access_mode = match parsed.mode {
+                SrtConnectionMode::Publish => PipelineAccessMode::SrtPublish,
+                SrtConnectionMode::Read => PipelineAccessMode::SrtRead,
+            };
+            if self
+                .security
+                .is_ip_banned_for(RateLimitScope::SrtPublish, &client_ip)
+                .or_else(|| {
+                    self.security
+                        .is_ip_banned_for(RateLimitScope::SrtRead, &client_ip)
+                })
+                .is_some()
+            {
+                let _ = peers.remove(logical_peer);
+                return;
+            }
+            let pipeline = match self
+                .pipeline_access
+                .authenticate(access_mode, &parsed.stream_key, &client_ip)
+                .await
+            {
+                Ok(pipeline) => pipeline,
+                Err(error) => {
+                    warn!(peer = %peer, error = ?error, "rejecting unauthorized SRT stream");
+                    let _ = peers.remove(logical_peer);
+                    return;
+                }
+            };
+            match parsed.mode {
+                SrtConnectionMode::Publish => {
+                    match self
+                        .start_publisher(peer, pipeline, parsed.stream_key)
+                        .await
+                    {
+                        Ok(session) => {
+                            sessions
+                                .insert(logical_peer, RustSrtSession::Publish(Box::new(session)));
+                        }
+                        Err(error) => {
+                            warn!(peer = %peer, %error, "rejecting SRT publisher");
+                            let _ = peers.remove(logical_peer);
+                        }
+                    }
+                }
+                SrtConnectionMode::Read => match self.start_reader(&pipeline.id).await {
+                    Ok(reader) => {
+                        sessions.insert(logical_peer, RustSrtSession::Read(reader));
+                    }
+                    Err(error) => {
+                        warn!(peer = %peer, %error, "rejecting SRT reader");
+                        let _ = peers.remove(logical_peer);
+                    }
+                },
+            }
         }
     }
 
@@ -634,180 +607,9 @@ async fn drive_srt_readers(
     }
 }
 
-fn resolve_listener_policy(
-    store: &SrtIngestPolicyStore,
-    request: &srt_transport::AdmissionRequest,
-) -> AdmissionResolution {
-    let stream_id = request
-        .claimed_identity
-        .stream_id
-        .as_deref()
-        .unwrap_or_default();
-    let parsed = parse_srt_stream_id(stream_id);
-    if parsed.stream_key.is_empty()
-        || !matches!(
-            parsed.mode,
-            SrtConnectionMode::Publish | SrtConnectionMode::Read
-        )
-    {
-        return AdmissionResolution::Reject {
-            reason: RejectionReason::BAD_MODE,
-        };
-    }
-    let Some(resolved) = store.resolved_policy(&parsed.stream_key) else {
-        return AdmissionResolution::Reject {
-            reason: RejectionReason::UNAUTHORIZED,
-        };
-    };
-    let mut policy = ListenerPeerPolicy {
-        latency: PolicyOverride::Set(Duration::from_millis(resolved.latency_ms.max(0) as u64)),
-        encryption: PolicyOverride::Set(None),
-        ..ListenerPeerPolicy::default()
-    };
-    if let ResolvedSrtCrypto::Encrypted {
-        passphrase,
-        pbkeylen,
-    } = resolved.crypto
-    {
-        let Some(key_length) = shiguredo_srt::KeyLength::from_len(pbkeylen as usize) else {
-            return AdmissionResolution::Reject {
-                reason: RejectionReason::BAD_REQUEST,
-            };
-        };
-        let Ok(encryption) = ListenerEncryptionConfig::new(passphrase, key_length) else {
-            return AdmissionResolution::Reject {
-                reason: RejectionReason::BAD_REQUEST,
-            };
-        };
-        policy.encryption = PolicyOverride::Set(Some(encryption));
-    }
-    AdmissionResolution::Configure(policy)
-}
-
-fn listener_wait_duration(peers: &mut PeerTable, now: Timestamp) -> Duration {
-    Duration::from_micros(
-        peers
-            .time_until_next_deadline(now, listener_idle_micros())
-            .min(listener_idle_micros()),
-    )
-}
-
-fn listener_idle_micros() -> u64 {
-    u64::try_from(LISTENER_IDLE.as_micros()).unwrap_or(u64::MAX)
-}
-
-fn park_listener(
-    waiter: &mut HighResWaiter<()>,
-    due: &mut Vec<()>,
-    ready: &mut Vec<()>,
-    wait: Duration,
-) -> std::io::Result<bool> {
-    waiter.set_deadline((), MonotonicDeadline::after(wait));
-    waiter.wait(due, ready)?;
-    Ok(!ready.is_empty())
-}
-
-/// Drain a socket that `HighResWaiter` already reported readable.
-///
-/// Must not use [`srt_transport::tokio_transport::drain_readable`]: that
-/// helper's `try_io(READABLE)` returns WouldBlock unless Tokio itself saw
-/// the wake. After a waiter park the kernel queue is full and Tokio is
-/// not, which is the post-#153 MSR sink/ingress handshake stall.
-fn drain_woken_listener(
-    socket: &UdpSocket,
-    recv_batch: &mut RecvBatch,
-    budget: RecvBudget,
-    on_datagram: impl FnMut(Option<std::net::SocketAddr>, &[u8]),
-) -> std::io::Result<srt_transport::RecvDrainReport> {
-    srt_transport::drain_recv_fd(socket.as_raw_fd(), recv_batch, budget, on_datagram)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn empty_peer_table_caps_listener_wait_at_idle() {
-        let mut peers = PeerTable::new();
-        assert_eq!(
-            listener_wait_duration(&mut peers, timestamp_now()),
-            LISTENER_IDLE
-        );
-    }
-
-    fn pending_datagram_socket() -> std::net::UdpSocket {
-        let receiver = std::net::UdpSocket::bind("127.0.0.1:0").expect("receiver binds");
-        receiver
-            .set_nonblocking(true)
-            .expect("receiver is nonblocking");
-        let dest = receiver.local_addr().expect("receiver address");
-        let sender = std::net::UdpSocket::bind("127.0.0.1:0").expect("sender binds");
-        sender.send_to(b"ping", dest).expect("send datagram");
-        receiver
-    }
-
-    fn with_woken_listener(
-        test: impl FnOnce(UdpSocket, &mut HighResWaiter<()>, &mut Vec<()>, &mut Vec<()>),
-    ) {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .build()
-            .expect("Tokio runtime builds");
-        let receiver = pending_datagram_socket();
-        runtime.block_on(async {
-            let sock = UdpSocket::from_std(receiver).expect("tokio adopts the socket");
-            let mut waiter = HighResWaiter::<()>::new().expect("waiter");
-            waiter
-                .register((), sock.as_raw_fd())
-                .expect("register listener fd");
-            let mut due = Vec::new();
-            let mut ready = Vec::new();
-            assert!(
-                park_listener(&mut waiter, &mut due, &mut ready, LISTENER_IDLE).expect("wait"),
-                "listener fd should be ready after a datagram"
-            );
-            test(sock, &mut waiter, &mut due, &mut ready);
-        });
-    }
-
-    #[test]
-    fn high_res_waiter_wakes_the_listener_socket() {
-        with_woken_listener(|_, _, _, _| {});
-    }
-
-    #[test]
-    fn woken_listener_drains_without_tokio_readable() {
-        with_woken_listener(|sock, _, _, _| {
-            let mut batch = RecvBatch::new();
-            let mut got = Vec::new();
-            let report =
-                drain_woken_listener(&sock, &mut batch, RecvBudget::default(), |_, data| {
-                    got.push(data.to_vec())
-                })
-                .expect("drain after waiter");
-            assert_eq!(report.datagrams, 1);
-            assert_eq!(got, [b"ping".to_vec()]);
-        });
-    }
-
-    #[test]
-    fn drain_readable_misses_a_waiter_wake_without_tokio_readable() {
-        with_woken_listener(|sock, _, _, _| {
-            let mut batch = RecvBatch::new();
-            let mut got = Vec::new();
-            let report = srt_transport::tokio_transport::drain_readable(
-                &sock,
-                &mut batch,
-                RecvBudget::default(),
-                |_, data| got.push(data.to_vec()),
-            )
-            .expect("drain_readable after waiter");
-            assert_eq!(
-                report.datagrams, 0,
-                "Tokio try_io is unset after HighResWaiter; this is the #153 MSR stall"
-            );
-            assert!(report.would_block);
-            assert!(got.is_empty());
-        });
-    }
+    // Protocol ownership (admission, deadlines, replies) lives on the native
+    // worker (`native_ingress.rs`); Tokio keeps session/media lifecycle only.
+    // See `native_ingress` tests for the owner-thread protocol path.
 }

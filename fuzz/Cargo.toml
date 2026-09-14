@@ -1,0 +1,40 @@
+[package]
+name = "restream-dataplane-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+restream-dataplane = { path = "../crates/restream-dataplane" }
+
+[[bin]]
+name = "ready_queue"
+path = "fuzz_targets/ready_queue.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "media_ring"
+path = "fuzz_targets/media_ring.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tx_pool"
+path = "fuzz_targets/tx_pool.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fairness"
+path = "fuzz_targets/fairness.rs"
+test = false
+doc = false
+bench = false

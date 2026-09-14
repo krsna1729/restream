@@ -8,6 +8,25 @@ fn budget() -> WorkBudget {
     WorkBudget::new(8, 4096, Duration::from_millis(50))
 }
 
+#[test]
+fn ready_queue_rejection_is_counted_without_growing() {
+    let mut backend =
+        RtmpShardBackend::new(TcpEgressPoller::new(1).unwrap(), feed(), budget(), 4096)
+            .with_leaf_capacity(1);
+    let event = TcpReadyLeaf {
+        fd: -1,
+        key: LeafKey(0),
+        generation: 1,
+        readable: false,
+        writable: true,
+    };
+
+    assert!(backend.enqueue_ready(event));
+    assert!(!backend.enqueue_ready(event));
+    assert_eq!(backend.ready.len(), 1);
+    assert_eq!(backend.queue_overflows, 1);
+}
+
 fn feed() -> RingFeed {
     RingFeed::new(
         Arc::new(crate::media::ring_buffer::RingBuffer::new(4)),
@@ -651,3 +670,34 @@ mod drain_tests;
 mod media_tick_tests;
 #[path = "rtmp_shard_reregistration_tests.rs"]
 mod reregistration_tests;
+
+#[test]
+fn leaf_slots_are_fixed_and_exhaustion_does_not_grow_the_slab() {
+    let mut backend =
+        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096)
+            .with_leaf_capacity(1);
+
+    assert_eq!(backend.leaves.len(), 1);
+    assert_eq!(backend.allocate_leaf_key(), Some(LeafKey(0)));
+    assert_eq!(backend.allocate_leaf_key(), None);
+    assert_eq!(backend.leaves.len(), 1);
+}
+
+#[test]
+fn shard_work_queues_have_a_hard_leaf_bound() {
+    let mut backend =
+        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096)
+            .with_leaf_capacity(1);
+    let event = TcpReadyLeaf {
+        fd: -1,
+        key: LeafKey(0),
+        generation: 0,
+        readable: false,
+        writable: true,
+    };
+    let capacity = backend.queue_capacity;
+
+    assert!(push_bounded(&mut backend.ready, event, capacity));
+    assert!(!push_bounded(&mut backend.ready, event, capacity));
+    assert_eq!(backend.ready.len(), 1);
+}

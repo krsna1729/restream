@@ -4,18 +4,19 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::media::egress::backend::{ProtocolEngine, Readiness};
+use crate::media::egress::backend::Readiness;
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::leaf::LeafCommon;
-use crate::media::egress::policy::{LeafLimits, LeafStallClass, WorkBudget, classify_stall};
+use crate::media::egress::metrics::ShardMetrics;
+use crate::media::egress::policy::{LeafLimits, LeafStallClass, WorkBudget};
 use crate::media::egress::scheduler::{LeafKey, VisitDecision};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
-use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
+use crate::media::egress::visit::EngineVisitResult;
 use crate::media::snapshots::PublisherQuality;
 use crate::media::srt::{
     NativeSendBacklog, SrtEgressEngine, SrtFabricEgressConnectSpec, SrtMessageSender,
-    connect_fabric_srt_egress_socket, drive_shared_srt_egress,
+    SrtNativeMetrics, SrtOwner, connect_fabric_srt_egress_socket, drive_shared_srt_egress,
 };
 
 /// Combined application and native pending state for one SRT fabric leaf.
@@ -48,6 +49,8 @@ fn apply_native_send_backlog(quality: &mut PublisherQuality, backlog: NativeSend
 
 pub(crate) mod muxer_ports;
 pub(crate) mod resolve_runtime;
+#[path = "srt_leaf.rs"]
+mod srt_leaf;
 
 type NativeSrtLeaf = SrtFabricLeaf<Box<dyn SrtMessageSender + Send>>;
 
@@ -126,148 +129,14 @@ where
     handshake_permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
-impl<T> SrtFabricLeaf<T>
-where
-    T: SrtMessageSender,
-{
-    pub(crate) fn new(common: LeafCommon, transport: T) -> Self {
-        Self {
-            common,
-            engine: SrtEgressEngine::default(),
-            transport,
-            last_native_backlog_bytes: 0,
-            last_packets_sent_drop: 0,
-            observed_since: Instant::now(),
-            draining_since: None,
-            draining_reason: None,
-            handshake_permit: None,
-        }
-    }
-
-    pub(crate) fn common(&self) -> &LeafCommon {
-        &self.common
-    }
-
-    #[cfg(test)]
-    pub(crate) fn pending_message_bytes(&self) -> usize {
-        self.engine.pending_message_bytes()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn transport_mut(&mut self) -> &mut T {
-        &mut self.transport
-    }
-
-    /// Combined backpressure state per the architecture's native-buffer
-    /// accounting rule: a leaf is backpressured when either the engine
-    /// retains an application message or the native libsrt sender buffer
-    /// holds unacknowledged data.  Removing the application queue while
-    /// permitting unlimited native buffering does not count as progress.
-    pub(crate) fn pressure(&mut self) -> SrtLeafPressure {
-        SrtLeafPressure {
-            app_pending_bytes: self.engine.pending_message_bytes(),
-            native_backlog: self.transport.native_send_backlog(),
-        }
-    }
-
-    /// Classify the send path from combined application and native pending
-    /// state. A declining native backlog counts as protocol progress only
-    /// when the peer actually drained data — i.e. `packets_sent_drop` did
-    /// not advance (TLPKTDROP/TSBPD-deadline discards also shrink the
-    /// buffer head, and a drop-riddled leaf must not extend its
-    /// no-progress deadline forever); a leaf whose read cursor lags more
-    /// than `max_feed_lag_units` behind the head is stalled regardless.
-    /// `packets_sent_drop` is the transport's drop total for this sweep
-    /// (`None` keeps the last sampled value, so the stall sweep's second
-    /// per-leaf call costs no extra FFI); `lag_units` is how far the read
-    /// cursor is behind the live edge (0 when unprimed or for lossless
-    /// protocols).
-    pub(crate) fn observe_stall(
-        &mut self,
-        now: Instant,
-        packets_sent_drop: Option<u64>,
-        lag_units: u64,
-    ) -> LeafStallClass {
-        let pressure = self.pressure();
-        let native_bytes = pressure.native_backlog.map_or(0, |backlog| backlog.bytes);
-        let drops = packets_sent_drop.unwrap_or(self.last_packets_sent_drop);
-        if native_bytes < self.last_native_backlog_bytes && drops <= self.last_packets_sent_drop {
-            self.common.progress.last_protocol_progress = Some(now);
-        }
-        self.last_native_backlog_bytes = native_bytes;
-        if let Some(drops) = packets_sent_drop {
-            self.last_packets_sent_drop = drops;
-        }
-
-        let last_progress = self
-            .common
-            .progress
-            .last_byte_progress
-            .into_iter()
-            .chain(self.common.progress.last_protocol_progress)
-            .max()
-            .unwrap_or(self.observed_since);
-        let age = now.saturating_duration_since(last_progress);
-        classify_stall(
-            pressure.pending_bytes(),
-            age,
-            lag_units,
-            &self.common.limits,
-        )
-    }
-
-    /// Sample sender-side connection quality (RTT, loss, drops, bandwidth)
-    /// for the once-per-second stall sweep. Returns `None` when the
-    /// transport has no stats to offer (fakes, closed sockets); the caller
-    /// should leave the previously published quality in place in that case.
-    ///
-    /// Occupancy is only folded in when `sender_quality()` is `Some`.
-    /// Production Direct/Bonded/Shared variants derive both from the same
-    /// `sender_stats()` / `logical_caller().stats()` snapshot, so a known
-    /// backlog with no quality snapshot is not a reachable live state.
-    /// `sender_quality()` fills RTT/rate/loss and leaves buffer fields
-    /// unset; `native_send_backlog` supplies `srtSendBufBytes` /
-    /// `msSendBuf` / `srtFlightSizePkts` so `/telemetry` can be summed
-    /// against process RSS on the shared Tokio path.
-    pub(crate) fn sample_quality(&mut self, _now: Instant) -> Option<PublisherQuality> {
-        let mut quality = self.transport.sender_quality()?;
-        if let Some(backlog) = self.transport.native_send_backlog() {
-            apply_native_send_backlog(&mut quality, backlog);
-        }
-        Some(quality)
-    }
-
-    pub(crate) fn visit_ready(
-        &mut self,
-        generation: u64,
-        readiness: Readiness,
-        feed: &TsFeed,
-        budget: WorkBudget,
-    ) -> EngineVisitResult {
-        EngineVisit {
-            generation,
-            common: &mut self.common,
-            engine: &mut self.engine,
-            transport: &mut self.transport,
-            readiness,
-            feed,
-            budget,
-        }
-        .run()
-    }
-}
-
 #[cfg(test)]
 pub(crate) fn requeue_after_srt_visit(decision: VisitDecision) -> bool {
     matches!(decision, VisitDecision::Continue)
 }
 
-/// One shard's internal readiness marker for a leaf due a visit. There is no
-/// real readiness multiplexing to report — `srt-rs` has no epoll equivalent,
-/// so `poll_ready()` marks every not-yet-enqueued leaf ready on every pass —
-/// this only exists to carry `(key, generation, writable)` through
-/// `self.ready` between `poll_ready()`/`enqueue_feed_waiting_leaves()` and
-/// `visit_one_ready_leaf()`.
+/// One shard's internal readiness marker for a leaf due a visit. It carries
+/// `(key, generation, writable)` through `self.ready` between the candidate
+/// queue/feed wake and `visit_one_ready_leaf()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SrtReadyLeaf {
     key: LeafKey,
@@ -334,6 +203,7 @@ impl SrtResolveCompletionQueue {
 
 pub(crate) struct SrtShardBackend {
     resolve_completions: SrtResolveCompletionQueue,
+    resolved_connects: Vec<SrtResolvedConnect>,
     feed: TsFeed,
     /// Per-visit limits. `WorkBudget::deadline` is an absolute `Instant`
     /// computed at construction time — storing one `WorkBudget` and reusing
@@ -348,13 +218,21 @@ pub(crate) struct SrtShardBackend {
     budget_max_bytes: usize,
     budget_window: Duration,
     leaves: Vec<Option<NativeSrtLeaf>>,
+    free_leaf_keys: Vec<LeafKey>,
     output_sockets: HashMap<OutputId, LeafKey>,
     ready: VecDeque<SrtReadyLeaf>,
+    ready_candidates: VecDeque<LeafKey>,
+    feed_waiting: VecDeque<LeafKey>,
+    stall_candidates: VecDeque<LeafKey>,
     pending_connects: HashMap<OutputId, PendingSrtConnect>,
     last_stall_sweep: Option<Instant>,
     /// This shard's application-owned shared UDP socket and srt-rs
     /// `CallerTable`, created lazily by the first egress connection.
     srt_egress_muxer_port: muxer_ports::SrtEgressMuxerPortState,
+    /// The live shared state is owned by this shard. The registry handle is
+    /// only used to hand it across shard lifecycles; it is never touched by
+    /// the media/send path.
+    shared_srt_egress: Option<crate::media::srt::SharedSrtEgress>,
     reuse_local_srt_egress_port: bool,
     /// Connect-concurrency admission; see `srt_connect_admission.rs`.
     connect_admission: Option<Arc<tokio::sync::Semaphore>>,
@@ -369,6 +247,16 @@ pub(crate) struct SrtShardBackend {
     /// across every leaf this backend has ever visited. Mirrors
     /// `RtmpShardBackend::resync_count` exactly.
     resync_count: u64,
+    budget_exhaustions: u64,
+    queue_overflows: u64,
+}
+
+fn push_bounded<T>(queue: &mut VecDeque<T>, value: T, capacity: usize) -> bool {
+    if queue.len() >= capacity {
+        return false;
+    }
+    queue.push_back(value);
+    true
 }
 
 struct PendingSrtConnect {
@@ -385,22 +273,99 @@ impl SrtShardBackend {
         let budget_window = budget.deadline.saturating_duration_since(Instant::now());
         Self {
             resolve_completions,
+            resolved_connects: Vec::with_capacity(1024),
             feed,
             budget_max_units: budget.max_units,
             budget_max_bytes: budget.max_bytes,
             budget_window,
-            leaves: Vec::new(),
+            leaves: (0..crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY)
+                .map(|_| None)
+                .collect(),
+            free_leaf_keys: (0
+                ..crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY as u32)
+                .rev()
+                .map(|slot| LeafKey(slot as usize))
+                .collect(),
             output_sockets: HashMap::new(),
-            ready: VecDeque::new(),
+            ready: VecDeque::with_capacity(
+                crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY,
+            ),
+            ready_candidates: VecDeque::with_capacity(
+                crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY,
+            ),
+            feed_waiting: VecDeque::with_capacity(
+                crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY,
+            ),
+            stall_candidates: VecDeque::with_capacity(
+                crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY,
+            ),
             pending_connects: HashMap::new(),
             last_stall_sweep: None,
             srt_egress_muxer_port: Arc::new(Mutex::new(None)),
+            shared_srt_egress: None,
             reuse_local_srt_egress_port: false,
             connect_admission: None,
-            connect_backlog: VecDeque::new(),
+            connect_backlog: VecDeque::with_capacity(
+                srt_connect_admission::CONNECT_BACKLOG_CAPACITY,
+            ),
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
+            budget_exhaustions: 0,
+            queue_overflows: 0,
         }
+    }
+
+    pub(crate) fn with_leaf_capacity(mut self, capacity: usize) -> Self {
+        self.leaves = (0..capacity).map(|_| None).collect();
+        self.free_leaf_keys = (0..capacity as u32)
+            .rev()
+            .map(|slot| LeafKey(slot as usize))
+            .collect();
+        self.ready = VecDeque::with_capacity(capacity);
+        self.ready_candidates = VecDeque::with_capacity(capacity);
+        self.feed_waiting = VecDeque::with_capacity(capacity);
+        self.stall_candidates = VecDeque::with_capacity(capacity);
+        self
+    }
+
+    fn leaf_queue_capacity(&self) -> usize {
+        self.leaves.len().max(1)
+    }
+
+    fn enqueue_ready_candidate(&mut self, key: LeafKey) -> bool {
+        let capacity = self.leaf_queue_capacity();
+        let admitted = push_bounded(&mut self.ready_candidates, key, capacity);
+        if !admitted {
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
+        }
+        admitted
+    }
+
+    fn enqueue_feed_waiting(&mut self, key: LeafKey) -> bool {
+        let capacity = self.leaf_queue_capacity();
+        let admitted = push_bounded(&mut self.feed_waiting, key, capacity);
+        if !admitted {
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
+        }
+        admitted
+    }
+
+    fn enqueue_stall_candidate(&mut self, key: LeafKey) -> bool {
+        let capacity = self.leaf_queue_capacity();
+        let admitted = push_bounded(&mut self.stall_candidates, key, capacity);
+        if !admitted {
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
+        }
+        admitted
+    }
+
+    fn enqueue_ready_event(&mut self, event: SrtReadyLeaf) -> bool {
+        let capacity = self.leaf_queue_capacity();
+        let admitted = push_bounded(&mut self.ready, event, capacity);
+        if !admitted {
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
+        }
+        admitted
     }
 
     // Production always constructs via `with_runtime_components` directly
@@ -432,6 +397,12 @@ impl SrtShardBackend {
         state: muxer_ports::SrtEgressMuxerPortState,
         enabled: bool,
     ) -> Self {
+        if enabled {
+            self.shared_srt_egress = state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take();
+        }
         self.srt_egress_muxer_port = state;
         self.reuse_local_srt_egress_port = enabled;
         self
@@ -445,15 +416,17 @@ impl SrtShardBackend {
         &self.srt_egress_muxer_port
     }
 
-    pub(crate) fn add_connected_leaf(
+    fn insert_connected_leaf(
         &mut self,
         common: LeafCommon,
         transport: Box<dyn SrtMessageSender + Send>,
+        key: LeafKey,
     ) -> LeafKey {
-        let key = LeafKey(self.leaves.len());
         let output_id = common.output_id.clone();
         let leaf = SrtFabricLeaf::new(common, transport);
-        self.leaves.push(Some(leaf));
+        self.leaves[key.0] = Some(leaf);
+        self.enqueue_ready_candidate(key);
+        self.enqueue_stall_candidate(key);
         if let Some(previous) = self.output_sockets.insert(output_id, key) {
             self.remove_leaf(
                 previous,
@@ -483,29 +456,38 @@ impl SrtShardBackend {
         // same way an established leaf's unexpected close does (see
         // `EgressProgressSink::terminated_unexpectedly`).
         let progress_sink = pending.common.progress_sink.clone();
-        let shared_state = self
+        let config = pending.connect_spec.connect_config(peer_addrs);
+        let Some(key) = self.allocate_leaf_key() else {
+            progress_sink.mark_terminated_unexpectedly();
+            return Err(SrtPendingConnectError::Connect(
+                "shard leaf capacity exhausted".to_string(),
+            ));
+        };
+        let shared_slot = self
             .reuse_local_srt_egress_port
-            .then(|| self.srt_egress_muxer_port.clone());
-        let config = pending
-            .connect_spec
-            .connect_config(peer_addrs, shared_state);
-        let transport = connect_fabric_srt_egress_socket(config).map_err(|error| {
+            .then_some(&mut self.shared_srt_egress);
+        let transport = connect_fabric_srt_egress_socket(config, shared_slot).map_err(|error| {
             tracing::warn!(
                 output_id = %output_id,
                 error = %error,
                 "srt fabric leaf connect failed"
             );
             progress_sink.mark_terminated_unexpectedly();
+            self.free_leaf_keys.push(key);
             SrtPendingConnectError::Connect(error)
         })?;
-        Ok(self.add_connected_leaf(pending.common, transport))
+        Ok(self.insert_connected_leaf(pending.common, transport, key))
     }
 
     #[cfg(test)]
     pub(crate) fn add_leaf(&mut self, leaf: NativeSrtLeaf) -> LeafKey {
-        let key = LeafKey(self.leaves.len());
+        let key = self
+            .allocate_leaf_key()
+            .expect("test leaf capacity must be increased before adding a leaf");
         let output_id = leaf.common.output_id.clone();
-        self.leaves.push(Some(leaf));
+        self.leaves[key.0] = Some(leaf);
+        self.enqueue_ready_candidate(key);
+        self.enqueue_stall_candidate(key);
         if let Some(previous) = self.output_sockets.insert(output_id, key) {
             self.remove_leaf(
                 previous,
@@ -525,6 +507,22 @@ impl SrtShardBackend {
 
     fn queue_pending_srt_connect(&mut self, spec: OutputSpec, target_url: &str) {
         let output_id = spec.id.clone();
+        let already_admitted = self.output_sockets.contains_key(&output_id)
+            || self.pending_connects.contains_key(&output_id);
+        if !already_admitted
+            && self
+                .output_sockets
+                .len()
+                .saturating_add(self.pending_connects.len())
+                >= self.leaves.len()
+        {
+            tracing::warn!(
+                output_id = %output_id,
+                "srt fabric leaf rejected: shard leaf capacity exhausted"
+            );
+            spec.progress.mark_terminated_unexpectedly();
+            return;
+        }
         let common = LeafCommon::new(
             spec.id,
             spec.generation,
@@ -558,46 +556,87 @@ impl SrtShardBackend {
         key: LeafKey,
         reason: crate::media::egress::backend::CloseReason,
     ) -> bool {
+        self.feed_waiting.retain(|queued| *queued != key);
+        self.ready.retain(|event| event.key != key);
+        self.ready_candidates.retain(|queued| *queued != key);
+        self.stall_candidates.retain(|queued| *queued != key);
         let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) else {
             return false;
         };
         let mut leaf = leaf;
-        leaf.engine.close(&mut leaf.transport, reason);
+        let mut owner = SrtOwner::new(self.shared_srt_egress.as_mut());
+        leaf.engine
+            .close_with_owner(&mut leaf.transport, reason, &mut owner);
+        self.free_leaf_keys.push(key);
         true
     }
 
-    /// Drives this shard's transports, then marks every not-yet-enqueued
-    /// leaf ready. There is no readiness to multiplex -- `srt-rs` has no
-    /// epoll equivalent, and every leaf always registers write interest --
-    /// so this is a direct walk of owned leaves rather than a poll of an
-    /// external readiness source.
+    fn allocate_leaf_key(&mut self) -> Option<LeafKey> {
+        self.free_leaf_keys.pop()
+    }
+
+    /// Drives the shared table once and advances one registered leaf from the
+    /// bounded candidate queue. A leaf that still needs I/O is returned to
+    /// that queue by `requeue_after_visit`; no normal pass walks the
+    /// population.
     ///
-    /// Driving is split in two because the work is: leaves owning their own
-    /// connection (`Direct`/`Bonded`) are driven individually, while every
-    /// leaf reusing this shard's local port shares one UDP socket and
-    /// `CallerTable`, so that one is driven once here rather than once per
-    /// leaf (`SrtMessageSender::drive` is a no-op for those leaves). This
+    /// Every leaf shares the shard's native UDP socket and `CallerTable`, so
+    /// one table drive happens once here rather than once per leaf
+    /// (`SrtMessageSender::drive` is a no-op). This
     /// is the dedup the old `SrtFabricPoller` did with its `driven_shared`
     /// set, made structural: a shard has exactly one
     /// `srt_egress_muxer_port`, so there is nothing to deduplicate against.
     ///
-    /// Only readiness driving is bounded this way — the send path drives
-    /// the shared table again per accepted message, so a busy pass is not
-    /// literally one table drive.
+    /// The send path may still drive the shared table after an accepted
+    /// message; this method only owns the readiness-side drive.
     fn poll_ready(&mut self) {
-        drive_shared_srt_egress(&self.srt_egress_muxer_port);
-        for (index, leaf) in self.leaves.iter_mut().enumerate() {
-            let Some(leaf) = leaf else { continue };
-            leaf.transport.drive();
-            if leaf.common.schedule.enqueued {
-                continue;
-            }
-            leaf.common.schedule.enqueued = true;
-            self.ready.push_back(SrtReadyLeaf {
-                key: LeafKey(index),
-                generation: leaf.common.generation,
+        drive_shared_srt_egress(self.shared_srt_egress.as_mut());
+        while let Some(key) = self.ready_candidates.pop_front() {
+            let generation = {
+                let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+                    continue;
+                };
+                if leaf.common.schedule.enqueued {
+                    continue;
+                }
+                leaf.transport.drive();
+                leaf.common.schedule.enqueued = true;
+                leaf.common.generation
+            };
+            if !self.enqueue_ready_event(SrtReadyLeaf {
+                key,
+                generation,
                 writable: true,
-            });
+            }) && let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut)
+            {
+                leaf.common.schedule.enqueued = false;
+            }
+            break;
+        }
+    }
+
+    fn requeue_after_visit(&mut self, key: LeafKey, decision: VisitDecision) {
+        if matches!(decision, VisitDecision::Close) {
+            return;
+        }
+        let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+            return;
+        };
+        if leaf.common.schedule.enqueued {
+            return;
+        }
+        let feed_wake =
+            leaf.common.schedule.wants_feed_wake && !leaf.common.schedule.feed_wake_queued;
+        if feed_wake {
+            leaf.common.schedule.feed_wake_queued = true;
+            let _ = leaf;
+            if !self.enqueue_feed_waiting(key)
+                && let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut)
+            {
+                leaf.common.schedule.feed_wake_queued = false;
+            }
+        } else {
+            let _ = self.enqueue_ready_candidate(key);
         }
     }
 
@@ -622,7 +661,8 @@ impl SrtShardBackend {
         let leaf = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)?;
         // Releases the connect-admission permit -- see `srt_connect_admission.rs`.
         leaf.handshake_permit = None;
-        let result = leaf.visit_ready(
+        let mut owner = SrtOwner::new(self.shared_srt_egress.as_mut());
+        let result = leaf.visit_ready_with_owner(
             event.generation,
             Readiness {
                 readable: false,
@@ -630,13 +670,23 @@ impl SrtShardBackend {
             },
             feed,
             budget,
+            &mut owner,
         );
 
         let decision = match result {
-            EngineVisitResult::StaleGeneration => VisitDecision::Suspend,
+            EngineVisitResult::StaleGeneration => {
+                leaf.common.schedule.enqueued = false;
+                VisitDecision::Suspend
+            }
             EngineVisitResult::Visited(outcome) => {
                 if matches!(
-                    outcome.progress,
+                    &outcome.progress,
+                    crate::media::egress::backend::EngineProgress::Yield
+                ) {
+                    self.budget_exhaustions = self.budget_exhaustions.saturating_add(1);
+                }
+                if matches!(
+                    &outcome.progress,
                     crate::media::egress::backend::EngineProgress::FeedOverrun
                 ) {
                     self.resync_count = self.resync_count.saturating_add(1);
@@ -652,7 +702,7 @@ impl SrtShardBackend {
         // mid-drain can't hang this leaf open forever. Mirrors
         // `RtmpShardBackend::visit_one_ready_leaf` exactly.
         if let Some(draining_since) = leaf.draining_since {
-            let flushed = !leaf.pressure().is_backpressured();
+            let flushed = !leaf.pressure_with_owner(&mut owner).is_backpressured();
             let expired = draining_since.elapsed() >= self.drain_timeout;
             if flushed || expired {
                 let reason = leaf
@@ -675,6 +725,28 @@ impl SrtShardBackend {
 impl EgressShardBackend for SrtShardBackend {
     fn resync_count(&self) -> u64 {
         self.resync_count
+    }
+
+    fn budget_exhaustion_count(&self) -> u64 {
+        self.budget_exhaustions
+    }
+
+    fn observe_metrics(&self, metrics: &mut ShardMetrics) {
+        let Some(shared) = self.shared_srt_egress.as_ref() else {
+            return;
+        };
+        let native: SrtNativeMetrics = shared.native_metrics();
+        metrics.rx_packets = native.rx_packets;
+        metrics.rx_bytes = native.rx_bytes;
+        metrics.tx_packets = native.tx_packets;
+        metrics.tx_bytes = native.tx_bytes;
+        metrics.sqes = native.sqes;
+        metrics.cqes = native.cqes;
+        metrics.stale_completions = native.stale_completions;
+        metrics.tx_pool_empty = native.tx_pool_empty;
+        metrics.cq_overflows = native.cq_overflows;
+        metrics.budget_exhaustions = self.budget_exhaustions;
+        metrics.queue_overflows = self.queue_overflows;
     }
 
     fn on_command(
@@ -737,6 +809,7 @@ impl EgressShardBackend for SrtShardBackend {
             self.poll_ready();
         }
 
+        let ready_key = self.ready.front().map(|event| event.key);
         let outcome = self.visit_one_ready_leaf();
         if let Some((Some(output_id), VisitDecision::Close)) = &outcome {
             // `VisitDecision::Close` is only ever produced from
@@ -752,8 +825,13 @@ impl EgressShardBackend for SrtShardBackend {
             self.remove_leaf_by_output(output_id);
         }
 
-        let leaf_wants_more = matches!(&outcome, Some((_, VisitDecision::Continue)));
-        if leaf_wants_more || !self.ready.is_empty() {
+        if let Some(key) = ready_key
+            && let Some((_, decision)) = outcome.as_ref()
+        {
+            self.requeue_after_visit(key, *decision);
+        }
+
+        if !self.ready.is_empty() || (outcome.is_some() && !self.ready_candidates.is_empty()) {
             EgressShardCommandEffect::ScheduleReady { count: 1 }
         } else {
             EgressShardCommandEffect::Continue
@@ -761,9 +839,11 @@ impl EgressShardBackend for SrtShardBackend {
     }
 
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
-        let mut resolved = Vec::new();
+        let mut resolved = std::mem::take(&mut self.resolved_connects);
+        resolved.clear();
         self.resolve_completions.drain_resolved(&mut resolved);
-        let connected_any = self.drain_connect_backlog(resolved);
+        let connected_any = self.drain_connect_backlog(&mut resolved);
+        self.resolved_connects = resolved;
         self.sweep_stalled_leaves(Instant::now());
         if connected_any || !self.connect_backlog.is_empty() {
             EgressShardCommandEffect::ScheduleReady { count: 1 }
@@ -777,12 +857,39 @@ impl EgressShardBackend for SrtShardBackend {
         for key in keys {
             if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) {
                 let mut leaf = leaf;
-                leaf.engine.close(
+                let mut owner = SrtOwner::new(self.shared_srt_egress.as_mut());
+                leaf.engine.close_with_owner(
                     &mut leaf.transport,
                     crate::media::egress::backend::CloseReason::ShardShutdown,
+                    &mut owner,
                 );
             }
         }
+        self.return_shared_srt_egress();
+    }
+}
+
+impl SrtShardBackend {
+    fn return_shared_srt_egress(&mut self) {
+        if !self.reuse_local_srt_egress_port {
+            return;
+        }
+        let Some(shared) = self.shared_srt_egress.take() else {
+            return;
+        };
+        let mut slot = self
+            .srt_egress_muxer_port
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if slot.is_none() {
+            *slot = Some(shared);
+        }
+    }
+}
+
+impl Drop for SrtShardBackend {
+    fn drop(&mut self) {
+        self.return_shared_srt_egress();
     }
 }
 

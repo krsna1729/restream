@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use rml_rtmp::chunk_io::ChunkDeserializer;
 use rml_rtmp::sessions::{
     ClientSession, ClientSessionConfig, ClientSessionEvent, ClientSessionResult,
     PublishRequestType, StreamMetadata,
@@ -18,6 +19,9 @@ pub(crate) struct RtmpSessionCore {
     session: ClientSession,
     connect_config: ClientSessionConfig,
     initial_results: Vec<ClientSessionResult>,
+    chunk_size: usize,
+    media_stream_id: Option<u32>,
+    wire_deserializer: ChunkDeserializer,
 }
 
 impl RtmpSessionCore {
@@ -30,6 +34,12 @@ impl RtmpSessionCore {
         ));
         config.chunk_size = chunk_size;
         let connect_config = config.clone();
+        let chunk_size = usize::try_from(chunk_size)
+            .map_err(|_| "RTMP chunk size does not fit usize".to_string())?;
+        let mut wire_deserializer = ChunkDeserializer::new();
+        wire_deserializer
+            .set_max_chunk_size(chunk_size)
+            .map_err(|error| format!("failed to configure RTMP wire observer: {error:?}"))?;
         let (session, initial_results) =
             ClientSession::new(config).map_err(|error| format!("{error:?}"))?;
         Ok(Self {
@@ -37,7 +47,28 @@ impl RtmpSessionCore {
             session,
             connect_config,
             initial_results,
+            chunk_size,
+            media_stream_id: None,
+            wire_deserializer,
         })
+    }
+
+    pub(crate) fn media_stream_id(&self) -> Option<u32> {
+        self.media_stream_id
+    }
+
+    pub(crate) fn chunk_size(&self) -> usize {
+        self.chunk_size
+    }
+
+    fn observe_outbound_packet(&mut self, bytes: &[u8]) {
+        let mut input = bytes;
+        while let Ok(Some(message)) = self.wire_deserializer.get_next_message(input) {
+            if matches!(message.type_id, 8 | 9) {
+                self.media_stream_id = Some(message.message_stream_id);
+            }
+            input = &[];
+        }
     }
 }
 
@@ -88,6 +119,7 @@ impl RtmpSessionCore {
         } else {
             packet.bytes
         };
+        self.observe_outbound_packet(&bytes);
         Ok(Bytes::from(bytes))
     }
 
@@ -104,6 +136,7 @@ impl RtmpSessionCore {
         for result in results {
             match result {
                 ClientSessionResult::OutboundResponse(packet) => {
+                    self.observe_outbound_packet(&packet.bytes);
                     packets.push(Bytes::from(packet.bytes));
                 }
                 ClientSessionResult::RaisedEvent(event) => match event {
@@ -184,6 +217,7 @@ impl RtmpSessionCore {
         };
         let bytes = u64::try_from(packet.bytes.len())
             .map_err(|_| RtmpSessionError::Protocol("RTMP packet length overflow"))?;
+        self.observe_outbound_packet(&packet.bytes);
         Ok((Bytes::from(packet.bytes), bytes))
     }
 }
