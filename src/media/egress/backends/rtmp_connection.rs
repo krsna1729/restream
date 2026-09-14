@@ -24,6 +24,7 @@ use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, ClientConnection, StreamOwned};
@@ -35,15 +36,75 @@ use crate::media::rtmp::rustls_client_config;
 #[path = "rtmp_ktls.rs"]
 mod rtmp_ktls;
 
-pub(crate) enum RtmpConnection {
+enum RtmpConnectionState {
     Plain(TcpStream),
     Ktls(TcpStream),
     Tls(Option<Box<StreamOwned<ClientConnection, TcpStream>>>),
+    Failed(TcpStream),
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct RtmpsTelemetrySnapshot {
+    pub(crate) connections: u64,
+    pub(crate) tls12: u64,
+    pub(crate) tls13: u64,
+    pub(crate) ktls_attempts: u64,
+    pub(crate) ktls_success: u64,
+    pub(crate) ktls_unsupported: u64,
+    pub(crate) ktls_error: u64,
+    pub(crate) userspace_tls_connections: u64,
+}
+
+struct RtmpsCounters {
+    connections: AtomicU64,
+    tls12: AtomicU64,
+    tls13: AtomicU64,
+    ktls_attempts: AtomicU64,
+    ktls_success: AtomicU64,
+    ktls_unsupported: AtomicU64,
+    ktls_error: AtomicU64,
+    userspace_tls_connections: AtomicU64,
+}
+
+static RTMPS_COUNTERS: RtmpsCounters = RtmpsCounters {
+    connections: AtomicU64::new(0),
+    tls12: AtomicU64::new(0),
+    tls13: AtomicU64::new(0),
+    ktls_attempts: AtomicU64::new(0),
+    ktls_success: AtomicU64::new(0),
+    ktls_unsupported: AtomicU64::new(0),
+    ktls_error: AtomicU64::new(0),
+    userspace_tls_connections: AtomicU64::new(0),
+};
+
+pub(crate) fn rtmps_telemetry_snapshot() -> RtmpsTelemetrySnapshot {
+    RtmpsTelemetrySnapshot {
+        connections: RTMPS_COUNTERS.connections.load(Ordering::Relaxed),
+        tls12: RTMPS_COUNTERS.tls12.load(Ordering::Relaxed),
+        tls13: RTMPS_COUNTERS.tls13.load(Ordering::Relaxed),
+        ktls_attempts: RTMPS_COUNTERS.ktls_attempts.load(Ordering::Relaxed),
+        ktls_success: RTMPS_COUNTERS.ktls_success.load(Ordering::Relaxed),
+        ktls_unsupported: RTMPS_COUNTERS.ktls_unsupported.load(Ordering::Relaxed),
+        ktls_error: RTMPS_COUNTERS.ktls_error.load(Ordering::Relaxed),
+        userspace_tls_connections: RTMPS_COUNTERS
+            .userspace_tls_connections
+            .load(Ordering::Relaxed),
+    }
+}
+
+pub(crate) struct RtmpConnection {
+    state: RtmpConnectionState,
+    tls_version_recorded: bool,
+    ktls_evaluated: bool,
 }
 
 impl RtmpConnection {
     pub(crate) fn plain(stream: TcpStream) -> Self {
-        Self::Plain(stream)
+        Self {
+            state: RtmpConnectionState::Plain(stream),
+            tls_version_recorded: false,
+            ktls_evaluated: false,
+        }
     }
 
     // Production always calls `tls_with_config` directly with an explicit
@@ -69,16 +130,23 @@ impl RtmpConnection {
         config.enable_secret_extraction = true;
         let connection = ClientConnection::new(Arc::new(config), server_name)
             .map_err(|error| format!("rustls client connection init failed: {error}"))?;
-        Ok(Self::Tls(Some(Box::new(StreamOwned::new(
-            connection, stream,
-        )))))
+        RTMPS_COUNTERS.connections.fetch_add(1, Ordering::Relaxed);
+        Ok(Self {
+            state: RtmpConnectionState::Tls(Some(Box::new(StreamOwned::new(connection, stream)))),
+            tls_version_recorded: false,
+            ktls_evaluated: false,
+        })
     }
 
     fn tcp_stream(&self) -> &TcpStream {
-        match self {
-            Self::Plain(stream) | Self::Ktls(stream) => stream,
-            Self::Tls(Some(stream)) => &stream.sock,
-            Self::Tls(None) => unreachable!("TLS stream is only temporarily taken during handoff"),
+        match &self.state {
+            RtmpConnectionState::Plain(stream)
+            | RtmpConnectionState::Ktls(stream)
+            | RtmpConnectionState::Failed(stream) => stream,
+            RtmpConnectionState::Tls(Some(stream)) => &stream.sock,
+            RtmpConnectionState::Tls(None) => {
+                unreachable!("TLS stream is only temporarily taken during handoff")
+            }
         }
     }
 
@@ -90,7 +158,10 @@ impl RtmpConnection {
     /// shard-owned `io_uring`. Rustls userspace records still need the normal
     /// `Write` path until (and unless) the kTLS handoff completes.
     pub(crate) fn supports_native_send(&self) -> bool {
-        matches!(self, Self::Plain(_) | Self::Ktls(_))
+        matches!(
+            self.state,
+            RtmpConnectionState::Plain(_) | RtmpConnectionState::Ktls(_)
+        )
     }
 
     /// Conservative estimate of rustls-internal buffered bytes not visible
@@ -109,16 +180,18 @@ impl RtmpConnection {
     /// not precise accounting.
     pub(crate) fn rustls_pending_bytes_estimate(&self) -> usize {
         const RUSTLS_DEFAULT_BUFFER_LIMIT: usize = 64 * 1024;
-        match self {
-            Self::Plain(_) | Self::Ktls(_) => 0,
-            Self::Tls(Some(stream)) => {
+        match &self.state {
+            RtmpConnectionState::Plain(_)
+            | RtmpConnectionState::Ktls(_)
+            | RtmpConnectionState::Failed(_) => 0,
+            RtmpConnectionState::Tls(Some(stream)) => {
                 if stream.conn.wants_write() {
                     RUSTLS_DEFAULT_BUFFER_LIMIT
                 } else {
                     0
                 }
             }
-            Self::Tls(None) => 0,
+            RtmpConnectionState::Tls(None) => 0,
         }
     }
 
@@ -133,22 +206,24 @@ impl RtmpConnection {
     /// one direction blocking does not imply that same direction is what
     /// unblocks it (see module docs).
     pub(crate) fn interest_hint(&self, fallback: Interest) -> Interest {
-        match self {
-            Self::Plain(_) | Self::Ktls(_) => fallback,
-            Self::Tls(Some(stream)) => {
+        match &self.state {
+            RtmpConnectionState::Plain(_)
+            | RtmpConnectionState::Ktls(_)
+            | RtmpConnectionState::Failed(_) => fallback,
+            RtmpConnectionState::Tls(Some(stream)) => {
                 let hint = Interest {
                     readable: stream.conn.wants_read(),
                     writable: stream.conn.wants_write(),
                 };
                 if hint.is_empty() { fallback } else { hint }
             }
-            Self::Tls(None) => fallback,
+            RtmpConnectionState::Tls(None) => fallback,
         }
     }
 
     fn maybe_handoff_ktls(&mut self) -> io::Result<()> {
         let (version, suite) = {
-            let Self::Tls(Some(stream)) = self else {
+            let RtmpConnectionState::Tls(Some(stream)) = &mut self.state else {
                 return Ok(());
             };
             if stream.conn.is_handshaking()
@@ -169,6 +244,23 @@ impl RtmpConnection {
             };
             (version, suite)
         };
+        if !self.tls_version_recorded {
+            match version {
+                tokio_rustls::rustls::ProtocolVersion::TLSv1_2 => {
+                    RTMPS_COUNTERS.tls12.fetch_add(1, Ordering::Relaxed);
+                }
+                tokio_rustls::rustls::ProtocolVersion::TLSv1_3 => {
+                    RTMPS_COUNTERS.tls13.fetch_add(1, Ordering::Relaxed);
+                }
+                _ => {}
+            }
+            self.tls_version_recorded = true;
+        }
+        if self.ktls_evaluated {
+            return Ok(());
+        }
+        self.ktls_evaluated = true;
+        RTMPS_COUNTERS.ktls_attempts.fetch_add(1, Ordering::Relaxed);
         if version != tokio_rustls::rustls::ProtocolVersion::TLSv1_2
             || !matches!(
                 suite.suite(),
@@ -179,65 +271,108 @@ impl RtmpConnection {
             )
             || !rtmp_ktls::available()
         {
+            RTMPS_COUNTERS
+                .ktls_unsupported
+                .fetch_add(1, Ordering::Relaxed);
             return Ok(());
         }
 
-        let stream = match self {
-            Self::Tls(stream) => stream.take().expect("TLS stream was checked above"),
-            Self::Plain(_) | Self::Ktls(_) => return Ok(()),
+        let stream = match &mut self.state {
+            RtmpConnectionState::Tls(stream) => {
+                stream.take().expect("TLS stream was checked above")
+            }
+            RtmpConnectionState::Plain(_)
+            | RtmpConnectionState::Ktls(_)
+            | RtmpConnectionState::Failed(_) => return Ok(()),
         };
         let (connection, socket) = stream.into_parts();
         #[allow(deprecated)]
-        let secrets = connection
-            .dangerous_extract_secrets()
-            .map_err(|error| io::Error::other(format!("rustls kTLS handoff: {error}")))?;
-        rtmp_ktls::install(socket.as_raw_fd(), version, suite.suite(), &secrets)?;
-        *self = Self::Ktls(socket);
+        let secrets = match connection.dangerous_extract_secrets() {
+            Ok(secrets) => secrets,
+            Err(error) => {
+                self.state = RtmpConnectionState::Failed(socket);
+                RTMPS_COUNTERS.ktls_error.fetch_add(1, Ordering::Relaxed);
+                return Err(io::Error::other(format!("rustls kTLS handoff: {error}")));
+            }
+        };
+        if let Err(error) = rtmp_ktls::install(socket.as_raw_fd(), version, suite.suite(), &secrets)
+        {
+            self.state = RtmpConnectionState::Failed(socket);
+            RTMPS_COUNTERS.ktls_error.fetch_add(1, Ordering::Relaxed);
+            return Err(error);
+        }
+        self.state = RtmpConnectionState::Ktls(socket);
+        RTMPS_COUNTERS.ktls_success.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
     #[cfg(test)]
     pub(crate) fn is_ktls(&self) -> bool {
-        matches!(self, Self::Ktls(_))
+        matches!(self.state, RtmpConnectionState::Ktls(_))
+    }
+}
+
+impl Drop for RtmpConnection {
+    fn drop(&mut self) {
+        if self.tls_version_recorded && matches!(self.state, RtmpConnectionState::Tls(_)) {
+            RTMPS_COUNTERS
+                .userspace_tls_connections
+                .fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
 impl Read for RtmpConnection {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self {
-            Self::Plain(stream) | Self::Ktls(stream) => stream.read(buf),
-            Self::Tls(Some(stream)) => {
+        match &mut self.state {
+            RtmpConnectionState::Plain(stream) | RtmpConnectionState::Ktls(stream) => {
+                stream.read(buf)
+            }
+            RtmpConnectionState::Tls(Some(stream)) => {
                 let result = stream.read(buf);
                 if result.is_ok() {
                     self.maybe_handoff_ktls()?;
                 }
                 result
             }
-            Self::Tls(None) => Err(io::Error::other("TLS stream unavailable during handoff")),
+            RtmpConnectionState::Tls(None) => {
+                Err(io::Error::other("TLS stream unavailable during handoff"))
+            }
+            RtmpConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
         }
     }
 }
 
 impl Write for RtmpConnection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            Self::Plain(stream) | Self::Ktls(stream) => stream.write(buf),
-            Self::Tls(Some(stream)) => {
+        match &mut self.state {
+            RtmpConnectionState::Plain(stream) | RtmpConnectionState::Ktls(stream) => {
+                stream.write(buf)
+            }
+            RtmpConnectionState::Tls(Some(stream)) => {
                 let result = stream.write(buf);
                 if result.is_ok() {
                     self.maybe_handoff_ktls()?;
                 }
                 result
             }
-            Self::Tls(None) => Err(io::Error::other("TLS stream unavailable during handoff")),
+            RtmpConnectionState::Tls(None) => {
+                Err(io::Error::other("TLS stream unavailable during handoff"))
+            }
+            RtmpConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
         }
     }
 
     fn write_vectored(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
-        let result = match self {
-            Self::Plain(stream) | Self::Ktls(stream) => stream.write_vectored(bufs),
-            Self::Tls(Some(stream)) => stream.write_vectored(bufs),
-            Self::Tls(None) => Err(io::Error::other("TLS stream unavailable during handoff")),
+        let result = match &mut self.state {
+            RtmpConnectionState::Plain(stream) | RtmpConnectionState::Ktls(stream) => {
+                stream.write_vectored(bufs)
+            }
+            RtmpConnectionState::Tls(Some(stream)) => stream.write_vectored(bufs),
+            RtmpConnectionState::Tls(None) => {
+                Err(io::Error::other("TLS stream unavailable during handoff"))
+            }
+            RtmpConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
         };
         if result.is_ok() {
             self.maybe_handoff_ktls()?;
@@ -246,16 +381,21 @@ impl Write for RtmpConnection {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        match self {
-            Self::Plain(stream) | Self::Ktls(stream) => stream.flush(),
-            Self::Tls(Some(stream)) => {
+        match &mut self.state {
+            RtmpConnectionState::Plain(stream) | RtmpConnectionState::Ktls(stream) => {
+                stream.flush()
+            }
+            RtmpConnectionState::Tls(Some(stream)) => {
                 let result = stream.flush();
                 if result.is_ok() {
                     self.maybe_handoff_ktls()?;
                 }
                 result
             }
-            Self::Tls(None) => Err(io::Error::other("TLS stream unavailable during handoff")),
+            RtmpConnectionState::Tls(None) => {
+                Err(io::Error::other("TLS stream unavailable during handoff"))
+            }
+            RtmpConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
         }
     }
 }
