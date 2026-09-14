@@ -4,6 +4,7 @@ use std::os::fd::AsRawFd;
 use std::time::Duration;
 
 use restream_dataplane::udp::{UdpInterest, UdpReadyEvent, UdpSendCompletion, UringUdpPoller};
+use restream_dataplane::{TxLease, TxPool};
 use shiguredo_srt::Timestamp;
 use srt_transport::{DatagramSink, LogicalCallerState, OutputDrainBudget, RecvBatch};
 
@@ -11,8 +12,15 @@ use super::{desired_udp_buf, recv_budget};
 
 const SRT_UDP_SEND_CAPACITY: usize = 16;
 const MAX_OUTBOUND: usize = 256;
+const TX_SLOT_SIZE: usize = 64 * 1024;
 const FAMILY_COUNT: usize = 2;
-type PendingDatagram = (SocketAddr, Vec<u8>);
+
+#[derive(Debug, Clone, Copy)]
+struct PendingDatagram {
+    peer: SocketAddr,
+    lease: TxLease,
+    len: usize,
+}
 
 pub(super) fn family_index(peer: SocketAddr) -> usize {
     usize::from(peer.is_ipv6())
@@ -85,8 +93,8 @@ pub(crate) struct SrtNativeMetrics {
 pub(crate) struct SharedSrtEgress {
     families: [Option<UdpFamily>; FAMILY_COUNT],
     pub(crate) callers: srt_transport::CallerTable,
-    pub(crate) outbound: [VecDeque<(SocketAddr, Vec<u8>)>; FAMILY_COUNT],
-    free_outbound: Vec<Vec<u8>>,
+    outbound: [VecDeque<PendingDatagram>; FAMILY_COUNT],
+    tx_pool: TxPool,
     recv_batch: RecvBatch,
     native_metrics: SrtNativeMetrics,
     /// Times `drive` has run, so the readiness-path invariant in
@@ -117,15 +125,30 @@ impl SharedSrtEgress {
         Self::bind_for_peers(std::slice::from_ref(&peer))
     }
 
+    #[cfg(test)]
+    pub(crate) fn enqueue_test_datagram(&mut self, peer: SocketAddr, packet: Vec<u8>) -> bool {
+        let mut sink = SharedTxSink {
+            outbound: &mut self.outbound,
+            tx_pool: &mut self.tx_pool,
+            pool_empty: &mut self.native_metrics.tx_pool_empty,
+            leased: None,
+        };
+        sink.send_owned(peer, packet).is_ok()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn outbound_empty(&self) -> bool {
+        self.outbound.iter().all(VecDeque::is_empty)
+    }
+
     pub(crate) fn bind_for_peers(peers: &[SocketAddr]) -> Result<Self, String> {
         let families = std::array::from_fn(|_| None);
         let mut shared = Self {
             families,
             callers: srt_transport::CallerTable::new(),
             outbound: std::array::from_fn(|_| VecDeque::with_capacity(MAX_OUTBOUND)),
-            free_outbound: (0..MAX_OUTBOUND)
-                .map(|_| Vec::with_capacity(64 * 1024))
-                .collect(),
+            tx_pool: TxPool::new(MAX_OUTBOUND, TX_SLOT_SIZE)
+                .expect("SRT TX pool capacity is valid"),
             recv_batch: RecvBatch::new(),
             native_metrics: SrtNativeMetrics::default(),
             #[cfg(test)]
@@ -204,7 +227,7 @@ impl SharedSrtEgress {
         let budget = OutputDrainBudget::default();
         let mut sink = SharedTxSink {
             outbound: &mut self.outbound,
-            free: &mut self.free_outbound,
+            tx_pool: &mut self.tx_pool,
             pool_empty: &mut self.native_metrics.tx_pool_empty,
             leased: None,
         };
@@ -237,7 +260,7 @@ impl SharedSrtEgress {
             Some(LogicalCallerState::Connected) => {
                 let mut sink = SharedTxSink {
                     outbound: &mut self.outbound,
-                    free: &mut self.free_outbound,
+                    tx_pool: &mut self.tx_pool,
                     pool_empty: &mut self.native_metrics.tx_pool_empty,
                     leased: None,
                 };
@@ -247,10 +270,10 @@ impl SharedSrtEgress {
     }
 
     pub(crate) fn flush_outbound(&mut self) -> Result<bool, String> {
-        let (families, outbound, free_outbound, native_metrics) = (
+        let (families, outbound, tx_pool, native_metrics) = (
             &mut self.families,
             &mut self.outbound,
-            &mut self.free_outbound,
+            &mut self.tx_pool,
             &mut self.native_metrics,
         );
         for family_index in 0..FAMILY_COUNT {
@@ -263,8 +286,7 @@ impl SharedSrtEgress {
             for completion_index in 0..completed {
                 let completion = family.send_completions[completion_index];
                 let slot = completion.slot as usize;
-                let Some((peer, packet)) = family.inflight.get_mut(slot).and_then(Option::take)
-                else {
+                let Some(pending) = family.inflight.get_mut(slot).and_then(Option::take) else {
                     return Err(format!(
                         "UDP completion {} has no in-flight datagram",
                         completion.slot
@@ -273,18 +295,22 @@ impl SharedSrtEgress {
                 if completion.result < 0 {
                     let error = std::io::Error::from_raw_os_error(-completion.result);
                     if error.kind() == std::io::ErrorKind::WouldBlock {
-                        outbound[family_index].push_front((peer, packet));
+                        outbound[family_index].push_front(pending);
                     } else {
+                        let _ = tx_pool.complete(pending.lease);
+                        let _ = tx_pool.release(pending.lease);
                         return Err(error.to_string());
                     }
-                } else if completion.result as usize == packet.len() {
+                } else if completion.result as usize == pending.len {
                     native_metrics.tx_packets = native_metrics.tx_packets.saturating_add(1);
                     native_metrics.tx_bytes =
-                        native_metrics.tx_bytes.saturating_add(packet.len() as u64);
-                    if free_outbound.len() < 256 {
-                        free_outbound.push(packet);
+                        native_metrics.tx_bytes.saturating_add(pending.len as u64);
+                    if !tx_pool.complete(pending.lease) || !tx_pool.release(pending.lease) {
+                        return Err("SRT TX lease completion failed".to_string());
                     }
                 } else {
+                    let _ = tx_pool.complete(pending.lease);
+                    let _ = tx_pool.release(pending.lease);
                     return Err(format!(
                         "short UDP datagram send: wrote {} bytes",
                         completion.result
@@ -292,27 +318,35 @@ impl SharedSrtEgress {
                 }
             }
             while let Some(operation_slot) = family.inflight.iter().position(Option::is_none) {
-                let Some((peer, packet)) = outbound[family_index].pop_front() else {
+                let Some(pending) = outbound[family_index].pop_front() else {
                     break;
+                };
+                let Some(packet) = tx_pool
+                    .slot(pending.lease)
+                    .and_then(|packet| packet.get(..pending.len))
+                else {
+                    let _ = tx_pool.complete(pending.lease);
+                    let _ = tx_pool.release(pending.lease);
+                    return Err("SRT TX lease is invalid".to_string());
                 };
                 match family.poller.submit_send_on_slot(
                     family.socket.as_raw_fd(),
                     0,
                     operation_slot as u32,
                     1,
-                    peer,
-                    &packet,
+                    pending.peer,
+                    packet,
                 ) {
                     Ok(()) => {
                         native_metrics.sqes = native_metrics.sqes.saturating_add(1);
-                        family.inflight[operation_slot] = Some((peer, packet));
+                        family.inflight[operation_slot] = Some(pending);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        outbound[family_index].push_front((peer, packet));
+                        outbound[family_index].push_front(pending);
                         break;
                     }
                     Err(error) => {
-                        outbound[family_index].push_front((peer, packet));
+                        outbound[family_index].push_front(pending);
                         return Err(error.to_string());
                     }
                 }
@@ -344,74 +378,82 @@ impl SharedSrtEgress {
 }
 
 struct SharedTxSink<'a> {
-    outbound: &'a mut [VecDeque<(SocketAddr, Vec<u8>)>; FAMILY_COUNT],
-    free: &'a mut Vec<Vec<u8>>,
+    outbound: &'a mut [VecDeque<PendingDatagram>; FAMILY_COUNT],
+    tx_pool: &'a mut TxPool,
     pool_empty: &'a mut u64,
-    leased: Option<Vec<u8>>,
+    leased: Option<TxLease>,
 }
 
 impl DatagramSink for SharedTxSink<'_> {
     fn send_owned(&mut self, peer: SocketAddr, packet: Vec<u8>) -> Result<(), Vec<u8>> {
         let queue = &mut self.outbound[family_index(peer)];
-        if self.leased.is_some() || packet.len() > 64 * 1024 || queue.len() >= MAX_OUTBOUND {
+        if self.leased.is_some() || packet.len() > TX_SLOT_SIZE || queue.len() >= MAX_OUTBOUND {
             return Err(packet);
         }
-        let Some(token) = self.free.pop() else {
+        let Some(lease) = self.tx_pool.acquire() else {
             *self.pool_empty = self.pool_empty.saturating_add(1);
             return Err(packet);
         };
-        drop(token);
-        queue.push_back((peer, packet));
+        let Some(storage) = self.tx_pool.slot_mut(lease) else {
+            let _ = self.tx_pool.abort(lease);
+            return Err(packet);
+        };
+        storage[..packet.len()].copy_from_slice(&packet);
+        if !self.tx_pool.submit(lease) {
+            let _ = self.tx_pool.abort(lease);
+            return Err(packet);
+        }
+        queue.push_back(PendingDatagram {
+            peer,
+            lease,
+            len: packet.len(),
+        });
         Ok(())
     }
 
     fn acquire(&mut self, max_len: usize) -> Option<&mut [std::mem::MaybeUninit<u8>]> {
-        if self.leased.is_some() {
+        if self.leased.is_some() || max_len > TX_SLOT_SIZE {
             return None;
         }
-        let Some(mut storage) = self.free.pop() else {
+        let Some(lease) = self.tx_pool.acquire() else {
             *self.pool_empty = self.pool_empty.saturating_add(1);
             return None;
         };
-        if max_len > storage.capacity() {
-            self.free.push(storage);
-            return None;
-        }
-        storage.clear();
-        self.leased = Some(storage);
-        Some(
-            self.leased
-                .as_mut()
-                .map(Vec::spare_capacity_mut)
-                .expect("leased TX storage is present"),
-        )
+        self.leased = Some(lease);
+        let storage = self
+            .tx_pool
+            .slot_mut(lease)
+            .expect("new TX lease is writable");
+        // SAFETY: `MaybeUninit<u8>` has the same layout as `u8`; the
+        // DatagramSink contract initializes exactly the committed prefix.
+        Some(unsafe {
+            std::slice::from_raw_parts_mut(
+                storage.as_mut_ptr().cast::<std::mem::MaybeUninit<u8>>(),
+                storage.len(),
+            )
+        })
     }
 
     fn commit(&mut self, peer: SocketAddr, len: usize) -> bool {
-        let Some(mut storage) = self.leased.take() else {
+        let Some(lease) = self.leased.take() else {
             return false;
         };
-        if len > storage.capacity() {
-            self.free.push(storage);
-            return false;
-        }
         let queue = &mut self.outbound[family_index(peer)];
-        if queue.len() >= MAX_OUTBOUND {
-            self.free.push(storage);
+        if len > TX_SLOT_SIZE || queue.len() >= MAX_OUTBOUND {
+            let _ = self.tx_pool.abort(lease);
             return false;
         }
-        // `acquire` exposes exactly this vector's spare capacity and the
-        // default DatagramSink::send initializes every committed byte.
-        // SAFETY: every byte in `0..len` was initialized by that default
-        // implementation before it called commit.
-        unsafe { storage.set_len(len) };
-        queue.push_back((peer, storage));
+        if !self.tx_pool.submit(lease) {
+            let _ = self.tx_pool.abort(lease);
+            return false;
+        }
+        queue.push_back(PendingDatagram { peer, lease, len });
         true
     }
 
     fn abort(&mut self) {
-        if let Some(storage) = self.leased.take() {
-            self.free.push(storage);
+        if let Some(lease) = self.leased.take() {
+            let _ = self.tx_pool.abort(lease);
         }
     }
 }
@@ -421,29 +463,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn owned_datagrams_reuse_the_protocol_buffer_without_copying() {
+    fn owned_datagrams_use_a_bounded_tx_lease() {
         let peer = "127.0.0.1:9000".parse().unwrap();
         let mut outbound = std::array::from_fn(|_| VecDeque::new());
-        let mut free = vec![Vec::with_capacity(64)];
+        let mut tx_pool = TxPool::new(1, TX_SLOT_SIZE).unwrap();
         let mut pool_empty = 0;
-        let packet = Vec::from([1_u8, 2, 3]);
-        let pointer = packet.as_ptr();
         let mut sink = SharedTxSink {
             outbound: &mut outbound,
-            free: &mut free,
+            tx_pool: &mut tx_pool,
             pool_empty: &mut pool_empty,
             leased: None,
         };
 
-        DatagramSink::send_owned(&mut sink, peer, packet).unwrap();
+        DatagramSink::send_owned(&mut sink, peer, Vec::from([1_u8, 2, 3])).unwrap();
 
-        assert_eq!(free.len(), 0);
-        assert_eq!(
-            outbound[family_index(peer)]
-                .front()
-                .map(|(_, packet)| packet.as_ptr()),
-            Some(pointer)
-        );
+        assert_eq!(tx_pool.available(), 0);
+        let lease = outbound[family_index(peer)].front().unwrap().lease;
+        assert_eq!(tx_pool.slot(lease).unwrap()[..3], [1_u8, 2, 3]);
     }
 
     #[test]
@@ -451,11 +487,11 @@ mod tests {
         let ipv4 = "127.0.0.1:9000".parse().unwrap();
         let ipv6 = "[::1]:9000".parse().unwrap();
         let mut outbound = std::array::from_fn(|_| VecDeque::new());
-        let mut free = (0..MAX_OUTBOUND).map(|_| Vec::with_capacity(64)).collect();
+        let mut tx_pool = TxPool::new(MAX_OUTBOUND, TX_SLOT_SIZE).unwrap();
         let mut pool_empty = 0;
         let mut sink = SharedTxSink {
             outbound: &mut outbound,
-            free: &mut free,
+            tx_pool: &mut tx_pool,
             pool_empty: &mut pool_empty,
             leased: None,
         };
@@ -470,11 +506,11 @@ mod tests {
         assert_eq!(pool_empty, 0);
 
         let mut ipv6_outbound = std::array::from_fn(|_| VecDeque::new());
-        let mut ipv6_free = vec![Vec::with_capacity(64)];
+        let mut ipv6_tx_pool = TxPool::new(1, TX_SLOT_SIZE).unwrap();
         let mut ipv6_pool_empty = 0;
         let mut ipv6_sink = SharedTxSink {
             outbound: &mut ipv6_outbound,
-            free: &mut ipv6_free,
+            tx_pool: &mut ipv6_tx_pool,
             pool_empty: &mut ipv6_pool_empty,
             leased: None,
         };

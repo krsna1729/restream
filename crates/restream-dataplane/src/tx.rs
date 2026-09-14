@@ -48,8 +48,25 @@ impl TxPool {
             .flatten()
     }
 
+    pub fn slot(&self, lease: TxLease) -> Option<&[u8]> {
+        matches!(
+            self.state(lease),
+            Some(TxState::Filling | TxState::Submitted | TxState::WaitingZcNotification)
+        )
+        .then(|| self.buffers.slot(lease.slot))
+        .flatten()
+    }
+
     pub fn submit(&mut self, lease: TxLease) -> bool {
         self.transition(lease, TxState::Filling, TxState::Submitted)
+    }
+
+    pub fn abort(&mut self, lease: TxLease) -> bool {
+        if !self.valid(lease, TxState::Filling) {
+            return false;
+        }
+        self.states[lease.slot as usize] = Some(TxState::Retired);
+        self.release(lease)
     }
 
     pub fn await_zc_notification(&mut self, lease: TxLease) -> bool {
@@ -109,6 +126,7 @@ mod tests {
         let mut pool = TxPool::new(1, 32).unwrap();
         let lease = pool.acquire().unwrap();
         pool.slot_mut(lease).unwrap()[..3].copy_from_slice(b"tx!");
+        assert_eq!(pool.slot(lease).unwrap()[..3], *b"tx!");
         assert!(pool.submit(lease));
         assert!(pool.await_zc_notification(lease));
         assert_eq!(pool.available(), 0);
