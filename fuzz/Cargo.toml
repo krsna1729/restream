@@ -31,3 +31,10 @@ path = "fuzz_targets/tx_pool.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fairness"
+path = "fuzz_targets/fairness.rs"
+test = false
+doc = false
+bench = false
