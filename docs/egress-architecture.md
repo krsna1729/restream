@@ -197,9 +197,9 @@ common lifecycle, or backpressure policy.
 A shard may use a protocol-native readiness path. RTMP shards use one native
 `io_uring` TCP readiness owner per shard. SRT shared egress uses the application's bounded
 io_uring UDP readiness path and drives the shared `CallerTable` from the shard
-owner thread. Direct and mixed-family bonded links retain the runtime adapter
-path. All variants stay under the same application topology, not a separate
-egress architecture.
+owner thread; mixed IPv4/IPv6 groups use one bounded native owner per local
+address family. All variants stay under the same application topology, not a
+separate egress architecture.
 
 ## Shared preparation graph
 
@@ -227,10 +227,9 @@ chunking, acknowledgement, connection, and optional TLS state.
 SRT leaves consume immutable MPEG-TS messages produced once for compatible
 outputs. Each leaf still owns SRT connection and protocol state in the
 `srt-rs` stack (congestion, retransmission, encryption). Shared egress owns one
-application UDP socket, native readiness poller, and `CallerTable` per
-`(pipeline, shard)`; homogeneous IPv4 and IPv6 peer groups use that path, while
-mixed-family groups retain the bounded runtime adapter because one UDP socket
-cannot serve both address families.
+application UDP socket per local address family, native readiness pollers, and a
+`CallerTable` per `(pipeline, shard)`; mixed-family groups use both native
+family owners without a runtime adapter.
 
 Sink leaves consume prepared media and discard it after accounting progress.
 They have no transport readiness adapter, but they still run through the same
@@ -493,14 +492,14 @@ SRT egress runs on `srt-rs` protocol state with an application-owned native UDP
 readiness adapter for shared links. The adapter uses bounded receive/send
 budgets and one-shot generation-tagged readiness events; the shard owner thread
 drives the shared socket and `CallerTable` without a per-leaf population scan.
-Ready candidates and feed-waiting leaves are queued explicitly. Direct or
-mixed-family bonded links use the runtime adapter because the upstream API does
-not expose caller-owned transmit storage for a zero-copy batch path.
+Ready candidates and feed-waiting leaves are queued explicitly. Direct and
+bonded callers use the same runtime-neutral table and caller-owned transmit
+storage; mixed-family groups use one native owner per local address family.
 
 Local-port reuse still scopes one shared UDP socket and `CallerTable` per
-`(pipeline, shard)` (`SrtEgressMuxerPorts`). Direct or mixed-family bonded leaves
-drive their own runtime sockets; shared-port leaves share one native socket and
-table that the shard drives once per readiness pass. Application-owned
+`(pipeline, shard)` (`SrtEgressMuxerPorts`), with one native socket/poller per
+family when needed. Outputs with reuse disabled own isolated native socket
+state, but still use the same caller table and readiness path. Application-owned
 per-destination byte queues and sender threads remain removed.
 
 SRT sender-buffer limits remain part of the leaf's total buffering policy;

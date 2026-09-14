@@ -474,8 +474,8 @@ flowchart LR
 | SRT ingest socket and protocol tasks | One native io_uring UDP owner thread with bounded packet handoff to the async `PeerTable`/protocol owner | Fixed receive-buffer reserve plus srt-rs receive state per connection; kernel `SO_RCVBUF` is separate and kernel-owned |
 | `TsDemuxer` → `source_ring` | Tokio worker, inline async | Shared `source_ring`, same structure as RTMP |
 | Shared `TsMuxer` (SRT preparation) | 1 Tokio task per `(pipeline, preset)`, inline async | `TsChunkRing` (256-chunk shared ring, `RESTREAM_TS_RING_CAPACITY`) |
-| Egress shard (SRT) | Fixed OS-thread pool per feed; each shard owner drives the shared homogeneous-family native UDP readiness socket and queued leaf visits, while direct/mixed-family links retain runtime adapters | Per-leaf protocol state and bounded application scratch |
-| Shared SRT transport | 1 application UDP socket + io_uring readiness poller + `CallerTable` per `(pipeline, shard)`; shared TS muxing remains per `(pipeline, preset)` | srt-rs caller/protocol state plus kernel `SO_SNDBUF`; normal media DATA uses bounded caller-owned final TX storage through `poll_outbound_into`/`send_shared_into`, while handshake/control/retransmit paths retain their protocol-owned packets |
+| Egress shard (SRT) | Fixed OS-thread pool per feed; each shard owner drives one native UDP readiness owner per local address family and queued leaf visits | Per-leaf protocol state and bounded application scratch |
+| Shared SRT transport | 1 application UDP socket/poller per local family + `CallerTable` per `(pipeline, shard)`; shared TS muxing remains per `(pipeline, preset)` | srt-rs caller/protocol state plus kernel `SO_SNDBUF`; normal media DATA uses bounded caller-owned final TX storage through `poll_outbound_into`/`send_shared_into`, while handshake/control/retransmit paths retain their protocol-owned packets |
 
 The shared native path bounds work per shard with receive/send budgets and
 explicit ready/feed-wait queues. The transport boundary no longer stages a
@@ -504,9 +504,9 @@ srt://primary:10080?streamid=publish:key&bond=backup1:10080,backup2:10080
 
 This creates an SRT Backup group with the URL authority as the primary leg and
 the listed peers as standbys. Add `type=broadcast` to duplicate each media
-message over every healthy leg. Homogeneous IPv4 or IPv6 groups use the native
-shared readiness path; mixed-family groups retain the runtime group adapter so
-all group I/O remains nonblocking.
+message over every healthy leg. Homogeneous and mixed-family groups use the
+native shared readiness path; mixed-family groups simply bind one owner per
+local address family so all group I/O remains nonblocking.
 
 
 ## Protocol correctness requirements

@@ -151,6 +151,7 @@ pub struct SrtListenerDiagSnapshot {
     pub native_rx_datagrams: u64,
     pub native_tx_datagrams: u64,
     pub native_rx_pool_drops: u64,
+    pub native_rx_channel_drops: u64,
     pub active_ingest_count: usize,
 }
 
@@ -180,6 +181,7 @@ pub struct ListenerSocketStats {
     pub native_rx_datagrams: AtomicU64,
     pub native_tx_datagrams: AtomicU64,
     pub native_rx_pool_drops: AtomicU64,
+    pub native_rx_channel_drops: AtomicU64,
 }
 
 /// Shared RTMP listener accept/error counters.

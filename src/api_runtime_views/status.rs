@@ -457,6 +457,11 @@ pub(crate) async fn health_snapshot(
         .listener_stats
         .native_rx_pool_drops
         .load(Ordering::Relaxed);
+    let native_rx_channel_drops = engine
+        .runtime
+        .listener_stats
+        .native_rx_channel_drops
+        .load(Ordering::Relaxed);
     let bonding_available = engine
         .runtime
         .listener_stats
@@ -515,6 +520,7 @@ pub(crate) async fn health_snapshot(
             "nativeRxDatagrams": native_rx_datagrams,
             "nativeTxDatagrams": native_tx_datagrams,
             "nativeRxPoolDrops": native_rx_pool_drops,
+            "nativeRxChannelDrops": native_rx_channel_drops,
         },
         "egressFabricShards": egress_fabric_shards,
         "tuning": {

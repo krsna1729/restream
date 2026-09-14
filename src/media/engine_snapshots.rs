@@ -234,6 +234,11 @@ impl MediaEngine {
                 .listener_stats
                 .native_rx_pool_drops
                 .load(Ordering::Relaxed),
+            native_rx_channel_drops: self
+                .runtime
+                .listener_stats
+                .native_rx_channel_drops
+                .load(Ordering::Relaxed),
             active_ingest_count: self.active_ingest_count().await,
         }
     }

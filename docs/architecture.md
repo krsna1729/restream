@@ -93,7 +93,7 @@ of the async scheduler is isolated:
 - RTMP ingress accepts on a native `io_uring` owner thread and hands bounded
   nonblocking streams to the existing authenticated connection workflow;
 - SRT ingress receives on a native `io_uring` UDP owner thread and hands fixed
-  packet buffers to the async `srt-rs` admission/protocol owner;
+  packet buffers to the runtime-neutral `srt-rs` admission/protocol owner;
 - in-process FFmpeg codec work runs on guarded OS threads;
 - recording uses a feeder task and a writer thread;
 - the default transcoder and file-ingest paths use managed FFmpeg child

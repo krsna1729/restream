@@ -41,6 +41,7 @@ impl NativeSrtDatagram {
 #[derive(Debug, Default)]
 pub(crate) struct NativeSrtIngressStats {
     pub(crate) dropped_pool: AtomicU64,
+    pub(crate) dropped_channel: AtomicU64,
     pub(crate) recv_datagrams: AtomicU64,
     pub(crate) sent_datagrams: AtomicU64,
 }
@@ -84,6 +85,25 @@ impl NativeSrtIngress {
             outbound,
             stats,
         })
+    }
+}
+
+fn deliver_datagram(
+    inbound_tx: &mpsc::Sender<NativeSrtDatagram>,
+    packet: NativeSrtDatagram,
+    stats: &NativeSrtIngressStats,
+    listener_stats: &ListenerSocketStats,
+) -> bool {
+    match inbound_tx.try_send(packet) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            stats.dropped_channel.fetch_add(1, Ordering::Relaxed);
+            listener_stats
+                .native_rx_channel_drops
+                .fetch_add(1, Ordering::Relaxed);
+            false
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => false,
     }
 }
 
@@ -173,10 +193,7 @@ fn run_worker(
                     buffer,
                     len: data.len(),
                 };
-                if inbound_tx.blocking_send(packet).is_err() {
-                    // The receiver is gone; the worker exits on the next loop
-                    // after this buffer is dropped rather than allocating.
-                }
+                let _ = deliver_datagram(&inbound_tx, packet, &stats, &listener_stats);
             })?;
             let _ = report;
             poller.register(fd, 0, 1, UdpInterest::READ)?;
@@ -248,6 +265,39 @@ fn flush_outbound(
 mod tests {
     use super::*;
     use std::net::UdpSocket;
+
+    #[tokio::test]
+    async fn full_application_channel_drops_without_blocking_native_owner() {
+        let (inbound_tx, mut inbound_rx) = mpsc::channel(1);
+        let stats = NativeSrtIngressStats::default();
+        let listener_stats = ListenerSocketStats::default();
+        let packet = || NativeSrtDatagram {
+            peer: "127.0.0.1:9000".parse().unwrap(),
+            buffer: vec![1_u8].into_boxed_slice(),
+            len: 1,
+        };
+
+        assert!(deliver_datagram(
+            &inbound_tx,
+            packet(),
+            &stats,
+            &listener_stats
+        ));
+        assert!(!deliver_datagram(
+            &inbound_tx,
+            packet(),
+            &stats,
+            &listener_stats
+        ));
+        assert_eq!(stats.dropped_channel.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            listener_stats
+                .native_rx_channel_drops
+                .load(Ordering::Relaxed),
+            1
+        );
+        let _ = inbound_rx.recv().await;
+    }
 
     #[tokio::test]
     async fn native_ingress_delivers_and_recycles_bounded_datagram() {

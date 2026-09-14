@@ -75,7 +75,7 @@ impl SrtServer {
             .bonded_inputs(BondedInputPolicy::Accept)
             .configure_transport(super::tokio_egress::apply_optional_udp_buf)
             .build()
-            .and_then(|config| config.prepare(RuntimeFlavor::Tokio))
+            .and_then(|config| config.prepare(RuntimeFlavor::Mio))
         {
             Ok(prepared) => prepared,
             Err(error) => {
