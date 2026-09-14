@@ -568,6 +568,13 @@ pub struct SinkSnapshot {
     pub visits: u64,
 }
 
+/// Control-plane identity for a dataplane-owned output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputRuntimeSpec {
+    pub id: u64,
+    pub generation: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShardSnapshot {
     pub active_leaves: usize,
@@ -616,8 +623,8 @@ impl LeafSlab {
         }
     }
 
-    fn add(&mut self, id: u64) -> Result<u32, CapacityError> {
-        if self.leaves.iter().flatten().any(|leaf| leaf.id == id) {
+    fn add(&mut self, spec: OutputRuntimeSpec) -> Result<u32, CapacityError> {
+        if self.leaves.iter().flatten().any(|leaf| leaf.id == spec.id) {
             return Err(CapacityError::TooManyLeaves(self.leaves.len()));
         }
         let slot = self
@@ -626,12 +633,26 @@ impl LeafSlab {
             .ok_or(CapacityError::TooManyLeaves(self.leaves.len()))?;
         let generation = self.generations[slot as usize];
         self.leaves[slot as usize] = Some(SinkLeaf {
-            id,
-            generation,
+            id: spec.id,
+            generation: spec.generation.max(generation),
             pending: false,
             visits: 0,
         });
         Ok(slot)
+    }
+
+    fn update(&mut self, id: u64, generation: u32) -> bool {
+        let Some(slot) = self.find_slot(id) else {
+            return false;
+        };
+        let leaf = self.leaves[slot as usize]
+            .as_mut()
+            .expect("find_slot returned a live leaf");
+        if generation <= leaf.generation {
+            return false;
+        }
+        leaf.generation = generation;
+        true
     }
 
     fn find_slot(&self, id: u64) -> Option<u32> {
@@ -647,8 +668,11 @@ impl LeafSlab {
         if self.leaves.get(slot).and_then(Option::as_ref).is_none() {
             return false;
         }
+        let generation = self.leaves[slot]
+            .as_ref()
+            .map_or(self.generations[slot], |leaf| leaf.generation);
         self.leaves[slot] = None;
-        self.generations[slot] = self.generations[slot].wrapping_add(1);
+        self.generations[slot] = generation.wrapping_add(1);
         self.free.push(slot as u32);
         true
     }
@@ -704,6 +728,22 @@ impl ShardState {
         self.ready.remove(slot);
         self.deadlines.remove(slot);
         self.leaves.remove_slot(slot)
+    }
+
+    fn update(&mut self, id: u64, generation: u32) -> bool {
+        let Some(slot) = self.leaves.find_slot(id) else {
+            return false;
+        };
+        if !self.leaves.update(id, generation) {
+            return false;
+        }
+        self.ready.remove(slot);
+        self.deadlines.remove(slot);
+        self.leaves.leaves[slot as usize]
+            .as_mut()
+            .expect("updated slot remains live")
+            .pending = false;
+        true
     }
 
     fn service_ready(&mut self, loop_deadline: Instant) {
@@ -773,7 +813,13 @@ impl ShardState {
 enum Command {
     Add {
         id: u64,
+        generation: u32,
         reply: SyncSender<Result<(), CommandError>>,
+    },
+    Update {
+        id: u64,
+        generation: u32,
+        reply: SyncSender<bool>,
     },
     Remove {
         id: u64,
@@ -844,6 +890,16 @@ impl DataplaneHandle {
         let shard = self.shard_for(id);
         self.shards[shard].add_sink(id)?;
         Ok(OutputHandle { shard, id })
+    }
+
+    pub fn add_output_spec(&self, spec: OutputRuntimeSpec) -> Result<OutputHandle, CommandError> {
+        let shard = self.shard_for(spec.id);
+        self.shards[shard].add_sink_with_generation(spec.id, spec.generation)?;
+        Ok(OutputHandle { shard, id: spec.id })
+    }
+
+    pub fn update_output(&self, id: u64, generation: u32) -> Result<bool, CommandError> {
+        self.shards[self.shard_for(id)].update_sink(id, generation)
     }
 
     pub fn remove_output(&self, id: u64) -> Result<bool, CommandError> {
@@ -919,9 +975,27 @@ impl Dataplane {
     }
 
     pub fn add_sink(&self, id: u64) -> Result<(), CommandError> {
+        self.add_sink_with_generation(id, 0)
+    }
+
+    pub fn add_sink_with_generation(&self, id: u64, generation: u32) -> Result<(), CommandError> {
         let (reply, result) = reply_channel();
-        self.enqueue(Command::Add { id, reply })?;
+        self.enqueue(Command::Add {
+            id,
+            generation,
+            reply,
+        })?;
         result.recv().map_err(|_| CommandError::Closed)?
+    }
+
+    pub fn update_sink(&self, id: u64, generation: u32) -> Result<bool, CommandError> {
+        let (reply, result) = reply_channel();
+        self.enqueue(Command::Update {
+            id,
+            generation,
+            reply,
+        })?;
+        result.recv().map_err(|_| CommandError::Closed)
     }
 
     pub fn remove_sink(&self, id: u64) -> Result<bool, CommandError> {
@@ -1084,13 +1158,24 @@ fn run_shard(
 
         loop {
             match mailbox.try_recv() {
-                Ok(Command::Add { id, reply }) => {
+                Ok(Command::Add {
+                    id,
+                    generation,
+                    reply,
+                }) => {
                     let result = state
                         .leaves
-                        .add(id)
+                        .add(OutputRuntimeSpec { id, generation })
                         .map(|_| ())
                         .map_err(CommandError::Shard);
                     let _ = reply.send(result);
+                }
+                Ok(Command::Update {
+                    id,
+                    generation,
+                    reply,
+                }) => {
+                    let _ = reply.send(state.update(id, generation));
                 }
                 Ok(Command::Remove { id, reply }) => {
                     let removed = state.remove(id);
@@ -1234,10 +1319,22 @@ mod tests {
             ready_capacity: 1,
             ..ShardConfig::default()
         });
-        state.leaves.add(7).unwrap();
+        state
+            .leaves
+            .add(OutputRuntimeSpec {
+                id: 7,
+                generation: 0,
+            })
+            .unwrap();
         assert!(state.wake(7));
         assert!(state.remove(7));
-        state.leaves.add(8).unwrap();
+        state
+            .leaves
+            .add(OutputRuntimeSpec {
+                id: 8,
+                generation: 0,
+            })
+            .unwrap();
         state.service_ready(Instant::now() + Duration::from_millis(1));
         assert_eq!(state.leaves.leaves[0].as_ref().unwrap().visits, 0);
         assert!(state.wake(8));
@@ -1252,9 +1349,12 @@ mod tests {
             ready_capacity: 2,
             ..ShardConfig::default()
         });
-        state.leaves.add(1).unwrap();
-        state.leaves.add(2).unwrap();
-        state.leaves.add(3).unwrap();
+        for id in 1..=3 {
+            state
+                .leaves
+                .add(OutputRuntimeSpec { id, generation: 0 })
+                .unwrap();
+        }
         assert!(state.wake(1));
         assert!(state.wake(2));
         assert!(!state.wake(3));
@@ -1263,6 +1363,28 @@ mod tests {
         // the third leaf must now be admitted.
         assert!(state.remove(1));
         assert!(state.wake(3));
+    }
+
+    #[test]
+    fn update_rejects_stale_generation_and_clears_pending_work() {
+        let mut state = ShardState::new(ShardConfig {
+            max_leaves: 1,
+            ready_capacity: 1,
+            ..ShardConfig::default()
+        });
+        state
+            .leaves
+            .add(OutputRuntimeSpec {
+                id: 7,
+                generation: 4,
+            })
+            .unwrap();
+        assert!(state.wake(7));
+        assert!(!state.update(7, 3));
+        assert_eq!(state.ready.len(), 1);
+        assert!(state.update(7, 5));
+        assert_eq!(state.ready.len(), 0);
+        assert_eq!(state.leaves.leaves[0].as_ref().unwrap().generation, 5);
     }
 
     #[test]
