@@ -798,6 +798,94 @@ pub struct Dataplane {
     join: Option<JoinHandle<io::Result<ShardMetrics>>>,
 }
 
+/// Stable placement handle for one output owned by a dataplane shard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputHandle {
+    pub shard: usize,
+    pub id: u64,
+}
+
+/// Cold-path snapshot of all native owner shards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataplaneSnapshot {
+    pub shards: Box<[ShardSnapshot]>,
+}
+
+/// A fixed set of single-owner native shards.
+pub struct DataplaneHandle {
+    shards: Box<[Dataplane]>,
+}
+
+impl DataplaneHandle {
+    /// Start exactly `shard_count` owner threads. Placement is stable for an
+    /// output's lifetime: the output id chooses its shard once and is never
+    /// migrated by this handle.
+    pub fn spawn(config: ShardConfig, shard_count: usize) -> io::Result<Self> {
+        if shard_count == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "dataplane requires at least one shard",
+            ));
+        }
+        let mut shards = Vec::with_capacity(shard_count);
+        for _ in 0..shard_count {
+            shards.push(Dataplane::spawn(config)?);
+        }
+        Ok(Self {
+            shards: shards.into_boxed_slice(),
+        })
+    }
+
+    pub fn shard_count(&self) -> usize {
+        self.shards.len()
+    }
+
+    pub fn add_output(&self, id: u64) -> Result<OutputHandle, CommandError> {
+        let shard = self.shard_for(id);
+        self.shards[shard].add_sink(id)?;
+        Ok(OutputHandle { shard, id })
+    }
+
+    pub fn remove_output(&self, id: u64) -> Result<bool, CommandError> {
+        self.shards[self.shard_for(id)].remove_sink(id)
+    }
+
+    pub fn wake_output(&self, id: u64) -> Result<bool, CommandError> {
+        self.shards[self.shard_for(id)].wake_sink(id)
+    }
+
+    pub fn snapshot(&self) -> Result<DataplaneSnapshot, CommandError> {
+        self.shards
+            .iter()
+            .map(Dataplane::snapshot)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|snapshots| DataplaneSnapshot {
+                shards: snapshots.into_boxed_slice(),
+            })
+    }
+
+    pub fn shutdown(self) -> io::Result<Box<[ShardMetrics]>> {
+        let mut metrics = Vec::with_capacity(self.shards.len());
+        let mut first_error = None;
+        for shard in self.shards {
+            match shard.shutdown() {
+                Ok(value) => metrics.push(value),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(metrics.into_boxed_slice()),
+        }
+    }
+
+    fn shard_for(&self, id: u64) -> usize {
+        (id as usize) % self.shards.len()
+    }
+}
+
 impl Dataplane {
     pub fn spawn(config: ShardConfig) -> io::Result<Self> {
         let config = config
