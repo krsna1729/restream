@@ -10,6 +10,8 @@ use io_uring::{IoUring, opcode, types};
 
 use crate::{FixedFileTable, MAX_TAG_SLOTS, OpKind, OpTag, build_ring};
 
+pub use crate::udp_recv::{UdpRecvBuffers, UdpRecvDatagram, UringUdpReceiver};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UdpInterest {
     pub readable: bool,

@@ -103,7 +103,6 @@ impl SrtServer {
         };
         let NativeSrtIngress {
             mut inbound,
-            recycled,
             outbound: outbound_tx,
             stats: _stats,
         } = native;
@@ -130,10 +129,7 @@ impl SrtServer {
             let wait = listener_wait_duration(&mut peers, timestamp_now());
             match tokio::time::timeout(wait, inbound.recv()).await {
                 Ok(Some(packet)) => {
-                    admit_native_datagram(
-                        &self, &mut peers, packet, &admission, &telemetry, &recycled,
-                    )
-                    .await;
+                    admit_native_datagram(&self, &mut peers, packet, &admission, &telemetry);
                 }
                 Ok(None) => break,
                 Err(_) => {}
@@ -141,8 +137,7 @@ impl SrtServer {
 
             let now = timestamp_now();
             while let Ok(packet) = inbound.try_recv() {
-                admit_native_datagram(&self, &mut peers, packet, &admission, &telemetry, &recycled)
-                    .await;
+                admit_native_datagram(&self, &mut peers, packet, &admission, &telemetry);
             }
             close_deleted_srt_publishers(&self.engine, &mut peers, &mut peer_sessions, now).await;
             drive_srt_readers(&self.engine, &mut peers, &mut peer_sessions, now).await;
@@ -649,20 +644,19 @@ fn resolve_listener_policy(
     AdmissionResolution::Configure(policy)
 }
 
-async fn admit_native_datagram(
+fn admit_native_datagram(
     server: &SrtServer,
     peers: &mut PeerTable,
     packet: NativeSrtDatagram,
     admission: &srt_transport::AdmissionOptions,
     telemetry: &IngressTelemetry,
-    recycled: &tokio::sync::mpsc::Sender<Vec<u8>>,
 ) {
-    let NativeSrtDatagram { peer, buffer, len } = packet;
+    let NativeSrtDatagram { peer, buffer } = packet;
     let now = timestamp_now();
     let policy_store = server.ingest_policy_store.clone();
     let _ = peers.admit_with_resolver(
         peer,
-        &buffer[..len],
+        buffer.payload(),
         now,
         admission,
         0,
@@ -670,7 +664,6 @@ async fn admit_native_datagram(
         telemetry,
         move |request| resolve_listener_policy(&policy_store, request),
     );
-    let _ = recycled.send(buffer).await;
 }
 
 fn listener_wait_duration(peers: &mut PeerTable, now: Timestamp) -> Duration {

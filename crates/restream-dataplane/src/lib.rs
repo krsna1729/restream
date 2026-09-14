@@ -29,6 +29,7 @@ pub mod media;
 pub mod tcp;
 pub mod tx;
 pub mod udp;
+mod udp_recv;
 
 pub use capabilities::{UringCapabilities, UringCapabilityTier};
 pub use files::{FixedFile, FixedFileTable};

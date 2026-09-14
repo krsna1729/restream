@@ -13,28 +13,52 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use restream_dataplane::udp::{UdpInterest, UdpReadyEvent, UdpSendCompletion, UringUdpPoller};
-use srt_transport::{RecvBatch, RecvBudget};
+use restream_dataplane::udp::{
+    UdpInterest, UdpReadyEvent, UdpRecvBuffers, UdpRecvDatagram, UdpSendCompletion, UringUdpPoller,
+    UringUdpReceiver,
+};
 use tokio::sync::mpsc;
 use tracing::error;
 
 use crate::media::snapshots::ListenerSocketStats;
 
 const CHANNEL_CAPACITY: usize = 256;
-const BUFFER_SIZE: usize = RecvBatch::DEFAULT_BUF_LEN;
+const BUFFER_COUNT: u16 = CHANNEL_CAPACITY as u16;
+const BUFFER_SIZE: usize = 2_048;
 const MAX_OUTBOUND: usize = 1024;
 const SEND_CAPACITY: usize = 64;
 
 pub(crate) struct NativeSrtDatagram {
     pub(crate) peer: SocketAddr,
-    pub(crate) buffer: Vec<u8>,
-    pub(crate) len: usize,
+    pub(crate) buffer: NativeSrtBuffer,
 }
 
 impl NativeSrtDatagram {
     #[cfg(test)]
     pub(crate) fn payload(&self) -> &[u8] {
-        &self.buffer[..self.len]
+        self.buffer.payload()
+    }
+}
+
+pub(crate) struct NativeSrtBuffer {
+    buffers: Arc<UdpRecvBuffers>,
+    recycled: mpsc::Sender<u16>,
+    buffer_id: u16,
+    offset: usize,
+    len: usize,
+}
+
+impl NativeSrtBuffer {
+    pub(crate) fn payload(&self) -> &[u8] {
+        self.buffers
+            .payload(self.buffer_id, self.offset, self.len)
+            .expect("native SRT receive buffer metadata is valid")
+    }
+}
+
+impl Drop for NativeSrtBuffer {
+    fn drop(&mut self) {
+        let _ = self.recycled.try_send(self.buffer_id);
     }
 }
 
@@ -48,7 +72,6 @@ pub(crate) struct NativeSrtIngressStats {
 
 pub(crate) struct NativeSrtIngress {
     pub(crate) inbound: mpsc::Receiver<NativeSrtDatagram>,
-    pub(crate) recycled: mpsc::Sender<Vec<u8>>,
     pub(crate) outbound: mpsc::Sender<(SocketAddr, Vec<u8>)>,
     pub(crate) stats: Arc<NativeSrtIngressStats>,
 }
@@ -71,6 +94,7 @@ impl NativeSrtIngress {
                     socket,
                     inbound_tx,
                     recycled_rx,
+                    recycled.clone(),
                     outbound_rx,
                     worker_stats,
                     listener_stats,
@@ -81,7 +105,6 @@ impl NativeSrtIngress {
             .map_err(|error| io::Error::other(format!("spawn SRT ingress: {error}")))?;
         Ok(Self {
             inbound,
-            recycled,
             outbound,
             stats,
         })
@@ -110,18 +133,17 @@ fn deliver_datagram(
 fn run_worker(
     socket: UdpSocket,
     inbound_tx: mpsc::Sender<NativeSrtDatagram>,
-    mut recycled_rx: mpsc::Receiver<Vec<u8>>,
+    mut recycled_rx: mpsc::Receiver<u16>,
+    recycled_tx: mpsc::Sender<u16>,
     mut outbound_rx: mpsc::Receiver<(SocketAddr, Vec<u8>)>,
     stats: Arc<NativeSrtIngressStats>,
     listener_stats: Arc<ListenerSocketStats>,
 ) -> io::Result<()> {
     let fd = socket.as_raw_fd();
     let mut poller = UringUdpPoller::new_fixed_with_send_capacity(1, 256, SEND_CAPACITY)?;
-    poller.register_fixed(fd, 0, 1, UdpInterest::READ)?;
-    let mut recv_batch = RecvBatch::new();
-    let mut free = (0..CHANNEL_CAPACITY)
-        .map(|_| vec![0_u8; BUFFER_SIZE])
-        .collect::<Vec<_>>();
+    poller.register_fixed(fd, 0, 1, UdpInterest::WRITE)?;
+    let mut receiver = UringUdpReceiver::new(fd, BUFFER_COUNT, BUFFER_SIZE)?;
+    let recv_buffers = receiver.buffers();
     let mut outbound = VecDeque::with_capacity(MAX_OUTBOUND);
     let mut inflight = std::iter::repeat_with(|| None)
         .take(SEND_CAPACITY)
@@ -141,13 +163,20 @@ fn run_worker(
         readable: false,
         writable: false,
     }];
-    let budget = RecvBudget::default();
+    let mut received = vec![
+        UdpRecvDatagram {
+            buffer_id: 0,
+            offset: 0,
+            len: 0,
+            peer: "0.0.0.0:0".parse().expect("valid zero socket address"),
+        };
+        CHANNEL_CAPACITY
+    ];
+    let mut pool_starved = false;
 
     loop {
-        while let Ok(buffer) = recycled_rx.try_recv() {
-            if free.len() < CHANNEL_CAPACITY {
-                free.push(buffer);
-            }
+        while let Ok(buffer_id) = recycled_rx.try_recv() {
+            receiver.recycle(buffer_id)?;
         }
         while outbound.len() < MAX_OUTBOUND {
             match outbound_rx.try_recv() {
@@ -169,51 +198,36 @@ fn run_worker(
         if inbound_tx.is_closed() && outbound.is_empty() && inflight.iter().all(Option::is_none) {
             return Ok(());
         }
-        let ready_count = poller.poll(Duration::from_millis(5), &mut ready)?;
-        let readable = ready[..ready_count]
-            .iter()
-            .any(|event| event.readable && event.slot == 0 && event.generation == 1);
-        if readable {
-            let max_datagrams = budget.max_datagrams.max(1);
-            let mut drained_datagrams = 0;
-            for _ in 0..budget.max_rounds.max(1) {
-                if drained_datagrams >= max_datagrams {
-                    break;
-                }
-                let received = recv_batch.recv(fd)?;
-                if received == 0 {
-                    break;
-                }
-                drained_datagrams = drained_datagrams.saturating_add(received);
-                for index in 0..received {
-                    stats.recv_datagrams.fetch_add(1, Ordering::Relaxed);
-                    listener_stats
-                        .native_rx_datagrams
-                        .fetch_add(1, Ordering::Relaxed);
-                    let Some(replacement) = free.pop() else {
-                        stats.dropped_pool.fetch_add(1, Ordering::Relaxed);
-                        listener_stats
-                            .native_rx_pool_drops
-                            .fetch_add(1, Ordering::Relaxed);
-                        continue;
-                    };
-                    let (peer, buffer, len) = recv_batch.take(index, replacement)?;
-                    let Some(peer) = peer else {
-                        free.push(buffer);
-                        continue;
-                    };
-                    let packet = NativeSrtDatagram { peer, buffer, len };
-                    if let Err(packet) =
-                        deliver_datagram(&inbound_tx, packet, &stats, &listener_stats)
-                    {
-                        free.push(packet.buffer);
-                    }
-                }
-                if received < recv_batch.capacity() {
-                    break;
-                }
+        let _ = poller.poll(Duration::ZERO, &mut ready)?;
+        poller.register(fd, 0, 1, UdpInterest::WRITE)?;
+        let received_count = receiver.poll(Duration::from_millis(5), &mut received)?;
+        if receiver.available_buffers() == 0 {
+            if !pool_starved {
+                stats.dropped_pool.fetch_add(1, Ordering::Relaxed);
+                listener_stats
+                    .native_rx_pool_drops
+                    .fetch_add(1, Ordering::Relaxed);
+                pool_starved = true;
             }
-            poller.register(fd, 0, 1, UdpInterest::READ)?;
+        } else {
+            pool_starved = false;
+        }
+        for datagram in received.iter().take(received_count).copied() {
+            stats.recv_datagrams.fetch_add(1, Ordering::Relaxed);
+            listener_stats
+                .native_rx_datagrams
+                .fetch_add(1, Ordering::Relaxed);
+            let packet = NativeSrtDatagram {
+                peer: datagram.peer,
+                buffer: NativeSrtBuffer {
+                    buffers: recv_buffers.clone(),
+                    recycled: recycled_tx.clone(),
+                    buffer_id: datagram.buffer_id,
+                    offset: datagram.offset,
+                    len: datagram.len,
+                },
+            };
+            let _ = deliver_datagram(&inbound_tx, packet, &stats, &listener_stats);
         }
         flush_outbound(
             &mut poller,
@@ -290,8 +304,13 @@ mod tests {
         let listener_stats = ListenerSocketStats::default();
         let packet = || NativeSrtDatagram {
             peer: "127.0.0.1:9000".parse().unwrap(),
-            buffer: vec![1_u8],
-            len: 1,
+            buffer: NativeSrtBuffer {
+                buffers: Arc::new(UdpRecvBuffers::for_test(1, BUFFER_SIZE, 1)),
+                recycled: mpsc::channel(1).0,
+                buffer_id: 0,
+                offset: 0,
+                len: 1,
+            },
         };
 
         assert!(deliver_datagram(&inbound_tx, packet(), &stats, &listener_stats).is_ok());
@@ -325,11 +344,10 @@ mod tests {
             };
         let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
         sender.send_to(b"srt", peer).unwrap();
-        let mut packet = ingress.inbound.recv().await.unwrap();
+        let packet = ingress.inbound.recv().await.unwrap();
         assert_eq!(packet.payload(), b"srt");
         assert_eq!(packet.peer, sender.local_addr().unwrap());
-        let buffer = std::mem::replace(&mut packet.buffer, vec![0_u8; BUFFER_SIZE]);
-        ingress.recycled.send(buffer).await.unwrap();
+        drop(packet);
         ingress
             .outbound
             .send((sender.local_addr().unwrap(), b"reply".to_vec()))
