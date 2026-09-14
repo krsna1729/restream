@@ -89,6 +89,9 @@ pub struct ShardMetrics {
     pub send_zc_fallbacks: u64,
     pub cq_overflows: u64,
     pub ready_overflows: u64,
+    /// Bounded backend work queues rejected an enqueue. A nonzero value is
+    /// an overload or scheduler-invariant signal, never permission to grow.
+    pub queue_overflows: u64,
 
     /// Time this snapshot was collected.
     pub collected_at: Option<Instant>,

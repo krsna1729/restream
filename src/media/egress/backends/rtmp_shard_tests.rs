@@ -8,6 +8,25 @@ fn budget() -> WorkBudget {
     WorkBudget::new(8, 4096, Duration::from_millis(50))
 }
 
+#[test]
+fn ready_queue_rejection_is_counted_without_growing() {
+    let mut backend =
+        RtmpShardBackend::new(TcpEgressPoller::new(1).unwrap(), feed(), budget(), 4096)
+            .with_leaf_capacity(1);
+    let event = TcpReadyLeaf {
+        fd: -1,
+        key: LeafKey(0),
+        generation: 1,
+        readable: false,
+        writable: true,
+    };
+
+    assert!(backend.enqueue_ready(event));
+    assert!(!backend.enqueue_ready(event));
+    assert_eq!(backend.ready.len(), 1);
+    assert_eq!(backend.queue_overflows, 1);
+}
+
 fn feed() -> RingFeed {
     RingFeed::new(
         Arc::new(crate::media::ring_buffer::RingBuffer::new(4)),

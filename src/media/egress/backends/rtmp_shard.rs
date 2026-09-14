@@ -384,6 +384,7 @@ where
     budget_exhaustions: u64,
     native_tx_packets: u64,
     native_tx_bytes: u64,
+    queue_overflows: u64,
 }
 
 impl<P, S> RtmpShardBackend<P, S>
@@ -438,6 +439,7 @@ where
             budget_exhaustions: 0,
             native_tx_packets: 0,
             native_tx_bytes: 0,
+            queue_overflows: 0,
         }
     }
 
@@ -454,12 +456,20 @@ where
         self
     }
 
-    fn enqueue_ready(&mut self, event: TcpReadyLeaf) {
-        let _ = push_bounded(&mut self.ready, event, self.queue_capacity);
+    fn enqueue_ready(&mut self, event: TcpReadyLeaf) -> bool {
+        let admitted = push_bounded(&mut self.ready, event, self.queue_capacity);
+        if !admitted {
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
+        }
+        admitted
     }
 
-    fn enqueue_stall_candidate(&mut self, key: LeafKey) {
-        let _ = push_bounded(&mut self.stall_candidates, key, self.queue_capacity);
+    fn enqueue_stall_candidate(&mut self, key: LeafKey) -> bool {
+        let admitted = push_bounded(&mut self.stall_candidates, key, self.queue_capacity);
+        if !admitted {
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
+        }
+        admitted
     }
 
     /// Override the per-leaf drain deadline. Production threads the
@@ -530,23 +540,31 @@ where
     /// `poll_ready()`, exactly as before.
     fn enqueue_feed_waiting_leaves(&mut self) {
         while let Some(key) = self.feed_waiting.pop_front() {
-            let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+            let event = self
+                .leaves
+                .get_mut(key.0)
+                .and_then(Option::as_mut)
+                .and_then(|leaf| {
+                    leaf.common.schedule.feed_wake_queued = false;
+                    if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
+                        None
+                    } else {
+                        Some(TcpReadyLeaf {
+                            fd: leaf.transport.raw_fd(),
+                            key,
+                            generation: leaf.common.generation,
+                            readable: false,
+                            writable: false,
+                        })
+                    }
+                });
+            let Some(event) = event else {
                 continue;
             };
-            leaf.common.schedule.feed_wake_queued = false;
-            if !leaf.common.schedule.wants_feed_wake || leaf.common.schedule.enqueued {
-                continue;
+            let admitted = self.enqueue_ready(event);
+            if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) {
+                leaf.common.schedule.enqueued = admitted;
             }
-            leaf.common.schedule.enqueued = true;
-            let fd = leaf.transport.raw_fd();
-            let generation = leaf.common.generation;
-            self.enqueue_ready(TcpReadyLeaf {
-                fd,
-                key,
-                generation,
-                readable: false,
-                writable: false,
-            });
         }
     }
 
@@ -566,49 +584,82 @@ where
                     .saturating_add(completion.result as u64);
             }
             let key = LeafKey(completion.slot as usize);
-            let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
+            let event = self
+                .leaves
+                .get_mut(key.0)
+                .and_then(Option::as_mut)
+                .and_then(|leaf| {
+                    if leaf.common.generation != completion.generation as u64 {
+                        None
+                    } else if leaf.common.schedule.enqueued {
+                        leaf.pending_send_result = Some(completion.result);
+                        None
+                    } else {
+                        leaf.pending_send_result = Some(completion.result);
+                        leaf.common.schedule.enqueued = true;
+                        Some(TcpReadyLeaf {
+                            fd: leaf.transport.raw_fd(),
+                            key,
+                            generation: leaf.common.generation,
+                            readable: false,
+                            writable: true,
+                        })
+                    }
+                });
+            let Some(event) = event else {
                 continue;
             };
-            if leaf.common.generation != completion.generation as u64 {
-                continue;
+            let admitted = self.enqueue_ready(event);
+            if !admitted && let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) {
+                leaf.common.schedule.enqueued = false;
             }
-            leaf.pending_send_result = Some(completion.result);
-            if leaf.common.schedule.enqueued {
-                continue;
-            }
-            leaf.common.schedule.enqueued = true;
-            let _ = push_bounded(
-                &mut self.ready,
-                TcpReadyLeaf {
-                    fd: leaf.transport.raw_fd(),
-                    key,
-                    generation: leaf.common.generation,
-                    readable: false,
-                    writable: true,
-                },
-                self.queue_capacity,
-            );
         }
         self.send_completions = completions;
         let mut poll_buffer = std::mem::take(&mut self.poll_buffer);
         for event in poll_buffer.drain(..) {
             if self.connecting.contains_key(&event.key) {
                 if self.finish_connecting(event)
-                    && let Some(leaf) = self.leaf_mut(event.key)
+                    && self
+                        .leaves
+                        .get(event.key.0)
+                        .and_then(Option::as_ref)
+                        .is_some()
                 {
-                    leaf.common.schedule.enqueued = true;
-                    let _ = push_bounded(&mut self.ready, event, self.queue_capacity);
+                    if let Some(leaf) = self.leaf_mut(event.key) {
+                        leaf.common.schedule.enqueued = true;
+                    }
+                    if !self.enqueue_ready(event)
+                        && let Some(leaf) = self.leaf_mut(event.key)
+                    {
+                        leaf.common.schedule.enqueued = false;
+                    }
                 }
                 continue;
             }
-            let Some(leaf) = self.leaf_mut(event.key) else {
-                continue;
-            };
-            if leaf.common.schedule.enqueued {
+            if self
+                .leaves
+                .get(event.key.0)
+                .and_then(Option::as_ref)
+                .is_none()
+            {
                 continue;
             }
-            leaf.common.schedule.enqueued = true;
-            let _ = push_bounded(&mut self.ready, event, self.queue_capacity);
+            if self
+                .leaves
+                .get(event.key.0)
+                .and_then(Option::as_ref)
+                .is_some_and(|leaf| leaf.common.schedule.enqueued)
+            {
+                continue;
+            }
+            if let Some(leaf) = self.leaf_mut(event.key) {
+                leaf.common.schedule.enqueued = true;
+            }
+            if !self.enqueue_ready(event)
+                && let Some(leaf) = self.leaf_mut(event.key)
+            {
+                leaf.common.schedule.enqueued = false;
+            }
         }
         self.poll_buffer = poll_buffer;
     }
@@ -670,8 +721,11 @@ where
             && !leaf.common.schedule.enqueued
             && !leaf.common.schedule.feed_wake_queued;
         if feed_waiting {
-            leaf.common.schedule.feed_wake_queued = true;
-            let _ = push_bounded(&mut self.feed_waiting, event.key, self.queue_capacity);
+            let admitted = push_bounded(&mut self.feed_waiting, event.key, self.queue_capacity);
+            if !admitted {
+                self.queue_overflows = self.queue_overflows.saturating_add(1);
+            }
+            leaf.common.schedule.feed_wake_queued = admitted;
         }
 
         // A draining leaf (see `begin_graceful_close`) that has now flushed
@@ -760,6 +814,7 @@ where
         metrics.stale_completions = native.stale_completions;
         metrics.cq_overflows = native.cq_overflows;
         metrics.budget_exhaustions = self.budget_exhaustions;
+        metrics.queue_overflows = self.queue_overflows;
     }
 
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {

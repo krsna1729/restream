@@ -594,7 +594,9 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 generation,
                 fire_at,
             } => {
-                self.timers.insert(fire_at, output_id, generation);
+                if !self.timers.insert(fire_at, output_id, generation) {
+                    self.metrics.queue_overflows = self.metrics.queue_overflows.saturating_add(1);
+                }
                 EgressShardCommandEffect::Continue
             }
             EgressShardCommandEffect::ScheduleReady { count } => {

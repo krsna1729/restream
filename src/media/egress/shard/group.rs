@@ -190,6 +190,7 @@ pub struct EgressShardHeartbeat {
     pub send_zc_fallbacks: u64,
     pub cq_overflows: u64,
     pub ready_overflows: u64,
+    pub queue_overflows: u64,
 }
 
 impl EgressShardHeartbeat {
@@ -250,6 +251,7 @@ impl EgressShardHeartbeat {
             send_zc_fallbacks: snapshot.metrics.send_zc_fallbacks,
             cq_overflows: snapshot.metrics.cq_overflows,
             ready_overflows: snapshot.metrics.ready_overflows,
+            queue_overflows: snapshot.metrics.queue_overflows,
         }
     }
 }

@@ -772,6 +772,20 @@ fn leaf_slots_are_fixed_and_exhaustion_does_not_grow_the_slab() {
 }
 
 #[test]
+fn ready_queue_rejection_is_counted_without_growing() {
+    let mut backend = SrtShardBackend::new(
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    )
+    .with_leaf_capacity(1);
+
+    assert!(backend.enqueue_ready_candidate(LeafKey(0)));
+    assert!(!backend.enqueue_ready_candidate(LeafKey(0)));
+    assert_eq!(backend.ready_candidates.len(), 1);
+    assert_eq!(backend.queue_overflows, 1);
+}
+
+#[test]
 fn pending_connect_admission_obeys_fixed_leaf_capacity() {
     let mut backend = SrtShardBackend::new(
         feed([Bytes::from_static(b"abc")]),

@@ -373,11 +373,11 @@ pub(crate) struct SrtShardBackend {
     /// `RtmpShardBackend::resync_count` exactly.
     resync_count: u64,
     budget_exhaustions: u64,
+    queue_overflows: u64,
 }
 
 fn push_bounded<T>(queue: &mut VecDeque<T>, value: T, capacity: usize) -> bool {
     if queue.len() >= capacity {
-        debug_assert!(false, "SRT shard queue capacity invariant violated");
         return false;
     }
     queue.push_back(value);
@@ -435,6 +435,7 @@ impl SrtShardBackend {
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
             budget_exhaustions: 0,
+            queue_overflows: 0,
         }
     }
 
@@ -455,24 +456,40 @@ impl SrtShardBackend {
         self.leaves.len().max(1)
     }
 
-    fn enqueue_ready_candidate(&mut self, key: LeafKey) {
+    fn enqueue_ready_candidate(&mut self, key: LeafKey) -> bool {
         let capacity = self.leaf_queue_capacity();
-        let _ = push_bounded(&mut self.ready_candidates, key, capacity);
+        let admitted = push_bounded(&mut self.ready_candidates, key, capacity);
+        if !admitted {
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
+        }
+        admitted
     }
 
-    fn enqueue_feed_waiting(&mut self, key: LeafKey) {
+    fn enqueue_feed_waiting(&mut self, key: LeafKey) -> bool {
         let capacity = self.leaf_queue_capacity();
-        let _ = push_bounded(&mut self.feed_waiting, key, capacity);
+        let admitted = push_bounded(&mut self.feed_waiting, key, capacity);
+        if !admitted {
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
+        }
+        admitted
     }
 
-    fn enqueue_stall_candidate(&mut self, key: LeafKey) {
+    fn enqueue_stall_candidate(&mut self, key: LeafKey) -> bool {
         let capacity = self.leaf_queue_capacity();
-        let _ = push_bounded(&mut self.stall_candidates, key, capacity);
+        let admitted = push_bounded(&mut self.stall_candidates, key, capacity);
+        if !admitted {
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
+        }
+        admitted
     }
 
-    fn enqueue_ready_event(&mut self, event: SrtReadyLeaf) {
+    fn enqueue_ready_event(&mut self, event: SrtReadyLeaf) -> bool {
         let capacity = self.leaf_queue_capacity();
-        let _ = push_bounded(&mut self.ready, event, capacity);
+        let admitted = push_bounded(&mut self.ready, event, capacity);
+        if !admitted {
+            self.queue_overflows = self.queue_overflows.saturating_add(1);
+        }
+        admitted
     }
 
     // Production always constructs via `with_runtime_components` directly
@@ -704,11 +721,14 @@ impl SrtShardBackend {
                 leaf.common.schedule.enqueued = true;
                 leaf.common.generation
             };
-            self.enqueue_ready_event(SrtReadyLeaf {
+            if !self.enqueue_ready_event(SrtReadyLeaf {
                 key,
                 generation,
                 writable: true,
-            });
+            }) && let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut)
+            {
+                leaf.common.schedule.enqueued = false;
+            }
             break;
         }
     }
@@ -723,11 +743,18 @@ impl SrtShardBackend {
         if leaf.common.schedule.enqueued {
             return;
         }
-        if leaf.common.schedule.wants_feed_wake && !leaf.common.schedule.feed_wake_queued {
+        let feed_wake =
+            leaf.common.schedule.wants_feed_wake && !leaf.common.schedule.feed_wake_queued;
+        if feed_wake {
             leaf.common.schedule.feed_wake_queued = true;
-            self.enqueue_feed_waiting(key);
+            let _ = leaf;
+            if !self.enqueue_feed_waiting(key)
+                && let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut)
+            {
+                leaf.common.schedule.feed_wake_queued = false;
+            }
         } else {
-            self.enqueue_ready_candidate(key);
+            let _ = self.enqueue_ready_candidate(key);
         }
     }
 
@@ -838,6 +865,7 @@ impl EgressShardBackend for SrtShardBackend {
         metrics.tx_pool_empty = native.tx_pool_empty;
         metrics.cq_overflows = native.cq_overflows;
         metrics.budget_exhaustions = self.budget_exhaustions;
+        metrics.queue_overflows = self.queue_overflows;
     }
 
     fn on_command(
