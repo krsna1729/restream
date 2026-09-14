@@ -663,3 +663,22 @@ fn leaf_slots_are_fixed_and_exhaustion_does_not_grow_the_slab() {
     assert_eq!(backend.allocate_leaf_key(), None);
     assert_eq!(backend.leaves.len(), 1);
 }
+
+#[test]
+fn shard_work_queues_have_a_hard_leaf_bound() {
+    let mut backend =
+        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096)
+            .with_leaf_capacity(1);
+    let event = TcpReadyLeaf {
+        fd: -1,
+        key: LeafKey(0),
+        generation: 0,
+        readable: false,
+        writable: true,
+    };
+    let capacity = backend.queue_capacity;
+
+    assert!(push_bounded(&mut backend.ready, event, capacity));
+    assert!(!push_bounded(&mut backend.ready, event, capacity));
+    assert_eq!(backend.ready.len(), 1);
+}

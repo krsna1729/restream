@@ -148,7 +148,7 @@ where
                 continue;
             };
             if !close {
-                self.stall_candidates.push_back(key);
+                self.enqueue_stall_candidate(key);
                 continue;
             }
             let Some(socket_ref) = self.output_sockets.remove(&output_id) else {

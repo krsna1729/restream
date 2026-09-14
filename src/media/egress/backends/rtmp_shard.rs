@@ -147,6 +147,15 @@ impl RtmpResolveCompletionQueue {
     }
 }
 
+fn push_bounded<T>(queue: &mut VecDeque<T>, value: T, capacity: usize) -> bool {
+    debug_assert!(queue.len() <= capacity);
+    if queue.len() == capacity {
+        return false;
+    }
+    queue.push_back(value);
+    true
+}
+
 pub(crate) fn resolve_rtmp_peer_host(host: &str, port: u16) -> Option<SocketAddr> {
     if let Ok(addr) = host.parse::<std::net::IpAddr>() {
         return Some(SocketAddr::new(addr, port));
@@ -355,6 +364,7 @@ where
     ready: VecDeque<TcpReadyLeaf>,
     feed_waiting: VecDeque<LeafKey>,
     stall_candidates: VecDeque<LeafKey>,
+    queue_capacity: usize,
     poll_buffer: Vec<TcpReadyLeaf>,
     send_completions: Vec<restream_dataplane::tcp::TcpSendCompletion>,
     pending_connects: HashMap<OutputId, PendingRtmpConnect>,
@@ -416,6 +426,7 @@ where
             ready: VecDeque::with_capacity(ready_capacity),
             feed_waiting: VecDeque::with_capacity(ready_capacity),
             stall_candidates: VecDeque::with_capacity(ready_capacity),
+            queue_capacity: EgressShardConfig::DEFAULT_LEAF_CAPACITY,
             poll_buffer: Vec::with_capacity(ready_capacity),
             send_completions: Vec::with_capacity(ready_capacity),
             pending_connects: HashMap::new(),
@@ -436,7 +447,19 @@ where
             .rev()
             .map(|slot| LeafKey(slot as usize))
             .collect();
+        self.queue_capacity = capacity;
+        self.ready = VecDeque::with_capacity(capacity);
+        self.feed_waiting = VecDeque::with_capacity(capacity);
+        self.stall_candidates = VecDeque::with_capacity(capacity);
         self
+    }
+
+    fn enqueue_ready(&mut self, event: TcpReadyLeaf) {
+        let _ = push_bounded(&mut self.ready, event, self.queue_capacity);
+    }
+
+    fn enqueue_stall_candidate(&mut self, key: LeafKey) {
+        let _ = push_bounded(&mut self.stall_candidates, key, self.queue_capacity);
     }
 
     /// Override the per-leaf drain deadline. Production threads the
@@ -517,7 +540,7 @@ where
             leaf.common.schedule.enqueued = true;
             let fd = leaf.transport.raw_fd();
             let generation = leaf.common.generation;
-            self.ready.push_back(TcpReadyLeaf {
+            self.enqueue_ready(TcpReadyLeaf {
                 fd,
                 key,
                 generation,
@@ -534,7 +557,8 @@ where
         self.send_completions.clear();
         self.poller
             .drain_send_completions(&mut self.send_completions);
-        for completion in self.send_completions.drain(..) {
+        let mut completions = std::mem::take(&mut self.send_completions);
+        for completion in completions.drain(..) {
             if completion.result >= 0 {
                 self.native_tx_packets = self.native_tx_packets.saturating_add(1);
                 self.native_tx_bytes = self
@@ -553,14 +577,19 @@ where
                 continue;
             }
             leaf.common.schedule.enqueued = true;
-            self.ready.push_back(TcpReadyLeaf {
-                fd: leaf.transport.raw_fd(),
-                key,
-                generation: leaf.common.generation,
-                readable: false,
-                writable: true,
-            });
+            let _ = push_bounded(
+                &mut self.ready,
+                TcpReadyLeaf {
+                    fd: leaf.transport.raw_fd(),
+                    key,
+                    generation: leaf.common.generation,
+                    readable: false,
+                    writable: true,
+                },
+                self.queue_capacity,
+            );
         }
+        self.send_completions = completions;
         let mut poll_buffer = std::mem::take(&mut self.poll_buffer);
         for event in poll_buffer.drain(..) {
             if self.connecting.contains_key(&event.key) {
@@ -568,7 +597,7 @@ where
                     && let Some(leaf) = self.leaf_mut(event.key)
                 {
                     leaf.common.schedule.enqueued = true;
-                    self.ready.push_back(event);
+                    let _ = push_bounded(&mut self.ready, event, self.queue_capacity);
                 }
                 continue;
             }
@@ -579,7 +608,7 @@ where
                 continue;
             }
             leaf.common.schedule.enqueued = true;
-            self.ready.push_back(event);
+            let _ = push_bounded(&mut self.ready, event, self.queue_capacity);
         }
         self.poll_buffer = poll_buffer;
     }
@@ -642,7 +671,7 @@ where
             && !leaf.common.schedule.feed_wake_queued;
         if feed_waiting {
             leaf.common.schedule.feed_wake_queued = true;
-            self.feed_waiting.push_back(event.key);
+            let _ = push_bounded(&mut self.feed_waiting, event.key, self.queue_capacity);
         }
 
         // A draining leaf (see `begin_graceful_close`) that has now flushed
