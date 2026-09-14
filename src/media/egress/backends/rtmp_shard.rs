@@ -382,6 +382,7 @@ where
     output_sockets: HashMap<OutputId, RtmpLeafSocket>,
     ready: VecDeque<TcpReadyLeaf>,
     feed_waiting: VecDeque<LeafKey>,
+    stall_candidates: VecDeque<LeafKey>,
     poll_buffer: Vec<TcpReadyLeaf>,
     send_completions: Vec<restream_dataplane::tcp::TcpSendCompletion>,
     pending_connects: HashMap<OutputId, PendingRtmpConnect>,
@@ -436,6 +437,7 @@ where
             output_sockets: HashMap::new(),
             ready: VecDeque::with_capacity(ready_capacity),
             feed_waiting: VecDeque::with_capacity(ready_capacity),
+            stall_candidates: VecDeque::with_capacity(ready_capacity),
             poll_buffer: Vec::with_capacity(ready_capacity),
             send_completions: Vec::with_capacity(ready_capacity),
             pending_connects: HashMap::new(),
@@ -462,6 +464,7 @@ where
     fn remove_leaf_socket(&mut self, socket_ref: RtmpLeafSocket, reason: CloseReason) -> bool {
         let _ = self.poller.remove(socket_ref.fd);
         self.feed_waiting.retain(|key| *key != socket_ref.key);
+        self.stall_candidates.retain(|key| *key != socket_ref.key);
         self.ready.retain(|event| event.key != socket_ref.key);
         self.poll_buffer.retain(|event| event.key != socket_ref.key);
         let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) else {

@@ -184,6 +184,7 @@ where
             previous_tcp_bytes: None,
             pending_send_result: None,
         });
+        self.stall_candidates.push_back(key);
         if let Some(previous) = self
             .output_sockets
             .insert(output_id.clone(), RtmpLeafSocket { key, fd })

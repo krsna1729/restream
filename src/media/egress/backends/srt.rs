@@ -351,6 +351,7 @@ pub(crate) struct SrtShardBackend {
     ready: VecDeque<SrtReadyLeaf>,
     ready_candidates: VecDeque<LeafKey>,
     feed_waiting: VecDeque<LeafKey>,
+    stall_candidates: VecDeque<LeafKey>,
     pending_connects: HashMap<OutputId, PendingSrtConnect>,
     last_stall_sweep: Option<Instant>,
     /// This shard's application-owned shared UDP socket and srt-rs
@@ -397,6 +398,7 @@ impl SrtShardBackend {
             ready: VecDeque::new(),
             ready_candidates: VecDeque::new(),
             feed_waiting: VecDeque::new(),
+            stall_candidates: VecDeque::with_capacity(1024),
             pending_connects: HashMap::new(),
             last_stall_sweep: None,
             srt_egress_muxer_port: Arc::new(Mutex::new(None)),
@@ -461,6 +463,7 @@ impl SrtShardBackend {
         let leaf = SrtFabricLeaf::new(common, transport);
         self.leaves[key.0] = Some(leaf);
         self.ready_candidates.push_back(key);
+        self.stall_candidates.push_back(key);
         if let Some(previous) = self.output_sockets.insert(output_id, key) {
             self.remove_leaf(
                 previous,
@@ -514,6 +517,7 @@ impl SrtShardBackend {
         let output_id = leaf.common.output_id.clone();
         self.leaves[key.0] = Some(leaf);
         self.ready_candidates.push_back(key);
+        self.stall_candidates.push_back(key);
         if let Some(previous) = self.output_sockets.insert(output_id, key) {
             self.remove_leaf(
                 previous,
@@ -569,6 +573,7 @@ impl SrtShardBackend {
         self.feed_waiting.retain(|queued| *queued != key);
         self.ready.retain(|event| event.key != key);
         self.ready_candidates.retain(|queued| *queued != key);
+        self.stall_candidates.retain(|queued| *queued != key);
         let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) else {
             return false;
         };

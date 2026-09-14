@@ -68,6 +68,7 @@ where
     /// once-a-second sweep. This is what actually bounds a leaf that stops
     /// getting write readiness at all (a peer that stops reading): nothing
     /// else will ever notice it again.
+    #[cfg(test)]
     pub(super) fn sweep_draining_leaves(&mut self, now: Instant) {
         let expired: Vec<OutputId> = self
             .output_sockets
@@ -94,15 +95,10 @@ where
         }
     }
 
-    /// Close every leaf whose pending application bytes have made no
-    /// byte/protocol progress within the no-progress deadline. Mirrors
-    /// `SrtShardBackend::sweep_stalled_leaves` exactly (same
-    /// `classify_stall` policy, same closed-leaves-retry-via-reconnect
-    /// contract) — this is what makes `LeafCommon::pending_application_bytes`
-    /// (wired up in `visit_one_ready_leaf`, `docs/archive/egress/implementation.md`
-    /// Phase 5 status) actually mean something: previously nothing read it,
-    /// so a leaf that fell arbitrarily far behind a slow or wedged peer was
-    /// never closed for that reason alone.
+    /// Probe a bounded rotating set of leaves for no-progress and drain
+    /// deadlines. New leaves enter `stall_candidates` once; each live key is
+    /// returned to the tail, so this never walks the whole population in one
+    /// media tick.
     pub(super) fn sweep_stalled_leaves(&mut self, now: Instant) {
         if self
             .last_stall_sweep
@@ -111,42 +107,50 @@ where
             return;
         }
         self.last_stall_sweep = Some(now);
-        self.sweep_draining_leaves(now);
-
         let head_sequence = self.feed.head_sequence();
-        for leaf in self.leaves.iter_mut().flatten() {
-            // A leaf that has not been visited yet still holds the
-            // placeholder cursor, so `head - cursor` would report the whole
-            // feed as lag rather than a real measurement. It is not behind:
-            // it has not started.
-            let lag_units = if leaf.common.cursor_primed {
-                head_sequence.saturating_sub(leaf.common.cursor.next_sequence)
-            } else {
-                0
+        let drain_timeout = self.drain_timeout;
+        for _ in 0..256 {
+            let Some(key) = self.stall_candidates.pop_front() else {
+                break;
             };
-            let reason = match leaf.observe_stall(now) {
-                LeafStallClass::Idle => None,
-                LeafStallClass::Backpressured => Some("backpressured"),
-                LeafStallClass::Stalled => Some("stalled"),
+            let Some((output_id, close)) =
+                self.leaves
+                    .get_mut(key.0)
+                    .and_then(Option::as_mut)
+                    .map(|leaf| {
+                        let lag_units = if leaf.common.cursor_primed {
+                            head_sequence.saturating_sub(leaf.common.cursor.next_sequence)
+                        } else {
+                            0
+                        };
+                        let quality = leaf.sample_quality(now);
+                        let reason = match leaf.observe_stall(now) {
+                            LeafStallClass::Idle => None,
+                            LeafStallClass::Backpressured => Some("backpressured"),
+                            LeafStallClass::Stalled => Some("stalled"),
+                        };
+                        leaf.common
+                            .progress_sink
+                            .record_backpressure_state(lag_units, reason);
+                        if let Some(quality) = quality {
+                            leaf.common.progress_sink.record_quality(quality);
+                        }
+                        let draining = leaf.draining_since.is_some_and(|since| {
+                            leaf.common.pending_application_bytes == 0
+                                || now.saturating_duration_since(since) >= drain_timeout
+                        });
+                        (
+                            leaf.common.output_id.clone(),
+                            draining || matches!(reason, Some("stalled")),
+                        )
+                    })
+            else {
+                continue;
             };
-            leaf.common
-                .progress_sink
-                .record_backpressure_state(lag_units, reason);
-            if let Some(quality) = leaf.sample_quality(now) {
-                leaf.common.progress_sink.record_quality(quality);
+            if !close {
+                self.stall_candidates.push_back(key);
+                continue;
             }
-        }
-
-        let stalled: Vec<OutputId> = self
-            .output_sockets
-            .iter()
-            .filter_map(|(output_id, socket_ref)| {
-                let leaf = self.leaves.get(socket_ref.key.0)?.as_ref()?;
-                (leaf.observe_stall(now) == LeafStallClass::Stalled).then(|| output_id.clone())
-            })
-            .collect();
-
-        for output_id in stalled {
             let Some(socket_ref) = self.output_sockets.remove(&output_id) else {
                 continue;
             };
