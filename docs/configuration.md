@@ -42,6 +42,7 @@ in SQLite.
 | Egress fabric command batch | `32` commands per loop | `RESTREAM_EGRESS_COMMAND_BATCH` |
 | Egress fabric readiness batch | `64` ready leaves per loop | `RESTREAM_EGRESS_READY_BATCH` |
 | Egress fabric timer batch | `64` timers per loop | `RESTREAM_EGRESS_TIMER_BATCH` |
+| Egress native leaf capacity | `4096` reusable leaf slots per shard | `RESTREAM_EGRESS_MAX_LEAVES_PER_SHARD` (clamped to `1..=1000000`; output creation is rejected after the per-shard slab is full) |
 | Egress fabric idle wait | `1` ms | `RESTREAM_EGRESS_IDLE_WAIT_MS` |
 | RTMP fabric poll events | `1024` events per shard poller | `RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS` |
 | Egress fabric visit units | `32` units per visit | `RESTREAM_EGRESS_VISIT_MAX_UNITS` |
