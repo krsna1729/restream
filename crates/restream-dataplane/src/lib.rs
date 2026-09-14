@@ -582,6 +582,8 @@ pub struct ShardSnapshot {
     pub deadline_count: usize,
     pub rx_available: usize,
     pub tx_available: usize,
+    /// Jain fairness index for service visits, scaled by 1,000.
+    pub jain_fairness_milli: u16,
     pub metrics: ShardMetrics,
     pub sinks: Vec<SinkSnapshot>,
 }
@@ -803,12 +805,21 @@ impl ShardState {
     }
 
     fn snapshot(&self) -> ShardSnapshot {
+        let visits: Vec<u64> = self
+            .leaves
+            .leaves
+            .iter()
+            .flatten()
+            .map(|leaf| leaf.visits)
+            .collect();
+        let jain_fairness_milli = jain_fairness_milli(&visits);
         ShardSnapshot {
             active_leaves: self.leaves.leaves.iter().flatten().count(),
             ready_leaves: self.ready.len(),
             deadline_count: self.deadlines.len(),
             rx_available: self.rx.available(),
             tx_available: self.tx.available(),
+            jain_fairness_milli,
             metrics: self.metrics,
             sinks: self
                 .leaves
@@ -823,6 +834,32 @@ impl ShardState {
                 .collect(),
         }
     }
+}
+
+fn jain_fairness_milli(visits: &[u64]) -> u16 {
+    let count = visits.len() as u128;
+    if count <= 1 {
+        return 1_000;
+    }
+    let sum = visits.iter().map(|&value| u128::from(value)).sum::<u128>();
+    if sum == 0 {
+        return 1_000;
+    }
+    let sum_squared = visits
+        .iter()
+        .map(|&value| {
+            let value = u128::from(value);
+            value.saturating_mul(value)
+        })
+        .sum::<u128>();
+    if sum_squared == 0 {
+        return 1_000;
+    }
+    sum.saturating_mul(sum)
+        .saturating_mul(1_000)
+        .checked_div(count.saturating_mul(sum_squared))
+        .unwrap_or(0)
+        .min(1_000) as u16
 }
 
 enum Command {
@@ -1529,6 +1566,14 @@ mod tests {
         assert_eq!(snapshot.deadline_count, 0);
         assert_eq!(snapshot.rx_available, 256);
         assert_eq!(snapshot.tx_available, 256);
+        assert_eq!(snapshot.jain_fairness_milli, 1_000);
         assert_eq!(snapshot.metrics.cq_overflows, 0);
+    }
+
+    #[test]
+    fn jain_fairness_reports_service_imbalance() {
+        assert_eq!(jain_fairness_milli(&[10, 10, 10]), 1_000);
+        assert_eq!(jain_fairness_milli(&[2, 1]), 900);
+        assert_eq!(jain_fairness_milli(&[0, 0]), 1_000);
     }
 }
