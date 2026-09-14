@@ -319,6 +319,7 @@ pub trait DatagramSink {
             return false;
         };
         if storage.len() < packet.len() {
+            self.abort();
             return false;
         }
         for (destination, source) in storage.iter_mut().zip(packet.iter().copied()) {
@@ -3524,6 +3525,31 @@ mod tests {
             self.packets.push(packet);
             true
         }
+    }
+
+    struct ShortReservationSink {
+        storage: Vec<MaybeUninit<u8>>,
+        aborted: bool,
+    }
+
+    impl DatagramSink for ShortReservationSink {
+        fn acquire(&mut self, _max_len: usize) -> Option<&mut [MaybeUninit<u8>]> {
+            Some(self.storage.as_mut_slice())
+        }
+
+        fn abort(&mut self) {
+            self.aborted = true;
+        }
+    }
+
+    #[test]
+    fn short_sink_reservation_is_released() {
+        let mut sink = ShortReservationSink {
+            storage: vec![MaybeUninit::uninit(); 1],
+            aborted: false,
+        };
+        assert!(!sink.send(std::net::SocketAddr::from(([127, 0, 0, 1], 9000)), &[1, 2],));
+        assert!(sink.aborted);
     }
 
     #[test]
