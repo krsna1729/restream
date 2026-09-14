@@ -14,12 +14,19 @@ pub struct UringCapabilities {
     pub connect: bool,
     pub recv: bool,
     pub recv_msg: bool,
+    pub recv_msg_multi: bool,
     pub recv_multishot: bool,
     pub recv_bundle: bool,
+    pub recv_zc: bool,
     pub send: bool,
     pub send_msg: bool,
+    pub send_vectored: bool,
     pub send_zc: bool,
     pub send_bundle: bool,
+    /// NAPI busy-poll registration is a Linux kernel facility rather than an
+    /// io_uring opcode. It is exposed separately so deployment profiles can
+    /// gate the optional optimization without making it a correctness path.
+    pub napi: bool,
 }
 
 impl UringCapabilities {
@@ -38,12 +45,16 @@ impl UringCapabilities {
             connect: probe.is_supported(opcode::Connect::CODE),
             recv: probe.is_supported(opcode::Recv::CODE),
             recv_msg: probe.is_supported(opcode::RecvMsg::CODE),
+            recv_msg_multi: probe.is_supported(opcode::RecvMsgMulti::CODE),
             recv_multishot: probe.is_supported(opcode::RecvMulti::CODE),
             recv_bundle: probe.is_supported(opcode::RecvBundle::CODE),
+            recv_zc: probe.is_supported(opcode::RecvZc::CODE),
             send: probe.is_supported(opcode::Send::CODE),
             send_msg: probe.is_supported(opcode::SendMsg::CODE),
+            send_vectored: probe.is_supported(opcode::SendMsg::CODE),
             send_zc: probe.is_supported(opcode::SendZc::CODE),
             send_bundle: probe.is_supported(opcode::SendBundle::CODE),
+            napi: cfg!(target_os = "linux"),
         })
     }
 }
