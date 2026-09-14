@@ -770,3 +770,19 @@ fn leaf_slots_are_fixed_and_exhaustion_does_not_grow_the_slab() {
     assert_eq!(backend.allocate_leaf_key(), None);
     assert_eq!(backend.leaves.len(), 1);
 }
+
+#[test]
+fn pending_connect_admission_obeys_fixed_leaf_capacity() {
+    let mut backend = SrtShardBackend::new(
+        feed([Bytes::from_static(b"abc")]),
+        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+    )
+    .with_leaf_capacity(1);
+    backend.on_command(EgressCommand::Add(srt_output_spec("out-a", 1)));
+    let (spec, terminated) = srt_output_spec_with_termination_flag("out-b", 1);
+    backend.on_command(EgressCommand::Add(spec));
+
+    assert!(backend.pending_connect(&OutputId::new("out-a")).is_some());
+    assert!(backend.pending_connect(&OutputId::new("out-b")).is_none());
+    assert!(terminated.load(std::sync::atomic::Ordering::Relaxed));
+}

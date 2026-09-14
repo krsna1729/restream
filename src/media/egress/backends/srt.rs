@@ -565,6 +565,22 @@ impl SrtShardBackend {
 
     fn queue_pending_srt_connect(&mut self, spec: OutputSpec, target_url: &str) {
         let output_id = spec.id.clone();
+        let already_admitted = self.output_sockets.contains_key(&output_id)
+            || self.pending_connects.contains_key(&output_id);
+        if !already_admitted
+            && self
+                .output_sockets
+                .len()
+                .saturating_add(self.pending_connects.len())
+                >= self.leaves.len()
+        {
+            tracing::warn!(
+                output_id = %output_id,
+                "srt fabric leaf rejected: shard leaf capacity exhausted"
+            );
+            spec.progress.mark_terminated_unexpectedly();
+            return;
+        }
         let common = LeafCommon::new(
             spec.id,
             spec.generation,

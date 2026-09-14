@@ -30,6 +30,24 @@ where
         };
         let output_id = spec.id.clone();
         self.remove_connecting_output(&output_id);
+        let already_admitted = self.output_sockets.contains_key(&output_id)
+            || self.pending_connects.contains_key(&output_id)
+            || self.connecting_by_output.contains_key(&output_id);
+        if !already_admitted
+            && self
+                .output_sockets
+                .len()
+                .saturating_add(self.pending_connects.len())
+                .saturating_add(self.connecting_by_output.len())
+                >= self.leaves.len()
+        {
+            tracing::warn!(
+                output_id = %output_id,
+                "rtmp fabric leaf rejected: shard leaf capacity exhausted"
+            );
+            spec.progress.mark_terminated_unexpectedly();
+            return;
+        }
         let common = LeafCommon::new(
             spec.id,
             spec.generation,
