@@ -28,6 +28,7 @@ use crate::time::Timestamp;
 
 const MAX_NAK_RECORD_SIZE: usize = 8;
 const NAK_CHUNK_INITIAL_CAPACITY: usize = 32;
+const CONTROL_QUEUE_RESERVE: usize = TimerId::COUNT + 8;
 const _: () = assert!(DEFAULT_MTU as usize - SRT_HEADER_SIZE >= MAX_NAK_RECORD_SIZE);
 
 /// Bytes in one encoded NAK range (`first_seq` + `last_seq`).
@@ -375,7 +376,7 @@ pub struct SrtConnection {
     max_payload_size: usize,
 
     /// Event queue.
-    event_queue: VecDeque<ConnectionEvent>,
+    event_queue: BoundedQueue<ConnectionEvent>,
     /// Whether the application has already been asked for a new SEK in the
     /// current refresh cycle. Reset after `provide_new_sek` starts that cycle.
     key_refresh_notified: bool,
@@ -386,7 +387,7 @@ pub struct SrtConnection {
     /// distinct from the event count because one message can span many packets.
     pending_data_packets: u32,
     /// Output queue.
-    output_queue: VecDeque<ConnectionOutput>,
+    output_queue: BoundedQueue<ConnectionOutput>,
 
     /// Connection start time.
     start_time: Option<Timestamp>,
@@ -417,6 +418,48 @@ pub struct SrtConnection {
     handshake_started_at: Option<Timestamp>,
     handshake_retry_interval_micros: u64,
     handshake_timeout_micros: u64,
+}
+
+/// A protocol-owned queue with an explicit memory ceiling.
+///
+/// DATA admission is bounded by `delivery_queue_packets`; control state gets a
+/// small reserve so lifecycle and timer notifications cannot consume the DATA
+/// budget. An overflow is an overload signal and drops the newest protocol
+/// item; the queue itself never grows past its negotiated bound.
+struct BoundedQueue<T> {
+    items: VecDeque<T>,
+    capacity: usize,
+}
+
+impl<T> BoundedQueue<T> {
+    fn with_capacity(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
+        Self {
+            items: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn push_back(&mut self, item: T) -> bool {
+        if self.items.len() >= self.capacity {
+            return false;
+        }
+        self.items.push_back(item);
+        true
+    }
+
+    fn pop_front(&mut self) -> Option<T> {
+        self.items.pop_front()
+    }
+
+    #[cfg(test)]
+    fn iter(&self) -> std::collections::vec_deque::Iter<'_, T> {
+        self.items.iter()
+    }
+}
+
+fn queue_capacity(window_packets: u32) -> usize {
+    (window_packets as usize).saturating_add(CONTROL_QUEUE_RESERVE)
 }
 
 impl Drop for SrtConnection {
@@ -503,6 +546,8 @@ impl SrtConnection {
     pub fn new_caller(options: ConnectionOptions) -> Self {
         let options = normalize_buffer_options(options);
         let initial_seq = options.initial_seq.unwrap_or(0);
+        let event_queue_capacity = queue_capacity(options.delivery_queue_packets);
+        let output_queue_capacity = queue_capacity(options.flow_window_packets);
         Self {
             role: ConnectionRole::Caller,
             state: ConnectionState::Disconnected,
@@ -516,11 +561,11 @@ impl SrtConnection {
             receiver: None,
             assembler: MessageAssembler::new(),
             max_payload_size: DEFAULT_MTU as usize - SRT_HEADER_SIZE,
-            event_queue: VecDeque::new(),
+            event_queue: BoundedQueue::with_capacity(event_queue_capacity),
             key_refresh_notified: false,
             pending_data_events: 0,
             pending_data_packets: 0,
-            output_queue: VecDeque::new(),
+            output_queue: BoundedQueue::with_capacity(output_queue_capacity),
             start_time: None,
             last_ack_time: None,
             last_nak_time: None,
@@ -544,6 +589,8 @@ impl SrtConnection {
     pub fn new_listener(options: ConnectionOptions) -> Self {
         let options = normalize_buffer_options(options);
         let initial_seq = options.initial_seq.unwrap_or(0);
+        let event_queue_capacity = queue_capacity(options.delivery_queue_packets);
+        let output_queue_capacity = queue_capacity(options.flow_window_packets);
         Self {
             role: ConnectionRole::Listener,
             state: ConnectionState::Listening,
@@ -557,11 +604,11 @@ impl SrtConnection {
             receiver: None,
             assembler: MessageAssembler::new(),
             max_payload_size: DEFAULT_MTU as usize - SRT_HEADER_SIZE,
-            event_queue: VecDeque::new(),
+            event_queue: BoundedQueue::with_capacity(event_queue_capacity),
             key_refresh_notified: false,
             pending_data_events: 0,
             pending_data_packets: 0,
-            output_queue: VecDeque::new(),
+            output_queue: BoundedQueue::with_capacity(output_queue_capacity),
             start_time: None,
             last_ack_time: None,
             last_nak_time: None,

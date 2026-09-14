@@ -5,6 +5,8 @@ use crate::{
 use shiguredo_srt::{Bytes, ConnectionOutput, SrtConnection, Timestamp, WireSink};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::mem::MaybeUninit;
+
+const DEFAULT_MAX_LOGICAL_CALLERS: usize = 4096;
 /// Opaque application identity for one outbound SRT stream. A direct caller
 /// and a bonded Broadcast/Backup group have the same steady-state API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -270,6 +272,7 @@ pub struct CallerTable {
     deadlines: BTreeSet<DeadlineEntry>,
     due_ids: Vec<LogicalCallerId>,
     sched: HashMap<LogicalCallerId, SchedEntry>,
+    max_logical_callers: usize,
     next_logical_caller: u64,
     #[cfg(any(test, feature = "bench-internals"))]
     sched_stats: SchedCounters,
@@ -665,13 +668,26 @@ fn logical_state(connection: &SrtConnection) -> LogicalCallerState {
 impl CallerTable {
     #[must_use]
     pub fn new() -> Self {
+        Self::with_capacity(DEFAULT_MAX_LOGICAL_CALLERS)
+    }
+
+    /// Create a table with an explicit logical-caller admission bound.
+    ///
+    /// The default matches the native egress shard's fixed leaf capacity.
+    /// Keeping this limit at the transport boundary prevents a caller-table
+    /// adapter from becoming an unbounded side channel if its owner admits
+    /// outputs incorrectly.
+    #[must_use]
+    pub fn with_capacity(max_logical_callers: usize) -> Self {
+        let max_logical_callers = max_logical_callers.max(1);
         Self {
-            sessions: HashMap::new(),
-            routes: HashMap::new(),
-            ready_queue: VecDeque::new(),
+            sessions: HashMap::with_capacity(64),
+            routes: HashMap::with_capacity(64),
+            ready_queue: VecDeque::with_capacity(64),
             deadlines: BTreeSet::new(),
-            due_ids: Vec::with_capacity(64),
-            sched: HashMap::new(),
+            due_ids: Vec::with_capacity(max_logical_callers.min(64)),
+            sched: HashMap::with_capacity(64),
+            max_logical_callers,
             next_logical_caller: 1,
             #[cfg(any(test, feature = "bench-internals"))]
             sched_stats: SchedCounters::default(),
@@ -777,6 +793,12 @@ impl CallerTable {
     /// Add one direct caller. Its non-zero SRT Socket ID must be unique among
     /// all physical legs in this shared UDP socket.
     pub fn add_direct(&mut self, leg: CallerLeg) -> Result<LogicalCallerId, shiguredo_srt::Error> {
+        if self.sessions.len() >= self.max_logical_callers {
+            return Err(shiguredo_srt::Error::with_reason(
+                shiguredo_srt::ErrorKind::InvalidState,
+                "shared caller table capacity exhausted",
+            ));
+        }
         let socket_id = self.validate_socket_id(&leg.connection)?;
         let id = self.allocate_logical_caller()?;
         self.sessions.insert(
@@ -810,6 +832,12 @@ impl CallerTable {
         mode: shiguredo_srt::GroupMode,
         legs: impl IntoIterator<Item = CallerGroupLeg>,
     ) -> Result<LogicalCallerId, shiguredo_srt::Error> {
+        if self.sessions.len() >= self.max_logical_callers {
+            return Err(shiguredo_srt::Error::with_reason(
+                shiguredo_srt::ErrorKind::InvalidState,
+                "shared caller table capacity exhausted",
+            ));
+        }
         let mut group = shiguredo_srt::SrtGroup::new(group_id, mode)?;
         let mut caller_legs = HashMap::new();
         let mut socket_ids = HashSet::new();
@@ -1964,6 +1992,29 @@ mod tests {
             .connect(Timestamp::default())
             .expect("caller starts handshake");
         connection
+    }
+
+    #[test]
+    fn caller_table_rejects_logical_capacity_overflow() {
+        let mut callers = CallerTable::with_capacity(1);
+        for socket_id in [101, 102] {
+            let result = callers.add_direct(CallerLeg::new(
+                "127.0.0.1:11000".parse().unwrap(),
+                caller_connection(ConnectionOptions {
+                    socket_id,
+                    ..ConnectionOptions::default()
+                }),
+            ));
+            if socket_id == 101 {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(
+                    result.unwrap_err().kind,
+                    ErrorKind::InvalidState,
+                    "caller-table admission must stay bounded"
+                );
+            }
+        }
     }
 
     #[test]
