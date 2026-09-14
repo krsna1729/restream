@@ -17,8 +17,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::os::fd::AsRawFd;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::thread::{self, JoinHandle};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
 use tokio_rustls::rustls::ClientConfig;
@@ -129,13 +128,6 @@ pub(crate) struct RtmpResolvedConnect {
     pub(crate) peer_addr: SocketAddr,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RtmpResolveWorkerError {
-    ResolveFailed { host: String },
-    CompletionQueueFull,
-    CompletionQueueClosed,
-}
-
 pub(crate) struct RtmpResolveCompletionQueue {
     receiver: Receiver<RtmpResolvedConnect>,
 }
@@ -155,30 +147,7 @@ impl RtmpResolveCompletionQueue {
     }
 }
 
-pub(crate) fn spawn_rtmp_resolve_worker(
-    output_id: OutputId,
-    generation: u64,
-    host: String,
-    port: u16,
-    completion_sender: SyncSender<RtmpResolvedConnect>,
-) -> JoinHandle<Result<(), RtmpResolveWorkerError>> {
-    thread::spawn(move || {
-        let peer_addr = resolve_rtmp_peer_host(&host, port)
-            .ok_or_else(|| RtmpResolveWorkerError::ResolveFailed { host: host.clone() })?;
-        completion_sender
-            .try_send(RtmpResolvedConnect {
-                output_id,
-                generation,
-                peer_addr,
-            })
-            .map_err(|error| match error {
-                TrySendError::Full(_) => RtmpResolveWorkerError::CompletionQueueFull,
-                TrySendError::Disconnected(_) => RtmpResolveWorkerError::CompletionQueueClosed,
-            })
-    })
-}
-
-fn resolve_rtmp_peer_host(host: &str, port: u16) -> Option<SocketAddr> {
+pub(crate) fn resolve_rtmp_peer_host(host: &str, port: u16) -> Option<SocketAddr> {
     if let Ok(addr) = host.parse::<std::net::IpAddr>() {
         return Some(SocketAddr::new(addr, port));
     }

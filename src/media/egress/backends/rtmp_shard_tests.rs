@@ -651,3 +651,15 @@ mod drain_tests;
 mod media_tick_tests;
 #[path = "rtmp_shard_reregistration_tests.rs"]
 mod reregistration_tests;
+
+#[test]
+fn leaf_slots_are_fixed_and_exhaustion_does_not_grow_the_slab() {
+    let mut backend =
+        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096)
+            .with_leaf_capacity(1);
+
+    assert_eq!(backend.leaves.len(), 1);
+    assert_eq!(backend.allocate_leaf_key(), Some(LeafKey(0)));
+    assert_eq!(backend.allocate_leaf_key(), None);
+    assert_eq!(backend.leaves.len(), 1);
+}

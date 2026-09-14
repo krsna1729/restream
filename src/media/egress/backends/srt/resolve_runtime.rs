@@ -1,8 +1,10 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 
 use super::{
-    SrtResolveRequest, SrtResolveWorkerError, SrtResolvedConnect, SrtShardBackend,
-    duration_millis_u64, srt_resolve_completion_queue,
+    SrtResolveRequest, SrtResolvedConnect, SrtShardBackend, duration_millis_u64,
+    srt_resolve_completion_queue,
 };
 use crate::media::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
@@ -13,54 +15,65 @@ use crate::media::srt::SrtFabricEgressConnectSpec;
 use std::sync::mpsc::SyncSender;
 
 const SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY: usize = 1024;
+const SRT_RESOLVE_REQUEST_QUEUE_CAPACITY: usize = 1024;
 
 pub(crate) type ResolvingSrtShardBackendDefault = ResolvingSrtShardBackend<SrtShardBackend>;
 
-#[derive(Debug)]
 pub(crate) struct SrtResolveWorkerSet {
-    completion_sender: SyncSender<SrtResolvedConnect>,
-    workers: Vec<JoinHandle<Result<(), SrtResolveWorkerError>>>,
+    request_sender: Option<SyncSender<SrtResolveRequest>>,
+    pending: Arc<AtomicUsize>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl SrtResolveWorkerSet {
     pub(crate) fn new(completion_sender: SyncSender<SrtResolvedConnect>) -> Self {
+        let (request_sender, request_receiver) =
+            mpsc::sync_channel::<SrtResolveRequest>(SRT_RESOLVE_REQUEST_QUEUE_CAPACITY);
+        let pending = Arc::new(AtomicUsize::new(0));
+        let worker_pending = Arc::clone(&pending);
+        let worker = std::thread::spawn(move || {
+            while let Ok(request) = request_receiver.recv() {
+                let _ = super::resolve_srt_peer_hosts(request, completion_sender.clone());
+                worker_pending.fetch_sub(1, Ordering::Relaxed);
+            }
+        });
         Self {
-            completion_sender,
-            workers: Vec::new(),
+            request_sender: Some(request_sender),
+            pending,
+            worker: Some(worker),
         }
     }
 
-    /// Spawn a single worker that resolves a batch of requests, collapsing
-    /// N thread creations into 1. Each request is resolved sequentially in
-    /// the worker; completions are sent to the shared completion queue.
+    /// Queue a bounded batch for the one resolver worker owned by this shard.
     fn spawn_batch(&mut self, requests: Vec<SrtResolveRequest>) {
-        if requests.is_empty() {
+        let Some(sender) = self.request_sender.as_ref() else {
             return;
-        }
-        let sender = self.completion_sender.clone();
-        self.workers.push(std::thread::spawn(move || {
-            for request in requests {
-                let _ = super::resolve_srt_peer_hosts(request, sender.clone());
+        };
+        for request in requests {
+            self.pending.fetch_add(1, Ordering::Relaxed);
+            if sender.try_send(request).is_err() {
+                self.pending.fetch_sub(1, Ordering::Relaxed);
+                break;
             }
-            Ok(())
-        }));
+        }
     }
 
-    fn reap_finished(&mut self) {
-        let mut index = 0;
-        while index < self.workers.len() {
-            if self.workers[index].is_finished() {
-                let worker = self.workers.swap_remove(index);
-                let _ = worker.join();
-            } else {
-                index += 1;
-            }
+    fn shutdown(&mut self) {
+        self.request_sender.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
         }
     }
 
     #[cfg(test)]
     pub(crate) fn worker_count(&self) -> usize {
-        self.workers.len()
+        self.pending.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for SrtResolveWorkerSet {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -68,9 +81,7 @@ pub(crate) struct ResolvingSrtShardBackend<B> {
     backend: B,
     resolve_workers: SrtResolveWorkerSet,
     /// Pending resolves buffered during `on_command` and flushed in
-    /// `on_media_tick` — batches N resolves into one thread instead of
-    /// spawning a thread per command. At 1,200-output scale this reduces
-    /// thread creations from 1,200 to ~shard-iterations (~30/s = 40/iter).
+    /// `on_media_tick` into the shard's bounded resolver request queue.
     pending_resolves: Vec<SrtResolveRequest>,
 }
 
@@ -135,13 +146,12 @@ where
             let batch = std::mem::take(&mut self.pending_resolves);
             self.resolve_workers.spawn_batch(batch);
         }
-        self.resolve_workers.reap_finished();
         effect
     }
 
     fn on_shutdown(&mut self) {
         self.backend.on_shutdown();
-        self.resolve_workers.reap_finished();
+        self.resolve_workers.shutdown();
     }
 
     fn resync_count(&self) -> u64 {

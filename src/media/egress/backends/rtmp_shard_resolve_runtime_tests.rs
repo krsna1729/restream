@@ -63,7 +63,10 @@ fn add_command_spawns_a_resolve_worker_reaped_on_next_media_tick() {
         "rtmp://127.0.0.1:1/live/key",
         1,
     )));
-    assert_eq!(backend.worker_count(), 1);
+    assert!(
+        backend.resolve_workers.worker.is_some(),
+        "each shard owns one resolver worker regardless of output count"
+    );
 
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while backend.worker_count() > 0 {
