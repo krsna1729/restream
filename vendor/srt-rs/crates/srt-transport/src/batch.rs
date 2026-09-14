@@ -67,6 +67,34 @@ impl RecvBatch {
             .take(n.min(self.bufs.len()))
             .map(|((buf, size), addr)| (*addr, &buf[..*size]))
     }
+
+    /// Move one received buffer to the caller while installing a reusable
+    /// replacement for the next `recvmmsg` call. The replacement must have at
+    /// least the same capacity as the existing slot.
+    pub fn take(
+        &mut self,
+        index: usize,
+        mut replacement: Vec<u8>,
+    ) -> io::Result<(Option<SocketAddr>, Vec<u8>, usize)> {
+        let Some(buffer) = self.bufs.get_mut(index) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "receive batch index out of range",
+            ));
+        };
+        if replacement.capacity() < buffer.capacity() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "receive batch replacement buffer is too small",
+            ));
+        }
+        replacement.resize(replacement.capacity(), 0);
+        let buffer = std::mem::replace(buffer, replacement);
+        let size = self.sizes[index].min(buffer.len());
+        let address = self.addrs[index].take();
+        self.sizes[index] = 0;
+        Ok((address, buffer, size))
+    }
 }
 
 impl Default for RecvBatch {
@@ -504,6 +532,23 @@ mod tests {
         assert_eq!(report.datagrams, 3);
         assert_eq!(report.syscalls, 1);
         assert_eq!(got, [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+    }
+
+    #[test]
+    fn take_swaps_a_received_buffer_without_copying() {
+        let mut batch = RecvBatch::with_capacity(1, 8);
+        batch.bufs[0][..3].copy_from_slice(b"abc");
+        batch.sizes[0] = 3;
+        batch.addrs[0] = Some("127.0.0.1:9000".parse().unwrap());
+        let received_ptr = batch.bufs[0].as_ptr();
+        let replacement = vec![0_u8; 8];
+
+        let (address, buffer, size) = batch.take(0, replacement).unwrap();
+
+        assert_eq!(buffer.as_ptr(), received_ptr);
+        assert_eq!(&buffer[..size], b"abc");
+        assert_eq!(address, Some("127.0.0.1:9000".parse().unwrap()));
+        assert_ne!(batch.bufs[0].as_ptr(), received_ptr);
     }
 
     #[test]

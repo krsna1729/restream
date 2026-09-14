@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use restream_dataplane::udp::{UdpInterest, UdpReadyEvent, UdpSendCompletion, UringUdpPoller};
-use srt_transport::{RecvBatch, RecvBudget, drain_recv_fd};
+use srt_transport::{RecvBatch, RecvBudget};
 use tokio::sync::mpsc;
 use tracing::error;
 
@@ -27,7 +27,7 @@ const SEND_CAPACITY: usize = 64;
 
 pub(crate) struct NativeSrtDatagram {
     pub(crate) peer: SocketAddr,
-    pub(crate) buffer: Box<[u8]>,
+    pub(crate) buffer: Vec<u8>,
     pub(crate) len: usize,
 }
 
@@ -48,7 +48,7 @@ pub(crate) struct NativeSrtIngressStats {
 
 pub(crate) struct NativeSrtIngress {
     pub(crate) inbound: mpsc::Receiver<NativeSrtDatagram>,
-    pub(crate) recycled: mpsc::Sender<Box<[u8]>>,
+    pub(crate) recycled: mpsc::Sender<Vec<u8>>,
     pub(crate) outbound: mpsc::Sender<(SocketAddr, Vec<u8>)>,
     pub(crate) stats: Arc<NativeSrtIngressStats>,
 }
@@ -93,24 +93,24 @@ fn deliver_datagram(
     packet: NativeSrtDatagram,
     stats: &NativeSrtIngressStats,
     listener_stats: &ListenerSocketStats,
-) -> bool {
+) -> Result<(), NativeSrtDatagram> {
     match inbound_tx.try_send(packet) {
-        Ok(()) => true,
-        Err(mpsc::error::TrySendError::Full(_)) => {
+        Ok(()) => Ok(()),
+        Err(mpsc::error::TrySendError::Full(packet)) => {
             stats.dropped_channel.fetch_add(1, Ordering::Relaxed);
             listener_stats
                 .native_rx_channel_drops
                 .fetch_add(1, Ordering::Relaxed);
-            false
+            Err(packet)
         }
-        Err(mpsc::error::TrySendError::Closed(_)) => false,
+        Err(mpsc::error::TrySendError::Closed(packet)) => Err(packet),
     }
 }
 
 fn run_worker(
     socket: UdpSocket,
     inbound_tx: mpsc::Sender<NativeSrtDatagram>,
-    mut recycled_rx: mpsc::Receiver<Box<[u8]>>,
+    mut recycled_rx: mpsc::Receiver<Vec<u8>>,
     mut outbound_rx: mpsc::Receiver<(SocketAddr, Vec<u8>)>,
     stats: Arc<NativeSrtIngressStats>,
     listener_stats: Arc<ListenerSocketStats>,
@@ -120,7 +120,7 @@ fn run_worker(
     poller.register_fixed(fd, 0, 1, UdpInterest::READ)?;
     let mut recv_batch = RecvBatch::new();
     let mut free = (0..CHANNEL_CAPACITY)
-        .map(|_| vec![0_u8; BUFFER_SIZE].into_boxed_slice())
+        .map(|_| vec![0_u8; BUFFER_SIZE])
         .collect::<Vec<_>>();
     let mut outbound = VecDeque::with_capacity(MAX_OUTBOUND);
     let mut inflight = std::iter::repeat_with(|| None)
@@ -174,28 +174,45 @@ fn run_worker(
             .iter()
             .any(|event| event.readable && event.slot == 0 && event.generation == 1);
         if readable {
-            let report = drain_recv_fd(fd, &mut recv_batch, budget, |peer, data| {
-                let Some(peer) = peer else { return };
-                stats.recv_datagrams.fetch_add(1, Ordering::Relaxed);
-                listener_stats
-                    .native_rx_datagrams
-                    .fetch_add(1, Ordering::Relaxed);
-                let Some(mut buffer) = free.pop() else {
-                    stats.dropped_pool.fetch_add(1, Ordering::Relaxed);
+            let max_datagrams = budget.max_datagrams.max(1);
+            let mut drained_datagrams = 0;
+            for _ in 0..budget.max_rounds.max(1) {
+                if drained_datagrams >= max_datagrams {
+                    break;
+                }
+                let received = recv_batch.recv(fd)?;
+                if received == 0 {
+                    break;
+                }
+                drained_datagrams = drained_datagrams.saturating_add(received);
+                for index in 0..received {
+                    stats.recv_datagrams.fetch_add(1, Ordering::Relaxed);
                     listener_stats
-                        .native_rx_pool_drops
+                        .native_rx_datagrams
                         .fetch_add(1, Ordering::Relaxed);
-                    return;
-                };
-                buffer[..data.len()].copy_from_slice(data);
-                let packet = NativeSrtDatagram {
-                    peer,
-                    buffer,
-                    len: data.len(),
-                };
-                let _ = deliver_datagram(&inbound_tx, packet, &stats, &listener_stats);
-            })?;
-            let _ = report;
+                    let Some(replacement) = free.pop() else {
+                        stats.dropped_pool.fetch_add(1, Ordering::Relaxed);
+                        listener_stats
+                            .native_rx_pool_drops
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    };
+                    let (peer, buffer, len) = recv_batch.take(index, replacement)?;
+                    let Some(peer) = peer else {
+                        free.push(buffer);
+                        continue;
+                    };
+                    let packet = NativeSrtDatagram { peer, buffer, len };
+                    if let Err(packet) =
+                        deliver_datagram(&inbound_tx, packet, &stats, &listener_stats)
+                    {
+                        free.push(packet.buffer);
+                    }
+                }
+                if received < recv_batch.capacity() {
+                    break;
+                }
+            }
             poller.register(fd, 0, 1, UdpInterest::READ)?;
         }
         flush_outbound(
@@ -273,22 +290,12 @@ mod tests {
         let listener_stats = ListenerSocketStats::default();
         let packet = || NativeSrtDatagram {
             peer: "127.0.0.1:9000".parse().unwrap(),
-            buffer: vec![1_u8].into_boxed_slice(),
+            buffer: vec![1_u8],
             len: 1,
         };
 
-        assert!(deliver_datagram(
-            &inbound_tx,
-            packet(),
-            &stats,
-            &listener_stats
-        ));
-        assert!(!deliver_datagram(
-            &inbound_tx,
-            packet(),
-            &stats,
-            &listener_stats
-        ));
+        assert!(deliver_datagram(&inbound_tx, packet(), &stats, &listener_stats).is_ok());
+        assert!(deliver_datagram(&inbound_tx, packet(), &stats, &listener_stats).is_err());
         assert_eq!(stats.dropped_channel.load(Ordering::Relaxed), 1);
         assert_eq!(
             listener_stats
@@ -321,10 +328,7 @@ mod tests {
         let mut packet = ingress.inbound.recv().await.unwrap();
         assert_eq!(packet.payload(), b"srt");
         assert_eq!(packet.peer, sender.local_addr().unwrap());
-        let buffer = std::mem::replace(
-            &mut packet.buffer,
-            vec![0_u8; BUFFER_SIZE].into_boxed_slice(),
-        );
+        let buffer = std::mem::replace(&mut packet.buffer, vec![0_u8; BUFFER_SIZE]);
         ingress.recycled.send(buffer).await.unwrap();
         ingress
             .outbound

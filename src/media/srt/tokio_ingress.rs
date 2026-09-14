@@ -655,7 +655,7 @@ async fn admit_native_datagram(
     packet: NativeSrtDatagram,
     admission: &srt_transport::AdmissionOptions,
     telemetry: &IngressTelemetry,
-    recycled: &tokio::sync::mpsc::Sender<Box<[u8]>>,
+    recycled: &tokio::sync::mpsc::Sender<Vec<u8>>,
 ) {
     let NativeSrtDatagram { peer, buffer, len } = packet;
     let now = timestamp_now();
