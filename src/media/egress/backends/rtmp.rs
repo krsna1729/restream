@@ -38,10 +38,15 @@ use crate::media::rtmp::{
 
 use super::rtmp_connection::RtmpConnection;
 use super::rtmp_handshake::{HandshakeOutcome, NonBlockingRtmpHandshake};
-use rtmp_negotiation::{PendingWrite, SessionAdvanceOutcome, SessionNegotiation};
+use rtmp_negotiation::{SessionAdvanceOutcome, SessionNegotiation};
 
 #[path = "rtmp_negotiation.rs"]
 mod rtmp_negotiation;
+
+#[path = "rtmp_wire.rs"]
+mod rtmp_wire;
+
+use rtmp_wire::RtmpWireMessage;
 
 const SESSION_READ_BUFFER: usize = 4096;
 const MAX_VECTORED_PACKETS: usize = 16;
@@ -104,6 +109,60 @@ pub(crate) struct RtmpPublishStartup {
     pub(crate) defer_audio_until_video_ready: bool,
 }
 
+#[allow(clippy::large_enum_variant)]
+enum MediaWirePacket {
+    Bytes(Bytes),
+    Vectored(RtmpWireMessage),
+}
+
+impl MediaWirePacket {
+    fn len(&self) -> usize {
+        match self {
+            Self::Bytes(bytes) => bytes.len(),
+            Self::Vectored(message) => message.remaining_len(),
+        }
+    }
+}
+
+#[allow(clippy::large_enum_variant)]
+enum MediaPendingWrite {
+    Bytes { bytes: Bytes, offset: usize },
+    Vectored(RtmpWireMessage),
+}
+
+impl MediaPendingWrite {
+    fn new(packet: MediaWirePacket) -> Option<Self> {
+        match packet {
+            MediaWirePacket::Bytes(bytes) if bytes.is_empty() => None,
+            MediaWirePacket::Bytes(bytes) => Some(Self::Bytes { bytes, offset: 0 }),
+            MediaWirePacket::Vectored(message) => Some(Self::Vectored(message)),
+        }
+    }
+
+    fn remaining_len(&self) -> usize {
+        match self {
+            Self::Bytes { bytes, offset } => bytes.len().saturating_sub(*offset),
+            Self::Vectored(message) => message.remaining_len(),
+        }
+    }
+
+    fn is_complete(&self) -> bool {
+        self.remaining_len() == 0
+    }
+
+    fn consume(&mut self, bytes: usize) {
+        match self {
+            Self::Bytes {
+                bytes: buffer,
+                offset,
+            } => {
+                *offset = offset.saturating_add(bytes).min(buffer.len());
+            }
+            Self::Vectored(message) => message.consume(bytes),
+        }
+    }
+}
+
 /// Drains `RingFeed` media units into non-blocking RTMP wire writes, reusing
 /// [`RtmpSessionCore`]'s pure packet-building calls and [`RtmpMediaEncoder`]'s
 /// pure per-packet encoding (sequence-header refresh, keyframe gating,
@@ -129,10 +188,9 @@ struct MediaPublisher {
     /// startup batch (metadata + sequence headers, queued once in `new` and
     /// never counted against `budget.max_units`) or one feed unit's encoded
     /// packets.
-    current_batch: VecDeque<Bytes>,
-    pending_write: Option<PendingWrite>,
+    current_batch: VecDeque<MediaWirePacket>,
+    pending_write: Option<MediaPendingWrite>,
     native_send_pending: bool,
-    native_vectored_bytes: Option<usize>,
     /// True once a feed-derived unit's packets have been queued into
     /// `current_batch` but not yet counted as consumed — distinguishes "just
     /// finished flushing a real unit" from "nothing queued yet" so the
@@ -159,16 +217,16 @@ impl MediaPublisher {
         let mut current_batch = VecDeque::with_capacity(32);
 
         if let Some(metadata) = startup.publish_metadata.as_ref() {
-            current_batch.push_back(
+            current_batch.push_back(MediaWirePacket::Bytes(
                 core.publish_metadata(metadata)
                     .map_err(|error| error.to_string())?,
-            );
+            ));
         }
         if let Some(video_sequence_header) = startup.startup_video_sequence_header {
             let (wire, _) = core
                 .publish_video_data(video_sequence_header, RtmpTimestamp::new(0), false)
                 .map_err(|error| error.to_string())?;
-            current_batch.push_back(wire);
+            current_batch.push_back(MediaWirePacket::Bytes(wire));
             encoder.set_startup_video_config(startup.startup_video_config);
         }
         let mut audio_sequence_header_sent = false;
@@ -176,7 +234,7 @@ impl MediaPublisher {
             let (wire, _) = core
                 .publish_audio_data(audio_sequence_header, RtmpTimestamp::new(0), false)
                 .map_err(|error| error.to_string())?;
-            current_batch.push_back(wire);
+            current_batch.push_back(MediaWirePacket::Bytes(wire));
             audio_sequence_header_sent = true;
         }
 
@@ -194,7 +252,6 @@ impl MediaPublisher {
             current_batch,
             pending_write: None,
             native_send_pending: false,
-            native_vectored_bytes: None,
             unit_in_flight: false,
             actions: Vec::with_capacity(2),
             pending_units: Vec::with_capacity(FEED_READ_BURST),
@@ -216,27 +273,9 @@ impl MediaPublisher {
         let pending_write_remaining = self
             .pending_write
             .as_ref()
-            .map_or(0, |pending| pending.remaining().len());
-        let queued_batch: usize = self.current_batch.iter().map(Bytes::len).sum();
+            .map_or(0, MediaPendingWrite::remaining_len);
+        let queued_batch: usize = self.current_batch.iter().map(MediaWirePacket::len).sum();
         pending_write_remaining + queued_batch
-    }
-
-    fn consume_vectored_bytes(&mut self, mut written: usize) {
-        while written != 0 {
-            let Some(packet_len) = self.current_batch.front().map(Bytes::len) else {
-                return;
-            };
-            if written < packet_len {
-                let bytes = self.current_batch.pop_front().expect("front was present");
-                self.pending_write = Some(PendingWrite {
-                    bytes,
-                    offset: written,
-                });
-                return;
-            }
-            written -= packet_len;
-            self.current_batch.pop_front();
-        }
     }
 
     /// Encode one feed unit into zero or more wire packets in
@@ -260,7 +299,7 @@ impl MediaPublisher {
                     .core
                     .publish_audio_data(sequence_header, RtmpTimestamp::new(0), false)
                     .map_err(|error| error.to_string())?;
-                self.current_batch.push_back(wire);
+                self.current_batch.push_back(MediaWirePacket::Bytes(wire));
                 self.audio_sequence_header_sent = true;
                 self.deferred_audio_sequence_header = None;
             }
@@ -280,23 +319,54 @@ impl MediaPublisher {
                     payload,
                     timestamp,
                     can_be_dropped,
-                } => {
-                    self.core
-                        .publish_video_data(payload, timestamp, can_be_dropped)
-                        .map_err(|error| error.to_string())?
-                        .0
-                }
+                } => self.media_wire_packet(9, payload, timestamp, can_be_dropped)?,
                 RtmpMediaAction::Audio { payload, timestamp } => {
-                    self.core
-                        .publish_audio_data(payload, timestamp, false)
-                        .map_err(|error| error.to_string())?
-                        .0
+                    self.media_wire_packet(8, payload, timestamp, false)?
                 }
             };
             self.current_batch.push_back(wire);
         }
         self.actions = actions;
         Ok(())
+    }
+
+    fn media_wire_packet(
+        &mut self,
+        type_id: u8,
+        payload: Bytes,
+        timestamp: RtmpTimestamp,
+        can_be_dropped: bool,
+    ) -> Result<MediaWirePacket, String> {
+        let generated = if self.core.media_stream_id().is_none() {
+            Some(match type_id {
+                8 => self
+                    .core
+                    .publish_audio_data(payload.clone(), timestamp, can_be_dropped),
+                9 => self
+                    .core
+                    .publish_video_data(payload.clone(), timestamp, can_be_dropped),
+                _ => unreachable!("only RTMP audio and video are media wire messages"),
+            })
+        } else {
+            None
+        };
+        let stream_id = self.core.media_stream_id();
+        let Some(stream_id) = stream_id else {
+            let wire = generated
+                .ok_or_else(|| "RTMP media stream id was not established".to_string())?
+                .map_err(|error| error.to_string())?
+                .0;
+            return Ok(MediaWirePacket::Bytes(wire));
+        };
+        RtmpWireMessage::new(
+            type_id,
+            timestamp,
+            stream_id,
+            payload,
+            self.core.chunk_size(),
+        )
+        .map(MediaWirePacket::Vectored)
+        .map_err(str::to_string)
     }
 
     fn advance(
@@ -353,7 +423,6 @@ impl MediaPublisher {
                     );
                 };
                 self.native_send_pending = false;
-                let vectored_bytes = self.native_vectored_bytes.take();
                 if result <= 0 {
                     return EngineProgress::Failed(ProtocolFailure {
                         reason: "rtmp_media_write",
@@ -367,10 +436,6 @@ impl MediaPublisher {
                 }
                 let written = usize::try_from(result).unwrap_or(usize::MAX);
                 total_bytes = total_bytes.saturating_add(written);
-                if vectored_bytes.is_some() {
-                    self.consume_vectored_bytes(written);
-                    continue;
-                }
                 let Some(pending) = &mut self.pending_write else {
                     return EngineProgress::Failed(ProtocolFailure {
                         reason: "rtmp_media_write",
@@ -378,7 +443,7 @@ impl MediaPublisher {
                         retryable: false,
                     });
                 };
-                pending.offset = pending.offset.saturating_add(written);
+                pending.consume(written);
                 if pending.is_complete() {
                     self.pending_write = None;
                 }
@@ -391,12 +456,27 @@ impl MediaPublisher {
                 if let Some(native) = native.as_mut()
                     && stream.supports_native_send()
                 {
-                    match native.sender.submit_send(
-                        stream.raw_fd(),
-                        native.slot,
-                        native.generation,
-                        pending.remaining(),
-                    ) {
+                    let result = match pending {
+                        MediaPendingWrite::Bytes { bytes, offset } => native.sender.submit_send(
+                            stream.raw_fd(),
+                            native.slot,
+                            native.generation,
+                            &bytes[*offset..],
+                        ),
+                        MediaPendingWrite::Vectored(message) => {
+                            let mut buffers: [&[u8]; MAX_VECTORED_PACKETS] =
+                                [&[]; MAX_VECTORED_PACKETS];
+                            let (count, _) = message
+                                .fill_buffers(budget.remaining_bytes(total_bytes), &mut buffers);
+                            native.sender.submit_send_vectored(
+                                stream.raw_fd(),
+                                native.slot,
+                                native.generation,
+                                &buffers[..count],
+                            )
+                        }
+                    };
+                    match result {
                         Ok(()) => {
                             self.native_send_pending = true;
                             return Self::finish(
@@ -428,7 +508,21 @@ impl MediaPublisher {
                         WaitCondition::Io(Interest::READ_WRITE),
                     );
                 }
-                match stream.write(pending.remaining()) {
+                let result = match pending {
+                    MediaPendingWrite::Bytes { bytes, offset } => stream.write(&bytes[*offset..]),
+                    MediaPendingWrite::Vectored(message) => {
+                        let mut buffers: [&[u8]; MAX_VECTORED_PACKETS] =
+                            [&[]; MAX_VECTORED_PACKETS];
+                        let (count, _) =
+                            message.fill_buffers(budget.remaining_bytes(total_bytes), &mut buffers);
+                        let mut slices = [IoSlice::new(&[]); MAX_VECTORED_PACKETS];
+                        for (slice, buffer) in slices.iter_mut().zip(&buffers[..count]) {
+                            *slice = IoSlice::new(buffer);
+                        }
+                        stream.write_vectored(&slices[..count])
+                    }
+                };
+                match result {
                     Ok(0) => {
                         return EngineProgress::Failed(ProtocolFailure {
                             reason: "rtmp_media_write",
@@ -437,7 +531,7 @@ impl MediaPublisher {
                         });
                     }
                     Ok(n) => {
-                        pending.offset += n;
+                        pending.consume(n);
                         total_bytes += n;
                         if !pending.is_complete() {
                             return Self::finish(
@@ -470,123 +564,9 @@ impl MediaPublisher {
             }
 
             if self.pending_write.is_none()
-                && self.current_batch.len() > 1
-                && let Some(native) = native.as_mut()
-                && stream.supports_native_send()
-            {
-                let mut buffers: [&[u8]; MAX_VECTORED_PACKETS] = [&[]; MAX_VECTORED_PACKETS];
-                let mut remaining = budget.remaining_bytes(total_bytes);
-                let mut count = 0;
-                let mut submitted_bytes = 0usize;
-                for packet in self.current_batch.iter().take(MAX_VECTORED_PACKETS) {
-                    if remaining == 0 {
-                        break;
-                    }
-                    let len = packet.len().min(remaining);
-                    buffers[count] = &packet[..len];
-                    count += 1;
-                    remaining -= len;
-                    submitted_bytes += len;
-                    if len < packet.len() {
-                        break;
-                    }
-                }
-                match native.sender.submit_send_vectored(
-                    stream.raw_fd(),
-                    native.slot,
-                    native.generation,
-                    &buffers[..count],
-                ) {
-                    Ok(()) => {
-                        self.native_send_pending = true;
-                        self.native_vectored_bytes = Some(submitted_bytes);
-                        return Self::finish(
-                            total_bytes,
-                            total_units,
-                            WaitCondition::Io(Interest::READ_WRITE),
-                        );
-                    }
-                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                        return Self::finish(
-                            total_bytes,
-                            total_units,
-                            WaitCondition::Io(Interest::READ_WRITE),
-                        );
-                    }
-                    Err(error) => {
-                        return EngineProgress::Failed(ProtocolFailure {
-                            reason: "rtmp_media_submit",
-                            detail: error.to_string(),
-                            retryable: true,
-                        });
-                    }
-                }
-            }
-
-            if self.pending_write.is_none()
-                && self.current_batch.len() > 1
-                && readiness.writable
-                && (native.is_none() || !stream.supports_native_send())
-            {
-                let result = {
-                    let mut slices = [IoSlice::new(&[]); MAX_VECTORED_PACKETS];
-                    let mut remaining = budget.remaining_bytes(total_bytes);
-                    let mut count = 0;
-                    for packet in self.current_batch.iter().take(MAX_VECTORED_PACKETS) {
-                        if remaining == 0 {
-                            break;
-                        }
-                        let len = packet.len().min(remaining);
-                        slices[count] = IoSlice::new(&packet[..len]);
-                        count += 1;
-                        remaining -= len;
-                        if len < packet.len() {
-                            break;
-                        }
-                    }
-                    stream.write_vectored(&slices[..count])
-                };
-                match result {
-                    Ok(0) => {
-                        return EngineProgress::Failed(ProtocolFailure {
-                            reason: "rtmp_media_write",
-                            detail: "peer closed during write".to_string(),
-                            retryable: true,
-                        });
-                    }
-                    Ok(written) => {
-                        total_bytes += written;
-                        self.consume_vectored_bytes(written);
-                        if self.pending_write.is_some() {
-                            return Self::finish(
-                                total_bytes,
-                                total_units,
-                                WaitCondition::Io(Interest::READ_WRITE),
-                            );
-                        }
-                        continue;
-                    }
-                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                        return Self::finish(
-                            total_bytes,
-                            total_units,
-                            WaitCondition::Io(Interest::READ_WRITE),
-                        );
-                    }
-                    Err(error) => {
-                        return EngineProgress::Failed(ProtocolFailure {
-                            reason: "rtmp_media_write",
-                            detail: error.to_string(),
-                            retryable: true,
-                        });
-                    }
-                }
-            }
-
-            if self.pending_write.is_none()
                 && let Some(next) = self.current_batch.pop_front()
             {
-                self.pending_write = PendingWrite::new(next);
+                self.pending_write = MediaPendingWrite::new(next);
                 continue;
             }
 
@@ -624,7 +604,8 @@ impl MediaPublisher {
                     }
                     Ok(n) => match self.core.handle_server_input(&buffer[..n]) {
                         Ok((packets, _events)) => {
-                            self.current_batch.extend(packets);
+                            self.current_batch
+                                .extend(packets.into_iter().map(MediaWirePacket::Bytes));
                             continue;
                         }
                         Err(error) => {
