@@ -332,6 +332,7 @@ impl SrtResolveCompletionQueue {
 
 pub(crate) struct SrtShardBackend {
     resolve_completions: SrtResolveCompletionQueue,
+    resolved_connects: Vec<SrtResolvedConnect>,
     feed: TsFeed,
     /// Per-visit limits. `WorkBudget::deadline` is an absolute `Instant`
     /// computed at construction time — storing one `WorkBudget` and reusing
@@ -388,6 +389,7 @@ impl SrtShardBackend {
         let budget_window = budget.deadline.saturating_duration_since(Instant::now());
         Self {
             resolve_completions,
+            resolved_connects: Vec::with_capacity(1024),
             feed,
             budget_max_units: budget.max_units,
             budget_max_bytes: budget.max_bytes,
@@ -404,7 +406,9 @@ impl SrtShardBackend {
             srt_egress_muxer_port: Arc::new(Mutex::new(None)),
             reuse_local_srt_egress_port: false,
             connect_admission: None,
-            connect_backlog: VecDeque::new(),
+            connect_backlog: VecDeque::with_capacity(
+                srt_connect_admission::CONNECT_BACKLOG_CAPACITY,
+            ),
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
             budget_exhaustions: 0,
@@ -845,9 +849,11 @@ impl EgressShardBackend for SrtShardBackend {
     }
 
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
-        let mut resolved = Vec::new();
+        let mut resolved = std::mem::take(&mut self.resolved_connects);
+        resolved.clear();
         self.resolve_completions.drain_resolved(&mut resolved);
-        let connected_any = self.drain_connect_backlog(resolved);
+        let connected_any = self.drain_connect_backlog(&mut resolved);
+        self.resolved_connects = resolved;
         self.sweep_stalled_leaves(Instant::now());
         if connected_any || !self.connect_backlog.is_empty() {
             EgressShardCommandEffect::ScheduleReady { count: 1 }

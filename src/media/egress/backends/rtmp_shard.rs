@@ -363,6 +363,7 @@ where
 {
     poller: P,
     resolve_completions: RtmpResolveCompletionQueue,
+    resolved_connects: Vec<RtmpResolvedConnect>,
     startup_source: S,
     feed: RingFeed,
     /// Per-visit limits. `WorkBudget::deadline` is an absolute `Instant`
@@ -425,6 +426,7 @@ where
         Self {
             poller,
             resolve_completions,
+            resolved_connects: Vec::with_capacity(1024),
             startup_source,
             feed,
             budget_max_units: budget.max_units,
@@ -826,10 +828,11 @@ where
     }
 
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
-        let mut resolved = Vec::new();
+        let mut resolved = std::mem::take(&mut self.resolved_connects);
+        resolved.clear();
         self.resolve_completions.drain_resolved(&mut resolved);
         let mut connected_any = false;
-        for completion in resolved {
+        for completion in resolved.drain(..) {
             let connected = self.complete_pending_connect(
                 &completion.output_id,
                 completion.generation,
@@ -837,6 +840,7 @@ where
             );
             connected_any |= connected;
         }
+        self.resolved_connects = resolved;
         self.sweep_connecting_leaves(Instant::now());
         self.sweep_stalled_leaves(Instant::now());
         if connected_any {

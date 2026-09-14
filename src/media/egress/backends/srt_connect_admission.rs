@@ -39,6 +39,8 @@
 
 use super::*;
 
+pub(super) const CONNECT_BACKLOG_CAPACITY: usize = 1024;
+
 impl SrtShardBackend {
     /// Opts this backend's resolved-connect draining into the shared
     /// `admission` semaphore. Kept as a separate builder step, mirroring
@@ -67,8 +69,21 @@ impl SrtShardBackend {
     /// `EgressShardCommandEffect::ScheduleReady`'s effect on the loop's
     /// idle-wait path in `shard.rs`), so throttling here bounds
     /// concurrency, not overall connect throughput.
-    pub(super) fn drain_connect_backlog(&mut self, resolved: Vec<SrtResolvedConnect>) -> bool {
-        self.connect_backlog.extend(resolved);
+    pub(super) fn drain_connect_backlog(&mut self, resolved: &mut Vec<SrtResolvedConnect>) -> bool {
+        let available = CONNECT_BACKLOG_CAPACITY.saturating_sub(self.connect_backlog.len());
+        let accepted = resolved.len().min(available);
+        self.connect_backlog.extend(resolved.drain(..accepted));
+        for completion in resolved.drain(..) {
+            let should_remove = self
+                .pending_connects
+                .get(&completion.output_id)
+                .is_some_and(|pending| pending.common.generation == completion.generation);
+            if should_remove
+                && let Some(pending) = self.pending_connects.remove(&completion.output_id)
+            {
+                pending.common.progress_sink.mark_terminated_unexpectedly();
+            }
+        }
 
         let mut connected_any = false;
         while let Some(completion) = self.connect_backlog.pop_front() {
