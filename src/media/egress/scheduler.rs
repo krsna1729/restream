@@ -128,6 +128,11 @@ impl ReadyQueue {
         self.inner.is_empty()
     }
 
+    /// Remove stale entries before a leaf slot is reused.
+    pub fn remove_key(&mut self, key: LeafKey) {
+        self.inner.retain(|queued| *queued != key);
+    }
+
     /// Drain all keys (e.g. during shard shutdown). Caller is responsible for
     /// clearing `enqueued` on each drained leaf.
     pub fn drain(&mut self) -> impl Iterator<Item = LeafKey> + '_ {

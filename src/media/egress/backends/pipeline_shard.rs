@@ -12,7 +12,7 @@
 //! [`PipelineTargetSource`], the same seam RTMP's publish-startup
 //! snapshot uses for the identical reason.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -138,6 +138,7 @@ where
     budget_window: Duration,
     target_source: S,
     leaves: Vec<Option<PipelineFabricLeaf>>,
+    free_leaf_keys: Vec<LeafKey>,
     output_leaves: HashMap<OutputId, LeafKey>,
     ready: ReadyQueue,
 }
@@ -157,15 +158,41 @@ where
             budget_window,
             target_source,
             leaves: Vec::new(),
+            free_leaf_keys: Vec::new(),
             output_leaves: HashMap::new(),
             ready: ReadyQueue::new(),
         }
+        .with_leaf_capacity(crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY)
+    }
+
+    pub(crate) fn with_leaf_capacity(mut self, capacity: usize) -> Self {
+        self.leaves = (0..capacity).map(|_| None).collect();
+        self.free_leaf_keys = (0..capacity as u32)
+            .rev()
+            .map(|slot| LeafKey(slot as usize))
+            .collect();
+        self
     }
 
     fn add_leaf(&mut self, spec: OutputSpec) {
         let output_id = spec.id.clone();
+        if !self.output_leaves.contains_key(&output_id) && self.free_leaf_keys.is_empty() {
+            tracing::warn!(
+                output_id = %output_id,
+                "pipeline fabric leaf rejected: shard leaf capacity exhausted"
+            );
+            spec.progress.mark_terminated_unexpectedly();
+            return;
+        }
         let Some(target) = self.target_source.take_target(&output_id) else {
             tracing::warn!(output_id = %output_id, "pipeline fabric leaf rejected: no target available");
+            return;
+        };
+        if let Some(previous) = self.output_leaves.remove(&output_id) {
+            self.remove_leaf_key(previous);
+        }
+        let Some(key) = self.free_leaf_keys.pop() else {
+            spec.progress.mark_terminated_unexpectedly();
             return;
         };
         let common = LeafCommon::new(
@@ -175,15 +202,12 @@ where
             LeafLimits::from_policy(&spec.policy),
         )
         .with_progress_sink(spec.progress);
-        let key = LeafKey(self.leaves.len());
-        self.leaves.push(Some(PipelineFabricLeaf {
+        self.leaves[key.0] = Some(PipelineFabricLeaf {
             common,
             engine: PipelineEngine::default(),
             transport: PipelineTransport::new(target),
-        }));
-        if let Some(previous) = self.output_leaves.insert(output_id, key) {
-            self.remove_leaf_key(previous);
-        }
+        });
+        self.output_leaves.insert(output_id, key);
         self.enqueue(key);
     }
 
@@ -200,17 +224,18 @@ where
     }
 
     fn remove_leaf_key(&mut self, key: LeafKey) {
+        self.ready.remove_key(key);
         if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) {
             let mut leaf = leaf;
             leaf.engine.close(&mut leaf.transport, CloseReason::Removed);
+            self.free_leaf_keys.push(key);
         }
     }
 
     /// The only readiness signal this backend has — see the module doc.
     fn enqueue_all_leaves(&mut self) {
-        let keys: Vec<LeafKey> = (0..self.leaves.len()).map(LeafKey).collect();
-        for key in keys {
-            self.enqueue(key);
+        for index in 0..self.leaves.len() {
+            self.enqueue(LeafKey(index));
         }
     }
 
@@ -237,11 +262,8 @@ where
                 VisitDecision::Continue => self.enqueue(key),
                 VisitDecision::Suspend => {}
                 VisitDecision::Close => {
-                    if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) {
-                        let mut leaf = leaf;
-                        self.output_leaves.remove(&leaf.common.output_id);
-                        leaf.engine.close(&mut leaf.transport, CloseReason::Removed);
-                    }
+                    self.output_leaves.retain(|_, queued| *queued != key);
+                    self.remove_leaf_key(key);
                 }
             }
         }
@@ -274,14 +296,13 @@ where
     }
 
     fn on_shutdown(&mut self) {
-        let leaves: Vec<Option<PipelineFabricLeaf>> = self.leaves.drain(..).collect();
-        for leaf in leaves.into_iter().flatten() {
+        self.ready.drain().for_each(drop);
+        for leaf in self.leaves.iter_mut().filter_map(Option::take) {
             let mut leaf = leaf;
             leaf.engine
                 .close(&mut leaf.transport, CloseReason::ShardShutdown);
         }
         self.output_leaves.clear();
-        let _: VecDeque<LeafKey> = self.ready.drain().collect();
     }
 }
 

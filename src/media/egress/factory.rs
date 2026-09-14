@@ -239,7 +239,10 @@ where
     let mut backends = Vec::with_capacity(shard_count.get() as usize);
     for shard_index in 0..shard_count.get() {
         let shard_id = ShardId::new(shard_index);
-        backends.push(SinkShardBackend::new(feed_for(shard_id), budget));
+        backends.push(
+            SinkShardBackend::new(feed_for(shard_id), budget)
+                .with_leaf_capacity(shard_config.leaf_capacity().get()),
+        );
     }
     EgressShardGroup::spawn(shard_count, shard_config, backends)
 }
@@ -261,11 +264,10 @@ where
     let mut backends = Vec::with_capacity(shard_count.get() as usize);
     for shard_index in 0..shard_count.get() {
         let shard_id = ShardId::new(shard_index);
-        backends.push(PipelineShardBackend::new(
-            feed_for(shard_id),
-            budget,
-            target_source.clone(),
-        ));
+        backends.push(
+            PipelineShardBackend::new(feed_for(shard_id), budget, target_source.clone())
+                .with_leaf_capacity(shard_config.leaf_capacity().get()),
+        );
     }
     EgressShardGroup::spawn(shard_count, shard_config, backends)
 }
