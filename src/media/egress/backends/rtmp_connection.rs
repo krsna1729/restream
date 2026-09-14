@@ -275,13 +275,13 @@ impl RtmpConnection {
                     | tokio_rustls::rustls::CipherSuite::TLS13_AES_256_GCM_SHA384
             )
         ) || !rtmp_ktls::available()
+            || !rtmp_ktls::supports(version, suite.suite())
         {
             RTMPS_COUNTERS
                 .ktls_unsupported
                 .fetch_add(1, Ordering::Relaxed);
             return Ok(());
         }
-
         let stream = match &mut self.state {
             RtmpConnectionState::Tls(stream) => {
                 stream.take().expect("TLS stream was checked above")
@@ -291,6 +291,9 @@ impl RtmpConnection {
             | RtmpConnectionState::Failed(_) => return Ok(()),
         };
         let (connection, socket) = stream.into_parts();
+        // The exact `(version, cipher)` kernel capability was proven above,
+        // so secret extraction and `install` failures here are genuinely
+        // unexpected — not "kTLS unsupported on this host".
         #[allow(deprecated)]
         let secrets = match connection.dangerous_extract_secrets() {
             Ok(secrets) => secrets,

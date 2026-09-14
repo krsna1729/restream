@@ -5,8 +5,10 @@
 //! this handoff ordinary `read`/`write` syscalls use kernel TLS records and no
 //! userspace ciphertext buffer remains.
 
+use std::collections::HashMap;
 use std::io;
 use std::os::fd::RawFd;
+use std::sync::{LazyLock, Mutex};
 
 use tokio_rustls::rustls::{
     CipherSuite, ConnectionTrafficSecrets, ExtractedSecrets, ProtocolVersion,
@@ -65,6 +67,189 @@ pub(crate) fn available() -> bool {
     };
     unsafe { libc::close(fd) };
     result == 0
+}
+
+/// Exact `(TLS version, AES-GCM cipher)` combinations the running kernel has
+/// proven it accepts through `SOL_TLS`. `available()` only proves
+/// `TCP_ULP="tls"` exists; it says nothing about TLS 1.3 or about a
+/// particular cipher. Probing the exact matrix *before* the caller consumes
+/// its Rustls connection via secret extraction keeps an unsupported kTLS
+/// attempt a userspace-TLS session instead of a failed output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum KtlsCipher {
+    Aes128Gcm,
+    Aes256Gcm,
+}
+
+static KTLS_CAPABILITY_CACHE: LazyLock<Mutex<HashMap<(bool, KtlsCipher), bool>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Returns `true` only if the running kernel has already proven it accepts
+/// this exact `(version, cipher)` for both `TLS_TX` and `TLS_RX`. The first
+/// call for a combination runs a once-per-process probe against a connected
+/// local TCP pair with dummy key material; later calls reuse the cached
+/// verdict without touching the kernel.
+pub(crate) fn supports(version: ProtocolVersion, suite: CipherSuite) -> bool {
+    let Some((tls13, cipher)) = capability_for(version, suite) else {
+        return false;
+    };
+    let key = (tls13, cipher);
+    if let Ok(cache) = KTLS_CAPABILITY_CACHE.lock()
+        && let Some(&proven) = cache.get(&key)
+    {
+        return proven;
+    }
+    let proven = probe_capability(version, suite, cipher);
+    if let Ok(mut cache) = KTLS_CAPABILITY_CACHE.lock() {
+        cache.insert(key, proven);
+    }
+    proven
+}
+
+fn capability_for(version: ProtocolVersion, suite: CipherSuite) -> Option<(bool, KtlsCipher)> {
+    let tls13 = match version {
+        ProtocolVersion::TLSv1_2 => false,
+        ProtocolVersion::TLSv1_3 => true,
+        _ => return None,
+    };
+    let cipher = match suite {
+        CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        | CipherSuite::TLS13_AES_128_GCM_SHA256 => KtlsCipher::Aes128Gcm,
+        CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        | CipherSuite::TLS13_AES_256_GCM_SHA384 => KtlsCipher::Aes256Gcm,
+        _ => return None,
+    };
+    Some((tls13, cipher))
+}
+
+fn probe_capability(version: ProtocolVersion, suite: CipherSuite, cipher: KtlsCipher) -> bool {
+    let wire_version = match version {
+        ProtocolVersion::TLSv1_2 => TLS_1_2,
+        ProtocolVersion::TLSv1_3 => TLS_1_3,
+        _ => return false,
+    };
+    let cipher_type = match cipher {
+        KtlsCipher::Aes128Gcm => TLS_CIPHER_AES_GCM_128,
+        KtlsCipher::Aes256Gcm => TLS_CIPHER_AES_GCM_256,
+    };
+    // Cipher-suite allowlist must agree with `install`, otherwise the probe
+    // would claim a combination `install` itself rejects.
+    if install_capability_mismatch(version, suite, cipher) {
+        return false;
+    }
+    // A connected local TCP pair is enough: kTLS only needs a TCP socket
+    // for `TCP_ULP` + `SOL_TLS`, never a real TLS session. Dummy key
+    // material proves whether the kernel accepts the exact
+    // `(version, cipher)` crypto-info shape for both directions.
+    let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => listener,
+        Err(_) => return false,
+    };
+    let addr = match listener.local_addr() {
+        Ok(addr) => addr,
+        Err(_) => return false,
+    };
+    let connector = match std::net::TcpStream::connect(addr) {
+        Ok(connector) => connector,
+        Err(_) => return false,
+    };
+    let (accepted, _) = match listener.accept() {
+        Ok(accepted) => accepted,
+        Err(_) => return false,
+    };
+    let _ = connector;
+    use std::os::unix::io::AsRawFd;
+    let fd = accepted.as_raw_fd();
+    let ulp = b"tls\0";
+    if set_socket_option(
+        fd,
+        libc::IPPROTO_TCP,
+        TCP_ULP,
+        ulp.as_ptr().cast(),
+        ulp.len(),
+    )
+    .is_err()
+    {
+        return false;
+    }
+    match cipher {
+        KtlsCipher::Aes128Gcm => {
+            let info = Tls12AesGcm128 {
+                info: TlsCryptoInfo {
+                    version: wire_version,
+                    cipher_type,
+                },
+                iv: [0xa5; 8],
+                key: [0x5a; 16],
+                salt: [0xa5; 4],
+                rec_seq: [0; 8],
+            };
+            set_socket_option(
+                fd,
+                SOL_TLS,
+                TLS_TX,
+                &info as *const Tls12AesGcm128 as *const libc::c_void,
+                size_of_val(&info),
+            )
+            .and(set_socket_option(
+                fd,
+                SOL_TLS,
+                TLS_RX,
+                &info as *const Tls12AesGcm128 as *const libc::c_void,
+                size_of_val(&info),
+            ))
+            .is_ok()
+        }
+        KtlsCipher::Aes256Gcm => {
+            let info = Tls12AesGcm256 {
+                info: TlsCryptoInfo {
+                    version: wire_version,
+                    cipher_type,
+                },
+                iv: [0xa5; 8],
+                key: [0x5a; 32],
+                salt: [0xa5; 4],
+                rec_seq: [0; 8],
+            };
+            set_socket_option(
+                fd,
+                SOL_TLS,
+                TLS_TX,
+                &info as *const Tls12AesGcm256 as *const libc::c_void,
+                size_of_val(&info),
+            )
+            .and(set_socket_option(
+                fd,
+                SOL_TLS,
+                TLS_RX,
+                &info as *const Tls12AesGcm256 as *const libc::c_void,
+                size_of_val(&info),
+            ))
+            .is_ok()
+        }
+    }
+}
+
+fn install_capability_mismatch(
+    version: ProtocolVersion,
+    suite: CipherSuite,
+    cipher: KtlsCipher,
+) -> bool {
+    let expected = match suite {
+        CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        | CipherSuite::TLS13_AES_128_GCM_SHA256 => KtlsCipher::Aes128Gcm,
+        CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        | CipherSuite::TLS13_AES_256_GCM_SHA384 => KtlsCipher::Aes256Gcm,
+        _ => return true,
+    };
+    if expected != cipher {
+        return true;
+    }
+    !matches!(version, ProtocolVersion::TLSv1_2 | ProtocolVersion::TLSv1_3)
 }
 
 pub(crate) fn install(
@@ -232,6 +417,22 @@ mod tests {
     #[test]
     fn capability_probe_is_safe_on_linux() {
         let _ = available();
+        let _ = supports(
+            ProtocolVersion::TLSv1_3,
+            CipherSuite::TLS13_AES_128_GCM_SHA256,
+        );
+        let _ = supports(
+            ProtocolVersion::TLSv1_2,
+            CipherSuite::TLS13_AES_128_GCM_SHA256,
+        );
+    }
+
+    #[test]
+    fn unknown_cipher_never_probes_the_kernel() {
+        assert!(!supports(
+            ProtocolVersion::TLSv1_3,
+            CipherSuite::TLS13_CHACHA20_POLY1305_SHA256
+        ));
     }
 
     #[test]
