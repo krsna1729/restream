@@ -124,7 +124,7 @@ pub struct ReadyQueue {
 
 impl ReadyQueue {
     pub fn new(capacity: usize, leaf_capacity: usize) -> Result<Self, CapacityError> {
-        if capacity == 0 || leaf_capacity == 0 || capacity < leaf_capacity {
+        if capacity == 0 || leaf_capacity == 0 {
             return Err(CapacityError::ReadyQueue {
                 capacity,
                 leaf_capacity,
@@ -145,10 +145,10 @@ impl ReadyQueue {
         if slot_index >= self.queued.len() || self.queued[slot_index] {
             return false;
         }
-        debug_assert!(self.len < self.entries.len());
         if self.len == self.entries.len() {
             return false;
         }
+        debug_assert!(self.len < self.entries.len());
         self.entries[self.tail] = slot;
         self.tail = (self.tail + 1) % self.entries.len();
         self.len += 1;
@@ -652,14 +652,6 @@ impl LeafSlab {
         self.free.push(slot as u32);
         true
     }
-
-    fn find_mut(&mut self, id: u64) -> Option<(u32, &mut SinkLeaf)> {
-        self.leaves.iter_mut().enumerate().find_map(|(slot, leaf)| {
-            leaf.as_mut()
-                .filter(|leaf| leaf.id == id)
-                .map(|leaf| (slot as u32, leaf))
-        })
-    }
 }
 
 struct ShardState {
@@ -686,14 +678,23 @@ impl ShardState {
     }
 
     fn wake(&mut self, id: u64) -> bool {
-        let Some((slot, leaf)) = self.leaves.find_mut(id) else {
+        let Some(slot) = self.leaves.find_slot(id) else {
             return false;
         };
-        if leaf.pending {
+        if self.leaves.leaves[slot as usize]
+            .as_ref()
+            .is_some_and(|leaf| leaf.pending)
+        {
             return true;
         }
-        leaf.pending = true;
-        self.ready.enqueue(slot)
+        if !self.ready.enqueue(slot) {
+            return false;
+        }
+        self.leaves.leaves[slot as usize]
+            .as_mut()
+            .expect("ready slot remains live")
+            .pending = true;
+        true
     }
 
     fn remove(&mut self, id: u64) -> bool {
@@ -927,7 +928,9 @@ fn signal_eventfd(fd: &OwnedFd) -> io::Result<()> {
             std::mem::size_of::<u64>(),
         )
     };
-    if result == std::mem::size_of::<u64>() as isize {
+    if result == std::mem::size_of::<u64>() as isize
+        || (result < 0 && io::Error::last_os_error().raw_os_error() == Some(libc::EAGAIN))
+    {
         Ok(())
     } else {
         Err(io::Error::last_os_error())
@@ -1154,6 +1157,26 @@ mod tests {
     }
 
     #[test]
+    fn wake_failure_does_not_poison_a_leaf_when_ready_is_full() {
+        let mut state = ShardState::new(ShardConfig {
+            max_leaves: 3,
+            ready_capacity: 2,
+            ..ShardConfig::default()
+        });
+        state.leaves.add(1).unwrap();
+        state.leaves.add(2).unwrap();
+        state.leaves.add(3).unwrap();
+        assert!(state.wake(1));
+        assert!(state.wake(2));
+        assert!(!state.wake(3));
+
+        // Free one queue slot without servicing the second leaf. A retry for
+        // the third leaf must now be admitted.
+        assert!(state.remove(1));
+        assert!(state.wake(3));
+    }
+
+    #[test]
     fn deadline_index_updates_and_expires_in_order() {
         let now = Instant::now();
         let mut deadlines = DeadlineIndex::new(3);
@@ -1224,7 +1247,7 @@ mod tests {
         );
         assert!(
             ShardConfig {
-                ready_capacity: 1,
+                ready_capacity: 0,
                 ..ShardConfig::default()
             }
             .validate()
