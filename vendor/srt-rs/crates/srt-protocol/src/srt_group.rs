@@ -332,27 +332,26 @@ impl SrtGroup {
     /// promotes a standby member while an unstable leg requalifies.
     pub fn can_send(&mut self) -> bool {
         self.refresh_states();
-        let active = self.active_indices();
         match self.mode {
-            GroupMode::Broadcast => active
+            GroupMode::Broadcast => self
+                .members
                 .iter()
-                .any(|&index| self.members[index].connection.can_send()),
-            GroupMode::Backup => active
-                .first()
-                .is_some_and(|&index| self.members[index].connection.can_send()),
+                .any(|member| Self::is_active_member(member) && member.connection.can_send()),
+            GroupMode::Backup => self
+                .first_active_index()
+                .is_some_and(|index| self.members[index].connection.can_send()),
         }
     }
 
     pub fn can_send_with_pacing(&mut self, now: Timestamp) -> bool {
         self.refresh_states();
-        let active = self.active_indices();
         match self.mode {
-            GroupMode::Broadcast => active
-                .iter()
-                .any(|&index| self.members[index].connection.can_send_with_pacing(now)),
-            GroupMode::Backup => active
-                .first()
-                .is_some_and(|&index| self.members[index].connection.can_send_with_pacing(now)),
+            GroupMode::Broadcast => self.members.iter().any(|member| {
+                Self::is_active_member(member) && member.connection.can_send_with_pacing(now)
+            }),
+            GroupMode::Backup => self
+                .first_active_index()
+                .is_some_and(|index| self.members[index].connection.can_send_with_pacing(now)),
         }
     }
 
@@ -460,13 +459,15 @@ impl SrtGroup {
     where
         F: FnMut(u32, &mut SrtConnection, Bytes, u32, Timestamp) -> Result<bool, Error>,
     {
-        let active = self.active_indices();
-        if active.is_empty() {
+        let Some(first_active) = self.first_active_index() else {
             return Err(Error::invalid_state("no active Broadcast group members"));
-        }
-        let sequence_number = self.sequence_for_send(&active)?;
+        };
+        let sequence_number = self.sequence_for_send(first_active, true)?;
         let mut sent = 0;
-        for index in active {
+        for index in 0..self.members.len() {
+            if !Self::is_active_member(&self.members[index]) {
+                continue;
+            }
             let member_id = self.members[index].id;
             if !self.members[index].connection.can_send() {
                 self.mark_send_failure(index);
@@ -486,9 +487,9 @@ impl SrtGroup {
         }
         if sent == 0 {
             if self
-                .active_indices()
+                .members
                 .iter()
-                .any(|&index| self.members[index].connection.can_send())
+                .any(|member| Self::is_active_member(member) && member.connection.can_send())
             {
                 return Ok(0);
             }
@@ -519,10 +520,10 @@ impl SrtGroup {
     where
         F: FnMut(u32, &mut SrtConnection, Bytes, u32, Timestamp) -> Result<bool, Error>,
     {
-        let mut active = self.active_indices().into_iter().next();
+        let mut active = self.first_active_index();
         if active.is_none() {
             self.promote_backup_member();
-            active = self.active_indices().into_iter().next();
+            active = self.first_active_index();
         }
         let Some(index) = active else {
             return Err(Error::invalid_state("no active Backup group members"));
@@ -532,7 +533,7 @@ impl SrtGroup {
             let member_id = self.members[index].id;
             self.align_member_sequence(member_id)?;
         }
-        let sequence_number = self.sequence_for_send(&[index])?;
+        let sequence_number = self.sequence_for_send(index, false)?;
         let first_attempt = if !self.members[index].connection.can_send() {
             Err(Error::invalid_state("Backup group member send buffer full"))
         } else {
@@ -550,7 +551,7 @@ impl SrtGroup {
             Err(_) => {
                 self.mark_send_failure(index);
                 self.promote_backup_member();
-                let Some(index) = self.active_indices().into_iter().next() else {
+                let Some(index) = self.first_active_index() else {
                     return Err(Error::invalid_state("all Backup group members failed"));
                 };
                 self.align_member_sequence(self.members[index].id)?;
@@ -574,18 +575,21 @@ impl SrtGroup {
         Ok(1)
     }
 
-    fn sequence_for_send(&self, active: &[usize]) -> Result<u32, Error> {
+    fn sequence_for_send(
+        &self,
+        first_active: usize,
+        require_all_active: bool,
+    ) -> Result<u32, Error> {
         let sequence_number = self
             .next_send_sequence
-            .or_else(|| {
-                active
-                    .first()
-                    .and_then(|&index| self.members[index].connection.next_sequence_number())
-            })
+            .or_else(|| self.members[first_active].connection.next_sequence_number())
             .ok_or_else(|| Error::invalid_state("group member is not connected"))?;
-        if active.iter().any(|&index| {
-            self.members[index].connection.next_sequence_number() != Some(sequence_number)
-        }) {
+        if require_all_active
+            && self.members.iter().any(|member| {
+                Self::is_active_member(member)
+                    && member.connection.next_sequence_number() != Some(sequence_number)
+            })
+        {
             return Err(Error::invalid_state("group member sequence mismatch"));
         }
         Ok(sequence_number)
@@ -773,20 +777,17 @@ impl SrtGroup {
         }
     }
 
-    fn active_indices(&self) -> Vec<usize> {
-        self.members
-            .iter()
-            .enumerate()
-            .filter(|(_, member)| {
-                member.state == GroupMemberState::Active
-                    && member.connection.state() == ConnectionState::Connected
-            })
-            .map(|(index, _)| index)
-            .collect()
+    fn is_active_member(member: &SrtGroupMember) -> bool {
+        member.state == GroupMemberState::Active
+            && member.connection.state() == ConnectionState::Connected
+    }
+
+    fn first_active_index(&self) -> Option<usize> {
+        self.members.iter().position(Self::is_active_member)
     }
 
     fn has_active_member(&self) -> bool {
-        !self.active_indices().is_empty()
+        self.members.iter().any(Self::is_active_member)
     }
 
     fn promote_backup_member(&mut self) {

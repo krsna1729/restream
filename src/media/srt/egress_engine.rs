@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::time::Instant;
 
@@ -71,7 +70,8 @@ pub(crate) struct SrtEgressEngine<T> {
     pending: Option<PendingSrtMessage>,
     /// Units already pulled from the feed but not yet handed to `pending`
     /// for fragmentation. See `FEED_READ_BURST`.
-    pending_units: VecDeque<Bytes>,
+    pending_units: Vec<Bytes>,
+    pending_units_index: usize,
     _transport: PhantomData<fn() -> T>,
 }
 
@@ -79,7 +79,8 @@ impl<T> Default for SrtEgressEngine<T> {
     fn default() -> Self {
         Self {
             pending: None,
-            pending_units: VecDeque::new(),
+            pending_units: Vec::with_capacity(FEED_READ_BURST),
+            pending_units_index: 0,
             _transport: PhantomData,
         }
     }
@@ -195,13 +196,15 @@ where
             };
         }
 
-        if self.pending_units.is_empty() {
-            let read_budget = ReadBudget::new(FEED_READ_BURST, budget.max_bytes);
-            match feed.read_from(*cursor, read_budget) {
-                FeedRead::Units { units, next_cursor } => {
-                    *cursor = next_cursor;
-                    self.pending_units.extend(units);
-                }
+        if self.pending_units_index >= self.pending_units.len() {
+            self.pending_units.clear();
+            self.pending_units_index = 0;
+            match feed.read_from_into(
+                *cursor,
+                ReadBudget::new(FEED_READ_BURST, budget.max_bytes),
+                &mut self.pending_units,
+            ) {
+                FeedRead::Units { next_cursor, .. } => *cursor = next_cursor,
                 FeedRead::Empty => return EngineProgress::Needs(WaitCondition::Feed),
                 FeedRead::Overrun { .. } | FeedRead::EpochMismatch { .. } => {
                     return EngineProgress::FeedOverrun;
@@ -209,9 +212,10 @@ where
             }
         }
 
-        let Some(message) = self.pending_units.pop_front() else {
+        let Some(message) = self.pending_units.get(self.pending_units_index).cloned() else {
             return EngineProgress::Needs(WaitCondition::Feed);
         };
+        self.pending_units_index += 1;
         self.pending = Some(PendingSrtMessage::new(message));
 
         if readiness.writable {
@@ -223,6 +227,8 @@ where
 
     fn close(&mut self, transport: &mut Self::Transport, reason: CloseReason) {
         self.pending = None;
+        self.pending_units.clear();
+        self.pending_units_index = 0;
         transport.close(reason);
     }
 
