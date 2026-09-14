@@ -365,7 +365,7 @@ fn run_shard_thread<B: EgressShardBackend>(
                     .get()
                     .saturating_add(config.readiness_batch_budget().get()),
             ),
-            timers: TimerWheel::with_capacity(config.command_channel_capacity().get()),
+            timers: TimerWheel::with_capacity(config.leaf_capacity().get()),
             expired_timers: Vec::with_capacity(config.timer_batch_budget().get()),
             metrics: ShardMetrics::new(shard_id),
             snapshot: Arc::clone(&snapshot),

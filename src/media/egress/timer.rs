@@ -65,11 +65,16 @@ impl<K: Ord> Ord for TimerEntry<K> {
 pub struct TimerWheel<K: Ord + Hash> {
     heap: BinaryHeap<TimerEntry<K>>,
     active: HashMap<K, TimerEntry<K>>,
+    capacity: usize,
 }
 
 impl<K: Ord + Hash + Clone> TimerWheel<K> {
     pub fn new() -> Self {
-        Self::with_capacity(0)
+        Self {
+            heap: BinaryHeap::new(),
+            active: HashMap::new(),
+            capacity: usize::MAX,
+        }
     }
 
     /// Preallocate the expected number of live keys. Replacements reuse the
@@ -80,13 +85,17 @@ impl<K: Ord + Hash + Clone> TimerWheel<K> {
         Self {
             heap: BinaryHeap::with_capacity(capacity.saturating_mul(2).saturating_add(64)),
             active: HashMap::with_capacity(capacity),
+            capacity,
         }
     }
 
     /// Schedule a wakeup for `key` at `fire_at`.
     ///
     /// Replaces any existing deadline for `key`.
-    pub fn insert(&mut self, fire_at: Instant, key: K, generation: u64) {
+    pub fn insert(&mut self, fire_at: Instant, key: K, generation: u64) -> bool {
+        if !self.active.contains_key(&key) && self.active.len() >= self.capacity {
+            return false;
+        }
         let entry = TimerEntry {
             fire_at,
             key: key.clone(),
@@ -95,6 +104,7 @@ impl<K: Ord + Hash + Clone> TimerWheel<K> {
         self.active.insert(key, entry.clone());
         self.heap.push(entry);
         self.rebuild_if_needed();
+        true
     }
 
     /// Returns the instant of the soonest pending timer, or `None` if empty.
@@ -305,6 +315,16 @@ mod tests {
         }
         wheel.clear();
         assert!(wheel.is_empty());
+    }
+
+    #[test]
+    fn timer_wheel_rejects_new_keys_at_capacity_but_replaces_existing_keys() {
+        let now = Instant::now();
+        let mut wheel = TimerWheel::<u32>::with_capacity(1);
+        assert!(wheel.insert(now, 1, 1));
+        assert!(!wheel.insert(now, 2, 1));
+        assert!(wheel.insert(now, 1, 2));
+        assert_eq!(wheel.len(), 1);
     }
 
     #[test]
