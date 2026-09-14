@@ -822,13 +822,13 @@ impl Dataplane {
     }
 
     fn enqueue(&self, command: Command) -> Result<(), CommandError> {
-        signal_eventfd(&self.wake_fd).map_err(|error| CommandError::Wake(error.kind()))?;
         self.commands
             .try_send(command)
             .map_err(|error| match error {
                 TrySendError::Full(_) => CommandError::MailboxFull,
                 TrySendError::Disconnected(_) => CommandError::Closed,
-            })
+            })?;
+        signal_eventfd(&self.wake_fd).map_err(|error| CommandError::Wake(error.kind()))
     }
 
     fn enqueue_blocking(&self, command: Command) -> io::Result<()> {
