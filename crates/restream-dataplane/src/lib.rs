@@ -730,6 +730,21 @@ impl ShardState {
         self.leaves.remove_slot(slot)
     }
 
+    fn remove_if_generation(&mut self, id: u64, generation: u32) -> bool {
+        let Some(slot) = self.leaves.find_slot(id) else {
+            return false;
+        };
+        if self.leaves.leaves[slot as usize]
+            .as_ref()
+            .is_none_or(|leaf| leaf.generation != generation)
+        {
+            return false;
+        }
+        self.ready.remove(slot);
+        self.deadlines.remove(slot);
+        self.leaves.remove_slot(slot)
+    }
+
     fn update(&mut self, id: u64, generation: u32) -> bool {
         let Some(slot) = self.leaves.find_slot(id) else {
             return false;
@@ -825,6 +840,11 @@ enum Command {
         id: u64,
         reply: SyncSender<bool>,
     },
+    RemoveIfGeneration {
+        id: u64,
+        generation: u32,
+        reply: SyncSender<bool>,
+    },
     Wake {
         id: u64,
         reply: SyncSender<bool>,
@@ -900,6 +920,14 @@ impl DataplaneHandle {
 
     pub fn update_output(&self, id: u64, generation: u32) -> Result<bool, CommandError> {
         self.shards[self.shard_for(id)].update_sink(id, generation)
+    }
+
+    pub fn remove_output_if_generation(
+        &self,
+        id: u64,
+        generation: u32,
+    ) -> Result<bool, CommandError> {
+        self.shards[self.shard_for(id)].remove_sink_if_generation(id, generation)
     }
 
     pub fn remove_output(&self, id: u64) -> Result<bool, CommandError> {
@@ -1001,6 +1029,20 @@ impl Dataplane {
     pub fn remove_sink(&self, id: u64) -> Result<bool, CommandError> {
         let (reply, result) = reply_channel();
         self.enqueue(Command::Remove { id, reply })?;
+        result.recv().map_err(|_| CommandError::Closed)
+    }
+
+    pub fn remove_sink_if_generation(
+        &self,
+        id: u64,
+        generation: u32,
+    ) -> Result<bool, CommandError> {
+        let (reply, result) = reply_channel();
+        self.enqueue(Command::RemoveIfGeneration {
+            id,
+            generation,
+            reply,
+        })?;
         result.recv().map_err(|_| CommandError::Closed)
     }
 
@@ -1179,6 +1221,14 @@ fn run_shard(
                 }
                 Ok(Command::Remove { id, reply }) => {
                     let removed = state.remove(id);
+                    let _ = reply.send(removed);
+                }
+                Ok(Command::RemoveIfGeneration {
+                    id,
+                    generation,
+                    reply,
+                }) => {
+                    let removed = state.remove_if_generation(id, generation);
                     let _ = reply.send(removed);
                 }
                 Ok(Command::Wake { id, reply }) => {

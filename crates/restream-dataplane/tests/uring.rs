@@ -88,6 +88,7 @@ fn multi_shard_handle_keeps_output_placement_stable() {
     assert_eq!(second.shard, 0);
     assert!(dataplane.update_output(7, 2).unwrap());
     assert!(!dataplane.update_output(7, 1).unwrap());
+    assert!(!dataplane.remove_output_if_generation(7, 1).unwrap());
     assert!(dataplane.wake_output(7).unwrap());
     let snapshot = (0..100)
         .map(|_| dataplane.snapshot().unwrap())
