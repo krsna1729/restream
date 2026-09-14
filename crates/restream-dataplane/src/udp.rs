@@ -71,6 +71,7 @@ pub struct UdpPollerMetrics {
     pub completions: u64,
     pub stale_completions: u64,
     pub ready_overflows: u64,
+    pub cq_overflows: u64,
     pub poll_errors: u64,
 }
 
@@ -358,6 +359,7 @@ impl UringUdpPoller {
         let mut ready_count = 0;
         {
             let cq = self.ring.completion();
+            self.metrics.cq_overflows = u64::from(cq.overflow());
             for completion in cq {
                 self.metrics.completions += 1;
                 let Some(tag) = OpTag::decode(completion.user_data()) else {

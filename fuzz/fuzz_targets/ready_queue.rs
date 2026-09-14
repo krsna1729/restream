@@ -7,10 +7,16 @@ fuzz_target!(|operations: Vec<u8>| {
     let mut queue = ReadyQueue::new(64, 64).expect("valid fixed queue");
     for operation in operations {
         let slot = u32::from(operation & 63);
-        if operation & 0x80 == 0 {
-            let _ = queue.enqueue(slot);
-        } else {
-            let _ = queue.pop();
+        match operation & 0xc0 {
+            0x00 => {
+                let _ = queue.enqueue(slot);
+            }
+            0x40 => {
+                let _ = queue.remove(slot);
+            }
+            _ => {
+                let _ = queue.pop();
+            }
         }
     }
     let mut seen = [false; 64];

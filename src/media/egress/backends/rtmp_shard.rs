@@ -729,7 +729,7 @@ where
         metrics.sqes = native.sqes;
         metrics.cqes = native.completions;
         metrics.stale_completions = native.stale_completions;
-        metrics.cq_overflows = native.ready_overflows;
+        metrics.cq_overflows = native.cq_overflows;
         metrics.budget_exhaustions = self.budget_exhaustions;
     }
 

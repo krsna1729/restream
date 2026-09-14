@@ -337,7 +337,7 @@ impl SharedSrtEgress {
                 .clone()
                 .map(|metrics| metrics.stale_completions)
                 .sum(),
-            cq_overflows: pollers.map(|metrics| metrics.ready_overflows).sum(),
+            cq_overflows: pollers.map(|metrics| metrics.cq_overflows).sum(),
             ..self.native_metrics
         }
     }

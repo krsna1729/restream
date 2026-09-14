@@ -1048,7 +1048,8 @@ fn build_ring(entries: u32) -> io::Result<IoUring> {
         .setup_single_issuer()
         .setup_defer_taskrun()
         .setup_coop_taskrun()
-        .setup_taskrun_flag();
+        .setup_taskrun_flag()
+        .setup_cqsize(entries.saturating_mul(2));
     match builder.build(entries) {
         Ok(ring) => Ok(ring),
         Err(_) => IoUring::new(entries),
