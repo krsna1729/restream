@@ -448,6 +448,7 @@ pub struct ShardMetrics {
     pub send_zc_attempts: u64,
     pub send_zc_fallbacks: u64,
     pub feed_overruns: u64,
+    pub timers_processed: u64,
     pub loop_iterations: u64,
     pub max_ready_depth: u64,
 }
@@ -594,6 +595,7 @@ pub enum CommandError {
     Closed,
     Wake(io::ErrorKind),
     Shard(CapacityError),
+    DeadlineCapacity,
     StaleGeneration,
 }
 
@@ -761,6 +763,35 @@ impl ShardState {
         Ok(())
     }
 
+    fn set_deadline(
+        &mut self,
+        slot: u32,
+        generation: u32,
+        at: Instant,
+    ) -> Result<(), CommandError> {
+        self.leaves.validate(slot, generation)?;
+        if self.deadlines.set(DeadlineEntry {
+            slot,
+            generation,
+            at,
+        }) {
+            Ok(())
+        } else {
+            Err(CommandError::DeadlineCapacity)
+        }
+    }
+
+    fn process_due_deadlines(&mut self, now: Instant) {
+        while let Some(entry) = self.deadlines.pop_due(now) {
+            if self.wake(entry.slot, entry.generation).unwrap_or(false) {
+                self.metrics.timers_processed = self.metrics.timers_processed.saturating_add(1);
+            } else {
+                let _ = self.deadlines.set(entry);
+                break;
+            }
+        }
+    }
+
     fn service_ready(&mut self, loop_deadline: Instant) {
         let mut units = 0;
         let mut bytes = 0;
@@ -872,6 +903,12 @@ enum Command {
         generation: u32,
         reply: SyncSender<Result<(), CommandError>>,
     },
+    SetDeadline {
+        slot: u32,
+        generation: u32,
+        at: Instant,
+        reply: SyncSender<Result<(), CommandError>>,
+    },
     Remove {
         slot: u32,
         generation: u32,
@@ -979,6 +1016,13 @@ impl DataplaneHandle {
             generation,
             ..handle
         })
+    }
+
+    pub fn set_deadline(&self, handle: OutputHandle, at: Instant) -> Result<(), CommandError> {
+        self.shards
+            .get(handle.shard)
+            .ok_or(CommandError::StaleGeneration)?
+            .set_deadline(handle, at)
     }
 
     pub fn remove_output_if_generation(&self, handle: OutputHandle) -> Result<bool, CommandError> {
@@ -1094,6 +1138,17 @@ impl Dataplane {
             slot: handle.slot,
             expected_generation: handle.generation,
             generation,
+            reply,
+        })?;
+        result.recv().map_err(|_| CommandError::Closed)?
+    }
+
+    pub fn set_deadline(&self, handle: OutputHandle, at: Instant) -> Result<(), CommandError> {
+        let (reply, result) = reply_channel();
+        self.enqueue(Command::SetDeadline {
+            slot: handle.slot,
+            generation: handle.generation,
+            at,
             reply,
         })?;
         result.recv().map_err(|_| CommandError::Closed)?
@@ -1234,6 +1289,13 @@ fn drain_eventfd(fd: &OwnedFd) {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DeadlineTimer {
+    at: Instant,
+    generation: u32,
+    cancel_pending: bool,
+}
+
 fn run_shard(
     config: ShardConfig,
     mailbox: Receiver<Command>,
@@ -1250,6 +1312,8 @@ fn run_shard(
     ring.submit()?;
     let _ = startup.send(Ok(()));
     let mut poll_in_flight = true;
+    let mut deadline_timer = None;
+    let mut timer_generation = 0_u32;
     let result = loop {
         state.metrics.loop_iterations += 1;
         let mut stopping = false;
@@ -1266,6 +1330,24 @@ fn run_shard(
                     }) => {
                         poll_in_flight = false;
                         drain_eventfd(&wake_fd);
+                    }
+                    Some(OpTag {
+                        kind: OpKind::Timeout,
+                        generation,
+                        ..
+                    }) if deadline_timer
+                        .is_some_and(|timer: DeadlineTimer| timer.generation == generation) =>
+                    {
+                        deadline_timer = None;
+                    }
+                    Some(OpTag {
+                        kind: OpKind::TimeoutCancel,
+                        generation,
+                        ..
+                    }) if deadline_timer
+                        .is_some_and(|timer: DeadlineTimer| timer.generation == generation) =>
+                    {
+                        deadline_timer = None;
                     }
                     Some(tag) if tag.generation != 0 => {
                         state.metrics.stale_completions += 1;
@@ -1295,6 +1377,14 @@ fn run_shard(
                     reply,
                 }) => {
                     let _ = reply.send(state.update(slot, expected_generation, generation));
+                }
+                Ok(Command::SetDeadline {
+                    slot,
+                    generation,
+                    at,
+                    reply,
+                }) => {
+                    let _ = reply.send(state.set_deadline(slot, generation, at));
                 }
                 Ok(Command::Remove {
                     slot,
@@ -1335,8 +1425,15 @@ fn run_shard(
             break Ok(state.metrics);
         }
 
-        while state.deadlines.pop_due(Instant::now()).is_some() {}
         state.service_ready(Instant::now() + config.leaf_budget.window);
+        state.process_due_deadlines(Instant::now());
+        state.service_ready(Instant::now() + config.leaf_budget.window);
+        sync_deadline_timeout(
+            &mut ring,
+            state.deadlines.next().map(|entry| entry.at),
+            &mut deadline_timer,
+            &mut timer_generation,
+        )?;
         if !poll_in_flight {
             arm_control_poll(&mut ring, wake_file.index)?;
             poll_in_flight = true;
@@ -1344,8 +1441,18 @@ fn run_shard(
         state.metrics.sqes += ring.submit_and_wait(1)? as u64;
     };
 
+    let mut shutdown_needs_wait = false;
+    if let Some(timer) = deadline_timer.take() {
+        if !timer.cancel_pending {
+            cancel_deadline_timeout(&mut ring, timer.generation)?;
+        }
+        shutdown_needs_wait = true;
+    }
     if poll_in_flight {
         cancel_control_poll(&mut ring)?;
+        shutdown_needs_wait = true;
+    }
+    if shutdown_needs_wait {
         ring.submit_and_wait(1)?;
         for _ in ring.completion() {}
     }
@@ -1385,6 +1492,68 @@ fn cancel_control_poll(ring: &mut IoUring) -> io::Result<()> {
     let entry = opcode::PollRemove::new(target)
         .build()
         .user_data(OpTag::new(OpKind::PollCancel, 0, 0).unwrap().encode());
+    unsafe {
+        ring.submission()
+            .push(&entry)
+            .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "io_uring SQ full"))?;
+    }
+    Ok(())
+}
+
+fn sync_deadline_timeout(
+    ring: &mut IoUring,
+    next_at: Option<Instant>,
+    timer: &mut Option<DeadlineTimer>,
+    next_generation: &mut u32,
+) -> io::Result<()> {
+    match (*timer, next_at) {
+        (None, None) => {}
+        (None, Some(at)) => {
+            *next_generation = next_generation.wrapping_add(1).max(1);
+            arm_deadline_timeout(ring, at, *next_generation)?;
+            *timer = Some(DeadlineTimer {
+                at,
+                generation: *next_generation,
+                cancel_pending: false,
+            });
+        }
+        (Some(active), _) if active.cancel_pending => {}
+        (Some(active), Some(at)) if active.at == at => {}
+        (Some(active), _) => {
+            cancel_deadline_timeout(ring, active.generation)?;
+            *timer = Some(DeadlineTimer {
+                cancel_pending: true,
+                ..active
+            });
+        }
+    }
+    Ok(())
+}
+
+fn arm_deadline_timeout(ring: &mut IoUring, at: Instant, generation: u32) -> io::Result<()> {
+    let timespec = types::Timespec::from(at.saturating_duration_since(Instant::now()));
+    let entry = opcode::Timeout::new(&timespec).build().user_data(
+        OpTag::new(OpKind::Timeout, 0, generation)
+            .expect("deadline timer generation is a valid tag")
+            .encode(),
+    );
+    unsafe {
+        ring.submission()
+            .push(&entry)
+            .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "io_uring SQ full"))?;
+    }
+    Ok(())
+}
+
+fn cancel_deadline_timeout(ring: &mut IoUring, generation: u32) -> io::Result<()> {
+    let target = OpTag::new(OpKind::Timeout, 0, generation)
+        .expect("deadline timer generation is a valid tag")
+        .encode();
+    let entry = opcode::TimeoutRemove::new(target).build().user_data(
+        OpTag::new(OpKind::TimeoutCancel, 0, generation)
+            .expect("deadline timer generation is a valid tag")
+            .encode(),
+    );
     unsafe {
         ring.submission()
             .push(&entry)

@@ -1,4 +1,5 @@
 use restream_dataplane::{Dataplane, DataplaneHandle, OutputRuntimeSpec, ShardConfig};
+use std::time::{Duration, Instant};
 
 #[test]
 fn owner_thread_services_only_woken_sinks() {
@@ -60,6 +61,49 @@ fn owner_thread_services_only_woken_sinks() {
         1
     );
     assert!(snapshot.metrics.ready_visits >= 1);
+    dataplane.shutdown().unwrap();
+}
+
+#[test]
+fn owner_thread_wakes_the_earliest_due_deadline() {
+    let dataplane = match Dataplane::spawn(ShardConfig {
+        max_leaves: 8,
+        ready_capacity: 8,
+        ..ShardConfig::default()
+    }) {
+        Ok(dataplane) => dataplane,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+            ) =>
+        {
+            return;
+        }
+        Err(error) => panic!("io_uring dataplane unavailable: {error}"),
+    };
+
+    let parts = dataplane.add_sink(9).unwrap();
+    let handle = restream_dataplane::OutputHandle {
+        shard: 0,
+        slot: parts.0,
+        generation: parts.1,
+    };
+    dataplane
+        .set_deadline(handle, Instant::now() + Duration::from_millis(200))
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(10));
+    dataplane
+        .set_deadline(handle, Instant::now() + Duration::from_millis(20))
+        .unwrap();
+
+    std::thread::sleep(Duration::from_millis(40));
+    let snapshot = (0..100)
+        .map(|_| dataplane.snapshot().unwrap())
+        .find(|snapshot| snapshot.metrics.timers_processed >= 1)
+        .expect("the io_uring deadline should wake the owner thread");
+    assert_eq!(snapshot.deadline_count, 0);
+    assert_eq!(snapshot.sinks[0].visits, 1);
     dataplane.shutdown().unwrap();
 }
 
