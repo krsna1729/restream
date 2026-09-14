@@ -24,7 +24,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const MAX_TAG_SLOTS: usize = 1 << 24;
 
 pub mod capabilities;
-pub mod capacity;
 pub mod files;
 pub mod media;
 pub mod tcp;
@@ -32,7 +31,6 @@ pub mod tx;
 pub mod udp;
 
 pub use capabilities::{UringCapabilities, UringCapabilityTier};
-pub use capacity::{CapacityModel, CapacityRates, CapacitySnapshot, Workload};
 pub use files::{FixedFile, FixedFileTable};
 pub use media::{CursorError, FeedCursor, MediaArena, MediaError, MediaRef, MediaRing};
 pub use tx::{TxLease, TxPool, TxState};

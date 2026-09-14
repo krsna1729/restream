@@ -1,7 +1,6 @@
 use proptest::prelude::*;
 use restream_dataplane::{
-    CapacityModel, CapacityRates, MediaArena, MediaRing, OpKind, OpTag, ReadyQueue, TxPool,
-    Workload, jain_fairness_milli,
+    MediaArena, MediaRing, OpKind, OpTag, ReadyQueue, TxPool, jain_fairness_milli,
 };
 
 proptest! {
@@ -58,38 +57,6 @@ proptest! {
             prop_assert!(pool.complete(current));
             prop_assert!(pool.release(current));
         }
-    }
-
-    #[test]
-    fn capacity_projection_is_monotonic_in_output_count(
-        small in 1u32..32,
-        extra in 1u32..32,
-    ) {
-        let model = CapacityModel::new(CapacityRates {
-            ingress_pps: 10_000.0,
-            media_bps: 1_000_000_000.0,
-            egress_pps: 20_000.0,
-            nic_bps: 10_000_000_000.0,
-            memory_bytes: 64.0 * 1024.0 * 1024.0,
-            ffmpeg_stages: 1_000.0,
-            disk_bps: 1_000_000_000.0,
-            tx_bytes_per_output: 64.0 * 1024.0,
-            shards: 2,
-        }).unwrap();
-        let workload = |outputs| Workload {
-            outputs,
-            media_bps: 1_000_000,
-            media_pps: 100,
-            rtmp_outputs: outputs,
-            rtmps_outputs: 0,
-            srt_outputs: 0,
-            loss_rate: 0.0,
-            stage_count: 0,
-        };
-        prop_assert!(
-            model.hottest_utilization(workload(small + extra))
-                >= model.hottest_utilization(workload(small))
-        );
     }
 
     #[test]
