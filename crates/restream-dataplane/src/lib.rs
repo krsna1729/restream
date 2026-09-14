@@ -836,7 +836,7 @@ impl ShardState {
     }
 }
 
-fn jain_fairness_milli(visits: &[u64]) -> u16 {
+pub fn jain_fairness_milli(visits: &[u64]) -> u16 {
     let count = visits.len() as u128;
     if count <= 1 {
         return 1_000;

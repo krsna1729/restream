@@ -1,7 +1,7 @@
 use proptest::prelude::*;
 use restream_dataplane::{
     CapacityModel, CapacityRates, MediaArena, MediaRing, OpKind, OpTag, ReadyQueue, TxPool,
-    Workload,
+    Workload, jain_fairness_milli,
 };
 
 proptest! {
@@ -90,5 +90,10 @@ proptest! {
             model.hottest_utilization(workload(small + extra))
                 >= model.hottest_utilization(workload(small))
         );
+    }
+
+    #[test]
+    fn jain_fairness_stays_in_range(visits in prop::collection::vec(0u64..1_000_000, 0..128)) {
+        prop_assert!(jain_fairness_milli(&visits) <= 1_000);
     }
 }
