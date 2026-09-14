@@ -60,7 +60,9 @@ impl SrtResolveWorkerSet {
 
     fn shutdown(&mut self) {
         self.request_sender.take();
-        if let Some(worker) = self.worker.take() {
+        if let Some(worker) = self.worker.take()
+            && worker.is_finished()
+        {
             let _ = worker.join();
         }
     }
