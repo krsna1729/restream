@@ -10,7 +10,7 @@ use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::policy::WorkBudget;
 
-use super::{SrtMessageSender, SrtSendResult};
+use super::{SrtMessageSender, SrtOwner, SrtSendResult};
 
 /// Maximum bytes per `srt_send()` call in message mode: 7 × 188-byte MPEG-TS
 /// packets, matching legacy SRT egress's fixed send buffer
@@ -102,7 +102,12 @@ impl<T> SrtEgressEngine<T> {
     /// Looping here amortizes that cost across one scheduler visit while
     /// still respecting the visit's byte/deadline budget, so one slow or
     /// always-writable leaf still cannot monopolize the shard.
-    fn send_pending(&mut self, transport: &mut T, budget: WorkBudget) -> EngineProgress
+    fn send_pending_inner(
+        &mut self,
+        transport: &mut T,
+        budget: WorkBudget,
+        mut owner: Option<&mut SrtOwner<'_>>,
+    ) -> EngineProgress
     where
         T: SrtMessageSender,
     {
@@ -123,7 +128,11 @@ impl<T> SrtEgressEngine<T> {
             };
 
             let fragment = pending.next_fragment();
-            match transport.send_message(&fragment) {
+            let result = match owner.as_deref_mut() {
+                Some(owner) => transport.send_message_with_owner(&fragment, owner),
+                None => transport.send_message(&fragment),
+            };
+            match result {
                 SrtSendResult::Accepted { bytes } => {
                     pending.advance(bytes);
                     total_bytes += bytes;
@@ -171,26 +180,22 @@ impl<T> SrtEgressEngine<T> {
             }
         }
     }
-}
 
-impl<T> ProtocolEngine for SrtEgressEngine<T>
-where
-    T: SrtMessageSender,
-{
-    type Feed = TsFeed;
-    type Transport = T;
-
-    fn advance(
+    fn advance_inner(
         &mut self,
-        transport: &mut Self::Transport,
+        transport: &mut T,
         readiness: Readiness,
-        feed: &Self::Feed,
+        feed: &TsFeed,
         cursor: &mut FeedCursor,
         budget: WorkBudget,
-    ) -> EngineProgress {
+        owner: Option<&mut SrtOwner<'_>>,
+    ) -> EngineProgress
+    where
+        T: SrtMessageSender,
+    {
         if self.pending.is_some() {
             return if readiness.writable {
-                self.send_pending(transport, budget)
+                self.send_pending_inner(transport, budget, owner)
             } else {
                 EngineProgress::Needs(WaitCondition::Io(Interest::WRITE))
             };
@@ -219,10 +224,29 @@ where
         self.pending = Some(PendingSrtMessage::new(message));
 
         if readiness.writable {
-            self.send_pending(transport, budget)
+            self.send_pending_inner(transport, budget, owner)
         } else {
             EngineProgress::Needs(WaitCondition::Io(Interest::WRITE))
         }
+    }
+}
+
+impl<T> ProtocolEngine for SrtEgressEngine<T>
+where
+    T: SrtMessageSender,
+{
+    type Feed = TsFeed;
+    type Transport = T;
+
+    fn advance(
+        &mut self,
+        transport: &mut Self::Transport,
+        readiness: Readiness,
+        feed: &Self::Feed,
+        cursor: &mut FeedCursor,
+        budget: WorkBudget,
+    ) -> EngineProgress {
+        self.advance_inner(transport, readiness, feed, cursor, budget, None)
     }
 
     fn close(&mut self, transport: &mut Self::Transport, reason: CloseReason) {
@@ -234,5 +258,34 @@ where
 
     fn recovery_capability(&self) -> RecoveryCapability {
         RecoveryCapability::ReconnectOnly
+    }
+}
+
+impl<T> SrtEgressEngine<T>
+where
+    T: SrtMessageSender,
+{
+    pub(crate) fn advance_with_owner(
+        &mut self,
+        transport: &mut T,
+        readiness: Readiness,
+        feed: &TsFeed,
+        cursor: &mut FeedCursor,
+        budget: WorkBudget,
+        owner: &mut SrtOwner<'_>,
+    ) -> EngineProgress {
+        self.advance_inner(transport, readiness, feed, cursor, budget, Some(owner))
+    }
+
+    pub(crate) fn close_with_owner(
+        &mut self,
+        transport: &mut T,
+        reason: CloseReason,
+        owner: &mut SrtOwner<'_>,
+    ) {
+        self.pending = None;
+        self.pending_units.clear();
+        self.pending_units_index = 0;
+        transport.close_with_owner(reason, owner);
     }
 }

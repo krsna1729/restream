@@ -212,7 +212,7 @@ fn srt_pending_connect_spec_builds_expected_connect_config() {
     let pending = backend
         .pending_connect(&OutputId::new("out-a"))
         .expect("pending connect");
-    let config = pending.connect_spec.connect_config(&peer_addrs, None);
+    let config = pending.connect_spec.connect_config(&peer_addrs);
     assert_eq!(config.peer_addrs(), &peer_addrs);
     assert_eq!(config.stream_id(), "publish:key");
     assert_eq!(config.connect_timeout_ms(), 30000);
@@ -443,9 +443,9 @@ fn poll_ready_drive_of_the_shared_muxer_does_not_scale_with_leaf_count() {
 
     // Connecting drives the table too, so measure the delta across exactly
     // one readiness pass rather than the absolute count.
-    let before = state.lock().unwrap().as_ref().unwrap().drive_calls();
+    let before = backend.shared_srt_egress.as_ref().unwrap().drive_calls();
     backend.on_ready();
-    let after = state.lock().unwrap().as_ref().unwrap().drive_calls();
+    let after = backend.shared_srt_egress.as_ref().unwrap().drive_calls();
 
     assert_eq!(
         after - before,

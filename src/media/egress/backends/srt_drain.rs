@@ -29,7 +29,8 @@ impl SrtShardBackend {
         let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) else {
             return;
         };
-        if !leaf.pressure().is_backpressured() {
+        let mut owner = SrtOwner::new(self.shared_srt_egress.as_mut());
+        if !leaf.pressure_with_owner(&mut owner).is_backpressured() {
             self.output_sockets.remove(output_id);
             self.remove_leaf(key, reason);
             return;
@@ -53,7 +54,8 @@ impl SrtShardBackend {
             .filter_map(|(output_id, key)| {
                 let leaf = self.leaves.get_mut(key.0)?.as_mut()?;
                 let draining_since = leaf.draining_since?;
-                let flushed = !leaf.pressure().is_backpressured();
+                let mut owner = SrtOwner::new(self.shared_srt_egress.as_mut());
+                let flushed = !leaf.pressure_with_owner(&mut owner).is_backpressured();
                 let expired = now.saturating_duration_since(draining_since) >= self.drain_timeout;
                 (flushed || expired).then(|| output_id.clone())
             })
@@ -105,9 +107,12 @@ impl SrtShardBackend {
                         } else {
                             0
                         };
-                        let quality = leaf.sample_quality(now);
+                        let mut owner = SrtOwner::new(self.shared_srt_egress.as_mut());
+                        let quality = leaf.sample_quality_with_owner(&mut owner);
                         let drops = quality.as_ref().and_then(|q| q.packets_sent_drop);
-                        let reason = match leaf.observe_stall(now, drops, lag_units) {
+                        let reason = match leaf
+                            .observe_stall_with_owner(now, drops, lag_units, &mut owner)
+                        {
                             LeafStallClass::Idle => None,
                             LeafStallClass::Backpressured => Some("backpressured"),
                             LeafStallClass::Stalled => Some("stalled"),
@@ -119,7 +124,7 @@ impl SrtShardBackend {
                             leaf.common().progress_sink.record_quality(quality);
                         }
                         let draining = leaf.draining_since.is_some_and(|since| {
-                            !leaf.pressure().is_backpressured()
+                            !leaf.pressure_with_owner(&mut owner).is_backpressured()
                                 || now.saturating_duration_since(since) >= drain_timeout
                         });
                         (
@@ -140,9 +145,11 @@ impl SrtShardBackend {
             if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) {
                 let mut leaf = leaf;
                 leaf.common.progress_sink.mark_terminated_unexpectedly();
-                leaf.engine.close(
+                let mut owner = SrtOwner::new(self.shared_srt_egress.as_mut());
+                leaf.engine.close_with_owner(
                     &mut leaf.transport,
                     crate::media::egress::backend::CloseReason::NoProgress,
+                    &mut owner,
                 );
             }
         }
