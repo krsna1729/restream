@@ -10,7 +10,7 @@ license = "MIT"
 loom = ["dep:loom"]
 
 [dependencies]
-io-uring = "0.7.14"
+io-uring = "0.7.15"
 libc = "0.2"
 loom = { version = "0.7", optional = true }
 
