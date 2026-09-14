@@ -67,7 +67,7 @@ fn publishing_can_hold_a_wire_buffer_across_native_send_completion() {
     assert!(queued > 0);
 
     let mut sender = RecordingSender {
-        submitted: Vec::new(),
+        submitted: Vec::with_capacity(4),
     };
     let progress = engine.advance_native(
         &mut client_stream,
@@ -91,6 +91,7 @@ fn publishing_can_hold_a_wire_buffer_across_native_send_completion() {
     assert_eq!(engine.pending_application_bytes(), queued);
 
     let submitted = sender.submitted[0].len() as i32;
+    crate::test_alloc::begin();
     let progress = engine.advance_native(
         &mut client_stream,
         Readiness::WRITABLE,
@@ -104,6 +105,7 @@ fn publishing_can_hold_a_wire_buffer_across_native_send_completion() {
             send_result: Some(submitted),
         },
     );
+    assert_eq!(crate::test_alloc::end(), 0);
     assert!(matches!(
         progress,
         EngineProgress::Needs(WaitCondition::FeedOrIo(_))

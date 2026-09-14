@@ -517,4 +517,25 @@ mod tests {
         DatagramSink::send_owned(&mut ipv6_sink, ipv6, vec![4]).unwrap();
         assert_eq!(ipv6_outbound[family_index(ipv6)].len(), 1);
     }
+
+    #[test]
+    fn tx_lease_hot_path_does_not_allocate() {
+        let peer = "127.0.0.1:9000".parse().unwrap();
+        let mut outbound = std::array::from_fn(|_| VecDeque::with_capacity(32));
+        let mut tx_pool = TxPool::new(32, TX_SLOT_SIZE).unwrap();
+        let mut pool_empty = 0;
+        let payload = [7_u8; 32];
+
+        crate::test_alloc::begin();
+        for _ in 0..32 {
+            let mut sink = SharedTxSink {
+                outbound: &mut outbound,
+                tx_pool: &mut tx_pool,
+                pool_empty: &mut pool_empty,
+                leased: None,
+            };
+            assert!(DatagramSink::send(&mut sink, peer, &payload));
+        }
+        assert_eq!(crate::test_alloc::end(), 0);
+    }
 }
