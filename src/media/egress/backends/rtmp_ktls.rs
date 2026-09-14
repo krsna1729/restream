@@ -17,6 +17,7 @@ const TLS_TX: libc::c_int = 1;
 const TLS_RX: libc::c_int = 2;
 const TCP_ULP: libc::c_int = 31;
 const TLS_1_2: u16 = 0x0303;
+const TLS_1_3: u16 = 0x0304;
 const TLS_CIPHER_AES_GCM_128: u16 = 51;
 const TLS_CIPHER_AES_GCM_256: u16 = 52;
 
@@ -72,14 +73,18 @@ pub(crate) fn install(
     suite: CipherSuite,
     secrets: &ExtractedSecrets,
 ) -> io::Result<()> {
-    if version != ProtocolVersion::TLSv1_2 {
-        return Err(unsupported("Linux kTLS baseline requires TLS 1.2"));
-    }
+    let wire_version = match version {
+        ProtocolVersion::TLSv1_2 => TLS_1_2,
+        ProtocolVersion::TLSv1_3 => TLS_1_3,
+        _ => return Err(unsupported("Linux kTLS requires TLS 1.2 or TLS 1.3")),
+    };
     let cipher_type = match suite {
         CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
-        | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 => TLS_CIPHER_AES_GCM_128,
+        | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        | CipherSuite::TLS13_AES_128_GCM_SHA256 => TLS_CIPHER_AES_GCM_128,
         CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
-        | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 => TLS_CIPHER_AES_GCM_256,
+        | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        | CipherSuite::TLS13_AES_256_GCM_SHA384 => TLS_CIPHER_AES_GCM_256,
         _ => {
             return Err(unsupported(
                 "TLS cipher is not supported by the kTLS baseline",
@@ -97,8 +102,8 @@ pub(crate) fn install(
     )?;
     match cipher_type {
         TLS_CIPHER_AES_GCM_128 => {
-            let tx = aes128_info(cipher_type, secrets.tx.0, &secrets.tx.1)?;
-            let rx = aes128_info(cipher_type, secrets.rx.0, &secrets.rx.1)?;
+            let tx = aes128_info(wire_version, cipher_type, secrets.tx.0, &secrets.tx.1)?;
+            let rx = aes128_info(wire_version, cipher_type, secrets.rx.0, &secrets.rx.1)?;
             set_socket_option(
                 fd,
                 SOL_TLS,
@@ -115,8 +120,8 @@ pub(crate) fn install(
             )?;
         }
         TLS_CIPHER_AES_GCM_256 => {
-            let tx = aes256_info(cipher_type, secrets.tx.0, &secrets.tx.1)?;
-            let rx = aes256_info(cipher_type, secrets.rx.0, &secrets.rx.1)?;
+            let tx = aes256_info(wire_version, cipher_type, secrets.tx.0, &secrets.tx.1)?;
+            let rx = aes256_info(wire_version, cipher_type, secrets.rx.0, &secrets.rx.1)?;
             set_socket_option(
                 fd,
                 SOL_TLS,
@@ -138,6 +143,7 @@ pub(crate) fn install(
 }
 
 fn aes128_info(
+    version: u16,
     cipher_type: u16,
     sequence: u64,
     secret: &ConnectionTrafficSecrets,
@@ -149,7 +155,7 @@ fn aes128_info(
     };
     let mut result = Tls12AesGcm128 {
         info: TlsCryptoInfo {
-            version: TLS_1_2,
+            version,
             cipher_type,
         },
         iv: [0; 8],
@@ -170,6 +176,7 @@ fn aes128_info(
 }
 
 fn aes256_info(
+    version: u16,
     cipher_type: u16,
     sequence: u64,
     secret: &ConnectionTrafficSecrets,
@@ -181,7 +188,7 @@ fn aes256_info(
     };
     let mut result = Tls12AesGcm256 {
         info: TlsCryptoInfo {
-            version: TLS_1_2,
+            version,
             cipher_type,
         },
         iv: [0; 8],
@@ -228,11 +235,11 @@ mod tests {
     }
 
     #[test]
-    fn non_tls12_handoff_is_rejected_before_touching_the_socket() {
+    fn unsupported_cipher_is_rejected_before_touching_the_socket() {
         let error = install(
             -1,
             ProtocolVersion::TLSv1_3,
-            CipherSuite::TLS13_AES_128_GCM_SHA256,
+            CipherSuite::TLS13_CHACHA20_POLY1305_SHA256,
             &ExtractedSecrets {
                 tx: (
                     0,
@@ -252,5 +259,15 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn tls13_aes_gcm_uses_the_tls13_crypto_info_version() {
+        let secret = ConnectionTrafficSecrets::Aes256Gcm {
+            key: [0; 32].into(),
+            iv: [0; 12].into(),
+        };
+        let info = aes256_info(TLS_1_3, TLS_CIPHER_AES_GCM_256, 0, &secret).unwrap();
+        assert_eq!(info.info.version, TLS_1_3);
     }
 }

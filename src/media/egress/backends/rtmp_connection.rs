@@ -261,15 +261,20 @@ impl RtmpConnection {
         }
         self.ktls_evaluated = true;
         RTMPS_COUNTERS.ktls_attempts.fetch_add(1, Ordering::Relaxed);
-        if version != tokio_rustls::rustls::ProtocolVersion::TLSv1_2
-            || !matches!(
-                suite.suite(),
+        if !matches!(
+            (version, suite.suite()),
+            (
+                tokio_rustls::rustls::ProtocolVersion::TLSv1_2,
                 tokio_rustls::rustls::CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
                     | tokio_rustls::rustls::CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
                     | tokio_rustls::rustls::CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
                     | tokio_rustls::rustls::CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+            ) | (
+                tokio_rustls::rustls::ProtocolVersion::TLSv1_3,
+                tokio_rustls::rustls::CipherSuite::TLS13_AES_128_GCM_SHA256
+                    | tokio_rustls::rustls::CipherSuite::TLS13_AES_256_GCM_SHA384
             )
-            || !rtmp_ktls::available()
+        ) || !rtmp_ktls::available()
         {
             RTMPS_COUNTERS
                 .ktls_unsupported
