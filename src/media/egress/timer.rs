@@ -9,6 +9,8 @@
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::time::Instant;
 
 // ---------------------------------------------------------------------------
@@ -31,6 +33,8 @@ struct TimerEntry<K> {
 impl<K: Ord> PartialEq for TimerEntry<K> {
     fn eq(&self, other: &Self) -> bool {
         self.fire_at == other.fire_at
+            && self.key == other.key
+            && self.generation == other.generation
     }
 }
 impl<K: Ord> Eq for TimerEntry<K> {}
@@ -42,7 +46,10 @@ impl<K: Ord> PartialOrd for TimerEntry<K> {
 impl<K: Ord> Ord for TimerEntry<K> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Reverse so earliest deadline is at the top.
-        Reverse(self.fire_at).cmp(&Reverse(other.fire_at))
+        Reverse(self.fire_at)
+            .cmp(&Reverse(other.fire_at))
+            .then_with(|| self.key.cmp(&other.key))
+            .then_with(|| self.generation.cmp(&other.generation))
     }
 }
 
@@ -52,35 +59,47 @@ impl<K: Ord> Ord for TimerEntry<K> {
 
 /// Generation-aware min-heap timer for egress shard leaves.
 ///
-/// Entries with a stale `generation` are silently skipped when draining. This
-/// prevents cancelled or updated leaves from causing spurious wakeups without
-/// requiring an O(n) scan to remove them.
-#[derive(Debug, Default)]
-pub struct TimerWheel<K: Ord> {
+/// Replacing a key supersedes its previous deadline. Entries with a stale
+/// generation are silently skipped when draining, without an O(n) scan.
+#[derive(Debug)]
+pub struct TimerWheel<K: Ord + Hash> {
     heap: BinaryHeap<TimerEntry<K>>,
+    active: HashMap<K, TimerEntry<K>>,
 }
 
-impl<K: Ord + Clone> TimerWheel<K> {
+impl<K: Ord + Hash + Clone> TimerWheel<K> {
     pub fn new() -> Self {
+        Self::with_capacity(0)
+    }
+
+    /// Preallocate the expected number of live keys. Replacements reuse the
+    /// active entry and stale heap entries are periodically rebuilt in place,
+    /// so the heap stays bounded by the live-key count rather than the number
+    /// of reschedules.
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            heap: BinaryHeap::new(),
+            heap: BinaryHeap::with_capacity(capacity.saturating_mul(2).saturating_add(64)),
+            active: HashMap::with_capacity(capacity),
         }
     }
 
     /// Schedule a wakeup for `key` at `fire_at`.
     ///
-    /// Multiple entries for the same key are allowed; the caller must use
-    /// `generation` to distinguish which entry is still valid.
+    /// Replaces any existing deadline for `key`.
     pub fn insert(&mut self, fire_at: Instant, key: K, generation: u64) {
-        self.heap.push(TimerEntry {
+        let entry = TimerEntry {
             fire_at,
-            key,
+            key: key.clone(),
             generation,
-        });
+        };
+        self.active.insert(key, entry.clone());
+        self.heap.push(entry);
+        self.rebuild_if_needed();
     }
 
     /// Returns the instant of the soonest pending timer, or `None` if empty.
-    pub fn next_deadline(&self) -> Option<Instant> {
+    pub fn next_deadline(&mut self) -> Option<Instant> {
+        self.discard_stale_heads();
         self.heap.peek().map(|e| e.fire_at)
     }
 
@@ -93,7 +112,9 @@ impl<K: Ord + Clone> TimerWheel<K> {
     where
         F: FnMut(&K) -> Option<u64>,
     {
-        self.drain_expired_limited(now, usize::MAX, &mut valid_gen)
+        let mut fired = Vec::new();
+        self.drain_expired_limited_into(now, usize::MAX, &mut valid_gen, &mut fired);
+        fired
     }
 
     /// Drain at most `max_fired` current entries whose `fire_at <= now`.
@@ -110,6 +131,22 @@ impl<K: Ord + Clone> TimerWheel<K> {
         F: FnMut(&K) -> Option<u64>,
     {
         let mut fired = Vec::new();
+        self.drain_expired_limited_into(now, max_fired, &mut valid_gen, &mut fired);
+        fired
+    }
+
+    /// Drain expired timers into caller-owned storage so a shard can reuse
+    /// its result buffer on every loop iteration.
+    pub fn drain_expired_limited_into<F>(
+        &mut self,
+        now: Instant,
+        max_fired: usize,
+        mut valid_gen: F,
+        fired: &mut Vec<(K, u64)>,
+    ) where
+        F: FnMut(&K) -> Option<u64>,
+    {
+        fired.clear();
         while fired.len() < max_fired {
             let Some(entry) = self.heap.peek() else {
                 break;
@@ -118,7 +155,14 @@ impl<K: Ord + Clone> TimerWheel<K> {
                 break;
             }
             let entry = self.heap.pop().unwrap();
-            // Accept only if the generation still matches.
+            let current = self.active.get(&entry.key).is_some_and(|active| {
+                active.fire_at == entry.fire_at && active.generation == entry.generation
+            });
+            if !current {
+                continue;
+            }
+            self.active.remove(&entry.key);
+            // Accept only if the backend generation still matches.
             match valid_gen(&entry.key) {
                 Some(current_gen) if current_gen == entry.generation => {
                     fired.push((entry.key, entry.generation));
@@ -128,21 +172,49 @@ impl<K: Ord + Clone> TimerWheel<K> {
                 }
             }
         }
-        fired
+        self.rebuild_if_needed();
     }
 
     /// Remove all entries (e.g. during shard shutdown).
     pub fn clear(&mut self) {
         self.heap.clear();
+        self.active.clear();
     }
 
     /// Number of pending timer entries (including stale ones not yet expired).
     pub fn len(&self) -> usize {
-        self.heap.len()
+        self.active.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.heap.is_empty()
+        self.active.is_empty()
+    }
+
+    fn discard_stale_heads(&mut self) {
+        while let Some(entry) = self.heap.peek() {
+            let current = self.active.get(&entry.key).is_some_and(|active| {
+                active.fire_at == entry.fire_at && active.generation == entry.generation
+            });
+            if current {
+                break;
+            }
+            self.heap.pop();
+        }
+    }
+
+    fn rebuild_if_needed(&mut self) {
+        let bound = self.active.len().saturating_mul(2).saturating_add(64);
+        if self.heap.len() <= bound {
+            return;
+        }
+        self.heap.clear();
+        self.heap.extend(self.active.values().cloned());
+    }
+}
+
+impl<K: Ord + Hash + Clone> Default for TimerWheel<K> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -243,6 +315,7 @@ mod tests {
         // Old timer (generation 1) and new timer (generation 2) for same key.
         wheel.insert(now + Duration::from_millis(10), 0, 1);
         wheel.insert(now + Duration::from_millis(20), 0, 2);
+        assert_eq!(wheel.len(), 1);
 
         // Current generation is 2; old entry should be skipped, new should fire.
         let fired = wheel.drain_expired(now + Duration::from_millis(25), |_k| Some(2));

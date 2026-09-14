@@ -348,7 +348,8 @@ fn run_shard_thread<B: EgressShardBackend>(
                     .get()
                     .saturating_add(config.readiness_batch_budget().get()),
             ),
-            timers: TimerWheel::new(),
+            timers: TimerWheel::with_capacity(config.command_channel_capacity().get()),
+            expired_timers: Vec::with_capacity(config.timer_batch_budget().get()),
             metrics: ShardMetrics::new(shard_id),
             snapshot: Arc::clone(&snapshot),
             wake_gate,
@@ -370,6 +371,7 @@ struct EgressShardRuntime<'a, B: EgressShardBackend> {
     backend: &'a mut B,
     ready_backlog: VecDeque<()>,
     timers: TimerWheel<OutputId>,
+    expired_timers: Vec<(OutputId, u64)>,
     metrics: ShardMetrics,
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
     wake_gate: Arc<WakeGate>,
@@ -541,13 +543,15 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
 
     fn process_timer_batch(&mut self, running: &mut bool) -> usize {
         let now = Instant::now();
-        let expired = self.timers.drain_expired_limited(
+        let mut expired = std::mem::take(&mut self.expired_timers);
+        self.timers.drain_expired_limited_into(
             now,
             self.config.timer_batch_budget.get(),
             |output_id| self.backend.timer_generation(output_id),
+            &mut expired,
         );
         let mut processed = 0;
-        for (output_id, generation) in expired {
+        for (output_id, generation) in expired.drain(..) {
             processed += 1;
             let effect = self.backend.on_timer(output_id, generation);
             if self.apply_effect(effect).stops_shard() {
@@ -555,6 +559,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 break;
             }
         }
+        self.expired_timers = expired;
         processed
     }
 
