@@ -60,6 +60,10 @@ pub enum OpKind {
     PollCancel = 9,
     TimeoutCancel = 10,
     TcpTxCancel = 11,
+    /// Multishot UDP receive armed on the shared owner ring. Slot selects the
+    /// registration; generation distinguishes provided-buffer completions (0)
+    /// from receive completions (1), matching `UringUdpReceiver`.
+    UdpRecvMulti = 12,
 }
 
 impl OpKind {
@@ -76,6 +80,7 @@ impl OpKind {
             9 => Self::PollCancel,
             10 => Self::TimeoutCancel,
             11 => Self::TcpTxCancel,
+            12 => Self::UdpRecvMulti,
             _ => return None,
         })
     }
@@ -1590,7 +1595,7 @@ mod tests {
     fn operation_tags_round_trip_and_reject_invalid_kind() {
         let tag = OpTag::new(OpKind::TcpTx, 0x00ab_cdef, u32::MAX).unwrap();
         assert_eq!(OpTag::decode(tag.encode()), Some(tag));
-        assert!(OpTag::decode(0x0c).is_none());
+        assert!(OpTag::decode(0x0d).is_none());
         assert!(OpTag::new(OpKind::TcpTx, MAX_TAG_SLOTS as u32, 0).is_none());
     }
 

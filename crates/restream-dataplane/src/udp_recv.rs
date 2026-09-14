@@ -9,16 +9,16 @@ use io_uring::{IoUring, opcode, types};
 
 use crate::{OpKind, OpTag, build_ring};
 
-const RECV_GENERATION: u32 = 1;
-const PROVIDED_GENERATION: u32 = 0;
-const BUFFER_GROUP: u16 = 1;
+pub(crate) const RECV_GENERATION: u32 = 1;
+pub(crate) const PROVIDED_GENERATION: u32 = 0;
+pub(crate) const BUFFER_GROUP: u16 = 1;
 
 /// Fixed storage shared by the native UDP owner and short-lived datagram
 /// leases. The storage never moves while io_uring may reference it.
 pub struct UdpRecvBuffers {
-    bytes: Box<[u8]>,
-    buffer_size: usize,
-    count: u16,
+    pub(crate) bytes: Box<[u8]>,
+    pub(crate) buffer_size: usize,
+    pub(crate) count: u16,
 }
 
 impl UdpRecvBuffers {
@@ -31,7 +31,7 @@ impl UdpRecvBuffers {
         }
     }
 
-    fn new(count: u16, buffer_size: usize) -> Self {
+    pub fn new_buffers(count: u16, buffer_size: usize) -> Self {
         Self {
             bytes: vec![0; usize::from(count) * buffer_size].into_boxed_slice(),
             buffer_size,
@@ -83,7 +83,7 @@ impl UringUdpReceiver {
             ));
         }
         let ring = build_ring(u32::from(buffer_count.next_power_of_two().max(8)))?;
-        let buffers = Arc::new(UdpRecvBuffers::new(buffer_count, buffer_size));
+        let buffers = Arc::new(UdpRecvBuffers::new_buffers(buffer_count, buffer_size));
         let message = Box::new(libc::msghdr {
             msg_name: std::ptr::null_mut(),
             msg_namelen: std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t,
@@ -340,6 +340,10 @@ impl UringUdpReceiver {
         unsafe { self.ring.submission().push(entry) }
             .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "io_uring SQ full"))
     }
+}
+
+pub(crate) fn parse_socket_addr(bytes: &[u8]) -> Option<SocketAddr> {
+    socket_addr(bytes)
 }
 
 fn socket_addr(bytes: &[u8]) -> Option<SocketAddr> {

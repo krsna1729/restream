@@ -78,17 +78,17 @@ pub struct UdpPollerMetrics {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Registration {
-    fd: RawFd,
-    generation: u32,
-    armed: bool,
-    fixed: Option<types::Fixed>,
+pub(crate) struct Registration {
+    pub(crate) fd: RawFd,
+    pub(crate) generation: u32,
+    pub(crate) armed: bool,
+    pub(crate) fixed: Option<types::Fixed>,
 }
 
-struct PendingSend {
-    registration_slot: u32,
-    generation: u32,
-    active: bool,
+pub(crate) struct PendingSend {
+    pub(crate) registration_slot: u32,
+    pub(crate) generation: u32,
+    pub(crate) active: bool,
     destination: libc::sockaddr_storage,
     destination_len: libc::socklen_t,
     iovec: libc::iovec,
@@ -147,15 +147,21 @@ impl PendingSend {
 ///
 /// UDP payloads stay in protocol-owned fixed buffers. This type only reports
 /// readiness into caller-owned storage; it never allocates on `poll`.
+///
+/// One ring per owner thread: readiness polls, UDP sends, and the timeout
+/// share this poller's ring. Multishot receives live on a separate
+/// [`UringUdpReceiver`] ring today; the planned [`UringUdpDriver`] merges
+/// them so a shard that services IPv4 and IPv6 holds both descriptors as two
+/// fixed slots on one ring instead of one poller per family.
 pub struct UringUdpPoller {
-    ring: IoUring,
-    registrations: Box<[Option<Registration>]>,
-    fixed_files: Option<FixedFileTable>,
-    pending_sends: Box<[PendingSend]>,
-    send_completions: Box<[Option<UdpSendCompletion>]>,
-    send_completion_order: VecDeque<u32>,
-    timeout_armed: bool,
-    metrics: UdpPollerMetrics,
+    pub(crate) ring: IoUring,
+    pub(crate) registrations: Box<[Option<Registration>]>,
+    pub(crate) fixed_files: Option<FixedFileTable>,
+    pub(crate) pending_sends: Box<[PendingSend]>,
+    pub(crate) send_completions: Box<[Option<UdpSendCompletion>]>,
+    pub(crate) send_completion_order: VecDeque<u32>,
+    pub(crate) timeout_armed: bool,
+    pub(crate) metrics: UdpPollerMetrics,
 }
 
 impl UringUdpPoller {
@@ -596,6 +602,551 @@ impl UringUdpPoller {
     }
 }
 
+/// One ring per owner thread: readiness polls, UDP sends, multishot receives
+/// with provided buffers, and the timeout all share this driver's ring. A
+/// shard that services IPv4 and IPv6 registers both descriptors as two fixed
+/// slots on the same ring instead of owning one poller per family. Receive
+/// buffers use one provided-buffer group per registration slot so buffer IDs
+/// stay namespaced by slot; completion tags carry the slot in `OpTag::slot`
+/// and use the receiver generations (0 = provided, 1 = receive) in
+/// `OpKind::UdpRecvMulti`.
+pub struct UringUdpDriver {
+    poller: UringUdpPoller,
+    recv: Vec<Option<DriverRecv>>,
+    recv_message: Box<libc::msghdr>,
+    buffers_per_slot: u16,
+    buffer_size: usize,
+}
+
+struct DriverRecv {
+    fd: RawFd,
+    fixed: Option<types::Fixed>,
+    buffers: std::sync::Arc<UdpRecvBuffers>,
+    recv_armed: bool,
+    provided: usize,
+    recycle: VecDeque<u16>,
+}
+
+// SAFETY: single-owner like `PendingSend`. `recv_message` raw pointers are
+// only populated while the owner retains the message box; `DriverRecv`
+// holds no pointers, only the fd and buffer ownership.
+unsafe impl Send for UringUdpDriver {}
+
+/// Datagrams drained from [`UringUdpDriver::poll`] alongside readiness. The
+/// buffer ID is namespaced by registration slot and must be returned with
+/// [`UringUdpDriver::recycle`]; payload bytes are read from
+/// [`UringUdpDriver::buffers`] without copying.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UdpDriverDatagram {
+    pub slot: u32,
+    pub buffer_id: u16,
+    pub offset: usize,
+    pub len: usize,
+    pub peer: SocketAddr,
+}
+
+impl UringUdpDriver {
+    /// One ring, `max_slots` fixed registrations, `send_capacity` in-flight
+    /// sends, and `buffers_per_slot` provided receive buffers per slot.
+    pub fn new_fixed(
+        max_slots: usize,
+        ring_entries: u32,
+        send_capacity: usize,
+        buffers_per_slot: u16,
+        buffer_size: usize,
+    ) -> io::Result<Self> {
+        if buffers_per_slot == 0 || buffer_size < 256 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid UDP receive buffer geometry",
+            ));
+        }
+        let poller =
+            UringUdpPoller::new_fixed_with_send_capacity(max_slots, ring_entries, send_capacity)?;
+        let mut recv = Vec::with_capacity(max_slots);
+        recv.resize_with(max_slots, || None);
+        Ok(Self {
+            poller,
+            recv: recv.into_boxed_slice().into_vec(),
+            recv_message: Box::new(libc::msghdr {
+                msg_name: std::ptr::null_mut(),
+                msg_namelen: std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t,
+                msg_iov: std::ptr::null_mut(),
+                msg_iovlen: 0,
+                msg_control: std::ptr::null_mut(),
+                msg_controllen: 0,
+                msg_flags: 0,
+            }),
+            buffers_per_slot,
+            buffer_size,
+        })
+    }
+
+    /// Register one descriptor as fixed slot `slot` and arm its multishot
+    /// receive on the shared ring. Both families of one shard are two slots
+    /// on this same ring.
+    pub fn register_fixed(
+        &mut self,
+        fd: RawFd,
+        slot: u32,
+        generation: u32,
+        interest: UdpInterest,
+    ) -> io::Result<()> {
+        let index = usize::try_from(slot)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "UDP slot out of range"))?;
+        if index >= self.recv.len() || self.recv[index].is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "UDP driver slot out of range or already used",
+            ));
+        }
+        self.poller.register_fixed(fd, slot, generation, interest)?;
+        let registration = self.poller.registrations[index]
+            .as_ref()
+            .expect("just-registered UDP slot remains live");
+        let buffers = std::sync::Arc::new(UdpRecvBuffers::new_buffers(
+            self.buffers_per_slot,
+            self.buffer_size,
+        ));
+        let mut state = DriverRecv {
+            fd,
+            fixed: registration.fixed,
+            buffers: buffers.clone(),
+            recv_armed: false,
+            provided: 0,
+            recycle: VecDeque::with_capacity(usize::from(self.buffers_per_slot)),
+        };
+        self.provide_all(slot, &mut state)?;
+        self.poller.ring.submit_and_wait(1)?;
+        self.drain_provided(slot, &mut state, true)?;
+        self.arm_recv(slot, &mut state)?;
+        self.poller.ring.submit()?;
+        self.recv[index] = Some(state);
+        Ok(())
+    }
+
+    /// Shared receive storage for `slot`, for zero-copy payload views.
+    pub fn buffers(&self, slot: u32) -> Option<std::sync::Arc<UdpRecvBuffers>> {
+        self.recv
+            .get(slot as usize)?
+            .as_ref()
+            .map(|state| state.buffers.clone())
+    }
+
+    /// Provided buffers still owned by the kernel for `slot`.
+    pub fn available_buffers(&self, slot: u32) -> usize {
+        self.recv
+            .get(slot as usize)
+            .and_then(Option::as_ref)
+            .map_or(0, |state| state.provided)
+    }
+
+    /// Return a consumed buffer ID to the kernel's provided group.
+    pub fn recycle(&mut self, slot: u32, buffer_id: u16) -> io::Result<()> {
+        let Some(state) = self.recv.get_mut(slot as usize).and_then(Option::as_mut) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "UDP driver slot is not live",
+            ));
+        };
+        if buffer_id >= self.buffers_per_slot {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "UDP receive buffer id out of range",
+            ));
+        }
+        state.recycle.push_back(buffer_id);
+        self.flush_recycle(slot)
+    }
+
+    /// Drain one CQ batch: readiness into `ready`, receives into
+    /// `datagrams`, send completions retained for `drain_send_completions`.
+    /// Single `submit_and_wait`; one ring, one wait, one timeout.
+    pub fn poll(
+        &mut self,
+        timeout: Duration,
+        ready: &mut [UdpReadyEvent],
+        datagrams: &mut [UdpDriverDatagram],
+    ) -> io::Result<(usize, usize)> {
+        for slot in 0..self.recv.len() as u32 {
+            self.flush_recycle(slot)?;
+            let needs_arm = self.recv[slot as usize]
+                .as_ref()
+                .is_some_and(|state| !state.recv_armed && state.provided != 0);
+            if needs_arm {
+                // Borrow dance: take raw parts so `arm_recv` can use `&mut self`
+                // while `state` is borrowed; single-owner thread, no aliasing.
+                let state_ptr = self.recv[slot as usize].as_mut().unwrap() as *mut DriverRecv;
+                unsafe { self.arm_recv(slot, &mut *state_ptr)? };
+            }
+        }
+        let timespec = types::Timespec::from(timeout);
+        if !timeout.is_zero() && !self.poller.timeout_armed {
+            let entry = opcode::Timeout::new(&timespec)
+                .build()
+                .user_data(OpTag::new(OpKind::Timeout, 0, 0).unwrap().encode());
+            unsafe { self.poller.push(&entry)? };
+            self.poller.timeout_armed = true;
+        }
+        self.poller
+            .ring
+            .submit_and_wait(usize::from(!timeout.is_zero()))?;
+        let mut ready_count = 0;
+        let mut datagram_count = 0;
+        let mut recv_more = vec![false; self.recv.len()];
+        {
+            let cq = self.poller.ring.completion();
+            self.poller.metrics.cq_overflows = u64::from(cq.overflow());
+            for completion in cq {
+                self.poller.metrics.completions += 1;
+                let Some(tag) = OpTag::decode(completion.user_data()) else {
+                    self.poller.metrics.stale_completions += 1;
+                    continue;
+                };
+                match tag.kind {
+                    OpKind::Timeout => self.poller.timeout_armed = false,
+                    OpKind::PollCancel => {}
+                    OpKind::UdpTx => {
+                        let Some(operation) = self.poller.pending_sends.get_mut(tag.slot as usize)
+                        else {
+                            self.poller.metrics.stale_completions += 1;
+                            continue;
+                        };
+                        operation.active = false;
+                        if operation.generation != tag.generation {
+                            self.poller.metrics.stale_completions += 1;
+                            continue;
+                        }
+                        self.poller.send_completions[tag.slot as usize] = Some(UdpSendCompletion {
+                            slot: tag.slot,
+                            generation: tag.generation,
+                            result: completion.result(),
+                        });
+                        self.poller.send_completion_order.push_back(tag.slot);
+                    }
+                    OpKind::UdpRecvMulti => {
+                        let Some(state) = self
+                            .recv
+                            .get_mut(tag.slot as usize)
+                            .and_then(Option::as_mut)
+                        else {
+                            self.poller.metrics.stale_completions += 1;
+                            continue;
+                        };
+                        if tag.generation == crate::udp_recv::PROVIDED_GENERATION {
+                            if completion.result() < 0 {
+                                return Err(io::Error::from_raw_os_error(-completion.result()));
+                            }
+                            state.provided = state.provided.saturating_add(1);
+                        } else if tag.generation == crate::udp_recv::RECV_GENERATION {
+                            recv_more[tag.slot as usize] |=
+                                io_uring::cqueue::more(completion.flags());
+                            if completion.result() < 0 {
+                                let error = io::Error::from_raw_os_error(-completion.result());
+                                if error.raw_os_error() != Some(libc::ENOBUFS) {
+                                    return Err(error);
+                                }
+                                continue;
+                            }
+                            state.provided = state.provided.saturating_sub(1);
+                            let Some(buffer_id) =
+                                io_uring::cqueue::buffer_select(completion.flags())
+                            else {
+                                return Err(io::Error::other(
+                                    "UDP multishot completion did not select a buffer",
+                                ));
+                            };
+                            if datagram_count == datagrams.len() {
+                                state.recycle.push_back(buffer_id);
+                                continue;
+                            }
+                            let result_len =
+                                usize::try_from(completion.result()).map_err(|_| {
+                                    io::Error::other("UDP receive completion length overflow")
+                                })?;
+                            let parsed = types::RecvMsgOut::parse(
+                                &state.buffers.bytes[usize::from(buffer_id)
+                                    * state.buffers.buffer_size
+                                    ..usize::from(buffer_id) * state.buffers.buffer_size
+                                        + result_len],
+                                &self.recv_message,
+                            )
+                            .map_err(|_| {
+                                io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "invalid UDP recvmsg output",
+                                )
+                            })?;
+                            let Some(peer) = crate::udp_recv::parse_socket_addr(parsed.name_data())
+                            else {
+                                state.recycle.push_back(buffer_id);
+                                continue;
+                            };
+                            let base =
+                                state.buffers.bytes.as_ptr().wrapping_add(
+                                    usize::from(buffer_id) * state.buffers.buffer_size,
+                                ) as usize;
+                            let payload = parsed.payload_data();
+                            let offset = (payload.as_ptr() as usize).saturating_sub(base);
+                            datagrams[datagram_count] = UdpDriverDatagram {
+                                slot: tag.slot,
+                                buffer_id,
+                                offset,
+                                len: payload.len(),
+                                peer,
+                            };
+                            datagram_count += 1;
+                        }
+                    }
+                    _ => {
+                        let Some(registration) = self
+                            .poller
+                            .registrations
+                            .get_mut(tag.slot as usize)
+                            .and_then(Option::as_mut)
+                        else {
+                            self.poller.metrics.stale_completions += 1;
+                            continue;
+                        };
+                        if registration.generation != tag.generation {
+                            self.poller.metrics.stale_completions += 1;
+                            continue;
+                        }
+                        registration.armed = false;
+                        if completion.result() < 0 {
+                            self.poller.metrics.poll_errors += 1;
+                            return Err(io::Error::from_raw_os_error(-completion.result()));
+                        }
+                        let events = completion.result() as u32;
+                        let errored = events & (libc::POLLERR | libc::POLLHUP) as u32 != 0;
+                        if ready_count == ready.len() {
+                            self.poller.metrics.ready_overflows += 1;
+                            continue;
+                        }
+                        ready[ready_count] = UdpReadyEvent {
+                            fd: registration.fd,
+                            slot: tag.slot,
+                            generation: tag.generation,
+                            readable: errored || events & libc::POLLIN as u32 != 0,
+                            writable: errored || events & libc::POLLOUT as u32 != 0,
+                        };
+                        ready_count += 1;
+                    }
+                }
+            }
+        }
+        if self.poller.timeout_armed {
+            let entry =
+                opcode::TimeoutRemove::new(OpTag::new(OpKind::Timeout, 0, 0).unwrap().encode())
+                    .build()
+                    .user_data(OpTag::new(OpKind::PollCancel, 0, 0).unwrap().encode());
+            unsafe { self.poller.push(&entry)? };
+            self.poller.ring.submit()?;
+            self.poller.timeout_armed = false;
+        }
+        for slot in 0..self.recv.len() as u32 {
+            self.flush_recycle(slot)?;
+            let Some(state) = self.recv[slot as usize].as_mut() else {
+                continue;
+            };
+            if !recv_more[slot as usize] {
+                state.recv_armed = false;
+            }
+            let needs_arm = !state.recv_armed && state.provided != 0;
+            if needs_arm {
+                let state_ptr = state as *mut DriverRecv;
+                unsafe { self.arm_recv(slot, &mut *state_ptr)? };
+                self.poller.ring.submit()?;
+            }
+        }
+        Ok((ready_count, datagram_count))
+    }
+
+    /// Submit one caller-owned datagram; caller retains `bytes` until the
+    /// matching completion is drained.
+    pub fn submit_send(
+        &mut self,
+        fd: RawFd,
+        registration_slot: u32,
+        operation_slot: u32,
+        generation: u32,
+        peer: SocketAddr,
+        bytes: &[u8],
+    ) -> io::Result<()> {
+        self.poller.submit_send_on_slot(
+            fd,
+            registration_slot,
+            operation_slot,
+            generation,
+            peer,
+            bytes,
+        )
+    }
+
+    /// Drain send completions without scanning registrations.
+    pub fn drain_send_completions(&mut self, completions: &mut [UdpSendCompletion]) -> usize {
+        self.poller.drain_send_completions(completions)
+    }
+
+    /// Re-arm readiness after a `poll` reported it (level-triggered PollAdd
+    /// is one-shot; the owner re-arms per wake).
+    pub fn rearm(&mut self, fd: RawFd, slot: u32, generation: u32) -> io::Result<()> {
+        self.poller
+            .register(fd, slot, generation, UdpInterest::READ_WRITE)
+    }
+
+    pub fn metrics(&self) -> UdpPollerMetrics {
+        self.poller.metrics()
+    }
+
+    fn provide_all(&mut self, slot: u32, state: &mut DriverRecv) -> io::Result<()> {
+        let group = self.group_for(slot);
+        let entry = opcode::ProvideBuffers::new(
+            state.buffers.bytes.as_ptr() as *mut u8,
+            state.buffers.buffer_size as i32,
+            self.buffers_per_slot,
+            group,
+            0,
+        )
+        .build()
+        .user_data(
+            OpTag::new(
+                OpKind::UdpRecvMulti,
+                slot,
+                crate::udp_recv::PROVIDED_GENERATION,
+            )
+            .unwrap()
+            .encode(),
+        );
+        unsafe { self.poller.push(&entry) }
+    }
+
+    fn flush_recycle(&mut self, slot: u32) -> io::Result<()> {
+        let group = self.group_for(slot);
+        let Some(state) = self.recv.get_mut(slot as usize).and_then(Option::as_mut) else {
+            return Ok(());
+        };
+        while let Some(buffer_id) = state.recycle.front().copied() {
+            let address = unsafe {
+                state
+                    .buffers
+                    .bytes
+                    .as_ptr()
+                    .add(usize::from(buffer_id) * state.buffers.buffer_size)
+                    as *mut u8
+            };
+            let entry = opcode::ProvideBuffers::new(
+                address,
+                state.buffers.buffer_size as i32,
+                1,
+                group,
+                buffer_id,
+            )
+            .build()
+            .user_data(
+                OpTag::new(
+                    OpKind::UdpRecvMulti,
+                    slot,
+                    crate::udp_recv::PROVIDED_GENERATION,
+                )
+                .unwrap()
+                .encode(),
+            );
+            if unsafe { self.poller.push(&entry) }.is_err() {
+                break;
+            }
+            state.recycle.pop_front();
+        }
+        if !state.recycle.is_empty() {
+            self.poller.ring.submit()?;
+        }
+        Ok(())
+    }
+
+    fn drain_provided(
+        &mut self,
+        slot: u32,
+        state: &mut DriverRecv,
+        require_one: bool,
+    ) -> io::Result<()> {
+        let mut count = 0;
+        let cq = self.poller.ring.completion();
+        for completion in cq {
+            let Some(tag) = OpTag::decode(completion.user_data()) else {
+                continue;
+            };
+            if tag.kind == OpKind::UdpRecvMulti
+                && tag.slot == slot
+                && tag.generation == crate::udp_recv::PROVIDED_GENERATION
+            {
+                if completion.result() < 0 {
+                    return Err(io::Error::from_raw_os_error(-completion.result()));
+                }
+                count += 1;
+            }
+        }
+        if require_one && count == 0 {
+            return Err(io::Error::other(
+                "io_uring did not provide UDP receive buffers",
+            ));
+        }
+        state.provided = if count == 0 {
+            0
+        } else {
+            usize::from(self.buffers_per_slot)
+        };
+        Ok(())
+    }
+
+    fn arm_recv(&mut self, slot: u32, state: &mut DriverRecv) -> io::Result<()> {
+        if state.recv_armed || state.provided == 0 {
+            return Ok(());
+        }
+        let group = self.group_for(slot);
+        let fd = match state.fixed {
+            Some(fixed) => return self.arm_recv_fixed(slot, state, fixed, group),
+            None => types::Fd(state.fd),
+        };
+        let _ = fd;
+        let entry =
+            opcode::RecvMsgMulti::new(types::Fd(state.fd), self.recv_message.as_ref(), group)
+                .build()
+                .user_data(
+                    OpTag::new(OpKind::UdpRecvMulti, slot, crate::udp_recv::RECV_GENERATION)
+                        .unwrap()
+                        .encode(),
+                );
+        unsafe { self.poller.push(&entry)? };
+        state.recv_armed = true;
+        Ok(())
+    }
+
+    fn arm_recv_fixed(
+        &mut self,
+        slot: u32,
+        state: &mut DriverRecv,
+        fixed: types::Fixed,
+        group: u16,
+    ) -> io::Result<()> {
+        let entry = opcode::RecvMsgMulti::new(fixed, self.recv_message.as_ref(), group)
+            .build()
+            .user_data(
+                OpTag::new(OpKind::UdpRecvMulti, slot, crate::udp_recv::RECV_GENERATION)
+                    .unwrap()
+                    .encode(),
+            );
+        unsafe { self.poller.push(&entry)? };
+        state.recv_armed = true;
+        Ok(())
+    }
+
+    fn group_for(&self, slot: u32) -> u16 {
+        // One provided-buffer group per registration slot; group 0 is
+        // reserved so a zero group never aliases a live slot.
+        (u32::from(u16::MAX - 1).min(slot) + 1) as u16
+    }
+}
+
 fn sockaddr(peer: SocketAddr) -> (libc::sockaddr_storage, libc::socklen_t) {
     match peer {
         SocketAddr::V4(peer) => {
@@ -923,6 +1474,71 @@ mod tests {
             }
         }
         panic!("owner-thread UDP sends did not complete");
+    }
+
+    #[test]
+    fn driver_hosts_two_slots_and_multishot_receive_on_one_ring() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let second = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut driver = match UringUdpDriver::new_fixed(2, 64, 4, 8, 2_048) {
+            Ok(driver) => driver,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
+                ) =>
+            {
+                return;
+            }
+            Err(error) => panic!("driver io_uring unavailable: {error}"),
+        };
+        driver
+            .register_fixed(receiver.as_raw_fd(), 0, 1, UdpInterest::READ_WRITE)
+            .unwrap();
+        driver
+            .register_fixed(second.as_raw_fd(), 1, 1, UdpInterest::READ_WRITE)
+            .unwrap();
+        // Both families share one ring: one poll observes both slots.
+        sender
+            .send_to(b"one", receiver.local_addr().unwrap())
+            .unwrap();
+        sender
+            .send_to(b"two", second.local_addr().unwrap())
+            .unwrap();
+        let mut ready = [UdpReadyEvent {
+            fd: -1,
+            slot: 0,
+            generation: 0,
+            readable: false,
+            writable: false,
+        }; 4];
+        let mut datagrams = [UdpDriverDatagram {
+            slot: 0,
+            buffer_id: 0,
+            offset: 0,
+            len: 0,
+            peer: "0.0.0.0:0".parse().unwrap(),
+        }; 4];
+        let mut slots = std::collections::BTreeSet::new();
+        for _ in 0..32 {
+            let (_, received) = driver
+                .poll(Duration::from_millis(5), &mut ready, &mut datagrams)
+                .unwrap();
+            for datagram in datagrams.iter().take(received) {
+                let buffers = driver.buffers(datagram.slot).unwrap();
+                let payload = buffers
+                    .payload(datagram.buffer_id, datagram.offset, datagram.len)
+                    .unwrap();
+                assert!(payload == b"one" || payload == b"two");
+                slots.insert(datagram.slot);
+                driver.recycle(datagram.slot, datagram.buffer_id).unwrap();
+            }
+            if slots.len() == 2 {
+                break;
+            }
+        }
+        assert_eq!(slots, [0, 1].into_iter().collect());
     }
 
     #[test]
