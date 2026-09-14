@@ -33,7 +33,18 @@ impl SrtResolveWorkerSet {
         let worker_pending = Arc::clone(&pending);
         let worker = std::thread::spawn(move || {
             while let Ok(request) = request_receiver.recv() {
-                let _ = super::resolve_srt_peer_hosts(request, completion_sender.clone());
+                let output_id = request.output_id.clone();
+                let generation = request.generation;
+                if super::resolve_srt_peer_hosts(request, completion_sender.clone()).is_err() {
+                    // An empty address list is the bounded failure completion:
+                    // the shard removes the matching pending connect instead
+                    // of leaving an unresolved output resident forever.
+                    let _ = completion_sender.send(SrtResolvedConnect {
+                        output_id,
+                        generation,
+                        peer_addrs: Vec::new(),
+                    });
+                }
                 worker_pending.fetch_sub(1, Ordering::Relaxed);
             }
         });

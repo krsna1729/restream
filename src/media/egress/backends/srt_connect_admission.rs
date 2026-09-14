@@ -87,6 +87,18 @@ impl SrtShardBackend {
 
         let mut connected_any = false;
         while let Some(completion) = self.connect_backlog.pop_front() {
+            if completion.peer_addrs.is_empty() {
+                let should_remove = self
+                    .pending_connects
+                    .get(&completion.output_id)
+                    .is_some_and(|pending| pending.common.generation == completion.generation);
+                if should_remove
+                    && let Some(pending) = self.pending_connects.remove(&completion.output_id)
+                {
+                    pending.common.progress_sink.mark_terminated_unexpectedly();
+                }
+                continue;
+            }
             let permit = match &self.connect_admission {
                 Some(admission) => match Arc::clone(admission).try_acquire_owned() {
                     Ok(permit) => Some(permit),
