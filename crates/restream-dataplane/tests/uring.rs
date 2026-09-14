@@ -1,4 +1,4 @@
-use restream_dataplane::{Dataplane, DataplaneHandle, ShardConfig};
+use restream_dataplane::{Dataplane, DataplaneHandle, OutputRuntimeSpec, ShardConfig};
 
 #[test]
 fn owner_thread_services_only_woken_sinks() {
@@ -77,10 +77,17 @@ fn multi_shard_handle_keeps_output_placement_stable() {
         Err(error) => panic!("io_uring dataplane unavailable: {error}"),
     };
 
-    let first = dataplane.add_output(7).unwrap();
+    let first = dataplane
+        .add_output_spec(OutputRuntimeSpec {
+            id: 7,
+            generation: 1,
+        })
+        .unwrap();
     let second = dataplane.add_output(8).unwrap();
     assert_eq!(first.shard, 1);
     assert_eq!(second.shard, 0);
+    assert!(dataplane.update_output(7, 2).unwrap());
+    assert!(!dataplane.update_output(7, 1).unwrap());
     assert!(dataplane.wake_output(7).unwrap());
     let snapshot = (0..100)
         .map(|_| dataplane.snapshot().unwrap())
@@ -88,7 +95,7 @@ fn multi_shard_handle_keeps_output_placement_stable() {
             snapshot.shards[first.shard]
                 .sinks
                 .iter()
-                .any(|sink| sink.id == 7 && sink.visits == 1)
+                .any(|sink| sink.id == 7 && sink.generation == 2 && sink.visits == 1)
         })
         .expect("the selected owner shard should service the woken output");
     assert_eq!(
