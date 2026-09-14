@@ -1,15 +1,15 @@
-//! Runtime adapter for the external `srt-rs` protocol core.
+//! Native owner-thread adapter for the external `srt-rs` protocol core.
 //!
 //! The protocol crate is sans-I/O. This module owns the small amount of
-//! application transport state needed by Restream: one nonblocking UDP
-//! socket, one protocol connection, and one manual timer store. The egress
-//! fabric continues to own scheduling and lifecycle; this adapter only moves
-//! datagrams through Tokio-owned UDP sockets and `SrtConnection`.
+//! application transport state needed by Restream: one native UDP socket per
+//! local address family, one protocol caller table, and one manual timer
+//! store. The egress fabric continues to own scheduling and lifecycle; this
+//! adapter only moves datagrams through the shard's native readiness owner.
 //!
-//! Each `srt-rs` connection (`RustSrtSocket`) is owned directly by the
+//! Each `srt-rs` logical caller (`RustSrtSocket`) is owned directly by the
 //! `SrtFabricLeaf` that connected it (boxed as `dyn SrtMessageSender`, since
-//! `RustSrtSocket` implements that trait directly below) -- there is no
-//! socket-id indirection or process-global connection registry.
+//! `RustSrtSocket` implements that trait directly below) while the physical
+//! UDP sockets and caller table remain shared per shard.
 
 use std::net::SocketAddr;
 use std::sync::{Mutex, OnceLock};
@@ -19,29 +19,19 @@ use crate::media::egress::backend::CloseReason;
 use crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPortState;
 use crate::media::snapshots::PublisherQuality;
 use bytes::Bytes;
-use shiguredo_srt::{ConnectionState, Timestamp};
-use srt_transport::OutputDrainBudget;
-use srt_transport::tokio_transport::{Conn, GroupConn as TokioGroupConn};
-use srt_transport::{LogicalCallerId, LogicalCallerState, LogicalCallerStats};
+use shiguredo_srt::Timestamp;
+use srt_transport::{LogicalCallerId, LogicalCallerStats};
 
 mod knobs;
 pub(crate) use knobs::{apply_optional_udp_buf, desired_udp_buf};
 pub use knobs::{recv_budget, recv_budget_or};
 
+#[cfg(test)]
 fn should_use_shared_srt_egress_state(peer_count: usize, has_shared_state: bool) -> bool {
     peer_count != 0 && has_shared_state
 }
 
-fn has_one_shared_srt_address_family(peers: &[SocketAddr]) -> bool {
-    let Some(first) = peers.first() else {
-        return false;
-    };
-    peers.iter().all(|peer| peer.is_ipv4() == first.is_ipv4())
-}
-
 enum RustSrtSocket {
-    Direct(Box<Conn>),
-    Bonded(Box<TokioGroupConn>),
     Shared {
         state: SrtEgressMuxerPortState,
         caller: LogicalCallerId,
@@ -79,73 +69,8 @@ pub(crate) fn drive_shared_srt_egress(state: &SrtEgressMuxerPortState) {
 }
 
 impl RustSrtSocket {
-    fn drive_connection(&mut self, now: Timestamp, runtime: &tokio::runtime::Runtime) -> bool {
-        match self {
-            Self::Direct(conn) => {
-                receive_conn(conn, now);
-                conn.fire_expired(now);
-                let _ =
-                    runtime.block_on(conn.drain_outputs_bounded(now, OutputDrainBudget::default()));
-                conn.conn.state() != ConnectionState::Disconnected
-            }
-            Self::Bonded(conn) => {
-                let _ = conn.drive(now, OutputDrainBudget::default());
-                conn.group()
-                    .members()
-                    .iter()
-                    .any(|member| member.connection().state() != ConnectionState::Disconnected)
-            }
-            // Shared leaves get their table-wide driving from
-            // `drive_shared_srt_egress`; there is no per-leaf I/O to do here.
-            Self::Shared { state, caller } => state
-                .lock()
-                .ok()
-                .and_then(|state| state.as_ref()?.callers.logical_caller(caller)?.state())
-                .is_some_and(|state| state != LogicalCallerState::Disconnected),
-        }
-    }
-
-    fn send(&mut self, message: &Bytes, runtime: &tokio::runtime::Runtime) -> SrtSendResult {
-        match self {
-            Self::Direct(conn) => send_direct_message(conn, message, runtime),
-            Self::Bonded(conn) => {
-                if conn
-                    .group()
-                    .members()
-                    .iter()
-                    .all(|member| member.connection().state() == ConnectionState::Disconnected)
-                {
-                    return SrtSendResult::PeerClosed;
-                }
-                if !conn.can_send() {
-                    return SrtSendResult::WouldBlock;
-                }
-                match conn.send_shared(message.clone(), timestamp_now()) {
-                    Ok(_) => match conn.drive(timestamp_now(), OutputDrainBudget::default()) {
-                        Ok(_) => SrtSendResult::Accepted {
-                            bytes: message.len(),
-                        },
-                        Err(error) => SrtSendResult::Failed {
-                            reason: "srt-rs-send",
-                            detail: error.to_string(),
-                            retryable: true,
-                        },
-                    },
-                    Err(error) => SrtSendResult::Failed {
-                        reason: "srt-rs-send",
-                        detail: error.to_string(),
-                        retryable: true,
-                    },
-                }
-            }
-            Self::Shared { .. } => unreachable!("shared SRT uses send_shared"),
-        }
-    }
-
     fn send_shared(&mut self, message: &Bytes) -> SrtSendResult {
-        let Self::Shared { state, caller } = self else {
-            unreachable!("send_shared called for a non-shared SRT socket");
-        };
+        let Self::Shared { state, caller } = self;
         let Ok(mut shared) = state.lock() else {
             return SrtSendResult::Failed {
                 reason: "srt-rs-shared-lock",
@@ -181,29 +106,6 @@ impl RustSrtSocket {
 
     fn native_send_backlog_inner(&self) -> Option<NativeSendBacklog> {
         match self {
-            Self::Direct(conn) => conn.conn.sender_stats().map(|stats| NativeSendBacklog {
-                bytes: stats.payload_bytes_in_buffer,
-                packets: stats.packets_in_buffer,
-                ms: u32::try_from(stats.buffer_span_micros / 1_000).unwrap_or(u32::MAX),
-            }),
-            Self::Bonded(conn) => {
-                let stats = conn.stats();
-                let mut bytes = 0_u64;
-                let mut packets = 0_u32;
-                let mut span_micros = 0_u64;
-                for leg in stats.legs {
-                    if let Some(sender) = leg.connection.sender {
-                        bytes = bytes.saturating_add(sender.payload_bytes_in_buffer);
-                        packets = packets.saturating_add(sender.packets_in_buffer);
-                        span_micros = span_micros.max(sender.buffer_span_micros);
-                    }
-                }
-                Some(NativeSendBacklog {
-                    bytes,
-                    packets,
-                    ms: u32::try_from(span_micros / 1_000).unwrap_or(u32::MAX),
-                })
-            }
             Self::Shared { state, caller } => {
                 let shared = state.lock().ok()?;
                 let shared = shared.as_ref()?;
@@ -241,47 +143,17 @@ impl RustSrtSocket {
 
 impl SrtMessageSender for RustSrtSocket {
     fn send_message(&mut self, message: &Bytes) -> SrtSendResult {
-        if matches!(self, Self::Shared { .. }) {
-            return self.send_shared(message);
-        }
-        let Ok(runtime) = srt_runtime() else {
-            return SrtSendResult::Failed {
-                reason: "srt-rs-runtime",
-                detail: "Tokio runtime unavailable".to_string(),
-                retryable: true,
-            };
-        };
-        self.send(message, &runtime)
+        self.send_shared(message)
     }
 
-    /// Feeds inbound datagrams into the connection, fires expired timers,
-    /// and drains pending outbound datagrams -- called once per leaf on
-    /// every `poll_ready()` pass (see `egress/backends/srt.rs`), independent
-    /// of whether `send_message` is called that pass. Without this, a
-    /// `Direct`/`Bonded` connection would never process incoming ACKs/NAKs
-    /// or advance its congestion/RTT state between sends.
-    ///
-    /// `Shared` leaves do nothing here: their socket and caller table are
-    /// shared with every other shared leaf on the shard, so readiness
-    /// driving happens once in `drive_shared_srt_egress` rather than once
-    /// per leaf.
+    /// Native shared leaves do nothing here: their sockets and caller table
+    /// are driven once per shard readiness pass rather than once per leaf.
     fn drive(&mut self) {
-        if matches!(self, Self::Shared { .. }) {
-            return;
-        }
-        let Ok(runtime) = srt_runtime() else {
-            return;
-        };
-        self.drive_connection(timestamp_now(), &runtime);
+        let _ = self;
     }
 
-    /// For `Shared`, disconnects this leaf's logical caller from the
-    /// shard's shared UDP socket/table without tearing down the socket
-    /// other callers on this shard still use. `Direct`/`Bonded` need no
-    /// explicit close: dropping the leaf drops this value, which drops the
-    /// owned `Conn`/`GroupConn` (and its Tokio `UdpSocket`) -- exactly the
-    /// behavior this had before, just via ownership instead of a registry
-    /// removal.
+    /// Disconnects this leaf's logical caller from the shard's shared UDP
+    /// socket/table without tearing down the socket other callers use.
     fn close(&mut self, _reason: CloseReason) {
         if let Self::Shared { state, caller } = self
             && let Ok(mut shared) = state.lock()
@@ -302,29 +174,6 @@ impl SrtMessageSender for RustSrtSocket {
 
     fn sender_quality(&self) -> Option<PublisherQuality> {
         match self {
-            Self::Direct(conn) => {
-                let stats = conn.conn.sender_stats()?;
-                Some(sender_quality(
-                    stats.peer_rtt_micros.map(f64::from),
-                    stats.peer_receiving_rate_bytes_per_second,
-                    stats.total_lost,
-                    stats.total_dropped,
-                ))
-            }
-            Self::Bonded(conn) => {
-                let stats = conn.stats();
-                Some(group_sender_quality(
-                    stats.legs.iter().filter_map(|leg| {
-                        leg.connection.sender.as_ref().map(|sender| {
-                            (
-                                sender.peer_rtt_micros.map(f64::from),
-                                sender.peer_receiving_rate_bytes_per_second,
-                            )
-                        })
-                    }),
-                    stats.aggregate.wire_sender_packets_lost,
-                ))
-            }
             Self::Shared { state, caller } => {
                 let shared = state.lock().ok()?;
                 let shared = shared.as_ref()?;
@@ -413,28 +262,10 @@ fn group_sender_quality<L: Into<f64>>(
 
 static NEXT_GROUP_ID: OnceLock<Mutex<u32>> = OnceLock::new();
 static CLOCK: OnceLock<Instant> = OnceLock::new();
-static SRT_RUNTIME: OnceLock<Result<std::sync::Arc<tokio::runtime::Runtime>, String>> =
-    OnceLock::new();
 
-fn srt_runtime() -> Result<std::sync::Arc<tokio::runtime::Runtime>, String> {
-    SRT_RUNTIME
-        .get_or_init(|| {
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()
-                .map(std::sync::Arc::new)
-                .map_err(|e| e.to_string())
-        })
-        .clone()
-}
-
-/// Forces the shared `srt-rs` Tokio runtime to exist (building it on first
-/// call, cheaply reusing it afterward), surfacing a build failure -- so a
-/// resource-exhaustion failure is caught once at fabric-spawn time instead of
-/// silently deferred to the first real connect attempt.
-pub(crate) fn ensure_srt_runtime() -> Result<(), String> {
-    srt_runtime().map(|_| ())
+/// Native SRT needs no private runtime or worker pool to initialize.
+pub(crate) fn ensure_srt_native() -> Result<(), String> {
+    Ok(())
 }
 
 fn next_group_id() -> u32 {
@@ -448,46 +279,6 @@ fn next_group_id() -> u32 {
 pub(super) fn timestamp_now() -> Timestamp {
     let start = CLOCK.get_or_init(Instant::now);
     Timestamp::from_micros(start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64)
-}
-
-fn send_direct_message(
-    conn: &mut Conn,
-    message: &Bytes,
-    runtime: &tokio::runtime::Runtime,
-) -> SrtSendResult {
-    if conn.conn.state() == ConnectionState::Disconnected {
-        return SrtSendResult::PeerClosed;
-    }
-    if conn.conn.state() != ConnectionState::Connected {
-        return SrtSendResult::WouldBlock;
-    }
-    let now = timestamp_now();
-    if !conn.conn.can_send_with_pacing(now) {
-        return SrtSendResult::WouldBlock;
-    }
-    match conn.conn.send_shared(message.clone(), now) {
-        Ok(()) => match runtime
-            .block_on(conn.drain_outputs_bounded(timestamp_now(), OutputDrainBudget::default()))
-        {
-            Ok(_) => SrtSendResult::Accepted {
-                bytes: message.len(),
-            },
-            Err(error) => SrtSendResult::Failed {
-                reason: "srt-rs-send",
-                detail: error.to_string(),
-                retryable: true,
-            },
-        },
-        Err(error) => SrtSendResult::Failed {
-            reason: "srt-rs-send",
-            detail: error.to_string(),
-            retryable: true,
-        },
-    }
-}
-
-fn receive_conn(conn: &mut Conn, now: Timestamp) {
-    let _ = conn.recv_ready(now, recv_budget_or(srt_transport::RecvBudget::default()));
 }
 
 pub(crate) trait SrtMessageSender {
@@ -665,12 +456,7 @@ impl SrtFabricEgressConnectConfig<'_> {
             state
                 .lock()
                 .ok()
-                .and_then(|shared| {
-                    shared
-                        .as_ref()
-                        .and_then(|shared| shared.socket.local_addr().ok())
-                })
-                .map(|address| address.port())
+                .and_then(|shared| shared.as_ref().and_then(SharedSrtEgress::local_port))
         })
     }
 }
@@ -697,119 +483,67 @@ pub(crate) fn connect_fabric_srt_egress_socket(
         max_in_flight: std::num::NonZeroUsize::MIN,
         attempt_deadline: Duration::from_millis(config.connect_timeout_ms.max(1)),
     };
-    let transport = if should_use_shared_srt_egress_state(
-        config.peer_addrs.len(),
-        config.shared_state.is_some(),
-    ) && has_one_shared_srt_address_family(config.peer_addrs)
-    {
-        let state = config
-            .shared_state
-            .clone()
-            .expect("shared SRT egress state selected by predicate");
-        let caller = {
-            let mut shared = state
-                .lock()
-                .map_err(|_| "shared SRT egress state is poisoned".to_string())?;
-            if shared.is_none() {
-                *shared = Some(SharedSrtEgress::bind(config.peer_addrs[0])?);
-            }
-            let shared = shared.as_mut().expect("initialized above");
-            let caller = if config.peer_addrs.len() == 1 {
-                let connection = session
-                    .caller(timestamp_now())
-                    .map_err(|error| error.to_string())?;
-                shared
-                    .callers
-                    .add_direct(srt_transport::CallerLeg::new(
-                        config.peer_addrs[0],
+    let state = config
+        .shared_state
+        .clone()
+        .unwrap_or_else(|| std::sync::Arc::new(std::sync::Mutex::new(None)));
+    let caller = {
+        let mut shared = state
+            .lock()
+            .map_err(|_| "shared SRT egress state is poisoned".to_string())?;
+        if let Some(existing) = shared.as_mut() {
+            existing.ensure_for_peers(config.peer_addrs)?;
+        } else {
+            *shared = Some(SharedSrtEgress::bind_for_peers(config.peer_addrs)?);
+        }
+        let shared = shared.as_mut().expect("initialized above");
+        let caller = if config.peer_addrs.len() == 1 {
+            let connection = session
+                .caller(timestamp_now())
+                .map_err(|error| error.to_string())?;
+            shared
+                .callers
+                .add_direct(srt_transport::CallerLeg::new(
+                    config.peer_addrs[0],
+                    connection,
+                ))
+                .map_err(|error| error.to_string())?
+        } else {
+            let mode = shiguredo_srt::GroupMode::from_group_type(config.bond_type)
+                .ok_or_else(|| "invalid SRT group type".to_string())?;
+            let legs = config
+                .peer_addrs
+                .iter()
+                .enumerate()
+                .map(|(index, peer)| {
+                    let caller = srt_transport::CallerConfig::builder(*peer)
+                        .session(session.clone())
+                        .connect(connect)
+                        .configure_transport(apply_optional_udp_buf)
+                        .build()
+                        .map_err(|error| error.to_string())?
+                        .prepare(srt_transport::RuntimeFlavor::Mio)
+                        .map_err(|error| error.to_string())?;
+                    let connection = caller
+                        .connection(timestamp_now())
+                        .map_err(|error| error.to_string())?;
+                    Ok(srt_transport::CallerGroupLeg::new(
+                        u32::try_from(index + 1).unwrap_or(u32::MAX),
+                        u16::try_from(config.peer_addrs.len() - index).unwrap_or(u16::MAX),
+                        *peer,
                         connection,
                     ))
-                    .map_err(|error| error.to_string())?
-            } else {
-                let mode = shiguredo_srt::GroupMode::from_group_type(config.bond_type)
-                    .ok_or_else(|| "invalid SRT group type".to_string())?;
-                let legs = config
-                    .peer_addrs
-                    .iter()
-                    .enumerate()
-                    .map(|(index, peer)| {
-                        let caller = srt_transport::CallerConfig::builder(*peer)
-                            .session(session.clone())
-                            .connect(connect)
-                            .configure_transport(apply_optional_udp_buf)
-                            .build()
-                            .map_err(|error| error.to_string())?
-                            .prepare(srt_transport::RuntimeFlavor::Mio)
-                            .map_err(|error| error.to_string())?;
-                        let connection = caller
-                            .connection(timestamp_now())
-                            .map_err(|error| error.to_string())?;
-                        Ok(srt_transport::CallerGroupLeg::new(
-                            u32::try_from(index + 1).unwrap_or(u32::MAX),
-                            u16::try_from(config.peer_addrs.len() - index).unwrap_or(u16::MAX),
-                            *peer,
-                            connection,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, String>>()?;
-                shared
-                    .callers
-                    .add_group(next_group_id(), mode, legs)
-                    .map_err(|error| error.to_string())?
-            };
-            shared.drive(timestamp_now())?;
-            caller
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            shared
+                .callers
+                .add_group(next_group_id(), mode, legs)
+                .map_err(|error| error.to_string())?
         };
-        RustSrtSocket::Shared { state, caller }
-    } else if config.peer_addrs.len() == 1 {
-        let runtime = srt_runtime()?;
-        let _runtime_guard = runtime.enter();
-        let caller = srt_transport::CallerConfig::builder(config.peer_addrs[0])
-            .session(session)
-            .connect(connect)
-            .configure_transport(apply_optional_udp_buf)
-            .build()
-            .map_err(|e| e.to_string())?
-            .prepare(srt_transport::RuntimeFlavor::Tokio)
-            .map_err(|e| e.to_string())?;
-        let socket = caller.bind_socket().map_err(|e| e.to_string())?;
-        let tokio_socket = tokio::net::UdpSocket::from_std(socket).map_err(|e| e.to_string())?;
-        let conn = caller
-            .connection(timestamp_now())
-            .map_err(|e| e.to_string())?;
-        RustSrtSocket::Direct(Box::new(Conn::new(conn, tokio_socket)))
-    } else {
-        let runtime = srt_runtime()?;
-        let _runtime_guard = runtime.enter();
-        let legs = config
-            .peer_addrs
-            .iter()
-            .enumerate()
-            .map(|(index, peer)| {
-                srt_transport::CallerConfig::builder(*peer)
-                    .session(session.clone())
-                    .connect(connect)
-                    .configure_transport(apply_optional_udp_buf)
-                    .build()
-                    .map(|caller| {
-                        srt_transport::GroupCallerLeg::new(
-                            u32::try_from(index + 1).unwrap_or(u32::MAX),
-                            u16::try_from(config.peer_addrs.len() - index).unwrap_or(u16::MAX),
-                            caller,
-                        )
-                    })
-                    .map_err(|error| error.to_string())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        RustSrtSocket::Bonded(Box::new(
-            TokioGroupConn::caller(
-                srt_transport::GroupConfig::new(next_group_id(), config.bond_type),
-                legs,
-                timestamp_now(),
-            )
-            .map_err(|error| error.to_string())?,
-        ))
+        shared.drive(timestamp_now())?;
+        caller
     };
+    let transport = RustSrtSocket::Shared { state, caller };
     Ok(Box::new(transport))
 }
 

@@ -1,3 +1,4 @@
+use super::shared::family_index;
 use super::{SharedSrtEgress, should_use_shared_srt_egress_state};
 
 #[test]
@@ -19,7 +20,7 @@ fn shared_outbound_flush_supports_ipv6() {
         .expect("set sink timeout");
     let peer = sink.local_addr().expect("sink address");
     let mut shared = SharedSrtEgress::bind(peer).expect("bind shared SRT socket");
-    shared.outbound.push_back((peer, vec![1, 2, 3, 4]));
+    shared.outbound[family_index(peer)].push_back((peer, vec![1, 2, 3, 4]));
 
     assert!(!shared.flush_outbound().expect("submit IPv6 datagram"));
     for _ in 0..8 {
@@ -30,7 +31,12 @@ fn shared_outbound_flush_supports_ipv6() {
             break;
         }
     }
-    assert!(shared.outbound.is_empty());
+    assert!(
+        shared
+            .outbound
+            .iter()
+            .all(std::collections::VecDeque::is_empty)
+    );
     let mut received = [0u8; 4];
     sink.recv(&mut received).expect("receive IPv6 datagram");
     assert_eq!(received, [1, 2, 3, 4]);
@@ -43,7 +49,7 @@ fn shared_outbound_flush_sends_without_entering_the_runtime() {
         .expect("set sink timeout");
     let peer = sink.local_addr().expect("sink address");
     let mut shared = SharedSrtEgress::bind(peer).expect("bind shared SRT socket");
-    shared.outbound.push_back((peer, vec![1, 2, 3, 4]));
+    shared.outbound[family_index(peer)].push_back((peer, vec![1, 2, 3, 4]));
 
     for _ in 0..8 {
         shared
@@ -53,7 +59,12 @@ fn shared_outbound_flush_sends_without_entering_the_runtime() {
             break;
         }
     }
-    assert!(shared.outbound.is_empty());
+    assert!(
+        shared
+            .outbound
+            .iter()
+            .all(std::collections::VecDeque::is_empty)
+    );
     let mut received = [0_u8; 4];
     let (size, _) = sink.recv_from(&mut received).expect("receive datagram");
     assert_eq!(size, received.len());
@@ -67,7 +78,7 @@ fn shared_outbound_flush_sends_an_ipv4_batch_and_clears_leftover() {
         .expect("set sink timeout");
     let peer = sink.local_addr().expect("sink address");
     let mut shared = SharedSrtEgress::bind(peer).expect("bind shared SRT socket");
-    shared.outbound.extend([
+    shared.outbound[family_index(peer)].extend([
         (peer, vec![1, 2, 3, 4]),
         (peer, vec![5, 6, 7, 8]),
         (peer, vec![9, 10, 11, 12]),
@@ -82,7 +93,12 @@ fn shared_outbound_flush_sends_an_ipv4_batch_and_clears_leftover() {
             break;
         }
     }
-    assert!(shared.outbound.is_empty());
+    assert!(
+        shared
+            .outbound
+            .iter()
+            .all(std::collections::VecDeque::is_empty)
+    );
     for expected in [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]] {
         let mut received = [0_u8; 4];
         let (size, _) = sink.recv_from(&mut received).expect("receive datagram");

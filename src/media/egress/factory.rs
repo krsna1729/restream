@@ -45,7 +45,7 @@ where
         shard_config,
         budget,
         feed_for,
-        crate::media::srt::ensure_srt_runtime,
+        crate::media::srt::ensure_srt_native,
         srt_egress_muxer_port_reuse,
         connect_admission,
     )
