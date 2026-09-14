@@ -1,7 +1,9 @@
 use super::super::resolve_runtime::{ResolvingSrtShardBackend, SrtResolveWorkerSet};
 use super::super::*;
 use super::support::feed;
+use crate::media::egress::command::ShardId;
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec};
+use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::{LeafPolicy, WorkBudget};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use bytes::Bytes;
@@ -79,4 +81,37 @@ fn resolving_srt_backend_does_not_spawn_for_non_srt_add() {
     assert_eq!(effect, EgressShardCommandEffect::Continue);
     backend.on_media_tick();
     assert_eq!(backend.worker_count(), 0);
+}
+
+struct ForwardingProbe;
+
+impl EgressShardBackend for ForwardingProbe {
+    fn on_command(&mut self, _command: EgressCommand) -> EgressShardCommandEffect {
+        EgressShardCommandEffect::Continue
+    }
+
+    fn resync_count(&self) -> u64 {
+        7
+    }
+
+    fn budget_exhaustion_count(&self) -> u64 {
+        11
+    }
+
+    fn observe_metrics(&self, metrics: &mut ShardMetrics) {
+        metrics.cq_overflows = 13;
+    }
+}
+
+#[test]
+fn resolving_srt_backend_forwards_metrics() {
+    let (completion_sender, _completion_queue) = srt_resolve_completion_queue(1);
+    let backend =
+        ResolvingSrtShardBackend::new(ForwardingProbe, SrtResolveWorkerSet::new(completion_sender));
+    let mut metrics = ShardMetrics::new(ShardId::new(0));
+
+    assert_eq!(backend.resync_count(), 7);
+    assert_eq!(backend.budget_exhaustion_count(), 11);
+    backend.observe_metrics(&mut metrics);
+    assert_eq!(metrics.cq_overflows, 13);
 }

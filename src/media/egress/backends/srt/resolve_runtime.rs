@@ -6,6 +6,7 @@ use super::{
 };
 use crate::media::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
+use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::WorkBudget;
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::srt::SrtFabricEgressConnectSpec;
@@ -141,6 +142,18 @@ where
     fn on_shutdown(&mut self) {
         self.backend.on_shutdown();
         self.resolve_workers.reap_finished();
+    }
+
+    fn resync_count(&self) -> u64 {
+        self.backend.resync_count()
+    }
+
+    fn budget_exhaustion_count(&self) -> u64 {
+        self.backend.budget_exhaustion_count()
+    }
+
+    fn observe_metrics(&self, metrics: &mut ShardMetrics) {
+        self.backend.observe_metrics(metrics);
     }
 }
 
