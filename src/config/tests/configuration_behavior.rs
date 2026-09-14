@@ -81,6 +81,29 @@ fn server_ports_are_loaded_by_config_module() {
 }
 
 #[test]
+fn capacity_limits_accept_host_calibration_overrides() {
+    with_env_vars(
+        &[
+            ("RESTREAM_CAPACITY_INGRESS_PPS", "1234"),
+            ("RESTREAM_CAPACITY_EGRESS_PPS", "5678"),
+            ("RESTREAM_CAPACITY_NIC_BPS", "9000000000"),
+            ("RESTREAM_CAPACITY_MEMORY_BYTES", "123456789"),
+            ("RESTREAM_CAPACITY_FFMPEG_STAGES", "3.5"),
+            ("RESTREAM_CAPACITY_DISK_BPS", "456789"),
+        ],
+        || {
+            let config = AppConfig::from_env();
+            assert_eq!(config.capacity_limits.ingress_pps, 1234.0);
+            assert_eq!(config.capacity_limits.egress_pps, 5678.0);
+            assert_eq!(config.capacity_limits.nic_bps, 9_000_000_000.0);
+            assert_eq!(config.capacity_limits.memory_bytes, 123_456_789.0);
+            assert_eq!(config.capacity_limits.ffmpeg_stages, 3.5);
+            assert_eq!(config.capacity_limits.disk_bps, 456_789.0);
+        },
+    );
+}
+
+#[test]
 fn server_ports_reject_zero_and_fall_back_to_defaults() {
     with_env_vars(
         &[

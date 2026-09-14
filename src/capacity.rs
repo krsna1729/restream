@@ -50,8 +50,8 @@ pub struct CapacityLimits {
 }
 
 impl CapacityLimits {
-    /// Conservative starting calibration. Production admission remains
-    /// observe-only until host-specific benchmark calibration replaces it.
+    /// Conservative starting calibration. Deployments can replace these
+    /// values through `AppConfig::from_env` after measuring their host.
     pub fn from_parallelism(parallelism: u32) -> Self {
         let cores = f64::from(parallelism.max(1));
         Self {
@@ -298,7 +298,11 @@ impl MediaEngine {
             .len()
             .min(u32::MAX as usize) as u32;
         workload.shard_count = self.config.egress_fabric.shards.max(1);
-        let mut snapshot = CapacityModel::default().project(workload);
+        let mut snapshot = CapacityModel {
+            limits: self.config.capacity_limits,
+            safe_utilization: 0.8,
+        }
+        .project(workload);
         if let Some((queue, capacity, progress_age_ms, stalled)) = self
             .egress_fabric_shard_statuses(std::time::Duration::from_secs(5))
             .await

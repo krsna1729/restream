@@ -4,6 +4,7 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
+use crate::capacity::CapacityLimits;
 use crate::media::egress::policy::WorkBudget;
 use crate::media::egress::shard::EgressShardConfig;
 use crate::planner::BackendPolicy;
@@ -260,6 +261,9 @@ pub struct AppConfig {
     pub http_bind_addr: String,
     pub tuning: RuntimeTuning,
     pub egress_fabric: EgressFabricConfig,
+    /// Host-specific service-center capacities. These remain observe-only;
+    /// admission is not enforced until calibration is validated externally.
+    pub capacity_limits: CapacityLimits,
     pub tokio_runtime: TokioRuntimeConfig,
     pub db_path: String,
     pub media_dir: String,
@@ -355,6 +359,26 @@ fn env_usize(name: &str, default: usize) -> usize {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
+}
+
+fn env_positive_f64(name: &str, default: f64) -> f64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value: &f64| value.is_finite() && value.is_sign_positive())
+        .unwrap_or(default)
+}
+
+fn capacity_limits_from_env(parallelism: usize) -> CapacityLimits {
+    let defaults = CapacityLimits::from_parallelism(parallelism.min(u32::MAX as usize) as u32);
+    CapacityLimits {
+        ingress_pps: env_positive_f64("RESTREAM_CAPACITY_INGRESS_PPS", defaults.ingress_pps),
+        egress_pps: env_positive_f64("RESTREAM_CAPACITY_EGRESS_PPS", defaults.egress_pps),
+        nic_bps: env_positive_f64("RESTREAM_CAPACITY_NIC_BPS", defaults.nic_bps),
+        memory_bytes: env_positive_f64("RESTREAM_CAPACITY_MEMORY_BYTES", defaults.memory_bytes),
+        ffmpeg_stages: env_positive_f64("RESTREAM_CAPACITY_FFMPEG_STAGES", defaults.ffmpeg_stages),
+        disk_bps: env_positive_f64("RESTREAM_CAPACITY_DISK_BPS", defaults.disk_bps),
+    }
 }
 
 /// Positive `usize` override for thin A/B knobs. Unset, unparseable, or `0`
@@ -625,6 +649,7 @@ impl Default for AppConfig {
             http_bind_addr: "127.0.0.1".to_string(),
             tuning,
             egress_fabric: EgressFabricConfig::default(),
+            capacity_limits: CapacityLimits::from_parallelism(cpus as u32),
             tokio_runtime,
             db_path: ".restream/data/restream.db".to_string(),
             media_dir: DEFAULT_MEDIA_DIR.to_string(),
@@ -680,6 +705,10 @@ impl AppConfig {
             std::env::var("RESTREAM_HTTP_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
         let tuning = RuntimeTuning::from_env();
         let egress_fabric = EgressFabricConfig::from_env();
+        let cpus = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1);
+        let capacity_limits = capacity_limits_from_env(cpus);
         let tokio_runtime = TokioRuntimeConfig::from_env();
         let db_path = std::env::var("RESTREAM_DB_PATH")
             .unwrap_or_else(|_| ".restream/data/restream.db".to_string());
@@ -757,9 +786,6 @@ impl AppConfig {
         {
             v
         } else {
-            let cpus = std::thread::available_parallelism()
-                .map(std::num::NonZeroUsize::get)
-                .unwrap_or(1);
             let reserve = std::env::var("RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE")
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
@@ -782,6 +808,7 @@ impl AppConfig {
             http_bind_addr,
             tuning,
             egress_fabric,
+            capacity_limits,
             tokio_runtime,
             db_path,
             media_dir,
@@ -859,6 +886,14 @@ impl AppConfig {
                 "visitMaxUs": self.egress_fabric.visit_max_us,
                 "maxPendingBytes": self.egress_fabric.max_pending_bytes,
                 "drainTimeoutMs": self.egress_fabric.drain_timeout_ms,
+            },
+            "capacity": {
+                "ingressPps": self.capacity_limits.ingress_pps,
+                "egressPps": self.capacity_limits.egress_pps,
+                "nicBps": self.capacity_limits.nic_bps,
+                "memoryBytes": self.capacity_limits.memory_bytes,
+                "ffmpegStages": self.capacity_limits.ffmpeg_stages,
+                "diskBps": self.capacity_limits.disk_bps,
             },
             "paths": {
                 "db": self.db_path,
