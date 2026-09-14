@@ -171,6 +171,7 @@ where
             .rev()
             .map(|slot| LeafKey(slot as usize))
             .collect();
+        self.ready = ReadyQueue::with_capacity(capacity);
         self
     }
 

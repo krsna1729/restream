@@ -87,15 +87,23 @@ impl Default for ScheduleState {
 /// The caller is responsible for keeping `ScheduleState::enqueued` in sync:
 /// call `set_enqueued(leaf_state, true)` before `push_back`, and
 /// `set_enqueued(leaf_state, false)` after `dequeue_next`.
-#[derive(Debug, Default)]
+const DEFAULT_READY_CAPACITY: usize = 4096;
+
+#[derive(Debug)]
 pub struct ReadyQueue {
     inner: VecDeque<LeafKey>,
+    capacity: usize,
 }
 
 impl ReadyQueue {
     pub fn new() -> Self {
+        Self::with_capacity(DEFAULT_READY_CAPACITY)
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            inner: VecDeque::new(),
+            inner: VecDeque::with_capacity(capacity),
+            capacity,
         }
     }
 
@@ -103,8 +111,12 @@ impl ReadyQueue {
     ///
     /// This deliberately does not look up `enqueued` itself — the shard loop
     /// manages that bit. Separation keeps the hot path free of map lookups.
-    pub fn push_back(&mut self, key: LeafKey) {
+    pub fn push_back(&mut self, key: LeafKey) -> bool {
+        if self.inner.len() == self.capacity {
+            return false;
+        }
         self.inner.push_back(key);
+        true
     }
 
     /// Dequeue the next ready leaf key. Caller must set `enqueued = false`
@@ -115,8 +127,12 @@ impl ReadyQueue {
 
     /// Re-append a still-runnable leaf to the tail (after a partial visit).
     /// Caller must ensure `enqueued` remains `true`.
-    pub fn push_back_runnable(&mut self, key: LeafKey) {
+    pub fn push_back_runnable(&mut self, key: LeafKey) -> bool {
+        if self.inner.len() == self.capacity {
+            return false;
+        }
         self.inner.push_back(key);
+        true
     }
 
     /// Number of currently ready leaves.
@@ -171,8 +187,18 @@ pub fn try_enqueue(schedule: &mut ScheduleState, queue: &mut ReadyQueue, key: Le
         return false;
     }
     schedule.enqueued = true;
-    queue.push_back(key);
-    true
+    if queue.push_back(key) {
+        true
+    } else {
+        schedule.enqueued = false;
+        false
+    }
+}
+
+impl Default for ReadyQueue {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,6 +232,14 @@ mod tests {
         // Second attempt returns false and does not double-enqueue.
         assert!(!try_enqueue(&mut slab.states[0], &mut queue, LeafKey(0)));
 
+        assert_eq!(queue.len(), 1);
+    }
+
+    #[test]
+    fn ready_queue_has_a_hard_capacity() {
+        let mut queue = ReadyQueue::with_capacity(1);
+        assert!(queue.push_back(LeafKey(0)));
+        assert!(!queue.push_back(LeafKey(1)));
         assert_eq!(queue.len(), 1);
     }
 
