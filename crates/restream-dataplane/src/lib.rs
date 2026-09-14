@@ -168,6 +168,35 @@ impl ReadyQueue {
         Some(slot)
     }
 
+    /// Remove one queued slot. Removal is control-plane work and bounded by
+    /// the configured ready capacity; the hot path remains O(1).
+    pub fn remove(&mut self, slot: u32) -> bool {
+        let slot_index = slot as usize;
+        if slot_index >= self.queued.len() || !self.queued[slot_index] {
+            return false;
+        }
+
+        let mut read = self.head;
+        let mut write = self.head;
+        let mut removed = false;
+        for _ in 0..self.len {
+            let current = self.entries[read];
+            read = (read + 1) % self.entries.len();
+            if current == slot && !removed {
+                removed = true;
+                continue;
+            }
+            self.entries[write] = current;
+            write = (write + 1) % self.entries.len();
+        }
+        if removed {
+            self.len -= 1;
+            self.tail = write;
+            self.queued[slot_index] = false;
+        }
+        removed
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }
@@ -605,15 +634,19 @@ impl LeafSlab {
         Ok(slot)
     }
 
-    fn remove(&mut self, id: u64) -> bool {
-        let Some((slot, _)) = self
-            .leaves
+    fn find_slot(&self, id: u64) -> Option<u32> {
+        self.leaves
             .iter()
             .enumerate()
             .find(|(_, leaf)| leaf.as_ref().is_some_and(|leaf| leaf.id == id))
-        else {
+            .map(|(slot, _)| slot as u32)
+    }
+
+    fn remove_slot(&mut self, slot: u32) -> bool {
+        let slot = slot as usize;
+        if self.leaves.get(slot).and_then(Option::as_ref).is_none() {
             return false;
-        };
+        }
         self.leaves[slot] = None;
         self.generations[slot] = self.generations[slot].wrapping_add(1);
         self.free.push(slot as u32);
@@ -661,6 +694,15 @@ impl ShardState {
         }
         leaf.pending = true;
         self.ready.enqueue(slot)
+    }
+
+    fn remove(&mut self, id: u64) -> bool {
+        let Some(slot) = self.leaves.find_slot(id) else {
+            return false;
+        };
+        self.ready.remove(slot);
+        self.deadlines.remove(slot);
+        self.leaves.remove_slot(slot)
     }
 
     fn service_ready(&mut self, loop_deadline: Instant) {
@@ -959,7 +1001,7 @@ fn run_shard(
                     let _ = reply.send(result);
                 }
                 Ok(Command::Remove { id, reply }) => {
-                    let removed = state.leaves.remove(id);
+                    let removed = state.remove(id);
                     let _ = reply.send(removed);
                 }
                 Ok(Command::Wake { id, reply }) => {
@@ -1077,6 +1119,37 @@ mod tests {
         assert_eq!(queue.pop(), Some(0));
         assert_eq!(queue.pop(), Some(2));
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn ready_queue_removes_a_pending_slot_before_reuse() {
+        let mut queue = ReadyQueue::new(3, 3).unwrap();
+        assert!(queue.enqueue(0));
+        assert!(queue.enqueue(1));
+        assert!(queue.remove(0));
+        assert!(!queue.remove(0));
+        assert!(queue.enqueue(0));
+        assert_eq!(queue.pop(), Some(1));
+        assert_eq!(queue.pop(), Some(0));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn removed_pending_leaf_does_not_wake_a_reused_slot() {
+        let mut state = ShardState::new(ShardConfig {
+            max_leaves: 1,
+            ready_capacity: 1,
+            ..ShardConfig::default()
+        });
+        state.leaves.add(7).unwrap();
+        assert!(state.wake(7));
+        assert!(state.remove(7));
+        state.leaves.add(8).unwrap();
+        state.service_ready(Instant::now() + Duration::from_millis(1));
+        assert_eq!(state.leaves.leaves[0].as_ref().unwrap().visits, 0);
+        assert!(state.wake(8));
+        state.service_ready(Instant::now() + Duration::from_millis(1));
+        assert_eq!(state.leaves.leaves[0].as_ref().unwrap().visits, 1);
     }
 
     #[test]
