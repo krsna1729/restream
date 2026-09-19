@@ -606,16 +606,23 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         processed
     }
 
+    /// The longest the shard may park: the earliest of the idle bound, the
+    /// next application timer and, once draining, the drain deadline. Every
+    /// backend waiter sees this same bound, so none can sleep past the
+    /// generic drain deadline.
+    fn idle_wait_bound(&mut self, now: Instant) -> Duration {
+        let mut wait = self.config.idle_wait();
+        if let Some(deadline) = self.timers.next_deadline() {
+            wait = wait.min(deadline.saturating_duration_since(now));
+        }
+        if let Some(deadline) = self.draining_until {
+            wait = wait.min(deadline.saturating_duration_since(now));
+        }
+        wait
+    }
+
     fn wait_for_activity(&mut self, running: &mut bool) -> usize {
-        let now = Instant::now();
-        let wait = self
-            .timers
-            .next_deadline()
-            .map_or(self.config.idle_wait(), |deadline| {
-                deadline
-                    .saturating_duration_since(now)
-                    .min(self.config.idle_wait())
-            });
+        let wait = self.idle_wait_bound(Instant::now());
         match self.backend.wait_idle(&self.receiver, wait) {
             EgressShardIdleWake::Command(command) => {
                 let effect = self.process_command(command);

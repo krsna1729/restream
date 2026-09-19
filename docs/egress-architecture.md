@@ -393,7 +393,9 @@ reports `Full` or `Closed`, FIFO), chosen because its receiver supports both
 blocking and Future-based receive. The idle wait is a backend hook,
 `EgressShardBackend::wait_idle(commands, max_wait)`, returning one of
 `Command`, `BackendActivity`, `Timeout` or `Disconnected`. `max_wait` is the
-shard's own bound; a backend may return sooner when a deadline it owns is due,
+shard's own bound, the earliest of the idle wait, the next application timer and,
+once `Shutdown` has started a drain, the drain deadline, so `drain_timeout` is a
+real upper bound however long `idle_wait` is; a backend may return sooner when a deadline it owns is due,
 and such protocol deadlines are not mirrored into the shard `TimerWheel`, which
 stays for application lifecycle timers. A `Command` wake goes through the same
 `process_command` path as one found by `try_recv`. `BackendActivity` only
