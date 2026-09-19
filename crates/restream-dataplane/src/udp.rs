@@ -616,6 +616,7 @@ pub struct UringUdpDriver {
     recv_message: Box<libc::msghdr>,
     buffers_per_slot: u16,
     buffer_size: usize,
+    recv_more: Box<[bool]>,
 }
 
 struct DriverRecv {
@@ -679,6 +680,7 @@ impl UringUdpDriver {
             }),
             buffers_per_slot,
             buffer_size,
+            recv_more: vec![false; max_slots].into_boxed_slice(),
         })
     }
 
@@ -793,7 +795,7 @@ impl UringUdpDriver {
             .submit_and_wait(usize::from(!timeout.is_zero()))?;
         let mut ready_count = 0;
         let mut datagram_count = 0;
-        let mut recv_more = vec![false; self.recv.len()];
+        self.recv_more.fill(false);
         {
             let cq = self.poller.ring.completion();
             self.poller.metrics.cq_overflows = u64::from(cq.overflow());
@@ -839,7 +841,7 @@ impl UringUdpDriver {
                             }
                             state.provided = state.provided.saturating_add(1);
                         } else if tag.generation == crate::udp_recv::RECV_GENERATION {
-                            recv_more[tag.slot as usize] |=
+                            self.recv_more[tag.slot as usize] |=
                                 io_uring::cqueue::more(completion.flags());
                             if completion.result() < 0 {
                                 let error = io::Error::from_raw_os_error(-completion.result());
@@ -949,7 +951,7 @@ impl UringUdpDriver {
             let Some(state) = self.recv[slot as usize].as_mut() else {
                 continue;
             };
-            if !recv_more[slot as usize] {
+            if !self.recv_more[slot as usize] {
                 state.recv_armed = false;
             }
             let needs_arm = !state.recv_armed && state.provided != 0;

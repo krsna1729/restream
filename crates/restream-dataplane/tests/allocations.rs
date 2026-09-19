@@ -3,7 +3,10 @@ use std::net::UdpSocket;
 use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use restream_dataplane::udp::{UdpInterest, UdpReadyEvent, UdpSendCompletion, UringUdpPoller};
+use restream_dataplane::udp::{
+    UdpDriverDatagram, UdpInterest, UdpReadyEvent, UdpSendCompletion, UringUdpDriver,
+    UringUdpPoller,
+};
 use restream_dataplane::{FeedCursor, MediaArena, MediaRing, ReadyQueue, TxPool};
 
 struct CountingAllocator;
@@ -118,5 +121,45 @@ fn dataplane_hot_paths_do_not_allocate() {
         assert_eq!(received, payload);
     }
 
+    let driver_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let mut driver = match UringUdpDriver::new_fixed(1, 32, 8, 8, 2_048) {
+        Ok(driver) => driver,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+            ) =>
+        {
+            return;
+        }
+        Err(error) => panic!("driver io_uring unavailable: {error}"),
+    };
+    driver
+        .register_fixed(driver_sock.as_raw_fd(), 0, 1, UdpInterest::READ_WRITE)
+        .unwrap();
+    let mut driver_ready = [UdpReadyEvent {
+        fd: -1,
+        slot: 0,
+        generation: 0,
+        readable: false,
+        writable: false,
+    }];
+    let mut driver_datagrams = [UdpDriverDatagram {
+        slot: 0,
+        buffer_id: 0,
+        offset: 0,
+        len: 0,
+        peer: "0.0.0.0:0".parse().unwrap(),
+    }; 4];
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    for _ in 0..100 {
+        let _ = driver
+            .poll(
+                std::time::Duration::ZERO,
+                &mut driver_ready,
+                &mut driver_datagrams,
+            )
+            .unwrap();
+    }
     assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
 }

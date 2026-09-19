@@ -96,6 +96,7 @@ pub(crate) struct SharedSrtEgress {
     outbound: [VecDeque<PendingDatagram>; FAMILY_COUNT],
     tx_pool: TxPool,
     native_metrics: SrtNativeMetrics,
+    datagram_scratch: Vec<UdpDriverDatagram>,
     /// Times `drive` has run, so the readiness-path invariant in
     /// `drive_shared_srt_egress` (driving does not scale with the number of
     /// leaves sharing this state) is directly assertable instead of
@@ -142,6 +143,18 @@ impl SharedSrtEgress {
 
     pub(crate) fn bind_for_peers(peers: &[SocketAddr]) -> Result<Self, String> {
         let families = std::array::from_fn(|_| None);
+        let budget = recv_budget();
+        let datagram_capacity = budget.max_datagrams.max(1);
+        let datagram_scratch = vec![
+            UdpDriverDatagram {
+                slot: 0,
+                buffer_id: 0,
+                offset: 0,
+                len: 0,
+                peer: "0.0.0.0:0".parse().expect("valid zero socket address"),
+            };
+            datagram_capacity
+        ];
         let mut shared = Self {
             families,
             driver: None,
@@ -150,6 +163,7 @@ impl SharedSrtEgress {
             tx_pool: TxPool::new(MAX_OUTBOUND, TX_SLOT_SIZE)
                 .expect("SRT TX pool capacity is valid"),
             native_metrics: SrtNativeMetrics::default(),
+            datagram_scratch,
             #[cfg(test)]
             drive_calls: 0,
         };
@@ -161,65 +175,58 @@ impl SharedSrtEgress {
         if peers.is_empty() {
             return Err("SRT connect requires a peer address".to_string());
         }
-        // Late family bind (IPv6 appearing after IPv4 was bound) rebuilds
-        // the one driver ring so both descriptors stay on one ring. In
-        // flight sends are drained first; queued outbound datagrams stay
-        // queued in `outbound` and are resubmitted after the rebuild.
-        let mut want = [false; FAMILY_COUNT];
-        for (family_index, entry) in want.iter_mut().enumerate() {
+        // Bind any newly requested address family.
+        let mut newly_bound = [false; FAMILY_COUNT];
+        for (family_index, entry) in newly_bound.iter_mut().enumerate() {
             let is_ipv6 = family_index == 1;
-            *entry = peers.iter().any(|peer| peer.is_ipv6() == is_ipv6);
-            if *entry && self.families[family_index].is_none() {
+            if peers.iter().any(|peer| peer.is_ipv6() == is_ipv6)
+                && self.families[family_index].is_none()
+            {
                 self.families[family_index] = Some(UdpFamily::new(bind_socket(is_ipv6)?));
+                *entry = true;
             }
         }
-        let live: Vec<usize> = (0..FAMILY_COUNT)
-            .filter(|index| self.families[*index].is_some())
-            .collect();
-        let driver_live: Vec<usize> = (0..FAMILY_COUNT)
-            .filter(|index| {
-                self.driver
-                    .as_ref()
-                    .is_some_and(|_| self.families[*index].is_some())
-            })
-            .collect();
-        if live != driver_live {
-            self.rebuild_driver()?;
-        }
-        Ok(())
-    }
-
-    fn rebuild_driver(&mut self) -> Result<(), String> {
-        // Queued (not yet submitted) outbound datagrams survive; in-flight
-        // sends do not — the old ring is dropped. Refuse the rebuild while
-        // any send is still in flight so no TX lease is lost.
-        for family in self.families.iter().flatten() {
-            if family.inflight.iter().any(Option::is_some) {
-                return Err("SRT UDP driver rebuild with sends in flight".to_string());
+        if let Some(driver) = self.driver.as_mut() {
+            // Late family appearance (e.g. IPv6 connect added to an existing
+            // IPv4-only shard) registers directly into its designated fixed
+            // slot on the existing ring without dropping the ring or aborting
+            // in-flight sends on other families.
+            for (family_index, is_new) in newly_bound.iter().enumerate() {
+                if *is_new && let Some(family) = &self.families[family_index] {
+                    driver
+                        .register_fixed(
+                            family.socket.as_raw_fd(),
+                            family_index as u32,
+                            1,
+                            UdpInterest::READ_WRITE,
+                        )
+                        .map_err(|error| error.to_string())?;
+                }
             }
+        } else {
+            // Driver ring owns fixed slots for ALL families up front.
+            let mut driver = UringUdpDriver::new_fixed(
+                FAMILY_COUNT,
+                DRIVER_RING_ENTRIES,
+                FAMILY_COUNT * SRT_UDP_SEND_CAPACITY,
+                DRIVER_BUFFERS_PER_SLOT,
+                DRIVER_BUFFER_SIZE,
+            )
+            .map_err(|error| error.to_string())?;
+            for (family_index, family) in self.families.iter().enumerate() {
+                if let Some(family) = family {
+                    driver
+                        .register_fixed(
+                            family.socket.as_raw_fd(),
+                            family_index as u32,
+                            1,
+                            UdpInterest::READ_WRITE,
+                        )
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+            self.driver = Some(driver);
         }
-        let mut driver = UringUdpDriver::new_fixed(
-            FAMILY_COUNT,
-            DRIVER_RING_ENTRIES,
-            FAMILY_COUNT * SRT_UDP_SEND_CAPACITY,
-            DRIVER_BUFFERS_PER_SLOT,
-            DRIVER_BUFFER_SIZE,
-        )
-        .map_err(|error| error.to_string())?;
-        for family_index in 0..FAMILY_COUNT {
-            let Some(family) = self.families[family_index].as_ref() else {
-                continue;
-            };
-            driver
-                .register_fixed(
-                    family.socket.as_raw_fd(),
-                    family_index as u32,
-                    1,
-                    UdpInterest::READ_WRITE,
-                )
-                .map_err(|error| error.to_string())?;
-        }
-        self.driver = Some(driver);
         Ok(())
     }
 
@@ -228,7 +235,28 @@ impl SharedSrtEgress {
         {
             self.drive_calls = self.drive_calls.saturating_add(1);
         }
-        let Some(driver) = self.driver.as_mut() else {
+        let budget = recv_budget();
+        let datagram_capacity = budget.max_datagrams.max(1);
+        if self.datagram_scratch.len() < datagram_capacity {
+            self.datagram_scratch.resize(
+                datagram_capacity,
+                UdpDriverDatagram {
+                    slot: 0,
+                    buffer_id: 0,
+                    offset: 0,
+                    len: 0,
+                    peer: "0.0.0.0:0".parse().expect("valid zero socket address"),
+                },
+            );
+        }
+        let (families, driver, datagram_scratch, callers, native_metrics) = (
+            &mut self.families,
+            self.driver.as_mut(),
+            &mut self.datagram_scratch,
+            &mut self.callers,
+            &mut self.native_metrics,
+        );
+        let Some(driver) = driver else {
             return Err("SRT UDP driver is not bound".to_string());
         };
         // One ring, one wait: readiness + multishot receives + TX
@@ -240,24 +268,16 @@ impl SharedSrtEgress {
             readable: false,
             writable: false,
         }; FAMILY_COUNT];
-        let budget = recv_budget();
-        let datagram_capacity = budget.max_datagrams.max(1);
-        let mut datagrams = vec![
-            UdpDriverDatagram {
-                slot: 0,
-                buffer_id: 0,
-                offset: 0,
-                len: 0,
-                peer: "0.0.0.0:0".parse().expect("valid zero socket address"),
-            };
-            datagram_capacity
-        ];
         let mut feed_error = None;
         for _ in 0..budget.max_rounds {
             let (ready_count, received) = driver
-                .poll(Duration::ZERO, &mut ready, &mut datagrams)
+                .poll(
+                    Duration::ZERO,
+                    &mut ready,
+                    &mut datagram_scratch[..datagram_capacity],
+                )
                 .map_err(|error| error.to_string())?;
-            for datagram in datagrams.iter().take(received) {
+            for datagram in datagram_scratch.iter().take(received) {
                 let family_index = datagram.slot as usize;
                 let Some(buffers) = driver.buffers(datagram.slot) else {
                     continue;
@@ -268,20 +288,17 @@ impl SharedSrtEgress {
                     let _ = driver.recycle(datagram.slot, datagram.buffer_id);
                     continue;
                 };
-                self.native_metrics.rx_packets = self.native_metrics.rx_packets.saturating_add(1);
-                self.native_metrics.rx_bytes = self
-                    .native_metrics
-                    .rx_bytes
-                    .saturating_add(payload.len() as u64);
-                if let Err(error) = self.callers.feed(datagram.peer, payload, now) {
+                native_metrics.rx_packets = native_metrics.rx_packets.saturating_add(1);
+                native_metrics.rx_bytes =
+                    native_metrics.rx_bytes.saturating_add(payload.len() as u64);
+                if let Err(error) = callers.feed(datagram.peer, payload, now) {
                     feed_error.get_or_insert(error.to_string());
                 }
                 let _ = driver.recycle(datagram.slot, datagram.buffer_id);
                 let _ = family_index;
             }
             for event in ready.iter().take(ready_count) {
-                let Some(family) = self
-                    .families
+                let Some(family) = families
                     .get_mut(event.slot as usize)
                     .and_then(Option::as_mut)
                 else {
