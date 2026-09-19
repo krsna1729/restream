@@ -12,7 +12,10 @@ use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::timer::TimerWheel;
 
 mod group;
-pub use group::{EgressShardGroup, EgressShardGroupError, EgressShardHealth, EgressShardHeartbeat};
+pub use group::{
+    EgressShardGroup, EgressShardGroupError, EgressShardGroupSpawnError, EgressShardHealth,
+    EgressShardHeartbeat,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EgressShardConfigError {
@@ -143,7 +146,13 @@ impl EgressShardSnapshot {
     }
 }
 
-pub trait EgressShardBackend: Send + 'static {
+/// Shard-local state driven by one shard OS thread.
+///
+/// Deliberately not `Send`: a backend is constructed, mutated and dropped on
+/// its shard thread (see [`EgressShardHandle::spawn_with`]), so it may own
+/// thread-affine runtime state (`Rc`, a per-thread io runtime, ...). Only the
+/// factory that builds it crosses the thread boundary.
+pub trait EgressShardBackend: 'static {
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect;
 
     fn timer_generation(&self, _output_id: &OutputId) -> Option<u64> {
@@ -256,11 +265,73 @@ pub struct EgressShardHandle {
 }
 
 impl EgressShardHandle {
-    pub fn spawn<B: EgressShardBackend>(
+    /// Spawn a shard whose backend is built on the shard thread by `factory`.
+    ///
+    /// Only `factory` (and what it captures) crosses the thread boundary and
+    /// must be `Send`; the backend it returns need not be. Construction,
+    /// every backend call and destruction all happen on the shard thread. A
+    /// panicking factory is reported like any other shard panic
+    /// (`EgressShardSnapshot::panicked`).
+    pub fn spawn_with<B, F>(shard_id: ShardId, config: EgressShardConfig, factory: F) -> Self
+    where
+        B: EgressShardBackend,
+        F: FnOnce() -> B + Send + 'static,
+    {
+        Self::spawn_thread(shard_id, config, move || Some(factory()))
+    }
+
+    /// Like [`Self::spawn_with`] for a fallible factory: waits for
+    /// construction and returns its error to the caller instead of starting
+    /// a shard.
+    pub fn try_spawn_with<B, E, F>(
+        shard_id: ShardId,
+        config: EgressShardConfig,
+        factory: F,
+    ) -> Result<Self, E>
+    where
+        B: EgressShardBackend,
+        E: Send + 'static,
+        F: FnOnce() -> Result<B, E> + Send + 'static,
+    {
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), E>>(1);
+        let mut handle = Self::spawn_thread(shard_id, config, move || match factory() {
+            Ok(backend) => {
+                let _ = ready_tx.send(Ok(()));
+                Some(backend)
+            }
+            Err(error) => {
+                let _ = ready_tx.send(Err(error));
+                None
+            }
+        });
+        // A disconnected channel means the factory panicked; that is already
+        // recorded in the snapshot, so hand back the (panicked) shard.
+        if let Ok(Err(error)) = ready_rx.recv() {
+            if let Some(join) = handle.join.take() {
+                let _ = join.join();
+            }
+            return Err(error);
+        }
+        Ok(handle)
+    }
+
+    /// Spawn a shard around an already-built `Send` backend. Convenience for
+    /// tests and callers whose backend is trivially movable; production
+    /// fabric paths use [`Self::spawn_with`] so the backend is born on its
+    /// shard thread.
+    pub fn spawn<B: EgressShardBackend + Send>(
         shard_id: ShardId,
         config: EgressShardConfig,
         backend: B,
     ) -> Self {
+        Self::spawn_with(shard_id, config, move || backend)
+    }
+
+    fn spawn_thread<B, I>(shard_id: ShardId, config: EgressShardConfig, init: I) -> Self
+    where
+        B: EgressShardBackend,
+        I: FnOnce() -> Option<B> + Send + 'static,
+    {
         let (sender, receiver) = mpsc::sync_channel(config.command_channel_capacity.get());
         let snapshot = Arc::new(Mutex::new(EgressShardSnapshot::new(shard_id)));
         let thread_snapshot = Arc::clone(&snapshot);
@@ -273,7 +344,7 @@ impl EgressShardHandle {
                     shard_id,
                     config,
                     receiver,
-                    backend,
+                    init,
                     thread_snapshot,
                     thread_wake_gate,
                 )
@@ -356,11 +427,16 @@ fn run_shard_thread<B: EgressShardBackend>(
     shard_id: ShardId,
     config: EgressShardConfig,
     receiver: Receiver<EgressCommand>,
-    mut backend: B,
+    init: impl FnOnce() -> Option<B>,
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
     wake_gate: Arc<WakeGate>,
 ) {
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        // Construction, use and drop of the backend all stay inside this
+        // closure, i.e. on the shard thread.
+        let Some(mut backend) = init() else {
+            return;
+        };
         let mut runtime = EgressShardRuntime {
             shard_id,
             config,

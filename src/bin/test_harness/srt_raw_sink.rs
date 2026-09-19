@@ -12,11 +12,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use shiguredo_srt::{ConnectionEvent, Timestamp};
-use srt_transport::{
-    HighResWaiter, IngressTelemetry, ListenerConfig, ListenerTopology, MonotonicDeadline,
-    PeerTable, RecvBatch, RecvBudget, RuntimeFlavor,
-};
+use srt_proto::{ConnectionEvent, Timestamp};
+use srt_transport::advanced::admission::PeerTable;
+use srt_transport::advanced::driver::RecvBudget;
+use srt_transport::advanced::native_io::{HighResWaiter, MonotonicDeadline, RecvBatch};
+use srt_transport::advanced::telemetry::IngressTelemetry;
+use srt_transport::{ListenerConfig, ListenerTopology, RuntimeFlavor};
 use tokio::net::UdpSocket;
 
 #[derive(Default)]
@@ -133,14 +134,14 @@ impl Drop for RawSrtSink {
 
 async fn run_sink(
     std_socket: std::net::UdpSocket,
-    admission: srt_transport::AdmissionOptions,
+    admission: srt_transport::advanced::admission::AdmissionOptions,
     stop: Arc<AtomicBool>,
     counters: Arc<SinkCounters>,
 ) {
     let Ok(socket) = UdpSocket::from_std(std_socket) else {
         return;
     };
-    let mut peers = srt_transport::PeerTable::new();
+    let mut peers = srt_transport::advanced::admission::PeerTable::new();
     let telemetry = IngressTelemetry::default();
     let mut recv_batch = RecvBatch::new();
     let mut outbound = Vec::new();
@@ -226,7 +227,7 @@ fn park_listener(
     ready: &mut Vec<()>,
     wait: Duration,
 ) -> std::io::Result<bool> {
-    waiter.set_deadline((), MonotonicDeadline::after(wait));
+    waiter.set_deadline((), MonotonicDeadline::after(wait))?;
     waiter.wait(due, ready)?;
     Ok(!ready.is_empty())
 }
@@ -236,8 +237,13 @@ fn drain_woken_listener(
     recv_batch: &mut RecvBatch,
     budget: RecvBudget,
     on_datagram: impl FnMut(Option<SocketAddr>, &[u8]),
-) -> std::io::Result<srt_transport::RecvDrainReport> {
-    srt_transport::drain_recv_fd(socket.as_raw_fd(), recv_batch, budget, on_datagram)
+) -> std::io::Result<srt_transport::advanced::native_io::RecvDrainReport> {
+    srt_transport::advanced::native_io::drain_recv_fd(
+        socket.as_raw_fd(),
+        recv_batch,
+        budget,
+        on_datagram,
+    )
 }
 
 fn sink_timestamp(started: Instant) -> Timestamp {

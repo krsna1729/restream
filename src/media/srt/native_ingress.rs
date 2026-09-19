@@ -20,11 +20,12 @@ use restream_dataplane::TxPool;
 use restream_dataplane::udp::{
     UdpDriverDatagram, UdpInterest, UdpReadyEvent, UdpSendCompletion, UringUdpDriver,
 };
-use shiguredo_srt::Timestamp;
-use srt_transport::{
-    AdmissionOptions, AdmissionResolution, IngressTelemetry, ListenerEncryptionConfig,
-    ListenerPeerPolicy, PeerTable, PolicyOverride, RejectionReason,
+use srt_proto::Timestamp;
+use srt_transport::advanced::admission::{
+    AdmissionOptions, AdmissionResolution, PeerTable, RejectionReason,
 };
+use srt_transport::advanced::telemetry::IngressTelemetry;
+use srt_transport::{ListenerEncryptionConfig, ListenerPeerPolicy, PolicyOverride};
 use tokio::sync::mpsc;
 use tracing::error;
 
@@ -143,17 +144,17 @@ pub(crate) struct NativeSrtIngressStats {
 pub(crate) enum SrtIngressEvent {
     Connected {
         peer: SocketAddr,
-        logical_peer: srt_transport::LogicalPeerId,
+        logical_peer: srt_transport::advanced::admission::LogicalPeerId,
         stream_id: String,
     },
     Media {
         peer: SocketAddr,
-        logical_peer: srt_transport::LogicalPeerId,
+        logical_peer: srt_transport::advanced::admission::LogicalPeerId,
         payload: bytes::Bytes,
     },
     Disconnected {
         peer: SocketAddr,
-        logical_peer: srt_transport::LogicalPeerId,
+        logical_peer: srt_transport::advanced::admission::LogicalPeerId,
         reason: String,
     },
 }
@@ -209,7 +210,7 @@ impl NativeSrtIngress {
 /// intermediate `Vec<u8>` on the normal hot path.
 fn resolve_ingress_policy(
     store: &SrtIngestPolicyStore,
-    request: &srt_transport::AdmissionRequest,
+    request: &srt_transport::advanced::admission::AdmissionRequest,
 ) -> AdmissionResolution {
     let stream_id = request
         .claimed_identity
@@ -244,7 +245,7 @@ fn resolve_ingress_policy(
         pbkeylen,
     } = resolved.crypto
     {
-        let Some(key_length) = shiguredo_srt::KeyLength::from_len(pbkeylen as usize) else {
+        let Some(key_length) = srt_proto::crypto::KeyLength::from_len(pbkeylen as usize) else {
             return AdmissionResolution::Reject {
                 reason: RejectionReason::BAD_REQUEST,
             };
@@ -375,7 +376,7 @@ fn run_worker(
         };
         SEND_CAPACITY
     ];
-    let mut proto_events: Vec<srt_transport::AdmissionEvent> =
+    let mut proto_events: Vec<srt_transport::advanced::admission::AdmissionEvent> =
         Vec::with_capacity(MAX_EVENTS_PER_TICK);
     let mut event_drops: u64 = 0;
     let mut tx_pool_empty: u64 = 0;

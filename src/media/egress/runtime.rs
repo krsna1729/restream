@@ -72,13 +72,14 @@ impl EgressFabricRuntime {
     /// event-driven, no background timer. A no-op (no allocation, no
     /// rehoming) on the common case where the target hasn't changed.
     ///
-    /// `backend_for` is fallible because constructing a real shard's
-    /// readiness poller can fail: `TcpEgressPoller::new` (RTMP/TCP) does a
+    /// `factory_for(shard_id)` returns the fallible factory that builds the
+    /// shard's backend on the new shard thread, because constructing a real
+    /// shard's readiness poller can fail: `TcpEgressPoller::new` (RTMP/TCP) does a
     /// real `epoll_create1` syscall that can fail under resource
     /// exhaustion. The SRT path has no such per-shard construction step —
     /// its one fallible resource (the shared `srt-rs` Tokio runtime) is
     /// checked once at initial fabric spawn, not per grown shard, so its
-    /// `backend_for` closure is effectively infallible. Either way, a
+    /// factory is effectively infallible. Either way, a
     /// failed grow attempt stops growing for this call (logged by the
     /// caller via the returned `Err`) rather than panicking or silently
     /// continuing with fewer shards than `touched` would suggest; whatever
@@ -87,16 +88,18 @@ impl EgressFabricRuntime {
     ///
     /// Returns the shard ids touched (grown or shut down) on success, for
     /// logging.
-    pub(crate) fn rescale<B, F, E>(
+    pub(crate) fn rescale<B, E, F, G>(
         &mut self,
         profile: crate::config::EgressShardProfile,
         effective_cpus: usize,
         shard_config: EgressShardConfig,
-        mut backend_for: F,
+        mut factory_for: G,
     ) -> Result<Vec<ShardId>, E>
     where
         B: EgressShardBackend,
-        F: FnMut(ShardId) -> Result<B, E>,
+        E: Send + 'static,
+        F: FnOnce() -> Result<B, E> + Send + 'static,
+        G: FnMut(ShardId) -> F,
     {
         let target = crate::config::target_egress_fabric_shards(
             profile,
@@ -109,8 +112,8 @@ impl EgressFabricRuntime {
         while self.group.shard_count() < target {
             let shard_id =
                 ShardId::new(u32::try_from(self.group.shard_count()).unwrap_or(u32::MAX));
-            match backend_for(shard_id) {
-                Ok(backend) => touched.push(self.group.grow(shard_config, backend)),
+            match self.group.grow_with(shard_config, factory_for(shard_id)) {
+                Ok(shard_id) => touched.push(shard_id),
                 Err(error) => {
                     grow_error = Some(error);
                     break;
@@ -423,7 +426,7 @@ mod tests {
                 crate::config::EgressShardProfile::OutputCount,
                 1,
                 shard_config(),
-                |_| -> Result<ProbeBackend, String> { unreachable!("must not grow") },
+                |_| || -> Result<ProbeBackend, String> { unreachable!("must not grow") },
             )
             .unwrap();
 
@@ -473,9 +476,8 @@ mod tests {
                 2,
                 big_shard_config,
                 |_| {
-                    Ok::<_, String>(ProbeBackend {
-                        probe: new_probe.clone(),
-                    })
+                    let probe = new_probe.clone();
+                    move || Ok::<_, String>(ProbeBackend { probe })
                 },
             )
             .unwrap();
@@ -541,7 +543,7 @@ mod tests {
                 crate::config::EgressShardProfile::OutputCount,
                 1,
                 shard_config(),
-                |_| -> Result<ProbeBackend, String> { unreachable!("must not grow") },
+                |_| || -> Result<ProbeBackend, String> { unreachable!("must not grow") },
             )
             .unwrap();
 

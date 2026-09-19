@@ -56,7 +56,6 @@ function markdownFiles() {
   collectMarkdown(path.join(root, "docs"), files);
   return [...files]
     .filter(fs.existsSync)
-    .filter((filename) => !relativePath(filename).startsWith("vendor/srt-rs/"))
     .sort();
 }
 

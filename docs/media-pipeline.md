@@ -475,7 +475,7 @@ flowchart LR
 | `TsDemuxer` → `source_ring` | Tokio worker, inline async | Shared `source_ring`, same structure as RTMP |
 | Shared `TsMuxer` (SRT preparation) | 1 Tokio task per `(pipeline, preset)`, inline async | `TsChunkRing` (256-chunk shared ring, `RESTREAM_TS_RING_CAPACITY`) |
 | Egress shard (SRT) | Fixed OS-thread pool per feed; each shard owner drives one native UDP readiness owner per local address family and queued leaf visits | Per-leaf protocol state and bounded application scratch |
-| Shared SRT transport | 1 application UDP socket/poller per local family + `CallerTable` per `(pipeline, shard)`; shared TS muxing remains per `(pipeline, preset)` | srt-rs caller/protocol state plus kernel `SO_SNDBUF`; normal media DATA uses bounded caller-owned final TX storage through `poll_outbound_into`/`send_shared_into`, while handshake/control/retransmit paths retain their protocol-owned packets |
+| Shared SRT transport | 1 application UDP socket/poller per local family + `CallerTable` per `(pipeline, shard)`; shared TS muxing remains per `(pipeline, preset)` | srt-rs caller/protocol state plus kernel `SO_SNDBUF`; normal media DATA uses bounded caller-owned final TX storage through the `DatagramSink` acquire/commit slots drained by `poll_outbound_bounded_to`, while handshake/control/retransmit paths retain their protocol-owned packets |
 
 The shared native path bounds work per shard with receive/send budgets and
 explicit ready/feed-wait queues. The transport boundary no longer stages a

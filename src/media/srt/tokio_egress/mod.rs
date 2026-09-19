@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use crate::media::egress::backend::CloseReason;
 use crate::media::snapshots::PublisherQuality;
 use bytes::Bytes;
-use shiguredo_srt::Timestamp;
-use srt_transport::{LogicalCallerId, LogicalCallerStats};
+use srt_proto::Timestamp;
+use srt_transport::advanced::caller::{LogicalCallerId, LogicalCallerStats};
 
 mod knobs;
 pub(crate) use knobs::{apply_optional_udp_buf, desired_udp_buf};
@@ -114,7 +114,7 @@ impl RustSrtSocket {
                     retryable: true,
                 },
             },
-            Err(error) if error.kind == shiguredo_srt::ErrorKind::InvalidState => {
+            Err(error) if error.kind == srt_proto::ErrorKind::InvalidState => {
                 SrtSendResult::PeerClosed
             }
             Err(error) => SrtSendResult::Failed {
@@ -315,7 +315,7 @@ pub(crate) fn ensure_srt_native() -> Result<(), String> {
 fn next_group_id() -> u32 {
     let next = NEXT_GROUP_ID.get_or_init(|| Mutex::new(10));
     let mut next = next.lock().unwrap_or_else(|error| error.into_inner());
-    let id = shiguredo_srt::SRTGROUP_MASK | *next;
+    let id = srt_proto::handshake::SRTGROUP_MASK | *next;
     *next = next.saturating_add(1);
     id
 }
@@ -424,8 +424,8 @@ pub(crate) struct SrtFabricEgressConnectSpec {
     peer_hosts: Vec<String>,
     stream_id: String,
     passphrase: Option<String>,
-    key_length: Option<shiguredo_srt::KeyLength>,
-    bond_type: shiguredo_srt::GroupType,
+    key_length: Option<srt_proto::crypto::KeyLength>,
+    bond_type: srt_proto::handshake::GroupType,
     connect_timeout_ms: u64,
 }
 
@@ -437,7 +437,7 @@ impl SrtFabricEgressConnectSpec {
         let mut stream_id = String::new();
         let mut passphrase = None;
         let mut key_length = None;
-        let mut bond_type = shiguredo_srt::GroupType::Backup;
+        let mut bond_type = srt_proto::handshake::GroupType::Backup;
         let mut peers = vec![host];
         if let Some(query) = parts.next() {
             for pair in query.split('&') {
@@ -451,12 +451,12 @@ impl SrtFabricEgressConnectSpec {
                         key_length = value
                             .parse::<usize>()
                             .ok()
-                            .and_then(shiguredo_srt::KeyLength::from_len)
+                            .and_then(srt_proto::crypto::KeyLength::from_len)
                     }
                     "bond" => peers.extend(value.split(',').map(str::to_string)),
                     "type" => match value.to_ascii_lowercase().as_str() {
-                        "broadcast" => bond_type = shiguredo_srt::GroupType::Broadcast,
-                        "backup" => bond_type = shiguredo_srt::GroupType::Backup,
+                        "broadcast" => bond_type = srt_proto::handshake::GroupType::Broadcast,
+                        "backup" => bond_type = srt_proto::handshake::GroupType::Backup,
                         _ => {}
                     },
                     _ => {}
@@ -496,8 +496,8 @@ pub(crate) struct SrtFabricEgressConnectConfig<'a> {
     peer_addrs: &'a [SocketAddr],
     stream_id: &'a str,
     passphrase: Option<&'a str>,
-    key_length: Option<shiguredo_srt::KeyLength>,
-    bond_type: shiguredo_srt::GroupType,
+    key_length: Option<srt_proto::crypto::KeyLength>,
+    bond_type: srt_proto::handshake::GroupType,
     connect_timeout_ms: u64,
 }
 
@@ -507,7 +507,7 @@ impl SrtFabricEgressConnectSpec {
         &self.stream_id
     }
 
-    pub(crate) fn bond_type(&self) -> shiguredo_srt::GroupType {
+    pub(crate) fn bond_type(&self) -> srt_proto::handshake::GroupType {
         self.bond_type
     }
 }
@@ -563,13 +563,13 @@ pub(crate) fn connect_fabric_srt_egress_socket(
             .map_err(|error| error.to_string())?;
         shared
             .callers
-            .add_direct(srt_transport::CallerLeg::new(
+            .add_direct(srt_transport::advanced::caller::CallerLeg::new(
                 config.peer_addrs[0],
                 connection,
             ))
             .map_err(|error| error.to_string())?
     } else {
-        let mode = shiguredo_srt::GroupMode::from_group_type(config.bond_type)
+        let mode = srt_proto::GroupMode::from_group_type(config.bond_type)
             .ok_or_else(|| "invalid SRT group type".to_string())?;
         let legs = config
             .peer_addrs
@@ -587,7 +587,7 @@ pub(crate) fn connect_fabric_srt_egress_socket(
                 let connection = caller
                     .connection(timestamp_now())
                     .map_err(|error| error.to_string())?;
-                Ok(srt_transport::CallerGroupLeg::new(
+                Ok(srt_transport::advanced::caller::CallerGroupLeg::new(
                     u32::try_from(index + 1).unwrap_or(u32::MAX),
                     u16::try_from(config.peer_addrs.len() - index).unwrap_or(u16::MAX),
                     *peer,

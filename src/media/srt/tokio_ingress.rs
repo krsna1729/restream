@@ -6,11 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use shiguredo_srt::Timestamp;
-use srt_transport::{
-    BondedInputPolicy, IngressTelemetry, ListenerConfig, ListenerTopology, LogicalPeerId,
-    PeerTable, RuntimeFlavor,
-};
+use srt_proto::Timestamp;
+use srt_transport::advanced::admission::{BondedInputPolicy, LogicalPeerId, PeerTable};
+use srt_transport::advanced::telemetry::IngressTelemetry;
+use srt_transport::{ListenerConfig, ListenerTopology, RuntimeFlavor};
 use tracing::{error, info, warn};
 
 use crate::media::engine::MediaEngine;

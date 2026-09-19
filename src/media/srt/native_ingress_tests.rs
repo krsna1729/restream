@@ -22,7 +22,7 @@ fn test_listener_parts() -> (
     let bind = "127.0.0.1:0".parse().unwrap();
     let prepared = srt_transport::ListenerConfig::builder(bind)
         .topology(srt_transport::ListenerTopology::PerPort)
-        .bonded_inputs(srt_transport::BondedInputPolicy::Accept)
+        .bonded_inputs(srt_transport::advanced::admission::BondedInputPolicy::Accept)
         .build()
         .and_then(|config| config.prepare(srt_transport::RuntimeFlavor::Mio))
         .expect("test listener prepares");

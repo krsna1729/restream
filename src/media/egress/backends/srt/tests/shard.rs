@@ -109,7 +109,7 @@ fn srt_shard_backend_add_srt_command_queues_pending_connect() {
     assert_eq!(pending.connect_spec.stream_id(), "publish:key");
     assert_eq!(
         pending.connect_spec.bond_type(),
-        shiguredo_srt::GroupType::Backup,
+        srt_proto::handshake::GroupType::Backup,
         "bonded URLs retain the historical Backup default"
     );
 }
@@ -121,7 +121,7 @@ fn srt_shard_backend_parses_broadcast_bond_mode() {
         10_000,
     );
 
-    assert_eq!(spec.bond_type(), shiguredo_srt::GroupType::Broadcast);
+    assert_eq!(spec.bond_type(), srt_proto::handshake::GroupType::Broadcast);
 }
 
 #[test]

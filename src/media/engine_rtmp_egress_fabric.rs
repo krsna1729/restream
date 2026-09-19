@@ -183,17 +183,25 @@ impl MediaEngine {
             effective_cpus,
             shard_config,
             |_shard_id| {
-                let poller = IoUringTcpPoller::new(poller_max_events)?;
-                Ok::<_, TcpEgressPollError>(resolving_rtmp_shard_backend(
-                    poller,
-                    feed.clone_reader(),
-                    budget,
-                    chunk_size,
-                    rtmps_client_config.clone(),
-                    startup_source.clone(),
-                    shard_config.drain_timeout(),
-                    shard_config.leaf_capacity().get(),
-                ))
+                let feed = feed.clone_reader();
+                let rtmps_client_config = rtmps_client_config.clone();
+                let startup_source = startup_source.clone();
+                let drain_timeout = shard_config.drain_timeout();
+                let leaf_capacity = shard_config.leaf_capacity().get();
+                // The poller is created on the new shard's own thread.
+                move || {
+                    let poller = IoUringTcpPoller::new(poller_max_events)?;
+                    Ok::<_, TcpEgressPollError>(resolving_rtmp_shard_backend(
+                        poller,
+                        feed,
+                        budget,
+                        chunk_size,
+                        rtmps_client_config,
+                        startup_source,
+                        drain_timeout,
+                        leaf_capacity,
+                    ))
+                }
             },
         );
         match result {

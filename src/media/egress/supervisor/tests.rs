@@ -118,7 +118,8 @@ fn supervisor_replaces_panicked_shard_and_replays_only_its_outputs() {
     wait_for_panicked(&group, ShardId::new(0));
 
     let recovery = supervisor().recover_panicked_shards(&mut manager, &mut group, |_| {
-        TestBackend::Probe(replacement.clone())
+        let probe = replacement.clone();
+        move || TestBackend::Probe(probe)
     });
 
     assert_eq!(
@@ -170,7 +171,8 @@ fn supervisor_observes_stalled_shard_without_replacing_it() {
     gate.wait_until_entered();
     let heartbeats = supervisor().observe_shards(&group, Instant::now());
     let recovery = supervisor().recover_panicked_shards(&mut manager, &mut group, |_| {
-        TestBackend::Probe(replacement.clone())
+        let probe = replacement.clone();
+        move || TestBackend::Probe(probe)
     });
     gate.release();
     let snapshots = group.shutdown_and_join();

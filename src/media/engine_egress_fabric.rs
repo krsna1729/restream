@@ -167,25 +167,32 @@ impl MediaEngine {
             effective_cpus,
             shard_config,
             |shard_id| {
-                Ok::<_, std::convert::Infallible>(
-                    crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
-                        feed.clone_reader(),
-                        budget,
-                        // Same per-(pipeline, shard) scoping the initial
-                        // `spawn_srt_fabric_shard_group` call uses: a shard
-                        // grown by a live rescale claims its own libsrt
-                        // multiplexer instead of inheriting another
-                        // shard's or another pipeline's.
-                        srt_egress_muxer_port_reuse
-                            .as_ref()
-                            .map(|ports| ports.shard(&scope_key, shard_id)),
-                        shard_config.drain_timeout(),
-                        shard_config.leaf_capacity().get(),
-                        // Same shared engine-wide admission handle the
-                        // initial spawn uses.
-                        Some(connect_admission.clone()),
-                    ),
-                )
+                let feed = feed.clone_reader();
+                // Same per-(pipeline, shard) scoping the initial
+                // `spawn_srt_fabric_shard_group` call uses: a shard
+                // grown by a live rescale claims its own libsrt
+                // multiplexer instead of inheriting another
+                // shard's or another pipeline's.
+                let muxer_ports = srt_egress_muxer_port_reuse
+                    .as_ref()
+                    .map(|ports| ports.shard(&scope_key, shard_id));
+                // Same shared engine-wide admission handle the
+                // initial spawn uses.
+                let connect_admission = Some(connect_admission.clone());
+                let drain_timeout = shard_config.drain_timeout();
+                let leaf_capacity = shard_config.leaf_capacity().get();
+                move || {
+                    Ok::<_, std::convert::Infallible>(
+                        crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
+                            feed,
+                            budget,
+                            muxer_ports,
+                            drain_timeout,
+                            leaf_capacity,
+                            connect_admission,
+                        ),
+                    )
+                }
             },
         );
         match result {

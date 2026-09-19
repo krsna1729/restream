@@ -15,7 +15,7 @@ fn shared_outbound_flush_supports_ipv6() {
     assert!(!shared.flush_outbound().expect("submit IPv6 datagram"));
     for _ in 0..8 {
         shared
-            .drive(shiguredo_srt::Timestamp::default())
+            .drive(srt_proto::Timestamp::default())
             .expect("drive IPv6 datagram");
         if shared.flush_outbound().expect("complete IPv6 datagram") {
             break;
@@ -38,7 +38,7 @@ fn shared_outbound_flush_sends_without_entering_the_runtime() {
 
     for _ in 0..8 {
         shared
-            .drive(shiguredo_srt::Timestamp::default())
+            .drive(srt_proto::Timestamp::default())
             .expect("drive native UDP readiness");
         if shared.flush_outbound().expect("complete datagram") {
             break;
@@ -65,7 +65,7 @@ fn shared_outbound_flush_sends_an_ipv4_batch_and_clears_leftover() {
     assert!(!shared.flush_outbound().expect("submit outbound batch"));
     for _ in 0..16 {
         shared
-            .drive(shiguredo_srt::Timestamp::default())
+            .drive(srt_proto::Timestamp::default())
             .expect("drive outbound batch");
         if shared.flush_outbound().expect("complete outbound batch") {
             break;
@@ -116,7 +116,7 @@ fn late_ipv6_family_registers_while_ipv4_traffic_is_in_flight() {
     // 4. Drive both to completion:
     for _ in 0..16 {
         shared
-            .drive(shiguredo_srt::Timestamp::default())
+            .drive(srt_proto::Timestamp::default())
             .expect("drive dual-family UDP driver");
         if shared
             .flush_outbound()
@@ -169,7 +169,7 @@ fn late_ipv4_family_registers_while_ipv6_traffic_is_in_flight() {
     // 4. Drive both to completion:
     for _ in 0..16 {
         shared
-            .drive(shiguredo_srt::Timestamp::default())
+            .drive(srt_proto::Timestamp::default())
             .expect("drive dual-family UDP driver");
         if shared
             .flush_outbound()

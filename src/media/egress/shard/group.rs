@@ -23,13 +23,21 @@ pub enum EgressShardGroupError {
     },
 }
 
+/// Failure of [`EgressShardGroup::try_spawn_with`]: either the group itself
+/// could not be assembled or a shard's backend factory failed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EgressShardGroupSpawnError<E> {
+    Backend(E),
+    Group(EgressShardGroupError),
+}
+
 #[derive(Debug)]
 pub struct EgressShardGroup {
     handles: Vec<EgressShardHandle>,
 }
 
 impl EgressShardGroup {
-    pub fn spawn<B: EgressShardBackend>(
+    pub fn spawn<B: EgressShardBackend + Send>(
         shard_count: NonZeroU32,
         config: EgressShardConfig,
         backends: Vec<B>,
@@ -51,6 +59,61 @@ impl EgressShardGroup {
                 config,
                 backend,
             ));
+        }
+        Ok(Self { handles })
+    }
+
+    /// Spawn `shard_count` shards, each building its backend on its own
+    /// shard thread from the factory `factory_for(shard_id)` returns. The
+    /// backends need not be `Send`; only the factories cross threads.
+    pub fn spawn_with<B, F, G>(
+        shard_count: NonZeroU32,
+        config: EgressShardConfig,
+        mut factory_for: G,
+    ) -> Result<Self, EgressShardGroupError>
+    where
+        B: EgressShardBackend,
+        F: FnOnce() -> B + Send + 'static,
+        G: FnMut(ShardId) -> F,
+    {
+        match Self::try_spawn_with(shard_count, config, |shard_id| {
+            let factory = factory_for(shard_id);
+            move || Ok::<B, std::convert::Infallible>(factory())
+        }) {
+            Ok(group) => Ok(group),
+            Err(EgressShardGroupSpawnError::Group(error)) => Err(error),
+            Err(EgressShardGroupSpawnError::Backend(never)) => match never {},
+        }
+    }
+
+    /// [`Self::spawn_with`] for fallible factories. A construction error
+    /// shuts down the shards already started and is returned as-is.
+    pub fn try_spawn_with<B, E, F, G>(
+        shard_count: NonZeroU32,
+        config: EgressShardConfig,
+        mut factory_for: G,
+    ) -> Result<Self, EgressShardGroupSpawnError<E>>
+    where
+        B: EgressShardBackend,
+        E: Send + 'static,
+        F: FnOnce() -> Result<B, E> + Send + 'static,
+        G: FnMut(ShardId) -> F,
+    {
+        let expected = usize::try_from(shard_count.get()).map_err(|_| {
+            EgressShardGroupSpawnError::Group(EgressShardGroupError::ShardCountTooLarge)
+        })?;
+        let mut handles = Vec::with_capacity(expected);
+        for index in 0..shard_count.get() {
+            let shard_id = ShardId::new(index);
+            match EgressShardHandle::try_spawn_with(shard_id, config, factory_for(shard_id)) {
+                Ok(handle) => handles.push(handle),
+                Err(error) => {
+                    for handle in handles {
+                        let _ = handle.shutdown_and_join();
+                    }
+                    return Err(EgressShardGroupSpawnError::Backend(error));
+                }
+            }
         }
         Ok(Self { handles })
     }
@@ -96,14 +159,15 @@ impl EgressShardGroup {
             .collect()
     }
 
-    pub fn replace_panicked<B, F>(
+    pub fn replace_panicked<B, F, G>(
         &mut self,
         config: EgressShardConfig,
-        mut backend_for: F,
+        mut factory_for: G,
     ) -> Vec<ShardId>
     where
         B: EgressShardBackend,
-        F: FnMut(ShardId) -> B,
+        F: FnOnce() -> B + Send + 'static,
+        G: FnMut(ShardId) -> F,
     {
         let mut replaced = Vec::new();
         for handle in &mut self.handles {
@@ -112,7 +176,8 @@ impl EgressShardGroup {
                 continue;
             }
             let shard_id = snapshot.shard_id;
-            let replacement = EgressShardHandle::spawn(shard_id, config, backend_for(shard_id));
+            let replacement =
+                EgressShardHandle::spawn_with(shard_id, config, factory_for(shard_id));
             let old = std::mem::replace(handle, replacement);
             let _ = old.shutdown_and_join();
             replaced.push(shard_id);
@@ -120,19 +185,26 @@ impl EgressShardGroup {
         replaced
     }
 
-    /// Add one shard at the next index, running `backend`. Used for
-    /// output-count-driven scale-out (`EgressFabricRuntime::rescale`) —
-    /// mirrors `replace_panicked`'s spawn shape, but appends a new handle
-    /// instead of replacing one in place.
-    pub fn grow<B: EgressShardBackend>(
+    /// Add one shard at the next index, building its backend on the new
+    /// shard thread with `factory`. Used for output-count-driven scale-out
+    /// (`EgressFabricRuntime::rescale`) — mirrors `replace_panicked`'s spawn
+    /// shape, but appends a new handle instead of replacing one in place.
+    /// A construction error leaves the group unchanged.
+    pub fn grow_with<B, E, F>(
         &mut self,
         config: EgressShardConfig,
-        backend: B,
-    ) -> ShardId {
+        factory: F,
+    ) -> Result<ShardId, E>
+    where
+        B: EgressShardBackend,
+        E: Send + 'static,
+        F: FnOnce() -> Result<B, E> + Send + 'static,
+    {
         let shard_id = ShardId::new(u32::try_from(self.handles.len()).unwrap_or(u32::MAX));
-        self.handles
-            .push(EgressShardHandle::spawn(shard_id, config, backend));
-        shard_id
+        self.handles.push(EgressShardHandle::try_spawn_with(
+            shard_id, config, factory,
+        )?);
+        Ok(shard_id)
     }
 
     /// Remove and gracefully shut down the highest-index shard, if any.

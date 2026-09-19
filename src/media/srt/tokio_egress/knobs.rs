@@ -5,7 +5,9 @@
 
 use std::sync::OnceLock;
 
-use srt_transport::{RecvBatch, RecvBudget, SocketBufferConfig, TransportConfig};
+use srt_transport::advanced::driver::RecvBudget;
+use srt_transport::advanced::native_io::RecvBatch;
+use srt_transport::{SocketBufferConfig, TransportConfig};
 use tracing::info;
 
 /// Requested `SO_RCVBUF`/`SO_SNDBUF` for shared Tokio SRT egress sockets.

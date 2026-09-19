@@ -13,10 +13,13 @@ use std::sync::mpsc::{self, SyncSender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use shiguredo_srt::ConnectionEvent;
+use srt_proto::ConnectionEvent;
+use srt_transport::advanced::admission::PeerTable;
+use srt_transport::advanced::driver::RecvBudget;
+use srt_transport::advanced::native_io::{HighResWaiter, MonotonicDeadline, RecvBatch};
+use srt_transport::advanced::telemetry::IngressTelemetry;
 use srt_transport::{
-    HighResWaiter, IngressTelemetry, ListenerConfig, ListenerTopology, MonotonicDeadline,
-    PeerTable, RecvBatch, RecvBudget, RuntimeFlavor, SocketBufferConfig, WorkerCount,
+    ListenerConfig, ListenerTopology, RuntimeFlavor, SocketBufferConfig, WorkerCount,
 };
 use tokio::net::UdpSocket;
 
@@ -148,7 +151,7 @@ impl HarnessSrtSinkPool {
 }
 
 fn sink_thread(
-    config: srt_transport::PreparedListener,
+    config: srt_transport::advanced::prepared::PreparedListener,
     socket: std::net::UdpSocket,
     stop: Arc<AtomicBool>,
     counters: Arc<SinkCounters>,
@@ -174,7 +177,7 @@ fn sink_thread(
 }
 
 async fn sink_port(
-    config: srt_transport::PreparedListener,
+    config: srt_transport::advanced::prepared::PreparedListener,
     socket: std::net::UdpSocket,
     stop: Arc<AtomicBool>,
     counters: Arc<SinkCounters>,
@@ -244,7 +247,7 @@ async fn sink_port(
 
 const LISTENER_IDLE: Duration = Duration::from_millis(5);
 
-fn listener_wait_duration(peers: &mut PeerTable, now: shiguredo_srt::Timestamp) -> Duration {
+fn listener_wait_duration(peers: &mut PeerTable, now: srt_proto::Timestamp) -> Duration {
     Duration::from_micros(
         peers
             .time_until_next_deadline(now, listener_idle_micros())
@@ -262,7 +265,7 @@ fn park_listener(
     ready: &mut Vec<()>,
     wait: Duration,
 ) -> std::io::Result<bool> {
-    waiter.set_deadline((), MonotonicDeadline::after(wait));
+    waiter.set_deadline((), MonotonicDeadline::after(wait))?;
     waiter.wait(due, ready)?;
     Ok(!ready.is_empty())
 }
@@ -272,15 +275,20 @@ fn drain_woken_listener(
     recv_batch: &mut RecvBatch,
     budget: RecvBudget,
     on_datagram: impl FnMut(Option<SocketAddr>, &[u8]),
-) -> std::io::Result<srt_transport::RecvDrainReport> {
-    srt_transport::drain_recv_fd(socket.as_raw_fd(), recv_batch, budget, on_datagram)
+) -> std::io::Result<srt_transport::advanced::native_io::RecvDrainReport> {
+    srt_transport::advanced::native_io::drain_recv_fd(
+        socket.as_raw_fd(),
+        recv_batch,
+        budget,
+        on_datagram,
+    )
 }
 
-fn srt_now() -> shiguredo_srt::Timestamp {
+fn srt_now() -> srt_proto::Timestamp {
     use std::sync::OnceLock;
     use std::time::Instant;
     static START: OnceLock<Instant> = OnceLock::new();
-    shiguredo_srt::Timestamp::from_micros(
+    srt_proto::Timestamp::from_micros(
         START
             .get_or_init(Instant::now)
             .elapsed()

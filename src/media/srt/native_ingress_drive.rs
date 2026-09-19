@@ -12,7 +12,8 @@ use tokio::sync::mpsc;
 
 use restream_dataplane::udp::{UdpSendCompletion, UringUdpDriver};
 use restream_dataplane::{TxLease, TxPool};
-use srt_transport::{AdmissionOptions, IngressTelemetry, PeerTable};
+use srt_transport::advanced::admission::{AdmissionOptions, PeerTable};
+use srt_transport::advanced::telemetry::IngressTelemetry;
 
 use crate::media::snapshots::ListenerSocketStats;
 
@@ -28,7 +29,6 @@ pub(super) struct ProtoTxSink<'a> {
     pub(super) outbound: &'a mut VecDeque<ProtoDatagram>,
     pub(super) tx_pool: &'a mut TxPool,
     pub(super) pool_empty: &'a mut u64,
-    pub(super) leased: Option<TxLease>,
 }
 
 #[derive(Clone, Copy)]
@@ -38,78 +38,33 @@ pub(super) struct ProtoDatagram {
     pub(super) len: usize,
 }
 
-impl srt_transport::DatagramSink for ProtoTxSink<'_> {
-    fn send_owned(&mut self, peer: SocketAddr, packet: Vec<u8>) -> Result<(), Vec<u8>> {
-        if self.leased.is_some()
-            || packet.len() > PROTO_TX_SLOT_SIZE
-            || self.outbound.len() >= MAX_OUTBOUND
-        {
-            return Err(packet);
+impl ProtoTxSink<'_> {
+    /// Copy one already-materialized reply into a TX pool lease and queue it
+    /// for the driver send path. Returns `false` when the pool or queue is
+    /// full; the reply is dropped, as SRT retransmits or times out.
+    fn send_owned(&mut self, peer: SocketAddr, packet: &[u8]) -> bool {
+        if packet.len() > PROTO_TX_SLOT_SIZE || self.outbound.len() >= MAX_OUTBOUND {
+            return false;
         }
         let Some(lease) = self.tx_pool.acquire() else {
             *self.pool_empty = self.pool_empty.saturating_add(1);
-            return Err(packet);
+            return false;
         };
         let Some(storage) = self.tx_pool.slot_mut(lease) else {
             let _ = self.tx_pool.abort(lease);
-            return Err(packet);
+            return false;
         };
-        storage[..packet.len()].copy_from_slice(&packet);
+        storage[..packet.len()].copy_from_slice(packet);
         if !self.tx_pool.submit(lease) {
             let _ = self.tx_pool.abort(lease);
-            return Err(packet);
+            return false;
         }
         self.outbound.push_back(ProtoDatagram {
             peer,
             lease,
             len: packet.len(),
         });
-        Ok(())
-    }
-
-    fn acquire(&mut self, max_len: usize) -> Option<&mut [std::mem::MaybeUninit<u8>]> {
-        if self.leased.is_some() || max_len > PROTO_TX_SLOT_SIZE {
-            return None;
-        }
-        let Some(lease) = self.tx_pool.acquire() else {
-            *self.pool_empty = self.pool_empty.saturating_add(1);
-            return None;
-        };
-        self.leased = Some(lease);
-        let storage = self
-            .tx_pool
-            .slot_mut(lease)
-            .expect("new TX lease is writable");
-        // SAFETY: `MaybeUninit<u8>` has the same layout as `u8`; the
-        // DatagramSink contract initializes exactly the committed prefix.
-        Some(unsafe {
-            std::slice::from_raw_parts_mut(
-                storage.as_mut_ptr().cast::<std::mem::MaybeUninit<u8>>(),
-                storage.len(),
-            )
-        })
-    }
-
-    fn commit(&mut self, peer: SocketAddr, len: usize) -> bool {
-        let Some(lease) = self.leased.take() else {
-            return false;
-        };
-        if len > PROTO_TX_SLOT_SIZE || self.outbound.len() >= MAX_OUTBOUND {
-            let _ = self.tx_pool.abort(lease);
-            return false;
-        }
-        if !self.tx_pool.submit(lease) {
-            let _ = self.tx_pool.abort(lease);
-            return false;
-        }
-        self.outbound.push_back(ProtoDatagram { peer, lease, len });
         true
-    }
-
-    fn abort(&mut self) {
-        if let Some(lease) = self.leased.take() {
-            let _ = self.tx_pool.abort(lease);
-        }
     }
 }
 
@@ -129,7 +84,7 @@ pub(super) fn drive_protocol(
     proto_inflight: &mut [Option<ProtoDatagram>],
     proto_completions: &mut [UdpSendCompletion],
     stashed: &mut Vec<UdpSendCompletion>,
-    proto_events: &mut Vec<srt_transport::AdmissionEvent>,
+    proto_events: &mut Vec<srt_transport::advanced::admission::AdmissionEvent>,
     tx_pool_empty: &mut u64,
     events_tx: &mpsc::Sender<SrtIngressEvent>,
     event_drops: &mut u64,
@@ -152,14 +107,12 @@ pub(super) fn drive_protocol(
             outbound: proto_outbound,
             tx_pool,
             pool_empty: tx_pool_empty,
-            leased: None,
         };
         let now = timestamp_now();
         let mut out: Vec<(SocketAddr, Vec<u8>)> = Vec::new();
         peers.poll_outbound(now, &mut out);
         for (peer, packet) in out.drain(..) {
-            use srt_transport::DatagramSink;
-            let _ = sink.send_owned(peer, packet);
+            let _ = sink.send_owned(peer, &packet);
         }
     }
     flush_proto_outbound(
@@ -176,8 +129,8 @@ pub(super) fn drive_protocol(
     proto_events.clear();
     peers.poll_events(proto_events);
     for event in proto_events.drain(..) {
-        use shiguredo_srt::ConnectionEvent;
-        let srt_transport::AdmissionEvent {
+        use srt_proto::ConnectionEvent;
+        let srt_transport::advanced::admission::AdmissionEvent {
             representative_peer: peer,
             logical_peer,
             event,
@@ -216,7 +169,7 @@ pub(super) fn drive_protocol(
                     .try_send(SrtIngressEvent::Disconnected {
                         peer,
                         logical_peer,
-                        reason,
+                        reason: reason.to_string(),
                     })
                     .is_err()
                 {
@@ -241,14 +194,13 @@ pub(super) fn drive_protocol_compat(
     _telemetry: &IngressTelemetry,
     tx_pool: &mut TxPool,
     proto_outbound: &mut VecDeque<ProtoDatagram>,
-    proto_events: &mut Vec<srt_transport::AdmissionEvent>,
+    proto_events: &mut Vec<srt_transport::advanced::admission::AdmissionEvent>,
     tx_pool_empty: &mut u64,
     events_tx: &mpsc::Sender<SrtIngressEvent>,
     event_drops: &mut u64,
     stats: &NativeSrtIngressStats,
     listener_stats: &ListenerSocketStats,
 ) -> io::Result<()> {
-    use srt_transport::DatagramSink;
     let now = timestamp_now();
     let mut out: Vec<(SocketAddr, Vec<u8>)> = Vec::new();
     peers.poll_outbound(now, &mut out);
@@ -256,10 +208,9 @@ pub(super) fn drive_protocol_compat(
         outbound: proto_outbound,
         tx_pool,
         pool_empty: tx_pool_empty,
-        leased: None,
     };
     for (peer, packet) in out.drain(..) {
-        let _ = sink.send_owned(peer, packet);
+        let _ = sink.send_owned(peer, &packet);
     }
     while let Some(datagram) = proto_outbound.pop_front() {
         let Some(bytes) = tx_pool
@@ -285,8 +236,8 @@ pub(super) fn drive_protocol_compat(
     proto_events.clear();
     peers.poll_events(proto_events);
     for event in proto_events.drain(..) {
-        use shiguredo_srt::ConnectionEvent;
-        let srt_transport::AdmissionEvent {
+        use srt_proto::ConnectionEvent;
+        let srt_transport::advanced::admission::AdmissionEvent {
             representative_peer: peer,
             logical_peer,
             event,
@@ -325,7 +276,7 @@ pub(super) fn drive_protocol_compat(
                     .try_send(SrtIngressEvent::Disconnected {
                         peer,
                         logical_peer,
-                        reason,
+                        reason: reason.to_string(),
                     })
                     .is_err()
                 {

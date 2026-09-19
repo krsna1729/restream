@@ -361,6 +361,16 @@ A shard owns:
 No hot-path global mutex is required for leaf scheduling or socket state.
 Mutable leaf state does not migrate between threads during normal operation.
 
+The backend is built, driven and dropped on the shard's own OS thread.
+`EgressShardBackend` is therefore not `Send`; only the factory passed to
+`EgressShardHandle::spawn_with` (or `try_spawn_with` for fallible construction
+such as an `io_uring` poller) crosses the thread boundary, and it must be
+`Send`. This is what lets a backend own thread-affine runtime state — a
+per-thread Compio runtime, an `Rc`-based owner — without
+`Arc<Mutex<Runtime>>` or `unsafe impl Send`. `EgressShardHandle::spawn` and
+`EgressShardGroup::spawn` remain as conveniences for already-built `Send`
+backends (tests); production groups use the factory forms.
+
 A shard loop performs bounded work in this order:
 
 1. process a limited batch of high-priority control commands;
@@ -511,6 +521,19 @@ reuse is per `(pipeline, shard)` by default so unrelated pipelines do not
 share a contention or failure domain merely because their shard-assignment
 formulas produced the same numeric id. Disabling pipeline scoping is an
 operator opt-out toward fewer shared sockets at the cost of that isolation.
+
+### Direction: Compio as the network I/O substrate
+
+Shard ownership, bounded scheduling, work budgets and the protocol-neutral
+leaf contract above stay normative. What changes is who implements network
+I/O: Compio becomes the I/O substrate, and the `srt-rs` Compio `Owner`
+(`srt_transport::compio::Owner`) becomes SRT's transport owner, built on the
+shard thread by the backend factory. The direct `io_uring` code in this
+repository (`UringUdpDriver`, `SharedSrtEgress`'s driver use, the native SRT
+ingress ring and the RTMP `IoUringTcpPoller`) is transitional and will be
+deleted as each path moves over; new work should not deepen it. Until each
+cutover lands, the native paths described in the sections above remain the
+shipped behavior.
 
 ### Future backends
 

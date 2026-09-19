@@ -94,6 +94,10 @@ of the async scheduler is isolated:
   nonblocking streams to the existing authenticated connection workflow;
 - SRT ingress receives on a native `io_uring` UDP owner thread and hands fixed
   packet buffers to the runtime-neutral `srt-rs` admission/protocol owner;
+- the hand-written native `io_uring` code is transitional: shard ownership
+  and bounded scheduling stay, Compio becomes the network I/O substrate, and
+  the `srt-rs` Compio `Owner` becomes SRT's transport owner (see
+  [egress architecture](egress-architecture.md#direction-compio-as-the-network-io-substrate));
 - in-process FFmpeg codec work runs on guarded OS threads;
 - recording uses a feeder task and a writer thread;
 - the default transcoder and file-ingest paths use managed FFmpeg child

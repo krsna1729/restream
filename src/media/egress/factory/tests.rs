@@ -6,6 +6,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
+/// Run each shard factory on this thread, standing in for its shard thread.
+fn build_all<B>(factories: Vec<impl FnOnce() -> B>) -> Vec<B> {
+    factories.into_iter().map(|factory| factory()).collect()
+}
+
 fn feed() -> TsFeed {
     let ring = TsChunkRing::new(8, CancellationToken::new());
     TsFeed::new(&ring, Arc::new(FeedEpoch::new()))
@@ -21,7 +26,7 @@ fn shard_config() -> EgressShardConfig {
 
 #[test]
 fn srt_fabric_shard_backends_build_one_backend_per_shard() {
-    let backends = srt_fabric_shard_backends(
+    let backends = build_all(srt_fabric_shard_factories(
         "pipeline-a",
         NonZeroU32::new(3).unwrap(),
         budget(),
@@ -30,7 +35,7 @@ fn srt_fabric_shard_backends_build_one_backend_per_shard() {
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
         EgressShardConfig::DEFAULT_LEAF_CAPACITY,
         None,
-    );
+    ));
 
     assert_eq!(backends.len(), 3);
 }
@@ -42,7 +47,7 @@ fn srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state() {
     // sockets through one libsrt sender thread. Each shard must get its own.
     let ports = SrtEgressMuxerPorts::default();
 
-    let backends = srt_fabric_shard_backends(
+    let backends = build_all(srt_fabric_shard_factories(
         "pipeline-a",
         NonZeroU32::new(3).unwrap(),
         budget(),
@@ -51,7 +56,7 @@ fn srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state() {
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
         EgressShardConfig::DEFAULT_LEAF_CAPACITY,
         None,
-    );
+    ));
 
     assert_eq!(
         ports.tracked_shards(),
@@ -88,7 +93,7 @@ fn srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state() {
 
 #[test]
 fn srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry() {
-    let backends = srt_fabric_shard_backends(
+    let backends = build_all(srt_fabric_shard_factories(
         "pipeline-a",
         NonZeroU32::new(2).unwrap(),
         budget(),
@@ -97,7 +102,7 @@ fn srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry() {
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
         EgressShardConfig::DEFAULT_LEAF_CAPACITY,
         None,
-    );
+    ));
 
     // Reuse disabled still means backend-local, never-shared state.
     let first = backends[0]
@@ -159,7 +164,7 @@ fn srt_fabric_shard_backends_share_one_connect_admission_semaphore_across_shards
     // `srt_connect_admission.rs`).
     let admission = Arc::new(tokio::sync::Semaphore::new(1));
 
-    let backends = srt_fabric_shard_backends(
+    let backends = build_all(srt_fabric_shard_factories(
         "pipeline-a",
         NonZeroU32::new(3).unwrap(),
         budget(),
@@ -168,7 +173,7 @@ fn srt_fabric_shard_backends_share_one_connect_admission_semaphore_across_shards
         EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
         EgressShardConfig::DEFAULT_LEAF_CAPACITY,
         Some(admission.clone()),
-    );
+    ));
 
     assert_eq!(backends.len(), 3);
     assert_eq!(admission.available_permits(), 1);
