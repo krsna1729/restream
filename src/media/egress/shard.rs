@@ -1,7 +1,7 @@
+use flume::{Receiver, Sender, TrySendError};
 use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -185,6 +185,29 @@ pub trait EgressShardBackend: 'static {
 
     fn on_shutdown(&mut self) {}
 
+    /// Block the shard thread until there is something to do or `max_wait`
+    /// elapses. `max_wait` is the shard's own bound (its idle wait, already
+    /// shortened to the next application timer); a backend may return sooner
+    /// when a deadline of its own is due.
+    ///
+    /// The default waits on the command channel only, which is what every
+    /// current native backend needs. A backend that owns a thread-affine
+    /// completion runtime overrides this and enters that runtime here to wait
+    /// for commands and its own I/O together, so the shard never blocks the
+    /// thread outside it. Scheduling, budgets, timers and shutdown stay with
+    /// the shard loop: a wake only says what woke it.
+    fn wait_idle(
+        &mut self,
+        commands: &Receiver<EgressCommand>,
+        max_wait: Duration,
+    ) -> EgressShardIdleWake {
+        match commands.recv_timeout(max_wait) {
+            Ok(command) => EgressShardIdleWake::Command(command),
+            Err(flume::RecvTimeoutError::Timeout) => EgressShardIdleWake::Timeout,
+            Err(flume::RecvTimeoutError::Disconnected) => EgressShardIdleWake::Disconnected,
+        }
+    }
+
     /// Total `EngineProgress::FeedOverrun` resynchronizations this backend
     /// has observed across every leaf it has ever visited. Read once per
     /// loop iteration into `ShardMetrics::feed_resyncs` for the
@@ -202,6 +225,23 @@ pub trait EgressShardBackend: 'static {
     /// Copy protocol-native counters into the shard snapshot. Backends that
     /// do not own a native dataplane keep the default no-op.
     fn observe_metrics(&self, _metrics: &mut ShardMetrics) {}
+}
+
+/// Why [`EgressShardBackend::wait_idle`] returned.
+// The command is moved by value through the channel already; boxing it would
+// add an allocation per idle wake to save stack space on the control path.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum EgressShardIdleWake {
+    /// A command arrived; it is handled exactly like one found by `try_recv`.
+    Command(EgressCommand),
+    /// The backend has I/O or completion work worth servicing. The shard
+    /// schedules one ordinary backend-ready visit; it is not a command.
+    BackendActivity,
+    /// `max_wait` (or an earlier backend deadline) elapsed with nothing else.
+    Timeout,
+    /// Every command sender is gone; the shard stops.
+    Disconnected,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,7 +268,7 @@ pub enum EgressShardSendError {
 #[derive(Debug, Clone)]
 pub struct FeedWakeHandle {
     gate: Arc<WakeGate>,
-    sender: SyncSender<EgressCommand>,
+    sender: Sender<EgressCommand>,
 }
 
 impl FeedWakeHandle {
@@ -258,7 +298,7 @@ impl FeedWakeHandle {
 #[derive(Debug)]
 pub struct EgressShardHandle {
     shard_id: ShardId,
-    sender: SyncSender<EgressCommand>,
+    sender: Sender<EgressCommand>,
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
     wake_gate: Arc<WakeGate>,
     join: Option<JoinHandle<()>>,
@@ -293,7 +333,7 @@ impl EgressShardHandle {
         E: Send + 'static,
         F: FnOnce() -> Result<B, E> + Send + 'static,
     {
-        let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), E>>(1);
+        let (ready_tx, ready_rx) = flume::bounded::<Result<(), E>>(1);
         let mut handle = Self::spawn_thread(shard_id, config, move || match factory() {
             Ok(backend) => {
                 let _ = ready_tx.send(Ok(()));
@@ -332,7 +372,7 @@ impl EgressShardHandle {
         B: EgressShardBackend,
         I: FnOnce() -> Option<B> + Send + 'static,
     {
-        let (sender, receiver) = mpsc::sync_channel(config.command_channel_capacity.get());
+        let (sender, receiver) = flume::bounded(config.command_channel_capacity.get());
         let snapshot = Arc::new(Mutex::new(EgressShardSnapshot::new(shard_id)));
         let thread_snapshot = Arc::clone(&snapshot);
         let wake_gate = Arc::new(WakeGate::new());
@@ -493,7 +533,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             let mut ready_processed = self.process_ready_batch(&mut running);
             let mut timers_processed = self.process_timer_batch(&mut running);
             if running && processed == 0 && ready_processed == 0 && timers_processed == 0 {
-                processed = self.wait_for_command(&mut running);
+                processed = self.wait_for_activity(&mut running);
                 if running {
                     ready_processed += self.process_ready_batch(&mut running);
                 }
@@ -566,7 +606,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         processed
     }
 
-    fn wait_for_command(&mut self, running: &mut bool) -> usize {
+    fn wait_for_activity(&mut self, running: &mut bool) -> usize {
         let now = Instant::now();
         let wait = self
             .timers
@@ -576,16 +616,22 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                     .saturating_duration_since(now)
                     .min(self.config.idle_wait())
             });
-        match self.receiver.recv_timeout(wait) {
-            Ok(command) => {
+        match self.backend.wait_idle(&self.receiver, wait) {
+            EgressShardIdleWake::Command(command) => {
                 let effect = self.process_command(command);
                 if self.apply_effect(effect).stops_shard() {
                     *running = false;
                 }
                 1
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => 0,
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
+            EgressShardIdleWake::BackendActivity => {
+                // Same path as any other readiness request: the ready batch
+                // that follows runs `on_ready` under the shared budget.
+                self.apply_effect(EgressShardCommandEffect::ScheduleReady { count: 1 });
+                0
+            }
+            EgressShardIdleWake::Timeout => 0,
+            EgressShardIdleWake::Disconnected => {
                 *running = false;
                 0
             }

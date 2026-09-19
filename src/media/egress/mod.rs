@@ -64,7 +64,7 @@ pub use policy::{LeafLimits, LeafPolicy, RetryState, WorkBudget};
 pub use shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardConfig, EgressShardConfigError,
     EgressShardGroup, EgressShardGroupError, EgressShardHandle, EgressShardHealth,
-    EgressShardHeartbeat, EgressShardSendError, EgressShardSnapshot,
+    EgressShardHeartbeat, EgressShardIdleWake, EgressShardSendError, EgressShardSnapshot,
 };
 pub use supervisor::{
     EgressShardRecovery, EgressSupervisor, EgressSupervisorConfig, EgressSupervisorError,

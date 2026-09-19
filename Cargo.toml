@@ -66,6 +66,10 @@ shiguredo_mp4 = "2026.5.0"
 # still runs on the runtime-neutral surface in this intermediate commit.
 srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "5dce0b2767a39224857221111593088cabd993b1" }
 srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "5dce0b2767a39224857221111593088cabd993b1", features = ["compio"] }
+# Bounded shard command channel with both blocking and Future-based receive, so
+# a backend that owns a thread-affine completion runtime can await commands
+# alongside its own I/O without a second wake source.
+flume = { version = "0.12", default-features = false, features = ["async"] }
 tracing = { version = "0.1", features = ["max_level_debug"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"

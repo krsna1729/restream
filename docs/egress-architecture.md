@@ -380,12 +380,29 @@ A shard loop performs bounded work in this order:
 4. schedule leaves whose feeds advanced;
 5. service ready leaves under per-leaf and per-loop budgets;
 6. publish aggregated metrics when due;
-7. when idle, wait on the command channel with a bounded timeout
-   (`recv_timeout(idle_wait)`), then resume from step 1 so quiet shards
-   still rediscover write-interested leaves on the next readiness pass.
+7. when idle, wait for control activity, backend I/O or completion activity,
+   or the next relevant deadline (the earlier of the next application timer and
+   the shard idle bound), then resume from step 1 so quiet shards still
+   rediscover write-interested leaves on the next readiness pass.
 
 Control processing itself is budgeted so a large update burst cannot starve
 media progress.
+
+The command channel is a bounded `flume` channel (exact capacity, `try_send`
+reports `Full` or `Closed`, FIFO), chosen because its receiver supports both
+blocking and Future-based receive. The idle wait is a backend hook,
+`EgressShardBackend::wait_idle(commands, max_wait)`, returning one of
+`Command`, `BackendActivity`, `Timeout` or `Disconnected`. `max_wait` is the
+shard's own bound; a backend may return sooner when a deadline it owns is due,
+and such protocol deadlines are not mirrored into the shard `TimerWheel`, which
+stays for application lifecycle timers. A `Command` wake goes through the same
+`process_command` path as one found by `try_recv`. `BackendActivity` only
+schedules one ordinary ready visit, so the backend's `on_ready` runs under the
+shared readiness budget and lifecycle policy; it is not a command. The default
+waiter blocks on the command channel alone and is what the RTMP/RTMPS, sink and
+pipeline backends and the current native SRT backend use. The upcoming SRT
+Compio backend overrides it to enter its shard-local runtime and await commands
+and `Owner::wait_for_activity` together.
 
 ## Leaf ownership
 

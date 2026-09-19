@@ -2585,6 +2585,7 @@ dependencies = [
  "chrono",
  "criterion",
  "ffmpeg-next",
+ "flume",
  "futures-util",
  "http-body-util",
  "libc",
