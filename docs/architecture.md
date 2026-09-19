@@ -84,9 +84,10 @@ of the async scheduler is isolated:
 - RTMP/RTMPS and SRT **egress** run on the egress fabric: a small
   CPU-derived pool of dedicated shard OS threads, output-count-scaled for
   RTMP/RTMPS/sink/pipeline feeds while SRT retains the CPU-derived ceiling,
-  each multiplexing many outputs (`io_uring` for RTMP/RTMPS; for SRT, the shard
-  directly drives `srt-rs` sockets and the shared `CallerTable` — there is no
-  libsrt epoll) instead of one OS thread per destination; see
+  each multiplexing many outputs (`io_uring` for RTMP/RTMPS; for SRT, one Compio
+  runtime per shard thread and at most one `srt-rs` Compio `Owner` per address
+  family, each owning one shared caller UDP socket — no per-output task, socket
+  or Owner) instead of one OS thread per destination; see
   [egress architecture](egress-architecture.md) for the live contract and
   [archive/egress/implementation.md](archive/egress/implementation.md) for
   migration history;

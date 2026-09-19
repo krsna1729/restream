@@ -125,8 +125,9 @@ Properties the fabric must keep preserving:
 - slow ring readers can recover after bounded overflow;
 - Tokio worker count and egress shard count are independent,
   measurement-driven knobs (separate sweeps). SRT keeps a CPU-derived shard
-  ceiling as a shared UDP socket / `CallerTable` parallelism budget rather
-  than scaling shards purely with output count.
+  ceiling as an Owner-parallelism budget (each shard runs its own Compio
+  runtime and family Owners) rather than scaling shards purely with output
+  count.
 
 Legacy per-destination RTMP tasks and per-destination SRT sender threads are
 gone; see [archive/egress/implementation.md](archive/egress/implementation.md)
@@ -194,12 +195,11 @@ flowchart LR
 There is no protocol-specific bypass around the manager, shard scheduler,
 common lifecycle, or backpressure policy.
 
-A shard may use a protocol-native readiness path. RTMP shards use one native
-`io_uring` TCP readiness owner per shard. SRT shared egress uses the application's bounded
-io_uring UDP readiness path and drives the shared `CallerTable` from the shard
-owner thread; mixed IPv4/IPv6 groups use one bounded native owner per local
-address family. All variants stay under the same application topology, not a
-separate egress architecture.
+A shard may use a protocol-native network path. RTMP shards use one native
+`io_uring` TCP readiness owner per shard. SRT shards run one Compio runtime on
+the shard thread with at most one `srt_transport::compio::Owner` per address
+family (IPv4, IPv6), each owning one shared caller UDP socket. All variants stay
+under the same application topology, not a separate egress architecture.
 
 ## Shared preparation graph
 
@@ -226,10 +226,10 @@ chunking, acknowledgement, connection, and optional TLS state.
 
 SRT leaves consume immutable MPEG-TS messages produced once for compatible
 outputs. Each leaf still owns SRT connection and protocol state in the
-`srt-rs` stack (congestion, retransmission, encryption). Shared egress owns one
-application UDP socket per local address family, native readiness pollers, and a
-`CallerTable` per `(pipeline, shard)`; mixed-family groups use both native
-family owners without a runtime adapter.
+`srt-rs` stack (congestion, retransmission, encryption). The shard's family
+`Owner` owns one shared caller UDP socket, one bounded caller pool and the
+logical callers; a leaf holds only its `LogicalCallerId`. A bonded output is
+one leaf and one logical caller whose legs must share one address family.
 
 Sink leaves consume prepared media and discard it after accounting progress.
 They have no transport readiness adapter, but they still run through the same
@@ -348,9 +348,9 @@ pub struct EgressShard<B: EgressBackend> {
 
 A shard owns:
 
-- its protocol-specific readiness backend (RTMP/RTMPS: a Linux epoll
-  instance; SRT: drive-based readiness with no poller — owned sockets and
-  the shared `CallerTable`);
+- its protocol-specific network backend (RTMP/RTMPS: a Linux epoll
+  instance; SRT: one Compio runtime and at most two family `Owner`s, built on
+  the shard thread);
 - all leaf protocol and transport state assigned to it;
 - its ready queue and scheduling flags;
 - connect, handshake, progress, and retry timers;
@@ -517,42 +517,76 @@ retained by the connection are both included in per-leaf memory limits.
 
 ### SRT backend
 
-SRT egress runs on `srt-rs` protocol state with an application-owned native UDP
-readiness adapter for shared links. The adapter uses bounded receive/send
-budgets and one-shot generation-tagged readiness events; the shard owner thread
-drives the shared socket and `CallerTable` without a per-leaf population scan.
-Ready candidates and feed-waiting leaves are queued explicitly. Direct and
-bonded callers use the same runtime-neutral table and caller-owned transmit
-storage; mixed-family groups use one native owner per local address family.
+SRT egress runs on `srt-rs`'s Compio `Owner`. Topology per shard:
 
-Local-port reuse still scopes one shared UDP socket and `CallerTable` per
-`(pipeline, shard)` (`SrtEgressMuxerPorts`), with one native socket/poller per
-family when needed. Outputs with reuse disabled own isolated native socket
-state, but still use the same caller table and readiness path. Application-owned
-per-destination byte queues and sender threads remain removed.
+```text
+shard OS thread
+  └── one Compio runtime (production profile, io_uring; built on this thread)
+        ├── IPv4 Owner  (lazy; one caller UDP socket, caller pool, fixed TX pool)
+        ├── IPv6 Owner  (lazy; likewise)
+        └── SRT leaves: OutputId/generation, feed cursor, family, LogicalCallerId
+```
+
+- **One runtime, at most two Owners.** There is never a runtime, task, socket
+  or Owner per output. Many direct and bonded callers share one Owner's socket;
+  TX lanes and the receive consumer are the Owner's fixed substrate.
+- **Connect admission is the Owner's caller pool.** `Owner::connect` /
+  `connect_bonded` return `Admitted`, `Queued` or `Full`. A queued request is
+  correlated by `(family, PoolRequestId)` to its output and generation; the
+  pool event that later admits it is attached only if that output and
+  generation are still current, otherwise the stale caller is retired. There is
+  no Restream-side connect semaphore or backlog. DNS resolution stays
+  off-thread and bounded, before the Owner is involved.
+- **Bonded outputs** are one leaf and one logical caller; all legs must resolve
+  to one address family (a mixed-family bond fails the output explicitly).
+  Backup/Broadcast selection and per-leg state belong to `srt-rs`.
+- **Scheduling.** A ready batch services each existing Owner once under a
+  finite `OwnerServiceBudget`, drains bounded Owner event queues, moves queued
+  candidates to the ready queue, and then visits leaves one per `on_ready`.
+  Payload submission (`send_shared`) only enqueues into protocol state and never
+  services an Owner. Backpressured or still-connecting leaves park; Owner
+  activity re-examines a bounded rotating slice of them, so a network wake does
+  bounded work and nothing spins. Each batch first does one non-blocking
+  driver poll (`Runtime::block_on` returns without touching the driver once its
+  future is ready), so a shard that never idles still reaps TX completions and
+  receives datagrams; without it all TX slots stay in flight and leaves starve
+  (regression test `a_shard_that_never_parks_still_reaps_tx_completions`).
+- **Waiting.** The backend overrides `wait_idle` to park inside its Compio
+  runtime, awaiting the command channel, each Owner's network/completion
+  activity and the earliest of the generic bound and each Owner's protocol
+  deadline. SRT protocol timers (ACK/NAK, keepalive, pacing, retransmission,
+  handshake) stay inside the Owner; Restream's timer wheel keeps only product
+  and lifecycle timers.
+- **Faults.** A peer-local or transient TX failure is attributed to one caller
+  (and leg) and never faults anything else. A structural Owner fault retires the
+  leaves on that family and stops admission there; the sibling family keeps
+  running.
+- **Shutdown.** Leaves flush inside the shard drain window minus a small
+  reserve; each instantiated Owner is then torn down with
+  `shutdown_and_drain`, proving no send in flight, a whole TX pool, joined lanes
+  and no receive consumer, or reporting the miss in shard metrics.
+- **Observability.** `ShardMetrics.srt_owners[family]` carries low-cardinality
+  Owner gauges/counters (TX pool capacity/free/high-water/exhaustions, in-flight,
+  caller-pool in-flight/queued/expired/failed/cancelled, receive mode and ring
+  depth/drops/truncation, service visits and budget exhaustions, fault state);
+  the shard also records whether its runtime is io_uring and whether the managed
+  receive substrate exists. The receive mode is `ManagedPreferred`: a host
+  without provided-buffer rings runs the readiness receiver, and that is
+  visible in `OwnerRxMode` and these metrics rather than silently claimed.
 
 SRT sender-buffer limits remain part of the leaf's total buffering policy;
 moving buffering into the protocol stack does not make it free or unbounded.
-
-`RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT` and
-`RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED` keep the isolation rule:
-reuse is per `(pipeline, shard)` by default so unrelated pipelines do not
-share a contention or failure domain merely because their shard-assignment
-formulas produced the same numeric id. Disabling pipeline scoping is an
-operator opt-out toward fewer shared sockets at the cost of that isolation.
+`RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` sets each Owner's caller-pool
+`max_in_flight` (its queue holds as many again).
 
 ### Direction: Compio as the network I/O substrate
 
 Shard ownership, bounded scheduling, work budgets and the protocol-neutral
-leaf contract above stay normative. What changes is who implements network
-I/O: Compio becomes the I/O substrate, and the `srt-rs` Compio `Owner`
-(`srt_transport::compio::Owner`) becomes SRT's transport owner, built on the
-shard thread by the backend factory. The direct `io_uring` code in this
-repository (`UringUdpDriver`, `SharedSrtEgress`'s driver use, the native SRT
-ingress ring and the RTMP `IoUringTcpPoller`) is transitional and will be
-deleted as each path moves over; new work should not deepen it. Until each
-cutover lands, the native paths described in the sections above remain the
-shipped behavior.
+leaf contract stay normative; Compio is the network I/O substrate. SRT egress
+is already on it (above). The remaining direct `io_uring` code in this
+repository — the native SRT ingress ring and the RTMP `IoUringTcpPoller` — is
+transitional and will be replaced as each path moves over; new work should not
+deepen it.
 
 ### Future backends
 
@@ -707,10 +741,10 @@ protected by:
 - optional per-host or per-destination-class limits if live evidence requires
   them.
 
-For SRT, a process-wide connect-admission semaphore
-(`RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY`, `srt_connect_admission.rs`) now
-implements the first bullet for both the initial mass-`Add` path and
-reconnects; the per-shard and per-host/per-destination-class refinements
+For SRT, each family Owner's bounded caller pool
+(`RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` as its `max_in_flight`, with an
+equal queue) is the per-shard concurrent-connect limit for both the initial
+mass-`Add` path and reconnects; the process-wide and per-host refinements
 remain open, as does equivalent admission control for RTMP.
 
 These controls prevent a large dead-destination set from causing DNS, TCP, TLS,

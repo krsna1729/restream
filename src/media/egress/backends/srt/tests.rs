@@ -1,9 +1,10 @@
-mod drain;
-mod leaf;
-mod leaf_termination;
-mod media_tick;
-mod muxer_port;
+mod allocation;
+mod architecture;
+mod bonded;
+mod connect_lifecycle;
+mod idle_shutdown;
+mod lifecycle_close;
 mod resolve_runtime;
 mod resolver;
-mod shard;
+mod send_fairness;
 mod support;

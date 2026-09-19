@@ -1,47 +1,39 @@
 use super::super::resolve_runtime::{ResolvingSrtShardBackend, SrtResolveWorkerSet};
 use super::super::*;
-use super::support::feed;
+use super::support::*;
 use crate::media::egress::command::ShardId;
-use crate::media::egress::command::{EgressCommand, FeedId, OutputId, OutputSpec, ProtocolSpec};
-use crate::media::egress::metrics::ShardMetrics;
-use crate::media::egress::policy::{LeafPolicy, WorkBudget};
-use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
-use bytes::Bytes;
+use crate::media::egress::shard::EgressShardBackend;
 use std::thread;
 use std::time::Duration;
 
-fn output_spec(id: &str, generation: u64, protocol: ProtocolSpec) -> OutputSpec {
-    OutputSpec {
-        id: OutputId::new(id),
-        generation,
-        feed: FeedId::new("feed-srt"),
-        protocol,
-        policy: LeafPolicy::default(),
-        progress: Default::default(),
-    }
-}
-
-#[test]
-fn resolving_srt_backend_spawns_resolver_and_completes_add() {
+fn resolving_backend() -> (ResolvingSrtShardBackend<SrtShardBackend>, TestFeed) {
+    let feed = TestFeed::new();
     let (completion_sender, completion_queue) = srt_resolve_completion_queue(4);
     let inner = SrtShardBackend::with_runtime_components(
-        feed([Bytes::from_static(b"abc")]),
-        WorkBudget::new(8, 1024, Duration::from_millis(1)),
+        feed.reader(),
+        budget(),
         completion_queue,
+        SrtOwners::new(settings()).expect("shard runtime"),
     );
-    let mut backend =
-        ResolvingSrtShardBackend::new(inner, SrtResolveWorkerSet::new(completion_sender));
+    (
+        ResolvingSrtShardBackend::new(inner, SrtResolveWorkerSet::new(completion_sender)),
+        feed,
+    )
+}
 
-    let effect = backend.on_command(EgressCommand::Add(output_spec(
+/// The full DNS -> Owner path through the resolver worker: a numeric host
+/// resolves off-thread, then the completion is attached to a live leaf.
+#[test]
+fn resolving_srt_backend_resolves_off_thread_and_completes_add() {
+    let (mut backend, _feed) = resolving_backend();
+    let effect = backend.on_command(EgressCommand::Add(srt_spec(
         "out-a",
         7,
-        ProtocolSpec::Srt {
-            url: "srt://127.0.0.1:9000?streamid=publish%3Akey&bond=127.0.0.2:9001".to_string(),
-        },
+        "srt://127.0.0.1:9000?streamid=publish%3Akey&bond=127.0.0.2:9001",
     )));
 
     assert_eq!(effect, EgressShardCommandEffect::Continue);
-    for _ in 0..50 {
+    for _ in 0..500 {
         backend.on_media_tick();
         if backend
             .inner_backend()
@@ -50,74 +42,53 @@ fn resolving_srt_backend_spawns_resolver_and_completes_add() {
         {
             break;
         }
-        thread::sleep(Duration::from_millis(1));
+        thread::sleep(Duration::from_millis(2));
     }
-    assert!(
-        backend
-            .inner_backend()
-            .output_sockets
-            .contains_key(&OutputId::new("out-a"))
+    let inner = backend.inner_backend();
+    assert!(inner.output_sockets.contains_key(&OutputId::new("out-a")));
+    assert_eq!(
+        inner.callers.len(),
+        1,
+        "one logical caller for the whole bond"
     );
-    assert_eq!(backend.worker_count(), 0);
 }
 
 #[test]
-fn resolving_srt_backend_does_not_spawn_for_non_srt_add() {
-    let (completion_sender, completion_queue) = srt_resolve_completion_queue(4);
-    let inner = SrtShardBackend::with_runtime_components(
-        feed([Bytes::from_static(b"abc")]),
-        WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        completion_queue,
+fn resolving_srt_backend_does_not_resolve_a_non_srt_add() {
+    let (mut backend, _feed) = resolving_backend();
+    let mut spec = srt_spec("out-a", 7, "unused");
+    spec.protocol = ProtocolSpec::Sink;
+    assert_eq!(
+        backend.on_command(EgressCommand::Add(spec)),
+        EgressShardCommandEffect::Continue
     );
-    let mut backend =
-        ResolvingSrtShardBackend::new(inner, SrtResolveWorkerSet::new(completion_sender));
-
-    let effect = backend.on_command(EgressCommand::Add(output_spec(
-        "out-a",
-        7,
-        ProtocolSpec::Sink,
-    )));
-
-    assert_eq!(effect, EgressShardCommandEffect::Continue);
     backend.on_media_tick();
-    assert_eq!(backend.worker_count(), 0);
+    assert!(backend.inner_backend().pending_connects.is_empty());
 }
 
 #[test]
 fn resolving_srt_backend_retires_failed_dns_connect() {
-    let (completion_sender, completion_queue) = srt_resolve_completion_queue(4);
-    let inner = SrtShardBackend::with_runtime_components(
-        feed([Bytes::from_static(b"abc")]),
-        WorkBudget::new(8, 1024, Duration::from_millis(1)),
-        completion_queue,
-    );
-    let mut backend =
-        ResolvingSrtShardBackend::new(inner, SrtResolveWorkerSet::new(completion_sender));
-
-    backend.on_command(EgressCommand::Add(output_spec(
+    let (mut backend, _feed) = resolving_backend();
+    let (spec, flag) = srt_spec_with_flag(
         "out-a",
         7,
-        ProtocolSpec::Srt {
-            url: "srt://256.256.256.256:9000?streamid=publish%3Akey".to_string(),
-        },
-    )));
-    for _ in 0..50 {
+        "srt://256.256.256.256:9000?streamid=publish%3Akey",
+    );
+    backend.on_command(EgressCommand::Add(spec));
+    for _ in 0..500 {
         backend.on_media_tick();
-        if backend
-            .inner_backend()
-            .pending_connect(&OutputId::new("out-a"))
-            .is_none()
-        {
+        if backend.inner_backend().pending_connects.is_empty() {
             break;
         }
-        thread::sleep(Duration::from_millis(1));
+        thread::sleep(Duration::from_millis(2));
     }
     assert!(
-        backend
-            .inner_backend()
-            .pending_connect(&OutputId::new("out-a"))
-            .is_none(),
+        backend.inner_backend().pending_connects.is_empty(),
         "failed DNS must not leave a pending connect resident"
+    );
+    assert!(
+        flag.load(std::sync::atomic::Ordering::Relaxed),
+        "and is reported terminated"
     );
 }
 
@@ -139,12 +110,23 @@ impl EgressShardBackend for ForwardingProbe {
     fn observe_metrics(&self, metrics: &mut ShardMetrics) {
         metrics.cq_overflows = 13;
     }
+
+    fn wait_idle(
+        &mut self,
+        _commands: &flume::Receiver<EgressCommand>,
+        _max_wait: Duration,
+    ) -> EgressShardIdleWake {
+        EgressShardIdleWake::BackendActivity
+    }
 }
 
+/// The decorator must forward everything the shard reads from a backend,
+/// including the idle wait (the default channel wait would bypass the wrapped
+/// backend's Compio park).
 #[test]
-fn resolving_srt_backend_forwards_metrics() {
+fn resolving_srt_backend_forwards_metrics_and_the_idle_wait() {
     let (completion_sender, _completion_queue) = srt_resolve_completion_queue(1);
-    let backend =
+    let mut backend =
         ResolvingSrtShardBackend::new(ForwardingProbe, SrtResolveWorkerSet::new(completion_sender));
     let mut metrics = ShardMetrics::new(ShardId::new(0));
 
@@ -152,4 +134,10 @@ fn resolving_srt_backend_forwards_metrics() {
     assert_eq!(backend.budget_exhaustion_count(), 11);
     backend.observe_metrics(&mut metrics);
     assert_eq!(metrics.cq_overflows, 13);
+
+    let (_tx, rx) = flume::bounded(1);
+    assert!(matches!(
+        backend.wait_idle(&rx, Duration::from_secs(30)),
+        EgressShardIdleWake::BackendActivity
+    ));
 }

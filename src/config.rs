@@ -304,35 +304,16 @@ pub struct AppConfig {
     /// "sink-mode bugs fixed; real ~600-connection SRT egress ceiling
     /// characterized"). Not scale-tested past 700 in one pipeline.
     pub srt_connect_timeout_ms: u64,
-    pub srt_egress_reuse_local_port: bool,
     pub srt_egress_muxer_max_outputs_per_shard: usize,
     pub srt_egress_muxer_max_shards: usize,
-    /// Whether `SrtEgressMuxerPorts`' local-port-reuse registry (see
-    /// `muxer_ports.rs`) is keyed per `(pipeline, shard)` (`true`, default)
-    /// or per shard alone, shared engine-wide across every pipeline
-    /// (`false`, the pre-2026-08-14 behavior). Per-pipeline scoping closes
-    /// a real cross-tenant coupling: two unrelated pipelines' shard *N*
-    /// would otherwise share one egress multiplexer — today one
-    /// application-owned UDP socket and `srt-rs` `CallerTable`, formerly
-    /// one libsrt multiplexer and its `CSndQueue` worker thread — purely
-    /// because their shard-assignment formulas both produced the same
-    /// numeric shard id. Numerically a no-op for any
-    /// single-pipeline deployment (including every MSR measurement to
-    /// date); multiplexer count scales with `shard_count x
-    /// active_pipeline_count` instead of a flat `shard_count` when enabled.
-    pub srt_egress_muxer_port_pipeline_scoped: bool,
-    /// Engine-wide bound on concurrent in-flight SRT egress connects
-    /// (`srt_connect_admission.rs`). Decouples connection-*establishment*
-    /// concurrency from shard count: a mass output-creation burst (all of
-    /// MSR's outputs added together) can resolve far more connects at once
-    /// than shard count alone would ever expose to the transport without
-    /// this. **Provisional after the srt-rs cutover**: the current value was
-    /// sized with margin under the measured ~120-connections-per-multiplexer
-    /// libsrt `CSndQueue` saturation point
-    /// (`docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`),
-    /// a mechanism that no longer exists — egress now drives an
-    /// application-owned socket and `CallerTable` explicitly. Retained
-    /// pending remeasurement rather than re-derived without evidence.
+    /// `max_in_flight` of each SRT egress Owner's bounded caller pool: the
+    /// transport's connect admission. One value applies per (shard, address
+    /// family) Owner; the pool queues up to the same number of further
+    /// requests and refuses beyond that. Decouples handshake concurrency from
+    /// output count so a mass output-creation burst queues in the Owner's
+    /// bounded pool instead of opening every handshake at once. Per-Owner,
+    /// not engine-wide: total in-flight connects scale with shard count x
+    /// active families.
     pub srt_egress_connect_concurrency: usize,
     pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
@@ -436,13 +417,11 @@ const OUTPUTS_PER_SHARD: u32 = 128;
 /// to buy parallelism per connection.
 ///
 /// SRT egress is different: every leaf on one shard shares that shard's
-/// egress multiplexer (`SrtEgressMuxerPorts`, `muxer_ports.rs`) — since the
-/// srt-rs cutover, one application-owned UDP socket and `CallerTable` driven
-/// from the shard thread; previously one libsrt multiplexer and its own
-/// `CSndQueue` worker thread — and every send races a hard 250ms TSBPD
-/// delivery deadline. The right shard count for SRT is a
-/// multiplexer-parallelism budget — bounded by CPU count, not by how many
-/// outputs happen to land on one feed.
+/// per-family Compio `Owner` (one shared caller UDP socket, one caller pool,
+/// a fixed TX pool), all driven from the shard thread, and every send races a
+/// hard 250ms TSBPD delivery deadline. The right shard count for SRT is an
+/// Owner-parallelism budget — bounded by CPU count, not by how many outputs
+/// happen to land on one feed.
 ///
 /// **This policy is provisional.** It was derived from the libsrt
 /// one-`CSndQueue`-worker-per-multiplexer model, which no longer describes
@@ -518,16 +497,6 @@ fn env_bool(name: &str) -> Option<bool> {
             "1" | "true" | "yes" | "on"
         )
     })
-}
-
-fn env_bool_default_true(name: &str) -> bool {
-    !matches!(
-        std::env::var(name)
-            .ok()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .as_deref(),
-        Some("0" | "false" | "no" | "off")
-    )
 }
 
 fn derive_external_ffmpeg_permits(
@@ -685,10 +654,8 @@ impl Default for AppConfig {
             srt_passphrase: None,
             srt_pbkeylen: 16,
             srt_connect_timeout_ms: 10_000,
-            srt_egress_reuse_local_port: true,
             srt_egress_muxer_max_outputs_per_shard: 0,
             srt_egress_muxer_max_shards: 64,
-            srt_egress_muxer_port_pipeline_scoped: true,
             srt_egress_connect_concurrency: 64,
             use_internal_file_ingest: false,
             initial_admin_password: None,
@@ -763,14 +730,10 @@ impl AppConfig {
             .and_then(|v| v.parse::<i32>().ok())
             .unwrap_or(16);
         let srt_connect_timeout_ms = env_u64("RESTREAM_SRT_CONNECT_TIMEOUT_MS", 10_000);
-        let srt_egress_reuse_local_port =
-            env_bool_default_true("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT");
         let srt_egress_muxer_max_outputs_per_shard =
             env_usize("RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD", 0).min(10_000);
         let srt_egress_muxer_max_shards =
             env_usize("RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS", 64).clamp(1, 64);
-        let srt_egress_muxer_port_pipeline_scoped =
-            env_bool_default_true("RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED");
         let srt_egress_connect_concurrency =
             env_usize("RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY", 64).clamp(1, 4096);
         let use_internal_file_ingest =
@@ -839,10 +802,8 @@ impl AppConfig {
             srt_passphrase,
             srt_pbkeylen,
             srt_connect_timeout_ms,
-            srt_egress_reuse_local_port,
             srt_egress_muxer_max_outputs_per_shard,
             srt_egress_muxer_max_shards,
-            srt_egress_muxer_port_pipeline_scoped,
             srt_egress_connect_concurrency,
             use_internal_file_ingest,
             initial_admin_password,
@@ -936,7 +897,6 @@ impl AppConfig {
                 "connectTimeoutMs": self.srt_connect_timeout_ms,
                 "egressMuxerMaxOutputsPerShard": self.srt_egress_muxer_max_outputs_per_shard,
                 "egressMuxerMaxShards": self.srt_egress_muxer_max_shards,
-                "egressMuxerPortPipelineScoped": self.srt_egress_muxer_port_pipeline_scoped,
             },
             "security": {
                 "secureSessionCookies": self.secure_session_cookies,

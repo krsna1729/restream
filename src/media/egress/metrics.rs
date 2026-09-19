@@ -14,6 +14,52 @@ use crate::media::egress::command::ShardId;
 use crate::media::egress::lifecycle::LeafLifecycle;
 
 // ---------------------------------------------------------------------------
+// SRT family Owner observability
+// ---------------------------------------------------------------------------
+
+/// Low-cardinality view of one SRT address-family `Owner` on a shard. Fixed
+/// scalars only: collecting it allocates nothing and it never appears on a
+/// packet path. Counters are cumulative since the Owner was created; gauges
+/// are the value at collection time.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OwnerFamilyMetrics {
+    /// The shard has instantiated an Owner for this family.
+    pub present: bool,
+    /// The Owner latched a structural fault: it admits no new callers.
+    pub faulted: bool,
+    /// Receive datapath: `true` managed multishot, `false` readiness reader.
+    pub managed_rx: bool,
+    pub tx_capacity: u32,
+    pub tx_free: u32,
+    pub tx_high_water: u32,
+    pub tx_exhaustions: u64,
+    pub tx_in_flight: u32,
+    /// Attributed TX failure events dropped because the bounded queue filled.
+    pub tx_failures_dropped: u64,
+    pub rx_packets: u64,
+    pub rx_bytes: u64,
+    pub tx_packets: u64,
+    pub tx_bytes: u64,
+    pub tx_completed_ok: u64,
+    pub tx_short_sends: u64,
+    pub tx_failed_sends: u64,
+    pub tx_peer_local_failures: u64,
+    pub tx_transient_failures: u64,
+    /// Protocol output that could not be materialized (leg quarantined).
+    pub protocol_output_failures: u64,
+    pub service_visits: u64,
+    pub service_budget_exhausted: u64,
+    pub caller_in_flight: u32,
+    pub caller_queued: u32,
+    pub caller_expired: u64,
+    pub caller_failed: u64,
+    pub caller_cancelled: u64,
+    pub rx_ring_depth: u32,
+    pub rx_ring_dropped: u64,
+    pub rx_truncated: u64,
+}
+
+// ---------------------------------------------------------------------------
 // ShardMetrics
 // ---------------------------------------------------------------------------
 
@@ -92,6 +138,16 @@ pub struct ShardMetrics {
     /// Bounded backend work queues rejected an enqueue. A nonzero value is
     /// an overload or scheduler-invariant signal, never permission to grow.
     pub queue_overflows: u64,
+
+    // --- SRT Compio Owners (index 0 = IPv4, 1 = IPv6) ---
+    pub srt_owners: [OwnerFamilyMetrics; 2],
+    /// The shard's Compio runtime is io_uring (vs Poll).
+    pub srt_runtime_io_uring: bool,
+    /// The shard's runtime provides the full managed-RX substrate (Owners
+    /// under `ManagedPreferred` select managed multishot only when true).
+    pub srt_managed_rx_available: bool,
+    /// Owner teardowns that missed their quiescence bound.
+    pub srt_owner_shutdown_incomplete: u64,
 
     /// Time this snapshot was collected.
     pub collected_at: Option<Instant>,

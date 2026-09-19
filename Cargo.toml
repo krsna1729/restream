@@ -64,12 +64,15 @@ shiguredo_mp4 = "2026.5.0"
 # Final upstream srt-rs. `compio` is the network I/O substrate for the next
 # work item (srt_transport::compio::Owner); the native io_uring SRT egress
 # still runs on the runtime-neutral surface in this intermediate commit.
-srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "5dce0b2767a39224857221111593088cabd993b1" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "5dce0b2767a39224857221111593088cabd993b1", features = ["compio"] }
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "090affbdc7c48cc2a13ecd416754cc93a6404bec" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "090affbdc7c48cc2a13ecd416754cc93a6404bec", features = ["compio"] }
 # Bounded shard command channel with both blocking and Future-based receive, so
 # a backend that owns a thread-affine completion runtime can await commands
 # alongside its own I/O without a second wake source.
 flume = { version = "0.12", default-features = false, features = ["async"] }
+# The SRT egress backend owns one Compio runtime per shard thread, so it
+# names the runtime type directly.
+compio = { version = "=0.19.2", default-features = false, features = ["runtime", "time"] }
 tracing = { version = "0.1", features = ["max_level_debug"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"

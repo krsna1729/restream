@@ -432,48 +432,6 @@ fn backend_policy_does_not_use_global_internal_switch_for_all_stages() {
 }
 
 #[test]
-fn srt_egress_reuse_local_port_defaults_on_and_allows_override() {
-    with_env_overlay(&[], &["RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT"], || {
-        assert!(AppConfig::from_env().srt_egress_reuse_local_port);
-    });
-    with_env_vars(&[("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT", "true")], || {
-        assert!(AppConfig::from_env().srt_egress_reuse_local_port);
-    });
-    with_env_vars(&[("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT", "1")], || {
-        assert!(AppConfig::from_env().srt_egress_reuse_local_port);
-    });
-    with_env_vars(&[("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT", "false")], || {
-        assert!(!AppConfig::from_env().srt_egress_reuse_local_port);
-    });
-    with_env_vars(&[("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT", "0")], || {
-        assert!(!AppConfig::from_env().srt_egress_reuse_local_port);
-    });
-}
-
-#[test]
-fn srt_egress_muxer_port_pipeline_scoped_defaults_on_and_allows_override() {
-    with_env_overlay(
-        &[],
-        &["RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED"],
-        || {
-            assert!(AppConfig::from_env().srt_egress_muxer_port_pipeline_scoped);
-        },
-    );
-    with_env_vars(
-        &[("RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED", "false")],
-        || {
-            assert!(!AppConfig::from_env().srt_egress_muxer_port_pipeline_scoped);
-        },
-    );
-    with_env_vars(
-        &[("RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED", "0")],
-        || {
-            assert!(!AppConfig::from_env().srt_egress_muxer_port_pipeline_scoped);
-        },
-    );
-}
-
-#[test]
 fn srt_connect_timeout_defaults_and_allows_override() {
     with_env_overlay(&[], &["RESTREAM_SRT_CONNECT_TIMEOUT_MS"], || {
         assert_eq!(AppConfig::from_env().srt_connect_timeout_ms, 10_000);

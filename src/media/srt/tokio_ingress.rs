@@ -19,7 +19,7 @@ use crate::media::ring_buffer::RingBuffer;
 use crate::media::security::{IngestSecurityService, RateLimitScope};
 use crate::media::srt_stream_id::{SrtConnectionMode, parse_srt_stream_id};
 
-use super::tokio_egress::timestamp_now;
+use super::timestamp_now;
 use crate::media::standby_gop::StandbyGopCache;
 use crate::media::ts_chunk_ring::TsChunkReader;
 
@@ -70,7 +70,7 @@ impl SrtServer {
         let prepared = match ListenerConfig::builder(bind)
             .topology(ListenerTopology::PerPort)
             .bonded_inputs(BondedInputPolicy::Accept)
-            .configure_transport(super::tokio_egress::apply_optional_udp_buf)
+            .configure_transport(super::apply_optional_udp_buf)
             .build()
             .and_then(|config| config.prepare(RuntimeFlavor::Mio))
         {

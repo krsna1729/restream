@@ -1,19 +1,31 @@
-//! Process-wide A/B knobs for Tokio SRT UDP buffers and batch caps.
+//! Process-wide A/B knobs for SRT UDP buffers and batch caps, and the
+//! ingress-side protocol clock.
 //!
 //! Unset or unparseable values keep the historical defaults. Resolved once
 //! per process so the packet path never re-parses the environment.
 
 use std::sync::OnceLock;
+use std::time::Instant;
 
+use srt_proto::Timestamp;
 use srt_transport::advanced::driver::RecvBudget;
 use srt_transport::advanced::native_io::RecvBatch;
 use srt_transport::{SocketBufferConfig, TransportConfig};
 use tracing::info;
 
-/// Requested `SO_RCVBUF`/`SO_SNDBUF` for shared Tokio SRT egress sockets.
+/// Requested `SO_RCVBUF`/`SO_SNDBUF` for the SRT egress Owner sockets.
 pub(crate) const DESIRED_UDP_BUF: usize = 8 * 1024 * 1024;
 const UDP_BUF_ENV: &str = "RESTREAM_SRT_UDP_BUF_BYTES";
 const RECV_BUDGET_ENV: &str = "RESTREAM_SRT_RECV_BUDGET_DATAGRAMS";
+
+static CLOCK: OnceLock<Instant> = OnceLock::new();
+
+/// Process-wide monotonic protocol time for the ingress side. (Egress uses a
+/// shard-local epoch shared by that shard's Owners; see `SrtOwners`.)
+pub(crate) fn timestamp_now() -> Timestamp {
+    let start = CLOCK.get_or_init(Instant::now);
+    Timestamp::from_micros(start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64)
+}
 
 pub(crate) fn desired_udp_buf() -> usize {
     udp_buf_override().unwrap_or(DESIRED_UDP_BUF)

@@ -6,11 +6,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-/// Run each shard factory on this thread, standing in for its shard thread.
-fn build_all<B>(factories: Vec<impl FnOnce() -> B>) -> Vec<B> {
-    factories.into_iter().map(|factory| factory()).collect()
-}
-
 fn feed() -> TsFeed {
     let ring = TsChunkRing::new(8, CancellationToken::new());
     TsFeed::new(&ring, Arc::new(FeedEpoch::new()))
@@ -24,110 +19,21 @@ fn shard_config() -> EgressShardConfig {
     EgressShardConfig::new(16, 4, 4, 4, Duration::from_millis(1)).unwrap()
 }
 
-#[test]
-fn srt_fabric_shard_backends_build_one_backend_per_shard() {
-    let backends = build_all(srt_fabric_shard_factories(
-        "pipeline-a",
-        NonZeroU32::new(3).unwrap(),
-        budget(),
-        |_| feed(),
-        None,
-        EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
-        EgressShardConfig::DEFAULT_LEAF_CAPACITY,
-        None,
-    ));
-
-    assert_eq!(backends.len(), 3);
+fn owner_settings() -> SrtOwnerSettings {
+    SrtOwnerSettings::new(4, Duration::from_secs(5))
 }
 
-#[test]
-fn srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state() {
-    // libsrt runs exactly one `CSndQueue` worker thread per bound local UDP
-    // port, so handing every shard the same reuse state funnels all egress
-    // sockets through one libsrt sender thread. Each shard must get its own.
-    let ports = SrtEgressMuxerPorts::default();
-
-    let backends = build_all(srt_fabric_shard_factories(
-        "pipeline-a",
-        NonZeroU32::new(3).unwrap(),
-        budget(),
-        |_| feed(),
-        Some(ports.clone()),
-        EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
-        EgressShardConfig::DEFAULT_LEAF_CAPACITY,
-        None,
-    ));
-
-    assert_eq!(
-        ports.tracked_shards(),
-        3,
-        "one libsrt multiplexer port per shard"
-    );
-    let states = backends
-        .iter()
-        .map(|backend| {
-            backend
-                .inner_backend()
-                .srt_egress_muxer_port_state()
-                .clone()
-        })
-        .collect::<Vec<_>>();
-    for (index, state) in states.iter().enumerate() {
-        // Within a shard, reuse still works: a later leaf on this shard
-        // resolves the same state and therefore binds the same port.
-        assert!(
-            Arc::ptr_eq(
-                state,
-                &ports.shard("pipeline-a", ShardId::new(index as u32))
-            ),
-            "shard {index} must keep claiming its own port"
-        );
-        for other in states.iter().skip(index + 1) {
-            assert!(
-                !Arc::ptr_eq(state, other),
-                "shards must not share one libsrt multiplexer"
-            );
-        }
-    }
-}
-
-#[test]
-fn srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry() {
-    let backends = build_all(srt_fabric_shard_factories(
-        "pipeline-a",
-        NonZeroU32::new(2).unwrap(),
-        budget(),
-        |_| feed(),
-        None,
-        EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
-        EgressShardConfig::DEFAULT_LEAF_CAPACITY,
-        None,
-    ));
-
-    // Reuse disabled still means backend-local, never-shared state.
-    let first = backends[0]
-        .inner_backend()
-        .srt_egress_muxer_port_state()
-        .clone();
-    let second = backends[1]
-        .inner_backend()
-        .srt_egress_muxer_port_state()
-        .clone();
-    assert!(!Arc::ptr_eq(&first, &second));
-    assert!(first.lock().unwrap().is_none());
-}
-
+/// The factory runs on each shard's own thread and builds a Compio runtime
+/// there, so a started group proves the runtime was constructible off the
+/// caller's thread and that every shard came up.
 #[test]
 fn spawn_srt_fabric_shard_group_starts_requested_shards() {
-    let group = spawn_srt_fabric_shard_group_with_runtime_check(
-        "pipeline-a",
+    let group = spawn_srt_fabric_shard_group(
         NonZeroU32::new(2).unwrap(),
         shard_config(),
         budget(),
-        |_| feed(),
-        || Ok::<(), &'static str>(()),
-        None,
-        None,
+        |_: ShardId| feed(),
+        owner_settings(),
     )
     .unwrap();
 
@@ -135,50 +41,5 @@ fn spawn_srt_fabric_shard_group_starts_requested_shards() {
     assert_eq!(group.snapshots().len(), 2);
     let snapshots = group.shutdown_and_join();
     assert_eq!(snapshots.len(), 2);
-}
-
-#[test]
-fn spawn_srt_fabric_shard_group_reports_runtime_check_error() {
-    let result = spawn_srt_fabric_shard_group_with_runtime_check(
-        "pipeline-a",
-        NonZeroU32::new(2).unwrap(),
-        shard_config(),
-        budget(),
-        |_| feed(),
-        || Err("runtime failed"),
-        None,
-        None,
-    );
-
-    assert!(matches!(
-        result,
-        Err(SrtFabricShardGroupError::Backend("runtime failed"))
-    ));
-}
-
-#[test]
-fn srt_fabric_shard_backends_share_one_connect_admission_semaphore_across_shards() {
-    // Connect admission is engine-wide, not per shard: every shard's
-    // backend must clone the *same* semaphore handle so a permit acquired
-    // on one shard is visible to every other shard (see
-    // `srt_connect_admission.rs`).
-    let admission = Arc::new(tokio::sync::Semaphore::new(1));
-
-    let backends = build_all(srt_fabric_shard_factories(
-        "pipeline-a",
-        NonZeroU32::new(3).unwrap(),
-        budget(),
-        |_| feed(),
-        None,
-        EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
-        EgressShardConfig::DEFAULT_LEAF_CAPACITY,
-        Some(admission.clone()),
-    ));
-
-    assert_eq!(backends.len(), 3);
-    assert_eq!(admission.available_permits(), 1);
-    let permit = admission.clone().try_acquire_owned().unwrap();
-    assert_eq!(admission.available_permits(), 0);
-    drop(permit);
-    assert_eq!(admission.available_permits(), 1);
+    assert!(snapshots.iter().all(|snapshot| !snapshot.panicked));
 }

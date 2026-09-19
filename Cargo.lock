@@ -2583,6 +2583,7 @@ dependencies = [
  "axum",
  "bytes",
  "chrono",
+ "compio",
  "criterion",
  "ffmpeg-next",
  "flume",
@@ -3218,7 +3219,7 @@ dependencies = [
 [[package]]
 name = "srt-lifecycle"
 version = "0.1.0"
-source = "git+https://github.com/krsna1729/srt-rs?rev=5dce0b2767a39224857221111593088cabd993b1#5dce0b2767a39224857221111593088cabd993b1"
+source = "git+https://github.com/krsna1729/srt-rs?rev=090affbdc7c48cc2a13ecd416754cc93a6404bec#090affbdc7c48cc2a13ecd416754cc93a6404bec"
 dependencies = [
  "srt-proto",
 ]
@@ -3226,7 +3227,7 @@ dependencies = [
 [[package]]
 name = "srt-proto"
 version = "0.1.0"
-source = "git+https://github.com/krsna1729/srt-rs?rev=5dce0b2767a39224857221111593088cabd993b1#5dce0b2767a39224857221111593088cabd993b1"
+source = "git+https://github.com/krsna1729/srt-rs?rev=090affbdc7c48cc2a13ecd416754cc93a6404bec#090affbdc7c48cc2a13ecd416754cc93a6404bec"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3246,7 +3247,7 @@ dependencies = [
 [[package]]
 name = "srt-transport"
 version = "0.1.0"
-source = "git+https://github.com/krsna1729/srt-rs?rev=5dce0b2767a39224857221111593088cabd993b1#5dce0b2767a39224857221111593088cabd993b1"
+source = "git+https://github.com/krsna1729/srt-rs?rev=090affbdc7c48cc2a13ecd416754cc93a6404bec#090affbdc7c48cc2a13ecd416754cc93a6404bec"
 dependencies = [
  "compio",
  "futures-util",
@@ -3363,7 +3364,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

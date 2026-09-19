@@ -1,4 +1,4 @@
-use crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPorts;
+use crate::media::egress::backends::srt::SrtOwnerSettings;
 use crate::media::egress::command::{EgressCommand, FeedId};
 use crate::media::egress::factory::{SrtFabricShardGroupError, spawn_srt_fabric_shard_group};
 use crate::media::egress::journal::TsFeed;
@@ -26,49 +26,32 @@ pub(crate) enum SrtFabricDispatchError {
 }
 
 impl MediaEngine {
-    /// The key used to scope `SrtEgressMuxerPorts` reuse: the real pipeline
-    /// id when `srt_egress_muxer_port_pipeline_scoped` is enabled (the
-    /// default), or one fixed key shared by every pipeline when disabled
-    /// (the pre-2026-08-14 engine-wide-shared behavior). See the field doc
-    /// on `AppConfig::srt_egress_muxer_port_pipeline_scoped`.
-    fn srt_egress_muxer_scope_key<'a>(&self, pipeline_id: &'a str) -> &'a str {
-        if self.config.srt_egress_muxer_port_pipeline_scoped {
-            pipeline_id
-        } else {
-            ""
-        }
+    /// Per-shard SRT Owner settings: the caller pool's `max_in_flight` is the
+    /// transport's connect admission, and the attempt deadline is the
+    /// configured SRT connect timeout, counted from pool admission.
+    fn srt_owner_settings(&self) -> SrtOwnerSettings {
+        SrtOwnerSettings::new(
+            self.config.srt_egress_connect_concurrency,
+            std::time::Duration::from_millis(self.config.srt_connect_timeout_ms),
+        )
     }
 
     pub(crate) async fn retain_srt_fabric_runtime(
         &self,
         feed_id: FeedId,
         feed: &TsFeed,
-        pipeline_id: &str,
     ) -> Result<bool, SrtFabricEnsureError> {
         let mut registry = self.fabric.srt.lock().await;
         let created = if registry.runtimes.contains_key(&feed_id) {
             false
         } else {
             let config = &self.config.egress_fabric;
-            // Engine-wide, per-(pipeline, shard) local-UDP-port reuse:
-            // leaves on one shard of one pipeline share that shard's libsrt
-            // egress multiplexer (and its one `CSndQueue` worker thread),
-            // while different shards -- and, when pipeline-scoped, the same
-            // shard number on a different pipeline -- get different
-            // multiplexers — see `muxer_ports.rs` and
-            // `srt_egress_muxer_scope_key`.
-            let srt_egress_muxer_port_reuse = self
-                .config
-                .srt_egress_reuse_local_port
-                .then(|| self.srt_egress_muxer_ports_handle());
             let group = spawn_srt_fabric_shard_group(
-                self.srt_egress_muxer_scope_key(pipeline_id),
                 config.shard_count(),
                 config.shard_config(),
                 config.work_budget(),
                 |_| feed.clone_reader(),
-                srt_egress_muxer_port_reuse.clone(),
-                Some(self.srt_egress_connect_admission_handle()),
+                self.srt_owner_settings(),
             )
             .map_err(SrtFabricEnsureError::Spawn)?;
             let manager_config =
@@ -88,12 +71,6 @@ impl MediaEngine {
             registry.runtimes.insert(feed_id.clone(), runtime);
             registry.feed_watchers.insert(feed_id.clone(), watcher);
             registry.feeds.insert(feed_id.clone(), feed.clone_reader());
-            registry
-                .srt_egress_muxer_port_reuse
-                .insert(feed_id.clone(), srt_egress_muxer_port_reuse);
-            registry
-                .pipeline_ids
-                .insert(feed_id.clone(), pipeline_id.to_string());
             true
         };
 
@@ -111,13 +88,7 @@ impl MediaEngine {
         // Owned upfront (see `dispatch_rtmp_fabric_command`'s identical
         // comment): disjoint from the `runtimes` borrow below, and no
         // lingering reference into `registry` for `rescale` to hold.
-        let rescale_inputs = registry
-            .feeds
-            .get(feed_id)
-            .map(|feed| feed.clone_reader())
-            .zip(registry.srt_egress_muxer_port_reuse.get(feed_id).cloned())
-            .zip(registry.pipeline_ids.get(feed_id).cloned())
-            .map(|((feed, muxer_reuse), pipeline_id)| (feed, muxer_reuse, pipeline_id));
+        let rescale_inputs = registry.feeds.get(feed_id).map(|feed| feed.clone_reader());
         let Some(runtime) = registry.runtimes.get_mut(feed_id) else {
             return Err(SrtFabricDispatchError::MissingFeed {
                 feed_id: feed_id.clone(),
@@ -150,47 +121,30 @@ impl MediaEngine {
         &self,
         feed_id: &FeedId,
         runtime: &mut EgressFabricRuntime,
-        (feed, srt_egress_muxer_port_reuse, pipeline_id): (
-            TsFeed,
-            Option<SrtEgressMuxerPorts>,
-            String,
-        ),
+        feed: TsFeed,
     ) {
         let config = &self.config.egress_fabric;
         let shard_config = config.shard_config();
         let budget = config.work_budget();
         let effective_cpus = crate::system_sampling::effective_cpu_count();
-        let scope_key = self.srt_egress_muxer_scope_key(&pipeline_id).to_string();
-        let connect_admission = self.srt_egress_connect_admission_handle();
+        let owner_settings = self.srt_owner_settings();
         let result = runtime.rescale(
             crate::config::EgressShardProfile::SrtCpuParallel,
             effective_cpus,
             shard_config,
-            |shard_id| {
+            |_shard_id| {
                 let feed = feed.clone_reader();
-                // Same per-(pipeline, shard) scoping the initial
-                // `spawn_srt_fabric_shard_group` call uses: a shard
-                // grown by a live rescale claims its own libsrt
-                // multiplexer instead of inheriting another
-                // shard's or another pipeline's.
-                let muxer_ports = srt_egress_muxer_port_reuse
-                    .as_ref()
-                    .map(|ports| ports.shard(&scope_key, shard_id));
-                // Same shared engine-wide admission handle the
-                // initial spawn uses.
-                let connect_admission = Some(connect_admission.clone());
                 let drain_timeout = shard_config.drain_timeout();
                 let leaf_capacity = shard_config.leaf_capacity().get();
+                // Built on the new shard's own thread, like the initial spawn;
+                // a runtime that cannot be built fails this grow attempt.
                 move || {
-                    Ok::<_, std::convert::Infallible>(
-                        crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
-                            feed,
-                            budget,
-                            muxer_ports,
-                            drain_timeout,
-                            leaf_capacity,
-                            connect_admission,
-                        ),
+                    crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend(
+                        feed,
+                        budget,
+                        drain_timeout,
+                        leaf_capacity,
+                        owner_settings,
                     )
                 }
             },
@@ -218,8 +172,6 @@ impl MediaEngine {
             }
             registry.active_outputs.remove(feed_id);
             registry.feeds.remove(feed_id);
-            registry.srt_egress_muxer_port_reuse.remove(feed_id);
-            registry.pipeline_ids.remove(feed_id);
             if let Some(watcher) = registry.feed_watchers.remove(feed_id) {
                 watcher.abort();
             }

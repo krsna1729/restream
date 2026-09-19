@@ -136,10 +136,10 @@ async fn srt_fabric_registry_retains_native_runtime_once_per_feed() {
     let feed = TsFeed::new(&ts_ring, Arc::new(FeedEpoch::new()));
 
     let first = engine
-        .retain_srt_fabric_runtime(feed_id.clone(), &feed, "pipeline-a")
+        .retain_srt_fabric_runtime(feed_id.clone(), &feed)
         .await;
     let second = engine
-        .retain_srt_fabric_runtime(feed_id.clone(), &feed, "pipeline-a")
+        .retain_srt_fabric_runtime(feed_id.clone(), &feed)
         .await;
     let snapshots = engine.srt_fabric_runtime_snapshots(&feed_id).await;
 
@@ -165,166 +165,6 @@ async fn srt_fabric_registry_retains_native_runtime_once_per_feed() {
     );
 }
 
-/// End-to-end wiring proof for the libsrt egress-multiplexer scoping.
-///
-/// libsrt creates one `CMultiplexer` per bound local UDP port and gives each
-/// one exactly one `CSndQueue` and one `CRcvQueue` worker thread
-/// (`srtcore/api.cpp::updateMux` -> `srtcore/queue.cpp`). An engine-wide
-/// port therefore put every SRT egress connection on one libsrt sender
-/// thread, which is what saturated at ~120 concurrent egress outputs and
-/// drove libsrt's TLPKTDROP to discard packets past their deadline. This
-/// asserts the real `retain_srt_fabric_runtime` path claims one port per
-/// `(pipeline, shard)`, that shard *N* is shared across feeds *of the same
-/// pipeline* so the libsrt thread count tracks shard count rather than feed
-/// count, and that a different pipeline's shard *N* never shares that
-/// multiplexer (the cross-tenant isolation fix).
-#[tokio::test]
-async fn srt_fabric_runtime_claims_one_libsrt_muxer_port_per_shard_shared_across_feeds() {
-    // Explicit config, not `MediaEngine::new()`'s `AppConfig::from_env()`:
-    // the process environment is shared with the config tests, which
-    // temporarily set `RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED=false`
-    // while asserting the override. Reading env here raced that window and
-    // silently flipped this test's premise (both pipelines then share one
-    // scope key, so the cross-tenant assertion below sees `shard_count`
-    // entries instead of `shard_count * 2`). Mirrors the sibling
-    // `..._shares_muxer_ports_across_pipelines_when_scoping_disabled`.
-    let engine = MediaEngine::new_with_config(Arc::new(crate::AppConfig {
-        srt_egress_muxer_port_pipeline_scoped: true,
-        ..crate::AppConfig::default()
-    }));
-    assert!(
-        engine.config.srt_egress_reuse_local_port,
-        "this test covers the reuse-enabled default"
-    );
-    let shard_count = engine.config.egress_fabric.shard_count().get();
-    assert!(shard_count > 1, "need more than one shard to be meaningful");
-    let ts_ring = TsChunkRing::new(8, CancellationToken::new());
-    let feed = TsFeed::new(&ts_ring, Arc::new(FeedEpoch::new()));
-    let first_feed = FeedId::new("feed-engine-srt-muxer-source");
-    let second_feed = FeedId::new("feed-engine-srt-muxer-720p");
-    let other_pipeline_feed = FeedId::new("feed-engine-srt-muxer-other-pipeline");
-
-    assert_eq!(
-        engine
-            .retain_srt_fabric_runtime(first_feed.clone(), &feed, "pipeline-a")
-            .await,
-        Ok(true)
-    );
-    let ports = engine.srt_egress_muxer_ports_handle();
-    assert_eq!(
-        ports.tracked_shards(),
-        shard_count as usize,
-        "one libsrt multiplexer port per shard"
-    );
-
-    // A second feed on the SAME pipeline reuses the same per-shard entries
-    // rather than minting a second multiplexer per shard.
-    assert_eq!(
-        engine
-            .retain_srt_fabric_runtime(second_feed.clone(), &feed, "pipeline-a")
-            .await,
-        Ok(true)
-    );
-    assert_eq!(
-        ports.tracked_shards(),
-        shard_count as usize,
-        "shard N is shared across feeds of one pipeline, so libsrt thread count \
-         tracks shard count within that pipeline"
-    );
-
-    // A feed on a DIFFERENT pipeline must mint its own multiplexers, even
-    // for the same numeric shard ids -- this is the cross-tenant isolation
-    // property `SrtEgressMuxerPorts` exists to provide.
-    assert_eq!(
-        engine
-            .retain_srt_fabric_runtime(other_pipeline_feed.clone(), &feed, "pipeline-b")
-            .await,
-        Ok(true)
-    );
-    assert_eq!(
-        ports.tracked_shards(),
-        (shard_count * 2) as usize,
-        "a different pipeline's shard N must not share pipeline-a's multiplexer"
-    );
-
-    // Distinct per shard; stable (reusable) within a shard.
-    let states = (0..shard_count)
-        .map(|index| ports.shard("pipeline-a", ShardId::new(index)))
-        .collect::<Vec<_>>();
-    for (index, state) in states.iter().enumerate() {
-        assert!(Arc::ptr_eq(
-            state,
-            &ports.shard("pipeline-a", ShardId::new(index as u32))
-        ));
-        assert!(
-            !Arc::ptr_eq(
-                state,
-                &ports.shard("pipeline-b", ShardId::new(index as u32))
-            ),
-            "pipeline-a and pipeline-b must never share a multiplexer for the same shard id"
-        );
-        for other in states.iter().skip(index + 1) {
-            assert!(
-                !Arc::ptr_eq(state, other),
-                "shards must not share one libsrt multiplexer"
-            );
-        }
-    }
-
-    assert!(engine.release_srt_fabric_runtime(&first_feed).await);
-    assert!(engine.release_srt_fabric_runtime(&second_feed).await);
-    assert!(
-        engine
-            .release_srt_fabric_runtime(&other_pipeline_feed)
-            .await
-    );
-    // Releasing a feed keeps the per-shard entries: a shard that comes back
-    // reuses its previous port instead of stranding it.
-    assert_eq!(ports.tracked_shards(), (shard_count * 2) as usize);
-}
-
-/// `srt_egress_muxer_port_pipeline_scoped = false` restores the
-/// pre-2026-08-14 engine-wide-shared behavior: two different pipelines'
-/// shard *N* collapse onto the same multiplexer entry, matching what
-/// `srt_fabric_runtime_claims_one_libsrt_muxer_port_per_shard_shared_across_feeds`
-/// proves for feeds *within* one pipeline. This is the explicit opt-out
-/// path for operators who prefer the lower multiplexer/thread count over
-/// cross-tenant isolation -- see `AppConfig::srt_egress_muxer_port_pipeline_scoped`.
-#[tokio::test]
-async fn srt_fabric_runtime_shares_muxer_ports_across_pipelines_when_scoping_disabled() {
-    let engine = MediaEngine::new_with_config(Arc::new(crate::AppConfig {
-        srt_egress_muxer_port_pipeline_scoped: false,
-        ..crate::AppConfig::default()
-    }));
-    let shard_count = engine.config.egress_fabric.shard_count().get();
-    let ts_ring = TsChunkRing::new(8, CancellationToken::new());
-    let feed = TsFeed::new(&ts_ring, Arc::new(FeedEpoch::new()));
-    let first_feed = FeedId::new("feed-engine-srt-muxer-scope-off-a");
-    let other_pipeline_feed = FeedId::new("feed-engine-srt-muxer-scope-off-b");
-
-    assert_eq!(
-        engine
-            .retain_srt_fabric_runtime(first_feed.clone(), &feed, "pipeline-a")
-            .await,
-        Ok(true)
-    );
-    let ports = engine.srt_egress_muxer_ports_handle();
-    assert_eq!(ports.tracked_shards(), shard_count as usize);
-
-    assert_eq!(
-        engine
-            .retain_srt_fabric_runtime(other_pipeline_feed.clone(), &feed, "pipeline-b")
-            .await,
-        Ok(true)
-    );
-    assert_eq!(
-        ports.tracked_shards(),
-        shard_count as usize,
-        "with pipeline scoping disabled, a different pipeline's shard N \
-         must share the same multiplexer entry, not mint its own"
-    );
-}
-
 #[tokio::test]
 async fn srt_fabric_registry_shutdown_helper_removes_and_joins_retained_runtime() {
     let engine = MediaEngine::new();
@@ -334,7 +174,7 @@ async fn srt_fabric_registry_shutdown_helper_removes_and_joins_retained_runtime(
 
     assert_eq!(
         engine
-            .retain_srt_fabric_runtime(feed_id.clone(), &feed, "pipeline-a")
+            .retain_srt_fabric_runtime(feed_id.clone(), &feed)
             .await,
         Ok(true)
     );

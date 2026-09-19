@@ -2,15 +2,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 
-use super::{
-    SrtResolveRequest, SrtResolvedConnect, SrtShardBackend, duration_millis_u64,
-    srt_resolve_completion_queue,
-};
+use super::owner_set::{SrtOwnerSettings, SrtOwners};
+use super::{SrtResolveRequest, SrtResolvedConnect, SrtShardBackend, srt_resolve_completion_queue};
 use crate::media::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::policy::WorkBudget;
-use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
+use crate::media::egress::shard::{
+    EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake,
+};
 use crate::media::srt::SrtFabricEgressConnectSpec;
 use std::sync::mpsc::SyncSender;
 
@@ -77,11 +77,6 @@ impl SrtResolveWorkerSet {
             let _ = worker.join();
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn worker_count(&self) -> usize {
-        self.pending.load(Ordering::Relaxed)
-    }
 }
 
 impl Drop for SrtResolveWorkerSet {
@@ -107,13 +102,8 @@ impl<B> ResolvingSrtShardBackend<B> {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn worker_count(&self) -> usize {
-        self.resolve_workers.worker_count()
-    }
-
-    /// The wrapped shard backend, so factory-wiring tests can inspect what
-    /// this decorator was actually constructed around.
+    /// The wrapped shard backend, so tests can inspect what this decorator
+    /// was actually constructed around.
     #[cfg(test)]
     pub(crate) fn inner_backend(&self) -> &B {
         &self.backend
@@ -149,6 +139,16 @@ where
         self.backend.on_ready()
     }
 
+    /// The idle wait belongs to the wrapped backend (it parks inside its
+    /// Compio runtime); the default channel wait here would bypass it.
+    fn wait_idle(
+        &mut self,
+        commands: &flume::Receiver<EgressCommand>,
+        max_wait: std::time::Duration,
+    ) -> EgressShardIdleWake {
+        self.backend.wait_idle(commands, max_wait)
+    }
+
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         let effect = self.backend.on_media_tick();
         // Flush buffered resolve requests into the worker set, batching
@@ -180,34 +180,26 @@ where
     }
 }
 
+/// Build one SRT shard backend. Runs on the shard OS thread (it is the shard
+/// factory's body) because it constructs the shard's Compio runtime; a
+/// runtime that cannot be built is a typed error, not a panic.
 pub(crate) fn resolving_srt_shard_backend(
     feed: TsFeed,
     budget: WorkBudget,
-    // This shard's application-owned UDP socket and logical caller table
-    // (see `SrtShardBackend::with_srt_egress_muxer_port_reuse`).
-    // `None` leaves reuse disabled (every existing test/no-config caller);
-    // `Some` is the per-shard state minted by `SrtEgressMuxerPorts::shard`
-    // in `factory.rs`/`engine_egress_fabric.rs`, so leaves on this shard
-    // share one srt-rs socket/table and other shards get their own.
-    srt_egress_muxer_port_reuse: Option<super::muxer_ports::SrtEgressMuxerPortState>,
     drain_timeout: std::time::Duration,
     leaf_capacity: usize,
-    // Engine-wide connect-concurrency admission control (see
-    // `srt_connect_admission.rs`). `None` leaves connects unthrottled
-    // (every existing test/no-config caller); `Some` is the one shared
-    // handle from `MediaEngine::srt_egress_connect_admission_handle`.
-    connect_admission: Option<std::sync::Arc<tokio::sync::Semaphore>>,
-) -> ResolvingSrtShardBackendDefault {
+    owner_settings: SrtOwnerSettings,
+) -> Result<ResolvingSrtShardBackendDefault, String> {
+    let owners = SrtOwners::new(owner_settings)?;
     let (completion_sender, completion_queue) =
         srt_resolve_completion_queue(SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY);
-    let mut backend = SrtShardBackend::with_runtime_components(feed, budget, completion_queue)
+    let backend = SrtShardBackend::with_runtime_components(feed, budget, completion_queue, owners)
         .with_leaf_capacity(leaf_capacity)
-        .with_drain_timeout(drain_timeout)
-        .with_connect_admission(connect_admission);
-    if let Some(state) = srt_egress_muxer_port_reuse {
-        backend = backend.with_srt_egress_muxer_port_reuse(state, true);
-    }
-    ResolvingSrtShardBackend::new(backend, SrtResolveWorkerSet::new(completion_sender))
+        .with_drain_timeout(drain_timeout);
+    Ok(ResolvingSrtShardBackend::new(
+        backend,
+        SrtResolveWorkerSet::new(completion_sender),
+    ))
 }
 
 fn resolve_request_from_command(command: &EgressCommand) -> Option<SrtResolveRequest> {
@@ -226,8 +218,7 @@ fn resolve_request_from_output_spec(spec: &OutputSpec) -> Option<SrtResolveReque
     let ProtocolSpec::Srt { url } = &spec.protocol else {
         return None;
     };
-    let connect_spec =
-        SrtFabricEgressConnectSpec::from_url(url, duration_millis_u64(spec.policy.connect_timeout));
+    let connect_spec = SrtFabricEgressConnectSpec::from_url(url);
     let peer_hosts = connect_spec.peer_hosts().to_vec();
     if peer_hosts.is_empty() {
         return None;

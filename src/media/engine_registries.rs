@@ -19,7 +19,6 @@ use crate::domain::stage::StageKey;
 use crate::events::EventLog;
 use crate::media::avio::MemoryQueue;
 use crate::media::egress::FeedId;
-use crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPorts;
 use crate::media::egress::runtime::EgressFabricRuntime;
 use crate::media::engine::{
     ActiveEgress, ActiveIngest, EgressRetryState, RecentEgressOutcome, RecentIngestOutcome,
@@ -107,16 +106,6 @@ pub(crate) struct SrtFabricRegistry {
     /// `EgressFabricRuntime::rescale` can mint a fresh reader for a shard
     /// grown after startup — see `RtmpFabricRegistry::feeds`.
     pub(crate) feeds: HashMap<FeedId, crate::media::egress::journal::TsFeed>,
-    /// The per-shard local-UDP-port reuse registry passed to the initial
-    /// `spawn_srt_fabric_shard_group` call, consulted again for any shard
-    /// grown later so a rescaled-in shard gets its own libsrt multiplexer
-    /// instead of falling back to another shard's.
-    pub(crate) srt_egress_muxer_port_reuse: HashMap<FeedId, Option<SrtEgressMuxerPorts>>,
-    /// The owning pipeline id resolved at creation time, reused on every
-    /// later rescale so a shard grown after startup claims its libsrt
-    /// multiplexer port under the same `(pipeline, shard)` key the initial
-    /// spawn used — see `SrtEgressMuxerPorts`.
-    pub(crate) pipeline_ids: HashMap<FeedId, String>,
 }
 
 impl SrtFabricRegistry {
@@ -126,8 +115,6 @@ impl SrtFabricRegistry {
             active_outputs: HashMap::new(),
             feed_watchers: HashMap::new(),
             feeds: HashMap::new(),
-            srt_egress_muxer_port_reuse: HashMap::new(),
-            pipeline_ids: HashMap::new(),
         }
     }
 }
@@ -515,15 +502,6 @@ pub struct RuntimeInfra {
     pub os_threads: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
     pub listener_shutdowns: std::sync::Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
     pub sender_semaphore: Arc<tokio::sync::Semaphore>,
-    /// Engine-wide registry of per-shard libsrt egress multiplexer ports —
-    /// see `SrtEgressMuxerPorts` for why this is keyed by shard id rather
-    /// than being a single engine-wide port.
-    pub(crate) srt_egress_muxer_ports: SrtEgressMuxerPorts,
-    /// Engine-wide bound on concurrent in-flight SRT egress connects —
-    /// see `srt_connect_admission.rs`. One shared semaphore, not per shard
-    /// or per pipeline: it caps total connection-establishment concurrency
-    /// regardless of how that work is sharded.
-    pub(crate) srt_egress_connect_admission: Arc<tokio::sync::Semaphore>,
     pub external_ffmpeg_semaphore: Arc<tokio::sync::Semaphore>,
     pub diag_semaphores: TokioRwLock<HashMap<String, Arc<tokio::sync::Semaphore>>>,
     pub event_log: Arc<EventLog>,
@@ -544,10 +522,6 @@ impl RuntimeInfra {
             os_threads: std::sync::Mutex::new(Vec::new()),
             listener_shutdowns: std::sync::Mutex::new(Vec::new()),
             sender_semaphore: Arc::new(tokio::sync::Semaphore::new(512)),
-            srt_egress_muxer_ports: SrtEgressMuxerPorts::default(),
-            srt_egress_connect_admission: Arc::new(tokio::sync::Semaphore::new(
-                config.srt_egress_connect_concurrency,
-            )),
             external_ffmpeg_semaphore: Arc::new(tokio::sync::Semaphore::new(
                 external_ffmpeg_permits,
             )),

@@ -18,32 +18,6 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 
 ## Open
 
-### Q-023 [performance] [opus] Batch the shared SRT egress table drive per visit
-- Goal: a connected shared-muxer leaf stops driving the whole shared
-  `CallerTable` after every accepted fragment. Logical callers enqueue their
-  sends under the existing `WorkBudget`, and the common socket/table is
-  flushed once per visit (or per pass), with backpressure and acceptance
-  semantics unchanged. Needs before/after evidence at shared-muxer density,
-  not just a smaller call count.
-- Files: `src/media/srt/tokio_egress/mod.rs` (`RustSrtSocket::send`'s
-  `Shared` arm, `drive_shared_srt_egress`), `src/media/srt/egress_engine.rs`
-  (`send_pending`'s fragment loop), `src/media/srt/tokio_egress/shared.rs`.
-- Gates: `scripts/build/resource-limit.sh cargo test --lib srt`;
-  `scripts/check/concurrency/contract.sh`; `benches/matrix_throughput.rs`
-  before/after; MSR shared-muxer ladder for the density claim.
-- Context: `RustSrtSocket::send`'s `Shared` arm calls `shared.drive(...)`
-  after each successful `send_shared`, and `SrtEgressEngine::send_pending`
-  loops several ≤1316-byte fragments per visit, so a busy pass performs many
-  whole-table drives (drain shared socket, flush shared outbound, poll every
-  caller) under one mutex. Predates PR #141 (it arrived with the srt-rs
-  cutover itself — the `Shared`/`CallerTable` path is post-cutover
-  architecture — and was already on #141's base); #141 bounded only the
-  *readiness* path (`poll_ready` drives the table once regardless of leaf
-  count, proven by
-  `poll_ready_drive_of_the_shared_muxer_does_not_scale_with_leaf_count`) and
-  deliberately did not touch the send path.
-- Status: open (Filed: 2026-09-05 by claude, from PR #141 review)
-
 ### Q-024 [modularity] [sonnet] Collapse the connector/completion test seams in both egress backends
 - Goal: remove production traits that exist only so tests can substitute a
   fake, in SRT *and* RTMP together: `SrtSocketConnector`
@@ -82,7 +56,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   full delivery and clean teardown; no code change without it.
 - Context: the current policy was derived from libsrt's
   one-`CSndQueue`-worker-per-multiplexer model. After #137/#141 a shard owns
-  an application-owned UDP socket plus `CallerTable` driven from the shard
+  a per-shard Compio runtime with per-family Owners driven from the shard
   thread — no per-multiplexer worker — so shard count is no longer buying
   the thing the policy assumed. The comments in `config.rs` now mark the
   policy provisional; this item is the measurement that resolves it.
@@ -514,3 +488,29 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 ## Archive
 
 (done items move here with their commit hashes)
+
+### Q-023 [performance] [opus] Batch the shared SRT egress table drive per visit
+- Goal: a connected shared-muxer leaf stops driving the whole shared
+  `CallerTable` after every accepted fragment. Logical callers enqueue their
+  sends under the existing `WorkBudget`, and the common socket/table is
+  flushed once per visit (or per pass), with backpressure and acceptance
+  semantics unchanged. Needs before/after evidence at shared-muxer density,
+  not just a smaller call count.
+- Files: `src/media/srt/tokio_egress/mod.rs` (`RustSrtSocket::send`'s
+  `Shared` arm, `drive_shared_srt_egress`), `src/media/srt/egress_engine.rs`
+  (`send_pending`'s fragment loop), `src/media/srt/tokio_egress/shared.rs`.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib srt`;
+  `scripts/check/concurrency/contract.sh`; `benches/matrix_throughput.rs`
+  before/after; MSR shared-muxer ladder for the density claim.
+- Context: `RustSrtSocket::send`'s `Shared` arm calls `shared.drive(...)`
+  after each successful `send_shared`, and `SrtEgressEngine::send_pending`
+  loops several ≤1316-byte fragments per visit, so a busy pass performs many
+  whole-table drives (drain shared socket, flush shared outbound, poll every
+  caller) under one mutex. Predates PR #141 (it arrived with the srt-rs
+  cutover itself — the `Shared`/`CallerTable` path is post-cutover
+  architecture — and was already on #141's base); #141 bounded only the
+  *readiness* path (`poll_ready` drives the table once regardless of leaf
+  count, proven by
+  `poll_ready_drive_of_the_shared_muxer_does_not_scale_with_leaf_count`) and
+  deliberately did not touch the send path.
+- Status: done (Resolved by the SRT egress move to the Compio `Owner`: `send_shared` only enqueues into protocol state, and `Owner::service` runs once per ready batch per family — proven by `one_ready_batch_is_one_owner_service_pass`. The files named above no longer exist.)

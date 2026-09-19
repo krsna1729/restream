@@ -52,40 +52,65 @@ where
             WorkBudget,
         ) -> EngineProgress,
     ) -> EngineVisitResult {
-        if !self.common.is_current_generation(self.generation) {
-            return EngineVisitResult::StaleGeneration;
-        }
-
-        self.common.schedule.enqueued = false;
-        if !self.common.cursor_primed {
-            // First visit: anchor the placeholder `(0, 0)` cursor to a real
-            // feed position before the engine ever reads. `LeafCommon::new`
-            // cannot do this — the feed is owned by the shard and only
-            // borrowed per visit — and priming here rather than at
-            // construction also means the anchor is taken at the moment the
-            // leaf can actually send, not when it was queued for connect.
-            self.common.cursor = live_start_cursor(self.feed);
-            self.common.cursor_primed = true;
-            tracing::debug!(
-                output_id = %self.common.output_id,
-                start_epoch = self.common.cursor.epoch,
-                start_sequence = self.common.cursor.next_sequence,
-                head_sequence = self.feed.head_sequence(),
-                "egress leaf cursor primed to feed live start"
-            );
-        }
-        let progress = advance(
-            self.engine,
-            self.transport,
-            self.readiness,
+        visit_leaf(
+            self.generation,
+            self.common,
             self.feed,
-            &mut self.common.cursor,
+            self.readiness,
             self.budget,
-        );
-        let decision = apply_progress_to_common(self.common, &progress, self.feed);
-
-        EngineVisitResult::Visited(EngineVisitOutcome { progress, decision })
+            |cursor, readiness, budget| {
+                advance(
+                    self.engine,
+                    self.transport,
+                    readiness,
+                    self.feed,
+                    cursor,
+                    budget,
+                )
+            },
+        )
     }
+}
+
+/// One scheduler visit of a leaf, independent of the engine's transport shape:
+/// generation check, first-visit cursor priming, the engine's own advance, and
+/// the shared progress-to-decision mapping. `EngineVisit::run_with` is this
+/// function plus the `ProtocolEngine` plumbing; engines whose transport lives
+/// outside the leaf (SRT: the shard's Owner) call it directly.
+pub(crate) fn visit_leaf<F: EgressFeed>(
+    generation: u64,
+    common: &mut LeafCommon,
+    feed: &F,
+    readiness: Readiness,
+    budget: WorkBudget,
+    advance: impl FnOnce(&mut FeedCursor, Readiness, WorkBudget) -> EngineProgress,
+) -> EngineVisitResult {
+    if !common.is_current_generation(generation) {
+        return EngineVisitResult::StaleGeneration;
+    }
+
+    common.schedule.enqueued = false;
+    if !common.cursor_primed {
+        // First visit: anchor the placeholder `(0, 0)` cursor to a real
+        // feed position before the engine ever reads. `LeafCommon::new`
+        // cannot do this — the feed is owned by the shard and only
+        // borrowed per visit — and priming here rather than at
+        // construction also means the anchor is taken at the moment the
+        // leaf can actually send, not when it was queued for connect.
+        common.cursor = live_start_cursor(feed);
+        common.cursor_primed = true;
+        tracing::debug!(
+            output_id = %common.output_id,
+            start_epoch = common.cursor.epoch,
+            start_sequence = common.cursor.next_sequence,
+            head_sequence = feed.head_sequence(),
+            "egress leaf cursor primed to feed live start"
+        );
+    }
+    let progress = advance(&mut common.cursor, readiness, budget);
+    let decision = apply_progress_to_common(common, &progress, feed);
+
+    EngineVisitResult::Visited(EngineVisitOutcome { progress, decision })
 }
 
 /// The position a leaf should read from when it has no valid position of its

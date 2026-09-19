@@ -459,11 +459,11 @@ flowchart LR
         SR2 -->|"passthrough"| Mux
         Mux --> TCR[("TsChunkRing — shared SPMC\npackage ring")]
     end
-    subgraph S2["Egress fabric shard pool: OS threads per feed,\neach shard owner drives shared native UDP readiness"]
-        Leaf2["SRT leaf: connection,\ncongestion, encryption state"] --> Send2["non-blocking srt_sendmsg2"]
+    subgraph S2["Egress fabric shard pool: OS threads per feed,\neach shard runs one Compio runtime with per-family Owners"]
+        Leaf2["SRT leaf: connection,\ncongestion, encryption state"] --> Send2["send_shared into the logical caller"]
     end
     TCR --> Leaf2
-    subgraph L2["Shared SRT state: 1 application UDP socket +\nio_uring readiness + CallerTable per (pipeline, shard)"]
+    subgraph L2["Shared SRT state: one Compio Owner per (shard, address family):\n1 caller UDP socket, caller pool, fixed TX pool"]
         Send2 --> Buf["srt-rs protocol buffers + TSBPD\ndeadline enforcement"]
     end
     Buf --> Dest2["Destination SRT receiver"]
@@ -474,15 +474,15 @@ flowchart LR
 | SRT ingest socket and protocol tasks | One native io_uring UDP owner thread with bounded packet handoff to the async `PeerTable`/protocol owner | Fixed receive-buffer reserve plus srt-rs receive state per connection; kernel `SO_RCVBUF` is separate and kernel-owned |
 | `TsDemuxer` → `source_ring` | Tokio worker, inline async | Shared `source_ring`, same structure as RTMP |
 | Shared `TsMuxer` (SRT preparation) | 1 Tokio task per `(pipeline, preset)`, inline async | `TsChunkRing` (256-chunk shared ring, `RESTREAM_TS_RING_CAPACITY`) |
-| Egress shard (SRT) | Fixed OS-thread pool per feed; each shard owner drives one native UDP readiness owner per local address family and queued leaf visits | Per-leaf protocol state and bounded application scratch |
-| Shared SRT transport | 1 application UDP socket/poller per local family + `CallerTable` per `(pipeline, shard)`; shared TS muxing remains per `(pipeline, preset)` | srt-rs caller/protocol state plus kernel `SO_SNDBUF`; normal media DATA uses bounded caller-owned final TX storage through the `DatagramSink` acquire/commit slots drained by `poll_outbound_bounded_to`, while handshake/control/retransmit paths retain their protocol-owned packets |
+| Egress shard (SRT) | Fixed OS-thread pool per feed; each shard owns one Compio runtime and at most one `Owner` per local address family, plus queued leaf visits | Per-leaf application state and bounded scratch; protocol state lives in the Owner |
+| Shared SRT transport | 1 Compio `Owner` per `(shard, local family)`: one caller UDP socket, one bounded caller pool, a fixed TX pool (16 slots per family) and one receive consumer; shared TS muxing remains per `(pipeline, preset)` | srt-rs caller/protocol state plus kernel `SO_SNDBUF`; media DATA is materialized straight into reserved TX-pool slots (`DatagramSink` acquire/commit), handshake/control/retransmit paths retain their protocol-owned packets |
 
-The shared native path bounds work per shard with receive/send budgets and
-explicit ready/feed-wait queues. The transport boundary no longer stages a
-second unbounded output vector: the caller-owned sink takes packets directly
-into a fixed Restream pool. The pinned protocol still builds each packet
-internally; eliminating that final allocation requires an upstream encoder API,
-separate from socket ownership and readiness.
+The SRT path bounds work per shard three ways: a finite `OwnerServiceBudget`
+for each per-family Owner's service pass, explicit ready/feed-wait/parked
+queues for leaf visits, and the Owner's fixed TX pool (16 slots per family) as
+the physical in-flight envelope. Restream keeps no transport queue of its own:
+unsent protocol output waits in bounded protocol state, and payload is
+materialized straight into a reserved TX-pool slot when the Owner drains it.
 
 ## SRT bonding
 

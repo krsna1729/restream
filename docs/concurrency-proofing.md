@@ -197,13 +197,22 @@ surface already covers it.
   - `first_visit_primes_the_cursor_epoch_from_the_feed`
   - `fresh_leaf_first_visit_starts_at_the_retained_keyframe_not_sequence_zero`
   - `fresh_leaf_first_visit_starts_at_the_live_edge_when_no_keyframe_is_retained`
-- `src/media/egress/backends/srt/muxer_ports.rs` (per-shard SRT egress
-  multiplexer scoping — one shared `srt-rs` UDP socket/`CallerTable` per
-  shard instead of one for the whole process; gate step
-  `lib-srt-egress-muxer-port-shard-scoping`)
-  - `distinct_shards_get_distinct_reuse_state`
-  - `repeated_lookups_for_one_shard_share_reuse_state`
-  - `clones_share_one_registry`
+- `src/media/egress/backends/srt/owner_set.rs` (the shard's Compio runtime and
+  its at-most-two family `Owner`s; thread affinity is a `!Send` type plus a
+  debug home-thread assertion)
+  - `runtime_and_owners_live_and_die_on_the_shard_thread`
+  - `many_ipv4_outputs_share_one_owner_and_one_caller_socket`
+  - `ipv4_and_ipv6_outputs_coexist_on_two_family_owners`
+  - `mixed_family_bond_is_rejected_without_partial_admission`
+- SRT egress scheduling and admission
+  (`src/media/egress/backends/srt/tests/`)
+  - `stale_queued_admission_never_attaches_to_a_replacement_generation`
+  - `late_dns_for_an_old_generation_is_ignored`
+  - `one_ready_batch_is_one_owner_service_pass`
+  - `a_wake_examines_a_bounded_slice_of_parked_leaves`
+  - `command_wakes_a_parked_compio_wait_promptly`
+  - `owner_protocol_deadline_bounds_the_park`
+  - `shutdown_under_active_tx_reaches_owner_quiescence`
   - `srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state`
   - `srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry`
   - `srt_fabric_runtime_claims_one_libsrt_muxer_port_per_shard_shared_across_feeds`
