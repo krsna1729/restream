@@ -109,7 +109,7 @@ workdirs=()
 # the smoke passes or fails (and even when the image cannot be built).
 default_health="not-run"; default_srt="not-run"; default_note=""
 shipped_health="not-run"; shipped_srt="not-run"; unconfined_srt="not-run"
-stage="start"; smoke_passed=0; probe_logs=""; srt_log=""
+stage="start"; smoke_passed=0; probe_logs=""; default_probe_logs=""; shipped_probe_logs=""; srt_log=""
 write_report() {
     [[ -n "${RESTREAM_CONTAINER_SMOKE_REPORT:-}" ]] || return 0
     local dir
@@ -117,7 +117,8 @@ write_report() {
     mkdir -p "$dir"
     # Logs that back the report: the default-profile startup, and the shipped
     # profile's Restream log (io_uring / RX substrate / mode lines live here).
-    [[ -z "$probe_logs" ]] || printf '%s\n' "$probe_logs" | sed 's/\x1b\[[0-9;]*m//g' >"$dir/default-profile-startup.log"
+    [[ -z "$default_probe_logs" ]] || printf '%s\n' "$default_probe_logs" | sed 's/\x1b\[[0-9;]*m//g' >"$dir/default-profile-startup.log"
+    [[ -z "$shipped_probe_logs" ]] || printf '%s\n' "$shipped_probe_logs" | sed 's/\x1b\[[0-9;]*m//g' >"$dir/shipped-profile-startup.log"
     [[ -z "$srt_log" ]] || printf '%s\n' "$srt_log" | sed 's/\x1b\[[0-9;]*m//g' >"$dir/last-srt-probe-restream.log"
     printf '{"result":"%s","failed_stage":"%s","image":"%s","engine":"%s","engine_version":"%s","kernel":"%s","default_seccomp":{"health":"%s","srt":"%s","note":"%s"},"shipped_profile":{"path":"%s","health":"%s","srt":"%s"},"unconfined_control":"%s"}\n' \
         "$([[ $smoke_passed == 1 ]] && echo pass || echo fail)" \
@@ -297,6 +298,7 @@ else
         exit 1
     fi
 fi
+default_probe_logs="$probe_logs"
 echo "container-smoke: default seccomp: health=$default_health srt=$default_srt ${default_note:+($default_note)}"
 
 stage="shipped-profile"
@@ -308,6 +310,7 @@ if ! health_probe "shipped profile" --security-opt "seccomp=$SECCOMP_PROFILE"; t
     exit 1
 fi
 shipped_health="ok"
+shipped_probe_logs="$probe_logs"
 if [[ "${RESTREAM_CONTAINER_SMOKE_SKIP_SRT:-0}" == "1" ]]; then
     echo "container-smoke: WARNING: SRT capability proof SKIPPED by request; this does NOT prove SRT egress" >&2
 else
