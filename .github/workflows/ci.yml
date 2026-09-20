@@ -172,6 +172,17 @@ jobs:
           RESTREAM_DOCKER_GHA_CACHE: "1"
           RESTREAM_CONTAINER_SMOKE_REPORT: .local/artifacts/container-smoke/report.json
         run: scripts/check/container-smoke.sh --image "$RESTREAM_CONTAINER_IMAGE"
+      - if: ${{ always() && steps.scope.outputs.run == 'true' }}
+        name: Upload container smoke report
+        uses: actions/upload-artifact@v7
+        with:
+          name: container-smoke-report
+          # report.json (engine, default-profile and shipped-profile outcomes)
+          # plus the container logs that back it; kept whether the smoke passed
+          # or failed so a run is reviewable without scraping the build log.
+          path: .local/artifacts/container-smoke/
+          if-no-files-found: warn
+          retention-days: 14
 
   api-contract:
     name: API contract smoke

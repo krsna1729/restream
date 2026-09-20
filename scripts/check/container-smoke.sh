@@ -104,7 +104,33 @@ done
 name="restream-release-smoke-$$"
 label="restream.container-smoke=$$"
 workdirs=()
+
+# Outcomes for the durable report; written by the EXIT trap so it exists whether
+# the smoke passes or fails (and even when the image cannot be built).
+default_health="not-run"; default_srt="not-run"; default_note=""
+shipped_health="not-run"; shipped_srt="not-run"; unconfined_srt="not-run"
+stage="start"; smoke_passed=0; probe_logs=""; srt_log=""
+write_report() {
+    [[ -n "${RESTREAM_CONTAINER_SMOKE_REPORT:-}" ]] || return 0
+    local dir
+    dir="$(dirname "$RESTREAM_CONTAINER_SMOKE_REPORT")"
+    mkdir -p "$dir"
+    # Logs that back the report: the default-profile startup, and the shipped
+    # profile's Restream log (io_uring / RX substrate / mode lines live here).
+    [[ -z "$probe_logs" ]] || printf '%s\n' "$probe_logs" | sed 's/\x1b\[[0-9;]*m//g' >"$dir/default-profile-startup.log"
+    [[ -z "$srt_log" ]] || printf '%s\n' "$srt_log" | sed 's/\x1b\[[0-9;]*m//g' >"$dir/last-srt-probe-restream.log"
+    printf '{"result":"%s","failed_stage":"%s","image":"%s","engine":"%s","engine_version":"%s","kernel":"%s","default_seccomp":{"health":"%s","srt":"%s","note":"%s"},"shipped_profile":{"path":"%s","health":"%s","srt":"%s"},"unconfined_control":"%s"}\n' \
+        "$([[ $smoke_passed == 1 ]] && echo pass || echo fail)" \
+        "$([[ $smoke_passed == 1 ]] && echo "" || echo "$stage")" \
+        "$IMAGE" "$ENGINE" \
+        "$("$ENGINE" version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)" \
+        "$(uname -sr)" \
+        "$default_health" "$default_srt" "$default_note" \
+        "$SECCOMP_PROFILE" "$shipped_health" "$shipped_srt" "$unconfined_srt" \
+        >"$RESTREAM_CONTAINER_SMOKE_REPORT" || true
+}
 cleanup() {
+    write_report
     "$ENGINE" rm -f "$name" >/dev/null 2>&1 || true
     while read -r stray; do
         [[ -n "$stray" ]] && "$ENGINE" rm -f "$stray" >/dev/null 2>&1 || true
@@ -120,6 +146,7 @@ if [[ -n "${CONTAINER_EXTRA_ARGS:-}" ]]; then
     read -r -a extra_args <<<"$CONTAINER_EXTRA_ARGS"
 fi
 
+stage="image-build-or-load"
 if [[ "$USE_EXISTING" == "1" ]]; then
     :
 elif [[ -n "$LOAD_ARCHIVE" ]]; then
@@ -149,6 +176,7 @@ else
     fi
 fi
 
+stage="image-inspection"
 user="$("$ENGINE" image inspect --format '{{.Config.User}}' "$IMAGE")"
 if [[ "$user" != "1000:1000" ]]; then
     echo "container-smoke: expected non-root runtime user 1000:1000, got ${user:-empty}" >&2
@@ -166,10 +194,10 @@ fi
 # egress Compio runtime all need io_uring_setup/enter/register.
 IO_URING_DENIAL='native RTMP acceptor|Compio runtime failed to build|production runtime builds|io_uring.*(Operation not permitted|Function not implemented)|Operation not permitted \(os error 1\)|Function not implemented \(os error 38\)'
 
+# (probe_logs / srt_log are initialised with the report state above.)
 # health_probe <label> [engine-run arguments...]: start the image detached with
 # an ephemeral published HTTP port, require no mounts, wait for /healthz.
 # Sets probe_logs; returns 0 only when the process became healthy.
-probe_logs=""
 health_probe() {
     local label_text=$1
     shift
@@ -212,7 +240,6 @@ health_probe() {
 # srt_probe <label> <CONTAINER_SECCOMP value>: real SRT egress through the
 # existing live harness driving THIS image as its restream (see
 # container-restream-shim.sh). Returns 0 only with observed egress progress.
-srt_log=""
 srt_probe() {
     local label_text=$1 seccomp=$2
     local harness="${RESTREAM_HARNESS_BIN:-target/bench/test_harness}"
@@ -241,9 +268,7 @@ srt_probe() {
     return "$status"
 }
 
-default_health="skipped"; default_srt="skipped"; default_note=""
-shipped_health="fail"; shipped_srt="skipped"; unconfined_srt="not-run"
-
+stage="default-seccomp-control"
 echo "container-smoke: === default engine seccomp profile (negative control) ==="
 if health_probe "default seccomp"; then
     default_health="ok"
@@ -274,7 +299,9 @@ else
 fi
 echo "container-smoke: default seccomp: health=$default_health srt=$default_srt ${default_note:+($default_note)}"
 
+stage="shipped-profile"
 echo "container-smoke: === shipped Restream seccomp profile ($SECCOMP_PROFILE) ==="
+shipped_health="fail"
 if ! health_probe "shipped profile" --security-opt "seccomp=$SECCOMP_PROFILE"; then
     echo "container-smoke: image did not become healthy under the shipped profile" >&2
     printf '%s\n' "$probe_logs" | tail -n 30 >&2
@@ -284,6 +311,7 @@ shipped_health="ok"
 if [[ "${RESTREAM_CONTAINER_SMOKE_SKIP_SRT:-0}" == "1" ]]; then
     echo "container-smoke: WARNING: SRT capability proof SKIPPED by request; this does NOT prove SRT egress" >&2
 else
+    shipped_srt="fail"
     if ! srt_probe "shipped profile" "$SECCOMP_PROFILE"; then
         echo "container-smoke: real SRT egress FAILED under the shipped seccomp profile" >&2
         printf '%s\n' "$srt_log" | tail -n 30 >&2
@@ -308,17 +336,10 @@ if [[ "$DIAGNOSTIC_UNCONFINED" == "1" ]]; then
     echo "container-smoke: unconfined control: srt=$unconfined_srt"
 fi
 
-if [[ -n "${RESTREAM_CONTAINER_SMOKE_REPORT:-}" ]]; then
-    mkdir -p "$(dirname "$RESTREAM_CONTAINER_SMOKE_REPORT")"
-    printf '{"image":"%s","engine":"%s","default_seccomp":{"health":"%s","srt":"%s","note":"%s"},"shipped_profile":{"path":"%s","health":"%s","srt":"%s"},"unconfined_control":"%s"}\n' \
-        "$IMAGE" "$ENGINE" "$default_health" "$default_srt" "$default_note" \
-        "$SECCOMP_PROFILE" "$shipped_health" "$shipped_srt" "$unconfined_srt" \
-        >"$RESTREAM_CONTAINER_SMOKE_REPORT"
-fi
-
 if [[ -n "$ARCHIVE" ]]; then
     mkdir -p "$(dirname "$ARCHIVE")"
     "$ENGINE" save "$IMAGE" | gzip -n >"$ARCHIVE"
 fi
 
+smoke_passed=1
 echo "container-smoke: PASS image=$IMAGE"
