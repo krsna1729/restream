@@ -53,6 +53,8 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test media::srt_stream_id::tests --lib -- --nocapture
   "$run_step_fn" lib-srt-ingress-owner \
     scripts/build/resource-limit.sh cargo test media::srt::ingress_live_tests --lib -- --nocapture
+  "$run_step_fn" lib-srt-ingress-bridges \
+    scripts/build/resource-limit.sh cargo test media::srt::ingress_bridge_tests --lib -- --nocapture
   "$run_step_fn" lib-srt-ingress-admission \
     scripts/build/resource-limit.sh cargo test media::srt::ingress_admission --lib -- --nocapture
   "$run_step_fn" external-transcoder-routing \

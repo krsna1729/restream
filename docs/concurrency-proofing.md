@@ -228,13 +228,16 @@ surface already covers it.
   - `external_1080p_stage_remuxes_marker_fixture_with_monotone_dts`
 - `src/media/hls/`
   - `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream`
-- `src/media/srt/ingress_owner.rs`, `ingress_admission.rs`, `ingress_live_tests.rs`
+- `src/media/srt/ingress_owner.rs`, `ingress_bridge.rs`, `ingress_admission.rs`,
+  `ingress_quality.rs`, `ingress_live_tests.rs`, `ingress_bridge_tests.rs`
   (the SRT ingress owner thread: one Compio runtime, one listener `Owner`,
   bounded `LogicalPeerId` command/event bridges)
   - `read_play_sends_through_the_owner_and_target_deletion_disconnects`
   - `asynchronous_rejection_disconnects_the_owner_peer`
   - `event_bridge_saturation_never_loses_accepted_media`
   - `command_bridge_saturation_never_loses_reader_fragments`
+  - `owner_samples_receive_quality_and_forgets_retired_peers`
+  - `publisher_receive_quality_reaches_the_ingest_snapshot`
   - `one_ingress_thread_serves_many_peers_and_tokio_has_no_peer_table`
   - `owner_and_runtime_are_not_send`
   - `media::srt::ingress_admission::tests`

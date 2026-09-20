@@ -373,12 +373,25 @@ fn production_srt_does_not_own_native_udp_transport() {
 /// `srtListener.ingressOwner`, published by the Compio Owner.
 #[test]
 fn dead_srt_udp_queue_telemetry_does_not_return() {
-    const DEAD: &[&str] = &["udpRxQueueBytes", "udpRxQueuePeakBytes", "udpDrops"];
+    // Fields nobody writes, and retired names/claims describing the removed
+    // kernel-queue monitor or libsrt-era statistics.
+    const DEAD: &[&str] = &[
+        "udpRxQueueBytes",
+        "udpRxQueuePeakBytes",
+        "udpDrops",
+        "srtRecvBufBytes",
+        "srtRecvBufAvailBytes",
+        "srt_recv_buf_avail_bytes",
+        "srt_bistats",
+        "SRT monitor task",
+        "/proc/net/udp",
+        "SRT UDP drops",
+    ];
     let mut inspect = |path: &std::path::Path, source: &str| {
         for dead in DEAD {
             assert!(
                 !source.contains(dead),
-                "{} reintroduces dead SRT UDP telemetry `{dead}`",
+                "{} reintroduces dead SRT telemetry `{dead}`",
                 path.display()
             );
         }
@@ -387,6 +400,7 @@ fn dead_srt_udp_queue_telemetry_does_not_return() {
     for doc in [
         "docs/api-reference.md",
         "docs/observability.md",
+        "docs/configuration.md",
         "README.md",
     ] {
         let source = std::fs::read_to_string(doc).expect("active doc is readable");

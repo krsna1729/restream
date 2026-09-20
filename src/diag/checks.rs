@@ -378,53 +378,29 @@ pub(super) async fn check_publisher_transport(
             if let Some(buf) = q.ms_receive_buf {
                 lines.push(format!("Current latency buffer: {:.0}ms", buf));
             }
-            if let (Some(snd), Some(snd_avail)) = (q.srt_send_buf_bytes, q.srt_send_buf_avail_bytes)
+            if let (Some(buffered), Some(capacity)) =
+                (q.srt_recv_buf_packets, q.srt_recv_buf_capacity_packets)
+                && capacity > 0
             {
-                let total = snd + snd_avail;
-                let pct = if total > 0 {
-                    (snd as f64 / total as f64) * 100.0
-                } else {
-                    0.0
-                };
+                let pct = f64::from(buffered) / f64::from(capacity) * 100.0;
                 lines.push(format!(
-                    "Send buffer: {}KB / {}KB ({:.0}%)",
-                    snd / 1024,
-                    total / 1024,
-                    pct
-                ));
-            }
-            if let (Some(rcv), Some(rcv_avail)) = (q.srt_recv_buf_bytes, q.srt_recv_buf_avail_bytes)
-            {
-                let total = rcv + rcv_avail;
-                let pct = if total > 0 {
-                    (rcv as f64 / total as f64) * 100.0
-                } else {
-                    0.0
-                };
-                lines.push(format!(
-                    "Recv buffer: {}KB / {}KB ({:.0}%)",
-                    rcv / 1024,
-                    total / 1024,
-                    pct
+                    "Recv buffer: {} / {} packets ({:.0}%), {} payload bytes",
+                    buffered,
+                    capacity,
+                    pct,
+                    q.srt_recv_buf_payload_bytes.unwrap_or(0)
                 ));
                 if pct >= DIAG_SRT_BUFFER_CRITICAL_PCT {
                     issues.push(format!(
-                        "SRT application receive buffer is {:.0}% full ({}KB / {}KB). Restream is not draining publisher data; downstream outputs will starve even if the kernel UDP queue looks empty.",
-                        pct,
-                        rcv / 1024,
-                        total / 1024
+                        "SRT application receive buffer is {:.0}% full ({} / {} packets). Restream is not draining publisher data; downstream outputs will starve.",
+                        pct, buffered, capacity
                     ));
                 } else if pct >= DIAG_SRT_BUFFER_WARNING_PCT {
                     issues.push(format!(
-                        "SRT application receive buffer is {:.0}% full ({}KB / {}KB). Ingest is close to stalling.",
-                        pct,
-                        rcv / 1024,
-                        total / 1024
+                        "SRT application receive buffer is {:.0}% full ({} / {} packets). Ingest is close to stalling.",
+                        pct, buffered, capacity
                     ));
                 }
-            }
-            if let Some(flight) = q.srt_flight_size_pkts {
-                lines.push(format!("Packets in flight: {}", flight));
             }
             if lines.len() == 1 {
                 lines.push("No SRT transport stats available yet.".to_string());
@@ -509,7 +485,7 @@ pub(super) async fn check_publisher_transport(
         "Publisher Transport",
         "Network connection quality metrics",
         if probe_protocol == "srt" {
-            "libsrt srt_bistats()"
+            "srt-rs Owner receiver statistics"
         } else {
             "getsockopt(TCP_INFO/SO_MEMINFO)"
         },

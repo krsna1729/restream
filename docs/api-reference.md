@@ -1216,7 +1216,7 @@ Aggregate alerts across all pipelines. Each alert carries `id`, `severity`,
 `scope`, `evidence`, `recommendedAction`, `firstSeen`, and `lastSeen` fields.
 Sorted Critical-first. `firstSeen` is stamped on first observation;
 `lastSeen` updates on every subsequent observation. Resolved alerts are
-pruned automatically. Engine-level alerts include SRT UDP drops, RTMP listener
+pruned automatically. Engine-level alerts include RTMP listener
 file-descriptor exhaustion, and a runtime nofile limit below the configured
 target.
 

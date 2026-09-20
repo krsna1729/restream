@@ -590,8 +590,8 @@ fn saturated_srt_receive_buffer_yields_input_causal_alert() {
                     "publisher": {
                         "protocol": "srt",
                         "quality": {
-                            "srtRecvBufBytes": 8_218_796,
-                            "srtRecvBufAvailBytes": 1_500
+                            "srtRecvBufPackets": 8_192,
+                            "srtRecvBufCapacityPackets": 8_192
                         }
                     }
                 },

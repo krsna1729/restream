@@ -361,8 +361,9 @@ buffer was sized for; nothing on either end can close that gap, since
 libsrt does not validate the peer's proposed latency at all.
 
 Linux startup checks warn when `net.core.rmem_max` or `net.core.wmem_max` cannot
-support the requested UDP buffers. The listener's `/proc/net/udp` receive queue
-and drop count are exported in `/api/v1/engine/health`.
+support the requested UDP buffers. Receive-path pressure on the SRT listener is
+reported by `srtListener.ingressOwner` (`rxRingDropped`, `rxTruncated`,
+`rxRingDepth`) in `/api/v1/engine/health`.
 
 Quiet-host A/B of these knobs (BBB fixture, `MSR_PEER=sink`,
 `srt-only`, 2026-09-07, see

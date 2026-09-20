@@ -6,11 +6,21 @@ pub(crate) mod egress_connect;
 pub(crate) mod egress_stats;
 #[path = "srt/ingress_admission.rs"]
 mod ingress_admission;
+#[path = "srt/ingress_bridge.rs"]
+mod ingress_bridge;
+#[cfg(test)]
+#[path = "srt/ingress_bridge_tests.rs"]
+mod ingress_bridge_tests;
 #[cfg(test)]
 #[path = "srt/ingress_live_tests.rs"]
 mod ingress_live_tests;
 #[path = "srt/ingress_owner.rs"]
 mod ingress_owner;
+#[path = "srt/ingress_quality.rs"]
+mod ingress_quality;
+#[cfg(test)]
+#[path = "srt/ingress_test_support.rs"]
+mod ingress_test_support;
 #[path = "srt/knobs.rs"]
 mod knobs;
 #[path = "srt/shared_muxer.rs"]

@@ -92,9 +92,14 @@ pub struct PublisherQuality {
     /// explicit `sndbuf=` URL override) for this specific destination.
     pub srt_sndbuf_configured_bytes: Option<i32>,
     pub srt_send_buf_bytes: Option<i32>,
-    pub srt_recv_buf_bytes: Option<i32>,
+    /// Ingest receive-buffer occupancy from `srt-rs` receiver statistics: packets
+    /// buffered, the configured capacity in packets, and the exact payload bytes
+    /// held. Byte capacity is not reported (the limit is in packets), so there is
+    /// deliberately no available-bytes field.
+    pub srt_recv_buf_packets: Option<u32>,
+    pub srt_recv_buf_capacity_packets: Option<u32>,
+    pub srt_recv_buf_payload_bytes: Option<u64>,
     pub srt_send_buf_avail_bytes: Option<i32>,
-    pub srt_recv_buf_avail_bytes: Option<i32>,
     pub srt_flight_size_pkts: Option<i32>,
     pub srt_flow_window_pkts: Option<i32>,
     pub srt_congestion_window_pkts: Option<i32>,
@@ -165,7 +170,7 @@ pub struct FileIngestDependencySnapshot {
     pub child_registered: bool,
 }
 
-/// Shared SRT listener socket state, updated by the SRT monitor task.
+/// Shared SRT listener state, published by the SRT ingress Owner thread.
 #[derive(Debug, Default)]
 pub struct ListenerSocketStats {
     pub bonding_available: AtomicBool,
