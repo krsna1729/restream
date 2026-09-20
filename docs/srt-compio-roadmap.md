@@ -647,7 +647,7 @@ Restream must not be changed until this lands upstream.
 
 ## 6. WI3.2 — Restream SRT Ingress Hard Cut
 
-Status: ACTIVE — read/play CI amendment in progress
+Status: DONE
 
 Started after WI3.1 merged.
 
@@ -664,9 +664,19 @@ Result (Restream pins srt-rs `86369b0815c09333547c965652250e17f580e834`):
   accepted media.
 - Async authorization rejection and pipeline deletion disconnect the real Owner
   peer; SRT read/play sends through the Owner logical peer.
-- Evidence: `src/media/srt/ingress_live_tests.rs`, `ingress_admission.rs`.
-- Deferred: the generic `restream-dataplane` UDP primitives now have no
-  production consumer (WI3.3).
+- Final Restream SHA entering cleanup: `b1e2d2d42545189403a3a1b69d842a00f482418a`.
+- Evidence: hosted ingress live tests pass (including the read/play proof, after
+  it was decomposed onto a fixture publisher); the real `srt.policy` scenario
+  passes plaintext, AES-128, AES-192 and AES-256 publish/read plus the plaintext
+  and wrong-passphrase rejections. The qualification host selected: driver
+  `IoUring`, `io_uring=true`, `managed_rx=BufferRingRegistrationFailed(22)`
+  (`buffer-ring-unsupported-by-kernel`), `rx_mode=RawReadiness`,
+  `rx_policy=ManagedPreferred`. ManagedMultishot ingress was exercised only by
+  hosted CI, not by the local process-level run.
+- Unrelated/pre-existing quality debt (not WI3.2 failures): the RTMP
+  `fault.resilience` sink-disappear/churn/stall failures (present at pre-cut
+  `2b328f13`) and the nondeterministic transcoder
+  `prebuffered_h264_packets_drive_internal_scaled_stage` unit test.
 
 Replace:
 
@@ -708,10 +718,19 @@ Do not:
 
 ## 7. WI3.3 — Delete Old SRT Transport Machinery
 
-Status: PLANNED
+Status: DONE
 
 After ingress passes qualification, remove all obsolete Restream SRT transport
 machinery.
+
+Result: `crates/restream-dataplane/src/udp.rs` and `udp_recv.rs` are deleted along
+with the UDP-only `OpKind` variants (`UdpRx`, `UdpTx`, `UdpRecvMulti`) and the
+UDP allocation-test section; the crate docs describe its surviving role (native
+TCP/io_uring for RTMP, reusable scheduler/media primitives, synthetic harness).
+The dead zero-match SRT concurrency steps are removed, the never-consumed
+`RESTREAM_SRT_UDP_BUFFER` / `srt_udp_buffer` setting and the undocumented-in-code
+`RESTREAM_SRT_IO_BATCH_CAPACITY` docs are gone, and
+`production_srt_does_not_own_native_udp_transport` guards production SRT source.
 
 Delete as applicable:
 

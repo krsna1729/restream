@@ -49,20 +49,12 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test write_batch_round_trips_random_chunks --lib -- --nocapture
   "$run_step_fn" lib-avio-unit \
     scripts/build/resource-limit.sh cargo test 'media::avio::tests' --lib -- --nocapture
-  "$run_step_fn" lib-srt-epoll \
-    scripts/build/resource-limit.sh cargo test epoll_waiter_coordination --lib -- --nocapture
-  "$run_step_fn" lib-srt-readiness-loom \
-    scripts/build/resource-limit.sh cargo test loom_srt_readiness_retry_does_not_depend_on_epoll_wake --lib -- --nocapture
-  "$run_step_fn" lib-srt-readiness-proptest \
-    scripts/build/resource-limit.sh cargo test proptest_srt_readiness_retry_model_never_requires_epoll_wake --lib -- --nocapture
   "$run_step_fn" lib-srt-stream-id-normalization \
-    scripts/build/resource-limit.sh cargo test srt_stream_ids_normalize_equivalent --lib -- --nocapture
+    scripts/build/resource-limit.sh cargo test media::srt_stream_id::tests --lib -- --nocapture
   "$run_step_fn" lib-srt-ingress-owner \
     scripts/build/resource-limit.sh cargo test media::srt::ingress_live_tests --lib -- --nocapture
   "$run_step_fn" lib-srt-ingress-admission \
     scripts/build/resource-limit.sh cargo test media::srt::ingress_admission --lib -- --nocapture
-  "$run_step_fn" lib-srt-sender-semaphore \
-    scripts/build/resource-limit.sh cargo test srt_sender_semaphore --lib -- --nocapture
   "$run_step_fn" external-transcoder-routing \
     scripts/build/resource-limit.sh cargo test external_output_stream_idx_routes_known_tracks_without_aliasing --lib -- --nocapture
   "$run_step_fn" external-transcoder-routing-proptest \
@@ -115,6 +107,4 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test fresh_leaf_first_visit --lib -- --nocapture
   "$run_step_fn" recording-drain-bounded-on-cancel \
     scripts/build/resource-limit.sh cargo test media::recording::tests::drain_ready_bursts --lib -- --nocapture
-  "$run_step_fn" lib-srt-egress-muxer-port-shard-scoping \
-    scripts/build/resource-limit.sh cargo test muxer_port --lib -- --nocapture
 }

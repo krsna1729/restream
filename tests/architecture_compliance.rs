@@ -312,6 +312,62 @@ fn srt_policy_store_consumes_typed_policies_without_persistence_dependencies() {
     );
 }
 
+/// Production SRT rides `srt_transport::compio::Owner` in both directions. The
+/// retired Restream-native UDP/io_uring transport must not come back into
+/// production SRT source (benchmark-only packet-I/O experiments elsewhere are
+/// intentionally not covered by this guard).
+#[test]
+fn production_srt_does_not_own_native_udp_transport() {
+    const FORBIDDEN: &[&str] = &[
+        "UringUdpDriver",
+        "UringUdpPoller",
+        "UringUdpReceiver",
+        "NativeSrtIngress",
+        "CompatReceiver",
+        "restream_dataplane::udp",
+    ];
+    let roots = ["src/media/srt", "src/media/egress/backends/srt"];
+    let files = ["src/media/srt.rs", "src/media/egress/backends/srt.rs"];
+    let mut inspect = |path: &std::path::Path, source: &str| {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        let is_test_file = name.ends_with("_tests.rs")
+            || name == "tests.rs"
+            || path.components().any(|part| part.as_os_str() == "tests");
+        if is_test_file {
+            return;
+        }
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+        for forbidden in FORBIDDEN {
+            assert!(
+                !production.contains(forbidden),
+                "{} references retired native SRT transport `{forbidden}`",
+                path.display()
+            );
+        }
+    };
+    for root in roots {
+        collect_rust_sources(std::path::Path::new(root), &mut inspect);
+    }
+    for file in files {
+        let source = std::fs::read_to_string(file).expect("SRT module root is readable");
+        inspect(std::path::Path::new(file), &source);
+    }
+    for retired in [
+        "crates/restream-dataplane/src/udp.rs",
+        "crates/restream-dataplane/src/udp_recv.rs",
+        "src/media/srt/native_ingress.rs",
+        "src/media/srt/native_ingress_drive.rs",
+    ] {
+        assert!(
+            !std::path::Path::new(retired).exists(),
+            "{retired} was deleted and must not return"
+        );
+    }
+}
+
 #[test]
 fn db_module_uses_explicit_repository_exports() {
     let db_mod = include_str!("../src/db/mod.rs");

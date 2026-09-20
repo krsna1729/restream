@@ -259,7 +259,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                                 "srtRecvBufBytes = {} / {} ({:.0}%)",
                                 recv_bytes, total_bytes, pct
                             ),
-                            "kernel UDP queue may still be empty because packets have already entered libsrt".into(),
+                            "kernel UDP queue may still be empty because packets have already entered the srt-rs Owner".into(),
                         ],
                         "Treat this as an input/ingest issue first: restart the affected publisher or Restream, then inspect SRT ingest readiness if it recurs.",
                         &generated_at,

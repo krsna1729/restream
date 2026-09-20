@@ -68,7 +68,7 @@ The architecture must:
 This design does not:
 
 - make RTMP and SRT wire operations identical;
-- force TCP epoll and SRT's drive-owned-leaves readiness into one physical
+- force TCP epoll and SRT's Compio Owner activity into one physical
   polling API;
 - move the API, database, reconciler, ingest, recording, or codec execution onto
   an egress thread-per-core runtime;
@@ -402,9 +402,8 @@ stays for application lifecycle timers. A `Command` wake goes through the same
 schedules one ordinary ready visit, so the backend's `on_ready` runs under the
 shared readiness budget and lifecycle policy; it is not a command. The default
 waiter blocks on the command channel alone and is what the RTMP/RTMPS, sink and
-pipeline backends and the current native SRT backend use. The upcoming SRT
-Compio backend overrides it to enter its shard-local runtime and await commands
-and `Owner::wait_for_activity` together.
+pipeline backends use. The SRT backend overrides it to enter its shard-local
+Compio runtime and await commands and `Owner::wait_for_activity` together.
 
 ## Leaf ownership
 
@@ -625,10 +624,9 @@ moving buffering into the protocol stack does not make it free or unbounded.
 
 Shard ownership, bounded scheduling, work budgets and the protocol-neutral
 leaf contract stay normative; Compio is the network I/O substrate. SRT egress
-is already on it (above). The remaining direct `io_uring` code in this
-repository — the native SRT ingress ring and the RTMP `IoUringTcpPoller` — is
-transitional and will be replaced as each path moves over; new work should not
-deepen it.
+and ingress are both on it (above). The remaining direct `io_uring` code in this
+repository — the RTMP `IoUringTcpPoller` — is transitional and will be replaced
+when RTMP moves over; new work should not deepen it.
 
 ### Future backends
 
@@ -1051,7 +1049,7 @@ Retained tradeoffs of the fabric itself:
 
 - one lifecycle and failure policy, fixed application thread count, and
   bounded memory under slow consumers;
-- more explicit partial-I/O (RTMP/TLS epoll plus SRT drive-owned-leaves), and
+- more explicit partial-I/O (RTMP/TLS epoll plus SRT's Owner-driven leaves), and
   scheduler/timer obligations versus one independent async task per
   destination at tiny scale;
 - prefer narrow abstractions proven by RTMP and SRT over a framework for

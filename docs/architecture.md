@@ -79,10 +79,6 @@ mux/demux work, and child-process pipe I/O. Native RTMP ingress/egress workers
 own their sockets and readiness rings. Work that can block independently
 of the async scheduler is isolated:
 
-- SRT ingress is one owner thread with one Compio runtime and one `srt-rs`
-  Compio `Owner`; the Owner owns the UDP socket and all SRT protocol state, and
-  Tokio addresses sessions only by `LogicalPeerId` through bounded commands and
-  events (see [media pipeline](media-pipeline.md#srt-ingress-owner));
 - RTMP ingress workers own their TCP descriptors and bounded handoff buffers;
 - RTMP/RTMPS and SRT **egress** run on the egress fabric: a small
   CPU-derived pool of dedicated shard OS threads, output-count-scaled for
@@ -96,12 +92,15 @@ of the async scheduler is isolated:
   migration history;
 - RTMP ingress accepts on a native `io_uring` owner thread and hands bounded
   nonblocking streams to the existing authenticated connection workflow;
-- SRT ingress receives on a native `io_uring` UDP owner thread and hands fixed
-  packet buffers to the runtime-neutral `srt-rs` admission/protocol owner;
-- the hand-written native `io_uring` code is transitional: shard ownership
-  and bounded scheduling stay, Compio becomes the network I/O substrate, and
-  the `srt-rs` Compio `Owner` becomes SRT's transport owner (see
-  [egress architecture](egress-architecture.md#direction-compio-as-the-network-io-substrate));
+- SRT ingress runs on one dedicated owner thread with one Compio runtime and one
+  `srt-rs` `Owner` listener (`Owner::listen_with_resolver`); Tokio addresses its
+  sessions only by `LogicalPeerId` through bounded commands and events (see
+  [media pipeline](media-pipeline.md#srt-ingress-owner));
+- SRT egress runs on fixed shard threads with one Compio runtime per shard and at
+  most one `Owner` per address family (see
+  [egress architecture](egress-architecture.md));
+- the remaining hand-written native `io_uring` code is the RTMP TCP path; it is
+  transitional and moves to Compio TCP later;
 - in-process FFmpeg codec work runs on guarded OS threads;
 - recording uses a feeder task and a writer thread;
 - the default transcoder and file-ingest paths use managed FFmpeg child

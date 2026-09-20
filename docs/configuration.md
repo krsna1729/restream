@@ -59,9 +59,8 @@ in SQLite.
 | SRT egress connect concurrency | `64` | `RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` (clamped to `1..=4096`; each SRT egress Owner's caller-pool `max_in_flight` — the transport's per-`(shard, address family)` handshake capacity, with an equally sized bounded queue behind it; capacity only, it never sets a timeout or changes the Owner's service budget; a request beyond both is refused and its output fails and retries. Decouples handshake concurrency from output count) |
 | Require SRT bonding support | Disabled | `RESTREAM_REQUIRE_SRT_BONDING` (retained compatibility setting; srt-rs bonded ingress is enabled by the listener) |
 | SRT encryption | Disabled | `RESTREAM_SRT_PASSPHRASE`; `RESTREAM_SRT_PBKEYLEN` selects the key length and defaults to `16` |
-| SRT UDP socket buffer | `8388608` bytes on SRT Owner sockets (`DESIRED_UDP_BUF` / `set_sock_bufs`) | `RESTREAM_SRT_UDP_BUF_BYTES` (A/B knob; unset keeps the current 8 MiB native request and leaves Caller/Listener `SocketBufferConfig::Auto` alone. When set to a positive `usize`, the SRT ingress Owner socket and the egress family Owner sockets use that request. Distinct from legacy `RESTREAM_SRT_UDP_BUFFER`, which is still parsed into AppConfig but is unused by the Owner-based SRT path.) |
-| SRT receive budget | `64` datagrams | `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` (A/B knob; bounds each SRT Owner receive drain. The measurement sink keeps `RecvBudget::new(8, 512)` unless this env is set.) |
-| SRT shared send batch | `64` datagrams | `RESTREAM_SRT_IO_BATCH_CAPACITY` (A/B knob; bounds each native egress family send batch.) |
+| SRT UDP socket buffer | `8388608` bytes on SRT Owner sockets (`DESIRED_UDP_BUF` / `set_sock_bufs`) | `RESTREAM_SRT_UDP_BUF_BYTES` (A/B knob; unset keeps the current 8 MiB request and leaves Caller/Listener `SocketBufferConfig::Auto` alone. When set to a positive `usize`, the SRT ingress Owner socket and the egress family Owner sockets use that request.) |
+| SRT receive budget | `64` datagrams | `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` (A/B knob for the test-harness SRT sinks only; the production Owner's receive work is bounded by `OwnerServiceBudget`, not this setting. The measurement sink keeps `RecvBudget::new(8, 512)` unless this env is set.) |
 | AVIO queue capacity (async↔OS-thread bridge) | `524288` bytes (512 KiB) | `RESTREAM_AVIO_QUEUE_CAPACITY` (measured peak HWM = 398 KiB at 8 Mb/s RTMP with zero blocked writes; raise only for very high-latency SRT links) |
 | File descriptor limit | `65536` | `RESTREAM_NOFILE_LIMIT` |
 | Output reconciliation interval | 1 second | `RESTREAM_RECONCILE_INTERVAL_MS` |
@@ -161,9 +160,9 @@ The runtime also exposes its resolved Tokio sizing in `/api/v1/engine/health`
 and the engineer telemetry host-settings table. `RESTREAM_TOKIO_WORKER_THREADS`
 controls async scheduler workers; `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` controls
 Tokio `spawn_blocking` capacity for blocking handshakes and waiters. Those knobs
-do not cap native helper threads created by FFmpeg, SQLite, or libsrt. Restream
+do not cap native helper threads created by FFmpeg or SQLite. Restream
 names its Tokio runtime threads `restream-tokio` so process tools can separate
-them from `SRT:*`, `sqlx-sqlite-*`, and other native helper threads; that label
+them from the `srt-in-<port>` ingress owner thread, `sqlx-sqlite-*`, and other native helper threads; that label
 covers Tokio scheduler, blocking, and replacement worker threads.
 
 ## SQLite Performance Settings
@@ -380,9 +379,6 @@ RESTREAM_SRT_UDP_BUF_BYTES=262144
 # Measured: rssPeak +73 MB (+16%) and 5 fabric-leaf deaths (baseline 0).
 RESTREAM_SRT_RECV_BUDGET_DATAGRAMS=8
 
-# Measured null at N=200 (rssPeak +44 MB / +9%, under the 10%+50 MB floor).
-# Send-path prefix cap, not a retention test.
-RESTREAM_SRT_IO_BATCH_CAPACITY=8
 ```
 
 Each override logs once at info (`SRT A/B knob override`). Sender-window

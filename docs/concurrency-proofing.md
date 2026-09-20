@@ -213,9 +213,6 @@ surface already covers it.
   - `command_wakes_a_parked_compio_wait_promptly`
   - `owner_protocol_deadline_bounds_the_park`
   - `shutdown_under_active_tx_reaches_owner_quiescence`
-  - `srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state`
-  - `srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry`
-  - `srt_fabric_runtime_claims_one_libsrt_muxer_port_per_shard_shared_across_feeds`
 - `src/media/avio.rs`
   - close/wake/backpressure loom coverage in `tests/avio_loom.rs`
   - `media::avio::tests`
@@ -231,13 +228,18 @@ surface already covers it.
   - `external_1080p_stage_remuxes_marker_fixture_with_monotone_dts`
 - `src/media/hls/`
   - `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream`
-- `src/media/srt.rs`
-  - `epoll_waiter_coordination`
-  - `srt_stream_ids_normalize_plain_publish_keys_before_registration`
-  - `srt_stream_ids_normalize_plain_read_keys_before_auth`
-  - `srt_stream_ids_keep_slashes_as_literal_key_data`
-  - `srt_sender_semaphore_is_bounded`
-  - `srt_sender_semaphore_releases_on_drop`
+- `src/media/srt/ingress_owner.rs`, `ingress_admission.rs`, `ingress_live_tests.rs`
+  (the SRT ingress owner thread: one Compio runtime, one listener `Owner`,
+  bounded `LogicalPeerId` command/event bridges)
+  - `read_play_sends_through_the_owner_and_target_deletion_disconnects`
+  - `asynchronous_rejection_disconnects_the_owner_peer`
+  - `event_bridge_saturation_never_loses_accepted_media`
+  - `command_bridge_saturation_never_loses_reader_fragments`
+  - `one_ingress_thread_serves_many_peers_and_tokio_has_no_peer_table`
+  - `owner_and_runtime_are_not_send`
+  - `media::srt::ingress_admission::tests`
+- `src/media/srt_stream_id.rs`
+  - `media::srt_stream_id::tests` (stream-key normalization and mode parsing)
 - `src/media/ts_chunk_ring.rs`
   - `live_reader_starts_after_existing_chunks`
 - `src/bin/test_harness.rs`

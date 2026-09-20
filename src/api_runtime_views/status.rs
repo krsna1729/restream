@@ -175,7 +175,7 @@ fn host_settings_json(engine: &MediaEngine, snapshot: &HostSettingsSnapshot) -> 
             "Tokio blocking thread cap",
             serde_json::json!(engine.config.tokio_runtime.max_blocking_threads),
             "threads",
-            "upper bound for spawn_blocking work such as SRT handshakes and epoll waiters; protects ramp-up latency without unbounded idle thread footprint",
+            "upper bound for spawn_blocking work such as DNS resolution and blocking child-process waits; protects ramp-up latency without unbounded idle thread footprint",
         ),
     ];
     rows.extend(cpu_capacity_settings(&snapshot.cpu_capacity));

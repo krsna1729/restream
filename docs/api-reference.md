@@ -868,7 +868,7 @@ Query params:
       "required": null,
       "unit": "threads",
       "status": "ok",
-      "detail": "upper bound for spawn_blocking work such as SRT handshakes and epoll waiters; protects ramp-up latency without unbounded idle thread footprint"
+      "detail": "upper bound for spawn_blocking work such as DNS resolution and blocking child-process waits; protects ramp-up latency without unbounded idle thread footprint"
     },
     {
       "key": "runtime.cpu.available_parallelism",

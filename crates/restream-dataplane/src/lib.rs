@@ -1,15 +1,21 @@
 //! Small Linux-native dataplane primitives: mechanism, not policy.
 //!
+//! Production SRT does NOT pass through this crate: SRT ingress and egress run
+//! on `srt_transport::compio::Owner` (see `docs/srt-compio-roadmap.md`). What
+//! survives here is:
+//!
+//! * the native TCP/`io_uring` mechanism the remaining RTMP path still uses
+//!   (`tcp`, `files`): one owner thread, one `io_uring`, generation-safe
+//!   operation tags;
+//! * reusable scheduler and media primitives (`ReadyQueue`, `DeadlineIndex`,
+//!   `MediaArena`/`MediaRing`, `FeedCursor`, `TxPool`) and generic `io_uring`
+//!   capability probing;
+//! * `Dataplane`/`DataplaneHandle`, the synthetic proof harness that
+//!   fixed-population benchmarks and allocation guards run against.
+//!
 //! `media/egress` owns production scheduling policy (stall classification,
-//! drain semantics, feed overrun, reconnect behavior, runtime diagnostics).
-//! This crate owns the kernel/storage mechanism both schedulers share: one
-//! owner thread, one `io_uring`, bounded control input, generation-safe
-//! operation tags, fixed ready/deadline storage, and fixed RX/TX pools.
-//! `Dataplane`/`DataplaneHandle` below are the synthetic proof harness for
-//! that mechanism — fixed-population benchmarks and allocation guards run
-//! against them. Do NOT grow production scheduling policy here; extend the
-//! `media/egress` shard backends and keep this crate to primitives that both
-//! the harness and production consume.
+//! drain semantics, feed overrun, reconnect behavior, runtime diagnostics). Do
+//! NOT grow production scheduling policy here.
 
 use std::cmp::Ordering as CmpOrdering;
 use std::io;
@@ -33,8 +39,6 @@ pub mod files;
 pub mod media;
 pub mod tcp;
 pub mod tx;
-pub mod udp;
-mod udp_recv;
 
 pub use capabilities::{UringCapabilities, UringCapabilityTier};
 pub use files::{FixedFile, FixedFileTable};
@@ -53,17 +57,11 @@ pub enum OpKind {
     Connect = 2,
     TcpRx = 3,
     TcpTx = 4,
-    UdpRx = 5,
-    UdpTx = 6,
     Timeout = 7,
     ControlWake = 8,
     PollCancel = 9,
     TimeoutCancel = 10,
     TcpTxCancel = 11,
-    /// Multishot UDP receive armed on the shared owner ring. Slot selects the
-    /// registration; generation distinguishes provided-buffer completions (0)
-    /// from receive completions (1), matching `UringUdpReceiver`.
-    UdpRecvMulti = 12,
 }
 
 impl OpKind {
@@ -73,14 +71,11 @@ impl OpKind {
             2 => Self::Connect,
             3 => Self::TcpRx,
             4 => Self::TcpTx,
-            5 => Self::UdpRx,
-            6 => Self::UdpTx,
             7 => Self::Timeout,
             8 => Self::ControlWake,
             9 => Self::PollCancel,
             10 => Self::TimeoutCancel,
             11 => Self::TcpTxCancel,
-            12 => Self::UdpRecvMulti,
             _ => return None,
         })
     }

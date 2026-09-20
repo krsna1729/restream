@@ -140,7 +140,7 @@ bonded publishers it additionally reports:
 
 | Field | Meaning |
 |---|---|
-| `srtBonded` | Whether libsrt accepted this publisher as a socket group |
+| `srtBonded` | Whether srt-rs admitted this publisher as a bonded group |
 | `srtGroupMemberCount` | Total member tuples currently reported |
 | `srtGroupConnectedMembers` | Members in the connected state |
 | `srtGroupActiveMembers` | Members carrying the active backup-group path |
@@ -214,7 +214,7 @@ and only when the byte counter advances.
 
 RTMP egress phases cover URL parsing, TCP/TLS connect, RTMP handshake,
 application connect, publish acceptance, and packet send. SRT egress phases
-cover resolve, connect, sender-capacity rejection, and `srt_send()` failures.
+cover resolve, connect, sender-capacity rejection, and Owner send failures.
 RTMP ingest and RTMP/RTMPS egress quality include the kernel TCP congestion
 control algorithm. RTMP/RTMPS egress quality also includes sender-side RTT,
 bytes sent/acked/retrans, unacked/lost/retrans packet counts,
@@ -293,16 +293,16 @@ as:
 
 ### SRT listener state
 
-The shared SRT listener monitor reads Linux `/proc/net/udp` and tracks:
+The SRT listener is one `srt-rs` Compio `Owner` on its own owner thread (see
+[media pipeline](media-pipeline.md#srt-ingress-owner)). `bondingAvailable` is
+true while that listener is running with bonded-input support; the live listener
+counters are `srtListener.ingressOwner`, published by the owner thread. These are
+listener-wide values, not per-pipeline.
 
-- whether the linked libsrt accepted `SRTO_GROUPCONNECT` at startup
-- current receive-queue bytes
-- peak receive-queue bytes since process start
-- cumulative kernel UDP drops
-
-These are listener-wide values, not per-pipeline. `bondingAvailable: false`
-means ordinary SRT works but the srt-rs listener did not expose a usable
-bonding topology on this build.
+`udpRxQueueBytes`, `udpRxQueuePeakBytes` and `udpDrops` are retained response
+fields from the removed `/proc/net/udp` listener monitor and are not populated by
+the Owner (they read `0`). Use `ingressOwner.rxRingDropped`, `rxTruncated` and
+`rxRingDepth` for receive-path loss and pressure.
 
 ## Diagnostic checks
 

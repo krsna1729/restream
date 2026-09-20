@@ -86,7 +86,7 @@ pub struct PublisherQuality {
     pub packets_received_undecrypt_per_sec: Option<f64>,
     // SRT buffer occupancy
     /// The configured `SRTO_SNDBUF` ceiling itself (not occupancy) — read
-    /// back from libsrt once at connect time since it's a PREBIND option
+    /// back from the connection once at connect time since it is a pre-connect option
     /// and cannot change afterward. Egress-only today: reflects whatever
     /// `srt_egress_sndbuf_bytes` resolved to (formula default or an
     /// explicit `sndbuf=` URL override) for this specific destination.
