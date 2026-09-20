@@ -191,3 +191,26 @@ fn shard_factory_builds_backend_or_returns_a_typed_error() {
     let ok = AtomicBool::new(built.is_ok());
     assert!(ok.load(Ordering::Relaxed));
 }
+
+/// The managed-RX substrate reason keeps a container policy denial (EPERM /
+/// EACCES) distinct from an unsupported kernel feature (EINVAL); the log line
+/// carries it while metrics stay low-cardinality.
+#[test]
+fn substrate_diagnosis_distinguishes_policy_denial_from_kernel_support() {
+    use crate::media::egress::backends::srt::owner_set::substrate_diagnosis;
+    use srt_transport::compio::ManagedRxSubstrate as S;
+    assert_eq!(
+        substrate_diagnosis(S::BufferRingRegistrationFailed(1)),
+        "buffer-ring-denied-by-policy"
+    );
+    assert_eq!(
+        substrate_diagnosis(S::BufferRingRegistrationFailed(13)),
+        "buffer-ring-denied-by-policy"
+    );
+    assert_eq!(
+        substrate_diagnosis(S::BufferRingRegistrationFailed(22)),
+        "buffer-ring-unsupported-by-kernel"
+    );
+    assert_eq!(substrate_diagnosis(S::NotIoUring), "runtime-not-io_uring");
+    assert_eq!(substrate_diagnosis(S::Available), "available");
+}

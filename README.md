@@ -131,12 +131,23 @@ docker build \
   --build-arg RESTREAM_BUILD_TIMESTAMP="$(git show -s --format=%cI HEAD)" \
   -t restream:container .
 docker run --rm \
+  --security-opt seccomp=distribution/docker/restream-seccomp.json \
   -e RESTREAM_INITIAL_ADMIN_PASSWORD=change-me \
   -p 3030:3030 \
   -p 1935:1935 \
   -p 10080:10080/udp \
   restream:container
 ```
+
+`--security-opt seccomp=...` is part of the supported launch contract, not an
+optional hardening flag. Restream's RTMP and SRT ingress and its SRT egress all
+run on `io_uring`, which Docker's default seccomp profile (Docker 25 and newer)
+denies, so under the default profile the process does not even finish starting.
+The shipped profile is Docker's own default plus exactly the three `io_uring`
+syscalls Restream uses; it needs no `--privileged` and no added capabilities.
+A running `/healthz` alone does not prove SRT egress works; see
+[`distribution/docker/README.md`](distribution/docker/README.md) for what it
+allows and why, the release-asset copy, and the requirements.
 
 The provenance arguments are required because `.git/` is intentionally absent
 from the Docker context. They are embedded in both the binary and OCI labels;
@@ -162,13 +173,15 @@ docker build \
   --build-arg RESTREAM_BUILD_TIMESTAMP="$(git show -s --format=%cI HEAD)" \
   --target harness -t restream:harness .
 docker run --rm --network host \
+  --security-opt seccomp=distribution/docker/restream-seccomp.json \
   restream:harness mixed.live.srt.h264.a1.bf0 --no-netns
 ```
 
 Use `--network host` for harness modes that open loopback publishers and sinks;
 the harness binary is the target's entry point, so modes and harness flags are
-passed directly. The normal production image needs only its documented TCP/UDP
-ports. The `runtime-ubuntu` target remains available as a compatibility
+passed directly. The harness image runs the same `io_uring`-based Restream, so
+it needs the same seccomp profile. The normal production image needs only its
+documented TCP/UDP ports plus that profile. The `runtime-ubuntu` target remains available as a compatibility
 fallback, but the default image is `runtime`/distroless.
 
 ## Read next

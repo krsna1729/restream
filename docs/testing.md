@@ -15,6 +15,7 @@ live here and in `AGENTS.md`.
 - [Evidence and generated inventories](#evidence-and-generated-inventories)
 - [Live integration tests](#live-integration-tests)
 - [Capability gates](#capability-gates)
+- [Container runtime smoke](#container-runtime-smoke)
 
 ## Rust test suite
 
@@ -464,3 +465,20 @@ These capabilities must be treated as test results, not assumptions:
 | Audio remap/downmix | Channel-level filtering is implemented for the default runtime; full audio-content matrix remains required |
 | Custom encoding | Runtime output selection must stay rejected until custom args are applied by a transcoder backend |
 | Bonded SRT ingest | Separate-process broadcast + backup tests |
+
+## Container runtime smoke
+
+`scripts/check/container-smoke.sh` proves the shipped runtime image, not just
+process startup. It (1) checks the non-root user and no-mount contract, (2)
+proves real SRT egress under the shipped seccomp profile
+(`distribution/docker/restream-seccomp.json`) by driving the image through the
+existing live harness (`scripts/check/container-restream-shim.sh` makes the
+harness launch the image where it expects `restream`; live input, pipeline,
+output, SRT fabric, Compio Owner, external SRT sink, observed byte progress),
+and (3) records what the engine's DEFAULT seccomp profile does as a negative
+control (Docker 25+ denies the required `io_uring` syscalls; the expected
+denial never fails the run, and a future default that allows them is recorded
+as such). The SRT proof needs the harness (`scripts/build/bench-harness.sh`);
+`--diagnostic-unconfined` adds a `seccomp=unconfined` troubleshooting control
+that is never a deployment recommendation. `tests/seccomp_profile.rs` statically
+pins the profile to "Moby baseline + exactly the `io_uring` delta".

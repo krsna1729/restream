@@ -77,6 +77,37 @@ pub(crate) struct SrtCaller {
     pub(crate) id: LogicalCallerId,
 }
 
+/// Builds a shard's Compio runtime. Production always uses
+/// [`production_runtime`] (forced io_uring, no fallback); the type is an
+/// injection seam so the typed startup-failure path is testable without a
+/// seccomp-restricted host.
+pub(crate) type RuntimeBuilder =
+    fn(ProductionRuntimeConfig) -> Result<compio::runtime::Runtime, String>;
+
+/// The one production runtime: forced io_uring. There is no fallback driver;
+/// when io_uring cannot be created the shard does not start.
+pub(crate) fn production_runtime(
+    config: ProductionRuntimeConfig,
+) -> Result<compio::runtime::Runtime, String> {
+    production_runtime_builder(config)?
+        .build()
+        .map_err(|error| format!("SRT egress Compio runtime failed to build: {error}"))
+}
+
+/// Attribution for the managed-RX substrate observation, kept distinct so an
+/// operator can tell a container/seccomp policy denial (`EPERM`/`EACCES`) from
+/// an unsupported kernel feature (`EINVAL`). Log-only; never a metric label.
+pub(crate) fn substrate_diagnosis(substrate: ManagedRxSubstrate) -> &'static str {
+    match substrate {
+        ManagedRxSubstrate::Available => "available",
+        ManagedRxSubstrate::NotIoUring => "runtime-not-io_uring",
+        ManagedRxSubstrate::MultishotRecvUnsupported => "recvmsg-multishot-unsupported",
+        ManagedRxSubstrate::BufferRingRegistrationFailed(1 | 13) => "buffer-ring-denied-by-policy",
+        ManagedRxSubstrate::BufferRingRegistrationFailed(22) => "buffer-ring-unsupported-by-kernel",
+        ManagedRxSubstrate::BufferRingRegistrationFailed(_) => "buffer-ring-registration-failed",
+    }
+}
+
 /// Configuration that is fixed for the life of a shard.
 ///
 /// The Owner is a resource governor: it owns pool CAPACITY and the finite
@@ -95,6 +126,8 @@ pub(crate) struct SrtOwnerSettings {
     /// on the readiness receiver; the selected mode is always observable
     /// (`OwnerRxMode`, shard metrics, startup log), never silently claimed.
     pub(crate) rx_policy: RxModePolicy,
+    /// How the shard's Compio runtime is built (production: forced io_uring).
+    pub(crate) runtime_builder: RuntimeBuilder,
 }
 
 impl SrtOwnerSettings {
@@ -104,7 +137,14 @@ impl SrtOwnerSettings {
                 .expect("clamped nonzero"),
             service_budget: OwnerServiceBudget::default(),
             rx_policy: RxModePolicy::ManagedPreferred,
+            runtime_builder: production_runtime,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_runtime_builder(mut self, runtime_builder: RuntimeBuilder) -> Self {
+        self.runtime_builder = runtime_builder;
+        self
     }
 }
 
@@ -195,6 +235,8 @@ struct FamilyCounters {
 struct FamilyOwner {
     owner: Owner,
     fault_reported: bool,
+    /// The selected receive mode was logged once, when the Owner attached.
+    attach_logged: bool,
     counters: FamilyCounters,
 }
 
@@ -235,9 +277,7 @@ impl SrtOwners {
     pub(crate) fn new(settings: SrtOwnerSettings) -> Result<Self, String> {
         let config =
             ProductionRuntimeConfig::for_owner(SRT_RUNTIME_TX_ENVELOPE, SRT_OWNER_WIRE_CEILING);
-        let runtime = production_runtime_builder(config)?
-            .build()
-            .map_err(|error| format!("SRT egress Compio runtime failed to build: {error}"))?;
+        let runtime = (settings.runtime_builder)(config)?;
         let profile = runtime.block_on(observe_production_runtime(
             &runtime,
             SRT_RUNTIME_TX_ENVELOPE,
@@ -249,6 +289,7 @@ impl SrtOwners {
             compio = %profile.compio_version,
             io_uring = profile.is_io_uring,
             managed_rx = ?substrate,
+            substrate_diagnosis = substrate_diagnosis(substrate),
             tx_capacity_per_family = SRT_OWNER_TX_CAPACITY,
             runtime_tx_envelope = SRT_RUNTIME_TX_ENVELOPE,
             wire_ceiling = SRT_OWNER_WIRE_CEILING,
@@ -311,6 +352,7 @@ impl SrtOwners {
         Ok(FamilyOwner {
             owner,
             fault_reported: false,
+            attach_logged: false,
             counters: FamilyCounters::default(),
         })
     }
@@ -336,13 +378,33 @@ impl SrtOwners {
         let now = Timestamp::from_micros(now.as_micros().min(u128::from(u64::MAX)) as u64);
         let owner = &mut family_owner.owner;
         // Socket creation and registration need the runtime context.
-        self.runtime.block_on(async {
+        let outcome = self.runtime.block_on(async {
             match &request.kind {
                 SrtConnectKind::Direct(config) => owner.connect(config, now),
                 SrtConnectKind::Bonded(config) => owner.connect_bonded(config, now),
             }
             .map_err(|error| error.to_string())
-        })
+        });
+        // Once, when the family Owner has actually attached and selected its
+        // receive mode (never per packet): make a RawReadiness fallback --
+        // and why the managed substrate was unavailable -- impossible to miss.
+        if outcome.is_ok()
+            && !family_owner.attach_logged
+            && let Some(rx_mode) = family_owner.owner.rx_mode()
+        {
+            family_owner.attach_logged = true;
+            tracing::info!(
+                family = ?request.family,
+                driver = %self.profile.driver_type,
+                io_uring = self.profile.is_io_uring,
+                substrate = ?self.substrate,
+                substrate_diagnosis = substrate_diagnosis(self.substrate),
+                rx_mode = ?rx_mode,
+                rx_policy = ?self.settings.rx_policy,
+                "srt egress owner attached"
+            );
+        }
+        outcome
     }
 
     /// Submit one payload fragment to a logical caller. Only enqueues into
@@ -672,6 +734,7 @@ impl SrtOwners {
     /// joined, managed RX consumer gone); a miss is counted, never hidden.
     pub(crate) fn shutdown(&mut self, timeout: Duration) -> bool {
         self.assert_home_thread();
+        self.log_final_counters();
         while let Some(entry) = self.closing.pop_front() {
             if let Some(family_owner) = self.owners[entry.family.index()].as_mut() {
                 drop(family_owner.owner.remove_caller(entry.id));
@@ -694,6 +757,37 @@ impl SrtOwners {
             }
         });
         all
+    }
+
+    /// One line per attached family at shard shutdown: the cumulative Owner
+    /// counters, so a run's receive mode, service rate and TX pool behavior
+    /// are on record (low-cardinality; no caller identities).
+    fn log_final_counters(&self) {
+        let mut metrics = ShardMetrics::default();
+        self.observe(&mut metrics);
+        for (index, owner) in metrics.srt_owners.iter().enumerate() {
+            if !owner.present {
+                continue;
+            }
+            tracing::info!(
+                family = if index == 0 { "v4" } else { "v6" },
+                managed_rx = owner.managed_rx,
+                service_visits = owner.service_visits,
+                service_actions = owner.service_actions,
+                maintenance_actions = owner.maintenance_actions,
+                service_budget_exhausted = owner.service_budget_exhausted,
+                rx_packets = owner.rx_packets,
+                rx_truncated = owner.rx_truncated,
+                rx_ring_dropped = owner.rx_ring_dropped,
+                tx_packets = owner.tx_packets,
+                tx_completed_ok = owner.tx_completed_ok,
+                tx_high_water = owner.tx_high_water,
+                tx_exhaustions = owner.tx_exhaustions,
+                caller_expired = owner.caller_expired,
+                peer_group_collisions = owner.peer_group_collisions,
+                "srt egress owner final counters"
+            );
+        }
     }
 
     #[cfg(test)]

@@ -591,6 +591,31 @@ shard OS thread
   without provided-buffer rings runs the readiness receiver, and that is
   visible in `OwnerRxMode` and these metrics rather than silently claimed.
 
+**Runtime states and deployment requirements.** Three states are distinct and
+must not be confused:
+
+| State | What the runtime observed | Result |
+|---|---|---|
+| A. io_uring unavailable or denied | the forced io_uring Compio runtime cannot be built (e.g. a container seccomp profile denies `io_uring_setup`, `EPERM`/`ENOSYS`) | the SRT shard fails closed: `SrtFabricShardGroupError::Backend` ("SRT egress Compio runtime failed to build: ..."), no shard is left running, no fallback driver/runtime/backend exists |
+| B. io_uring works, no managed substrate | provided-buffer ring registration failed (or multishot is unsupported) | `ManagedPreferred` selects `OwnerRxMode::RawReadiness`; a valid receive mode of the same Compio Owner, not a second backend |
+| C. full substrate | io_uring + provided-buffer ring + `recvmsg` multishot | `OwnerRxMode::ManagedMultishot` |
+
+RawReadiness does not make io_uring optional. SRT egress always requires a
+kernel and container syscall policy that permit the forced io_uring runtime
+(for Docker: the shipped profile, `distribution/docker/README.md`); managed
+multishot receive additionally requires `IORING_REGISTER_PBUF_RING` and
+`recvmsg` multishot; RawReadiness needs neither. Capability is read from the
+live runtime, never inferred from a kernel version. Startup logs one
+`srt egress shard runtime ready` line per shard (`driver`, `io_uring`,
+`managed_rx` substrate, `substrate_diagnosis`) and one
+`srt egress owner attached` line per address family when its Owner selects a
+receive mode (`rx_mode`, `substrate`, `substrate_diagnosis`), so a RawReadiness
+fallback and its reason are always visible; `substrate_diagnosis` separates a
+policy denial (`buffer-ring-denied-by-policy`, `EPERM`/`EACCES`) from an
+unsupported kernel feature (`buffer-ring-unsupported-by-kernel`, `EINVAL`). At
+shard shutdown one `srt egress owner final counters` line per family records the
+cumulative service, RX/TX and TX-pool counters.
+
 SRT sender-buffer limits remain part of the leaf's total buffering policy;
 moving buffering into the protocol stack does not make it free or unbounded.
 `RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` sets each Owner's caller-pool
