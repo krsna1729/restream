@@ -224,6 +224,8 @@ struct FamilyCounters {
     transient_failures: u64,
     protocol_output_failures: u64,
     service_visits: u64,
+    service_duration_sum_us: u64,
+    service_duration_max_us: u64,
     budget_exhausted_visits: u64,
     /// Protocol (TX) output actions, and pool/lifecycle maintenance actions:
     /// separate upstream budget axes, never mixed.
@@ -552,9 +554,14 @@ impl SrtOwners {
                 let Some(family_owner) = slot.as_mut() else {
                     continue;
                 };
+                let started = Instant::now();
                 let report = family_owner.owner.service(now, budget).await;
+                let elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
                 let counters = &mut family_owner.counters;
                 counters.service_visits += 1;
+                counters.service_duration_sum_us =
+                    counters.service_duration_sum_us.saturating_add(elapsed_us);
+                counters.service_duration_max_us = counters.service_duration_max_us.max(elapsed_us);
                 counters.service_actions += report.actions as u64;
                 counters.maintenance_actions += report.maintenance_actions as u64;
                 counters.rx_packets += report.rx_packets as u64;
@@ -836,6 +843,8 @@ impl SrtOwners {
                 tx_transient_failures: counters.transient_failures,
                 protocol_output_failures: counters.protocol_output_failures,
                 service_visits: counters.service_visits,
+                service_duration_sum_us: counters.service_duration_sum_us,
+                service_duration_max_us: counters.service_duration_max_us,
                 service_budget_exhausted: counters.budget_exhausted_visits,
                 service_actions: counters.service_actions,
                 maintenance_actions: counters.maintenance_actions,

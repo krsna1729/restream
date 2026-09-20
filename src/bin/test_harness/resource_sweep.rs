@@ -47,6 +47,8 @@ use config::{
     ResourceSweepEnv, ResourceSweepLifecycle, ResourceSweepPeer, parse_string_set,
     parse_sweep_configs, parse_usize_list, sweep_configs,
 };
+#[path = "resource_sweep/first_progress.rs"]
+mod first_progress;
 #[path = "resource_sweep/measurement.rs"]
 mod measurement;
 pub(super) use measurement::ffmpeg_children_stats;
@@ -639,6 +641,7 @@ async fn run_resource_egress_growth(
     let mut publisher = spawn_resource_publisher(env, config, &stream_key)?;
     wait_for_api_input_live(&active.api, &pipeline_id, Duration::from_secs(45)).await?;
     let mut output_ids = Vec::new();
+    let mut output_starts: Vec<(String, Instant)> = Vec::new();
     let max_outputs = *env.egress_counts.iter().max().unwrap_or(&1);
     let mut out = Vec::new();
     for index in 1..=max_outputs {
@@ -655,10 +658,20 @@ async fn run_resource_egress_growth(
             )
             .await?;
             start_output(&active.api, &pipeline_id, &output_id).await?;
+            output_starts.push((output_id.clone(), Instant::now()));
             output_ids.push(output_id);
         }
         if env.egress_counts.contains(&index) {
             let progress_timeout = resource_output_progress_timeout(output_ids.len());
+            first_progress::record_first_progress(
+                &active.api,
+                &pipeline_id,
+                &output_starts,
+                progress_timeout,
+                &env.work_dir
+                    .join(format!("first-progress-{}.json", output_ids.len())),
+            )
+            .await;
             wait_for_outputs_progress(&active.api, &pipeline_id, &output_ids, progress_timeout)
                 .await?;
             out.push(

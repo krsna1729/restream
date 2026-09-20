@@ -48,6 +48,10 @@ pub struct OwnerFamilyMetrics {
     /// Protocol output that could not be materialized (leg quarantined).
     pub protocol_output_failures: u64,
     pub service_visits: u64,
+    /// Wall time spent inside `Owner::service` (sum and worst single call),
+    /// measured once per ready batch -- never per packet or per leaf.
+    pub service_duration_sum_us: u64,
+    pub service_duration_max_us: u64,
     /// Cumulative protocol-output (TX) actions charged to `max_actions`.
     pub service_actions: u64,
     /// Cumulative pool/lifecycle maintenance actions charged to

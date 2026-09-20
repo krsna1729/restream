@@ -42,6 +42,15 @@ pub(crate) struct EgressFabricShardStatus {
     pub cq_overflows: u64,
     pub ready_overflows: u64,
     pub queue_overflows: u64,
+    pub feed_wakes_useful: u64,
+    pub feed_wakes_empty: u64,
+    pub loop_duration_sum_us: u64,
+    pub driver_budget_violations: u64,
+    pub driver_overrun_us: u64,
+    pub retry_events: u64,
+    pub srt_owners: [crate::media::egress::metrics::OwnerFamilyMetrics; 2],
+    pub srt_runtime_io_uring: bool,
+    pub srt_managed_rx_available: bool,
 }
 
 impl EgressFabricShardStatus {
@@ -79,6 +88,15 @@ impl EgressFabricShardStatus {
             cq_overflows: heartbeat.cq_overflows,
             ready_overflows: heartbeat.ready_overflows,
             queue_overflows: heartbeat.queue_overflows,
+            feed_wakes_useful: heartbeat.feed_wakes_useful,
+            feed_wakes_empty: heartbeat.feed_wakes_empty,
+            loop_duration_sum_us: heartbeat.loop_duration_sum_us,
+            driver_budget_violations: heartbeat.driver_budget_violations,
+            driver_overrun_us: heartbeat.driver_overrun_us,
+            retry_events: heartbeat.retry_events,
+            srt_owners: heartbeat.srt_owners,
+            srt_runtime_io_uring: heartbeat.srt_runtime_io_uring,
+            srt_managed_rx_available: heartbeat.srt_managed_rx_available,
         }
     }
 
@@ -121,8 +139,63 @@ impl EgressFabricShardStatus {
             "cqOverflows": self.cq_overflows,
             "readyOverflows": self.ready_overflows,
             "queueOverflows": self.queue_overflows,
+            "feedWakesUseful": self.feed_wakes_useful,
+            "feedWakesEmpty": self.feed_wakes_empty,
+            "loopDurationSumUs": self.loop_duration_sum_us,
+            "driverBudgetViolations": self.driver_budget_violations,
+            "driverOverrunUs": self.driver_overrun_us,
+            "retryEvents": self.retry_events,
+            "srtRuntimeIoUring": self.srt_runtime_io_uring,
+            "srtManagedRxAvailable": self.srt_managed_rx_available,
+            "srtOwners": [
+                srt_owner_json("v4", &self.srt_owners[0]),
+                srt_owner_json("v6", &self.srt_owners[1]),
+            ],
         })
     }
+}
+
+/// One SRT Compio Owner's low-cardinality gauges/counters (no caller ids).
+fn srt_owner_json(
+    family: &'static str,
+    owner: &crate::media::egress::metrics::OwnerFamilyMetrics,
+) -> serde_json::Value {
+    serde_json::json!({
+        "family": family,
+        "present": owner.present,
+        "faulted": owner.faulted,
+        "managedRx": owner.managed_rx,
+        "txCapacity": owner.tx_capacity,
+        "txFree": owner.tx_free,
+        "txHighWater": owner.tx_high_water,
+        "txExhaustions": owner.tx_exhaustions,
+        "txInFlight": owner.tx_in_flight,
+        "txPackets": owner.tx_packets,
+        "txBytes": owner.tx_bytes,
+        "txCompletedOk": owner.tx_completed_ok,
+        "txShortSends": owner.tx_short_sends,
+        "txFailedSends": owner.tx_failed_sends,
+        "txPeerLocalFailures": owner.tx_peer_local_failures,
+        "txTransientFailures": owner.tx_transient_failures,
+        "protocolOutputFailures": owner.protocol_output_failures,
+        "rxPackets": owner.rx_packets,
+        "rxBytes": owner.rx_bytes,
+        "rxRingDepth": owner.rx_ring_depth,
+        "rxRingDropped": owner.rx_ring_dropped,
+        "rxTruncated": owner.rx_truncated,
+        "serviceVisits": owner.service_visits,
+        "serviceDurationSumUs": owner.service_duration_sum_us,
+        "serviceDurationMaxUs": owner.service_duration_max_us,
+        "serviceActions": owner.service_actions,
+        "maintenanceActions": owner.maintenance_actions,
+        "serviceBudgetExhausted": owner.service_budget_exhausted,
+        "callerInFlight": owner.caller_in_flight,
+        "callerQueued": owner.caller_queued,
+        "callerExpired": owner.caller_expired,
+        "callerFailed": owner.caller_failed,
+        "callerCancelled": owner.caller_cancelled,
+        "peerGroupCollisions": owner.peer_group_collisions,
+    })
 }
 
 impl MediaEngine {
