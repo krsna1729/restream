@@ -125,7 +125,7 @@ fn release_policy_metadata_is_declared_and_enforced() {
     // visible in the root manifest so release metadata cannot silently drift
     // back to an unpinned dependency.
     assert!(cargo_toml.contains("https://github.com/krsna1729/srt-rs"));
-    assert!(cargo_toml.contains("7382e26f80410bef43da149a3550978bcc7a4d49"));
+    assert!(cargo_toml.contains("86369b0815c09333547c965652250e17f580e834"));
     assert!(cargo_toml.contains("srt_proto"));
     assert!(cargo_toml.contains("srt-transport"));
 

@@ -4,6 +4,13 @@
 pub(crate) mod egress_connect;
 #[path = "srt/egress_stats.rs"]
 pub(crate) mod egress_stats;
+#[path = "srt/ingress_admission.rs"]
+mod ingress_admission;
+#[cfg(test)]
+#[path = "srt/ingress_live_tests.rs"]
+mod ingress_live_tests;
+#[path = "srt/ingress_owner.rs"]
+mod ingress_owner;
 #[path = "srt/knobs.rs"]
 mod knobs;
 #[path = "srt/shared_muxer.rs"]
@@ -18,7 +25,7 @@ pub(crate) use egress_connect::{
     AddressFamily, SrtConnectKind, SrtConnectRequest, SrtFabricEgressConnectSpec,
 };
 pub(crate) use egress_stats::SrtSendBacklog;
-pub(crate) use knobs::{apply_optional_udp_buf, desired_udp_buf, timestamp_now};
+pub(crate) use knobs::{apply_optional_udp_buf, desired_udp_buf};
 pub(crate) use shared_muxer::start_shared_ts_muxer;
 pub(crate) use srt_egress_engine::{SrtEgressEngine, SrtSendResult};
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};

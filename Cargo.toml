@@ -61,11 +61,11 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 percent-encoding = "2"
 shiguredo_mp4 = "2026.5.0"
-# Final upstream srt-rs. `compio` is the network I/O substrate for the next
-# work item (srt_transport::compio::Owner); the native io_uring SRT egress
-# still runs on the runtime-neutral surface in this intermediate commit.
-srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "7382e26f80410bef43da149a3550978bcc7a4d49" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "7382e26f80410bef43da149a3550978bcc7a4d49", features = ["compio"] }
+# Upstream srt-rs (merged main). SRT egress and ingress both run on
+# `srt_transport::compio::Owner`; ingress attaches with
+# `Owner::listen_with_resolver`.
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "86369b0815c09333547c965652250e17f580e834" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "86369b0815c09333547c965652250e17f580e834", features = ["compio"] }
 # Bounded shard command channel with both blocking and Future-based receive, so
 # a backend that owns a thread-affine completion runtime can await commands
 # alongside its own I/O without a second wake source.

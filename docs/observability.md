@@ -56,12 +56,26 @@ recording settings in SQLite.
     "udpRxQueueBytes": 0,
     "udpRxQueuePeakBytes": 0,
     "udpDrops": 0,
-    "nativeRxDatagrams": 0,
-    "nativeTxDatagrams": 0,
-    "nativeRxPoolDrops": 0
+    "ingressOwner": {
+      "faulted": false,
+      "managedRx": true,
+      "serviceVisits": 0,
+      "rxPackets": 0,
+      "txPackets": 0,
+      "peers": 0
+    }
   }
 }
 ```
+
+`srtListener.ingressOwner` is published by the SRT ingress Owner thread and is
+low-cardinality by construction (no peer or StreamID labels). The sample shows a
+subset; the full set is service visits/actions/maintenance actions and budget
+exhaustion, TX capacity/in-flight/high-water/exhaustions/packets/completions/
+failures, RX packets/bytes/ring depth/ring drops/truncation, peers, admission
+policy telemetry, command and event bridge depth high-water, event-bridge-full
+visits, deferred read sends, stale commands, overload disconnects and send
+failures.
 
 `status` is currently always `ready` when the handler returns.
 

@@ -75,12 +75,15 @@ The current layering sequence and stop rules live in
 ## Runtime ownership
 
 Tokio tasks own Axum, reconciliation, application protocol state, native
-mux/demux work, and child-process pipe I/O. Native ingress/egress workers own
-their sockets and readiness rings. Work that can block independently
+mux/demux work, and child-process pipe I/O. Native RTMP ingress/egress workers
+own their sockets and readiness rings. Work that can block independently
 of the async scheduler is isolated:
 
-- srt-rs protocol state stays on its async owner while native ingress workers
-  own UDP/TCP descriptors and bounded handoff buffers;
+- SRT ingress is one owner thread with one Compio runtime and one `srt-rs`
+  Compio `Owner`; the Owner owns the UDP socket and all SRT protocol state, and
+  Tokio addresses sessions only by `LogicalPeerId` through bounded commands and
+  events (see [media pipeline](media-pipeline.md#srt-ingress-owner));
+- RTMP ingress workers own their TCP descriptors and bounded handoff buffers;
 - RTMP/RTMPS and SRT **egress** run on the egress fabric: a small
   CPU-derived pool of dedicated shard OS threads, output-count-scaled for
   RTMP/RTMPS/sink/pipeline feeds while SRT retains the CPU-derived ceiling,

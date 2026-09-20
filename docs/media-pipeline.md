@@ -23,6 +23,7 @@ For the performance optimization plan and benchmark results, see
 - [Buffer sizing for 4K 60fps](#buffer-sizing-for-4k-60fps)
 - [Thread and memory ownership, ingest to egress](#thread-and-memory-ownership-ingest-to-egress)
 - [SRT bonding](#srt-bonding)
+- [SRT ingress owner](#srt-ingress-owner)
 - [Protocol correctness requirements](#protocol-correctness-requirements)
 
 ## Current shape
@@ -489,7 +490,12 @@ materialized straight into a reserved TX-pool slot when the Owner drains it.
 ### Ingest
 
 The srt-rs listener explicitly accepts publisher-created Broadcast and Backup
-groups. Their authenticated matching legs feed one stable logical input,
+groups. Restream answers every bonded leg with ONE application-owned
+receiving-group id (random per listener lifetime, never derived from an address,
+port or socket id), in the caller's own mode; a caller's group id identifies the
+CALLER group and is never echoed. A direct caller receives no GROUP response.
+Because the id is stable across legs, libsrt callers pin it and see no
+`SRT_REJ_GROUP`. Their authenticated matching legs feed one stable logical input,
 deduplicate received MPEG-TS payloads, and retain per-leg health plus logical
 aggregate telemetry. Matching StreamIDs on independent sockets do not create a
 bond.
@@ -518,6 +524,43 @@ merely unreachable is ordinary degradation, not a collision. Independent
 receivers are not a bond target. All legs of one bond must share one address
 family (one bond, one family Owner, one shared caller socket); a mixed-family
 bond fails the output explicitly.
+
+## SRT ingress owner
+
+The SRT listener is one owner thread (`srt-in-<port>`): one production Compio
+runtime (forced io_uring, no fallback; `ManagedPreferred` receive with an
+observed substrate, RawReadiness only inside a working io_uring runtime) and one
+`srt_transport::compio::Owner` attached with `Owner::listen_with_resolver`. The
+Owner owns the socket, the `PeerTable`, handshake admission, timers, ACK/NAK,
+listener TX and every peer's send/disconnect/retire. There is no second protocol
+table on Tokio.
+
+- **Admission** is synchronous on the owner thread: the resolver reads the
+  `SrtIngestPolicyStore` (mode validation, `UNAUTHORIZED`/`BAD_MODE`/
+  `BAD_REQUEST`, latency, passphrase, key length) and adds the receiving-group
+  response for bonded callers. The asynchronous checks (pipeline authentication,
+  IP bans, duplicate publishers, missing read target) stay in Tokio and, on
+  rejection, send `Disconnect` for the real `LogicalPeerId`.
+- **Bridges are bounded.** Commands (Tokio to Owner): `Send`, `Disconnect`,
+  `Shutdown`, capacity 256, at most 32 applied per owner visit before the Owner is
+  serviced again. Events (Owner to Tokio): `Connected`, `Media`, `Disconnected`,
+  `Fault`, capacity 256. A full event bridge stops draining Owner events, so
+  protocol flow control absorbs the pressure; accepted media is never counted and
+  dropped. A full command bridge leaves an SRT reader's fragments queued in Tokio
+  (a fragment is popped only once the bridge accepted it). Read/play fragments
+  that wait for send-window room are bounded per peer (32) and in total (1024);
+  a peer that exceeds them is explicitly disconnected (`overloadDisconnects`).
+- **Retirement.** A terminal `Disconnected` is forwarded and the peer is removed
+  from the Owner; a locally disconnected peer is retired after its terminal event
+  or a 500 ms grace. Stale commands for a retired `LogicalPeerId` are harmless and
+  counted (`staleCommands`).
+- **Owner fault** stops admission, reports `Fault` to Tokio and ends the thread;
+  there is no rebuild on another runtime. Shutdown flushes SHUTDOWN datagrams and
+  runs `Owner::shutdown_and_drain`; the verdict is logged, never assumed.
+- **Metrics**: `srtListener.ingressOwner` in the engine status (service visits and
+  actions, TX capacity/in-flight/high-water/exhaustions, RX packets/bytes/ring
+  depth/drops/truncation, peers, admission telemetry, bridge depth high-water,
+  stale commands, overload disconnects). No peer or StreamID labels.
 
 ## Protocol correctness requirements
 

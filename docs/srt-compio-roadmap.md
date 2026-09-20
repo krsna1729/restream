@@ -548,10 +548,23 @@ Track separately in:
 
 ### WI3.1 — Upstream production listener admission for Compio Owner
 
-Status: ACTIVE — implemented and in review
+Status: DONE
 
-Progress: srt-rs PR #125, head `08eb56b46d999be71c90666e2da850210b44b778`; not yet
-merged. WI3.2 stays blocked until it merges.
+srt-rs PR #125, squash-merged as `86369b0815c09333547c965652250e17f580e834`
+(content head `08eb56b46d999be71c90666e2da850210b44b778`).
+
+Key architectural results:
+
+- `ListenerAdmissionResolver` (Arc-backed, one per listener) and
+  `Owner::listen_with_resolver` on the Compio, Mio and Tokio Owners;
+  `Owner::listen` is unchanged.
+- Compio RawReadiness and ManagedMultishot share one admission helper.
+- A listener advertises GROUP only to callers that sent a GROUP request; the
+  response id is the application-owned receiving-group id, distinct from the
+  caller's group id.
+- Known non-blocking note: Compio `Owner::listen_inner` assigns
+  `socket_memory_budget` before RX-mode resolution/bind, so "transactional"
+  means the same semantics as the pre-existing `listen()`.
 
 Repository:
 
@@ -634,9 +647,26 @@ Restream must not be changed until this lands upstream.
 
 ## 6. WI3.2 — Restream SRT Ingress Hard Cut
 
-Status: PLANNED
+Status: DONE
 
-Start only after WI3.1 merges.
+Started after WI3.1 merged.
+
+Result (Restream pins srt-rs `86369b0815c09333547c965652250e17f580e834`):
+
+- `native_ingress.rs`, `native_ingress_drive.rs` and their tests are deleted; SRT
+  ingress has no `UringUdpDriver`, `CompatReceiver` or shadow `PeerTable`.
+- One owner thread (`srt-in-<port>`) builds one production Compio runtime and
+  one `Owner` attached with `Owner::listen_with_resolver`; Restream owns the
+  receiving-group identity (`ingress_admission.rs`).
+- Tokio addresses sessions only by `LogicalPeerId` through bounded commands
+  (`Send`, `Disconnect`, `Shutdown`; capacity 256, 32 per owner visit) and
+  events (capacity 256); a full event bridge backpressures, never drops
+  accepted media.
+- Async authorization rejection and pipeline deletion disconnect the real Owner
+  peer; SRT read/play sends through the Owner logical peer.
+- Evidence: `src/media/srt/ingress_live_tests.rs`, `ingress_admission.rs`.
+- Deferred: the generic `restream-dataplane` UDP primitives now have no
+  production consumer (WI3.3).
 
 Replace:
 
@@ -1697,18 +1727,14 @@ WI10
 
 Do not start packet-rate optimization yet.
 
-The next item remains:
+WI3.1 and WI3.2 are done. The next item is:
 
 ```text
-WI3.1
+WI3.3
 ```
 
-because the ingress cutover requires upstream Owner support for:
-
-- synchronous per-StreamID admission policy
-- correct application-owned receiving-group identity
-
-After WI3.1 merges, proceed to WI3.2.
+Delete the old Restream SRT transport machinery that WI3.2 left without a
+production consumer (notably the generic `restream-dataplane` UDP primitives).
 
 The packet-rate program starts only after the SRT ingress and egress paths share
 the same final architecture.

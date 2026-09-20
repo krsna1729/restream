@@ -57,6 +57,10 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test proptest_srt_readiness_retry_model_never_requires_epoll_wake --lib -- --nocapture
   "$run_step_fn" lib-srt-stream-id-normalization \
     scripts/build/resource-limit.sh cargo test srt_stream_ids_normalize_equivalent --lib -- --nocapture
+  "$run_step_fn" lib-srt-ingress-owner \
+    scripts/build/resource-limit.sh cargo test media::srt::ingress_live_tests --lib -- --nocapture
+  "$run_step_fn" lib-srt-ingress-admission \
+    scripts/build/resource-limit.sh cargo test media::srt::ingress_admission --lib -- --nocapture
   "$run_step_fn" lib-srt-sender-semaphore \
     scripts/build/resource-limit.sh cargo test srt_sender_semaphore --lib -- --nocapture
   "$run_step_fn" external-transcoder-routing \

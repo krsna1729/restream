@@ -442,26 +442,12 @@ pub(crate) async fn health_snapshot(
         .rx_queue_max_bytes
         .load(Ordering::Relaxed);
     let drops = engine.runtime.listener_stats.drops.load(Ordering::Relaxed);
-    let native_rx_datagrams = engine
+    let ingress_owner = engine
         .runtime
         .listener_stats
-        .native_rx_datagrams
-        .load(Ordering::Relaxed);
-    let native_tx_datagrams = engine
-        .runtime
-        .listener_stats
-        .native_tx_datagrams
-        .load(Ordering::Relaxed);
-    let native_rx_pool_drops = engine
-        .runtime
-        .listener_stats
-        .native_rx_pool_drops
-        .load(Ordering::Relaxed);
-    let native_rx_channel_drops = engine
-        .runtime
-        .listener_stats
-        .native_rx_channel_drops
-        .load(Ordering::Relaxed);
+        .ingress_owner
+        .snapshot()
+        .to_json();
     let bonding_available = engine
         .runtime
         .listener_stats
@@ -517,10 +503,7 @@ pub(crate) async fn health_snapshot(
             "udpRxQueueBytes": rx_queue,
             "udpRxQueuePeakBytes": rx_max,
             "udpDrops": drops,
-            "nativeRxDatagrams": native_rx_datagrams,
-            "nativeTxDatagrams": native_tx_datagrams,
-            "nativeRxPoolDrops": native_rx_pool_drops,
-            "nativeRxChannelDrops": native_rx_channel_drops,
+            "ingressOwner": ingress_owner,
         },
         "egressFabricShards": egress_fabric_shards,
         "tuning": {

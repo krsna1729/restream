@@ -6,10 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use srt_proto::Timestamp;
-use srt_transport::advanced::admission::{BondedInputPolicy, LogicalPeerId, PeerTable};
-use srt_transport::advanced::telemetry::IngressTelemetry;
-use srt_transport::{ListenerConfig, ListenerTopology, RuntimeFlavor};
+use srt_transport::advanced::admission::LogicalPeerId;
 use tracing::{error, info, warn};
 
 use crate::media::engine::MediaEngine;
@@ -19,23 +16,58 @@ use crate::media::ring_buffer::RingBuffer;
 use crate::media::security::{IngestSecurityService, RateLimitScope};
 use crate::media::srt_stream_id::{SrtConnectionMode, parse_srt_stream_id};
 
-use super::timestamp_now;
 use crate::media::standby_gop::StandbyGopCache;
 use crate::media::ts_chunk_ring::TsChunkReader;
 
 pub(crate) use super::srt_policy::SrtIngestPolicyStore;
 
-#[path = "native_ingress.rs"]
-mod native_ingress;
-use native_ingress::NativeSrtIngress;
+use super::ingress_admission::ReceiverGroupId;
+use super::ingress_owner::{
+    INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, IngressCommand, IngressConfig,
+    SrtIngressEvent, SrtIngressHandle,
+};
 
 #[path = "ingest_packets.rs"]
 mod ingest_packets;
 
 const SRT_MESSAGE_PAYLOAD_MAX: usize = 1316;
 /// Upper bound for listener parks so reader pull and shutdown stay responsive
-/// when the next protocol deadline is farther out.
+/// when no Owner event arrives.
 const LISTENER_IDLE: Duration = Duration::from_millis(5);
+/// Owner events handled per Tokio pass before readers and deletion checks run.
+const EVENTS_PER_PASS: usize = 64;
+/// Send commands one reader may queue per Tokio pass, so one busy reader
+/// cannot monopolize the command bridge.
+const READER_SENDS_PER_PASS: usize = 32;
+
+/// Tokio's end of the ingress Owner: the bounded command bridge plus the
+/// disconnects waiting for bridge room. Sessions are addressed only by
+/// `LogicalPeerId`; the protocol state they name lives on the owner thread.
+struct Ingress {
+    handle: SrtIngressHandle,
+    pending_disconnects: VecDeque<LogicalPeerId>,
+}
+
+impl Ingress {
+    /// Ask the Owner to disconnect (and then retire) a peer. Never lost: a
+    /// full bridge leaves it queued for the next pass.
+    fn disconnect(&mut self, peer: LogicalPeerId) {
+        self.pending_disconnects.push_back(peer);
+        self.flush_disconnects();
+    }
+
+    fn flush_disconnects(&mut self) {
+        while let Some(peer) = self.pending_disconnects.pop_front() {
+            if let Err(IngressCommand::Disconnect { logical_peer }) = self
+                .handle
+                .try_send(IngressCommand::Disconnect { logical_peer: peer })
+            {
+                self.pending_disconnects.push_front(logical_peer);
+                break;
+            }
+        }
+    }
+}
 
 pub(crate) struct SrtServer {
     pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
@@ -67,52 +99,26 @@ impl SrtServer {
                 return;
             }
         };
-        let prepared = match ListenerConfig::builder(bind)
-            .topology(ListenerTopology::PerPort)
-            .bonded_inputs(BondedInputPolicy::Accept)
-            .configure_transport(super::apply_optional_udp_buf)
-            .build()
-            .and_then(|config| config.prepare(RuntimeFlavor::Mio))
+        let handle = match SrtIngressHandle::start(IngressConfig {
+            bind,
+            policy_store: self.ingest_policy_store.clone(),
+            receiver_group: ReceiverGroupId::generate(),
+            stats: self.engine.listener_stats_handle(),
+            command_capacity: INGRESS_COMMAND_CAPACITY,
+            event_capacity: INGRESS_EVENT_CAPACITY,
+        })
+        .await
         {
-            Ok(prepared) => prepared,
+            Ok(handle) => handle,
             Err(error) => {
-                error!(port, %error, "failed to prepare srt-rs listener");
+                error!(port, %error, "failed to start the SRT ingress owner");
                 return;
             }
         };
-        let mut sockets = match prepared.bind_sockets() {
-            Ok(sockets) => sockets,
-            Err(error) => {
-                error!(port, %error, "failed to bind srt-rs listener");
-                return;
-            }
+        let mut ingress = Ingress {
+            handle,
+            pending_disconnects: VecDeque::new(),
         };
-        let Some(socket) = sockets.pop() else {
-            error!(port, "srt-rs listener produced no UDP socket");
-            return;
-        };
-        let peers = prepared.peer_table();
-        let admission = prepared.admission_options();
-        let telemetry = IngressTelemetry::default();
-        let native = match NativeSrtIngress::start(
-            socket,
-            self.engine.listener_stats_handle(),
-            peers,
-            admission,
-            telemetry,
-            self.ingest_policy_store.clone(),
-        ) {
-            Ok(native) => native,
-            Err(error) => {
-                error!(port, %error, "failed to start native SRT ingress");
-                return;
-            }
-        };
-        let NativeSrtIngress {
-            mut events,
-            outbound: _outbound,
-            stats: _stats,
-        } = native;
 
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let shutdown_hook = shutdown.clone();
@@ -124,37 +130,61 @@ impl SrtServer {
             .listener_stats_handle()
             .bonding_available
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        // Protocol state (PeerTable, timers, replies) lives on the native
-        // worker now. Tokio keeps session/media lifecycle: it consumes the
-        // worker's bounded control events plus legacy datagrams still in
-        // flight, and drives readers/publishers. A local shadow PeerTable is
-        // NOT kept: `handle_peer_event` takes the worker-owned table's
-        // decisions as events, and session teardown is idempotent.
+        // Protocol state (the Compio Owner, its PeerTable, timers, replies)
+        // lives on the ingress owner thread. Tokio keeps session and media
+        // lifecycle keyed by `LogicalPeerId` and reaches the protocol only
+        // through bounded commands. There is no second protocol table here.
         let mut peer_sessions = HashMap::new();
-        // Shadow table for session-lifecycle bookkeeping only (disconnect /
-        // remove by logical id). It never admits or feeds; the worker owns
-        // protocol truth.
-        let mut shadow = PeerTable::new();
 
-        info!(port, "SRT listener ready (srt-rs/native io_uring ingress)");
-        while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
-            let now = timestamp_now();
-            close_deleted_srt_publishers(&self.engine, &mut shadow, &mut peer_sessions, now).await;
-            drive_srt_readers(&self.engine, &mut shadow, &mut peer_sessions, now).await;
-            match tokio::time::timeout(LISTENER_IDLE, events.recv()).await {
-                Ok(Some(event)) => {
-                    self.handle_ingress_event(&mut shadow, &mut peer_sessions, event)
-                        .await;
+        info!(port, bind = %ingress.handle.local_addr(), "SRT listener ready (srt-rs compio Owner ingress)");
+        let mut owner_fault = None;
+        'listener: while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
+            ingress.flush_disconnects();
+            close_deleted_srt_publishers(&self.engine, &mut ingress, &mut peer_sessions).await;
+            drive_srt_readers(&self.engine, &mut ingress, &mut peer_sessions).await;
+            let first = tokio::time::timeout(LISTENER_IDLE, ingress.handle.events.recv()).await;
+            let mut next = match first {
+                Ok(Some(event)) => Some(event),
+                Ok(None) => {
+                    owner_fault = Some("the SRT ingress owner thread stopped".to_string());
+                    break;
                 }
-                Ok(None) => break,
-                Err(_) => {}
-            }
-            while let Ok(event) = events.try_recv() {
-                self.handle_ingress_event(&mut shadow, &mut peer_sessions, event)
+                Err(_) => None,
+            };
+            let mut handled = 0;
+            while let Some(event) = next.take() {
+                if let SrtIngressEvent::Fault { detail } = &event {
+                    owner_fault = Some(detail.clone());
+                    break 'listener;
+                }
+                self.handle_ingress_event(&mut ingress, &mut peer_sessions, event)
                     .await;
+                handled += 1;
+                if handled >= EVENTS_PER_PASS {
+                    break;
+                }
+                next = ingress.handle.events.try_recv().ok();
+            }
+            if ingress.handle.is_closed() {
+                owner_fault = Some("the SRT ingress owner thread stopped".to_string());
+                break;
             }
         }
 
+        // Ask every live peer to close orderly, then stop the owner and report
+        // its truthful verdict before the listener is marked stopped.
+        for logical_peer in peer_sessions.keys().copied().collect::<Vec<_>>() {
+            ingress.disconnect(logical_peer);
+        }
+        let exit = ingress.handle.shutdown().await;
+        if let Some(fault) = owner_fault.as_ref().or(exit.fault.as_ref()) {
+            error!(port, fault = %fault, quiescent = exit.quiescent, "SRT listener stopped after an owner fault");
+        } else if !exit.quiescent {
+            warn!(
+                port,
+                "SRT ingress owner did not reach quiescence at shutdown"
+            );
+        }
         for (_logical_peer, session) in peer_sessions.drain() {
             if let RustSrtSession::Publish(publisher) = session {
                 self.finish_publisher(*publisher).await;
@@ -164,35 +194,34 @@ impl SrtServer {
             .listener_stats_handle()
             .bonding_available
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        info!(port, "SRT listener stopped");
+        info!(port, quiescent = exit.quiescent, "SRT listener stopped");
     }
 
     async fn handle_ingress_event(
         &self,
-        peers: &mut PeerTable,
+        ingress: &mut Ingress,
         sessions: &mut HashMap<LogicalPeerId, RustSrtSession>,
-        event: native_ingress::SrtIngressEvent,
+        event: SrtIngressEvent,
     ) {
         match event {
-            native_ingress::SrtIngressEvent::Connected {
+            SrtIngressEvent::Fault { .. } => {}
+            SrtIngressEvent::Connected {
                 peer,
                 logical_peer,
                 stream_id,
             } => {
-                self.handle_connected(peers, sessions, peer, logical_peer, stream_id)
+                self.handle_connected(ingress, sessions, peer, logical_peer, stream_id)
                     .await;
             }
-            native_ingress::SrtIngressEvent::Media {
-                peer,
+            SrtIngressEvent::Media {
                 logical_peer,
                 payload,
             } => {
-                let _ = peer;
                 if let Some(RustSrtSession::Publish(publisher)) = sessions.get_mut(&logical_peer) {
                     publisher.accept_payload(&self.engine, payload).await;
                 }
             }
-            native_ingress::SrtIngressEvent::Disconnected {
+            SrtIngressEvent::Disconnected {
                 peer,
                 logical_peer,
                 reason,
@@ -202,22 +231,21 @@ impl SrtServer {
                 {
                     self.finish_publisher(*publisher).await;
                 }
+                // The owner retires the terminal peer itself; nothing to remove.
                 info!(peer = %peer, %reason, "SRT peer disconnected");
-                let _ = peers.remove(logical_peer);
             }
         }
     }
 
     async fn handle_connected(
         &self,
-        peers: &mut PeerTable,
+        ingress: &mut Ingress,
         sessions: &mut HashMap<LogicalPeerId, RustSrtSession>,
         peer: SocketAddr,
         logical_peer: LogicalPeerId,
         stream_id: String,
     ) {
         {
-            let _ = peers.logical_peer(&logical_peer);
             let parsed = parse_srt_stream_id(&stream_id);
             let client_ip = peer.ip().to_string();
             let access_mode = match parsed.mode {
@@ -233,7 +261,7 @@ impl SrtServer {
                 })
                 .is_some()
             {
-                let _ = peers.remove(logical_peer);
+                ingress.disconnect(logical_peer);
                 return;
             }
             let pipeline = match self
@@ -244,7 +272,7 @@ impl SrtServer {
                 Ok(pipeline) => pipeline,
                 Err(error) => {
                     warn!(peer = %peer, error = ?error, "rejecting unauthorized SRT stream");
-                    let _ = peers.remove(logical_peer);
+                    ingress.disconnect(logical_peer);
                     return;
                 }
             };
@@ -260,7 +288,7 @@ impl SrtServer {
                         }
                         Err(error) => {
                             warn!(peer = %peer, %error, "rejecting SRT publisher");
-                            let _ = peers.remove(logical_peer);
+                            ingress.disconnect(logical_peer);
                         }
                     }
                 }
@@ -270,7 +298,7 @@ impl SrtServer {
                     }
                     Err(error) => {
                         warn!(peer = %peer, %error, "rejecting SRT reader");
-                        let _ = peers.remove(logical_peer);
+                        ingress.disconnect(logical_peer);
                     }
                 },
             }
@@ -487,9 +515,8 @@ struct RustSrtReader {
 
 async fn close_deleted_srt_publishers(
     engine: &MediaEngine,
-    peers: &mut PeerTable,
+    ingress: &mut Ingress,
     sessions: &mut HashMap<LogicalPeerId, RustSrtSession>,
-    now: Timestamp,
 ) {
     let live_pipelines = engine.ingests.pipelines.read().await;
     let publisher_peers: Vec<_> = sessions
@@ -510,22 +537,19 @@ async fn close_deleted_srt_publishers(
         if publisher.closing {
             continue;
         }
-        let Some(mut entry) = peers.logical_peer_mut(&peer) else {
-            continue;
-        };
         // A sink pipeline can disappear while its SRT publisher connection is
-        // still healthy. Close that connection immediately so the producing
-        // egress observes a normal peer shutdown and enters retry/cleanup.
-        entry.disconnect(now);
+        // still healthy. Close that connection immediately (an Owner command
+        // against the real logical peer) so the producing egress observes a
+        // normal peer shutdown and enters retry/cleanup.
+        ingress.disconnect(peer);
         publisher.closing = true;
     }
 }
 
 async fn drive_srt_readers(
     engine: &MediaEngine,
-    peers: &mut PeerTable,
+    ingress: &mut Ingress,
     sessions: &mut HashMap<LogicalPeerId, RustSrtSession>,
-    now: Timestamp,
 ) {
     // The pipeline ring is removed by pipeline deletion immediately, while
     // the active ingest entry intentionally remains until the peer teardown
@@ -541,14 +565,12 @@ async fn drive_srt_readers(
         .collect();
     for (peer, reader) in reader_peers {
         if !live_pipelines.contains_key(&reader.pipeline_id) {
-            if !reader.closing
-                && let Some(mut entry) = peers.logical_peer_mut(&peer)
-            {
+            if !reader.closing {
                 // A target pipeline can be deleted independently of the SRT
-                // socket. Send a protocol shutdown so the remote egress sees
-                // the disappearance promptly instead of waiting for idle
-                // timeout/retry handling.
-                entry.disconnect(now);
+                // socket. Ask the Owner to close the real peer so the remote
+                // egress sees the disappearance promptly instead of waiting
+                // for idle timeout/retry handling.
+                ingress.disconnect(peer);
                 reader.closing = true;
             }
             continue;
@@ -576,39 +598,44 @@ async fn drive_srt_readers(
                 }
             }
         }
-        while let Some(payload) = reader.pending.front().cloned() {
-            let Some(mut entry) = peers.logical_peer_mut(&peer) else {
-                break;
-            };
-            let sent = match entry.send(&payload, now) {
-                Ok(_) => {
-                    reader.pending.pop_front();
-                    true
-                }
-                Err(error) => {
-                    warn!(
-                        peer = ?peer,
-                        error = ?error,
-                        payload_len = payload.len(),
-                        "SRT reader send failed"
-                    );
-                    false
-                }
-            };
-            if !sent
-                || !peers
-                    .logical_peer_mut(&peer)
-                    .is_some_and(|mut entry| entry.can_send())
-            {
-                break;
-            }
-        }
+        // A fragment leaves `pending` only once the bounded command bridge has
+        // accepted it. A full bridge stops the pull for this reader (the next
+        // burst is not fetched while fragments wait), so nothing is dropped.
+        submit_pending(&mut reader.pending, READER_SENDS_PER_PASS, |payload| {
+            ingress
+                .handle
+                .try_send(IngressCommand::Send {
+                    logical_peer: peer,
+                    payload,
+                })
+                .map_err(|command| match command {
+                    IngressCommand::Send { payload, .. } => payload,
+                    IngressCommand::Disconnect { .. } | IngressCommand::Shutdown => {
+                        unreachable!("only a Send command was offered")
+                    }
+                })
+        });
     }
 }
 
-#[cfg(test)]
-mod tests {
-    // Protocol ownership (admission, deadlines, replies) lives on the native
-    // worker (`native_ingress.rs`); Tokio keeps session/media lifecycle only.
-    // See `native_ingress` tests for the owner-thread protocol path.
+/// Offer up to `limit` pending fragments to a bounded sink. A fragment leaves
+/// `pending` only once the sink has accepted it, so a full bridge stops the
+/// pass with nothing lost and order preserved. Returns the accepted count.
+pub(super) fn submit_pending(
+    pending: &mut VecDeque<Bytes>,
+    limit: usize,
+    mut offer: impl FnMut(Bytes) -> Result<(), Bytes>,
+) -> usize {
+    let mut accepted = 0;
+    while accepted < limit {
+        let Some(payload) = pending.front().cloned() else {
+            break;
+        };
+        if offer(payload).is_err() {
+            break;
+        }
+        pending.pop_front();
+        accepted += 1;
+    }
+    accepted
 }

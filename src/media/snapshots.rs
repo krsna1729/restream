@@ -5,7 +5,7 @@
 //! populates them, while API, diagnostics, alerts, and harness code consume
 //! them through stable runtime-facing shapes.
 
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Per-pipeline ingest quality snapshot (RTMP TCP or SRT link stats).
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -148,10 +148,7 @@ pub struct SrtListenerDiagSnapshot {
     pub rx_queue_bytes: u64,
     pub rx_queue_peak_bytes: u64,
     pub drops: u64,
-    pub native_rx_datagrams: u64,
-    pub native_tx_datagrams: u64,
-    pub native_rx_pool_drops: u64,
-    pub native_rx_channel_drops: u64,
+    pub ingress_owner: SrtIngressOwnerSnapshot,
     pub active_ingest_count: usize,
 }
 
@@ -178,10 +175,78 @@ pub struct ListenerSocketStats {
     pub rx_queue_bytes: AtomicU64,
     pub rx_queue_max_bytes: AtomicU64,
     pub drops: AtomicU64,
-    pub native_rx_datagrams: AtomicU64,
-    pub native_tx_datagrams: AtomicU64,
-    pub native_rx_pool_drops: AtomicU64,
-    pub native_rx_channel_drops: AtomicU64,
+    /// Counters published by the SRT ingress Owner thread.
+    pub ingress_owner: SrtIngressOwnerStats,
+}
+
+macro_rules! ingress_owner_stats {
+    ($($counter:ident),* $(,)?; $($gauge:ident),* $(,)?) => {
+        /// Low-cardinality SRT ingress Owner counters and gauges. Written only
+        /// by the ingress Owner thread (and the bridge accounting it owns);
+        /// read by status/diagnostics. No peer or StreamID labels.
+        #[derive(Debug, Default)]
+        pub struct SrtIngressOwnerStats {
+            $(pub $counter: AtomicU64,)*
+            $(pub $gauge: AtomicU64,)*
+            pub faulted: AtomicBool,
+            pub managed_rx: AtomicBool,
+        }
+
+        /// Plain-value copy of [`SrtIngressOwnerStats`].
+        #[derive(Debug, Clone, Default, PartialEq, Eq)]
+        pub struct SrtIngressOwnerSnapshot {
+            $(pub $counter: u64,)*
+            $(pub $gauge: u64,)*
+            pub faulted: bool,
+            pub managed_rx: bool,
+        }
+
+        impl SrtIngressOwnerStats {
+            pub fn snapshot(&self) -> SrtIngressOwnerSnapshot {
+                SrtIngressOwnerSnapshot {
+                    $($counter: self.$counter.load(Ordering::Relaxed),)*
+                    $($gauge: self.$gauge.load(Ordering::Relaxed),)*
+                    faulted: self.faulted.load(Ordering::Relaxed),
+                    managed_rx: self.managed_rx.load(Ordering::Relaxed),
+                }
+            }
+        }
+    };
+}
+
+ingress_owner_stats! {
+    // Cumulative counters.
+    service_visits,
+    service_actions,
+    maintenance_actions,
+    budget_exhausted,
+    tx_exhaustions,
+    tx_packets,
+    tx_completed_ok,
+    tx_failed,
+    rx_packets,
+    rx_bytes,
+    rx_ring_dropped,
+    rx_truncated,
+    policy_requests,
+    policy_rejections,
+    policy_deferred,
+    credential_failures,
+    stale_commands,
+    overload_disconnects,
+    send_failures,
+    event_bridge_full_visits,
+    ;
+    // Gauges and high-water marks.
+    tx_capacity,
+    tx_in_flight,
+    tx_high_water,
+    rx_ring_depth,
+    peers,
+    command_depth_hwm,
+    event_depth_hwm,
+    deferred_sends,
+    deferred_sends_hwm,
 }
 
 /// Shared RTMP listener accept/error counters.
@@ -189,4 +254,43 @@ pub struct ListenerSocketStats {
 pub struct RtmpListenerStats {
     pub rtmp_accept_errors: AtomicU64,
     pub rtmp_fd_exhaustion_errors: AtomicU64,
+}
+
+impl SrtIngressOwnerSnapshot {
+    /// The status-API projection: camelCase, low-cardinality, no identities.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "faulted": self.faulted,
+            "managedRx": self.managed_rx,
+            "serviceVisits": self.service_visits,
+            "serviceActions": self.service_actions,
+            "maintenanceActions": self.maintenance_actions,
+            "budgetExhausted": self.budget_exhausted,
+            "txCapacity": self.tx_capacity,
+            "txInFlight": self.tx_in_flight,
+            "txHighWater": self.tx_high_water,
+            "txExhaustions": self.tx_exhaustions,
+            "txPackets": self.tx_packets,
+            "txCompletedOk": self.tx_completed_ok,
+            "txFailed": self.tx_failed,
+            "rxPackets": self.rx_packets,
+            "rxBytes": self.rx_bytes,
+            "rxRingDepth": self.rx_ring_depth,
+            "rxRingDropped": self.rx_ring_dropped,
+            "rxTruncated": self.rx_truncated,
+            "peers": self.peers,
+            "policyRequests": self.policy_requests,
+            "policyRejections": self.policy_rejections,
+            "policyDeferred": self.policy_deferred,
+            "credentialFailures": self.credential_failures,
+            "commandDepthHighWater": self.command_depth_hwm,
+            "eventDepthHighWater": self.event_depth_hwm,
+            "eventBridgeFullVisits": self.event_bridge_full_visits,
+            "deferredSends": self.deferred_sends,
+            "deferredSendsHighWater": self.deferred_sends_hwm,
+            "staleCommands": self.stale_commands,
+            "overloadDisconnects": self.overload_disconnects,
+            "sendFailures": self.send_failures,
+        })
+    }
 }
