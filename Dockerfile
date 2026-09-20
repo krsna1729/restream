@@ -122,7 +122,12 @@ COPY crates/restream-dataplane/ crates/restream-dataplane/
 COPY src/ src/
 COPY --from=frontend-build /workspace/public public
 COPY --from=native-deps /workspace/public/bin/ffmpeg public/bin/ffmpeg
-RUN RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
+# COPY keeps each file's original (checkout-time) mtime, which is OLDER than the
+# dummy sources the warm layer compiled, so Cargo would treat the warmed dummy
+# artifacts (an empty dataplane lib, a stub main) as up to date. Touch the real
+# sources so the final build compiles them.
+RUN find crates src -type f -name '*.rs' -exec touch {} + \
+    && RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 
 # The harness image is an explicit target, so this extra bench build is paid
 # only by `--target harness`, never by the production runtime image. It must
