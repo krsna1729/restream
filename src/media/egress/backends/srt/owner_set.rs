@@ -223,6 +223,11 @@ struct FamilyCounters {
     peer_local_failures: u64,
     transient_failures: u64,
     protocol_output_failures: u64,
+    caller_in_flight_hwm: u32,
+    caller_queued_hwm: u32,
+    caller_queue_longest_us: u64,
+    /// When the pool queue last became non-empty (continuous period start).
+    queued_since: Option<Instant>,
     service_visits: u64,
     service_duration_sum_us: u64,
     service_duration_max_us: u64,
@@ -558,6 +563,25 @@ impl SrtOwners {
                 let report = family_owner.owner.service(now, budget).await;
                 let elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
                 let counters = &mut family_owner.counters;
+                // Pool depth high-water and the longest continuous queued
+                // period: one O(1) stats read per ready batch.
+                if let Some(pool) = family_owner.owner.caller_pool_stats() {
+                    let queued = u32::try_from(pool.queued).unwrap_or(u32::MAX);
+                    let in_flight = u32::try_from(pool.in_flight).unwrap_or(u32::MAX);
+                    counters.caller_in_flight_hwm = counters.caller_in_flight_hwm.max(in_flight);
+                    counters.caller_queued_hwm = counters.caller_queued_hwm.max(queued);
+                    match (queued > 0, counters.queued_since) {
+                        (true, None) => counters.queued_since = Some(Instant::now()),
+                        (false, Some(since)) => {
+                            let held =
+                                u64::try_from(since.elapsed().as_micros()).unwrap_or(u64::MAX);
+                            counters.caller_queue_longest_us =
+                                counters.caller_queue_longest_us.max(held);
+                            counters.queued_since = None;
+                        }
+                        _ => {}
+                    }
+                }
                 counters.service_visits += 1;
                 counters.service_duration_sum_us =
                     counters.service_duration_sum_us.saturating_add(elapsed_us);
@@ -842,6 +866,9 @@ impl SrtOwners {
                 tx_peer_local_failures: counters.peer_local_failures,
                 tx_transient_failures: counters.transient_failures,
                 protocol_output_failures: counters.protocol_output_failures,
+                caller_in_flight_hwm: counters.caller_in_flight_hwm,
+                caller_queued_hwm: counters.caller_queued_hwm,
+                caller_queue_longest_us: counters.caller_queue_longest_us,
                 service_visits: counters.service_visits,
                 service_duration_sum_us: counters.service_duration_sum_us,
                 service_duration_max_us: counters.service_duration_max_us,

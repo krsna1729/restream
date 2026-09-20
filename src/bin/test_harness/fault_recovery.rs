@@ -11,6 +11,7 @@ pub(crate) use egress::{
 };
 pub(crate) use egress::{
     fault_egress_retry, fault_output_stall, wait_for_output_retry_observation,
+    wait_for_outputs_live_and_progressing,
 };
 pub(crate) use resilience::{
     RECOVERY_WARM_VIDEO_MIN, create_pipeline, create_pipeline_with_stream_key, delete_pipeline_v1,

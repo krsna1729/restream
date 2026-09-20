@@ -116,6 +116,7 @@ Markdown is indexed only from [archive/README.md](archive/README.md).
 - [MIT license](../LICENSE.md)
 - [Third-party component manifest](../distribution/THIRD_PARTY_COMPONENTS.md)
 - [Docker seccomp profile and container launch contract](../distribution/docker/README.md)
+- [SRT Compio Owner final qualification results](../test/harness/baselines/srt-compio-owner-final/amd-epyc-6vcpu-ubuntu2404-vm/README.md)
 - [Harness manifest README](../test/harness/README.md)
 - [SRT scaling investigation tools README](../test/native/srt-scaling/README.md)
 - [Phase 0 egress baseline workloads](../test/harness/baselines/egress-phase0/README.md)

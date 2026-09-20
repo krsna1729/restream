@@ -73,6 +73,8 @@ mod resource_sweep;
 mod sinks;
 #[path = "test_harness/srt_raw_sink.rs"]
 mod srt_raw_sink;
+#[path = "test_harness/srt_slow_peer.rs"]
+mod srt_slow_peer;
 #[path = "test_harness/srt_urls.rs"]
 mod srt_urls;
 #[path = "test_harness/suite.rs"]
@@ -99,6 +101,7 @@ use output_progress::*;
 use resource_sweep::*;
 use sinks::*;
 use srt_raw_sink::*;
+use srt_slow_peer::*;
 use srt_urls::*;
 use suite::*;
 use workflow_exec::*;
@@ -230,6 +233,7 @@ async fn run() -> Result<(), String> {
             "fault.egress-retry" => fault_egress_retry().await,
             "fault.output-stall" => fault_output_stall().await,
             "fault.srt-output-stall" => fault_srt_output_stall().await,
+            "srt.slow-peer" => srt_slow_peer().await,
             "fault.resilience" => fault_resilience().await,
             "file.live-edge" => file_live_edge().await,
             "signal.control" => signal_control().await,

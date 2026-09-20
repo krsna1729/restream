@@ -209,6 +209,14 @@
           },
           "purpose": "SRT destinations that stop taking data: bounded RSS against a frozen receiver, and the backpressured-but-connected stall path against a raw undrained SRT listener"
         },
+        "srt.slow-peer": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "purpose": "one genuinely slow APPLICATION SRT receiver (delivery paused, protocol alive) among healthy SRT outputs: healthy siblings must keep progressing and feed retention must stay bounded (WI2.5)"
+        },
         "fault.resilience": {
           "suiteDefault": true,
           "suiteOrder": 500,

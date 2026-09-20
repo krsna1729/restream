@@ -4,6 +4,12 @@
 //! acknowledgements, and discards application payloads after delivery to the
 //! protocol core. The transport bounds queued unread delivery, so its receive
 //! window remains a real source of sender backpressure.
+//!
+//! [`RawSrtSink::set_paused`] models a genuinely slow APPLICATION consumer (as
+//! opposed to a frozen peer): the sink keeps receiving datagrams and driving
+//! srt-rs protocol timers and control traffic, but stops draining application
+//! delivery events, so the bounded receive window fills and the sender sees real
+//! receiver-window backpressure on a live connection.
 
 use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
@@ -54,6 +60,7 @@ impl RawSrtSinkObservation {
 pub(crate) struct RawSrtSink {
     port: u16,
     stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     counters: Arc<SinkCounters>,
     thread: Option<JoinHandle<()>>,
 }
@@ -78,7 +85,9 @@ impl RawSrtSink {
         let admission = prepared.admission_options();
         let stop = Arc::new(AtomicBool::new(false));
         let counters = Arc::new(SinkCounters::default());
+        let paused = Arc::new(AtomicBool::new(false));
         let thread_stop = stop.clone();
+        let thread_paused = paused.clone();
         let thread_counters = counters.clone();
         let thread = std::thread::Builder::new()
             .name(format!("srt-rs-stall-sink-{port}"))
@@ -90,12 +99,19 @@ impl RawSrtSink {
                     Ok(runtime) => runtime,
                     Err(_) => return,
                 };
-                runtime.block_on(run_sink(socket, admission, thread_stop, thread_counters));
+                runtime.block_on(run_sink(
+                    socket,
+                    admission,
+                    thread_stop,
+                    thread_paused,
+                    thread_counters,
+                ));
             })
             .map_err(|error| format!("spawn raw SRT sink: {error}"))?;
         Ok(Self {
             port,
             stop,
+            paused,
             counters,
             thread: Some(thread),
         })
@@ -103,6 +119,12 @@ impl RawSrtSink {
 
     pub(crate) fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Pause (or resume) APPLICATION delivery only: UDP receive, protocol
+    /// timers and ACK/NAK/control output keep running while paused.
+    pub(crate) fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Release);
     }
 
     pub(crate) fn observe(&self) -> RawSrtSinkObservation {
@@ -136,6 +158,7 @@ async fn run_sink(
     std_socket: std::net::UdpSocket,
     admission: srt_transport::advanced::admission::AdmissionOptions,
     stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     counters: Arc<SinkCounters>,
 ) {
     let Ok(socket) = UdpSocket::from_std(std_socket) else {
@@ -184,6 +207,11 @@ async fn run_sink(
         peers.poll_outbound(now, &mut outbound);
         for (peer, packet) in outbound.drain(..) {
             let _ = socket.send_to(&packet, peer).await;
+        }
+        // While paused, leave delivery events undrained: the protocol core's
+        // bounded unread-delivery queue (and so its receive window) fills.
+        if paused.load(Ordering::Acquire) {
+            continue;
         }
         peers.poll_events(&mut events);
         for event in events.drain(..) {

@@ -1,0 +1,101 @@
+{
+  "variant": "baseline",
+  "tag": "frozen-peer-baseline",
+  "harness_exit": 1,
+  "gate_rssGrowthKb": 72512,
+  "gate_limit_kb": 65536,
+  "gate_rssBeforeKb": null,
+  "gate_rssAfterKb": null,
+  "enteredRetryCycle": true,
+  "sigstopOk": true,
+  "rss_mb_median_by_fifth": [
+    138,
+    176.0,
+    176.0,
+    184.0,
+    184.0
+  ],
+  "rss_mb_max": 196,
+  "threads_max": 29,
+  "fds_max": 52,
+  "rss_series_mb_every_10s": [
+    [
+      0,
+      74,
+      17,
+      49
+    ],
+    [
+      10,
+      138,
+      17,
+      52
+    ],
+    [
+      20,
+      164,
+      16,
+      52
+    ],
+    [
+      30,
+      166,
+      16,
+      52
+    ],
+    [
+      40,
+      176,
+      16,
+      52
+    ],
+    [
+      50,
+      176,
+      16,
+      52
+    ],
+    [
+      60,
+      176,
+      16,
+      52
+    ],
+    [
+      70,
+      183,
+      16,
+      52
+    ],
+    [
+      80,
+      184,
+      16,
+      52
+    ],
+    [
+      90,
+      184,
+      16,
+      52
+    ],
+    [
+      100,
+      184,
+      16,
+      52
+    ],
+    [
+      110,
+      184,
+      16,
+      52
+    ],
+    [
+      120,
+      184,
+      16,
+      52
+    ]
+  ]
+}

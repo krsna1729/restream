@@ -47,6 +47,8 @@ use config::{
     ResourceSweepEnv, ResourceSweepLifecycle, ResourceSweepPeer, parse_string_set,
     parse_sweep_configs, parse_usize_list, sweep_configs,
 };
+#[path = "resource_sweep/burst.rs"]
+mod burst;
 #[path = "resource_sweep/first_progress.rs"]
 mod first_progress;
 #[path = "resource_sweep/measurement.rs"]
@@ -644,8 +646,23 @@ async fn run_resource_egress_growth(
     let mut output_starts: Vec<(String, Instant)> = Vec::new();
     let max_outputs = *env.egress_counts.iter().max().unwrap_or(&1);
     let mut out = Vec::new();
+    let burst_mode = burst::burst_enabled();
+    if burst_mode {
+        let mut specs: Vec<burst::BurstSpec> = Vec::new();
+        for index in 1..=max_outputs {
+            for kind in output_kinds {
+                let name = format!("{scenario_name}-{}-{index}", kind.label());
+                let (url, encoding) = resource_output_url(env, config, *kind, &name);
+                specs.push((name, url, encoding, kind.rtmp_mode()));
+            }
+        }
+        for (id, at) in burst::create_and_start_all(&active.api, &pipeline_id, &specs).await? {
+            output_ids.push(id.clone());
+            output_starts.push((id, at));
+        }
+    }
     for index in 1..=max_outputs {
-        for kind in output_kinds {
+        for kind in output_kinds.iter().filter(|_| !burst_mode) {
             let name = format!("{scenario_name}-{}-{index}", kind.label());
             let (url, encoding) = resource_output_url(env, config, *kind, &name);
             let output_id = create_output_with_rtmp_mode(

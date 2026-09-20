@@ -16,6 +16,7 @@ live here and in `AGENTS.md`.
 - [Live integration tests](#live-integration-tests)
 - [Capability gates](#capability-gates)
 - [Container runtime smoke](#container-runtime-smoke)
+- [SRT egress qualification](#srt-egress-qualification)
 
 ## Rust test suite
 
@@ -482,3 +483,15 @@ as such). The SRT proof needs the harness (`scripts/build/bench-harness.sh`);
 `--diagnostic-unconfined` adds a `seccomp=unconfined` troubleshooting control
 that is never a deployment recommendation. `tests/seccomp_profile.rs` statically
 pins the profile to "Moby baseline + exactly the `io_uring` delta".
+
+## SRT egress qualification
+
+`scripts/harness/srt_final_qual.py` drives the SRT Compio Owner final
+qualification (fresh-process fanout points sampled at 1 Hz with the Owner
+metrics exposed in `/metrics/system` `egressShards`, concurrent connect bursts,
+the `srt.slow-peer` mode, and the frozen-destination case) and derives the gates
+and rates; `scripts/harness/test_srt_final_qual.py` tests that machinery. The
+`srt.slow-peer` harness mode pauses APPLICATION delivery on one `RawSrtSink`
+receiver (protocol timers and ACK/NAK keep running, unlike a SIGSTOPped peer) and
+requires healthy siblings to keep progressing. Results and method:
+`test/harness/baselines/srt-compio-owner-final/`.

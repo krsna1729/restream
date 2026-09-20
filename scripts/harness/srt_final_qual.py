@@ -69,8 +69,9 @@ def cmd_env(args):
 
 # ----------------------------------------------------------------- sampler
 class Sampler(threading.Thread):
-    def __init__(self, work_dir, out_path):
+    def __init__(self, work_dir, out_path, interval=1.0):
         super().__init__(daemon=True)
+        self.interval = interval
         self.work_dir, self.out_path, self.stop = Path(work_dir), Path(out_path), threading.Event()
         self.port = self.pid = None
         self.cookie = None
@@ -89,8 +90,10 @@ class Sampler(threading.Thread):
                     self.cookie = sc.split(";")[0]
             return json.loads(body) if body else {}
 
+    log_name = "restream.log"
+
     def discover(self):
-        log = self.work_dir / "restream.log"
+        log = self.work_dir / self.log_name
         if not log.exists():
             return False
         m = re.search(r"http_port\D*(\d+)", re.sub(r"\x1b\[[0-9;]*m", "", log.read_text(errors="ignore")))
@@ -156,7 +159,7 @@ class Sampler(threading.Thread):
                         break
                 fh.write(json.dumps(rec) + "\n")
                 fh.flush()
-                self.stop.wait(max(0.0, 1.0 - (time.time() - t0)))
+                self.stop.wait(max(0.0, self.interval - (time.time() - t0)))
 
 
 # --------------------------------------------------------------- analysis
@@ -339,6 +342,25 @@ def med(vals):
     return statistics.median(vals) if vals else None
 
 
+def end_state(out, r):
+    """(outputs with bytesOut>0 at the end, outputs whose bytesOut advanced across the steady window)."""
+    path = out / f"{r['variant']}-{r['outputs']}-{r['rep']}.samples.jsonl"
+    if not path.exists():
+        return None, None
+    samples = load_samples(path)
+    t_all, window = steady_window(samples, r["outputs"], 8)
+    # The final sample can be taken while Restream shuts down (no output rows).
+    populated = [s for s in samples if s.get("outputs")]
+    last = populated[-1]["outputs"] if populated else {}
+    window = [s for s in window if s.get("outputs")]
+    progressing = sum(1 for o in last.values() if o["bytesOut"] > 0)
+    adv = None
+    if window:
+        first = window[0].get("outputs", {})
+        adv = sum(1 for oid, o in window[-1]["outputs"].items() if o["bytesOut"] > first.get(oid, {}).get("bytesOut", 0))
+    return progressing, adv
+
+
 def cmd_summarize(args):
     out = Path(args.out)
     runs = [json.loads(p.read_text()) for p in sorted(out.glob("*-*-*.json"))
@@ -349,16 +371,21 @@ def cmd_summarize(args):
             rs = [r for r in runs if r["variant"] == v and r["outputs"] == n]
             if not rs:
                 continue
-            good = [r for r in rs if r["passed"]]
-            def col(k, fn=lambda r, k: r.get(k)):
-                return [fn(r, k) for r in good]
+            # The baseline is reported from EVERY repetition (failed ones included):
+            # dropping its collapses would hide the very behavior being compared.
+            use = [r for r in rs if r.get("cpu_pct") is not None]
+            ends = [end_state(out, r) for r in rs]
             fp = lambda r, k: ((r.get("first_progress") or {}).get("firstProgressMs") or {}).get(k)
+            vals = lambda k: [r.get(k) for r in use]
             table[f"{v}-{n}"] = {
-                "runs": len(rs), "passed_runs": len(good),
-                "cpu_pct": {"median": med(col("cpu_pct")), "min": min(col("cpu_pct"), default=None), "max": max(col("cpu_pct"), default=None)},
-                "rss_mb": {"median": med(col("rss_mb")), "min": min(col("rss_mb"), default=None), "max": max(col("rss_mb"), default=None)},
-                "threads": med(col("threads")), "fds": med(col("fds")),
+                "runs": len(rs), "runs_passing_all_gates": sum(1 for r in rs if r["passed"]),
+                "outputs_progressing_at_end": [e[0] for e in ends],
+                "outputs_advancing_in_window": [e[1] for e in ends],
+                "cpu_pct": {"median": med(vals("cpu_pct")), "min": min(vals("cpu_pct"), default=None), "max": max(vals("cpu_pct"), default=None)},
+                "rss_mb": {"median": med(vals("rss_mb")), "min": min(vals("rss_mb"), default=None), "max": max(vals("rss_mb"), default=None)},
+                "threads_max": max(vals("threads"), default=None), "fds_max": max(vals("fds"), default=None),
                 "first_progress_ms": {k: med([fp(r, k) for r in rs]) for k in ("p50", "p95", "max")},
+                "first_progress_ms_per_run_p95": [fp(r, "p95") for r in rs],
                 "failed_gates": sorted({g for r in rs for g, ok in r["gates"].items() if not ok}),
             }
     verdicts = {}
@@ -371,7 +398,8 @@ def cmd_summarize(args):
             fp_bad = bool(bp and cp and cp > max(bp * 1.25, bp + 1000))
             verdicts[str(n)] = {"cpu_ratio": round(cpu_ratio, 3), "cpu_regression(>+10%)": cpu_ratio > 1.10,
                                 "rss_ratio": round(rss_ratio, 3), "rss_regression(>+20%)": rss_ratio > 1.20,
-                                "first_progress_p95_regression": fp_bad}
+                                "first_progress_p95_regression(>max(1.25x,+1s))": fp_bad,
+                                "baseline_operated_normally": b["runs_passing_all_gates"] > 0}
     owner = {}
     for n in sorted({r["outputs"] for r in runs if r["variant"] == "candidate"}):
         rs = [r for r in runs if r["variant"] == "candidate" and r["outputs"] == n and r.get("owner_families")]
@@ -384,10 +412,186 @@ def cmd_summarize(args):
             owner[str(n)].update(tx_high_water=max(f["tx_high_water"] or 0 for f in fams),
                                  tx_exhaustions=sum(f["tx_exhaustions"] or 0 for f in fams),
                                  rx_ring_dropped=sum(f["rx_ring_dropped"] or 0 for f in fams),
-                                 rx_truncated=sum(f["rx_truncated"] or 0 for f in fams))
+                                 rx_truncated=sum(f["rx_truncated"] or 0 for f in fams),
+                                 max_service_us=max(f["max_service_us"] or 0 for f in fams),
+                                 caller_expired=sum(f["caller_expired"] or 0 for f in fams))
     summary = {"table": table, "baseline_vs_candidate_verdicts": verdicts, "candidate_owner": owner}
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2))
+
+
+# ------------------------------------------------------------------- burst
+def cmd_burst(args):
+    """100+ direct SRT outputs created CONCURRENTLY against one pinned shard."""
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    tag = args.tag
+    if stray_processes():
+        print("ABORT: stray processes", file=sys.stderr)
+        sys.exit(3)
+    work = ROOT / ".local/artifacts/srt-final" / tag
+    subprocess.run(["rm", "-rf", str(work)])
+    work.mkdir(parents=True)
+    real = ROOT / "target/bench/restream"
+    env = dict(os.environ, RESTREAM_BIN=str(ROOT / "scripts/harness/restream-pinned.sh"),
+               REAL_RESTREAM=str(real), PIN_CPUS=args.pin_cpus, MSR_PEER="sink",
+               RESOURCE_SWEEP_SCENARIOS="egress-growth-source-srt", RESOURCE_SWEEP_EGRESS_COUNTS=str(args.outputs),
+               RESOURCE_SWEEP_SAMPLE_SECS="2", RESOURCE_SWEEP_SETTLE_SECS="20", RESOURCE_SWEEP_BURST="1",
+               RESOURCE_SWEEP_PROGRESS_TIMEOUT_BASE_SECS="90", BENCH_BUILD="never", WORK_DIR=str(work))
+    # NOTE: SRT egress floors its shard count at 2 (`default_egress_fabric_shards`
+    # clamps to 2..=8 and RESTREAM_EGRESS_SHARDS does not apply to the SRT
+    # profile), so a pinned run is ONE CPU but TWO shards/Owners.
+    if args.connect_concurrency:
+        env["RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY"] = str(args.connect_concurrency)
+    sampler = Sampler(work, work / "samples.jsonl", interval=0.1)
+    sampler.start()
+    p = subprocess.run([str(ROOT / "scripts/harness/run.sh"), "resource-sweep", "--", "--no-netns"],
+                       env=env, cwd=ROOT, capture_output=True, text=True, timeout=900)
+    sampler.stop.set(); sampler.join(timeout=5)
+    log = re.sub(r"\x1b\[[0-9;]*m", "", (work / "restream.log").read_text(errors="ignore"))
+    samples = load_samples(work / "samples.jsonl")
+    rows = []
+    for s in samples:
+        for sh_ in s.get("shards", []):
+            for own in sh_.get("srtOwners", []) or []:
+                if own.get("present"):
+                    rows.append((s["t"], s, own))
+    if not rows:
+        print("no owner samples"); sys.exit(2)
+    t0 = rows[0][0]
+    peak_q = max(max(r[2]["callerQueued"] for r in rows), max(r[2].get("callerQueuedHwm", 0) for r in rows))
+    peak_inflight = max(max(r[2]["callerInFlight"] for r in rows), max(r[2].get("callerInFlightHwm", 0) for r in rows))
+    q_up = next((r[0] for r in rows if r[2]["callerQueued"] > 0), None)
+    q_zero_after = None
+    if q_up is not None:
+        q_zero_after = next((r[0] for r in rows if r[0] > q_up and r[2]["callerQueued"] == 0), None)
+    last = rows[-1][2]
+    # TX handshake progress while the pool was queueing
+    tx_during = None
+    if q_up is not None and q_zero_after is not None:
+        a = next(r[2] for r in rows if r[0] >= q_up); b = next(r[2] for r in rows if r[0] >= q_zero_after)
+        tx_during = {"tx_packets_delta": b["txPackets"] - a["txPackets"], "service_actions_delta": b["serviceActions"] - a["serviceActions"],
+                     "maintenance_actions_delta": b["maintenanceActions"] - a["maintenanceActions"]}
+    fp_path = work / f"first-progress-{args.outputs}.json"
+    populated = [x for x in samples if x.get("outputs")]
+    outs_last = populated[-1]["outputs"] if populated else {}
+    res = {
+        "tag": tag, "outputs": args.outputs, "pinned_cpus": args.pin_cpus,
+        "connect_concurrency": args.connect_concurrency or "default(64)",
+        "harness_exit": p.returncode,
+        "peak_caller_queued": peak_q, "peak_caller_in_flight": peak_inflight,
+        "queue_longest_continuous_us": max(r[2].get("callerQueueLongestUs", 0) for r in rows),
+        "queue_first_above_zero_s": None if q_up is None else round(q_up - t0, 2),
+        "queue_drained_to_zero_s": None if q_zero_after is None else round(q_zero_after - t0, 2),
+        "queue_drain_duration_s": None if (q_up is None or q_zero_after is None) else round(q_zero_after - q_up, 2),
+        "tx_while_queued": tx_during,
+        "final": {k: last.get(k) for k in ("callerInFlight", "callerQueued", "callerExpired", "callerFailed", "callerCancelled",
+                                          "serviceActions", "maintenanceActions", "txHighWater", "txExhaustions", "protocolOutputFailures", "faulted")},
+        "outputs_with_progress": sum(1 for o in outs_last.values() if o["bytesOut"] > 0),
+        "first_progress": json.loads(fp_path.read_text()) if fp_path.exists() else None,
+        "no_stalled_log": "no progress (stalled)" not in log,
+        "pool_full_refusals": log.count("caller pool and its queue are full"),
+        "outputs_with_retry": sum(1 for o in outs_last.values() if o.get("retryAttempts", 0) > 0),
+        "shards_with_owner": sorted({sh_["shardIndex"] for s in samples for sh_ in s.get("shards", []) if any(o.get("present") for o in sh_.get("srtOwners", []) or [])}),
+    }
+    res["passed"] = (p.returncode == 0 and res["outputs_with_progress"] >= args.outputs and last["callerQueued"] == 0
+                     and last["callerInFlight"] == 0 and last["callerExpired"] == 0 and last["callerFailed"] == 0
+                     and res["pool_full_refusals"] == 0 and (peak_q > 0 or args.allow_no_queue))
+    (out / f"{tag}.json").write_text(json.dumps(res, indent=2) + "\n")
+    (out / f"{tag}.samples.jsonl").write_text((work / "samples.jsonl").read_text())
+    print(json.dumps({k: res[k] for k in ("tag", "passed", "peak_caller_queued", "peak_caller_in_flight", "queue_longest_continuous_us", "pool_full_refusals", "outputs_with_retry", "outputs_with_progress", "final", "tx_while_queued")}, indent=1))
+
+
+# -------------------------------------------------------------- slow peer
+def cmd_slow(args):
+    """srt.slow-peer harness mode: one paused-application receiver among healthy outputs."""
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    if stray_processes():
+        print("ABORT: stray processes", file=sys.stderr)
+        sys.exit(3)
+    work = ROOT / ".local/artifacts/srt-final" / args.tag
+    subprocess.run(["rm", "-rf", str(work)])
+    work.mkdir(parents=True)
+    real = ROOT / "target/bench/restream"
+    env = dict(os.environ, BENCH_BUILD="never", WORK_DIR=str(work), SLOW_PEER_HEALTHY=str(args.healthy),
+               SLOW_PEER_WATCH_SECS=str(args.watch), SLOW_PEER_LABEL=args.tag)
+    if args.control:
+        env["SLOW_PEER_PAUSE"] = "0"
+    if args.pin_cpus:
+        env.update(RESTREAM_BIN=str(ROOT / "scripts/harness/restream-pinned.sh"), REAL_RESTREAM=str(real), PIN_CPUS=args.pin_cpus)
+    else:
+        env["RESTREAM_BIN"] = str(real)
+    sdir = work / "srt.slow-peer"
+    sdir.mkdir(parents=True)
+    sampler = Sampler(sdir, work / "samples.jsonl")
+    sampler.start()
+    p = subprocess.run([str(ROOT / "scripts/harness/run.sh"), "srt.slow-peer", "--", "--no-netns"],
+                       env=env, cwd=ROOT, capture_output=True, text=True, timeout=900)
+    sampler.stop.set(); sampler.join(timeout=5)
+    result_path = sdir / f"{args.tag}.json"
+    res = json.loads(result_path.read_text()) if result_path.exists() else {"passed": False, "error": (p.stderr or p.stdout)[-800:]}
+    res["harness_exit"] = p.returncode
+    res["pinned_cpus"] = args.pin_cpus
+    samples = load_samples(work / "samples.jsonl") if (work / "samples.jsonl").exists() else []
+    fams = {}
+    for s in samples:
+        for sh_ in s.get("shards", []):
+            for own in sh_.get("srtOwners", []) or []:
+                if own.get("present"):
+                    fams[f"shard{sh_['shardIndex']}/{own['family']}"] = {k: own.get(k) for k in (
+                        "txCapacity", "txHighWater", "txExhaustions", "txInFlight", "txCompletedOk", "faulted", "serviceVisits",
+                        "protocolOutputFailures", "callerExpired", "callerFailed", "rxTruncated")}
+    res["owner_final"] = fams
+    res["shards_with_owner"] = sorted(fams)
+    (out / f"{args.tag}.json").write_text(json.dumps(res, indent=2) + "\n")
+    (out / f"{args.tag}.samples.jsonl").write_text((work / "samples.jsonl").read_text() if (work / "samples.jsonl").exists() else "")
+    print(json.dumps({k: res.get(k) for k in ("passed", "healthyOutputs", "healthyMinAdvancingPerSecond", "healthyWindowStalls",
+                                             "healthyRetryOrFailed", "ownerFaulted", "feedRingPayloadBytes", "slowSinkDataEventsDuringPause",
+                                             "slowSinkConnectedAtEnd", "shards_with_owner", "error")}, indent=1))
+
+
+# ------------------------------------------------------------------ frozen
+def cmd_frozen(args):
+    """fault.srt-output-stall (SIGSTOPped MediaMTX destination) with an RSS time series."""
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    if stray_processes():
+        print("ABORT: stray processes", file=sys.stderr)
+        sys.exit(3)
+    work = ROOT / ".local/artifacts/srt-final" / args.tag
+    subprocess.run(["rm", "-rf", str(work)])
+    work.mkdir(parents=True)
+    real = ROOT / (".local/worktrees/wi2-before/target/bench/restream" if args.variant == "baseline" else "target/bench/restream")
+    env = dict(os.environ, RESTREAM_BIN=str(real), BENCH_BUILD="never", WORK_DIR=str(work))
+    sdir = work / "fault.srt-output-stall"
+    sdir.mkdir(parents=True)
+    sampler = Sampler(sdir, work / "samples.jsonl")
+    sampler.log_name = "restream-frozen-destination.log"
+    sampler.start()
+    p = subprocess.run([str(ROOT / "scripts/harness/run.sh"), "fault.srt-output-stall", "--", "--no-netns"],
+                       env=env, cwd=ROOT, capture_output=True, text=True, timeout=900)
+    sampler.stop.set(); sampler.join(timeout=5)
+    samples = load_samples(work / "samples.jsonl") if (work / "samples.jsonl").exists() else []
+    series = [(round(x["t"] - samples[0]["t"]), x["proc"]["rss_kb"] // 1024, x["proc"]["threads"], x["proc"]["fds"])
+              for x in samples if x.get("proc")]
+    art = sdir / "fault.srt-output-stall.json"
+    fault = json.loads(art.read_text()) if art.exists() else {}
+    frozen = next((t for t in fault.get("tests", []) if "rssGrowthKb" in t), {})
+    rss = [r[1] for r in series]
+    n = len(rss)
+    def med_of(a, b):
+        seg = rss[int(n * a):int(n * b)]
+        return statistics.median(seg) if seg else None
+    res = {"variant": args.variant, "tag": args.tag, "harness_exit": p.returncode,
+           "gate_rssGrowthKb": frozen.get("rssGrowthKb"), "gate_limit_kb": 64 * 1024,
+           "gate_rssBeforeKb": frozen.get("rssBeforeKb"), "gate_rssAfterKb": frozen.get("rssAfterKb"),
+           "enteredRetryCycle": frozen.get("enteredRetryCycle"), "sigstopOk": frozen.get("sigstopOk"),
+           "rss_mb_median_by_fifth": [med_of(i / 5, (i + 1) / 5) for i in range(5)],
+           "rss_mb_max": max(rss) if rss else None, "threads_max": max((r[2] for r in series), default=None),
+           "fds_max": max((r[3] for r in series), default=None), "rss_series_mb_every_10s": series[::10]}
+    (out / f"{args.tag}.json").write_text(json.dumps(res, indent=2) + "\n")
+    print(json.dumps({k: v for k, v in res.items() if k != "rss_series_mb_every_10s"}, indent=1))
 
 
 def main():
@@ -399,9 +603,17 @@ def main():
     f.add_argument("--variant", choices=["baseline", "candidate"], required=True)
     f.add_argument("--outputs", type=int, required=True); f.add_argument("--rep", type=int, required=True)
     f.add_argument("--settle", type=int, default=8); f.add_argument("--sample", type=int, default=30)
+    b = sub.add_parser("burst"); b.add_argument("--out", required=True); b.add_argument("--tag", required=True)
+    b.add_argument("--outputs", type=int, default=100); b.add_argument("--pin-cpus", default="5")
+    b.add_argument("--connect-concurrency", type=int, default=0); b.add_argument("--allow-no-queue", action="store_true")
+    w = sub.add_parser("slow"); w.add_argument("--out", required=True); w.add_argument("--tag", required=True)
+    w.add_argument("--healthy", type=int, default=10); w.add_argument("--watch", type=int, default=30)
+    w.add_argument("--pin-cpus", default=""); w.add_argument("--control", action="store_true")
+    z = sub.add_parser("frozen"); z.add_argument("--out", required=True); z.add_argument("--tag", required=True)
+    z.add_argument("--variant", choices=["baseline", "candidate"], required=True)
     s = sub.add_parser("summarize"); s.add_argument("--out", required=True)
     args = ap.parse_args()
-    {"env": cmd_env, "fanout": cmd_fanout, "summarize": cmd_summarize}[args.cmd](args)
+    {"env": cmd_env, "fanout": cmd_fanout, "burst": cmd_burst, "slow": cmd_slow, "frozen": cmd_frozen, "summarize": cmd_summarize}[args.cmd](args)
 
 
 if __name__ == "__main__":

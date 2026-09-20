@@ -63,6 +63,12 @@ pub struct OwnerFamilyMetrics {
     pub service_budget_exhausted: u64,
     pub caller_in_flight: u32,
     pub caller_queued: u32,
+    /// Highest caller-pool in-flight / queued depth seen at any ready batch
+    /// (a gauge sampled at 1 Hz would miss a millisecond-scale burst), and the
+    /// longest continuous period the queue was non-empty.
+    pub caller_in_flight_hwm: u32,
+    pub caller_queued_hwm: u32,
+    pub caller_queue_longest_us: u64,
     pub caller_expired: u64,
     pub caller_failed: u64,
     pub caller_cancelled: u64,
