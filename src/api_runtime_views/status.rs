@@ -431,17 +431,6 @@ pub(crate) async fn health_snapshot(
         }
     }
 
-    let rx_queue = engine
-        .runtime
-        .listener_stats
-        .rx_queue_bytes
-        .load(Ordering::Relaxed);
-    let rx_max = engine
-        .runtime
-        .listener_stats
-        .rx_queue_max_bytes
-        .load(Ordering::Relaxed);
-    let drops = engine.runtime.listener_stats.drops.load(Ordering::Relaxed);
     let ingress_owner = engine
         .runtime
         .listener_stats
@@ -500,9 +489,6 @@ pub(crate) async fn health_snapshot(
         },
         "srtListener": {
             "bondingAvailable": bonding_available,
-            "udpRxQueueBytes": rx_queue,
-            "udpRxQueuePeakBytes": rx_max,
-            "udpDrops": drops,
             "ingressOwner": ingress_owner,
         },
         "egressFabricShards": egress_fabric_shards,

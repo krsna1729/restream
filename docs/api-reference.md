@@ -800,9 +800,6 @@ Query params:
   },
   "srtListener": {
     "bondingAvailable": false,
-    "udpRxQueueBytes": 0,
-    "udpRxQueuePeakBytes": 0,
-    "udpDrops": 0,
     "ingressOwner": {
       "faulted": false,
       "managedRx": true,

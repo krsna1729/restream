@@ -208,17 +208,6 @@ impl MediaEngine {
     pub async fn srt_listener_diag_snapshot(&self) -> SrtListenerDiagSnapshot {
         SrtListenerDiagSnapshot {
             bonding_available: self.bonding_available(),
-            rx_queue_bytes: self
-                .runtime
-                .listener_stats
-                .rx_queue_bytes
-                .load(Ordering::Relaxed),
-            rx_queue_peak_bytes: self
-                .runtime
-                .listener_stats
-                .rx_queue_max_bytes
-                .load(Ordering::Relaxed),
-            drops: self.runtime.listener_stats.drops.load(Ordering::Relaxed),
             ingress_owner: self.runtime.listener_stats.ingress_owner.snapshot(),
             active_ingest_count: self.active_ingest_count().await,
         }

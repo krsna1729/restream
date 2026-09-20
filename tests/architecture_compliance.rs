@@ -368,6 +368,32 @@ fn production_srt_does_not_own_native_udp_transport() {
     }
 }
 
+/// Kernel-queue telemetry from the removed native SRT UDP monitor must not come
+/// back as fabricated zero-valued fields, alerts or docs. SRT listener state is
+/// `srtListener.ingressOwner`, published by the Compio Owner.
+#[test]
+fn dead_srt_udp_queue_telemetry_does_not_return() {
+    const DEAD: &[&str] = &["udpRxQueueBytes", "udpRxQueuePeakBytes", "udpDrops"];
+    let mut inspect = |path: &std::path::Path, source: &str| {
+        for dead in DEAD {
+            assert!(
+                !source.contains(dead),
+                "{} reintroduces dead SRT UDP telemetry `{dead}`",
+                path.display()
+            );
+        }
+    };
+    collect_rust_sources(std::path::Path::new("src"), &mut inspect);
+    for doc in [
+        "docs/api-reference.md",
+        "docs/observability.md",
+        "README.md",
+    ] {
+        let source = std::fs::read_to_string(doc).expect("active doc is readable");
+        inspect(std::path::Path::new(doc), &source);
+    }
+}
+
 #[test]
 fn db_module_uses_explicit_repository_exports() {
     let db_mod = include_str!("../src/db/mod.rs");

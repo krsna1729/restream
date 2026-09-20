@@ -133,21 +133,6 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
 
     // ── Engine-level checks ───────────────────────────────────────────────────
 
-    let srt = &snapshot["srtListener"];
-    let udp_drops = srt.get("udpDrops").and_then(|v| v.as_u64()).unwrap_or(0);
-    if udp_drops > 0 {
-        alerts.push(Alert::new(
-            "engine:srt_listener:udp_drops".into(),
-            Severity::Warning,
-            Scope::Engine,
-            "SRT listener UDP drops detected",
-            "The SRT listener's kernel receive queue is overflowing.",
-            vec![format!("udpDrops = {}", udp_drops)],
-            "Increase SO_RCVBUF or reduce SRT publisher bandwidth.",
-            &generated_at,
-        ));
-    }
-
     let nofile = &snapshot["runtimeLimits"]["nofile"];
     if nofile
         .get("satisfied")

@@ -326,7 +326,7 @@ async fn diagnostics_supports_active_file_ingest() {
     assert!(names.contains(&&serde_json::json!("Preview & Recording")));
     assert!(!names.contains(&&serde_json::json!("Publisher Transport")));
     assert!(!names.contains(&&serde_json::json!("Network Bandwidth")));
-    assert!(!names.contains(&&serde_json::json!("SRT Listener Socket")));
+    assert!(!names.contains(&&serde_json::json!("SRT Listener Owner")));
 
     let semaphore = engine.get_or_create_diag_semaphore("pipe-file-diag").await;
     let _held_permit = semaphore.try_acquire_owned().unwrap();

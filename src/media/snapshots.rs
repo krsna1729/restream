@@ -145,9 +145,6 @@ pub struct RingBufferDiagSnapshot {
 #[derive(Debug, Clone)]
 pub struct SrtListenerDiagSnapshot {
     pub bonding_available: bool,
-    pub rx_queue_bytes: u64,
-    pub rx_queue_peak_bytes: u64,
-    pub drops: u64,
     pub ingress_owner: SrtIngressOwnerSnapshot,
     pub active_ingest_count: usize,
 }
@@ -172,9 +169,6 @@ pub struct FileIngestDependencySnapshot {
 #[derive(Debug, Default)]
 pub struct ListenerSocketStats {
     pub bonding_available: AtomicBool,
-    pub rx_queue_bytes: AtomicU64,
-    pub rx_queue_max_bytes: AtomicU64,
-    pub drops: AtomicU64,
     /// Counters published by the SRT ingress Owner thread.
     pub ingress_owner: SrtIngressOwnerStats,
 }

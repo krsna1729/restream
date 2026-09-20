@@ -12,7 +12,7 @@ pub(super) use file::{
     check_file_ingest_runtime, check_file_source, check_preview_recording_state,
 };
 pub(super) use system::{
-    check_network_bandwidth, check_srt_listener_socket, check_system_resources,
+    check_network_bandwidth, check_srt_listener_owner, check_system_resources,
 };
 
 const DIAG_OUTPUT_PROGRESS_STALE_MS: i64 = 10_000;

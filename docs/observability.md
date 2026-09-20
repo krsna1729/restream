@@ -53,9 +53,6 @@ recording settings in SQLite.
   "pipelines": {},
   "srtListener": {
     "bondingAvailable": false,
-    "udpRxQueueBytes": 0,
-    "udpRxQueuePeakBytes": 0,
-    "udpDrops": 0,
     "ingressOwner": {
       "faulted": false,
       "managedRx": true,
@@ -299,10 +296,9 @@ true while that listener is running with bonded-input support; the live listener
 counters are `srtListener.ingressOwner`, published by the owner thread. These are
 listener-wide values, not per-pipeline.
 
-`udpRxQueueBytes`, `udpRxQueuePeakBytes` and `udpDrops` are retained response
-fields from the removed `/proc/net/udp` listener monitor and are not populated by
-the Owner (they read `0`). Use `ingressOwner.rxRingDropped`, `rxTruncated` and
-`rxRingDepth` for receive-path loss and pressure.
+Use `ingressOwner.rxRingDropped`, `rxTruncated` and `rxRingDepth` for receive-path
+loss and pressure, and `txFailed`, `txExhaustions` and `faulted` for the transmit
+path and Owner health.
 
 ## Diagnostic checks
 
@@ -369,7 +365,7 @@ RTMP and SRT ingests run these checks:
 | 6 | Active Outputs | Output state and bytes; egresses associated via `ActiveEgress.pipeline_id` |
 | 7 | System Resources | CPU, RAM, disk |
 | 8 | Network Bandwidth | Host-wide interface rates (not pipeline-specific latency) |
-| 9 | SRT Listener Socket | SRT-only: bonding availability, shared UDP queue/peak/drops (listener-wide, Linux-specific) |
+| 9 | SRT Listener Owner | SRT-only: bonding availability, Owner fault, receive mode, peers, RX/TX counters, ring drops/truncation and admission counters (listener-wide, from the Compio Owner) |
 
 File ingests run a file-specific set instead:
 
