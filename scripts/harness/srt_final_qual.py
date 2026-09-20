@@ -518,6 +518,8 @@ def cmd_slow(args):
                SLOW_PEER_WATCH_SECS=str(args.watch), SLOW_PEER_LABEL=args.tag)
     if args.control:
         env["SLOW_PEER_PAUSE"] = "0"
+    if args.exact_owner:
+        env["SLOW_PEER_EXACT_OWNER"] = "1"
     if args.pin_cpus:
         env.update(RESTREAM_BIN=str(ROOT / "scripts/harness/restream-pinned.sh"), REAL_RESTREAM=str(real), PIN_CPUS=args.pin_cpus)
     else:
@@ -609,6 +611,7 @@ def main():
     w = sub.add_parser("slow"); w.add_argument("--out", required=True); w.add_argument("--tag", required=True)
     w.add_argument("--healthy", type=int, default=10); w.add_argument("--watch", type=int, default=30)
     w.add_argument("--pin-cpus", default=""); w.add_argument("--control", action="store_true")
+    w.add_argument("--exact-owner", action="store_true")
     z = sub.add_parser("frozen"); z.add_argument("--out", required=True); z.add_argument("--tag", required=True)
     z.add_argument("--variant", choices=["baseline", "candidate"], required=True)
     s = sub.add_parser("summarize"); s.add_argument("--out", required=True)

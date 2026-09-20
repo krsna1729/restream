@@ -62,6 +62,22 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   policy provisional; this item is the measurement that resolves it.
 - Status: open (Filed: 2026-09-05 by claude, from PR #141 review)
 
+### Q-026 [resilience] [opus] Attribute and recalibrate the frozen-SRT-destination RSS gate
+- Goal: explain the ~70 MB RSS growth of `fault.srt-output-stall`'s frozen
+  destination case (114 -> ~185 MB, then a plateau) and either remove the cause
+  or recalibrate the fixed 64 MiB `MAX_ACCEPTABLE_RSS_GROWTH_KB` from an
+  attribution, not from the observed result.
+- Files: `src/bin/test_harness/fault_recovery/srt_stall.rs`, retry/cleanup paths
+  in `src/media/egress/backends/srt*.rs`.
+- Gates: `scripts/harness/run.sh fault.srt-output-stall -- --no-netns`;
+  `scripts/harness/srt_final_qual.py frozen` for the RSS time series.
+- Context: WI2.5 measured the gate failing on BOTH `c323e5f5` (67.6 and 72.5 MB)
+  and the Compio Owner (69.7-74.6 MB over four runs), with a late-window plateau
+  in each (candidate ~197 MB, baseline ~184 MB). No Compio-specific retry-memory
+  regression, so the threshold was deliberately left unchanged; this debt
+  predates the cutover. Evidence:
+  `test/harness/baselines/srt-compio-owner-final/`. Filed: 2026-09-20 by claude.
+
 ### Q-001 [proof] [sonnet] Establish the per-module coverage map
 - Goal: a per-module line/branch coverage table for `src/` recorded in the
   journal, with follow-up `[proof]` items filed for the 3 weakest

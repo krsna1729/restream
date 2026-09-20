@@ -105,12 +105,24 @@ DELIVERY while protocol timers and ACK/NAK keep running (not SIGSTOP). Healthy o
 | slow-peer-one-cpu-90s | 10 | 90 s | 10/10 | 0 | 0 | False | 2.5 -> 9.4 MB | 0 | True |
 | slow-peer-control-no-pause-90s | 10 | 90 s | 10/10 | 0 | 0 | False | 2.6 -> 9.4 MB | 16756 | True |
 | slow-peer-normal-host | 30 | 30 s | 30/30 | 0 | 0 | False | 2.7 -> 9.3 MB | 0 | True |
+| slow-peer-exact-owner-90s | 10 | 90 s | 10/10 | 0 | 0 | False | 3.4 -> 9.4 MB | 0 | True |
 
-The pause is real (0 delivered events while paused, vs 16,756 in the no-pause control). In the 90 s run the slow leaf
+The pause is real (0 delivered events while paused, vs 16,756 in the no-pause control). In the 90 s runs the slow leaf
 delivered ~10.7 MB, then its output was closed by the existing stall policy and retried (bytesOut reset); the healthy
 siblings never stalled, retried or lost an Owner. Retained feed payload plateaus at the same ~9.4 MB with or without the
-slow peer, so the slow leaf does not pin retention. Leaf-to-shard attribution is not exposed reliably by the API, so the
-shared-Owner claim is structural (two shards, outputs hashed by rendezvous), not per-leaf.
+slow peer, so the slow leaf does not pin retention.
+
+### Same-Owner proof (`slow-peer-exact-owner-90s`)
+
+SRT egress floors its shard count at 2 (`default_egress_fabric_shards` clamps to 2..=8), so one effective CPU is still TWO
+shards. The exact run therefore selects siblings with the production `assign_output_to_shard` and the LIVE shard count:
+live SRT shard count 2, slow output computed to shard 1, and 10 healthy outputs kept from 20 created candidates (the 10 that
+hashed to shard 0 were deleted unstarted), all 11 computing to shard 1, all IPv4. By the production architecture that is one
+runtime, one IPv4 Owner and one shared caller socket; the samples confirm it (only `shard1/v4` ever had an Owner). Over 90 s
+with delivery paused: 10/10 siblings advanced every second, no stall/retry/failure, target Owner unfaulted and productive
+(tx completions 17,721 -> 393,132 equal to packets, tx high-water 16, 0 exhaustions, 0 RX truncation/drop, 0 expiry),
+feed payload 3.4 -> 9.4 MB and flat. The slow leaf backpressured and was retried by the existing stall policy.
+The computed shard for every retained output is recorded in `exactOwner` in the artifact.
 
 ## Frozen SIGSTOP destination (fault.srt-output-stall)
 
@@ -119,10 +131,12 @@ shared-Owner claim is structural (two shards, outputs hashed by rendezvous), not
 | candidate | 68.0 MB | [139, 181.0, 194.0, 197.0, 197.0] | 198 MB | 29 / 66 |
 | baseline | 70.8 MB | [138, 176.0, 176.0, 184.0, 184.0] | 196 MB | 29 / 52 |
 
-**The existing 64 MB gate FAILS for both builds** (candidate 69.7-74.6 MB over four runs, baseline 67.6-72.5 MB over two).
+**The existing 64 MB gate FAILS for both builds and is deliberately left unchanged** (recorded as backlog Q-026) (candidate 69.7-74.6 MB over four runs, baseline 67.6-72.5 MB over two).
 This is the known, previously deferred RSS-under-retry behavior, unchanged by the Compio Owner: RSS climbs during the
 first ~40% of the run and then plateaus (candidate 197/197, baseline 184/184), i.e. it is bounded, but it exceeds the gate's
-64 MB allowance by 4-10 MB. The srt-rs receiver-delivery half of the mode PASSES.
+64 MB allowance by 4-10 MB. Interpretation: the fixed heuristic fails on baseline and candidate alike, the candidate is not
+worse in growth class, and both plateau late in the run, so there is no Compio-specific unbounded retry-memory regression;
+the absolute gate needs a separate attribution/recalibration item. This does NOT claim the 64 MiB gate passes. The srt-rs receiver-delivery half of the mode PASSES.
 
 ## Thread ownership
 
