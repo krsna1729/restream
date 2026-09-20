@@ -504,10 +504,20 @@ srt://primary:10080?streamid=publish:key&bond=backup1:10080,backup2:10080
 
 This creates an SRT Backup group with the URL authority as the primary leg and
 the listed peers as standbys. Add `type=broadcast` to duplicate each media
-message over every healthy leg. Homogeneous and mixed-family groups use the
-native shared readiness path; mixed-family groups simply bind one owner per
-local address family so all group I/O remains nonblocking.
+message over every healthy leg.
 
+`bond=` means true SRT bonding: ONE logical stream, ONE logical caller, N
+physical paths, and every path must terminate in the SAME remote receiving
+group. Distinct hosts, IPs or ports are fine (they can be different network
+endpoints of one receiver process); the validity test is the remote group
+identity the SRT handshake establishes, not the URL strings. If a leg answers
+from a different receiving group, `srt-rs` reports a peer-group collision and
+Restream fails the whole output (it never keeps the healthy leg running or
+degrades to one leg); normal retry policy owns any restart. A backup leg that is
+merely unreachable is ordinary degradation, not a collision. Independent
+receivers are not a bond target. All legs of one bond must share one address
+family (one bond, one family Owner, one shared caller socket); a mixed-family
+bond fails the output explicitly.
 
 ## Protocol correctness requirements
 

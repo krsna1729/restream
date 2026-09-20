@@ -22,8 +22,8 @@ use bytes::Bytes;
 use futures_util::future::{Either, pending, select};
 use srt_proto::Timestamp;
 use srt_transport::advanced::caller::{
-    CallerEvent, LogicalCallerId, LogicalCallerState, LogicalCallerStats, PoolEvent, PoolOutcome,
-    PoolRequestId,
+    CallerEvent, CallerGroupFault, LogicalCallerId, LogicalCallerState, LogicalCallerStats,
+    PoolEvent, PoolOutcome, PoolRequestId,
 };
 use srt_transport::advanced::driver::OutputDrainBudget;
 use srt_transport::advanced::sink::TxAttribution;
@@ -78,13 +78,18 @@ pub(crate) struct SrtCaller {
 }
 
 /// Configuration that is fixed for the life of a shard.
+///
+/// The Owner is a resource governor: it owns pool CAPACITY and the finite
+/// service budget, never a request's timeout. Each output's connect deadline
+/// travels on its own `CallerConfig`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SrtOwnerSettings {
     /// Per-Owner caller-pool `max_in_flight`: the transport's connect
     /// admission bound (replaces the old application connect semaphore).
     pub(crate) caller_max_in_flight: std::num::NonZeroUsize,
-    /// Per-attempt handshake deadline, counted from pool admission.
-    pub(crate) attempt_deadline: Duration,
+    /// Upstream defaults, independent of pool capacity and fan-out: protocol
+    /// TX (`max_actions`) and pool/lifecycle maintenance
+    /// (`max_maintenance_actions`) progress on separate finite axes.
     pub(crate) service_budget: OwnerServiceBudget,
     /// `ManagedPreferred` keeps a host without provided-buffer rings running
     /// on the readiness receiver; the selected mode is always observable
@@ -93,22 +98,11 @@ pub(crate) struct SrtOwnerSettings {
 }
 
 impl SrtOwnerSettings {
-    pub(crate) fn new(caller_max_in_flight: usize, attempt_deadline: Duration) -> Self {
-        let caller_max_in_flight = caller_max_in_flight.max(1);
-        let mut service_budget = OwnerServiceBudget::default();
-        // The Owner's pool-expiry pass re-visits the earliest in-flight
-        // attempts on every service call and charges them to `max_actions`;
-        // if in-flight attempts can reach `max_actions`, nothing is left for
-        // TX drain. Keep the action budget above the pool bound so a full
-        // pool of unanswered handshakes can never starve output.
-        service_budget.max_actions = service_budget
-            .max_actions
-            .max(caller_max_in_flight.saturating_mul(2));
+    pub(crate) fn new(caller_max_in_flight: usize) -> Self {
         Self {
-            caller_max_in_flight: std::num::NonZeroUsize::new(caller_max_in_flight)
+            caller_max_in_flight: std::num::NonZeroUsize::new(caller_max_in_flight.max(1))
                 .expect("clamped nonzero"),
-            attempt_deadline: attempt_deadline.max(Duration::from_millis(1)),
-            service_budget,
+            service_budget: OwnerServiceBudget::default(),
             rx_policy: RxModePolicy::ManagedPreferred,
         }
     }
@@ -154,6 +148,14 @@ pub(crate) enum SrtOwnerEvent {
         family: AddressFamily,
         attribution: TxAttribution,
     },
+    /// A bonded leg answered from a different remote receiving group than the
+    /// one its logical caller is bound to: the output is not an SRT bond.
+    /// The upstream typed fault is kept whole (caller, leg peer, member and
+    /// both group ids).
+    PeerGroupCollision {
+        family: AddressFamily,
+        fault: CallerGroupFault,
+    },
 }
 
 /// Result of one batch service across the existing Owners.
@@ -183,6 +185,11 @@ struct FamilyCounters {
     protocol_output_failures: u64,
     service_visits: u64,
     budget_exhausted_visits: u64,
+    /// Protocol (TX) output actions, and pool/lifecycle maintenance actions:
+    /// separate upstream budget axes, never mixed.
+    service_actions: u64,
+    maintenance_actions: u64,
+    peer_group_collisions: u64,
 }
 
 struct FamilyOwner {
@@ -206,6 +213,7 @@ pub(crate) struct SrtOwners {
     caller_scratch: Vec<CallerEvent>,
     failure_scratch: Vec<TxFailureEvent>,
     output_failure_scratch: Vec<srt_transport::advanced::sink::ProtocolOutputFailure>,
+    group_fault_scratch: Vec<CallerGroupFault>,
     runtime: compio::runtime::Runtime,
     epoch: Instant,
     profile: CompioProductionProfile,
@@ -253,6 +261,7 @@ impl SrtOwners {
             caller_scratch: Vec::with_capacity(EVENT_DRAIN),
             failure_scratch: Vec::with_capacity(EVENT_DRAIN),
             output_failure_scratch: Vec::with_capacity(EVENT_DRAIN),
+            group_fault_scratch: Vec::with_capacity(EVENT_DRAIN),
             runtime,
             epoch: Instant::now(),
             profile,
@@ -297,10 +306,7 @@ impl SrtOwners {
             .map_err(|error| error.to_string())?;
         owner.set_rx_mode_policy(self.settings.rx_policy);
         owner
-            .set_caller_pool_policy(
-                self.settings.caller_max_in_flight,
-                self.settings.attempt_deadline,
-            )
+            .set_caller_pool_capacity(self.settings.caller_max_in_flight)
             .map_err(|error| error.to_string())?;
         Ok(FamilyOwner {
             owner,
@@ -487,6 +493,8 @@ impl SrtOwners {
                 let report = family_owner.owner.service(now, budget).await;
                 let counters = &mut family_owner.counters;
                 counters.service_visits += 1;
+                counters.service_actions += report.actions as u64;
+                counters.maintenance_actions += report.maintenance_actions as u64;
                 counters.rx_packets += report.rx_packets as u64;
                 counters.rx_bytes += report.rx_bytes as u64;
                 counters.tx_packets += report.tx_packets_submitted as u64;
@@ -530,7 +538,8 @@ impl SrtOwners {
             };
             let owner = &mut family_owner.owner;
             owner.poll_caller_pool_events(&mut self.pool_scratch);
-            more |= self.pool_scratch.len() >= cap;
+            let pool_drained_fully = self.pool_scratch.len() < cap;
+            more |= !pool_drained_fully;
             for event in self.pool_scratch.drain(..) {
                 match event {
                     PoolEvent::Admitted {
@@ -588,6 +597,20 @@ impl SrtOwners {
                     family,
                     attribution: failure.attribution,
                 });
+            }
+            // A peer-group fault names a LOGICAL CALLER, so it may only be
+            // delivered after every pool `Admitted` that could introduce that
+            // caller to the backend: they precede it in `out` when the pool
+            // queue drained fully this pass. If it did not, the (non-lossy)
+            // upstream fault queue simply waits for the next pass.
+            if pool_drained_fully {
+                owner.poll_caller_group_faults(cap, &mut self.group_fault_scratch);
+                more |= self.group_fault_scratch.len() >= cap;
+                family_owner.counters.peer_group_collisions +=
+                    self.group_fault_scratch.len() as u64;
+                for fault in self.group_fault_scratch.drain(..) {
+                    out.push(SrtOwnerEvent::PeerGroupCollision { family, fault });
+                }
             }
         }
         more
@@ -720,6 +743,9 @@ impl SrtOwners {
                 protocol_output_failures: counters.protocol_output_failures,
                 service_visits: counters.service_visits,
                 service_budget_exhausted: counters.budget_exhausted_visits,
+                service_actions: counters.service_actions,
+                maintenance_actions: counters.maintenance_actions,
+                peer_group_collisions: counters.peer_group_collisions,
                 caller_in_flight: pool.in_flight as u32,
                 caller_queued: pool.queued as u32,
                 caller_expired: pool.expired,

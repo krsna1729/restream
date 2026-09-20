@@ -55,8 +55,8 @@ in SQLite.
 | Capacity service-center limits | Derived from available CPUs plus conservative NIC, memory, and disk defaults | `RESTREAM_CAPACITY_INGRESS_PPS`, `RESTREAM_CAPACITY_EGRESS_PPS`, `RESTREAM_CAPACITY_NIC_BPS`, `RESTREAM_CAPACITY_MEMORY_BYTES`, `RESTREAM_CAPACITY_FFMPEG_STAGES`, and `RESTREAM_CAPACITY_DISK_BPS`; set from host-specific benchmark calibration. Values are observe-only and do not admit/reject work. |
 | SRT egress muxer max outputs per shard | `0` | `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` (disabled at `0`; when set, SRT egress creates a new shared TS muxer shard as each pipeline+encoding cohort crosses this many outputs) |
 | SRT egress muxer max shards | `64` | `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` (hard guardrail for dynamic SRT muxer sharding; once reached, new outputs are assigned to the least-loaded existing shard and a warning is emitted) |
-| SRT egress connect timeout | `10000` ms | `RESTREAM_SRT_CONNECT_TIMEOUT_MS` (raised from a 3s default: a live scale run showed a burst of 600+ simultaneous handshakes to one peer still completing the SRT handshake when the old 3s timeout tore the socket down first, surfacing as `SRT_ENOCONN` on the next send — see `docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`) |
-| SRT egress connect concurrency | `64` | `RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` (clamped to `1..=4096`; each SRT egress Owner's caller-pool `max_in_flight` — the transport's connect admission — with an equally sized bounded queue behind it, per `(shard, address family)`; a request beyond both is refused and its output fails and retries. Decouples handshake concurrency from output count) |
+| SRT egress connect timeout | `10000` ms | `RESTREAM_SRT_CONNECT_TIMEOUT_MS` (each output's request-local handshake attempt duration: it becomes that output's `LeafPolicy.connect_timeout` and its `CallerConfig` attempt deadline, whose clock starts when the pool ADMITS the request, so time spent queued behind the concurrency bound is excluded; raised from a 3s default: a live scale run showed a burst of 600+ simultaneous handshakes to one peer still completing the SRT handshake when the old 3s timeout tore the socket down first, surfacing as `SRT_ENOCONN` on the next send — see `docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`) |
+| SRT egress connect concurrency | `64` | `RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` (clamped to `1..=4096`; each SRT egress Owner's caller-pool `max_in_flight` — the transport's per-`(shard, address family)` handshake capacity, with an equally sized bounded queue behind it; capacity only, it never sets a timeout or changes the Owner's service budget; a request beyond both is refused and its output fails and retries. Decouples handshake concurrency from output count) |
 | Require SRT bonding support | Disabled | `RESTREAM_REQUIRE_SRT_BONDING` (retained compatibility setting; srt-rs bonded ingress is enabled by the listener) |
 | SRT encryption | Disabled | `RESTREAM_SRT_PASSPHRASE`; `RESTREAM_SRT_PBKEYLEN` selects the key length and defaults to `16` |
 | SRT UDP socket buffer | `8388608` bytes on native SRT sockets (`DESIRED_UDP_BUF` / `set_sock_bufs`) | `RESTREAM_SRT_UDP_BUF_BYTES` (A/B knob; unset keeps the current 8 MiB native request and leaves Caller/Listener `SocketBufferConfig::Auto` alone. When set to a positive `usize`, native ingress and egress family sockets use that request. Distinct from legacy `RESTREAM_SRT_UDP_BUFFER`, which is still parsed into AppConfig but is unused on the native shared path.) |
@@ -541,7 +541,10 @@ both per-leg and deduplicated aggregate telemetry.
 
 Bonded egress URLs use `bond=` plus the standard optional `type=`. The default is
 `backup`: the URL authority is primary and comma-separated `bond=` values are
-standbys. Set `type=broadcast` to send media over every healthy leg.
+standbys. Set `type=broadcast` to send media over every healthy leg. A bond is
+one logical SRT group: its endpoints need not share a hostname or IP, but they
+must resolve at protocol level to the same remote receiving group, otherwise the
+output fails (see `docs/media-pipeline.md`).
 
 Practical note: if you validate bonded ingest or egress across multiple NICs or
 WAN paths with one wildcard listener, upstream SRT recommends a build with

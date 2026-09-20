@@ -43,6 +43,31 @@ impl SrtShardBackend {
                     self.stale_events = self.stale_events.saturating_add(1);
                 }
             }
+            SrtOwnerEvent::PeerGroupCollision { family, fault } => {
+                // The bond spans remote receiving groups, so it is not an SRT
+                // bond at all: fail the WHOLE output (never leave the healthy
+                // leg running or degrade to one leg). Attributed by exact
+                // logical caller; session-local, never an Owner fault.
+                let caller = SrtCaller {
+                    family,
+                    id: fault.id,
+                };
+                if let Some(key) = self.callers.get(&caller).copied()
+                    && let Some(leaf) = self.leaves.get(key.0).and_then(Option::as_ref)
+                {
+                    tracing::warn!(
+                        output_id = %leaf.common.output_id,
+                        family = ?family,
+                        caller = ?fault.id,
+                        member_id = fault.collision.member_id,
+                        peer = %fault.peer,
+                        expected_peer_group_id = fault.collision.expected_peer_group_id,
+                        actual_peer_group_id = fault.collision.actual_peer_group_id,
+                        "srt bonded output legs reach different receiving groups; failing the output"
+                    );
+                }
+                self.close_unexpected(caller, true, "bonded legs reach different receiving groups");
+            }
             SrtOwnerEvent::Disconnected { family, caller } => {
                 self.close_unexpected(SrtCaller { family, id: caller }, true, "peer disconnected");
             }

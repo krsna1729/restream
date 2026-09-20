@@ -44,7 +44,7 @@ impl TestFeed {
 }
 
 pub(super) fn settings() -> SrtOwnerSettings {
-    SrtOwnerSettings::new(16, Duration::from_secs(10))
+    SrtOwnerSettings::new(16)
 }
 
 /// A backend plus the resolver-completion sender the tests drive by hand.

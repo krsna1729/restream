@@ -48,6 +48,14 @@ pub struct OwnerFamilyMetrics {
     /// Protocol output that could not be materialized (leg quarantined).
     pub protocol_output_failures: u64,
     pub service_visits: u64,
+    /// Cumulative protocol-output (TX) actions charged to `max_actions`.
+    pub service_actions: u64,
+    /// Cumulative pool/lifecycle maintenance actions charged to
+    /// `max_maintenance_actions`; a separate axis from `service_actions`.
+    pub maintenance_actions: u64,
+    /// Bonded callers retired because a leg answered from another remote
+    /// receiving group. Cumulative; the ids live in the warning log only.
+    pub peer_group_collisions: u64,
     pub service_budget_exhausted: u64,
     pub caller_in_flight: u32,
     pub caller_queued: u32,

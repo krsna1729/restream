@@ -25,7 +25,7 @@ fn rx() -> (flume::Sender<EgressCommand>, flume::Receiver<EgressCommand>) {
 #[test]
 fn command_wakes_a_parked_compio_wait_promptly() {
     let (_hold, silent) = silent_peer();
-    let mut harness = Harness::with_settings(SrtOwnerSettings::new(4, LONG));
+    let mut harness = Harness::with_settings(SrtOwnerSettings::new(4));
     harness.add_resolved(srt_spec("out", 1, &url_for(silent)), vec![silent]);
     assert!(
         harness.backend.owners.has_owner(),
@@ -62,7 +62,7 @@ fn command_wakes_a_parked_compio_wait_promptly() {
 #[test]
 fn owner_network_activity_wakes_the_shard_without_a_command() {
     let sink = SinkPeer::v4();
-    let mut harness = Harness::with_settings(SrtOwnerSettings::new(4, LONG));
+    let mut harness = Harness::with_settings(SrtOwnerSettings::new(4));
     harness.add_resolved(srt_spec("out", 1, &url_for(sink.addr)), vec![sink.addr]);
     let (_tx, commands) = rx();
 
@@ -95,8 +95,10 @@ fn owner_network_activity_wakes_the_shard_without_a_command() {
 #[test]
 fn owner_protocol_deadline_bounds_the_park() {
     let (_hold, silent) = silent_peer();
-    let mut harness = Harness::with_settings(SrtOwnerSettings::new(4, Duration::from_millis(200)));
-    harness.add_resolved(srt_spec("out", 1, &url_for(silent)), vec![silent]);
+    let mut harness = Harness::with_settings(SrtOwnerSettings::new(4));
+    let mut spec = srt_spec("out", 1, &url_for(silent));
+    spec.policy.connect_timeout = Duration::from_millis(200);
+    harness.add_resolved(spec, vec![silent]);
     let (_tx, commands) = rx();
 
     let started = Instant::now();
@@ -113,7 +115,7 @@ fn owner_protocol_deadline_bounds_the_park() {
 #[test]
 fn an_earlier_generic_bound_still_wins() {
     let (_hold, silent) = silent_peer();
-    let mut harness = Harness::with_settings(SrtOwnerSettings::new(4, LONG));
+    let mut harness = Harness::with_settings(SrtOwnerSettings::new(4));
     harness.add_resolved(srt_spec("out", 1, &url_for(silent)), vec![silent]);
     let (_tx, commands) = rx();
     let bound = harness.backend.owners.park_bound(Duration::from_millis(20));
@@ -130,7 +132,7 @@ fn an_earlier_generic_bound_still_wins() {
 #[test]
 fn a_closed_command_channel_disconnects_the_wait() {
     let (_hold, silent) = silent_peer();
-    let mut harness = Harness::with_settings(SrtOwnerSettings::new(4, LONG));
+    let mut harness = Harness::with_settings(SrtOwnerSettings::new(4));
     harness.add_resolved(srt_spec("out", 1, &url_for(silent)), vec![silent]);
     let (tx, commands) = rx();
     drop(tx);

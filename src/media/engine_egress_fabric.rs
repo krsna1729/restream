@@ -26,14 +26,14 @@ pub(crate) enum SrtFabricDispatchError {
 }
 
 impl MediaEngine {
-    /// Per-shard SRT Owner settings: the caller pool's `max_in_flight` is the
-    /// transport's connect admission, and the attempt deadline is the
-    /// configured SRT connect timeout, counted from pool admission.
+    /// Per-shard SRT Owner settings: only the caller pool's `max_in_flight`
+    /// (`RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY`), the transport's connect
+    /// admission. The connect TIMEOUT is not an Owner setting: it is each
+    /// output's `LeafPolicy.connect_timeout`
+    /// (`RESTREAM_SRT_CONNECT_TIMEOUT_MS`), carried on that output's own
+    /// `CallerConfig` and counted from pool admission.
     fn srt_owner_settings(&self) -> SrtOwnerSettings {
-        SrtOwnerSettings::new(
-            self.config.srt_egress_connect_concurrency,
-            std::time::Duration::from_millis(self.config.srt_connect_timeout_ms),
-        )
+        SrtOwnerSettings::new(self.config.srt_egress_connect_concurrency)
     }
 
     pub(crate) async fn retain_srt_fabric_runtime(

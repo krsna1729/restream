@@ -536,12 +536,27 @@ shard OS thread
   pool event that later admits it is attached only if that output and
   generation are still current, otherwise the stale caller is retired. There is
   no Restream-side connect semaphore or backlog. DNS resolution stays
-  off-thread and bounded, before the Owner is involved.
+  off-thread and bounded, before the Owner is involved. The Owner is a resource
+  governor: `set_caller_pool_capacity` bounds in-flight handshakes, while each
+  output's `LeafPolicy.connect_timeout` (`RESTREAM_SRT_CONNECT_TIMEOUT_MS`)
+  rides on that output's own `CallerConfig` as its attempt deadline. The pool
+  starts the clock at admission, so queue wait never consumes it, and no
+  Restream-side timer exists to defeat that.
 - **Bonded outputs** are one leaf and one logical caller; all legs must resolve
-  to one address family (a mixed-family bond fails the output explicitly).
-  Backup/Broadcast selection and per-leg state belong to `srt-rs`.
+  to one address family (a mixed-family bond fails the output explicitly) and
+  carry one identical request deadline. Backup/Broadcast selection and per-leg
+  state belong to `srt-rs`. Endpoints are never rejected for differing hosts;
+  the handshake's remote group identity decides. A `PeerGroupCollision` (typed
+  `CallerGroupFault`: logical caller, leg peer, member, expected/actual group
+  id) is drained in the normal bounded event pass -- after the pool `Admitted`
+  events of that pass, so a queued request is installed before its collision is
+  applied -- and fails exactly that output (session-local, never an Owner fault);
+  an ordinary leg failure keeps the sibling legs.
 - **Scheduling.** A ready batch services each existing Owner once under a
-  finite `OwnerServiceBudget`, drains bounded Owner event queues, moves queued
+  finite `OwnerServiceBudget` (upstream defaults, independent of pool capacity
+  and fan-out: `max_actions` bounds protocol TX and `max_maintenance_actions`
+  bounds pool/lifecycle maintenance on separate axes), drains bounded Owner
+  event queues, moves queued
   candidates to the ready queue, and then visits leaves one per `on_ready`.
   Payload submission (`send_shared`) only enqueues into protocol state and never
   services an Owner. Backpressured or still-connecting leaves park; Owner
@@ -568,7 +583,9 @@ shard OS thread
 - **Observability.** `ShardMetrics.srt_owners[family]` carries low-cardinality
   Owner gauges/counters (TX pool capacity/free/high-water/exhaustions, in-flight,
   caller-pool in-flight/queued/expired/failed/cancelled, receive mode and ring
-  depth/drops/truncation, service visits and budget exhaustions, fault state);
+  depth/drops/truncation, service visits and budget exhaustions, cumulative
+  protocol `service_actions` and `maintenance_actions`, peer-group collisions,
+  fault state);
   the shard also records whether its runtime is io_uring and whether the managed
   receive substrate exists. The receive mode is `ManagedPreferred`: a host
   without provided-buffer rings runs the readiness receiver, and that is
@@ -577,7 +594,7 @@ shard OS thread
 SRT sender-buffer limits remain part of the leaf's total buffering policy;
 moving buffering into the protocol stack does not make it free or unbounded.
 `RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` sets each Owner's caller-pool
-`max_in_flight` (its queue holds as many again).
+`max_in_flight` (its queue holds as many again); it is capacity only.
 
 ### Direction: Compio as the network I/O substrate
 

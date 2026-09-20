@@ -218,7 +218,7 @@ fn resolve_request_from_output_spec(spec: &OutputSpec) -> Option<SrtResolveReque
     let ProtocolSpec::Srt { url } = &spec.protocol else {
         return None;
     };
-    let connect_spec = SrtFabricEgressConnectSpec::from_url(url);
+    let connect_spec = SrtFabricEgressConnectSpec::from_url(url, spec.policy.connect_timeout);
     let peer_hosts = connect_spec.peer_hosts().to_vec();
     if peer_hosts.is_empty() {
         return None;

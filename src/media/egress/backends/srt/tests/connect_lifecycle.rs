@@ -41,7 +41,7 @@ fn silent_peer() -> (std::net::UdpSocket, std::net::SocketAddr) {
 fn one_permit() -> SrtOwnerSettings {
     // max_in_flight 1 => queue capacity 1: a second request queues, a third
     // is refused.
-    SrtOwnerSettings::new(1, Duration::from_secs(30))
+    SrtOwnerSettings::new(1)
 }
 
 fn terminated(flag: &Arc<AtomicBool>) -> bool {
@@ -239,11 +239,13 @@ fn late_dns_for_an_old_generation_is_ignored() {
 fn connect_expiry_closes_the_pending_output_and_spares_siblings() {
     let live = SinkPeer::v4();
     let (_h, dead) = silent_peer();
-    let mut harness = Harness::with_settings(SrtOwnerSettings::new(8, Duration::from_millis(150)));
+    let mut harness = Harness::with_settings(SrtOwnerSettings::new(8));
     let unit = Bytes::from(vec![0x47u8; 1316]);
 
     harness.add_resolved(srt_spec("healthy", 1, &url_for(live.addr)), vec![live.addr]);
-    let (spec, flag) = srt_spec_with_flag("doomed", 1, &url_for(dead));
+    let (mut spec, flag) = srt_spec_with_flag("doomed", 1, &url_for(dead));
+    // The deadline is this OUTPUT's own connect timeout, not an Owner setting.
+    spec.policy.connect_timeout = Duration::from_millis(150);
     harness.add_resolved(spec, vec![dead]);
     assert_eq!(harness.backend.output_sockets.len(), 2);
 

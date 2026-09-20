@@ -154,7 +154,7 @@ fn owner_service_is_bounded_by_its_budget() {
 #[test]
 fn a_wake_examines_a_bounded_slice_of_parked_leaves() {
     let (_hold, silent) = silent_peer();
-    let mut harness = Harness::with_settings(SrtOwnerSettings::new(128, Duration::from_secs(30)));
+    let mut harness = Harness::with_settings(SrtOwnerSettings::new(128));
     let unit = Bytes::from(vec![0x47u8; 1316]);
     let outputs: usize = 48;
     for index in 0..outputs {

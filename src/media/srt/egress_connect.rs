@@ -8,6 +8,7 @@
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 use srt_proto::handshake::GroupType;
 use srt_transport::{
@@ -58,10 +59,15 @@ pub(crate) struct SrtFabricEgressConnectSpec {
     passphrase: Option<String>,
     key_length: Option<srt_proto::crypto::KeyLength>,
     bond_type: GroupType,
+    /// This output's own connect attempt duration
+    /// (`LeafPolicy.connect_timeout`). It becomes the request-local
+    /// `CallerConfig.connect.attempt_deadline` of every leg; the Owner's pool
+    /// starts its clock at ADMISSION, so queue wait never consumes it.
+    connect_timeout: Duration,
 }
 
 impl SrtFabricEgressConnectSpec {
-    pub(crate) fn from_url(url: &str) -> Self {
+    pub(crate) fn from_url(url: &str, connect_timeout: Duration) -> Self {
         let clean = url.strip_prefix("srt://").unwrap_or(url);
         let mut parts = clean.splitn(2, '?');
         let host = parts.next().unwrap_or_default().to_string();
@@ -100,6 +106,7 @@ impl SrtFabricEgressConnectSpec {
             passphrase,
             key_length,
             bond_type,
+            connect_timeout: connect_timeout.max(Duration::from_millis(1)),
         }
     }
 
@@ -117,6 +124,9 @@ impl SrtFabricEgressConnectSpec {
             }
             session.set_encryption(Some(encryption));
         }
+        // The protocol's own whole-handshake deadline must not end the attempt
+        // before this output's connect window does.
+        session.handshake.timeout = self.connect_timeout.max(session.handshake.retry_interval);
         session
     }
 
@@ -125,6 +135,7 @@ impl SrtFabricEgressConnectSpec {
         CallerConfig::builder(peer)
             .ownership(SocketOwnership::Shared)
             .session(self.session())
+            .connect_deadline(self.connect_timeout)
             .configure_transport(|transport| {
                 if let Some(bytes) = buffer {
                     transport.socket_buffers = SocketBufferConfig::Bytes(bytes);
@@ -206,6 +217,8 @@ fn percent_decode(value: &str) -> String {
 mod tests {
     use super::*;
 
+    const TIMEOUT: Duration = Duration::from_secs(7);
+
     fn addr(text: &str) -> SocketAddr {
         text.parse().expect("socket address")
     }
@@ -214,6 +227,7 @@ mod tests {
     fn parses_stream_id_encryption_and_bond_options() {
         let spec = SrtFabricEgressConnectSpec::from_url(
             "srt://a.example:9000?streamid=live%2Fkey&passphrase=secret%20pass&pbkeylen=32&bond=b.example:9001&type=broadcast",
+            TIMEOUT,
         );
         assert_eq!(spec.peer_hosts(), ["a.example:9000", "b.example:9001"]);
         assert_eq!(spec.stream_id(), "live/key");
@@ -222,7 +236,7 @@ mod tests {
 
     #[test]
     fn single_peer_is_a_direct_shared_caller_in_its_own_family() {
-        let spec = SrtFabricEgressConnectSpec::from_url("srt://127.0.0.1:9000?streamid=k");
+        let spec = SrtFabricEgressConnectSpec::from_url("srt://127.0.0.1:9000?streamid=k", TIMEOUT);
         let request = spec
             .connect_request(&[addr("127.0.0.1:9000")])
             .expect("request");
@@ -239,6 +253,7 @@ mod tests {
     fn bond_is_one_group_with_first_leg_preferred() {
         let spec = SrtFabricEgressConnectSpec::from_url(
             "srt://127.0.0.1:9000?bond=127.0.0.1:9001&type=backup",
+            TIMEOUT,
         );
         let request = spec
             .connect_request(&[addr("127.0.0.1:9000"), addr("127.0.0.1:9001")])
@@ -253,12 +268,97 @@ mod tests {
 
     #[test]
     fn mixed_family_bond_is_refused_explicitly() {
-        let spec = SrtFabricEgressConnectSpec::from_url("srt://127.0.0.1:9000?bond=[::1]:9001");
+        let spec =
+            SrtFabricEgressConnectSpec::from_url("srt://127.0.0.1:9000?bond=[::1]:9001", TIMEOUT);
         let error = spec
             .connect_request(&[addr("127.0.0.1:9000"), addr("[::1]:9001")])
             .err()
             .expect("mixed families are refused");
         assert!(error.contains("mixes address families"), "{error}");
         assert!(spec.connect_request(&[]).is_err());
+    }
+
+    fn direct_deadline(spec: &SrtFabricEgressConnectSpec, peer: &str) -> Duration {
+        let SrtConnectKind::Direct(config) =
+            spec.connect_request(&[addr(peer)]).expect("request").kind
+        else {
+            panic!("expected a direct caller");
+        };
+        config.connect.attempt_deadline
+    }
+
+    /// A. Each output's own connect timeout is the request's attempt deadline;
+    /// two specs on one shard never share one.
+    #[test]
+    fn a_direct_request_carries_its_own_connect_timeout() {
+        let fast = SrtFabricEgressConnectSpec::from_url(
+            "srt://127.0.0.1:9000",
+            Duration::from_millis(100),
+        );
+        let slow =
+            SrtFabricEgressConnectSpec::from_url("srt://127.0.0.1:9001", Duration::from_secs(5));
+        assert_eq!(
+            direct_deadline(&fast, "127.0.0.1:9000"),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            direct_deadline(&slow, "127.0.0.1:9001"),
+            Duration::from_secs(5)
+        );
+        // Owner capacity is not encoded in the request.
+        let SrtConnectKind::Direct(config) = fast
+            .connect_request(&[addr("127.0.0.1:9000")])
+            .expect("request")
+            .kind
+        else {
+            panic!("direct");
+        };
+        assert_eq!(config.connect.max_in_flight, std::num::NonZeroUsize::MIN);
+        assert!(config.session.handshake.timeout >= Duration::from_millis(100));
+    }
+
+    /// B. Every leg of a bonded output carries the same request deadline and
+    /// upstream preparation accepts the group.
+    #[test]
+    fn every_bonded_leg_carries_one_identical_deadline() {
+        let spec = SrtFabricEgressConnectSpec::from_url(
+            "srt://127.0.0.1:9000?bond=127.0.0.1:9001,127.0.0.1:9002&type=broadcast",
+            Duration::from_millis(2_500),
+        );
+        let SrtConnectKind::Bonded(config) = spec
+            .connect_request(&[
+                addr("127.0.0.1:9000"),
+                addr("127.0.0.1:9001"),
+                addr("127.0.0.1:9002"),
+            ])
+            .expect("request")
+            .kind
+        else {
+            panic!("bonded");
+        };
+        assert_eq!(config.legs.len(), 3);
+        assert!(
+            config
+                .legs
+                .iter()
+                .all(|leg| leg.caller.connect.attempt_deadline == Duration::from_millis(2_500))
+        );
+        config
+            .prepare(srt_transport::RuntimeFlavor::Compio)
+            .expect("identical leg deadlines prepare");
+    }
+
+    /// H. Different endpoints are never rejected as "different receivers":
+    /// only the handshake's peer-group identity decides that.
+    #[test]
+    fn different_same_family_endpoints_are_a_valid_bond_request() {
+        let spec = SrtFabricEgressConnectSpec::from_url(
+            "srt://10.0.0.1:9000?bond=10.9.9.9:19000",
+            TIMEOUT,
+        );
+        let request = spec
+            .connect_request(&[addr("10.0.0.1:9000"), addr("10.9.9.9:19000")])
+            .expect("distinct hosts and ports are accepted");
+        assert!(matches!(request.kind, SrtConnectKind::Bonded(_)));
     }
 }

@@ -20,7 +20,7 @@ fn shard_config() -> EgressShardConfig {
 }
 
 fn owner_settings() -> SrtOwnerSettings {
-    SrtOwnerSettings::new(4, Duration::from_secs(5))
+    SrtOwnerSettings::new(4)
 }
 
 /// The factory runs on each shard's own thread and builds a Compio runtime
