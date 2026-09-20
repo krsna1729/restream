@@ -138,6 +138,7 @@ fn free_port() -> u16 {
 }
 
 struct TestServer {
+    server: Arc<SrtServer>,
     engine: Arc<MediaEngine>,
     remote: SocketAddr,
     task: tokio::task::JoinHandle<()>,
@@ -157,7 +158,7 @@ impl TestServer {
             store,
         ));
         let port = free_port();
-        let task = tokio::spawn(server.run(port));
+        let task = tokio::spawn(server.clone().run(port));
         let ready = engine.listener_stats_handle();
         let deadline = Instant::now() + Duration::from_secs(10);
         while !ready.bonding_available.load(Ordering::Relaxed) {
@@ -168,6 +169,7 @@ impl TestServer {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         Self {
+            server,
             engine,
             remote: SocketAddr::from(([127, 0, 0, 1], port)),
             task,
@@ -198,6 +200,59 @@ impl TestServer {
             .contains_key(pipeline_id)
     }
 
+    /// Failure-only state dump: enough to tell a handshake failure, an
+    /// authorization failure, an Owner fault, bridge starvation, a vanished
+    /// session and plain host scheduling delay apart. Never called on the
+    /// success path and never per packet.
+    async fn diagnostics(&self) -> String {
+        let snapshot = self.engine.listener_stats_handle().ingress_owner.snapshot();
+        let pipelines: Vec<String> = self
+            .engine
+            .ingests
+            .pipelines
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect();
+        let active: Vec<String> = self
+            .engine
+            .ingests
+            .active
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect();
+        format!(
+            "srt_server_task_alive={} pipelines={pipelines:?} active_ingests={active:?} \
+             ingressOwner{{faulted={} managedRx={} peers={} serviceVisits={} serviceActions={} txPackets={} \
+             txCompletedOk={} txInFlight={} rxPackets={} rxRingDropped={} rxTruncated={} \
+             eventDepthHwm={} commandDepthHwm={} eventBridgeFullVisits={} staleCommands={} \
+             overloadDisconnects={} policyRequests={} policyRejections={} credentialFailures={}}}",
+            !self.task.is_finished(),
+            snapshot.faulted,
+            snapshot.managed_rx,
+            snapshot.peers,
+            snapshot.service_visits,
+            snapshot.service_actions,
+            snapshot.tx_packets,
+            snapshot.tx_completed_ok,
+            snapshot.tx_in_flight,
+            snapshot.rx_packets,
+            snapshot.rx_ring_dropped,
+            snapshot.rx_truncated,
+            snapshot.event_depth_hwm,
+            snapshot.command_depth_hwm,
+            snapshot.event_bridge_full_visits,
+            snapshot.stale_commands,
+            snapshot.overload_disconnects,
+            snapshot.policy_requests,
+            snapshot.policy_rejections,
+            snapshot.credential_failures,
+        )
+    }
+
     async fn wait_until<F, Fut>(&self, what: &str, timeout: Duration, mut condition: F)
     where
         F: FnMut() -> Fut,
@@ -205,7 +260,12 @@ impl TestServer {
     {
         let deadline = Instant::now() + timeout;
         while !condition().await {
-            assert!(Instant::now() < deadline, "timed out waiting for: {what}");
+            if Instant::now() >= deadline {
+                panic!(
+                    "timed out waiting for: {what}; {}",
+                    self.diagnostics().await
+                );
+            }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
@@ -555,69 +615,83 @@ async fn asynchronous_rejection_disconnects_the_owner_peer() {
     server.stop().await;
 }
 
+/// The real product read path against a deterministic active pipeline: an
+/// SRT reader connects to the Owner listener, `SrtServer` pulls the shared
+/// muxer through `TsChunkReader`, sends over the bounded bridge to the Owner's
+/// logical peer, and target deletion produces a protocol disconnect.
+///
+/// The active pipeline is a fixture (a registered ingest fed with the checked
+/// MPEG-TS fixture), not a second live SRT publisher: the publisher path has
+/// its own test, and a second caller runtime only adds host contention.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_play_sends_through_the_owner_and_target_deletion_disconnects() {
+    const PIPELINE: &str = "pipeline-live-rw";
     let server = TestServer::start(&["live-rw"], vec![plain("live-rw")]).await;
     let remote = server.remote;
 
-    // A publisher that keeps the pipeline fed for the whole test.
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let stop_publisher = stop.clone();
-    let chunks = ts_chunks(3000);
-    let publisher = tokio::task::spawn_blocking(move || {
-        let mut inner = publish_step(chunks);
-        run_caller(
-            direct(remote, "#!::r=live-rw,m=publish", None),
-            Duration::from_secs(40),
-            move |ctx| {
-                let _ = inner(ctx);
-                stop_publisher.load(Ordering::Relaxed)
-            },
+    // Fixture: an active publisher session built through the production
+    // publisher path (`start_publisher` + `accept_payload`: registration, demux,
+    // probe metadata, ring adaptation), fed the checked MPEG-TS fixture without
+    // a second SRT caller.
+    let authenticated = AuthenticatedPipeline {
+        id: PIPELINE.to_string(),
+        input_id: "input-live-rw".to_string(),
+        selected: true,
+    };
+    let mut publisher = server
+        .server
+        .start_publisher(
+            SocketAddr::from(([127, 0, 0, 1], 9)),
+            authenticated,
+            "live-rw".to_string(),
         )
-    });
-    server
-        .wait_until(
-            "the publisher registers",
-            Duration::from_secs(10),
-            || async { server.ingest_active("pipeline-live-rw").await },
-        )
-        .await;
+        .await
+        .expect("the fixture publisher registers");
+    assert!(server.ingest_active(PIPELINE).await);
 
-    // A reader receives progressing MPEG-TS through the Owner logical peer.
+    // Keep the pipeline live for the whole test (about 15 s of paced media);
+    // the reader attaches at the live edge whenever it connects.
+    let feeder_engine = server.engine.clone();
+    let feeder = tokio::spawn(async move {
+        for chunk in ts_chunks(5000) {
+            publisher.accept_payload(&feeder_engine, chunk).await;
+            tokio::time::sleep(Duration::from_millis(3)).await;
+        }
+        publisher
+    });
+
     let engine = server.engine.clone();
     let reader = blocking(move || {
         let mut deleted = false;
         run_caller(
             direct(remote, "#!::r=live-rw,m=request", None),
-            Duration::from_secs(25),
+            Duration::from_secs(40),
             move |ctx| {
                 if !deleted && ctx.report.received.len() >= 200 * CHUNK {
                     deleted = true;
                     // Target deletion: the pipeline ring disappears.
-                    engine
-                        .ingests
-                        .pipelines
-                        .blocking_write()
-                        .remove("pipeline-live-rw");
+                    engine.ingests.pipelines.blocking_write().remove(PIPELINE);
                 }
                 ctx.report.disconnected
             },
         )
     })
     .await;
-    stop.store(true, Ordering::Relaxed);
-    let _ = publisher.await;
+    feeder.abort();
+    // The feeder owned the publisher session; the deletion above already ended
+    // the pipeline, so there is nothing further to unregister.
 
-    assert!(reader.connected, "{reader:?}");
+    let diagnostics = server.diagnostics().await;
+    assert!(reader.connected, "{reader:?}; {diagnostics}");
     assert!(
         reader.received.len() >= 200 * CHUNK,
-        "the reader received progressing bytes: {} ({reader:?})",
+        "the reader received progressing bytes: {} ({reader:?}); {diagnostics}",
         reader.received.len()
     );
     assert_eq!(reader.received[0], 0x47, "MPEG-TS sync byte");
     assert!(
         reader.disconnected,
-        "target deletion produced a protocol disconnect: {reader:?}"
+        "target deletion produced a protocol disconnect: {reader:?}; {diagnostics}"
     );
     server.stop().await;
 }

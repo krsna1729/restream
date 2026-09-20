@@ -647,7 +647,7 @@ Restream must not be changed until this lands upstream.
 
 ## 6. WI3.2 — Restream SRT Ingress Hard Cut
 
-Status: DONE
+Status: ACTIVE — read/play CI amendment in progress
 
 Started after WI3.1 merged.
 

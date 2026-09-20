@@ -305,7 +305,7 @@ impl SrtServer {
         }
     }
 
-    async fn start_publisher(
+    pub(super) async fn start_publisher(
         &self,
         peer: SocketAddr,
         pipeline: crate::media::ingest_auth::AuthenticatedPipeline,
@@ -391,7 +391,7 @@ impl SrtServer {
         })
     }
 
-    async fn finish_publisher(&self, mut publisher: RustSrtPublisher) {
+    pub(super) async fn finish_publisher(&self, mut publisher: RustSrtPublisher) {
         publisher.demuxer.flush();
         if publisher.demuxer.drain_into(&mut publisher.packets) > 0 {
             ingest_packets::forward_ingest_packets(
@@ -423,7 +423,7 @@ enum RustSrtSession {
     Read(RustSrtReader),
 }
 
-struct RustSrtPublisher {
+pub(super) struct RustSrtPublisher {
     pipeline_id: String,
     registration: crate::media::engine::IngestRegistration,
     ring_buffer: Arc<RingBuffer>,
@@ -440,7 +440,7 @@ struct RustSrtPublisher {
 }
 
 impl RustSrtPublisher {
-    async fn accept_payload(&mut self, engine: &MediaEngine, payload: Bytes) {
+    pub(super) async fn accept_payload(&mut self, engine: &MediaEngine, payload: Bytes) {
         self.demuxer.feed(payload.as_ref());
         if self.demuxer.drain_into(&mut self.packets) > 0 {
             ingest_packets::forward_ingest_packets(
