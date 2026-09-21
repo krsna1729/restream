@@ -98,6 +98,27 @@ function getPublisherQualityMetrics(publisher: Publisher | null): QualityMetric[
                 alertCheck: (v) => v > 0,
                 alwaysShow: true,
             });
+            addNumericMetric({
+                code: 'srt_bond_wire_lost',
+                label: 'Bond wire packets lost (all legs)',
+                description:
+                    'Missing sequence numbers summed over every bond leg. This is a wire view: a lost ' +
+                    'copy on one leg can leave the deduplicated publisher stream intact, so it is not ' +
+                    'logical publisher loss.',
+                rawValue: q.srtGroupWireReceiverPacketsLost,
+                alertCheck: () => false,
+                alwaysShow: true,
+            });
+            addNumericMetric({
+                code: 'srt_bond_wire_undecrypt',
+                label: 'Bond wire packets undecryptable (all legs)',
+                description:
+                    'Packets rejected at decryption on any bond leg. Any non-zero total indicates an ' +
+                    'encryption mismatch on that path.',
+                rawValue: q.srtGroupWirePacketsUndecryptable,
+                alertCheck: (v) => v > 0,
+                alwaysShow: true,
+            });
         }
         addNumericMetric({
             code: 'rtp_loss',

@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::media::engine::MediaEngine;
+use crate::media::snapshots::PublisherQuality;
 
 use super::model::DiagResult;
 
@@ -272,24 +273,7 @@ pub(super) async fn check_publisher_transport(
         let q = &ingest.quality;
         if probe_protocol == "srt" {
             lines.push("Protocol: SRT".to_string());
-            if q.srt_bonded == Some(true) {
-                let members = q.srt_group_member_count.unwrap_or(0);
-                let connected = q.srt_group_connected_members.unwrap_or(0);
-                let active = q.srt_group_active_members.unwrap_or(0);
-                let broken = q.srt_group_broken_members.unwrap_or(0);
-                lines.push(format!(
-                    "Bonded group: {} members, {} connected, {} active, {} broken",
-                    members, connected, active, broken
-                ));
-                if active == 0 {
-                    issues.push("SRT bond has no active member links.".to_string());
-                }
-                if broken > 0 {
-                    issues.push(format!("SRT bond has {} broken member link(s).", broken));
-                }
-            } else if q.srt_bonded == Some(false) {
-                lines.push("Bonded group: no (single SRT link)".to_string());
-            }
+            push_bonded_srt_quality(q, &mut lines, &mut issues);
             if let Some(rtt) = q.ms_rtt {
                 lines.push(format!("RTT: {:.1} ms", rtt));
                 if rtt > 200.0 {
@@ -302,75 +286,80 @@ pub(super) async fn check_publisher_transport(
             if let Some(cap) = q.mbps_link_capacity {
                 lines.push(format!("Link capacity: {:.2} Mbps", cap));
             }
-            let loss_total = q.packets_received_loss.unwrap_or(0);
-            match q.packets_received_loss_per_sec {
-                Some(rate) => {
-                    lines.push(format!(
-                        "Packets lost: {:.1}/s ({} total)",
-                        rate, loss_total
-                    ));
-                    if rate >= 5.0 {
-                        issues.push(format!(
-                            "High SRT packet loss rate: {:.1}/s (threshold 5/s)",
-                            rate
+            // Ordinary publisher counters are a LOGICAL view. A bond reports
+            // its degradation as the explicit wire counters above, so these
+            // stay unprinted rather than reading "—/s (0 total)".
+            if q.srt_bonded != Some(true) {
+                let loss_total = q.packets_received_loss.unwrap_or(0);
+                match q.packets_received_loss_per_sec {
+                    Some(rate) => {
+                        lines.push(format!(
+                            "Packets lost: {:.1}/s ({} total)",
+                            rate, loss_total
                         ));
+                        if rate >= 5.0 {
+                            issues.push(format!(
+                                "High SRT packet loss rate: {:.1}/s (threshold 5/s)",
+                                rate
+                            ));
+                        }
                     }
+                    None => lines.push(format!("Packets lost: —/s ({} total)", loss_total)),
                 }
-                None => lines.push(format!("Packets lost: —/s ({} total)", loss_total)),
-            }
-            let drop_total = q.packets_received_drop.unwrap_or(0);
-            match q.packets_received_drop_per_sec {
-                Some(rate) => {
-                    lines.push(format!(
-                        "Packets dropped: {:.1}/s ({} total)",
-                        rate, drop_total
-                    ));
-                    if rate >= 1.0 {
-                        issues.push(format!(
-                            "SRT packet drop rate: {:.1}/s (threshold 1/s)",
-                            rate
+                let drop_total = q.packets_received_drop.unwrap_or(0);
+                match q.packets_received_drop_per_sec {
+                    Some(rate) => {
+                        lines.push(format!(
+                            "Packets dropped: {:.1}/s ({} total)",
+                            rate, drop_total
                         ));
+                        if rate >= 1.0 {
+                            issues.push(format!(
+                                "SRT packet drop rate: {:.1}/s (threshold 1/s)",
+                                rate
+                            ));
+                        }
                     }
+                    None => lines.push(format!("Packets dropped: —/s ({} total)", drop_total)),
                 }
-                None => lines.push(format!("Packets dropped: —/s ({} total)", drop_total)),
-            }
-            let retrans_total = q.packets_received_retrans.unwrap_or(0);
-            match q.packets_received_retrans_per_sec {
-                Some(rate) => {
-                    lines.push(format!(
-                        "Packets retransmitted: {:.1}/s ({} total)",
-                        rate, retrans_total
-                    ));
-                    if rate >= 10.0 {
-                        issues.push(format!(
-                            "High SRT retransmission rate: {:.1}/s (threshold 10/s)",
-                            rate
+                let retrans_total = q.packets_received_retrans.unwrap_or(0);
+                match q.packets_received_retrans_per_sec {
+                    Some(rate) => {
+                        lines.push(format!(
+                            "Packets retransmitted: {:.1}/s ({} total)",
+                            rate, retrans_total
                         ));
+                        if rate >= 10.0 {
+                            issues.push(format!(
+                                "High SRT retransmission rate: {:.1}/s (threshold 10/s)",
+                                rate
+                            ));
+                        }
                     }
+                    None => lines.push(format!(
+                        "Packets retransmitted: —/s ({} total)",
+                        retrans_total
+                    )),
                 }
-                None => lines.push(format!(
-                    "Packets retransmitted: —/s ({} total)",
-                    retrans_total
-                )),
-            }
-            let undecrypt_total = q.packets_received_undecrypt.unwrap_or(0);
-            match q.packets_received_undecrypt_per_sec {
-                Some(rate) => {
-                    lines.push(format!(
-                        "Packets undecrypted: {:.1}/s ({} total)",
-                        rate, undecrypt_total
-                    ));
-                    if rate > 0.0 {
-                        issues.push(format!(
-                            "SRT undecrypted packet rate: {:.1}/s (expected 0/s)",
-                            rate
+                let undecrypt_total = q.packets_received_undecrypt.unwrap_or(0);
+                match q.packets_received_undecrypt_per_sec {
+                    Some(rate) => {
+                        lines.push(format!(
+                            "Packets undecrypted: {:.1}/s ({} total)",
+                            rate, undecrypt_total
                         ));
+                        if rate > 0.0 {
+                            issues.push(format!(
+                                "SRT undecrypted packet rate: {:.1}/s (expected 0/s)",
+                                rate
+                            ));
+                        }
                     }
+                    None => lines.push(format!(
+                        "Packets undecrypted: —/s ({} total)",
+                        undecrypt_total
+                    )),
                 }
-                None => lines.push(format!(
-                    "Packets undecrypted: —/s ({} total)",
-                    undecrypt_total
-                )),
             }
             if let Some(latency) = q.ms_receive_tsb_pd_delay {
                 lines.push(format!("Negotiated latency buffer: {:.0}ms", latency));
@@ -493,6 +482,54 @@ pub(super) async fn check_publisher_transport(
         start.elapsed().as_millis() as u64,
     )
     .with_issues(issues)
+}
+
+/// Bonded SRT publisher transport: bond identity plus the wire degradation
+/// counters `srt-rs` aggregates over every leg. A bond's ordinary logical
+/// counters stay unknown by design — a deduplicated stream can be intact while
+/// one leg degrades — so they are rendered from their own wire fields, never
+/// from a default zero.
+fn push_bonded_srt_quality(
+    quality: &PublisherQuality,
+    lines: &mut Vec<String>,
+    issues: &mut Vec<String>,
+) {
+    match quality.srt_bonded {
+        Some(true) => {
+            let members = quality.srt_group_member_count.unwrap_or(0);
+            let connected = quality.srt_group_connected_members.unwrap_or(0);
+            let active = quality.srt_group_active_members.unwrap_or(0);
+            let broken = quality.srt_group_broken_members.unwrap_or(0);
+            lines.push(format!(
+                "Bonded group: {} members, {} connected, {} active, {} broken",
+                members, connected, active, broken
+            ));
+            if active == 0 {
+                issues.push("SRT bond has no active member links.".to_string());
+            }
+            if broken > 0 {
+                issues.push(format!("SRT bond has {} broken member link(s).", broken));
+            }
+            if let Some(wire_lost) = quality.srt_group_wire_receiver_packets_lost {
+                lines.push(format!("Wire packets lost (all legs): {}", wire_lost));
+            }
+            if let Some(undecryptable) = quality.srt_group_wire_packets_undecryptable {
+                lines.push(format!(
+                    "Wire packets undecryptable (all legs): {}",
+                    undecryptable
+                ));
+                if undecryptable > 0 {
+                    issues.push(format!(
+                        "{} SRT bond wire packet(s) could not be decrypted (expected 0).",
+                        undecryptable
+                    ));
+                }
+            }
+        }
+        Some(false) => lines.push("Bonded group: no (single SRT link)".to_string()),
+        // No transport statistics yet: the caller prints its own "no stats" note.
+        None => {}
+    }
 }
 
 pub(super) async fn check_ring_buffer_health(
@@ -644,4 +681,114 @@ pub(super) async fn check_gop_analysis(
         start.elapsed().as_millis() as u64,
     )
     .with_issues(issues)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn transport_check(quality: PublisherQuality) -> DiagResult {
+        let engine = Arc::new(MediaEngine::new());
+        engine
+            .try_register_ingest("pipe-1", "stream-key", "srt")
+            .await
+            .unwrap();
+        engine.update_publisher_quality("pipe-1", quality).await;
+        check_publisher_transport(4, &engine, "pipe-1", "srt").await
+    }
+
+    /// A bond's transport check reports the wire degradation counters and
+    /// never the ordinary logical counters, which are unknown for a bond
+    /// rather than zero.
+    #[tokio::test]
+    async fn publisher_transport_names_wire_counters_for_a_bond() {
+        let result = transport_check(PublisherQuality {
+            srt_bonded: Some(true),
+            srt_group_member_count: Some(2),
+            srt_group_connected_members: Some(2),
+            srt_group_active_members: Some(1),
+            srt_group_broken_members: Some(1),
+            srt_group_wire_receiver_packets_lost: Some(12),
+            srt_group_wire_packets_undecryptable: Some(3),
+            ms_rtt: Some(18.0),
+            ..PublisherQuality::default()
+        })
+        .await;
+
+        assert!(
+            result
+                .stdout
+                .contains("Bonded group: 2 members, 2 connected, 1 active, 1 broken"),
+            "{}",
+            result.stdout
+        );
+        assert!(
+            result.stdout.contains("Wire packets lost (all legs): 12"),
+            "{}",
+            result.stdout
+        );
+        assert!(
+            result
+                .stdout
+                .contains("Wire packets undecryptable (all legs): 3"),
+            "{}",
+            result.stdout
+        );
+        assert!(
+            !result.stdout.contains("Packets lost: —/s"),
+            "logical loss stays unprinted for a bond: {}",
+            result.stdout
+        );
+        assert!(
+            !result.stdout.contains("Packets undecrypted: —/s"),
+            "logical decryption stays unprinted for a bond: {}",
+            result.stdout
+        );
+        assert!(
+            result
+                .issues
+                .iter()
+                .any(|issue| issue.contains("broken member link")),
+            "{:?}",
+            result.issues
+        );
+        assert!(
+            result
+                .issues
+                .iter()
+                .any(|issue| issue.contains("could not be decrypted")),
+            "{:?}",
+            result.issues
+        );
+    }
+
+    /// A direct SRT publisher keeps the ordinary counters and reports no bond
+    /// identity.
+    #[tokio::test]
+    async fn publisher_transport_keeps_logical_counters_for_a_direct_peer() {
+        let result = transport_check(PublisherQuality {
+            srt_bonded: Some(false),
+            ms_rtt: Some(18.0),
+            packets_received_loss: Some(10),
+            packets_received_loss_per_sec: Some(2.0),
+            ..PublisherQuality::default()
+        })
+        .await;
+
+        assert!(
+            result.stdout.contains("Bonded group: no (single SRT link)"),
+            "{}",
+            result.stdout
+        );
+        assert!(
+            result.stdout.contains("Packets lost: 2.0/s (10 total)"),
+            "{}",
+            result.stdout
+        );
+        assert!(
+            !result.stdout.contains("Wire packets lost"),
+            "a direct peer has no wire view: {}",
+            result.stdout
+        );
+    }
 }

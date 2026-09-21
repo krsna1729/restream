@@ -147,7 +147,7 @@ bond. For bonded publishers it additionally reports:
 |---|---|
 | `srtBonded` | Whether srt-rs admitted this publisher as a bonded group |
 | `srtGroupMemberCount` | Total member tuples currently reported |
-| `srtGroupConnectedMembers` | Members in the connected state |
+| `srtGroupConnectedMembers` | Members in a connected state (active, standby, or unstable) |
 | `srtGroupActiveMembers` | Members carrying the active backup-group path |
 | `srtGroupBrokenMembers` | Members reported broken |
 | `srtGroupWireReceiverPacketsLost` | Receiver-side missing sequence numbers summed over all legs (wire) |
@@ -158,6 +158,17 @@ fields: one degraded leg does not mean the deduplicated logical stream lost
 data, so the ordinary `packetsReceivedLoss`/`Drop`/`Retrans`/`Undecrypt` fields
 are not set for a bond. The member-count and wire fields are omitted for
 ordinary single-link publishers.
+
+`srt-rs` retains the last receiver statistics of every leg it has seen,
+including legs that never completed a handshake and legs that failed, so a
+bond's instantaneous RTT, jitter, latency span and receive-buffer occupancy
+(`msRtt`, `msReceiveBuf`, `srtRecvBufPackets` and friends) are computed from
+connected legs only — an unstable leg still counts, because upstream defines it
+as a connected link the group excludes from delivery under backpressure, while a
+broken leg's stale full buffer must never be the "fullest leg" the
+`_recv_buffer_saturated` alert reads. The cumulative `wire` counters remain
+summed over every leg. A bond with no connected leg reports no new quality
+sample rather than describing the dead legs' last-known state.
 
 ### Output status
 
@@ -184,7 +195,7 @@ Active native egresses appear in `pipelines[id].outputs`:
 | `recentFailureCount` | Number of recent egress failures still inside the short downstream flap window. Carries forward onto the recovered active attempt so operators can see repeated sink churn even after the output is running again. |
 | `flapping` | `true` when repeated downstream failures happened inside that flap window, even if the output has already recovered and resumed sending. |
 | `retrying`, `retryAttempts`, `retryBackoffMs`, `nextRetryAt`, `retryRemainingMs` | Present while reconciler backoff is actively delaying the next automatic egress start. During this window the output `status` is promoted to `retrying` even though the preserved runtime phase remains `failed`. |
-| `quality` | Egress transport quality. RTMP/RTMPS expose sender-side `TCP_INFO`/`SO_MEMINFO`; SRT exposes sender-side `srt-rs` logical-caller statistics (RTT, send rate, sent loss/drop, send-buffer backlog). |
+| `quality` | Egress transport quality. RTMP/RTMPS expose sender-side `TCP_INFO`/`SO_MEMINFO`; SRT exposes sender-side `srt-rs` logical-caller statistics (RTT, send rate from the local wire byte delta, sent loss/drop, send-buffer backlog). |
 | `endedAt`, `endedAgeMs` | Present on recent output snapshots after unregister/cleanup so operators can tell when the last classified egress state ended |
 | `fabric`, `shardId` | `true` and the owning shard index for every network egress output — the egress fabric runtime is now the only egress path |
 | `resyncCount` | Total feed resynchronizations for this leaf (see `docs/archive/egress/implementation.md` Phase 6); a leaf that falls behind its retained feed window resyncs to the latest sync point in place rather than closing |
@@ -232,8 +243,15 @@ bytes sent/acked/retrans, unacked/lost/retrans packet counts,
 congestion/window state, not-sent bytes, pacing and delivery rate,
 send-buffer limitation time, RTO counters, and send-side socket memory.
 
-SRT egress quality comes from `srt-rs` logical-caller statistics: sender rate,
-RTT, sent loss/drop totals and the sender-buffer backlog.
+SRT egress quality comes from `srt-rs` logical-caller statistics: RTT, sent
+loss/drop totals and the sender-buffer backlog. `mbpsSendRate` is the interval
+delta of the caller's own wire sender bytes — a direct caller's
+`total_srt_bytes_sent`, a bond's summed `wire_srt_bytes_sent` — sampled at the
+shard's ~1 Hz stall sweep, never the peer's advertised receive rate from ACK
+feedback. A first sample, a counter reset, or an absent sender direction
+reports `null` rather than zero, and `msRtt`/`packetsSentDrop` stay `null` until
+the transport reports them (a bond has no aggregate sender TLPKTDROP counter,
+so its drop value is never a fabricated zero).
 HLS PUT egress reports upload progress for segment and playlist PUTs. These
 signals are local sender evidence; they do not prove that a third-party platform
 accepted or played the stream unless a readback/verification probe is also run.
@@ -382,12 +400,12 @@ RTMP and SRT ingests run these checks:
 | 1 | Engine Status | Ingest/egress state, uptime, bytes, source ring, max reader lag, total overflows, and max unread packet age |
 | 2 | Stream Info | Codec and track metadata |
 | 3 | GOP Analysis | Keyframe interval; uses media PTS when available |
-| 4 | Publisher Transport | RTMP `TCP_INFO`/`SO_MEMINFO` or SRT `srt-rs` receiver statistics |
+| 4 | Publisher Transport | RTMP `TCP_INFO`/`SO_MEMINFO` or SRT `srt-rs` receiver statistics. For a bonded SRT publisher the bond identity and explicit wire degradation counters are reported instead of the ordinary logical loss/drop/retransmit/undecrypt counters, which are unknown for a bond |
 | 5 | Ring Buffer Health | Buffer state plus per-reader lag slots, overflow counters, and unread packet age |
 | 6 | Active Outputs | Output state and bytes; egresses associated via `ActiveEgress.pipeline_id` |
 | 7 | System Resources | CPU, RAM, disk |
 | 8 | Network Bandwidth | Host-wide interface rates (not pipeline-specific latency) |
-| 9 | SRT Listener Owner | SRT-only: bonding availability, Owner fault, receive mode, peers, RX/TX counters, ring drops/truncation and admission counters (listener-wide, from the Compio Owner) |
+| 9 | SRT Listener Owner | SRT-only: bonding availability, Owner fault, receive mode, peers, RX/TX counters, ring drops/truncation, admission counters and dropped publisher-telemetry samples (listener-wide, from the Compio Owner) |
 
 File ingests run a file-specific set instead:
 

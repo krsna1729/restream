@@ -79,7 +79,9 @@ impl SrtShardBackend {
                         };
                         let stats = owners.stats(&leaf.caller);
                         let backlog = stats.as_ref().and_then(send_backlog);
-                        let quality = stats.as_ref().and_then(SrtFabricLeaf::quality_from_stats);
+                        let quality = stats
+                            .as_ref()
+                            .and_then(|stats| leaf.sample_quality(stats, now));
                         let drops = quality.as_ref().and_then(|q| q.packets_sent_drop);
                         let reason = match leaf.observe_stall(now, drops, lag_units, backlog) {
                             LeafStallClass::Idle => None,

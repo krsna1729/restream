@@ -6,6 +6,7 @@ use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::policy::{LeafStallClass, WorkBudget, classify_stall};
 use crate::media::egress::visit::{EngineVisitResult, visit_leaf};
 use crate::media::snapshots::PublisherQuality;
+use crate::media::srt::egress_stats::SenderQualitySampler;
 use crate::media::srt::{SrtEgressEngine, SrtSendBacklog};
 use srt_transport::advanced::caller::LogicalCallerStats;
 
@@ -28,6 +29,9 @@ pub(crate) struct SrtFabricLeaf {
     last_packets_sent_drop: u64,
     /// Anchor for stall aging before any progress has been recorded.
     observed_since: Instant,
+    /// Sent-rate sampling state for this leaf's caller: the previous wire
+    /// byte counter reading, so a cumulative counter becomes an interval rate.
+    quality_sampler: SenderQualitySampler,
     /// Set when this leaf has been asked to close but still had queued
     /// send-path bytes: it stays registered and visited so it can flush, and
     /// is force-closed once flushed or `drain_timeout` has passed.
@@ -49,6 +53,7 @@ impl SrtFabricLeaf {
             last_backlog_bytes: 0,
             last_packets_sent_drop: 0,
             observed_since: Instant::now(),
+            quality_sampler: SenderQualitySampler::default(),
             draining_since: None,
             draining_reason: None,
             blocked_queued: false,
@@ -107,10 +112,16 @@ impl SrtFabricLeaf {
         )
     }
 
-    /// Quality snapshot from one public statistics read, with the sender
-    /// backlog folded in.
-    pub(crate) fn quality_from_stats(stats: &LogicalCallerStats) -> Option<PublisherQuality> {
-        let mut quality = crate::media::srt::egress_stats::sender_quality(stats)?;
+    /// Quality snapshot from one public statistics read at `now`, with the
+    /// sender backlog folded in. Rates are measured against this leaf's
+    /// previous sample, so this is a `&mut self` operation: it is called once
+    /// per stall sweep (about 1 Hz), never per media visit.
+    pub(crate) fn sample_quality(
+        &mut self,
+        stats: &LogicalCallerStats,
+        now: Instant,
+    ) -> Option<PublisherQuality> {
+        let mut quality = self.quality_sampler.sample(stats, now)?;
         if let Some(backlog) = crate::media::srt::egress_stats::send_backlog(stats) {
             apply_send_backlog(&mut quality, backlog);
         }

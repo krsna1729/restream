@@ -209,7 +209,16 @@ impl MediaEngine {
         SrtListenerDiagSnapshot {
             bonding_available: self.bonding_available(),
             ingress_owner: self.runtime.listener_stats.ingress_owner.snapshot(),
-            active_ingest_count: self.active_ingest_count().await,
+            // The listener is SRT-only state: counting every protocol here
+            // would let a concurrent RTMP ingest inflate the SRT number.
+            active_ingest_count: self
+                .ingests
+                .active
+                .read()
+                .await
+                .values()
+                .filter(|ingest| ingest.protocol == "srt")
+                .count(),
         }
     }
 }

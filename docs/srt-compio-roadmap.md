@@ -732,7 +732,8 @@ The dead zero-match SRT concurrency steps are removed, the never-consumed
 `RESTREAM_SRT_IO_BATCH_CAPACITY` docs are gone, and
 `production_srt_does_not_own_native_udp_transport` guards production SRT source.
 
-Amendments (Restream `bdbf001e`, `808347d2`, and the follow-up below):
+Amendments (Restream `bdbf001e`, `808347d2`, `d56406f2`, and the final
+correction below):
 
 - `bdbf001e` removed the dead listener telemetry (`udpRxQueueBytes`,
   `udpRxQueuePeakBytes`, `udpDrops`, the `udp_drops` alert, the fabricated
@@ -741,7 +742,7 @@ Amendments (Restream `bdbf001e`, `808347d2`, and the follow-up below):
   alert and Publisher Transport diagnostic read: the ingress Owner samples
   `srt-rs` receiver statistics and Tokio folds them into the ingest snapshot;
   occupancy is authoritative packet capacity, and the guessed byte fields are gone.
-- The final amendment replaced the shared sample map with a stamped, bounded,
+- `d56406f2` replaced the shared sample map with a stamped, bounded,
   LOSSY Owner-to-Tokio telemetry bridge (a full bridge drops and counts the
   sample, never delaying protocol service; rates use Owner-to-Owner intervals,
   duplicates are ignored, counter resets give no rate). Bonded peers report
@@ -749,6 +750,20 @@ Amendments (Restream `bdbf001e`, `808347d2`, and the follow-up below):
   loss/undecryptable fields instead of summed leg counters. The egress
   `mbps_send_rate` unit bug (MB/s reported as Mbps) is fixed, and the stale
   libsrt wording in the frontend and docs is corrected.
+- The final correction (see the commit recorded in §7's result line) makes
+  egress quality stateful at the ~1 Hz stall sweep: `mbps_send_rate` is the
+  interval delta of the caller's own wire
+  sender bytes (`total_srt_bytes_sent` direct, `wire_srt_bytes_sent` bonded),
+  never the peer's advertised receive rate, and a first sample, a counter reset
+  or an absent sender direction reads `null` instead of a fabricated zero —
+  RTT and bonded drop counters likewise stay `null` until the transport
+  reports them. Bonded ingress instantaneous RTT/jitter/latency/buffer
+  occupancy comes only from connected legs, and `srtGroupConnectedMembers`
+  counts unstable legs as connected because upstream defines them as connected
+  links excluded from delivery by backpressure. The Publisher Transport
+  diagnostic and the dashboard show the bonded wire degradation counters
+  instead of unavailable ordinary counters, and the SRT Listener Owner check
+  counts SRT ingests only and reports `telemetryDropped`.
 - Known non-blocking debt: `ingressOwner.managedRx` is a bool, so it cannot
   distinguish "no Owner selected a mode yet" from RawReadiness.
 

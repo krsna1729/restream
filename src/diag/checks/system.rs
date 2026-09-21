@@ -173,6 +173,14 @@ pub(in crate::diag) async fn check_srt_listener_owner(
         owner.policy_deferred,
         owner.credential_failures
     ));
+    // The quality bridge is deliberately lossy under pressure: a dropped
+    // sample is a gap in publisher telemetry, never a protocol problem, so
+    // this is reported without a threshold. `telemetryDropped` is cumulative
+    // since listener start; a historical value is not a current fault.
+    lines.push(format!(
+        "Publisher telemetry: {} dropped samples",
+        owner.telemetry_dropped
+    ));
 
     if owner.faulted {
         issues.push(
@@ -287,6 +295,11 @@ mod tests {
         assert_eq!(healthy.name, "SRT Listener Owner");
         assert!(healthy.issues.is_empty(), "{:?}", healthy.issues);
         assert!(healthy.stdout.contains("Owner faulted: false"));
+        assert!(
+            healthy
+                .stdout
+                .contains("Publisher telemetry: 0 dropped samples")
+        );
         assert!(!healthy.stdout.contains("UDP recv queue"));
 
         let owner = &stats.ingress_owner;
@@ -302,8 +315,21 @@ mod tests {
         owner
             .tx_failed
             .store(1, std::sync::atomic::Ordering::Relaxed);
+        owner
+            .telemetry_dropped
+            .store(5, std::sync::atomic::Ordering::Relaxed);
         let unhealthy = check_srt_listener_owner(8, &engine).await;
-        assert_eq!(unhealthy.issues.len(), 4, "{:?}", unhealthy.issues);
+        assert_eq!(
+            unhealthy.issues.len(),
+            4,
+            "a dropped telemetry sample is not a diagnostic issue: {:?}",
+            unhealthy.issues
+        );
+        assert!(
+            unhealthy
+                .stdout
+                .contains("Publisher telemetry: 5 dropped samples")
+        );
     }
 
     #[test]

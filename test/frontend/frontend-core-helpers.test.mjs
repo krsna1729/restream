@@ -750,6 +750,8 @@ test("ingest detail rendering and publisher quality helpers surface operator-fac
       srtBonded: true,
       srtGroupMemberCount: 1,
       srtGroupActiveMembers: 0,
+      srtGroupWireReceiverPacketsLost: 9,
+      srtGroupWirePacketsUndecryptable: 1,
       packetsReceivedLossPerSec: 5.5,
       packetsReceivedLoss: 42,
       packetsReceivedDropPerSec: 0,
@@ -781,6 +783,10 @@ test("ingest detail rendering and publisher quality helpers surface operator-fac
 
   assert.equal(publisherQuality.normalizePublisherProtocolLabel("srt"), "SRT");
   assert.ok(srtAlerts.some((alert) => alert.code === "srt_bond_members"));
+  assert.ok(
+    srtAlerts.some((alert) => alert.code === "srt_bond_wire_undecrypt"),
+    "wire decryption failures on a bond raise an alert",
+  );
   assert.ok(rtmpMetrics.some((metric) => metric.code === "tcp_rtt"));
 
   deps.setPipelineViewDependencies({

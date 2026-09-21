@@ -118,12 +118,21 @@ pub(crate) fn sample_from_stats(stats: &LogicalPeerStats) -> Option<PeerReceiver
             })
         }
         LogicalPeerStats::Group(stats) => {
+            // Instantaneous path state comes only from legs that are actually
+            // connected: `srt-rs` keeps the last statistics of a broken or
+            // still-pending leg, and a dead leg's stale, full receive buffer
+            // must never become the "fullest leg" the saturation alert reads.
+            // Historical wire counters stay aggregated across every leg --
+            // they live in `aggregate`, which this sampling never recomputes.
             let mut legs = 0_u64;
             let (mut rtt, mut jitter) = (0_u64, 0_u64);
             let mut delay = 0_u64;
             let mut span = 0_u64;
             let mut fullest: Option<(f64, u32, u64, u32)> = None;
             for leg in &stats.legs {
+                if !is_connected(leg.state) {
+                    continue;
+                }
                 let Some(receiver) = leg.connection.receiver else {
                     continue;
                 };
@@ -162,13 +171,30 @@ pub(crate) fn sample_from_stats(stats: &LogicalPeerStats) -> Option<PeerReceiver
                     wire_receiver_packets_lost: aggregate.wire_receiver_packets_lost,
                     wire_packets_undecryptable: aggregate.wire_packets_undecryptable,
                     members: count(stats.legs.len()),
-                    connected_members: count(aggregate.active_legs + aggregate.standby_legs),
+                    // `Unstable` is a connected leg the group temporarily
+                    // excludes from delivery under backpressure, so it counts
+                    // as connected; `Pending` and `Broken` are not connected.
+                    connected_members: count(
+                        aggregate.active_legs + aggregate.standby_legs + aggregate.unstable_legs,
+                    ),
                     active_members: count(aggregate.active_legs),
                     broken_members: count(aggregate.broken_legs),
                 }),
             })
         }
     }
+}
+
+/// Whether a bonded leg is currently connected. `srt-rs` retains the
+/// statistics of every leg it has seen, including `Pending` legs that never
+/// completed a handshake and `Broken` legs whose failure was already
+/// accounted for, so instantaneous path metrics must ask first.
+fn is_connected(state: srt_proto::GroupMemberState) -> bool {
+    use srt_proto::GroupMemberState;
+    matches!(
+        state,
+        GroupMemberState::Active | GroupMemberState::Standby | GroupMemberState::Unstable
+    )
 }
 
 /// `current - previous` as a per-second rate, or `None` when the interval is
@@ -452,5 +478,119 @@ mod tests {
         assert_eq!(quality.packets_received_loss_per_sec, None);
         // No logical rate without a previous observation.
         assert_eq!(quality_from(&first, None).mbps_receive_rate, None);
+    }
+
+    /// One leg's stale state: `srt-rs` keeps the last receiver statistics of
+    /// every leg it has seen, so a dead leg can hold a full receive buffer and
+    /// an ancient RTT. Instantaneous path state must come from connected legs
+    /// only, while the wire counters stay aggregated over all of them.
+    #[test]
+    fn dead_and_pending_legs_never_contribute_instantaneous_path_state() {
+        let leg = |member_id, state, rtt: u32, buffered: u32| GroupLegStats {
+            member_id,
+            weight: 1,
+            state,
+            local_addr: None,
+            peer_addr: None,
+            connection: ConnectionStats {
+                sender: None,
+                receiver: Some(ReceiverStats {
+                    packets_in_buffer: buffered,
+                    max_buffer_packets: 100,
+                    payload_bytes_in_buffer: u64::from(buffered) * 1_316,
+                    rtt,
+                    jitter: 500,
+                    tsbpd_delay_micros: 120_000,
+                    ..ReceiverStats::default()
+                }),
+            },
+        };
+        let stats = LogicalPeerStats::Group(Box::new(GroupConnectionStats {
+            group_id: 1,
+            mode: GroupMode::Broadcast,
+            aggregate: GroupAggregateStats {
+                active_legs: 1,
+                unstable_legs: 1,
+                broken_legs: 1,
+                pending_legs: 1,
+                logical_payload_bytes_received: 0,
+                wire_receiver_packets_lost: 9,
+                wire_packets_undecryptable: 2,
+                ..GroupAggregateStats::default()
+            },
+            legs: vec![
+                leg(1, GroupMemberState::Active, 10_000, 10),
+                leg(2, GroupMemberState::Unstable, 20_000, 30),
+                // A leg that failed: stale, saturated buffer, huge old RTT.
+                leg(3, GroupMemberState::Broken, 900_000, 100),
+                // A leg that never completed a handshake.
+                leg(4, GroupMemberState::Pending, 800_000, 95),
+            ],
+        }));
+        let sample = sample_from_stats(&stats).expect("connected legs report receiver stats");
+        assert_eq!(
+            sample.rtt_micros, 15_000,
+            "mean of the connected legs only (active 10 ms, unstable 20 ms)"
+        );
+        assert_eq!(
+            sample.packets_in_buffer, 30,
+            "the fullest CONNECTED leg, not the broken leg's stale full buffer"
+        );
+        assert_eq!(sample.occupancy_percent(), Some(30.0));
+        let PeerKind::Group(view) = sample.kind else {
+            panic!("a bonded peer samples as a group")
+        };
+        assert_eq!(view.members, 4);
+        assert_eq!(
+            view.connected_members, 2,
+            "active + unstable; pending and broken legs are not connected"
+        );
+        assert_eq!(view.active_members, 1);
+        assert_eq!(view.broken_members, 1);
+        assert_eq!(
+            view.wire_receiver_packets_lost, 9,
+            "wire counters stay aggregated over every leg"
+        );
+        assert_eq!(view.wire_packets_undecryptable, 2);
+    }
+
+    /// With no connected leg there is no live path to describe: the sample
+    /// says nothing rather than describing the dead legs' last-known state.
+    #[test]
+    fn a_bond_with_only_pending_and_broken_legs_has_no_sample() {
+        let stats = LogicalPeerStats::Group(Box::new(GroupConnectionStats {
+            group_id: 1,
+            mode: GroupMode::Broadcast,
+            aggregate: GroupAggregateStats {
+                broken_legs: 1,
+                pending_legs: 1,
+                ..GroupAggregateStats::default()
+            },
+            legs: vec![
+                GroupLegStats {
+                    member_id: 1,
+                    weight: 1,
+                    state: GroupMemberState::Broken,
+                    local_addr: None,
+                    peer_addr: None,
+                    connection: ConnectionStats {
+                        sender: None,
+                        receiver: Some(receiver(0, 0)),
+                    },
+                },
+                GroupLegStats {
+                    member_id: 2,
+                    weight: 1,
+                    state: GroupMemberState::Pending,
+                    local_addr: None,
+                    peer_addr: None,
+                    connection: ConnectionStats {
+                        sender: None,
+                        receiver: None,
+                    },
+                },
+            ],
+        }));
+        assert_eq!(sample_from_stats(&stats), None);
     }
 }
