@@ -4,7 +4,8 @@
 //! TX, receive state, per-peer send/disconnect/retire).
 //!
 //! Tokio owns the control plane and the media application state. The two sides
-//! meet only through two bounded bridges:
+//! meet only through two lossless bounded bridges (plus one lossy telemetry
+//! bridge, below):
 //!
 //! * `IngressCommand` (Tokio -> Owner): `Send`, `Disconnect`, `Shutdown`, all
 //!   addressed by `LogicalPeerId`. A `LogicalPeerId` is the sole cross-thread
@@ -12,6 +13,10 @@
 //!   `SocketAddr` identifies a session.
 //! * `SrtIngressEvent` (Owner -> Tokio): `Connected`, `Media`, `Disconnected`,
 //!   plus the terminal `Fault`.
+//! * `QualitySample` (Owner -> Tokio, LOSSY): per-peer receive-quality
+//!   observations stamped with the time the Owner took them. Sent with
+//!   `try_send`; a full bridge drops the sample and counts it, so telemetry can
+//!   never delay protocol service. Tokio owns everything derived from it.
 //!
 //! Everything here runs on the owner thread. The runtime and the Owner are
 //! `!Send`; they are built, driven and dropped on this thread and nothing
@@ -43,10 +48,10 @@ use crate::media::snapshots::ListenerSocketStats;
 
 use super::ingress_admission::ingress_resolver;
 pub(crate) use super::ingress_bridge::{
-    INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, IngressCommand, IngressConfig, IngressExit,
-    SrtIngressEvent, SrtIngressHandle,
+    INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, INGRESS_TELEMETRY_CAPACITY, IngressCommand,
+    IngressConfig, IngressExit, SrtIngressEvent, SrtIngressHandle,
 };
-use super::ingress_quality::{PeerSampleTable, sample_from_stats};
+use super::ingress_quality::{Observation, QualitySample, sample_from_stats};
 
 /// Concurrent datagram sends (TX pool slots and lanes) for the ingress Owner.
 /// Ingress TX is protocol replies (handshake, ACK/NAK, SHUTDOWN) plus SRT
@@ -121,8 +126,8 @@ struct OwnerLoop {
     runtime: compio::runtime::Runtime,
     commands: flume::Receiver<IngressCommand>,
     events: mpsc::Sender<SrtIngressEvent>,
+    telemetry: mpsc::Sender<QualitySample>,
     stats: Arc<ListenerSocketStats>,
-    samples: Arc<PeerSampleTable>,
     /// Live admitted peers, and the slice of them still to sample this round.
     live: std::collections::HashSet<LogicalPeerId>,
     sample_queue: VecDeque<LogicalPeerId>,
@@ -148,9 +153,10 @@ pub(super) fn run_owner_thread(
     config: IngressConfig,
     commands: flume::Receiver<IngressCommand>,
     events: mpsc::Sender<SrtIngressEvent>,
+    telemetry: mpsc::Sender<QualitySample>,
     ready: flume::Sender<Result<SocketAddr, String>>,
 ) -> IngressExit {
-    match build(config, commands, events) {
+    match build(config, commands, events, telemetry) {
         Ok((mut owner_loop, local_addr)) => {
             let _ = ready.send(Ok(local_addr));
             owner_loop.serve()
@@ -170,6 +176,7 @@ fn build(
     config: IngressConfig,
     commands: flume::Receiver<IngressCommand>,
     events: mpsc::Sender<SrtIngressEvent>,
+    telemetry: mpsc::Sender<QualitySample>,
 ) -> Result<(OwnerLoop, SocketAddr), String> {
     // The runtime and the Owner are born on this thread and never leave it.
     let runtime_config =
@@ -223,7 +230,6 @@ fn build(
         "srt ingress owner attached"
     );
     let stats = config.stats;
-    let samples = config.samples;
     stats.ingress_owner.tx_capacity.store(
         u64::try_from(INGRESS_TX_CAPACITY).unwrap_or(u64::MAX),
         Ordering::Relaxed,
@@ -238,8 +244,8 @@ fn build(
             runtime,
             commands,
             events,
+            telemetry,
             stats,
-            samples,
             live: std::collections::HashSet::new(),
             sample_queue: VecDeque::new(),
             next_sample_round: Instant::now() + SAMPLE_INTERVAL,
@@ -330,7 +336,9 @@ impl OwnerLoop {
             let busy = report.work_remaining
                 || self.stash.is_some()
                 || !self.commands.is_empty()
-                || (!self.pending_events.is_empty() && self.events_has_room());
+                || (!self.pending_events.is_empty() && self.events_has_room())
+                // A sampling round in progress finishes promptly.
+                || !self.sample_queue.is_empty();
             if !busy {
                 self.park(now);
             }
@@ -518,8 +526,21 @@ impl OwnerLoop {
                 .listener_peer_mut(peer)
                 .and_then(|entry| entry.stats())
                 .and_then(|stats| sample_from_stats(&stats));
-            if let Some(sample) = sample {
-                self.samples.record(peer, sample);
+            let Some(sample) = sample else {
+                continue;
+            };
+            let observation = Observation {
+                observed_at: Instant::now(),
+                sample,
+            };
+            // Lossy by design: never wait for Tokio.
+            if let Err(mpsc::error::TrySendError::Full(_)) =
+                self.telemetry.try_send(QualitySample { peer, observation })
+            {
+                self.stats
+                    .ingress_owner
+                    .telemetry_dropped
+                    .fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -552,7 +573,6 @@ impl OwnerLoop {
         self.deferred.forget(&peer);
         self.overloaded.remove(&peer);
         self.live.remove(&peer);
-        self.samples.forget(&peer);
     }
 
     /// Translate Owner listener events into the application vocabulary. Only
@@ -716,8 +736,15 @@ impl OwnerLoop {
     /// waiting), or the next protocol deadline. No fixed-frequency polling.
     fn park(&mut self, now: Timestamp) {
         let default_us = u64::try_from(IDLE_PARK.as_micros()).unwrap_or(u64::MAX);
-        let wait = Duration::from_micros(self.owner.time_until_next_deadline(now, default_us))
+        let mut wait = Duration::from_micros(self.owner.time_until_next_deadline(now, default_us))
             .min(IDLE_PARK);
+        // The next sampling round is a deadline too, while peers are live.
+        if !self.live.is_empty() {
+            wait = wait.min(
+                self.next_sample_round
+                    .saturating_duration_since(Instant::now()),
+            );
+        }
         let Self {
             owner,
             runtime,

@@ -23,10 +23,10 @@ pub(crate) use super::srt_policy::SrtIngestPolicyStore;
 
 use super::ingress_admission::ReceiverGroupId;
 use super::ingress_owner::{
-    INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, IngressCommand, IngressConfig,
-    SrtIngressEvent, SrtIngressHandle,
+    INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, INGRESS_TELEMETRY_CAPACITY, IngressCommand,
+    IngressConfig, SrtIngressEvent, SrtIngressHandle,
 };
-use super::ingress_quality::{PeerSampleTable, quality_from_sample};
+use super::ingress_quality::{QualityFold, QualitySample};
 
 #[path = "ingest_packets.rs"]
 mod ingest_packets;
@@ -37,8 +37,8 @@ const SRT_MESSAGE_PAYLOAD_MAX: usize = 1316;
 const LISTENER_IDLE: Duration = Duration::from_millis(5);
 /// Owner events handled per Tokio pass before readers and deletion checks run.
 const EVENTS_PER_PASS: usize = 64;
-/// How often publisher receive quality is folded into the ingest snapshot.
-const QUALITY_INTERVAL: Duration = Duration::from_secs(1);
+/// Owner telemetry samples folded per Tokio pass.
+const TELEMETRY_PER_PASS: usize = 64;
 /// Send commands one reader may queue per Tokio pass, so one busy reader
 /// cannot monopolize the command bridge.
 const READER_SENDS_PER_PASS: usize = 32;
@@ -48,8 +48,6 @@ const READER_SENDS_PER_PASS: usize = 32;
 /// `LogicalPeerId`; the protocol state they name lives on the owner thread.
 struct Ingress {
     handle: SrtIngressHandle,
-    /// Receive-quality samples the Owner thread publishes per `LogicalPeerId`.
-    samples: Arc<PeerSampleTable>,
     pending_disconnects: VecDeque<LogicalPeerId>,
 }
 
@@ -104,15 +102,14 @@ impl SrtServer {
                 return;
             }
         };
-        let samples = Arc::new(PeerSampleTable::default());
         let handle = match SrtIngressHandle::start(IngressConfig {
             bind,
             policy_store: self.ingest_policy_store.clone(),
             receiver_group: ReceiverGroupId::generate(),
             stats: self.engine.listener_stats_handle(),
-            samples: samples.clone(),
             command_capacity: INGRESS_COMMAND_CAPACITY,
             event_capacity: INGRESS_EVENT_CAPACITY,
+            telemetry_capacity: INGRESS_TELEMETRY_CAPACITY,
         })
         .await
         {
@@ -124,7 +121,6 @@ impl SrtServer {
         };
         let mut ingress = Ingress {
             handle,
-            samples,
             pending_disconnects: VecDeque::new(),
         };
 
@@ -146,7 +142,6 @@ impl SrtServer {
 
         info!(port, bind = %ingress.handle.local_addr(), "SRT listener ready (srt-rs compio Owner ingress)");
         let mut owner_fault = None;
-        let mut next_quality = tokio::time::Instant::now() + QUALITY_INTERVAL;
         'listener: while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
             ingress.flush_disconnects();
             close_deleted_srt_publishers(&self.engine, &mut ingress, &mut peer_sessions).await;
@@ -174,11 +169,7 @@ impl SrtServer {
                 }
                 next = ingress.handle.events.try_recv().ok();
             }
-            if tokio::time::Instant::now() >= next_quality {
-                next_quality = tokio::time::Instant::now() + QUALITY_INTERVAL;
-                self.publish_publisher_quality(&ingress, &mut peer_sessions)
-                    .await;
-            }
+            self.fold_telemetry(&mut ingress, &mut peer_sessions).await;
             if ingress.handle.is_closed() {
                 owner_fault = Some("the SRT ingress owner thread stopped".to_string());
                 break;
@@ -211,29 +202,26 @@ impl SrtServer {
         info!(port, quiescent = exit.quiescent, "SRT listener stopped");
     }
 
-    /// Fold the Owner's latest receive-quality sample for each publisher into
-    /// its ingest snapshot (generation-safe through the registration).
-    async fn publish_publisher_quality(
+    /// Fold the Owner's stamped receive-quality samples into their publishers'
+    /// ingest snapshots (generation-safe through the registration). Bounded per
+    /// pass; a sample for a peer with no publisher session is dropped, and the
+    /// next one (about a second later) replaces it.
+    async fn fold_telemetry(
         &self,
-        ingress: &Ingress,
+        ingress: &mut Ingress,
         sessions: &mut HashMap<LogicalPeerId, RustSrtSession>,
     ) {
-        for (peer, session) in sessions.iter_mut() {
-            let RustSrtSession::Publish(publisher) = session else {
+        for _ in 0..TELEMETRY_PER_PASS {
+            let Ok(QualitySample { peer, observation }) = ingress.handle.telemetry.try_recv()
+            else {
+                break;
+            };
+            let Some(RustSrtSession::Publish(publisher)) = sessions.get_mut(&peer) else {
                 continue;
             };
-            let Some(sample) = ingress.samples.get(peer) else {
+            let Some(quality) = publisher.quality_fold.fold(observation) else {
                 continue;
             };
-            let now = tokio::time::Instant::now();
-            let quality = quality_from_sample(
-                &sample,
-                publisher
-                    .last_quality_sample
-                    .as_ref()
-                    .map(|(at, earlier)| (earlier, now.duration_since(*at))),
-            );
-            publisher.last_quality_sample = Some((now, sample));
             self.engine
                 .update_ingest_session_quality(&publisher.registration, quality)
                 .await;
@@ -406,7 +394,7 @@ impl SrtServer {
             last_progress_ms,
             probe_sent: false,
             closing: false,
-            last_quality_sample: None,
+            quality_fold: QualityFold::default(),
         })
     }
 
@@ -481,11 +469,8 @@ pub(super) struct RustSrtPublisher {
     last_progress_ms: Arc<std::sync::atomic::AtomicU64>,
     probe_sent: bool,
     closing: bool,
-    /// The last receive-quality sample and when it was folded in, for rates.
-    last_quality_sample: Option<(
-        tokio::time::Instant,
-        super::ingress_quality::PeerReceiverSample,
-    )>,
+    /// Tracks the last Owner observation, so rates use Owner-to-Owner intervals.
+    quality_fold: QualityFold,
 }
 
 impl RustSrtPublisher {

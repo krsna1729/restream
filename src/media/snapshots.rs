@@ -108,6 +108,12 @@ pub struct PublisherQuality {
     pub srt_group_connected_members: Option<u32>,
     pub srt_group_active_members: Option<u32>,
     pub srt_group_broken_members: Option<u32>,
+    /// Bonded ingest only: receiver-side missing sequence numbers and
+    /// decryption rejections summed over all legs. These are WIRE views; a bond's
+    /// deduplicated logical stream can be intact while one leg degrades, so they
+    /// are deliberately not folded into the ordinary publisher loss counters.
+    pub srt_group_wire_receiver_packets_lost: Option<u64>,
+    pub srt_group_wire_packets_undecryptable: Option<u64>,
     pub inbound_rtp_packets_lost: Option<u64>,
     pub inbound_rtp_packets_in_error: Option<u64>,
     pub inbound_rtp_packets_jitter: Option<f64>,
@@ -235,6 +241,7 @@ ingress_owner_stats! {
     overload_disconnects,
     send_failures,
     event_bridge_full_visits,
+    telemetry_dropped,
     ;
     // Gauges and high-water marks.
     tx_capacity,
@@ -285,6 +292,7 @@ impl SrtIngressOwnerSnapshot {
             "commandDepthHighWater": self.command_depth_hwm,
             "eventDepthHighWater": self.event_depth_hwm,
             "eventBridgeFullVisits": self.event_bridge_full_visits,
+            "telemetryDropped": self.telemetry_dropped,
             "deferredSends": self.deferred_sends,
             "deferredSendsHighWater": self.deferred_sends_hwm,
             "staleCommands": self.stale_commands,

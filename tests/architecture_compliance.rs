@@ -406,6 +406,13 @@ fn dead_srt_udp_queue_telemetry_does_not_return() {
         let source = std::fs::read_to_string(doc).expect("active doc is readable");
         inspect(std::path::Path::new(doc), &source);
     }
+    // The publisher-quality UI describes srt-rs, not a libsrt runtime.
+    let quality_ui = std::fs::read_to_string("web/ts/features/publisher-quality.ts")
+        .expect("publisher quality UI is readable");
+    assert!(
+        !quality_ui.contains("libsrt"),
+        "publisher-quality.ts must not describe a libsrt runtime"
+    );
 }
 
 #[test]

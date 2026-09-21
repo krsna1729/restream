@@ -75,7 +75,7 @@ function getPublisherQualityMetrics(publisher: Publisher | null): QualityMetric[
                 code: 'srt_bond_members',
                 label: 'Bond member links',
                 description:
-                    'Number of network paths currently attached to this libsrt socket group.',
+                    'Number of network paths currently attached to this srt-rs bonded group.',
                 rawValue: q.srtGroupMemberCount,
                 alertCheck: (v) => v < 2,
                 alwaysShow: true,
@@ -93,7 +93,7 @@ function getPublisherQualityMetrics(publisher: Publisher | null): QualityMetric[
                 code: 'srt_bond_broken',
                 label: 'Bond broken links',
                 description:
-                    'Member links that libsrt reports as broken. Any broken path reduces redundancy.',
+                    'Member links srt-rs reports as broken. Any broken path reduces redundancy.',
                 rawValue: q.srtGroupBrokenMembers,
                 alertCheck: (v) => v > 0,
                 alwaysShow: true,
@@ -159,7 +159,7 @@ function getPublisherQualityMetrics(publisher: Publisher | null): QualityMetric[
             label: 'Send buffer ceiling (configured)',
             description:
                 'The SRTO_SNDBUF value this connection was set up with — fixed for the life of ' +
-                'the connection (libsrt rejects changing it after connect). Egress-only: derived ' +
+                'the connection (SRT does not allow changing it after connect). Egress-only: derived ' +
                 'from an explicit sndbuf= URL override, or a bitrate*latency*margin formula ' +
                 'default when none was given.',
             rawValue: q.srtSndbufConfiguredBytes,

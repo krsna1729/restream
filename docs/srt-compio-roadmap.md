@@ -732,6 +732,27 @@ The dead zero-match SRT concurrency steps are removed, the never-consumed
 `RESTREAM_SRT_IO_BATCH_CAPACITY` docs are gone, and
 `production_srt_does_not_own_native_udp_transport` guards production SRT source.
 
+Amendments (Restream `bdbf001e`, `808347d2`, and the follow-up below):
+
+- `bdbf001e` removed the dead listener telemetry (`udpRxQueueBytes`,
+  `udpRxQueuePeakBytes`, `udpDrops`, the `udp_drops` alert, the fabricated
+  "SRT Listener Socket" diagnostic) and the libsrt-era `AGENTS.md` rules.
+- `808347d2` wired the per-publisher receive quality that the receive-buffer
+  alert and Publisher Transport diagnostic read: the ingress Owner samples
+  `srt-rs` receiver statistics and Tokio folds them into the ingest snapshot;
+  occupancy is authoritative packet capacity, and the guessed byte fields are gone.
+- The final amendment replaced the shared sample map with a stamped, bounded,
+  LOSSY Owner-to-Tokio telemetry bridge (a full bridge drops and counts the
+  sample, never delaying protocol service; rates use Owner-to-Owner intervals,
+  duplicates are ignored, counter resets give no rate). Bonded peers report
+  bond identity and member state, a LOGICAL payload rate, and explicit wire
+  loss/undecryptable fields instead of summed leg counters. The egress
+  `mbps_send_rate` unit bug (MB/s reported as Mbps) is fixed, and the stale
+  libsrt wording in the frontend and docs is corrected.
+- Known non-blocking debt: `ingressOwner.managedRx` is a bool, so it cannot
+  distinguish "no Owner selected a mode yet" from RawReadiness.
+
+
 Delete as applicable:
 
 - Restream native SRT UDP io_uring driver

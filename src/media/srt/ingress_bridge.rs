@@ -1,5 +1,5 @@
 //! The Tokio-facing half of the SRT ingress owner: the command and event
-//! vocabulary, the start/exit types, and [`SrtIngressHandle`], Tokio's end of
+//! vocabulary, the lossy quality-telemetry channel, the start/exit types, and [`SrtIngressHandle`], Tokio's end of
 //! the two bounded bridges. The owner thread itself lives in `ingress_owner`.
 
 use std::net::SocketAddr;
@@ -14,7 +14,7 @@ use crate::media::snapshots::ListenerSocketStats;
 
 use super::ingress_admission::ReceiverGroupId;
 use super::ingress_owner::run_owner_thread;
-use super::ingress_quality::PeerSampleTable;
+use super::ingress_quality::QualitySample;
 use super::srt_policy::SrtIngestPolicyStore;
 
 /// Tokio -> Owner command bridge capacity.
@@ -22,6 +22,11 @@ pub(crate) const INGRESS_COMMAND_CAPACITY: usize = 256;
 
 /// Owner -> Tokio event bridge capacity.
 pub(crate) const INGRESS_EVENT_CAPACITY: usize = 256;
+
+/// Owner -> Tokio receive-quality telemetry bridge capacity. Unlike the command
+/// and event bridges this one is LOSSY by design: a full bridge drops the sample
+/// (counted in `telemetryDropped`) instead of ever delaying protocol service.
+pub(crate) const INGRESS_TELEMETRY_CAPACITY: usize = 256;
 
 pub(crate) enum IngressCommand {
     /// Send one SRT message payload to a connected reader peer.
@@ -80,15 +85,16 @@ pub(crate) struct IngressConfig {
     pub(crate) policy_store: Arc<SrtIngestPolicyStore>,
     pub(crate) receiver_group: ReceiverGroupId,
     pub(crate) stats: Arc<ListenerSocketStats>,
-    /// Where the owner publishes per-peer receive-quality samples for Tokio.
-    pub(crate) samples: Arc<PeerSampleTable>,
     pub(crate) command_capacity: usize,
     pub(crate) event_capacity: usize,
+    pub(crate) telemetry_capacity: usize,
 }
 
 /// Tokio's handle to the owner thread.
 pub(crate) struct SrtIngressHandle {
     pub(crate) events: mpsc::Receiver<SrtIngressEvent>,
+    /// Lossy, stamped receive-quality samples from the Owner.
+    pub(crate) telemetry: mpsc::Receiver<QualitySample>,
     commands: flume::Sender<IngressCommand>,
     thread: Option<std::thread::JoinHandle<IngressExit>>,
     local_addr: SocketAddr,
@@ -101,16 +107,18 @@ impl SrtIngressHandle {
     pub(crate) async fn start(config: IngressConfig) -> Result<Self, IngressStartError> {
         let (commands_tx, commands_rx) = flume::bounded(config.command_capacity.max(1));
         let (events_tx, events_rx) = mpsc::channel(config.event_capacity.max(1));
+        let (telemetry_tx, telemetry_rx) = mpsc::channel(config.telemetry_capacity.max(1));
         let (ready_tx, ready_rx) = flume::bounded::<Result<SocketAddr, String>>(1);
         let thread = std::thread::Builder::new()
             // `srt-in-<port>`: unique per listener and short enough that the
             // kernel's 15-byte thread name keeps the whole port.
             .name(format!("srt-in-{}", config.bind.port()))
-            .spawn(move || run_owner_thread(config, commands_rx, events_tx, ready_tx))
+            .spawn(move || run_owner_thread(config, commands_rx, events_tx, telemetry_tx, ready_tx))
             .map_err(|error| IngressStartError(format!("spawn SRT ingress thread: {error}")))?;
         match ready_rx.recv_async().await {
             Ok(Ok(local_addr)) => Ok(Self {
                 events: events_rx,
+                telemetry: telemetry_rx,
                 commands: commands_tx,
                 thread: Some(thread),
                 local_addr,

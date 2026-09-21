@@ -781,7 +781,9 @@ Query params:
             "srtGroupMemberCount": 2,
             "srtGroupConnectedMembers": 2,
             "srtGroupActiveMembers": 1,
-            "srtGroupBrokenMembers": 0
+            "srtGroupBrokenMembers": 0,
+            "srtGroupWireReceiverPacketsLost": 0,
+            "srtGroupWirePacketsUndecryptable": 0
           }
         }
       },

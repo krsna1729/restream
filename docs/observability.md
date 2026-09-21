@@ -71,8 +71,8 @@ subset; the full set is service visits/actions/maintenance actions and budget
 exhaustion, TX capacity/in-flight/high-water/exhaustions/packets/completions/
 failures, RX packets/bytes/ring depth/ring drops/truncation, peers, admission
 policy telemetry, command and event bridge depth high-water, event-bridge-full
-visits, deferred read sends, stale commands, overload disconnects and send
-failures.
+visits, dropped telemetry samples, deferred read sends, stale commands,
+overload disconnects and send failures.
 
 `status` is currently always `ready` when the handler returns.
 
@@ -128,12 +128,20 @@ hosts or collection failure, `tcpStatsUnavailableReason` explains the absence.
 ### SRT publisher quality
 
 The ingress Owner thread samples `srt-rs` receiver statistics about once per
-second. Cumulative loss/drop/retransmit/undecrypt counters are retained for
-context; alerting should use per-second delta fields (derived from successive
-samples) so a recovered connection can return to healthy.
+second and stamps each sample with its own observation time. Samples reach Tokio
+over a separate bounded, lossy telemetry bridge (a full bridge drops the sample
+and counts it in `ingressOwner.telemetryDropped`; it never delays protocol
+service). Per-second rates are computed between two consecutive Owner
+observations; a duplicate observation is ignored and a counter that moved
+backwards yields no rate rather than zero. Cumulative loss/drop/retransmit/
+undecrypt counters are retained for context; alerting should use the per-second
+delta fields so a recovered connection can return to healthy.
 
-The snapshot also includes SRT buffer occupancy and packets in flight. For
-bonded publishers it additionally reports:
+The snapshot includes receive-buffer occupancy in packets, but no in-flight
+count (the ingest receiver does not report one). `mbpsReceiveRate` is the
+Owner's smoothed wire receive rate for a direct publisher and the LOGICAL
+payload rate (one copy of each delivered payload, from successive samples) for a
+bond. For bonded publishers it additionally reports:
 
 | Field | Meaning |
 |---|---|
@@ -142,8 +150,14 @@ bonded publishers it additionally reports:
 | `srtGroupConnectedMembers` | Members in the connected state |
 | `srtGroupActiveMembers` | Members carrying the active backup-group path |
 | `srtGroupBrokenMembers` | Members reported broken |
+| `srtGroupWireReceiverPacketsLost` | Receiver-side missing sequence numbers summed over all legs (wire) |
+| `srtGroupWirePacketsUndecryptable` | Decryption rejections summed over all legs (wire) |
 
-The member-count fields are omitted for ordinary single-link publishers.
+A bond's leg-level degradation is reported only through the explicit `wire`
+fields: one degraded leg does not mean the deduplicated logical stream lost
+data, so the ordinary `packetsReceivedLoss`/`Drop`/`Retrans`/`Undecrypt` fields
+are not set for a bond. The member-count and wire fields are omitted for
+ordinary single-link publishers.
 
 ### Output status
 

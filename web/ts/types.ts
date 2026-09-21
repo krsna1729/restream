@@ -119,6 +119,11 @@ export interface PublisherQuality {
   srtGroupConnectedMembers?: number | null;
   srtGroupActiveMembers?: number | null;
   srtGroupBrokenMembers?: number | null;
+  srtGroupWireReceiverPacketsLost?: number | null;
+  srtGroupWirePacketsUndecryptable?: number | null;
+  srtRecvBufPackets?: number | null;
+  srtRecvBufCapacityPackets?: number | null;
+  srtRecvBufPayloadBytes?: number | null;
   tcpRttMs?: number | null;
   tcpRttVarMs?: number | null;
   tcpBytesReceived?: number | null;
