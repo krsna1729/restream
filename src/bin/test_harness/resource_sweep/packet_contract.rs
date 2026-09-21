@@ -452,8 +452,17 @@ pub(super) async fn record(
     elapsed_secs: f64,
     cpu_pct: f64,
     meta: &ResourceScenarioMeta<'_>,
+    restream_cpus: Option<&str>,
 ) -> Result<(), String> {
-    record_at(system, elapsed_secs, cpu_pct, meta, Instant::now()).await
+    record_at(
+        system,
+        elapsed_secs,
+        cpu_pct,
+        meta,
+        Instant::now(),
+        restream_cpus,
+    )
+    .await
 }
 
 /// [`record`] with an explicit observation time (tests drive the clock).
@@ -463,6 +472,7 @@ pub(super) async fn record_at(
     cpu_pct: f64,
     meta: &ResourceScenarioMeta<'_>,
     observed_at: Instant,
+    restream_cpus: Option<&str>,
 ) -> Result<(), String> {
     let peer_config = with_sampler(|sampler| sampler.run.peer_state.clone()).flatten();
     let peer_readings = match &peer_config {
@@ -542,6 +552,7 @@ pub(super) async fn record_at(
         record.insert("outputs".to_string(), json!(meta.outputs));
         // Workload dimensions travel with the contract record so baseline
         // eligibility can check them from the artifact alone.
+        record.insert("restreamCpusAllowed".to_string(), json!(restream_cpus));
         record.insert("ingestTypes".to_string(), json!(meta.ingest_types));
         record.insert("egressMix".to_string(), json!(meta.egress_mix));
         record.insert("transcode".to_string(), json!(meta.transcode));

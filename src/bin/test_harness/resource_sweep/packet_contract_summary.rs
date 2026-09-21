@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use super::measurement::round2;
 use super::packet_contract::MIN_RATED_WINDOW_SECS;
+use super::packet_contract_run::cpu_masks_disjoint;
 use super::packet_contract_verdict::sample_validity;
 use super::packet_contract_verdict::{
     EXPECTED_DATA_PPS_PER_OUTPUT, EXPECTED_PAYLOAD_BYTES_PER_OUTPUT_PER_SEC, WORKLOAD_TOLERANCE,
@@ -254,6 +255,42 @@ pub(super) fn rung_summary(
         reasons.extend(workload_reasons);
     }
 
+    // Topology and the *observed* CPU masks: what ran where, not what was asked
+    // for. A same-host topology (veth/loopback) is only baseline-eligible when
+    // the measured datapath and the receivers have disjoint CPUs.
+    let restream_cpus = last["restreamCpusAllowed"].as_str().map(str::to_string);
+    let mut peer_cpus = serde_json::Map::new();
+    let mut disjoint = None;
+    if let Some(peers) = last["peers"].as_array() {
+        for peer in peers {
+            let Some(host) = peer["host"].as_str() else {
+                continue;
+            };
+            let Some(mask) = peer["cpusAllowedList"].as_str() else {
+                continue;
+            };
+            peer_cpus.insert(host.to_string(), json!(mask));
+            if let Some(restream) = &restream_cpus {
+                let pair = cpu_masks_disjoint(restream, mask);
+                disjoint = Some(disjoint.unwrap_or(true) && pair.unwrap_or(false));
+            }
+        }
+    }
+    let topology_kind = run["topologyKind"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+    let same_host = topology_kind != "remote";
+    let topology = json!({
+        "kind": topology_kind,
+        "netns": run["topologyNetns"],
+        "peerHosts": run["peerTargets"],
+        "restreamCpusAllowed": restream_cpus,
+        "peerCpusAllowed": peer_cpus,
+        "cpuPartitioned": disjoint,
+        "sameHost": same_host,
+    });
+
     let workload = json!({
         "ingestTypes": last["ingestTypes"],
         "egressMix": last["egressMix"],
@@ -273,6 +310,7 @@ pub(super) fn rung_summary(
         rated,
         samples.len(),
         &workload,
+        &topology,
     );
 
     json!({
@@ -298,6 +336,7 @@ pub(super) fn rung_summary(
             "shardQueueOverflowsDelta",
         ]),
         "peerDelivery": peer_delivery,
+        "topology": topology,
         "gaugesPeak": gauges,
         "cost": mean_peak(&[
             "cpuMicrosPerSrtPacket",
@@ -321,6 +360,7 @@ pub(super) fn baseline_eligibility(
     rated_samples: usize,
     total_samples: usize,
     workload: &Value,
+    topology: &Value,
 ) -> Value {
     let mut reasons = Vec::new();
     let sha = run["gitSha"].as_str();
@@ -442,6 +482,20 @@ pub(super) fn baseline_eligibility(
             ));
         }
     }
+    // Same-host lanes must prove the receiver is not on the measured CPUs.
+    if topology["sameHost"] != false {
+        match topology["cpuPartitioned"].as_bool() {
+            Some(true) => {}
+            Some(false) => reasons.push(
+                "same-host topology without disjoint CPU masks: the receivers share the measured CPUs"
+                    .to_string(),
+            ),
+            None => reasons.push(
+                "same-host topology without observed CPU masks (RESTREAM_CPUSET/SRT_SINK_CPUSET)"
+                    .to_string(),
+            ),
+        }
+    }
     if common_window_secs < MIN_RATED_WINDOW_SECS {
         reasons.push(format!(
             "common rated window {common_window_secs:.1}s is shorter than {MIN_RATED_WINDOW_SECS:.0}s"
@@ -485,6 +539,8 @@ pub(super) fn baseline_eligibility(
             "restreamBinExplicit": run["restreamBinExplicit"],
             "remotePeers": remote_peers,
             "peerHosts": peer_hosts,
+            "topologyKind": topology["kind"],
+            "cpuPartitioned": topology["cpuPartitioned"],
             "workload": workload.clone(),
         }
     })

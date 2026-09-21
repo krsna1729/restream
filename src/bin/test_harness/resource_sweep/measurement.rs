@@ -163,7 +163,15 @@ pub(super) async fn sample_resource_window(
         let telemetry = stack.api.get_json("/api/v1/engine/telemetry").await?;
         let health = stack.api.get_json("/api/v1/engine/health").await?;
         let system = stack.api.get_json("/metrics/system?view=summary").await?;
-        super::packet_contract::record(&system, interval_secs, restream_cpu_pct, &meta).await?;
+        let restream_cpus = read_proc_status_text(stack.restream_pid, "Cpus_allowed_list");
+        super::packet_contract::record(
+            &system,
+            interval_secs,
+            restream_cpu_pct,
+            &meta,
+            restream_cpus.as_deref(),
+        )
+        .await?;
         let accounting = &telemetry["memoryAccounting"];
         let retained_kb = accounting["retainedPayloadBytes"].as_u64().unwrap_or(0) / 1024;
         let source_ring_kb = accounting["sourceRings"]
@@ -383,6 +391,15 @@ fn read_proc_ctxt_switches(pid: u32) -> Result<ProcCtxtSwitches, String> {
         voluntary: read_proc_status_kb(pid, "voluntary_ctxt_switches").unwrap_or(0),
         nonvoluntary: read_proc_status_kb(pid, "nonvoluntary_ctxt_switches").unwrap_or(0),
     })
+}
+
+/// One textual `/proc/<pid>/status` field, e.g. `Cpus_allowed_list`.
+pub(super) fn read_proc_status_text(pid: u32, key: &str) -> Option<String> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{key}:")))
+        .map(|value| value.trim().to_string())
 }
 
 fn read_proc_status_kb(pid: u32, key: &str) -> Result<u64, String> {

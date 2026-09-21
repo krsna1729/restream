@@ -2,6 +2,7 @@
 
 use super::packet_contract::*;
 use super::packet_contract_peers::{PeerReading, PeerState, PeerStateConfig};
+use super::packet_contract_run::{cpu_masks_disjoint, parse_cpu_mask};
 use super::packet_contract_summary::{baseline_eligibility, rung_summary};
 use super::packet_contract_tests::{
     SAMPLER_TEST_LOCK, clean_sample, sample_with, system_with_owners,
@@ -186,6 +187,8 @@ async fn peer_poll_latency_cannot_inflate_the_common_window() {
             git_dirty: Some(false),
             build: None,
             lifecycle: "isolated".to_string(),
+            topology_kind: "loopback".to_string(),
+            topology_netns: None,
             restream_binary: "restream".to_string(),
             restream_bin_explicit: false,
             bitrate_label: "8M".to_string(),
@@ -236,6 +239,7 @@ async fn peer_poll_latency_cannot_inflate_the_common_window() {
                 udp_sndbuf_errors: Some(0),
                 nic_rx_dropped: Some(0),
                 nic_tx_dropped: Some(0),
+                cpus_allowed: Some("3-5".to_string()),
             }),
         }]
     };
@@ -245,7 +249,7 @@ async fn peer_poll_latency_cannot_inflate_the_common_window() {
 
     // Record immediately: if the barrier predated the poll, this sample would
     // already report ~60 ms of rated window.
-    record_at(&system, 0.06, 0.0, &meta, std::time::Instant::now())
+    record_at(&system, 0.06, 0.0, &meta, std::time::Instant::now(), None)
         .await
         .unwrap();
     let summary_path = finish(&work_dir).unwrap().expect("summary written");
@@ -271,6 +275,7 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
             "lifecycle": "isolated",
             "peerMode": "sink",
             "restreamBinExplicit": false,
+            "topologyKind": "loopback",
             "bitrateLabel": "8M",
             "egressCounts": [100],
             "scenarioFilter": ["egress-growth-source-srt"],
@@ -279,6 +284,10 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
         })
     };
     let canonical_workload = || json!({"ingestTypes": "h264-srt", "egressMix": "srt-source", "transcode": "no", "configuredOutputs": 100});
+    let partitioned = json!({
+        "kind": "netns-veth", "sameHost": true, "cpuPartitioned": true,
+        "restreamCpusAllowed": "0-2", "peerCpusAllowed": {"10.53.0.2": "3-5"},
+    });
     let eligible = baseline_eligibility(
         &canonical_run(),
         "egress-growth-source-srt",
@@ -288,6 +297,7 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
         8,
         8,
         &canonical_workload(),
+        &partitioned,
     );
     assert_eq!(eligible["eligible"], true, "{eligible}");
 
@@ -483,6 +493,7 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
             8,
             8,
             &case_workload,
+            &partitioned,
         );
         assert_eq!(eligibility["eligible"], false, "{needle}: {eligibility}");
         assert!(
@@ -506,6 +517,7 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
         0,
         8,
         &canonical_workload(),
+        &partitioned,
     );
     assert_eq!(unrated["eligible"], false, "{unrated}");
     assert!(
@@ -528,6 +540,7 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
         7,
         8,
         &canonical_workload(),
+        &partitioned,
     );
     assert_eq!(partially_rated["eligible"], false, "{partially_rated}");
     assert!(
@@ -550,6 +563,7 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
             "lifecycle": "isolated", "peerMode": "sink", "bitrateLabel": "8M",
             "egressCounts": [300], "scenarioFilter": ["egress-growth-source-srt"],
             "settleSecs": 10, "restreamBinExplicit": false,
+            "topologyKind": "netns-veth",
             "peerStateEndpoint": {"hosts": ["peer-a", "peer-b"], "port": 9997},
         }),
         "egress-growth-source-srt",
@@ -559,6 +573,7 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
         8,
         8,
         &json!({"ingestTypes": "h264-srt", "egressMix": "srt-source", "transcode": "no"}),
+        &json!({"kind": "remote", "sameHost": false, "cpuPartitioned": null}),
     );
     assert_eq!(remote_300["eligible"], true, "{remote_300}");
 }
@@ -644,4 +659,94 @@ fn peer_delivery_uses_the_peers_own_intervals() {
                 .contains("delivered 960000000 B over 12.0s observed")),
         "{rung}"
     );
+}
+
+/// A same-host lane must prove CPU partitioning: masks that overlap, or no
+/// observed masks at all, are not baseline-eligible.
+#[test]
+fn same_host_topologies_require_disjoint_cpu_masks() {
+    let run = json!({
+        "gitSha": "abc123", "gitDirty": false,
+        "buildProvenance": {"gitSha": "abc123", "gitDirty": false},
+        "lifecycle": "isolated", "peerMode": "sink", "bitrateLabel": "8M",
+        "egressCounts": [100], "scenarioFilter": ["egress-growth-source-srt"],
+        "settleSecs": 10, "restreamBinExplicit": false,
+        "topologyKind": "netns-veth",
+        "peerStateEndpoint": {"hosts": ["10.53.0.2"], "port": 9997},
+    });
+    let workload = json!({"ingestTypes": "h264-srt", "egressMix": "srt-source", "transcode": "no"});
+    let eligibility = |topology: Value| {
+        baseline_eligibility(
+            &run,
+            "egress-growth-source-srt",
+            100,
+            12.0,
+            "healthy",
+            8,
+            8,
+            &workload,
+            &topology,
+        )
+    };
+
+    let partitioned = eligibility(json!({
+        "kind": "netns-veth", "sameHost": true, "cpuPartitioned": true,
+        "restreamCpusAllowed": "0-2", "peerCpusAllowed": {"10.53.0.2": "3-5"},
+    }));
+    assert_eq!(partitioned["eligible"], true, "{partitioned}");
+
+    let overlapping = eligibility(json!({
+        "kind": "netns-veth", "sameHost": true, "cpuPartitioned": false,
+        "restreamCpusAllowed": "0-2", "peerCpusAllowed": {"10.53.0.2": "2-5"},
+    }));
+    assert_eq!(overlapping["eligible"], false, "{overlapping}");
+    assert!(
+        overlapping["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason
+                .as_str()
+                .unwrap_or("")
+                .contains("without disjoint CPU masks")),
+        "{overlapping}"
+    );
+
+    let unobserved = eligibility(json!({
+        "kind": "netns-veth", "sameHost": true, "cpuPartitioned": null,
+        "restreamCpusAllowed": null, "peerCpusAllowed": {},
+    }));
+    assert_eq!(unobserved["eligible"], false, "{unobserved}");
+    assert!(
+        unobserved["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason
+                .as_str()
+                .unwrap_or("")
+                .contains("without observed CPU masks")),
+        "{unobserved}"
+    );
+
+    // A genuinely remote lane needs no local partitioning.
+    let remote = eligibility(json!({
+        "kind": "remote", "sameHost": false, "cpuPartitioned": null,
+    }));
+    assert_eq!(remote["eligible"], true, "{remote}");
+}
+
+/// CPU-list parsing and disjointness, as the topology check uses them.
+#[test]
+fn cpu_masks_parse_and_compare() {
+    assert_eq!(parse_cpu_mask("0-2"), Some(vec![0, 1, 2]));
+    assert_eq!(parse_cpu_mask("0,2-3"), Some(vec![0, 2, 3]));
+    assert_eq!(parse_cpu_mask(" 4 "), Some(vec![4]));
+    assert_eq!(parse_cpu_mask(""), None);
+    assert_eq!(parse_cpu_mask("3-1"), None);
+    assert_eq!(parse_cpu_mask("x"), None);
+
+    assert_eq!(cpu_masks_disjoint("0-2", "3-5"), Some(true));
+    assert_eq!(cpu_masks_disjoint("0-3", "3-5"), Some(false));
+    assert_eq!(cpu_masks_disjoint("0-2", "bogus"), None);
 }

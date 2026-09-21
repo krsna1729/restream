@@ -44,6 +44,8 @@ pub(super) struct PeerState {
     /// losslessness evidence.
     pub(super) nic_rx_dropped: Option<u64>,
     pub(super) nic_tx_dropped: Option<u64>,
+    /// The sink process's own CPU affinity, as it reports it.
+    pub(super) cpus_allowed: Option<String>,
 }
 
 /// One poll of one peer: the reading (or the failure) and when it was taken.
@@ -91,6 +93,7 @@ pub(super) fn peer_state_from_json(host: &str, value: &Value) -> Result<PeerStat
         udp_sndbuf_errors: value["udpSndbufErrors"].as_u64(),
         nic_rx_dropped: value["nicRxDropped"].as_u64(),
         nic_tx_dropped: value["nicTxDropped"].as_u64(),
+        cpus_allowed: value["cpusAllowedList"].as_str().map(str::to_string),
     })
 }
 
@@ -235,6 +238,7 @@ impl PeerFold {
                     peers.push(json!({
                         "host": reading.host,
                         "expectedOutputs": expected_outputs,
+                        "cpusAllowedList": state.cpus_allowed,
                         "runId": state.run_id,
                         "runIdChanged": run_id_changed,
                         "intervalSecs": interval_secs.map(round2),
@@ -305,6 +309,7 @@ mod tests {
             udp_sndbuf_errors: Some(0),
             nic_rx_dropped: Some(0),
             nic_tx_dropped: Some(0),
+            cpus_allowed: Some("2-5".to_string()),
         }
     }
 

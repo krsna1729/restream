@@ -289,6 +289,8 @@ async fn summary_groups_samples_by_rung() {
             peer_state: None,
             build: None,
             lifecycle: "isolated".to_string(),
+            topology_kind: "loopback".to_string(),
+            topology_netns: None,
             sample_secs: 10,
             settle_secs: 10,
             sample_interval_ms: 1000,
@@ -320,6 +322,7 @@ async fn summary_groups_samples_by_rung() {
         100.0,
         &meta(100),
         t0 + std::time::Duration::from_secs(1),
+        None,
     )
     .await
     .unwrap();
@@ -331,6 +334,7 @@ async fn summary_groups_samples_by_rung() {
         200.0,
         &meta(100),
         t0 + std::time::Duration::from_secs(2),
+        None,
     )
     .await
     .unwrap();
@@ -387,6 +391,8 @@ async fn a_rung_change_resets_counter_history() {
             peer_state: None,
             build: None,
             lifecycle: "isolated".to_string(),
+            topology_kind: "loopback".to_string(),
+            topology_netns: None,
             sample_secs: 10,
             settle_secs: 10,
             sample_interval_ms: 1000,
@@ -419,22 +425,50 @@ async fn a_rung_change_resets_counter_history() {
     prime_at(&sample_system(1_000, 100), &meta(100), at(0))
         .await
         .unwrap();
-    record_at(&sample_system(3_000, 100), 1.0, 100.0, &meta(100), at(1))
-        .await
-        .unwrap();
-    record_at(&sample_system(5_000, 100), 1.0, 100.0, &meta(100), at(2))
-        .await
-        .unwrap();
+    record_at(
+        &sample_system(3_000, 100),
+        1.0,
+        100.0,
+        &meta(100),
+        at(1),
+        None,
+    )
+    .await
+    .unwrap();
+    record_at(
+        &sample_system(5_000, 100),
+        1.0,
+        100.0,
+        &meta(100),
+        at(2),
+        None,
+    )
+    .await
+    .unwrap();
     // Rung 2 (a different output count) is not primed here, so the boundary
     // itself must clear the history: its first sample is a baseline and the
     // second rates at 4000/s from rung 2's own counters. A cross-rung delta
     // would read 6000/s, so the value distinguishes the two behaviours.
-    record_at(&sample_system(7_000, 300), 1.0, 300.0, &meta(300), at(3))
-        .await
-        .unwrap();
-    record_at(&sample_system(11_000, 300), 1.0, 300.0, &meta(300), at(4))
-        .await
-        .unwrap();
+    record_at(
+        &sample_system(7_000, 300),
+        1.0,
+        300.0,
+        &meta(300),
+        at(3),
+        None,
+    )
+    .await
+    .unwrap();
+    record_at(
+        &sample_system(11_000, 300),
+        1.0,
+        300.0,
+        &meta(300),
+        at(4),
+        None,
+    )
+    .await
+    .unwrap();
 
     let summary_path = finish(&work_dir).unwrap().expect("summary written");
     let summary: Value = serde_json::from_slice(&std::fs::read(&summary_path).unwrap()).unwrap();
@@ -674,6 +708,8 @@ async fn a_short_rated_window_is_not_a_baseline() {
             peer_state: None,
             build: None,
             lifecycle: "isolated".to_string(),
+            topology_kind: "loopback".to_string(),
+            topology_netns: None,
             sample_secs: 10,
             settle_secs: 10,
             sample_interval_ms: 1000,
@@ -710,6 +746,7 @@ async fn a_short_rated_window_is_not_a_baseline() {
             100.0,
             &meta,
             t0 + std::time::Duration::from_secs(secs),
+            None,
         )
         .await
         .unwrap();

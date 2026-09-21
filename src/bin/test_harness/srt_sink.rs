@@ -43,6 +43,54 @@ fn host_udp_drop_counters() -> Option<(u64, u64, u64)> {
     ))
 }
 
+/// This process's own CPU affinity, as `/proc/self/status` reports it. Recorded
+/// so the measuring host sees the sink's *observed* mask, not what was asked
+/// for.
+fn cpus_allowed_list() -> Option<String> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Cpus_allowed_list:"))
+        .map(|value| value.trim().to_string())
+}
+
+/// Pin this process (and every thread spawned afterwards, which inherits the
+/// creating thread's mask) to `mask`, e.g. `2-5` or `0,2-3`.
+fn pin_to_cpuset(mask: &str) -> Result<(), String> {
+    let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+    unsafe { libc::CPU_ZERO(&mut set) };
+    for part in mask.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (start, end) = match part.split_once('-') {
+            Some((start, end)) => (
+                start.parse::<usize>().map_err(|e| e.to_string())?,
+                end.parse::<usize>().map_err(|e| e.to_string())?,
+            ),
+            None => {
+                let cpu = part.parse::<usize>().map_err(|e| e.to_string())?;
+                (cpu, cpu)
+            }
+        };
+        if end < start || end >= libc::CPU_SETSIZE as usize {
+            return Err(format!("cpu mask {mask:?} is out of range"));
+        }
+        for cpu in start..=end {
+            unsafe { libc::CPU_SET(cpu, &mut set) };
+        }
+    }
+    let rc = unsafe { libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set) };
+    if rc != 0 {
+        return Err(format!(
+            "sched_setaffinity({mask:?}): {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
 /// Identity of one sink process: a restarted sink must be visible as a new
 /// run, because its cumulative counters restart too.
 fn run_id() -> String {
@@ -100,6 +148,7 @@ fn read_counter_file(path: &Path) -> Option<u64> {
 fn state_json(
     run: &str,
     started_ms: u128,
+    cpus_allowed: Option<&str>,
     ports: &[u16],
     counters: SrtSinkCounters,
     udp_drops: Option<(u64, u64, u64)>,
@@ -109,6 +158,7 @@ fn state_json(
     json!({
         "runId": run,
         "startedAtMs": started_ms,
+        "cpusAllowedList": cpus_allowed,
         "ports": ports,
         "accepted": counters.accepted,
         "closed": counters.closed,
@@ -142,6 +192,7 @@ async fn serve_state(
         let body = state_json(
             &run,
             started_ms,
+            cpus_allowed_list().as_deref(),
             &ports,
             counters.snapshot(),
             host_udp_drop_counters(),
@@ -186,6 +237,13 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
     let threads = env_usize("HARNESS_SRT_SINK_THREADS", default_threads);
     let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024);
     let interval_secs = env_secs("SRT_SINK_REPORT_SECS", 5).max(1);
+    if let Ok(mask) = std::env::var("SRT_SINK_CPUSET")
+        && !mask.trim().is_empty()
+    {
+        // Before the pool spawns its threads: they inherit this mask.
+        pin_to_cpuset(mask.trim())?;
+        println!("[srt-sink] pinned to cpus {mask}");
+    }
     let pool = HarnessSrtSinkPool::start(&ports, udp_buffer, threads)?;
 
     let started = Instant::now();
@@ -256,6 +314,7 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
     Ok(json!({
         "mode": "srt-sink",
         "runId": run,
+        "cpusAllowedList": cpus_allowed_list(),
         "ports": ports,
         "statePort": state_port,
         "threads": threads,
@@ -285,6 +344,7 @@ mod tests {
         let state = state_json(
             "run-1",
             1_000,
+            Some("2-5"),
             &[8891],
             counters,
             Some((3, 7, 1)),
@@ -292,6 +352,7 @@ mod tests {
             Some(0),
         );
         assert_eq!(state["runId"], "run-1");
+        assert_eq!(state["cpusAllowedList"], "2-5");
         assert_eq!(state["ports"][0], 8891);
         assert_eq!(state["accepted"], 100);
         assert_eq!(state["discardedBytes"], 5_000);
@@ -303,7 +364,7 @@ mod tests {
 
         // A host that cannot read /proc/net/snmp or its NIC counters reports
         // null, not zero: the measuring side must see a missing sensor.
-        let state = state_json("run-1", 1_000, &[8891], counters, None, None, None);
+        let state = state_json("run-1", 1_000, None, &[8891], counters, None, None, None);
         assert!(state["udpInErrors"].is_null());
         assert!(state["udpRcvbufErrors"].is_null());
         assert!(state["udpSndbufErrors"].is_null());

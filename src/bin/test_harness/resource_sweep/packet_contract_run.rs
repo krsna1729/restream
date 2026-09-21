@@ -20,6 +20,11 @@ pub(super) struct RunMetadata {
     pub(super) build: Option<BuildProvenance>,
     /// Resource-sweep lifecycle (`isolated` is the contractual one).
     pub(super) lifecycle: String,
+    /// Benchmark topology: `loopback`, `netns-veth`, or whatever the operator
+    /// declared. A same-host topology needs disjoint CPU masks to be
+    /// baseline-eligible.
+    pub(super) topology_kind: String,
+    pub(super) topology_netns: Option<String>,
     pub(super) restream_binary: String,
     /// Whether `RESTREAM_BIN` was overridden. The provenance stamp covers the
     /// default sibling binary, so an explicit override cannot be proven from
@@ -48,6 +53,9 @@ impl RunMetadata {
                 .map(|status| !status.trim().is_empty()),
             build: read_build_provenance(),
             lifecycle: env.lifecycle.as_str().to_string(),
+            topology_kind: std::env::var("RESTREAM_BENCH_TOPOLOGY")
+                .unwrap_or_else(|_| "loopback".to_string()),
+            topology_netns: std::env::var("RESTREAM_BENCH_NETNS").ok(),
             restream_binary: env.restream_bin.display().to_string(),
             restream_bin_explicit: std::env::var_os("RESTREAM_BIN").is_some(),
             bitrate_label: env.bitrate.clone(),
@@ -85,6 +93,8 @@ impl RunMetadata {
                 "builtAt": build.built_at,
             })),
             "lifecycle": self.lifecycle,
+            "topologyKind": self.topology_kind,
+            "topologyNetns": self.topology_netns,
             "peerTargets": self.peer_targets,
             "peerStateEndpoint": self.peer_state.as_ref().map(|state| json!({
                 "hosts": state.hosts,
@@ -97,6 +107,38 @@ impl RunMetadata {
             "scenarioFilter": self.scenario_filter,
         })
     }
+}
+
+/// Parse a Linux CPU list (`0-2`, `0,2-3`) into the CPUs it names.
+pub(super) fn parse_cpu_mask(mask: &str) -> Option<Vec<u32>> {
+    let mut cpus = Vec::new();
+    for part in mask.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        match part.split_once('-') {
+            Some((start, end)) => {
+                let (start, end) = (
+                    start.trim().parse::<u32>().ok()?,
+                    end.trim().parse::<u32>().ok()?,
+                );
+                if end < start || end - start > 4096 {
+                    return None;
+                }
+                cpus.extend(start..=end);
+            }
+            None => cpus.push(part.parse::<u32>().ok()?),
+        }
+    }
+    (!cpus.is_empty()).then_some(cpus)
+}
+
+/// Whether two CPU lists share no CPU. `None` when either mask is unparseable.
+pub(super) fn cpu_masks_disjoint(left: &str, right: &str) -> Option<bool> {
+    let left = parse_cpu_mask(left)?;
+    let right = parse_cpu_mask(right)?;
+    Some(left.iter().all(|cpu| !right.contains(cpu)))
 }
 
 /// Build provenance of the running bench binaries, from the stamp the bench

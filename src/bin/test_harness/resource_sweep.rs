@@ -457,7 +457,18 @@ async fn start_resource_sweep_stack(
 
     let restream_log = std::fs::File::create(&env.restream_log).map_err(|e| e.to_string())?;
     let restream_err = restream_log.try_clone().map_err(|e| e.to_string())?;
-    let mut restream_cmd = Command::new(&env.restream_bin);
+    // The measured datapath runs on its own CPUs when the operator partitions
+    // the host (`RESTREAM_CPUSET`), so receiver work cannot steal the core
+    // under measurement. The contract records the *observed* mask from
+    // `/proc/<pid>/status`, not this request.
+    let mut restream_cmd = match std::env::var("RESTREAM_CPUSET") {
+        Ok(mask) if !mask.trim().is_empty() => {
+            let mut cmd = Command::new("taskset");
+            cmd.arg("-c").arg(mask.trim()).arg(&env.restream_bin);
+            cmd
+        }
+        _ => Command::new(&env.restream_bin),
+    };
     restream_cmd
         .env("RESTREAM_HTTP_PORT", env.restream_http.to_string())
         .env("RESTREAM_RTMP_PORT", env.restream_rtmp.to_string())

@@ -912,7 +912,27 @@ This is a stretch goal, not something to assume current code already satisfies.
 
 ## 10. WI3.4 — Establish the Packet-Rate Benchmark Contract
 
-Status: IN PROGRESS
+Status: WI3.4A IN PROGRESS (contract frozen; local reference artifact pending);
+WI3.4B PENDING INFRASTRUCTURE (external-host baseline)
+
+WI3.4 splits into two deliverables with different prerequisites:
+
+```text
+WI3.4A  measurement contract
+        DONE once frozen and exercised by a reproducible local reference
+        artifact (single-host development lane). Blocks WI3.5.
+
+WI3.4B  external-host reference baseline
+        PENDING INFRASTRUCTURE: a real second host (>=10 GbE for 100 outputs;
+        >=25 GbE for the 1000-output qualification). Does NOT block WI3.5/WI3.6.
+
+WI3.7-final
+        requires real multi-host / physical-NIC qualification.
+```
+
+The contract is mature enough to measure and reject a contaminated run, which
+was its purpose; waiting for a second machine to record a `healthy` remote rung
+would gate the packet-engine work on infrastructure it does not need.
 
 Build durable benchmark/evidence machinery for:
 
@@ -1018,6 +1038,45 @@ Artifacts per rung, all under `WORK_DIR`:
 | `resource-sweep-samples.jsonl` | The same, one line per sample |
 | `packet-contract.json` | Run metadata (git SHA/dirty, workload, peers, windows), one summary per `(scenario, output count)` rung, the validity verdict with reasons, and the `unavailable` block |
 | `packet-contract-samples.jsonl` | One contract record per sample |
+
+### 10.1a Single-host development lane (veth + CPU partitioning)
+
+Namespace-separated sinks over a veth pair plus explicit CPU partitioning make
+the development lane materially better than loopback without pretending to be
+a second machine: separate network stacks, socket tables, routing and qdisc
+paths, and a receiver that cannot steal the measured core.
+
+```text
+                 host
+                   |
+        +----------+-----------+
+        |                      |
+   Restream cpuset          sink cpuset
+   (RESTREAM_CPUSET)        (SRT_SINK_CPUSET)
+        |                      |
+      veth0 ---------------- veth1
+        |                      |
+   root netns              sink netns
+```
+
+`scripts/harness/veth-topology.sh up` creates the netns/veth pair and writes
+`local://wi3-topology.env` (peer host, ports, topology kind and both CPU
+masks) for the run; `down` removes it. The measured datapath is pinned with
+`RESTREAM_CPUSET` (the harness spawns restream under `taskset`) and the sink
+with `SRT_SINK_CPUSET` (applied before the acceptor threads start, so they
+inherit it). `packet-contract.json` records the topology and the *observed*
+masks — restream's `Cpus_allowed_list` from `/proc/<pid>/status` and each
+peer's mask from its `/state` endpoint — not just what was requested.
+
+A same-host rung is baseline-eligible only when the masks are disjoint:
+partitioning is what stops the receiver from consuming the measured CPUs.
+
+What this lane can establish: SRT protocol cost, Restream scheduler cost,
+syscall/io_uring cost, UDP/IP stack cost, socket-queue pressure, batching,
+wakeups, copies, crypto, cross-thread scheduling and CPU scaling. What it
+cannot: PCIe/NIC DMA, hardware queues, IRQ/NAPI placement, offloads,
+physical-link drops, real 10/25/100 GbE behaviour, AF_XDP zero-copy driver
+performance or NUMA locality. Those stay in the multi-host final qualification.
 
 ### 10.2 Metric contract
 
@@ -1129,11 +1188,22 @@ above, not a threshold invented for retransmissions.
   [quality baselines](agent-guidance/quality/baselines.md) with date and
   commit; Criterion's `target/criterion/` remains scratch.
 - This tranche measures. No code may be tuned against a rung before the
-  contract numbers for the current tree are recorded.
+  contract is frozen and a reproducible local reference artifact exists for the
+  current tree — that gate is "contract frozen + local reference recorded", not
+  "a remote host was available".
 
 ## 11. WI3.5 — Packet-I/O Substrate Shootout
 
-Status: PLANNED
+Status: PLANNED (runs in the single-host development lane; no second host needed)
+
+Topology: sender pinned to dedicated CPUs, receivers in network namespaces
+over veth, pinned to disjoint CPUs (`§10.1a`). The receivers are cheap UDP
+drain sockets, not SRT: this work item deliberately excludes the protocol so it
+measures submission cost. Run the current Compio path and a native fixed-slot
+io_uring path first and establish pps/core before adding further variants
+(batching, SQPOLL, SEND_ZC, AF_XDP copy-mode). Classify the result as
+single-host development qualification; the physical-NIC/NIC-queue claims belong
+to the multi-host lane.
 
 Purpose:
 
@@ -1920,8 +1990,12 @@ WI3.2
 WI3.3
     delete old Restream SRT transport machinery
 
-WI3.4
-    formal 8 Mbps / packet-rate benchmark contract
+WI3.4A
+    formal 8 Mbps / packet-rate benchmark contract (frozen; local reference
+    artifact in the single-host lane)
+
+WI3.4B
+    external-host reference baseline (pending infrastructure; does not block)
 
 WI3.5
     Compio vs native io_uring vs SQPOLL/SEND_ZC vs AF_XDP substrate shootout
@@ -1962,18 +2036,20 @@ WI10
 
 Do not start packet-rate optimization yet.
 
-WI3.1, WI3.2 and WI3.3 are done. The next item is:
+WI3.1, WI3.2 and WI3.3 are done; WI3.4A's contract is frozen. The next item is:
 
 ```text
-WI3.4
+WI3.5
 ```
 
-Establish the 8 Mbps / packet-rate benchmark contract: the 100/300/500/1000
-output ladder, the metric-to-source table, and the durable artifact schema.
-It measures; it does not optimize.
+the packet-I/O substrate shootout, in the **single-host development lane**:
+sender on dedicated CPUs, cheap UDP drain receivers in network namespaces over
+veth, pinned to disjoint CPUs. Establish pps/core for the Compio path and a
+native fixed-slot io_uring path before adding variants.
 
-The packet-rate program starts only after the SRT ingress and egress paths share
-the same final architecture.
+WI3.4B (a `healthy` remote baseline) stays open against infrastructure and does
+not gate WI3.5/WI3.6. The packet-rate program starts only after the SRT ingress
+and egress paths share the same final architecture, which they do.
 
 ## 37. Definition of Success
 
