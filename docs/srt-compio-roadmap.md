@@ -1040,8 +1040,8 @@ counter reset, or a missing source reads `null`, never a fabricated zero.
 | scheduler wake rate | not sourced yet: `ShardMetrics::record_useful_wake`/`record_empty_wake` have no production caller, so `feedWakesUseful`/`feedWakesEmpty` read 0 for every backend | gap |
 | loop iterations/s, media ticks/s, ready visits/s | Σ `loopIterations`, `mediaTicks`, `readyVisits` delta — the scheduler-activity signals that are actually produced | rate |
 | scheduler ready depth | `readyDepth` / `readyDepthHwm`, max over shards | gauge |
-| fault/pressure counts | rated-window deltas of `ownerTxFailedSends`, `ownerTxExhaustions`, `ownerServiceBudgetExhausted`, `ownerRxRingDropped`, `ownerRxTruncated`, `shardFeedResyncs`, `shardDriverBudgetViolations`, `shardQueueOverflows` (`*Delta`). Lifetime totals stay as `*Total` for context; the verdict judges only the deltas, so ramp-up or settle-period events cannot condemn a steady-state window | count |
-| workload delivery | the peer's own delivered payload against `expectedOutputs × 1,000,000 B/s` (8 Mbps) within the fixture's ±5%, summed over the **whole common rated window** (each sample's rate times its own interval reconstructs the delivered bytes). The fixture is VBR and that ±5% is a whole-span average, so per-second rates stay informational; on a local rung the same window average uses first-transmission DATA pps per output against the fixed ~760. A stall (zero delivery in a sample) is an immediate per-sample failure | rate |
+| fault/pressure counts | rated-window deltas of `ownerTxFailedSends`, `ownerTxExhaustions`, `ownerServiceBudgetExhausted`, `ownerRxRingDropped`, `ownerRxTruncated`, `shardFeedResyncs`, `shardDriverBudgetViolations`, `shardQueueOverflows`, reported under the summary's `countsPerWindow` (they are interval counts, not rates). Lifetime totals stay as `*Total` for context; the verdict judges only the deltas, so ramp-up or settle-period events cannot condemn a steady-state window | count |
+| workload delivery | the peer's own `payloadBytesDelta` integrated over **that peer's observed intervals** (`observedSecs`), compared against `expectedOutputs × 1,000,000 B/s × observedSecs` within the fixture's ±5%. Peer polling can drift from the host's sampling cadence, so `rate × host interval` is never used; the rung records `peerDelivery` (`deliveredBytes`, `observedSecs`, `coverageRatio`, delivered/expected B/s) and requires the peer to have observed at least the ten-second minimum. The fixture is VBR and that ±5% is a whole-span average, so per-second rates stay informational; on a local rung the observed-window average uses first-transmission DATA pps per output against the fixed ~760. A stall (zero delivery in a sample) is an immediate per-sample failure | rate |
 | connection churn | `acceptedPerSec` / `closedPerSec` on each peer during the rated window; any re-accept or close means the steady state was not steady | rate |
 | budget pressure (instantaneous) | `budgetExhaustions` (shard), `txInFlight`, `txCapacity`, `callerInFlightHwm`, `callerQueuedHwm` | gauge |
 | CPU | `/proc/<pid>/stat` delta (restream process only; control plane included, reported separately from ffmpeg) | rate |
@@ -1061,7 +1061,7 @@ Each rung also carries `baselineEligible`, deliberately separate from the
 runtime verdict: `healthy` describes the datapath, eligibility describes
 whether the artifact may be recorded as a contractual baseline. It requires:
 
-- a clean known SHA **and** bench binaries built from that same clean tree —
+- a clean known SHA, an unoverridden `RESTREAM_BIN` (the provenance stamp only covers the default sibling binary), and bench binaries built from that same clean tree —
   `scripts/build/bench-harness.sh` writes `target/bench/build-provenance.json`
   next to the binaries, and a clean SHA at run time alone never proves the
   executed binary came from it;
@@ -1070,8 +1070,8 @@ whether the artifact may be recorded as a contractual baseline. It requires:
   `settleSecs >= 10`;
 - the canonical workload (`h264-srt` ingest, `srt-source` egress, no
   transcode, `8M`) and an output count on the `{100, 300, 500, 1000}` ladder,
-  with remote sink peers for the 300/500/1000 rungs;
-- a common rated window of at least ten seconds and runtime `healthy`.
+  with non-loopback sink peers for the 300/500/1000 rungs (loopback targets are rejected, so "remote" is mechanically true);
+- a common rated window of at least ten seconds, **every** sample rated (a primed rung rates all of them, so `no-rated-samples` can never promote), and runtime `healthy`.
 
 So a promotion cannot happen by hand-editing the ledger, and a stale bench
 pair or a convenient non-canonical run cannot masquerade as a baseline.

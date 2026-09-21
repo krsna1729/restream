@@ -223,6 +223,12 @@ impl PeerFold {
                         .entry(reading.host.clone())
                         .or_insert_with(|| state.run_id.clone());
                     let previous_state = previous.and_then(|previous| previous.state.as_ref().ok());
+                    // The raw delta is the authoritative quantity: a window
+                    // integration must use this peer's own interval, not the
+                    // measuring host's sampling interval.
+                    let payload_bytes_delta = previous_state.and_then(|previous| {
+                        state.discarded_bytes.checked_sub(previous.discarded_bytes)
+                    });
                     let peer_rate = |current: Option<u64>, previous: Option<u64>| {
                         interval_secs.and_then(|interval| rate_over(current, previous, interval))
                     };
@@ -244,6 +250,7 @@ impl PeerFold {
                             Some(state.discarded_bytes),
                             previous_state.map(|previous| previous.discarded_bytes),
                         ),
+                        "payloadBytesDelta": payload_bytes_delta,
                         "udpInErrorsPerSec": peer_rate(
                             state.udp_in_errors,
                             previous_state.and_then(|previous| previous.udp_in_errors),

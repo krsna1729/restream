@@ -136,8 +136,15 @@ payload (78 % of the workload) is what flagged under-delivery, while the
 locally measured send rate (778 pps/output) sat inside the band — the
 peer-side check catches exactly what a send-side check cannot. Drops,
 retransmissions and the workload shortfall are all in the verdict's reasons, so
-no baseline was recorded: one host's loopback sink cannot carry 100 × 8 Mbps
-losslessly, which is what the multi-host ≥25 GbE rungs are for.
+no baseline was recorded.
+
+Scope of that conclusion: it says **this 6-vCPU host cannot carry 100 × 8 Mbps
+losslessly when the sink runs on the same box** (the sink competes for the same
+cores as restream). It does not say 100 outputs need a 25 GbE path: 100 ×
+8 Mbps is ~0.8 Gbit/s of payload, well inside a 10 GbE-class link, and the
+roadmap's ≥25 GbE requirement is specifically the 1000-output qualification
+environment (§9.1). A separate peer host on a ≥10 GbE path is the right next
+step for this rung.
 
 Operational finding recorded in §10.1: `MTX_SRT`/`MTX_API` must be pinned to the
 peer's `SRT_SINK_PORTS`/`SRT_SINK_STATE_PORT`; without them the harness

@@ -21,6 +21,10 @@ pub(super) struct RunMetadata {
     /// Resource-sweep lifecycle (`isolated` is the contractual one).
     pub(super) lifecycle: String,
     pub(super) restream_binary: String,
+    /// Whether `RESTREAM_BIN` was overridden. The provenance stamp covers the
+    /// default sibling binary, so an explicit override cannot be proven from
+    /// the stamp and is rejected for baseline eligibility.
+    pub(super) restream_bin_explicit: bool,
     pub(super) bitrate_label: String,
     pub(super) peer_mode: String,
     pub(super) peer_targets: Vec<String>,
@@ -45,6 +49,7 @@ impl RunMetadata {
             build: read_build_provenance(),
             lifecycle: env.lifecycle.as_str().to_string(),
             restream_binary: env.restream_bin.display().to_string(),
+            restream_bin_explicit: std::env::var_os("RESTREAM_BIN").is_some(),
             bitrate_label: env.bitrate.clone(),
             peer_mode: env.peer_mode.as_str().to_string(),
             peer_targets: env.srt_peer_targets(),
@@ -71,6 +76,7 @@ impl RunMetadata {
             "gitSha": self.git_sha,
             "gitDirty": self.git_dirty,
             "restreamBinary": self.restream_binary,
+            "restreamBinExplicit": self.restream_bin_explicit,
             "bitrateLabel": self.bitrate_label,
             "peerMode": self.peer_mode,
             "buildProvenance": self.build.as_ref().map(|build| json!({

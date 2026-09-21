@@ -78,6 +78,8 @@ fn workload_conformance_averages_over_the_common_window() {
         "gitSha": "abc123", "gitDirty": false, "bitrateLabel": "8M",
         "peerMode": "sink", "lifecycle": "isolated",
     });
+    // Each peer sample carries the payload delta over the peer's own observed
+    // interval; the window integration uses those, not the host's interval.
     let sample = |seconds: u64, payload: f64| {
         let mut sample = clean_sample();
         sample["intervalSecs"] = json!(1.0);
@@ -87,6 +89,8 @@ fn workload_conformance_averages_over_the_common_window() {
             "host": "peer-a", "runId": "run-1", "runIdChanged": false,
             "expectedOutputs": 100,
             "payloadBytesPerSec": payload,
+            "payloadBytesDelta": (payload * 1.0) as u64,
+            "intervalSecs": 1.0,
             "acceptedPerSec": 0.0, "closedPerSec": 0.0,
             "udpRcvbufErrorsPerSec": 0.0, "udpSndbufErrorsPerSec": 0.0,
             "udpInErrorsPerSec": 0.0, "nicRxDroppedPerSec": 0.0, "nicTxDroppedPerSec": 0.0,
@@ -139,7 +143,11 @@ fn workload_conformance_averages_over_the_common_window() {
 
     // Sustained under-delivery: the window average is outside the band.
     let short = summarize(&[80_000_000.0; 12]);
-    assert_eq!(short["validity"]["status"], "contaminated", "{short}");
+    assert_eq!(
+        short["validity"]["status"], "contaminated",
+        "validity: {}",
+        short["validity"]
+    );
     assert!(
         short["validity"]["reasons"]
             .as_array()
@@ -148,7 +156,7 @@ fn workload_conformance_averages_over_the_common_window() {
             .any(|reason| reason
                 .as_str()
                 .unwrap_or("")
-                .contains("over the common window against")),
+                .contains("expected at the 8 Mbps workload")),
         "{short}"
     );
 }
@@ -179,6 +187,7 @@ async fn peer_poll_latency_cannot_inflate_the_common_window() {
             build: None,
             lifecycle: "isolated".to_string(),
             restream_binary: "restream".to_string(),
+            restream_bin_explicit: false,
             bitrate_label: "8M".to_string(),
             peer_mode: "sink".to_string(),
             peer_targets: vec!["peer-a".to_string()],
@@ -261,6 +270,7 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
             "buildProvenance": {"gitSha": "abc123", "gitDirty": false, "builtAt": "2026-09-21T00:00:00Z"},
             "lifecycle": "isolated",
             "peerMode": "sink",
+            "restreamBinExplicit": false,
             "bitrateLabel": "8M",
             "egressCounts": [100],
             "scenarioFilter": ["egress-growth-source-srt"],
@@ -275,13 +285,17 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
         100,
         12.0,
         "healthy",
+        8,
+        8,
         &canonical_workload(),
     );
     assert_eq!(eligible["eligible"], true, "{eligible}");
 
-    let mut run = canonical_run();
-    let mut workload = canonical_workload();
-    let mut patch_case = |run_patch: Value, workload_patch: Value| {
+    // Each case starts from the canonical run: patches must not accumulate, or
+    // one case's damage would mask the next case's reason.
+    let patch_case = |run_patch: Value, workload_patch: Value| {
+        let mut run = canonical_run();
+        let mut workload = canonical_workload();
         if let (Value::Object(base), Value::Object(patch)) = (&mut run, run_patch) {
             for (key, value) in patch {
                 base.insert(key, value);
@@ -292,7 +306,7 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
                 base.insert(key, value);
             }
         }
-        (run.clone(), workload.clone())
+        (run, workload)
     };
 
     for (run_patch, workload_patch, scenario, outputs, window, status, needle) in [
@@ -393,7 +407,7 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
             300,
             12.0,
             "healthy",
-            "need remote sink peers",
+            "need non-loopback sink peers",
         ),
         (
             json!({"bitrateLabel": "4M"}),
@@ -460,8 +474,16 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
         ),
     ] {
         let (case_run, case_workload) = patch_case(run_patch, workload_patch);
-        let eligibility =
-            baseline_eligibility(&case_run, scenario, outputs, window, status, &case_workload);
+        let eligibility = baseline_eligibility(
+            &case_run,
+            scenario,
+            outputs,
+            window,
+            status,
+            8,
+            8,
+            &case_workload,
+        );
         assert_eq!(eligibility["eligible"], false, "{needle}: {eligibility}");
         assert!(
             eligibility["reasons"]
@@ -472,4 +494,154 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
             "{needle}: {eligibility}"
         );
     }
+
+    // A rung with unrated samples must never promote, even when the wall-clock
+    // window is long enough and nothing else is wrong.
+    let unrated = baseline_eligibility(
+        &canonical_run(),
+        "egress-growth-source-srt",
+        100,
+        12.0,
+        "no-rated-samples",
+        0,
+        8,
+        &canonical_workload(),
+    );
+    assert_eq!(unrated["eligible"], false, "{unrated}");
+    assert!(
+        unrated["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason
+                .as_str()
+                .unwrap_or("")
+                .contains("0 of 8 samples are rated")),
+        "{unrated}"
+    );
+    let partially_rated = baseline_eligibility(
+        &canonical_run(),
+        "egress-growth-source-srt",
+        100,
+        12.0,
+        "healthy",
+        7,
+        8,
+        &canonical_workload(),
+    );
+    assert_eq!(partially_rated["eligible"], false, "{partially_rated}");
+    assert!(
+        partially_rated["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason
+                .as_str()
+                .unwrap_or("")
+                .contains("7 of 8 samples are rated")),
+        "{partially_rated}"
+    );
+
+    // Remote peers satisfy the 300-output rule; loopback does not.
+    let remote_300 = baseline_eligibility(
+        &json!({
+            "gitSha": "abc123", "gitDirty": false,
+            "buildProvenance": {"gitSha": "abc123", "gitDirty": false},
+            "lifecycle": "isolated", "peerMode": "sink", "bitrateLabel": "8M",
+            "egressCounts": [300], "scenarioFilter": ["egress-growth-source-srt"],
+            "settleSecs": 10, "restreamBinExplicit": false,
+            "peerStateEndpoint": {"hosts": ["peer-a", "peer-b"], "port": 9997},
+        }),
+        "egress-growth-source-srt",
+        300,
+        12.0,
+        "healthy",
+        8,
+        8,
+        &json!({"ingestTypes": "h264-srt", "egressMix": "srt-source", "transcode": "no"}),
+    );
+    assert_eq!(remote_300["eligible"], true, "{remote_300}");
+}
+
+/// Peer delivery is integrated over the peer's *own* observed intervals, not the
+/// measuring host's sample interval: the two can drift, and the frozen contract
+/// must not depend on them agreeing. Coverage of the common window is required.
+#[test]
+fn peer_delivery_uses_the_peers_own_intervals() {
+    let run = json!({
+        "gitSha": "abc123", "gitDirty": false, "bitrateLabel": "8M",
+        "peerMode": "sink", "lifecycle": "isolated", "restreamBinExplicit": false,
+    });
+    // Each peer observation covers 2 s of wall clock while the host samples
+    // every 1 s, so `rate × host interval` would be half the true delivery.
+    let sample = |seconds: u64, peer_interval: f64, payload_delta: u64| {
+        let mut sample = clean_sample();
+        sample["intervalSecs"] = json!(1.0);
+        sample["ratedSecs"] = json!(seconds);
+        sample["expectedPeers"] = json!(1);
+        sample["peers"] = json!([{
+            "host": "peer-a", "runId": "run-1", "runIdChanged": false,
+            "expectedOutputs": 100,
+            "payloadBytesPerSec": payload_delta as f64 / peer_interval,
+            "payloadBytesDelta": payload_delta,
+            "intervalSecs": peer_interval,
+            "acceptedPerSec": 0.0, "closedPerSec": 0.0,
+            "udpRcvbufErrorsPerSec": 0.0, "udpSndbufErrorsPerSec": 0.0,
+            "udpInErrorsPerSec": 0.0, "nicRxDroppedPerSec": 0.0, "nicTxDroppedPerSec": 0.0,
+            "error": Value::Null,
+        }]);
+        sample
+    };
+    let summarize = |samples: Vec<Value>| {
+        let refs: Vec<&Value> = samples.iter().collect();
+        rung_summary("egress-growth-source-srt", 100, refs.len(), &run, &refs)
+    };
+
+    // Six peer observations of 2 s each, each carrying 200 MB of payload:
+    // 1.2 GB over 12 observed seconds = exactly the 8 Mbps workload.
+    let samples: Vec<Value> = (1..=6)
+        .map(|index| sample(index * 2, 2.0, 200_000_000))
+        .collect();
+    let rung = summarize(samples);
+    let delivery = &rung["peerDelivery"]["peer-a"];
+    assert_eq!(delivery["deliveredBytes"], 1_200_000_000_u64);
+    assert_eq!(delivery["observedSecs"], 12.0);
+    assert_eq!(delivery["expectedBytesPerSec"], 100_000_000.0);
+    assert_eq!(rung["validity"]["status"], "healthy", "{rung}");
+
+    // A peer that only observed 4 s of the window cannot be judged on it.
+    let samples: Vec<Value> = (1..=2)
+        .map(|index| sample(index * 2, 2.0, 200_000_000))
+        .collect();
+    let rung = summarize(samples);
+    assert_eq!(rung["validity"]["status"], "contaminated", "{rung}");
+    assert!(
+        rung["validity"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason
+                .as_str()
+                .unwrap_or("")
+                .contains("observed only 4.0s of the common window")),
+        "{rung}"
+    );
+
+    // Under-delivery over the peer's own window is still caught.
+    let samples: Vec<Value> = (1..=6)
+        .map(|index| sample(index * 2, 2.0, 160_000_000))
+        .collect();
+    let rung = summarize(samples);
+    assert_eq!(rung["validity"]["status"], "contaminated", "{rung}");
+    assert!(
+        rung["validity"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason
+                .as_str()
+                .unwrap_or("")
+                .contains("delivered 960000000 B over 12.0s observed")),
+        "{rung}"
+    );
 }
