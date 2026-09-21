@@ -929,7 +929,6 @@ Measure:
 
 - DATA pps
 - protocol-control pps
-- total packet events/s
 - CPU
 - cycles/packet where possible
 - RSS
@@ -1039,6 +1038,7 @@ counter reset, or a missing source reads `null`, never a fabricated zero.
 | kernel drops | `/proc/net/snmp` `Udp:` `InErrors`/`RcvbufErrors`/`SndbufErrors` delta | rate |
 | NIC drops | `/sys/class/net/*/statistics/{rx,tx}_dropped` delta, loopback excluded | rate |
 | shard load | `capacity` `ingressPps`/`egressPps`/`mediaBps`/`hottestShardUtil`/`activeLeaves` and `flow` (`queue`, `backlogSlope`, `deadlineSlackMs`, `delayMs`, `errors`, `amplification`, `status`) | gauge |
+| remote peer drops | each configured peer's `GET /state` `udpInErrors`/`udpRcvbufErrors` delta over the same sample window, plus accepted connections and payload bytes. These are the peer host's kernel UDP counters (host-wide, the same semantics as the local row), not per-socket counters | rate |
 | SQEs/submission, io_uring enters/s | not sourced yet: the Compio runtime's ring counters are not exposed | gap |
 
 The `unavailable` block in `packet-contract.json` carries each gap with its
@@ -1046,15 +1046,20 @@ reason, so a rung cannot silently report a zero where a metric is missing.
 
 Each rated sample and each rung also carries an explicit `validity` verdict:
 
-- `healthy` — every participant present and no drop/stall pressure observed.
+- `healthy` — every participant present, the active output count exactly equal
+  to the rung's declared count, and no drop/stall pressure observed. For a
+  remote rung this additionally requires same-window telemetry from *every*
+  configured peer, with zero peer-side drops: a missing or unreadable peer
+  reading is a reason, not a pass.
 - `contaminated` — the rung was measured, but the host or the peer dropped
   datagrams or the scheduler hit a pressure signal (kernel UDP errors, NIC
   drops, driver budget violations, queue overflows, service-budget
   exhaustion). Numbers are still recorded; they are not a no-loss baseline.
 - `invalid` — the rung cannot be compared with anything: no live SRT
-  shard/owner, fewer active outputs than the rung declares, a non-healthy
-  shard state, output retries or feed resyncs, an Owner fault, or Owner TX
-  failures.
+  shard/owner, an active output count that is not exactly the rung's declared
+  count (fewer *or* more live leaves), a non-healthy shard state, output
+  retries or feed resyncs, an Owner fault, Owner TX failures, or a remote sink
+  that restarted mid-rung.
 
 A metric whose source is not observable is itself a reason, so "no sensor" can
 never be mistaken for "sensor says zero". Retransmission share is reported
@@ -1063,11 +1068,16 @@ above, not a threshold invented for retransmissions.
 
 ### 10.3 Contract rules
 
+- Counters are only comparable inside one rung: a `(scenario, output count)`
+  change resets the sampler's history, so every rung's first sample is a
+  baseline rather than a rate differenced against the previous rung.
 - A rung is only *recorded* as a baseline with the declared workload, sink
   peers, a settle window, a sample window of at least ten seconds, a
   `packet-contract.json` whose rung verdict is `healthy`, and the run's git
-  SHA (clean tree) embedded in that artifact. A `contaminated` rung is
-  evidence about the local environment, not a performance baseline.
+  SHA (clean tree) embedded in that artifact. For a remote rung, `healthy`
+  additionally requires peer telemetry proving the peer side was lossless for
+  the same window. A `contaminated` rung is evidence about the local
+  environment, not a performance baseline.
 - Numbers are recorded in
   [quality baselines](agent-guidance/quality/baselines.md) with date and
   commit; Criterion's `target/criterion/` remains scratch.

@@ -1,6 +1,12 @@
 //! Tests for the WI3.4 packet-rate contract sampler.
 
 use super::packet_contract::*;
+use super::packet_contract_peers::peer_state_from_json;
+
+/// `begin`/`finish` drive one process-global sampler, so the tests that use it
+/// must not run concurrently with each other. Async-aware because the guard is
+/// held across the `record` awaits.
+static SAMPLER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 use crate::resource_sweep::ResourceScenarioMeta;
 use crate::resource_sweep::packet_contract_verdict::sample_validity;
 use serde_json::{Value, json};
@@ -244,8 +250,9 @@ fn validity_separates_healthy_contaminated_and_invalid_rungs() {
 
 /// One artifact must describe one rung per `(scenario, output count)`:
 /// walking several rungs in one run may not average them together.
-#[test]
-fn summary_groups_samples_by_rung() {
+#[tokio::test]
+async fn summary_groups_samples_by_rung() {
+    let _guard = SAMPLER_TEST_LOCK.lock().await;
     let work_dir =
         std::env::temp_dir().join(format!("packet-contract-rungs-{}", std::process::id()));
     std::fs::create_dir_all(&work_dir).unwrap();
@@ -258,6 +265,7 @@ fn summary_groups_samples_by_rung() {
             bitrate_label: "8M".to_string(),
             peer_mode: "sink".to_string(),
             peer_targets: vec!["127.0.0.1".to_string()],
+            peer_state: None,
             sample_secs: 10,
             settle_secs: 10,
             sample_interval_ms: 1000,
@@ -281,10 +289,10 @@ fn summary_groups_samples_by_rung() {
     }]));
     system["capacity"] = json!({"activeLeaves": 100});
     // First sample is the baseline; the second is rated.
-    record(&system, 1.0, 100.0, &meta(100)).unwrap();
+    record(&system, 1.0, 100.0, &meta(100)).await.unwrap();
     system["egressShards"][0]["srtOwners"][0]["txPackets"] = json!(3_000);
     system["egressShards"][0]["srtOwners"][0]["txClass"]["dataFirst"] = json!(2_700);
-    record(&system, 1.0, 200.0, &meta(100)).unwrap();
+    record(&system, 1.0, 200.0, &meta(100)).await.unwrap();
 
     let summary_path = finish(&work_dir).unwrap().expect("summary written");
     let summary: Value = serde_json::from_slice(&std::fs::read(&summary_path).unwrap()).unwrap();
@@ -305,4 +313,230 @@ fn summary_groups_samples_by_rung() {
         "only the rated sample contributes"
     );
     let _ = std::fs::remove_dir_all(&work_dir);
+}
+
+/// The first sample of every rung must be unrated: counters are only
+/// comparable inside one rung, so a `(scenario, outputs)` change clears the
+/// history instead of differencing the new rung against the old one.
+#[tokio::test]
+async fn a_rung_change_resets_counter_history() {
+    let _guard = SAMPLER_TEST_LOCK.lock().await;
+    let work_dir =
+        std::env::temp_dir().join(format!("packet-contract-rung-reset-{}", std::process::id()));
+    std::fs::create_dir_all(&work_dir).unwrap();
+    begin(
+        &work_dir,
+        RunMetadata {
+            git_sha: None,
+            git_dirty: None,
+            restream_binary: "restream".to_string(),
+            bitrate_label: "8M".to_string(),
+            peer_mode: "sink".to_string(),
+            peer_targets: vec!["127.0.0.1".to_string()],
+            peer_state: None,
+            sample_secs: 10,
+            settle_secs: 10,
+            sample_interval_ms: 1000,
+            egress_counts: vec![100, 300],
+            scenario_filter: vec!["egress-growth-source-srt".to_string()],
+        },
+    );
+    let meta = |outputs: usize| ResourceScenarioMeta {
+        scenario: "egress-growth-source-srt",
+        label: format!("{outputs}-per-group"),
+        pipelines: 1,
+        outputs,
+        ingest_types: "h264-srt".to_string(),
+        egress_mix: "srt-source".to_string(),
+        transcode: "no",
+    };
+    let sample_system = |packets: u64, leaves: u64| {
+        let mut system = system_with_owners(json!([{
+            "present": true, "txPackets": packets, "txCompletedOk": packets, "rxPackets": 10,
+            "serviceVisits": 10, "serviceActions": 100, "maintenanceActions": 0,
+            "txClass": {"dataFirst": packets, "dataRetransmit": 0},
+        }]));
+        system["capacity"] = json!({"activeLeaves": leaves});
+        system
+    };
+
+    // Rung 1: baseline then rated.
+    record(&sample_system(1_000, 100), 1.0, 100.0, &meta(100))
+        .await
+        .unwrap();
+    record(&sample_system(3_000, 100), 1.0, 100.0, &meta(100))
+        .await
+        .unwrap();
+    // Rung 2: its first sample must be unrated even though the counters
+    // only grew, because they belong to a different rung.
+    record(&sample_system(5_000, 300), 1.0, 300.0, &meta(300))
+        .await
+        .unwrap();
+    record(&sample_system(9_000, 300), 1.0, 300.0, &meta(300))
+        .await
+        .unwrap();
+
+    let summary_path = finish(&work_dir).unwrap().expect("summary written");
+    let summary: Value = serde_json::from_slice(&std::fs::read(&summary_path).unwrap()).unwrap();
+    let rungs = summary["rungs"].as_array().unwrap();
+    assert_eq!(rungs.len(), 2);
+    for rung in rungs {
+        assert_eq!(rung["samples"], 2);
+        assert_eq!(
+            rung["ratedSamples"], 1,
+            "each rung's first sample is a baseline, not a rate"
+        );
+    }
+    let rung_100 = rungs.iter().find(|rung| rung["outputs"] == 100).unwrap();
+    assert_eq!(rung_100["ratesPerSec"]["srtDataFirstPps"]["mean"], 2000.0);
+    let rung_300 = rungs.iter().find(|rung| rung["outputs"] == 300).unwrap();
+    assert_eq!(
+        rung_300["ratesPerSec"]["srtDataFirstPps"]["mean"], 4000.0,
+        "measured from rung 2's own baseline, not from rung 1's last sample"
+    );
+    let _ = std::fs::remove_dir_all(&work_dir);
+}
+
+/// An isolated rung must run exactly the outputs it declares: extra live
+/// leaves are a workload mismatch too.
+#[test]
+fn validity_requires_the_exact_output_count() {
+    let (status, reasons) =
+        sample_validity(&sample_with(json!({"capacityActiveLeaves": 101})), 100).unwrap();
+    assert_eq!(status, "invalid", "{reasons:?}");
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("101 of 100 expected outputs")),
+        "{reasons:?}"
+    );
+    assert_eq!(
+        sample_validity(&clean_sample(), 100).unwrap().0,
+        "healthy",
+        "an exact match still passes"
+    );
+}
+
+/// Remote rungs depend on the peer hosts' own drop counters: `healthy`
+/// requires same-window telemetry from every configured peer, and a sink
+/// that restarted mid-rung invalidates the window.
+#[test]
+fn remote_peers_gate_the_verdict() {
+    let peer = |run_id: &str, run_changed: bool, drops: f64, errors: Value| {
+        json!({
+            "host": "peer-a",
+            "runId": run_id,
+            "runIdChanged": run_changed,
+            "udpRcvbufErrorsPerSec": drops,
+            "udpInErrorsPerSec": 0.0,
+            "error": errors,
+        })
+    };
+    let remote = |peers: Value, expected: u64| {
+        sample_with(json!({"expectedPeers": expected, "peers": peers}))
+    };
+
+    let (status, reasons) = sample_validity(
+        &remote(json!([peer("run-1", false, 0.0, Value::Null)]), 1),
+        100,
+    )
+    .unwrap();
+    assert_eq!(status, "healthy", "{reasons:?}");
+
+    // A peer that dropped datagrams in this window.
+    let (status, reasons) = sample_validity(
+        &remote(json!([peer("run-1", false, 12.5, Value::Null)]), 1),
+        100,
+    )
+    .unwrap();
+    assert_eq!(status, "contaminated");
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("peer peer-a receive-buffer drops")),
+        "{reasons:?}"
+    );
+
+    // Missing telemetry from a configured peer is never healthy.
+    let (status, reasons) = sample_validity(
+        &remote(json!([{"host": "peer-a", "error": "connect: refused"}]), 1),
+        100,
+    )
+    .unwrap();
+    assert_ne!(status, "healthy");
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("telemetry unavailable")),
+        "{reasons:?}"
+    );
+
+    // Fewer readings than configured peers is also a hole.
+    let (status, reasons) = sample_validity(
+        &remote(json!([peer("run-1", false, 0.0, Value::Null)]), 2),
+        100,
+    )
+    .unwrap();
+    assert_ne!(status, "healthy");
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("expected 2 peer state reading")),
+        "{reasons:?}"
+    );
+
+    // A sink restart breaks the window even with zero drops.
+    let (status, reasons) = sample_validity(
+        &remote(json!([peer("run-2", true, 0.0, Value::Null)]), 1),
+        100,
+    )
+    .unwrap();
+    assert_eq!(status, "invalid");
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("restarted mid-rung")),
+        "{reasons:?}"
+    );
+
+    // A local run has no peer expectations and is unaffected.
+    assert_eq!(sample_validity(&clean_sample(), 100).unwrap().0, "healthy");
+}
+
+#[test]
+fn peer_state_parsing_rejects_incomplete_telemetry() {
+    let state = peer_state_from_json(
+        "peer-a",
+        &json!({
+            "runId": "run-1", "accepted": 100, "closed": 1, "discardedBytes": 5_000,
+            "udpInErrors": 3, "udpRcvbufErrors": 7,
+        }),
+    )
+    .unwrap();
+    assert_eq!(state.run_id, "run-1");
+    assert_eq!(state.accepted, 100);
+    assert_eq!(state.discarded_bytes, 5_000);
+    assert_eq!(state.udp_rcvbuf_errors, Some(7));
+
+    // A peer that cannot read its own /proc reports null, which the
+    // verdict treats as a missing sensor rather than zero drops.
+    let state = peer_state_from_json(
+        "peer-a",
+        &json!({
+            "runId": "run-1", "accepted": 0, "closed": 0, "discardedBytes": 0,
+            "udpInErrors": Value::Null, "udpRcvbufErrors": Value::Null,
+        }),
+    )
+    .unwrap();
+    assert_eq!(state.udp_in_errors, None);
+
+    for incomplete in [
+        json!({"accepted": 1, "closed": 0, "discardedBytes": 0}),
+        json!({"runId": "run-1", "closed": 0, "discardedBytes": 0}),
+    ] {
+        assert!(
+            peer_state_from_json("peer-a", &incomplete).is_err(),
+            "{incomplete}"
+        );
+    }
 }

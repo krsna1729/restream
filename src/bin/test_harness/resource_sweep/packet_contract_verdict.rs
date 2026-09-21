@@ -47,16 +47,57 @@ pub(super) fn sample_validity(
             reasons.push("SRT shard health is not observable".to_string());
         }
     }
+    // Exact match, not "at least": an isolated rung must run exactly the
+    // outputs it declares, so extra live leaves (leaked state, a stray output)
+    // fail the rung just as missing ones do.
     match sample["capacityActiveLeaves"].as_u64() {
         Some(active) => require(
             &mut invalid,
             &mut reasons,
-            active < expected_outputs,
+            active != expected_outputs,
             format!("{active} of {expected_outputs} expected outputs active"),
         ),
         None => {
             invalid = true;
             reasons.push("active output count is not observable".to_string());
+        }
+    }
+
+    // Remote rungs depend on the sink hosts' own drop counters, which only
+    // their state endpoints can report. Missing telemetry is a reason, and a
+    // restarted sink means the window is no longer one measurement.
+    let expected_peers = sample["expectedPeers"].as_u64().unwrap_or(0);
+    if expected_peers > 0 {
+        match sample["peers"].as_array() {
+            Some(peers) if peers.len() as u64 == expected_peers => {
+                for peer in peers {
+                    let host = peer["host"].as_str().unwrap_or("peer");
+                    if let Some(error) = peer["error"].as_str() {
+                        reasons.push(format!("peer {host} telemetry unavailable: {error}"));
+                        continue;
+                    }
+                    if peer["runIdChanged"] == true {
+                        invalid = true;
+                        reasons.push(format!("peer {host} sink restarted mid-rung"));
+                    }
+                    for (key, label) in [
+                        ("udpRcvbufErrorsPerSec", "receive-buffer"),
+                        ("udpInErrorsPerSec", "receive"),
+                    ] {
+                        match peer[key].as_f64() {
+                            Some(rate) if rate > 0.0 => {
+                                reasons.push(format!("peer {host} {label} drops: {key}={rate}"))
+                            }
+                            None => reasons.push(format!("peer {host} {key} not observable")),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            peers => reasons.push(format!(
+                "expected {expected_peers} peer state reading(s), got {}",
+                peers.map(|peers| peers.len()).unwrap_or(0)
+            )),
         }
     }
     if let Some(retries) = sample["shardRetriesPerSec"].as_f64() {

@@ -262,6 +262,9 @@ pub(super) struct RunMetadata {
     pub(super) bitrate_label: String,
     pub(super) peer_mode: String,
     pub(super) peer_targets: Vec<String>,
+    /// Present only when the rung points at remote sink peers, in which case
+    /// their state endpoints gate the rung's validity.
+    pub(super) peer_state: Option<PeerStateConfig>,
     pub(super) sample_secs: u64,
     pub(super) settle_secs: u64,
     pub(super) sample_interval_ms: u64,
@@ -279,6 +282,7 @@ impl RunMetadata {
             bitrate_label: env.bitrate.clone(),
             peer_mode: env.peer_mode.as_str().to_string(),
             peer_targets: env.srt_peer_targets(),
+            peer_state: env.peer_state_config(),
             sample_secs: env.sample_secs,
             settle_secs: env.settle_secs,
             sample_interval_ms: env.sample_interval_ms,
@@ -304,6 +308,10 @@ impl RunMetadata {
             "bitrateLabel": self.bitrate_label,
             "peerMode": self.peer_mode,
             "peerTargets": self.peer_targets,
+            "peerStateEndpoint": self.peer_state.as_ref().map(|state| json!({
+                "hosts": state.hosts,
+                "port": state.port,
+            })),
             "sampleSecs": self.sample_secs,
             "settleSecs": self.settle_secs,
             "sampleIntervalMs": self.sample_interval_ms,
@@ -325,11 +333,17 @@ fn git_output(args: &[&str]) -> Option<String> {
 /// Contract artifact state: previous counters plus every emitted record.
 struct PacketContractSampler {
     previous: Option<PacketCounters>,
+    /// `(scenario, outputs)` of the previous sample. Counters are only
+    /// comparable inside one rung, so a change resets the history instead of
+    /// differencing a new rung against the previous rung's last sample.
+    previous_key: Option<(String, u64)>,
+    peer_fold: PeerFold,
     samples: Vec<Value>,
     jsonl: PathBuf,
     run: RunMetadata,
 }
 
+use super::packet_contract_peers::{PeerFold, PeerStateConfig, poll_peers};
 use super::packet_contract_verdict::sample_validity;
 
 static SAMPLER: Mutex<Option<PacketContractSampler>> = Mutex::new(None);
@@ -351,6 +365,8 @@ pub(super) fn begin(work_dir: &Path, run: RunMetadata) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(PacketContractSampler {
         previous: None,
+        previous_key: None,
+        peer_fold: PeerFold::default(),
         samples: Vec::new(),
         jsonl,
         run,
@@ -366,13 +382,27 @@ pub(super) fn summary_json(work_dir: &Path) -> PathBuf {
 }
 
 /// Record one sample. A no-op when [`begin`] was never called.
-pub(super) fn record(
+pub(super) async fn record(
     system: &Value,
     elapsed_secs: f64,
     cpu_pct: f64,
     meta: &ResourceScenarioMeta<'_>,
 ) -> Result<(), String> {
+    let peer_config = with_sampler(|sampler| sampler.run.peer_state.clone()).flatten();
+    let peer_readings = match &peer_config {
+        Some(config) => poll_peers(config).await,
+        None => Vec::new(),
+    };
     let Some((record, jsonl)) = with_sampler(|sampler| {
+        // Counters are comparable only inside one rung: a `(scenario, outputs)`
+        // change clears the history so the new rung's first sample is unrated
+        // instead of differencing against the previous rung.
+        let key = (meta.scenario.to_string(), meta.outputs as u64);
+        if sampler.previous_key.as_ref() != Some(&key) {
+            sampler.previous = None;
+            sampler.peer_fold.clear();
+            sampler.previous_key = Some(key);
+        }
         let counters = PacketCounters::read(system);
         let previous = sampler.previous;
         let previous_ref = previous.as_ref();
@@ -680,6 +710,13 @@ pub(super) fn record(
             json!(f64_field(flow, "amplification").map(round2)),
         );
         record.insert("flowStatus".to_string(), json!(flow["status"].clone()));
+        if let Some(config) = &peer_config {
+            record.insert("expectedPeers".to_string(), json!(config.hosts.len()));
+            record.insert(
+                "peers".to_string(),
+                sampler.peer_fold.record(&peer_readings, elapsed_secs),
+            );
+        }
         let mut record = Value::Object(record);
         if let Some((status, reasons)) = sample_validity(&record, meta.outputs as u64)
             && let Value::Object(map) = &mut record
@@ -753,7 +790,7 @@ pub(super) fn finish(work_dir: &Path) -> Result<Option<PathBuf>, String> {
             "sqesPerSubmission": "Compio's runtime ring counters are not exposed; the shard sqes/cqes fields are written only by the native RTMP dataplane, so the SRT Owner path has no producer.",
             "ioUringEntersPerSec": "Same gap: no runtime enter counter is published.",
             "cyclesPerPacket": "No PMU on the reference hosts; cpuMicrosPerSrtPacket is the portable stand-in.",
-            "remotePeerTelemetry": "With RESOURCE_SWEEP_SRT_PEER_HOSTS the sink peers run on the remote host, so their kernel drop counters belong to that host and are not part of this artifact; read them there (the standalone `srt-sink` mode prints its own counters at stop)."
+            "remotePeerNicDrops": "Remote peer UDP drops ARE collected (each peer's `/state` counters are differenced per sample window and gate the verdict), but those are the peer host's kernel UDP counters, not its NIC statistics: NIC drops stay on the peer host and are not part of this artifact."
         }
     });
     let path = summary_json(work_dir);

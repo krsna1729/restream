@@ -23,6 +23,22 @@ use srt_transport::{
 };
 use tokio::net::UdpSocket;
 
+/// Cloneable handle to a running pool's counters.
+#[derive(Clone)]
+pub(crate) struct SrtSinkCountersHandle {
+    counters: Arc<SinkCounters>,
+}
+
+impl SrtSinkCountersHandle {
+    pub(crate) fn snapshot(&self) -> SrtSinkCounters {
+        SrtSinkCounters {
+            accepted: self.counters.accepted.load(Ordering::Relaxed),
+            discarded_bytes: self.counters.discarded_bytes.load(Ordering::Relaxed),
+            closed: self.counters.closed.load(Ordering::Relaxed),
+        }
+    }
+}
+
 /// One reading of a sink pool's cumulative counters.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SrtSinkCounters {
@@ -141,6 +157,14 @@ impl HarnessSrtSinkPool {
             counters,
             threads,
         })
+    }
+
+    /// A cloneable handle to the pool's counters, so a state endpoint can
+    /// report them while the pool keeps owning its threads.
+    pub(crate) fn counters(&self) -> SrtSinkCountersHandle {
+        SrtSinkCountersHandle {
+            counters: self.counters.clone(),
+        }
     }
 
     /// Cumulative counters so far (connections accepted, payload bytes

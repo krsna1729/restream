@@ -250,7 +250,7 @@ async fn run_msr_phase(
     let _ = std::fs::remove_file(&env.samples_jsonl);
     let _ = std::fs::remove_file(&report_md);
 
-    let mut stack = start_resource_sweep_stack(&env).await?;
+    let mut stack = start_resource_sweep_stack(&env, LocalPeerNeeds::ALL).await?;
     let stream_key = profile.stream_key();
     let pipeline_id =
         create_resource_pipeline(&stack.api, profile.pipeline_name(), stream_key).await?;

@@ -8,6 +8,7 @@ use super::super::{
     HarnessSrtCrypto, default_restream_bin, default_work_db_path, env_secs, env_usize,
     harness_port_defaults, harness_srt_crypto_from_env,
 };
+use super::packet_contract_peers::PeerStateConfig;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ResourceSweepLifecycle {
@@ -180,6 +181,23 @@ impl ResourceSweepEnv {
                 _ => None,
             },
             work_dir,
+        })
+    }
+
+    /// The remote sink peers' state endpoints, when SRT outputs are
+    /// retargeted. Their same-window drop counters gate a remote rung's
+    /// validity, so this must resolve whenever `srt_peer_hosts` is set.
+    pub(super) fn peer_state_config(&self) -> Option<PeerStateConfig> {
+        if self.srt_peer_hosts.is_empty() {
+            return None;
+        }
+        let port = std::env::var("RESOURCE_SWEEP_SRT_PEER_STATE_PORT")
+            .ok()
+            .and_then(|value| value.trim().parse::<u16>().ok())
+            .unwrap_or_else(|| harness_port_defaults().mtx_api);
+        Some(PeerStateConfig {
+            hosts: self.srt_peer_hosts.clone(),
+            port,
         })
     }
 

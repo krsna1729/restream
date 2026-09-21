@@ -57,11 +57,16 @@ pub(super) use measurement::ffmpeg_children_stats;
 pub(crate) use measurement::read_proc_status_kb_checked;
 #[path = "resource_sweep/packet_contract.rs"]
 mod packet_contract;
+#[path = "resource_sweep/packet_contract_peers.rs"]
+mod packet_contract_peers;
 #[path = "resource_sweep/packet_contract_tests.rs"]
 #[cfg(test)]
 mod packet_contract_tests;
 #[path = "resource_sweep/packet_contract_verdict.rs"]
 mod packet_contract_verdict;
+#[path = "resource_sweep/sweep_tests.rs"]
+#[cfg(test)]
+mod sweep_tests;
 use measurement::{
     ResourceAggregate, ResourceScenarioMeta, csv_escape, read_proc_stat_ticks,
     resource_aggregate_json, sample_resource_window, write_resource_sweep_csv,
@@ -132,7 +137,7 @@ pub(crate) async fn resource_sweep() -> Result<Value, String> {
     let mut stack = if env.lifecycle == ResourceSweepLifecycle::Isolated {
         None
     } else {
-        Some(start_resource_sweep_stack(&env).await?)
+        Some(start_resource_sweep_stack(&env, LocalPeerNeeds::ALL).await?)
     };
     let mut retained_publishers: Vec<Child> = Vec::new();
     let mut aggregates = Vec::new();
@@ -351,44 +356,83 @@ async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>
 /// *total* thread budget for the shared SRT pool
 /// (`HarnessSrtSinkPool`), partitioned with exclusive port ownership
 /// across every `PEER_COUNT` port, not a per-port thread count.
-async fn start_harness_sink_peers(env: &ResourceSweepEnv) -> Result<SinkPeerStack, String> {
+async fn start_harness_sink_peers(
+    env: &ResourceSweepEnv,
+    needs: LocalPeerNeeds,
+) -> Result<SinkPeerStack, String> {
     let mut rtmp = Vec::with_capacity(env.peer_count);
     let mut srt_ports = Vec::with_capacity(env.peer_count);
     for index in 0..env.peer_count {
         let (rtmp_port, _rtmps, srt_port, _api) = peer_instance_ports(env, index);
-        let metrics = Arc::new(GeneralizedSinkMetrics::default());
-        match start_generalized_sink_server(rtmp_port, metrics).await {
-            Ok(server) => rtmp.push(server),
-            Err(err) => {
-                for server in rtmp {
-                    stop_generalized_sink_server(server);
+        if needs.rtmp {
+            let metrics = Arc::new(GeneralizedSinkMetrics::default());
+            match start_generalized_sink_server(rtmp_port, metrics).await {
+                Ok(server) => rtmp.push(server),
+                Err(err) => {
+                    for server in rtmp {
+                        stop_generalized_sink_server(server);
+                    }
+                    return Err(format!("harness sink RTMP listener on {rtmp_port}: {err}"));
                 }
-                return Err(format!("harness sink RTMP listener on {rtmp_port}: {err}"));
             }
         }
         srt_ports.push(srt_port);
     }
 
-    let default_sink_threads =
-        std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
-    let discard_threads = env_usize("HARNESS_SRT_SINK_THREADS", default_sink_threads);
-    let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024);
-    let srt_pool = match HarnessSrtSinkPool::start(&srt_ports, udp_buffer, discard_threads) {
-        Ok(pool) => pool,
-        Err(err) => {
-            for server in rtmp {
-                stop_generalized_sink_server(server);
+    let srt_pool = if needs.srt {
+        let default_sink_threads =
+            std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
+        let discard_threads = env_usize("HARNESS_SRT_SINK_THREADS", default_sink_threads);
+        let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024);
+        match HarnessSrtSinkPool::start(&srt_ports, udp_buffer, discard_threads) {
+            Ok(pool) => Some(pool),
+            Err(err) => {
+                for server in rtmp {
+                    stop_generalized_sink_server(server);
+                }
+                return Err(format!("harness SRT sink pool on {srt_ports:?}: {err}"));
             }
-            return Err(format!("harness SRT sink pool on {srt_ports:?}: {err}"));
         }
+    } else {
+        None
     };
-    Ok(SinkPeerStack {
-        rtmp,
-        srt_pool: Some(srt_pool),
-    })
+    Ok(SinkPeerStack { rtmp, srt_pool })
 }
 
-async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSweepStack, String> {
+/// Which local sink peers a scenario needs. RTMP outputs always terminate on
+/// local peers; SRT outputs do only when no remote hosts are configured, so a
+/// remote SRT-only rung starts no local sink pool at all — idle workers there
+/// would only perturb scheduling and the host counters the contract reads.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct LocalPeerNeeds {
+    rtmp: bool,
+    srt: bool,
+}
+
+impl LocalPeerNeeds {
+    const ALL: Self = Self {
+        rtmp: true,
+        srt: true,
+    };
+
+    fn for_output_kinds(env: &ResourceSweepEnv, kinds: &[SweepOutputKind]) -> Self {
+        let is_srt = |kind: &SweepOutputKind| {
+            matches!(
+                kind,
+                SweepOutputKind::SrtSource | SweepOutputKind::Srt720p | SweepOutputKind::Srt1080p
+            )
+        };
+        Self {
+            rtmp: kinds.iter().any(|kind| !is_srt(kind)),
+            srt: kinds.iter().any(is_srt) && env.srt_peer_hosts.is_empty(),
+        }
+    }
+}
+
+async fn start_resource_sweep_stack(
+    env: &ResourceSweepEnv,
+    needs: LocalPeerNeeds,
+) -> Result<ResourceSweepStack, String> {
     if !env.restream_bin.exists() {
         return Err(format!(
             "restream binary not found at {}",
@@ -401,7 +445,7 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
     let mut sink_peers = SinkPeerStack::default();
     match env.peer_mode {
         ResourceSweepPeer::Mediamtx => mediamtx = start_resource_sweep_peers(env).await?,
-        ResourceSweepPeer::Sink => sink_peers = start_harness_sink_peers(env).await?,
+        ResourceSweepPeer::Sink => sink_peers = start_harness_sink_peers(env, needs).await?,
     }
 
     let restream_log = std::fs::File::create(&env.restream_log).map_err(|e| e.to_string())?;
@@ -451,9 +495,10 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
 async fn ensure_resource_stack<'a>(
     env: &ResourceSweepEnv,
     stack: &'a mut Option<ResourceSweepStack>,
+    needs: LocalPeerNeeds,
 ) -> Result<&'a mut ResourceSweepStack, String> {
     if stack.is_none() {
-        *stack = Some(start_resource_sweep_stack(env).await?);
+        *stack = Some(start_resource_sweep_stack(env, needs).await?);
     }
     stack
         .as_mut()
@@ -467,14 +512,14 @@ async fn run_resource_baseline(
 ) -> Result<ResourceAggregate, String> {
     let local_only = env.lifecycle == ResourceSweepLifecycle::Isolated;
     let mut local_stack = if local_only {
-        Some(start_resource_sweep_stack(env).await?)
+        Some(start_resource_sweep_stack(env, LocalPeerNeeds::ALL).await?)
     } else {
         None
     };
     let active = if local_only {
         local_stack.as_mut().unwrap()
     } else {
-        ensure_resource_stack(env, stack).await?
+        ensure_resource_stack(env, stack, LocalPeerNeeds::ALL).await?
     };
     let meta = ResourceScenarioMeta {
         scenario: "baseline-empty",
@@ -503,14 +548,14 @@ async fn run_resource_ingest_only(
 ) -> Result<ResourceAggregate, String> {
     let local_only = env.lifecycle == ResourceSweepLifecycle::Isolated;
     let mut local_stack = if local_only {
-        Some(start_resource_sweep_stack(env).await?)
+        Some(start_resource_sweep_stack(env, LocalPeerNeeds::ALL).await?)
     } else {
         None
     };
     let active = if local_only {
         local_stack.as_mut().unwrap()
     } else {
-        ensure_resource_stack(env, stack).await?
+        ensure_resource_stack(env, stack, LocalPeerNeeds::ALL).await?
     };
     let stream_key = format!("resource-{}", config.name);
     let pipeline_id = create_resource_pipeline(&active.api, config.name, &stream_key).await?;
@@ -548,14 +593,14 @@ async fn run_resource_ingest_growth(
 ) -> Result<Vec<ResourceAggregate>, String> {
     let local_only = env.lifecycle == ResourceSweepLifecycle::Isolated;
     let mut local_stack = if local_only {
-        Some(start_resource_sweep_stack(env).await?)
+        Some(start_resource_sweep_stack(env, LocalPeerNeeds::ALL).await?)
     } else {
         None
     };
     let active = if local_only {
         local_stack.as_mut().unwrap()
     } else {
-        ensure_resource_stack(env, stack).await?
+        ensure_resource_stack(env, stack, LocalPeerNeeds::ALL).await?
     };
 
     let mut publishers = Vec::new();
@@ -639,15 +684,16 @@ async fn run_resource_egress_growth(
     output_kinds: &[SweepOutputKind],
 ) -> Result<Vec<ResourceAggregate>, String> {
     let local_only = env.lifecycle == ResourceSweepLifecycle::Isolated;
+    let peer_needs = LocalPeerNeeds::for_output_kinds(env, output_kinds);
     let mut local_stack = if local_only {
-        Some(start_resource_sweep_stack(env).await?)
+        Some(start_resource_sweep_stack(env, peer_needs).await?)
     } else {
         None
     };
     let active = if local_only {
         local_stack.as_mut().unwrap()
     } else {
-        ensure_resource_stack(env, stack).await?
+        ensure_resource_stack(env, stack, peer_needs).await?
     };
     let stream_key = format!("resource-{scenario_name}");
     let pipeline_id = create_resource_pipeline(&active.api, scenario_name, &stream_key).await?;
@@ -875,93 +921,4 @@ pub(crate) fn scaled_output_progress_timeout(
     let extra_outputs = output_count.saturating_sub(1) as u64;
     let scaled_secs = base_secs.saturating_add(extra_outputs.saturating_mul(per_output_secs));
     Duration::from_secs(scaled_secs.min(cap_secs))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The multi-host rung path: only the loopback authority is replaced.
-    #[test]
-    fn srt_urls_move_onto_a_remote_peer_host() {
-        let url = "srt://127.0.0.1:8891?streamid=publish:live/key&latency=200";
-        assert_eq!(
-            srt_url_on_host(url, "peer-a"),
-            "srt://peer-a:8891?streamid=publish:live/key&latency=200"
-        );
-        assert_eq!(
-            srt_url_on_host(url, "2001:db8::5"),
-            "srt://[2001:db8::5]:8891?streamid=publish:live/key&latency=200",
-            "IPv6 peer hosts are bracketed"
-        );
-        assert_eq!(
-            srt_url_on_host(url, "[2001:db8::5]"),
-            "srt://[2001:db8::5]:8891?streamid=publish:live/key&latency=200"
-        );
-        let already_remote = "srt://peer-b:8891?streamid=publish:live/key";
-        assert_eq!(srt_url_on_host(already_remote, "peer-a"), already_remote);
-    }
-
-    fn test_env() -> ResourceSweepEnv {
-        ResourceSweepEnv {
-            work_dir: PathBuf::from("."),
-            summary_json: PathBuf::from("summary.json"),
-            summary_csv: PathBuf::from("summary.csv"),
-            samples_jsonl: PathBuf::from("samples.jsonl"),
-            restream_log: PathBuf::from("restream.log"),
-            mediamtx_log: PathBuf::from("mediamtx.log"),
-            mediamtx_config: PathBuf::from("mediamtx.yml"),
-            restream_bin: PathBuf::from("restream"),
-            restream_db_path: PathBuf::from("restream.db"),
-            restream_http: 3030,
-            restream_rtmp: 1935,
-            restream_srt: 10080,
-            mtx_rtmp: 1936,
-            mtx_rtmps: 1937,
-            mtx_srt: 8891,
-            mtx_api: 9997,
-            peer_count: 4,
-            peer_mode: ResourceSweepPeer::Mediamtx,
-            srt_peer_hosts: Vec::new(),
-            sample_secs: 1,
-            sample_interval_ms: 1000,
-            settle_secs: 1,
-            ingest_counts: Vec::new(),
-            egress_counts: Vec::new(),
-            bitrate: "1.5M".to_string(),
-            scenario_filter: None,
-            lifecycle: ResourceSweepLifecycle::Continuous,
-            no_cleanup: false,
-            srt_crypto: HarnessSrtCrypto::plaintext(),
-            backend_policy_env: Vec::new(),
-            rtmps_tls: None,
-        }
-    }
-
-    #[test]
-    fn peer_instance_ports_offset_from_instance_zero() {
-        let env = test_env();
-        // Instance 0 always matches the pre-existing single-mediamtx ports.
-        assert_eq!(peer_instance_ports(&env, 0), (1936, 1937, 8891, 9997));
-        assert_eq!(peer_instance_ports(&env, 3), (1939, 1940, 8894, 10000));
-    }
-
-    #[test]
-    fn instance_suffixed_path_leaves_instance_zero_unchanged() {
-        let path = PathBuf::from("/work/msr-mediamtx.yml");
-        assert_eq!(instance_suffixed_path(&path, 0), path);
-        assert_eq!(
-            instance_suffixed_path(&path, 2),
-            PathBuf::from("/work/msr-mediamtx-2.yml")
-        );
-    }
-
-    #[test]
-    fn instance_suffixed_path_handles_extensionless_paths() {
-        let path = PathBuf::from("/work/mediamtx-log");
-        assert_eq!(
-            instance_suffixed_path(&path, 1),
-            PathBuf::from("/work/mediamtx-log-1")
-        );
-    }
 }
