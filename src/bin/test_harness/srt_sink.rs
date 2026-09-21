@@ -19,10 +19,10 @@ use tokio::net::TcpListener;
 
 use super::*;
 
-/// `InErrors` and `RcvbufErrors` from `/proc/net/snmp`'s `Udp:` row: the
-/// kernel counters that show a sink host dropping datagrams it could not
-/// buffer. `None` when the file or either column is unavailable.
-fn host_udp_drop_counters() -> Option<(u64, u64)> {
+/// `InErrors`, `RcvbufErrors` and `SndbufErrors` from `/proc/net/snmp`'s
+/// `Udp:` row: the kernel counters that show a sink host dropping datagrams it
+/// could not buffer. `None` when the file or any column is unavailable.
+fn host_udp_drop_counters() -> Option<(u64, u64, u64)> {
     let snmp = std::fs::read_to_string("/proc/net/snmp").ok()?;
     let mut lines = snmp
         .lines()
@@ -36,7 +36,11 @@ fn host_udp_drop_counters() -> Option<(u64, u64)> {
             .and_then(|index| values.clone().nth(index))
             .and_then(|value| value.parse::<u64>().ok())
     };
-    Some((column("InErrors")?, column("RcvbufErrors")?))
+    Some((
+        column("InErrors")?,
+        column("RcvbufErrors")?,
+        column("SndbufErrors")?,
+    ))
 }
 
 /// Identity of one sink process: a restarted sink must be visible as a new
@@ -49,13 +53,58 @@ fn run_id() -> String {
     format!("{:x}-{started_ms:x}", std::process::id())
 }
 
+/// Non-loopback interface drop counters, summed: a receiving NIC can drop
+/// before UDP ever sees the packet, so a peer's losslessness evidence needs
+/// them alongside the kernel UDP counters. `None` when no interface could be
+/// read, so the measuring host sees a missing sensor rather than zero drops.
+fn host_nic_drop_counters() -> (Option<u64>, Option<u64>) {
+    let mut rx = None;
+    let mut tx = None;
+    if let Ok(entries) = std::fs::read_dir("/sys/class/net") {
+        for entry in entries.flatten() {
+            if entry.file_name() == "lo" {
+                continue;
+            }
+            let statistics = entry.path().join("statistics");
+            if let Some(value) = read_counter_file(&statistics.join("rx_dropped")) {
+                rx = Some(rx.unwrap_or(0) + value);
+            }
+            if let Some(value) = read_counter_file(&statistics.join("tx_dropped")) {
+                tx = Some(tx.unwrap_or(0) + value);
+            }
+        }
+    }
+    (rx, tx)
+}
+
+/// Kernel UDP error counters since this sink started, for the human-readable
+/// log line; the state endpoint serves the absolute values.
+fn udp_drops_since_start(start: Option<(u64, u64, u64)>) -> Option<(u64, u64, u64)> {
+    let (start_in, start_rcv, start_snd) = start?;
+    let (in_errors, rcvbuf, sndbuf) = host_udp_drop_counters()?;
+    Some((
+        in_errors.saturating_sub(start_in),
+        rcvbuf.saturating_sub(start_rcv),
+        sndbuf.saturating_sub(start_snd),
+    ))
+}
+
+fn read_counter_file(path: &Path) -> Option<u64> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+}
+
 /// Absolute counters served to the measuring host, plus the run identity.
+#[allow(clippy::too_many_arguments)]
 fn state_json(
     run: &str,
     started_ms: u128,
     ports: &[u16],
     counters: SrtSinkCounters,
-    drops: Option<(u64, u64)>,
+    udp_drops: Option<(u64, u64, u64)>,
+    nic_rx_dropped: Option<u64>,
+    nic_tx_dropped: Option<u64>,
 ) -> Value {
     json!({
         "runId": run,
@@ -64,8 +113,11 @@ fn state_json(
         "accepted": counters.accepted,
         "closed": counters.closed,
         "discardedBytes": counters.discarded_bytes,
-        "udpInErrors": drops.map(|drops| drops.0),
-        "udpRcvbufErrors": drops.map(|drops| drops.1),
+        "udpInErrors": udp_drops.map(|drops| drops.0),
+        "udpRcvbufErrors": udp_drops.map(|drops| drops.1),
+        "udpSndbufErrors": udp_drops.map(|drops| drops.2),
+        "nicRxDropped": nic_rx_dropped,
+        "nicTxDropped": nic_tx_dropped,
         "uptimeSecs": (SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|elapsed| elapsed.as_millis())
@@ -86,12 +138,15 @@ async fn serve_state(
         let Ok((mut socket, _)) = listener.accept().await else {
             continue;
         };
+        let (nic_rx_dropped, nic_tx_dropped) = host_nic_drop_counters();
         let body = state_json(
             &run,
             started_ms,
             &ports,
             counters.snapshot(),
             host_udp_drop_counters(),
+            nic_rx_dropped,
+            nic_tx_dropped,
         )
         .to_string();
         let response = format!(
@@ -143,9 +198,18 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
 
     // The state endpoint is what makes a remote rung's validity checkable: the
     // measuring host polls it every sample and refuses `healthy` without it.
-    let listener = TcpListener::bind(format!("0.0.0.0:{state_port}"))
-        .await
-        .map_err(|error| format!("srt-sink state endpoint on {state_port}: {error}"))?;
+    // Dual-stack first (Linux maps IPv4 onto [::] by default), IPv4-only as
+    // the fallback, so a peer host addressed by raw IPv6 can still be polled.
+    let listener = match TcpListener::bind(format!("[::]:{state_port}")).await {
+        Ok(listener) => listener,
+        Err(dual_stack_error) => TcpListener::bind(format!("0.0.0.0:{state_port}"))
+            .await
+            .map_err(|ipv4_error| {
+                format!(
+                    "srt-sink state endpoint on {state_port}: {dual_stack_error} / {ipv4_error}"
+                )
+            })?,
+    };
     let state_task = tokio::spawn(serve_state(
         listener,
         run.clone(),
@@ -155,7 +219,7 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
     ));
     println!(
         "[srt-sink] run {run} listening on {ports:?} with {threads} thread(s), {udp_buffer} B udp buffer; \
-         state endpoint on 0.0.0.0:{state_port}/state; send SIGINT/SIGTERM to stop"
+         state endpoint on {state_port}/state (dual-stack when available); send SIGINT/SIGTERM to stop"
     );
 
     let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
@@ -165,14 +229,7 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
         tokio::select! {
             _ = ticker.tick() => {
                 let counters = pool.snapshot();
-                let drops = host_udp_drop_counters().zip(start_drops).map(
-                    |((errors, rcvbuf), (start_errors, start_rcvbuf))| {
-                        (
-                            errors.saturating_sub(start_errors),
-                            rcvbuf.saturating_sub(start_rcvbuf),
-                        )
-                    },
-                );
+                let drops = udp_drops_since_start(start_drops);
                 println!(
                     "[srt-sink] {}",
                     json!({
@@ -183,6 +240,7 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
                         "discardedBytes": counters.discarded_bytes,
                         "udpInErrorsSinceStart": drops.map(|drops| drops.0),
                         "udpRcvbufErrorsSinceStart": drops.map(|drops| drops.1),
+                        "udpSndbufErrorsSinceStart": drops.map(|drops| drops.2),
                     })
                 );
             }
@@ -192,14 +250,7 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
     };
 
     let counters = pool.snapshot();
-    let drops = host_udp_drop_counters().zip(start_drops).map(
-        |((errors, rcvbuf), (start_errors, start_rcvbuf))| {
-            (
-                errors.saturating_sub(start_errors),
-                rcvbuf.saturating_sub(start_rcvbuf),
-            )
-        },
-    );
+    let drops = udp_drops_since_start(start_drops);
     state_task.abort();
     pool.stop();
     Ok(json!({
@@ -216,6 +267,7 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
         "discardedBytes": counters.discarded_bytes,
         "udpInErrorsSinceStart": drops.map(|drops| drops.0),
         "udpRcvbufErrorsSinceStart": drops.map(|drops| drops.1),
+        "udpSndbufErrorsSinceStart": drops.map(|drops| drops.2),
     }))
 }
 
@@ -230,18 +282,33 @@ mod tests {
             discarded_bytes: 5_000,
             closed: 2,
         };
-        let state = state_json("run-1", 1_000, &[8891], counters, Some((3, 7)));
+        let state = state_json(
+            "run-1",
+            1_000,
+            &[8891],
+            counters,
+            Some((3, 7, 1)),
+            Some(2),
+            Some(0),
+        );
         assert_eq!(state["runId"], "run-1");
         assert_eq!(state["ports"][0], 8891);
         assert_eq!(state["accepted"], 100);
         assert_eq!(state["discardedBytes"], 5_000);
         assert_eq!(state["udpInErrors"], 3);
         assert_eq!(state["udpRcvbufErrors"], 7);
+        assert_eq!(state["udpSndbufErrors"], 1);
+        assert_eq!(state["nicRxDropped"], 2);
+        assert_eq!(state["nicTxDropped"], 0);
 
-        // A host that cannot read /proc/net/snmp reports null, not zero.
-        let state = state_json("run-1", 1_000, &[8891], counters, None);
+        // A host that cannot read /proc/net/snmp or its NIC counters reports
+        // null, not zero: the measuring side must see a missing sensor.
+        let state = state_json("run-1", 1_000, &[8891], counters, None, None, None);
         assert!(state["udpInErrors"].is_null());
         assert!(state["udpRcvbufErrors"].is_null());
+        assert!(state["udpSndbufErrors"].is_null());
+        assert!(state["nicRxDropped"].is_null());
+        assert!(state["nicTxDropped"].is_null());
     }
 
     #[test]

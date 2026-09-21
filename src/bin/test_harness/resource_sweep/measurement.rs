@@ -112,13 +112,18 @@ pub(super) async fn sample_resource_window(
     meta: ResourceScenarioMeta<'_>,
 ) -> Result<ResourceAggregate, String> {
     tokio::time::sleep(Duration::from_secs(env.settle_secs)).await;
+    // Prime the cumulative packet counters and every remote peer before the
+    // rated clock starts, so the first rated sample already covers a full
+    // interval of evidence instead of spending an interval on a baseline.
+    let primed_system = stack.api.get_json("/metrics/system?view=summary").await?;
+    super::packet_contract::prime(&primed_system, &meta).await?;
     let mut samples = Vec::new();
     let mut prev_ticks = read_proc_stat_ticks(stack.restream_pid)?;
     let mut prev_ffmpeg_ticks: HashMap<u32, u64> = HashMap::new();
     let mut prev_ctxt = read_proc_ctxt_switches(stack.restream_pid)?;
     let mut prev_instant = Instant::now();
-    let deadline = Instant::now() + Duration::from_secs(env.sample_secs);
-    while Instant::now() < deadline {
+    let rated_started = Instant::now();
+    while rated_started.elapsed() < Duration::from_secs(env.sample_secs) {
         tokio::time::sleep(Duration::from_millis(env.sample_interval_ms)).await;
         let now = Instant::now();
         let ticks = read_proc_stat_ticks(stack.restream_pid)?;

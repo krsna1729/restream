@@ -11,6 +11,9 @@ use crate::resource_sweep::ResourceScenarioMeta;
 use crate::resource_sweep::packet_contract_verdict::sample_validity;
 use serde_json::{Value, json};
 
+/// A complete `/metrics/system` shard projection: every counter the verdict
+/// reads is present, so a fixture that means "nothing is wrong" really is
+/// healthy rather than merely under-specified.
 fn system_with_owners(owners: Value) -> Value {
     json!({
         "egressShards": [{
@@ -20,6 +23,10 @@ fn system_with_owners(owners: Value) -> Value {
             "mediaTicks": 7,
             "readyVisits": 40,
             "retryEvents": 0,
+            "resyncCount": 0,
+            "driverBudgetViolations": 0,
+            "queueOverflows": 0,
+            "budgetExhaustions": 0,
             "srtOwners": owners,
         }]
     })
@@ -155,6 +162,8 @@ fn udp_snmp_columns_are_none_when_the_kernel_does_not_publish_them() {
 fn clean_sample() -> Value {
     json!({
         "srtTxDatagramsPerSec": 100_000.0,
+        "srtDataRetransmitPps": 0.0,
+        "ratedSecs": 12.0,
         "egressShardCount": 6,
         "srtOwnerCount": 6,
         "shardUnhealthyCount": 0,
@@ -288,11 +297,29 @@ async fn summary_groups_samples_by_rung() {
         "txClass": {"dataFirst": 900, "dataRetransmit": 100},
     }]));
     system["capacity"] = json!({"activeLeaves": 100});
-    // First sample is the baseline; the second is rated.
-    record(&system, 1.0, 100.0, &meta(100)).await.unwrap();
+    // The runner primes, then rates every sample against the previous reading.
+    let t0 = std::time::Instant::now();
+    prime_at(&system, &meta(100), t0).await.unwrap();
+    record_at(
+        &system,
+        1.0,
+        100.0,
+        &meta(100),
+        t0 + std::time::Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
     system["egressShards"][0]["srtOwners"][0]["txPackets"] = json!(3_000);
     system["egressShards"][0]["srtOwners"][0]["txClass"]["dataFirst"] = json!(2_700);
-    record(&system, 1.0, 200.0, &meta(100)).await.unwrap();
+    record_at(
+        &system,
+        1.0,
+        200.0,
+        &meta(100),
+        t0 + std::time::Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
 
     let summary_path = finish(&work_dir).unwrap().expect("summary written");
     let summary: Value = serde_json::from_slice(&std::fs::read(&summary_path).unwrap()).unwrap();
@@ -303,14 +330,17 @@ async fn summary_groups_samples_by_rung() {
     let rung = &summary["rungs"][0];
     assert_eq!(rung["outputs"], 100);
     assert_eq!(rung["samples"], 2);
-    assert_eq!(rung["ratedSamples"], 1, "the first sample carries no rates");
+    assert_eq!(
+        rung["ratedSamples"], 2,
+        "both samples are rated: the prime is the interval origin"
+    );
     assert_eq!(
         rung["validity"]["status"], "invalid",
         "6 owners expected, 1 present"
     );
     assert_eq!(
-        rung["ratesPerSec"]["srtDataFirstPps"]["mean"], 1800.0,
-        "only the rated sample contributes"
+        rung["ratesPerSec"]["srtDataFirstPps"]["mean"], 900.0,
+        "each sample is rated over its own one-second interval"
     );
     let _ = std::fs::remove_dir_all(&work_dir);
 }
@@ -360,19 +390,26 @@ async fn a_rung_change_resets_counter_history() {
         system
     };
 
-    // Rung 1: baseline then rated.
-    record(&sample_system(1_000, 100), 1.0, 100.0, &meta(100))
+    let t0 = std::time::Instant::now();
+    let at = |secs: u64| t0 + std::time::Duration::from_secs(secs);
+    // Rung 1: primed, then two rated samples of 2000 DATA/s each.
+    prime_at(&sample_system(1_000, 100), &meta(100), at(0))
         .await
         .unwrap();
-    record(&sample_system(3_000, 100), 1.0, 100.0, &meta(100))
+    record_at(&sample_system(3_000, 100), 1.0, 100.0, &meta(100), at(1))
         .await
         .unwrap();
-    // Rung 2: its first sample must be unrated even though the counters
-    // only grew, because they belong to a different rung.
-    record(&sample_system(5_000, 300), 1.0, 300.0, &meta(300))
+    record_at(&sample_system(5_000, 100), 1.0, 100.0, &meta(100), at(2))
         .await
         .unwrap();
-    record(&sample_system(9_000, 300), 1.0, 300.0, &meta(300))
+    // Rung 2 (a different output count) is not primed here, so the boundary
+    // itself must clear the history: its first sample is a baseline and the
+    // second rates at 4000/s from rung 2's own counters. A cross-rung delta
+    // would read 6000/s, so the value distinguishes the two behaviours.
+    record_at(&sample_system(7_000, 300), 1.0, 300.0, &meta(300), at(3))
+        .await
+        .unwrap();
+    record_at(&sample_system(11_000, 300), 1.0, 300.0, &meta(300), at(4))
         .await
         .unwrap();
 
@@ -382,14 +419,22 @@ async fn a_rung_change_resets_counter_history() {
     assert_eq!(rungs.len(), 2);
     for rung in rungs {
         assert_eq!(rung["samples"], 2);
-        assert_eq!(
-            rung["ratedSamples"], 1,
-            "each rung's first sample is a baseline, not a rate"
-        );
     }
     let rung_100 = rungs.iter().find(|rung| rung["outputs"] == 100).unwrap();
+    assert_eq!(
+        rung_100["ratedSamples"], 2,
+        "a primed rung rates every sample, including the first"
+    );
     assert_eq!(rung_100["ratesPerSec"]["srtDataFirstPps"]["mean"], 2000.0);
+
+    // Rung 2 was not primed here, so the rung boundary itself must clear the
+    // history: its first sample is a baseline, and the second is rated from
+    // rung 2's own counters rather than from rung 1's last sample.
     let rung_300 = rungs.iter().find(|rung| rung["outputs"] == 300).unwrap();
+    assert_eq!(
+        rung_300["ratedSamples"], 1,
+        "an unprimed rung boundary leaves the first sample unrated"
+    );
     assert_eq!(
         rung_300["ratesPerSec"]["srtDataFirstPps"]["mean"], 4000.0,
         "measured from rung 2's own baseline, not from rung 1's last sample"
@@ -428,7 +473,10 @@ fn remote_peers_gate_the_verdict() {
             "runId": run_id,
             "runIdChanged": run_changed,
             "udpRcvbufErrorsPerSec": drops,
+            "udpSndbufErrorsPerSec": 0.0,
             "udpInErrorsPerSec": 0.0,
+            "nicRxDroppedPerSec": 0.0,
+            "nicTxDroppedPerSec": 0.0,
             "error": errors,
         })
     };
@@ -453,7 +501,7 @@ fn remote_peers_gate_the_verdict() {
     assert!(
         reasons
             .iter()
-            .any(|reason| reason.contains("peer peer-a receive-buffer drops")),
+            .any(|reason| reason.contains("peer peer-a UDP receive-buffer drops")),
         "{reasons:?}"
     );
 
@@ -539,4 +587,122 @@ fn peer_state_parsing_rejects_incomplete_telemetry() {
             "{incomplete}"
         );
     }
+}
+
+/// The roadmap target is a healthy NO-LOSS path, so any retransmission in
+/// the rated window contaminates the rung and an unobservable retransmit
+/// counter is a missing sensor. No percentage threshold is invented.
+#[test]
+fn retransmissions_contaminate_a_no_loss_rung() {
+    assert_eq!(
+        sample_validity(&sample_with(json!({"srtDataRetransmitPps": 0.0})), 100)
+            .unwrap()
+            .0,
+        "healthy"
+    );
+    let (status, reasons) =
+        sample_validity(&sample_with(json!({"srtDataRetransmitPps": 12.0})), 100).unwrap();
+    assert_eq!(status, "contaminated");
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("SRT retransmissions in the rated window")),
+        "{reasons:?}"
+    );
+    let (status, reasons) = sample_validity(
+        &sample_with(json!({"srtDataRetransmitPps": Value::Null})),
+        100,
+    )
+    .unwrap();
+    assert_ne!(status, "healthy");
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("srtDataRetransmitPps is not observable")),
+        "{reasons:?}"
+    );
+}
+
+/// The rated window is measured evidence, not configuration: a rung whose
+/// counter window is shorter than the contract minimum is not a baseline.
+#[tokio::test]
+async fn a_short_rated_window_is_not_a_baseline() {
+    let _guard = SAMPLER_TEST_LOCK.lock().await;
+    let work_dir = std::env::temp_dir().join(format!(
+        "packet-contract-short-window-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&work_dir).unwrap();
+    begin(
+        &work_dir,
+        RunMetadata {
+            git_sha: Some("deadbeef".to_string()),
+            git_dirty: Some(false),
+            restream_binary: "restream".to_string(),
+            bitrate_label: "8M".to_string(),
+            peer_mode: "sink".to_string(),
+            peer_targets: vec!["127.0.0.1".to_string()],
+            peer_state: None,
+            sample_secs: 10,
+            settle_secs: 10,
+            sample_interval_ms: 1000,
+            egress_counts: vec![100],
+            scenario_filter: vec!["egress-growth-source-srt".to_string()],
+        },
+    );
+    let meta = ResourceScenarioMeta {
+        scenario: "egress-growth-source-srt",
+        label: "100-per-group".to_string(),
+        pipelines: 1,
+        outputs: 100,
+        ingest_types: "h264-srt".to_string(),
+        egress_mix: "srt-source".to_string(),
+        transcode: "no",
+    };
+    let system = {
+        let mut system = system_with_owners(json!([{
+            "present": true, "txPackets": 1_000, "txCompletedOk": 1_000, "rxPackets": 10,
+            "serviceVisits": 10, "serviceActions": 100, "maintenanceActions": 0,
+            "txFailedSends": 0, "txExhaustions": 0, "serviceBudgetExhausted": 0,
+            "txClass": {"dataFirst": 1_000, "dataRetransmit": 0},
+        }]));
+        system["capacity"] = json!({"activeLeaves": 100});
+        system
+    };
+    // A 3 second rated window: primed, then rated three times.
+    let t0 = std::time::Instant::now();
+    prime_at(&system, &meta, t0).await.unwrap();
+    for secs in 1..=3 {
+        record_at(
+            &system,
+            1.0,
+            100.0,
+            &meta,
+            t0 + std::time::Duration::from_secs(secs),
+        )
+        .await
+        .unwrap();
+    }
+    let summary_path = finish(&work_dir).unwrap().expect("summary written");
+    let summary: Value = serde_json::from_slice(&std::fs::read(&summary_path).unwrap()).unwrap();
+    let rung = &summary["rungs"][0];
+    assert_eq!(rung["ratedWindowSecs"], 3.0);
+    assert_eq!(
+        rung["validity"]["status"], "contaminated",
+        "validity: {}",
+        rung["validity"]
+    );
+    assert!(
+        rung["validity"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason
+                .as_str()
+                .unwrap_or("")
+                .contains("shorter than the 10s")),
+        "{}",
+        rung["validity"]
+    );
+    let _ = std::fs::remove_dir_all(&work_dir);
 }

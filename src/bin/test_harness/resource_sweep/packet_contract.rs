@@ -32,6 +32,11 @@ use std::sync::Mutex;
 use super::measurement::round2;
 use super::*;
 
+/// Minimum rated counter window for a rung to count as baseline evidence.
+/// Configuration alone is not evidence: the window is measured from the prime
+/// to the last rated sample.
+pub(super) const MIN_RATED_WINDOW_SECS: f64 = 10.0;
+
 /// `/metrics/system` `egressShards[].state` — the shard health enum, which is
 /// part of the current schema (`healthy`/`stalled`/`stopped`/`panicked`). It
 /// is deliberately read through this constant so it cannot be confused with
@@ -276,7 +281,9 @@ impl RunMetadata {
     pub(super) fn from_env(env: &ResourceSweepEnv) -> Self {
         Self {
             git_sha: git_output(&["rev-parse", "HEAD"]),
-            git_dirty: git_output(&["status", "--porcelain", "--untracked-files=no"])
+            // Untracked-but-not-ignored files count as dirty: a "clean tree"
+            // claim must mean the whole work tree, not just tracked files.
+            git_dirty: git_output(&["status", "--porcelain"])
                 .map(|status| !status.trim().is_empty()),
             restream_binary: env.restream_bin.display().to_string(),
             bitrate_label: env.bitrate.clone(),
@@ -333,6 +340,11 @@ fn git_output(args: &[&str]) -> Option<String> {
 /// Contract artifact state: previous counters plus every emitted record.
 struct PacketContractSampler {
     previous: Option<PacketCounters>,
+    /// When `previous` was read. Packet rates are measured over this interval,
+    /// which starts at the prime — not at the first rated sample.
+    previous_at: Option<Instant>,
+    /// Start of the rated window, set by `prime`.
+    rated_started: Option<Instant>,
     /// `(scenario, outputs)` of the previous sample. Counters are only
     /// comparable inside one rung, so a change resets the history instead of
     /// differencing a new rung against the previous rung's last sample.
@@ -365,6 +377,8 @@ pub(super) fn begin(work_dir: &Path, run: RunMetadata) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(PacketContractSampler {
         previous: None,
+        previous_at: None,
+        rated_started: None,
         previous_key: None,
         peer_fold: PeerFold::default(),
         samples: Vec::new(),
@@ -381,12 +395,55 @@ pub(super) fn summary_json(work_dir: &Path) -> PathBuf {
     work_dir.join("packet-contract.json")
 }
 
+/// Take the pre-rated baseline: the cumulative counters and every configured
+/// peer's state, immediately after the settle period and before the rated
+/// clock starts. Without this the first rated sample would be spent creating a
+/// baseline, so the rated window would begin one sampling interval late.
+pub(super) async fn prime(system: &Value, meta: &ResourceScenarioMeta<'_>) -> Result<(), String> {
+    prime_at(system, meta, Instant::now()).await
+}
+
+/// [`prime`] with an explicit observation time (tests drive the clock).
+pub(super) async fn prime_at(
+    system: &Value,
+    meta: &ResourceScenarioMeta<'_>,
+    observed_at: Instant,
+) -> Result<(), String> {
+    let peer_config = with_sampler(|sampler| sampler.run.peer_state.clone()).flatten();
+    let peer_readings = match &peer_config {
+        Some(config) => poll_peers(config).await,
+        None => Vec::new(),
+    };
+    with_sampler(|sampler| {
+        sampler.previous = Some(PacketCounters::read(system));
+        sampler.previous_at = Some(observed_at);
+        sampler.rated_started = Some(observed_at);
+        // The prime belongs to this rung, so the first rated sample must not
+        // look like a rung change and reset what the prime just established.
+        sampler.previous_key = Some((meta.scenario.to_string(), meta.outputs as u64));
+        sampler.peer_fold.clear();
+        sampler.peer_fold.prime(&peer_readings);
+    });
+    Ok(())
+}
+
 /// Record one sample. A no-op when [`begin`] was never called.
 pub(super) async fn record(
     system: &Value,
     elapsed_secs: f64,
     cpu_pct: f64,
     meta: &ResourceScenarioMeta<'_>,
+) -> Result<(), String> {
+    record_at(system, elapsed_secs, cpu_pct, meta, Instant::now()).await
+}
+
+/// [`record`] with an explicit observation time (tests drive the clock).
+pub(super) async fn record_at(
+    system: &Value,
+    elapsed_secs: f64,
+    cpu_pct: f64,
+    meta: &ResourceScenarioMeta<'_>,
+    observed_at: Instant,
 ) -> Result<(), String> {
     let peer_config = with_sampler(|sampler| sampler.run.peer_state.clone()).flatten();
     let peer_readings = match &peer_config {
@@ -400,9 +457,23 @@ pub(super) async fn record(
         let key = (meta.scenario.to_string(), meta.outputs as u64);
         if sampler.previous_key.as_ref() != Some(&key) {
             sampler.previous = None;
+            sampler.previous_at = None;
+            sampler.rated_started = Some(observed_at);
             sampler.peer_fold.clear();
             sampler.previous_key = Some(key);
         }
+        // Packet rates cover the interval since the last counter reading —
+        // the prime for the first rated sample — falling back to the caller's
+        // sampling interval when no prime happened.
+        let elapsed_secs = sampler
+            .previous_at
+            .map(|previous_at| {
+                observed_at
+                    .saturating_duration_since(previous_at)
+                    .as_secs_f64()
+            })
+            .filter(|elapsed| *elapsed > 0.0)
+            .unwrap_or(elapsed_secs);
         let counters = PacketCounters::read(system);
         let previous = sampler.previous;
         let previous_ref = previous.as_ref();
@@ -448,6 +519,12 @@ pub(super) async fn record(
         record.insert("label".to_string(), json!(meta.label));
         record.insert("outputs".to_string(), json!(meta.outputs));
         record.insert("intervalSecs".to_string(), json!(round2(elapsed_secs)));
+        record.insert(
+            "ratedSecs".to_string(),
+            json!(sampler.rated_started.map(|started| {
+                round2(observed_at.saturating_duration_since(started).as_secs_f64())
+            })),
+        );
         record.insert("cpuPct".to_string(), json!(round2(cpu_pct)));
         record.insert(
             "srtTxDatagramsPerSec".to_string(),
@@ -714,7 +791,7 @@ pub(super) async fn record(
             record.insert("expectedPeers".to_string(), json!(config.hosts.len()));
             record.insert(
                 "peers".to_string(),
-                sampler.peer_fold.record(&peer_readings, elapsed_secs),
+                sampler.peer_fold.record(&peer_readings),
             );
         }
         let mut record = Value::Object(record);
@@ -727,6 +804,7 @@ pub(super) async fn record(
             );
         }
         sampler.previous = Some(counters);
+        sampler.previous_at = Some(observed_at);
         sampler.samples.push(record.clone());
         (record, sampler.jsonl.clone())
     }) else {
@@ -740,6 +818,9 @@ pub(super) async fn record(
 
 /// Write the per-rung summary (means/peaks plus the validity verdict) and
 /// return its path. A no-op when [`begin`] was never called.
+///
+/// Per-rung aggregation lives in `packet_contract_summary.rs`; this function
+/// owns the artifact plumbing (grouping, path, `unavailable`).
 pub(super) fn finish(work_dir: &Path) -> Result<Option<PathBuf>, String> {
     let Some((samples, run)) =
         with_sampler(|sampler| (std::mem::take(&mut sampler.samples), sampler.run.to_json()))
@@ -771,7 +852,7 @@ pub(super) fn finish(work_dir: &Path) -> Result<Option<PathBuf>, String> {
                     && sample["outputs"].as_u64() == Some(*outputs)
             })
             .collect();
-        rungs.push(rung_summary(
+        rungs.push(super::packet_contract_summary::rung_summary(
             scenario,
             *outputs,
             samples.len(),
@@ -790,139 +871,10 @@ pub(super) fn finish(work_dir: &Path) -> Result<Option<PathBuf>, String> {
             "sqesPerSubmission": "Compio's runtime ring counters are not exposed; the shard sqes/cqes fields are written only by the native RTMP dataplane, so the SRT Owner path has no producer.",
             "ioUringEntersPerSec": "Same gap: no runtime enter counter is published.",
             "cyclesPerPacket": "No PMU on the reference hosts; cpuMicrosPerSrtPacket is the portable stand-in.",
-            "remotePeerNicDrops": "Remote peer UDP drops ARE collected (each peer's `/state` counters are differenced per sample window and gate the verdict), but those are the peer host's kernel UDP counters, not its NIC statistics: NIC drops stay on the peer host and are not part of this artifact."
         }
     });
     let path = summary_json(work_dir);
     std::fs::write(&path, serde_json::to_vec_pretty(&summary).unwrap())
         .map_err(|e| e.to_string())?;
     Ok(Some(path))
-}
-
-/// Aggregate one rung's samples: mean/peak rates, peak gauges, cost proxies,
-/// the workload dimensions, and the worst validity verdict with the union of
-/// its reasons.
-fn rung_summary(scenario: &str, outputs: u64, run_samples: usize, samples: &[&Value]) -> Value {
-    let mean_peak = |keys: &[&str]| -> serde_json::Map<String, Value> {
-        let mut out = serde_json::Map::new();
-        for key in keys {
-            let values: Vec<f64> = samples
-                .iter()
-                .filter_map(|sample| sample[key].as_f64())
-                .collect();
-            if values.is_empty() {
-                continue;
-            }
-            out.insert(
-                key.to_string(),
-                json!({
-                    "mean": round2(values.iter().sum::<f64>() / values.len() as f64),
-                    "peak": round2(values.iter().copied().fold(f64::MIN, f64::max)),
-                    "samples": values.len(),
-                }),
-            );
-        }
-        out
-    };
-    let rate_keys = [
-        "srtTxDatagramsPerSec",
-        "srtDataFirstPps",
-        "srtDataRetransmitPps",
-        "srtControlPps",
-        "srtRetransmitShare",
-        "srtTxCompletedPerSec",
-        "srtRxDatagramsPerSec",
-        "srtServiceVisitsPerSec",
-        "srtServiceActionsPerSec",
-        "srtMaintenanceActionsPerSec",
-        "shardLoopIterationsPerSec",
-        "shardMediaTicksPerSec",
-        "shardReadyVisitsPerSec",
-        "shardRetriesPerSec",
-        "udpInErrorsPerSec",
-        "udpRcvbufErrorsPerSec",
-        "udpSndbufErrorsPerSec",
-        "nicRxDroppedPerSec",
-        "nicTxDroppedPerSec",
-    ];
-    let gauge_keys = [
-        "shardReadyDepthMax",
-        "shardReadyDepthHwmMax",
-        "shardUnhealthyCount",
-        "shardBudgetExhaustions",
-        "shardQueueOverflows",
-        "shardDriverBudgetViolations",
-        "shardFeedResyncs",
-        "ownerTxInFlightMax",
-        "ownerTxCapacityMax",
-        "ownerTxExhaustions",
-        "ownerTxFailedSends",
-        "ownerServiceBudgetExhausted",
-        "ownerCallerInFlightHwm",
-        "ownerCallerQueuedHwm",
-        "ownerRxRingDropped",
-        "ownerRxTruncated",
-    ];
-    let mut gauges = serde_json::Map::new();
-    for key in gauge_keys {
-        gauges.insert(
-            key.to_string(),
-            json!(
-                samples
-                    .iter()
-                    .filter_map(|sample| sample[key].as_u64())
-                    .max()
-            ),
-        );
-    }
-
-    // Verdict: the worst status any rated sample reached, with each distinct
-    // reason and how many samples reported it.
-    let mut status = "healthy";
-    let mut reason_counts: Vec<(String, usize)> = Vec::new();
-    let mut rated = 0_usize;
-    for sample in samples {
-        let Some((sample_status, reasons)) = sample_validity(sample, outputs) else {
-            continue;
-        };
-        rated += 1;
-        status = match (status, sample_status) {
-            ("invalid", _) | (_, "invalid") => "invalid",
-            ("contaminated", _) | (_, "contaminated") => "contaminated",
-            _ => "healthy",
-        };
-        for reason in reasons {
-            match reason_counts.iter_mut().find(|(seen, _)| *seen == reason) {
-                Some((_, count)) => *count += 1,
-                None => reason_counts.push((reason, 1)),
-            }
-        }
-    }
-    let reasons: Vec<String> = reason_counts
-        .into_iter()
-        .map(|(reason, count)| format!("{reason} (in {count}/{rated} rated samples)"))
-        .collect();
-    let last = samples.last().copied().unwrap_or(&Value::Null);
-
-    json!({
-        "scenario": scenario,
-        "label": last["label"],
-        "outputs": outputs,
-        "samples": samples.len(),
-        "ratedSamples": rated,
-        "runSamples": run_samples,
-        "workload": {
-            "ingestTypes": last["ingestTypes"],
-            "egressMix": last["egressMix"],
-            "configuredOutputs": last["outputs"],
-        },
-        "validity": { "status": if rated == 0 { "no-rated-samples" } else { status }, "reasons": reasons },
-        "ratesPerSec": mean_peak(&rate_keys),
-        "gaugesPeak": gauges,
-        "cost": mean_peak(&[
-            "cpuMicrosPerSrtPacket",
-            "srtTxDatagramsPerOutputPerSec",
-            "srtDataFirstPpsPerOutput",
-        ]),
-    })
 }

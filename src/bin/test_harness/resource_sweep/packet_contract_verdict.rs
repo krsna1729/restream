@@ -81,8 +81,11 @@ pub(super) fn sample_validity(
                         reasons.push(format!("peer {host} sink restarted mid-rung"));
                     }
                     for (key, label) in [
-                        ("udpRcvbufErrorsPerSec", "receive-buffer"),
-                        ("udpInErrorsPerSec", "receive"),
+                        ("udpRcvbufErrorsPerSec", "UDP receive-buffer"),
+                        ("udpSndbufErrorsPerSec", "UDP send-buffer"),
+                        ("udpInErrorsPerSec", "UDP receive"),
+                        ("nicRxDroppedPerSec", "NIC receive"),
+                        ("nicTxDroppedPerSec", "NIC transmit"),
                     ] {
                         match peer[key].as_f64() {
                             Some(rate) if rate > 0.0 => {
@@ -169,6 +172,18 @@ pub(super) fn sample_validity(
             None => reasons.push(format!("{key} is not observable")),
         }
     }
+    // The roadmap's target is a healthy NO-LOSS path, so retransmissions in
+    // the rated window are end-to-end loss evidence: nonzero contaminates, and
+    // an unobservable retransmit counter is a missing sensor, not a pass. No
+    // percentage threshold is invented — zero is the no-loss condition.
+    match sample["srtDataRetransmitPps"].as_f64() {
+        Some(0.0) => {}
+        Some(rate) => reasons.push(format!(
+            "SRT retransmissions in the rated window: {rate}/s (no-loss contract)"
+        )),
+        None => reasons.push("srtDataRetransmitPps is not observable".to_string()),
+    }
+
     Some(if invalid {
         ("invalid", reasons)
     } else if reasons.is_empty() {

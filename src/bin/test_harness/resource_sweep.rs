@@ -59,6 +59,8 @@ pub(crate) use measurement::read_proc_status_kb_checked;
 mod packet_contract;
 #[path = "resource_sweep/packet_contract_peers.rs"]
 mod packet_contract_peers;
+#[path = "resource_sweep/packet_contract_summary.rs"]
+mod packet_contract_summary;
 #[path = "resource_sweep/packet_contract_tests.rs"]
 #[cfg(test)]
 mod packet_contract_tests;

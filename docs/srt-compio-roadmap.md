@@ -1038,7 +1038,8 @@ counter reset, or a missing source reads `null`, never a fabricated zero.
 | kernel drops | `/proc/net/snmp` `Udp:` `InErrors`/`RcvbufErrors`/`SndbufErrors` delta | rate |
 | NIC drops | `/sys/class/net/*/statistics/{rx,tx}_dropped` delta, loopback excluded | rate |
 | shard load | `capacity` `ingressPps`/`egressPps`/`mediaBps`/`hottestShardUtil`/`activeLeaves` and `flow` (`queue`, `backlogSlope`, `deadlineSlackMs`, `delayMs`, `errors`, `amplification`, `status`) | gauge |
-| remote peer drops | each configured peer's `GET /state` `udpInErrors`/`udpRcvbufErrors` delta over the same sample window, plus accepted connections and payload bytes. These are the peer host's kernel UDP counters (host-wide, the same semantics as the local row), not per-socket counters | rate |
+| remote peer drops | each configured peer's `GET /state` deltas over its own interval: kernel `udpInErrors`/`udpRcvbufErrors`/`udpSndbufErrors` plus non-loopback NIC `rx_dropped`/`tx_dropped`, alongside accepted connections and payload bytes. The UDP figures are host-wide (the same semantics as the local row), not per-socket counters | rate |
+| rated window | `ratedSecs` per sample, from the prime to the last rated sample; the rung records `ratedWindowSecs` | gauge |
 | SQEs/submission, io_uring enters/s | not sourced yet: the Compio runtime's ring counters are not exposed | gap |
 
 The `unavailable` block in `packet-contract.json` carries each gap with its
@@ -1052,9 +1053,13 @@ Each rated sample and each rung also carries an explicit `validity` verdict:
   configured peer, with zero peer-side drops: a missing or unreadable peer
   reading is a reason, not a pass.
 - `contaminated` — the rung was measured, but the host or the peer dropped
-  datagrams or the scheduler hit a pressure signal (kernel UDP errors, NIC
+  datagrams, the scheduler hit a pressure signal (kernel UDP errors, NIC
   drops, driver budget violations, queue overflows, service-budget
-  exhaustion). Numbers are still recorded; they are not a no-loss baseline.
+  exhaustion), the rated window is shorter than the ten-second minimum, or
+  `srtDataRetransmitPps` was nonzero. The target is a healthy **no-loss**
+  path, so any retransmission in the rated window is end-to-end loss evidence:
+  zero is the condition, no percentage threshold is invented. Numbers are
+  still recorded; they are not a no-loss baseline.
 - `invalid` — the rung cannot be compared with anything: no live SRT
   shard/owner, an active output count that is not exactly the rung's declared
   count (fewer *or* more live leaves), a non-healthy shard state, output
@@ -1068,9 +1073,17 @@ above, not a threshold invented for retransmissions.
 
 ### 10.3 Contract rules
 
+- The rated window starts at the prime: the runner reads `/metrics/system`
+  and every configured peer immediately after the settle period and before the
+  first rated sample, so no evidence is spent creating a baseline and peer
+  drops during the first interval are inside the rated window. The window is
+  measured (`ratedWindowSecs`), not inferred from configuration, and a rung
+  shorter than ten seconds is not a baseline.
 - Counters are only comparable inside one rung: a `(scenario, output count)`
   change resets the sampler's history, so every rung's first sample is a
   baseline rather than a rate differenced against the previous rung.
+- Each peer runs one fresh sink process per rung (`srt-sink`), because its
+  counters are cumulative from process start.
 - A rung is only *recorded* as a baseline with the declared workload, sink
   peers, a settle window, a sample window of at least ten seconds, a
   `packet-contract.json` whose rung verdict is `healthy`, and the run's git
