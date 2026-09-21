@@ -68,6 +68,49 @@ Full 42-case breakdown and dated MSR/resource campaigns live in
 VPS/WSL2 profiling dumps live in
 [archive/quality/baselines-profiling-2026-07.md](../../archive/quality/baselines-profiling-2026-07.md).
 
+### WI3.4 packet-rate contract — SRT fanout ladder (2026-09-21)
+
+First rung of the [WI3.4 contract](../../srt-compio-roadmap.md#10-wi34--establish-the-packet-rate-benchmark-contract)
+on this host: WSL2, 6 vCPU, ~10 GB RAM, loopback. Workload was one 1080p30
+H.264 SRT ingest at 8 Mbps (`bench-h264-8m.ts`) fanning out to SRT outputs
+whose peer was the in-process `srt-rs` sink pool (`MSR_PEER=sink`), one
+isolated stack per rung, 10 s settle + 10 s sampling, effective sample
+interval ~1.4 s. Commit `744602b6`.
+
+| Rung | Restream CPU avg/peak | RSS peak | SRT shards | TX datagrams/s | DATA pps | retransmits/s | control pps | pkts/output/s | µs CPU/pkt | ready depth cur/hwm | kernel UDP rcvbuf err/s |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 100 SRT outputs | 191.7% / 220.4% | 176 MB | 6 | 106,446 | 90,413 | 2,162 | 16,033 | 1,064 | 18.8 | 54 / 182 | 2,001 |
+| 300 SRT outputs | 360.3% / 371.8% | 437 MB | 6 | drop-dominated — see note | — | — | — | — | — | 3,607 / 7,113 | 615,093 |
+
+What these numbers say:
+
+- 100 × 8 Mbps SRT egress costs ~1.9–2.2 cores on this host at ~106 k SRT
+  datagrams/s (~1,064 packets/output/s against a ~760 DATA pps/output nominal
+  payload rate: control plus retransmissions plus TS overhead). That is the
+  distance to [the §9.4 stretch goal](../../srt-compio-roadmap.md#94-product-stretch-goal),
+  recorded here so later optimization is measured against a number, not a hunch.
+- The Owner TX pool is the first visible saturation point: in-flight peaked at
+  the full capacity of 16 at 100 outputs, `ownerServiceBudgetExhausted` was 0
+  there and 51 at 300.
+- The 300 rung is **not a valid healthy-path measurement on this host**: kernel
+  `Udp RcvbufErrors` ran at ~615 k/s mean, i.e. the in-process sink peer cannot
+  absorb 2.4 Gbps on 6 vCPU, and restream's TX rate becomes dominated by
+  retransmissions. Even the 100 rung shows nonzero kernel drops (~2 k/s), so the
+  local sink ceiling is near 100 outputs. Valid 300/500/1000 rungs need the
+  multi-host ≥25 GbE environment §9.1 calls for; until then they stay unrecorded
+  rather than recorded-and-misleading.
+- `cycles/packet` is unmeasurable here (no PMU); `cpuMicrosPerSrtPacket` (18.8 µs
+  at 100 outputs) is the portable stand-in. `schedulerWakeRate`,
+  `SQEs/submission` and `ioUringEntersPerSec` are listed as gaps in
+  `packet-contract.json`'s `unavailable` block because they have no producer in
+  the current tree.
+
+Artifacts:
+
+- `.local/artifacts/wi34-ladder/100-classed/packet-contract.json` (+
+  `resource-sweep-results.json`, `packet-contract-samples.jsonl`)
+- `.local/artifacts/wi34-ladder/100-300/` for the 300 rung and the drop evidence
+
 ## Standing optimization targets (2026-06-27 CPU profile, task-clock 999 Hz)
 
 | Self % | Symbol | Meaning | Backlog |
