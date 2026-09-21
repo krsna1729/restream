@@ -198,6 +198,9 @@ impl ResourceSweepEnv {
         Some(PeerStateConfig {
             hosts: self.srt_peer_hosts.clone(),
             port,
+            // Filled by the runner once the rung's outputs exist, so delivery
+            // can be checked per peer against the workload.
+            expected_outputs_per_host: Vec::new(),
         })
     }
 

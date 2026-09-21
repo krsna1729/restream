@@ -994,10 +994,8 @@ MSR_PEER=sink RESOURCE_SWEEP_SRT_PEER_HOSTS=peer-a,peer-b RESOURCE_SWEEP_BITRATE
 ```
 
 SRT outputs are spread over the configured hosts by a stable hash of the
-output name. The remote peer's own kernel drop counters live on the peer host
-(the `srt-sink` mode prints them per interval and in its final artifact), so
-a remote run's `packet-contract.json` names that in its `unavailable` block
-instead of reporting the measuring host's numbers as if they were the peer's.
+output name, and the rung records how many outputs each peer is expected to
+receive so delivery can be checked against the workload.
 
 Artifacts per rung, all under `WORK_DIR`:
 
@@ -1029,9 +1027,10 @@ counter reset, or a missing source reads `null`, never a fabricated zero.
 | scheduler wake rate | not sourced yet: `ShardMetrics::record_useful_wake`/`record_empty_wake` have no production caller, so `feedWakesUseful`/`feedWakesEmpty` read 0 for every backend | gap |
 | loop iterations/s, media ticks/s, ready visits/s | Σ `loopIterations`, `mediaTicks`, `readyVisits` delta — the scheduler-activity signals that are actually produced | rate |
 | scheduler ready depth | `readyDepth` / `readyDepthHwm`, max over shards | gauge |
-| budget pressure | `budgetExhaustions`, `serviceBudgetExhausted`, `queueOverflows`, `driverBudgetViolations` | gauge |
-| Owner saturation | `txInFlight`, `txCapacity`, `txExhaustions`, `txFailedSends`, `callerInFlightHwm`, `callerQueuedHwm` | gauge |
-| Owner receive pressure | `rxRingDropped`, `rxTruncated` | gauge |
+| fault/pressure counts | rated-window deltas of `ownerTxFailedSends`, `ownerTxExhaustions`, `ownerServiceBudgetExhausted`, `ownerRxRingDropped`, `ownerRxTruncated`, `shardFeedResyncs`, `shardDriverBudgetViolations`, `shardQueueOverflows` (`*Delta`). Lifetime totals stay as `*Total` for context; the verdict judges only the deltas, so ramp-up or settle-period events cannot condemn a steady-state window | count |
+| workload delivery | the peer's own delivered payload (`payloadBytesPerSec`) against `expectedOutputs × 1,000,000 B/s` (8 Mbps) within the fixture's ±5%; on a local rung, first-transmission DATA pps per output against the fixed ~760. Zero or materially under-rate delivery is never healthy | rate |
+| connection churn | `acceptedPerSec` / `closedPerSec` on each peer during the rated window; any re-accept or close means the steady state was not steady | rate |
+| budget pressure (instantaneous) | `budgetExhaustions` (shard), `txInFlight`, `txCapacity`, `callerInFlightHwm`, `callerQueuedHwm` | gauge |
 | CPU | `/proc/<pid>/stat` delta (restream process only; control plane included, reported separately from ffmpeg) | rate |
 | RSS | `/proc/<pid>/status` VmRSS, plus smaps attribution | gauge |
 | cycles/packet | not measurable on the reference hosts (no PMU); `cpuMicrosPerSrtPacket` is the portable stand-in | proxy |
@@ -1044,6 +1043,14 @@ counter reset, or a missing source reads `null`, never a fabricated zero.
 
 The `unavailable` block in `packet-contract.json` carries each gap with its
 reason, so a rung cannot silently report a zero where a metric is missing.
+
+Each rung also carries `baselineEligible`, deliberately separate from the
+runtime verdict: `healthy` describes the datapath, eligibility describes
+whether the artifact may be recorded as a contractual baseline. It requires a
+clean known SHA, the canonical `egress-growth-source-srt` / `8M` / no-transcode
+workload, an output count on the `{100, 300, 500, 1000}` ladder, a common rated
+window of at least ten seconds, and runtime `healthy` — so a promotion cannot
+happen by hand-editing the ledger.
 
 Each rated sample and each rung also carries an explicit `validity` verdict:
 
@@ -1063,8 +1070,9 @@ Each rated sample and each rung also carries an explicit `validity` verdict:
 - `invalid` — the rung cannot be compared with anything: no live SRT
   shard/owner, an active output count that is not exactly the rung's declared
   count (fewer *or* more live leaves), a non-healthy shard state, output
-  retries or feed resyncs, an Owner fault, Owner TX failures, or a remote sink
-  that restarted mid-rung.
+  retries, a rated-window feed resync, an Owner fault, rated-window Owner TX
+  failures, connection churn on a peer, or a remote sink that restarted
+  mid-rung.
 
 A metric whose source is not observable is itself a reason, so "no sensor" can
 never be mistaken for "sensor says zero". Retransmission share is reported
@@ -1073,12 +1081,14 @@ above, not a threshold invented for retransmissions.
 
 ### 10.3 Contract rules
 
-- The rated window starts at the prime: the runner reads `/metrics/system`
-  and every configured peer immediately after the settle period and before the
-  first rated sample, so no evidence is spent creating a baseline and peer
-  drops during the first interval are inside the rated window. The window is
-  measured (`ratedWindowSecs`), not inferred from configuration, and a rung
-  shorter than ten seconds is not a baseline.
+- The rated window starts at the common post-prime barrier: the runner polls
+  every configured peer first and reads `/metrics/system` after those polls
+  return, immediately after the settle period and before the first rated
+  sample. No evidence is spent creating a baseline, peer drops during the
+  first interval are inside the rated window, and `commonRatedWindowSecs`
+  measures the same interval for the local counters and the peers. The window
+  is measured, not inferred from configuration, and a rung shorter than ten
+  seconds is not baseline-eligible.
 - Counters are only comparable inside one rung: a `(scenario, output count)`
   change resets the sampler's history, so every rung's first sample is a
   baseline rather than a rate differenced against the previous rung.

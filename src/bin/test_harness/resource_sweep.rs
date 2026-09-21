@@ -702,6 +702,7 @@ async fn run_resource_egress_growth(
     let mut publisher = spawn_resource_publisher(env, config, &stream_key)?;
     wait_for_api_input_live(&active.api, &pipeline_id, Duration::from_secs(45)).await?;
     let mut output_ids = Vec::new();
+    let mut output_names: Vec<String> = Vec::new();
     let mut output_starts: Vec<(String, Instant)> = Vec::new();
     let max_outputs = *env.egress_counts.iter().max().unwrap_or(&1);
     let mut out = Vec::new();
@@ -724,6 +725,7 @@ async fn run_resource_egress_growth(
         for kind in output_kinds.iter().filter(|_| !burst_mode) {
             let name = format!("{scenario_name}-{}-{index}", kind.label());
             let (url, encoding) = resource_output_url(env, config, *kind, &name);
+            output_names.push(name.clone());
             let output_id = create_output_with_rtmp_mode(
                 &active.api,
                 &pipeline_id,
@@ -750,6 +752,18 @@ async fn run_resource_egress_growth(
             .await;
             wait_for_outputs_progress(&active.api, &pipeline_id, &output_ids, progress_timeout)
                 .await?;
+            // Which peer is expected to receive how many outputs of this rung,
+            // so the contract can check delivered payload against the workload
+            // instead of trusting it.
+            let mut expected_per_host = vec![0_usize; env.srt_peer_hosts.len()];
+            for name in &output_names {
+                if let Some(host) = env.srt_peer_host_for(name)
+                    && let Some(index) = env.srt_peer_hosts.iter().position(|peer| peer == host)
+                {
+                    expected_per_host[index] += 1;
+                }
+            }
+            packet_contract::set_peer_expected_outputs(expected_per_host);
             out.push(
                 sample_resource_window(
                     env,

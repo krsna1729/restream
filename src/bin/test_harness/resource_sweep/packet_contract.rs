@@ -60,6 +60,17 @@ pub(super) struct PacketCounters {
     pub(super) srt_data_retx: Option<u64>,
     /// SRT control datagrams submitted (ACK, ACKACK, NAK, keepalive, ...).
     pub(super) srt_control: Option<u64>,
+    /// Monotonic fault/pressure counters. They are primed and differenced like
+    /// every other counter: an event during connection ramp-up or the settle
+    /// period must not condemn an otherwise steady-state rated window.
+    pub(super) owner_tx_failed_sends: Option<u64>,
+    pub(super) owner_tx_exhaustions: Option<u64>,
+    pub(super) owner_service_budget_exhausted: Option<u64>,
+    pub(super) owner_rx_ring_dropped: Option<u64>,
+    pub(super) owner_rx_truncated: Option<u64>,
+    pub(super) shard_feed_resyncs: Option<u64>,
+    pub(super) shard_driver_budget_violations: Option<u64>,
+    pub(super) shard_queue_overflows: Option<u64>,
     pub(super) srt_service_visits: Option<u64>,
     pub(super) srt_service_actions: Option<u64>,
     pub(super) srt_maintenance_actions: Option<u64>,
@@ -123,6 +134,14 @@ impl PacketCounters {
             srt_data_first: data_first,
             srt_data_retx: data_retx,
             srt_control,
+            owner_tx_failed_sends: owner_field("txFailedSends"),
+            owner_tx_exhaustions: owner_field("txExhaustions"),
+            owner_service_budget_exhausted: owner_field("serviceBudgetExhausted"),
+            owner_rx_ring_dropped: owner_field("rxRingDropped"),
+            owner_rx_truncated: owner_field("rxTruncated"),
+            shard_feed_resyncs: shard_field("resyncCount"),
+            shard_driver_budget_violations: shard_field("driverBudgetViolations"),
+            shard_queue_overflows: shard_field("queueOverflows"),
             srt_service_visits: owner_field("serviceVisits"),
             srt_service_actions: owner_field("serviceActions"),
             srt_maintenance_actions: owner_field("maintenanceActions"),
@@ -137,6 +156,14 @@ impl PacketCounters {
             nic_tx_dropped: host.nic_tx_dropped,
         }
     }
+}
+
+/// `current - previous` as a count. `None` on the first sample, a counter
+/// reset, or a missing reading on either side — an unobservable counter never
+/// becomes a zero.
+pub(super) fn counter_delta(current: Option<u64>, previous: Option<u64>) -> Option<u64> {
+    let (current, previous) = (current?, previous?);
+    (current >= previous).then(|| current - previous)
 }
 
 /// Parse `/proc/net/snmp`'s `Udp:` header/value rows. Each column is `None`
@@ -395,6 +422,19 @@ pub(super) fn summary_json(work_dir: &Path) -> PathBuf {
     work_dir.join("packet-contract.json")
 }
 
+/// Tell the sampler how many of the rung's outputs each configured peer is
+/// expected to receive, so delivery can be checked against the workload
+/// instead of trusted. Called by the runner once the rung's outputs exist.
+pub(super) fn set_peer_expected_outputs(expected: Vec<usize>) {
+    with_sampler(|sampler| {
+        if let Some(config) = &mut sampler.run.peer_state {
+            config.expected_outputs_per_host = expected.clone();
+            let hosts = config.hosts.clone();
+            sampler.peer_fold.configure(&hosts, &expected);
+        }
+    });
+}
+
 /// Take the pre-rated baseline: the cumulative counters and every configured
 /// peer's state, immediately after the settle period and before the rated
 /// clock starts. Without this the first rated sample would be spent creating a
@@ -410,11 +450,19 @@ pub(super) async fn prime_at(
     observed_at: Instant,
 ) -> Result<(), String> {
     let peer_config = with_sampler(|sampler| sampler.run.peer_state.clone()).flatten();
+    // Peer baselines first: the local counter reading below happens after
+    // every peer poll has returned, so `ratedSecs` is measured from the common
+    // post-prime barrier rather than from a timestamp taken before the polls.
     let peer_readings = match &peer_config {
         Some(config) => poll_peers(config).await,
         None => Vec::new(),
     };
     with_sampler(|sampler| {
+        if let Some(config) = &peer_config {
+            let hosts = config.hosts.clone();
+            let expected = config.expected_outputs_per_host.clone();
+            sampler.peer_fold.configure(&hosts, &expected);
+        }
         sampler.previous = Some(PacketCounters::read(system));
         sampler.previous_at = Some(observed_at);
         sampler.rated_started = Some(observed_at);
@@ -502,6 +550,9 @@ pub(super) async fn record_at(
         };
         let capacity = &system["capacity"];
         let flow = &capacity["flow"];
+        let delta = |current: Option<u64>, get: fn(&PacketCounters) -> Option<u64>| {
+            counter_delta(current, previous_ref.and_then(get))
+        };
         let tx_datagrams_rate = rate(counters.srt_tx_datagrams, |c| c.srt_tx_datagrams);
         let data_first_rate = rate(counters.srt_data_first, |c| c.srt_data_first);
         let data_retx_rate = rate(counters.srt_data_retx, |c| c.srt_data_retx);
@@ -598,6 +649,79 @@ pub(super) async fn record_at(
             "shardUnhealthyCount".to_string(),
             json!(unhealthy_shards(&shards)),
         );
+        // Rated-window deltas for the monotonic fault/pressure counters: the
+        // verdict judges these, never the lifetime totals.
+        for (key, value) in [
+            (
+                "ownerTxFailedSendsDelta",
+                delta(counters.owner_tx_failed_sends, |c| c.owner_tx_failed_sends),
+            ),
+            (
+                "ownerTxExhaustionsDelta",
+                delta(counters.owner_tx_exhaustions, |c| c.owner_tx_exhaustions),
+            ),
+            (
+                "ownerServiceBudgetExhaustedDelta",
+                delta(counters.owner_service_budget_exhausted, |c| {
+                    c.owner_service_budget_exhausted
+                }),
+            ),
+            (
+                "ownerRxRingDroppedDelta",
+                delta(counters.owner_rx_ring_dropped, |c| c.owner_rx_ring_dropped),
+            ),
+            (
+                "ownerRxTruncatedDelta",
+                delta(counters.owner_rx_truncated, |c| c.owner_rx_truncated),
+            ),
+            (
+                "shardFeedResyncsDelta",
+                delta(counters.shard_feed_resyncs, |c| c.shard_feed_resyncs),
+            ),
+            (
+                "shardDriverBudgetViolationsDelta",
+                delta(counters.shard_driver_budget_violations, |c| {
+                    c.shard_driver_budget_violations
+                }),
+            ),
+            (
+                "shardQueueOverflowsDelta",
+                delta(counters.shard_queue_overflows, |c| c.shard_queue_overflows),
+            ),
+        ] {
+            record.insert(key.to_string(), json!(value));
+        }
+        // Lifetime totals stay for context only.
+        for (key, value) in [
+            (
+                "ownerTxFailedSendsTotal",
+                sum_field(&owners, "txFailedSends"),
+            ),
+            (
+                "ownerTxExhaustionsTotal",
+                sum_field(&owners, "txExhaustions"),
+            ),
+            (
+                "ownerServiceBudgetExhaustedTotal",
+                sum_field(&owners, "serviceBudgetExhausted"),
+            ),
+            (
+                "ownerRxRingDroppedTotal",
+                sum_field(&owners, "rxRingDropped"),
+            ),
+            ("ownerRxTruncatedTotal", sum_field(&owners, "rxTruncated")),
+            ("shardFeedResyncsTotal", sum_field(&shards, "resyncCount")),
+            (
+                "shardDriverBudgetViolationsTotal",
+                sum_field(&shards, "driverBudgetViolations"),
+            ),
+            (
+                "shardQueueOverflowsTotal",
+                sum_field(&shards, "queueOverflows"),
+            ),
+        ] {
+            record.insert(key.to_string(), json!(value));
+        }
         record.insert(
             "udpInErrorsPerSec".to_string(),
             json!(rate(counters.udp_in_errors, |c| c.udp_in_errors).map(round2)),
@@ -667,36 +791,12 @@ pub(super) async fn record_at(
             json!(sum_field(&shards, "budgetExhaustions")),
         );
         record.insert(
-            "shardQueueOverflows".to_string(),
-            json!(sum_field(&shards, "queueOverflows")),
-        );
-        record.insert(
-            "shardDriverBudgetViolations".to_string(),
-            json!(sum_field(&shards, "driverBudgetViolations")),
-        );
-        record.insert(
-            "shardFeedResyncs".to_string(),
-            json!(sum_field(&shards, "resyncCount")),
-        );
-        record.insert(
             "ownerTxInFlightMax".to_string(),
             json!(max_field(&owners, "txInFlight")),
         );
         record.insert(
             "ownerTxCapacityMax".to_string(),
             json!(max_field(&owners, "txCapacity")),
-        );
-        record.insert(
-            "ownerTxExhaustions".to_string(),
-            json!(sum_field(&owners, "txExhaustions")),
-        );
-        record.insert(
-            "ownerTxFailedSends".to_string(),
-            json!(sum_field(&owners, "txFailedSends")),
-        );
-        record.insert(
-            "ownerServiceBudgetExhausted".to_string(),
-            json!(sum_field(&owners, "serviceBudgetExhausted")),
         );
         record.insert(
             "ownerCallerInFlightHwm".to_string(),
@@ -856,6 +956,7 @@ pub(super) fn finish(work_dir: &Path) -> Result<Option<PathBuf>, String> {
             scenario,
             *outputs,
             samples.len(),
+            &run,
             &rung_samples,
         ));
     }

@@ -23,6 +23,9 @@ use super::measurement::round2;
 pub(super) struct PeerStateConfig {
     pub(super) hosts: Vec<String>,
     pub(super) port: u16,
+    /// How many of the rung's outputs each host is expected to receive, in
+    /// `hosts` order. Empty until the runner reports it.
+    pub(super) expected_outputs_per_host: Vec<usize>,
 }
 
 /// One peer reading, parsed from the sink's `/state` endpoint. Counters are
@@ -161,9 +164,19 @@ pub(super) async fn poll_peers(config: &PeerStateConfig) -> Vec<PeerReading> {
 pub(super) struct PeerFold {
     previous: HashMap<String, PeerReading>,
     first_run: HashMap<String, String>,
+    /// Host order and expected outputs per host, from the run configuration.
+    hosts: Vec<String>,
+    expected_outputs_per_host: Vec<usize>,
 }
 
 impl PeerFold {
+    /// Remember the configured host order and how many outputs each host is
+    /// expected to receive.
+    pub(super) fn configure(&mut self, hosts: &[String], expected_outputs_per_host: &[usize]) {
+        self.hosts = hosts.to_vec();
+        self.expected_outputs_per_host = expected_outputs_per_host.to_vec();
+    }
+
     /// Forget the history: a new `(scenario, outputs)` rung starts a new window.
     pub(super) fn clear(&mut self) {
         self.previous.clear();
@@ -188,6 +201,11 @@ impl PeerFold {
     pub(super) fn record(&mut self, readings: &[PeerReading]) -> Value {
         let mut peers = Vec::with_capacity(readings.len());
         for reading in readings {
+            let expected_outputs = self
+                .hosts
+                .iter()
+                .position(|host| host == &reading.host)
+                .and_then(|index| self.expected_outputs_per_host.get(index).copied());
             match &reading.state {
                 Ok(state) => {
                     let previous = self.previous.get(&reading.host);
@@ -210,6 +228,7 @@ impl PeerFold {
                     };
                     peers.push(json!({
                         "host": reading.host,
+                        "expectedOutputs": expected_outputs,
                         "runId": state.run_id,
                         "runIdChanged": run_id_changed,
                         "intervalSecs": interval_secs.map(round2),

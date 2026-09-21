@@ -17,6 +17,7 @@ pub(super) fn rung_summary(
     scenario: &str,
     outputs: u64,
     run_samples: usize,
+    run: &Value,
     samples: &[&Value],
 ) -> Value {
     let mean_peak = |keys: &[&str]| -> serde_json::Map<String, Value> {
@@ -134,6 +135,11 @@ pub(super) fn rung_summary(
         ));
     }
 
+    // Baseline eligibility is deliberately separate from runtime validity:
+    // `healthy` describes the datapath, this describes whether the artifact
+    // may be recorded as a contractual baseline at all.
+    let baseline = baseline_eligibility(run, scenario, outputs, rated_window_secs, status);
+
     json!({
         "scenario": scenario,
         "label": last["label"],
@@ -146,7 +152,8 @@ pub(super) fn rung_summary(
             "egressMix": last["egressMix"],
             "configuredOutputs": last["outputs"],
         },
-        "ratedWindowSecs": round2(rated_window_secs),
+        "commonRatedWindowSecs": round2(rated_window_secs),
+        "baselineEligible": baseline,
         "validity": { "status": if rated == 0 { "no-rated-samples" } else { status }, "reasons": reasons },
         "ratesPerSec": mean_peak(&rate_keys),
         "gaugesPeak": gauges,
@@ -155,5 +162,63 @@ pub(super) fn rung_summary(
             "srtTxDatagramsPerOutputPerSec",
             "srtDataFirstPpsPerOutput",
         ]),
+    })
+}
+
+/// Whether this rung may be recorded as a contractual baseline. Kept apart
+/// from the runtime verdict so an accidental promotion is mechanically
+/// impossible: a `healthy` datapath on a dirty tree, a non-canonical workload,
+/// an off-ladder output count or a short window is still not a baseline.
+pub(super) fn baseline_eligibility(
+    run: &Value,
+    scenario: &str,
+    outputs: u64,
+    common_window_secs: f64,
+    runtime_status: &str,
+) -> Value {
+    let mut reasons = Vec::new();
+    let sha = run["gitSha"].as_str();
+    if sha.is_none() {
+        reasons.push("the artifact records no git SHA".to_string());
+    }
+    match run["gitDirty"].as_bool() {
+        Some(false) => {}
+        Some(true) => reasons.push("the work tree was dirty at run time".to_string()),
+        None => reasons.push("the work-tree state is not observable".to_string()),
+    }
+    if run["bitrateLabel"].as_str() != Some("8M") {
+        reasons.push(format!(
+            "workload bitrate label is {:?}, not 8M",
+            run["bitrateLabel"]
+        ));
+    }
+    if scenario != "egress-growth-source-srt" {
+        reasons.push(format!(
+            "scenario {scenario:?} is not the canonical SRT fanout"
+        ));
+    }
+    if !matches!(outputs, 100 | 300 | 500 | 1000) {
+        reasons.push(format!("output count {outputs} is not a ladder rung"));
+    }
+    if common_window_secs < MIN_RATED_WINDOW_SECS {
+        reasons.push(format!(
+            "common rated window {common_window_secs:.1}s is shorter than {MIN_RATED_WINDOW_SECS:.0}s"
+        ));
+    }
+    if runtime_status != "healthy" {
+        reasons.push(format!("runtime validity is {runtime_status}, not healthy"));
+    }
+    json!({
+        "eligible": reasons.is_empty(),
+        "reasons": reasons,
+        "checks": {
+            "gitSha": sha,
+            "gitDirty": run["gitDirty"],
+            "bitrateLabel": run["bitrateLabel"],
+            "scenario": scenario,
+            "outputs": outputs,
+            "commonRatedWindowSecs": round2(common_window_secs),
+            "runtimeValidity": runtime_status,
+        }
     })
 }
