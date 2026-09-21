@@ -217,3 +217,29 @@ fn a_shard_that_never_parks_still_reaps_tx_completions() {
         v4_metrics(&harness)
     );
 }
+
+/// The per-class TX counters that the packet-rate contract reads: a run's
+/// submitted datagrams are broken down by `DatagramClass`, and the breakdown
+/// covers the same packets as `tx_packets` (it is what makes DATA pps,
+/// retransmissions and control pps measurable separately).
+#[test]
+fn owner_metrics_break_tx_packets_down_by_datagram_class() {
+    let sink = SinkPeer::v4();
+    let mut harness = Harness::new();
+    let unit = Bytes::from(vec![0x47u8; 1316]);
+    harness.add_resolved(srt_spec("typed", 1, &url_for(sink.addr)), vec![sink.addr]);
+    assert!(harness.feed_until(&unit, Duration::from_secs(10), |_| sink.payloads() >= 3));
+
+    let metrics = v4_metrics(&harness);
+    assert!(metrics.tx_packets > 0, "some datagrams were submitted");
+    assert_eq!(
+        metrics.tx_class.total(),
+        metrics.tx_packets,
+        "the class breakdown must cover exactly the submitted datagrams"
+    );
+    assert!(
+        metrics.tx_class.data_first >= 3,
+        "the three delivered payloads were DATA first transmissions: {:?}",
+        metrics.tx_class
+    );
+}

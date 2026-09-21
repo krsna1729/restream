@@ -27,7 +27,19 @@ Artifacts are written to `.local/artifacts/resource-sweep/`:
 - `resource-sweep-results.json`: stage aggregates
 - `resource-sweep-results.csv`: spreadsheet-friendly summary
 - `resource-sweep-samples.jsonl`: raw 1 Hz samples
+- `packet-contract.json`: the WI3.4 packet-rate contract summary (mean/peak
+  rates, peak gauges, cost proxies, and an `unavailable` block naming every
+  metric the product cannot source yet)
+- `packet-contract-samples.jsonl`: one packet-rate contract record per sample
 - `restream.log`, `mediamtx.log`, and publisher logs
+
+The packet-rate contract records per-second rates for the SRT Owner packet
+path (TX submissions, TX completions, RX datagrams, service visits, Owner
+actions), scheduler wake rate, ready depth, budget/exhaustion pressure, kernel
+UDP errors and NIC drops, and the capacity/flow projection — sourced from
+`/metrics/system` and host counters, so the numbers describe the shipped
+datapath. See [the SRT/Compio roadmap](srt-compio-roadmap.md) §10 for the full
+metric-to-source table.
 
 The sweep combines:
 
@@ -54,8 +66,12 @@ Useful env vars:
 - `WORK_DIR=.local/artifacts/resource-sweep-custom`
 - `RESOURCE_SWEEP_SAMPLE_SECS=10`
 - `RESOURCE_SWEEP_SETTLE_SECS=6`
+- `RESOURCE_SWEEP_BITRATE=8M` (publisher fixture bitrate label; default `1.5M`)
 - `RESOURCE_SWEEP_EGRESS_COUNTS=1,3,6`
 - `RESOURCE_SWEEP_INGEST_COUNTS=1,2,4`
+- `MSR_PEER=sink` swaps MediaMTX for in-process `srt-rs`/RTMP sink listeners,
+  which is what the packet-rate ladder uses so the peer side is not the
+  bottleneck
 - `RESOURCE_SWEEP_SCENARIOS=baseline-empty,ingest-only,ingest-growth-same,ingest-growth-mixed,egress-growth-source-same,egress-growth-source-srt,egress-growth-source-mixed,egress-growth-transcode-same,egress-growth-transcode-srt,egress-growth-transcode-mixed,egress-growth-source-plus-transcode-mixed,egress-growth-transcode-dual-mixed,egress-growth-source-plus-transcode-dual-mixed,egress-growth-hevc-bridge`
 - `RESOURCE_SWEEP_LIFECYCLE=isolated|continuous|cumulative`
 - `RESOURCE_SWEEP_NO_CLEANUP=1` to leave the final scenario running

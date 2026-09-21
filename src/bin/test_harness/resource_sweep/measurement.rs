@@ -152,6 +152,8 @@ pub(super) async fn sample_resource_window(
         let rollup = read_smaps_rollup(stack.restream_pid)?;
         let telemetry = stack.api.get_json("/api/v1/engine/telemetry").await?;
         let health = stack.api.get_json("/api/v1/engine/health").await?;
+        let system = stack.api.get_json("/metrics/system?view=summary").await?;
+        super::packet_contract::record(&system, interval_secs, restream_cpu_pct, &meta)?;
         let accounting = &telemetry["memoryAccounting"];
         let retained_kb = accounting["retainedPayloadBytes"].as_u64().unwrap_or(0) / 1024;
         let source_ring_kb = accounting["sourceRings"]

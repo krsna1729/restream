@@ -100,6 +100,9 @@ pub(super) struct ResourceSweepEnv {
     pub(super) settle_secs: u64,
     pub(super) ingest_counts: Vec<usize>,
     pub(super) egress_counts: Vec<usize>,
+    /// Publisher fixture bitrate label (`RESOURCE_SWEEP_BITRATE`, default
+    /// `1.5M`). The WI3.4 packet-rate contract runs the `8M` workload.
+    pub(super) bitrate: String,
     pub(super) scenario_filter: Option<HashSet<String>>,
     pub(super) lifecycle: ResourceSweepLifecycle,
     pub(super) no_cleanup: bool,
@@ -148,6 +151,7 @@ impl ResourceSweepEnv {
             settle_secs: env_secs("RESOURCE_SWEEP_SETTLE_SECS", 4),
             ingest_counts: parse_usize_list("RESOURCE_SWEEP_INGEST_COUNTS", "1,3,5"),
             egress_counts: parse_usize_list("RESOURCE_SWEEP_EGRESS_COUNTS", "1,5,10"),
+            bitrate: std::env::var("RESOURCE_SWEEP_BITRATE").unwrap_or_else(|_| "1.5M".to_string()),
             scenario_filter: parse_string_set("RESOURCE_SWEEP_SCENARIOS"),
             lifecycle: ResourceSweepLifecycle::from_env()?,
             no_cleanup: std::env::var("RESOURCE_SWEEP_NO_CLEANUP")

@@ -340,6 +340,15 @@ Use `ingressOwner.rxRingDropped`, `rxTruncated` and `rxRingDepth` for receive-pa
 loss and pressure, and `txFailed`, `txExhaustions` and `faulted` for the transmit
 path and Owner health.
 
+Per-shard SRT Owner counters are also published in `/metrics/system`
+`egressShards[].srtOwners[]`. Alongside `txPackets` they carry `txClass`, the
+`DatagramClass` breakdown of exactly those submissions (`dataFirst`,
+`dataRetransmit`, `ack`, `ackack`, `nak`, `keepalive`, `handshake`,
+`dropRequest`, `keyMaterial`, `shutdown`, `otherControl`). DATA pps,
+retransmission rate and protocol-control pps are read from that breakdown; a
+`txClass.total()` that does not equal `txPackets` would mean the breakdown is
+incomplete.
+
 ## Diagnostic checks
 
 `GET /metrics/system` also includes an observe-only `capacity` object. It

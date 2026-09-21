@@ -912,7 +912,7 @@ This is a stretch goal, not something to assume current code already satisfies.
 
 ## 10. WI3.4 — Establish the Packet-Rate Benchmark Contract
 
-Status: PLANNED
+Status: IN PROGRESS
 
 Build durable benchmark/evidence machinery for:
 
@@ -949,6 +949,86 @@ Measure:
 This card establishes the measurement contract.
 
 It does not optimize yet.
+
+### 10.1 Scenario ladder
+
+One 1080p30 H.264 SRT ingest at 8 Mbps
+(`test/fixtures/transport/bench-h264-8m.ts`) fanning out to N SRT outputs
+against harness-native `srt-rs` sink peers, one isolated stack per rung:
+
+```text
+N = 100, 300, 500, 1000
+```
+
+The rung is driven by the existing resource-sweep mode (`MSR_PEER=sink` swaps
+MediaMTX for in-process sink listeners so the peer side is not the bottleneck):
+
+```sh
+MSR_PEER=sink \
+RESOURCE_SWEEP_BITRATE=8M \
+RESOURCE_SWEEP_EGRESS_COUNTS=<N> \
+RESOURCE_SWEEP_SCENARIOS=egress-growth-source-srt \
+RESOURCE_SWEEP_SAMPLE_SECS=10 \
+RESOURCE_SWEEP_SETTLE_SECS=10 \
+WORK_DIR=.local/artifacts/wi34-ladder/<N> \
+scripts/harness/run.sh resource-sweep
+```
+
+Artifacts per rung, all under `WORK_DIR`:
+
+| File | Contents |
+|---|---|
+| `resource-sweep-results.json` / `.csv` | CPU, RSS, memory attribution, ring/AVIO occupancy per rung |
+| `resource-sweep-samples.jsonl` | The same, one line per sample |
+| `packet-contract.json` | Contract summary: mean/peak rates, peak gauges, cost proxies, and the `unavailable` block |
+| `packet-contract-samples.jsonl` | One contract record per sample |
+
+### 10.2 Metric contract
+
+Each contract record is sourced from production surfaces only
+(`/metrics/system`: `egressShards`, `capacity`, `ioUring`) plus host counters,
+so the numbers describe the shipped datapath rather than a benchmark-only
+build. Cumulative counters are differenced between samples; a first sample, a
+counter reset, or a missing source reads `null`, never a fabricated zero.
+
+| Metric | Source | Kind |
+|---|---|---|
+| total packet events/s | Σ `egressShards[].srtOwners[].txPackets` delta | rate |
+| TX submissions/s | the same Owner TX counter (datagrams handed to sockets) | rate |
+| DATA pps | Σ `srtOwners[].txClass.dataFirst` + `dataRetransmit` delta | rate |
+| retransmissions/s | Σ `srtOwners[].txClass.dataRetransmit` delta | rate |
+| protocol-control pps | Σ `srtOwners[].txPackets` − DATA delta | rate |
+| TX completions/s | Σ `srtOwners[].txCompletedOk` delta | rate |
+| RX datagrams/s | Σ `srtOwners[].rxPackets` delta | rate |
+| service visits/s | Σ `srtOwners[].serviceVisits` delta | rate |
+| Owner actions/s | Σ `srtOwners[].serviceActions` delta, plus `maintenanceActions` | rate |
+| scheduler wake rate | not sourced yet: `ShardMetrics::record_useful_wake`/`record_empty_wake` have no production caller, so `feedWakesUseful`/`feedWakesEmpty` read 0 for every backend | gap |
+| loop iterations/s, media ticks/s, ready visits/s | Σ `loopIterations`, `mediaTicks`, `readyVisits` delta — the scheduler-activity signals that are actually produced | rate |
+| scheduler ready depth | `readyDepth` / `readyDepthHwm`, max over shards | gauge |
+| budget pressure | `budgetExhaustions`, `serviceBudgetExhausted`, `queueOverflows`, `driverBudgetViolations` | gauge |
+| Owner saturation | `txInFlight`, `txCapacity`, `txExhaustions`, `txFailedSends`, `callerInFlightHwm`, `callerQueuedHwm` | gauge |
+| Owner receive pressure | `rxRingDropped`, `rxTruncated` | gauge |
+| CPU | `/proc/<pid>/stat` delta (restream process only; control plane included, reported separately from ffmpeg) | rate |
+| RSS | `/proc/<pid>/status` VmRSS, plus smaps attribution | gauge |
+| cycles/packet | not measurable on the reference hosts (no PMU); `cpuMicrosPerSrtPacket` is the portable stand-in | proxy |
+| kernel drops | `/proc/net/snmp` `Udp:` `InErrors`/`RcvbufErrors`/`SndbufErrors` delta | rate |
+| NIC drops | `/sys/class/net/*/statistics/{rx,tx}_dropped` delta, loopback excluded | rate |
+| shard load | `capacity` `ingressPps`/`egressPps`/`mediaBps`/`hottestShardUtil`/`activeLeaves` and `flow` (`queue`, `backlogSlope`, `deadlineSlackMs`, `delayMs`, `errors`, `amplification`, `status`) | gauge |
+| SQEs/submission, io_uring enters/s | not sourced yet: the Compio runtime's ring counters are not exposed | gap |
+
+The `unavailable` block in `packet-contract.json` carries each gap with its
+reason, so a rung cannot silently report a zero where a metric is missing.
+
+### 10.3 Contract rules
+
+- A rung is valid only with the declared workload, sink peers, a settle window,
+  a sample window of at least ten seconds, and the run's commit recorded
+  alongside the artifacts.
+- Numbers are recorded in
+  [quality baselines](agent-guidance/quality/baselines.md) with date and
+  commit; Criterion's `target/criterion/` remains scratch.
+- This tranche measures. No code may be tuned against a rung before the
+  contract numbers for the current tree are recorded.
 
 ## 11. WI3.5 — Packet-I/O Substrate Shootout
 

@@ -55,6 +55,8 @@ mod first_progress;
 mod measurement;
 pub(super) use measurement::ffmpeg_children_stats;
 pub(crate) use measurement::read_proc_status_kb_checked;
+#[path = "resource_sweep/packet_contract.rs"]
+mod packet_contract;
 use measurement::{
     ResourceAggregate, ResourceScenarioMeta, csv_escape, read_proc_stat_ticks,
     resource_aggregate_json, sample_resource_window, write_resource_sweep_csv,
@@ -120,6 +122,7 @@ pub(crate) async fn resource_sweep() -> Result<Value, String> {
     let _ = std::fs::remove_file(&env.summary_csv);
     let _ = std::fs::remove_file(&env.summary_json);
     let _ = std::fs::remove_file(&env.samples_jsonl);
+    packet_contract::begin(&env.work_dir);
 
     let mut stack = if env.lifecycle == ResourceSweepLifecycle::Isolated {
         None
@@ -168,6 +171,7 @@ pub(crate) async fn resource_sweep() -> Result<Value, String> {
     }
 
     write_resource_sweep_csv(&env.summary_csv, &aggregates)?;
+    let packet_contract_summary = packet_contract::finish(&env.work_dir)?;
     let result = json!({
         "mode": "resource-sweep",
         "lifecycle": env.lifecycle.as_str(),
@@ -175,6 +179,8 @@ pub(crate) async fn resource_sweep() -> Result<Value, String> {
             "summaryJson": env.summary_json,
             "summaryCsv": env.summary_csv,
             "samplesJsonl": env.samples_jsonl,
+            "packetContractSamplesJsonl": packet_contract::samples_jsonl(&env.work_dir),
+            "packetContractJson": packet_contract_summary,
             "restreamLog": env.restream_log,
             "mediamtxLog": env.mediamtx_log,
         },
@@ -776,7 +782,7 @@ fn spawn_resource_publisher(
         &env.srt_crypto,
         config,
         stream_key,
-        "1.5M",
+        &env.bitrate,
     )
 }
 
@@ -874,6 +880,7 @@ mod tests {
             settle_secs: 1,
             ingest_counts: Vec::new(),
             egress_counts: Vec::new(),
+            bitrate: "1.5M".to_string(),
             scenario_filter: None,
             lifecycle: ResourceSweepLifecycle::Continuous,
             no_cleanup: false,

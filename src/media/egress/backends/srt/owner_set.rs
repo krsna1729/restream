@@ -217,6 +217,9 @@ struct FamilyCounters {
     rx_bytes: u64,
     tx_packets: u64,
     tx_bytes: u64,
+    /// Per-visit TX class deltas folded in with `merge`, so `tx_class.total()`
+    /// tracks `tx_packets` exactly.
+    tx_class: srt_transport::compio::OwnerTxClassCounters,
     completed_ok: u64,
     short_sends: u64,
     failed_sends: u64,
@@ -592,6 +595,7 @@ impl SrtOwners {
                 counters.rx_bytes += report.rx_bytes as u64;
                 counters.tx_packets += report.tx_packets_submitted as u64;
                 counters.tx_bytes += report.tx_bytes_submitted as u64;
+                counters.tx_class.merge(report.tx_class);
                 counters.completed_ok += report.tx_completed_ok as u64;
                 counters.short_sends += report.tx_short_sends as u64;
                 counters.failed_sends += report.tx_failed_sends as u64;
@@ -860,6 +864,7 @@ impl SrtOwners {
                 rx_bytes: counters.rx_bytes,
                 tx_packets: counters.tx_packets,
                 tx_bytes: counters.tx_bytes,
+                tx_class: counters.tx_class,
                 tx_completed_ok: counters.completed_ok,
                 tx_short_sends: counters.short_sends,
                 tx_failed_sends: counters.failed_sends,

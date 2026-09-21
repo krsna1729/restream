@@ -40,6 +40,11 @@ pub struct OwnerFamilyMetrics {
     pub rx_bytes: u64,
     pub tx_packets: u64,
     pub tx_bytes: u64,
+    /// Per-class breakdown of `tx_packets`, accumulated from the Owner's
+    /// per-visit `tx_class` deltas. `total()` always equals `tx_packets`;
+    /// DATA-first versus DATA-retransmit versus control is what packet-rate
+    /// work needs, and it cannot be derived from the total.
+    pub tx_class: srt_transport::compio::OwnerTxClassCounters,
     pub tx_completed_ok: u64,
     pub tx_short_sends: u64,
     pub tx_failed_sends: u64,
