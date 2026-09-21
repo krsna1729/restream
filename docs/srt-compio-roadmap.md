@@ -954,7 +954,11 @@ It does not optimize yet.
 
 One 1080p30 H.264 SRT ingest at 8 Mbps
 (`test/fixtures/transport/bench-h264-8m.ts`) fanning out to N SRT outputs
-against harness-native `srt-rs` sink peers, one isolated stack per rung:
+against harness-native `srt-rs` sink peers, one isolated stack per rung. The
+fixture's effective rate is part of the contract: `tests/fixtures.rs`
+asserts that its bytes over the demuxed media span are 8.0 Mbps ±0.4, so an
+encoder or generator drift fails in CI instead of silently redefining the
+workload (the label is the payload rate, not the `-b:v` video target).
 
 ```text
 N = 100, 300, 500, 1000
@@ -974,13 +978,35 @@ WORK_DIR=.local/artifacts/wi34-ladder/<N> \
 scripts/harness/run.sh resource-sweep
 ```
 
+Run one rung per invocation (`RESOURCE_SWEEP_EGRESS_COUNTS` with a single
+value): a run that walks several counts grows the fan-out cumulatively, so
+its later rungs are not independent rungs.
+
+For the 300/500/1000 rungs the peers belong on other machines — the loopback
+sink pool saturates long before 1000 × 8 Mbps. Start a sink peer on each
+remote host and point the rung at them:
+
+```sh
+# on each peer host
+SRT_SINK_PORTS=8891 scripts/harness/run.sh srt-sink -- --no-netns
+
+# on the measuring host
+MSR_PEER=sink RESOURCE_SWEEP_SRT_PEER_HOSTS=peer-a,peer-b RESOURCE_SWEEP_BITRATE=8M RESOURCE_SWEEP_EGRESS_COUNTS=1000 RESOURCE_SWEEP_SCENARIOS=egress-growth-source-srt WORK_DIR=.local/artifacts/wi34-ladder/1000 scripts/harness/run.sh resource-sweep -- --no-netns
+```
+
+SRT outputs are spread over the configured hosts by a stable hash of the
+output name. The remote peer's own kernel drop counters live on the peer host
+(the `srt-sink` mode prints them per interval and in its final artifact), so
+a remote run's `packet-contract.json` names that in its `unavailable` block
+instead of reporting the measuring host's numbers as if they were the peer's.
+
 Artifacts per rung, all under `WORK_DIR`:
 
 | File | Contents |
 |---|---|
 | `resource-sweep-results.json` / `.csv` | CPU, RSS, memory attribution, ring/AVIO occupancy per rung |
 | `resource-sweep-samples.jsonl` | The same, one line per sample |
-| `packet-contract.json` | Contract summary: mean/peak rates, peak gauges, cost proxies, and the `unavailable` block |
+| `packet-contract.json` | Run metadata (git SHA/dirty, workload, peers, windows), one summary per `(scenario, output count)` rung, the validity verdict with reasons, and the `unavailable` block |
 | `packet-contract-samples.jsonl` | One contract record per sample |
 
 ### 10.2 Metric contract
@@ -993,11 +1019,10 @@ counter reset, or a missing source reads `null`, never a fabricated zero.
 
 | Metric | Source | Kind |
 |---|---|---|
-| total packet events/s | Σ `egressShards[].srtOwners[].txPackets` delta | rate |
-| TX submissions/s | the same Owner TX counter (datagrams handed to sockets) | rate |
-| DATA pps | Σ `srtOwners[].txClass.dataFirst` + `dataRetransmit` delta | rate |
+| TX datagrams/s | Σ `egressShards[].srtOwners[].txPackets` delta — every datagram handed to a socket, DATA plus control. This is not "total SRT events": RX and timer/maintenance work are separate rows below | rate |
+| DATA pps | Σ `srtOwners[].txClass.dataFirst` delta — first transmissions only. This is the number to compare against the ~760 DATA packets/s per destination of the product workload, and against §9.3's ≥1 M DATA pps/core | rate |
 | retransmissions/s | Σ `srtOwners[].txClass.dataRetransmit` delta | rate |
-| protocol-control pps | Σ `srtOwners[].txPackets` − DATA delta | rate |
+| protocol-control pps | Σ `srtOwners[].txPackets` − (DATA + retransmissions) delta | rate |
 | TX completions/s | Σ `srtOwners[].txCompletedOk` delta | rate |
 | RX datagrams/s | Σ `srtOwners[].rxPackets` delta | rate |
 | service visits/s | Σ `srtOwners[].serviceVisits` delta | rate |
@@ -1019,11 +1044,30 @@ counter reset, or a missing source reads `null`, never a fabricated zero.
 The `unavailable` block in `packet-contract.json` carries each gap with its
 reason, so a rung cannot silently report a zero where a metric is missing.
 
+Each rated sample and each rung also carries an explicit `validity` verdict:
+
+- `healthy` — every participant present and no drop/stall pressure observed.
+- `contaminated` — the rung was measured, but the host or the peer dropped
+  datagrams or the scheduler hit a pressure signal (kernel UDP errors, NIC
+  drops, driver budget violations, queue overflows, service-budget
+  exhaustion). Numbers are still recorded; they are not a no-loss baseline.
+- `invalid` — the rung cannot be compared with anything: no live SRT
+  shard/owner, fewer active outputs than the rung declares, a non-healthy
+  shard state, output retries or feed resyncs, an Owner fault, or Owner TX
+  failures.
+
+A metric whose source is not observable is itself a reason, so "no sensor" can
+never be mistaken for "sensor says zero". Retransmission share is reported
+alongside for context, but the verdict follows the drop/stall/fault classes
+above, not a threshold invented for retransmissions.
+
 ### 10.3 Contract rules
 
-- A rung is valid only with the declared workload, sink peers, a settle window,
-  a sample window of at least ten seconds, and the run's commit recorded
-  alongside the artifacts.
+- A rung is only *recorded* as a baseline with the declared workload, sink
+  peers, a settle window, a sample window of at least ten seconds, a
+  `packet-contract.json` whose rung verdict is `healthy`, and the run's git
+  SHA (clean tree) embedded in that artifact. A `contaminated` rung is
+  evidence about the local environment, not a performance baseline.
 - Numbers are recorded in
   [quality baselines](agent-guidance/quality/baselines.md) with date and
   commit; Criterion's `target/criterion/` remains scratch.

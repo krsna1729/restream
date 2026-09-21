@@ -233,6 +233,14 @@
             "benchProfile": false
           },
           "purpose": "recovery-focused subset of fault behavior"
+        },
+        "srt-sink": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": false,
+            "benchProfile": true
+          },
+          "purpose": "standalone SRT sink peer on this host for multi-host packet-rate rungs (RESOURCE_SWEEP_SRT_PEER_HOSTS on the measuring host); reports its own counters and UDP drop counters"
         }
       }
     }

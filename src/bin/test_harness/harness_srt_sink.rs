@@ -23,6 +23,14 @@ use srt_transport::{
 };
 use tokio::net::UdpSocket;
 
+/// One reading of a sink pool's cumulative counters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SrtSinkCounters {
+    pub accepted: u64,
+    pub discarded_bytes: u64,
+    pub closed: u64,
+}
+
 #[derive(Default)]
 struct SinkCounters {
     accepted: AtomicU64,
@@ -135,17 +143,32 @@ impl HarnessSrtSinkPool {
         })
     }
 
+    /// Cumulative counters so far (connections accepted, payload bytes
+    /// discarded, connections closed). Readable while the pool is running.
+    pub(crate) fn snapshot(&self) -> SrtSinkCounters {
+        SrtSinkCounters {
+            accepted: self.counters.accepted.load(Ordering::Relaxed),
+            discarded_bytes: self.counters.discarded_bytes.load(Ordering::Relaxed),
+            closed: self.counters.closed.load(Ordering::Relaxed),
+        }
+    }
+
     pub(crate) fn stop(mut self) {
         self.stop.store(true, Ordering::Release);
         for thread in self.threads.drain(..) {
             let _ = thread.join();
         }
+        let counters = SrtSinkCounters {
+            accepted: self.counters.accepted.load(Ordering::Relaxed),
+            discarded_bytes: self.counters.discarded_bytes.load(Ordering::Relaxed),
+            closed: self.counters.closed.load(Ordering::Relaxed),
+        };
         tracing::info!(
             "[harness-srt-sink] stopped {} port(s), accepted={}, discarded={}MB, closed={}",
             self.ports.len(),
-            self.counters.accepted.load(Ordering::Relaxed),
-            self.counters.discarded_bytes.load(Ordering::Relaxed) / (1024 * 1024),
-            self.counters.closed.load(Ordering::Relaxed),
+            counters.accepted,
+            counters.discarded_bytes / (1024 * 1024),
+            counters.closed,
         );
     }
 }

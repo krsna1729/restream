@@ -70,46 +70,46 @@ VPS/WSL2 profiling dumps live in
 
 ### WI3.4 packet-rate contract — SRT fanout ladder (2026-09-21)
 
-First rung of the [WI3.4 contract](../../srt-compio-roadmap.md#10-wi34--establish-the-packet-rate-benchmark-contract)
-on this host: WSL2, 6 vCPU, ~10 GB RAM, loopback. Workload was one 1080p30
-H.264 SRT ingest at 8 Mbps (`bench-h264-8m.ts`) fanning out to SRT outputs
-whose peer was the in-process `srt-rs` sink pool (`MSR_PEER=sink`), one
-isolated stack per rung, 10 s settle + 10 s sampling, effective sample
-interval ~1.4 s. Commit `744602b6`.
+The contract lives in
+[the SRT/Compio roadmap](../../srt-compio-roadmap.md#10-wi34--establish-the-packet-rate-benchmark-contract).
+Both 100-output rungs below are **local-host evidence, not a no-loss baseline**:
+the sink peer ran in the same 6 vCPU host, and its kernel receive-buffer drops
+are visible in each artifact's `validity` verdict.
 
-| Rung | Restream CPU avg/peak | RSS peak | SRT shards | TX datagrams/s | DATA pps | retransmits/s | control pps | pkts/output/s | µs CPU/pkt | ready depth cur/hwm | kernel UDP rcvbuf err/s |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 100 SRT outputs | 191.7% / 220.4% | 176 MB | 6 | 106,446 | 90,413 | 2,162 | 16,033 | 1,064 | 18.8 | 54 / 182 | 2,001 |
-| 300 SRT outputs | 360.3% / 371.8% | 437 MB | 6 | drop-dominated — see note | — | — | — | — | — | 3,607 / 7,113 | 615,093 |
+| Rung | Workload | Verdict | CPU avg/peak | RSS peak | TX datagrams/s | DATA pps/output | retransmits/s | control pps | µs CPU/pkt | ready depth hwm | kernel rcvbuf errors/s |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 100 outputs (`744602b6`) | 9.32 Mbps fixture (labelled 8M, since regenerated) | contaminated | 191.7% / 220.4% | 176 MB | 106,446 | 882.5 | 2,162 | 16,033 | 18.8 | 182 | 2,001 |
+| 100 outputs (`ccc29614` + contract fixes) | 8.01 Mbps fixture | contaminated | 218.6% / 260.2% | 174 MB | 89,109 | 756.6 | 1,004 | 12,445 | 25.4 | 392 | 1,308 |
 
 What these numbers say:
 
-- 100 × 8 Mbps SRT egress costs ~1.9–2.2 cores on this host at ~106 k SRT
-  datagrams/s (~1,064 packets/output/s against a ~760 DATA pps/output nominal
-  payload rate: control plus retransmissions plus TS overhead). That is the
-  distance to [the §9.4 stretch goal](../../srt-compio-roadmap.md#94-product-stretch-goal),
-  recorded here so later optimization is measured against a number, not a hunch.
-- The Owner TX pool is the first visible saturation point: in-flight peaked at
-  the full capacity of 16 at 100 outputs, `ownerServiceBudgetExhausted` was 0
-  there and 51 at 300.
-- The 300 rung is **not a valid healthy-path measurement on this host**: kernel
-  `Udp RcvbufErrors` ran at ~615 k/s mean, i.e. the in-process sink peer cannot
-  absorb 2.4 Gbps on 6 vCPU, and restream's TX rate becomes dominated by
-  retransmissions. Even the 100 rung shows nonzero kernel drops (~2 k/s), so the
-  local sink ceiling is near 100 outputs. Valid 300/500/1000 rungs need the
-  multi-host ≥25 GbE environment §9.1 calls for; until then they stay unrecorded
-  rather than recorded-and-misleading.
-- `cycles/packet` is unmeasurable here (no PMU); `cpuMicrosPerSrtPacket` (18.8 µs
-  at 100 outputs) is the portable stand-in. `schedulerWakeRate`,
-  `SQEs/submission` and `ioUringEntersPerSec` are listed as gaps in
-  `packet-contract.json`'s `unavailable` block because they have no producer in
-  the current tree.
+- The fixture fix is visible end to end: with the regenerated 8.0 Mbps fixture
+  (`tests/fixtures.rs` asserts the effective rate) the measured
+  first-transmission DATA rate is **756.6 packets/s/output** against the
+  roadmap's ~760, while the earlier row's 882.5 was the mislabelled 9.32 Mbps
+  fixture — which is why that rung is reclassified instead of kept as the
+  baseline.
+- Neither rung is healthy. Kernel UDP receive-buffer errors (mean 1,308/s, peak
+  3,789/s in the corrected rung) plus `ownerServiceBudgetExhausted` make the
+  verdict `contaminated`; retransmissions (~2% of first-transmission DATA in the
+  corrected rung) follow from the same peer-side pressure. A healthy rung needs
+  the sink peer on another host (`srt-sink` +
+  `RESOURCE_SWEEP_SRT_PEER_HOSTS`) or the ≥25 GbE multi-host environment §9.1
+  requires, so no contractual baseline is recorded yet.
+- The Owner TX pool reached full occupancy (16 in flight) in both rungs while
+  `txExhaustions` stayed 0: that is "full-pool occupancy observed", not evidence
+  that the pool is the first bottleneck.
+- The earlier 300-output rung stays **invalid** rather than merely contaminated:
+  ~615 k/s kernel receive-buffer errors mean the sink peer was saturated, so its
+  packet rates were retransmission-dominated and are not recorded here.
+- `cycles/packet` is unmeasurable on this host (no PMU); `cpuMicrosPerSrtPacket`
+  is the stand-in. Scheduler wake rate, SQEs/submission and io_uring enters/s
+  remain unsourced — each is named in the artifact's `unavailable` block.
 
-Artifacts:
-
-- `.local/artifacts/wi34-ladder/100-classed/packet-contract.json` (+
-  `resource-sweep-results.json`, `packet-contract-samples.jsonl`)
-- `.local/artifacts/wi34-ladder/100-300/` for the 300 rung and the drop evidence
+Artifacts: `.local/artifacts/wi34-rung-100/` (corrected rung, with
+`packet-contract.json` carrying the git SHA, workload/peer environment and the
+per-rung validity verdict), `.local/artifacts/wi34-ladder/100-300/` (the
+earlier 100/300 rungs and the drop evidence).
 
 ## Standing optimization targets (2026-06-27 CPU profile, task-clock 999 Hz)
 

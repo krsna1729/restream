@@ -57,6 +57,11 @@ pub(super) use measurement::ffmpeg_children_stats;
 pub(crate) use measurement::read_proc_status_kb_checked;
 #[path = "resource_sweep/packet_contract.rs"]
 mod packet_contract;
+#[path = "resource_sweep/packet_contract_tests.rs"]
+#[cfg(test)]
+mod packet_contract_tests;
+#[path = "resource_sweep/packet_contract_verdict.rs"]
+mod packet_contract_verdict;
 use measurement::{
     ResourceAggregate, ResourceScenarioMeta, csv_escape, read_proc_stat_ticks,
     resource_aggregate_json, sample_resource_window, write_resource_sweep_csv,
@@ -122,7 +127,7 @@ pub(crate) async fn resource_sweep() -> Result<Value, String> {
     let _ = std::fs::remove_file(&env.summary_csv);
     let _ = std::fs::remove_file(&env.summary_json);
     let _ = std::fs::remove_file(&env.samples_jsonl);
-    packet_contract::begin(&env.work_dir);
+    packet_contract::begin(&env.work_dir, packet_contract::RunMetadata::from_env(&env));
 
     let mut stack = if env.lifecycle == ResourceSweepLifecycle::Isolated {
         None
@@ -820,16 +825,37 @@ fn spawn_resource_publisher_with_bitrate(
     spawn_publisher_with_selection(&fixture, &url, format, selection, Some(&log_path))
 }
 
+/// Move one harness-built SRT publish URL onto a remote peer host. Only the
+/// loopback authority the harness itself builds is replaced, and IPv6 hosts are
+/// bracketed, so a rung against `RESOURCE_SWEEP_SRT_PEER_HOSTS` reaches a real
+/// remote sink without touching any other part of the URL.
+fn srt_url_on_host(url: &str, host: &str) -> String {
+    let authority = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    url.replacen("srt://127.0.0.1:", &format!("srt://{authority}:"), 1)
+}
+
 fn resource_output_url(
     env: &ResourceSweepEnv,
     config: SweepConfig,
     kind: SweepOutputKind,
     name: &str,
 ) -> (String, String) {
-    (
-        kind.publish_url(env.mtx_rtmp, env.mtx_rtmps, env.mtx_srt, name),
-        kind.encoding(config.multi_audio).to_string(),
-    )
+    let url = kind.publish_url(env.mtx_rtmp, env.mtx_rtmps, env.mtx_srt, name);
+    // SRT outputs can target sink peers on another host
+    // (`RESOURCE_SWEEP_SRT_PEER_HOSTS`), which is what the multi-host rungs of
+    // the packet-rate ladder need. RTMP output kinds keep loopback peers.
+    let url = match (env.srt_peer_host_for(name), kind) {
+        (
+            Some(host),
+            SweepOutputKind::SrtSource | SweepOutputKind::Srt720p | SweepOutputKind::Srt1080p,
+        ) => srt_url_on_host(&url, host),
+        _ => url,
+    };
+    (url, kind.encoding(config.multi_audio).to_string())
 }
 
 fn resource_output_progress_timeout(output_count: usize) -> Duration {
@@ -855,6 +881,27 @@ pub(crate) fn scaled_output_progress_timeout(
 mod tests {
     use super::*;
 
+    /// The multi-host rung path: only the loopback authority is replaced.
+    #[test]
+    fn srt_urls_move_onto_a_remote_peer_host() {
+        let url = "srt://127.0.0.1:8891?streamid=publish:live/key&latency=200";
+        assert_eq!(
+            srt_url_on_host(url, "peer-a"),
+            "srt://peer-a:8891?streamid=publish:live/key&latency=200"
+        );
+        assert_eq!(
+            srt_url_on_host(url, "2001:db8::5"),
+            "srt://[2001:db8::5]:8891?streamid=publish:live/key&latency=200",
+            "IPv6 peer hosts are bracketed"
+        );
+        assert_eq!(
+            srt_url_on_host(url, "[2001:db8::5]"),
+            "srt://[2001:db8::5]:8891?streamid=publish:live/key&latency=200"
+        );
+        let already_remote = "srt://peer-b:8891?streamid=publish:live/key";
+        assert_eq!(srt_url_on_host(already_remote, "peer-a"), already_remote);
+    }
+
     fn test_env() -> ResourceSweepEnv {
         ResourceSweepEnv {
             work_dir: PathBuf::from("."),
@@ -875,6 +922,7 @@ mod tests {
             mtx_api: 9997,
             peer_count: 4,
             peer_mode: ResourceSweepPeer::Mediamtx,
+            srt_peer_hosts: Vec::new(),
             sample_secs: 1,
             sample_interval_ms: 1000,
             settle_secs: 1,

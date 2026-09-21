@@ -73,6 +73,8 @@ mod resource_sweep;
 mod sinks;
 #[path = "test_harness/srt_raw_sink.rs"]
 mod srt_raw_sink;
+#[path = "test_harness/srt_sink.rs"]
+mod srt_sink;
 #[path = "test_harness/srt_slow_peer.rs"]
 mod srt_slow_peer;
 #[path = "test_harness/srt_urls.rs"]
@@ -239,6 +241,7 @@ async fn run() -> Result<(), String> {
             "signal.control" => signal_control().await,
             "recovery" => recovery().await,
             "resource-sweep" => resource_sweep().await,
+            "srt-sink" => srt_sink::srt_sink_mode().await,
             "msr" => msr().await,
             "msr.dashboard" => msr_dashboard().await,
             "bitrate-sweep" => bitrate_sweep().await,
