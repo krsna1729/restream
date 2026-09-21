@@ -340,8 +340,10 @@ Peer: `udp-drain` in the sink namespace on CPUs 3-5, 2 wildcard sockets, 64 MiB
 `SO_RCVBUF`. Both variants are CPU-saturated on their core for the whole window
 (`senderCpuSecs == windowSecs`).
 
-Two lane configurations, because moving the peer's receive path between CPUs
-moves the ceiling with it:
+Measured on the WI3.5 working tree, committed as `c9fe93b9`; the only change
+between the first rows and that commit was a clippy type-alias/lifetime refactor
+with no behavioral difference. Two lane configurations, because moving the
+peer's receive path between CPUs moves the ceiling with it:
 
 | Configuration | Run | pps | pps/core | payload Gbit/s | receiver | Verdict |
 |---|---|---:|---:|---:|---|---|
