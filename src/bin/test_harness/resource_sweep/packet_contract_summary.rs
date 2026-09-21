@@ -465,9 +465,12 @@ pub(super) fn baseline_eligibility(
         host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "0.0.0.0"
     };
     let remote_peers = !peer_hosts.is_empty() && peer_hosts.iter().all(|host| !is_loopback(host));
-    if outputs >= 300 && !remote_peers {
+    // "Remote" must mean another machine, not just a non-loopback address: a
+    // same-host netns/veth peer is still this host's CPU and kernel.
+    if outputs >= 300 && (!remote_peers || topology["sameHost"] != false) {
         reasons.push(format!(
-            "{outputs}-output rungs need non-loopback sink peers (configured: {peer_hosts:?})"
+            "{outputs}-output rungs need a second host: peers {peer_hosts:?} in topology {:?}",
+            topology["kind"]
         ));
     }
     for (key, expected) in [

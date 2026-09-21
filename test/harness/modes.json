@@ -241,6 +241,22 @@
             "benchProfile": true
           },
           "purpose": "standalone SRT sink peer on this host for multi-host packet-rate rungs (RESOURCE_SWEEP_SRT_PEER_HOSTS on the measuring host); reports its own counters and UDP drop counters"
+        },
+        "udp-drain": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": false,
+            "benchProfile": true
+          },
+          "purpose": "cheap wildcard UDP drain peer for substrate benchmarks: one receive socket per thread, counters and kernel drop counters on /state, so a sender result can be classified as receiver-limited or attributable"
+        },
+        "substrate-pps": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": false,
+            "benchProfile": true
+          },
+          "purpose": "substrate UDP submission benchmark (compio vs native io_uring): one pinned sender CPU, 1000 destinations over the veth lane, preconstructed payload, queue-depth window; reports pps, pps/core and payload Gbit/s with the drain peer's counters deciding attribution"
         }
       }
     }

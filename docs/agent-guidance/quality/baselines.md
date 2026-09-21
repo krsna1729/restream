@@ -297,7 +297,11 @@ Dated MSR/resource campaign write-ups:
 VPS and WSL2 profiling dumps:
 [baselines-profiling-2026-07.md](../../archive/quality/baselines-profiling-2026-07.md).
 
-### WI3.4A local reference lane — veth + CPU partitioning (`a4024c64`, 2026-09-21)
+### WI3.4A local reference lane — veth + CPU partitioning (measurement tree `a4024c64`; ledger commit `f72387ed`, 2026-09-21)
+
+Measured tree `a4024c64` (clean, bench provenance matching that SHA); the
+numbers below were recorded in the ledger by `f72387ed`, which is
+documentation-only.
 
 Single-host development lane: sink process in its own network namespace over a
 veth pair (`scripts/harness/veth-topology.sh`), restream pinned to CPUs 0-2 and
@@ -321,3 +325,59 @@ contract's ladder is 100/300/500/1000) and the 100-output rung misses the
 workload; both also carry residual no-loss violations. A `healthy`,
 ladder-eligible artifact still needs either a host with more CPU headroom or a
 cheaper receiver (WI3.5's UDP drain), or the external-host lane (WI3.4B).
+
+### WI3.5 substrate A/B — Compio vs native io_uring (2026-09-21)
+
+Harness mode `substrate-pps`: one sender CPU pinned exclusively
+(`SUBSTRATE_SENDER_CPUS`), harness/control on disjoint CPUs, 1000 IPv4
+destinations inside the peer's local prefix, preconstructed 1316-byte payload,
+queue depth 64, identical socket model (one unconnected wildcard UDP socket,
+same `SO_SNDBUF`), identical sliding-window completion semantics (one completion
+reaped per iteration, one refill), warmup then a 20 s window. `pps/core` is
+completed datagrams divided by the sender thread's own CPU seconds
+(`/proc/self/task/<tid>/stat`), not wall-clock divided by an assumed core count.
+Peer: `udp-drain` in the sink namespace on CPUs 3-5, 2 wildcard sockets, 64 MiB
+`SO_RCVBUF`. Both variants are CPU-saturated on their core for the whole window
+(`senderCpuSecs == windowSecs`).
+
+Two lane configurations, because moving the peer's receive path between CPUs
+moves the ceiling with it:
+
+| Configuration | Run | pps | pps/core | payload Gbit/s | receiver | Verdict |
+|---|---|---:|---:|---:|---|---|
+| plain lane | `compio` | 139 837 | 139 853 | 1.472 | all datagrams, 0 drops | healthy |
+| plain lane | `io-uring` | 114 046 | 114 061 | 1.201 | all datagrams, 0 drops | healthy |
+| plain lane | control: bare blocking `sendto` (Python, 1 CPU) | 111 467 | — | 1.174 | all datagrams, 0 drops | — |
+| plain lane | control: same, single destination | 119 493 | — | 1.258 | all datagrams, 0 drops | — |
+| RPS on the peer rx queue | control: bare blocking `sendto` | 139 867 | — | 1.473 | all datagrams, 0 drops | — |
+| RPS on the peer rx queue | `compio` | 172 540 | 172 554 | 1.817 | 0.28 % short, 0 drops | receiver-limited |
+| RPS on the peer rx queue | `io-uring` | 146 403 | 146 420 | 1.541 | 3.4 % short, 27 297 rcvbuf drops | receiver-limited |
+| plain lane, exploratory | native path reaping the whole 64-deep window per ring enter | — | 155 941 | 1.643 | all datagrams, 0 drops | healthy |
+
+**The lane, not the submission API, is the ceiling.** A bare blocking `sendto`
+loop reaches 111 467 pps on the plain lane — within ~25 % of both
+implementations — and destination diversity is not the cause (single
+destination: 119 493 pps). Moving the peer's receive path off the sender's core
+with RPS lifts the control to 139 867 pps, and at that point the *receiver*
+becomes the limiter (the higher-rate runs above lose datagrams at the drain).
+Either way the sender's transmit path costs ~7 µs of CPU per datagram on veth,
+roughly an order of magnitude above a NIC path, so **this lane cannot support a
+2 Mpps/core statement in either direction**; it can only compare implementations
+under identical conditions, and under those conditions the submission mechanism
+is not the differentiator at this rate.
+
+Batched ring enters (64 SQEs per enter, whole window reaped per iteration) did
+buy +37 % over the aligned sliding pattern (155 941 vs 114 061 pps/core), so
+syscall amortization is real but second-order next to the per-packet cost — and
+it must be re-measured on a lane where the sender is not paying veth's peer-side
+work before it means anything.
+
+The `rps_cpus` knob is per-run lane configuration, not a benchmark parameter:
+the topology script leaves it at 0 (plain lane) and an operator sets it per run.
+`scripts/harness/lane-ceiling-control.py` is committed as the control that
+decides attribution for every substrate run.
+
+Next measurement step (WI3.5 continuation): substrate numbers need a lane whose
+per-packet cost is not veth-bound — RPS-enabled partitioning plus the external
+host of WI3.4B, or a driver-level path — before any substrate conclusion is
+drawn.

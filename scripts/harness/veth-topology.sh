@@ -22,8 +22,17 @@ ROOT_DIR="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 NETNS="${WI3_NETNS:-wi3-sink}"
 VETH_HOST="${WI3_VETH_HOST:-veth-wi3}"
 VETH_PEER="${WI3_VETH_PEER:-veth-wi3p}"
-HOST_ADDR="${WI3_HOST_ADDR:-10.53.0.1/24}"
-PEER_ADDR="${WI3_PEER_ADDR:-10.53.0.2/24}"
+# A /16 keeps a whole destination prefix local inside the namespace, so a
+# benchmark can address 1000 distinct destinations while one wildcard drain
+# socket receives them all.
+# Destination prefix the namespace accepts as local (see the route added below):
+# a benchmark addresses 1000 distinct destinations inside it while one wildcard
+# drain socket receives them all. Both ends are /32 addresses so the prefix is
+# reached through the peer as a gateway rather than by resolving 1000
+# neighbours.
+WI3_DEST_PREFIX="${WI3_DEST_PREFIX:-10.53.0.0/16}"
+HOST_ADDR="${WI3_HOST_ADDR:-10.53.0.1/32}"
+PEER_ADDR="${WI3_PEER_ADDR:-10.53.0.2/32}"
 SRT_PORT="${WI3_SRT_PORT:-8891}"
 STATE_PORT="${WI3_STATE_PORT:-9997}"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/.local/artifacts/wi3-topology}"
@@ -33,6 +42,7 @@ usage() {
   cat >&2 <<EOF
 usage:
   scripts/harness/veth-topology.sh up [--cpus <restream-mask> <sink-mask>]
+  scripts/harness/veth-topology.sh start-peer [srt-sink|udp-drain]
   scripts/harness/veth-topology.sh down
   scripts/harness/veth-topology.sh status
 
@@ -89,6 +99,16 @@ cmd_up() {
   netns_exec ip addr add "$PEER_ADDR" dev "$VETH_PEER"
   netns_exec ip link set "$VETH_PEER" up
   netns_exec ip link set lo up
+  # Point-to-point addressing: only the peer address needs resolution, and the
+  # destination prefix is routed through it.
+  ip route add "$PEER_ADDR" dev "$VETH_HOST"
+  ip route add "$WI3_DEST_PREFIX" via "${PEER_ADDR%%/*}" dev "$VETH_HOST"
+  netns_exec ip route add "$HOST_ADDR" dev "$VETH_PEER"
+
+  # The namespace accepts the whole destination prefix as local, so packets
+  # addressed to any of the 1000 destinations are delivered to its sockets.
+  netns_exec ip route add local "$WI3_DEST_PREFIX" dev "$VETH_PEER"
+  echo "[veth-topology] namespace treats ${WI3_DEST_PREFIX} as local"
 
   # Keep the veth path out of the host's forwarding/NAT rules.
   sysctl -qw "net.ipv4.conf.${VETH_HOST}.forwarding=0" || true
@@ -98,6 +118,7 @@ cmd_up() {
 export RESTREAM_BENCH_TOPOLOGY=netns-veth
 export RESTREAM_BENCH_NETNS=${NETNS}
 export RESOURCE_SWEEP_SRT_PEER_HOSTS=${PEER_ADDR%%/*}
+export WI3_DEST_PREFIX=${WI3_DEST_PREFIX}
 export MTX_SRT=${SRT_PORT}
 export MTX_API=${STATE_PORT}
 export RESTREAM_CPUSET=${restream_mask}
@@ -110,9 +131,7 @@ EOF
   cat <<EOF
 [veth-topology] run the peer inside the namespace:
   source ${ENV_FILE}
-  taskset -c \${SRT_SINK_CPUSET} ip netns exec ${NETNS} \\
-    SRT_SINK_PORTS=${SRT_PORT} SRT_SINK_STATE_PORT=${STATE_PORT} \\
-    target/bench/test_harness srt-sink --no-netns
+  scripts/harness/veth-topology.sh start-peer [srt-sink|udp-drain]
 EOF
 }
 
@@ -135,9 +154,41 @@ cmd_status() {
   [[ -f "$ENV_FILE" ]] && sed 's/^/  /' "$ENV_FILE" || echo "  absent"
 }
 
+# Start the peer process inside the namespace on the sink CPUs, with the ports
+# and masks from the generated env file. `env` is required: `ip netns exec`
+# would otherwise try to execute the assignment as a program.
+cmd_start_peer() {
+  local mode="${1:-srt-sink}"
+  [[ -f "$ENV_FILE" ]] || { echo "[veth-topology] run 'up' first (${ENV_FILE} missing)" >&2; exit 2; }
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  local binary="${WI3_PEER_BIN:-$ROOT_DIR/target/bench/sink-peer/test_harness}"
+  [[ -x "$binary" ]] || { echo "[veth-topology] peer binary missing: ${binary}" >&2; exit 2; }
+  case "$mode" in
+    srt-sink)
+      exec sudo -n ip netns exec "$NETNS" env \
+        SRT_SINK_PORTS="$SRT_PORT" SRT_SINK_STATE_PORT="$STATE_PORT" \
+        SRT_SINK_CPUSET="$SRT_SINK_CPUSET" HARNESS_SRT_SINK_THREADS="${HARNESS_SRT_SINK_THREADS:-4}" \
+        HARNESS_SRT_SINK_UDP_BUFFER="${HARNESS_SRT_SINK_UDP_BUFFER:-33554432}" \
+        "$binary" srt-sink --no-netns
+      ;;
+    udp-drain)
+      exec sudo -n ip netns exec "$NETNS" env \
+        UDP_DRAIN_PORT="${UDP_DRAIN_PORT:-9000}" UDP_DRAIN_STATE_PORT="$STATE_PORT" \
+        UDP_DRAIN_CPUSET="$SRT_SINK_CPUSET" \
+        "$binary" udp-drain --no-netns
+      ;;
+    *)
+      echo "[veth-topology] unknown peer mode ${mode}; expected srt-sink or udp-drain" >&2
+      exit 2
+      ;;
+  esac
+}
+
 case "${1:-}" in
   up) shift; cmd_up "$@" ;;
   down) cmd_down ;;
   status) cmd_status ;;
+  start-peer) shift; cmd_start_peer "$@" ;;
   *) usage; exit 2 ;;
 esac

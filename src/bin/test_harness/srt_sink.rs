@@ -14,134 +14,11 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
-
+use super::peer_state::{
+    bind_state_listener, cpus_allowed_list, host_nic_drop_counters, host_udp_drop_counters,
+    pin_to_cpuset, run_id, serve_state_json, udp_drops_since_start,
+};
 use super::*;
-
-/// `InErrors`, `RcvbufErrors` and `SndbufErrors` from `/proc/net/snmp`'s
-/// `Udp:` row: the kernel counters that show a sink host dropping datagrams it
-/// could not buffer. `None` when the file or any column is unavailable.
-fn host_udp_drop_counters() -> Option<(u64, u64, u64)> {
-    let snmp = std::fs::read_to_string("/proc/net/snmp").ok()?;
-    let mut lines = snmp
-        .lines()
-        .filter_map(|line| line.strip_prefix("Udp:"))
-        .map(str::split_whitespace);
-    let (header, values) = (lines.next()?, lines.next()?);
-    let column = |name: &str| -> Option<u64> {
-        header
-            .clone()
-            .position(|field| field == name)
-            .and_then(|index| values.clone().nth(index))
-            .and_then(|value| value.parse::<u64>().ok())
-    };
-    Some((
-        column("InErrors")?,
-        column("RcvbufErrors")?,
-        column("SndbufErrors")?,
-    ))
-}
-
-/// This process's own CPU affinity, as `/proc/self/status` reports it. Recorded
-/// so the measuring host sees the sink's *observed* mask, not what was asked
-/// for.
-fn cpus_allowed_list() -> Option<String> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    status
-        .lines()
-        .find_map(|line| line.strip_prefix("Cpus_allowed_list:"))
-        .map(|value| value.trim().to_string())
-}
-
-/// Pin this process (and every thread spawned afterwards, which inherits the
-/// creating thread's mask) to `mask`, e.g. `2-5` or `0,2-3`.
-fn pin_to_cpuset(mask: &str) -> Result<(), String> {
-    let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
-    unsafe { libc::CPU_ZERO(&mut set) };
-    for part in mask.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        let (start, end) = match part.split_once('-') {
-            Some((start, end)) => (
-                start.parse::<usize>().map_err(|e| e.to_string())?,
-                end.parse::<usize>().map_err(|e| e.to_string())?,
-            ),
-            None => {
-                let cpu = part.parse::<usize>().map_err(|e| e.to_string())?;
-                (cpu, cpu)
-            }
-        };
-        if end < start || end >= libc::CPU_SETSIZE as usize {
-            return Err(format!("cpu mask {mask:?} is out of range"));
-        }
-        for cpu in start..=end {
-            unsafe { libc::CPU_SET(cpu, &mut set) };
-        }
-    }
-    let rc = unsafe { libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set) };
-    if rc != 0 {
-        return Err(format!(
-            "sched_setaffinity({mask:?}): {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    Ok(())
-}
-
-/// Identity of one sink process: a restarted sink must be visible as a new
-/// run, because its cumulative counters restart too.
-fn run_id() -> String {
-    let started_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis())
-        .unwrap_or(0);
-    format!("{:x}-{started_ms:x}", std::process::id())
-}
-
-/// Non-loopback interface drop counters, summed: a receiving NIC can drop
-/// before UDP ever sees the packet, so a peer's losslessness evidence needs
-/// them alongside the kernel UDP counters. `None` when no interface could be
-/// read, so the measuring host sees a missing sensor rather than zero drops.
-fn host_nic_drop_counters() -> (Option<u64>, Option<u64>) {
-    let mut rx = None;
-    let mut tx = None;
-    if let Ok(entries) = std::fs::read_dir("/sys/class/net") {
-        for entry in entries.flatten() {
-            if entry.file_name() == "lo" {
-                continue;
-            }
-            let statistics = entry.path().join("statistics");
-            if let Some(value) = read_counter_file(&statistics.join("rx_dropped")) {
-                rx = Some(rx.unwrap_or(0) + value);
-            }
-            if let Some(value) = read_counter_file(&statistics.join("tx_dropped")) {
-                tx = Some(tx.unwrap_or(0) + value);
-            }
-        }
-    }
-    (rx, tx)
-}
-
-/// Kernel UDP error counters since this sink started, for the human-readable
-/// log line; the state endpoint serves the absolute values.
-fn udp_drops_since_start(start: Option<(u64, u64, u64)>) -> Option<(u64, u64, u64)> {
-    let (start_in, start_rcv, start_snd) = start?;
-    let (in_errors, rcvbuf, sndbuf) = host_udp_drop_counters()?;
-    Some((
-        in_errors.saturating_sub(start_in),
-        rcvbuf.saturating_sub(start_rcv),
-        sndbuf.saturating_sub(start_snd),
-    ))
-}
-
-fn read_counter_file(path: &Path) -> Option<u64> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-}
 
 /// Absolute counters served to the measuring host, plus the run identity.
 #[allow(clippy::too_many_arguments)]
@@ -176,41 +53,20 @@ fn state_json(
     })
 }
 
-/// One `GET /state` request per connection: no keep-alive, no routing.
-async fn serve_state(
-    listener: TcpListener,
-    run: String,
-    started_ms: u128,
-    ports: Vec<u16>,
-    counters: SrtSinkCountersHandle,
-) {
-    loop {
-        let Ok((mut socket, _)) = listener.accept().await else {
-            continue;
-        };
-        let (nic_rx_dropped, nic_tx_dropped) = host_nic_drop_counters();
-        let body = state_json(
-            &run,
-            started_ms,
-            cpus_allowed_list().as_deref(),
-            &ports,
-            counters.snapshot(),
-            host_udp_drop_counters(),
-            nic_rx_dropped,
-            nic_tx_dropped,
-        )
-        .to_string();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        tokio::spawn(async move {
-            let mut request = [0_u8; 512];
-            let _ = socket.read(&mut request).await;
-            let _ = socket.write_all(response.as_bytes()).await;
-            let _ = socket.shutdown().await;
-        });
-    }
+/// The sink's own state body: absolute counters, run identity and the observed
+/// CPU mask.
+fn sink_state(run: &str, started_ms: u128, ports: &[u16], counters: SrtSinkCounters) -> Value {
+    let (nic_rx_dropped, nic_tx_dropped) = host_nic_drop_counters();
+    state_json(
+        run,
+        started_ms,
+        cpus_allowed_list().as_deref(),
+        ports,
+        counters,
+        host_udp_drop_counters(),
+        nic_rx_dropped,
+        nic_tx_dropped,
+    )
 }
 
 /// The peer-side half of a multi-host rung: bind the SRT sink listeners, serve
@@ -258,23 +114,13 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
     // measuring host polls it every sample and refuses `healthy` without it.
     // Dual-stack first (Linux maps IPv4 onto [::] by default), IPv4-only as
     // the fallback, so a peer host addressed by raw IPv6 can still be polled.
-    let listener = match TcpListener::bind(format!("[::]:{state_port}")).await {
-        Ok(listener) => listener,
-        Err(dual_stack_error) => TcpListener::bind(format!("0.0.0.0:{state_port}"))
-            .await
-            .map_err(|ipv4_error| {
-                format!(
-                    "srt-sink state endpoint on {state_port}: {dual_stack_error} / {ipv4_error}"
-                )
-            })?,
-    };
-    let state_task = tokio::spawn(serve_state(
-        listener,
-        run.clone(),
-        started_ms,
-        ports.clone(),
-        pool.counters(),
-    ));
+    let listener = bind_state_listener(state_port).await?;
+    let state_task = tokio::spawn(serve_state_json(listener, {
+        let run = run.clone();
+        let ports = ports.clone();
+        let counters = pool.counters();
+        std::sync::Arc::new(move || sink_state(&run, started_ms, &ports, counters.snapshot()))
+    }));
     println!(
         "[srt-sink] run {run} listening on {ports:?} with {threads} thread(s), {udp_buffer} B udp buffer; \
          state endpoint on {state_port}/state (dual-stack when available); send SIGINT/SIGTERM to stop"

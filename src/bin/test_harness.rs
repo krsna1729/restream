@@ -67,6 +67,9 @@ mod mixed_runner;
 mod mode_specs;
 #[path = "test_harness/output_progress.rs"]
 mod output_progress;
+
+#[path = "test_harness/peer_state.rs"]
+mod peer_state;
 #[path = "test_harness/resource_sweep.rs"]
 mod resource_sweep;
 #[path = "test_harness/sinks.rs"]
@@ -79,8 +82,14 @@ mod srt_sink;
 mod srt_slow_peer;
 #[path = "test_harness/srt_urls.rs"]
 mod srt_urls;
+
+#[path = "test_harness/substrate_pps.rs"]
+mod substrate_pps;
 #[path = "test_harness/suite.rs"]
 mod suite;
+
+#[path = "test_harness/udp_drain.rs"]
+mod udp_drain;
 #[path = "test_harness/workflow_exec.rs"]
 mod workflow_exec;
 
@@ -242,6 +251,8 @@ async fn run() -> Result<(), String> {
             "recovery" => recovery().await,
             "resource-sweep" => resource_sweep().await,
             "srt-sink" => srt_sink::srt_sink_mode().await,
+            "udp-drain" => udp_drain::udp_drain_mode().await,
+            "substrate-pps" => substrate_pps::substrate_pps_mode().await,
             "msr" => msr().await,
             "msr.dashboard" => msr_dashboard().await,
             "bitrate-sweep" => bitrate_sweep().await,

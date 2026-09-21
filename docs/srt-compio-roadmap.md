@@ -912,7 +912,9 @@ This is a stretch goal, not something to assume current code already satisfies.
 
 ## 10. WI3.4 — Establish the Packet-Rate Benchmark Contract
 
-Status: WI3.4A IN PROGRESS (contract frozen; local reference artifact pending);
+Status: WI3.4A DONE (contract frozen; local reference artifact recorded — tree
+`a4024c64`, ledger commit `f72387ed`, artifacts under
+`.local/artifacts/wi3-lane-50/` and `.local/artifacts/wi3-lane-100/`);
 WI3.4B PENDING INFRASTRUCTURE (external-host baseline)
 
 WI3.4 splits into two deliverables with different prerequisites:
@@ -1137,7 +1139,10 @@ whether the artifact may be recorded as a contractual baseline. It requires:
 - the canonical workload (`h264-srt` ingest, `srt-source` egress, no
   transcode, `8M`) and an output count on the `{100, 300, 500, 1000}` ladder,
   with non-loopback sink peers for the 300/500/1000 rungs (loopback targets are rejected, so "remote" is mechanically true);
-- a common rated window of at least ten seconds, **every** sample rated (a primed rung rates all of them, so `no-rated-samples` can never promote), and runtime `healthy`.
+- a common rated window of at least ten seconds, **every** sample rated (a primed rung rates all of them, so `no-rated-samples` can never promote), and runtime `healthy`;
+- for the external-host lane (`WI3.4B`), a non-loopback peer host **and**
+  `topology.sameHost == false`, so a same-host `netns-veth` peer cannot stand in
+  for a second machine.
 
 So a promotion cannot happen by hand-editing the ledger, and a stale bench
 pair or a convenient non-canonical run cannot masquerade as a baseline.
@@ -1201,7 +1206,21 @@ above, not a threshold invented for retransmissions.
 
 ## 11. WI3.5 — Packet-I/O Substrate Shootout
 
-Status: PLANNED (runs in the single-host development lane; no second host needed)
+Status: IN PROGRESS — first tranche measured (harness mode `substrate-pps`,
+variants `compio` and `io-uring`, plus the `udp-drain` peer and the
+`scripts/harness/lane-ceiling-control.py` control). Result: on the single-host
+veth lane a bare blocking `sendto` loop reaches 111 467 pps, `compio` 139 853 and
+native `io_uring` 114 061 pps/core — all within ~25 % of each other and of the
+control, so **the lane is the ceiling, not the submission API**, and this lane
+cannot yet support a 2 Mpps/core statement in either direction (per-datagram
+sender cost is ~7 µs on veth versus sub-µs on a NIC path). Batched ring enters
+bought +37 % (155 941 pps/core), second-order next to the per-packet cost. With
+`rps_cpus` set on the peer's rx queue the ceiling moves to the receiver instead
+(172 554 / 146 420 pps/core, both `receiver-limited`). Evidence:
+`docs/agent-guidance/quality/baselines.md` (WI3.5 substrate A/B). Next: move the
+substrate numbers onto a lane whose per-packet cost is not veth-bound
+(RPS-enabled partitioning plus the external host of WI3.4B, or a driver-level
+path) before drawing any substrate conclusion.
 
 Topology: sender pinned to dedicated CPUs, receivers in network namespaces
 over veth, pinned to disjoint CPUs (`§10.1a`). The receivers are cheap UDP
@@ -1227,9 +1246,12 @@ one pinned CPU
 
 Compare:
 
-1. current Compio TX path
-2. purpose-built fixed-slot native io_uring benchmark
-3. native io_uring with large multi-SQE batches
+1. current Compio TX path — **measured** (139 853 pps/core, sliding window)
+2. purpose-built fixed-slot native io_uring benchmark — **measured** (114 061
+   pps/core, sliding window, one `SendMsg` per datagram)
+3. native io_uring with large multi-SQE batches — exploratory only (155 941
+   pps/core reaping the whole window per ring enter); needs a non-veth-bound
+   lane before it is a result
 4. SQPOLL where supported
 5. SEND_ZC where supported and beneficial
 6. AF_XDP zero-copy reference

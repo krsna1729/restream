@@ -417,7 +417,7 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
             300,
             12.0,
             "healthy",
-            "need non-loopback sink peers",
+            "need a second host",
         ),
         (
             json!({"bitrateLabel": "4M"}),
@@ -505,6 +505,53 @@ fn baseline_eligibility_requires_the_canonical_run_shape() {
             "{needle}: {eligibility}"
         );
     }
+
+    // A non-loopback peer address is not enough: a same-host netns/veth peer is
+    // still this machine, so the external-host rule needs `sameHost: false`.
+    let remote_topology = json!({
+        "kind": "remote", "sameHost": false, "cpuPartitioned": Value::Null,
+        "restreamCpusAllowed": "0-7", "peerCpusAllowed": {"peer-a": "0-7"},
+    });
+    let external = baseline_eligibility(
+        &canonical_run(),
+        "egress-growth-source-srt",
+        300,
+        12.0,
+        "healthy",
+        8,
+        8,
+        &canonical_workload(),
+        &remote_topology,
+    );
+    assert!(
+        !external["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason.as_str().unwrap_or("").contains("need a second host")),
+        "{external}"
+    );
+
+    let same_host_with_remote_addresses = baseline_eligibility(
+        &canonical_run(),
+        "egress-growth-source-srt",
+        300,
+        12.0,
+        "healthy",
+        8,
+        8,
+        &canonical_workload(),
+        &partitioned,
+    );
+    assert_eq!(same_host_with_remote_addresses["eligible"], false);
+    assert!(
+        same_host_with_remote_addresses["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason.as_str().unwrap_or("").contains("need a second host")),
+        "{same_host_with_remote_addresses}"
+    );
 
     // A rung with unrated samples must never promote, even when the wall-clock
     // window is long enough and nothing else is wrong.
