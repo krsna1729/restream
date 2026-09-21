@@ -1454,9 +1454,22 @@ two-process real-`Owner` qualification with an independent receiver process.
 Extend those shapes rather than building another synthetic Owner.
 
 Fanout first: find the highest fanout at which the SRT sink is provably not the
-limiter (this host: below the 50-100 range where the sink became
-receiver-limited), and hold it for A/B/C/D. WI3.6 is about attribution, not maximum
-fanout.
+limiter, and hold it for A/B/C/D. WI3.6 is about attribution, not maximum fanout.
+
+Measured caveat (2026-09-21): on this host the same-host sink is **not provably
+lossless at any probed fanout** — 20 outputs dropped 93/s and 27/s (98.5 %
+delivery) with 8 MiB sink buffers, 17/s and 2.2/s (97.3 %) with 32 MiB, and 10
+outputs still dropped 14/s and 14.7/s (97.5 %). Residual drops of ~0.15 % persist
+at ten outputs, so before the ladder runs one of these must be chosen explicitly:
+more receiver CPU/buffers, an external receiver (WI3.4B), or a documented residual
+threshold that still counts as receiver-unlimited.
+
+Load regime matters as much as fanout: stage A saturates at 6.65 us/datagram of
+sender CPU on this lane, while stage D at 10 outputs reports 55 us per SRT packet
+because it is paced and wakeup-bound far below saturation. Stages must be compared
+at matched load — pace stage A to the product rate, or measure the SRT stages at
+saturation on a receiver that can absorb it — and every figure must state its
+regime.
 
 Report, per stage, over repeated windows (median/min/max):
 

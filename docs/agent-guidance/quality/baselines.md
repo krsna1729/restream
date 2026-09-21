@@ -413,3 +413,41 @@ itself; that target needs either a fundamentally cheaper transmit mechanism
 (AF_XDP/XDP TX or equivalent kernel bypass) or a different host/kernel
 configuration, and the SRT protocol work of WI3.6 adds on top of whichever figure
 the substrate finally provides.
+
+### WI3.6 ladder start — common-topology rungs on the veth lane (2026-09-21)
+
+Same topology for every rung: veth lane (`wi3-sink` namespace), one pinned sender
+CPU (CPU 0), harness on 1-2, receiver on 3-5, 1316-byte payload, 8 Mbps-equivalent
+shape. Stage A is unpaced (substrate instrument); stage D is the product path at
+its contract rate.
+
+| Stage | Fanout | Result | Receiver | Verdict |
+|---|---:|---|---|---|
+| A: raw Compio UDP (veth, unpaced) | 10 dests | **150 350 pps/core** (6.65 us/datagram sender CPU), 1.583 Gbit/s, user 1.68 s / sys 18.32 s | 0 drops, loss 7e-6 | healthy, attributable |
+| A: raw Compio UDP (veth, unpaced) | 1000 dests | 139 853 pps/core | 0 drops | healthy |
+| D: full Restream SRT egress | 10 outputs | DATA-first 760.85 pps/output, total SRT datagrams 956.29 pps/output, `cpuMicrosPerSrtPacket` mean 55.13 | 14.0 / 14.7 rcvbuf drops per second in 2 of 12 samples, delivery 97.5 % | contaminated |
+
+Two findings that shape the rest of the ladder:
+
+1. **The same-host SRT sink is not provably lossless at any probed fanout.** At 20
+   outputs (8 MiB sink buffers) drops ran 93/s and 27/s with 98.5 % delivery; with
+   32 MiB buffers, 17/s and 2.2/s with 97.3 %; at 10 outputs, 14.0/s and 14.7/s
+   with 97.5 %, plus one retransmission blip (5.68/s). Residual drops of ~0.15 %
+   persist even at ten outputs, so "the receiver is provably not the limiter" is
+   not demonstrable on this host as configured: it needs more receiver CPU or
+   buffers, an external receiver (WI3.4B), or an explicitly documented residual
+   threshold. The receiver is the reason the ladder cannot simply be run at the
+   product's larger fanouts.
+2. **Load regime matters more than the ladder's ordering.** Stage A saturates at
+   6.65 us/datagram of sender CPU, while stage D at 10 outputs reports 55 us per
+   SRT packet — a paced, wakeup-dominated regime far below saturation. Comparing
+   those two numbers directly would attribute pacing overhead to the SRT protocol.
+   The ladder must therefore compare stages at matched load (pace stage A to the
+   product rate, or measure the SRT stages at saturation on a receiver that can
+   absorb it), and report the regime alongside every figure.
+
+Amplification is measurable today and already recorded: at 10 outputs the product
+path sends 1.257 total SRT datagrams per first-transmission DATA packet
+(956.29 / 760.85), which is the denominator that keeps control and retransmission
+traffic from reading as CPU inefficiency.
+
