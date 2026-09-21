@@ -559,3 +559,49 @@ row is lossless yet, so no A/B attribution is drawn from them; the earlier
 ceiling" — the counters now say which stage dropped, and the answer depends on the
 configuration.
 
+### WI3.6 measurement fence + clean Stage-A repeats (2026-09-21)
+
+Two-sided fence, now proven end to end:
+
+- **Sender quiescence** (previous change) drains in-flight operations to zero before
+  acknowledging a pause.
+- **Receiver settlement** (new): after each sender quiescence boundary the harness
+  polls the peer until its datagram delta equals the sender's completed count —
+  warmup delta against `warm_completed`, window delta against `completedInWindow` —
+  and returns immediately as loss if any UDP/NIC/application/softnet drop counter
+  increments. The rated clock and the sender CPU sample stop at sender quiescence,
+  so settlement time is never charged to the sender. `settlement.window.outcome`
+  must be `settled` for a run to be attributable.
+- The live `/state` now publishes the `softnet` block the gate reads (it previously
+  appeared only in the drain's exit JSON, so a clean run could never become
+  attributable).
+
+Diagnostic receiver hardened so it cannot become the benchmark bottleneck: per-thread
+cache-line-separated counters with per-thread datagram counts and granted
+`SO_RCVBUF` per socket in `/state`, `recvmmsg` batches of 32 (`UDP_DRAIN_BATCH`),
+`recv` in the single-datagram path, four drain threads on CPUs 2-5, and the interval
+log now divides each delta by the interval since the previous tick rather than by
+total uptime. `netdev_max_backlog` is restored on every exit path, independently of
+whether the namespace still exists.
+
+**Clean Stage-A repeats** (10 destinations, 20 s, RPS lane, backlog 1 000 000,
+4 drain threads, exact `received == completed`, zero UDP/NIC/softnet drops):
+
+| Arm | Clean runs | pps/core median (min-max) | us/datagram median (min-max) |
+|---|---:|---:|---:|
+| `compio` (frozen, `Pin<Box<dyn Future>>` per send) | 3/3 | 175 026 (174 332-175 971) | 5.71 (5.68-5.74) |
+| `compio-pipeline` (homogeneous futures, no boxing) | 2/3 | 171 973 (168 364-175 581) | 5.82 (5.70-5.94) |
+| `sendto` (blocking `libc::sendto`) | 3/3 | 176 569 (156 956-178 215) | 5.66 (5.61-6.37) |
+
+**The boxing question is retired.** With clean rows the three arms are
+indistinguishable: 5.66-5.82 us/datagram across boxed Compio, unboxed Compio
+pipeline and plain blocking `sendto`, all within run variance. The earlier "~4 %
+boxing cost" was receiver contamination, not a harness cost — so Stage A -> B will
+not be measuring harness allocation, it will be measuring Owner/TxEngine execution
+cost. The clean Stage-A baseline for the ladder is **~5.7 us/datagram of sender CPU
+(≈175 000 datagrams/s on one pinned core)** under the fence.
+
+Still open before A -> B attribution is published: allocation counts and bytes per
+datagram for A and B, the product-paced regime rows, and the Stage B implementation
+behind a harness-only `bench-internals` feature.
+

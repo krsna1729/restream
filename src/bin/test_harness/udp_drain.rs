@@ -12,7 +12,7 @@
 //! socket receives them all.
 
 use std::net::UdpSocket;
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -96,8 +96,8 @@ fn bind_drain_socket(port: u16, rcvbuf: usize, timeout: Duration) -> Result<UdpS
 fn drain_loop(socket: UdpSocket, stop: Arc<AtomicBool>, counters: Arc<DrainCounters>) {
     let mut buffer = [0_u8; 65_536];
     while !stop.load(Ordering::Relaxed) {
-        match socket.recv_from(&mut buffer) {
-            Ok((len, _)) => {
+        match socket.recv(&mut buffer) {
+            Ok(len) => {
                 counters.datagrams.fetch_add(1, Ordering::Relaxed);
                 counters.bytes.fetch_add(len as u64, Ordering::Relaxed);
             }
@@ -112,11 +112,119 @@ fn drain_loop(socket: UdpSocket, stop: Arc<AtomicBool>, counters: Arc<DrainCount
     }
 }
 
+/// The receive buffer the kernel actually granted this socket, read back rather
+/// than assumed: a requested size is clamped to `net.core.rmem_max`.
+fn granted_rcvbuf(socket: &UdpSocket) -> Option<u64> {
+    let mut value: libc::c_int = 0;
+    let mut len = std::mem::size_of_val(&value) as libc::socklen_t;
+    let rc = unsafe {
+        libc::getsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_RCVBUF,
+            &mut value as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    (rc == 0).then_some(value as u64)
+}
+
+/// One drain thread's counters. Cache-line separated: every datagram touches
+/// two of these fields, and sharing one cache line across receiver CPUs would
+/// put the apparatus's own coherence traffic into the measurement it exists to
+/// keep cheap.
+#[repr(align(64))]
 #[derive(Default)]
 struct DrainCounters {
     datagrams: AtomicU64,
     bytes: AtomicU64,
     errors: AtomicU64,
+}
+
+impl DrainCounters {
+    fn snapshot(&self) -> (u64, u64, u64) {
+        (
+            self.datagrams.load(Ordering::Relaxed),
+            self.bytes.load(Ordering::Relaxed),
+            self.errors.load(Ordering::Relaxed),
+        )
+    }
+}
+
+/// One drain thread's socket identity, so reuseport hash skew is visible.
+struct DrainSocket {
+    index: usize,
+    local_port: u16,
+    requested_rcvbuf_bytes: usize,
+    granted_rcvbuf_bytes: Option<u64>,
+    counters: Arc<DrainCounters>,
+}
+
+/// Datagrams per `recvmmsg` call. One syscall per datagram is not a property of
+/// the workload; the receiver is apparatus and must not become the ceiling.
+fn drain_batch() -> usize {
+    env_usize("UDP_DRAIN_BATCH", 32).clamp(1, 256)
+}
+
+/// Blocking `recvmmsg` drain: up to `batch` datagrams per syscall, no
+/// per-datagram allocation, and a receive timeout so the stop flag is observed
+/// promptly when traffic stops.
+fn drain_loop_batched(
+    socket: UdpSocket,
+    stop: Arc<AtomicBool>,
+    counters: Arc<DrainCounters>,
+    batch: usize,
+) {
+    const SLOT_BYTES: usize = 2048;
+    let mut arena = vec![0_u8; SLOT_BYTES * batch];
+    let mut iovecs: Vec<libc::iovec> = (0..batch)
+        .map(|slot| libc::iovec {
+            iov_base: arena[slot * SLOT_BYTES..].as_mut_ptr() as *mut libc::c_void,
+            iov_len: SLOT_BYTES,
+        })
+        .collect();
+    let mut messages: Vec<libc::mmsghdr> = (0..batch)
+        .map(|slot| {
+            let mut header: libc::mmsghdr = unsafe { std::mem::zeroed() };
+            header.msg_hdr.msg_iov = &mut iovecs[slot] as *mut libc::iovec;
+            header.msg_hdr.msg_iovlen = 1;
+            header
+        })
+        .collect();
+    let fd = socket.as_raw_fd();
+    while !stop.load(Ordering::Relaxed) {
+        let received = unsafe {
+            libc::recvmmsg(
+                fd,
+                messages.as_mut_ptr(),
+                batch as u32,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        if received <= 0 {
+            let error = std::io::Error::last_os_error();
+            match error.kind() {
+                std::io::ErrorKind::WouldBlock
+                | std::io::ErrorKind::TimedOut
+                | std::io::ErrorKind::Interrupted => {}
+                _ => {
+                    counters.errors.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            continue;
+        }
+        let mut bytes = 0_u64;
+        for message in messages.iter_mut().take(received as usize) {
+            bytes += u64::from(message.msg_len);
+            // Reset the slot length: recvmmsg overwrites it per call.
+            message.msg_hdr.msg_iovlen = 1;
+        }
+        counters
+            .datagrams
+            .fetch_add(received as u64, Ordering::Relaxed);
+        counters.bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
 }
 
 /// The peer-side half of a substrate run: bind the drain sockets, serve the
@@ -148,42 +256,87 @@ pub(crate) async fn udp_drain_mode() -> Result<Value, String> {
         .unwrap_or(0);
     let run = run_id();
     let start_drops = host_udp_drop_counters();
-    let counters = Arc::new(DrainCounters::default());
     let stop = Arc::new(AtomicBool::new(false));
+    let batch = drain_batch();
 
     let mut handles = Vec::with_capacity(threads);
+    let mut sockets = Vec::with_capacity(threads);
     for index in 0..threads {
         let socket = bind_drain_socket(port, rcvbuf, Duration::from_millis(200))?;
-        let counters = Arc::clone(&counters);
+        let counters = Arc::new(DrainCounters::default());
+        sockets.push(DrainSocket {
+            index,
+            local_port: socket.local_addr().map_err(|e| e.to_string())?.port(),
+            requested_rcvbuf_bytes: rcvbuf,
+            granted_rcvbuf_bytes: granted_rcvbuf(&socket),
+            counters: Arc::clone(&counters),
+        });
         let stop = Arc::clone(&stop);
         let handle = std::thread::Builder::new()
             .name(format!("udp-drain-{index}"))
-            .spawn(move || drain_loop(socket, stop, counters))
+            .spawn(move || {
+                if batch > 1 {
+                    drain_loop_batched(socket, stop, counters, batch);
+                } else {
+                    drain_loop(socket, stop, counters);
+                }
+            })
             .map_err(|e| format!("spawn drain thread {index}: {e}"))?;
         handles.push(handle);
     }
 
+    let sockets = Arc::new(sockets);
     let listener = bind_state_listener(state_port).await?;
     let state_task = tokio::spawn(serve_state_json(listener, {
         let run = run.clone();
-        let counters = Arc::clone(&counters);
+        let sockets = Arc::clone(&sockets);
         Arc::new(move || {
             let (nic_rx_dropped, nic_tx_dropped) = host_nic_drop_counters();
+            let per_thread: Vec<Value> = sockets
+                .iter()
+                .map(|socket| {
+                    let (datagrams, bytes, errors) = socket.counters.snapshot();
+                    json!({
+                        "index": socket.index,
+                        "localPort": socket.local_port,
+                        "datagrams": datagrams,
+                        "bytes": bytes,
+                        "receiveErrors": errors,
+                        "requestedRcvbufBytes": socket.requested_rcvbuf_bytes,
+                        "grantedRcvbufBytes": socket.granted_rcvbuf_bytes,
+                    })
+                })
+                .collect();
+            let total: u64 = sockets
+                .iter()
+                .map(|socket| socket.counters.datagrams.load(Ordering::Relaxed))
+                .sum();
+            let total_bytes: u64 = sockets
+                .iter()
+                .map(|socket| socket.counters.bytes.load(Ordering::Relaxed))
+                .sum();
+            let total_errors: u64 = sockets
+                .iter()
+                .map(|socket| socket.counters.errors.load(Ordering::Relaxed))
+                .sum();
             json!({
                 "runId": run,
                 "startedAtMs": started_ms,
                 "cpusAllowedList": cpus_allowed_list(),
                 "port": port,
                 "threads": threads,
+                "batch": batch,
                 "rcvbufBytes": rcvbuf,
-                "datagrams": counters.datagrams.load(Ordering::Relaxed),
-                "bytes": counters.bytes.load(Ordering::Relaxed),
-                "receiveErrors": counters.errors.load(Ordering::Relaxed),
+                "datagrams": total,
+                "bytes": total_bytes,
+                "receiveErrors": total_errors,
+                "perThread": per_thread,
                 "udpInErrors": host_udp_drop_counters().map(|drops| drops.0),
                 "udpRcvbufErrors": host_udp_drop_counters().map(|drops| drops.1),
                 "udpSndbufErrors": host_udp_drop_counters().map(|drops| drops.2),
                 "nicRxDropped": nic_rx_dropped,
                 "nicTxDropped": nic_tx_dropped,
+                "softnet": softnet_counters(),
                 "uptimeSecs": (SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map(|elapsed| elapsed.as_millis())
@@ -193,22 +346,26 @@ pub(crate) async fn udp_drain_mode() -> Result<Value, String> {
         })
     }));
     println!(
-        "[udp-drain] run {run} draining :{port} on {threads} thread(s) with {rcvbuf} B rcvbuf; \
-         state endpoint on {state_port}/state; send SIGINT/SIGTERM to stop"
+        "[udp-drain] run {run} draining :{port} on {threads} thread(s), recvmmsg batch {batch}, \
+         {rcvbuf} B rcvbuf requested; state endpoint on {state_port}/state; SIGINT/SIGTERM to stop"
     );
 
     let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|e| format!("install SIGTERM handler: {e}"))?;
     let mut last = (0_u64, 0_u64);
+    let mut last_at = Instant::now();
     let stopped_by = loop {
         tokio::select! {
             _ = ticker.tick() => {
                 let now = (
-                    counters.datagrams.load(Ordering::Relaxed),
-                    counters.bytes.load(Ordering::Relaxed),
+                    sockets.iter().map(|s| s.counters.datagrams.load(Ordering::Relaxed)).sum::<u64>(),
+                    sockets.iter().map(|s| s.counters.bytes.load(Ordering::Relaxed)).sum::<u64>(),
                 );
-                let secs = started.elapsed().as_secs_f64();
+                // Per-interval rate: the delta since the previous tick over the
+                // time since the previous tick, not over total uptime.
+                let now_at = Instant::now();
+                let interval = now_at.duration_since(last_at).as_secs_f64().max(1e-9);
                 let drops = udp_drops_since_start(start_drops);
                 println!(
                     "[udp-drain] {}",
@@ -216,23 +373,37 @@ pub(crate) async fn udp_drain_mode() -> Result<Value, String> {
                         "runId": run,
                         "uptimeSecs": started.elapsed().as_secs(),
                         "datagrams": now.0,
-                        "datagramsPerSec": (now.0.saturating_sub(last.0)) as f64 / secs.max(1e-9),
+                        "datagramsPerSec": (now.0.saturating_sub(last.0)) as f64 / interval,
                         "bytes": now.1,
-                        "receiveErrors": counters.errors.load(Ordering::Relaxed),
+                        "receiveErrors": sockets
+                            .iter()
+                            .map(|s| s.counters.errors.load(Ordering::Relaxed))
+                            .sum::<u64>(),
                         "udpRcvbufErrorsSinceStart": drops.map(|drops| drops.1),
                         "udpInErrorsSinceStart": drops.map(|drops| drops.0),
+                        "softnetDroppedSinceStart": softnet_counters().and_then(|s| s["dropped"].as_u64()),
                     })
                 );
                 last = now;
+                last_at = now_at;
             }
             _ = tokio::signal::ctrl_c() => break "ctrl_c",
             _ = sigterm.recv() => break "sigterm",
         }
     };
 
-    let datagrams = counters.datagrams.load(Ordering::Relaxed);
-    let bytes = counters.bytes.load(Ordering::Relaxed);
-    let errors = counters.errors.load(Ordering::Relaxed);
+    let datagrams: u64 = sockets
+        .iter()
+        .map(|s| s.counters.datagrams.load(Ordering::Relaxed))
+        .sum();
+    let bytes: u64 = sockets
+        .iter()
+        .map(|s| s.counters.bytes.load(Ordering::Relaxed))
+        .sum();
+    let errors: u64 = sockets
+        .iter()
+        .map(|s| s.counters.errors.load(Ordering::Relaxed))
+        .sum();
     let drops = udp_drops_since_start(start_drops);
     state_task.abort();
     stop.store(true, Ordering::Relaxed);

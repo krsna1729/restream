@@ -1516,20 +1516,24 @@ independent receiver process above is the part to run. Upstream qualification
 reconciled receiver DATA with zero receiver loss through F=200 in that shape, so it
 is a far better candidate than repairing the hybrid Tokio/`HighResWaiter` sink.
 
-Stage A controls (exploratory, RPS lane, saturation, **not yet clean**): `compio`
-(frozen, boxed) 164 342 pps/core = 6.08 us/datagram; `compio-pipeline` (no
-per-datagram boxing) 171 872 = 5.82; `sendto` 172 089 = 5.81. Every row is
-receiver-path contaminated, so **no boxing bound is claimed**: the ~4 % gap is a
-signal to re-measure, not a bound, and "anything above 0.26 us/datagram is
-Owner-side" must not be stated. Stage A -> B is the *raw Compio pipeline ->
-Owner/TxEngine execution delta* until allocation evidence justifies a narrower
-attribution.
+Stage A controls, clean (RPS lane, backlog 1 000 000, 4 drain threads, exact
+`received == completed`, zero UDP/NIC/softnet drops, 3 runs each): `compio`
+(frozen, boxed) 175 026 pps/core = 5.71 us/datagram median; `compio-pipeline` (no
+per-datagram boxing) 171 973 = 5.82; `sendto` 176 569 = 5.66. **The boxing question
+is retired**: the three arms are indistinguishable within run variance, so the
+earlier ~4 % reading was receiver contamination. The clean Stage-A baseline for the
+ladder is ~5.7 us/datagram (about 175 000 datagrams/s on one pinned core) under the
+fence, and Stage A -> B measures *Owner/TxEngine execution cost*, not harness
+allocation.
 
-Boundary correctness is a precondition for those repeats: a pause request must stop
-refilling, drain in-flight to zero and only then acknowledge (implemented for both
-Compio arms, the native ring and the blocking arm), and the ladder requires exact
-reconciliation (`received == completed`) with zero UDP/NIC/application/softnet drops;
-the `<= 0.001` tolerance survives only for historical WI3.5 reproduction.
+Boundary correctness: sender quiescence (stop refilling, drain in-flight to zero,
+then acknowledge) **plus receiver settlement** — after each boundary the harness
+polls the peer until its datagram delta equals the sender's completed count, exits
+immediately as loss if any drop counter increments, and never charges settlement
+time to sender CPU or rated wall time. `settlement.window.outcome` must be `settled`
+for attribution, and the ladder requires exact reconciliation (`received ==
+completed`) with zero UDP/NIC/application/softnet drops; the `<= 0.001` tolerance
+survives only for historical WI3.5 reproduction.
 
 Receiver-side drops are diagnosed, not inferred: the drain peer serves a `softnet`
 block from `/proc/net/softnet_stat` and the artifact records its deltas, while

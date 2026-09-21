@@ -45,6 +45,103 @@ use super::peer_state::{ThreadCpu, cpus_allowed_list, pin_to_cpuset};
 
 use super::*;
 
+/// How long the receiver may take to account for datagrams the sender already
+/// completed. Settlement time is measured separately and never enters the rated
+/// window.
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Outcome of waiting for the receiver to settle after a sender quiescence
+/// boundary. A completed send means the sender operation finished; the datagram
+/// can still be in the peer's veth/RPS/UDP path, so the receiver is polled until
+/// its own count matches — otherwise a perfectly lossless run can read as short
+/// delivery purely because the RX path had not drained yet.
+#[derive(Debug)]
+enum Settlement {
+    Settled {
+        polls: u32,
+        secs: f64,
+    },
+    Loss {
+        field: String,
+        before: u64,
+        after: u64,
+        polls: u32,
+    },
+    Timeout {
+        expected: u64,
+        observed: u64,
+        polls: u32,
+    },
+}
+
+async fn settle_receiver(
+    url: &str,
+    before: &Value,
+    expected: u64,
+    timeout: Duration,
+) -> Result<Settlement, String> {
+    let deadline = Instant::now() + timeout;
+    let started = Instant::now();
+    let mut polls = 0_u32;
+    loop {
+        polls += 1;
+        let state = fetch_peer_state(url).await?;
+        // A drop that increments during settlement is immediate evidence that
+        // the receiver did not take everything, whatever the totals say.
+        for field in [
+            "udpRcvbufErrors",
+            "udpInErrors",
+            "receiveErrors",
+            "nicRxDropped",
+        ] {
+            if let (Some(before), Some(after)) = (counter(before, field), counter(&state, field))
+                && after > before
+            {
+                return Ok(Settlement::Loss {
+                    field: field.to_string(),
+                    before,
+                    after,
+                    polls,
+                });
+            }
+        }
+        if let (Some(before), Some(after)) = (
+            before
+                .get("softnet")
+                .and_then(|softnet| softnet["dropped"].as_u64()),
+            state
+                .get("softnet")
+                .and_then(|softnet| softnet["dropped"].as_u64()),
+        ) && after > before
+        {
+            return Ok(Settlement::Loss {
+                field: "softnet.dropped".to_string(),
+                before,
+                after,
+                polls,
+            });
+        }
+        let observed = counter(&state, "datagrams")
+            .zip(counter(before, "datagrams"))
+            .map(|(after, before)| after.saturating_sub(before))
+            .unwrap_or(0);
+        if observed >= expected {
+            return Ok(Settlement::Settled {
+                polls,
+                secs: started.elapsed().as_secs_f64(),
+            });
+        }
+        if Instant::now() > deadline {
+            return Ok(Settlement::Timeout {
+                expected,
+                observed,
+                polls,
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 /// Netdev transmit counters, read from `/sys/class/net/<dev>/statistics`.
 #[derive(Clone, Copy)]
 struct TxCounters {
@@ -93,6 +190,37 @@ async fn fetch_peer_state(url: &str) -> Result<Value, String> {
         .ok_or_else(|| format!("{url}: malformed HTTP response"))?;
     serde_json::from_slice(&response[body_start..])
         .map_err(|e| format!("{url}: state is not JSON: {e}"))
+}
+
+fn settlement_json(settlement: &Option<Settlement>) -> Value {
+    match settlement {
+        None => Value::Null,
+        Some(Settlement::Settled { polls, secs }) => {
+            json!({"outcome": "settled", "polls": polls, "secs": secs})
+        }
+        Some(Settlement::Loss {
+            field,
+            before,
+            after,
+            polls,
+        }) => json!({
+            "outcome": "loss",
+            "field": field,
+            "before": before,
+            "after": after,
+            "polls": polls,
+        }),
+        Some(Settlement::Timeout {
+            expected,
+            observed,
+            polls,
+        }) => json!({
+            "outcome": "timeout",
+            "expected": expected,
+            "observed": observed,
+            "polls": polls,
+        }),
+    }
 }
 
 fn counter(state: &Value, field: &str) -> Option<u64> {
@@ -162,6 +290,14 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
     let sender_tid = handles.tid.load(Ordering::Relaxed);
     let warm_completed = handles.completed();
     let warm_cpu = handles.cpu_sample();
+    // Warmup boundary: the receiver must account for everything the sender
+    // completed before the window baseline is taken.
+    let warm_settlement = match (&config.receiver_state, &receiver_before_all) {
+        (Some(url), Some(before_all)) => {
+            Some(settle_receiver(url, before_all, warm_completed, SETTLE_TIMEOUT).await?)
+        }
+        _ => None,
+    };
     let receiver_before = match &config.receiver_state {
         Some(url) => Some(fetch_peer_state(url).await?),
         None => None,
@@ -201,11 +337,20 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
         }
     }
 
-    // Park again for the closing snapshot, then stop.
+    // Park again for the closing snapshot: the rated clock and the sender CPU
+    // sample stop at quiescence, so receiver settlement is never charged to the
+    // sender.
     pause_sender(&handles).await?;
     let window_secs = window_started.elapsed().as_secs_f64();
     let completed = handles.completed();
     let final_cpu = handles.cpu_sample();
+    let window_settlement = match (&config.receiver_state, &receiver_before) {
+        (Some(url), Some(before)) => {
+            let expected = completed.saturating_sub(warm_completed);
+            Some(settle_receiver(url, before, expected, SETTLE_TIMEOUT).await?)
+        }
+        _ => None,
+    };
     let receiver_after = match &config.receiver_state {
         Some(url) => Some(fetch_peer_state(url).await?),
         None => None,
@@ -324,6 +469,7 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
             && receiver["receiveErrors"] == 0
             && receiver["softnet"]["dropped"].as_i64() == Some(0)
             && receiver["softnet"]["flowLimit"].as_i64() == Some(0)
+            && matches!(window_settlement, Some(Settlement::Settled { .. }))
     });
     // WI3.6 strictness: with a quiescent boundary the sender's completed
     // datagrams must equal the receiver's, exactly, and every drop counter must
@@ -442,6 +588,10 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
             "payloadGbitPerCpuSec": payload_gbit / cpu_secs.max(1e-9),
         },
         "receiver": receiver,
+        "settlement": json!({
+            "warmup": settlement_json(&warm_settlement),
+            "window": settlement_json(&window_settlement),
+        }),
         "receiverAttributable": receiver_attributable,
         "receiverKeptUp": receiver_kept_up,
         "tx": tx,
