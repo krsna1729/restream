@@ -296,3 +296,28 @@ Dated MSR/resource campaign write-ups:
 
 VPS and WSL2 profiling dumps:
 [baselines-profiling-2026-07.md](../../archive/quality/baselines-profiling-2026-07.md).
+
+### WI3.4A local reference lane — veth + CPU partitioning (`a4024c64`, 2026-09-21)
+
+Single-host development lane: sink process in its own network namespace over a
+veth pair (`scripts/harness/veth-topology.sh`), restream pinned to CPUs 0-2 and
+the sink to 3-5, both masks recorded from the processes themselves. Clean tree,
+bench provenance matching HEAD.
+
+| Rung | Common window | Rated samples | Peer delivery | Peer observed | First-DATA | Verdict |
+|---|---:|---:|---:|---:|---:|---|
+| 50 outputs | 21.3 s | 15/15 | 49.4 MB/s of 50 MB/s expected (98.9 %) | 21.7 s (coverage 1.02) | 769.7 pps/output | `contaminated` (residual drops 2–143/s, retransmits ≤7/s in single samples) |
+| 100 outputs | 20.2 s | 14/14 | 56.7 MB/s of 100 MB/s expected (57 %) | 20.6 s (coverage 1.02) | 686 pps/output | `contaminated` (receiver-limited) |
+
+What this establishes: the lane and the contract work end to end — topology and
+observed CPU masks land in the artifact, peer delivery is integrated over the
+peer's own intervals, and workload conformance passes at 50 outputs while the
+100-output rung is flagged as receiver-limited on this 6-vCPU host. The
+receiver is the limiting side somewhere between 50 and 100 × 8 Mbps here, which
+is a property of this host, not of the 8 Mbps workload or of a 10 GbE path.
+
+Neither rung is a contractual baseline: the 50-output rung is off-ladder (the
+contract's ladder is 100/300/500/1000) and the 100-output rung misses the
+workload; both also carry residual no-loss violations. A `healthy`,
+ladder-eligible artifact still needs either a host with more CPU headroom or a
+cheaper receiver (WI3.5's UDP drain), or the external-host lane (WI3.4B).

@@ -1071,6 +1071,13 @@ peer's mask from its `/state` endpoint — not just what was requested.
 A same-host rung is baseline-eligible only when the masks are disjoint:
 partitioning is what stops the receiver from consuming the measured CPUs.
 
+Measured on the reference 6-vCPU host: with restream on CPUs 0-2 and the sink on
+3-5, 50 × 8 Mbps delivers 98.9 % of the workload to the peer, while 100 ×
+8 Mbps is receiver-limited (57 %). The receiver is therefore the limiting side
+somewhere between those rungs on this host — a host property, not a workload or
+link property, and the reason WI3.5 uses cheap UDP drains rather than SRT
+receivers.
+
 What this lane can establish: SRT protocol cost, Restream scheduler cost,
 syscall/io_uring cost, UDP/IP stack cost, socket-queue pressure, batching,
 wakeups, copies, crypto, cross-thread scheduling and CPU scaling. What it
