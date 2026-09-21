@@ -1213,8 +1213,8 @@ above, not a threshold invented for retransmissions.
 
 ## 11. WI3.5 — Packet-I/O Substrate Shootout
 
-Status: IN PROGRESS — sender-side bound measured, external host not required for
-this tranche. Two single-host lanes now exist: the veth/CPU-partitioned lane
+Status: DONE at `d6145413` — the current-host substrate characterization is
+recorded and the program moves on. Two single-host lanes exist: the veth/CPU-partitioned lane
 (`scripts/harness/veth-topology.sh`, end-to-end, receiver in a namespace) and a
 TX-only lane (`scripts/harness/dummy-lane.sh`, disposable dummy netdev, no peer,
 no receiver process). Harness mode `substrate-pps` runs three arms on exactly one
@@ -1223,6 +1223,11 @@ native `io_uring` ring with `SUBSTRATE_REAP_MODE=sliding|window` — with an exp
 pause barrier so sender and peer counters cover the same interval, and with netdev
 TX accounting required to reconcile with the sender's completions on the TX-only
 lane.
+
+SQPOLL and `SEND_ZC` are **not completion requirements**: they are optional,
+non-blocking deferred experiments, to be opened only if a later stage (WI3.6's
+attribution, or WI3.7's scaling) shows the submission path itself is the cost.
+AF_XDP is not in this matrix at all — see WI3.8 (`§18`).
 
 Measured (evidence in `docs/agent-guidance/quality/baselines.md`, profile under
 `.local/artifacts/wi3-dummy-prof/`):
@@ -1289,9 +1294,10 @@ Compare:
    far, and still kernel-bound at 0.14 s user of 20 s)
 3a. blocking `libc::sendto` control — **measured** (262 777 pps/core on TX-only),
    the control that separates submission-API cost from kernel-stack cost
-4. SQPOLL where supported
-5. SEND_ZC where supported and beneficial
-6. AF_XDP zero-copy reference
+4. SQPOLL where supported — **optional, deferred, non-blocking**
+5. `SEND_ZC` where supported and beneficial — **optional, deferred, non-blocking**
+
+AF_XDP is deliberately absent: the product decision is not to adopt it (`§18`).
 
 Do not include:
 
@@ -1404,12 +1410,67 @@ raw UDP                      (substrate, measured in WI3.5)
   -> Restream scheduling/media (fanout, rings, mux)
 ```
 
-A host that is 2x or 4x slower changes every absolute number and none of the
-ratios: if raw UDP costs 3.1 us/datagram here and full SRT costs 5.0 us, the ~1.9
-us of SRT-plus-runtime cost is a property of our code, and it stays identifiable
-on any host. The decomposition is therefore the deliverable, and the absolute
-pps/core figure is the *output* of that decomposition on whatever host is used,
-not an entry gate.
+What transfers across hosts is the **decomposition methodology and the attribution
+boundaries**, not the numbers. Microarchitecture, cache hierarchy, branch
+behaviour, kernel version, frequency and virtualization all move the relative cost
+of raw UDP, SRT protocol work and Restream scheduling, so the CPU-cost *ratios* are
+host-specific too: a 2x/4x faster host is expected to change the ratios as well as
+the absolutes. WI10 must therefore remeasure **both** the absolute costs and the
+ratios on the i9-13xxxH before any of them is treated as portable.
+
+The decomposition is the deliverable, and the absolute pps/core figure is its
+*output* on whatever host runs it, not an entry gate.
+
+### 13.1 Common-topology ladder (the experiment)
+
+Causal comparison requires one topology. **Never subtract the dummy-netdev
+raw-UDP figure from a veth/SRT figure and call the difference "SRT overhead"** —
+those are different kernel paths. The dummy result stays the substrate reference
+(`§11`); the incremental ladder runs on the veth lane with, for every stage:
+
+```text
+same pinned sender CPU
+same veth route to the peer namespace
+same receiver-unlimited fanout (established first, held fixed)
+same 1316-byte payload / 8 Mbps-equivalent workload
+```
+
+```text
+A. raw Compio UDP                      (substrate, on this topology)
+       |
+B. production Owner TX, pre-materialized datagrams
+       |                               (protocol generation excluded)
+C. full plaintext SRT Owner            (real SRT peer: ACK/NAK/timers)
+       |
+D. full Restream SRT egress            (media pipeline included)
+```
+
+Reuse before inventing: pinned `srt-rs` already carries the hooks —
+`crates/srt-transport/benches/compio_tx_allocs.rs` shows the production
+`Owner::new(..).with_caller(OwnerCallerSide::new_single(..))` +
+`owner.service(now, budget)` attach path and the pre-materialized-datagram push
+(Layer 3b), and `crates/srt-bench/benches/compio_shared_owner_qual.rs` is a
+two-process real-`Owner` qualification with an independent receiver process.
+Extend those shapes rather than building another synthetic Owner.
+
+Fanout first: find the highest fanout at which the SRT sink is provably not the
+limiter (this host: below the 50-100 range where the sink became
+receiver-limited), and hold it for A/B/C/D. WI3.6 is about attribution, not maximum
+fanout.
+
+Report, per stage, over repeated windows (median/min/max):
+
+- CPU microseconds per **first-transmission DATA packet** (product capacity cost)
+  and per **total SRT datagram** (packet-engine efficiency) — both denominators,
+  because they answer different questions;
+- `total datagrams / DATA-first` (protocol amplification, so control and
+  retransmission traffic cannot masquerade as CPU inefficiency);
+- DATA / ACK / NAK / retransmit rates, service visits and actions, TX
+  submissions/completions/in-flight, allocation rate;
+- datapath-thread CPU and whole-process CPU separately for stage D.
+
+Commit the decomposition and its clean baseline before optimizing anything; the
+incremental costs decide which layer is worth changing.
 
 Optimization candidates must be measurement-driven.
 
@@ -1511,13 +1572,23 @@ with actual cycles/packet evidence.
 Status: PLANNED — runs on the current host; shard counts derived here are
 provisional and host-specific (`§11.1`).
 
-The subject is how the architecture scales and how much lossless capacity it
-delivers, not a universal one-core target. Measure 1/2/3/4 shards at each rung and
-report:
+This host can characterize **shard scaling at receiver-unlimited workloads**, not
+the lossless top of the ladder: the same-host SRT sink already became
+receiver-limited somewhere between 50 and 100 outputs, and four sender shards on a
+six-vCPU host leave the receiver less CPU still. The split is therefore:
+
+```text
+current host (WI3.7)          external infrastructure / WI10
+  shard scaling law             lossless 100 / 300 / 500 / 1000 outputs
+  receiver-unlimited fanout     physical NIC, line-rate, remote receivers
+  provisional shard counts      portable defaults
+```
+
+Measure 1/2/3/4 shards at a **receiver-unlimited fanout** and report:
 
 - capacity per shard and the scaling efficiency between shard counts;
-- the lossless 100/300/500/1000-output rung at each shard count;
-- whether additional shards move p99 service latency or only add cost.
+- whether additional shards move p99 service latency or only add cost;
+- the highest fanout at which the receiver is still provably not the limiter.
 
 Do not turn "N shards was best on this machine" into a production default. The
 shard law must be parameterized around capacity, not a fixed count (`§17`):
@@ -1633,26 +1704,29 @@ capacity
 
 ## 18. WI3.8 — AF_XDP Decision Gate
 
-Status: CONDITIONAL
+Status: SUPERSEDED — AF_XDP is not adopted. Reopen only by an explicit later
+capacity decision (a deliberate tradeoff review that names what capacity target
+the kernel path cannot meet), never as a default path for a future agent.
 
-AF_XDP is not the default future.
+The decision: Restream keeps one packet-I/O substrate (kernel UDP + io_uring) for
+SRT. The current-host characterization (`§11`) shows the stock IPv4/UDP transmit
+path costs ~3.1 us of sender CPU per datagram here, and that a better submission
+API does not move it — but that is a *current-host* finding, and the cross-host
+comparison (`§11.1`) is what would settle whether AF_XDP-style kernel bypass is
+ever needed. It is not needed to proceed with WI3.6 or WI3.7.
 
-Enter this work item only if WI3.5 proves that the normal kernel UDP/socket path
-prevents the packet-rate target.
-
-Possible end-state for SRT:
+If reopened, the question is capacity, not architecture:
 
 ```text
 srt-rs protocol/Owner
     |
 packet-I/O substrate
     |
-    +-- normal UDP + io_uring
-    |
-    `-- AF_XDP, only if proven necessary
+    `-- kernel UDP + io_uring   (the adopted path)
 ```
 
-Do not build two long-lived product backends just to preserve optionality.
+Do not build two long-lived product backends just to preserve optionality, and do
+not let a superseded gate read as pending work.
 
 If AF_XDP is adopted, it should live below the same logical SRT Owner and
 protocol state.
@@ -2162,8 +2236,9 @@ WI3.6
     full SRT -> whole Restream, in CPU us/event and overhead ratios
 
 WI3.7
-    multi-shard scaling + lossless 100/300/500/1000-output capacity on the
-    current host; rederive the shard law as a capacity-based law
+    shard scaling law at receiver-unlimited fanout on the current host; rederive
+    the shard law as a capacity-based law. The lossless 100/300/500/1000 ladder
+    is external-infrastructure/WI10 work, not a current-host promise
 
 WI3.8
     AF_XDP decision only if normal UDP/io_uring misses the substrate requirement
@@ -2207,11 +2282,13 @@ ratios. It does **not** wait for raw UDP to reach 2 Mpps/core — the absolute
 pps/core figure is that decomposition's output on whatever host runs it, and the
 cross-host comparison is deferred to WI3.5B/WI10.
 
-Then WI3.7 measures multi-shard scaling and lossless 100/300/500/1000-output
-capacity on the current host, deriving a capacity-based shard law rather than a
-fixed count. WI3.4B (a `healthy` remote baseline) and WI3.5B (modern-P-core rerun)
-stay open against infrastructure and gate only absolute capacity claims,
-portable defaults, and final pps/core characterization.
+Then WI3.7 measures multi-shard scaling at a receiver-unlimited fanout on this
+host, deriving a capacity-based shard law rather than a fixed count; the lossless
+100/300/500/1000-output ladder stays external-infrastructure/WI10 work, because
+this host's same-host SRT sink is already receiver-limited below 100 outputs.
+WI3.4B (a `healthy` remote baseline) and WI3.5B (modern-P-core rerun) stay open
+against infrastructure and gate only absolute capacity claims, portable defaults,
+and final pps/core characterization.
 
 ## 37. Definition of Success
 
