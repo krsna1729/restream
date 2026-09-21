@@ -391,11 +391,20 @@ per-datagram cost in the microseconds, dominated by the kernel stack, with the
 submission API worth tens of percent rather than multiples.
 
 **What this does and does not establish.** It establishes a *sender-side kernel
-stack* bound on this host class: ~3.1-3.8 us of sender CPU per datagram, ~0.26-0.32
-Mpps/core, with the cost distributed across the generic IPv4 transmit path. It does
-**not** measure a physical NIC: no DMA, no IRQ/completion placement, no offloads,
-no line-rate backpressure, and no claim is made here about NIC-path cost per
-datagram. It also does not yet test `sendmmsg`, SQPOLL, `SEND_ZC` or AF_XDP.
+stack* bound on **the measured host** (6-vCPU Zen-class VM): ~3.1-3.8 us of sender
+CPU per datagram, ~0.26-0.32 Mpps/core, with the cost distributed across the
+generic IPv4 transmit path. This is deliberately scoped to that host class: **the
+measured current host is limited to ~0.3 Mpps/core** — not "Linux UDP is limited
+to ~0.3 Mpps/core", which is a cross-host claim deferred to WI3.5B (roadmap
+§11.1). It does **not** measure a physical NIC: no DMA, no IRQ/completion
+placement, no offloads, no line-rate backpressure, and no claim is made here about
+NIC-path cost per datagram. It also does not yet test `sendmmsg`, SQPOLL,
+`SEND_ZC` or AF_XDP.
+
+Reference commit for this current-host characterization: `d6145413`. Relative
+conclusions (where our own overhead lives, how the architecture parallelizes)
+transfer to other hosts; absolute capacity numbers do not, which is why the
+modern-P-core rerun is deferred rather than borrowed.
 
 Implication for the roadmap's 2 Mpps/core target: 2 Mpps/core is 0.5 us per
 datagram, while the measured kernel transmit path alone costs ~3.1 us on this host

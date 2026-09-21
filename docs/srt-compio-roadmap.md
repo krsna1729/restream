@@ -52,11 +52,12 @@ This roadmap owns:
 - [9. Fixed Performance Targets](#9-fixed-performance-targets)
 - [10. WI3.4 — Establish the Packet-Rate Benchmark Contract](#10-wi34--establish-the-packet-rate-benchmark-contract)
 - [11. WI3.5 — Packet-I/O Substrate Shootout](#11-wi35--packet-io-substrate-shootout)
+- [11.1 WI3.5B — Modern CPU cross-host validation (deferred)](#111-wi35b--modern-cpu-cross-host-validation-deferred-to-wi10)
 - [12. What io_uring Does and Does Not Give Us](#12-what-io_uring-does-and-does-not-give-us)
-- [13. WI3.6 — SRT Packet Engine to >=1 Mpps/Core](#13-wi36--srt-packet-engine-to-1-mppscore)
+- [13. WI3.6 — SRT Packet Engine: Incremental Cost Above the Substrate](#13-wi36--srt-packet-engine-incremental-cost-above-the-substrate)
 - [14. Same-Peer GSO vs Cross-Destination Batching](#14-same-peer-gso-vs-cross-destination-batching)
 - [15. Zero Copy](#15-zero-copy)
-- [16. WI3.7 — End-to-End One-Core 8 Mbps Qualification](#16-wi37--end-to-end-one-core-8-mbps-qualification)
+- [16. WI3.7 — End-to-End Multi-Shard 8 Mbps Capacity Qualification](#16-wi37--end-to-end-multi-shard-8-mbps-capacity-qualification)
 - [17. Re-Derive the SRT Shard Law](#17-re-derive-the-srt-shard-law)
 - [18. WI3.8 — AF_XDP Decision Gate](#18-wi38--af_xdp-decision-gate)
 - [19. AF_XDP Scope](#19-af_xdp-scope)
@@ -851,6 +852,12 @@ Synthetic packet-I/O target:
 >=2 M UDP datagrams/s/core
 ```
 
+This remains the target, but its attainability is host-dependent: the measured
+development host reaches ~0.3 Mpps/core on a TX-only lane with the stock IPv4/UDP
+transmit path (`§11`), so the target is an absolute capacity claim that is only
+settled by the cross-host comparison in `§11.1`. It is not a precondition for
+WI3.6.
+
 Shape:
 
 - ~1316-byte payload
@@ -1236,13 +1243,18 @@ percent (batched native ring +44 % over its sliding arm, +23 % over bare `sendto
 not multiples.
 
 Consequence for the 2 Mpps/core threshold: 2 Mpps/core is 0.5 us/datagram against a
-measured ~3.1 us of kernel transmit cost per datagram on this host class, so the
-threshold cannot be met by a better submission API — it requires a fundamentally
-cheaper transmit mechanism (AF_XDP/XDP TX or equivalent) or a different host/kernel
-configuration, and it is a *sender-side* figure that the SRT protocol work then
-adds on top of. Physical-NIC/RSS/XPS/IRQ/DMA and true line-rate claims remain
-reserved for WI3.4B and WI3.7-final, and no NIC-path cost per datagram is claimed
-here.
+measured ~3.1 us of kernel transmit cost per datagram **on this measured host**
+(6-vCPU Zen-class VM), so the threshold cannot be met by a better submission API
+here — it requires a fundamentally cheaper transmit mechanism (AF_XDP/XDP TX or
+equivalent) or a different host/kernel configuration, and it is a *sender-side*
+figure that the SRT protocol work then adds on top of. Physical-NIC/RSS/XPS/IRQ/DMA
+and true line-rate claims remain reserved for WI3.4B and WI3.7-final, and no
+NIC-path cost per datagram is claimed here.
+
+Wording constraint until WI3.5B runs: **the measured current host is limited to
+~0.3 Mpps/core**. That is not a statement about Linux UDP in general, and it must
+not be written as one; whether a modern P-core host is 2x or 4x faster is a
+cross-host question, deliberately deferred (`§11.1`).
 
 Topology: sender pinned to dedicated CPUs, receivers in network namespaces
 over veth, pinned to disjoint CPUs (`§10.1a`). The receivers are cheap UDP
@@ -1311,6 +1323,47 @@ evaluate AF_XDP seriously
 
 This is the point where AF_XDP becomes evidence-driven rather than speculative.
 
+### 11.1 WI3.5B — Modern CPU cross-host validation (deferred to WI10)
+
+Status: DEFERRED TO WI10. Non-blocking.
+
+Purpose: validate portability of the current-host substrate and capacity
+conclusions.
+
+Reference to preserve: `d6145413` is the current-host substrate reference
+(harness mode `substrate-pps`, TX-only and veth lanes, evidence in
+`docs/agent-guidance/quality/baselines.md`). Every ~0.26-0.32 Mpps/core figure is
+scoped to that measured host class.
+
+Does NOT block: WI3.6, WI3.7, WI4, WI5, WI6, WI7, WI8, WI9.
+
+Blocks only: final absolute capacity claims, portable shard/default selection, and
+final pps/core characterization.
+
+At WI10, run both on the modern i9-13xxxH P-core host and on the old-Zen reference
+before finalizing any default:
+
+```text
+frozen raw substrate benchmark
++
+finished Restream/SRT product path
+```
+
+and answer together:
+
+```text
+How much faster is raw Linux UDP?
+How much faster is srt-rs?
+How much faster is full Restream?
+Does shard scaling change?
+Are our defaults portable?
+```
+
+Nothing in the current sequence requires knowing whether this host is 2x or 4x
+slower than a modern P-core: relative architectural conclusions (where our own
+overhead lives, how the architecture parallelizes) transfer, absolute capacity
+numbers do not.
+
 ## 12. What io_uring Does and Does Not Give Us
 
 io_uring reduces submission/completion overhead.
@@ -1336,14 +1389,27 @@ io_uring != AF_XDP
 The experiment in WI3.5 exists to measure whether that remaining in-kernel path
 is actually a material bottleneck for our workload.
 
-## 13. WI3.6 — SRT Packet Engine to >=1 Mpps/Core
+## 13. WI3.6 — SRT Packet Engine: Incremental Cost Above the Substrate
 
-Status: PLANNED
+Status: PLANNED — safe to run now on the current host; it does not depend on raw
+UDP reaching 2 Mpps/core.
 
-Run only after WI3.5 identifies substrate headroom.
+The question is *where our overhead lives*, not an absolute pps number. Decompose
+the path and report CPU microseconds per event plus overhead ratios at each step:
 
-If raw UDP/io_uring can exceed 2 Mpps/core but full SRT cannot exceed 1 Mpps/core,
-the remaining cost is ours.
+```text
+raw UDP                      (substrate, measured in WI3.5)
+  -> Compio / Owner machinery (runtime and ownership cost)
+  -> SRT protocol             (encoding, ACK/NAK, timers, crypto)
+  -> Restream scheduling/media (fanout, rings, mux)
+```
+
+A host that is 2x or 4x slower changes every absolute number and none of the
+ratios: if raw UDP costs 3.1 us/datagram here and full SRT costs 5.0 us, the ~1.9
+us of SRT-plus-runtime cost is a property of our code, and it stays identifiable
+on any host. The decomposition is therefore the deliverable, and the absolute
+pps/core figure is the *output* of that decomposition on whatever host is used,
+not an entry gate.
 
 Optimization candidates must be measurement-driven.
 
@@ -1440,9 +1506,25 @@ Evaluate:
 
 with actual cycles/packet evidence.
 
-## 16. WI3.7 — End-to-End One-Core 8 Mbps Qualification
+## 16. WI3.7 — End-to-End Multi-Shard 8 Mbps Capacity Qualification
 
-Status: PLANNED
+Status: PLANNED — runs on the current host; shard counts derived here are
+provisional and host-specific (`§11.1`).
+
+The subject is how the architecture scales and how much lossless capacity it
+delivers, not a universal one-core target. Measure 1/2/3/4 shards at each rung and
+report:
+
+- capacity per shard and the scaling efficiency between shard counts;
+- the lossless 100/300/500/1000-output rung at each shard count;
+- whether additional shards move p99 service latency or only add cost.
+
+Do not turn "N shards was best on this machine" into a production default. The
+shard law must be parameterized around capacity, not a fixed count (`§17`):
+
+```text
+required shards ~= packet/event demand / measured per-shard capacity
+```
 
 Run the actual product path:
 
@@ -1512,6 +1594,17 @@ WI3.7 must therefore remeasure and either preserve or replace:
 ```text
 EgressShardProfile::SrtCpuParallel
 ```
+
+The replacement must be a capacity-based law, not a count fitted to one host:
+
+```text
+required shards ~= packet/event demand / measured per-shard capacity
+```
+
+with per-shard capacity a measured coefficient (WI8's Oracle should carry it as a
+host measurement, not a constant), and a fixed default only after the cross-host
+comparison of `§11.1`. A shard count that is best on this machine is a provisional
+observation until then.
 
 Questions to answer:
 
@@ -1853,6 +1946,12 @@ Only after the real dataplane is known:
 
 ## 29. WI10 — Final Qualification
 
+This is where the deferred absolute claims are settled: rerun the frozen substrate
+matrix (`§11`) and the finished product path (`§16`) on the modern i9-13xxxH P-core
+host and compare both against the old-Zen reference recorded in `d6145413`, before
+finalizing shard defaults, CPU/NUMA policy or any portable capacity number
+(`§11.1`).
+
 Final qualification matrix should include:
 
 ### SRT
@@ -2052,17 +2151,22 @@ WI3.4B
     external-host reference baseline (pending infrastructure; does not block)
 
 WI3.5
-    Compio vs native io_uring vs SQPOLL/SEND_ZC vs AF_XDP substrate shootout
+    current-host substrate characterization (DONE: TX-only + veth lanes,
+    sendto/compio/io-uring arms, sender-side profile)
+
+WI3.5B
+    modern i9-13xxxH cross-host validation (DEFERRED to WI10; non-blocking)
 
 WI3.6
-    optimize srt-rs packet engine to >=1 M DATA pps/core
+    measure SRT overhead above the local substrate: raw UDP -> Compio/Owner ->
+    full SRT -> whole Restream, in CPU us/event and overhead ratios
 
 WI3.7
-    end-to-end 8 Mbps x 1000 <=1-core stretch qualification
-    + rederive shard law
+    multi-shard scaling + lossless 100/300/500/1000-output capacity on the
+    current host; rederive the shard law as a capacity-based law
 
 WI3.8
-    AF_XDP decision only if normal UDP/io_uring misses substrate floor
+    AF_XDP decision only if normal UDP/io_uring misses the substrate requirement
 
 WI4
     final SRT cleanup / productionization
@@ -2083,27 +2187,31 @@ WI9
     abstraction and LOC compression
 
 WI10
-    final production qualification
+    final production qualification, including the deferred cross-host rerun:
+    frozen substrate matrix + finished product path on the i9-13xxxH P-core,
+    compared against the old-Zen reference before any default is finalized
 ```
 
 ## 36. Immediate Next Action
 
-Do not start packet-rate optimization yet.
-
-WI3.1, WI3.2 and WI3.3 are done; WI3.4A's contract is frozen. The next item is:
+WI3.1, WI3.2 and WI3.3 are done; WI3.4A's contract is frozen; WI3.5's current-host
+substrate characterization is done (`d6145413`). The next item is:
 
 ```text
-WI3.5
+WI3.6
 ```
 
-the packet-I/O substrate shootout, in the **single-host development lane**:
-sender on dedicated CPUs, cheap UDP drain receivers in network namespaces over
-veth, pinned to disjoint CPUs. Establish pps/core for the Compio path and a
-native fixed-slot io_uring path before adding variants.
+measuring where our own overhead lives above the substrate: raw UDP -> Compio/Owner
+-> full SRT -> whole Restream, reported as CPU microseconds per event and overhead
+ratios. It does **not** wait for raw UDP to reach 2 Mpps/core — the absolute
+pps/core figure is that decomposition's output on whatever host runs it, and the
+cross-host comparison is deferred to WI3.5B/WI10.
 
-WI3.4B (a `healthy` remote baseline) stays open against infrastructure and does
-not gate WI3.5/WI3.6. The packet-rate program starts only after the SRT ingress
-and egress paths share the same final architecture, which they do.
+Then WI3.7 measures multi-shard scaling and lossless 100/300/500/1000-output
+capacity on the current host, deriving a capacity-based shard law rather than a
+fixed count. WI3.4B (a `healthy` remote baseline) and WI3.5B (modern-P-core rerun)
+stay open against infrastructure and gate only absolute capacity claims,
+portable defaults, and final pps/core characterization.
 
 ## 37. Definition of Success
 
