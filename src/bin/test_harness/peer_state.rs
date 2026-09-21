@@ -155,9 +155,19 @@ pub(crate) fn current_thread_id() -> libc::pid_t {
     unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t }
 }
 
-/// CPU time (user + system) consumed by one thread of this process, in seconds.
-/// `/proc/self/task/<tid>/stat` fields 14 and 15 are in clock ticks.
-pub(crate) fn thread_cpu_secs(tid: libc::pid_t) -> Option<f64> {
+/// One thread's CPU time split into user and system seconds, plus its
+/// voluntary and involuntary context switches: the first cut of an on-CPU /
+/// off-CPU attribution (which half of the time, and whether the thread is
+/// being descheduled rather than working).
+#[derive(Debug)]
+pub(crate) struct ThreadCpu {
+    pub(crate) user_secs: f64,
+    pub(crate) system_secs: f64,
+    pub(crate) voluntary_switches: u64,
+    pub(crate) involuntary_switches: u64,
+}
+
+pub(crate) fn thread_cpu(tid: libc::pid_t) -> Option<ThreadCpu> {
     let stat = std::fs::read_to_string(format!("/proc/self/task/{tid}/stat")).ok()?;
     // The comm field may contain spaces and parentheses; fields after the last
     // ')' are positional.
@@ -169,7 +179,19 @@ pub(crate) fn thread_cpu_secs(tid: libc::pid_t) -> Option<f64> {
     if ticks <= 0 {
         return None;
     }
-    Some((utime + stime) as f64 / ticks as f64)
+    let status = std::fs::read_to_string(format!("/proc/self/task/{tid}/status")).ok()?;
+    let counter = |name: &str| -> Option<u64> {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    };
+    Some(ThreadCpu {
+        user_secs: utime as f64 / ticks as f64,
+        system_secs: stime as f64 / ticks as f64,
+        voluntary_switches: counter("voluntary_ctxt_switches:")?,
+        involuntary_switches: counter("nonvoluntary_ctxt_switches:")?,
+    })
 }
 
 /// Bind the peer's `GET /state` listener: dual-stack first (Linux maps IPv4
@@ -242,17 +264,17 @@ mod tests {
     }
 
     #[test]
-    fn thread_cpu_secs_reads_the_calling_thread() {
+    fn thread_cpu_reads_the_calling_thread() {
         let tid = current_thread_id();
         assert!(tid > 0);
-        let secs = thread_cpu_secs(tid).expect("own thread cpu time");
-        assert!(secs >= 0.0, "{secs}");
+        let cpu = thread_cpu(tid).expect("own thread cpu time");
+        assert!(cpu.user_secs >= 0.0 && cpu.system_secs >= 0.0, "{cpu:?}");
         // A thread that does not exist has no record.
-        assert!(thread_cpu_secs(-1).is_none());
+        assert!(thread_cpu(-1).is_none());
     }
 
     #[test]
-    fn thread_cpu_secs_reads_another_thread() {
+    fn thread_cpu_reads_another_thread() {
         // The substrate benchmark reads the sender thread's CPU time from the
         // harness thread, so cross-thread reads must work.
         let tid = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
@@ -274,9 +296,12 @@ mod tests {
         // Let the thread accumulate measurable CPU time before reading it from
         // this thread.
         std::thread::sleep(Duration::from_millis(200));
-        let secs = thread_cpu_secs(tid.load(Ordering::Relaxed));
+        let cpu = thread_cpu(tid.load(Ordering::Relaxed));
         let _ = handle.join();
-        assert!(secs.is_some_and(|secs| secs > 0.0), "{secs:?}");
+        let busy = cpu
+            .as_ref()
+            .is_some_and(|cpu| cpu.user_secs + cpu.system_secs > 0.0);
+        assert!(busy, "{cpu:?}");
     }
 
     #[test]

@@ -1206,21 +1206,43 @@ above, not a threshold invented for retransmissions.
 
 ## 11. WI3.5 — Packet-I/O Substrate Shootout
 
-Status: IN PROGRESS — first tranche measured (harness mode `substrate-pps`,
-variants `compio` and `io-uring`, plus the `udp-drain` peer and the
-`scripts/harness/lane-ceiling-control.py` control). Result: on the single-host
-veth lane a bare blocking `sendto` loop reaches 111 467 pps, `compio` 139 853 and
-native `io_uring` 114 061 pps/core — all within ~25 % of each other and of the
-control, so **the lane is the ceiling, not the submission API**, and this lane
-cannot yet support a 2 Mpps/core statement in either direction (per-datagram
-sender cost is ~7 µs on veth versus sub-µs on a NIC path). Batched ring enters
-bought +37 % (155 941 pps/core), second-order next to the per-packet cost. With
-`rps_cpus` set on the peer's rx queue the ceiling moves to the receiver instead
-(172 554 / 146 420 pps/core, both `receiver-limited`). Evidence:
-`docs/agent-guidance/quality/baselines.md` (WI3.5 substrate A/B). Next: move the
-substrate numbers onto a lane whose per-packet cost is not veth-bound
-(RPS-enabled partitioning plus the external host of WI3.4B, or a driver-level
-path) before drawing any substrate conclusion.
+Status: IN PROGRESS — sender-side bound measured, external host not required for
+this tranche. Two single-host lanes now exist: the veth/CPU-partitioned lane
+(`scripts/harness/veth-topology.sh`, end-to-end, receiver in a namespace) and a
+TX-only lane (`scripts/harness/dummy-lane.sh`, disposable dummy netdev, no peer,
+no receiver process). Harness mode `substrate-pps` runs three arms on exactly one
+pinned sender CPU — `sendto` (blocking `libc::sendto` control), `compio`, and a
+native `io_uring` ring with `SUBSTRATE_REAP_MODE=sliding|window` — with an explicit
+pause barrier so sender and peer counters cover the same interval, and with netdev
+TX accounting required to reconcile with the sender's completions on the TX-only
+lane.
+
+Measured (evidence in `docs/agent-guidance/quality/baselines.md`, profile under
+`.local/artifacts/wi3-dummy-prof/`):
+
+| lane | arm | pps/core |
+|---|---|---:|
+| veth | compio / io-uring sliding / bare `sendto` | 139 853 / 114 061 / 111 467 |
+| TX-only | `sendto` / compio / io-uring sliding / io-uring window | 262 777 / 256 896 / 224 283 / **322 918** |
+
+veth receive processing materially participates in the veth ceiling (it is roughly
+half the TX-only rate, and `rps_cpus` moves the ceiling to the receiver), but even
+with no peer at all the sender tops out at ~0.26-0.32 Mpps/core with ~95 % of its
+CPU in the kernel transmit path. The profile shows the cost spread across skb
+allocation and header build (19 %), neighbour plus device transmit (19 %), route
+lookup (10 %), IP ID selection (6 %), dst release (5 %), with no netfilter (0.7 %)
+or qdisc tax: there is no single hotspot, and the submission API is worth tens of
+percent (batched native ring +44 % over its sliding arm, +23 % over bare `sendto`),
+not multiples.
+
+Consequence for the 2 Mpps/core threshold: 2 Mpps/core is 0.5 us/datagram against a
+measured ~3.1 us of kernel transmit cost per datagram on this host class, so the
+threshold cannot be met by a better submission API — it requires a fundamentally
+cheaper transmit mechanism (AF_XDP/XDP TX or equivalent) or a different host/kernel
+configuration, and it is a *sender-side* figure that the SRT protocol work then
+adds on top of. Physical-NIC/RSS/XPS/IRQ/DMA and true line-rate claims remain
+reserved for WI3.4B and WI3.7-final, and no NIC-path cost per datagram is claimed
+here.
 
 Topology: sender pinned to dedicated CPUs, receivers in network namespaces
 over veth, pinned to disjoint CPUs (`§10.1a`). The receivers are cheap UDP
@@ -1246,12 +1268,15 @@ one pinned CPU
 
 Compare:
 
-1. current Compio TX path — **measured** (139 853 pps/core, sliding window)
-2. purpose-built fixed-slot native io_uring benchmark — **measured** (114 061
-   pps/core, sliding window, one `SendMsg` per datagram)
-3. native io_uring with large multi-SQE batches — exploratory only (155 941
-   pps/core reaping the whole window per ring enter); needs a non-veth-bound
-   lane before it is a result
+1. current Compio TX path — **measured** (139 853 pps/core on veth, 256 896 on
+   the TX-only lane)
+2. purpose-built fixed-slot native io_uring benchmark — **measured** (sliding:
+   114 061 on veth, 224 283 on TX-only)
+3. native io_uring with large multi-SQE batches — **measured** (322 918 pps/core
+   on the TX-only lane with 64 SQEs per ring enter; the best single-core arm so
+   far, and still kernel-bound at 0.14 s user of 20 s)
+3a. blocking `libc::sendto` control — **measured** (262 777 pps/core on TX-only),
+   the control that separates submission-API cost from kernel-stack cost
 4. SQPOLL where supported
 5. SEND_ZC where supported and beneficial
 6. AF_XDP zero-copy reference

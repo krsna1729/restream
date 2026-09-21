@@ -326,60 +326,81 @@ workload; both also carry residual no-loss violations. A `healthy`,
 ladder-eligible artifact still needs either a host with more CPU headroom or a
 cheaper receiver (WI3.5's UDP drain), or the external-host lane (WI3.4B).
 
-### WI3.5 substrate A/B — Compio vs native io_uring (2026-09-21)
+### WI3.5 substrate measurement — veth lane, TX-only lane, and the sender-side profile (2026-09-21)
 
-Harness mode `substrate-pps`: one sender CPU pinned exclusively
-(`SUBSTRATE_SENDER_CPUS`), harness/control on disjoint CPUs, 1000 IPv4
-destinations inside the peer's local prefix, preconstructed 1316-byte payload,
-queue depth 64, identical socket model (one unconnected wildcard UDP socket,
-same `SO_SNDBUF`), identical sliding-window completion semantics (one completion
-reaped per iteration, one refill), warmup then a 20 s window. `pps/core` is
-completed datagrams divided by the sender thread's own CPU seconds
-(`/proc/self/task/<tid>/stat`), not wall-clock divided by an assumed core count.
-Peer: `udp-drain` in the sink namespace on CPUs 3-5, 2 wildcard sockets, 64 MiB
-`SO_RCVBUF`. Both variants are CPU-saturated on their core for the whole window
-(`senderCpuSecs == windowSecs`).
+Harness mode `substrate-pps`. All arms: one sender CPU pinned exclusively, harness
+on disjoint CPUs, 1000 destinations, preconstructed 1316-byte payload, queue
+depth 64, warmup then a measured window whose start and end are taken while the
+sender is **parked** (explicit pause barrier), so sender completions and peer
+counters describe exactly the same interval. `pps/core` is completed datagrams
+divided by the sender thread's own CPU seconds, split into user and system time.
+Three arms: `compio` (the completion path the SRT egress uses), `io-uring` (native
+ring, `SendMsg` with preconstructed slots; `SUBSTRATE_REAP_MODE=sliding|window`),
+and `sendto` (blocking `libc::sendto` in-process — same payload, same
+preconstructed destination array, same socket options, same machinery).
 
-Measured on the WI3.5 working tree, committed as `c9fe93b9`; the only change
-between the first rows and that commit was a clippy type-alias/lifetime refactor
-with no behavioral difference. Two lane configurations, because moving the
-peer's receive path between CPUs moves the ceiling with it:
+**veth lane (end-to-end, `udp-drain` peer on CPUs 3-5).** Preserved as
+end-to-end veth lane evidence. veth receive processing materially participates in
+this ceiling: with `rps_cpus` clear the sender's core absorbs the peer's receive
+path, and with it set the ceiling moves to the receiver instead.
 
-| Configuration | Run | pps | pps/core | payload Gbit/s | receiver | Verdict |
-|---|---|---:|---:|---:|---|---|
-| plain lane | `compio` | 139 837 | 139 853 | 1.472 | all datagrams, 0 drops | healthy |
-| plain lane | `io-uring` | 114 046 | 114 061 | 1.201 | all datagrams, 0 drops | healthy |
-| plain lane | control: bare blocking `sendto` (Python, 1 CPU) | 111 467 | — | 1.174 | all datagrams, 0 drops | — |
-| plain lane | control: same, single destination | 119 493 | — | 1.258 | all datagrams, 0 drops | — |
-| RPS on the peer rx queue | control: bare blocking `sendto` | 139 867 | — | 1.473 | all datagrams, 0 drops | — |
-| RPS on the peer rx queue | `compio` | 172 540 | 172 554 | 1.817 | 0.28 % short, 0 drops | receiver-limited |
-| RPS on the peer rx queue | `io-uring` | 146 403 | 146 420 | 1.541 | 3.4 % short, 27 297 rcvbuf drops | receiver-limited |
-| plain lane, exploratory | native path reaping the whole 64-deep window per ring enter | — | 155 941 | 1.643 | all datagrams, 0 drops | healthy |
+| Arm | pps/core | payload Gbit/s | user / system | Verdict |
+|---|---:|---:|---|---|
+| compio | 139 853 | 1.472 | — | healthy |
+| io-uring (sliding) | 114 061 | 1.201 | — | healthy |
+| bare blocking `sendto` (Python convenience check) | 111 467 | 1.174 | — | — |
+| compio, `rps_cpus` set on the peer queue | 172 554 | 1.817 | — | receiver-limited |
+| io-uring, `rps_cpus` set | 146 420 | 1.541 | — | receiver-limited |
 
-**The lane, not the submission API, is the ceiling.** A bare blocking `sendto`
-loop reaches 111 467 pps on the plain lane — within ~25 % of both
-implementations — and destination diversity is not the cause (single
-destination: 119 493 pps). Moving the peer's receive path off the sender's core
-with RPS lifts the control to 139 867 pps, and at that point the *receiver*
-becomes the limiter (the higher-rate runs above lose datagrams at the drain).
-Either way the sender's transmit path costs ~7 µs of CPU per datagram on veth,
-roughly an order of magnitude above a NIC path, so **this lane cannot support a
-2 Mpps/core statement in either direction**; it can only compare implementations
-under identical conditions, and under those conditions the submission mechanism
-is not the differentiator at this rate.
+**TX-only lane (`scripts/harness/dummy-lane.sh`, disposable dummy netdev, no peer,
+no receiver process).** The netdev's own `tx_packets`/`tx_bytes` reconcile with the
+sender's completions one-for-one (window slack allowed), which is what makes this
+lane usable for attribution at all; a device whose counters cannot account for the
+datagrams is rejected rather than trusted.
 
-Batched ring enters (64 SQEs per enter, whole window reaped per iteration) did
-buy +37 % over the aligned sliding pattern (155 941 vs 114 061 pps/core), so
-syscall amortization is real but second-order next to the per-packet cost — and
-it must be re-measured on a lane where the sender is not paying veth's peer-side
-work before it means anything.
+| Arm | pps/core | payload Gbit/s | user / system (s) | TX | Verdict |
+|---|---:|---:|---|---|---|
+| `sendto` | 262 777 | 2.766 | 0.24 / 4.76 (5 s window) | 1.000 packets/completion | healthy |
+| compio | 256 896 | 2.704 | 3.20 / 16.80 | 1.000 (20 s) | healthy |
+| io-uring sliding | 224 283 | 2.359 | 1.02 / 18.96 | 1.000 | healthy |
+| **io-uring window (64 SQEs/enter)** | **322 918** | 3.398 | 0.14 / 19.86 | 1.000 | healthy |
 
-The `rps_cpus` knob is per-run lane configuration, not a benchmark parameter:
-the topology script leaves it at 0 (plain lane) and an operator sets it per run.
-`scripts/harness/lane-ceiling-control.py` is committed as the control that
-decides attribution for every substrate run.
+Reading: the veth lane's ceiling is roughly half the TX-only lane's, so veth's
+receive path materially participates in it — but even with no peer at all the
+sender tops out at ~0.26-0.32 Mpps/core. The submission mechanism is worth ~44 %
+between the sliding and batched native arms and ~23 % against a bare `sendto`
+loop, while userspace cost collapses to 0.14 s of 20 s for the batched ring: at
+this rate the ceiling is the stock IPv4/UDP transmit path, not the submission API.
 
-Next measurement step (WI3.5 continuation): substrate numbers need a lane whose
-per-packet cost is not veth-bound — RPS-enabled partitioning plus the external
-host of WI3.4B, or a driver-level path — before any substrate conclusion is
-drawn.
+**Sender-side profile (perf, 997 Hz, CPU-pinned, 8795 samples, folded stacks in
+`.local/artifacts/wi3-dummy-prof/`).** On-CPU: the sender is CPU-saturated
+(20.00 s of CPU in a 20.00 s window) with 5-13 context switches per window, so
+there is no off-CPU story to chase. 88.97 % of samples are inside the `sendto`
+syscall path, and the cost is spread rather than concentrated: skb allocation and
+header build 19.44 %, neighbour plus device transmit 19.42 %, route lookup 9.72 %,
+IP ID selection 5.91 %, dst refcount release 5.41 %, netfilter hooks 0.74 %, qdisc
+0.00 %. No single hotspot to fix, no firewall or qdisc tax to remove.
+
+Cross-reference: pinned `srt-rs` `crates/srt-bench/benches/udp_datapath_floor.rs`
+(recorded in its `docs/results/scaling-1000/floor-single-core.txt`) measured the
+same host class in-process on loopback: a null syscall at 303 ns, Compio with 64
+operations in flight at 8.898 us CPU/datagram (166 343 pps), `sendmmsg` batch=16
+at 7.611 us (207 574 pps). Those include the loopback receive path on the same
+core, which is why they sit above the TX-only figures here; the shape agrees —
+per-datagram cost in the microseconds, dominated by the kernel stack, with the
+submission API worth tens of percent rather than multiples.
+
+**What this does and does not establish.** It establishes a *sender-side kernel
+stack* bound on this host class: ~3.1-3.8 us of sender CPU per datagram, ~0.26-0.32
+Mpps/core, with the cost distributed across the generic IPv4 transmit path. It does
+**not** measure a physical NIC: no DMA, no IRQ/completion placement, no offloads,
+no line-rate backpressure, and no claim is made here about NIC-path cost per
+datagram. It also does not yet test `sendmmsg`, SQPOLL, `SEND_ZC` or AF_XDP.
+
+Implication for the roadmap's 2 Mpps/core target: 2 Mpps/core is 0.5 us per
+datagram, while the measured kernel transmit path alone costs ~3.1 us on this host
+class. A faster submission API cannot close a 6x gap that lives in the packet path
+itself; that target needs either a fundamentally cheaper transmit mechanism
+(AF_XDP/XDP TX or equivalent kernel bypass) or a different host/kernel
+configuration, and the SRT protocol work of WI3.6 adds on top of whichever figure
+the substrate finally provides.
