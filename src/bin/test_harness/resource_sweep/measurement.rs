@@ -112,11 +112,16 @@ pub(super) async fn sample_resource_window(
     meta: ResourceScenarioMeta<'_>,
 ) -> Result<ResourceAggregate, String> {
     tokio::time::sleep(Duration::from_secs(env.settle_secs)).await;
-    // Prime the cumulative packet counters and every remote peer before the
-    // rated clock starts, so the first rated sample already covers a full
-    // interval of evidence instead of spending an interval on a baseline.
-    let primed_system = stack.api.get_json("/metrics/system?view=summary").await?;
-    super::packet_contract::prime(&primed_system, &meta).await?;
+    // Prime before the rated clock starts: peers are polled first, the local
+    // `/metrics/system` snapshot is fetched after they return, and the common
+    // barrier is stamped then. No evidence is spent on a baseline, and
+    // peer-poll latency cannot inflate the rated window.
+    let api = &stack.api;
+    super::packet_contract::prime(
+        || async { api.get_json("/metrics/system?view=summary").await },
+        &meta,
+    )
+    .await?;
     let mut samples = Vec::new();
     let mut prev_ticks = read_proc_stat_ticks(stack.restream_pid)?;
     let mut prev_ffmpeg_ticks: HashMap<u32, u64> = HashMap::new();

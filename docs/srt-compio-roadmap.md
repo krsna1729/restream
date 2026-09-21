@@ -1028,7 +1028,7 @@ counter reset, or a missing source reads `null`, never a fabricated zero.
 | loop iterations/s, media ticks/s, ready visits/s | Σ `loopIterations`, `mediaTicks`, `readyVisits` delta — the scheduler-activity signals that are actually produced | rate |
 | scheduler ready depth | `readyDepth` / `readyDepthHwm`, max over shards | gauge |
 | fault/pressure counts | rated-window deltas of `ownerTxFailedSends`, `ownerTxExhaustions`, `ownerServiceBudgetExhausted`, `ownerRxRingDropped`, `ownerRxTruncated`, `shardFeedResyncs`, `shardDriverBudgetViolations`, `shardQueueOverflows` (`*Delta`). Lifetime totals stay as `*Total` for context; the verdict judges only the deltas, so ramp-up or settle-period events cannot condemn a steady-state window | count |
-| workload delivery | the peer's own delivered payload (`payloadBytesPerSec`) against `expectedOutputs × 1,000,000 B/s` (8 Mbps) within the fixture's ±5%; on a local rung, first-transmission DATA pps per output against the fixed ~760. Zero or materially under-rate delivery is never healthy | rate |
+| workload delivery | the peer's own delivered payload against `expectedOutputs × 1,000,000 B/s` (8 Mbps) within the fixture's ±5%, summed over the **whole common rated window** (each sample's rate times its own interval reconstructs the delivered bytes). The fixture is VBR and that ±5% is a whole-span average, so per-second rates stay informational; on a local rung the same window average uses first-transmission DATA pps per output against the fixed ~760. A stall (zero delivery in a sample) is an immediate per-sample failure | rate |
 | connection churn | `acceptedPerSec` / `closedPerSec` on each peer during the rated window; any re-accept or close means the steady state was not steady | rate |
 | budget pressure (instantaneous) | `budgetExhaustions` (shard), `txInFlight`, `txCapacity`, `callerInFlightHwm`, `callerQueuedHwm` | gauge |
 | CPU | `/proc/<pid>/stat` delta (restream process only; control plane included, reported separately from ffmpeg) | rate |
@@ -1038,7 +1038,7 @@ counter reset, or a missing source reads `null`, never a fabricated zero.
 | NIC drops | `/sys/class/net/*/statistics/{rx,tx}_dropped` delta, loopback excluded | rate |
 | shard load | `capacity` `ingressPps`/`egressPps`/`mediaBps`/`hottestShardUtil`/`activeLeaves` and `flow` (`queue`, `backlogSlope`, `deadlineSlackMs`, `delayMs`, `errors`, `amplification`, `status`) | gauge |
 | remote peer drops | each configured peer's `GET /state` deltas over its own interval: kernel `udpInErrors`/`udpRcvbufErrors`/`udpSndbufErrors` plus non-loopback NIC `rx_dropped`/`tx_dropped`, alongside accepted connections and payload bytes. The UDP figures are host-wide (the same semantics as the local row), not per-socket counters | rate |
-| rated window | `ratedSecs` per sample, from the prime to the last rated sample; the rung records `ratedWindowSecs` | gauge |
+| rated window | `ratedSecs` per sample, from the common post-prime barrier to that sample; the rung records `commonRatedWindowSecs` | gauge |
 | SQEs/submission, io_uring enters/s | not sourced yet: the Compio runtime's ring counters are not exposed | gap |
 
 The `unavailable` block in `packet-contract.json` carries each gap with its
@@ -1046,11 +1046,22 @@ reason, so a rung cannot silently report a zero where a metric is missing.
 
 Each rung also carries `baselineEligible`, deliberately separate from the
 runtime verdict: `healthy` describes the datapath, eligibility describes
-whether the artifact may be recorded as a contractual baseline. It requires a
-clean known SHA, the canonical `egress-growth-source-srt` / `8M` / no-transcode
-workload, an output count on the `{100, 300, 500, 1000}` ladder, a common rated
-window of at least ten seconds, and runtime `healthy` — so a promotion cannot
-happen by hand-editing the ledger.
+whether the artifact may be recorded as a contractual baseline. It requires:
+
+- a clean known SHA **and** bench binaries built from that same clean tree —
+  `scripts/build/bench-harness.sh` writes `target/bench/build-provenance.json`
+  next to the binaries, and a clean SHA at run time alone never proves the
+  executed binary came from it;
+- `lifecycle=isolated`, `peerMode=sink`, exactly one configured egress rung
+  equal to the summarized rung, the canonical scenario filter, and
+  `settleSecs >= 10`;
+- the canonical workload (`h264-srt` ingest, `srt-source` egress, no
+  transcode, `8M`) and an output count on the `{100, 300, 500, 1000}` ladder,
+  with remote sink peers for the 300/500/1000 rungs;
+- a common rated window of at least ten seconds and runtime `healthy`.
+
+So a promotion cannot happen by hand-editing the ledger, and a stale bench
+pair or a convenient non-canonical run cannot masquerade as a baseline.
 
 Each rated sample and each rung also carries an explicit `validity` verdict:
 

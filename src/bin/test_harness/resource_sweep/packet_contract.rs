@@ -285,85 +285,6 @@ pub(super) fn rate_per_sec(
     (elapsed_secs > 0.0 && current >= previous).then(|| (current - previous) as f64 / elapsed_secs)
 }
 
-/// Run-level metadata every artifact carries, so a result can never be read
-/// without its tree, workload and environment.
-pub(super) struct RunMetadata {
-    pub(super) git_sha: Option<String>,
-    pub(super) git_dirty: Option<bool>,
-    pub(super) restream_binary: String,
-    pub(super) bitrate_label: String,
-    pub(super) peer_mode: String,
-    pub(super) peer_targets: Vec<String>,
-    /// Present only when the rung points at remote sink peers, in which case
-    /// their state endpoints gate the rung's validity.
-    pub(super) peer_state: Option<PeerStateConfig>,
-    pub(super) sample_secs: u64,
-    pub(super) settle_secs: u64,
-    pub(super) sample_interval_ms: u64,
-    pub(super) egress_counts: Vec<usize>,
-    pub(super) scenario_filter: Vec<String>,
-}
-
-impl RunMetadata {
-    pub(super) fn from_env(env: &ResourceSweepEnv) -> Self {
-        Self {
-            git_sha: git_output(&["rev-parse", "HEAD"]),
-            // Untracked-but-not-ignored files count as dirty: a "clean tree"
-            // claim must mean the whole work tree, not just tracked files.
-            git_dirty: git_output(&["status", "--porcelain"])
-                .map(|status| !status.trim().is_empty()),
-            restream_binary: env.restream_bin.display().to_string(),
-            bitrate_label: env.bitrate.clone(),
-            peer_mode: env.peer_mode.as_str().to_string(),
-            peer_targets: env.srt_peer_targets(),
-            peer_state: env.peer_state_config(),
-            sample_secs: env.sample_secs,
-            settle_secs: env.settle_secs,
-            sample_interval_ms: env.sample_interval_ms,
-            egress_counts: env.egress_counts.clone(),
-            scenario_filter: env
-                .scenario_filter
-                .as_ref()
-                .map(|set| {
-                    let mut filter: Vec<String> = set.iter().cloned().collect();
-                    filter.sort();
-                    filter
-                })
-                .unwrap_or_default(),
-        }
-    }
-
-    fn to_json(&self) -> Value {
-        json!({
-            "generatedAt": chrono::Utc::now().to_rfc3339(),
-            "gitSha": self.git_sha,
-            "gitDirty": self.git_dirty,
-            "restreamBinary": self.restream_binary,
-            "bitrateLabel": self.bitrate_label,
-            "peerMode": self.peer_mode,
-            "peerTargets": self.peer_targets,
-            "peerStateEndpoint": self.peer_state.as_ref().map(|state| json!({
-                "hosts": state.hosts,
-                "port": state.port,
-            })),
-            "sampleSecs": self.sample_secs,
-            "settleSecs": self.settle_secs,
-            "sampleIntervalMs": self.sample_interval_ms,
-            "egressCounts": self.egress_counts,
-            "scenarioFilter": self.scenario_filter,
-        })
-    }
-}
-
-/// One `git` probe; `None` when git is unavailable or the call fails.
-fn git_output(args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new("git").args(args).output().ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
 /// Contract artifact state: previous counters plus every emitted record.
 struct PacketContractSampler {
     previous: Option<PacketCounters>,
@@ -382,7 +303,8 @@ struct PacketContractSampler {
     run: RunMetadata,
 }
 
-use super::packet_contract_peers::{PeerFold, PeerStateConfig, poll_peers};
+use super::packet_contract_peers::{PeerFold, PeerReading, PeerStateConfig, poll_peers};
+pub(super) use super::packet_contract_run::RunMetadata;
 use super::packet_contract_verdict::sample_validity;
 
 static SAMPLER: Mutex<Option<PacketContractSampler>> = Mutex::new(None);
@@ -439,22 +361,73 @@ pub(super) fn set_peer_expected_outputs(expected: Vec<usize>) {
 /// peer's state, immediately after the settle period and before the rated
 /// clock starts. Without this the first rated sample would be spent creating a
 /// baseline, so the rated window would begin one sampling interval late.
-pub(super) async fn prime(system: &Value, meta: &ResourceScenarioMeta<'_>) -> Result<(), String> {
-    prime_at(system, meta, Instant::now()).await
+pub(super) async fn prime<F, Fut>(
+    fetch_system: F,
+    meta: &ResourceScenarioMeta<'_>,
+) -> Result<(), String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<Value, String>>,
+{
+    prime_with(fetch_system, meta, poll_peers).await
 }
 
-/// [`prime`] with an explicit observation time (tests drive the clock).
+/// [`prime`] with the peer poller injected, so the sequencing itself is
+/// testable: peers first, then the local `/metrics/system` observation, then
+/// the common rated-window barrier taken from *that* observation. Passing a
+/// pre-fetched system snapshot would let peer-poll latency leak into
+/// `commonRatedWindowSecs`.
+pub(super) async fn prime_with<F, Fut, P, PFut>(
+    fetch_system: F,
+    meta: &ResourceScenarioMeta<'_>,
+    poll: P,
+) -> Result<(), String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<Value, String>>,
+    P: FnOnce(PeerStateConfig) -> PFut,
+    PFut: std::future::Future<Output = Vec<PeerReading>>,
+{
+    let peer_config = with_sampler(|sampler| sampler.run.peer_state.clone()).flatten();
+    let peer_readings = match &peer_config {
+        Some(config) => poll(config.clone()).await,
+        None => Vec::new(),
+    };
+    // The local snapshot is fetched *after* the peer polls have returned, and
+    // the barrier is stamped when that snapshot arrives: the common window then
+    // starts no earlier than the last observation either side contributed.
+    let system = fetch_system().await?;
+    let observed_at = Instant::now();
+    with_sampler(|sampler| {
+        if let Some(config) = &peer_config {
+            let hosts = config.hosts.clone();
+            let expected = config.expected_outputs_per_host.clone();
+            sampler.peer_fold.configure(&hosts, &expected);
+        }
+        sampler.previous = Some(PacketCounters::read(&system));
+        sampler.previous_at = Some(observed_at);
+        sampler.rated_started = Some(observed_at);
+        // The prime belongs to this rung, so the first rated sample must not
+        // look like a rung change and reset what the prime just established.
+        sampler.previous_key = Some((meta.scenario.to_string(), meta.outputs as u64));
+        sampler.peer_fold.clear();
+        sampler.peer_fold.prime(&peer_readings);
+    });
+    Ok(())
+}
+
+/// [`prime_with`] with an explicit observation time and a caller-supplied
+/// snapshot: tests drive the clock and the fetch, so they must not exercise the
+/// production ordering. Production code uses [`prime`].
+#[cfg(test)]
 pub(super) async fn prime_at(
     system: &Value,
     meta: &ResourceScenarioMeta<'_>,
     observed_at: Instant,
 ) -> Result<(), String> {
     let peer_config = with_sampler(|sampler| sampler.run.peer_state.clone()).flatten();
-    // Peer baselines first: the local counter reading below happens after
-    // every peer poll has returned, so `ratedSecs` is measured from the common
-    // post-prime barrier rather than from a timestamp taken before the polls.
     let peer_readings = match &peer_config {
-        Some(config) => poll_peers(config).await,
+        Some(config) => poll_peers(config.clone()).await,
         None => Vec::new(),
     };
     with_sampler(|sampler| {
@@ -466,8 +439,6 @@ pub(super) async fn prime_at(
         sampler.previous = Some(PacketCounters::read(system));
         sampler.previous_at = Some(observed_at);
         sampler.rated_started = Some(observed_at);
-        // The prime belongs to this rung, so the first rated sample must not
-        // look like a rung change and reset what the prime just established.
         sampler.previous_key = Some((meta.scenario.to_string(), meta.outputs as u64));
         sampler.peer_fold.clear();
         sampler.peer_fold.prime(&peer_readings);
@@ -495,7 +466,7 @@ pub(super) async fn record_at(
 ) -> Result<(), String> {
     let peer_config = with_sampler(|sampler| sampler.run.peer_state.clone()).flatten();
     let peer_readings = match &peer_config {
-        Some(config) => poll_peers(config).await,
+        Some(config) => poll_peers(config.clone()).await,
         None => Vec::new(),
     };
     let Some((record, jsonl)) = with_sampler(|sampler| {

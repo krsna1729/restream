@@ -28,6 +28,25 @@ for binary in target/bench/restream target/bench/test_harness; do
   fi
 done
 
+# Build provenance: which tree these binaries were built from. The packet-rate
+# contract reads this stamp next to the harness binary and refuses to call a
+# rung baseline-eligible unless the running binary was built from the recorded
+# commit with a clean tree — a clean SHA at run time alone does not prove the
+# executed binary came from it.
+provenance_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
+provenance_dirty=false
+if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+  provenance_dirty=true
+fi
+cat > target/bench/build-provenance.json <<EOF
+{
+  "gitSha": "${provenance_sha}",
+  "gitDirty": ${provenance_dirty},
+  "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+echo "bench build provenance: sha=${provenance_sha:-unknown} dirty=${provenance_dirty}"
+
 cat <<'EOF'
 Bench-profile measurement binaries are ready:
   target/bench/restream

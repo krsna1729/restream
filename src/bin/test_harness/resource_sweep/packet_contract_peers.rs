@@ -98,7 +98,7 @@ pub(super) fn peer_state_from_json(host: &str, value: &Value) -> Result<PeerStat
 /// that host, never dropped: a remote rung cannot be healthy without the peer
 /// telemetry it depends on. Concurrency matters because a slow or unreachable
 /// peer must not stretch the sampling window it is part of.
-pub(super) async fn poll_peers(config: &PeerStateConfig) -> Vec<PeerReading> {
+pub(super) async fn poll_peers(config: PeerStateConfig) -> Vec<PeerReading> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .build();

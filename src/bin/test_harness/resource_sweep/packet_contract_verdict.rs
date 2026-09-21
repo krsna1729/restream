@@ -11,13 +11,10 @@ use serde_json::Value;
 /// assumes that is ~760 first-transmission DATA packets/s per output.
 pub(super) const EXPECTED_PAYLOAD_BYTES_PER_OUTPUT_PER_SEC: f64 = 1_000_000.0;
 pub(super) const EXPECTED_DATA_PPS_PER_OUTPUT: f64 = 760.0;
-/// The fixture contract's own tolerance (`8.0 ± 0.4 Mbps`).
-const WORKLOAD_TOLERANCE: f64 = 0.05;
-
-/// Is `value` inside `expected ± tolerance` (relative)?
-fn within(value: f64, expected: f64, tolerance: f64) -> bool {
-    expected > 0.0 && (value - expected).abs() <= expected * tolerance
-}
+/// The fixture contract's own tolerance (`8.0 ± 0.4 Mbps`). Applied over the
+/// whole common rated window, because the fixture is VBR and that contract is a
+/// whole-span average.
+pub(super) const WORKLOAD_TOLERANCE: f64 = 0.05;
 
 /// Verdict for one sample. `invalid` means the rung cannot be compared with
 /// any other rung (a required participant is missing, stalled, retrying or
@@ -178,10 +175,11 @@ pub(super) fn sample_validity(
             }
         }
     }
-    // Workload conformance: a rung that stopped delivering media, or delivered
-    // materially less than the declared workload, is not a performance
-    // baseline however clean its health counters look.
-    let outputs = expected_outputs as f64;
+    // Immediate workload failures only: a stall (zero delivery) is a per-sample
+    // fault, and connection churn means the steady state was not steady. The
+    // ±5% workload-conformance check runs over the whole common rated window in
+    // the rung summary, because the fixture is VBR and its tolerance is a
+    // whole-span average, not a per-second one.
     if expected_peers > 0 {
         if let Some(peers) = sample["peers"].as_array() {
             for peer in peers {
@@ -199,19 +197,8 @@ pub(super) fn sample_validity(
                         "peer {host} connection churn during the rated window (accepted/closed)"
                     ));
                 }
-                let Some(expected) = peer["expectedOutputs"].as_u64() else {
-                    reasons.push(format!(
-                        "peer {host} expected output count is not observable"
-                    ));
-                    continue;
-                };
-                let expected_bytes = expected as f64 * EXPECTED_PAYLOAD_BYTES_PER_OUTPUT_PER_SEC;
                 match peer["payloadBytesPerSec"].as_f64() {
-                    Some(delivered) if !within(delivered, expected_bytes, WORKLOAD_TOLERANCE) => {
-                        reasons.push(format!(
-                            "peer {host} delivered {delivered:.0} B/s against {expected_bytes:.0} B/s expected for {expected} output(s) at the 8 Mbps workload"
-                        ));
-                    }
+                    Some(0.0) => reasons.push(format!("peer {host} delivered no payload")),
                     Some(_) => {}
                     None => reasons.push(format!(
                         "peer {host} delivered payload rate is not observable"
@@ -219,18 +206,8 @@ pub(super) fn sample_validity(
                 }
             }
         }
-    } else if outputs > 0.0 {
-        match sample["srtDataFirstPps"].as_f64() {
-            Some(pps) => {
-                let per_output = pps / outputs;
-                if !within(per_output, EXPECTED_DATA_PPS_PER_OUTPUT, WORKLOAD_TOLERANCE) {
-                    reasons.push(format!(
-                        "sent {per_output:.0} first-transmission DATA pps/output against the ~{EXPECTED_DATA_PPS_PER_OUTPUT:.0} of the 8 Mbps workload"
-                    ));
-                }
-            }
-            None => reasons.push("srtDataFirstPps is not observable".to_string()),
-        }
+    } else if sample["srtDataFirstPps"].as_f64() == Some(0.0) {
+        reasons.push("no first-transmission DATA sent in the sample".to_string());
     }
 
     // The roadmap's target is a healthy NO-LOSS path, so retransmissions in

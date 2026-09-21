@@ -2,12 +2,11 @@
 
 use super::packet_contract::*;
 use super::packet_contract_peers::peer_state_from_json;
-use super::packet_contract_summary::baseline_eligibility;
 
 /// `begin`/`finish` drive one process-global sampler, so the tests that use it
 /// must not run concurrently with each other. Async-aware because the guard is
 /// held across the `record` awaits.
-static SAMPLER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(super) static SAMPLER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 use crate::resource_sweep::ResourceScenarioMeta;
 use crate::resource_sweep::packet_contract_verdict::sample_validity;
 use serde_json::{Value, json};
@@ -15,7 +14,7 @@ use serde_json::{Value, json};
 /// A complete `/metrics/system` shard projection: every counter the verdict
 /// reads is present, so a fixture that means "nothing is wrong" really is
 /// healthy rather than merely under-specified.
-fn system_with_owners(owners: Value) -> Value {
+pub(super) fn system_with_owners(owners: Value) -> Value {
     json!({
         "egressShards": [{
             "protocol": "srt",
@@ -160,7 +159,7 @@ fn udp_snmp_columns_are_none_when_the_kernel_does_not_publish_them() {
 }
 
 /// A rated sample with nothing wrong: healthy, no reasons.
-fn clean_sample() -> Value {
+pub(super) fn clean_sample() -> Value {
     json!({
         "srtTxDatagramsPerSec": 100_000.0,
         "srtDataRetransmitPps": 0.0,
@@ -190,7 +189,7 @@ fn clean_sample() -> Value {
     })
 }
 
-fn sample_with(patch: Value) -> Value {
+pub(super) fn sample_with(patch: Value) -> Value {
     let mut sample = clean_sample();
     if let (Value::Object(base), Value::Object(patch)) = (&mut sample, patch) {
         for (key, value) in patch {
@@ -287,6 +286,8 @@ async fn summary_groups_samples_by_rung() {
             peer_mode: "sink".to_string(),
             peer_targets: vec!["127.0.0.1".to_string()],
             peer_state: None,
+            build: None,
+            lifecycle: "isolated".to_string(),
             sample_secs: 10,
             settle_secs: 10,
             sample_interval_ms: 1000,
@@ -376,6 +377,8 @@ async fn a_rung_change_resets_counter_history() {
             peer_mode: "sink".to_string(),
             peer_targets: vec!["127.0.0.1".to_string()],
             peer_state: None,
+            build: None,
+            lifecycle: "isolated".to_string(),
             sample_secs: 10,
             settle_secs: 10,
             sample_interval_ms: 1000,
@@ -660,6 +663,8 @@ async fn a_short_rated_window_is_not_a_baseline() {
             peer_mode: "sink".to_string(),
             peer_targets: vec!["127.0.0.1".to_string()],
             peer_state: None,
+            build: None,
+            lifecycle: "isolated".to_string(),
             sample_secs: 10,
             settle_secs: 10,
             sample_interval_ms: 1000,
@@ -722,173 +727,4 @@ async fn a_short_rated_window_is_not_a_baseline() {
         rung["validity"]
     );
     let _ = std::fs::remove_dir_all(&work_dir);
-}
-
-/// Delivery conformance on a remote rung: the peer's own delivered payload is
-/// the end-to-end evidence that the 8 Mbps workload actually arrived, and any
-/// connection churn during the rated window disqualifies a steady-state rung.
-#[test]
-fn remote_workload_delivery_gates_the_verdict() {
-    let peer = |payload: Value, accepted: f64, closed: f64| {
-        json!([{
-            "host": "peer-a", "runId": "run-1", "runIdChanged": false,
-            "expectedOutputs": 100,
-            "payloadBytesPerSec": payload,
-            "acceptedPerSec": accepted, "closedPerSec": closed,
-            "udpRcvbufErrorsPerSec": 0.0, "udpSndbufErrorsPerSec": 0.0,
-            "udpInErrorsPerSec": 0.0, "nicRxDroppedPerSec": 0.0, "nicTxDroppedPerSec": 0.0,
-            "error": Value::Null,
-        }])
-    };
-    let remote = |peers: Value| sample_with(json!({"expectedPeers": 1, "peers": peers}));
-
-    assert_eq!(
-        sample_validity(&remote(peer(json!(100_000_000.0), 0.0, 0.0)), 100)
-            .unwrap()
-            .0,
-        "healthy",
-        "100 outputs at 8 Mbps deliver 100 MB/s"
-    );
-
-    for (payload, needle) in [
-        (json!(0.0), "delivered 0 B/s"),
-        (json!(80_000_000.0), "against 100000000 B/s expected"),
-    ] {
-        let (status, reasons) = sample_validity(&remote(peer(payload, 0.0, 0.0)), 100).unwrap();
-        assert_eq!(status, "contaminated", "{reasons:?}");
-        assert!(
-            reasons.iter().any(|reason| reason.contains(needle)),
-            "{reasons:?}"
-        );
-    }
-
-    // A peer whose delivered-payload sensor is unreadable is not a pass.
-    let (status, reasons) = sample_validity(&remote(peer(Value::Null, 0.0, 0.0)), 100).unwrap();
-    assert_ne!(status, "healthy");
-    assert!(
-        reasons
-            .iter()
-            .any(|reason| reason.contains("delivered payload rate is not observable")),
-        "{reasons:?}"
-    );
-
-    // Connections closing or re-accepting inside the rated window mean the
-    // steady state was not steady.
-    for (accepted, closed) in [(1.0, 0.0), (0.0, 1.0)] {
-        let (status, reasons) =
-            sample_validity(&remote(peer(json!(100_000_000.0), accepted, closed)), 100).unwrap();
-        assert_eq!(status, "invalid", "{reasons:?}");
-        assert!(
-            reasons
-                .iter()
-                .any(|reason| reason.contains("connection churn during the rated window")),
-            "{reasons:?}"
-        );
-    }
-}
-
-/// Baseline eligibility is a separate gate from runtime validity: a healthy
-/// datapath on a dirty tree, a non-canonical workload, an off-ladder rung or a
-/// short window still may not be recorded as a contractual baseline.
-#[test]
-fn baseline_eligibility_requires_a_canonical_clean_healthy_rung() {
-    let run = |sha: Value, dirty: Value, bitrate: &str| {
-        json!({
-            "gitSha": sha,
-            "gitDirty": dirty,
-            "bitrateLabel": bitrate,
-            "peerMode": "sink",
-        })
-    };
-    let eligible = baseline_eligibility(
-        &run(json!("abc123"), json!(false), "8M"),
-        "egress-growth-source-srt",
-        100,
-        12.0,
-        "healthy",
-    );
-    assert_eq!(eligible["eligible"], true, "{eligible}");
-
-    for (case, scenario, outputs, window, status, needle) in [
-        (
-            "dirty tree",
-            "egress-growth-source-srt",
-            100,
-            12.0,
-            "healthy",
-            "dirty",
-        ),
-        (
-            "unknown sha",
-            "egress-growth-source-srt",
-            100,
-            12.0,
-            "healthy",
-            "no git SHA",
-        ),
-        (
-            "wrong scenario",
-            "egress-growth-transcode-mixed",
-            100,
-            12.0,
-            "healthy",
-            "not the canonical SRT fanout",
-        ),
-        (
-            "off-ladder rung",
-            "egress-growth-source-srt",
-            150,
-            12.0,
-            "healthy",
-            "not a ladder rung",
-        ),
-        (
-            "short window",
-            "egress-growth-source-srt",
-            100,
-            4.0,
-            "healthy",
-            "shorter than 10s",
-        ),
-        (
-            "contaminated runtime",
-            "egress-growth-source-srt",
-            100,
-            12.0,
-            "contaminated",
-            "runtime validity is contaminated",
-        ),
-    ] {
-        let sha = if case == "unknown sha" {
-            Value::Null
-        } else {
-            json!("abc123")
-        };
-        let dirty = if case == "dirty tree" {
-            json!(true)
-        } else {
-            json!(false)
-        };
-        let bitrate = if case == "wrong bitrate" { "4M" } else { "8M" };
-        let eligibility =
-            baseline_eligibility(&run(sha, dirty, bitrate), scenario, outputs, window, status);
-        assert_eq!(eligibility["eligible"], false, "{case}: {eligibility}");
-        assert!(
-            eligibility["reasons"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|reason| reason.as_str().unwrap_or("").contains(needle)),
-            "{case}: {eligibility}"
-        );
-    }
-
-    let wrong_bitrate = baseline_eligibility(
-        &run(json!("abc123"), json!(false), "4M"),
-        "egress-growth-source-srt",
-        100,
-        12.0,
-        "healthy",
-    );
-    assert_eq!(wrong_bitrate["eligible"], false, "{wrong_bitrate}");
 }

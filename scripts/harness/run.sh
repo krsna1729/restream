@@ -33,7 +33,9 @@ needs_bench_rebuild() {
   local stamp
   stamp=$(stat -c '%Y' "$bin")
   local newest
-  newest=$(find src scripts test/harness Cargo.toml build.rs rust-toolchain.toml \
+  # Workspace crates and the lockfile are build inputs too: a stale bench pair
+  # must not be able to masquerade as a fresh build of the current tree.
+  newest=$(find src scripts test/harness crates Cargo.toml Cargo.lock build.rs rust-toolchain.toml \
     -type f -not -path '*/target/*' -printf '%T@\n' 2>/dev/null | sort -nr | head -n1)
   if [[ -z "$newest" ]]; then
     return 1
