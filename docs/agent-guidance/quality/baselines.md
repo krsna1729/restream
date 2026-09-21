@@ -111,6 +111,41 @@ Artifacts: `.local/artifacts/wi34-rung-100/` (corrected rung, with
 per-rung validity verdict), `.local/artifacts/wi34-ladder/100-300/` (the
 earlier 100/300 rungs and the drop evidence).
 
+### WI3.4 remote-peer shakedown — 100 outputs, one host (`f45e8596`, 2026-09-21)
+
+The first run through the finished contract machinery: sink peer as a separate
+process (`srt-sink`, 4 acceptors, 32 MB socket buffers), measuring host
+retargeted at it with `RESOURCE_SWEEP_SRT_PEER_HOSTS=127.0.0.1` and pinned
+`MTX_SRT`/`MTX_API`, one isolated rung of 100 outputs, 12 s settle + 12 s
+sample. 8 rated samples, **12.96 s common rated window**, clean tree, bench
+provenance matching HEAD.
+
+| Signal | Value |
+|---|---|
+| Runtime verdict | `contaminated` (`baselineEligible: false`) |
+| Peer delivered payload | 78.3 MB/s for 100 outputs (expected 100 MB/s at 8 Mbps) |
+| Peer UDP receive-buffer drops | 68–4 263/s |
+| Local kernel UDP receive-buffer errors | up to 5 292/s |
+| SRT retransmissions | up to 8 400/s (mean 1 144/s) |
+| First-transmission DATA | 778.4 pps/output mean (within the 8 Mbps band) |
+| CPU | 22.5 µs per SRT datagram (mean) |
+
+What it shows: the contract now measures what it claims to. Priming gives every
+sample a rated interval and a 12.96 s common window; the peer's own delivered
+payload (78 % of the workload) is what flagged under-delivery, while the
+locally measured send rate (778 pps/output) sat inside the band — the
+peer-side check catches exactly what a send-side check cannot. Drops,
+retransmissions and the workload shortfall are all in the verdict's reasons, so
+no baseline was recorded: one host's loopback sink cannot carry 100 × 8 Mbps
+losslessly, which is what the multi-host ≥25 GbE rungs are for.
+
+Operational finding recorded in §10.1: `MTX_SRT`/`MTX_API` must be pinned to the
+peer's `SRT_SINK_PORTS`/`SRT_SINK_STATE_PORT`; without them the harness
+synthesizes per-process ports and every output dies on
+`handshake attempt deadline`. A six-acceptor sink also failed to drain on this
+host while one and four acceptors worked — worth re-checking before the
+multi-host runs.
+
 ## Standing optimization targets (2026-06-27 CPU profile, task-clock 999 Hz)
 
 | Self % | Symbol | Meaning | Backlog |

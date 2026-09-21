@@ -540,6 +540,11 @@ pub(super) async fn record_at(
         record.insert("scenario".to_string(), json!(meta.scenario));
         record.insert("label".to_string(), json!(meta.label));
         record.insert("outputs".to_string(), json!(meta.outputs));
+        // Workload dimensions travel with the contract record so baseline
+        // eligibility can check them from the artifact alone.
+        record.insert("ingestTypes".to_string(), json!(meta.ingest_types));
+        record.insert("egressMix".to_string(), json!(meta.egress_mix));
+        record.insert("transcode".to_string(), json!(meta.transcode));
         record.insert("intervalSecs".to_string(), json!(round2(elapsed_secs)));
         record.insert(
             "ratedSecs".to_string(),

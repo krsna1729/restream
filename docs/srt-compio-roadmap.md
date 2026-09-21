@@ -989,9 +989,22 @@ remote host and point the rung at them:
 # on each peer host
 SRT_SINK_PORTS=8891 scripts/harness/run.sh srt-sink -- --no-netns
 
-# on the measuring host
-MSR_PEER=sink RESOURCE_SWEEP_SRT_PEER_HOSTS=peer-a,peer-b RESOURCE_SWEEP_BITRATE=8M RESOURCE_SWEEP_EGRESS_COUNTS=1000 RESOURCE_SWEEP_SCENARIOS=egress-growth-source-srt WORK_DIR=.local/artifacts/wi34-ladder/1000 scripts/harness/run.sh resource-sweep -- --no-netns
+# on the measuring host — pin BOTH peer ports, or the harness synthesizes its
+# own per-process ports and the outputs never reach the peer
+MSR_PEER=sink \
+RESOURCE_SWEEP_SRT_PEER_HOSTS=peer-a,peer-b \
+MTX_SRT=8891 MTX_API=9997 \
+RESOURCE_SWEEP_BITRATE=8M \
+RESOURCE_SWEEP_EGRESS_COUNTS=1000 \
+RESOURCE_SWEEP_SCENARIOS=egress-growth-source-srt \
+WORK_DIR=.local/artifacts/wi34-ladder/1000 \
+scripts/harness/run.sh resource-sweep -- --no-netns
 ```
+
+`MTX_SRT` must match the peer's `SRT_SINK_PORTS` and `MTX_API` its
+`SRT_SINK_STATE_PORT`: the harness otherwise allocates per-process ports, so a
+run without them points at ports nothing is listening on (observed as
+`handshake attempt deadline` on every output).
 
 SRT outputs are spread over the configured hosts by a stable hash of the
 output name, and the rung records how many outputs each peer is expected to

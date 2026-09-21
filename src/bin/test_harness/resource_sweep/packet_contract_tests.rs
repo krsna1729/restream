@@ -344,6 +344,12 @@ async fn summary_groups_samples_by_rung() {
     assert_eq!(rung["outputs"], 100);
     assert_eq!(rung["samples"], 2);
     assert_eq!(
+        rung["workload"]["ingestTypes"], "h264-srt",
+        "workload dimensions come from the contract records, not from thin air"
+    );
+    assert_eq!(rung["workload"]["egressMix"], "srt-source");
+    assert_eq!(rung["workload"]["transcode"], "no");
+    assert_eq!(
         rung["ratedSamples"], 2,
         "both samples are rated: the prime is the interval origin"
     );
