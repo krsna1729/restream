@@ -1456,20 +1456,64 @@ Extend those shapes rather than building another synthetic Owner.
 Fanout first: find the highest fanout at which the SRT sink is provably not the
 limiter, and hold it for A/B/C/D. WI3.6 is about attribution, not maximum fanout.
 
-Measured caveat (2026-09-21): on this host the same-host sink is **not provably
-lossless at any probed fanout** — 20 outputs dropped 93/s and 27/s (98.5 %
-delivery) with 8 MiB sink buffers, 17/s and 2.2/s (97.3 %) with 32 MiB, and 10
-outputs still dropped 14/s and 14.7/s (97.5 %). Residual drops of ~0.15 % persist
-at ten outputs, so before the ladder runs one of these must be chosen explicitly:
-more receiver CPU/buffers, an external receiver (WI3.4B), or a documented residual
-threshold that still counts as receiver-unlimited.
+`receiver-unlimited` has a fixed meaning here and it is not a threshold: **zero
+observed receiver/kernel drops and zero retransmitted DATA during the rated
+window**. Loss recovery changes the protocol cost being attributed, so a residual
+allowance would corrupt the measurement it is meant to enable.
+
+Measured (2026-09-21), on the RPS-partitioned lane (sender CPU 0, harness CPU 1,
+receiver and peer RX on CPUs 2-5, peer `rps_cpus` = `3c` requested and observed,
+effective socket buffers read back rather than assumed — 32 MiB requested, 50 MiB
+granted):
+
+| Fanout | Peer delivery | Coverage | Drops in the rated window |
+|---:|---|---|---|
+| 1 | 0.97 of 1 MB/s | 1.02 | 48, 50, 88, 45, 64, 347 per second across 6 samples |
+| 2 | 1.95 of 2 MB/s | 1.02 | 131, 7.5 per second |
+| 4 | 3.94 of 4 MB/s | 1.05 | 41, 18 per second |
+| 8 | 7.86 of 8 MB/s | 1.02 | 18, 113 per second |
+| 10 | 9.99 of 10 MB/s | 1.02 | 113 per second plus 2.91 retransmissions/s |
+
+No fanout is lossless, including fanout 1, while the same lane's cheap UDP drain
+absorbed 150 000 pps with zero drops. **The harness `srt-sink` is therefore not a
+valid measurement receiver** for WI3.6: replace it with the pinned srt-rs
+two-process qualification receiver (`compio_shared_owner_qual`, pinned to the
+receiver CPUs inside the same namespace) or fix its drain path before stages C and
+D price anything. Stage B needs no SRT receiver semantics and proceeds now.
+
+Lane placement for sender attribution: sender CPU 0, harness/control CPU 1,
+receiver and peer-side RX processing on CPUs 2-5, with the peer veth's `rps_cpus`
+set to the receiver mask and both the requested and the observed mask recorded in
+the topology env and every artifact. Plain-veth numbers predating this placement
+are exploratory, not subtraction anchors.
 
 Load regime matters as much as fanout: stage A saturates at 6.65 us/datagram of
 sender CPU on this lane, while stage D at 10 outputs reports 55 us per SRT packet
-because it is paced and wakeup-bound far below saturation. Stages must be compared
-at matched load — pace stage A to the product rate, or measure the SRT stages at
-saturation on a receiver that can absorb it — and every figure must state its
-regime.
+because it is paced and wakeup-bound far below saturation. WI3.6 therefore runs two
+explicit regimes, both at the identical selected fanout:
+
+```text
+Regime S — saturation            Regime P — product paced
+  A raw UDP                        A raw UDP
+  B Owner pre-materialized TX      B Owner pre-materialized TX
+  C full plaintext SRT Owner       C full plaintext SRT Owner
+                                   D full Restream
+Question: intrinsic per-packet   Question: real 8 Mbps/output cost
+cost and maximum service demand  including pacing/wakeup behaviour
+```
+
+Paced A/B must reproduce the product's **burst shape**, not a uniform drip: every
+~1316 us source tick, emit one datagram per destination, so ten outputs look like
+ten sends per tick rather than one send every ~132 us. Uniform spacing would give
+the controls different wakeup and batching opportunities from the stages they are
+compared against.
+
+Report per stage: CPU us per source tick, CPU us per first-transmission DATA
+packet, CPU us per total datagram, `total datagrams / DATA-first`, user/system CPU,
+wakeups/context switches, service visits and actions, TX submitted/completed/in
+flight, retransmits and peer loss. Attribute A->B to Owner/runtime, B->C to SRT
+protocol and timer/control work, and C->D to Restream media/scheduler integration —
+only within the same topology, fanout and regime.
 
 Report, per stage, over repeated windows (median/min/max):
 

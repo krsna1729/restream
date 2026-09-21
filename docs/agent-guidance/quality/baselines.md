@@ -451,3 +451,43 @@ path sends 1.257 total SRT datagrams per first-transmission DATA packet
 (956.29 / 760.85), which is the denominator that keeps control and retransmission
 traffic from reading as CPU inefficiency.
 
+### WI3.6 receiver apparatus — RPS-partitioned lane, effective buffers, fanout probe (2026-09-21)
+
+Lane amended for sender attribution: sender CPU 0, harness/control CPU 1, receiver
+plus peer-side RX processing on CPUs 2-5, with the peer veth's `rps_cpus` set to
+the receiver mask (requested `3c`, observed `3c`, recorded in the topology env
+file) so veth's peer RX work no longer executes on the measured sender core. The
+plain-veth Stage A/D numbers recorded earlier stay exploratory evidence, not
+subtraction anchors.
+
+Effective socket buffers are now read back instead of assumed: the sink serves
+`requestedRcvbufBytes` plus an `effectiveSocketBuffers` block whose granted values
+come from `getsockopt` on a probe socket carrying the same request in the same
+namespace. With 32 MiB requested the kernel granted **50 MiB** receive (and 16 MiB
+send), so "32 MiB buffers still dropped" was never established — the granted size
+is 50 MiB.
+
+Fanout probe under that lane (8 Mbps per output, 15 s samples, sink on CPUs 2-5):
+
+| Fanout | Rated | Peer delivery | Coverage | Drops / retransmits in the rated window |
+|---:|---:|---|---|---|
+| 1 | 11/11 | 0.97 of 1 MB/s | 1.02 | rcvbuf errors 48, 50, 88, 45, 64, 347 per second across 6 samples |
+| 2 | 12/12 | 1.95 of 2 MB/s | 1.02 | 131, 7.5 per second |
+| 4 | 11/11 | 3.94 of 4 MB/s | 1.05 | 41, 18 per second |
+| 8 | 11/11 | 7.86 of 8 MB/s | 1.02 | 18, 113 per second |
+| 10 | 11/11 | 9.99 of 10 MB/s | 1.02 | 113 per second plus 2.91 retransmissions/s |
+
+**No fanout is lossless, including fanout 1.** At a single 8 Mbps output (~956 SRT
+datagrams/s) the receiver overflows its receive buffer in most seconds, so the
+apparatus — not capacity — is the limiter: the same lane's cheap UDP drain absorbed
+150 000 pps with zero drops and zero receive errors. Delivery still reads 97-99 %
+because SRT retransmits the drops, which is precisely why a residual-loss allowance
+is not acceptable here: loss recovery changes the protocol cost being attributed.
+
+Classification: the harness `srt-sink` is **not a valid measurement receiver** for
+WI3.6. Before stages C and D can price SRT, the receiver must be either the pinned
+srt-rs two-process qualification receiver (`compio_shared_owner_qual`, pinned to the
+receiver CPUs inside the same namespace) or a fixed harness sink. Stage B
+(pre-materialized Owner TX against the cheap UDP drain) does not need SRT receiver
+semantics and can proceed immediately.
+

@@ -14,6 +14,8 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use std::os::fd::AsRawFd;
+
 use super::peer_state::{
     bind_state_listener, cpus_allowed_list, host_nic_drop_counters, host_udp_drop_counters,
     pin_to_cpuset, run_id, serve_state_json, udp_drops_since_start,
@@ -53,11 +55,74 @@ fn state_json(
     })
 }
 
-/// The sink's own state body: absolute counters, run identity and the observed
-/// CPU mask.
-fn sink_state(run: &str, started_ms: u128, ports: &[u16], counters: SrtSinkCounters) -> Value {
+/// Read one sysctl value from `/proc/sys`, e.g. `net/core/rmem_max`.
+fn sysctl_value(path: &str) -> Option<u64> {
+    std::fs::read_to_string(format!("/proc/sys/{path}"))
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+}
+
+/// What the kernel *granted* for a socket buffer request, read back with
+/// `getsockopt` on a probe socket that carries the same request in the same
+/// namespace. A requested `SO_RCVBUF` is clamped to `net.core.rmem_max`, so
+/// "32 MiB sink buffers still dropped" is not established until the granted size
+/// is visible; the requested size alone is not evidence.
+fn probe_effective_socket_buffers(requested: usize) -> Value {
+    let Some(socket) = std::net::UdpSocket::bind("127.0.0.1:0").ok() else {
+        return json!({"error": "probe socket unavailable"});
+    };
+    let fd = socket.as_raw_fd();
+    // Same request shape the listener applies (`SO_RCVBUF`/`SO_SNDBUF` set to the
+    // requested size), so the readback answers what the kernel grants here.
+    let applied = [libc::SO_RCVBUF, libc::SO_SNDBUF].iter().all(|name| {
+        let value = requested as libc::c_int;
+        let rc = unsafe {
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                *name,
+                &value as *const _ as *const libc::c_void,
+                std::mem::size_of_val(&value) as libc::socklen_t,
+            )
+        };
+        rc == 0
+    });
+    let read_back = |name: libc::c_int| -> Option<u64> {
+        let mut value: libc::c_int = 0;
+        let mut len = std::mem::size_of_val(&value) as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                name,
+                &mut value as *mut _ as *mut libc::c_void,
+                &mut len,
+            )
+        };
+        (rc == 0).then_some(value as u64)
+    };
+    json!({
+        "applied": applied,
+        "grantedRcvbufBytes": read_back(libc::SO_RCVBUF),
+        "grantedSndbufBytes": read_back(libc::SO_SNDBUF),
+        "rmemMaxBytes": sysctl_value("net/core/rmem_max"),
+        "wmemMaxBytes": sysctl_value("net/core/wmem_max"),
+        "rmemDefaultBytes": sysctl_value("net/core/rmem_default"),
+        "wmemDefaultBytes": sysctl_value("net/core/wmem_default"),
+    })
+}
+
+/// The sink's own state body: absolute counters, run identity, the observed CPU
+/// mask, and both the requested and the effective socket buffers.
+fn sink_state(
+    run: &str,
+    started_ms: u128,
+    ports: &[u16],
+    counters: SrtSinkCounters,
+    requested_rcvbuf: usize,
+) -> Value {
     let (nic_rx_dropped, nic_tx_dropped) = host_nic_drop_counters();
-    state_json(
+    let mut state = state_json(
         run,
         started_ms,
         cpus_allowed_list().as_deref(),
@@ -66,7 +131,10 @@ fn sink_state(run: &str, started_ms: u128, ports: &[u16], counters: SrtSinkCount
         host_udp_drop_counters(),
         nic_rx_dropped,
         nic_tx_dropped,
-    )
+    );
+    state["requestedRcvbufBytes"] = json!(requested_rcvbuf);
+    state["effectiveSocketBuffers"] = probe_effective_socket_buffers(requested_rcvbuf);
+    state
 }
 
 /// The peer-side half of a multi-host rung: bind the SRT sink listeners, serve
@@ -119,7 +187,9 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
         let run = run.clone();
         let ports = ports.clone();
         let counters = pool.counters();
-        std::sync::Arc::new(move || sink_state(&run, started_ms, &ports, counters.snapshot()))
+        std::sync::Arc::new(move || {
+            sink_state(&run, started_ms, &ports, counters.snapshot(), udp_buffer)
+        })
     }));
     println!(
         "[srt-sink] run {run} listening on {ports:?} with {threads} thread(s), {udp_buffer} B udp buffer; \
@@ -173,6 +243,8 @@ pub(crate) async fn srt_sink_mode() -> Result<Value, String> {
         "udpInErrorsSinceStart": drops.map(|drops| drops.0),
         "udpRcvbufErrorsSinceStart": drops.map(|drops| drops.1),
         "udpSndbufErrorsSinceStart": drops.map(|drops| drops.2),
+        "requestedRcvbufBytes": udp_buffer,
+        "effectiveSocketBuffers": probe_effective_socket_buffers(udp_buffer),
     }))
 }
 

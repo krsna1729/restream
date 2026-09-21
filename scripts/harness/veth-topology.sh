@@ -41,7 +41,7 @@ ENV_FILE="${WI3_TOPOLOGY_ENV:-$WORK_DIR/wi3-topology.env}"
 usage() {
   cat >&2 <<EOF
 usage:
-  scripts/harness/veth-topology.sh up [--cpus <restream-mask> <sink-mask>]
+  scripts/harness/veth-topology.sh up [--cpus <sender-cpu> <harness-mask> <receiver-mask>]
   scripts/harness/veth-topology.sh start-peer [srt-sink|udp-drain]
   scripts/harness/veth-topology.sh down
   scripts/harness/veth-topology.sh status
@@ -64,26 +64,62 @@ netns_exec() {
 
 # Default partition: half the CPUs for the measured datapath, the rest for the
 # receiver, so the sink cannot consume the core under measurement.
+# Sender attribution needs three disjoint placements: the measured sender on one
+# CPU, harness/control elsewhere, and the receiver plus its peer-side receive
+# processing (RPS) on a third set. The peer veth's rx queue is redirected to the
+# receiver mask, because veth otherwise runs peer RX work in the sender's path
+# and contaminates every sender-side number (WI3.5 showed `rps_cpus` moving the
+# measured ceiling).
 default_cpu_masks() {
   local cpus
   cpus=$(nproc)
-  if (( cpus < 4 )); then
-    echo "[veth-topology] at least 4 CPUs are needed to partition sender and receiver" >&2
+  if (( cpus < 3 )); then
+    echo "[veth-topology] at least 3 CPUs are needed to partition sender, harness and receiver" >&2
     exit 2
   fi
-  local restream_end=$(( cpus / 2 - 1 ))
-  local sink_start=$(( cpus / 2 ))
-  echo "0-${restream_end} ${sink_start}-$(( cpus - 1 ))"
+  if (( cpus == 3 )); then
+    echo "0 1 2"
+  else
+    echo "0 1 2-$(( cpus - 1 ))"
+  fi
+}
+
+# CPU mask as the kernel's rps_cpus format (hex bitmap, comma-separated per word).
+rps_mask() {
+  local mask="$1" cpu bit=0 word=0 out=""
+  local -a words=()
+  local part start end
+  for part in ${mask//,/ }; do
+    if [[ "$part" == *-* ]]; then
+      start="${part%%-*}"; end="${part##*-}"
+    else
+      start="$part"; end="$part"
+    fi
+    for ((cpu = start; cpu <= end; cpu++)); do
+      word=$((cpu / 32)); bit=$((cpu % 32))
+      while [[ "${#words[@]}" -le "$word" ]]; do words+=("0"); done
+      words[$word]=$(( words[$word] | (1 << bit) ))
+    done
+  done
+  for word in "${words[@]}"; do
+    [[ -n "$out" ]] && out+=","
+    out+="$(printf '%x' "$word")"
+  done
+  echo "${out:-0}"
 }
 
 cmd_up() {
-  local restream_mask sink_mask
+  local sender_cpu harness_mask receiver_mask restream_mask sink_mask rps rps_observed
   if [[ "${1:-}" == "--cpus" ]]; then
-    restream_mask="${2:?--cpus needs two masks}"
-    sink_mask="${3:?--cpus needs two masks}"
+    sender_cpu="${2:?--cpus needs three masks}"
+    harness_mask="${3:?--cpus needs three masks}"
+    receiver_mask="${4:?--cpus needs three masks}"
   else
-    read -r restream_mask sink_mask <<<"$(default_cpu_masks)"
+    read -r sender_cpu harness_mask receiver_mask <<<"$(default_cpu_masks)"
   fi
+  # Restream runs on sender+harness; the sink owns the receiver mask.
+  restream_mask="${sender_cpu},${harness_mask}"
+  sink_mask="$receiver_mask"
   require_root
   mkdir -p "$WORK_DIR"
 
@@ -108,6 +144,11 @@ cmd_up() {
   # The namespace accepts the whole destination prefix as local, so packets
   # addressed to any of the 1000 destinations are delivered to its sockets.
   netns_exec ip route add local "$WI3_DEST_PREFIX" dev "$VETH_PEER"
+
+  # Peer-side receive processing moves off the measured sender core.
+  rps="$(rps_mask "$receiver_mask")"
+  netns_exec sh -c "echo ${rps} > /sys/class/net/${VETH_PEER}/queues/rx-0/rps_cpus" 2>/dev/null || true
+  rps_observed="$(netns_exec cat /sys/class/net/${VETH_PEER}/queues/rx-0/rps_cpus 2>/dev/null || echo unavailable)"
   echo "[veth-topology] namespace treats ${WI3_DEST_PREFIX} as local"
 
   # Keep the veth path out of the host's forwarding/NAT rules.
@@ -123,10 +164,16 @@ export MTX_SRT=${SRT_PORT}
 export MTX_API=${STATE_PORT}
 export RESTREAM_CPUSET=${restream_mask}
 export SRT_SINK_CPUSET=${sink_mask}
+export WI3_SENDER_CPU=${sender_cpu}
+export WI3_HARNESS_CPUS=${harness_mask}
+export WI3_RECEIVER_CPUS=${receiver_mask}
+export WI3_RPS_CPUS_REQUESTED=${rps}
+export WI3_RPS_CPUS_OBSERVED=${rps_observed}
 EOF
 
   echo "[veth-topology] up: ${VETH_HOST} $(echo "$HOST_ADDR" | cut -d/ -f1) <-> ${NETNS}:${VETH_PEER} $(echo "$PEER_ADDR" | cut -d/ -f1)"
-  echo "[veth-topology] restream cpus ${restream_mask}, sink cpus ${sink_mask}"
+  echo "[veth-topology] sender cpu ${sender_cpu}, harness cpus ${harness_mask}, receiver cpus ${receiver_mask} (restream ${restream_mask}, sink ${sink_mask})"
+  echo "[veth-topology] peer rx rps_cpus requested ${rps}, observed ${rps_observed}"
   echo "[veth-topology] env written to ${ENV_FILE}"
   cat <<EOF
 [veth-topology] run the peer inside the namespace:
