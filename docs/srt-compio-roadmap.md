@@ -1445,6 +1445,28 @@ C. full plaintext SRT Owner            (real SRT peer: ACK/NAK/timers)
 D. full Restream SRT egress            (media pipeline included)
 ```
 
+Stage B is precisely: **production `TxEngine`/`Owner::service` execution path with
+benchmark-only pre-materialized injection**. The upstream helpers it needs
+(`with_caller`, `bench_caller_table_mut`, `bench_push_pending`) are all
+`bench-internals` APIs, and `with_caller` explicitly bypasses the production
+`Owner::connect` checks, so it must not be called "the production attach path" —
+Stage C is where the true production SRT attach and protocol path begins. Enable
+`srt-transport/bench-internals` only for the benchmark/harness build (a harness-only
+feature), never for normal Restream production builds.
+
+Stage D CPU scopes must be like-for-like: the resource sweep's
+`cpuMicrosPerSrtPacket` is whole-Restream process CPU, while stage C is a single
+sender thread. Report, per stage D run, the named `egress-{shard_id}` SRT shard
+thread CPU delta *and* whole-process CPU, so that:
+
+```text
+C -> D  SRT-thread delta          = integration cost on the egress path
+D       whole-process CPU         = actual product cost
+D       process - SRT threads     = surrounding Restream/control/media cost
+```
+
+and never subtract unlike CPU scopes.
+
 Reuse before inventing: pinned `srt-rs` already carries the hooks —
 `crates/srt-transport/benches/compio_tx_allocs.rs` shows the production
 `Owner::new(..).with_caller(OwnerCallerSide::new_single(..))` +
@@ -1475,11 +1497,32 @@ granted):
 | 10 | 9.99 of 10 MB/s | 1.02 | 113 per second plus 2.91 retransmissions/s |
 
 No fanout is lossless, including fanout 1, while the same lane's cheap UDP drain
-absorbed 150 000 pps with zero drops. **The harness `srt-sink` is therefore not a
-valid measurement receiver** for WI3.6: replace it with the pinned srt-rs
-two-process qualification receiver (`compio_shared_owner_qual`, pinned to the
-receiver CPUs inside the same namespace) or fix its drain path before stages C and
-D price anything. Stage B needs no SRT receiver semantics and proceeds now.
+absorbed 150 000 pps with zero drops. Simple socket-buffer undersizing is not
+supported by the probe evidence (the probe is indirect and does not read the
+listener sockets; prove the real listener grants from pinned srt-rs
+`socket_buffer_stats()` before closing the question), so the sink drain path remains
+the suspected apparatus failure. **Retire the harness `srt-sink` from WI3.6
+attribution**; do not repair it unless later work needs it independently.
+
+Replacement receiver for stages C/D: the *receiver* of the pinned upstream
+two-process shape, launched inside the same namespace on CPUs 2-5:
+
+```text
+srt-bench runtime=compio mode=receiver <port> <duration> 120 --connections <N>
+```
+
+Note the naming: `compio_shared_owner_qual` is the *sender* benchmark; the
+independent receiver process above is the part to run. Upstream qualification
+reconciled receiver DATA with zero receiver loss through F=200 in that shape, so it
+is a far better candidate than repairing the hybrid Tokio/`HighResWaiter` sink.
+
+Stage A controls (this host, RPS lane, saturation): `compio` (frozen, boxed) 164 342
+pps/core = 6.08 us/datagram; `compio-pipeline` (no per-datagram boxing) 171 872 =
+5.82; `sendto` 172 089 = 5.81. Stage A's harness allocation is worth ~4 %, so an
+A->B difference larger than that is Owner-side. Above ~160 000 pps the RPS backlog
+(`nicRxDropped`) is the lane's first receiver-side ceiling even with zero UDP drops,
+so saturation runs must raise `net.core.netdev_max_backlog` on the receiver as
+recorded lane configuration or run below that rate.
 
 Lane placement for sender attribution: sender CPU 0, harness/control CPU 1,
 receiver and peer-side RX processing on CPUs 2-5, with the peer veth's `rps_cpus`

@@ -70,6 +70,57 @@ pub(crate) fn run_compio(
     })
 }
 
+/// WI3.6 Stage A control: the Compio pipeline without per-datagram boxing.
+///
+/// Every send produces the *same* future type, so `FuturesUnordered` holds them
+/// directly — the shape pinned srt-rs uses in `udp_datapath_floor` and the shape
+/// the production Owner TX machinery eliminated `Box::pin` for. Comparing this
+/// arm against the frozen `compio` arm isolates Stage A's own harness overhead
+/// from any Owner-side difference.
+pub(crate) fn run_compio_pipeline(
+    config: &SubstrateConfig,
+    payload: Bytes,
+    handles: &SenderHandles,
+) -> Result<(), String> {
+    let runtime = compio::runtime::Runtime::new().map_err(|e| format!("compio runtime: {e}"))?;
+    runtime.block_on(async {
+        let std_socket =
+            std::net::UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("udp bind: {e}"))?;
+        set_send_buffer(std_socket.as_raw_fd(), SEND_BUFFER_BYTES)?;
+        let socket = compio::net::UdpSocket::from_std(std_socket)
+            .map_err(|e| format!("compio adopt udp socket: {e}"))?;
+
+        // No type annotation and no boxing: the futures are homogeneous.
+        let mut in_flight = FuturesUnordered::new();
+        let mut next = 0_usize;
+        while !handles.stop.load(Ordering::Relaxed) {
+            handles.wait_if_paused();
+            while in_flight.len() < config.queue_depth {
+                let destination = config.destinations[next % config.destinations.len()];
+                next += 1;
+                handles.counters.submitted.fetch_add(1, Ordering::Relaxed);
+                in_flight.push(socket.send_to(payload.clone(), destination));
+            }
+            handles
+                .counters
+                .max_in_flight
+                .fetch_max(in_flight.len() as u64, Ordering::Relaxed);
+            handles.counters.batches.fetch_add(1, Ordering::Relaxed);
+            match in_flight.next().await {
+                Some(compio::BufResult(result, _)) => {
+                    handles.counters.completed.fetch_add(1, Ordering::Relaxed);
+                    if let Err(error) = result {
+                        handles.counters.errors.fetch_add(1, Ordering::Relaxed);
+                        return Err(format!("compio send_to: {error}"));
+                    }
+                }
+                None => break,
+            }
+        }
+        Ok(())
+    })
+}
+
 /// Variant B: a purpose-built native ring. One `IoUring`, a fixed window of
 /// `SendTo` SQEs with preconstructed sockaddrs, one `submit()` per batch and a
 /// blocking enter only when the completion queue came back empty.

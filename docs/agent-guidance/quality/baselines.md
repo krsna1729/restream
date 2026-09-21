@@ -464,8 +464,12 @@ Effective socket buffers are now read back instead of assumed: the sink serves
 `requestedRcvbufBytes` plus an `effectiveSocketBuffers` block whose granted values
 come from `getsockopt` on a probe socket carrying the same request in the same
 namespace. With 32 MiB requested the kernel granted **50 MiB** receive (and 16 MiB
-send), so "32 MiB buffers still dropped" was never established — the granted size
-is 50 MiB.
+send). Simple socket-buffer undersizing is therefore **not supported by the probe
+evidence**; the sink drain path remains the suspected apparatus failure. The probe
+is still indirect — it does not read the listener sockets themselves — so the
+granted values on the actual listeners remain to be proven from pinned srt-rs
+`socket_buffer_stats()` (which records OS-granted buffers from the real sockets)
+before that question is closed.
 
 Fanout probe under that lane (8 Mbps per output, 15 s samples, sink on CPUs 2-5):
 
@@ -490,4 +494,27 @@ srt-rs two-process qualification receiver (`compio_shared_owner_qual`, pinned to
 receiver CPUs inside the same namespace) or a fixed harness sink. Stage B
 (pre-materialized Owner TX against the cheap UDP drain) does not need SRT receiver
 semantics and can proceed immediately.
+
+### WI3.6 Stage A controls — boxed vs no-box Compio (2026-09-21)
+
+RPS-partitioned lane (sender CPU 0, harness CPU 1, receiver plus peer RX on CPUs
+2-5), 10 destinations, 1316-byte payload, 20 s window, unpaced (saturation regime).
+
+| Arm | pps/core | us/datagram | payload Gbit/s | user / system (s) | Receiver |
+|---|---:|---:|---:|---|---|
+| `compio` (frozen WI3.5 arm: `Pin<Box<dyn Future>>` per datagram) | 164 342 | 6.08 | 1.730 | 1.73 / 18.27 | 0 UDP drops, 2 195 NIC rx drops, loss 2.1e-4 |
+| `compio-pipeline` (WI3.6 control: homogeneous futures, no per-datagram boxing) | 171 872 | 5.82 | 1.809 | 1.88 / 18.12 | 582 UDP drops, 2 993 NIC rx drops, loss 1.0e-3 |
+| `sendto` (blocking `libc::sendto`) | 172 089 | 5.81 | 1.811 | 0.64 / 19.36 | 18 659 UDP drops, 33 712 NIC rx drops, loss 1.5e-2 |
+
+Stage A's own harness allocation is therefore worth **~4 %** (6.08 -> 5.82
+us/datagram), not more: an A->B difference larger than that is Owner-side, and the
+boxed arm stays frozen as the WI3.5 historical reference.
+
+Lane finding: with RPS redirecting receive processing to CPUs 2-5, the peer's
+netdev rx path starts dropping (`nicRxDropped` 2 195-33 712) above ~160 000 pps
+even when UDP drops are zero — the RPS backlog, not the socket buffer, is the first
+receiver-side ceiling on this lane. Saturation-regime runs must therefore either
+raise `net.core.netdev_max_backlog` on the receiver (recording it as lane
+configuration) or run below that rate; all three arms above are `unclassified`
+under the zero-loss rule for exactly this reason.
 

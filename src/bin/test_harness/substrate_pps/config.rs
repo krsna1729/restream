@@ -9,8 +9,15 @@ use super::super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Variant {
-    /// The completion-based Compio path the SRT egress uses.
+    /// The completion-based Compio path as the WI3.5 reference measured it: a
+    /// boxed per-datagram future, kept frozen as historical evidence.
     Compio,
+    /// WI3.6 control: the same Compio path without per-datagram `Box::pin`
+    /// orchestration — one homogeneous future type in `FuturesUnordered`, the
+    /// shape the production Owner TX machinery uses. Without this arm, a faster
+    /// Stage B could be misread as "negative Owner overhead" when part of the
+    /// difference is Stage A's own harness allocation.
+    CompioPipeline,
     /// A purpose-built native ring.
     IoUring,
     /// Blocking `libc::sendto` in this process: the control that says whether a
@@ -22,10 +29,12 @@ impl Variant {
     pub(crate) fn parse(raw: &str) -> Result<Self, String> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "compio" => Ok(Self::Compio),
+            "compio-pipeline" => Ok(Self::CompioPipeline),
             "io-uring" | "io_uring" => Ok(Self::IoUring),
             "sendto" => Ok(Self::Sendto),
             other => Err(format!(
-                "SUBSTRATE_VARIANT must be compio, io-uring or sendto, got {other:?}"
+                "SUBSTRATE_VARIANT must be compio, compio-pipeline, io-uring or sendto, got \
+                 {other:?}"
             )),
         }
     }
@@ -33,6 +42,7 @@ impl Variant {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Compio => "compio",
+            Self::CompioPipeline => "compio-pipeline",
             Self::IoUring => "io-uring",
             Self::Sendto => "sendto",
         }

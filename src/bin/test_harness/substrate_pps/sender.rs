@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 
 use super::super::peer_state::{ThreadCpu, pin_to_cpuset, thread_cpus_allowed_list};
-use super::arms::{run_compio, run_io_uring, run_sendto};
+use super::arms::{run_compio, run_compio_pipeline, run_io_uring, run_sendto};
 use super::config::*;
 
 #[derive(Default)]
@@ -142,6 +142,7 @@ pub(crate) fn sender_thread(
             .store(super::peer_state::current_thread_id(), Ordering::Relaxed);
         match config.variant {
             Variant::Compio => run_compio(&config, payload, &handles),
+            Variant::CompioPipeline => run_compio_pipeline(&config, payload, &handles),
             Variant::IoUring => run_io_uring(&config, payload, &handles),
             Variant::Sendto => run_sendto(&config, payload, &handles),
         }

@@ -387,7 +387,7 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
             "ringEnters": match config.variant {
                 // Compio owns its ring internally; its submit count is not
                 // observable from the application side.
-                Variant::Compio => Value::Null,
+                Variant::Compio | Variant::CompioPipeline => Value::Null,
                 Variant::IoUring | Variant::Sendto => {
                     json!(handles.counters.ring_enters.load(Ordering::Relaxed))
                 }
