@@ -43,7 +43,18 @@ pub(crate) fn run_compio(
         let mut in_flight: FuturesUnordered<SendFuture<'_>> = FuturesUnordered::new();
         let mut next = 0_usize;
         while !handles.stop.load(Ordering::Relaxed) {
-            handles.wait_if_paused();
+            if handles.pause_requested() {
+                // Quiesce: complete every already-submitted send, then snapshot.
+                while let Some(compio::BufResult(result, _)) = in_flight.next().await {
+                    handles.counters.completed.fetch_add(1, Ordering::Relaxed);
+                    if let Err(error) = result {
+                        handles.counters.errors.fetch_add(1, Ordering::Relaxed);
+                        return Err(format!("compio send_to: {error}"));
+                    }
+                }
+                handles.acknowledge_pause();
+                continue;
+            }
             while in_flight.len() < config.queue_depth {
                 let destination = config.destinations[next % config.destinations.len()];
                 next += 1;
@@ -94,7 +105,18 @@ pub(crate) fn run_compio_pipeline(
         let mut in_flight = FuturesUnordered::new();
         let mut next = 0_usize;
         while !handles.stop.load(Ordering::Relaxed) {
-            handles.wait_if_paused();
+            if handles.pause_requested() {
+                // Quiesce: complete every already-submitted send, then snapshot.
+                while let Some(compio::BufResult(result, _)) = in_flight.next().await {
+                    handles.counters.completed.fetch_add(1, Ordering::Relaxed);
+                    if let Err(error) = result {
+                        handles.counters.errors.fetch_add(1, Ordering::Relaxed);
+                        return Err(format!("compio send_to: {error}"));
+                    }
+                }
+                handles.acknowledge_pause();
+                continue;
+            }
             while in_flight.len() < config.queue_depth {
                 let destination = config.destinations[next % config.destinations.len()];
                 next += 1;
@@ -179,7 +201,22 @@ pub(crate) fn run_io_uring(
     let mut result: Result<(), String> = Ok(());
 
     while !handles.stop.load(Ordering::Relaxed) && result.is_ok() {
-        handles.wait_if_paused();
+        if handles.pause_requested() {
+            // Quiesce the ring: reap every submitted operation before the
+            // snapshot, so no completion can cross the window boundary.
+            while in_flight > 0 {
+                let reaped = reap_ready(&mut ring, &handles.counters, &mut result);
+                if reaped == 0 {
+                    ring.submit_and_wait(1)
+                        .map_err(|e| format!("io_uring submit_and_wait: {e}"))?;
+                    handles.counters.ring_enters.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                in_flight = in_flight.saturating_sub(reaped);
+            }
+            handles.acknowledge_pause();
+            continue;
+        }
         let mut pushed = 0_usize;
         while in_flight < config.queue_depth && pushed < entries as usize {
             let slot = &slots[next % slots.len()];
@@ -279,7 +316,12 @@ pub(crate) fn run_sendto(
     let mut next = 0_usize;
     let mut result = Ok(());
     while !handles.stop.load(Ordering::Relaxed) && result.is_ok() {
-        handles.wait_if_paused();
+        if handles.pause_requested() {
+            // Blocking sends have nothing in flight: the boundary is already
+            // quiescent once the last `sendto` returned.
+            handles.acknowledge_pause();
+            continue;
+        }
         let destination = &sockaddrs[next % sockaddrs.len()];
         next += 1;
         handles.counters.submitted.fetch_add(1, Ordering::Relaxed);

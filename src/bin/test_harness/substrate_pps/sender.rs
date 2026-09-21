@@ -58,12 +58,20 @@ impl SenderHandles {
         self.counters.completed.load(Ordering::Relaxed)
     }
 
-    /// Park the sender and take its own on-CPU/off-CPU sample. Called from the
-    /// hot loop, so the fast path is one relaxed load.
-    pub(crate) fn wait_if_paused(&self) {
-        if !self.pause.load(Ordering::Acquire) {
-            return;
-        }
+    /// Whether a snapshot boundary has been requested. The hot path is one
+    /// relaxed load; the arm must then drain its in-flight work to zero and call
+    /// [`Self::acknowledge_pause`], so the boundary is quiescent rather than
+    /// merely "not refilling".
+    pub(crate) fn pause_requested(&self) -> bool {
+        self.pause.load(Ordering::Acquire)
+    }
+
+    /// Park the sender and take its own on-CPU/off-CPU sample. Callers must have
+    /// drained every already-submitted operation first: with a queue depth of 64,
+    /// acknowledging at the top of the loop would leave ~63 datagrams in flight,
+    /// free to cross the peer snapshot boundary and be counted on one side of the
+    /// window only.
+    pub(crate) fn acknowledge_pause(&self) {
         let tid = self.tid.load(Ordering::Relaxed);
         if let Some(cpu) = super::peer_state::thread_cpu(tid) {
             self.paused_user_micros

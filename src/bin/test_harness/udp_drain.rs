@@ -19,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::peer_state::{
     bind_state_listener, cpus_allowed_list, host_nic_drop_counters, host_udp_drop_counters,
-    pin_to_cpuset, run_id, serve_state_json, udp_drops_since_start,
+    pin_to_cpuset, run_id, serve_state_json, softnet_counters, udp_drops_since_start,
 };
 use super::*;
 
@@ -255,6 +255,7 @@ pub(crate) async fn udp_drain_mode() -> Result<Value, String> {
         "udpInErrorsSinceStart": drops.map(|drops| drops.0),
         "udpRcvbufErrorsSinceStart": drops.map(|drops| drops.1),
         "udpSndbufErrorsSinceStart": drops.map(|drops| drops.2),
+        "softnet": softnet_counters(),
     }))
 }
 

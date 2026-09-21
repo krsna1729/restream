@@ -110,6 +110,7 @@ rps_mask() {
 
 cmd_up() {
   local sender_cpu harness_mask receiver_mask restream_mask sink_mask rps rps_observed
+  local backlog backlog_observed backlog_original
   if [[ "${1:-}" == "--cpus" ]]; then
     sender_cpu="${2:?--cpus needs three masks}"
     harness_mask="${3:?--cpus needs three masks}"
@@ -146,6 +147,18 @@ cmd_up() {
   netns_exec ip route add local "$WI3_DEST_PREFIX" dev "$VETH_PEER"
 
   # Peer-side receive processing moves off the measured sender core.
+  # Receiver-side queue depth for the redirected receive path. Recorded, read
+  # back, and removed with the namespace; it is lane configuration, not a
+  # benchmark parameter, and a peer-side drop claim is not attributed to it
+  # until the softnet counters in `/state` show where the drops happened.
+  # `netdev_max_backlog` is not namespaced on this kernel (the namespace exposes
+  # only net.core entries that are per-net), so the lane knob is host-wide and is
+  # restored by `down`. Save the original first so teardown is exact.
+  backlog="${WI3_NETDEV_MAX_BACKLOG:-1000000}"
+  backlog_original="$(cat /proc/sys/net/core/netdev_max_backlog 2>/dev/null || echo unavailable)"
+  sysctl -qw "net.core.netdev_max_backlog=${backlog}" 2>/dev/null || true
+  backlog_observed="$(cat /proc/sys/net/core/netdev_max_backlog 2>/dev/null || echo unavailable)"
+
   rps="$(rps_mask "$receiver_mask")"
   netns_exec sh -c "echo ${rps} > /sys/class/net/${VETH_PEER}/queues/rx-0/rps_cpus" 2>/dev/null || true
   rps_observed="$(netns_exec cat /sys/class/net/${VETH_PEER}/queues/rx-0/rps_cpus 2>/dev/null || echo unavailable)"
@@ -169,11 +182,15 @@ export WI3_HARNESS_CPUS=${harness_mask}
 export WI3_RECEIVER_CPUS=${receiver_mask}
 export WI3_RPS_CPUS_REQUESTED=${rps}
 export WI3_RPS_CPUS_OBSERVED=${rps_observed}
+export WI3_NETDEV_MAX_BACKLOG_REQUESTED=${backlog}
+export WI3_NETDEV_MAX_BACKLOG_OBSERVED=${backlog_observed}
+export WI3_NETDEV_MAX_BACKLOG_ORIGINAL=${backlog_original}
 EOF
 
   echo "[veth-topology] up: ${VETH_HOST} $(echo "$HOST_ADDR" | cut -d/ -f1) <-> ${NETNS}:${VETH_PEER} $(echo "$PEER_ADDR" | cut -d/ -f1)"
   echo "[veth-topology] sender cpu ${sender_cpu}, harness cpus ${harness_mask}, receiver cpus ${receiver_mask} (restream ${restream_mask}, sink ${sink_mask})"
   echo "[veth-topology] peer rx rps_cpus requested ${rps}, observed ${rps_observed}"
+  echo "[veth-topology] netdev_max_backlog (host-wide) was ${backlog_original}, requested ${backlog}, observed ${backlog_observed}"
   echo "[veth-topology] env written to ${ENV_FILE}"
   cat <<EOF
 [veth-topology] run the peer inside the namespace:
@@ -185,7 +202,15 @@ EOF
 cmd_down() {
   require_root
   if ip netns list | grep -q "^${NETNS}\b"; then
-    ip netns del "$NETNS"
+    if [[ -f "$ENV_FILE" ]]; then
+    local original
+    original="$(sed -n 's/^export WI3_NETDEV_MAX_BACKLOG_ORIGINAL=\(.*\)$/\1/p' "$ENV_FILE")"
+    if [[ -n "$original" && "$original" != "unavailable" ]]; then
+      sysctl -qw "net.core.netdev_max_backlog=${original}" 2>/dev/null || true
+      echo "[veth-topology] restored netdev_max_backlog=${original}"
+    fi
+  fi
+  ip netns del "$NETNS"
   fi
   ip link del "$VETH_HOST" 2>/dev/null || true
   rm -f "$ENV_FILE"

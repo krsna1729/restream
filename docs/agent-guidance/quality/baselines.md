@@ -518,3 +518,44 @@ raise `net.core.netdev_max_backlog` on the receiver (recording it as lane
 configuration) or run below that rate; all three arms above are `unclassified`
 under the zero-loss rule for exactly this reason.
 
+### WI3.6 measurement hardening — quiescence barrier, strict delivery, softnet/backlog (2026-09-21)
+
+Boundary correctness: a pause request now means *stop refilling, drain every
+already-submitted operation to in-flight zero, then acknowledge*. Previously the
+arms acknowledged at the top of the loop with up to `queue_depth - 1` sends still in
+flight, so up to 63 datagrams could cross the peer snapshot boundary and be counted
+on one side of the window only. The Compio arms drain `FuturesUnordered`, the native
+ring reaps until `in_flight == 0`, and the blocking arm is already quiescent when its
+last `sendto` returns.
+
+Delivery rule for the ladder is now exact: `SUBSTRATE_DELIVERY_TOLERANCE` defaults to
+`0`, requiring `received == completed` plus zero UDP, NIC, application and softnet
+drops. The old `<= 0.001` tolerance survives only as an explicitly-set value for
+reproducing historical WI3.5 rows.
+
+Receiver-side drop diagnosis, rather than inference from `nicRxDropped`:
+
+- The drain peer now serves a `softnet` block (`processed`, `dropped`,
+  `timeSqueeze`, `receivedRps`, `flowLimit`) from `/proc/net/softnet_stat`, and the
+  substrate artifact records its deltas; a non-zero `dropped` or `flowLimit` now
+  blocks attribution.
+- `netdev_max_backlog` is **not namespaced** on this kernel (the peer namespace
+  exposes only per-net `net.core` entries), so the lane knob is host-wide:
+  `veth-topology.sh` saves the original, sets the requested value, reads it back,
+  records all three in the env file, and `down` restores the original.
+
+Measured effect (10 destinations, 20 s, cheap drain, quiescence barrier active):
+
+| Arm | backlog | pps/core | us/datagram | NIC rx drops | UDP rcvbuf drops |
+|---|---:|---:|---:|---:|---:|
+| `compio-pipeline` | 1 000 000 | 185 429 | 5.39 | 0 | 24 991 (0.68 %) |
+| `sendto` | 1 000 000 | 171 549 | 5.83 | 0 | 8 209 (0.24 %) |
+
+So the backlog hypothesis holds for the *netdev* drops — with 1 000 000 the
+`nicRxDropped` counter is zero — and the lane's ceiling moved to the **drain socket**
+instead (185 kpps at 2 drain threads sharing CPUs 2-5 with the RPS softirq). Neither
+row is lossless yet, so no A/B attribution is drawn from them; the earlier
+"boxing = ~4 %" reading stays exploratory, as does "the RPS backlog is the first
+ceiling" — the counters now say which stage dropped, and the answer depends on the
+configuration.
+

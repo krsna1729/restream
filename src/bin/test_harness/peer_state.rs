@@ -144,6 +144,36 @@ pub(crate) fn host_nic_drop_counters() -> (Option<u64>, Option<u64>) {
     (rx, tx)
 }
 
+/// Per-CPU software-network-stack counters from `/proc/net/softnet_stat`,
+/// summed: `processed`, `dropped`, `time_squeeze`, `received_rps` and
+/// `flow_limit`. A peer-side netdev drop claim needs these alongside the
+/// interface counters, because they name which part of the receive path
+/// discarded the packet instead of leaving it as an inference.
+pub(crate) fn softnet_counters() -> Option<Value> {
+    let raw = std::fs::read_to_string("/proc/net/softnet_stat").ok()?;
+    let column = |index: usize| -> Option<u64> {
+        let mut total = 0_u64;
+        let mut seen = false;
+        for line in raw.lines() {
+            let Some(field) = line.split_whitespace().nth(index) else {
+                continue;
+            };
+            if let Ok(value) = u64::from_str_radix(field, 16) {
+                total += value;
+                seen = true;
+            }
+        }
+        seen.then_some(total)
+    };
+    Some(json!({
+        "processed": column(0),
+        "dropped": column(1),
+        "timeSqueeze": column(2),
+        "receivedRps": column(9),
+        "flowLimit": column(10),
+    }))
+}
+
 pub(crate) fn read_counter_file(path: &Path) -> Option<u64> {
     std::fs::read_to_string(path)
         .ok()

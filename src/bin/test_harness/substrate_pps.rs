@@ -267,8 +267,27 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
                     1.0 - received as f64 / measured as f64
                 }
             });
+            let softnet = before
+                .get("softnet")
+                .zip(after.get("softnet"))
+                .map(|(before, after)| {
+                    let delta = |field: &str| -> Option<i64> {
+                        Some(
+                            after.get(field)?.as_u64()? as i64
+                                - before.get(field)?.as_u64()? as i64,
+                        )
+                    };
+                    json!({
+                        "processed": delta("processed"),
+                        "dropped": delta("dropped"),
+                        "timeSqueeze": delta("timeSqueeze"),
+                        "receivedRps": delta("receivedRps"),
+                        "flowLimit": delta("flowLimit"),
+                    })
+                });
             json!({
                 "runId": after.get("runId"),
+                "softnet": softnet,
                 "runIdChanged": run_id_changed,
                 "cpusAllowedList": after.get("cpusAllowedList"),
                 "datagrams": datagrams,
@@ -303,11 +322,26 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
             && receiver["udpInErrors"] == 0
             && receiver["nicRxDropped"] == 0
             && receiver["receiveErrors"] == 0
+            && receiver["softnet"]["dropped"].as_i64() == Some(0)
+            && receiver["softnet"]["flowLimit"].as_i64() == Some(0)
     });
+    // WI3.6 strictness: with a quiescent boundary the sender's completed
+    // datagrams must equal the receiver's, exactly, and every drop counter must
+    // be zero. `SUBSTRATE_DELIVERY_TOLERANCE` exists only to reproduce the
+    // historical WI3.5 behaviour; the ladder runs at 0.
+    let tolerance = std::env::var("SUBSTRATE_DELIVERY_TOLERANCE")
+        .ok()
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .unwrap_or(0.0)
+        .max(0.0);
     let receiver_kept_up = receiver.as_ref().map(|receiver| {
-        receiver["lossRatio"]
+        let loss_ok = receiver["lossRatio"]
             .as_f64()
-            .is_some_and(|ratio| ratio <= 0.001)
+            .is_some_and(|ratio| ratio <= tolerance);
+        let exact_ok = receiver["datagrams"]
+            .as_u64()
+            .is_some_and(|received| received == measured);
+        loss_ok && (tolerance > 0.0 || exact_ok)
     });
 
     // Transmit accounting: with no receiver, a TX-only lane is only usable when
@@ -366,6 +400,7 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
             "reapMode": config.reap_mode.as_str(),
             "warmupSecs": config.warmup.as_secs(),
             "durationSecs": config.duration.as_secs(),
+            "deliveryTolerance": tolerance,
             "senderCpusRequested": config.sender_cpus,
             "harnessCpusRequested": config.harness_cpus,
             "txNetdev": tx_netdev,

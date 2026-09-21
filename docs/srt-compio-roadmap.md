@@ -1516,13 +1516,28 @@ independent receiver process above is the part to run. Upstream qualification
 reconciled receiver DATA with zero receiver loss through F=200 in that shape, so it
 is a far better candidate than repairing the hybrid Tokio/`HighResWaiter` sink.
 
-Stage A controls (this host, RPS lane, saturation): `compio` (frozen, boxed) 164 342
-pps/core = 6.08 us/datagram; `compio-pipeline` (no per-datagram boxing) 171 872 =
-5.82; `sendto` 172 089 = 5.81. Stage A's harness allocation is worth ~4 %, so an
-A->B difference larger than that is Owner-side. Above ~160 000 pps the RPS backlog
-(`nicRxDropped`) is the lane's first receiver-side ceiling even with zero UDP drops,
-so saturation runs must raise `net.core.netdev_max_backlog` on the receiver as
-recorded lane configuration or run below that rate.
+Stage A controls (exploratory, RPS lane, saturation, **not yet clean**): `compio`
+(frozen, boxed) 164 342 pps/core = 6.08 us/datagram; `compio-pipeline` (no
+per-datagram boxing) 171 872 = 5.82; `sendto` 172 089 = 5.81. Every row is
+receiver-path contaminated, so **no boxing bound is claimed**: the ~4 % gap is a
+signal to re-measure, not a bound, and "anything above 0.26 us/datagram is
+Owner-side" must not be stated. Stage A -> B is the *raw Compio pipeline ->
+Owner/TxEngine execution delta* until allocation evidence justifies a narrower
+attribution.
+
+Boundary correctness is a precondition for those repeats: a pause request must stop
+refilling, drain in-flight to zero and only then acknowledge (implemented for both
+Compio arms, the native ring and the blocking arm), and the ladder requires exact
+reconciliation (`received == completed`) with zero UDP/NIC/application/softnet drops;
+the `<= 0.001` tolerance survives only for historical WI3.5 reproduction.
+
+Receiver-side drops are diagnosed, not inferred: the drain peer serves a `softnet`
+block from `/proc/net/softnet_stat` and the artifact records its deltas, while
+`netdev_max_backlog` is a recorded host-wide lane knob (save, set, read back,
+restore on `down`) because it is not namespaced on this kernel. With 1 000 000 the
+netdev drops disappear (`nicRxDropped` 0) and the ceiling moves to the drain socket
+(185 429 pps/core with 0.68 % UDP drops), so the lane still needs more drain
+capacity before the repeated A rows are usable.
 
 Lane placement for sender attribution: sender CPU 0, harness/control CPU 1,
 receiver and peer-side RX processing on CPUs 2-5, with the peer veth's `rps_cpus`
