@@ -750,9 +750,8 @@ correction below):
   loss/undecryptable fields instead of summed leg counters. The egress
   `mbps_send_rate` unit bug (MB/s reported as Mbps) is fixed, and the stale
   libsrt wording in the frontend and docs is corrected.
-- The final correction (see the commit recorded in §7's result line) makes
-  egress quality stateful at the ~1 Hz stall sweep: `mbps_send_rate` is the
-  interval delta of the caller's own wire
+- The final correction (`d3d92bae`) makes egress quality stateful at the ~1 Hz
+  stall sweep: `mbps_send_rate` is the interval delta of the caller's own wire
   sender bytes (`total_srt_bytes_sent` direct, `wire_srt_bytes_sent` bonded),
   never the peer's advertised receive rate, and a first sample, a counter reset
   or an absent sender direction reads `null` instead of a fabricated zero —
@@ -1782,14 +1781,15 @@ WI10
 
 Do not start packet-rate optimization yet.
 
-WI3.1 and WI3.2 are done. The next item is:
+WI3.1, WI3.2 and WI3.3 are done. The next item is:
 
 ```text
-WI3.3
+WI3.4
 ```
 
-Delete the old Restream SRT transport machinery that WI3.2 left without a
-production consumer (notably the generic `restream-dataplane` UDP primitives).
+Establish the 8 Mbps / packet-rate benchmark contract: the 100/300/500/1000
+output ladder, the metric-to-source table, and the durable artifact schema.
+It measures; it does not optimize.
 
 The packet-rate program starts only after the SRT ingress and egress paths share
 the same final architecture.
