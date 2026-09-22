@@ -622,6 +622,33 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
         (Ok(()), Some(_), _) if receiver_kept_up != Some(true) => "receiver-limited",
         (Ok(()), Some(_), _) => "healthy",
     };
+    let per_datagram_cpu = |secs: f64| {
+        if measured == 0 {
+            Value::Null
+        } else {
+            json!(secs * 1e6 / measured as f64)
+        }
+    };
+    let stage_injection_cpu_secs = (handles
+        .counters
+        .injection_cpu_micros
+        .load(Ordering::Relaxed)
+        .saturating_sub(baseline_cpu.injection) as f64)
+        / 1e6;
+    let stage_owner_drive_cpu_secs = (handles
+        .counters
+        .owner_drive_cpu_micros
+        .load(Ordering::Relaxed)
+        .saturating_sub(baseline_cpu.drive) as f64)
+        / 1e6;
+    let stage_cpu = json!({
+        "inclusiveSenderCpuSecs": cpu_secs,
+        "injectionCpuSecs": stage_injection_cpu_secs,
+        "ownerDriveCpuSecs": stage_owner_drive_cpu_secs,
+        "inclusiveSenderCpuUsPerDatagram": per_datagram_cpu(cpu_secs),
+        "injectionCpuUsPerDatagram": per_datagram_cpu(stage_injection_cpu_secs),
+        "ownerDriveCpuUsPerDatagram": per_datagram_cpu(stage_owner_drive_cpu_secs),
+    });
 
     let result = json!({
         "mode": "substrate-pps",
@@ -663,10 +690,7 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
                     json!(handles.counters.ring_enters.load(Ordering::Relaxed))
                 }
             },
-            "stageBCpu": json!({
-                "injectionCpuSecs": (handles.counters.injection_cpu_micros.load(Ordering::Relaxed).saturating_sub(baseline_cpu.injection) as f64) / 1e6,
-                "ownerDriveCpuSecs": (handles.counters.owner_drive_cpu_micros.load(Ordering::Relaxed).saturating_sub(baseline_cpu.drive) as f64) / 1e6,
-            }),
+            "stageBCpu": stage_cpu,
             "stageBTotals": totals.take().map(|totals| totals.as_json()).unwrap_or(Value::Null),
             "sqesPerBatch": (handles.counters.submitted.load(Ordering::Relaxed) as f64)
                 / (handles.counters.batches.load(Ordering::Relaxed).max(1) as f64),
