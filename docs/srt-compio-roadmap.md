@@ -1405,7 +1405,8 @@ C lossless attribution fanout   F=11 (not a real-time capacity point; see risk b
 C paced absolute cost           measured (median 28.05 us / DATA-first, 30 s window)
 paced A -> B                    measured (+8.152 us/datagram inclusive)
 paced B -> C protocol increment UNRESOLVED / NONBLOCKING (control unsuitable)
-Stage D                         ACTIVE (ready)
+Stage D                         measured at F=11: no rating-eligible row; CPU
+                                comparison indicative (egress threads ~= C)
 ```
 
 Recorded state, with evidence in
@@ -1572,6 +1573,35 @@ materially above C, profile that delta before optimizing anything; if the
 egress-thread numbers are close but whole-process D is much larger, move the
 investigation upward into media/ring/mux/control scheduling instead of back
 into `srt-rs`.
+
+Measured (2026-09-22, F=11, full detail in
+[baselines](agent-guidance/quality/baselines.md)):
+
+```text
+rating-eligible D rows          0 of 5 (retransmission fence; every other
+                                condition passed, reconciliation exact)
+D egress shard threads          median 26.018 us / DATA-first (22.857-30.111)
+D whole Restream process        median 33.718 us / DATA-first (30.395-38.379)
+D surrounding media/control     ~7.9 us / DATA-first (process - egress threads)
+C full-SRT sender (1 thread)    28.046 us / DATA-first (27.591-30.403)
+```
+
+The egress-thread cost sits inside the C spread, so the integration layer is
+not adding a material per-DATA CPU increment above the SRT engine at this
+shape; the surrounding media path is the visible increment (~7.9 us/DATA-first)
+and that is where the next question lives. Two caveats travel with it: D's
+egress is carried by two shard threads against C's one, and the D rows are
+rejected, so these are indicative rather than rating-eligible numbers.
+
+Apparatus findings that must not be re-derived: the receiver's default 250 ms
+datapath horizon (189 packets/connection) is smaller than the product's
+per-visit burst (`RESTREAM_EGRESS_VISIT_MAX_BYTES` = 256 KB = 199 datagrams),
+so Stage D runs the receiver with `--datapath-queue-horizon-ms 4000`; the
+product's burst-driven egress shows a small NAK/retransmission floor
+(3-47 per 30 s window, 1.2e-5..1.9e-4 of DATA) that the paced control does not,
+with zero drops at every measured layer (host veth, namespace veth, softnet,
+receiver socket, receiver queue); and two probes of that floor were negative or
+inconclusive (peer `rps_cpus=0`; `RESTREAM_EGRESS_VISIT_MAX_BYTES=65536`).
 
 Reuse before inventing: pinned `srt-rs` already carries the hooks —
 `crates/srt-transport/benches/compio_tx_allocs.rs` shows the benchmark-only

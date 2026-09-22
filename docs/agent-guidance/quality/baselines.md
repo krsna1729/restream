@@ -1092,3 +1092,120 @@ Paced-mode harness changes landed with this evidence:
 - `tx_pool_free_min` is `Option<u64>` and therefore survives a real zero: the
   previous `0`-as-uninitialized sentinel erased a genuine empty pool (visible
   immediately in the paced rows, all of which report `txPoolFreeMin = 0`).
+
+### WI3.6 Stage D — full Restream SRT egress at F=11 (2026-09-22)
+
+Stage D is the whole product path: one Restream process publishing 11 plaintext
+SRT outputs at the 8 Mbps shape, sourced from the canonical
+`bench-h264-8m.ts` SRT ingest fixture, against the same independent pinned
+`compio` receiver as Stage C. Lane and placement: egress shard threads pinned to
+CPU 0, the rest of Restream on CPU 1, harness on CPU 1, receiver on CPUs 2-5,
+ports 12000-12010 (`per-port`), 30 s rated window.
+
+Two apparatus facts, both recorded in the artifact:
+
+- The receiver's **default 250 ms datapath horizon is smaller than the
+  product's per-visit burst**. Restream drains up to
+  `RESTREAM_EGRESS_VISIT_MAX_BYTES` = 262 144 B = **199 datagrams** per shard
+  visit at 1316 B, against a derived per-connection queue capacity of **189**
+  packets: the receiver's own application queue overflowed (8 628 dropped, peak
+  depth exactly 189/189) and every retransmission followed from it. The rated
+  rows therefore run the receiver with `--datapath-queue-horizon-ms 4000`
+  (3 036 packets per connection, 33 396 total) and the TSBPD latency the Stage C
+  rows used (`120` ms; the third positional is `latency_ms`, not a connect
+  timeout). Peak queue depth in the rated rows is 439-879 of 3 036, so the
+  receiver is provably not the limiter.
+- The product's SRT egress runs **two** shard threads at this shape
+  (`EgressShardProfile::SrtCpuParallel` clamps to `clamp(effective_cpus, 2, 8)`,
+  so one CPU of Restream affinity still yields two shards). Each shard index
+  also has a second thread carrying the inherited `comm` at 0.00 s CPU. All are
+  pinned to CPU 0 and their observed affinity is `[0]`.
+
+**Result: no rating-eligible Stage D row at F=11.** Five rated attempts, every
+one rejected by the retransmission fence; all other fence conditions passed in
+all five, including exact whole-run reconciliation.
+
+| Rep | window DATA-first | window retx | receiver `sec_a` / `sec_b` | queue peak / cap | kernel + queue drops | reconciliation residual | verdict |
+|---|---:|---:|---|---:|---|---:|---|
+| r1 | 246 752 | 11 | 0 / 22 | 439 / 3 036 | 0 | 0 | rejected |
+| r2 | 246 752 | 33 | 0 / 33 | 879 / 3 036 | 0 | 0 | rejected |
+| r3 | 246 752 | 42 | 0 / 42 | 663 / 3 036 | 0 | 0 | rejected |
+| r4 | 246 752 | 47 | 0 / 58 | 676 / 3 036 | 0 | 0 | rejected |
+| r6 | 246 752 | 3 | 0 / 3 | 815 / 3 036 | 0 | 0 | rejected |
+
+Every attempt: 11/11 connections established, all outputs `running`/`sending`
+across four mid-window samples, no owner fault, `txFailedSends` 0,
+`txExhaustions` 0, `queueOverflows` 0, `resyncCount` 0, and engine
+first-transmission DATA (280 192, whole lifetime) equal to receiver `pkt_sent`
+exactly.
+
+The retransmissions are **not lost data**. For the lane-probed attempt (r6) the
+host veth and the namespace veth moved identical packet counts
+(36 420 175 -> 36 767 616, +347 441) with `tx_dropped`/`tx_errors`/`rx_dropped`/
+`rx_errors` all zero, host-wide softnet `dropped` did not move (182 414 before
+and after), `flow_limit` 0, and the receiver's socket held a 32 MiB effective
+receive buffer with zero overflow. The receiver declared gaps, NAKed, and the
+repairs arrived as duplicates (`sec_b`); the loss counters that would show
+dropped data never moved.
+
+Two mechanism probes are recorded because both are **negative or
+inconclusive**, and neither should be re-derived later:
+
+- **RPS is not the mechanism.** One repetition with the peer veth's `rps_cpus`
+  set to `0` (order-preserving single-CPU RX) still showed 30 window
+  retransmissions and 30 receiver duplicates. Lane restored to `3c` on exit.
+- **The visit-burst bound is inconclusive.** One repetition with
+  `RESTREAM_EGRESS_VISIT_MAX_BYTES=65536` still showed 28 window
+  retransmissions, and the artifact's burst-bound read came back `null`, so the
+  override's delivery to the child is unconfirmed. Treat the burst-size
+  hypothesis as untested, not refuted.
+
+A **paced control on the same lane and the same receiver settings** shows this
+is not simply "the product's burst shape": the upstream paced sender (Stage C's
+shape, F=11, 8 Mbps/destination) ran with **0 window retransmissions** but the
+receiver still counted 10 duplicates, and that control run had its own defect
+(40 missed source ticks, so it is not a rating row either). The duplicate-event
+floor at this scale is a property of the lane + receiver pairing on this host,
+not of the product's CPU path.
+
+**Indicative CPU numbers (rejected rows — not rating-eligible).** Reported
+because the fence failure is a protocol-timing artefact of order 1e-5..1e-4 of
+DATA, and because the decision they inform is aggregate:
+
+| Scope | median us / window DATA-first | range |
+|---|---:|---|
+| SRT egress shard threads (sum over both shards, CPU 0) | **26.018** | 22.857-30.111 |
+| whole Restream process | **33.718** | 30.395-38.379 |
+| surrounding media/control (process − egress threads) | **~7.9** | 7.5-8.3 |
+
+Egress threads carry 5.64-7.43 s of CPU per ~30.34 s window (21-24% of one
+core); the process carries 7.50-9.47 s. The egress threads hold ~77% of the
+process CPU at this shape.
+
+Against Stage C (28.046 us per first-transmission DATA, one sender thread,
+27.591-30.403), **D's egress-thread cost sits inside the C spread**: the SRT
+egress path of the product costs about the same CPU per DATA-first as the
+upstream qualification sender, and the remaining ~7.9 us/DATA-first is the
+surrounding ingest/muxer/ring/control work. Two caveats that must travel with
+that sentence: D's egress is carried by **two** shard threads (C by one), so the
+per-thread efficiency differs even though the summed cost does not; and C must
+never be subtracted from D's *whole-process* CPU — the only like-for-like
+statement is C's sender CPU against D's egress-thread CPU.
+
+Offered rate differs slightly and is recorded for comparability: D's source
+delivers 739.35 DATA/s per output (7.78 Mbps at 1316 B) against C's 759.9
+(8.00 Mbps), i.e. the product row is ~2.7% below the upstream offer.
+
+Artifacts: `.local/artifacts/wi36-stage-d-{r1,r2,r3,r4,r6-laneprobe}/egress-duty.json`,
+the RPS probe at `wi36-stage-d-r5-rps0/`, the burst probe at
+`wi36-stage-d-r7-burst64k/`, and the paced control at
+`wi36-stage-d-control-paced/{sender.log,receiver.tsv}`. Every rejected attempt
+kept its full artifact (receiver TSV, both stdout/stderr logs, Restream log,
+publisher log) next to it.
+
+Carry forward to WI3.7 (capacity) and WI10 (portability): F=11 is a lossless
+*attribution* fanout (3 of 10 rating-eligible Stage C launches), the receiver's
+default datapath horizon is smaller than the product's per-visit burst at this
+payload size, and the product's burst-driven egress shows a small
+NAK/retransmission floor that the paced control does not — none of which WI3.6
+is gated on.
