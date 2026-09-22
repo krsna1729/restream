@@ -1401,10 +1401,11 @@ Status: **ACTIVE** (2026-09-22).
 
 ```text
 A/B saturation attribution      complete at F=1000 and F=11
-C receiver-unlimited fanout     highest clean current-host fanout = 11
+C lossless attribution fanout   F=11 (not a real-time capacity point; see risk below)
 C paced absolute cost           measured (median 28.05 us / DATA-first, 30 s window)
-paced A/B/C decomposition       A -> B measured; B -> C NOT subtractable (see below)
-Stage D                         not started; blocked on the paced table
+paced A -> B                    measured (+8.152 us/datagram inclusive)
+paced B -> C protocol increment UNRESOLVED / NONBLOCKING (control unsuitable)
+Stage D                         ACTIVE (ready)
 ```
 
 Recorded state, with evidence in
@@ -1413,21 +1414,35 @@ Recorded state, with evidence in
 - **A -> B (saturation, F=1000, K=16)**: median paired delta **+1.213
   us/datagram** (difference of medians +1.155; pairs 1.069-2.222). The Owner
   compatibility execution path adds ~1.2 us/datagram on this host.
-- **C, F=11 (highest clean current-host fanout)**: zero missed source ticks,
-  250 756 first-transmission DATA (exactly 11 x 22 796), zero DATA
-  retransmission, zero receiver protocol/kernel/datapath loss, `drain_ok`.
-  Window-only cost median **28.046 us per first-transmission DATA** and 22.787
-  us per total wire datagram; protocol amplification **1.2308**, entirely
-  ACK/ACKACK (ACK 0.096-0.107, ACKACK 0.123-0.124 per DATA-first).
-- **Paced regime (Regime P)**: paced A (raw Compio) and paced C (full plaintext
-  SRT) cost the same sending-thread CPU per source tick within this lane's
-  spread (median 307.73 vs 308.51 us at the 11-destination 8 Mbps shape, ~23% of
-  one core for 88 Mbps), while paced B is 90-120 us/tick *above* both. The
-  prescribed paces `C - B_drive` and `C - B_inclusive` are therefore not usable:
-  B's compatibility injection (per-datagram `Vec` clone, the 1316-byte copy into
-  the reserved TxPool slot, its deallocation) costs more than the SRT protocol
-  work C adds. Resolving paced B -> C needs a bench-internals control that
-  materialises directly into the final slot, upstream.
+- **C, F=11**: zero missed source ticks, 250 756 first-transmission DATA
+  (exactly 11 x 22 796), zero DATA retransmission, zero receiver
+  protocol/kernel/datapath loss, `drain_ok`. Window-only cost median **28.046
+  us per first-transmission DATA** and 22.787 us per total wire datagram;
+  protocol amplification **1.2308**, entirely ACK/ACKACK (ACK 0.096-0.107,
+  ACKACK 0.123-0.124 per DATA-first).
+- **F=11 is a lossless attribution fanout, not a product-capacity point.**
+  Only 3 of 10 completed non-malformed F=11 launches were rating-eligible, and
+  the clean rows still carry first-submit lateness of p99 22-95 ms and maxima
+  47-124 ms. Carry both forward as qualification risk into WI3.7 (capacity) and
+  WI10 (portability); WI3.6 is not gated on fixing them.
+- **Paced regime (Regime P)**: paced A (raw Compio) median 307.73 us/source
+  tick and paced C (full plaintext SRT) median 308.51 us/source tick at the
+  11-destination 8 Mbps shape (~23% of one core for 88 Mbps). This is a
+  **whole-path** statement: the net `A -> C` difference is unresolved around
+  zero, and protocol CPU cannot be isolated because A and C submit and
+  materialise through different machinery (raw sends versus Owner scheduler +
+  direct final-slot materialisation + 1.2308 wire datagrams per DATA). It does
+  bound the aggregate: full SRT as a whole shows no large positive CPU gap over
+  the raw paced control.
+- **Paced `B -> C` is UNRESOLVED / NONBLOCKING.** The compatibility control
+  costs 90-120 us/tick above both A and C (36.613 inclusive, 10.618 drive,
+  2.413 injection, leaving 23.582 us/datagram outside the measured scopes), so
+  its aggregate harness/compatibility execution dominates the differential and
+  no single term of it can be charged to protocol work. A direct-slot `B'`
+  control would resolve the number but is **deliberately not built** — it
+  reopens the measurement loop for a number no current optimization decision
+  needs. Revisit only if a Stage-D result makes protocol-versus-integration
+  attribution genuinely decision-critical.
 - `compio_shared_owner_qual` prints `owner.rx_mode()` of the **sender's** Owner
   caller socket; `rx_mode=Some(RawReadiness)` there is a sender-side RX fallback
   and says nothing about the independent receiver process.
@@ -1518,6 +1533,45 @@ D       process - SRT threads     = surrounding Restream/control/media cost
 ```
 
 and never subtract unlike CPU scopes.
+
+#### Stage D run contract (2026-09-22)
+
+Stage D is the full Restream SRT egress with the media pipeline, run on the
+same lane and at the same lossless attribution fanout as Stage C:
+
+```text
+fanout 11, plaintext, 1316-byte payload, 8 Mbps per output
+receiver: the pinned independent `srt-bench runtime=compio mode=receiver`
+          process, pinned to CPUs 2-5 inside the wi3-sink namespace
+sender:   Restream, with the named `egress-*` shard TID pinned to CPU 0 and
+          control/media work kept off that CPU where possible; record the
+          observed TID affinity
+```
+
+Measure both scopes over the same rated window: **SRT egress-shard thread CPU**
+and **whole Restream process CPU**. Record per row: first-transmission DATA,
+total SRT datagrams, retransmitted DATA, control classes when available
+(ACK/ACKACK/other), protocol amplification, source ticks, service
+visits/actions, TX submitted/completed/in-flight, receiver/kernel/datapath loss,
+and first-submit/pacing lateness.
+
+A valid D row requires zero observed receiver/kernel loss, zero DATA
+retransmission, stable 11 connections, no owner fault, and complete
+window/drain reconciliation. Preserve every rejected attempt.
+
+Run at least three clean repetitions and compare like-for-like scopes:
+
+```text
+C full-SRT sender CPU / DATA-first   vs   D egress-thread CPU / DATA-first
+                                          -> integration-path increment
+D whole-process CPU / DATA-first          -> actual product cost
+```
+
+Never subtract C from D's whole-process CPU. If D's egress-thread CPU is
+materially above C, profile that delta before optimizing anything; if the
+egress-thread numbers are close but whole-process D is much larger, move the
+investigation upward into media/ring/mux/control scheduling instead of back
+into `srt-rs`.
 
 Reuse before inventing: pinned `srt-rs` already carries the hooks —
 `crates/srt-transport/benches/compio_tx_allocs.rs` shows the benchmark-only

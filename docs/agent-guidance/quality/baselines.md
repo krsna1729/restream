@@ -924,7 +924,7 @@ Four further attempts were **not** fully clean and are retained rather than
 discarded; each is usable only as a bound, never as the rated row:
 
 | Attempt | Failure | us / DATA-first |
-|---|---|---:|
+|---|---|---|
 | `wi36-stage-c-11-r2` | 42 missed source ticks (11 x 42 fewer DATA offered) | 32.569 |
 | `wi36-stage-c-11-r5` | 4 missed source ticks | 33.575 |
 | `wi36-stage-c-11-r10` | clean ticks, but 11 DATA first-transmitted after the window close | 29.041 |
@@ -933,6 +933,17 @@ discarded; each is usable only as a bound, never as the rated row:
 | `wi36-stage-c-11-r11` | zero loss but 4 retransmissions and `drain_ok = false` | (not rating-eligible) |
 | `wi36-stage-c-11-r8` | 28 missed ticks and `drain_ok = false` | (not rating-eligible) |
 | `wi36-stage-c-11-r4`, `-r6`, `-r7` | aborted launches (malformed sender argv); `sender.log` empty, receiver recorded partial capture | (no row) |
+
+**F=11 is a lossless *attribution* fanout, not a real-time capacity point.**
+Rating eligibility required zero loss and a complete sender fence, and that
+selection is itself evidence about the lane: of the **10 completed
+non-malformed F=11 launches, only 3 were rating-eligible**. The clean rows also
+carry real first-submit lateness despite zero missed source ticks — p99
+**22 000-95 000 us** and maxima **47 376-123 704 us** — so F=11 is not evidence
+that the sink is robust under host contention, only that it can be lossless in
+the rated window when it is. Carry both figures forward as qualification risk
+into WI3.7 (capacity) and WI10 (portability); WI3.6 is not gated on fixing them,
+because attribution needs a lossless point, not a real-time guarantee.
 
 WI3.6 must use `window_cpu_ms`, never `cpu_ms`: the latter spans
 window + post-window drain, and the drain is real (116-702 ms here, and ~1.2x
@@ -987,12 +998,20 @@ paced C (full plaintext SRT)  median 308.51 us / source tick   (303.50-334.43)
 paced B (Owner compat path)   median 402.74 us / source tick   (360.34-423.57)
 ```
 
-Paced A and paced C are the same within this lane's run-to-run spread: at the
+Paced A and paced C are close within this lane's run-to-run spread: at the
 product's load shape the sending thread costs ~300-310 us of CPU per 1316 us
-tick (~23% of one core for 88 Mbps), and the SRT protocol engine adds no
-resolvable CPU increment above the raw submission floor. **Paced B is 90-120 us
-per tick *above* both**, i.e. the Stage-B control costs more than the production
-path it was meant to bound.
+tick (~23% of one core for 88 Mbps). Read that as a **whole-path** number only:
+the net product-paced `A -> C` CPU difference is unresolved around zero, and the
+protocol term inside it is not isolable because A and C submit and materialise
+through different machinery (raw `FuturesUnordered` sends versus Owner
+scheduler + direct final-slot materialisation + SRT protocol + 1.2308 wire
+datagrams per DATA-first). Full SRT as a whole does not create a large positive
+CPU gap over the raw paced control; that is a bound on the *aggregate*, not a
+measurement of protocol CPU. **Paced B is 90-120 us
+per tick *above* both**, so the compatibility control as a whole is unsuitable
+for a paced `B -> C` subtraction — not because any one term of its cost was
+identified, but because its aggregate harness/compatibility execution dominates
+the differential (see below).
 
 That is a measured apparatus result, not a transport result, and it is why the
 prescribed paced `B -> C` subtraction is not valid:
@@ -1001,10 +1020,14 @@ prescribed paced `B -> C` subtraction is not valid:
   C's cost is whole-thread, so `C - B_drive` would attribute B's per-tick
   parking and injection to "protocol work".
 - The like-for-like scope is whole sending thread per tick, and there
-  `C - B` is **negative** (-94 us/tick, -8.6 us/datagram): B's compatibility
-  injection (per-datagram `Vec` clone, the 1316-byte copy into the reserved
-  TxPool slot, and the deallocation of the queued `Vec`) plus its
-  pool-saturating burst pattern exceeds the SRT protocol work that C adds.
+  `C - B` is **negative** (-94 us/tick, -8.6 us/datagram).
+- Paced B's largest component is **outside** the measured scopes: 36.613
+  inclusive, 10.618 Owner-drive, 2.413 injection, leaving **23.582
+  us/datagram** of pacing/runtime/outer-loop CPU. Aggregate
+  harness/compatibility execution dominates the differential, so the
+  domination cannot be assigned to the per-datagram `Vec`
+  clone, the 1316-byte copy into the reserved TxPool slot, or its deallocation
+  individually.
 - B's final TxPool is the binding resource in every paced row
   (`txPoolFreeMin = 0`, `inFlightHwm = 16` at K = 16), while C runs the same
   offer through `send_shared` and materialises directly into the final slot.
@@ -1012,11 +1035,30 @@ prescribed paced `B -> C` subtraction is not valid:
 So the paced regime supports: **A -> B = +8.152 us/datagram inclusive (+5.739
 excluding harness injection)**, and an absolute product-paced cost for the real
 SRT path (**28.05 us per first-transmission DATA**, 308.51 us per source tick,
-1.2308 wire datagrams per DATA). It does **not** support a paced `B -> C`
-protocol increment: the control's apparatus cost is larger than the effect.
-Resolving paced `B -> C` needs a control that materialises directly into the
-final slot (no per-datagram `Vec`), which is an upstream `srt-rs` bench-internals
-capability, not a Restream harness change.
+1.2308 wire datagrams per DATA).
+
+**`A ≈ C` is a whole-path statement, not a protocol-cost measurement.** The
+net product-paced `A -> C` whole-path CPU difference is **unresolved around
+zero**; protocol CPU cannot be isolated from this experiment because A and C use
+different submission and materialisation machinery:
+
+```text
+A: FuturesUnordered raw sends
+C: Owner scheduler + direct final-slot materialisation + SRT protocol
+   + 1.2308 wire datagrams per DATA-first
+```
+
+C can therefore carry positive protocol cost that is offset by a cheaper or
+better-batched TX path than A, and no term of that difference is attributable
+from these rows.
+
+**Paced `B -> C`: UNRESOLVED / NONBLOCKING.** The compatibility control as a
+whole is unsuitable for `B -> C` subtraction. A direct-slot `B'` control (one
+that materialises into the final slot with no per-datagram `Vec`) would resolve
+it, but it is an upstream `srt-rs` bench-internals capability and is
+**deliberately not built now**: it reopens the measurement loop for a number
+that no current optimization decision needs. Revisit only if a Stage-D result
+leaves protocol-versus-integration attribution genuinely decision-critical.
 
 Paced artifacts (SHA-256 of `substrate-pps.json`):
 
