@@ -250,6 +250,14 @@
           },
           "purpose": "cheap wildcard UDP drain peer for substrate benchmarks: one receive socket per thread, counters and kernel drop counters on /state, so a sender result can be classified as receiver-limited or attributable"
         },
+        "egress-duty": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": false,
+            "benchProfile": false
+          },
+          "purpose": "WI3.6 Stage D: one live Restream SRT egress fanout against the independent pinned srt-bench receiver on the lane, over a rated window; reports the pinned SRT egress shard thread CPU and the whole Restream process CPU per first-transmission DATA datagram, plus the receiver's whole-run loss/reconciliation fence. Manages its own lane network namespace (`ip netns exec`) and takes explicit binary paths, so it is not gated on the bench profile"
+        },
         "substrate-pps": {
           "suiteDefault": false,
           "requires": {

@@ -39,6 +39,8 @@ mod catalog;
 mod catalog_cli;
 #[path = "test_harness/core.rs"]
 mod core;
+#[path = "test_harness/egress_duty.rs"]
+mod egress_duty;
 #[path = "test_harness/fault_input_promotion.rs"]
 mod fault_input_promotion;
 #[path = "test_harness/fault_manifest.rs"]
@@ -96,6 +98,7 @@ mod workflow_exec;
 use api_client::*;
 use catalog_cli::*;
 use core::*;
+use egress_duty::*;
 use fault_input_promotion::*;
 use fault_manifest::*;
 use fault_recovery::*;
@@ -251,6 +254,7 @@ async fn run() -> Result<(), String> {
             "recovery" => recovery().await,
             "resource-sweep" => resource_sweep().await,
             "srt-sink" => srt_sink::srt_sink_mode().await,
+            "egress-duty" => egress_duty().await,
             "udp-drain" => udp_drain::udp_drain_mode().await,
             "substrate-pps" => substrate_pps::substrate_pps_mode().await,
             "msr" => msr().await,
