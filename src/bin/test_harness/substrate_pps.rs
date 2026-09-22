@@ -24,6 +24,8 @@
 mod arms;
 #[path = "substrate_pps/config.rs"]
 mod config;
+#[path = "substrate_pps/owner_tx.rs"]
+mod owner_tx;
 #[path = "substrate_pps/sender.rs"]
 mod sender;
 #[cfg(test)]
@@ -654,11 +656,15 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
             "ringEnters": match config.variant {
                 // Compio owns its ring internally; its submit count is not
                 // observable from the application side.
-                Variant::Compio | Variant::CompioPipeline => Value::Null,
+                Variant::Compio | Variant::CompioPipeline | Variant::OwnerTx => Value::Null,
                 Variant::IoUring | Variant::Sendto => {
                     json!(handles.counters.ring_enters.load(Ordering::Relaxed))
                 }
             },
+            "stageBCpu": json!({
+                "injectionCpuSecs": handles.counters.injection_cpu_micros.load(Ordering::Relaxed) as f64 / 1e6,
+                "ownerDriveCpuSecs": handles.counters.owner_drive_cpu_micros.load(Ordering::Relaxed) as f64 / 1e6,
+            }),
             "sqesPerBatch": (handles.counters.submitted.load(Ordering::Relaxed) as f64)
                 / (handles.counters.batches.load(Ordering::Relaxed).max(1) as f64),
         },

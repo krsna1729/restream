@@ -642,7 +642,39 @@ socket across threads balanced the load (658k/727k/668k/708k per thread) but mea
 configuration. Reverting to per-socket reuseport restored the code path that produced
 the nine clean rows, but the first verification run at this revision was
 `unclassified` (59 266 receiver rcvbuf drops at 171 967 pps/core, settlement `loss`),
-so **a lossless saturation lane is not currently re-established** and no Stage-A/B row
-may be trusted until it is. Either the drops are host noise (repeat runs decide) or
-this revision regressed the drain; if they persist, revert the drain to `30bcbbc9`.
+so **a lossless saturation lane is not currently re-established**. There is no causal
+reason to revert the drain to `30bcbbc9`: the deployed receive hot loop is materially
+the same shape as the clean revision, so a revert would not explain the drops. The
+skew finding below is the better explanation, and clean rows are to be obtained by
+repeated alternating runs with every attempt recorded, not by retrying until one passes.
+
+### WI3.6 Stage B — implemented, first fenced attempt rejected by control traffic (2026-09-22)
+
+Stage B exists: harness-only feature `wi3-owner-bench = ["srt-transport/bench-internals"]`
+(default off; normal builds never see `bench-internals`), a `owner-tx` arm that builds
+the caller side with `OwnerCallerSide::new_single`, attaches it with the benchmark-only
+`with_caller`, adds a direct caller leg (`add_direct` + an in-process connected
+`SrtConnection`, mirroring the pinned upstream helper), injects pre-materialized
+datagrams with `bench_push_pending`, and drives the production
+`service()` -> `wait_for_activity()` -> `service()` rhythm with a normal
+`OwnerServiceBudget`. Thread CPU is split with `CLOCK_THREAD_CPUTIME_ID` into an
+injection scope and an Owner-drive scope (`stageBCpu` in the artifact), and quiescence
+requires stopping injection, draining every queued datagram through the Owner, and
+reaping until `tx_in_flight() == 0` with no due work before acknowledging the pause.
+
+Attribution label (carried in the module doc): the Owner-drive scope contains caller
+scheduling, pending-output handling, the 1316-byte compatibility copy into the TxPool
+slot, the pending `Vec<u8>` deallocation, TxPool reservation/commit, and TxEngine
+submission/reaping — so A -> B is the Owner/transport execution increment *including*
+those, not pure TxEngine cost.
+
+**First fenced attempt was rejected, correctly**: the warmup boundary returned
+`{"outcome":"overshoot","expected":2432,"observed":2464}` — the drain peer also counts
+the Owner's SRT control datagrams (handshakes, ACKs, keepalives), so a Stage-B boundary
+can never satisfy the ladder's exact `received == completed` rule against a raw UDP
+drain. The fence did exactly what it was built for. Next fix for Stage B is
+control-aware reconciliation: either count media datagrams separately (Owner TX
+accounting) or require `observed >= expected` with the excess bounded by the measured
+control rate and zero drops — the latter must be explicit, not a silent tolerance.
+No clean Stage-B row exists yet, so no A -> B number is claimed.
 

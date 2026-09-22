@@ -1484,12 +1484,13 @@ D       process - SRT threads     = surrounding Restream/control/media cost
 and never subtract unlike CPU scopes.
 
 Reuse before inventing: pinned `srt-rs` already carries the hooks —
-`crates/srt-transport/benches/compio_tx_allocs.rs` shows the production
+`crates/srt-transport/benches/compio_tx_allocs.rs` shows the benchmark-only
 `Owner::new(..).with_caller(OwnerCallerSide::new_single(..))` +
-`owner.service(now, budget)` attach path and the pre-materialized-datagram push
-(Layer 3b), and `crates/srt-bench/benches/compio_shared_owner_qual.rs` is a
-two-process real-`Owner` qualification with an independent receiver process.
-Extend those shapes rather than building another synthetic Owner.
+`owner.service(now, budget)` shape and the pre-materialized-datagram push (Layer 3b),
+and `crates/srt-bench/benches/compio_shared_owner_qual.rs` is a two-process real-`Owner`
+qualification with an independent receiver process. Extend those shapes rather than
+building another synthetic Owner — and note that neither is an "attach path":
+`with_caller` is benchmark-only and bypasses production `Owner::connect`.
 
 Fanout first: find the highest fanout at which the SRT sink is provably not the
 limiter, and hold it for A/B/C/D. WI3.6 is about attribution, not maximum fanout.

@@ -20,6 +20,9 @@ pub(crate) enum Variant {
     CompioPipeline,
     /// A purpose-built native ring.
     IoUring,
+    /// Stage B: the production `TxEngine`/`Owner::service` execution path driven
+    /// by benchmark-only pre-materialized injection (harness-only feature).
+    OwnerTx,
     /// Blocking `libc::sendto` in this process: the control that says whether a
     /// measured rate is a submission-API property or the kernel/UDP stack.
     Sendto,
@@ -32,6 +35,7 @@ impl Variant {
             "compio-pipeline" => Ok(Self::CompioPipeline),
             "io-uring" | "io_uring" => Ok(Self::IoUring),
             "sendto" => Ok(Self::Sendto),
+            "owner-tx" => Ok(Self::OwnerTx),
             other => Err(format!(
                 "SUBSTRATE_VARIANT must be compio, compio-pipeline, io-uring or sendto, got \
                  {other:?}"
@@ -45,6 +49,7 @@ impl Variant {
             Self::CompioPipeline => "compio-pipeline",
             Self::IoUring => "io-uring",
             Self::Sendto => "sendto",
+            Self::OwnerTx => "owner-tx",
         }
     }
 }

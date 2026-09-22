@@ -19,6 +19,11 @@ pub(crate) struct SenderCounters {
     pub(crate) errors: AtomicU64,
     pub(crate) max_in_flight: AtomicU64,
     pub(crate) batches: AtomicU64,
+    /// Stage B only: thread CPU spent queuing pre-materialized datagrams. Kept
+    /// out of the Owner-drive denominator by construction.
+    pub(crate) injection_cpu_micros: AtomicU64,
+    /// Stage B only: thread CPU spent driving `Owner::service` and reaping.
+    pub(crate) owner_drive_cpu_micros: AtomicU64,
 }
 
 pub(crate) struct SenderHandles {
@@ -153,6 +158,14 @@ pub(crate) fn sender_thread(
             Variant::CompioPipeline => run_compio_pipeline(&config, payload, &handles),
             Variant::IoUring => run_io_uring(&config, payload, &handles),
             Variant::Sendto => run_sendto(&config, payload, &handles),
+            #[cfg(feature = "wi3-owner-bench")]
+            Variant::OwnerTx => super::owner_tx::run_owner_tx(&config, payload, &handles),
+            #[cfg(not(feature = "wi3-owner-bench"))]
+            Variant::OwnerTx => Err(
+                "SUBSTRATE_VARIANT=owner-tx needs a build with --features wi3-owner-bench: the \
+                 Stage-B arm uses benchmark-only srt-transport internals"
+                    .to_string(),
+            ),
         }
     })();
     SenderReport {

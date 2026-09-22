@@ -26,6 +26,12 @@ mcp-server = ["mcp-core"]
 mcp-http-backend = ["mcp-core"]
 mcp-embedded = ["mcp-core", "agent-plane"]
 egress-test-driver = []
+# Harness-only Stage-B benchmark surface: enables the pinned srt-transport
+# benchmark internals (`with_caller`, `bench_push_pending`, ...) so the substrate
+# harness can drive the production Owner/TxEngine execution path with
+# pre-materialized datagrams. Default-off: normal Restream builds must never see
+# `bench-internals`.
+wi3-owner-bench = ["srt-transport/bench-internals"]
 
 [dependencies]
 tokio = { version = "1.35", features = [
