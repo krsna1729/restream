@@ -1397,8 +1397,44 @@ is actually a material bottleneck for our workload.
 
 ## 13. WI3.6 — SRT Packet Engine: Incremental Cost Above the Substrate
 
-Status: PLANNED — safe to run now on the current host; it does not depend on raw
-UDP reaching 2 Mpps/core.
+Status: **ACTIVE** (2026-09-22).
+
+```text
+A/B saturation attribution      complete at F=1000 and F=11
+C receiver-unlimited fanout     highest clean current-host fanout = 11
+C paced absolute cost           measured (median 28.05 us / DATA-first, 30 s window)
+paced A/B/C decomposition       A -> B measured; B -> C NOT subtractable (see below)
+Stage D                         not started; blocked on the paced table
+```
+
+Recorded state, with evidence in
+[baselines](agent-guidance/quality/baselines.md):
+
+- **A -> B (saturation, F=1000, K=16)**: median paired delta **+1.213
+  us/datagram** (difference of medians +1.155; pairs 1.069-2.222). The Owner
+  compatibility execution path adds ~1.2 us/datagram on this host.
+- **C, F=11 (highest clean current-host fanout)**: zero missed source ticks,
+  250 756 first-transmission DATA (exactly 11 x 22 796), zero DATA
+  retransmission, zero receiver protocol/kernel/datapath loss, `drain_ok`.
+  Window-only cost median **28.046 us per first-transmission DATA** and 22.787
+  us per total wire datagram; protocol amplification **1.2308**, entirely
+  ACK/ACKACK (ACK 0.096-0.107, ACKACK 0.123-0.124 per DATA-first).
+- **Paced regime (Regime P)**: paced A (raw Compio) and paced C (full plaintext
+  SRT) cost the same sending-thread CPU per source tick within this lane's
+  spread (median 307.73 vs 308.51 us at the 11-destination 8 Mbps shape, ~23% of
+  one core for 88 Mbps), while paced B is 90-120 us/tick *above* both. The
+  prescribed paces `C - B_drive` and `C - B_inclusive` are therefore not usable:
+  B's compatibility injection (per-datagram `Vec` clone, the 1316-byte copy into
+  the reserved TxPool slot, its deallocation) costs more than the SRT protocol
+  work C adds. Resolving paced B -> C needs a bench-internals control that
+  materialises directly into the final slot, upstream.
+- `compio_shared_owner_qual` prints `owner.rx_mode()` of the **sender's** Owner
+  caller socket; `rx_mode=Some(RawReadiness)` there is a sender-side RX fallback
+  and says nothing about the independent receiver process.
+
+Naming caution (unchanged, and now measured): Stage B is the transport/Owner
+execution increment *including* the legacy compatibility copy, and it is not the
+production attach path.
 
 The question is *where our overhead lives*, not an absolute pps number. Decompose
 the path and report CPU microseconds per event plus overhead ratios at each step:

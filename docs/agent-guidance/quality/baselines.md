@@ -712,7 +712,18 @@ transport subtraction is:
 `median(Owner-drive B) - median(raw Stage-A inclusive) = 7.203 - 6.047 = +1.155 us/datagram`
 
 The four pairwise transport increments are **+1.069, +1.184, +1.242, and
-+2.222 us/datagram**; the spread is retained rather than hidden. Owner-drive is
++2.222 us/datagram**. Because these are deliberately *paired* runs, the primary
+estimate for the increment is the median of the four pairwise deltas, not the
+difference of the two medians; both are recorded:
+
+```text
+Stage-B transport increment:
+  difference of medians:  +1.155 us/datagram
+  median paired delta:    +1.213 us/datagram  (1.069-2.222)
+```
+
+The spread is retained rather than hidden. On this host the Owner compatibility
+execution path therefore adds roughly **~1.2 us/datagram**, not 2.5-3+. Owner-drive is
 85.6–85.8% of Stage B sender CPU, injection is 10.5–10.8%, and the residual
 inclusive scope is the outer sender/control work. All eight rated rows have
 `receiver.udpRcvbufErrors == 0`, `receiver.receiveErrors == 0`, and
@@ -861,3 +872,181 @@ pps/core** and **5.944 inclusive sender us/datagram**; `owner-tx` B measured
 |---|---|---|
 | A | `.local/artifacts/wi36-stage-b-clean-11-compio-pipeline/substrate-pps.json` | `03493648f0135471f4d5765f21917825f797a0310fae48795f9db5b3b1086741` |
 | B | `.local/artifacts/wi36-stage-b-clean-11-owner-tx/substrate-pps.json` | `cc173b157fe5db9f0311022090e614ebb97e47595becc85b5734e369a5050aa5` |
+
+### WI3.6 Stage C — clean F=11 window row, derived costs, and repeats (2026-09-22)
+
+Fanout 11 was rerun four more times with the identical shape (plaintext, payload
+1316 B, interval 1316 us, 8 Mbps per destination, `--tx-lanes 16`,
+`--connect-cc 16`, 30 s sender window,
+`srt-bench runtime=compio mode=receiver` in the `wi3-sink` namespace on CPUs
+2-5). The three fully clean rows below are the ones eligible for WI3.6: zero
+missed source ticks, `tx_class_data_first == 250756` (exactly 11 x 22796),
+zero DATA retransmission, zero receiver protocol/kernel/datapath loss, and
+`drain_ok`.
+
+```text
+expected_ticks 22796   generated_ticks 22796   missed_source_ticks 0
+data_offered 250756    data_accepted 250756     tx_class_data_first 250756
+window cpu_ms         7623.7 / 7032.8 / 6918.6   (cpu_ms 7740.1 / 7245.0 / 7620.2)
+drain cpu_ms          116.4 / 212.2 / 701.6
+```
+
+| Fanout-11 run | `window_cpu_ms` | us / first-transmission DATA | us / total wire datagram | wire / DATA-first | service visits / tick | first-submit lateness p50 / p99 / max (us) | in-flight at window end | drain_ok |
+|---|---:|---:|---:|---:|---:|---|---:|---|
+| base | 7 623.7 | 30.403 | 24.938 | 1.2191 | 0.9557 | 100 / 95 000 / 123 704 | 15 | true |
+| r3 | 7 032.8 | 28.046 | 22.787 | 1.2308 | 0.9788 | 100 / 22 000 / 47 376 | 14 | true |
+| r13 | 6 918.6 | 27.591 | 22.402 | 1.2316 | 0.9824 | 100 / 40 000 / 64 484 | 11 | true |
+| **median** | **7 032.8** | **28.046** | **22.787** | **1.2308** | **0.9788** | — | — | — |
+| range | 6 918.6-7 623.7 | 27.591-30.403 | 22.402-24.938 | 1.2191-1.2316 | 0.9557-0.9824 | — | 11-15 | — |
+
+Control classes per first-transmission DATA are identical across the three rows
+(only ACK and ACKACK are non-zero): ACK 0.0964-0.1074, ACKACK 0.1227-0.1243,
+NAK / keepalive / handshake / DROPREQ / KM / shutdown / other-control all 0.
+`tx_class_total = first + ACK + ACKACK` exactly in every row, so protocol
+amplification is fully accounted for by the peer's ACK/ACKACK cadence.
+
+Invariants across the three rows: `owner_faulted = false`,
+`rx_dropped = rx_truncated = rx_lost = rx_duplicates = 0`,
+`pending_after_drain = 0`, `tx_pool_free = tx_pool_capacity = 16`,
+`tx_pool_high_water = 16`, receiver `pkt_sent = core_total = 250756` with
+`sec_a = sec_b = 0`, driver `IoUring`, compio 0.19.2, host contention
+`contended`.
+
+Artifacts (sender log / receiver TSV SHA-256):
+
+| Run | Sender log | Receiver TSV |
+|---|---|---|
+| base | `646efee12e644696177d88be8c940ac65c3b5d67fc7dee5de579e3df6d3efd49` | `b06fd6bcbaf4333808a33f739774e09d0b3ff9696673fcc54479e3807ed434f9` |
+| r3 | `3746531f38a3c6594f099ab17e4ba3d303d80758ec12c6b23edcd4181519fe7d` | `bdb55fa40a7bdbf6ee34fa051bb10d67ab1a55ffedb9add199bfc0ff35e53ab3` |
+| r13 | `4539988ce2c2b1b8ccff2091ac8c4a7337c115b29c8b6443427147d13acf1f88` | `555d09e9ca00a9411a633f8a007a5ad55a6cd071264a165aa841a550f9b1d86f` |
+
+Four further attempts were **not** fully clean and are retained rather than
+discarded; each is usable only as a bound, never as the rated row:
+
+| Attempt | Failure | us / DATA-first |
+|---|---|---:|
+| `wi36-stage-c-11-r2` | 42 missed source ticks (11 x 42 fewer DATA offered) | 32.569 |
+| `wi36-stage-c-11-r5` | 4 missed source ticks | 33.575 |
+| `wi36-stage-c-11-r10` | clean ticks, but 11 DATA first-transmitted after the window close | 29.041 |
+| `wi36-stage-c-11-r12` | clean ticks, but 165 DATA first-transmitted after the window close | 30.554 |
+| `wi36-stage-c-11-r9` | 106 missed ticks, 275 DATA retransmissions, receiver `sec_a` 238 / `sec_b` 36 | (not rating-eligible) |
+| `wi36-stage-c-11-r11` | zero loss but 4 retransmissions and `drain_ok = false` | (not rating-eligible) |
+| `wi36-stage-c-11-r8` | 28 missed ticks and `drain_ok = false` | (not rating-eligible) |
+| `wi36-stage-c-11-r4`, `-r6`, `-r7` | aborted launches (malformed sender argv); `sender.log` empty, receiver recorded partial capture | (no row) |
+
+WI3.6 must use `window_cpu_ms`, never `cpu_ms`: the latter spans
+window + post-window drain, and the drain is real (116-702 ms here, and ~1.2x
+the window's traffic on the upstream F=200 shard).
+
+**Correction — `rx_mode` is sender-side.** `compio_shared_owner_qual` prints
+`owner.rx_mode()` of the *sender's* Owner caller socket, and `managed_rx` is the
+comparison with `OwnerRxMode::ManagedMultishot` for that same sender-side
+endpoint. The value recorded above, `Some(RawReadiness)`, therefore means the
+**sender-side Owner RX path fell back to the raw reader** (`ManagedPreferred`
+could not register the provided-buffer ring on this host). It is not a statement
+about the independent `srt-bench` receiver process, which is a separate program
+with its own receive path.
+
+### WI3.6 paced regime (Regime P) — controls, and why paced B->C is not subtractable (2026-09-22)
+
+Stage C is a product-paced run: 11 destinations, one 1316-byte payload per
+destination every ~1316 us (8 Mbps each, 88 Mbps aggregate, ~8360 datagrams/s).
+The Stage-B fanout-11 rows above are *saturation* rows (168-135k datagrams/s) and
+**cannot be subtracted from Stage C**. A product-paced mode was therefore added
+to the Restream substrate harness (`SUBSTRATE_PACE_US=<interval>`), which emits
+one datagram per destination per tick as a single burst and resets its schedule
+at every pause boundary; `sourceBurstsInWindow` / `partialSourceBurstDatagrams`
+in the artifact prove the burst shape (0 partial bursts means the window's
+datagram count is an exact multiple of the fanout).
+
+Paced rows, six alternating repetitions, same lane/placement, K = 16, 5 s
+windows, zero receiver drops, exact settlement, `healthy`:
+
+| Rep | Arm | datagrams | source ticks | us / datagram | us / source tick | Owner-drive us/dg | injection us/dg | service visits |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| A1 | `compio-pipeline` | 41 822 | 3 802 | 27.976 | 307.73 | — | — | — |
+| B1 | `owner-tx` | 41 811 | 3 801 | 38.507 | 423.57 | 11.584 | 2.540 | 3 801 |
+| A2 | `compio-pipeline` | 41 822 | 3 802 | 25.585 | 281.43 | — | — | — |
+| B2 | `owner-tx` | 41 822 | 3 802 | 32.758 | 360.34 | 8.327 | 2.004 | 3 802 |
+| A3 | `compio-pipeline` | 41 811 | 3 801 | 28.461 | 313.08 | — | — | — |
+| B3 | `owner-tx` | 41 789 | 3 799 | 36.613 | 402.74 | 10.618 | 2.413 | 3 799 |
+| **median A** | | | | **27.976** | **307.73** | — | — | — |
+| **median B** | | | | **36.613** | **402.74** | **10.618** | **2.413** | — |
+
+Paired paced A->B deltas (inclusive sender CPU): **+10.531, +7.173, +8.152
+us/datagram**, median **+8.152 us/datagram** (+95 us per source tick). Removing
+the harness-only injection scope: median **+5.739 us/datagram**.
+
+Stage C at the same pacing and fanout, on the same scope (whole sending
+thread/process CPU per window; `production_runtime_builder` builds compio's
+single-threaded runtime, so the process CPU is the sender thread's CPU):
+
+```text
+paced A (raw Compio UDP)      median 307.73 us / source tick   (281.43-313.08)
+paced C (full plaintext SRT)  median 308.51 us / source tick   (303.50-334.43)
+paced B (Owner compat path)   median 402.74 us / source tick   (360.34-423.57)
+```
+
+Paced A and paced C are the same within this lane's run-to-run spread: at the
+product's load shape the sending thread costs ~300-310 us of CPU per 1316 us
+tick (~23% of one core for 88 Mbps), and the SRT protocol engine adds no
+resolvable CPU increment above the raw submission floor. **Paced B is 90-120 us
+per tick *above* both**, i.e. the Stage-B control costs more than the production
+path it was meant to bound.
+
+That is a measured apparatus result, not a transport result, and it is why the
+prescribed paced `B -> C` subtraction is not valid:
+
+- B's `Owner-drive` scope covers only the `service()` span (10.6 us/datagram);
+  C's cost is whole-thread, so `C - B_drive` would attribute B's per-tick
+  parking and injection to "protocol work".
+- The like-for-like scope is whole sending thread per tick, and there
+  `C - B` is **negative** (-94 us/tick, -8.6 us/datagram): B's compatibility
+  injection (per-datagram `Vec` clone, the 1316-byte copy into the reserved
+  TxPool slot, and the deallocation of the queued `Vec`) plus its
+  pool-saturating burst pattern exceeds the SRT protocol work that C adds.
+- B's final TxPool is the binding resource in every paced row
+  (`txPoolFreeMin = 0`, `inFlightHwm = 16` at K = 16), while C runs the same
+  offer through `send_shared` and materialises directly into the final slot.
+
+So the paced regime supports: **A -> B = +8.152 us/datagram inclusive (+5.739
+excluding harness injection)**, and an absolute product-paced cost for the real
+SRT path (**28.05 us per first-transmission DATA**, 308.51 us per source tick,
+1.2308 wire datagrams per DATA). It does **not** support a paced `B -> C`
+protocol increment: the control's apparatus cost is larger than the effect.
+Resolving paced `B -> C` needs a control that materialises directly into the
+final slot (no per-datagram `Vec`), which is an upstream `srt-rs` bench-internals
+capability, not a Restream harness change.
+
+Paced artifacts (SHA-256 of `substrate-pps.json`):
+
+| Rep | Artifact | SHA-256 |
+|---:|---|---|
+| A1 | `.local/artifacts/wi36-stage-p4-a1/substrate-pps.json` | `9aac267d0ef3e1fcb9b373b990778453db21673ffb3e102b8b2564aa4bbc5f37` |
+| B1 | `.local/artifacts/wi36-stage-p4-b1/substrate-pps.json` | `adf598a2b28132ec01d78a43d805cafcebf565e939dcad59a587d5afe8aef921` |
+| A2 | `.local/artifacts/wi36-stage-p4-a2/substrate-pps.json` | `680ececc54a9f0409cf37bf304a2112f003df8f1595bba5be181a842e1d7f160` |
+| B2 | `.local/artifacts/wi36-stage-p4-b2/substrate-pps.json` | `d0b7236107f1ee0e49ebeb29e233f0ab9f2f112119556c5af2f1535468c80f6a` |
+| A3 | `.local/artifacts/wi36-stage-p4-a3/substrate-pps.json` | `4d3e0ad3ac793f2e3036ebbae1ce6420d3646f3abffd197ca2893c5f3178a274` |
+| B3 | `.local/artifacts/wi36-stage-p4-b3/substrate-pps.json` | `47f8611eb6517f431f64969bf45ac0bfb112819eb53b8a55f6e2d8df99faed40` |
+
+Superseded paced calibration attempts (retained, not used for any number):
+`wi36-stage-p2-*` (harness pacer dropped the ticks a late burst had passed
+instead of catching up) and `wi36-stage-p3-*` (pacer phase was not re-anchored
+after the warmup pause, and the `owner-tx` burst waited for free TxPool slots,
+which added a second `service()` visit per tick: 2.1 visits/tick against the
+production path's 0.98).
+
+Paced-mode harness changes landed with this evidence:
+
+- `SUBSTRATE_PACE_US` selects product pacing; per-tick bursts are one datagram
+  per destination, and skipped ticks are counted from the epoch-anchored
+  schedule rather than silently stretching the interval.
+- The pacer is re-anchored at each pause boundary, so a warmup pause cannot make
+  the sender fire a catch-up burst into the rated window.
+- Stage-B service totals are now **window deltas**: `ServiceTotals` is
+  snapshot at the warmup boundary and subtracted at the end, so
+  `serviceVisits` / `actions` / TX counters are comparable with the upstream
+  Stage-C window figures instead of being whole-run cumulative totals.
+- `tx_pool_free_min` is `Option<u64>` and therefore survives a real zero: the
+  previous `0`-as-uninitialized sentinel erased a genuine empty pool (visible
+  immediately in the paced rows, all of which report `txPoolFreeMin = 0`).
