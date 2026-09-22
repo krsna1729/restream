@@ -648,7 +648,7 @@ the same shape as the clean revision, so a revert would not explain the drops. T
 skew finding below is the better explanation, and clean rows are to be obtained by
 repeated alternating runs with every attempt recorded, not by retrying until one passes.
 
-### WI3.6 Stage B — implemented, fanout-matched, initial clean rows (2026-09-22)
+### WI3.6 Stage B — implemented, fanout-matched, four clean alternating pairs (2026-09-22)
 
 Stage B exists: harness-only feature `wi3-owner-bench = ["srt-transport/bench-internals"]`
 (default off; normal builds never see `bench-internals`), a `owner-tx` arm that builds the
@@ -681,7 +681,7 @@ with `maintenanceActions == 0` and `protocolOutputFailures == 0`). This satisfie
 ladder's exact `received == completed` settlement rule against the UDP drain with zero
 overshoot.
 
-**Initial clean rows (veth lane, depth 16, 1000 destinations, exact delivery, zero drops):**
+**Earlier non-alternating clean rows (veth lane, depth 16, 1000 destinations, exact delivery, zero drops):**
 
 | Arm | Run | pps/core | Inclusive sender us/datagram | Payload Gbit/CPU-s | Verdict | Settlement |
 |---|---:|---:|---:|---:|---|---|
@@ -690,21 +690,174 @@ overshoot.
 | `owner-tx` (Stage B) | 2 | 106 350 | 9.40 | 1.120 | healthy | settled (polls 1, 0.003 s) |
 | `owner-tx` (Stage B) | 3 | 110 688 | 9.03 | 1.165 | healthy | settled (polls 1, 0.002 s) |
 
-Stage B achieved **3/3 clean, zero-loss, 100% healthy runs** with median **110 688 pps/core**
-(**9.03 inclusive sender us/datagram**). The inclusive Stage B minus Stage A difference
-(+2.80 to +3.32 us/datagram, +45% to +58%) is not the Owner transport increment: it
-also includes injection and the outer sender loop. The requested subtraction is
+The four replacement pairs are all **healthy**, exact-delivery, zero-receiver-drop rows:
 
-`Owner-drive us/datagram - raw Stage-A us/datagram`.
+| Pair | Arm | pps/core | Inclusive sender us/datagram | Injection us/datagram | Owner-drive us/datagram | Receiver/kernel drops | Verdict |
+|---:|---|---:|---:|---:|---:|---:|---|
+| 1 | `compio-pipeline` A | 174 672 | 5.725 | — | — | 0 | healthy |
+| 1 | `owner-tx` B | 124 077 | 8.060 | 0.868 | 6.909 | 0 | healthy |
+| 2 | `compio-pipeline` A | 162 320 | 6.161 | — | — | 0 | healthy |
+| 2 | `owner-tx` B | 102 343 | 9.771 | 1.025 | 8.383 | 0 | healthy |
+| 3 | `compio-pipeline` A | 164 267 | 6.088 | — | — | 0 | healthy |
+| 3 | `owner-tx` B | 119 643 | 8.358 | 0.891 | 7.157 | 0 | healthy |
+| 4 | `compio-pipeline` A | 166 483 | 6.007 | — | — | 0 | healthy |
+| 4 | `owner-tx` B | 118 330 | 8.451 | 0.891 | 7.249 | 0 | healthy |
 
-The existing Stage B artifacts put Owner-drive at roughly **7.7–7.9 us/datagram**
-versus the raw Stage-A **6.23 us/datagram**, or about **+1.45–+1.72 us/datagram**
-(approximately **+23% to +28%**) for the Owner/transport execution scope. Owner-drive
-accounts for about 85–88% of Stage B sender CPU; injection accounts for about 11–12%.
-The next ledger revision must report inclusive sender, injection, and Owner-drive values
-per datagram for every genuinely alternating `compio-pipeline`/`owner-tx` pair.
+The matched medians are **6.047 inclusive sender us/datagram** for primary
+`compio-pipeline` A and **8.405 inclusive sender**, **0.891 injection**, and
+**7.203 Owner-drive us/datagram** for Stage B. The inclusive B minus A median
+(+2.357 us/datagram) is not the transport increment. The required A -> B
+transport subtraction is:
 
-**Provenance and paired rerun requirement:** preserve every attempted raw JSON artifact or
-its stable hash and path, record the exact command, and retain the verdict (including
-lossy attempts). Run at least four clean alternating pairs at 1000 destinations and
-queue depth 16 before treating the subtraction as a baseline.
+`median(Owner-drive B) - median(raw Stage-A inclusive) = 7.203 - 6.047 = +1.155 us/datagram`
+
+The four pairwise transport increments are **+1.069, +1.184, +1.242, and
++2.222 us/datagram**; the spread is retained rather than hidden. Owner-drive is
+85.6–85.8% of Stage B sender CPU, injection is 10.5–10.8%, and the residual
+inclusive scope is the outer sender/control work. All eight rated rows have
+`receiver.udpRcvbufErrors == 0`, `receiver.receiveErrors == 0`, and
+`verdict == "healthy"`. Every Stage B row also has
+`txSubmitted == txCompletedOk == completionsReaped`, `txFailedSends == 0`, and
+`protocolOutputFailures == 0`.
+
+**Attempt provenance:** the first 20-second A attempt failed before the rated
+window because the warmup receiver counter rose (`udpRcvbufErrors` 99 693 ->
+103 643). After a clean drain restart, the 20-second A retry reached the rated
+window but accumulated 25 114 receiver/kernel drops and was `unclassified`.
+Neither attempt is silently discarded:
+
+| Attempt | Verdict | Artifact | SHA-256 |
+|---|---|---|---|
+| A pre-window | loss | `.local/artifacts/wi36-stage-b-pair1-compio-pipeline/attempt.txt` | `b92bcad3ba715b3730ebf04e8ee32b5c634cbe3cebc1aaa7390880c481087ea2` |
+| A rated 20 s | unclassified/loss | `.local/artifacts/wi36-stage-b-pair1b-compio-pipeline/substrate-pps.json` | `b411fe78dcd23cb473c7254dbe03be8d57163f6f3e56a9eaef8ab40923ba40af` |
+
+The clean pair artifacts remain at the following stable local paths; hashes
+are recorded so an artifact copy can be verified:
+
+| Pair/arm | Artifact | SHA-256 |
+|---|---|---|
+| 1/A | `.local/artifacts/wi36-stage-b-pair1c-compio-pipeline/substrate-pps.json` | `028d87d470107a0823282486ac8817641171dd60c4b322c0e3840224992a9e9a` |
+| 1/B | `.local/artifacts/wi36-stage-b-pair1c-owner-tx/substrate-pps.json` | `d860f90ce51c2f182279398a133b69e4f722328af88a3f48bca932de31f29c84` |
+| 2/A | `.local/artifacts/wi36-stage-b-pair2-compio-pipeline/substrate-pps.json` | `6a007c34e2c7fac1a853502aa541038a86bf217a51f8e6b8d6029d9f2d53d3eb` |
+| 2/B | `.local/artifacts/wi36-stage-b-pair2-owner-tx/substrate-pps.json` | `132daf5527a10a9dbfab70d5cdbad5982ae20f70cc180e6b1bac7b496a984683` |
+| 3/A | `.local/artifacts/wi36-stage-b-pair3-compio-pipeline/substrate-pps.json` | `eef79fee5964c90b0db5860089c9fb5ace55be5ca2d1c1346622eb723f2ba6ba` |
+| 3/B | `.local/artifacts/wi36-stage-b-pair3-owner-tx/substrate-pps.json` | `39e2bb615c2821388d6ba99ccadf44889b6623c4e6b681a3838a223663be1424` |
+| 4/A | `.local/artifacts/wi36-stage-b-pair4-compio-pipeline/substrate-pps.json` | `450cf96108a37c4ea4983dd08e3696e41258f0945fe6c806dfe53d0332f77c1d` |
+| 4/B | `.local/artifacts/wi36-stage-b-pair4-owner-tx/substrate-pps.json` | `4ce93fcfa6f631263cf36a3844c8417f1cd75f88ba2f3efead8e1cb250faed79` |
+
+Exact rated command for every clean row (only artifact directory and
+`SUBSTRATE_VARIANT` changed, in order A1, B1, A2, B2, A3, B3, A4, B4):
+
+```sh
+source .local/artifacts/wi3-topology/wi3-topology.env
+TEST_HARNESS_ARTIFACT_DIR=.local/artifacts/<run> \
+WORK_DIR=.local/artifacts/<run> \
+SUBSTRATE_VARIANT=<compio-pipeline|owner-tx> \
+SUBSTRATE_SENDER_CPUS=0 SUBSTRATE_HARNESS_CPUS=1 WI3_RECEIVER_CPUS=2-5 \
+SUBSTRATE_DEST_BASE=10.53.1.1 SUBSTRATE_DEST_PORT=9000 \
+SUBSTRATE_DEST_COUNT=1000 SUBSTRATE_QUEUE_DEPTH=16 \
+SUBSTRATE_WARMUP_SECS=3 SUBSTRATE_DURATION_SECS=5 \
+SUBSTRATE_REPORT_SECS=5 SUBSTRATE_RECEIVER_STATE=http://10.53.0.2:9997/state \
+taskset -c 1 target/bench/test_harness substrate-pps --no-netns
+```
+
+### WI3.6 Stage C — plaintext production-attach Owner qualification (2026-09-22)
+
+Stage C used the pinned upstream production qualification path rather than
+duplicating it in the Restream synthetic harness:
+`/home/dev/.cargo/git/checkouts/srt-rs-2a4e85d4a1e5ceb4/86369b0/crates/srt-bench/benches/compio_shared_owner_qual.rs`
+at srt-rs revision `86369b0815c09333547c965652250e17f580e834`. The sender uses
+real `Owner::connect`, `SocketOwnership::Shared`, the production Compio runtime,
+fixed `tx_lanes=16`, `connect_cc=16`, payload 1316 bytes, plaintext SRT, and
+8 Mbps per destination. The receiver is an independent pinned
+`srt-bench runtime=compio mode=receiver` process. Receiver TSV counters, not
+sender TX completion alone, decide loss.
+
+The 1000-destination attempt did **not** qualify: the receiver recorded
+184 133 `udp_rcvbuf_err`, the sender never submitted DATA, and its
+`pre_window_drained=false`. The required loss criterion was not weakened.
+Descending fanout kept the same payload, rate, TX lanes, connect concurrency,
+receiver process, and 30-second sender window:
+
+| Fanout | Sender `data_retx` | Sender `pre_window_drained` / `drain_ok` | Receiver `pkt_sent` | Receiver `sec_a` / `sec_b` | Kernel / datapath drops | Result |
+|---:|---:|---|---:|---:|---:|---|
+| 1000 | 0 | false / true | 0 | 0 / 0 | 184 133 / 0 | failed |
+| 600 | 0 | false / true | 0 | 0 / 0 | 38 141 / 0 | failed |
+| 300 | 0 | false / true | 0 | 12 232 / 0 | 0 / 0 | failed |
+| 100 | 0 | true / false | 74 217 | 175 469 / 0 | 0 / 9 615 | failed |
+| 50 | 0 | true / false | 104 290 | 192 045 / 0 | 0 / 5 351 | failed |
+| 25 | 0 | true / false | 104 978 | 141 138 / 1 | 0 / 15 086 | failed |
+| 15 | 0 | true / false | 177 919 | 121 473 / 0 | 0 / 9 054 | failed |
+| 14 | 0 | true / false | 308 639 | 5 766 / 4 | 0 / 9 307 | failed |
+| 13 | 0 | true / false | 208 160 | 84 209 / 0 | 0 / 15 231 | failed |
+| 12 | 0 | true / false | 273 540 | 0 / 0 | 0 / 0 | zero-loss counters, sender drain incomplete |
+| 11 | 0 | true / true | 250 756 | 0 / 0 | 0 / 0 | **highest fully clean tested** |
+| 10 | 0 | true / true | 227 950 | 0 / 0 | 0 / 0 | clean, below 11 |
+
+Here `sec_a` is receiver protocol loss, `sec_b` receiver duplicates,
+`udp_rcvbuf_err` is kernel receive-buffer loss, and `datapath_q_dropped` is
+benchmark receiver queue loss. Fanout 12 met the two hard zero-loss counters
+and zero DATA-retransmission conditions but did not complete the sender's
+drain fence; it is therefore not called fully clean. Fanout 11 is the
+conservative highest clean fanout.
+
+Every Stage C attempt is preserved as `sender.log` plus `receiver.tsv` under
+`.local/artifacts/wi36-stage-c-<fanout>/`; the stable SHA-256 pairs are:
+
+| Fanout | Sender log SHA-256 | Receiver TSV SHA-256 |
+|---:|---|---|
+| 1000 | `760240c6c363cf74a6e4f6e57d63508cc34c126bebb10b4cc18ef8c76a99fc92` | `1a204a1f02432b7e1bd7383f18b8180175e4b4e992be64742b48e20ad3ace80e` |
+| 600 | `c4968b10a9b260a0d4c101865fd0795721289e76208ce035279a8d82ccfdcf8b` | `d17ebc9ac006c52069537f4ef72107db7d1e9b57cb63015fde6e21f9bc775823` |
+| 300 | `0bc2a37ee0a7f7d3d0a6d4f15ea201910f74d131230a46ad91a8409e58aed23a` | `6dbe655efacd33015a6459630eec1d88a0879bb72b37132996d34cc77b6b15e2` |
+| 100 | `7f468a7280d5a5b9ded8fe079a6bbca1f3ec8ce18084b7be90c879da48dbff8a` | `4fe7d605aaee5e24672d3e0c63dd06526f436001dd52889ffdc5971487ab1ce9` |
+| 50 | `ba3d5333667e33d092f9962a0966dc6a62d86f200fb75f6026d6e936a1b0302b` | `602d8c0207855863c47313435402d23cf135e3cfac37a83c72726b39e3e90bab` |
+| 25 | `d83424ed2599b6ab1a377e0edd3eab4335d698fbffc6678004983b83dc295b16` | `1a8a8c6c34dd9b844be803b1d094ecf882244d877a41b899949fa835ad8b238e` |
+| 15 | `9671ee1b39b316989e2f8b6b50d3658620a6fcf12934b5461094090c4f10884f` | `38c40da16c1ad8bc23f07e90573e71324da36c5ffa62762aa16b31040a105352` |
+| 14 | `40d1144e8068a8c6e6f1a9efd3e0628c6d3a570e25c58eb44a53277fb82e5297` | `ec55b80099aff05e36d2f6040172ae0631a243181abb3ce5b2711c15076a2c36` |
+| 13 | `2b7170891a95e065dc1878ef7c55c6a4bab461bbeb18297576195fe25ab05b29` | `1dbb50e5a6b14ee0b079f288db15a0412317bb80d939dae96e17c198725837b4` |
+| 12 | `f79ea006147b8cf53acae492ae903584b947dc4d1a8135d4ac99f7e77ea3c5b0` | `9dc0fda4825a397f57c2277db394ebe33846c3496f0c309c0c050a26f3457218` |
+| 11 | `646efee12e644696177d88be8c940ac65c3b5d67fc7dee5de579e3df6d3efd49` | `b06fd6bcbaf4333808a33f739774e09d0b3ff9696673fcc54479e3807ed434f9` |
+| 10 | `a0ae9e9dd278b891957cb232040b23a49a78bdcc63c19709647337d71f49cc0c` | `d46eb0e51e13cafb52906ce80de1f8c2e56f29145f96f4db659672a320302fc8` |
+
+The one failed receiver-launch attempt at fanout 12 is also retained at
+`.local/artifacts/wi36-stage-c-12/attempt.txt` (SHA-256
+`ffccd87ef462872fc6518c5d121e7f2b29c8831e7fe37416fb066948dc54829c`);
+the corrected fanout-12 sender/receiver run is the row above.
+
+Exact Stage C build commands:
+
+```sh
+cd /home/dev/.cargo/git/checkouts/srt-rs-2a4e85d4a1e5ceb4/86369b0
+/home/dev/restream/scripts/build/resource-limit.sh cargo build --release -p srt-bench --bin srt-bench
+/home/dev/restream/scripts/build/resource-limit.sh cargo bench -p srt-bench --bench compio_shared_owner_qual --no-run
+```
+
+Exact receiver command template:
+
+```sh
+taskset -c 2-5 /home/dev/.cargo/git/checkouts/srt-rs-2a4e85d4a1e5ceb4/86369b0/target/release/srt-bench \
+  runtime=compio mode=receiver 12000 90 120 --connections <fanout> \
+  --ingress per-port --egress per-connection --encryption plain --workers 1 \
+  --cpus 2-5 --pin on --out /home/dev/restream/.local/artifacts/wi36-stage-c-<fanout>/receiver.tsv
+```
+
+Exact sender command template:
+
+```sh
+taskset -c 0 /home/dev/.cargo/git/checkouts/srt-rs-2a4e85d4a1e5ceb4/86369b0/target/release/deps/compio_shared_owner_qual-aa6a3035a9ac534d \
+  --fanout <fanout> --duration-ms 30000 --base-port 12000 \
+  --tx-lanes 16 --connect-cc 16 --payload-bytes 1316 \
+  --rate-mbps-per-dest 8 --send-shards 1
+```
+
+At the highest fully clean fanout, 11, the matched Restream A/B rerun stayed
+healthy with zero receiver drops: `compio-pipeline` A measured **168 227
+pps/core** and **5.944 inclusive sender us/datagram**; `owner-tx` B measured
+**134 778 pps/core**, **7.420 inclusive**, **0.259 injection**, and
+**6.874 Owner-drive us/datagram**. The transport subtraction is therefore
+`6.874 - 5.944 = +0.930 us/datagram` (15.6%). Raw artifacts:
+
+| Arm | Artifact | SHA-256 |
+|---|---|---|
+| A | `.local/artifacts/wi36-stage-b-clean-11-compio-pipeline/substrate-pps.json` | `03493648f0135471f4d5765f21917825f797a0310fae48795f9db5b3b1086741` |
+| B | `.local/artifacts/wi36-stage-b-clean-11-owner-tx/substrate-pps.json` | `cc173b157fe5db9f0311022090e614ebb97e47595becc85b5734e369a5050aa5` |
