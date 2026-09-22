@@ -593,12 +593,15 @@ whether the namespace still exists.
 | `compio-pipeline` (homogeneous futures, no boxing) | 2/3 | 171 973 (168 364-175 581) | 5.82 (5.70-5.94) |
 | `sendto` (blocking `libc::sendto`) | 3/3 | 176 569 (156 956-178 215) | 5.66 (5.61-6.37) |
 
-**The boxing question is retired.** With clean rows the three arms are
-indistinguishable: 5.66-5.82 us/datagram across boxed Compio, unboxed Compio
-pipeline and plain blocking `sendto`, all within run variance. The earlier "~4 %
-boxing cost" was receiver contamination, not a harness cost — so Stage A -> B will
-not be measuring harness allocation, it will be measuring Owner/TxEngine execution
-cost. The clean Stage-A baseline for the ladder is **~5.7 us/datagram of sender CPU
+**No reproducible boxing penalty.** With clean rows the three arms span 5.66-5.82
+us/datagram (boxed Compio 3/3 clean, unboxed pipeline 2/3, blocking `sendto` 3/3).
+The third `compio-pipeline` attempt was rejected by the fence itself — its window
+boundary did not reconcile exactly, so it is excluded rather than averaged. The
+earlier ~4 % gap did not reproduce under the corrected apparatus and therefore
+**cannot be attributed to boxing**; with three attempts per arm this is an
+engineering conclusion, not a statistical one. Boxing is not an optimization target,
+and Stage A -> B measures Owner/TxEngine execution cost rather than harness
+allocation. The clean Stage-A baseline for the ladder is **~5.7 us/datagram of sender CPU
 (≈175 000 datagrams/s on one pinned core)** under the fence.
 
 Still open before A -> B attribution is published: allocation counts and bytes per

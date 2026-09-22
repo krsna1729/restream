@@ -1519,11 +1519,13 @@ is a far better candidate than repairing the hybrid Tokio/`HighResWaiter` sink.
 Stage A controls, clean (RPS lane, backlog 1 000 000, 4 drain threads, exact
 `received == completed`, zero UDP/NIC/softnet drops, 3 runs each): `compio`
 (frozen, boxed) 175 026 pps/core = 5.71 us/datagram median; `compio-pipeline` (no
-per-datagram boxing) 171 973 = 5.82; `sendto` 176 569 = 5.66. **The boxing question
-is retired**: the three arms are indistinguishable within run variance, so the
-earlier ~4 % reading was receiver contamination. The clean Stage-A baseline for the
-ladder is ~5.7 us/datagram (about 175 000 datagrams/s on one pinned core) under the
-fence, and Stage A -> B measures *Owner/TxEngine execution cost*, not harness
+per-datagram boxing) 171 973 = 5.82; `sendto` 176 569 = 5.66. **No reproducible boxing
+penalty**: the earlier ~4 % gap did not reproduce under the corrected lossless
+apparatus, so it cannot be attributed to boxing — with three attempts per arm (2/3
+clean for `compio-pipeline`) this is an engineering conclusion, not a statistical
+one, and boxing is simply not an optimization target. The clean Stage-A baseline for
+the ladder is ~5.7 us/datagram (about 175 000 datagrams/s on one pinned core) under
+the fence, and Stage A -> B measures *Owner/TxEngine execution cost*, not harness
 allocation.
 
 Boundary correctness: sender quiescence (stop refilling, drain in-flight to zero,
@@ -1539,9 +1541,11 @@ Receiver-side drops are diagnosed, not inferred: the drain peer serves a `softne
 block from `/proc/net/softnet_stat` and the artifact records its deltas, while
 `netdev_max_backlog` is a recorded host-wide lane knob (save, set, read back,
 restore on `down`) because it is not namespaced on this kernel. With 1 000 000 the
-netdev drops disappear (`nicRxDropped` 0) and the ceiling moves to the drain socket
-(185 429 pps/core with 0.68 % UDP drops), so the lane still needs more drain
-capacity before the repeated A rows are usable.
+netdev drops disappear (`nicRxDropped` 0) and the ceiling moved to the drain socket
+(185 429 pps/core with 0.68 % UDP drops) — **superseded**: the hardened drain
+(per-thread counters, `recvmmsg` batch 32, four threads) plus the receiver
+settlement fence produced clean, exactly-reconciled saturation rows, so no further
+drain capacity work is needed.
 
 Lane placement for sender attribution: sender CPU 0, harness/control CPU 1,
 receiver and peer-side RX processing on CPUs 2-5, with the peer veth's `rps_cpus`

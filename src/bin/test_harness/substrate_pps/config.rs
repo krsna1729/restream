@@ -97,6 +97,45 @@ pub(crate) struct SubstrateConfig {
 /// `count` IPv4 destinations starting at `base`, all inside the peer's local
 /// prefix: destination-address diversity on the TX side without 1000 receiver
 /// tasks on the RX side.
+/// Parse a Linux CPU list (`0`, `2-5`, `0,2-3`) into the actual set of CPUs, so
+/// placement checks compare sets rather than string tokens.
+pub(crate) fn parse_cpu_list(mask: &str) -> Result<std::collections::BTreeSet<usize>, String> {
+    let mut cpus = std::collections::BTreeSet::new();
+    for part in mask.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (start, end) = match part.split_once('-') {
+            Some((start, end)) => (
+                start
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|e| format!("cpu list {mask:?}: {e}"))?,
+                end.trim()
+                    .parse::<usize>()
+                    .map_err(|e| format!("cpu list {mask:?}: {e}"))?,
+            ),
+            None => {
+                let cpu = part
+                    .parse::<usize>()
+                    .map_err(|e| format!("cpu list {mask:?}: {e}"))?;
+                (cpu, cpu)
+            }
+        };
+        if end < start {
+            return Err(format!("cpu list {mask:?} has a descending range {part:?}"));
+        }
+        for cpu in start..=end {
+            cpus.insert(cpu);
+        }
+    }
+    if cpus.is_empty() {
+        return Err(format!("cpu list {mask:?} names no CPUs"));
+    }
+    Ok(cpus)
+}
+
 pub(crate) fn destinations(base: Ipv4Addr, count: usize, port: u16) -> Vec<SocketAddr> {
     let start = u32::from(base);
     (0..count)
@@ -118,13 +157,31 @@ pub(crate) fn parse_config() -> Result<SubstrateConfig, String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    if let Some(mask) = &harness_cpus
-        && mask.split(',').any(|part| part.trim() == sender_cpus)
+    // Parsed as Linux CPU lists and intersected as sets: a string-token check
+    // accepts `SUBSTRATE_HARNESS_CPUS=0-2` beside a sender on CPU 0, which is
+    // exactly the latent measurement error this guards against.
+    let sender_set = parse_cpu_list(&sender_cpus)?;
+    if let Some(mask) = &harness_cpus {
+        let harness_set = parse_cpu_list(mask)?;
+        let overlap: Vec<usize> = sender_set.intersection(&harness_set).copied().collect();
+        if !overlap.is_empty() {
+            return Err(format!(
+                "harness CPUs {mask:?} overlap the sender CPUs {sender_cpus:?} on {overlap:?}: the \
+                 sender must own its core exclusively"
+            ));
+        }
+    }
+    if let Ok(receiver) = std::env::var("WI3_RECEIVER_CPUS")
+        && !receiver.trim().is_empty()
     {
-        return Err(format!(
-            "harness CPUs {mask:?} overlap the sender CPU {sender_cpus:?}: the sender must own its \
-             core exclusively"
-        ));
+        let receiver_set = parse_cpu_list(receiver.trim())?;
+        let overlap: Vec<usize> = sender_set.intersection(&receiver_set).copied().collect();
+        if !overlap.is_empty() {
+            return Err(format!(
+                "receiver CPUs {receiver:?} overlap the sender CPUs {sender_cpus:?} on {overlap:?}: \
+                 peer receive processing must stay off the measured core"
+            ));
+        }
     }
     let payload_bytes = env_usize("SUBSTRATE_PAYLOAD_BYTES", 1316);
     if payload_bytes == 0 || payload_bytes > 65_507 {

@@ -192,6 +192,32 @@ async fn fetch_peer_state(url: &str) -> Result<Value, String> {
         .map_err(|e| format!("{url}: state is not JSON: {e}"))
 }
 
+/// The lane a run used, copied into the artifact so later A/B rows can prove
+/// they share a topology instead of relying on the operator's memory.
+fn lane_configuration() -> Value {
+    let env = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    json!({
+        "topologyKind": env("RESTREAM_BENCH_TOPOLOGY"),
+        "netns": env("RESTREAM_BENCH_NETNS"),
+        "peerHosts": env("RESOURCE_SWEEP_SRT_PEER_HOSTS"),
+        "senderCpusRequested": env("SUBSTRATE_SENDER_CPUS"),
+        "harnessCpusRequested": env("SUBSTRATE_HARNESS_CPUS"),
+        "receiverCpus": env("WI3_RECEIVER_CPUS"),
+        "rpsCpusRequested": env("WI3_RPS_CPUS_REQUESTED"),
+        "rpsCpusObserved": env("WI3_RPS_CPUS_OBSERVED"),
+        "netdevMaxBacklogOriginal": env("WI3_NETDEV_MAX_BACKLOG_ORIGINAL"),
+        "netdevMaxBacklogRequested": env("WI3_NETDEV_MAX_BACKLOG_REQUESTED"),
+        "netdevMaxBacklogObserved": env("WI3_NETDEV_MAX_BACKLOG_OBSERVED"),
+        "deliveryTolerance": env("SUBSTRATE_DELIVERY_TOLERANCE"),
+        "txNetdev": env("SUBSTRATE_TX_NETDEV"),
+    })
+}
+
 fn settlement_json(settlement: &Option<Settlement>) -> Value {
     match settlement {
         None => Value::Null,
@@ -298,6 +324,19 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
         }
         _ => None,
     };
+    // A warmup boundary that did not settle leaves warmup datagrams in the RX
+    // path, which would contaminate the rated interval: stop before the window.
+    if let Some(Settlement::Timeout { .. } | Settlement::Loss { .. }) = warm_settlement {
+        handles.stop.store(true, Ordering::Relaxed);
+        resume_sender(&handles).await?;
+        sender
+            .join()
+            .map_err(|_| "substrate sender thread panicked".to_string())?;
+        return Err(format!(
+            "warmup boundary did not settle ({}): refusing to start the rated window",
+            settlement_json(&warm_settlement)
+        ));
+    }
     let receiver_before = match &config.receiver_state {
         Some(url) => Some(fetch_peer_state(url).await?),
         None => None,
@@ -551,6 +590,7 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
             "harnessCpusRequested": config.harness_cpus,
             "txNetdev": tx_netdev,
         },
+        "lane": lane_configuration(),
         "placement": {
             "senderTid": sender_tid,
             "senderCpusAllowedList": sender_mask,
