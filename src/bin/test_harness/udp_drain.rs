@@ -25,7 +25,12 @@ use super::*;
 
 /// A wildcard UDP socket with `SO_REUSEPORT`, a large receive buffer and a
 /// read timeout so the drain loop can observe the stop flag.
-fn bind_drain_socket(port: u16, rcvbuf: usize, timeout: Duration) -> Result<UdpSocket, String> {
+fn bind_drain_socket(
+    port: u16,
+    rcvbuf: usize,
+    timeout: Duration,
+    reuseport: bool,
+) -> Result<UdpSocket, String> {
     let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
         return Err(format!("socket(): {}", std::io::Error::last_os_error()));
@@ -33,7 +38,14 @@ fn bind_drain_socket(port: u16, rcvbuf: usize, timeout: Duration) -> Result<UdpS
     // Own the fd from here on so every early return closes it.
     let socket = unsafe { UdpSocket::from_raw_fd(fd) };
     let enable: libc::c_int = 1;
-    for (name, value) in [(libc::SO_REUSEADDR, enable), (libc::SO_REUSEPORT, enable)] {
+    // SO_REUSEPORT only when explicitly asked for: per-socket reuseport spreads
+    // by flow hash, and with a handful of destination flows it leaves threads
+    // idle while one socket absorbs everything.
+    let mut options = vec![(libc::SO_REUSEADDR, enable)];
+    if reuseport {
+        options.push((libc::SO_REUSEPORT, enable));
+    }
+    for (name, value) in options {
         let rc = unsafe {
             libc::setsockopt(
                 fd,
@@ -151,13 +163,13 @@ impl DrainCounters {
     }
 }
 
-/// One drain thread's socket identity, so reuseport hash skew is visible.
+/// The drain socket's identity, and the per-thread counters that make load skew
+/// visible even when every thread shares one socket.
 struct DrainSocket {
     index: usize,
     local_port: u16,
     requested_rcvbuf_bytes: usize,
     granted_rcvbuf_bytes: Option<u64>,
-    counters: Arc<DrainCounters>,
 }
 
 /// Datagrams per `recvmmsg` call. One syscall per datagram is not a property of
@@ -259,65 +271,70 @@ pub(crate) async fn udp_drain_mode() -> Result<Value, String> {
     let stop = Arc::new(AtomicBool::new(false));
     let batch = drain_batch();
 
+    // Per-thread sockets with SO_REUSEPORT: the hash spreads by flow, and a
+    // single recvmmsg thread already absorbs ~175 000 datagrams/s here, so hash
+    // skew (now visible in `perThread`) is tolerated rather than contended. A
+    // single shared socket across threads measured *slower* — socket-lock
+    // contention cost more than the skew did.
     let mut handles = Vec::with_capacity(threads);
-    let mut sockets = Vec::with_capacity(threads);
+    let mut counters = Vec::with_capacity(threads);
+    let mut socket_info = Vec::with_capacity(threads);
     for index in 0..threads {
-        let socket = bind_drain_socket(port, rcvbuf, Duration::from_millis(200))?;
-        let counters = Arc::new(DrainCounters::default());
-        sockets.push(DrainSocket {
+        let socket = bind_drain_socket(port, rcvbuf, Duration::from_millis(200), true)?;
+        socket_info.push(DrainSocket {
             index,
             local_port: socket.local_addr().map_err(|e| e.to_string())?.port(),
             requested_rcvbuf_bytes: rcvbuf,
             granted_rcvbuf_bytes: granted_rcvbuf(&socket),
-            counters: Arc::clone(&counters),
         });
+        let thread_counters = Arc::new(DrainCounters::default());
+        counters.push(Arc::clone(&thread_counters));
         let stop = Arc::clone(&stop);
         let handle = std::thread::Builder::new()
             .name(format!("udp-drain-{index}"))
             .spawn(move || {
                 if batch > 1 {
-                    drain_loop_batched(socket, stop, counters, batch);
+                    drain_loop_batched(socket, stop, thread_counters, batch);
                 } else {
-                    drain_loop(socket, stop, counters);
+                    drain_loop(socket, stop, thread_counters);
                 }
             })
             .map_err(|e| format!("spawn drain thread {index}: {e}"))?;
         handles.push(handle);
     }
-
-    let sockets = Arc::new(sockets);
+    let sockets = Arc::new(socket_info);
+    let counters = Arc::new(counters);
     let listener = bind_state_listener(state_port).await?;
     let state_task = tokio::spawn(serve_state_json(listener, {
         let run = run.clone();
         let sockets = Arc::clone(&sockets);
+        let counters = Arc::clone(&counters);
         Arc::new(move || {
             let (nic_rx_dropped, nic_tx_dropped) = host_nic_drop_counters();
-            let per_thread: Vec<Value> = sockets
+            let per_thread: Vec<Value> = counters
                 .iter()
-                .map(|socket| {
-                    let (datagrams, bytes, errors) = socket.counters.snapshot();
+                .enumerate()
+                .map(|(index, counters)| {
+                    let (datagrams, bytes, errors) = counters.snapshot();
                     json!({
-                        "index": socket.index,
-                        "localPort": socket.local_port,
+                        "index": index,
                         "datagrams": datagrams,
                         "bytes": bytes,
                         "receiveErrors": errors,
-                        "requestedRcvbufBytes": socket.requested_rcvbuf_bytes,
-                        "grantedRcvbufBytes": socket.granted_rcvbuf_bytes,
                     })
                 })
                 .collect();
-            let total: u64 = sockets
+            let total: u64 = counters
                 .iter()
-                .map(|socket| socket.counters.datagrams.load(Ordering::Relaxed))
+                .map(|c| c.datagrams.load(Ordering::Relaxed))
                 .sum();
-            let total_bytes: u64 = sockets
+            let total_bytes: u64 = counters
                 .iter()
-                .map(|socket| socket.counters.bytes.load(Ordering::Relaxed))
+                .map(|c| c.bytes.load(Ordering::Relaxed))
                 .sum();
-            let total_errors: u64 = sockets
+            let total_errors: u64 = counters
                 .iter()
-                .map(|socket| socket.counters.errors.load(Ordering::Relaxed))
+                .map(|c| c.errors.load(Ordering::Relaxed))
                 .sum();
             json!({
                 "runId": run,
@@ -326,7 +343,15 @@ pub(crate) async fn udp_drain_mode() -> Result<Value, String> {
                 "port": port,
                 "threads": threads,
                 "batch": batch,
-                "rcvbufBytes": rcvbuf,
+                "sockets": sockets
+                    .iter()
+                    .map(|socket| json!({
+                        "index": socket.index,
+                        "localPort": socket.local_port,
+                        "requestedRcvbufBytes": socket.requested_rcvbuf_bytes,
+                        "grantedRcvbufBytes": socket.granted_rcvbuf_bytes,
+                    }))
+                    .collect::<Vec<_>>(),
                 "datagrams": total,
                 "bytes": total_bytes,
                 "receiveErrors": total_errors,
@@ -359,8 +384,8 @@ pub(crate) async fn udp_drain_mode() -> Result<Value, String> {
         tokio::select! {
             _ = ticker.tick() => {
                 let now = (
-                    sockets.iter().map(|s| s.counters.datagrams.load(Ordering::Relaxed)).sum::<u64>(),
-                    sockets.iter().map(|s| s.counters.bytes.load(Ordering::Relaxed)).sum::<u64>(),
+                    counters.iter().map(|c| c.datagrams.load(Ordering::Relaxed)).sum::<u64>(),
+                    counters.iter().map(|c| c.bytes.load(Ordering::Relaxed)).sum::<u64>(),
                 );
                 // Per-interval rate: the delta since the previous tick over the
                 // time since the previous tick, not over total uptime.
@@ -375,9 +400,9 @@ pub(crate) async fn udp_drain_mode() -> Result<Value, String> {
                         "datagrams": now.0,
                         "datagramsPerSec": (now.0.saturating_sub(last.0)) as f64 / interval,
                         "bytes": now.1,
-                        "receiveErrors": sockets
+                        "receiveErrors": counters
                             .iter()
-                            .map(|s| s.counters.errors.load(Ordering::Relaxed))
+                            .map(|c| c.errors.load(Ordering::Relaxed))
                             .sum::<u64>(),
                         "udpRcvbufErrorsSinceStart": drops.map(|drops| drops.1),
                         "udpInErrorsSinceStart": drops.map(|drops| drops.0),
@@ -392,17 +417,17 @@ pub(crate) async fn udp_drain_mode() -> Result<Value, String> {
         }
     };
 
-    let datagrams: u64 = sockets
+    let datagrams: u64 = counters
         .iter()
-        .map(|s| s.counters.datagrams.load(Ordering::Relaxed))
+        .map(|c| c.datagrams.load(Ordering::Relaxed))
         .sum();
-    let bytes: u64 = sockets
+    let bytes: u64 = counters
         .iter()
-        .map(|s| s.counters.bytes.load(Ordering::Relaxed))
+        .map(|c| c.bytes.load(Ordering::Relaxed))
         .sum();
-    let errors: u64 = sockets
+    let errors: u64 = counters
         .iter()
-        .map(|s| s.counters.errors.load(Ordering::Relaxed))
+        .map(|c| c.errors.load(Ordering::Relaxed))
         .sum();
     let drops = udp_drops_since_start(start_drops);
     state_task.abort();
@@ -417,7 +442,16 @@ pub(crate) async fn udp_drain_mode() -> Result<Value, String> {
         "port": port,
         "statePort": state_port,
         "threads": threads,
-        "rcvbufBytes": rcvbuf,
+        "batch": batch,
+        "grantedRcvbufBytes": sockets.first().and_then(|socket| socket.granted_rcvbuf_bytes),
+        "perThread": counters
+            .iter()
+            .enumerate()
+            .map(|(index, counters)| {
+                let (datagrams, bytes, errors) = counters.snapshot();
+                json!({"index": index, "datagrams": datagrams, "bytes": bytes, "receiveErrors": errors})
+            })
+            .collect::<Vec<_>>(),
         "uptimeSecs": started.elapsed().as_secs(),
         "stoppedBy": stopped_by,
         "datagrams": datagrams,
@@ -435,19 +469,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reuseport_sockets_can_share_one_port() {
-        let first = bind_drain_socket(0, 1 << 20, Duration::from_millis(50)).expect("first");
-        let port = first.local_addr().expect("addr").port();
-        let second = bind_drain_socket(port, 1 << 20, Duration::from_millis(50))
-            .expect("second shares port");
-        // Both bound to the same wildcard port, so the sender's 1000
-        // destinations can be spread across drain threads.
-        assert_eq!(second.local_addr().expect("addr").port(), port);
+    fn one_shared_socket_serves_every_drain_thread() {
+        // The drain deliberately does not use per-socket SO_REUSEPORT: with a
+        // handful of destination flows its hash left three of four threads idle
+        // while one socket absorbed everything.
+        let shared = Arc::new(
+            bind_drain_socket(0, 1 << 20, Duration::from_millis(50), true).expect("socket"),
+        );
+        let port = shared.local_addr().expect("addr").port();
+        let counters: Vec<Arc<DrainCounters>> =
+            (0..2).map(|_| Arc::new(DrainCounters::default())).collect();
+        let stop = Arc::new(AtomicBool::new(false));
+        let handles: Vec<_> = counters
+            .iter()
+            .map(|counters| {
+                let socket = shared.try_clone().expect("clone socket");
+                let counters = Arc::clone(counters);
+                let stop = Arc::clone(&stop);
+                std::thread::spawn(move || drain_loop(socket, stop, counters))
+            })
+            .collect();
+        let sender = UdpSocket::bind("127.0.0.1:0").expect("sender");
+        let target = format!("127.0.0.1:{port}");
+        for _ in 0..64 {
+            sender.send_to(&[7_u8; 1316], &target).expect("send");
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let total = || {
+            counters
+                .iter()
+                .map(|c| c.datagrams.load(Ordering::Relaxed))
+                .sum::<u64>()
+        };
+        while total() < 64 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        stop.store(true, Ordering::Relaxed);
+        for handle in handles {
+            let _ = handle.join();
+        }
+        assert_eq!(total(), 64);
     }
 
     #[test]
     fn drain_loop_counts_datagrams_and_bytes_until_stopped() {
-        let socket = bind_drain_socket(0, 1 << 20, Duration::from_millis(50)).expect("socket");
+        let socket =
+            bind_drain_socket(0, 1 << 20, Duration::from_millis(50), true).expect("socket");
         let port = socket.local_addr().expect("addr").port();
         let counters = Arc::new(DrainCounters::default());
         let stop = Arc::new(AtomicBool::new(false));

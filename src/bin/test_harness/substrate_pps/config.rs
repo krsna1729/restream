@@ -171,16 +171,30 @@ pub(crate) fn parse_config() -> Result<SubstrateConfig, String> {
             ));
         }
     }
-    if let Ok(receiver) = std::env::var("WI3_RECEIVER_CPUS")
-        && !receiver.trim().is_empty()
-    {
-        let receiver_set = parse_cpu_list(receiver.trim())?;
+    let receiver_cpus = std::env::var("WI3_RECEIVER_CPUS")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    // All three placements must be pairwise disjoint: sender, harness/control and
+    // the receiver (plus its RPS processing).
+    if let Some(receiver) = &receiver_cpus {
+        let receiver_set = parse_cpu_list(receiver)?;
         let overlap: Vec<usize> = sender_set.intersection(&receiver_set).copied().collect();
         if !overlap.is_empty() {
             return Err(format!(
                 "receiver CPUs {receiver:?} overlap the sender CPUs {sender_cpus:?} on {overlap:?}: \
                  peer receive processing must stay off the measured core"
             ));
+        }
+        if let Some(mask) = &harness_cpus {
+            let harness_set = parse_cpu_list(mask)?;
+            let overlap: Vec<usize> = harness_set.intersection(&receiver_set).copied().collect();
+            if !overlap.is_empty() {
+                return Err(format!(
+                    "harness CPUs {mask:?} overlap the receiver CPUs {receiver:?} on {overlap:?}: \
+                     control work must not share the receiver's cores"
+                ));
+            }
         }
     }
     let payload_bytes = env_usize("SUBSTRATE_PAYLOAD_BYTES", 1316);

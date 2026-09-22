@@ -608,3 +608,37 @@ Still open before A -> B attribution is published: allocation counts and bytes p
 datagram for A and B, the product-paced regime rows, and the Stage B implementation
 behind a harness-only `bench-internals` feature.
 
+### WI3.6 fence corrections + drain telemetry, and an unverified drain revision (2026-09-22)
+
+Fence corrections (landed and verified live):
+
+- Settlement succeeds only on `observed == expected`; **overshoot is contamination**
+  (`Settlement::Overshoot`), and a warmup boundary that did not settle aborts the run
+  before the rated window — observed live: a warmup boundary reported
+  `{"field":"udpRcvbufErrors","outcome":"loss"}` and the harness refused to start the
+  window.
+- `softnet.flowLimit` now gates settlement alongside `softnet.dropped`; `timeSqueeze`
+  and `receivedRps` remain diagnostics.
+- All three placements must be pairwise disjoint: sender, harness/control and
+  receiver (plus its RPS work) are parsed as CPU sets and intersected.
+- Artifacts carry a `lane` block (environment provenance) **and** a `laneObserved`
+  block with the effective values actually used — e.g. `deliveryToleranceEffective: 0.0`
+  when the variable was never exported, plus the observed sender/harness/receiver/RPS
+  masks.
+
+Drain telemetry (landed): per-thread counters in `/state` plus granted `SO_RCVBUF`
+per socket. The telemetry immediately exposed a real apparatus defect: with
+per-socket `SO_REUSEPORT` and ten destination flows the hash sent **all** traffic to
+one socket (`perThread` 0/0/0/888 917), so the receiver was effectively
+single-threaded.
+
+Drain revision **not yet verified**: replacing per-socket reuseport with one shared
+socket across threads balanced the load (658k/727k/668k/708k per thread) but measured
+*slower* — 123 124 pps/core and healthy, versus ~175 000 pps/core for the reuseport
+configuration. Reverting to per-socket reuseport restored the code path that produced
+the nine clean rows, but the first verification run at this revision was
+`unclassified` (59 266 receiver rcvbuf drops at 171 967 pps/core, settlement `loss`),
+so **a lossless saturation lane is not currently re-established** and no Stage-A/B row
+may be trusted until it is. Either the drops are host noise (repeat runs decide) or
+this revision regressed the drain; if they persist, revert the drain to `30bcbbc9`.
+

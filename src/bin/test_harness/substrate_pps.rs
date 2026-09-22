@@ -105,21 +105,25 @@ async fn settle_receiver(
                 });
             }
         }
-        if let (Some(before), Some(after)) = (
-            before
-                .get("softnet")
-                .and_then(|softnet| softnet["dropped"].as_u64()),
-            state
-                .get("softnet")
-                .and_then(|softnet| softnet["dropped"].as_u64()),
-        ) && after > before
-        {
-            return Ok(Settlement::Loss {
-                field: "softnet.dropped".to_string(),
-                before,
-                after,
-                polls,
-            });
+        // Both softnet loss columns gate settlement; `timeSqueeze` and
+        // `receivedRps` stay diagnostics.
+        for field in ["dropped", "flowLimit"] {
+            if let (Some(before), Some(after)) = (
+                before
+                    .get("softnet")
+                    .and_then(|softnet| softnet[field].as_u64()),
+                state
+                    .get("softnet")
+                    .and_then(|softnet| softnet[field].as_u64()),
+            ) && after > before
+            {
+                return Ok(Settlement::Loss {
+                    field: format!("softnet.{field}"),
+                    before,
+                    after,
+                    polls,
+                });
+            }
         }
         let observed = counter(&state, "datagrams")
             .zip(counter(before, "datagrams"))
@@ -213,7 +217,7 @@ fn lane_configuration() -> Value {
         "netdevMaxBacklogOriginal": env("WI3_NETDEV_MAX_BACKLOG_ORIGINAL"),
         "netdevMaxBacklogRequested": env("WI3_NETDEV_MAX_BACKLOG_REQUESTED"),
         "netdevMaxBacklogObserved": env("WI3_NETDEV_MAX_BACKLOG_OBSERVED"),
-        "deliveryTolerance": env("SUBSTRATE_DELIVERY_TOLERANCE"),
+        "deliveryToleranceRequested": env("SUBSTRATE_DELIVERY_TOLERANCE"),
         "txNetdev": env("SUBSTRATE_TX_NETDEV"),
     })
 }
@@ -563,6 +567,18 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
         .unwrap_or(false);
 
     let sender_mask = report.observed_mask;
+    // Effective values the program actually used, alongside the environment
+    // provenance: an unset tolerance means 0, not "unknown".
+    let observed_lane = json!({
+        "deliveryToleranceEffective": tolerance,
+        "senderCpusObserved": sender_mask,
+        "harnessCpusObserved": cpus_allowed_list(),
+        "receiverCpusObserved": receiver
+            .as_ref()
+            .and_then(|receiver| receiver["cpusAllowedList"].clone().into()),
+        "rpsCpusObserved": std::env::var("WI3_RPS_CPUS_OBSERVED").ok(),
+        "settlementWarmup": settlement_json(&warm_settlement),
+    });
     let verdict = match (&outcome, &receiver, tx_netdev.as_deref()) {
         (Err(_), _, _) => "failed",
         (Ok(()), None, Some(_)) if tx_reconciled => "healthy",
@@ -627,6 +643,7 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
             "payloadGbitPerSec": payload_gbit / window_secs.max(1e-9),
             "payloadGbitPerCpuSec": payload_gbit / cpu_secs.max(1e-9),
         },
+        "laneObserved": observed_lane,
         "receiver": receiver,
         "settlement": json!({
             "warmup": settlement_json(&warm_settlement),

@@ -1445,8 +1445,19 @@ C. full plaintext SRT Owner            (real SRT peer: ACK/NAK/timers)
 D. full Restream SRT egress            (media pipeline included)
 ```
 
-Stage B is precisely: **production `TxEngine`/`Owner::service` execution path with
-benchmark-only pre-materialized injection**. The upstream helpers it needs
+Stage B measures the **production `TxEngine`/`Owner::service` execution path with
+benchmark-only pre-materialized injection**. Naming caution recorded so the
+attribution stays honest: `bench_push_pending` stores a `Vec<u8>` in the caller
+pending queue and `Owner::service` drains that legacy path by **copying the
+1316-byte packet into the reserved TxPool slot**, whereas production Stage C
+materializes directly into the final slot. A -> B is therefore the transport/Owner
+execution increment *including* that compatibility copy, and B -> C is not purely
+"protocol CPU" (C removes the copy and adds real protocol work). Bound the copy with
+a separate fixed 1316-byte `memcpy` control in the instrumentation run — report it,
+never subtract it. Report three CPU scopes with coarse batch-scoped
+`CLOCK_THREAD_CPUTIME_ID`: injection CPU, Owner-drive CPU and inclusive sender-thread
+CPU, reconciling injection + drive against the inclusive figure, and never letting
+injection CPU enter the Owner denominator. The upstream helpers it needs
 (`with_caller`, `bench_caller_table_mut`, `bench_push_pending`) are all
 `bench-internals` APIs, and `with_caller` explicitly bypasses the production
 `Owner::connect` checks, so it must not be called "the production attach path" —
