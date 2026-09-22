@@ -347,6 +347,7 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
     let sender_tid = handles.tid.load(Ordering::Relaxed);
     let warm_completed = handles.completed();
     let warm_cpu = handles.cpu_sample();
+    let baseline_cpu = handles.cpu_scopes();
     // Warmup boundary: the receiver must account for everything the sender
     // completed before the window baseline is taken.
     let warm_settlement = match (&config.receiver_state, &receiver_before_all) {
@@ -436,6 +437,7 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
     let report = sender
         .join()
         .map_err(|_| "substrate sender thread panicked".to_string())?;
+    let mut totals = report.take_owner_totals();
     let outcome = report.outcome;
 
     let measured = completed.saturating_sub(warm_completed);
@@ -662,9 +664,10 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
                 }
             },
             "stageBCpu": json!({
-                "injectionCpuSecs": handles.counters.injection_cpu_micros.load(Ordering::Relaxed) as f64 / 1e6,
-                "ownerDriveCpuSecs": handles.counters.owner_drive_cpu_micros.load(Ordering::Relaxed) as f64 / 1e6,
+                "injectionCpuSecs": (handles.counters.injection_cpu_micros.load(Ordering::Relaxed).saturating_sub(baseline_cpu.injection) as f64) / 1e6,
+                "ownerDriveCpuSecs": (handles.counters.owner_drive_cpu_micros.load(Ordering::Relaxed).saturating_sub(baseline_cpu.drive) as f64) / 1e6,
             }),
+            "stageBTotals": totals.take().map(|totals| totals.as_json()).unwrap_or(Value::Null),
             "sqesPerBatch": (handles.counters.submitted.load(Ordering::Relaxed) as f64)
                 / (handles.counters.batches.load(Ordering::Relaxed).max(1) as f64),
         },

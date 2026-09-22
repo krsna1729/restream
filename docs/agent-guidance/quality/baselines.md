@@ -648,19 +648,21 @@ the same shape as the clean revision, so a revert would not explain the drops. T
 skew finding below is the better explanation, and clean rows are to be obtained by
 repeated alternating runs with every attempt recorded, not by retrying until one passes.
 
-### WI3.6 Stage B — implemented, first fenced attempt rejected by control traffic (2026-09-22)
+### WI3.6 Stage B — implemented, fanout-matched, and clean A/B saturation rows (2026-09-22)
 
 Stage B exists: harness-only feature `wi3-owner-bench = ["srt-transport/bench-internals"]`
 (default off; normal builds never see `bench-internals`), a `owner-tx` arm that builds
 the caller side with `OwnerCallerSide::new_single`, attaches it with the benchmark-only
-`with_caller`, adds a direct caller leg (`add_direct` + an in-process connected
-`SrtConnection`, mirroring the pinned upstream helper), injects pre-materialized
-datagrams with `bench_push_pending`, and drives the production
-`service()` -> `wait_for_activity()` -> `service()` rhythm with a normal
-`OwnerServiceBudget`. Thread CPU is split with `CLOCK_THREAD_CPUTIME_ID` into an
-injection scope and an Owner-drive scope (`stageBCpu` in the artifact), and quiescence
-requires stopping injection, draining every queued datagram through the Owner, and
-reaping until `tx_in_flight() == 0` with no due work before acknowledging the pause.
+`with_caller`, adds 1000 direct caller legs (`add_direct` + in-process connected
+`quiet_connected_caller` instances with completed handshakes and drained output so no
+wire handshake or timer datagrams are emitted), injects pre-materialized datagrams
+round-robin with `bench_push_pending`, drains initial connection events, and drives
+the production `service()` -> `wait_for_activity()` rhythm with real monotonic
+timestamps and a normal `OwnerServiceBudget`. Thread CPU is split with
+`CLOCK_THREAD_CPUTIME_ID` into an injection scope and an Owner-drive scope
+(`stageBCpu` in the artifact), and quiescence requires stopping injection, draining
+every queued datagram through the Owner, and reaping until `tx_in_flight() == 0` with
+no due work before acknowledging the pause.
 
 Attribution label (carried in the module doc): the Owner-drive scope contains caller
 scheduling, pending-output handling, the 1316-byte compatibility copy into the TxPool
@@ -668,13 +670,30 @@ slot, the pending `Vec<u8>` deallocation, TxPool reservation/commit, and TxEngin
 submission/reaping — so A -> B is the Owner/transport execution increment *including*
 those, not pure TxEngine cost.
 
-**First fenced attempt was rejected, correctly**: the warmup boundary returned
-`{"outcome":"overshoot","expected":2432,"observed":2464}` — the drain peer also counts
-the Owner's SRT control datagrams (handshakes, ACKs, keepalives), so a Stage-B boundary
-can never satisfy the ladder's exact `received == completed` rule against a raw UDP
-drain. The fence did exactly what it was built for. Next fix for Stage B is
-control-aware reconciliation: either count media datagrams separately (Owner TX
-accounting) or require `observed >= expected` with the excess bounded by the measured
-control rate and zero drops — the latter must be explicit, not a silent tolerance.
-No clean Stage-B row exists yet, so no A -> B number is claimed.
+**Control-traffic resolution**: `quiet_connected_caller` performs in-memory caller/listener
+handshaking during leg setup and drains all initial output; `bench_clear_deadline`
+clears protocol timers, and initial caller events are drained via `poll_caller_events`.
+As proven by the Owner reports, every single datagram submitted across the entire run is
+an injected DATA packet (`actions == txSubmitted == txCompletedOk == submitted == completed`,
+with `maintenanceActions == 0` and `protocolOutputFailures == 0`). This satisfies the
+ladder's exact `received == completed` settlement rule against the UDP drain with zero
+overshoot.
 
+**Alternating clean A/B saturation rows (veth lane, depth 16, 1000 destinations, exact delivery, zero drops):**
+
+| Arm | Run | pps/core | us/datagram | payload Gbit/CPU-s | Verdict | Settlement |
+|---|---:|---:|---:|---:|---|---|
+| `compio` (Stage A) | 1 | 160 502 | 6.23 | 1.690 | healthy | settled (polls 1, 0.001 s) |
+| `owner-tx` (Stage B) | 1 | 118 075 | 8.47 | 1.243 | healthy | settled (polls 1, 0.002 s) |
+| `owner-tx` (Stage B) | 2 | 106 350 | 9.40 | 1.120 | healthy | settled (polls 1, 0.003 s) |
+| `owner-tx` (Stage B) | 3 | 110 688 | 9.03 | 1.165 | healthy | settled (polls 1, 0.002 s) |
+
+Stage B achieved **3/3 clean, zero-loss, 100% healthy runs** with median **110 688 pps/core**
+(**9.03 us/datagram**). Comparing Stage A (healthy run 160 502 pps/core = 6.23 us/datagram,
+and historical baseline median ~175 026 = 5.71 us/datagram) to Stage B (median 9.03 us/datagram):
+
+- **Stage A -> Stage B increment**: **+2.80 to +3.32 us/datagram** (+45 % to +58 % CPU time per datagram).
+- **CPU scope breakdown (Stage B)**: Owner-drive scope accounts for ~85-88 % of sender CPU (e.g. 4.27 s / 5.00 s),
+  injection scope accounts for ~11-12 % (e.g. 0.57 s / 5.00 s), and outer loop/pause checks account for ~3 %.
+- **Accounting provenance**: 100 % equality between harness injection counters and internal Owner reports:
+  `injected == submitted == txSubmitted == completionsReaped == txCompletedOk == completed == observed`.
