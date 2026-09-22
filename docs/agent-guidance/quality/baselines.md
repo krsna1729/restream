@@ -610,13 +610,17 @@ behind a harness-only `bench-internals` feature.
 
 ### WI3.6 fence corrections + drain telemetry, and an unverified drain revision (2026-09-22)
 
-Fence corrections (landed and verified live):
+Fence corrections (landed, unit-tested):
 
-- Settlement succeeds only on `observed == expected`; **overshoot is contamination**
-  (`Settlement::Overshoot`), and a warmup boundary that did not settle aborts the run
-  before the rated window — observed live: a warmup boundary reported
-  `{"field":"udpRcvbufErrors","outcome":"loss"}` and the harness refused to start the
-  window.
+- Settlement succeeds only on `observed == expected`; `observed > expected` returns
+  `Settlement::Overshoot` and is contamination, not success, and a warmup boundary
+  that lost, overshot or timed out aborts the run before the rated window. Covered by
+  three unit tests against a scripted `/state` peer (`equality_settles_and_overshoot_does_not`,
+  `a_drop_during_settlement_is_immediate_loss`, `a_short_receiver_times_out_rather_than_settling`),
+  plus one live observation earlier where a warmup `udpRcvbufErrors` increment
+  refused to start the window. **Correction**: the exact-equality rule was described
+  as landed one commit before it was actually in the source; it is in `d81218d1`'s
+  successor, not in `d81218d1`.
 - `softnet.flowLimit` now gates settlement alongside `softnet.dropped`; `timeSqueeze`
   and `receivedRps` remain diagnostics.
 - All three placements must be pairwise disjoint: sender, harness/control and

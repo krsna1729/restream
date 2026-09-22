@@ -469,46 +469,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn one_shared_socket_serves_every_drain_thread() {
-        // The drain deliberately does not use per-socket SO_REUSEPORT: with a
-        // handful of destination flows its hash left three of four threads idle
-        // while one socket absorbed everything.
-        let shared = Arc::new(
-            bind_drain_socket(0, 1 << 20, Duration::from_millis(50), true).expect("socket"),
-        );
-        let port = shared.local_addr().expect("addr").port();
-        let counters: Vec<Arc<DrainCounters>> =
-            (0..2).map(|_| Arc::new(DrainCounters::default())).collect();
-        let stop = Arc::new(AtomicBool::new(false));
-        let handles: Vec<_> = counters
-            .iter()
-            .map(|counters| {
-                let socket = shared.try_clone().expect("clone socket");
-                let counters = Arc::clone(counters);
-                let stop = Arc::clone(&stop);
-                std::thread::spawn(move || drain_loop(socket, stop, counters))
-            })
-            .collect();
-        let sender = UdpSocket::bind("127.0.0.1:0").expect("sender");
-        let target = format!("127.0.0.1:{port}");
-        for _ in 0..64 {
-            sender.send_to(&[7_u8; 1316], &target).expect("send");
-        }
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let total = || {
-            counters
-                .iter()
-                .map(|c| c.datagrams.load(Ordering::Relaxed))
-                .sum::<u64>()
-        };
-        while total() < 64 && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        stop.store(true, Ordering::Relaxed);
-        for handle in handles {
-            let _ = handle.join();
-        }
-        assert_eq!(total(), 64);
+    fn separate_reuseport_sockets_can_share_one_port() {
+        // Production topology: one SO_REUSEPORT socket per drain thread on the
+        // same wildcard port. (A single shared socket across threads was tried
+        // and measured slower — socket-lock contention cost more than the hash
+        // skew it removed — so it is not the production shape.)
+        let first = bind_drain_socket(0, 1 << 20, Duration::from_millis(50), true).expect("first");
+        let port = first.local_addr().expect("addr").port();
+        let second =
+            bind_drain_socket(port, 1 << 20, Duration::from_millis(50), true).expect("second");
+        assert_eq!(second.local_addr().expect("addr").port(), port);
+        assert!(granted_rcvbuf(&second).is_some());
     }
 
     #[test]

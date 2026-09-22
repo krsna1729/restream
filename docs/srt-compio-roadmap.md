@@ -1452,9 +1452,14 @@ pending queue and `Owner::service` drains that legacy path by **copying the
 1316-byte packet into the reserved TxPool slot**, whereas production Stage C
 materializes directly into the final slot. A -> B is therefore the transport/Owner
 execution increment *including* that compatibility copy, and B -> C is not purely
-"protocol CPU" (C removes the copy and adds real protocol work). Bound the copy with
-a separate fixed 1316-byte `memcpy` control in the instrumentation run — report it,
-never subtract it. Report three CPU scopes with coarse batch-scoped
+"protocol CPU" (C removes the copy and adds real protocol work). The compatibility
+path also **drops the pending `Vec<u8>` inside `Owner::service()`**, so the
+Owner-drive scope contains scheduler/pending handling + the 1316-byte copy + that
+deallocation + TxPool reservation/commit + TxEngine submission/reaping; the
+injection-side allocation sits outside the denominator but its deallocation does not.
+Bound both with controls — a fixed 1316-byte `memcpy` and the destruction of
+pre-created 1316-byte `Vec`s — and in the instrumented allocator count deallocations
+and deallocation bytes as well as allocations. Report all of it; subtract none of it. Report three CPU scopes with coarse batch-scoped
 `CLOCK_THREAD_CPUTIME_ID`: injection CPU, Owner-drive CPU and inclusive sender-thread
 CPU, reconciling injection + drive against the inclusive figure, and never letting
 injection CPU enter the Owner denominator. The upstream helpers it needs

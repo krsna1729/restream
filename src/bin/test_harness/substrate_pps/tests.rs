@@ -106,3 +106,125 @@ async fn fetch_peer_state_rejects_non_http_urls() {
     let error = fetch_peer_state("10.53.0.2:9997/state").await.unwrap_err();
     assert!(error.contains("http://"), "{error}");
 }
+
+#[cfg(test)]
+mod settlement_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::*;
+    use crate::substrate_pps::Settlement;
+
+    /// A peer whose `/state` serves whatever the test sets, so the settlement
+    /// rule is exercised without a live drain.
+    async fn peer_with(datagrams: Arc<AtomicU64>, rcvbuf_errors: Arc<AtomicU64>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    continue;
+                };
+                let datagrams = Arc::clone(&datagrams);
+                let rcvbuf_errors = Arc::clone(&rcvbuf_errors);
+                tokio::spawn(async move {
+                    let mut request = [0_u8; 512];
+                    let _ = socket.read(&mut request).await;
+                    let body = json!({
+                        "runId": "peer-1",
+                        "datagrams": datagrams.load(Ordering::Relaxed),
+                        "bytes": 0,
+                        "receiveErrors": 0,
+                        "udpRcvbufErrors": rcvbuf_errors.load(Ordering::Relaxed),
+                        "udpInErrors": 0,
+                        "nicRxDropped": 0,
+                        "softnet": {"dropped": 0, "flowLimit": 0},
+                    })
+                    .to_string();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}/state")
+    }
+
+    fn before() -> serde_json::Value {
+        json!({
+            "runId": "peer-1", "datagrams": 100, "bytes": 0, "receiveErrors": 0,
+            "udpRcvbufErrors": 0, "udpInErrors": 0, "nicRxDropped": 0,
+            "softnet": {"dropped": 0, "flowLimit": 0},
+        })
+    }
+
+    #[tokio::test]
+    async fn equality_settles_and_overshoot_does_not() {
+        let datagrams = Arc::new(AtomicU64::new(110));
+        let errors = Arc::new(AtomicU64::new(0));
+        let url = peer_with(Arc::clone(&datagrams), Arc::clone(&errors)).await;
+
+        let settled = settle_receiver(&url, &before(), 10, Duration::from_millis(500))
+            .await
+            .expect("settle");
+        assert!(matches!(settled, Settlement::Settled { .. }), "{settled:?}");
+
+        // One datagram more than the sender completed is contamination, not a
+        // success: `observed > expected` must never read as settled.
+        datagrams.store(120, Ordering::Relaxed);
+        let overshoot = settle_receiver(&url, &before(), 10, Duration::from_millis(500))
+            .await
+            .expect("settle");
+        assert!(
+            matches!(
+                overshoot,
+                Settlement::Overshoot {
+                    expected: 10,
+                    observed: 20,
+                    ..
+                }
+            ),
+            "{overshoot:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_drop_during_settlement_is_immediate_loss() {
+        let datagrams = Arc::new(AtomicU64::new(150));
+        let errors = Arc::new(AtomicU64::new(3));
+        let url = peer_with(Arc::clone(&datagrams), Arc::clone(&errors)).await;
+        let outcome = settle_receiver(&url, &before(), 10, Duration::from_millis(500))
+            .await
+            .expect("settle");
+        match outcome {
+            Settlement::Loss { field, .. } => assert_eq!(field, "udpRcvbufErrors"),
+            other => panic!("expected loss, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_short_receiver_times_out_rather_than_settling() {
+        let datagrams = Arc::new(AtomicU64::new(105));
+        let errors = Arc::new(AtomicU64::new(0));
+        let url = peer_with(Arc::clone(&datagrams), Arc::clone(&errors)).await;
+        let outcome = settle_receiver(&url, &before(), 10, Duration::from_millis(60))
+            .await
+            .expect("settle");
+        match outcome {
+            Settlement::Timeout {
+                expected, observed, ..
+            } => {
+                assert_eq!(expected, 10);
+                assert_eq!(observed, 5);
+            }
+            other => panic!("expected timeout, got {other:?}"),
+        }
+    }
+}

@@ -56,10 +56,18 @@ const SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 /// its own count matches — otherwise a perfectly lossless run can read as short
 /// delivery purely because the RX path had not drained yet.
 #[derive(Debug)]
-enum Settlement {
+pub(crate) enum Settlement {
     Settled {
         polls: u32,
         secs: f64,
+    },
+    /// The receiver counted more datagrams than the sender completed: the
+    /// boundary is contaminated rather than settled, and `observed > expected`
+    /// must never be reported as success.
+    Overshoot {
+        expected: u64,
+        observed: u64,
+        polls: u32,
     },
     Loss {
         field: String,
@@ -74,7 +82,7 @@ enum Settlement {
     },
 }
 
-async fn settle_receiver(
+pub(crate) async fn settle_receiver(
     url: &str,
     before: &Value,
     expected: u64,
@@ -129,10 +137,17 @@ async fn settle_receiver(
             .zip(counter(before, "datagrams"))
             .map(|(after, before)| after.saturating_sub(before))
             .unwrap_or(0);
-        if observed >= expected {
+        if observed == expected {
             return Ok(Settlement::Settled {
                 polls,
                 secs: started.elapsed().as_secs_f64(),
+            });
+        }
+        if observed > expected {
+            return Ok(Settlement::Overshoot {
+                expected,
+                observed,
+                polls,
             });
         }
         if Instant::now() > deadline {
@@ -228,6 +243,16 @@ fn settlement_json(settlement: &Option<Settlement>) -> Value {
         Some(Settlement::Settled { polls, secs }) => {
             json!({"outcome": "settled", "polls": polls, "secs": secs})
         }
+        Some(Settlement::Overshoot {
+            expected,
+            observed,
+            polls,
+        }) => json!({
+            "outcome": "overshoot",
+            "expected": expected,
+            "observed": observed,
+            "polls": polls,
+        }),
         Some(Settlement::Loss {
             field,
             before,
@@ -330,7 +355,12 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
     };
     // A warmup boundary that did not settle leaves warmup datagrams in the RX
     // path, which would contaminate the rated interval: stop before the window.
-    if let Some(Settlement::Timeout { .. } | Settlement::Loss { .. }) = warm_settlement {
+    // A warmup boundary that lost or overshot datagrams is not a valid baseline:
+    // stop before the rated window rather than measuring on top of it.
+    if let Some(
+        Settlement::Timeout { .. } | Settlement::Loss { .. } | Settlement::Overshoot { .. },
+    ) = warm_settlement
+    {
         handles.stop.store(true, Ordering::Relaxed);
         resume_sender(&handles).await?;
         sender
