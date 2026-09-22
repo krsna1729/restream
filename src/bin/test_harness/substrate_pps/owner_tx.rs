@@ -31,7 +31,7 @@ use srt_proto::{ConnectionOptions, ConnectionOutput, SrtConnection, Timestamp};
 use srt_transport::advanced::caller::CallerLeg;
 use srt_transport::compio::{Owner, OwnerCallerSide, OwnerServiceBudget};
 
-use super::config::{SEND_BUFFER_BYTES, SubstrateConfig, set_send_buffer};
+use super::config::{BurstPacer, SEND_BUFFER_BYTES, SubstrateConfig, set_send_buffer};
 use super::sender::SenderHandles;
 use super::sender::ServiceTotals;
 
@@ -158,6 +158,8 @@ pub(crate) fn run_owner_tx(
         let mut totals = ServiceTotals::default();
         let mut injected = 0_u64;
         let mut round_robin = 0_usize;
+        let mut pacer = config.pace_us.map(BurstPacer::new);
+        let mut reset_pacer = false;
         // The pool hosts exactly one caller with exactly one in-flight service
         // operation. A second concurrent visitor is a bug, not backpressure: prove
         // it cannot happen by panicking on entry instead of serializing on a lock.
@@ -175,6 +177,13 @@ pub(crate) fn run_owner_tx(
                     .counters
                     .completed
                     .store(completed, Ordering::Relaxed);
+                // The first pause is the warmup/window fence. Keep cumulative
+                // counters for validity, but reset the peak fields so the
+                // final report's service totals describe the rated window.
+                if handles.owner_window_baseline_is_empty() {
+                    handles.capture_owner_window_baseline(&totals);
+                    totals.reset_window_peaks();
+                }
                 // Validity is a proven equality, not an assumption: quiescence
                 // must leave every injected datagram submitted and completed.
                 if submitted != injected || completed != injected {
@@ -184,26 +193,36 @@ pub(crate) fn run_owner_tx(
                     ));
                 }
                 handles.acknowledge_pause();
+                reset_pacer = true;
                 continue;
             }
+            if reset_pacer {
+                pacer = config.pace_us.map(BurstPacer::new);
+                reset_pacer = false;
+            }
 
-            // Injection scope: queue up to free capacity in the pool,
-            // distributed round-robin across the legs so the fanout matches Stage A.
-            let free = owner.tx_pool().free_count();
-            if free > 0 {
-                let to_inject = free.min(batch);
+            if let Some(pacer) = pacer.as_mut() {
+                let _late_ticks = pacer.wait_next().await;
+                if handles.pause_requested() {
+                    continue;
+                }
+                // A product tick is one fanout burst, offered into the
+                // protocol's own queue exactly as the product does it:
+                // `bench_push_pending` always accepts and marks the caller
+                // ready, and the Owner materialises whatever the final TxPool
+                // can hold. Waiting here for free slots instead would add a
+                // second `service()` visit per tick that the production path
+                // does not pay, and would price the harness rather than the
+                // Owner path.
                 let inject_start = thread_cpu_secs();
-                for _ in 0..to_inject {
-                    let position = round_robin % leg_ids.len();
-                    let id = leg_ids[position];
-                    round_robin += 1;
+                for (position, id) in leg_ids.iter().enumerate() {
                     owner
                         .bench_caller_table_mut()
                         .ok_or("bench caller table unavailable")?
                         .bench_push_pending(
-                            id,
+                            *id,
                             config.destinations[position],
-                            prebuilt[round_robin % batch].clone(),
+                            prebuilt[position % batch].clone(),
                         );
                     injected += 1;
                 }
@@ -215,6 +234,37 @@ pub(crate) fn run_owner_tx(
                     ((thread_cpu_secs() - inject_start) * 1e6) as u64,
                     Ordering::Relaxed,
                 );
+            } else {
+                // Saturation scope: queue up to free capacity in the pool,
+                // distributed round-robin across the legs so the fanout matches
+                // Stage A.
+                let free = owner.tx_pool().free_count();
+                if free > 0 {
+                    let to_inject = free.min(batch);
+                    let inject_start = thread_cpu_secs();
+                    for _ in 0..to_inject {
+                        let position = round_robin % leg_ids.len();
+                        let id = leg_ids[position];
+                        round_robin += 1;
+                        owner
+                            .bench_caller_table_mut()
+                            .ok_or("bench caller table unavailable")?
+                            .bench_push_pending(
+                                id,
+                                config.destinations[position],
+                                prebuilt[round_robin % batch].clone(),
+                            );
+                        injected += 1;
+                    }
+                    handles
+                        .counters
+                        .submitted
+                        .store(injected, Ordering::Relaxed);
+                    handles.counters.injection_cpu_micros.fetch_add(
+                        ((thread_cpu_secs() - inject_start) * 1e6) as u64,
+                        Ordering::Relaxed,
+                    );
+                }
             }
 
             assert!(

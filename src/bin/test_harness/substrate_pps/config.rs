@@ -94,6 +94,7 @@ pub(crate) struct SubstrateConfig {
     pub(crate) queue_depth: usize,
     pub(crate) warmup: Duration,
     pub(crate) duration: Duration,
+    pub(crate) pace_us: Option<u64>,
     pub(crate) report_secs: u64,
     pub(crate) receiver_state: Option<String>,
     pub(crate) run: String,
@@ -216,6 +217,19 @@ pub(crate) fn parse_config() -> Result<SubstrateConfig, String> {
     let queue_depth = env_usize("SUBSTRATE_QUEUE_DEPTH", 64).max(1);
     let warmup = Duration::from_secs(env_secs("SUBSTRATE_WARMUP_SECS", 3).max(1));
     let duration = Duration::from_secs(env_secs("SUBSTRATE_DURATION_SECS", 20).max(5));
+    let pace_us = match std::env::var("SUBSTRATE_PACE_US") {
+        Ok(value) => {
+            let value = value
+                .trim()
+                .parse::<u64>()
+                .map_err(|error| format!("SUBSTRATE_PACE_US must be an integer: {error}"))?;
+            if value == 0 {
+                return Err("SUBSTRATE_PACE_US must be greater than zero".to_string());
+            }
+            Some(value)
+        }
+        Err(_) => None,
+    };
     let report_secs = env_secs("SUBSTRATE_REPORT_SECS", 5).max(1);
     let receiver_state = std::env::var("SUBSTRATE_RECEIVER_STATE")
         .ok()
@@ -241,10 +255,48 @@ pub(crate) fn parse_config() -> Result<SubstrateConfig, String> {
         queue_depth,
         warmup,
         duration,
+        pace_us,
         report_secs,
         receiver_state,
         run: run_id(),
     })
+}
+
+/// Wall-clock source schedule for product-paced A/B controls.
+///
+/// One call represents one source tick. The schedule remains anchored to its
+/// epoch: a late sender catches up with the next burst instead of silently
+/// discarding source ticks or changing the offered workload.
+pub(crate) struct BurstPacer {
+    interval: Duration,
+    interval_us: u64,
+    next_deadline: std::time::Instant,
+}
+
+impl BurstPacer {
+    pub(crate) fn new(interval_us: u64) -> Self {
+        let interval_us = interval_us.max(1);
+        Self {
+            interval: Duration::from_micros(interval_us),
+            interval_us,
+            next_deadline: std::time::Instant::now() + Duration::from_micros(interval_us),
+        }
+    }
+
+    pub(crate) async fn wait_next(&mut self) -> u64 {
+        let now = std::time::Instant::now();
+        if self.next_deadline > now {
+            compio::time::sleep(self.next_deadline - now).await;
+        }
+        let now = std::time::Instant::now();
+        let late_ticks = now
+            .saturating_duration_since(self.next_deadline)
+            .as_micros()
+            .min(u64::MAX as u128) as u64
+            / self.interval_us;
+        self.next_deadline += self.interval;
+        late_ticks
+    }
 }
 
 /// One preconstructed payload for every datagram: the kernel copies on send, so

@@ -235,10 +235,10 @@ fn lane_configuration() -> Value {
         "netdevMaxBacklogRequested": env("WI3_NETDEV_MAX_BACKLOG_REQUESTED"),
         "netdevMaxBacklogObserved": env("WI3_NETDEV_MAX_BACKLOG_OBSERVED"),
         "deliveryToleranceRequested": env("SUBSTRATE_DELIVERY_TOLERANCE"),
+        "sourcePaceUs": env("SUBSTRATE_PACE_US"),
         "txNetdev": env("SUBSTRATE_TX_NETDEV"),
     })
 }
-
 fn settlement_json(settlement: &Option<Settlement>) -> Value {
     match settlement {
         None => Value::Null,
@@ -662,6 +662,8 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
             "reapMode": config.reap_mode.as_str(),
             "warmupSecs": config.warmup.as_secs(),
             "durationSecs": config.duration.as_secs(),
+            "sourcePaceUs": config.pace_us,
+            "sourceBurstDatagrams": config.pace_us.map(|_| config.destinations.len()),
             "deliveryTolerance": tolerance,
             "senderCpusRequested": config.sender_cpus,
             "harnessCpusRequested": config.harness_cpus,
@@ -682,6 +684,12 @@ pub(crate) async fn substrate_pps_mode() -> Result<Value, String> {
             "errors": handles.counters.errors.load(Ordering::Relaxed),
             "batches": handles.counters.batches.load(Ordering::Relaxed),
             "maxInFlight": handles.counters.max_in_flight.load(Ordering::Relaxed),
+            "sourceBurstsInWindow": config
+                .pace_us
+                .map(|_| measured / config.destinations.len() as u64),
+            "partialSourceBurstDatagrams": config
+                .pace_us
+                .map(|_| measured % config.destinations.len() as u64),
             "ringEnters": match config.variant {
                 // Compio owns its ring internally; its submit count is not
                 // observable from the application side.

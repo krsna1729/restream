@@ -33,7 +33,7 @@ pub(crate) struct SenderCounters {
 /// only the `wi3-owner-bench` arm writes it, while every build reads it in the
 /// artifact path.
 #[allow(dead_code)]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct ServiceTotals {
     pub(crate) visits: u64,
     pub(crate) actions: u64,
@@ -48,18 +48,53 @@ pub(crate) struct ServiceTotals {
     pub(crate) protocol_output_failures: u64,
     pub(crate) budget_exhausted: u64,
     pub(crate) in_flight_hwm: u64,
-    pub(crate) tx_pool_free_min: u64,
+    pub(crate) tx_pool_free_min: Option<u64>,
 }
 
 #[allow(dead_code)]
 impl ServiceTotals {
     fn observe_in_flight(&mut self, in_flight: usize, pool_free: usize) {
         self.in_flight_hwm = self.in_flight_hwm.max(in_flight as u64);
-        self.tx_pool_free_min = if self.tx_pool_free_min == 0 {
-            pool_free as u64
-        } else {
-            self.tx_pool_free_min.min(pool_free as u64)
-        };
+        self.tx_pool_free_min = Some(
+            self.tx_pool_free_min
+                .map_or(pool_free as u64, |minimum| minimum.min(pool_free as u64)),
+        );
+    }
+
+    pub(crate) fn reset_window_peaks(&mut self) {
+        self.in_flight_hwm = 0;
+        self.tx_pool_free_min = None;
+    }
+
+    fn window_delta(&self, baseline: &Self) -> Self {
+        Self {
+            visits: self.visits.saturating_sub(baseline.visits),
+            actions: self.actions.saturating_sub(baseline.actions),
+            maintenance_actions: self
+                .maintenance_actions
+                .saturating_sub(baseline.maintenance_actions),
+            submitted: self.submitted.saturating_sub(baseline.submitted),
+            completed_ok: self.completed_ok.saturating_sub(baseline.completed_ok),
+            completions_reaped: self
+                .completions_reaped
+                .saturating_sub(baseline.completions_reaped),
+            short_sends: self.short_sends.saturating_sub(baseline.short_sends),
+            failed_sends: self.failed_sends.saturating_sub(baseline.failed_sends),
+            transient_failures: self
+                .transient_failures
+                .saturating_sub(baseline.transient_failures),
+            peer_local_failures: self
+                .peer_local_failures
+                .saturating_sub(baseline.peer_local_failures),
+            protocol_output_failures: self
+                .protocol_output_failures
+                .saturating_sub(baseline.protocol_output_failures),
+            budget_exhausted: self
+                .budget_exhausted
+                .saturating_sub(baseline.budget_exhausted),
+            in_flight_hwm: self.in_flight_hwm,
+            tx_pool_free_min: self.tx_pool_free_min,
+        }
     }
 
     pub(crate) fn absorb(
@@ -139,6 +174,9 @@ impl ServiceTotals {
 
 pub(crate) struct SenderHandles {
     pub(crate) tid: AtomicI32,
+    /// Stage B only: cumulative Owner totals at the warmup boundary. The
+    /// sender converts its final accumulation into rated-window deltas.
+    pub(crate) owner_window_baseline: std::sync::Mutex<Option<ServiceTotals>>,
     /// Stage B only: the finished Owner accumulation, attached to the report by
     /// `sender_thread` after the arm returns.
     pub(crate) finished_totals: std::sync::Mutex<Option<ServiceTotals>>,
@@ -165,6 +203,7 @@ impl SenderHandles {
     pub(crate) fn new() -> Self {
         Self {
             tid: AtomicI32::new(0),
+            owner_window_baseline: std::sync::Mutex::new(None),
             finished_totals: std::sync::Mutex::new(None),
             stop: Arc::new(AtomicBool::new(false)),
             pause: Arc::new(AtomicBool::new(false)),
@@ -177,6 +216,30 @@ impl SenderHandles {
             paused_involuntary: AtomicU64::new(0),
             counters: Arc::new(SenderCounters::default()),
         }
+    }
+
+    /// Stage B only: `wi3-owner-bench` arms take the warmup snapshot; every
+    /// other build has no writer, so this is dead code outside that feature.
+    #[allow(dead_code)]
+    pub(crate) fn capture_owner_window_baseline(&self, totals: &ServiceTotals) {
+        if let Ok(mut guard) = self.owner_window_baseline.lock() {
+            *guard = Some(totals.clone());
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn owner_window_baseline_is_empty(&self) -> bool {
+        self.owner_window_baseline
+            .lock()
+            .map(|guard| guard.is_none())
+            .unwrap_or(false)
+    }
+
+    fn take_owner_window_baseline(&self) -> Option<ServiceTotals> {
+        self.owner_window_baseline
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
     }
 
     pub(crate) fn completed(&self) -> u64 {
@@ -326,24 +389,73 @@ pub(crate) fn sender_thread(
         *guard = Some(err.clone());
     }
     handles.exited.store(true, Ordering::Release);
-    // report carries provenance rather than bookkeeping.
+    // Report only the rated Stage-B window. The arm keeps cumulative totals
+    // for the quiescence validity fence, then the sender applies the warmup
+    // snapshot here after the final drain has settled.
+    let baseline = handles.take_owner_window_baseline();
     let finished = handles
         .finished_totals
         .lock()
         .map(|mut guard| guard.take())
-        .unwrap_or(None);
+        .unwrap_or(None)
+        .map(|totals| {
+            baseline
+                .as_ref()
+                .map_or(totals.clone(), |baseline| totals.window_delta(baseline))
+        });
     SenderReport {
         observed_mask: thread_cpus_allowed_list(handles.tid.load(Ordering::Relaxed)),
         owner_totals: std::sync::Mutex::new(finished),
         outcome,
     }
 }
-
 impl SenderReport {
     pub(crate) fn take_owner_totals(&self) -> Option<ServiceTotals> {
         self.owner_totals
             .lock()
             .map(|mut guard| guard.take())
             .unwrap_or(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tx_pool_free_min_keeps_a_real_zero() {
+        let mut totals = ServiceTotals::default();
+        totals.observe_in_flight(0, 4);
+        totals.observe_in_flight(0, 0);
+        totals.observe_in_flight(0, 7);
+        assert_eq!(totals.tx_pool_free_min, Some(0));
+    }
+
+    #[test]
+    fn window_delta_subtracts_cumulative_counters() {
+        let baseline = ServiceTotals {
+            visits: 3,
+            actions: 5,
+            submitted: 7,
+            completed_ok: 6,
+            tx_pool_free_min: Some(4),
+            ..ServiceTotals::default()
+        };
+        let current = ServiceTotals {
+            visits: 11,
+            actions: 19,
+            submitted: 23,
+            completed_ok: 22,
+            in_flight_hwm: 8,
+            tx_pool_free_min: Some(0),
+            ..baseline.clone()
+        };
+        let window = current.window_delta(&baseline);
+        assert_eq!(window.visits, 8);
+        assert_eq!(window.actions, 14);
+        assert_eq!(window.submitted, 16);
+        assert_eq!(window.completed_ok, 16);
+        assert_eq!(window.in_flight_hwm, 8);
+        assert_eq!(window.tx_pool_free_min, Some(0));
     }
 }

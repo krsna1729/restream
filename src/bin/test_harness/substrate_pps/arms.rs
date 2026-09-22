@@ -42,6 +42,8 @@ pub(crate) fn run_compio(
 
         let mut in_flight: FuturesUnordered<SendFuture<'_>> = FuturesUnordered::new();
         let mut next = 0_usize;
+        let mut pacer = config.pace_us.map(BurstPacer::new);
+        let mut reset_pacer = false;
         while !handles.stop.load(Ordering::Relaxed) {
             if handles.pause_requested() {
                 // Quiesce: complete every already-submitted send, then snapshot.
@@ -53,13 +55,43 @@ pub(crate) fn run_compio(
                     }
                 }
                 handles.acknowledge_pause();
+                reset_pacer = true;
                 continue;
             }
-            while in_flight.len() < config.queue_depth {
-                let destination = config.destinations[next % config.destinations.len()];
-                next += 1;
-                handles.counters.submitted.fetch_add(1, Ordering::Relaxed);
-                in_flight.push(Box::pin(socket.send_to(payload.clone(), destination)));
+            if reset_pacer {
+                pacer = config.pace_us.map(BurstPacer::new);
+                reset_pacer = false;
+            }
+            if let Some(pacer) = pacer.as_mut() {
+                let _late_ticks = pacer.wait_next().await;
+                if handles.pause_requested() {
+                    continue;
+                }
+                for &destination in &config.destinations {
+                    while in_flight.len() >= config.queue_depth {
+                        match in_flight.next().await {
+                            Some(compio::BufResult(result, _)) => {
+                                handles.counters.completed.fetch_add(1, Ordering::Relaxed);
+                                if let Err(error) = result {
+                                    handles.counters.errors.fetch_add(1, Ordering::Relaxed);
+                                    return Err(format!("compio send_to: {error}"));
+                                }
+                            }
+                            None => {
+                                return Err("paced Compio queue ended unexpectedly".to_string());
+                            }
+                        }
+                    }
+                    handles.counters.submitted.fetch_add(1, Ordering::Relaxed);
+                    in_flight.push(Box::pin(socket.send_to(payload.clone(), destination)));
+                }
+            } else {
+                while in_flight.len() < config.queue_depth {
+                    let destination = config.destinations[next % config.destinations.len()];
+                    next += 1;
+                    handles.counters.submitted.fetch_add(1, Ordering::Relaxed);
+                    in_flight.push(Box::pin(socket.send_to(payload.clone(), destination)));
+                }
             }
             handles
                 .counters
@@ -104,6 +136,8 @@ pub(crate) fn run_compio_pipeline(
         // No type annotation and no boxing: the futures are homogeneous.
         let mut in_flight = FuturesUnordered::new();
         let mut next = 0_usize;
+        let mut pacer = config.pace_us.map(BurstPacer::new);
+        let mut reset_pacer = false;
         while !handles.stop.load(Ordering::Relaxed) {
             if handles.pause_requested() {
                 // Quiesce: complete every already-submitted send, then snapshot.
@@ -115,13 +149,45 @@ pub(crate) fn run_compio_pipeline(
                     }
                 }
                 handles.acknowledge_pause();
+                reset_pacer = true;
                 continue;
             }
-            while in_flight.len() < config.queue_depth {
-                let destination = config.destinations[next % config.destinations.len()];
-                next += 1;
-                handles.counters.submitted.fetch_add(1, Ordering::Relaxed);
-                in_flight.push(socket.send_to(payload.clone(), destination));
+            if reset_pacer {
+                pacer = config.pace_us.map(BurstPacer::new);
+                reset_pacer = false;
+            }
+            if let Some(pacer) = pacer.as_mut() {
+                let _late_ticks = pacer.wait_next().await;
+                if handles.pause_requested() {
+                    continue;
+                }
+                for &destination in &config.destinations {
+                    while in_flight.len() >= config.queue_depth {
+                        match in_flight.next().await {
+                            Some(compio::BufResult(result, _)) => {
+                                handles.counters.completed.fetch_add(1, Ordering::Relaxed);
+                                if let Err(error) = result {
+                                    handles.counters.errors.fetch_add(1, Ordering::Relaxed);
+                                    return Err(format!("compio send_to: {error}"));
+                                }
+                            }
+                            None => {
+                                return Err(
+                                    "paced Compio pipeline queue ended unexpectedly".to_string()
+                                );
+                            }
+                        }
+                    }
+                    handles.counters.submitted.fetch_add(1, Ordering::Relaxed);
+                    in_flight.push(socket.send_to(payload.clone(), destination));
+                }
+            } else {
+                while in_flight.len() < config.queue_depth {
+                    let destination = config.destinations[next % config.destinations.len()];
+                    next += 1;
+                    handles.counters.submitted.fetch_add(1, Ordering::Relaxed);
+                    in_flight.push(socket.send_to(payload.clone(), destination));
+                }
             }
             handles
                 .counters
