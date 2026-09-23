@@ -74,33 +74,32 @@ The current layering sequence and stop rules live in
 
 ## Runtime ownership
 
-Tokio tasks own Axum, reconciliation, application protocol state, native
-mux/demux work, and child-process pipe I/O. Native RTMP ingress/egress workers
-own their sockets and readiness rings. Work that can block independently
+Tokio runtimes own Axum, reconciliation, application protocol state, native
+mux/demux work, and child-process pipe I/O. Compio transport owners own RTMP
+TCP and SRT transport sockets/readiness. Work that can block independently
 of the async scheduler is isolated:
 
-- RTMP ingress workers own their TCP descriptors and bounded handoff buffers;
+- RTMP ingress uses one Compio acceptor thread/runtime for its listener and
+  accepted TCP sockets; a bounded 64 KiB duplex bridge feeds fixed
+  current-thread Tokio session workers. The acceptor and worker thread handles
+  are registered with engine shutdown; cancellation closes bridges and joins
+  those threads;
 - RTMP/RTMPS and SRT **egress** run on the egress fabric: a small
   CPU-derived pool of dedicated shard OS threads, output-count-scaled for
-  RTMP/RTMPS/sink/pipeline feeds while SRT retains the CPU-derived ceiling,
-  each multiplexing many outputs (`io_uring` for RTMP/RTMPS; for SRT, one Compio
-  runtime per shard thread and at most one `srt-rs` Compio `Owner` per address
-  family, each owning one shared caller UDP socket — no per-output task, socket
-  or Owner) instead of one OS thread per destination; see
+  RTMP/RTMPS/sink/pipeline feeds while SRT retains the CPU-derived ceiling.
+  Each RTMP/RTMPS shard owns one Compio runtime, TCP streams, and `PollFd`
+  readiness; each SRT shard owns one Compio runtime and at most one
+  `srt-rs` Compio `Owner` per address family, each with one shared caller UDP
+  socket. SRT uses no per-output task, socket, or Owner; see
   [egress architecture](egress-architecture.md) for the live contract and
   [archive/egress/implementation.md](archive/egress/implementation.md) for
   migration history;
-- RTMP ingress accepts on a native `io_uring` owner thread and hands bounded
-  nonblocking streams to the existing authenticated connection workflow;
 - SRT ingress runs on one dedicated owner thread with one Compio runtime and one
   `srt-rs` `Owner` listener (`Owner::listen_with_resolver`); Tokio addresses its
   sessions only by `LogicalPeerId` through bounded commands and events (see
   [media pipeline](media-pipeline.md#srt-ingress-owner));
-- SRT egress runs on fixed shard threads with one Compio runtime per shard and at
-  most one `Owner` per address family (see
-  [egress architecture](egress-architecture.md));
-- the remaining hand-written native `io_uring` code is the RTMP TCP path; it is
-  transitional and moves to Compio TCP later;
+- the former direct RTMP io_uring/epoll production path is removed; remaining
+  generic dataplane cleanup is tracked under WI7;
 - in-process FFmpeg codec work runs on guarded OS threads;
 - recording uses a feeder task and a writer thread;
 - the default transcoder and file-ingest paths use managed FFmpeg child

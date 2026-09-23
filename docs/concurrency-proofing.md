@@ -120,6 +120,9 @@ dead sinks.
 `fault.resilience` includes RTMP and SRT connected-standby promotions with a
 10-second publisher GOP and a five-second progress deadline, proving cached
 replay rather than eventual next-keyframe recovery.
+`fault.resilience` also verifies real RTMP-input to RTMPS-egress media, sink
+loss entering `retrying`, then bounded SIGTERM shutdown with the completion
+event present.
 `fault.output-stall` owns the stalled-output contract for connected-but-not-
 draining RTMP sinks. `recovery` is the focused reconnect/grace/retry contract
 so we can target that behavior directly without depending on the broader
@@ -241,6 +244,10 @@ surface already covers it.
   - `one_ingress_thread_serves_many_peers_and_tokio_has_no_peer_table`
   - `owner_and_runtime_are_not_send`
   - `media::srt::ingress_admission::tests`
+- `src/media/rtmp/listener.rs`
+  - `compio_rtmp_listener_shutdown_joins_acceptor_and_session_workers`
+    (cancellation drops accepted bridges and joins every registered listener
+    and session worker thread)
 - `src/media/srt_stream_id.rs`
   - `media::srt_stream_id::tests` (stream-key normalization and mode parsing)
 - `src/media/ts_chunk_ring.rs`

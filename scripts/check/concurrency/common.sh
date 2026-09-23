@@ -79,6 +79,8 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_enabled --lib -- --nocapture
   "$run_step_fn" test-harness-process-lifecycle \
     scripts/build/resource-limit.sh cargo test --bin test_harness tests::kill_and_wait_child_terminates_spawned_process -- --exact --nocapture
+  "$run_step_fn" rtmp-ingress-listener-shutdown \
+    scripts/build/resource-limit.sh cargo test compio_rtmp_listener_shutdown_joins_acceptor_and_session_workers --lib -- --nocapture
   "$run_step_fn" test-harness-slow-sink-sibling-count \
     scripts/build/resource-limit.sh cargo test --bin test_harness tests::fault_output_stall_sibling_count_honors_n_per_group_cap -- --exact --nocapture
   "$run_step_fn" lib-recent-egress \

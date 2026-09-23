@@ -17,6 +17,7 @@ mod listener;
 mod play;
 mod timestamps;
 
+pub(crate) use listener::start_rtmp_server_on_with_shutdown;
 pub use listener::{start_rtmp_server, start_rtmp_server_on};
 
 pub(crate) use egress_connection::{RtmpSessionCore, RtmpSessionError, RtmpSessionEvent};
@@ -78,6 +79,6 @@ use flv::{
 #[cfg(test)]
 use handshake::perform_client_handshake;
 #[cfg(test)]
-use ingest::handle_rtmp_client;
+use ingest::{RtmpClientSocket, handle_rtmp_client};
 #[cfg(test)]
 use timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
