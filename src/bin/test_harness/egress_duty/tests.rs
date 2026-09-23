@@ -285,6 +285,40 @@ fn wi37_per_shard_counters_preserve_metrics_index_identity() {
 }
 
 #[test]
+fn wi37_service_actions_survive_snapshot_delta_and_artifact_input() {
+    let before_system = json!({
+        "egressShards": [{
+            "protocol": "srt",
+            "srtOwners": [{
+                "present": true,
+                "serviceVisits": 100,
+                "serviceActions": 240
+            }]
+        }]
+    });
+    let after_system = json!({
+        "egressShards": [{
+            "protocol": "srt",
+            "srtOwners": [{
+                "present": true,
+                "serviceVisits": 140,
+                "serviceActions": 317
+            }]
+        }]
+    });
+    let before = engine_srt_counters(&before_system);
+    let after = engine_srt_counters(&after_system);
+    assert_eq!(counter_at(&after, &["serviceActions"]), Some(317));
+    let delta = counter_deltas(&before, &after);
+    assert_eq!(counter_at(&delta, &["serviceActions"]), Some(77));
+    // verdict.rs feeds this exact delta path into capacity.serviceSignals.
+    assert_eq!(
+        json!({"serviceActions": counter_at(&delta, &["serviceActions"])}),
+        json!({"serviceActions": 77})
+    );
+}
+
+#[test]
 fn wi37_rate_parser_accepts_bitrate_suffixes() {
     assert_eq!(parse_bitrate_bps("8M"), Some(8_000_000.0));
     assert_eq!(parse_bitrate_bps("1.5G"), Some(1_500_000_000.0));

@@ -456,7 +456,23 @@ pub(super) fn emit(input: VerdictInput<'_>) -> Result<(), String> {
             "note": "legacy WI3.6 diagnostic only; WI3.7 uses requested_shard_topology",
         }),
     );
-    const PERSISTENT_BUDGET_EVENTS: u64 = 2;
+    const PERSISTENT_SERVICE_PRESSURE_EVENTS: u64 = 2;
+    const MIN_DELIVERED_RATE_RATIO: f64 = 0.95;
+    let offered_bitrate_bps = parse_bitrate_bps(&cfg.bitrate);
+    let offered_payload_gbps =
+        offered_bitrate_bps.map(|bps| bps * cfg.outputs as f64 / 1_000_000_000.0);
+    let data_first_rate = data_first_delta
+        .filter(|_| window_secs_observed > 0.0)
+        .map(|packets| packets as f64 / window_secs_observed);
+    let first_data_payload_gbps = data_first_rate.map(|packets_per_sec| {
+        packets_per_sec * f64::from(HARNESS_SRT_PACKET_SIZE) * 8.0 / 1_000_000_000.0
+    });
+    let delivered_rate_ratio = match (first_data_payload_gbps, offered_payload_gbps) {
+        (Some(first), Some(offered)) if offered > 0.0 => Some(first / offered),
+        _ => None,
+    };
+    let delivered_rate_degraded =
+        delivered_rate_ratio.is_some_and(|ratio| ratio < MIN_DELIVERED_RATE_RATIO);
     let tx_exhaustions = counter_at(&engine_deltas, &["txExhaustions"]);
     let service_budget_exhausted = counter_at(&engine_deltas, &["serviceBudgetExhausted"]);
     let driver_budget_violations = counter_at(&engine_deltas, &["driverBudgetViolations"]);
@@ -475,12 +491,21 @@ pub(super) fn emit(input: VerdictInput<'_>) -> Result<(), String> {
         .round() as u64;
     let sustained_caller_queue = caller_queued.unwrap_or(0) > 0
         && caller_queue_longest_us.unwrap_or(0) >= sustained_queue_us;
-    let sender_backlog = caller_queue_growth || sustained_caller_queue;
-    let sender_saturated = sender_backlog
-        || tx_exhaustions.unwrap_or(0) > 0
-        || service_budget_exhausted.unwrap_or(0) >= PERSISTENT_BUDGET_EVENTS
-        || driver_budget_violations.unwrap_or(0) >= PERSISTENT_BUDGET_EVENTS
-        || ready_overflows.unwrap_or(0) > 0;
+    let caller_admission_open = established != Some(cfg.outputs as u64);
+    let sender_backlog = caller_admission_open && (caller_queue_growth || sustained_caller_queue);
+    let service_pressure_events = service_budget_exhausted
+        .unwrap_or(0)
+        .saturating_add(driver_budget_violations.unwrap_or(0));
+    let persistent_service_pressure = service_pressure_events >= PERSISTENT_SERVICE_PRESSURE_EVENTS;
+    let window_secs_for_rate = window_secs_observed.max(1e-9);
+    let service_budget_rate_per_sec =
+        service_budget_exhausted.map(|events| events as f64 / window_secs_for_rate);
+    let driver_budget_rate_per_sec =
+        driver_budget_violations.map(|events| events as f64 / window_secs_for_rate);
+    let sender_saturated = tx_exhaustions.unwrap_or(0) > 0
+        || ready_overflows.unwrap_or(0) > 0
+        || sender_backlog
+        || (persistent_service_pressure && delivered_rate_degraded);
     let amplification = match (wire_delta, data_first_delta) {
         (Some(wire), Some(first)) if first > 0 => {
             json!({
@@ -510,15 +535,6 @@ pub(super) fn emit(input: VerdictInput<'_>) -> Result<(), String> {
         "stable-unclassified"
     };
     let apparatus_valid = failed_required.is_empty();
-    let offered_bitrate_bps = parse_bitrate_bps(&cfg.bitrate);
-    let offered_payload_gbps =
-        offered_bitrate_bps.map(|bps| bps * cfg.outputs as f64 / 1_000_000_000.0);
-    let data_first_rate = data_first_delta
-        .filter(|_| window_secs_observed > 0.0)
-        .map(|packets| packets as f64 / window_secs_observed);
-    let first_data_payload_gbps = data_first_rate.map(|packets_per_sec| {
-        packets_per_sec * f64::from(HARNESS_SRT_PACKET_SIZE) * 8.0 / 1_000_000_000.0
-    });
     let wire_rate = wire_delta
         .filter(|_| window_secs_observed > 0.0)
         .map(|packets| packets as f64 / window_secs_observed);
@@ -551,13 +567,18 @@ pub(super) fn emit(input: VerdictInput<'_>) -> Result<(), String> {
                 "saturated": sender_saturated,
                 "txExhaustions": tx_exhaustions,
                 "serviceBudgetExhausted": service_budget_exhausted,
-                "serviceBudgetSaturationThreshold": PERSISTENT_BUDGET_EVENTS,
                 "driverBudgetViolations": driver_budget_violations,
-                "driverBudgetSaturationThreshold": PERSISTENT_BUDGET_EVENTS,
+                "servicePressureEvents": service_pressure_events,
+                "persistentServicePressure": persistent_service_pressure,
+                "serviceBudgetRatePerSec": service_budget_rate_per_sec.map(round6),
+                "driverBudgetRatePerSec": driver_budget_rate_per_sec.map(round6),
+                "deliveredRateRatio": delivered_rate_ratio.map(round6),
+                "deliveredRateDegraded": delivered_rate_degraded,
                 "readyOverflows": ready_overflows,
                 "txInFlight": tx_in_flight,
                 "txHighWaterDelta": counter_at(&engine_deltas, &["txHighWater"]),
                 "txHighWaterClosing": counter_at(&engine_after, &["txHighWater"]),
+                "callerAdmissionOpen": caller_admission_open,
                 "callerQueued": caller_queued,
                 "callerQueuedHwm": caller_queued_hwm,
                 "callerQueueLongestUs": caller_queue_longest_us,
@@ -571,7 +592,10 @@ pub(super) fn emit(input: VerdictInput<'_>) -> Result<(), String> {
                 "actions": counter_at(&engine_deltas, &["serviceActions"]),
                 "durationSumUs": counter_at(&engine_deltas, &["serviceDurationSumUs"]),
                 "durationMaxUs": counter_at(&engine_deltas, &["serviceDurationMaxUs"]),
-                "driverBudgetViolations": counter_at(&engine_deltas, &["driverBudgetViolations"]),
+                "serviceBudgetExhausted": service_budget_exhausted,
+                "serviceBudgetRatePerSec": service_budget_rate_per_sec.map(round6),
+                "driverBudgetViolations": driver_budget_violations,
+                "driverBudgetRatePerSec": driver_budget_rate_per_sec.map(round6),
                 "readyDepthHwm": counter_at(&engine_deltas, &["readyDepthHwm"]),
                 "readyOverflows": counter_at(&engine_deltas, &["readyOverflows"]),
                 "loopDurationSumUs": counter_at(&engine_deltas, &["loopDurationSumUs"]),
@@ -595,7 +619,7 @@ pub(super) fn emit(input: VerdictInput<'_>) -> Result<(), String> {
                 "softnetTimeSqueeze": counter_at(&receiver_net_delta, &["softnet", "timeSqueeze"]),
             },
             "ladderStop": receiver_apparatus_limited || sender_saturated,
-            "rule": "WI3.7 retransmits/duplicates are measured outputs; receiver/kernel/datapath faults reject an apparatus row, while sender exhaustion, lateness, and backlog classify demand saturation",
+            "rule": "WI3.7 retransmits/duplicates are measured outputs; receiver/kernel/datapath faults reject an apparatus row, while TX exhaustion, ready overflow, admission backlog, or delivered-rate degradation with persistent service pressure classify demand saturation",
         }),
     );
     let mut control_partition = serde_json::Map::new();

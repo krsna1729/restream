@@ -1849,26 +1849,17 @@ with actual cycles/packet evidence.
 
 ## 16. WI3.7 — End-to-End Multi-Shard 8 Mbps Capacity Qualification
 
-Status: CURRENT-HOST RESULT FROZEN — WI3.6 is frozen. WI3.7 completed the
-bounded plaintext ladder, repeated lower-control/knee cells, and three
-alternating AES-128/AES-256 pairs on the current host. The observations and
-coefficients remain provisional until the cross-host comparison in `§11.1`
-and the portable default decision in WI10.
+Status: ACTIVE — provenance closure is in progress. WI3.6 is frozen. WI3.7
+completed the first bounded plaintext/crypto qualification, but its numerical
+result is not frozen until every selected artifact matches one clean build
+provenance and the durable baseline manifest is committed. Coefficients remain
+provisional until the cross-host comparison in `§11.1` and the portable default
+decision in WI10.
 
-Current-host evidence:
-
-- 15 apparatus-valid, non-saturated plaintext rows fit
-  `egress_core_equivalents = 0.05177 * shard_count + 0.0000202463 * DATA_rate`
-  with `R² = 0.9575`; the target-utilization equation gives a provisional
-  upper bound of two shards for the observed rows.
-- The repeated plaintext controls moved the observed sender knee (including
-  one lower-control repeat), so the fit is retained as provisional evidence,
-  not a deterministic per-fanout threshold.
-- AES-128 egress CPU was median `25.588 us/DATA` (min `24.831`, max
-  `27.015`); AES-256 was median `28.887 us/DATA` (min `25.009`, max
-  `32.755`). Paired egress deltas ranged from `-0.580` to `7.924 us/DATA`;
-  noise spans zero, so the crypto increment is unresolved and deferred to
-  WI10.
+The prior local-only result is retained as an audit trail, not as the current
+baseline. Its fit was approximately `fixedCorePerShard = 0.0518`,
+`secondsPerData = 20.25 us/DATA`, and a two-shard upper bound; the closure pass
+must regenerate those numbers from provenance-clean artifacts.
 
 WI3.6 remains the strict, lossless handoff. Its `retx == 0` and duplicate-free
 fences are not silently weakened. WI3.7 uses a separate `CAPACITY_MODE` arm:
@@ -1948,8 +1939,15 @@ Summarize the retained cells and fit provisional service demand with:
 
 ```sh
 scripts/harness/wi37-capacity-analysis.py .local/artifacts/wi37-capacity \
+  --provenance .local/artifacts/wi37-capacity/provenance.json \
   --out .local/artifacts/wi37-capacity/summary.json
 ```
+
+The analysis consumes only artifacts whose sibling `contract.json` matches the
+explicit provenance selection. It retains every matching attempt; each logical
+`{shards, fanout}` cell is reduced to a median with attempt count/min/max.
+Stable/sender classification flips are marked `boundary-unstable` and excluded
+from the stable service-demand fit.
 
 Stop the current shard arm at the first receiver-apparatus-limited row or
 sender-clearly-saturated row. Do not run the old `100 / 300 / 500 / 1000`
@@ -1983,9 +1981,12 @@ stable-unclassified
 
 The capacity knee is selected from demand signals, not from `txInFlight > 0`
 or `callerQueuedHwm > 0`: `txInFlight` is a steady-state pool gauge and a
-caller queue high-water mark records history. Sender saturation requires actual
-caller-queue growth or a sustained non-empty caller queue, TX exhaustion,
-persistent service/driver budget exhaustion, or a ready-queue overflow.
+caller queue high-water mark records admission history. Once all requested
+outputs are established, caller-pool queue state is not media-send backlog.
+TX exhaustion, ready-queue overflow, or admission backlog are definite
+signals. Owner budget exhaustion remains pressure telemetry; it classifies
+sender saturation only when persistent pressure is accompanied by observable
+delivered-rate degradation.
 Receiver-apparatus limits remain separate from sender demand saturation.
 
 Fit CPU demand directly, excluding receiver-apparatus-limited and

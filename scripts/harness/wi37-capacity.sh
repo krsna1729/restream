@@ -12,7 +12,7 @@ Runs the bounded WI3.7 plaintext shard/fanout ladder. The default arm is
 requested SRT shards 1..4, fanout 10,20,30,40,50,60,80. Each arm stops after
 a receiver apparatus limit or a sender-capacity classification. Existing
 complete cells are preserved as attempts; WI37_RESUME=1 reuses only cells
-whose artifact and contract match the current binary/configuration.
+whose artifact and contract match the current clean build provenance.
 
 Environment:
   WI37_ARTIFACT_ROOT    output root (default .local/artifacts/wi37-capacity)
@@ -111,7 +111,28 @@ if [[ ! -x target/bench/test_harness ]]; then
 fi
 
 git_sha="$(git rev-parse HEAD)"
-bench_sha="$(sha256sum target/bench/test_harness | awk '{print $1}')"
+test_harness_sha256="$(sha256sum target/bench/test_harness | awk '{print $1}')"
+restream_sha256="$(sha256sum target/bench/restream | awk '{print $1}')"
+features="wi37-shard-bench"
+build_provenance_path="target/bench/build-provenance.json"
+if [[ ! -s "$build_provenance_path" ]]; then
+  echo "wi37-capacity: missing $build_provenance_path; rebuild the clean feature bench" >&2
+  exit 1
+fi
+python3 - "$build_provenance_path" "$git_sha" "$features" <<'PY'
+import json, sys
+path, git_sha, features = sys.argv[1:]
+try:
+    provenance = json.load(open(path))
+except (OSError, ValueError) as error:
+    raise SystemExit(f"wi37-capacity: invalid build provenance: {error}")
+if provenance.get("gitSha") != git_sha:
+    raise SystemExit("wi37-capacity: build provenance gitSha does not match HEAD")
+if provenance.get("gitDirty") is not False:
+    raise SystemExit("wi37-capacity: rating requires build provenance gitDirty=false")
+if provenance.get("features") != features:
+    raise SystemExit("wi37-capacity: build provenance feature set does not match WI3.7")
+PY
 
 capacity_field() {
   local artifact=$1
@@ -157,26 +178,59 @@ peer_cpus_for() {
   esac
 }
 
+write_provenance() {
+  local path=$1
+  python3 - "$path" "$git_sha" "$test_harness_sha256" "$restream_sha256" "$features" "$build_provenance_path" <<'PY'
+import json, sys
+path, git_sha, bench_sha, restream_sha, features, build_path = sys.argv[1:]
+build = json.load(open(build_path))
+provenance = {
+    "contractVersion": 2,
+    "gitSha": git_sha,
+    "benchSha256": bench_sha,
+    "restreamSha256": restream_sha,
+    "features": features,
+    "buildProvenance": {
+        "gitSha": build["gitSha"],
+        "gitDirty": build["gitDirty"],
+        "features": build["features"],
+    },
+}
+with open(path, "w") as handle:
+    json.dump(provenance, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
+}
+
 write_contract() {
   local path=$1
   local crypto=$2
-  local shards=$3
-  local fanout=$4
-  local shard_cpus=$5
-  local control_cpu=$6
-  local peer_cpus=$7
-  python3 - "$path" "$git_sha" "$bench_sha" "$crypto" "$shards" "$fanout" "$shard_cpus" "$control_cpu" "$peer_cpus" "$window_secs" "$receiver_queue_horizon_ms" "$dest_base" "$netns" <<'PY'
+  local repeat=$3
+  local shards=$4
+  local fanout=$5
+  local shard_cpus=$6
+  local control_cpu=$7
+  local peer_cpus=$8
+  python3 - "$path" "$git_sha" "$test_harness_sha256" "$restream_sha256" "$features" "$crypto" "$repeat" "$shards" "$fanout" "$shard_cpus" "$control_cpu" "$peer_cpus" "$window_secs" "$receiver_queue_horizon_ms" "$dest_base" "$netns" <<'PY'
 import json, sys
 (
-    path, git_sha, bench_sha, crypto, shards, fanout, shard_cpus, control_cpu,
-    peer_cpus, window_secs, queue_horizon, dest_base, netns,
+    path, git_sha, bench_sha, restream_sha, features, crypto, repeat, shards,
+    fanout, shard_cpus, control_cpu, peer_cpus, window_secs, queue_horizon,
+    dest_base, netns,
 ) = sys.argv[1:]
 contract = {
     "contractVersion": 2,
     "gitSha": git_sha,
     "benchSha256": bench_sha,
-    "features": "wi37-shard-bench",
+    "restreamSha256": restream_sha,
+    "features": features,
+    "buildProvenance": {
+        "gitSha": git_sha,
+        "gitDirty": False,
+        "features": features,
+    },
     "crypto": crypto,
+    "repeat": None if repeat == "-" else int(repeat),
     "requestedShards": int(shards),
     "outputs": int(fanout),
     "bitrate": "8M",
@@ -201,13 +255,35 @@ artifact_matches_contract() {
   local artifact="$run_dir/egress-duty.json"
   local contract="$run_dir/contract.json"
   [[ -s "$artifact" && -s "$contract" ]] || return 1
-  python3 - "$artifact" "$contract" <<'PY'
+  python3 - "$artifact" "$contract" "$git_sha" "$test_harness_sha256" "$restream_sha256" "$features" "$build_provenance_path" <<'PY'
 import json, sys
-artifact_path, contract_path = sys.argv[1:]
+(
+    artifact_path, contract_path, current_git_sha, current_bench_sha,
+    current_restream_sha, current_features, build_path,
+) = sys.argv[1:]
 try:
     artifact = json.load(open(artifact_path))
     contract = json.load(open(contract_path))
+    build = json.load(open(build_path))
 except (OSError, ValueError):
+    raise SystemExit(1)
+expected = {
+    "contractVersion": 2,
+    "gitSha": current_git_sha,
+    "benchSha256": current_bench_sha,
+    "restreamSha256": current_restream_sha,
+    "features": current_features,
+    "buildProvenance": {
+        "gitSha": current_git_sha,
+        "gitDirty": False,
+        "features": current_features,
+    },
+}
+if any(contract.get(key) != value for key, value in expected.items()):
+    raise SystemExit(1)
+if build.get("gitSha") != current_git_sha or build.get("gitDirty") is not False:
+    raise SystemExit(1)
+if build.get("features") != current_features:
     raise SystemExit(1)
 if artifact.get("verdict") is None or not isinstance(artifact.get("capacity"), dict):
     raise SystemExit(1)
@@ -227,17 +303,18 @@ checks = {
     "receiverPeerCpus": config.get("peerCpus"),
 }
 for key, value in checks.items():
-    expected = contract.get(key)
+    expected_value = contract.get(key)
     if key == "windowSecs":
-        if value is None or expected is None or abs(float(value) - float(expected)) > 1e-9:
+        if value is None or expected_value is None or abs(float(value) - float(expected_value)) > 1e-9:
             raise SystemExit(1)
-    elif str(value) != str(expected):
+    elif str(value) != str(expected_value):
         raise SystemExit(1)
 if contract.get("controlRestreamHarnessShare") is not True:
     raise SystemExit(1)
 raise SystemExit(0)
 PY
 }
+
 
 matching_run_dir() {
   local canonical_dir=$1
@@ -328,7 +405,7 @@ run_cell() {
     run_dir="$canonical_dir/attempt-$(date -u +%Y%m%dT%H%M%SZ)-$$-$run_id"
   fi
   mkdir -p "$run_dir"
-  write_contract "$run_dir/contract.json" "$crypto" "$shards" "$fanout" "$shard_cpus" "$control_cpu" "$peer_cpus"
+  write_contract "$run_dir/contract.json" "$crypto" "$repeat" "$shards" "$fanout" "$shard_cpus" "$control_cpu" "$peer_cpus"
   log="$run_dir/run.log"
   port_base=$((18000 + run_id * 200))
 
@@ -362,6 +439,7 @@ if (( online_cpus < 6 )); then
   echo "wi37-capacity: requires at least 6 online CPUs for the fixed layout (got $online_cpus)" >&2
   exit 1
 fi
+write_provenance "$artifact_root/provenance.json"
 
 printf 'crypto\trepeat\tshards\tfanout\tstatus\tverdict\tclassification\tapparatusValid\tartifact\n'
 run_id=0

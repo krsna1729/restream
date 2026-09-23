@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Summarize WI3.7 egress-duty artifacts without changing product policy.
+"""Summarize provenance-clean WI3.7 egress-duty artifacts.
 
-The input tree is produced by ``wi37-capacity.sh``. Apparatus-valid plaintext
-rows fit CPU demand directly:
+The input tree is produced by ``wi37-capacity.sh``. A provenance selection is
+required; every selected artifact must have a sibling ``contract.json`` that
+matches it exactly. Plaintext attempts for one logical cell are retained in
+the output and reduced to a median for fitting. A cell that flips between
+stable and sender-saturated is marked boundary-unstable and excluded from the
+stable service-demand fit.
+
+The fit is measurement aid for WI10/WI8, not a production shard decision:
 
     egress cores = fixed cores/shard * shard count + seconds/DATA * DATA rate
-
-Receiver-capped and sender-saturated rows remain visible but do not drive the
-fit. The result is measurement aid for WI10, not a production shard decision.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -19,8 +23,68 @@ import statistics
 from pathlib import Path
 
 
+PROVENANCE_KEYS = (
+    "contractVersion",
+    "gitSha",
+    "benchSha256",
+    "restreamSha256",
+    "features",
+    "buildProvenance",
+)
+CELL_NUMERIC_FIELDS = (
+    "offeredPayloadGbps",
+    "dataFirst",
+    "windowSecs",
+    "serviceDurationSumUs",
+    "egressThreadCpuSecs",
+    "egressThreadUsPerDataFirst",
+    "processUsPerDataFirst",
+    "hottestShardCpuUtilization",
+    "shardCpuImbalance",
+    "dataRate",
+    "egressCoreEquivalents",
+    "serviceDurationUsPerDataFirst",
+    "receiverCpuSysMs",
+    "receiverCpuUserMs",
+)
+
+
 def finite(value):
     return isinstance(value, (int, float)) and math.isfinite(value)
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def read_json(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def load_provenance(path):
+    provenance = read_json(path)
+    if not isinstance(provenance, dict):
+        raise ValueError(f"invalid provenance selection: {path}")
+    if any(key not in provenance for key in PROVENANCE_KEYS):
+        raise ValueError(f"provenance selection lacks required fields: {path}")
+    if provenance["contractVersion"] != 2:
+        raise ValueError("WI3.7 analysis requires contractVersion=2")
+    build = provenance["buildProvenance"]
+    if (
+        not isinstance(build, dict)
+        or build.get("gitSha") != provenance["gitSha"]
+        or build.get("gitDirty") is not False
+        or build.get("features") != provenance["features"]
+    ):
+        raise ValueError("provenance selection is not a clean feature build")
+    return provenance
 
 
 def fit_affine(points):
@@ -96,7 +160,9 @@ def fit_joint(points):
     predictions = [
         fixed * shards + seconds_per_data * rate for shards, rate, _ in points
     ]
-    residuals = [cores - predicted for predicted, (_, _, cores) in zip(predictions, points)]
+    residuals = [
+        cores - predicted for predicted, (_, _, cores) in zip(predictions, points)
+    ]
     residual_sum_squares = sum(value * value for value in residuals)
     mean_cores = statistics.fmean(cores for _, _, cores in points)
     total_sum_squares = sum((cores - mean_cores) ** 2 for _, _, cores in points)
@@ -114,121 +180,117 @@ def fit_joint(points):
     }
 
 
-def median_field(rows, field):
-    values = [row.get(field) for row in rows if finite(row.get(field))]
-    return statistics.median(values) if values else None
-
-
-def selected_artifact_paths(root):
-    """Choose one newest artifact per logical cell, including resumable attempts."""
-    selected = {}
-    for path in root.rglob("egress-duty.json"):
-        try:
-            artifact = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-        config = artifact.get("config") or {}
-        crypto = config.get("crypto", "plain")
-        shards = config.get("requestedShards")
-        outputs = config.get("outputs")
-        if not isinstance(shards, int) or not isinstance(outputs, int):
-            continue
-        key = (crypto, shards, outputs, crypto_repeat(path) if crypto != "plain" else None)
-        previous = selected.get(key)
-        if previous is None or path.stat().st_mtime_ns >= previous.stat().st_mtime_ns:
-            selected[key] = path
-    return sorted(selected.values())
-
-
-def load_rows(root):
-    rows = []
-    for path in selected_artifact_paths(root):
-        try:
-            artifact = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-        config = artifact.get("config") or {}
-        capacity = artifact.get("capacity") or {}
-        cpu = capacity.get("cpu") or artifact.get("cpu") or {}
-        if config.get("crypto", "plain") != "plain":
-            continue
-        shards = config.get("requestedShards")
-        outputs = config.get("outputs")
-        offered = (capacity.get("offered") or {}).get("payloadGbps")
-        service = (capacity.get("serviceSignals") or {}).get("durationSumUs")
-        data = (capacity.get("firstData") or {}).get("packets")
-        window = (artifact.get("window") or {}).get("observedSecs")
-        egress_cpu_secs = cpu.get("egressThreadCpuSecs")
-        process_us_per_data = cpu.get("processUsPerDataFirst")
-        row = {
-            "artifact": str(path),
-            "shards": shards,
-            "outputs": outputs,
-            "classification": capacity.get("classification"),
-            "apparatusValid": capacity.get("apparatusValid"),
-            "offeredPayloadGbps": offered,
-            "dataFirst": data,
-            "windowSecs": window,
-            "serviceDurationSumUs": service,
-            "egressThreadCpuSecs": egress_cpu_secs,
-            "egressThreadUsPerDataFirst": cpu.get("egressThreadUsPerDataFirst"),
-            "processUsPerDataFirst": process_us_per_data,
-            "hottestShardCpuUtilization": cpu.get("hottestShardCpuUtilization"),
-            "shardCpuImbalance": cpu.get("shardCpuImbalance"),
-        }
-        if finite(data) and finite(window) and window > 0:
-            row["dataRate"] = data / window
-        else:
-            row["dataRate"] = None
-        if finite(egress_cpu_secs) and finite(window) and window > 0:
-            row["egressCoreEquivalents"] = egress_cpu_secs / window
-        else:
-            row["egressCoreEquivalents"] = None
-        rows.append(row)
-    return rows
-
-
 def crypto_repeat(path):
     match = re.search(r"repeat-(\d+)", str(path))
     return int(match.group(1)) if match else None
 
 
-def load_crypto_rows(root):
-    rows = []
-    for path in selected_artifact_paths(root):
-        try:
-            artifact = json.loads(path.read_text())
-        except (OSError, ValueError):
+def contract_matches_selection(contract, selection):
+    if not isinstance(contract, dict):
+        return False
+    return all(contract.get(key) == selection.get(key) for key in PROVENANCE_KEYS)
+
+
+def artifact_matches_contract(artifact, contract):
+    config = artifact.get("config") or {}
+    checks = {
+        "crypto": config.get("crypto"),
+        "requestedShards": config.get("requestedShards"),
+        "outputs": config.get("outputs"),
+        "bitrate": config.get("bitrate"),
+        "windowSecs": config.get("windowSecs"),
+        "receiverQueueHorizonMs": config.get("receiverQueueHorizonMs"),
+        "destBase": config.get("destBase"),
+        "netns": config.get("netns"),
+        "shardCpus": ",".join(str(value) for value in config.get("shardCpus", [])),
+        "controlRestreamCpus": config.get(
+            "restreamCpusExplicit", config.get("restreamCpus")
+        ),
+        "harnessCpus": config.get("harnessCpus"),
+        "receiverPeerCpus": config.get("peerCpus"),
+    }
+    for key, value in checks.items():
+        expected = contract.get(key)
+        if key == "windowSecs":
+            if value is None or expected is None or abs(float(value) - float(expected)) > 1e-9:
+                return False
+        elif str(value) != str(expected):
+            return False
+    return contract.get("controlRestreamHarnessShare") is True
+
+
+def selected_artifact_records(root, selection):
+    """Return every artifact with a matching sibling contract; never use mtime."""
+    records = []
+    for path in sorted(root.rglob("egress-duty.json")):
+        contract_path = path.parent / "contract.json"
+        artifact = read_json(path)
+        contract = read_json(contract_path)
+        if not isinstance(artifact, dict) or not contract_matches_selection(contract, selection):
             continue
-        config = artifact.get("config") or {}
-        crypto = config.get("crypto")
-        capacity = artifact.get("capacity") or {}
-        if crypto not in ("128", "256") or capacity.get("apparatusValid") is not True:
+        if artifact.get("verdict") is None or not isinstance(artifact.get("capacity"), dict):
             continue
-        cpu = capacity.get("cpu") or artifact.get("cpu") or {}
-        receiver = artifact.get("receiver") or {}
-        data = (capacity.get("firstData") or {}).get("packets")
-        service_us = (capacity.get("serviceSignals") or {}).get("durationSumUs")
-        rows.append(
+        if not artifact_matches_contract(artifact, contract):
+            continue
+        records.append(
             {
-                "artifact": str(path),
-                "crypto": crypto,
-                "repeat": crypto_repeat(path),
-                "outputs": config.get("outputs"),
-                "offeredPayloadGbps": (capacity.get("offered") or {}).get("payloadGbps"),
-                "dataFirst": data,
-                "egressThreadUsPerDataFirst": cpu.get("egressThreadUsPerDataFirst"),
-                "processUsPerDataFirst": cpu.get("processUsPerDataFirst"),
-                "serviceDurationUsPerDataFirst": (
-                    service_us / data
-                    if finite(service_us) and finite(data) and data > 0
-                    else None
-                ),
-                "receiverCpuSysMs": receiver.get("cpuSysMs"),
-                "receiverCpuUserMs": receiver.get("cpuUserMs"),
+                "path": path,
+                "contractPath": contract_path,
+                "artifact": artifact,
+                "contract": contract,
             }
         )
-    return rows
+    return records
+
+
+def row_from_record(record):
+    path = record["path"]
+    artifact = record["artifact"]
+    config = artifact.get("config") or {}
+    capacity = artifact.get("capacity") or {}
+    cpu = capacity.get("cpu") or artifact.get("cpu") or {}
+    receiver = artifact.get("receiver") or {}
+    data = (capacity.get("firstData") or {}).get("packets")
+    window = (artifact.get("window") or {}).get("observedSecs")
+    egress_cpu_secs = cpu.get("egressThreadCpuSecs")
+    service_us = (capacity.get("serviceSignals") or {}).get("durationSumUs")
+    row = {
+        "artifact": str(path),
+        "artifactSha256": sha256_file(path),
+        "contract": str(record["contractPath"]),
+        "gitSha": record["contract"].get("gitSha"),
+        "benchSha256": record["contract"].get("benchSha256"),
+        "restreamSha256": record["contract"].get("restreamSha256"),
+        "crypto": config.get("crypto", "plain"),
+        "repeat": record["contract"].get("repeat", crypto_repeat(path)),
+        "shards": config.get("requestedShards"),
+        "outputs": config.get("outputs"),
+        "classification": capacity.get("classification"),
+        "apparatusValid": capacity.get("apparatusValid"),
+        "offeredPayloadGbps": (capacity.get("offered") or {}).get("payloadGbps"),
+        "dataFirst": data,
+        "windowSecs": window,
+        "serviceDurationSumUs": service_us,
+        "egressThreadCpuSecs": egress_cpu_secs,
+        "egressThreadUsPerDataFirst": cpu.get("egressThreadUsPerDataFirst"),
+        "processUsPerDataFirst": cpu.get("processUsPerDataFirst"),
+        "hottestShardCpuUtilization": cpu.get("hottestShardCpuUtilization"),
+        "shardCpuImbalance": cpu.get("shardCpuImbalance"),
+        "receiverCpuSysMs": receiver.get("cpuSysMs"),
+        "receiverCpuUserMs": receiver.get("cpuUserMs"),
+    }
+    row["dataRate"] = (
+        data / window if finite(data) and finite(window) and window > 0 else None
+    )
+    row["egressCoreEquivalents"] = (
+        egress_cpu_secs / window
+        if finite(egress_cpu_secs) and finite(window) and window > 0
+        else None
+    )
+    row["serviceDurationUsPerDataFirst"] = (
+        service_us / data if finite(service_us) and finite(data) and data > 0 else None
+    )
+    return row
 
 
 def value_stats(rows, field):
@@ -243,8 +305,79 @@ def value_stats(rows, field):
     }
 
 
-def summarize_crypto(root):
-    rows = load_crypto_rows(root)
+def collapse_cell(rows, key_fields):
+    rows = sorted(rows, key=lambda row: row["artifact"])
+    classifications = sorted({row.get("classification") for row in rows})
+    boundary_unstable = {
+        "stable-unclassified",
+        "sender-saturated",
+    }.issubset(classifications)
+    apparatus_valid = all(row.get("apparatusValid") is True for row in rows)
+    classification = "boundary-unstable" if boundary_unstable else classifications[0]
+    if len(classifications) > 1 and not boundary_unstable:
+        classification = "mixed"
+    cell = {
+        key: rows[0].get(key) for key in key_fields
+    }
+    cell.update(
+        {
+            "artifact": rows[0]["artifact"] if len(rows) == 1 else None,
+            "artifacts": [row["artifact"] for row in rows],
+            "contracts": sorted({row["contract"] for row in rows}),
+            "artifactSha256": rows[0]["artifactSha256"] if len(rows) == 1 else None,
+            "attemptCount": len(rows),
+            "attempts": rows,
+            "classifications": classifications,
+            "classification": classification,
+            "boundaryUnstable": boundary_unstable,
+            "apparatusValid": apparatus_valid,
+            "fitEligible": apparatus_valid and classification == "stable-unclassified",
+            "attemptStats": {
+                field: value_stats(rows, field) for field in CELL_NUMERIC_FIELDS
+            },
+        }
+    )
+    for field in CELL_NUMERIC_FIELDS:
+        stats = cell["attemptStats"][field]
+        cell[field] = stats["median"]
+    return cell
+
+
+def load_plaintext_cells(root, selection):
+    rows = [
+        row_from_record(record)
+        for record in selected_artifact_records(root, selection)
+        if (record["artifact"].get("config") or {}).get("crypto", "plain") == "plain"
+    ]
+    groups = {}
+    for row in rows:
+        groups.setdefault((row.get("shards"), row.get("outputs")), []).append(row)
+    return [collapse_cell(group, ("shards", "outputs")) for _, group in sorted(groups.items())]
+
+
+def load_crypto_cells(root, selection):
+    rows = [
+        row_from_record(record)
+        for record in selected_artifact_records(root, selection)
+        if (record["artifact"].get("config") or {}).get("crypto") in ("128", "256")
+        and record["artifact"].get("capacity", {}).get("apparatusValid") is True
+    ]
+    groups = {}
+    for row in rows:
+        repeat = row.get("repeat")
+        if repeat is None:
+            continue
+        groups.setdefault((row.get("crypto"), repeat), []).append(row)
+    return [collapse_cell(group, ("crypto", "repeat")) for _, group in sorted(groups.items())]
+
+
+def median_field(rows, field):
+    values = [row.get(field) for row in rows if finite(row.get(field))]
+    return statistics.median(values) if values else None
+
+
+def summarize_crypto(root, selection):
+    rows = load_crypto_cells(root, selection)
     by_mode = {mode: [row for row in rows if row["crypto"] == mode] for mode in ("128", "256")}
     modes = {
         mode: {
@@ -260,28 +393,26 @@ def summarize_crypto(root):
         }
         for mode, cells in by_mode.items()
     }
+    indexed = {mode: {row["repeat"]: row for row in cells} for mode, cells in by_mode.items()}
     paired = []
-    indexed = {}
-    for mode, cells in by_mode.items():
-        for row in cells:
-            indexed.setdefault(row.get("repeat"), {})[mode] = row
-    for repeat, pair in sorted(indexed.items(), key=lambda item: (item[0] is None, item[0])):
-        if "128" not in pair or "256" not in pair:
+    for repeat in sorted(set(indexed["128"]) & set(indexed["256"])):
+        aes128 = indexed["128"][repeat]
+        aes256 = indexed["256"][repeat]
+        fields = (
+            "egressThreadUsPerDataFirst",
+            "processUsPerDataFirst",
+            "serviceDurationUsPerDataFirst",
+        )
+        if not all(finite(aes128.get(field)) and finite(aes256.get(field)) for field in fields):
             continue
-        aes128 = pair["128"]
-        aes256 = pair["256"]
-        delta = {
-            "repeat": repeat,
-            "egressThreadUsPerDataFirst": aes256["egressThreadUsPerDataFirst"]
-            - aes128["egressThreadUsPerDataFirst"],
-            "processUsPerDataFirst": aes256["processUsPerDataFirst"]
-            - aes128["processUsPerDataFirst"],
-            "serviceDurationUsPerDataFirst": aes256[
-                "serviceDurationUsPerDataFirst"
-            ]
-            - aes128["serviceDurationUsPerDataFirst"],
-        }
-        paired.append(delta)
+        paired.append(
+            {
+                "repeat": repeat,
+                **{
+                    field: aes256[field] - aes128[field] for field in fields
+                },
+            }
+        )
     delta_stats = {
         field: value_stats(paired, field)
         for field in (
@@ -303,19 +434,19 @@ def summarize_crypto(root):
         "pairedDeltaStats": delta_stats,
         "noiseSpansZero": noise_spans_zero,
         "unresolvedOnHost": unresolved,
-        "basis": "apparatus-valid bounded cells; use medians/min/max, not one sample",
+        "basis": "provenance-clean apparatus-valid repeat cells; use medians/min/max",
         "fullMatrix": "not run; expand only if repeated bounded cells show nonlinear behavior",
     }
 
 
-def summarize(root, target_utilization):
-    rows = load_rows(root)
+def summarize(root, selection_path, target_utilization):
+    selection = load_provenance(selection_path)
+    rows = load_plaintext_cells(root, selection)
     arms = {}
     for row in rows:
         shards = row.get("shards")
-        if not isinstance(shards, int):
-            continue
-        arms.setdefault(str(shards), []).append(row)
+        if isinstance(shards, int):
+            arms.setdefault(str(shards), []).append(row)
 
     arm_summaries = {}
     joint_points = []
@@ -329,18 +460,23 @@ def summarize(root, target_utilization):
             and finite(row.get("dataRate"))
             and finite(row.get("egressCoreEquivalents"))
         ]
-        fit_rows = [row for row in valid if row.get("classification") != "sender-saturated"]
+        fit_rows = [row for row in valid if row.get("fitEligible") is True]
         fit = fit_affine(
             [(row["dataRate"], row["egressCoreEquivalents"]) for row in fit_rows]
         )
         joint_points.extend(
-            (int(key), row["dataRate"], row["egressCoreEquivalents"]) for row in fit_rows
+            (int(key), row["dataRate"], row["egressCoreEquivalents"])
+            for row in fit_rows
         )
         receiver_capped = any(
             row.get("classification") == "receiver-apparatus-limited" for row in arm
         )
         sender_knee = next(
-            (row for row in arm if row.get("classification") == "sender-saturated"),
+            (
+                row
+                for row in arm
+                if row.get("classification") in ("sender-saturated", "boundary-unstable")
+            ),
             None,
         )
         arm_summaries[key] = {
@@ -364,22 +500,21 @@ def summarize(root, target_utilization):
     fixed_per_shard = joint_fit.get("fixedCorePerShard")
     seconds_per_data = joint_fit.get("secondsPerData")
     denominator = (
-        target_utilization - fixed_per_shard
-        if finite(fixed_per_shard)
-        else None
+        target_utilization - fixed_per_shard if finite(fixed_per_shard) else None
     )
     provisional_required = []
     if finite(seconds_per_data) and finite(denominator) and denominator > 0:
         for row in rows:
-            if row.get("apparatusValid") is not True or row.get("classification") == "sender-saturated":
+            if not row.get("fitEligible") or not finite(row.get("dataRate")):
                 continue
-            if not finite(row.get("dataRate")):
-                continue
-            required = math.ceil(row["dataRate"] * seconds_per_data / denominator)
-            required = max(1, required)
+            required = max(
+                1, math.ceil(row["dataRate"] * seconds_per_data / denominator)
+            )
             row["provisionalRequiredShards"] = required
             row["targetShardUtilization"] = target_utilization
-            row["fixedOverheadGuard"] = "fixed per-shard CPU is included; retain a tail-latency guard"
+            row["fixedOverheadGuard"] = (
+                "fixed per-shard CPU is included; retain a tail-latency guard"
+            )
             provisional_required.append(required)
             required_rows.append(row)
 
@@ -411,10 +546,12 @@ def summarize(root, target_utilization):
     return {
         "mode": "wi3.7-capacity-analysis",
         "root": str(root),
+        "provenanceSelection": str(selection_path),
+        "provenance": selection,
         "shardComparisons": shard_comparisons,
         "arms": arm_summaries,
         "jointCpuDemandFit": joint_fit,
-        "cryptoIncrement": summarize_crypto(root),
+        "cryptoIncrement": summarize_crypto(root, selection),
         "portableCoefficient": {
             "provisional": True,
             "requiredShardsUpperBound": max(provisional_required)
@@ -433,12 +570,16 @@ def summarize(root, target_utilization):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("root", nargs="?", default=".local/artifacts/wi37-capacity")
+    parser.add_argument("--provenance", type=Path, required=True)
     parser.add_argument("--target-utilization", type=float, default=0.8)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
     if not 0.0 < args.target_utilization <= 1.0:
         parser.error("--target-utilization must be in (0, 1]")
-    result = summarize(Path(args.root), args.target_utilization)
+    try:
+        result = summarize(Path(args.root), args.provenance, args.target_utilization)
+    except ValueError as error:
+        parser.error(str(error))
     text = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.out:
         args.out.write_text(text)
