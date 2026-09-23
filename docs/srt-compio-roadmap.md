@@ -1849,9 +1849,26 @@ with actual cycles/packet evidence.
 
 ## 16. WI3.7 — End-to-End Multi-Shard 8 Mbps Capacity Qualification
 
-Status: ACTIVE — WI3.6 is frozen. WI3.7 is the bounded capacity arm on the
-current host; its coefficients and shard observations are provisional until the
-cross-host comparison in `§11.1` and the portable default decision in WI10.
+Status: CURRENT-HOST RESULT FROZEN — WI3.6 is frozen. WI3.7 completed the
+bounded plaintext ladder, repeated lower-control/knee cells, and three
+alternating AES-128/AES-256 pairs on the current host. The observations and
+coefficients remain provisional until the cross-host comparison in `§11.1`
+and the portable default decision in WI10.
+
+Current-host evidence:
+
+- 15 apparatus-valid, non-saturated plaintext rows fit
+  `egress_core_equivalents = 0.05177 * shard_count + 0.0000202463 * DATA_rate`
+  with `R² = 0.9575`; the target-utilization equation gives a provisional
+  upper bound of two shards for the observed rows.
+- The repeated plaintext controls moved the observed sender knee (including
+  one lower-control repeat), so the fit is retained as provisional evidence,
+  not a deterministic per-fanout threshold.
+- AES-128 egress CPU was median `25.588 us/DATA` (min `24.831`, max
+  `27.015`); AES-256 was median `28.887 us/DATA` (min `25.009`, max
+  `32.755`). Paired egress deltas ranged from `-0.580` to `7.924 us/DATA`;
+  noise spans zero, so the crypto increment is unresolved and deferred to
+  WI10.
 
 WI3.6 remains the strict, lossless handoff. Its `retx == 0` and duplicate-free
 fences are not silently weakened. WI3.7 uses a separate `CAPACITY_MODE` arm:
@@ -1901,10 +1918,11 @@ Restream media pipeline
 fanout SRT outputs
 ```
 
-The egress-duty harness accepts a shard CPU list, pins shard index `N` to CPU
-`N`, and records per-shard Owner/service/TX counters. Shard CPUs, Restream,
-the harness, and receiver peer CPUs are disjoint in the fixed six-vCPU arm
-layout.
+The egress-duty harness accepts a shard CPU list, pins shard index `N` to the
+Nth configured CPU, and records per-shard Owner/service/TX counters. The fixed
+six-vCPU topology isolates shard CPUs from the control, harness, and receiver
+peer CPUs. Control-plane Restream and the egress-duty harness intentionally
+share one control CPU; the artifact records that shared set explicitly.
 
 ### 16.2 Bounded fanout ladder and stop rules
 
@@ -1919,6 +1937,12 @@ The bounded runner is:
 ```sh
 scripts/harness/wi37-capacity.sh
 ```
+
+Use `WI37_SHARDS=1,2,3,4` and `WI37_FANOUTS=...` to select a resumable subset.
+Set `WI37_RESUME=1` to skip only a complete artifact whose contract matches the
+current git revision, feature build SHA, topology, and cell configuration.
+Mismatched or interrupted cells are written below `attempt-*`; earlier
+artifacts are never overwritten.
 
 Summarize the retained cells and fit provisional service demand with:
 
@@ -1957,40 +1981,56 @@ stable-unclassified
 
 ### 16.3 Capacity analysis
 
-The capacity knee is selected from demand signals (`TX` exhaustion, service
-budget exhaustion, missed ticks/lateness, and sustained backlog), not from
-`retx == 0`. If the receiver caps before the sender knee, fit service demand
-from valid lower cells and mark the extrapolated capacity provisional. Compare
-shard gains against fixed overhead: extra shards are useful only when they
-reduce service demand/tail or increase valid DATA capacity enough to pay for
-their extra wakeups, runtime work, and cache cost.
+The capacity knee is selected from demand signals, not from `txInFlight > 0`
+or `callerQueuedHwm > 0`: `txInFlight` is a steady-state pool gauge and a
+caller queue high-water mark records history. Sender saturation requires actual
+caller-queue growth or a sustained non-empty caller queue, TX exhaustion,
+persistent service/driver budget exhaustion, or a ready-queue overflow.
+Receiver-apparatus limits remain separate from sender demand saturation.
 
-Use the provisional coefficient form:
+Fit CPU demand directly, excluding receiver-apparatus-limited and
+sender-saturated rows from the provisional fit:
 
 ```text
-required_shards ~= ceil(
-    DATA/event demand * measured service demand
-    / target shard utilization
-)
-                 + fixed-overhead guard
-                 + tail-latency guard
+egress_core_equivalents = egressThreadCpuSecs / windowSecs
+DATA_rate                = dataFirst / windowSecs
+
+egress_core_equivalents =
+    fixed_core_per_shard * shard_count
+    + seconds_per_DATA * DATA_rate
 ```
 
-The measured service-demand coefficient is portable evidence for WI10, not a
-new production constant. WI3.7 MUST NOT replace the CPU-derived production
-shard law.
+The analysis artifact reports the joint coefficients, per-arm affine fits,
+point count, residual sum of squares/RMSE, and `R²`. It reports no coefficient
+when the rows are insufficient or rank-deficient. Required shards are derived
+from variable CPU demand:
+
+```text
+required_shards >= ceil(
+    DATA_rate * seconds_per_DATA
+    / (target_utilization - fixed_core_per_shard)
+)
++ fixed-overhead and tail-latency guard
+```
+
+The coefficient and shard count are provisional WI10 evidence, not production
+constants. Extra shards still require a measured CPU/tail-latency gain large
+enough to pay their fixed wakeup, runtime, and cache cost. WI3.7 MUST NOT
+replace the CPU-derived production shard law.
 
 ### 16.4 Bounded crypto cells
 
-After plaintext establishes the service-demand law, run one bounded AES-128
-cell and one bounded AES-256 cell at a receiver-safe point on the ladder. The
-runner defaults the receiver datapath queue horizon to `10000 ms` so this is
-not confused with the smaller default queue's known apparatus limit; override
-`WI37_RECEIVER_QUEUE_HORIZON_MS` only when the receiver topology justifies it.
-Record the incremental receiver and egress CPU/service demand. Do not run a
-full crypto/fanout matrix unless the bounded cells show nonlinear behavior.
+After plaintext establishes the service-demand law, run AES-128 and AES-256 at
+the same receiver-safe point, three times each, alternating mode order between
+repeats. The runner stores each repeat separately and the analysis reports
+median/min/max for egress CPU, process CPU, service demand, and receiver CPU,
+plus paired deltas. If the observed delta/noise spans zero, mark the crypto
+increment unresolved on this host and defer it to WI10; do not run a full
+crypto/fanout matrix unless these bounded repeats show nonlinear behavior.
+
 Crypto cells use the same product output path and remain separate from the
-plaintext shard comparison.
+plaintext shard comparison. No production `SrtCpuParallel` policy change and
+no Q-025 closure is allowed from this host-only qualification.
 
 ## 17. Re-Derive the SRT Shard Law
 

@@ -55,6 +55,7 @@ pub(super) struct VerdictInput<'a> {
     pub(super) outputs_before: &'a [OutputSample],
     pub(super) outputs_after: &'a [OutputSample],
     pub(super) receiver_net_delta: Value,
+    pub(super) engine_before: Value,
     pub(super) engine_after: Value,
     pub(super) engine_deltas: Value,
     pub(super) engine_final: Value,
@@ -94,6 +95,7 @@ pub(super) fn emit(input: VerdictInput<'_>) -> Result<(), String> {
         outputs_before,
         outputs_after,
         receiver_net_delta,
+        engine_before,
         engine_after,
         engine_deltas,
         engine_final,
@@ -454,16 +456,31 @@ pub(super) fn emit(input: VerdictInput<'_>) -> Result<(), String> {
             "note": "legacy WI3.6 diagnostic only; WI3.7 uses requested_shard_topology",
         }),
     );
+    const PERSISTENT_BUDGET_EVENTS: u64 = 2;
     let tx_exhaustions = counter_at(&engine_deltas, &["txExhaustions"]);
     let service_budget_exhausted = counter_at(&engine_deltas, &["serviceBudgetExhausted"]);
     let driver_budget_violations = counter_at(&engine_deltas, &["driverBudgetViolations"]);
+    let ready_overflows = counter_at(&engine_deltas, &["readyOverflows"]);
     let tx_in_flight = counter_at(&engine_after, &["txInFlight"]);
+    let caller_queued_before = counter_at(&engine_before, &["callerQueued"]);
+    let caller_queued = counter_at(&engine_after, &["callerQueued"]);
     let caller_queued_hwm = counter_at(&engine_deltas, &["callerQueuedHwm"]);
-    let sender_backlog = tx_in_flight.unwrap_or(0) > 0 || caller_queued_hwm.unwrap_or(0) > 0;
+    let caller_queue_longest_us = counter_at(&engine_deltas, &["callerQueueLongestUs"]);
+    let caller_queue_growth = match (caller_queued_before, caller_queued) {
+        (Some(before), Some(after)) => after > before,
+        _ => false,
+    };
+    let sustained_queue_us = (window_secs_observed * 1_000_000.0 / 10.0)
+        .max(1_000.0)
+        .round() as u64;
+    let sustained_caller_queue = caller_queued.unwrap_or(0) > 0
+        && caller_queue_longest_us.unwrap_or(0) >= sustained_queue_us;
+    let sender_backlog = caller_queue_growth || sustained_caller_queue;
     let sender_saturated = sender_backlog
         || tx_exhaustions.unwrap_or(0) > 0
-        || service_budget_exhausted.unwrap_or(0) > 0
-        || driver_budget_violations.unwrap_or(0) > 0;
+        || service_budget_exhausted.unwrap_or(0) >= PERSISTENT_BUDGET_EVENTS
+        || driver_budget_violations.unwrap_or(0) >= PERSISTENT_BUDGET_EVENTS
+        || ready_overflows.unwrap_or(0) > 0;
     let amplification = match (wire_delta, data_first_delta) {
         (Some(wire), Some(first)) if first > 0 => {
             json!({
@@ -534,10 +551,19 @@ pub(super) fn emit(input: VerdictInput<'_>) -> Result<(), String> {
                 "saturated": sender_saturated,
                 "txExhaustions": tx_exhaustions,
                 "serviceBudgetExhausted": service_budget_exhausted,
+                "serviceBudgetSaturationThreshold": PERSISTENT_BUDGET_EVENTS,
+                "driverBudgetViolations": driver_budget_violations,
+                "driverBudgetSaturationThreshold": PERSISTENT_BUDGET_EVENTS,
+                "readyOverflows": ready_overflows,
                 "txInFlight": tx_in_flight,
                 "txHighWaterDelta": counter_at(&engine_deltas, &["txHighWater"]),
                 "txHighWaterClosing": counter_at(&engine_after, &["txHighWater"]),
+                "callerQueued": caller_queued,
                 "callerQueuedHwm": caller_queued_hwm,
+                "callerQueueLongestUs": caller_queue_longest_us,
+                "callerQueueGrowth": caller_queue_growth,
+                "sustainedCallerQueue": sustained_caller_queue,
+                "sustainedQueueThresholdUs": sustained_queue_us,
                 "backlog": sender_backlog,
             },
             "serviceSignals": {
@@ -549,7 +575,9 @@ pub(super) fn emit(input: VerdictInput<'_>) -> Result<(), String> {
                 "readyDepthHwm": counter_at(&engine_deltas, &["readyDepthHwm"]),
                 "readyOverflows": counter_at(&engine_deltas, &["readyOverflows"]),
                 "loopDurationSumUs": counter_at(&engine_deltas, &["loopDurationSumUs"]),
-                "backlog": tx_in_flight,
+                "backlog": sender_backlog,
+                "txInFlight": tx_in_flight,
+                "callerQueued": caller_queued,
                 "missedTicks": Value::Null,
                 "missedTicksSource": "not exposed by /metrics/system",
                 "latenessUs": {"p50": Value::Null, "p99": Value::Null, "max": Value::Null, "source": "not exposed by /metrics/system"},
@@ -592,7 +620,9 @@ pub(super) fn emit(input: VerdictInput<'_>) -> Result<(), String> {
                 "queueOverflows": queue_overflows,
                 "serviceBudgetExhausted": service_budget_exhausted,
                 "txInFlight": tx_in_flight,
+                "callerQueued": caller_queued,
                 "callerQueuedHwm": caller_queued_hwm,
+                "callerQueueLongestUs": caller_queue_longest_us,
                 "serviceVisits": counter_at(&engine_deltas, &["serviceVisits"]),
                 "serviceActions": counter_at(&engine_deltas, &["serviceActions"]),
                 "serviceDurationSumUs": counter_at(&engine_deltas, &["serviceDurationSumUs"]),

@@ -713,7 +713,7 @@ pub(super) async fn run_duty_inner(
         "engine",
         json!({
             "source": "GET /metrics/system egressShards[protocol=srt].srtOwners[] + shard counters",
-            "baseline": engine_before,
+            "baseline": engine_before.clone(),
             "closing": engine_after,
             "delta": engine_deltas,
             "perShardBaseline": engine_shards_before,
@@ -778,6 +778,7 @@ pub(super) async fn run_duty_inner(
         outputs_before: &outputs_before,
         outputs_after: &outputs_after,
         receiver_net_delta,
+        engine_before,
         engine_after,
         engine_deltas,
         engine_final,

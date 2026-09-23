@@ -236,6 +236,14 @@ impl EgressDutyConfig {
     }
 
     pub(super) fn json(&self) -> Value {
+        let restream_cpus = self.restream_mask();
+        let restream_set = parse_cpu_mask(&restream_cpus).unwrap_or_default();
+        let harness_set = parse_cpu_mask(&self.harness_cpus).unwrap_or_default();
+        let peer_set = parse_cpu_mask(&self.peer_cpus).unwrap_or_default();
+        let control_restream_harness_shared = restream_set
+            .intersection(&harness_set)
+            .copied()
+            .collect::<Vec<_>>();
         json!({
             "outputs": self.outputs,
             "destBase": self.dest_base,
@@ -246,8 +254,20 @@ impl EgressDutyConfig {
             "requestedShards": self.requested_shards,
             "peerCpus": self.peer_cpus,
             "harnessCpus": self.harness_cpus,
-            "restreamCpus": self.restream_mask(),
+            "restreamCpus": restream_cpus,
             "restreamCpusExplicit": self.restream_cpus,
+            "topology": {
+                "shardCpus": self.shard_cpus.iter().collect::<Vec<_>>(),
+                "controlRestreamCpus": restream_set.iter().collect::<Vec<_>>(),
+                "harnessCpus": harness_set.iter().collect::<Vec<_>>(),
+                "receiverPeerCpus": peer_set.iter().collect::<Vec<_>>(),
+                "controlRestreamHarnessSharedCpus": control_restream_harness_shared,
+                "shardCpusIsolatedFromControl": self.shard_cpus.is_disjoint(&restream_set),
+                "shardCpusIsolatedFromHarness": self.shard_cpus.is_disjoint(&harness_set),
+                "shardCpusIsolatedFromReceiver": self.shard_cpus.is_disjoint(&peer_set),
+                "controlRestreamAndHarnessIntentionallyShare": true,
+                "note": "shard CPUs are isolated from control, harness, and receiver CPUs; control Restream and harness intentionally share the control CPU set",
+            },
             "receiverBin": self.receiver_bin.display().to_string(),
             "receiverSecs": self.receiver_secs,
             "receiverLatencyMs": self.receiver_latency_ms,
