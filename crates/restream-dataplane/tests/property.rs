@@ -1,9 +1,13 @@
 use proptest::prelude::*;
+use proptest::test_runner::{Config as ProptestConfig, FileFailurePersistence};
 use restream_dataplane::{
     MediaArena, MediaRing, OpKind, OpTag, ReadyQueue, TxPool, jain_fairness_milli,
 };
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_failure_persistence(
+        FileFailurePersistence::WithSource("proptest-regressions")
+    ))]
     #[test]
     fn operation_tag_round_trip(slot in 0u32..(1 << 20), generation in any::<u32>()) {
         let tag = OpTag::new(OpKind::TcpTx, slot, generation).unwrap();

@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use proptest::prelude::*;
+use proptest::test_runner::{Config as ProptestConfig, FileFailurePersistence};
 use restream::media::input_gate::{
     InputForwardState, InputPacketBoundary, InputPacketGate, InputTimestampMapper,
 };
@@ -95,6 +96,9 @@ fn repeated_promotion_rebases_an_initialized_timestamp_mapper() {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_failure_persistence(
+        FileFailurePersistence::WithSource("proptest-regressions")
+    ))]
     #[test]
     fn gate_matches_sequential_selection_model(
         operations in prop::collection::vec((0u8..4, 0u8..3), 1..128)
