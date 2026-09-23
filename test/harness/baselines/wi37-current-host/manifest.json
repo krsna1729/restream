@@ -1,0 +1,848 @@
+{
+  "artifactAudit": {
+    "preQualificationRootAbsent": [
+      ".local/artifacts/wi37-capacity"
+    ],
+    "selectionRule": "Only artifacts with sibling contract.json matching the explicit provenance.json are retained; no mtime selection.",
+    "staleRoots": [
+      {
+        "action": "not retained; reran qualification cells",
+        "artifacts": 16,
+        "contracts": 0,
+        "matchingCleanProvenance": 0,
+        "root": "/tmp/restream-wi37-ladder-safe"
+      },
+      {
+        "action": "not retained; reran qualification cells",
+        "artifacts": 26,
+        "contracts": 26,
+        "matchingCleanProvenance": 0,
+        "root": "/tmp/restream-wi37-followup-plaintext"
+      },
+      {
+        "action": "not retained; reran six crypto repeats",
+        "artifacts": 7,
+        "contracts": 7,
+        "matchingCleanProvenance": 0,
+        "root": "/tmp/restream-wi37-followup-crypto"
+      }
+    ]
+  },
+  "binaries": {
+    "restreamSha256": "1608ddd1efab26bf54ec467cf153b0baccd9c9d58110ab53e7c0a4ecc1360f7a",
+    "testHarnessSha256": "1f010888356f75c231fdc0f3fbb68620007538da9e56945389c648f09e378ed0"
+  },
+  "commands": {
+    "analysis": "python3 scripts/harness/wi37-capacity-analysis.py .local/artifacts/wi37-capacity --provenance .local/artifacts/wi37-capacity/provenance.json --out test/harness/baselines/wi37-current-host/summary.json",
+    "build": "RESTREAM_BENCH_FEATURES=wi37-shard-bench scripts/build/bench-harness.sh",
+    "crypto": "WI37_ARTIFACT_ROOT=.local/artifacts/wi37-capacity WI37_SKIP_BUILD=1 WI37_RESUME=1 WI37_SHARDS=1 WI37_FANOUTS=10 WI37_SKIP_CRYPTO=0 WI37_CRYPTO_SHARDS=1 WI37_CRYPTO_OUTPUTS=10 WI37_CRYPTO_REPEATS=3 WI37_WINDOW_SECS=30 WI37_RECEIVER_QUEUE_HORIZON_MS=10000 WI37_NETNS=wi3-sink WI37_DEST_BASE=10.53.0.2 scripts/harness/wi37-capacity.sh",
+    "plaintext": "WI37_ARTIFACT_ROOT=.local/artifacts/wi37-capacity WI37_SKIP_BUILD=1 WI37_RESUME=0 WI37_SHARDS=1,2,3,4 WI37_FANOUTS=10,20,30,40,50,60,80 WI37_SKIP_CRYPTO=1 WI37_WINDOW_SECS=30 WI37_RECEIVER_QUEUE_HORIZON_MS=10000 WI37_NETNS=wi3-sink WI37_DEST_BASE=10.53.0.2 scripts/harness/wi37-capacity.sh"
+  },
+  "manifestVersion": 1,
+  "measuredCommit": "4acb0148f7dc76087203c9dec205150f68a6961b",
+  "provenance": {
+    "benchSha256": "1f010888356f75c231fdc0f3fbb68620007538da9e56945389c648f09e378ed0",
+    "buildProvenance": {
+      "features": "wi37-shard-bench",
+      "gitDirty": false,
+      "gitSha": "4acb0148f7dc76087203c9dec205150f68a6961b"
+    },
+    "contractVersion": 2,
+    "features": "wi37-shard-bench",
+    "gitSha": "4acb0148f7dc76087203c9dec205150f68a6961b",
+    "restreamSha256": "1608ddd1efab26bf54ec467cf153b0baccd9c9d58110ab53e7c0a4ecc1360f7a"
+  },
+  "qualification": "WI3.7 current-host provenance-clean qualification; raw logs intentionally omitted",
+  "qualificationResult": {
+    "boundaryUnstableCells": 0,
+    "classifications": [
+      "stable-unclassified"
+    ],
+    "cryptoAttempts": 6,
+    "cryptoNoiseSpansZero": true,
+    "currentHostFrozen": false,
+    "freezeReason": "Clean fit is not materially consistent with the prior ~0.052 fixed-core/~20us DATA baseline; retain evidence but do not freeze or advance WI4.",
+    "jointCpuDemandFit": {
+      "fixedCorePerShard": 0.10351899892053437,
+      "points": 28,
+      "rSquared": 0.9024534124956954,
+      "residualSumSquares": 0.21159596196466984,
+      "rmseCoreEquivalents": 0.0869309993132217,
+      "secondsPerData": 1.3010635767914276e-05
+    },
+    "plaintextAttempts": 28,
+    "plaintextLogicalCells": 28,
+    "requiredShardsUpperBound": 2,
+    "unresolvedOnHost": true
+  },
+  "rawArtifactsCommitted": false,
+  "selectedCells": [
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-10/egress-duty.json",
+          "artifactSha256": "584ab7b376408122a15271969f8b23444d0269fd8b2707bd987bd069ccd58c0c",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-10/contract.json",
+          "crypto": "plain",
+          "logical": "plain/1/10",
+          "outputs": 10,
+          "repeat": null,
+          "shards": 1
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 10,
+      "shards": 1
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-20/egress-duty.json",
+          "artifactSha256": "d8e66609d95cbec0a9017a0507d6f88e1c5a69870b6aadd1a2a2c61d7a2dc993",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-20/contract.json",
+          "crypto": "plain",
+          "logical": "plain/1/20",
+          "outputs": 20,
+          "repeat": null,
+          "shards": 1
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 20,
+      "shards": 1
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-30/egress-duty.json",
+          "artifactSha256": "3fe246adf016359259421fe1e4b7f59b4212b631c25280b78fb2e0fb8430d0f2",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-30/contract.json",
+          "crypto": "plain",
+          "logical": "plain/1/30",
+          "outputs": 30,
+          "repeat": null,
+          "shards": 1
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 30,
+      "shards": 1
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-40/egress-duty.json",
+          "artifactSha256": "9541ecb4443b367c8391528785075573050aea7a1cee7f77f8ef1999c340e56d",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-40/contract.json",
+          "crypto": "plain",
+          "logical": "plain/1/40",
+          "outputs": 40,
+          "repeat": null,
+          "shards": 1
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 40,
+      "shards": 1
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-50/egress-duty.json",
+          "artifactSha256": "98b82bde3b03abbcee12688e9567fcd37a351bfe6c56c7e9b68209caec28605e",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-50/contract.json",
+          "crypto": "plain",
+          "logical": "plain/1/50",
+          "outputs": 50,
+          "repeat": null,
+          "shards": 1
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 50,
+      "shards": 1
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-60/egress-duty.json",
+          "artifactSha256": "daa1a93f2fe862ec9c543daaf03e54c544cfe781dd71e2cdc3c52966869a7328",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-60/contract.json",
+          "crypto": "plain",
+          "logical": "plain/1/60",
+          "outputs": 60,
+          "repeat": null,
+          "shards": 1
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 60,
+      "shards": 1
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-80/egress-duty.json",
+          "artifactSha256": "7f1d277fd2972641f682593ed6c43689b0bb354ad334860e680372e5fff8c62b",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-80/contract.json",
+          "crypto": "plain",
+          "logical": "plain/1/80",
+          "outputs": 80,
+          "repeat": null,
+          "shards": 1
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 80,
+      "shards": 1
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-10/egress-duty.json",
+          "artifactSha256": "3e813866f8f4b41781c2e5139e5e1a12a7752354fb5d8a8666683d6c7e3e8f81",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-10/contract.json",
+          "crypto": "plain",
+          "logical": "plain/2/10",
+          "outputs": 10,
+          "repeat": null,
+          "shards": 2
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 10,
+      "shards": 2
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-20/egress-duty.json",
+          "artifactSha256": "f3216c671ce1725cff78d53010598a51aa4150b642dacda759981e2527168ecc",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-20/contract.json",
+          "crypto": "plain",
+          "logical": "plain/2/20",
+          "outputs": 20,
+          "repeat": null,
+          "shards": 2
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 20,
+      "shards": 2
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-30/egress-duty.json",
+          "artifactSha256": "5c2e1e8c97a7d729899cd4f0a98923ddcb0bc6ec1605b720a0e6ac0ef171d6a6",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-30/contract.json",
+          "crypto": "plain",
+          "logical": "plain/2/30",
+          "outputs": 30,
+          "repeat": null,
+          "shards": 2
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 30,
+      "shards": 2
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-40/egress-duty.json",
+          "artifactSha256": "97798324c057057f6f1c75d7efd4b91df983ca86f44a1062d366c0fbb1c77cbb",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-40/contract.json",
+          "crypto": "plain",
+          "logical": "plain/2/40",
+          "outputs": 40,
+          "repeat": null,
+          "shards": 2
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 40,
+      "shards": 2
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-50/egress-duty.json",
+          "artifactSha256": "c194cf224220ea3d1d98584239b04cb04463ba037126a647b9a42bb30872ca75",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-50/contract.json",
+          "crypto": "plain",
+          "logical": "plain/2/50",
+          "outputs": 50,
+          "repeat": null,
+          "shards": 2
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 50,
+      "shards": 2
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-60/egress-duty.json",
+          "artifactSha256": "77ad94b7b6ec7bf6326123c3d8f783656e55371946bba679d2614678712f5839",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-60/contract.json",
+          "crypto": "plain",
+          "logical": "plain/2/60",
+          "outputs": 60,
+          "repeat": null,
+          "shards": 2
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 60,
+      "shards": 2
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-80/egress-duty.json",
+          "artifactSha256": "dbecba146d6dbdab132ea4c45444b1e2b9fe4a2e3ad30fc47dbbb7c03a4b732f",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-80/contract.json",
+          "crypto": "plain",
+          "logical": "plain/2/80",
+          "outputs": 80,
+          "repeat": null,
+          "shards": 2
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 80,
+      "shards": 2
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-10/egress-duty.json",
+          "artifactSha256": "1440c73339987cbe74a044d73991efb930ef66ad301add451008efcdcba172f7",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-10/contract.json",
+          "crypto": "plain",
+          "logical": "plain/3/10",
+          "outputs": 10,
+          "repeat": null,
+          "shards": 3
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 10,
+      "shards": 3
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-20/egress-duty.json",
+          "artifactSha256": "d7f0a432deead2e7f5d5831d9e358a6c874dc36107a7fe161d78617e828a82a5",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-20/contract.json",
+          "crypto": "plain",
+          "logical": "plain/3/20",
+          "outputs": 20,
+          "repeat": null,
+          "shards": 3
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 20,
+      "shards": 3
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-30/egress-duty.json",
+          "artifactSha256": "95f8180f0faf0f0fa00b6ab7a177f14f799babe918b5b8ffd9caee924a235064",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-30/contract.json",
+          "crypto": "plain",
+          "logical": "plain/3/30",
+          "outputs": 30,
+          "repeat": null,
+          "shards": 3
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 30,
+      "shards": 3
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-40/egress-duty.json",
+          "artifactSha256": "34c032e271f4537ff48408333d6c97713b4d7f8573282287e878a7b232e93e87",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-40/contract.json",
+          "crypto": "plain",
+          "logical": "plain/3/40",
+          "outputs": 40,
+          "repeat": null,
+          "shards": 3
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 40,
+      "shards": 3
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-50/egress-duty.json",
+          "artifactSha256": "b28d3d6069775b528f8d1629ea432d3774c8a229a22c65db462355217788eeb1",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-50/contract.json",
+          "crypto": "plain",
+          "logical": "plain/3/50",
+          "outputs": 50,
+          "repeat": null,
+          "shards": 3
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 50,
+      "shards": 3
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-60/egress-duty.json",
+          "artifactSha256": "49dec0752f8b2e0389f8164735247310fca63fd75e5c6d427006b9a3778aa489",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-60/contract.json",
+          "crypto": "plain",
+          "logical": "plain/3/60",
+          "outputs": 60,
+          "repeat": null,
+          "shards": 3
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 60,
+      "shards": 3
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-80/egress-duty.json",
+          "artifactSha256": "cf435ecd067cbef2622ab56a38db669cf00d4c69c8bfcd7e3c85c2fe92b1b4ad",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-80/contract.json",
+          "crypto": "plain",
+          "logical": "plain/3/80",
+          "outputs": 80,
+          "repeat": null,
+          "shards": 3
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 80,
+      "shards": 3
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-10/egress-duty.json",
+          "artifactSha256": "aed6257310c9dfe7a57b54d700c914466bf3e27fdf192f128c2f83bf74aac2ad",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-10/contract.json",
+          "crypto": "plain",
+          "logical": "plain/4/10",
+          "outputs": 10,
+          "repeat": null,
+          "shards": 4
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 10,
+      "shards": 4
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-20/egress-duty.json",
+          "artifactSha256": "0bd29e8a4d3ab23f34863a8e784a7884161a673f0129874d45deab1717280b07",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-20/contract.json",
+          "crypto": "plain",
+          "logical": "plain/4/20",
+          "outputs": 20,
+          "repeat": null,
+          "shards": 4
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 20,
+      "shards": 4
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-30/egress-duty.json",
+          "artifactSha256": "a5be70fe5965e1b82f7b1c338d52e8c6b1d2358340d575d59ac9c524154109dc",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-30/contract.json",
+          "crypto": "plain",
+          "logical": "plain/4/30",
+          "outputs": 30,
+          "repeat": null,
+          "shards": 4
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 30,
+      "shards": 4
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-40/egress-duty.json",
+          "artifactSha256": "a4d2e701480d89377524738ed28c53e6822f3e84020e5aff4d52b35b59dc8335",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-40/contract.json",
+          "crypto": "plain",
+          "logical": "plain/4/40",
+          "outputs": 40,
+          "repeat": null,
+          "shards": 4
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 40,
+      "shards": 4
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-50/egress-duty.json",
+          "artifactSha256": "6740e61e8a74243b5642bb21e1d1323bb9662dde7ce0393743161b04a60dacb3",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-50/contract.json",
+          "crypto": "plain",
+          "logical": "plain/4/50",
+          "outputs": 50,
+          "repeat": null,
+          "shards": 4
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 50,
+      "shards": 4
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-60/egress-duty.json",
+          "artifactSha256": "a5276079fa95640d32598563ff2f1c300e97878a42928c17b5b176ebc468429c",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-60/contract.json",
+          "crypto": "plain",
+          "logical": "plain/4/60",
+          "outputs": 60,
+          "repeat": null,
+          "shards": 4
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 60,
+      "shards": 4
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-80/egress-duty.json",
+          "artifactSha256": "61770034e53213aefe60d7369d17c6ba67e85a1aecf1459673d38a6f70f69bb9",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-80/contract.json",
+          "crypto": "plain",
+          "logical": "plain/4/80",
+          "outputs": 80,
+          "repeat": null,
+          "shards": 4
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "kind": "plaintext",
+      "outputs": 80,
+      "shards": 4
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/crypto-128/repeat-1/egress-duty.json",
+          "artifactSha256": "317275c51e9d002c056feff013ebd02c3c9b5bdc381737fe35475dc36c1f9fe7",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/crypto-128/repeat-1/contract.json",
+          "crypto": "128",
+          "logical": "crypto/128/1",
+          "outputs": 10,
+          "repeat": 1,
+          "shards": 1
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "crypto": "128",
+      "kind": "crypto",
+      "outputs": 10,
+      "repeat": 1,
+      "shards": 1
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/crypto-128/repeat-2/egress-duty.json",
+          "artifactSha256": "9fa54234b0c2d000c9b3f7699faf8f7d8f14cfaf678e71216ff8719430a5e580",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/crypto-128/repeat-2/contract.json",
+          "crypto": "128",
+          "logical": "crypto/128/2",
+          "outputs": 10,
+          "repeat": 2,
+          "shards": 1
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "crypto": "128",
+      "kind": "crypto",
+      "outputs": 10,
+      "repeat": 2,
+      "shards": 1
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/crypto-128/repeat-3/egress-duty.json",
+          "artifactSha256": "b7d291c5201d5d7747fac1bdb38ad8597af3a96b85643330f2eca09843024f4b",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/crypto-128/repeat-3/contract.json",
+          "crypto": "128",
+          "logical": "crypto/128/3",
+          "outputs": 10,
+          "repeat": 3,
+          "shards": 1
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "crypto": "128",
+      "kind": "crypto",
+      "outputs": 10,
+      "repeat": 3,
+      "shards": 1
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/crypto-256/repeat-1/egress-duty.json",
+          "artifactSha256": "8ef257c367cdd89c5b66b13113aa7ac19081cb4e2cd94be9719fece589672623",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/crypto-256/repeat-1/contract.json",
+          "crypto": "256",
+          "logical": "crypto/256/1",
+          "outputs": 10,
+          "repeat": 1,
+          "shards": 1
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "crypto": "256",
+      "kind": "crypto",
+      "outputs": 10,
+      "repeat": 1,
+      "shards": 1
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/crypto-256/repeat-2/egress-duty.json",
+          "artifactSha256": "99670213e6acc65435104be0911d291215f46b92b29a72dd32ae7ccc95ae31b8",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/crypto-256/repeat-2/contract.json",
+          "crypto": "256",
+          "logical": "crypto/256/2",
+          "outputs": 10,
+          "repeat": 2,
+          "shards": 1
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "crypto": "256",
+      "kind": "crypto",
+      "outputs": 10,
+      "repeat": 2,
+      "shards": 1
+    },
+    {
+      "attemptCount": 1,
+      "attempts": [
+        {
+          "apparatusValid": true,
+          "artifact": ".local/artifacts/wi37-capacity/crypto-256/repeat-3/egress-duty.json",
+          "artifactSha256": "856a634daffa01ecf0d8fc292165664e66329a9bf56550a82285dd0215f97a58",
+          "classification": "stable-unclassified",
+          "contract": ".local/artifacts/wi37-capacity/crypto-256/repeat-3/contract.json",
+          "crypto": "256",
+          "logical": "crypto/256/3",
+          "outputs": 10,
+          "repeat": 3,
+          "shards": 1
+        }
+      ],
+      "boundaryUnstable": false,
+      "classification": "stable-unclassified",
+      "crypto": "256",
+      "kind": "crypto",
+      "outputs": 10,
+      "repeat": 3,
+      "shards": 1
+    }
+  ],
+  "sourceArtifactRoot": ".local/artifacts/wi37-capacity",
+  "srtRs": {
+    "commit": "86369b0",
+    "receiverBin": "/home/dev/.cargo/git/checkouts/srt-rs-2a4e85d4a1e5ceb4/86369b0/target/release/srt-bench"
+  },
+  "summaryPath": "test/harness/baselines/wi37-current-host/summary.json",
+  "summarySha256": "e442c921c401efbe235d281eadae6d7233ca8f093abb5ec31526b4a93e9d295f"
+}

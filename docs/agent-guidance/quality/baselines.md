@@ -68,6 +68,27 @@ Full 42-case breakdown and dated MSR/resource campaigns live in
 VPS/WSL2 profiling dumps live in
 [archive/quality/baselines-profiling-2026-07.md](../../archive/quality/baselines-profiling-2026-07.md).
 
+### WI3.7 provenance-clean current-host qualification (2026-09-23)
+
+Measured from clean build commit `4acb0148` with the `wi37-shard-bench`
+feature, pinned `srt-rs` checkout `86369b0`, and the six-vCPU veth topology.
+The durable evidence is
+[`test/harness/baselines/wi37-current-host/`](../../../test/harness/baselines/wi37-current-host/):
+`summary.json` contains the selected cells and `manifest.json` records the
+provenance, binary SHA-256s, selected artifact SHA-256s, classifications, and
+exact commands. Raw run logs are intentionally not committed.
+
+The qualification retained 28 plaintext logical cells (`1..4` shards ×
+`10,20,30,40,50,60,80` outputs), one matching attempt per cell, and six
+matching crypto repeats (AES-128/AES-256, three each). All selected rows were
+apparatus-valid and `stable-unclassified`; no boundary-unstable cell was
+included. The joint fit is `fixedCorePerShard = 0.103519`,
+`secondsPerData = 13.0106 us/DATA`, `R² = 0.90245`, with a provisional
+two-shard upper bound. The clean fit is materially different from the prior
+local-only `0.0518` / `20.25 us/DATA` result, so this is evidence, not a
+frozen current-host coefficient; WI4 is not advanced and Q-025 remains open.
+The crypto paired deltas span zero and remain unresolved on this host.
+
 ### WI3.4 packet-rate contract — SRT fanout ladder (2026-09-21)
 
 The contract lives in

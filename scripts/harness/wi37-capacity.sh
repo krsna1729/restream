@@ -252,14 +252,24 @@ PY
 
 artifact_matches_contract() {
   local run_dir=$1
+  local crypto=$2
+  local repeat=$3
+  local shards=$4
+  local fanout=$5
+  local shard_cpus=$6
+  local control_cpu=$7
+  local peer_cpus=$8
   local artifact="$run_dir/egress-duty.json"
   local contract="$run_dir/contract.json"
   [[ -s "$artifact" && -s "$contract" ]] || return 1
-  python3 - "$artifact" "$contract" "$git_sha" "$test_harness_sha256" "$restream_sha256" "$features" "$build_provenance_path" <<'PY'
+  python3 - "$artifact" "$contract" "$git_sha" "$test_harness_sha256" "$restream_sha256" "$features" "$build_provenance_path" "$crypto" "$repeat" "$shards" "$fanout" "$shard_cpus" "$control_cpu" "$peer_cpus" "$window_secs" "$receiver_queue_horizon_ms" "$dest_base" "$netns" <<'PY'
 import json, sys
 (
     artifact_path, contract_path, current_git_sha, current_bench_sha,
-    current_restream_sha, current_features, build_path,
+    current_restream_sha, current_features, build_path, expected_crypto,
+    expected_repeat, expected_shards, expected_fanout, expected_shard_cpus,
+    expected_control_cpu, expected_peer_cpus, expected_window_secs,
+    expected_queue_horizon, expected_dest_base, expected_netns,
 ) = sys.argv[1:]
 try:
     artifact = json.load(open(artifact_path))
@@ -267,7 +277,8 @@ try:
     build = json.load(open(build_path))
 except (OSError, ValueError):
     raise SystemExit(1)
-expected = {
+expected_repeat = None if expected_repeat == "-" else int(expected_repeat)
+expected_contract = {
     "contractVersion": 2,
     "gitSha": current_git_sha,
     "benchSha256": current_bench_sha,
@@ -278,9 +289,28 @@ expected = {
         "gitDirty": False,
         "features": current_features,
     },
+    "crypto": expected_crypto,
+    "repeat": expected_repeat,
+    "requestedShards": int(expected_shards),
+    "outputs": int(expected_fanout),
+    "bitrate": "8M",
+    "windowSecs": float(expected_window_secs),
+    "receiverQueueHorizonMs": int(expected_queue_horizon),
+    "destBase": expected_dest_base,
+    "netns": expected_netns,
+    "shardCpus": expected_shard_cpus,
+    "controlRestreamCpus": expected_control_cpu,
+    "harnessCpus": expected_control_cpu,
+    "receiverPeerCpus": expected_peer_cpus,
+    "controlRestreamHarnessShare": True,
 }
-if any(contract.get(key) != value for key, value in expected.items()):
-    raise SystemExit(1)
+for key, expected in expected_contract.items():
+    actual = contract.get(key)
+    if key == "windowSecs":
+        if actual is None or abs(float(actual) - expected) > 1e-9:
+            raise SystemExit(1)
+    elif actual != expected:
+        raise SystemExit(1)
 if build.get("gitSha") != current_git_sha or build.get("gitDirty") is not False:
     raise SystemExit(1)
 if build.get("features") != current_features:
@@ -303,14 +333,12 @@ checks = {
     "receiverPeerCpus": config.get("peerCpus"),
 }
 for key, value in checks.items():
-    expected_value = contract.get(key)
+    expected = expected_contract[key]
     if key == "windowSecs":
-        if value is None or expected_value is None or abs(float(value) - float(expected_value)) > 1e-9:
+        if value is None or abs(float(value) - float(expected)) > 1e-9:
             raise SystemExit(1)
-    elif str(value) != str(expected_value):
+    elif str(value) != str(expected):
         raise SystemExit(1)
-if contract.get("controlRestreamHarnessShare") is not True:
-    raise SystemExit(1)
 raise SystemExit(0)
 PY
 }
@@ -318,14 +346,15 @@ PY
 
 matching_run_dir() {
   local canonical_dir=$1
+  shift
   local candidate
-  if artifact_matches_contract "$canonical_dir"; then
+  if artifact_matches_contract "$canonical_dir" "$@"; then
     printf '%s' "$canonical_dir"
     return 0
   fi
   shopt -s nullglob
   for candidate in "$canonical_dir"/attempt-*; do
-    if artifact_matches_contract "$candidate"; then
+    if artifact_matches_contract "$candidate" "$@"; then
       printf '%s' "$candidate"
       shopt -u nullglob
       return 0
@@ -394,7 +423,7 @@ run_cell() {
   control_cpu="$shards"
   peer_cpus=$(peer_cpus_for "$shards")
 
-  if (( resume == 1 )) && matching=$(matching_run_dir "$canonical_dir"); then
+  if (( resume == 1 )) && matching=$(matching_run_dir "$canonical_dir" "$crypto" "$repeat" "$shards" "$fanout" "$shard_cpus" "$control_cpu" "$peer_cpus"); then
     echo "wi37-capacity: resume crypto=$crypto repeat=$repeat shards=$shards fanout=$fanout artifact=$matching/egress-duty.json" >&2
     emit_cell "$crypto" "$repeat" "$shards" "$fanout" 0 "$matching"
     return $?

@@ -1849,17 +1849,22 @@ with actual cycles/packet evidence.
 
 ## 16. WI3.7 — End-to-End Multi-Shard 8 Mbps Capacity Qualification
 
-Status: ACTIVE — provenance closure is in progress. WI3.6 is frozen. WI3.7
-completed the first bounded plaintext/crypto qualification, but its numerical
-result is not frozen until every selected artifact matches one clean build
-provenance and the durable baseline manifest is committed. Coefficients remain
-provisional until the cross-host comparison in `§11.1` and the portable default
-decision in WI10.
+Status: ACTIVE — the provenance-clean closure evidence is recorded, but
+WI3.7 is not current-host-frozen. The clean run selected one build
+provenance for all 28 plaintext cells and six crypto repeats; every selected
+cell was apparatus-valid and `stable-unclassified`. Its joint fit is
+`fixedCorePerShard = 0.103519`, `secondsPerData = 13.0106 us/DATA`,
+`R² = 0.90245`, with a provisional two-shard upper bound. That fit is
+materially different from the prior local-only `0.0518` / `20.25 us/DATA`
+result, so the result is retained as qualification evidence rather than
+frozen or advanced to WI4. The durable summary and provenance manifest are
+at `test/harness/baselines/wi37-current-host/`.
 
 The prior local-only result is retained as an audit trail, not as the current
 baseline. Its fit was approximately `fixedCorePerShard = 0.0518`,
-`secondsPerData = 20.25 us/DATA`, and a two-shard upper bound; the closure pass
-must regenerate those numbers from provenance-clean artifacts.
+`secondsPerData = 20.25 us/DATA`, and a two-shard upper bound. The clean
+closure result above does not justify treating those coefficients as
+reproduced on this host.
 
 WI3.6 remains the strict, lossless handoff. Its `retx == 0` and duplicate-free
 fences are not silently weakened. WI3.7 uses a separate `CAPACITY_MODE` arm:
