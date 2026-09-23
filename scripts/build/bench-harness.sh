@@ -8,7 +8,12 @@ if [[ -z "${TMPDIR:-}" || ! -d "${TMPDIR:-}" || ! -w "${TMPDIR:-}" ]]; then
   export TMPDIR=/tmp
 fi
 
-scripts/build/resource-limit.sh cargo build --profile bench --bin restream --bin test_harness
+feature_args=()
+if [[ -n "${RESTREAM_BENCH_FEATURES:-}" ]]; then
+  feature_args=(--features "$RESTREAM_BENCH_FEATURES")
+fi
+
+scripts/build/resource-limit.sh cargo build --profile bench --bin restream --bin test_harness "${feature_args[@]}"
 
 # Cargo hardcodes target/release as the output dir for a profile named
 # "bench" (dir-name cannot be overridden for built-in profile names, and the
@@ -38,10 +43,12 @@ provenance_dirty=false
 if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
   provenance_dirty=true
 fi
+bench_features="${RESTREAM_BENCH_FEATURES:-}"
 cat > target/bench/build-provenance.json <<EOF
 {
   "gitSha": "${provenance_sha}",
   "gitDirty": ${provenance_dirty},
+  "features": "${bench_features}",
   "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF

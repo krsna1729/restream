@@ -1,38 +1,40 @@
-//! `egress-duty`: WI3.6 Stage D — live Restream SRT egress, media pipeline
-//! included, against the *independent* pinned upstream receiver process.
+//! `egress-duty`: live Restream SRT egress, media pipeline included, against
+//! the independent pinned upstream receiver process.
 //!
-//! One Restream process fans `OUTPUTS` plaintext SRT outputs into the pinned
-//! `srt-bench runtime=compio mode=receiver` process (launched inside the lane
-//! network namespace, pinned to the receiver CPUs). Over one rated window the
-//! mode measures both scopes the Stage D contract asks for:
-//!
-//! * the SRT **egress shard threads** — every `/proc/<pid>/task/<tid>/comm`
-//!   matching `egress-shard-<n>` whose index is an SRT shard in
-//!   `/metrics/system` `egressShards[]`, each pinned to `SHARD_CPU`;
-//! * the **whole Restream process** (`/proc/<pid>/stat` utime+stime).
+//! One Restream process fans an 8 Mbps SRT ingress into plaintext or bounded
+//! AES-128/AES-256 SRT outputs. WI3.6 remains the legacy single-shard arm;
+//! WI3.7 enables exact 1..=4 shard requests with `RESTREAM_BENCH_FEATURES`
+//! and records the actual `/metrics/system` topology.
 //!
 //! Environment knobs (all `EGRESS_DUTY_`-prefixed):
 //!
 //! | knob | default |
 //! |---|---|
 //! | `OUTPUTS` | 11 |
-//! | `DEST_BASE` | `$RESOURCE_SWEEP_SRT_PEER_HOSTS` (the lane peer, e.g. `10.53.0.2`), else `10.53.1.1` |
+//! | `DEST_BASE` | `$RESOURCE_SWEEP_SRT_PEER_HOSTS`, else `10.53.1.1` |
 //! | `PORT_BASE` | 12000 |
 //! | `WINDOW_SECS` | 30 |
-//! | `SHARD_CPU` | 0 (a single CPU; disjoint from the harness/receiver masks) |
+//! | `SHARD_CPUS` | `SHARD_CPU`, else `0`; one CPU per WI3.7 shard index |
+//! | `REQUESTED_SHARDS` | unset; WI3.7 exact count, valid values 1..=4 |
 //! | `PEER_CPUS` | `2-5` |
 //! | `HARNESS_CPUS` | 1 |
-//! | `RESTREAM_CPUS` | every CPU except `SHARD_CPU` |
+//! | `RESTREAM_CPUS` | every CPU except `SHARD_CPUS` |
+//! | `CRYPTO` | `plain`; bounded cells also accept `128` and `256` |
+//! | `CAPACITY_MODE` | false; permits retransmit/duplicate quality outputs |
 //! | `RECEIVER_BIN` | the pinned `target/release/srt-bench` |
-//! | `RECEIVER_SECS` | `WINDOW_SECS + 40`, capped at 70 (backstop only: the receiver is stopped with `SIGTERM`) |
-//! | `RECEIVER_LATENCY_MS` | 120 (srt-bench's 3rd positional, the TSBPD delay; matches the Stage C rows) |
-//! | `RECEIVER_QUEUE_HORIZON_MS` | unset → omit `--datapath-queue-horizon-ms` (the receiver's own 250 ms / 189-packet-per-connection default) |
+//! | `RECEIVER_SECS` | `WINDOW_SECS + 40`, capped at 70 |
+//! | `RECEIVER_LATENCY_MS` | 120 |
+//! | `RECEIVER_QUEUE_HORIZON_MS` | unset; receiver default |
 //! | `RESTREAM_BIN` | `target/bench/restream` |
 //! | `NETNS` | `$RESTREAM_BENCH_NETNS` |
-//! | `WORK_DIR` | the harness artifact dir + `/egress-duty` |
-//! | `BITRATE` | `8M` (the WI3.4/Stage D source workload) |
-//! | `FFMPEG_THREADS`, `PROGRESS_TIMEOUT_SECS`, `DRAIN_SETTLE_SECS`, `EGRESS_SHARDS` | 2, 45, 8, 1 |
+//! | `WORK_DIR` | harness artifact dir + `/egress-duty` |
+//! | `BITRATE` | `8M` |
+//! | `PROGRESS_TIMEOUT_SECS`, `DRAIN_SETTLE_SECS`, `EGRESS_SHARDS` | 45, 8, 1 |
 //!
+//! The receiver has no HTTP endpoint and no per-interval output. Its whole-run
+//! totals are reconciled after the rated window; receiver and kernel drop
+//! counters remain apparatus-validity fences, while retransmits and duplicates
+//! are measured quality outputs in capacity mode.
 //! The receiver has **no HTTP endpoint and no per-interval output**: stdout is
 //! `LISTENING` then one final `STATS` line, and `--out` appends exactly one
 //! aggregate TSV row per process at teardown. So the mode never polls it, waits
@@ -91,7 +93,10 @@ pub(crate) async fn egress_duty() -> Result<Value, String> {
             "windowSecs": cfg.window_secs,
             "destBase": cfg.dest_base,
             "portBase": cfg.port_base,
-            "shardCpu": cfg.shard_cpu,
+            "shardCpus": cfg.shard_cpus.iter().collect::<Vec<_>>(),
+            "requestedShards": cfg.requested_shards,
+            "crypto": cfg.crypto,
+            "capacityMode": cfg.capacity_mode,
             "restreamCpus": cfg.restream_mask(),
             "netns": cfg.netns,
         })

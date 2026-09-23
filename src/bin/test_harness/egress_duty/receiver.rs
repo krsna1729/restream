@@ -119,6 +119,146 @@ pub(super) fn receiver_stats_line(stdout: &str) -> Option<String> {
         .map(|line| line.trim().to_string())
 }
 
+/// Kernel/network counters sampled from the receiver's network namespace.
+/// Missing proc files stay `null`; verdicts reject missing required drop
+/// counters instead of treating them as zero.
+pub(super) fn read_proc_net_counters(pid: Option<u32>) -> Value {
+    let Some(pid) = pid else {
+        return json!({
+            "pid": Value::Null,
+            "udp": Value::Null,
+            "interfaces": Value::Null,
+            "softnet": Value::Null,
+        });
+    };
+    let root = format!("/proc/{pid}");
+    let udp = read_udp_snmp(&format!("{root}/net/snmp"));
+    let interfaces = read_net_dev(&format!("{root}/net/dev"));
+    let softnet = read_softnet(&format!("{root}/net/softnet_stat"));
+    json!({
+        "pid": pid,
+        "udp": udp,
+        "interfaces": interfaces,
+        "softnet": softnet,
+    })
+}
+
+fn read_udp_snmp(path: &str) -> Value {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Value::Null;
+    };
+    let mut header: Vec<&str> = Vec::new();
+    for line in text.lines().filter(|line| line.starts_with("Udp:")) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 2 {
+            continue;
+        }
+        if header.is_empty() {
+            header = fields;
+            continue;
+        }
+        if header.len() != fields.len() {
+            return Value::Null;
+        }
+        let mut out = serde_json::Map::new();
+        for (key, value) in header.iter().skip(1).zip(fields.iter().skip(1)) {
+            let parsed = value
+                .parse::<u64>()
+                .ok()
+                .map_or(Value::Null, |value| json!(value));
+            out.insert((*key).to_string(), parsed);
+        }
+        return Value::Object(out);
+    }
+    Value::Null
+}
+
+fn read_net_dev(path: &str) -> Value {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Value::Null;
+    };
+    let mut interface_rx_dropped = 0_u64;
+    let mut interface_tx_dropped = 0_u64;
+    let mut veth_rx_dropped = 0_u64;
+    let mut veth_tx_dropped = 0_u64;
+    let mut observed = 0_u64;
+    for line in text.lines().skip(2) {
+        let Some((name, values)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim();
+        if name == "lo" {
+            continue;
+        }
+        let fields: Vec<&str> = values.split_whitespace().collect();
+        if fields.len() < 12 {
+            continue;
+        }
+        let Some(rx_dropped) = fields[3].parse::<u64>().ok() else {
+            continue;
+        };
+        let Some(tx_dropped) = fields[11].parse::<u64>().ok() else {
+            continue;
+        };
+        observed += 1;
+        interface_rx_dropped = interface_rx_dropped.saturating_add(rx_dropped);
+        interface_tx_dropped = interface_tx_dropped.saturating_add(tx_dropped);
+        if name.starts_with("veth") {
+            veth_rx_dropped = veth_rx_dropped.saturating_add(rx_dropped);
+            veth_tx_dropped = veth_tx_dropped.saturating_add(tx_dropped);
+        }
+    }
+    json!({
+        "observedInterfaces": observed,
+        "interfaceRxDropped": interface_rx_dropped,
+        "interfaceTxDropped": interface_tx_dropped,
+        "vethRxDropped": veth_rx_dropped,
+        "vethTxDropped": veth_tx_dropped,
+    })
+}
+
+fn read_softnet(path: &str) -> Value {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Value::Null;
+    };
+    let mut processed = 0_u64;
+    let mut dropped = 0_u64;
+    let mut time_squeeze = 0_u64;
+    let mut received_rps = 0_u64;
+    let mut flow_limit = 0_u64;
+    let mut observed = 0_u64;
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 3 {
+            continue;
+        }
+        let parse_hex = |index: usize| {
+            fields
+                .get(index)
+                .and_then(|value| u64::from_str_radix(value, 16).ok())
+        };
+        let (Some(row_processed), Some(row_dropped), Some(row_squeeze)) =
+            (parse_hex(0), parse_hex(1), parse_hex(2))
+        else {
+            continue;
+        };
+        observed += 1;
+        processed = processed.saturating_add(row_processed);
+        dropped = dropped.saturating_add(row_dropped);
+        time_squeeze = time_squeeze.saturating_add(row_squeeze);
+        received_rps = received_rps.saturating_add(parse_hex(9).unwrap_or(0));
+        flow_limit = flow_limit.saturating_add(parse_hex(10).unwrap_or(0));
+    }
+    json!({
+        "observedRows": observed,
+        "processed": processed,
+        "dropped": dropped,
+        "timeSqueeze": time_squeeze,
+        "receivedRps": received_rps,
+        "flowLimit": flow_limit,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Lane / child processes
 // ---------------------------------------------------------------------------
@@ -264,10 +404,8 @@ pub(super) async fn spawn_receiver(
         cfg.outputs.to_string(),
         "--ingress".into(),
         "per-port".into(),
-        "--egress".into(),
-        "per-connection".into(),
         "--encryption".into(),
-        "plain".into(),
+        cfg.crypto.clone(),
         "--workers".into(),
         "1".into(),
         "--cpus".into(),

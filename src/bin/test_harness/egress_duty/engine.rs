@@ -31,17 +31,30 @@ pub(super) fn parse_visit_max_bytes(restream_log: &str) -> Option<u64> {
 /// an absent counter is never a zero.
 pub(super) const OWNER_COUNTER_FIELDS: &[&str] = &[
     "txPackets",
+    "txBytes",
     "txCompletedOk",
     "txInFlight",
+    "txHighWater",
     "txFailedSends",
+    "txShortSends",
+    "txPeerLocalFailures",
+    "txTransientFailures",
+    "txFailuresDropped",
     "txExhaustions",
+    "protocolOutputFailures",
     "serviceBudgetExhausted",
     "rxPackets",
+    "rxBytes",
     "rxRingDropped",
     "rxTruncated",
     "serviceVisits",
+    "serviceDurationSumUs",
+    "serviceDurationMaxUs",
     "serviceActions",
     "maintenanceActions",
+    "callerInFlightHwm",
+    "callerQueuedHwm",
+    "callerQueueLongestUs",
 ];
 
 /// `txClass` keys: first-transmission DATA, retransmitted DATA, and every
@@ -65,10 +78,13 @@ pub(super) const SHARD_COUNTER_FIELDS: &[&str] = &[
     "loopIterations",
     "mediaTicks",
     "readyVisits",
+    "readyDepthHwm",
     "resyncCount",
     "queueOverflows",
+    "readyOverflows",
     "driverBudgetViolations",
     "retryEvents",
+    "loopDurationSumUs",
 ];
 
 pub(super) fn sum_optional(values: impl Iterator<Item = Option<u64>>) -> Option<u64> {
@@ -136,6 +152,63 @@ pub(super) fn engine_srt_counters(system: &Value) -> Value {
         counters.insert((*key).to_string(), opt_counter(shard_field(key)));
     }
     Value::Object(counters)
+}
+
+/// Per-shard SRT counters keyed by the product's stable shard index. Keeping
+/// this as an object, rather than an array, lets `counter_deltas` preserve
+/// shard-index identity while still emitting one compact artifact block.
+pub(super) fn engine_srt_shard_counters(system: &Value) -> Value {
+    let mut per_shard = serde_json::Map::new();
+    for shard in system["egressShards"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|shard| shard["protocol"] == "srt")
+    {
+        let Some(index) = shard["shardIndex"].as_u64() else {
+            continue;
+        };
+        let owners: Vec<&Value> = shard["srtOwners"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|owner| owner["present"] == true)
+            .collect();
+        let owner_field = |key: &str| {
+            sum_optional(
+                owners
+                    .iter()
+                    .map(|owner| owner.get(key).and_then(Value::as_u64)),
+            )
+        };
+        let class_field = |key: &str| {
+            sum_optional(owners.iter().map(|owner| {
+                owner
+                    .get("txClass")
+                    .and_then(|class| class.get(key))
+                    .and_then(Value::as_u64)
+            }))
+        };
+        let mut tx_class = serde_json::Map::new();
+        for key in TX_CLASS_FIELDS {
+            tx_class.insert((*key).to_string(), opt_counter(class_field(key)));
+        }
+        let mut counters = serde_json::Map::new();
+        counters.insert("shardIndex".to_string(), json!(index));
+        counters.insert("ownerCount".to_string(), json!(owners.len()));
+        for key in OWNER_COUNTER_FIELDS {
+            counters.insert((*key).to_string(), opt_counter(owner_field(key)));
+        }
+        counters.insert("txClass".to_string(), Value::Object(tx_class));
+        for key in SHARD_COUNTER_FIELDS {
+            counters.insert(
+                (*key).to_string(),
+                opt_counter(shard.get(*key).and_then(Value::as_u64)),
+            );
+        }
+        per_shard.insert(index.to_string(), Value::Object(counters));
+    }
+    Value::Object(per_shard)
 }
 
 /// Any SRT owner faulted in this snapshot?

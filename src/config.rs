@@ -125,6 +125,27 @@ impl RuntimeTuning {
     }
 }
 
+#[cfg(feature = "wi37-shard-bench")]
+const WI37_SRT_SHARDS_ENV: &str = "RESTREAM_WI37_SRT_SHARDS";
+
+/// Benchmark-only exact SRT shard override. Invalid values are ignored here;
+/// the egress-duty harness rejects them before starting a measurement. Keeping
+/// parsing in the product config makes the feature seam explicit and leaves
+/// every default build on the production CPU-derived policy.
+fn wi37_srt_shard_override() -> Option<u32> {
+    #[cfg(feature = "wi37-shard-bench")]
+    {
+        return std::env::var(WI37_SRT_SHARDS_ENV)
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .filter(|value| (1..=4).contains(value));
+    }
+    #[cfg(not(feature = "wi37-shard-bench"))]
+    {
+        None
+    }
+}
+
 impl EgressFabricConfig {
     pub fn from_env() -> Self {
         let defaults = Self::default();
@@ -183,6 +204,13 @@ impl EgressFabricConfig {
 
     pub(crate) fn shard_count(&self) -> NonZeroU32 {
         NonZeroU32::new(self.shards).expect("egress fabric shard count is clamped nonzero")
+    }
+
+    /// SRT's initial shard count. The benchmark-only WI3.7 seam is applied
+    /// only to the SRT fabric; RTMP/sink/pipeline retain `shards`.
+    pub(crate) fn srt_shard_count(&self) -> NonZeroU32 {
+        NonZeroU32::new(wi37_srt_shard_override().unwrap_or(self.shards))
+            .expect("egress fabric shard count is clamped nonzero")
     }
 
     /// Cross-field sanity checks the per-field clamps in `from_env` can't
@@ -467,18 +495,20 @@ pub(crate) enum EgressShardProfile {
 /// Live, output-count-aware shard target for one egress fabric runtime
 /// (one instance per protocol per feed — see `EgressFabricRuntime`), used
 /// to rescale the shard pool as outputs are added/removed instead of
-/// paying for a fixed shard count picked once at startup. Pure function
-/// of (the feed's protocol profile, how many outputs this fabric runtime
-/// currently owns, how many CPUs the process has) — no lookup table, no
-/// cached classification: the CPU-derived ceiling is
-/// `default_egress_fabric_shards` unchanged, and output count only ever
-/// pushes the target *down* from that ceiling, never past it.
+/// paying for a fixed shard count picked once at startup. Default builds
+/// remain a pure CPU-derived policy. The benchmark-only WI3.7 feature may
+/// supply an exact 1..=4 SRT target through `RESTREAM_WI37_SRT_SHARDS`.
 pub(crate) fn target_egress_fabric_shards(
     profile: EgressShardProfile,
     output_count: usize,
     effective_cpus: usize,
 ) -> u32 {
     let cpu_max = default_egress_fabric_shards(effective_cpus);
+    if matches!(profile, EgressShardProfile::SrtCpuParallel)
+        && let Some(requested) = wi37_srt_shard_override()
+    {
+        return requested;
+    }
     let by_outputs = match profile {
         EgressShardProfile::OutputCount => u32::try_from(output_count)
             .unwrap_or(u32::MAX)

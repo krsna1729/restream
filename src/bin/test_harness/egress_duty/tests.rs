@@ -215,19 +215,23 @@ fn cpu_masks_validate_as_sets() {
         3
     );
 
-    let shard = 0;
-    assert!(validate_cpu_masks(shard, &BTreeSet::from([1]), &BTreeSet::from([2, 3]), None).is_ok());
-    assert!(validate_cpu_masks(shard, &BTreeSet::from([0]), &BTreeSet::from([2]), None).is_err());
-    assert!(validate_cpu_masks(shard, &BTreeSet::from([1]), &BTreeSet::from([0]), None).is_err());
+    let shard = BTreeSet::from([0]);
+    assert!(
+        validate_cpu_masks(&shard, &BTreeSet::from([1]), &BTreeSet::from([2, 3]), None).is_ok()
+    );
+    assert!(validate_cpu_masks(&shard, &BTreeSet::from([0]), &BTreeSet::from([2]), None).is_err());
+    assert!(validate_cpu_masks(&shard, &BTreeSet::from([1]), &BTreeSet::from([0]), None).is_err());
     assert!(
         validate_cpu_masks(
-            shard,
+            &shard,
             &BTreeSet::from([1]),
             &BTreeSet::from([2]),
             Some(BTreeSet::from([0, 1])),
         )
         .is_err()
     );
+    let multi = BTreeSet::from([0, 2, 4]);
+    assert!(validate_cpu_masks(&multi, &BTreeSet::from([5]), &BTreeSet::from([6]), None).is_ok());
 }
 
 #[test]
@@ -243,4 +247,47 @@ fn canonical_srt_ingest_row_is_still_the_sweep_h264_srt_row() {
     assert_eq!(row["ingestProto"], "srt");
     assert_eq!(row["videoCodec"], "h264");
     assert_eq!(row["multiAudio"], false);
+}
+
+#[test]
+fn wi37_per_shard_counters_preserve_metrics_index_identity() {
+    let system = json!({
+        "egressShards": [
+            {
+                "protocol": "srt",
+                "shardIndex": 1,
+                "txPackets": 17,
+                "srtOwners": [{
+                    "present": true,
+                    "txPackets": 17,
+                    "txClass": {"dataFirst": 13}
+                }]
+            },
+            {
+                "protocol": "srt",
+                "shardIndex": 0,
+                "txPackets": 11,
+                "srtOwners": [{
+                    "present": true,
+                    "txPackets": 11,
+                    "txClass": {"dataFirst": 9}
+                }]
+            }
+        ]
+    });
+    let counters = engine_srt_shard_counters(&system);
+    assert_eq!(counter_at(&counters["0"], &["txPackets"]), Some(11));
+    assert_eq!(
+        counter_at(&counters["1"], &["txClass", "dataFirst"]),
+        Some(13)
+    );
+    assert_eq!(engine_srt_shard_indices(&system), vec![0, 1]);
+}
+
+#[test]
+fn wi37_rate_parser_accepts_bitrate_suffixes() {
+    assert_eq!(parse_bitrate_bps("8M"), Some(8_000_000.0));
+    assert_eq!(parse_bitrate_bps("1.5G"), Some(1_500_000_000.0));
+    assert_eq!(parse_bitrate_bps("8000000"), Some(8_000_000.0));
+    assert_eq!(parse_bitrate_bps("bad"), None);
 }

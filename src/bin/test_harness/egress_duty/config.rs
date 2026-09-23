@@ -19,7 +19,8 @@ pub(super) struct EgressDutyConfig {
     pub(super) dest_base_source: &'static str,
     pub(super) port_base: u16,
     pub(super) window_secs: u64,
-    pub(super) shard_cpu: u32,
+    pub(super) shard_cpus: BTreeSet<u32>,
+    pub(super) requested_shards: Option<u32>,
     pub(super) peer_cpus: String,
     pub(super) harness_cpus: String,
     pub(super) restream_cpus: Option<String>,
@@ -31,6 +32,8 @@ pub(super) struct EgressDutyConfig {
     pub(super) netns: Option<String>,
     pub(super) work_dir: PathBuf,
     pub(super) bitrate: String,
+    pub(super) crypto: String,
+    pub(super) capacity_mode: bool,
     pub(super) progress_timeout_secs: u64,
     pub(super) drain_settle_secs: u64,
     pub(super) egress_shards: u32,
@@ -39,26 +42,49 @@ pub(super) struct EgressDutyConfig {
 /// Online CPUs on the host, independent of this process's affinity mask.
 pub(super) fn system_cpu_count() -> u32 {
     let online = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
-    let online = if online > 0 {
+    if online > 0 {
         online as u32
     } else {
         std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
             .unwrap_or(1) as u32
-    };
-    online.max(1)
+    }
 }
-
 impl EgressDutyConfig {
     pub(super) fn from_env() -> Result<Self, String> {
         let available = system_cpu_count();
-        let shard_mask = std::env::var("EGRESS_DUTY_SHARD_CPU").unwrap_or_else(|_| "0".to_string());
+        let shard_mask = std::env::var("EGRESS_DUTY_SHARD_CPUS")
+            .or_else(|_| std::env::var("EGRESS_DUTY_SHARD_CPU"))
+            .unwrap_or_else(|_| "0".to_string());
         let shard_cpus = parse_cpu_mask(&shard_mask)?;
-        let shard_cpu = single_cpu(&shard_cpus, "EGRESS_DUTY_SHARD_CPU")?;
-        if shard_cpu >= available {
+        if let Some(cpu) = shard_cpus.iter().find(|cpu| **cpu >= available) {
             return Err(format!(
-                "EGRESS_DUTY_SHARD_CPU={shard_mask} is not a CPU on this host (available_parallelism={available})"
+                "EGRESS_DUTY_SHARD_CPUS={shard_mask} names CPU {cpu}, outside \
+                 available_parallelism={available}"
             ));
+        }
+        let requested_shards = std::env::var("EGRESS_DUTY_REQUESTED_SHARDS")
+            .ok()
+            .map(|value| {
+                value
+                    .trim()
+                    .parse::<u32>()
+                    .map_err(|_| "EGRESS_DUTY_REQUESTED_SHARDS must be an integer".to_string())
+            })
+            .transpose()?;
+        if let Some(requested) = requested_shards {
+            if !(1..=4).contains(&requested) {
+                return Err(format!(
+                    "EGRESS_DUTY_REQUESTED_SHARDS={requested} is outside the WI3.7 range 1..=4"
+                ));
+            }
+            if shard_cpus.len() != requested as usize {
+                return Err(format!(
+                    "WI3.7 requested {requested} shards but EGRESS_DUTY_SHARD_CPUS={shard_mask} \
+                     names {} CPUs; provide one CPU per shard index",
+                    shard_cpus.len()
+                ));
+            }
         }
         let peer_cpus =
             std::env::var("EGRESS_DUTY_PEER_CPUS").unwrap_or_else(|_| "2-5".to_string());
@@ -68,7 +94,7 @@ impl EgressDutyConfig {
             .ok()
             .filter(|mask| !mask.trim().is_empty());
         validate_cpu_masks(
-            shard_cpu,
+            &shard_cpus,
             &parse_cpu_mask(&harness_cpus)?,
             &parse_cpu_mask(&peer_cpus)?,
             restream_cpus.as_deref().map(parse_cpu_mask).transpose()?,
@@ -121,13 +147,24 @@ impl EgressDutyConfig {
                 None => ("10.53.1.1".to_string(), "default"),
             },
         };
+        let crypto = std::env::var("EGRESS_DUTY_CRYPTO").unwrap_or_else(|_| "plain".to_string());
+        if !matches!(crypto.as_str(), "plain" | "128" | "256") {
+            return Err(format!(
+                "EGRESS_DUTY_CRYPTO={crypto:?} must be plain, 128, or 256"
+            ));
+        }
+        let egress_shards = std::env::var("EGRESS_DUTY_EGRESS_SHARDS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .unwrap_or_else(|| requested_shards.unwrap_or(1));
         Ok(Self {
             outputs,
             dest_base,
             dest_base_source,
             port_base,
             window_secs,
-            shard_cpu,
+            shard_cpus,
+            requested_shards,
             peer_cpus,
             harness_cpus,
             restream_cpus,
@@ -139,9 +176,6 @@ impl EgressDutyConfig {
                 .ok()
                 .and_then(|value| value.trim().parse::<u64>().ok())
                 .unwrap_or(DEFAULT_RECEIVER_LATENCY_MS),
-            // Unset keeps the receiver's own 250 ms horizon (today's argv); set
-            // to give each connection a queue bigger than the product's
-            // per-visit burst (see `visitBurstBound` in the artifact).
             receiver_queue_horizon_ms: std::env::var("EGRESS_DUTY_RECEIVER_QUEUE_HORIZON_MS")
                 .ok()
                 .and_then(|value| value.trim().parse::<u64>().ok()),
@@ -154,25 +188,21 @@ impl EgressDutyConfig {
                 .or_else(|| std::env::var("RESTREAM_BENCH_NETNS").ok()),
             work_dir,
             bitrate: std::env::var("EGRESS_DUTY_BITRATE").unwrap_or_else(|_| "8M".to_string()),
+            crypto,
+            capacity_mode: env_flag("EGRESS_DUTY_CAPACITY_MODE"),
             progress_timeout_secs: env_secs("EGRESS_DUTY_PROGRESS_TIMEOUT_SECS", 45),
             drain_settle_secs: env_secs("EGRESS_DUTY_DRAIN_SETTLE_SECS", 8),
-            egress_shards: std::env::var("EGRESS_DUTY_EGRESS_SHARDS")
-                .ok()
-                .and_then(|value| value.trim().parse::<u32>().ok())
-                .unwrap_or(1),
+            egress_shards,
         })
     }
 
-    /// The Restream child's CPU mask: explicit, or every CPU except the shard.
-    ///
-    /// Evaluated against the *host's* online CPUs, not this process's current
-    /// affinity: the harness pins itself to `HARNESS_CPUS` before spawning
-    /// Restream, and an affinity-derived count would then collapse the mask to
-    /// nothing (measured: `taskset: failed to parse CPU list:`).
+    /// The Restream child's CPU mask: explicit, or every CPU except the shard
+    /// CPUs. Evaluated against the host's online CPUs, not this process's
+    /// current affinity.
     pub(super) fn restream_mask(&self) -> String {
         self.restream_cpus.clone().unwrap_or_else(|| {
             let cpus: Vec<u32> = (0..system_cpu_count())
-                .filter(|cpu| *cpu != self.shard_cpu)
+                .filter(|cpu| !self.shard_cpus.contains(cpu))
                 .collect();
             cpus.iter()
                 .map(u32::to_string)
@@ -181,12 +211,28 @@ impl EgressDutyConfig {
         })
     }
 
+    /// WI3.7 maps shard index N to the Nth configured CPU. The one-CPU form is
+    /// retained for the frozen WI3.6 arm and pins every shard to that CPU.
+    pub(super) fn shard_cpu_for_index(&self, index: u32) -> Option<u32> {
+        if self.shard_cpus.len() == 1 && self.requested_shards.is_none() {
+            return self.shard_cpus.iter().next().copied();
+        }
+        self.shard_cpus.iter().nth(index as usize).copied()
+    }
+
     pub(super) fn output_url(&self, index: usize) -> String {
-        format!(
+        let mut url = format!(
             "srt://{}:{}?streamid=publish:egress-duty-{index:03}",
             self.dest_base,
             u32::from(self.port_base) + index as u32
-        )
+        );
+        match self.crypto.as_str() {
+            "128" => url.push_str("&passphrase=srt-bench-encryption&pbkeylen=16"),
+            "256" => url.push_str("&passphrase=srt-bench-encryption&pbkeylen=32"),
+            "plain" => {}
+            _ => unreachable!("crypto validated in from_env"),
+        }
+        url
     }
 
     pub(super) fn json(&self) -> Value {
@@ -196,7 +242,8 @@ impl EgressDutyConfig {
             "destBaseSource": self.dest_base_source,
             "portBase": self.port_base,
             "windowSecs": self.window_secs,
-            "shardCpu": self.shard_cpu,
+            "shardCpus": self.shard_cpus.iter().collect::<Vec<_>>(),
+            "requestedShards": self.requested_shards,
             "peerCpus": self.peer_cpus,
             "harnessCpus": self.harness_cpus,
             "restreamCpus": self.restream_mask(),
@@ -209,6 +256,8 @@ impl EgressDutyConfig {
             "netns": self.netns,
             "workDir": self.work_dir.display().to_string(),
             "bitrate": self.bitrate,
+            "crypto": self.crypto,
+            "capacityMode": self.capacity_mode,
             "egressShards": self.egress_shards,
             "progressTimeoutSecs": self.progress_timeout_secs,
             "drainSettleSecs": self.drain_settle_secs,
@@ -255,6 +304,7 @@ pub(super) fn parse_cpu_mask(mask: &str) -> Result<BTreeSet<u32>, String> {
     Ok(cpus)
 }
 
+#[cfg(test)]
 pub(super) fn single_cpu(cpus: &BTreeSet<u32>, knob: &str) -> Result<u32, String> {
     match cpus.len() {
         1 => Ok(*cpus.iter().next().expect("single CPU")),
@@ -264,32 +314,35 @@ pub(super) fn single_cpu(cpus: &BTreeSet<u32>, knob: &str) -> Result<u32, String
     }
 }
 
-/// The sender/shard CPU must be a single CPU disjoint from the harness and the
-/// receiver, and (when given explicitly) outside Restream's own mask — that
-/// mask exists precisely to keep control/media work off the measured core.
+/// Every measured shard CPU must be disjoint from the harness and receiver,
+/// and (when given explicitly) outside Restream's process mask.
 pub(super) fn validate_cpu_masks(
-    shard_cpu: u32,
+    shard_cpus: &BTreeSet<u32>,
     harness: &BTreeSet<u32>,
     peers: &BTreeSet<u32>,
     restream: Option<BTreeSet<u32>>,
 ) -> Result<(), String> {
-    if harness.contains(&shard_cpu) {
-        return Err(format!(
-            "EGRESS_DUTY_SHARD_CPU={shard_cpu} overlaps EGRESS_DUTY_HARNESS_CPUS={harness:?}"
-        ));
-    }
-    if peers.contains(&shard_cpu) {
-        return Err(format!(
-            "EGRESS_DUTY_SHARD_CPU={shard_cpu} overlaps EGRESS_DUTY_PEER_CPUS={peers:?}"
-        ));
-    }
-    if let Some(restream) = restream
-        && restream.contains(&shard_cpu)
-    {
-        return Err(format!(
-            "EGRESS_DUTY_SHARD_CPU={shard_cpu} is inside EGRESS_DUTY_RESTREAM_CPUS={restream:?}; \
-             Restream must run on every CPU except the measured egress shard's"
-        ));
+    for shard_cpu in shard_cpus {
+        if harness.contains(shard_cpu) {
+            return Err(format!(
+                "EGRESS_DUTY_SHARD_CPUS={shard_cpus:?} overlaps \
+                 EGRESS_DUTY_HARNESS_CPUS={harness:?} at CPU {shard_cpu}"
+            ));
+        }
+        if peers.contains(shard_cpu) {
+            return Err(format!(
+                "EGRESS_DUTY_SHARD_CPUS={shard_cpus:?} overlaps \
+                 EGRESS_DUTY_PEER_CPUS={peers:?} at CPU {shard_cpu}"
+            ));
+        }
+        if let Some(restream) = restream.as_ref()
+            && restream.contains(shard_cpu)
+        {
+            return Err(format!(
+                "EGRESS_DUTY_SHARD_CPUS={shard_cpus:?} is inside \
+                 EGRESS_DUTY_RESTREAM_CPUS={restream:?} at CPU {shard_cpu}"
+            ));
+        }
     }
     Ok(())
 }

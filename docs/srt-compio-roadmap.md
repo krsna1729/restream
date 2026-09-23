@@ -1849,81 +1849,148 @@ with actual cycles/packet evidence.
 
 ## 16. WI3.7 — End-to-End Multi-Shard 8 Mbps Capacity Qualification
 
-Status: ACTIVE — starts after the WI3.6 Stage D handoff; runs on the current
-host, with shard counts derived here provisional and host-specific (`§11.1`).
+Status: ACTIVE — WI3.6 is frozen. WI3.7 is the bounded capacity arm on the
+current host; its coefficients and shard observations are provisional until the
+cross-host comparison in `§11.1` and the portable default decision in WI10.
 
-This host can characterize **shard scaling at receiver-unlimited workloads**, not
-the lossless top of the ladder: the same-host SRT sink already became
-receiver-limited somewhere between 50 and 100 outputs, and four sender shards on a
-six-vCPU host leave the receiver less CPU still. The split is therefore:
+WI3.6 remains the strict, lossless handoff. Its `retx == 0` and duplicate-free
+fences are not silently weakened. WI3.7 uses a separate `CAPACITY_MODE` arm:
+retransmits and receiver duplicates are measured quality outputs, not row
+rejection conditions. The row is apparatus-valid only when:
+
+- all requested SRT connections are established and stable for the rated
+  window;
+- receiver UDP/kernel, veth, softnet, datapath-queue, local-drop, and retry
+  counters are readable and zero;
+- no SRT Owner fault, failed send, short send, protocol output failure, or
+  bounded product queue overflow occurs;
+- the requested shard count equals the observed `/metrics/system` shard-index
+  set, and every shard index `N` reads back pinned to configured CPU `N`;
+- whole-run receiver DATA and product `txClass.dataFirst` conservation is
+  internally consistent.
+
+Missed ticks, service lateness, TX-pool exhaustion, queue backlog, retransmits,
+duplicates, and control amplification are recorded outputs. They classify a
+sender-capacity knee; they do not make an otherwise valid saturated row
+disappear. A receiver apparatus limit stops the arm separately from a
+sender-saturated result.
+
+### 16.1 Measurement seam and topology
+
+WI3.7 is default-off:
 
 ```text
-current host (WI3.7)          external infrastructure / WI10
-  shard scaling law             lossless 100 / 300 / 500 / 1000 outputs
-  receiver-unlimited fanout     physical NIC, line-rate, remote receivers
-  provisional shard counts      portable defaults
+RESTREAM_BENCH_FEATURES=wi37-shard-bench
+RESTREAM_WI37_SRT_SHARDS=1..4
 ```
 
-Measure 1/2/3/4 shards at a **receiver-unlimited fanout** and report:
+The feature provides the exact requested SRT shard override only for the
+benchmark arm. Normal builds retain the production CPU-derived law
+`clamp(effective_cpus, 2, 8)`. The artifact records the requested count,
+actual metrics indices, matched TIDs, requested CPU list, observed affinity,
+and the pinning method/error. A requested/observed mismatch rejects the row;
+the production policy is not changed by this work item.
 
-- capacity per shard and the scaling efficiency between shard counts;
-- whether additional shards move p99 service latency or only add cost;
-- the highest fanout at which the receiver is still provably not the limiter.
-
-Do not turn "N shards was best on this machine" into a production default. The
-shard law must be parameterized around capacity, not a fixed count (`§17`):
-
-```text
-required shards ~= packet/event demand / measured per-shard capacity
-```
-
-Run the actual product path:
+Each cell keeps the product path intact:
 
 ```text
 8 Mbps SRT ingress
     ->
-media pipeline
+Restream media pipeline
     ->
-100 / 300 / 500 / 1000 SRT outputs
+fanout SRT outputs
 ```
 
-Measure:
+The egress-duty harness accepts a shard CPU list, pins shard index `N` to CPU
+`N`, and records per-shard Owner/service/TX counters. Shard CPUs, Restream,
+the harness, and receiver peer CPUs are disjoint in the fixed six-vCPU arm
+layout.
 
-- aggregate datapath CPU
-- control-plane CPU separately
-- pps
-- wire bitrate
-- Owner service cost
-- scheduler cost
-- media/ring cost
-- ingress cost
-- egress cost
-- crypto cost
-- TX completion cost
-- kernel networking cost
+### 16.2 Bounded fanout ladder and stop rules
 
-Run plaintext and encrypted variants separately.
-
-Suggested encryption matrix:
+Run each requested shard count `1, 2, 3, 4` over this ladder only:
 
 ```text
-plain
-AES-128
-AES-256
+10, 20, 30, 40, 50, 60, 80 outputs
 ```
 
-The purpose is to answer:
+The bounded runner is:
+
+```sh
+scripts/harness/wi37-capacity.sh
+```
+
+Summarize the retained cells and fit provisional service demand with:
+
+```sh
+scripts/harness/wi37-capacity-analysis.py .local/artifacts/wi37-capacity \
+  --out .local/artifacts/wi37-capacity/summary.json
+```
+
+Stop the current shard arm at the first receiver-apparatus-limited row or
+sender-clearly-saturated row. Do not run the old `100 / 300 / 500 / 1000`
+matrix on this host: it is receiver-limited and cannot answer the WI3.7
+sender question.
+
+Per cell, retain:
+
+- offered bitrate and first-DATA payload rate, in packets/s and Gbps;
+- summed egress CPU, CPU seconds per DATA, hottest-shard utilization, and
+  hottest/coolest shard imbalance;
+- whole-process CPU and non-egress CPU;
+- Owner service visits/actions, service budgets, duration sums/maxima, and
+  per-shard TX counters;
+- TX submitted/completed/in-flight/high-water values and exhaustion counts;
+- exposed lateness p50/p99/max, missed-tick/budget violations, and backlog;
+- DATA first/retransmit counts, duplicate/receiver quality values, wire
+  datagrams, and control amplification;
+- receiver CPU time, queue capacity/peak/full/drop values, UDP/kernel/veth/
+  softnet/datapath/retry counters, and the apparatus verdict.
+
+The artifact carries a machine-readable classification:
 
 ```text
-raw UDP fast, SRT slow
-    -> optimize srt-rs
-
-SRT fast, whole Restream slow
-    -> optimize Restream media/scheduler
-
-raw UDP itself slow
-    -> kernel/socket substrate decision
+receiver-apparatus-limited
+sender-saturated
+stable-unclassified
 ```
+
+### 16.3 Capacity analysis
+
+The capacity knee is selected from demand signals (`TX` exhaustion, service
+budget exhaustion, missed ticks/lateness, and sustained backlog), not from
+`retx == 0`. If the receiver caps before the sender knee, fit service demand
+from valid lower cells and mark the extrapolated capacity provisional. Compare
+shard gains against fixed overhead: extra shards are useful only when they
+reduce service demand/tail or increase valid DATA capacity enough to pay for
+their extra wakeups, runtime work, and cache cost.
+
+Use the provisional coefficient form:
+
+```text
+required_shards ~= ceil(
+    DATA/event demand * measured service demand
+    / target shard utilization
+)
+                 + fixed-overhead guard
+                 + tail-latency guard
+```
+
+The measured service-demand coefficient is portable evidence for WI10, not a
+new production constant. WI3.7 MUST NOT replace the CPU-derived production
+shard law.
+
+### 16.4 Bounded crypto cells
+
+After plaintext establishes the service-demand law, run one bounded AES-128
+cell and one bounded AES-256 cell at a receiver-safe point on the ladder. The
+runner defaults the receiver datapath queue horizon to `10000 ms` so this is
+not confused with the smaller default queue's known apparatus limit; override
+`WI37_RECEIVER_QUEUE_HORIZON_MS` only when the receiver topology justifies it.
+Record the incremental receiver and egress CPU/service demand. Do not run a
+full crypto/fanout matrix unless the bounded cells show nonlinear behavior.
+Crypto cells use the same product output path and remain separate from the
+plaintext shard comparison.
 
 ## 17. Re-Derive the SRT Shard Law
 

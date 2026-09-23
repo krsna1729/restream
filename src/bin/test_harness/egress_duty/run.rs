@@ -318,6 +318,7 @@ pub(super) async fn run_duty_inner(
     );
     receiver::wait_for_listening(&receiver_stdout, &receiver_stderr, Duration::from_secs(15))
         .await?;
+    let receiver_net_before = receiver::read_proc_net_counters(children.receiver_pid);
 
     // ── Restream ────────────────────────────────────────────────────────
     cleanup_ramp_db(&restream_db);
@@ -339,7 +340,16 @@ pub(super) async fn run_duty_inner(
             "RESTREAM_DB_PATH",
             restream_db.to_string_lossy().to_string(),
         )
-        .env("RESTREAM_EGRESS_SHARDS", cfg.egress_shards.to_string())
+        .env(
+            "RESTREAM_EGRESS_SHARDS",
+            cfg.requested_shards
+                .unwrap_or(cfg.egress_shards)
+                .to_string(),
+        );
+    if let Some(requested) = cfg.requested_shards {
+        restream_cmd.env("RESTREAM_WI37_SRT_SHARDS", requested.to_string());
+    }
+    restream_cmd
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))
         .kill_on_drop(true);
@@ -478,9 +488,17 @@ pub(super) async fn run_duty_inner(
     let mut affinity_rows = Vec::new();
     let mut pinned: Vec<EgressShardThread> = Vec::new();
     for thread in &shard_threads {
-        let (observed, method, error) = match set_thread_affinity(thread.tid, cfg.shard_cpu) {
-            Ok((observed, method)) => (Some(observed), method, Value::Null),
-            Err(error) => (None, "failed", json!(error)),
+        let requested_cpu = cfg.shard_cpu_for_index(thread.index);
+        let (observed, method, error) = match requested_cpu {
+            Some(cpu) => match set_thread_affinity(thread.tid, cpu) {
+                Ok((observed, method)) => (Some(observed), method, Value::Null),
+                Err(error) => (None, "failed", json!(error)),
+            },
+            None => (
+                None,
+                "not-configured",
+                json!("no configured CPU for this observed shard index"),
+            ),
         };
         if error.is_null() {
             pinned.push(thread.clone());
@@ -489,7 +507,7 @@ pub(super) async fn run_duty_inner(
             "tid": thread.tid,
             "index": thread.index,
             "commTruncated": thread.comm_truncated,
-            "requestedCpu": cfg.shard_cpu,
+            "requestedCpu": requested_cpu,
             "observedAffinity": observed,
             "method": method,
             "error": error,
@@ -508,6 +526,8 @@ pub(super) async fn run_duty_inner(
     artifact.set_observed(
         "shardThreads",
         json!({
+            "requestedShardCount": cfg.requested_shards,
+            "configuredShardCpus": cfg.shard_cpus.iter().collect::<Vec<_>>(),
             "srtShardIndices": srt_shard_indices,
             "allEgressShardThreads": all_egress_threads.iter().map(EgressShardThread::json).collect::<Vec<_>>(),
             "srtShardThreads": shard_threads.iter().map(EgressShardThread::json).collect::<Vec<_>>(),
@@ -526,10 +546,9 @@ pub(super) async fn run_duty_inner(
             "tids": pinned.iter().map(|thread| thread.tid).collect::<Vec<_>>(),
         })
     );
-
-    // ── Rated window ────────────────────────────────────────────────────
     let system_before = api.get_json("/metrics/system").await?;
     let engine_before = engine_srt_counters(&system_before);
+    let engine_shards_before = engine_srt_shard_counters(&system_before);
     let fault_before = engine_owner_faulted(&system_before);
     let process_before = read_proc_stat_cpu(&PathBuf::from(format!("/proc/{restream_pid}/stat")))?;
     let mut shard_cpu_before: BTreeMap<u32, CpuTicks> = BTreeMap::new();
@@ -566,6 +585,8 @@ pub(super) async fn run_duty_inner(
 
     let system_after = api.get_json("/metrics/system").await?;
     let engine_after = engine_srt_counters(&system_after);
+    let engine_shards_after = engine_srt_shard_counters(&system_after);
+    let engine_shard_deltas = counter_deltas(&engine_shards_before, &engine_shards_after);
     let fault_after = engine_owner_faulted(&system_after);
     let process_after = read_proc_stat_cpu(&PathBuf::from(format!("/proc/{restream_pid}/stat")))?;
     let mut shard_cpu_after: BTreeMap<u32, CpuTicks> = BTreeMap::new();
@@ -586,9 +607,8 @@ pub(super) async fn run_duty_inner(
     let engine_deltas = counter_deltas(&engine_before, &engine_after);
     let data_first_delta = counter_at(&engine_deltas, &["txClass", "dataFirst"]);
     let wire_delta = counter_at(&engine_deltas, &["txPackets"]);
-
-    // ── CPU scopes ──────────────────────────────────────────────────────
     let mut per_shard_cpu = Vec::new();
+    let mut per_shard_cpu_by_index: BTreeMap<u32, (f64, usize)> = BTreeMap::new();
     let mut egress_thread_cpu_secs = 0.0;
     for thread in &pinned {
         let before = shard_cpu_before
@@ -602,6 +622,9 @@ pub(super) async fn run_duty_inner(
         let cpu_secs = cpu_secs_between(before, after, ticks_per_sec);
         if let Some(cpu_secs) = cpu_secs {
             egress_thread_cpu_secs += cpu_secs;
+            let entry = per_shard_cpu_by_index.entry(thread.index).or_default();
+            entry.0 += cpu_secs;
+            entry.1 += 1;
         }
         per_shard_cpu.push(json!({
             "tid": thread.tid,
@@ -609,21 +632,50 @@ pub(super) async fn run_duty_inner(
             "beforeTicks": before.total(),
             "afterTicks": after.total(),
             "cpuSecs": opt_round6(cpu_secs),
-            "usPerDataFirst": opt_round6(data_first_delta.and_then(|units| cpu_secs.and_then(|secs| micros_per_unit(secs, units)))),
-            "usPerWireDatagram": opt_round6(wire_delta.and_then(|units| cpu_secs.and_then(|secs| micros_per_unit(secs, units)))),
         }));
     }
+    let mut per_shard_cpu_summary = Vec::new();
+    let mut hottest_shard_cpu_utilization: f64 = 0.0;
+    let mut coolest_shard_cpu_utilization = f64::INFINITY;
+    for (index, (cpu_secs, thread_count)) in &per_shard_cpu_by_index {
+        let data_first = engine_shard_deltas
+            .get(index.to_string())
+            .and_then(|counters| counter_at(counters, &["txClass", "dataFirst"]));
+        let utilization = cpu_secs / window_secs_observed.max(0.001);
+        hottest_shard_cpu_utilization = hottest_shard_cpu_utilization.max(utilization);
+        coolest_shard_cpu_utilization = coolest_shard_cpu_utilization.min(utilization);
+        per_shard_cpu_summary.push(json!({
+            "index": index,
+            "threadCount": thread_count,
+            "cpuSecs": round6(*cpu_secs),
+            "cpuUtilization": round6(utilization),
+            "dataFirst": data_first,
+            "usPerDataFirst": opt_round6(data_first.and_then(|units| micros_per_unit(*cpu_secs, units))),
+        }));
+    }
+    if !coolest_shard_cpu_utilization.is_finite() {
+        coolest_shard_cpu_utilization = 0.0;
+    }
     let process_cpu_secs = cpu_secs_between(process_before, process_after, ticks_per_sec);
+    let non_egress_cpu_secs = process_cpu_secs
+        .zip(Some(egress_thread_cpu_secs))
+        .map(|(process, egress)| (process - egress).max(0.0));
     artifact.set(
         "cpu",
         json!({
             "clockTicksPerSec": ticks_per_sec,
             "scope": {
-                "egressThread": "sum over every SRT egress shard thread pinned to SHARD_CPU",
+                "egressThread": "sum over every matched SRT egress shard thread pinned to its configured shard CPU",
                 "process": "/proc/<pid>/stat utime+stime (every Restream thread)",
+                "nonEgress": "processCpuSecs - matched egress shard thread CPU; includes control/media and unclassified Restream threads",
             },
             "egressThreadCpuSecs": round6(egress_thread_cpu_secs),
-            "egressThreadCpuSecsPerShard": per_shard_cpu,
+            "egressThreadCpuSecsPerShard": per_shard_cpu_summary,
+            "egressThreadCpuSecsPerThread": per_shard_cpu,
+            "hottestShardCpuUtilization": round6(hottest_shard_cpu_utilization),
+            "shardCpuImbalance": round6(
+                hottest_shard_cpu_utilization - coolest_shard_cpu_utilization
+            ),
             "egressThreadUsPerDataFirst": opt_round6(
                 data_first_delta.and_then(|units| micros_per_unit(egress_thread_cpu_secs, units))
             ),
@@ -631,6 +683,7 @@ pub(super) async fn run_duty_inner(
                 wire_delta.and_then(|units| micros_per_unit(egress_thread_cpu_secs, units))
             ),
             "processCpuSecs": opt_round6(process_cpu_secs),
+            "nonEgressCpuSecs": opt_round6(non_egress_cpu_secs),
             "processUsPerDataFirst": opt_round6(
                 data_first_delta.and_then(|units| process_cpu_secs.and_then(|secs| micros_per_unit(secs, units)))
             ),
@@ -663,6 +716,9 @@ pub(super) async fn run_duty_inner(
             "baseline": engine_before,
             "closing": engine_after,
             "delta": engine_deltas,
+            "perShardBaseline": engine_shards_before,
+            "perShardClosing": engine_shards_after,
+            "perShardDelta": engine_shard_deltas,
             "ownerFaultedBaseline": fault_before,
             "ownerFaultedClosing": fault_after,
         }),
@@ -687,6 +743,16 @@ pub(super) async fn run_duty_inner(
         }),
     );
     children.stop_restream().await;
+    let receiver_net_after = receiver::read_proc_net_counters(children.receiver_pid);
+    let receiver_net_delta = counter_deltas(&receiver_net_before, &receiver_net_after);
+    artifact.set(
+        "receiverNetwork",
+        json!({
+            "before": receiver_net_before,
+            "after": receiver_net_after,
+            "delta": receiver_net_delta,
+        }),
+    );
 
     let receiver_teardown = children.stop_receiver().await;
     let receiver_stdout_text = std::fs::read_to_string(&receiver_stdout).unwrap_or_default();
@@ -708,8 +774,10 @@ pub(super) async fn run_duty_inner(
         receiver_stdout_text: &receiver_stdout_text,
         receiver_stderr_text: &receiver_stderr_text,
         window_samples: &window_samples,
+        window_secs_observed,
         outputs_before: &outputs_before,
         outputs_after: &outputs_after,
+        receiver_net_delta,
         engine_after,
         engine_deltas,
         engine_final,
@@ -720,6 +788,8 @@ pub(super) async fn run_duty_inner(
         wire_delta,
         shard_threads: &shard_threads,
         all_egress_threads: &all_egress_threads,
+        srt_shard_indices: &srt_shard_indices,
+        affinity_rows: &affinity_rows,
         per_index_counts: &per_index_counts,
         visit_max_bytes,
         visit_max_env_value,

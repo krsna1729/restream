@@ -32,6 +32,9 @@ egress-test-driver = []
 # pre-materialized datagrams. Default-off: normal Restream builds must never see
 # `bench-internals`.
 wi3-owner-bench = ["srt-transport/bench-internals"]
+# WI3.7-only shard-count seam. Kept default-off; production builds retain the
+# CPU-derived SRT shard policy unless a benchmark explicitly opts in.
+wi37-shard-bench = []
 
 [dependencies]
 tokio = { version = "1.35", features = [

@@ -47,16 +47,18 @@ impl MediaEngine {
         } else {
             let config = &self.config.egress_fabric;
             let group = spawn_srt_fabric_shard_group(
-                config.shard_count(),
+                config.srt_shard_count(),
                 config.shard_config(),
                 config.work_budget(),
                 |_| feed.clone_reader(),
                 self.srt_owner_settings(),
             )
             .map_err(SrtFabricEnsureError::Spawn)?;
-            let manager_config =
-                EgressManagerConfig::new(config.shards, config.command_channel_capacity)
-                    .expect("egress fabric manager config is clamped nonzero");
+            let manager_config = EgressManagerConfig::new(
+                config.srt_shard_count().get(),
+                config.command_channel_capacity,
+            )
+            .expect("egress fabric manager config is clamped nonzero");
             let runtime = EgressFabricRuntime::new(manager_config, group)
                 .map_err(SrtFabricEnsureError::Runtime)?;
 
