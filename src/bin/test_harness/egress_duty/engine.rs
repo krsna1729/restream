@@ -15,6 +15,7 @@ pub(super) fn parse_visit_max_bytes(restream_log: &str) -> Option<u64> {
     let start = restream_log.find(marker)? + marker.len();
     let rest = &restream_log[start..];
     let digits: String = rest
+        .trim_start()
         .chars()
         .take_while(|character| character.is_ascii_digit())
         .collect();

@@ -7,6 +7,24 @@ use super::super::*;
 
 use super::*;
 pub(super) const ARTIFACT_FILE: &str = "egress-duty.json";
+/// Wait for the product's effective-config startup event to reach the
+/// redirected log. A read immediately after HTTP readiness can race the
+/// logger's file write, which would turn a real bound into an unproven
+/// `null` artifact value.
+async fn wait_for_visit_max_bytes(path: &PathBuf, timeout: Duration) -> Option<u64> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(path)
+            && let Some(value) = parse_visit_max_bytes(&text)
+        {
+            return Some(value);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The run
@@ -406,8 +424,8 @@ pub(super) async fn run_duty_inner(
         urls.insert(output_id.clone(), url);
         output_ids.push(output_id);
     }
-    let visit_max_bytes =
-        parse_visit_max_bytes(&std::fs::read_to_string(&restream_log).unwrap_or_default());
+    let visit_max_env_value = std::env::var("RESTREAM_EGRESS_VISIT_MAX_BYTES").ok();
+    let visit_max_bytes = wait_for_visit_max_bytes(&restream_log, Duration::from_secs(10)).await;
     artifact.set(
         "workload",
         json!({
@@ -431,7 +449,7 @@ pub(super) async fn run_duty_inner(
                 // this or a single visit's burst is dropped at the receiver.
                 "visitBurstBound": {
                     "knob": "RESTREAM_EGRESS_VISIT_MAX_BYTES",
-                    "envValue": std::env::var("RESTREAM_EGRESS_VISIT_MAX_BYTES").ok(),
+                    "envValue": visit_max_env_value.clone(),
                     "observedVisitMaxBytes": visit_max_bytes,
                     "observedSource": "restream.config.effective (product startup log)",
                     "payloadBytes": HARNESS_SRT_PACKET_SIZE,
@@ -704,6 +722,7 @@ pub(super) async fn run_duty_inner(
         all_egress_threads: &all_egress_threads,
         per_index_counts: &per_index_counts,
         visit_max_bytes,
+        visit_max_env_value,
         tsv_path: &tsv_path,
         receiver_stdout: &receiver_stdout,
         receiver_stderr: &receiver_stderr,

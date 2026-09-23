@@ -1397,7 +1397,8 @@ is actually a material bottleneck for our workload.
 
 ## 13. WI3.6 — SRT Packet Engine: Incremental Cost Above the Substrate
 
-Status: **ACTIVE** (2026-09-22).
+Status: **DONE** (2026-09-22). Stage D closed without a valid rating row;
+WI3.7 is the next active work item.
 
 ```text
 A/B saturation attribution      complete at F=1000 and F=11
@@ -1405,8 +1406,8 @@ C lossless attribution fanout   F=11 (not a real-time capacity point; see risk b
 C paced absolute cost           measured (median 28.05 us / DATA-first, 30 s window)
 paced A -> B                    measured (+8.152 us/datagram inclusive)
 paced B -> C protocol increment UNRESOLVED / NONBLOCKING (control unsuitable)
-Stage D                         measured at F=11: no rating-eligible row; CPU
-                                comparison indicative (egress threads ~= C)
+Stage D                         closed at F=11: no valid row; CPU indicative only
+                                (no positive C -> D egress increment resolved)
 ```
 
 Recorded state, with evidence in
@@ -1528,9 +1529,10 @@ sender thread. Report, per stage D run, the named `egress-{shard_id}` SRT shard
 thread CPU delta *and* whole-process CPU, so that:
 
 ```text
-C -> D  SRT-thread delta          = integration cost on the egress path
-D       whole-process CPU         = actual product cost
-D       process - SRT threads     = surrounding Restream/control/media cost
+C -> D  SRT-thread delta          integration cost on the egress path
+D       whole-process CPU         actual product cost
+D       process - SRT threads     non-egress Restream CPU: ingest SRT +
+                                  demux/mux/media/control/etc.
 ```
 
 and never subtract unlike CPU scopes.
@@ -1568,40 +1570,58 @@ C full-SRT sender CPU / DATA-first   vs   D egress-thread CPU / DATA-first
 D whole-process CPU / DATA-first          -> actual product cost
 ```
 
-Never subtract C from D's whole-process CPU. If D's egress-thread CPU is
-materially above C, profile that delta before optimizing anything; if the
-egress-thread numbers are close but whole-process D is much larger, move the
-investigation upward into media/ring/mux/control scheduling instead of back
-into `srt-rs`.
+Never subtract C from D's whole-process CPU. For these rejected rows, no
+positive C→D egress CPU increment is resolved: the D egress-thread
+measurements overlap the clean C range. The process-minus-egress value is
+non-egress Restream CPU (ingest SRT plus demux/mux/media/control/etc.), not a
+protocol attribution. Do not turn it into a causal layer claim without a
+valid D row.
 
 Measured (2026-09-22, F=11, full detail in
 [baselines](agent-guidance/quality/baselines.md)):
 
 ```text
-rating-eligible D rows          0 of 5 (retransmission fence; every other
+rating-eligible D rows          0 of 5 (both recovery fences failed:
+                                zero DATA retransmission and receiver
+                                protocol loss with sec_b > 0; every other
                                 condition passed, reconciliation exact)
 D egress shard threads          median 26.018 us / DATA-first (22.857-30.111)
 D whole Restream process        median 33.718 us / DATA-first (30.395-38.379)
-D surrounding media/control     ~7.9 us / DATA-first (process - egress threads)
+D non-egress Restream CPU       ~7.9 us / DATA-first (process - egress;
+                                ingest SRT + demux/mux/media/control/etc.)
 C full-SRT sender (1 thread)    28.046 us / DATA-first (27.591-30.403)
 ```
 
-The egress-thread cost sits inside the C spread, so the integration layer is
-not adding a material per-DATA CPU increment above the SRT engine at this
-shape; the surrounding media path is the visible increment (~7.9 us/DATA-first)
-and that is where the next question lives. Two caveats travel with it: D's
-egress is carried by two shard threads against C's one, and the D rows are
-rejected, so these are indicative rather than rating-eligible numbers.
+No positive C→D egress CPU increment is resolved: the rejected D
+egress-thread measurements overlap the clean C range. These CPU values are
+indicative only. D's egress is carried by two shard threads against C's one,
+and C must never be subtracted from D's whole-process CPU.
 
 Apparatus findings that must not be re-derived: the receiver's default 250 ms
 datapath horizon (189 packets/connection) is smaller than the product's
 per-visit burst (`RESTREAM_EGRESS_VISIT_MAX_BYTES` = 256 KB = 199 datagrams),
 so Stage D runs the receiver with `--datapath-queue-horizon-ms 4000`; the
 product's burst-driven egress shows a small NAK/retransmission floor
-(3-47 per 30 s window, 1.2e-5..1.9e-4 of DATA) that the paced control does not,
-with zero drops at every measured layer (host veth, namespace veth, softnet,
-receiver socket, receiver queue); and two probes of that floor were negative or
-inconclusive (peer `rps_cpus=0`; `RESTREAM_EGRESS_VISIT_MAX_BYTES=65536`).
+(3-47 per 30 s window, 1.2e-5..1.9e-4 of DATA) with zero drops at every
+measured layer (host veth, namespace veth, softnet, receiver socket, receiver
+queue).
+
+The bounded diagnostics closed the visit-fragment question without another
+long campaign: F=11 with `RESTREAM_EGRESS_VISIT_MAX_BYTES=1316` read back
+`1316` and still produced 131 DATA retransmissions / `sec_b=149`; F=1 with
+the normal `262144`-byte bound read back `262144` and still produced one
+retransmission / `sec_b=1`. The first result rejects the visit-fragment
+hypothesis; the second shows fanout is not necessary for the floor and is
+consistent with same-peer burst/TX ordering, not proof of ownership. No
+upstream `TxEngine` ordering experiment is opened.
+
+The peer-veth `rps_cpus=0` probe showed 30 retransmissions and 30 duplicates:
+multi-CPU RPS is not a necessary cause, but RPS and network scheduling are not
+thereby irrelevant. The paced control had zero sender retransmissions but
+10 receiver duplicates; that demonstrates receiver duplicates can occur
+without sender retransmission, but does not assign the D retransmissions to
+the receiver. The old 64 KiB probe remains inconclusive because its artifact
+did not read back the effective bound.
 
 Reuse before inventing: pinned `srt-rs` already carries the hooks —
 `crates/srt-transport/benches/compio_tx_allocs.rs` shows the benchmark-only
@@ -1829,8 +1849,8 @@ with actual cycles/packet evidence.
 
 ## 16. WI3.7 — End-to-End Multi-Shard 8 Mbps Capacity Qualification
 
-Status: PLANNED — runs on the current host; shard counts derived here are
-provisional and host-specific (`§11.1`).
+Status: ACTIVE — starts after the WI3.6 Stage D handoff; runs on the current
+host, with shard counts derived here provisional and host-specific (`§11.1`).
 
 This host can characterize **shard scaling at receiver-unlimited workloads**, not
 the lossless top of the ladder: the same-host SRT sink already became

@@ -1121,9 +1121,12 @@ Two apparatus facts, both recorded in the artifact:
   also has a second thread carrying the inherited `comm` at 0.00 s CPU. All are
   pinned to CPU 0 and their observed affinity is `[0]`.
 
-**Result: no rating-eligible Stage D row at F=11.** Five rated attempts, every
-one rejected by the retransmission fence; all other fence conditions passed in
-all five, including exact whole-run reconciliation.
+**Result: no rating-eligible Stage D row at F=11.** Five rated attempts were
+rejected by both required recovery fences: every row failed
+`zero_data_retransmission`, and every row failed `receiver_protocol_loss` with
+`sec_b > 0` (while `sec_a = 0`). These are two views of the same recovery
+phenomenon, but both checks are independently required. All other fence
+conditions passed in all five, including exact whole-run reconciliation.
 
 | Rep | window DATA-first | window retx | receiver `sec_a` / `sec_b` | queue peak / cap | kernel + queue drops | reconciliation residual | verdict |
 |---|---:|---:|---|---:|---|---:|---|
@@ -1148,25 +1151,37 @@ receive buffer with zero overflow. The receiver declared gaps, NAKed, and the
 repairs arrived as duplicates (`sec_b`); the loss counters that would show
 dropped data never moved.
 
-Two mechanism probes are recorded because both are **negative or
-inconclusive**, and neither should be re-derived later:
+Three bounded mechanism probes are now recorded:
 
-- **RPS is not the mechanism.** One repetition with the peer veth's `rps_cpus`
-  set to `0` (order-preserving single-CPU RX) still showed 30 window
-  retransmissions and 30 receiver duplicates. Lane restored to `3c` on exit.
-- **The visit-burst bound is inconclusive.** One repetition with
+- **RPS is not a necessary cause.** One repetition with the peer veth's
+  `rps_cpus` set to `0` (single-CPU RX) still showed 30 window
+  retransmissions and 30 receiver duplicates. This rules out multi-CPU RPS as
+  a necessary cause; it does not establish that RPS or network scheduling is
+  irrelevant. Lane restored to `3c` on exit.
+- **The prior 64 KiB visit probe is inconclusive.** One repetition with
   `RESTREAM_EGRESS_VISIT_MAX_BYTES=65536` still showed 28 window
-  retransmissions, and the artifact's burst-bound read came back `null`, so the
-  override's delivery to the child is unconfirmed. Treat the burst-size
-  hypothesis as untested, not refuted.
+  retransmissions, but the old artifact's burst-bound read was `null`, so the
+  override's effective value was unconfirmed.
+- **The bounded visit-floor probe is rejected.** With F=11 and
+  `RESTREAM_EGRESS_VISIT_MAX_BYTES=1316`, the corrected artifact reads back
+  exactly `1316` (`datagramsPerVisit=1`), yet reports 131 window
+  retransmissions and `sec_b=149`. The visit-fragment hypothesis is therefore
+  unsupported under the probe rule.
+- **Fanout is not necessary for the floor.** With F=1 and the normal
+  `262144`-byte effective bound, the artifact reads back `262144`
+  (`datagramsPerVisit=199`) but still reports one window retransmission and
+  `sec_b=1`. That is consistent with same-peer burst/TX ordering, not proof of
+  ownership by either side. Since the F=11/1316 probe retained retransmission,
+  no pinned `srt-rs` `TxEngine` experiment is opened; Stage D closes with no
+  valid row.
 
-A **paced control on the same lane and the same receiver settings** shows this
-is not simply "the product's burst shape": the upstream paced sender (Stage C's
-shape, F=11, 8 Mbps/destination) ran with **0 window retransmissions** but the
-receiver still counted 10 duplicates, and that control run had its own defect
-(40 missed source ticks, so it is not a rating row either). The duplicate-event
-floor at this scale is a property of the lane + receiver pairing on this host,
-not of the product's CPU path.
+A **paced control on the same lane and the same receiver settings** shows that
+receiver duplicate events can occur without sender DATA retransmission: the
+upstream paced sender (Stage C's shape, F=11, 8 Mbps/destination) ran with
+**0 window retransmissions** but the receiver still counted 10 duplicates.
+That control had its own defect (40 missed source ticks, so it is not a rating
+row). It does not assign the D retransmissions to the receiver; it only shows
+that the receiver duplicate counter can move without a sender retransmission.
 
 **Indicative CPU numbers (rejected rows — not rating-eligible).** Reported
 because the fence failure is a protocol-timing artefact of order 1e-5..1e-4 of
@@ -1176,36 +1191,38 @@ DATA, and because the decision they inform is aggregate:
 |---|---:|---|
 | SRT egress shard threads (sum over both shards, CPU 0) | **26.018** | 22.857-30.111 |
 | whole Restream process | **33.718** | 30.395-38.379 |
-| surrounding media/control (process − egress threads) | **~7.9** | 7.5-8.3 |
+| non-egress Restream CPU (process − egress; ingest SRT + demux/mux/media/control/etc.) | **~7.9** | 7.5-8.3 |
 
 Egress threads carry 5.64-7.43 s of CPU per ~30.34 s window (21-24% of one
 core); the process carries 7.50-9.47 s. The egress threads hold ~77% of the
 process CPU at this shape.
 
 Against Stage C (28.046 us per first-transmission DATA, one sender thread,
-27.591-30.403), **D's egress-thread cost sits inside the C spread**: the SRT
-egress path of the product costs about the same CPU per DATA-first as the
-upstream qualification sender, and the remaining ~7.9 us/DATA-first is the
-surrounding ingest/muxer/ring/control work. Two caveats that must travel with
-that sentence: D's egress is carried by **two** shard threads (C by one), so the
-per-thread efficiency differs even though the summed cost does not; and C must
-never be subtracted from D's *whole-process* CPU — the only like-for-like
-statement is C's sender CPU against D's egress-thread CPU.
+27.591-30.403), **no positive C→D egress CPU increment is resolved**:
+rejected D egress-thread measurements overlap the clean C range. These are
+indicative only, not a rating result. The process-minus-egress figure is
+non-egress Restream CPU — ingest SRT plus demux/mux/media/control/etc. — and
+is not a protocol attribution. Two caveats must travel with the comparison:
+D's egress is carried by two shard threads (C by one), so per-thread
+efficiency differs even though the reported D number is summed; and C must
+never be subtracted from D's whole-process CPU.
 
 Offered rate differs slightly and is recorded for comparability: D's source
 delivers 739.35 DATA/s per output (7.78 Mbps at 1316 B) against C's 759.9
 (8.00 Mbps), i.e. the product row is ~2.7% below the upstream offer.
 
 Artifacts: `.local/artifacts/wi36-stage-d-{r1,r2,r3,r4,r6-laneprobe}/egress-duty.json`,
-the RPS probe at `wi36-stage-d-r5-rps0/`, the burst probe at
-`wi36-stage-d-r7-burst64k/`, and the paced control at
+the RPS probe at `wi36-stage-d-r5-rps0/`, the old burst probe at
+`wi36-stage-d-r7-burst64k/`, the corrected bounded probes at
+`wi36-stage-d-probe-f11-visit1316/` and
+`wi36-stage-d-probe-f1-default/`, and the paced control at
 `wi36-stage-d-control-paced/{sender.log,receiver.tsv}`. Every rejected attempt
 kept its full artifact (receiver TSV, both stdout/stderr logs, Restream log,
 publisher log) next to it.
 
-Carry forward to WI3.7 (capacity) and WI10 (portability): F=11 is a lossless
-*attribution* fanout (3 of 10 rating-eligible Stage C launches), the receiver's
-default datapath horizon is smaller than the product's per-visit burst at this
-payload size, and the product's burst-driven egress shows a small
-NAK/retransmission floor that the paced control does not — none of which WI3.6
-is gated on.
+Carry **no valid Stage D row** into WI3.7 (capacity) or WI10 (portability).
+F=11 remains the lossless *attribution* fanout for Stage C, but the full
+Restream path did not produce a valid D measurement: its recovery floor
+persists at the corrected 1316-byte visit bound and even at F=1. The D CPU
+figures above remain indicative only; do not use them as a positive
+protocol/integration increment.

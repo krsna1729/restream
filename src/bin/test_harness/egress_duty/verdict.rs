@@ -35,6 +35,7 @@ pub(super) struct VerdictInput<'a> {
     pub(super) all_egress_threads: &'a [EgressShardThread],
     pub(super) per_index_counts: &'a BTreeMap<u32, usize>,
     pub(super) visit_max_bytes: Option<u64>,
+    pub(super) visit_max_env_value: Option<String>,
     pub(super) tsv_path: &'a Path,
     pub(super) receiver_stdout: &'a Path,
     pub(super) receiver_stderr: &'a Path,
@@ -69,6 +70,7 @@ pub(super) fn emit(input: VerdictInput<'_>) -> Result<(), String> {
         all_egress_threads,
         per_index_counts,
         visit_max_bytes,
+        visit_max_env_value,
         tsv_path,
         receiver_stdout,
         receiver_stderr,
@@ -160,6 +162,24 @@ pub(super) fn emit(input: VerdictInput<'_>) -> Result<(), String> {
             "windowDataRetransmit": data_retx_delta,
             "lifecycleDataRetransmit": data_retx_lifecycle,
             "rule": "txClass.dataRetransmit delta over the rated window must be 0",
+        }),
+    );
+    let requested_visit_max_bytes = visit_max_env_value
+        .as_deref()
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    let visit_max_readback_ok = match visit_max_env_value.as_deref() {
+        Some(_) => requested_visit_max_bytes == visit_max_bytes,
+        None => visit_max_bytes.is_some(),
+    };
+    check(
+        "visit_burst_bound_readback",
+        true,
+        visit_max_readback_ok,
+        json!({
+            "envValue": visit_max_env_value,
+            "requestedVisitMaxBytes": requested_visit_max_bytes,
+            "observedVisitMaxBytes": visit_max_bytes,
+            "rule": "the product effective-config event must be read back; when RESTREAM_EGRESS_VISIT_MAX_BYTES is set, the observed value must equal it",
         }),
     );
 
