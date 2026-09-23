@@ -1853,8 +1853,8 @@ Status: ACTIVE — the provenance-clean closure evidence is recorded, but
 WI3.7 is not current-host-frozen. The clean run selected one build
 provenance for all 28 plaintext cells and six crypto repeats; every selected
 cell was apparatus-valid and `stable-unclassified`. Its joint fit is
-`fixedCorePerShard = 0.103519`, `secondsPerData = 13.0106 us/DATA`,
-`R² = 0.90245`, with a provisional two-shard upper bound. That fit is
+`fixedCorePerShard = 0.099466`, `secondsPerData = 14.1026 us/DATA`,
+`R² = 0.89508`, with a provisional two-shard upper bound. That fit is
 materially different from the prior local-only `0.0518` / `20.25 us/DATA`
 result, so the result is retained as qualification evidence rather than
 frozen or advanced to WI4. The durable summary and provenance manifest are

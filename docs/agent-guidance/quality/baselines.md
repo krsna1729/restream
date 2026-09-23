@@ -70,7 +70,7 @@ VPS/WSL2 profiling dumps live in
 
 ### WI3.7 provenance-clean current-host qualification (2026-09-23)
 
-Measured from clean build commit `4acb0148` with the `wi37-shard-bench`
+Measured from clean build commit `b957f180` with the `wi37-shard-bench`
 feature, pinned `srt-rs` checkout `86369b0`, and the six-vCPU veth topology.
 The durable evidence is
 [`test/harness/baselines/wi37-current-host/`](../../../test/harness/baselines/wi37-current-host/):
@@ -82,8 +82,8 @@ The qualification retained 28 plaintext logical cells (`1..4` shards ×
 `10,20,30,40,50,60,80` outputs), one matching attempt per cell, and six
 matching crypto repeats (AES-128/AES-256, three each). All selected rows were
 apparatus-valid and `stable-unclassified`; no boundary-unstable cell was
-included. The joint fit is `fixedCorePerShard = 0.103519`,
-`secondsPerData = 13.0106 us/DATA`, `R² = 0.90245`, with a provisional
+included. The joint fit is `fixedCorePerShard = 0.099466`,
+`secondsPerData = 14.1026 us/DATA`, `R² = 0.89508`, with a provisional
 two-shard upper bound. The clean fit is materially different from the prior
 local-only `0.0518` / `20.25 us/DATA` result, so this is evidence, not a
 frozen current-host coefficient; WI4 is not advanced and Q-025 remains open.

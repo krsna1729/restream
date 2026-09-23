@@ -3,7 +3,7 @@
     "preQualificationRootAbsent": [
       ".local/artifacts/wi37-capacity"
     ],
-    "selectionRule": "Only artifacts with sibling contract.json matching the explicit provenance.json are retained; no mtime selection.",
+    "selectionRule": "Only artifacts with sibling contract.json matching the explicit provenance are retained; no mtime selection.",
     "staleRoots": [
       {
         "action": "not retained; reran qualification cells",
@@ -25,32 +25,39 @@
         "contracts": 7,
         "matchingCleanProvenance": 0,
         "root": "/tmp/restream-wi37-followup-crypto"
+      },
+      {
+        "action": "retained only as attempt history; reran all cells after resume matcher fix",
+        "artifacts": 34,
+        "contracts": 34,
+        "matchingCleanProvenance": 0,
+        "root": ".local/artifacts/wi37-capacity (pre-fix run)"
       }
     ]
   },
   "binaries": {
-    "restreamSha256": "1608ddd1efab26bf54ec467cf153b0baccd9c9d58110ab53e7c0a4ecc1360f7a",
-    "testHarnessSha256": "1f010888356f75c231fdc0f3fbb68620007538da9e56945389c648f09e378ed0"
+    "restreamSha256": "5e1e3d331ccacb8392b71749083abd866dc28aaa9b457d15df39aa0fbbd7daec",
+    "testHarnessSha256": "1c7406b8e371399fc688bde4f5780a71b705758de98bf9c513378f0a862f2350"
   },
   "commands": {
     "analysis": "python3 scripts/harness/wi37-capacity-analysis.py .local/artifacts/wi37-capacity --provenance .local/artifacts/wi37-capacity/provenance.json --out test/harness/baselines/wi37-current-host/summary.json",
     "build": "RESTREAM_BENCH_FEATURES=wi37-shard-bench scripts/build/bench-harness.sh",
     "crypto": "WI37_ARTIFACT_ROOT=.local/artifacts/wi37-capacity WI37_SKIP_BUILD=1 WI37_RESUME=1 WI37_SHARDS=1 WI37_FANOUTS=10 WI37_SKIP_CRYPTO=0 WI37_CRYPTO_SHARDS=1 WI37_CRYPTO_OUTPUTS=10 WI37_CRYPTO_REPEATS=3 WI37_WINDOW_SECS=30 WI37_RECEIVER_QUEUE_HORIZON_MS=10000 WI37_NETNS=wi3-sink WI37_DEST_BASE=10.53.0.2 scripts/harness/wi37-capacity.sh",
-    "plaintext": "WI37_ARTIFACT_ROOT=.local/artifacts/wi37-capacity WI37_SKIP_BUILD=1 WI37_RESUME=0 WI37_SHARDS=1,2,3,4 WI37_FANOUTS=10,20,30,40,50,60,80 WI37_SKIP_CRYPTO=1 WI37_WINDOW_SECS=30 WI37_RECEIVER_QUEUE_HORIZON_MS=10000 WI37_NETNS=wi3-sink WI37_DEST_BASE=10.53.0.2 scripts/harness/wi37-capacity.sh"
+    "plaintext": "WI37_ARTIFACT_ROOT=.local/artifacts/wi37-capacity WI37_SKIP_BUILD=1 WI37_RESUME=1 WI37_SHARDS=1,2,3,4 WI37_FANOUTS=10,20,30,40,50,60,80 WI37_SKIP_CRYPTO=1 WI37_WINDOW_SECS=30 WI37_RECEIVER_QUEUE_HORIZON_MS=10000 WI37_NETNS=wi3-sink WI37_DEST_BASE=10.53.0.2 scripts/harness/wi37-capacity.sh"
   },
   "manifestVersion": 1,
-  "measuredCommit": "4acb0148f7dc76087203c9dec205150f68a6961b",
+  "measuredCommit": "b957f1807edbb320bb915375574600230b0680d5",
   "provenance": {
-    "benchSha256": "1f010888356f75c231fdc0f3fbb68620007538da9e56945389c648f09e378ed0",
+    "benchSha256": "1c7406b8e371399fc688bde4f5780a71b705758de98bf9c513378f0a862f2350",
     "buildProvenance": {
       "features": "wi37-shard-bench",
       "gitDirty": false,
-      "gitSha": "4acb0148f7dc76087203c9dec205150f68a6961b"
+      "gitSha": "b957f1807edbb320bb915375574600230b0680d5"
     },
     "contractVersion": 2,
     "features": "wi37-shard-bench",
-    "gitSha": "4acb0148f7dc76087203c9dec205150f68a6961b",
-    "restreamSha256": "1608ddd1efab26bf54ec467cf153b0baccd9c9d58110ab53e7c0a4ecc1360f7a"
+    "gitSha": "b957f1807edbb320bb915375574600230b0680d5",
+    "restreamSha256": "5e1e3d331ccacb8392b71749083abd866dc28aaa9b457d15df39aa0fbbd7daec"
   },
   "qualification": "WI3.7 current-host provenance-clean qualification; raw logs intentionally omitted",
   "qualificationResult": {
@@ -63,12 +70,12 @@
     "currentHostFrozen": false,
     "freezeReason": "Clean fit is not materially consistent with the prior ~0.052 fixed-core/~20us DATA baseline; retain evidence but do not freeze or advance WI4.",
     "jointCpuDemandFit": {
-      "fixedCorePerShard": 0.10351899892053437,
+      "fixedCorePerShard": 0.09946566626509051,
       "points": 28,
-      "rSquared": 0.9024534124956954,
-      "residualSumSquares": 0.21159596196466984,
-      "rmseCoreEquivalents": 0.0869309993132217,
-      "secondsPerData": 1.3010635767914276e-05
+      "rSquared": 0.895076371597936,
+      "residualSumSquares": 0.3242142534229707,
+      "rmseCoreEquivalents": 0.10760613588170431,
+      "secondsPerData": 1.4102558133177814e-05
     },
     "plaintextAttempts": 28,
     "plaintextLogicalCells": 28,
@@ -82,10 +89,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-10/egress-duty.json",
-          "artifactSha256": "584ab7b376408122a15271969f8b23444d0269fd8b2707bd987bd069ccd58c0c",
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-10/attempt-20260923T104733Z-2660637-1/egress-duty.json",
+          "artifactSha256": "115d33bda0a02cac652da598a6cfa46fd8119cf517f42c4b9d469724afc98fa9",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-10/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-10/attempt-20260923T104733Z-2660637-1/contract.json",
           "crypto": "plain",
           "logical": "plain/1/10",
           "outputs": 10,
@@ -104,10 +111,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-20/egress-duty.json",
-          "artifactSha256": "d8e66609d95cbec0a9017a0507d6f88e1c5a69870b6aadd1a2a2c61d7a2dc993",
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-20/attempt-20260923T104817Z-2660637-2/egress-duty.json",
+          "artifactSha256": "49e1452a6d4128310ce59d2878b7ec7760b6c8ce532d1d32fabfa9e2b4c607c1",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-20/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-20/attempt-20260923T104817Z-2660637-2/contract.json",
           "crypto": "plain",
           "logical": "plain/1/20",
           "outputs": 20,
@@ -126,10 +133,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-30/egress-duty.json",
-          "artifactSha256": "3fe246adf016359259421fe1e4b7f59b4212b631c25280b78fb2e0fb8430d0f2",
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-30/attempt-20260923T104859Z-2660637-3/egress-duty.json",
+          "artifactSha256": "47f6fc8b342dd5311d4a2a4104663c011d6fa08734ac97612309f6c05aa7b790",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-30/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-30/attempt-20260923T104859Z-2660637-3/contract.json",
           "crypto": "plain",
           "logical": "plain/1/30",
           "outputs": 30,
@@ -148,10 +155,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-40/egress-duty.json",
-          "artifactSha256": "9541ecb4443b367c8391528785075573050aea7a1cee7f77f8ef1999c340e56d",
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-40/attempt-20260923T104943Z-2660637-4/egress-duty.json",
+          "artifactSha256": "bb640d648f66523e15a357e39705fb3f14bb970d6b64852d4d33e44011b71a00",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-40/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-40/attempt-20260923T104943Z-2660637-4/contract.json",
           "crypto": "plain",
           "logical": "plain/1/40",
           "outputs": 40,
@@ -170,10 +177,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-50/egress-duty.json",
-          "artifactSha256": "98b82bde3b03abbcee12688e9567fcd37a351bfe6c56c7e9b68209caec28605e",
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-50/attempt-20260923T105028Z-2660637-5/egress-duty.json",
+          "artifactSha256": "2b97d4d95d095d33b0fddb1e9a02d7bce52276ca05717dd5684e3c045f12dc34",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-50/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-50/attempt-20260923T105028Z-2660637-5/contract.json",
           "crypto": "plain",
           "logical": "plain/1/50",
           "outputs": 50,
@@ -192,10 +199,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-60/egress-duty.json",
-          "artifactSha256": "daa1a93f2fe862ec9c543daaf03e54c544cfe781dd71e2cdc3c52966869a7328",
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-60/attempt-20260923T105112Z-2660637-6/egress-duty.json",
+          "artifactSha256": "89aa215e84849e876075a2566527c6bd043d5136131e50ab6a58b10fe3a655ca",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-60/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-60/attempt-20260923T105112Z-2660637-6/contract.json",
           "crypto": "plain",
           "logical": "plain/1/60",
           "outputs": 60,
@@ -214,10 +221,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-80/egress-duty.json",
-          "artifactSha256": "7f1d277fd2972641f682593ed6c43689b0bb354ad334860e680372e5fff8c62b",
+          "artifact": ".local/artifacts/wi37-capacity/shards-1/fanout-80/attempt-20260923T105156Z-2660637-7/egress-duty.json",
+          "artifactSha256": "4dc64e02df57572ebe05d47cba21a5bee74f1e295986680c402e1d717244a8bd",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-80/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-1/fanout-80/attempt-20260923T105156Z-2660637-7/contract.json",
           "crypto": "plain",
           "logical": "plain/1/80",
           "outputs": 80,
@@ -236,10 +243,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-10/egress-duty.json",
-          "artifactSha256": "3e813866f8f4b41781c2e5139e5e1a12a7752354fb5d8a8666683d6c7e3e8f81",
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-10/attempt-20260923T105240Z-2660637-8/egress-duty.json",
+          "artifactSha256": "54144ac87444c90189e9627235181b95468483d39cab5dd3697df2b0771cfd24",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-10/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-10/attempt-20260923T105240Z-2660637-8/contract.json",
           "crypto": "plain",
           "logical": "plain/2/10",
           "outputs": 10,
@@ -258,10 +265,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-20/egress-duty.json",
-          "artifactSha256": "f3216c671ce1725cff78d53010598a51aa4150b642dacda759981e2527168ecc",
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-20/attempt-20260923T105323Z-2660637-9/egress-duty.json",
+          "artifactSha256": "0adebdecec853912df9f5f4493ce246a3bb4be907ddebd6596d51edef35aefad",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-20/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-20/attempt-20260923T105323Z-2660637-9/contract.json",
           "crypto": "plain",
           "logical": "plain/2/20",
           "outputs": 20,
@@ -280,10 +287,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-30/egress-duty.json",
-          "artifactSha256": "5c2e1e8c97a7d729899cd4f0a98923ddcb0bc6ec1605b720a0e6ac0ef171d6a6",
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-30/attempt-20260923T105405Z-2660637-10/egress-duty.json",
+          "artifactSha256": "878d8c417c94552416e65c29c2140a1e0e1457f224cff01e1f1de3115039a6ad",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-30/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-30/attempt-20260923T105405Z-2660637-10/contract.json",
           "crypto": "plain",
           "logical": "plain/2/30",
           "outputs": 30,
@@ -302,10 +309,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-40/egress-duty.json",
-          "artifactSha256": "97798324c057057f6f1c75d7efd4b91df983ca86f44a1062d366c0fbb1c77cbb",
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-40/attempt-20260923T105449Z-2660637-11/egress-duty.json",
+          "artifactSha256": "1d94a4806dbb3165339265eb045169f9d7a6762f0a57980909800450d21c11b6",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-40/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-40/attempt-20260923T105449Z-2660637-11/contract.json",
           "crypto": "plain",
           "logical": "plain/2/40",
           "outputs": 40,
@@ -324,10 +331,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-50/egress-duty.json",
-          "artifactSha256": "c194cf224220ea3d1d98584239b04cb04463ba037126a647b9a42bb30872ca75",
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-50/attempt-20260923T105533Z-2660637-12/egress-duty.json",
+          "artifactSha256": "32cb3e143290860cc01745a5bb37ddca7d506d1a1c7ae5d83d54f4448fe6c666",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-50/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-50/attempt-20260923T105533Z-2660637-12/contract.json",
           "crypto": "plain",
           "logical": "plain/2/50",
           "outputs": 50,
@@ -346,10 +353,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-60/egress-duty.json",
-          "artifactSha256": "77ad94b7b6ec7bf6326123c3d8f783656e55371946bba679d2614678712f5839",
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-60/attempt-20260923T105617Z-2660637-13/egress-duty.json",
+          "artifactSha256": "f494d339ae3d81edfbdbfcd4a1e9a52b1c4117dfc8ec983eb799dac0395a2799",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-60/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-60/attempt-20260923T105617Z-2660637-13/contract.json",
           "crypto": "plain",
           "logical": "plain/2/60",
           "outputs": 60,
@@ -368,10 +375,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-80/egress-duty.json",
-          "artifactSha256": "dbecba146d6dbdab132ea4c45444b1e2b9fe4a2e3ad30fc47dbbb7c03a4b732f",
+          "artifact": ".local/artifacts/wi37-capacity/shards-2/fanout-80/attempt-20260923T105701Z-2660637-14/egress-duty.json",
+          "artifactSha256": "c364337e8d3de89b21ac4ee6989cb03f3a6a6622196c2e886abd4a61813a4ad5",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-80/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-2/fanout-80/attempt-20260923T105701Z-2660637-14/contract.json",
           "crypto": "plain",
           "logical": "plain/2/80",
           "outputs": 80,
@@ -390,10 +397,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-10/egress-duty.json",
-          "artifactSha256": "1440c73339987cbe74a044d73991efb930ef66ad301add451008efcdcba172f7",
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-10/attempt-20260923T105746Z-2660637-15/egress-duty.json",
+          "artifactSha256": "e3f6bae7af7bfca15c7bb4618b23c2097322121bf17d7d6e16a2993710aa2263",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-10/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-10/attempt-20260923T105746Z-2660637-15/contract.json",
           "crypto": "plain",
           "logical": "plain/3/10",
           "outputs": 10,
@@ -412,10 +419,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-20/egress-duty.json",
-          "artifactSha256": "d7f0a432deead2e7f5d5831d9e358a6c874dc36107a7fe161d78617e828a82a5",
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-20/attempt-20260923T105829Z-2660637-16/egress-duty.json",
+          "artifactSha256": "fabd79f009c18e23ba6544983538aaba10ab847b3c6a3a22e3e7266b1c4bd889",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-20/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-20/attempt-20260923T105829Z-2660637-16/contract.json",
           "crypto": "plain",
           "logical": "plain/3/20",
           "outputs": 20,
@@ -434,10 +441,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-30/egress-duty.json",
-          "artifactSha256": "95f8180f0faf0f0fa00b6ab7a177f14f799babe918b5b8ffd9caee924a235064",
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-30/attempt-20260923T105912Z-2660637-17/egress-duty.json",
+          "artifactSha256": "d31cec3acea20f81ea51f72e75eb12fd6c4b5cee855a3f5bb255b23f7fe8ad8d",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-30/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-30/attempt-20260923T105912Z-2660637-17/contract.json",
           "crypto": "plain",
           "logical": "plain/3/30",
           "outputs": 30,
@@ -456,10 +463,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-40/egress-duty.json",
-          "artifactSha256": "34c032e271f4537ff48408333d6c97713b4d7f8573282287e878a7b232e93e87",
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-40/attempt-20260923T105957Z-2660637-18/egress-duty.json",
+          "artifactSha256": "86ff5e39d6e7065a586967bd772966cc74a8fcd803df648b323de8501d5adc75",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-40/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-40/attempt-20260923T105957Z-2660637-18/contract.json",
           "crypto": "plain",
           "logical": "plain/3/40",
           "outputs": 40,
@@ -478,10 +485,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-50/egress-duty.json",
-          "artifactSha256": "b28d3d6069775b528f8d1629ea432d3774c8a229a22c65db462355217788eeb1",
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-50/attempt-20260923T110041Z-2660637-19/egress-duty.json",
+          "artifactSha256": "bfd9006dba599d5b385062753e4b4c7f796761c43dafe585830c6a99838f1bad",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-50/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-50/attempt-20260923T110041Z-2660637-19/contract.json",
           "crypto": "plain",
           "logical": "plain/3/50",
           "outputs": 50,
@@ -500,10 +507,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-60/egress-duty.json",
-          "artifactSha256": "49dec0752f8b2e0389f8164735247310fca63fd75e5c6d427006b9a3778aa489",
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-60/attempt-20260923T110125Z-2660637-20/egress-duty.json",
+          "artifactSha256": "057a18c61fbc31c2e3c1b7ebe62de2986ed39abcbe1dc3b519f727d8c154c34a",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-60/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-60/attempt-20260923T110125Z-2660637-20/contract.json",
           "crypto": "plain",
           "logical": "plain/3/60",
           "outputs": 60,
@@ -522,10 +529,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-80/egress-duty.json",
-          "artifactSha256": "cf435ecd067cbef2622ab56a38db669cf00d4c69c8bfcd7e3c85c2fe92b1b4ad",
+          "artifact": ".local/artifacts/wi37-capacity/shards-3/fanout-80/attempt-20260923T110209Z-2660637-21/egress-duty.json",
+          "artifactSha256": "ffa894a16c7034b5d047f77e45f03806d8f81daf501898bedb27f74b4be14752",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-80/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-3/fanout-80/attempt-20260923T110209Z-2660637-21/contract.json",
           "crypto": "plain",
           "logical": "plain/3/80",
           "outputs": 80,
@@ -544,10 +551,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-10/egress-duty.json",
-          "artifactSha256": "aed6257310c9dfe7a57b54d700c914466bf3e27fdf192f128c2f83bf74aac2ad",
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-10/attempt-20260923T110254Z-2660637-22/egress-duty.json",
+          "artifactSha256": "cf048e7e0edfa86068361a961aba9586793c54ae7c22a80ee89d9b54735ceafa",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-10/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-10/attempt-20260923T110254Z-2660637-22/contract.json",
           "crypto": "plain",
           "logical": "plain/4/10",
           "outputs": 10,
@@ -566,10 +573,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-20/egress-duty.json",
-          "artifactSha256": "0bd29e8a4d3ab23f34863a8e784a7884161a673f0129874d45deab1717280b07",
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-20/attempt-20260923T110337Z-2660637-23/egress-duty.json",
+          "artifactSha256": "c3b44b2e9e52b94632a468fe104156c63cb2bfdb528da53128913d48163fcc80",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-20/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-20/attempt-20260923T110337Z-2660637-23/contract.json",
           "crypto": "plain",
           "logical": "plain/4/20",
           "outputs": 20,
@@ -588,10 +595,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-30/egress-duty.json",
-          "artifactSha256": "a5be70fe5965e1b82f7b1c338d52e8c6b1d2358340d575d59ac9c524154109dc",
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-30/attempt-20260923T110421Z-2660637-24/egress-duty.json",
+          "artifactSha256": "0f6b4edb091bb906c20448ad35643c16d727b00b12c36fc9290f96b577563807",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-30/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-30/attempt-20260923T110421Z-2660637-24/contract.json",
           "crypto": "plain",
           "logical": "plain/4/30",
           "outputs": 30,
@@ -610,10 +617,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-40/egress-duty.json",
-          "artifactSha256": "a4d2e701480d89377524738ed28c53e6822f3e84020e5aff4d52b35b59dc8335",
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-40/attempt-20260923T110504Z-2660637-25/egress-duty.json",
+          "artifactSha256": "37312491c173d4af466a82acafdcec37a79dbc92218db9b03fa254f99c8ca519",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-40/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-40/attempt-20260923T110504Z-2660637-25/contract.json",
           "crypto": "plain",
           "logical": "plain/4/40",
           "outputs": 40,
@@ -632,10 +639,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-50/egress-duty.json",
-          "artifactSha256": "6740e61e8a74243b5642bb21e1d1323bb9662dde7ce0393743161b04a60dacb3",
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-50/attempt-20260923T110548Z-2660637-26/egress-duty.json",
+          "artifactSha256": "4415366e5497e5a669979573eb0f31288975f9b0fb913ceb0f05ca8c9615b9ea",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-50/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-50/attempt-20260923T110548Z-2660637-26/contract.json",
           "crypto": "plain",
           "logical": "plain/4/50",
           "outputs": 50,
@@ -654,10 +661,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-60/egress-duty.json",
-          "artifactSha256": "a5276079fa95640d32598563ff2f1c300e97878a42928c17b5b176ebc468429c",
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-60/attempt-20260923T110632Z-2660637-27/egress-duty.json",
+          "artifactSha256": "4fdea25d8bbad3050d6e14cb8b3251828500fa89948bd7e5c8cb5e5c095873c2",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-60/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-60/attempt-20260923T110632Z-2660637-27/contract.json",
           "crypto": "plain",
           "logical": "plain/4/60",
           "outputs": 60,
@@ -676,10 +683,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-80/egress-duty.json",
-          "artifactSha256": "61770034e53213aefe60d7369d17c6ba67e85a1aecf1459673d38a6f70f69bb9",
+          "artifact": ".local/artifacts/wi37-capacity/shards-4/fanout-80/attempt-20260923T110717Z-2660637-28/egress-duty.json",
+          "artifactSha256": "9467964ec51531caeab2e68b6efcd3bf052b7608b96aab7b74e0be30cfcee862",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-80/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/shards-4/fanout-80/attempt-20260923T110717Z-2660637-28/contract.json",
           "crypto": "plain",
           "logical": "plain/4/80",
           "outputs": 80,
@@ -698,10 +705,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/crypto-128/repeat-1/egress-duty.json",
-          "artifactSha256": "317275c51e9d002c056feff013ebd02c3c9b5bdc381737fe35475dc36c1f9fe7",
+          "artifact": ".local/artifacts/wi37-capacity/crypto-128/repeat-1/attempt-20260923T110815Z-2671832-2/egress-duty.json",
+          "artifactSha256": "cd8a46911b99090cb86126458e7543cb811bb677bcc358a162348fda45238cdf",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/crypto-128/repeat-1/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/crypto-128/repeat-1/attempt-20260923T110815Z-2671832-2/contract.json",
           "crypto": "128",
           "logical": "crypto/128/1",
           "outputs": 10,
@@ -722,10 +729,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/crypto-128/repeat-2/egress-duty.json",
-          "artifactSha256": "9fa54234b0c2d000c9b3f7699faf8f7d8f14cfaf678e71216ff8719430a5e580",
+          "artifact": ".local/artifacts/wi37-capacity/crypto-128/repeat-2/attempt-20260923T111025Z-2671832-5/egress-duty.json",
+          "artifactSha256": "f6eef53bcd0b547c0cb4567bfca8e3d23275b9fb5db049bb3257968ef03ef821",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/crypto-128/repeat-2/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/crypto-128/repeat-2/attempt-20260923T111025Z-2671832-5/contract.json",
           "crypto": "128",
           "logical": "crypto/128/2",
           "outputs": 10,
@@ -746,10 +753,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/crypto-128/repeat-3/egress-duty.json",
-          "artifactSha256": "b7d291c5201d5d7747fac1bdb38ad8597af3a96b85643330f2eca09843024f4b",
+          "artifact": ".local/artifacts/wi37-capacity/crypto-128/repeat-3/attempt-20260923T111109Z-2671832-6/egress-duty.json",
+          "artifactSha256": "7ddc4e2df5bf178366febd383f0311f1c4cc207b4fcaf15147873db731dc4f0f",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/crypto-128/repeat-3/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/crypto-128/repeat-3/attempt-20260923T111109Z-2671832-6/contract.json",
           "crypto": "128",
           "logical": "crypto/128/3",
           "outputs": 10,
@@ -770,10 +777,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/crypto-256/repeat-1/egress-duty.json",
-          "artifactSha256": "8ef257c367cdd89c5b66b13113aa7ac19081cb4e2cd94be9719fece589672623",
+          "artifact": ".local/artifacts/wi37-capacity/crypto-256/repeat-1/attempt-20260923T110857Z-2671832-3/egress-duty.json",
+          "artifactSha256": "1c29edca145a98376779d94368842e246e421760aba7393f310d734b6796226d",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/crypto-256/repeat-1/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/crypto-256/repeat-1/attempt-20260923T110857Z-2671832-3/contract.json",
           "crypto": "256",
           "logical": "crypto/256/1",
           "outputs": 10,
@@ -794,10 +801,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/crypto-256/repeat-2/egress-duty.json",
-          "artifactSha256": "99670213e6acc65435104be0911d291215f46b92b29a72dd32ae7ccc95ae31b8",
+          "artifact": ".local/artifacts/wi37-capacity/crypto-256/repeat-2/attempt-20260923T110941Z-2671832-4/egress-duty.json",
+          "artifactSha256": "e3e81d9e942be3bbcdedfb7cdd79526dd78f75c43fcd1ebe2f06636a4af628b0",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/crypto-256/repeat-2/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/crypto-256/repeat-2/attempt-20260923T110941Z-2671832-4/contract.json",
           "crypto": "256",
           "logical": "crypto/256/2",
           "outputs": 10,
@@ -818,10 +825,10 @@
       "attempts": [
         {
           "apparatusValid": true,
-          "artifact": ".local/artifacts/wi37-capacity/crypto-256/repeat-3/egress-duty.json",
-          "artifactSha256": "856a634daffa01ecf0d8fc292165664e66329a9bf56550a82285dd0215f97a58",
+          "artifact": ".local/artifacts/wi37-capacity/crypto-256/repeat-3/attempt-20260923T111153Z-2671832-7/egress-duty.json",
+          "artifactSha256": "a2e3ee905df1f5d55bd7affdc7361ec7a209a4ae9f22a16f5cd6e62931e1c085",
           "classification": "stable-unclassified",
-          "contract": ".local/artifacts/wi37-capacity/crypto-256/repeat-3/contract.json",
+          "contract": ".local/artifacts/wi37-capacity/crypto-256/repeat-3/attempt-20260923T111153Z-2671832-7/contract.json",
           "crypto": "256",
           "logical": "crypto/256/3",
           "outputs": 10,
@@ -844,5 +851,5 @@
     "receiverBin": "/home/dev/.cargo/git/checkouts/srt-rs-2a4e85d4a1e5ceb4/86369b0/target/release/srt-bench"
   },
   "summaryPath": "test/harness/baselines/wi37-current-host/summary.json",
-  "summarySha256": "e442c921c401efbe235d281eadae6d7233ca8f093abb5ec31526b4a93e9d295f"
+  "summarySha256": "12c23d3f887d0de075cf7ba1fb66aed924381d73627b0b7b0b1b1b9870504e44"
 }
