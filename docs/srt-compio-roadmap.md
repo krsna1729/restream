@@ -65,8 +65,8 @@ This roadmap owns:
 - [21. RTMP / RTMPS Networking Strategy](#21-rtmp--rtmps-networking-strategy)
 - [22. kTLS and AF_XDP](#22-ktls-and-af_xdp)
 - [23. Why Keep RTMP on Kernel TCP](#23-why-keep-rtmp-on-kernel-tcp)
-- [24. RTMP / RTMPS Performance Direction](#24-rtmp--rtmps-performance-direction)
-- [25. WI4 — Final SRT Cleanup / Productionization](#25-wi4--final-srt-cleanup--productionization)
+- [24. RTMP / RTMPS Transport Convergence](#24-rtmp--rtmps-transport-convergence)
+- [25. WI4A — SRT Productionization](#25-wi4a--srt-productionization)
 - [26. WI7 — Dataplane Shrink](#26-wi7--dataplane-shrink)
 - [27. WI8 — CPU / NUMA / Capacity Oracle](#27-wi8--cpu--numa--capacity-oracle)
 - [28. WI9 — Abstraction Compression](#28-wi9--abstraction-compression)
@@ -726,8 +726,9 @@ machinery.
 
 Result: `crates/restream-dataplane/src/udp.rs` and `udp_recv.rs` are deleted along
 with the UDP-only `OpKind` variants (`UdpRx`, `UdpTx`, `UdpRecvMulti`) and the
-UDP allocation-test section; the crate docs describe its surviving role (native
-TCP/io_uring for RTMP, reusable scheduler/media primitives, synthetic harness).
+UDP allocation-test section; at that point, crate docs described its surviving
+role as native TCP/io_uring for RTMP, reusable scheduler/media primitives, and
+synthetic harness. WI5 now moves production RTMP to Compio TCP.
 The dead zero-match SRT concurrency steps are removed, the never-consumed
 `RESTREAM_SRT_UDP_BUFFER` / `srt_udp_buffer` setting and the undocumented-in-code
 `RESTREAM_SRT_IO_BATCH_CAPACITY` docs are gone, and
@@ -1341,7 +1342,7 @@ Reference to preserve: `d6145413` is the current-host substrate reference
 `docs/agent-guidance/quality/baselines.md`). Every ~0.26-0.32 Mpps/core figure is
 scoped to that measured host class.
 
-Does NOT block: WI3.6, WI3.7, WI4, WI5, WI6, WI7, WI8, WI9.
+Does NOT block: WI3.6, WI3.7, WI4A, WI5, WI6, WI7, WI8, WI9.
 
 Blocks only: final absolute capacity claims, portable shard/default selection, and
 final pps/core characterization.
@@ -1398,7 +1399,8 @@ is actually a material bottleneck for our workload.
 ## 13. WI3.6 — SRT Packet Engine: Incremental Cost Above the Substrate
 
 Status: **DONE** (2026-09-22). Stage D closed without a valid rating row;
-WI3.7 is the next active work item.
+WI3.7's provenance-clean evidence is recorded as provisional; the runtime
+shard-law decision remains open in Q-025 and is deferred past transport convergence.
 
 ```text
 A/B saturation attribution      complete at F=1000 and F=11
@@ -1849,16 +1851,18 @@ with actual cycles/packet evidence.
 
 ## 16. WI3.7 — End-to-End Multi-Shard 8 Mbps Capacity Qualification
 
-Status: ACTIVE — the provenance-clean closure evidence is recorded, but
-WI3.7 is not current-host-frozen. The clean run selected one build
-provenance for all 28 plaintext cells and six crypto repeats; every selected
-cell was apparatus-valid and `stable-unclassified`. Its joint fit is
+Status: PROVISIONAL EVIDENCE COMPLETE — the provenance-clean closure records
+current-host results, but does not freeze a production coefficient or decide
+the runtime shard law. The clean run selected one build provenance for all 28
+plaintext cells and six crypto repeats; every selected cell was apparatus-valid
+and `stable-unclassified`. Its joint fit is
 `fixedCorePerShard = 0.099466`, `secondsPerData = 14.1026 us/DATA`,
-`R² = 0.89508`, with a provisional two-shard upper bound. That fit is
-materially different from the prior local-only `0.0518` / `20.25 us/DATA`
-result, so the result is retained as qualification evidence rather than
-frozen or advanced to WI4. The durable summary and provenance manifest are
-at `test/harness/baselines/wi37-current-host/`.
+`R² = 0.89508`, with a provisional two-shard upper bound. That fit is materially
+different from the prior local-only `0.0518` / `20.25 us/DATA` result and is
+retained as evidence, not a frozen current-host coefficient. No production
+shard policy or capacity constant changes from this result. WI3.7 evidence
+collection is complete for this migration; further shard-law measurement is
+deferred to Q-025 after transport convergence and runtime/host qualification.
 
 The prior local-only result is retained as an audit trail, not as the current
 baseline. Its fit was approximately `fixedCorePerShard = 0.0518`,
@@ -2040,7 +2044,9 @@ no Q-025 closure is allowed from this host-only qualification.
 
 ## 17. Re-Derive the SRT Shard Law
 
-Q-025 currently tracks this debt.
+Q-025 remains open and deferred until WI4A–WI6 transport convergence, WI7/WI9
+cleanup, and WI8 runtime/host calibration are complete. WI3.7 remains
+provisional evidence only; it does not select a runtime shard law.
 
 Existing shard policy was derived under an older libsrt/CSndQueue model.
 
@@ -2053,7 +2059,9 @@ one Owner/family
 shared sockets
 ```
 
-WI3.7 must therefore remeasure and either preserve or replace:
+After those prerequisites, re-evaluate the policy using evidence from the final
+transport topology; do not rerun WI3.7 or change production defaults as part of
+the current transport-convergence package:
 
 ```text
 EgressShardProfile::SrtCpuParallel
@@ -2279,55 +2287,60 @@ RTMP is a byte stream and can amortize packet cost through:
 This is fundamentally different from SRT fanout, where destination-specific UDP
 packets stress per-packet work.
 
-## 24. RTMP / RTMPS Performance Direction
+## 24. RTMP / RTMPS Transport Convergence
 
-After SRT is settled:
+WI5 and WI6 migrate transport ownership while preserving the shared fabric
+scheduler, lifecycle, retry, backpressure, generation safety, TCP quality
+reporting, and shutdown behavior. This is not a performance-tuning phase;
+WI3.7 remains provisional and Q-025 remains deferred.
 
 ### WI5 — Compio TCP
 
-Replace native Restream TCP io_uring RTMP machinery with Compio TCP.
+Status: implementation complete; live qualification in progress.
 
-Preserve:
-
-- fixed shard ownership
-- bounded pending bytes
-- generation safety
-- RTMP wire/state work already completed
+- RTMP ingress uses a Compio acceptor thread/runtime for the listener and
+  accepted streams, with a bounded 64 KiB duplex bridge to fixed Tokio session
+  workers.
+- RTMP egress uses one Compio runtime per fabric shard, owning its TCP streams
+  and `PollFd` readiness; protocol I/O remains bounded and non-blocking.
+- There is no production io_uring or epoll fallback; standard-TCP and epoll
+  adapters exist only under `cfg(test)`.
+- Preserve fixed shard ownership, pending-byte limits, generation safety,
+  reconnect policy, shutdown draining, and TCP_INFO/send-queue quality.
 
 ### WI6 — RTMPS/kTLS
 
-Retain:
+Status: implementation complete; live qualification in progress.
 
-- userspace TLS handshake
-- kTLS handoff
-- io_uring socket operation
-- kernel TCP
+- Rustls performs the handshake over the same Compio-owned TCP path; Linux
+  kTLS is required for application records.
+- `KtlsState` distinguishes `NotRequested`, `Requested`, `Enabled`,
+  `Unsupported`, and `SetupFailed`; `ktlsSuccess` counts only completed
+  handoffs.
+- Unsupported suites/capability or a kTLS setup error fail the output. There
+  is no silent userspace-TLS fallback.
+- `/metrics/system` exposes request, attempt, success, unsupported, error, and
+  capability state; RTMPS live preflight fails explicitly if the host cannot
+  support the required AES-GCM kTLS path.
+- Qualification covers actual RTMPS media, reconnect after receiver loss,
+  stalled receivers, transport failure, and clean shutdown. It does not add a
+  new CPU/byte benchmark or derive production constants.
 
-Qualification should measure:
+## 25. WI4A — SRT Productionization
 
-- plaintext RTMP
-- userspace TLS
-- kTLS
-- vectored/coalesced writes
-- TSO/GSO behavior
-- CPU/byte
-- CPU/connection
+Status: DONE for the current productionization scope.
 
-## 25. WI4 — Final SRT Cleanup / Productionization
+- Production SRT ingress and egress use the Compio `Owner` architecture; old
+  native/compatibility SRT transport paths are removed.
+- Benchmark-only transport overrides are isolated behind the default-off
+  `wi37-shard-bench` feature; production builds do not expose those seams.
+- Owner metrics and terminology are reconciled, and stale SRT compatibility
+  hooks are removed.
+- No SRT shard policy, default, capacity coefficient, or CPU/NUMA policy is
+  changed. Q-025 remains open and deferred.
 
-Status: PLANNED AFTER PERFORMANCE DECISIONS
-
-Once the SRT packet substrate is settled:
-
-- remove benchmark-only hooks that should not ship
-- finalize runtime metrics
-- finalize shard defaults
-- finalize CPU/NUMA policy
-- remove stale legacy SRT wording
-- remove now-unused dataplane abstractions
-- shrink `restream-dataplane` around actual reusable primitives
-
-At this point SRT should be considered architecturally complete.
+Remaining generic/native dataplane cleanup belongs to WI7; runtime/host
+calibration belongs to WI8 and final cross-host qualification to WI10.
 
 ## 26. WI7 — Dataplane Shrink
 
@@ -2549,15 +2562,13 @@ Keep these in:
 
 ### Q-025
 
-Remeasure SRT shard-count scaling law.
+Keep the SRT shard-law decision open. WI3.7 is provisional current-host
+evidence, not a production coefficient.
 
-Roadmap relationship:
-
-```text
-WI3.7
-```
-
-Do not close Q-025 before the one-core / shard-law matrix exists.
+Resume measurement only after WI4A–WI6 transport convergence, WI7/WI9 cleanup,
+and WI8 runtime/host calibration. Run the shard-law matrix against that final
+topology, then use WI10 cross-host qualification before finalizing a default.
+Do not rerun WI3.7 or change production policy as part of the current package.
 
 ### Q-026
 
@@ -2598,90 +2609,71 @@ The roadmap should remain a readable architectural history.
 
 ## 35. Current Sequence
 
-The expected execution order from the current state is:
+The current program state and next dependency order are:
 
 ```text
-WI3.1
-    upstream Owner listener admission + receiving-group identity
-
-WI3.2
-    hard-cut Restream SRT ingress to Compio Owner
-
-WI3.3
-    delete old Restream SRT transport machinery
-
-WI3.4A
-    formal 8 Mbps / packet-rate benchmark contract (frozen; local reference
-    artifact in the single-host lane)
-
-WI3.4B
-    external-host reference baseline (pending infrastructure; does not block)
-
-WI3.5
-    current-host substrate characterization (DONE: TX-only + veth lanes,
-    sendto/compio/io-uring arms, sender-side profile)
-
-WI3.5B
-    modern i9-13xxxH cross-host validation (DEFERRED to WI10; non-blocking)
-
-WI3.6
-    measure SRT overhead above the local substrate: raw UDP -> Compio/Owner ->
-    full SRT -> whole Restream, in CPU us/event and overhead ratios
+WI3.1–WI3.6
+    complete; WI3.5B / WI3.4B remain external-host evidence
 
 WI3.7
-    shard scaling law at receiver-unlimited fanout on the current host; rederive
-    the shard law as a capacity-based law. The lossless 100/300/500/1000 ladder
-    is external-infrastructure/WI10 work, not a current-host promise
+    provisional current-host evidence complete; no production coefficient or
+    runtime shard-law decision; Q-025 remains open and deferred
 
 WI3.8
-    AF_XDP decision only if normal UDP/io_uring misses the substrate requirement
+    AF_XDP rejected for current requirements; reopen only if final normal-socket
+    evidence shows the substrate cannot meet a stated requirement
 
-WI4
-    final SRT cleanup / productionization
+WI4A
+    SRT Compio Owner productionization complete; no policy/default change
 
 WI5
-    RTMP -> Compio TCP
+    RTMP ingress and egress Compio TCP implementation complete; live qualification
+    is the active acceptance gate
 
 WI6
-    RTMPS / kTLS qualification
+    RTMPS on the same Compio path with strict kTLS handoff; live qualification
+    is the active acceptance gate
+
+Transport live CI
+    short PR SRT/RTMP smoke; broader redevelop media/crypto/fault matrix;
+    nightly full certification and churn/measurement lanes
 
 WI7
-    delete obsolete dataplane machinery
-
-WI8
-    CPU / NUMA / Oracle capacity model
+    delete obsolete dataplane machinery after transport convergence
 
 WI9
-    abstraction and LOC compression
+    compress abstractions after the active dataplane is known; retain a stable
+    post-cleanup baseline
+
+WI8
+    runtime Performance Oracle and host calibration
+
+Q-025
+    re-derive and validate a dynamic shard model at the final topology
+
+Continuous regression / experiment loop
+    observe, diagnose, benchmark candidates, live-qualify, then adopt or drop
 
 WI10
-    final production qualification, including the deferred cross-host rerun:
-    frozen substrate matrix + finished product path on the i9-13xxxH P-core,
-    compared against the old-Zen reference before any default is finalized
+    final cross-host qualification before portable defaults are finalized
+
 ```
 
 ## 36. Immediate Next Action
 
-WI3.1, WI3.2 and WI3.3 are done; WI3.4A's contract is frozen; WI3.5's current-host
-substrate characterization is done (`d6145413`). The next item is:
+WI3.7's current-host evidence is frozen provisionally. Do not rerun its
+performance matrix, derive a new shard coefficient, or change production
+defaults in this transport-convergence work.
 
-```text
-WI3.6
-```
+WI4A SRT productionization is complete. The current milestone finishes WI5/WI6
+through actual RTMP/RTMPS/SRT media and reconnect, slow-receiver, failure, and
+shutdown qualification, then passes the PR/redevelop live-CI tiers. Q-025 stays
+open until the final topology and WI8 Performance Oracle are ready.
 
-measuring where our own overhead lives above the substrate: raw UDP -> Compio/Owner
--> full SRT -> whole Restream, reported as CPU microseconds per event and overhead
-ratios. It does **not** wait for raw UDP to reach 2 Mpps/core — the absolute
-pps/core figure is that decomposition's output on whatever host runs it, and the
-cross-host comparison is deferred to WI3.5B/WI10.
-
-Then WI3.7 measures multi-shard scaling at a receiver-unlimited fanout on this
-host, deriving a capacity-based shard law rather than a fixed count; the lossless
-100/300/500/1000-output ladder stays external-infrastructure/WI10 work, because
-this host's same-host SRT sink is already receiver-limited below 100 outputs.
-WI3.4B (a `healthy` remote baseline) and WI3.5B (modern-P-core rerun) stay open
-against infrastructure and gate only absolute capacity claims, portable defaults,
-and final pps/core characterization.
+After those acceptance gates, the next roadmap work is WI7 dataplane cleanup,
+then WI9 abstraction compression and a stable baseline, followed by WI8, Q-025
+dynamic-model validation, the continuous regression/experiment loop, and final
+WI10 cross-host qualification.
 
 ## 37. Definition of Success
 

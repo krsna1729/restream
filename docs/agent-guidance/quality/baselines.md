@@ -84,10 +84,14 @@ matching crypto repeats (AES-128/AES-256, three each). All selected rows were
 apparatus-valid and `stable-unclassified`; no boundary-unstable cell was
 included. The joint fit is `fixedCorePerShard = 0.099466`,
 `secondsPerData = 14.1026 us/DATA`, `R² = 0.89508`, with a provisional
-two-shard upper bound. The clean fit is materially different from the prior
-local-only `0.0518` / `20.25 us/DATA` result, so this is evidence, not a
-frozen current-host coefficient; WI4 is not advanced and Q-025 remains open.
-The crypto paired deltas span zero and remain unresolved on this host.
+two-shard upper bound. The clean fit differs materially from the prior
+local-only `0.0518` / `20.25 us/DATA` result, which remains an audit trail.
+WI3.7 is provisional evidence, not a production coefficient; no production
+shard policy or capacity constants change. Evidence collection is complete
+for this migration, so no more current-host shard-law runs are planned.
+Q-025 remains open and deferred until transport convergence, runtime Oracle,
+and multi-host qualification. The crypto paired deltas span zero and remain
+unresolved on this host.
 
 ### WI3.4 packet-rate contract — SRT fanout ladder (2026-09-21)
 

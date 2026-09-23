@@ -43,24 +43,24 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   and call connect_fabric_* directly. Filed: 2026-09-05 by claude, from PR
   #141 review.
 
-### Q-025 [performance] [opus] Remeasure the SRT shard-count scaling law after the srt-rs cutover
-- Goal: either re-justify `EgressShardProfile::SrtCpuParallel` (always claim
-  the CPU-derived shard ceiling for SRT feeds) with post-cutover evidence, or
-  replace it with a law derived from the current mechanism. Same for
-  `srt_egress_connect_concurrency`, still sized under a libsrt
-  `CSndQueue` saturation point that no longer exists.
+### Q-025 [performance] [opus] Re-qualify the SRT shard law after transport convergence
+- Goal: settle `EgressShardProfile::SrtCpuParallel` and
+  `srt_egress_connect_concurrency` against the final Compio Owner and transport
+  architecture; the previous libsrt `CSndQueue` saturation rationale no longer
+  applies.
 - Files: `src/config.rs` (`target_egress_fabric_shards`,
   `EgressShardProfile`, `srt_egress_connect_concurrency`), plus a matrix
   document under `docs/agent-guidance/quality/`.
-- Gates: MSR shard-count x caller-density matrix at 30/200/600/1200 with
-  full delivery and clean teardown; no code change without it.
-- Context: the current policy was derived from libsrt's
-  one-`CSndQueue`-worker-per-multiplexer model. After #137/#141 a shard owns
-  a per-shard Compio runtime with per-family Owners driven from the shard
-  thread — no per-multiplexer worker — so shard count is no longer buying
-  the thing the policy assumed. The comments in `config.rs` now mark the
-  policy provisional; this item is the measurement that resolves it.
-- Status: open (Filed: 2026-09-05 by claude, from PR #141 review)
+- Gates: one-core/shard-law matrix at the final transport topology, followed by
+  cross-host qualification; no production policy change without valid measured
+  evidence.
+- Context: WI3.7's provenance-clean current-host result is provisional
+  evidence, not a frozen coefficient or runtime-law decision. Defer new
+  measurement until WI4A–WI6 transport convergence, WI7/WI9 cleanup, and WI8
+  runtime/host calibration are complete. No production shard policy or
+  performance constants change from WI3.7.
+- Status: open and deferred until those prerequisites are complete (Filed:
+  2026-09-05 by claude, from PR #141 review).
 
 ### Q-026 [resilience] [opus] Attribute and recalibrate the frozen-SRT-destination RSS gate
 - Goal: explain the ~70 MB RSS growth of `fault.srt-output-stall`'s frozen
