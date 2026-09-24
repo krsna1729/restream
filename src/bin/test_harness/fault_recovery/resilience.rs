@@ -537,7 +537,7 @@ pub(crate) async fn fault_resilience() -> Result<Value, String> {
     let mut shutdown_publisher = spawn_publisher(
         &fixture_h264,
         &format!(
-            "rtmp://127.0.0.1:{}/live/fault-graceful-transport",
+            "rtmp://127.0.0.1:{}/live/fault-graceful-rtmp-rtmps",
             ports.rtmp
         ),
         "flv",
