@@ -2296,7 +2296,8 @@ WI3.7 remains provisional and Q-025 remains deferred.
 
 ### WI5 — Compio TCP
 
-Status: implementation complete; live qualification in progress.
+Status: implementation complete; local live qualification complete.
+Hosted PR/redevelop CI is pending.
 
 - RTMP ingress uses a Compio acceptor thread/runtime for the listener and
   accepted streams, with a bounded 64 KiB duplex bridge to fixed Tokio session
@@ -2310,7 +2311,8 @@ Status: implementation complete; live qualification in progress.
 
 ### WI6 — RTMPS/kTLS
 
-Status: implementation complete; live qualification in progress.
+Status: implementation complete; local live qualification complete.
+Hosted PR/redevelop CI is pending.
 
 - Rustls performs the handshake over the same Compio-owned TCP path; Linux
   kTLS is required for application records.
@@ -2632,12 +2634,24 @@ WI4A
     SRT Compio Owner productionization complete; no policy/default change
 
 WI5
-    RTMP ingress and egress Compio TCP implementation complete; live qualification
-    is the active acceptance gate
+    RTMP ingress/egress Compio TCP implementation and local live qualification
+    complete; hosted PR/redevelop live-CI acceptance remains pending
 
 WI6
-    RTMPS on the same Compio path with strict kTLS handoff; live qualification
-    is the active acceptance gate
+    RTMPS on the same Compio path with strict kTLS handoff; local live
+    qualification complete; hosted PR/redevelop live-CI acceptance remains pending
+
+local live evidence (2026-09-24; single Linux host, `--no-netns`):
+    Restream SHA: d30454afaa4cf27edb4f46fa375488e2c1f3c89b
+    SRT plaintext/AES-128/AES-192/AES-256 fan-out matrix passed at 20/40/60
+    outputs; two RTMP H.264 A1 BF0/BF2 and eight SRT H.264/H.265
+    A1/A2 BF0/BF2 modes passed.
+    evidence: .local/artifacts/final-srt-crypto/ and
+              .local/artifacts/final-mixed/
+    PR: not created; hosted CI pending; srt-rs unchanged.
+    First H.264 A2/BF0 signal run reported a 256.5ms audio gap; exact rerun
+    passed at 0.37ms. No cause identified; both artifacts retained.
+    No cross-host or performance-capacity claim; Q-025/WI8/WI10 remain deferred.
 
 Transport live CI
     short PR SRT/RTMP smoke; broader redevelop media/crypto/fault matrix;
@@ -2671,10 +2685,9 @@ performance matrix, derive a new shard coefficient, or change production
 defaults in this transport-convergence work.
 Sequence: `WI4A -> WI5 -> WI6 -> live-CI convergence`.
 
-WI4A SRT productionization is complete. The current milestone finishes WI5/WI6
-through actual RTMP/RTMPS/SRT media and reconnect, slow-receiver, failure, and
-shutdown qualification, then passes the PR/redevelop live-CI tiers. Q-025 stays
-open until the final topology and WI8 Performance Oracle are ready.
+WI4A SRT productionization and local WI5/WI6 live qualification are complete.
+Next run the PR/redevelop live-CI tiers; Q-025 stays open until the final
+topology and WI8 Performance Oracle are ready.
 
 After those acceptance gates, the next roadmap work is WI7 dataplane cleanup,
 then WI9 abstraction compression and a stable baseline, followed by WI8, Q-025
