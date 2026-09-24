@@ -25,6 +25,24 @@ pub(crate) trait RtmpReadinessPoller {
         interest: TcpEgressInterest,
     ) -> Result<(), TcpEgressPollError>;
 
+    fn register_connection(
+        &mut self,
+        fd: RawFd,
+        key: LeafKey,
+        generation: u64,
+        _stream: &super::compio_tcp::CompioTcpStream,
+    ) -> Result<(), TcpEgressPollError> {
+        self.register_leaf(
+            fd,
+            key,
+            generation,
+            TcpEgressInterest {
+                readable: true,
+                writable: true,
+            },
+        )
+    }
+
     fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError>;
 
     fn poll_leaves(
@@ -121,6 +139,15 @@ impl RtmpReadinessPoller for super::compio_tcp::CompioTcpPoller {
         self.register_leaf(fd, key, generation, interest)
     }
 
+    fn register_connection(
+        &mut self,
+        fd: RawFd,
+        key: LeafKey,
+        generation: u64,
+        stream: &super::compio_tcp::CompioTcpStream,
+    ) -> Result<(), TcpEgressPollError> {
+        super::compio_tcp::CompioTcpPoller::register_connection(self, fd, key, generation, stream)
+    }
     fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError> {
         self.remove(fd)
     }

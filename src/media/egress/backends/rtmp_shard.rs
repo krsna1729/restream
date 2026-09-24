@@ -1,10 +1,9 @@
-//! RTMP fabric shard backend. A shard-local Compio runtime owns TCP readiness
-//! registrations and socket descriptors; DNS resolution stays on a dedicated
-//! worker so a slow resolver cannot stall the shard.
+//! RTMP fabric shard backend. A shard-local Compio runtime owns connection
+//! receives and writes; DNS resolution stays on a dedicated worker so a slow
+//! resolver cannot stall the shard.
 //!
-//! The engine requests read/write readiness across handshake, negotiation,
-//! and publication. The backend updates each leaf's registered interest only
-//! when that request changes.
+//! Completion events are bounded and generation-tagged. The protocol engine
+//! remains shard-scheduled, preserving feed fairness, drain and retry rules.
 
 use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -16,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use tokio_rustls::rustls::ClientConfig;
 
-use crate::media::egress::backend::{CloseReason, Interest, ProtocolEngine, Readiness};
+use crate::media::egress::backend::{CloseReason, ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::feed::EgressFeed;
 use crate::media::egress::journal::RingFeed;
@@ -40,7 +39,7 @@ use super::tcp::TcpConnectAttempt;
 use super::tcp::TcpEgressPollError;
 #[cfg(test)]
 use super::tcp::TcpEgressPoller;
-use super::tcp::{TcpEgressInterest, TcpReadyLeaf};
+use super::tcp::TcpReadyLeaf;
 
 use self::rtmp_shard_connect::{ConnectingRtmpConnect, PendingRtmpConnect};
 pub(crate) use super::rtmp_shard_poller::RtmpReadinessPoller;
@@ -150,6 +149,11 @@ fn push_bounded<T>(queue: &mut VecDeque<T>, value: T, capacity: usize) -> bool {
     true
 }
 
+fn merge_ready_flags(pending: &mut Readiness, event: TcpReadyLeaf) {
+    pending.readable |= event.readable;
+    pending.writable |= event.writable;
+}
+
 pub(crate) fn resolve_rtmp_peer_host(host: &str, port: u16) -> Option<SocketAddr> {
     if let Ok(addr) = host.parse::<std::net::IpAddr>() {
         return Some(SocketAddr::new(addr, port));
@@ -161,10 +165,7 @@ struct RtmpFabricLeaf {
     common: LeafCommon,
     engine: RtmpFabricEngine,
     transport: RtmpConnection,
-    /// What the poller is currently registered to watch for this leaf's fd.
-    /// The registered readiness interest; only changed when the engine asks
-    /// for a different direction.
-    registered_interest: TcpEgressInterest,
+    pending_readiness: Readiness,
     /// Last-progress fallback while a leaf has made no byte or protocol
     /// progress yet, such as during connect or handshake.
     observed_since: Instant,
@@ -194,7 +195,7 @@ impl RtmpFabricLeaf {
         feed: &RingFeed,
         budget: WorkBudget,
     ) -> EngineVisitResult {
-        EngineVisit {
+        let result = EngineVisit {
             generation,
             common: &mut self.common,
             engine: &mut self.engine,
@@ -203,7 +204,9 @@ impl RtmpFabricLeaf {
             feed,
             budget,
         }
-        .run()
+        .run();
+        self.transport.resume_receive();
+        result
     }
 
     /// Classify send-path health from pending application bytes and time
@@ -259,28 +262,6 @@ impl RtmpFabricLeaf {
 
 fn requeue_after_rtmp_visit(decision: VisitDecision) -> bool {
     matches!(decision, VisitDecision::Continue)
-}
-
-/// Registration interest for the next visit, derived from the engine's last
-/// progress. `HandshakeComplete` and `FeedOverrun` need one immediate
-/// nonblocking visit after the state/cursor transition; relying on a zero-time
-/// poll can miss a ready descriptor and leave the leaf parked indefinitely.
-/// That synthetic visit is queued in `visit_one_ready_leaf`.
-fn next_registration_interest(
-    progress: &crate::media::egress::backend::EngineProgress,
-) -> Interest {
-    use crate::media::egress::backend::EngineProgress;
-    match progress {
-        EngineProgress::Progress { wait, .. } | EngineProgress::Needs(wait) => wait.io_interest(),
-        _ => Interest::READ_WRITE,
-    }
-}
-
-fn tcp_interest(interest: Interest) -> TcpEgressInterest {
-    TcpEgressInterest {
-        readable: interest.readable,
-        writable: interest.writable,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -396,9 +377,24 @@ where
     }
 
     fn enqueue_ready(&mut self, event: TcpReadyLeaf) -> bool {
-        let admitted = push_bounded(&mut self.ready, event, self.queue_capacity);
+        let queue_capacity = self.queue_capacity;
+        let ready = &mut self.ready;
+        let queue_overflows = &mut self.queue_overflows;
+        let Some(leaf) = self.leaves.get_mut(event.key.0).and_then(Option::as_mut) else {
+            return false;
+        };
+        if leaf.common.generation != event.generation {
+            return false;
+        }
+        merge_ready_flags(&mut leaf.pending_readiness, event);
+        if leaf.common.schedule.enqueued {
+            return true;
+        }
+        leaf.common.schedule.enqueued = true;
+        let admitted = push_bounded(ready, event, queue_capacity);
         if !admitted {
-            self.queue_overflows = self.queue_overflows.saturating_add(1);
+            leaf.common.schedule.enqueued = false;
+            *queue_overflows = queue_overflows.saturating_add(1);
         }
         admitted
     }
@@ -433,10 +429,6 @@ where
         leaf.engine.close(&mut leaf.transport, reason);
         self.free_leaf_keys.push(socket_ref.key);
         true
-    }
-
-    fn leaf_mut(&mut self, key: LeafKey) -> Option<&mut RtmpFabricLeaf> {
-        self.leaves.get_mut(key.0).and_then(Option::as_mut)
     }
 
     fn allocate_leaf_key(&mut self) -> Option<LeafKey> {
@@ -487,12 +479,8 @@ where
                         })
                     }
                 });
-            let Some(event) = event else {
-                continue;
-            };
-            let admitted = self.enqueue_ready(event);
-            if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) {
-                leaf.common.schedule.enqueued = admitted;
+            if let Some(event) = event {
+                self.enqueue_ready(event);
             }
         }
     }
@@ -511,49 +499,17 @@ where
                         .and_then(Option::as_ref)
                         .is_some()
                 {
-                    if let Some(leaf) = self.leaf_mut(event.key) {
-                        leaf.common.schedule.enqueued = true;
-                    }
-                    if !self.enqueue_ready(event)
-                        && let Some(leaf) = self.leaf_mut(event.key)
-                    {
-                        leaf.common.schedule.enqueued = false;
-                    }
+                    self.enqueue_ready(event);
                 }
-                continue;
-            }
-            if self
-                .leaves
-                .get(event.key.0)
-                .and_then(Option::as_ref)
-                .is_none()
-            {
-                continue;
-            }
-            if self
-                .leaves
-                .get(event.key.0)
-                .and_then(Option::as_ref)
-                .is_some_and(|leaf| leaf.common.schedule.enqueued)
-            {
-                continue;
-            }
-            if let Some(leaf) = self.leaf_mut(event.key) {
-                leaf.common.schedule.enqueued = true;
-            }
-            if !self.enqueue_ready(event)
-                && let Some(leaf) = self.leaf_mut(event.key)
-            {
-                leaf.common.schedule.enqueued = false;
+            } else {
+                self.enqueue_ready(event);
             }
         }
         self.poll_buffer = poll_buffer;
     }
 
-    /// Visit the next ready leaf, then re-register its poller interest to
-    /// match what the engine's returned progress says it needs next (unlike
-    /// SRT's always-write registration, RTMP's interest genuinely changes
-    /// across handshake/negotiation/publishing — see module docs).
+    /// Visit one completion-ready leaf. The scheduler keeps protocol work
+    /// bounded and isolates a blocked socket from healthy neighbors.
     ///
     /// `OutputId` wraps a `String`, so cloning it is a heap allocation; the
     /// caller only ever uses it on `VisitDecision::Close` (to remove the
@@ -564,16 +520,8 @@ where
         let budget = self.budget_config.new_visit();
         let feed = &self.feed;
         let leaf = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)?;
-        let result = leaf.visit_ready(
-            event.generation,
-            Readiness {
-                readable: event.readable,
-                writable: event.writable,
-            },
-            feed,
-            budget,
-        );
-
+        let readiness = std::mem::take(&mut leaf.pending_readiness);
+        let result = leaf.visit_ready(event.generation, readiness, feed, budget);
         let (progress, decision) = match result {
             EngineVisitResult::StaleGeneration => return Some((None, VisitDecision::Suspend)),
             EngineVisitResult::Visited(outcome) => {
@@ -586,11 +534,25 @@ where
                 (outcome.progress, outcome.decision)
             }
         };
-        let transition_needs_visit = matches!(
+        // Read completions and feed wakes can leave protocol bytes staged
+        // without a socket event for the bounded adapter to accept them.
+        // Prime one local writable visit; WouldBlock then waits for a real
+        // completion instead of spinning.
+        let needs_writable = matches!(
             &progress,
-            crate::media::egress::backend::EngineProgress::HandshakeComplete
-                | crate::media::egress::backend::EngineProgress::FeedOverrun
+            crate::media::egress::backend::EngineProgress::Needs(
+                crate::media::egress::backend::WaitCondition::Io(interest)
+            ) if interest.writable
         );
+        let immediate_write_visit = readiness.readable && readiness.writable && needs_writable;
+        let local_write_visit = !readiness.readable && !readiness.writable && needs_writable;
+        let transition_needs_visit = immediate_write_visit
+            || local_write_visit
+            || matches!(
+                &progress,
+                crate::media::egress::backend::EngineProgress::HandshakeComplete
+                    | crate::media::egress::backend::EngineProgress::FeedOverrun
+            );
         if matches!(
             progress,
             crate::media::egress::backend::EngineProgress::FeedOverrun
@@ -600,7 +562,8 @@ where
         leaf.common.pending_application_bytes = leaf
             .engine
             .pending_application_bytes()
-            .saturating_add(leaf.transport.rustls_pending_bytes_estimate());
+            .saturating_add(leaf.transport.rustls_pending_bytes_estimate())
+            .saturating_add(leaf.transport.pending_transport_write_bytes());
         // Progress can still end on an empty feed. Keep that leaf parked for
         // the next publication even though this visit returns `Continue`.
         let feed_waiting = leaf.common.schedule.wants_feed_wake
@@ -636,58 +599,28 @@ where
             return Some((Some(leaf.common.output_id.clone()), decision));
         }
 
-        {
-            let interest = tcp_interest(next_registration_interest(&progress));
-            // Avoid refreshing the Compio readiness registration when the
-            // requested interest has not changed.
-            if let Some(leaf) = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)
-                && leaf.registered_interest != interest
-            {
-                // Discarding this Result and updating `registered_interest`
-                // unconditionally would desync tracked state from the real
-                // kernel registration on failure: the leaf would believe
-                // it's watching (e.g.) writable readiness forever while the
-                // kernel never actually does, and would never be
-                // rediscovered by `poll_ready()` again — silent, permanent
-                // starvation, indistinguishable from a healthy idle leaf
-                // (the root cause of the recurring "RTMP fabric leaf
-                // terminated unexpectedly" CI flake). Treat a failed
-                // re-registration as leaf-fatal instead, same as a failed
-                // initial registration at connect time: close and let the
-                // existing retry/reconnect path recover it.
-                if self
-                    .poller
-                    .register_leaf(event.fd, event.key, event.generation, interest)
-                    .is_err()
-                {
-                    tracing::warn!(
-                        output_id = %leaf.common.output_id,
-                        leaf_key = event.key.0,
-                        "rtmp fabric leaf re-registration failed; closing for retry"
-                    );
-                    return Some((Some(leaf.common.output_id.clone()), VisitDecision::Close));
-                }
-                leaf.registered_interest = interest;
-            }
-        }
         if transition_needs_visit {
+            let followup_readiness = if immediate_write_visit || local_write_visit {
+                Readiness::WRITABLE
+            } else {
+                Readiness::BOTH
+            };
+            leaf.pending_readiness = followup_readiness;
             let admitted = push_bounded(
                 &mut self.ready,
                 TcpReadyLeaf {
                     fd: event.fd,
                     key: event.key,
                     generation: event.generation,
-                    readable: true,
-                    writable: true,
+                    readable: followup_readiness.readable,
+                    writable: followup_readiness.writable,
                 },
                 self.queue_capacity,
             );
             if !admitted {
                 self.queue_overflows = self.queue_overflows.saturating_add(1);
             }
-            if let Some(leaf) = self.leaves.get_mut(event.key.0).and_then(Option::as_mut) {
-                leaf.common.schedule.enqueued = admitted;
-            }
+            leaf.common.schedule.enqueued = admitted;
         }
 
         Some((None, decision))

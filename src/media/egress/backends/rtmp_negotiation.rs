@@ -69,6 +69,7 @@ impl SessionNegotiation {
         stream: &mut RtmpConnection,
         readiness: Readiness,
     ) -> SessionAdvanceOutcome {
+        let mut wrote = false;
         if let Some(pending) = &mut self.pending_write {
             if !readiness.writable {
                 return SessionAdvanceOutcome::Pending(Interest::WRITE);
@@ -83,6 +84,7 @@ impl SessionNegotiation {
                         return SessionAdvanceOutcome::Pending(Interest::WRITE);
                     }
                     self.pending_write = None;
+                    wrote = true;
                 }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => {
                     return SessionAdvanceOutcome::Pending(stream.interest_hint(Interest::WRITE));
@@ -91,21 +93,9 @@ impl SessionNegotiation {
             }
         }
 
-        if self.pending_write.is_none() {
-            while self.pending_write.is_none() {
-                match self.outbound.pop_front() {
-                    Some(next) => self.pending_write = PendingWrite::new(next),
-                    None => break,
-                }
-            }
-            if self.pending_write.is_some() {
-                return SessionAdvanceOutcome::Pending(Interest::WRITE);
-            }
-        }
-
         if !self.unread.is_empty() {
             let input = std::mem::take(&mut self.unread);
-            return match self.core.handle_server_input(&input) {
+            match self.core.handle_server_input(&input) {
                 Ok((packets, events)) => {
                     self.outbound.extend(packets);
                     if events
@@ -114,25 +104,53 @@ impl SessionNegotiation {
                     {
                         self.publish_accepted = true;
                     }
-                    if self.publish_accepted && self.outbound.is_empty() {
-                        return SessionAdvanceOutcome::PublishAccepted;
-                    }
-                    let interest = if self.outbound.is_empty() {
-                        Interest::READ
-                    } else {
-                        Interest::WRITE
-                    };
-                    SessionAdvanceOutcome::Pending(interest)
                 }
                 Err(RtmpSessionError::ConnectionRejected(description)) => {
-                    SessionAdvanceOutcome::Failed(format!("connection rejected: {description}"))
+                    return SessionAdvanceOutcome::Failed(format!(
+                        "connection rejected: {description}"
+                    ));
                 }
-                Err(other) => SessionAdvanceOutcome::Failed(other.to_string()),
-            };
+                Err(other) => return SessionAdvanceOutcome::Failed(other.to_string()),
+            }
+        }
+
+        if self.pending_write.is_none() {
+            while let Some(next) = self.outbound.pop_front() {
+                if let Some(pending) = PendingWrite::new(next) {
+                    self.pending_write = Some(pending);
+                    break;
+                }
+            }
+        }
+
+        if let Some(pending) = &mut self.pending_write {
+            if wrote || !readiness.writable {
+                return SessionAdvanceOutcome::Pending(Interest::WRITE);
+            }
+            match stream.write(pending.remaining()) {
+                Ok(0) => {
+                    return SessionAdvanceOutcome::Failed("peer closed during write".to_string());
+                }
+                Ok(n) => {
+                    pending.offset += n;
+                    if !pending.is_complete() {
+                        return SessionAdvanceOutcome::Pending(Interest::WRITE);
+                    }
+                    self.pending_write = None;
+                    wrote = true;
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    return SessionAdvanceOutcome::Pending(stream.interest_hint(Interest::WRITE));
+                }
+                Err(error) => return SessionAdvanceOutcome::Failed(error.to_string()),
+            }
         }
 
         if self.publish_accepted && self.outbound.is_empty() && self.pending_write.is_none() {
             return SessionAdvanceOutcome::PublishAccepted;
+        }
+        if wrote {
+            return SessionAdvanceOutcome::Pending(Interest::READ);
         }
 
         if !readiness.readable {

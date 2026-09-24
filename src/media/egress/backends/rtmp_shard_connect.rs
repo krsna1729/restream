@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
-use super::super::tcp::{TcpConnectAttempt, TcpEgressInterest, TcpReadyLeaf, connect_error};
+use super::super::tcp::{TcpConnectAttempt, TcpReadyLeaf, connect_error};
 use super::*;
 
 pub(super) struct PendingRtmpConnect {
@@ -141,6 +141,7 @@ where
         key: LeafKey,
     ) -> bool {
         let progress_sink = connecting.common.progress_sink.clone();
+        let generation = connecting.common.generation;
         let fd = connecting.stream.as_raw_fd();
         let stream = if connecting.parts.tls {
             match RtmpConnection::tls_with_config(
@@ -184,12 +185,7 @@ where
         };
         if self
             .poller
-            .register_leaf(
-                fd,
-                key,
-                connecting.common.generation,
-                TcpEgressInterest::WRITE,
-            )
+            .register_connection(fd, key, generation, stream.completion_stream())
             .is_err()
         {
             tracing::warn!(output_id = %output_id, "rtmp fabric leaf poller registration failed");
@@ -202,7 +198,7 @@ where
             common: connecting.common,
             engine,
             transport: stream,
-            registered_interest: TcpEgressInterest::WRITE,
+            pending_readiness: super::Readiness::default(),
             observed_since: Instant::now(),
             draining_since: None,
             draining_reason: None,
@@ -214,6 +210,20 @@ where
             .insert(output_id.clone(), RtmpLeafSocket { key, fd })
         {
             self.remove_leaf_socket(previous, CloseReason::Removed);
+        }
+        // An established TCP socket is writable, but the TX worker only emits
+        // completions after a write. Queue that first write opportunity here.
+        if !self.enqueue_ready(TcpReadyLeaf {
+            fd,
+            key,
+            generation,
+            readable: false,
+            writable: true,
+        }) {
+            tracing::warn!(output_id = %output_id, "rtmp fabric leaf could not enter the ready queue");
+            progress_sink.mark_terminated_unexpectedly();
+            self.remove_leaf_by_output(output_id);
+            return false;
         }
         tracing::info!(output_id = %output_id, leaf_key = key.0, "rtmp fabric leaf connected");
         true

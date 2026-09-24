@@ -56,19 +56,6 @@ fn plain_connection_delegates_vectored_write() {
 }
 
 #[test]
-fn plain_connection_interest_hint_always_returns_the_fallback() {
-    let (client, _server) = connected_pair();
-    let connection = RtmpConnection::plain(client);
-
-    assert_eq!(connection.interest_hint(Interest::READ), Interest::READ);
-    assert_eq!(connection.interest_hint(Interest::WRITE), Interest::WRITE);
-    assert_eq!(
-        connection.interest_hint(Interest::READ_WRITE),
-        Interest::READ_WRITE
-    );
-}
-
-#[test]
 fn plain_connection_raw_fd_matches_the_underlying_socket() {
     use std::os::unix::io::AsRawFd;
 
@@ -86,33 +73,6 @@ fn tls_connection_rejects_an_invalid_host_name() {
     let result = RtmpConnection::tls(client, "");
 
     assert!(result.is_err());
-}
-
-/// Before any I/O happens, a freshly constructed client TLS connection
-/// already wants to write (it has a ClientHello queued) — proving
-/// `interest_hint` reflects `rustls::ClientConnection`'s real internal
-/// state rather than the naive "direction that just blocked" guess plain
-/// TCP uses. This is the exact correctness gap the module doc calls out:
-/// without it, a leaf that blocks on `write()` while TLS internally needs
-/// to `read_tls()` first would only ever be registered for write
-/// readiness and could stall forever waiting for a read event that never
-/// gets requested.
-///
-/// A full round-trip handshake against a real TLS server peer is not
-/// covered here (this repo has no certificate-generation dependency yet);
-/// this test instead proves the interest-derivation logic this slice
-/// exists for, using a real (but unhandshaked) `rustls::ClientConnection`.
-#[test]
-fn tls_connection_wants_write_before_any_io() {
-    let (client, _server) = connected_pair();
-
-    let connection = RtmpConnection::tls(client, "example.com").unwrap();
-
-    let hint = connection.interest_hint(Interest::READ);
-    assert!(
-        hint.writable,
-        "a fresh client TLS connection must want to write its ClientHello"
-    );
 }
 
 #[test]

@@ -1,11 +1,8 @@
 //! Plain-or-TLS transport for the RTMP fabric engine.
 //!
-//! Compio owns the nonblocking TCP stream and readiness registration. The
-//! synchronous RTMP and rustls state machines perform bounded, nonblocking
-//! reads and writes during a shard visit; `WouldBlock` returns control to the
-//! shard. TLS interest is derived from rustls' `wants_read()` and
-//! `wants_write()` state because a blocked read or write can need the opposite
-//! readiness direction to make progress.
+//! Compio-owned completion workers drive socket reads and writes on the egress
+//! shard runtime. The synchronous RTMP and rustls state machines exchange
+//! bytes with those workers through bounded connection-local buffers.
 
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
@@ -22,7 +19,7 @@ use tokio_rustls::rustls::{ClientConfig, ClientConnection, ProtocolVersion, Stre
 use crate::media::rtmp::rustls_client_config;
 
 #[path = "rtmp_ktls.rs"]
-mod rtmp_ktls;
+pub(crate) mod rtmp_ktls;
 
 enum RtmpConnectionState {
     Plain(CompioTcpStream),
@@ -43,16 +40,42 @@ impl KtlsConnection {
     const MAX_CONTROL_RECORDS_PER_READ: usize = 8;
 
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        let fd = self.stream.as_raw_fd();
-        self.read_with(buffer, |buffer| rtmp_ktls::recv_record(fd, buffer))
+        let stream = &mut self.stream;
+        Self::read_records(
+            buffer,
+            self.version,
+            &mut self.handshake_buffer,
+            &mut self.pending_alert_level,
+            &mut self.peer_closed,
+            |buffer| stream.read_record(buffer),
+        )
     }
 
+    #[cfg(test)]
     fn read_with(
         &mut self,
         buffer: &mut [u8],
+        recv_record: impl FnMut(&mut [u8]) -> io::Result<(usize, u8)>,
+    ) -> io::Result<usize> {
+        Self::read_records(
+            buffer,
+            self.version,
+            &mut self.handshake_buffer,
+            &mut self.pending_alert_level,
+            &mut self.peer_closed,
+            recv_record,
+        )
+    }
+
+    fn read_records(
+        buffer: &mut [u8],
+        version: ProtocolVersion,
+        handshake_buffer: &mut Vec<u8>,
+        pending_alert_level: &mut Option<u8>,
+        peer_closed: &mut bool,
         mut recv_record: impl FnMut(&mut [u8]) -> io::Result<(usize, u8)>,
     ) -> io::Result<usize> {
-        if buffer.is_empty() || self.peer_closed {
+        if buffer.is_empty() || *peer_closed {
             return Ok(0);
         }
         let mut control_records = 0;
@@ -65,7 +88,7 @@ impl KtlsConnection {
             }
             let (count, record_type) = recv_record(buffer)?;
             if count == 0 {
-                self.peer_closed = true;
+                *peer_closed = true;
                 return Ok(0);
             }
             if record_type != rtmp_ktls::RECORD_TYPE_DATA {
@@ -73,20 +96,20 @@ impl KtlsConnection {
             }
             match record_type {
                 rtmp_ktls::RECORD_TYPE_DATA => return Ok(count),
-                rtmp_ktls::RECORD_TYPE_HANDSHAKE if self.version == ProtocolVersion::TLSv1_3 => {
-                    if self.handshake_buffer.len().saturating_add(count) > (1 << 20) + 4 {
+                rtmp_ktls::RECORD_TYPE_HANDSHAKE if version == ProtocolVersion::TLSv1_3 => {
+                    if handshake_buffer.len().saturating_add(count) > (1 << 20) + 4 {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
                             "oversized TLS 1.3 post-handshake data",
                         ));
                     }
-                    self.handshake_buffer.extend_from_slice(&buffer[..count]);
-                    self.process_handshake_buffer()?;
+                    handshake_buffer.extend_from_slice(&buffer[..count]);
+                    Self::process_handshake_buffer(handshake_buffer)?;
                 }
                 rtmp_ktls::RECORD_TYPE_ALERT => {
-                    let (level, description) = match (self.pending_alert_level.take(), count) {
+                    let (level, description) = match (pending_alert_level.take(), count) {
                         (None, 1) => {
-                            self.pending_alert_level = Some(buffer[0]);
+                            *pending_alert_level = Some(buffer[0]);
                             continue;
                         }
                         (Some(level), 1) => (level, buffer[0]),
@@ -99,7 +122,7 @@ impl KtlsConnection {
                         }
                     };
                     if description == 0 {
-                        self.peer_closed = true;
+                        *peer_closed = true;
                         return Ok(0);
                     }
                     if level == 2 {
@@ -119,15 +142,14 @@ impl KtlsConnection {
         }
     }
 
-    fn process_handshake_buffer(&mut self) -> io::Result<()> {
+    fn process_handshake_buffer(buffer: &mut Vec<u8>) -> io::Result<()> {
         loop {
-            if self.handshake_buffer.len() < 4 {
+            if buffer.len() < 4 {
                 return Ok(());
             }
-            let message_type = self.handshake_buffer[0];
-            let message_len = ((self.handshake_buffer[1] as usize) << 16)
-                | ((self.handshake_buffer[2] as usize) << 8)
-                | self.handshake_buffer[3] as usize;
+            let message_type = buffer[0];
+            let message_len =
+                ((buffer[1] as usize) << 16) | ((buffer[2] as usize) << 8) | buffer[3] as usize;
             if message_len > (1 << 20) {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -135,16 +157,16 @@ impl KtlsConnection {
                 ));
             }
             let frame_len = 4 + message_len;
-            if self.handshake_buffer.len() < frame_len {
+            if buffer.len() < frame_len {
                 return Ok(());
             }
             match message_type {
                 4 => {
                     // ponytail: buffered Rustls extraction cannot retain session state; ignore
                     // tickets and fail closed on KeyUpdate until the unbuffered API is used.
-                    drop(self.handshake_buffer.drain(..frame_len));
+                    drop(buffer.drain(..frame_len));
                 }
-                24 if message_len == 1 && self.handshake_buffer[4] <= 1 => {
+                24 if message_len == 1 && buffer[4] <= 1 => {
                     return Err(io::Error::new(
                         io::ErrorKind::Unsupported,
                         "TLS 1.3 key updates are unsupported after the kTLS handoff",
@@ -293,17 +315,16 @@ impl RtmpConnection {
         RTMPS_COUNTERS
             .ktls_requested
             .fetch_add(1, Ordering::Relaxed);
+        let stream: CompioTcpStream = stream.into();
+        stream.set_ancillary_mode();
         Ok(Self {
-            state: RtmpConnectionState::Tls(Some(Box::new(StreamOwned::new(
-                connection,
-                stream.into(),
-            )))),
+            state: RtmpConnectionState::Tls(Some(Box::new(StreamOwned::new(connection, stream)))),
             tls_version_recorded: false,
             ktls_state: KtlsState::Requested,
         })
     }
 
-    fn tcp_stream(&self) -> &CompioTcpStream {
+    pub(crate) fn completion_stream(&self) -> &CompioTcpStream {
         match &self.state {
             RtmpConnectionState::Plain(stream) | RtmpConnectionState::Failed(stream) => stream,
             RtmpConnectionState::Ktls(connection) => &connection.stream,
@@ -314,8 +335,23 @@ impl RtmpConnection {
         }
     }
 
+    fn tcp_stream(&self) -> &CompioTcpStream {
+        self.completion_stream()
+    }
+
+    pub(crate) fn interest_hint(&self, requested: Interest) -> Interest {
+        requested
+    }
+
     pub(crate) fn raw_fd(&self) -> RawFd {
         self.tcp_stream().as_raw_fd()
+    }
+
+    pub(crate) fn pending_transport_write_bytes(&self) -> usize {
+        self.tcp_stream().pending_write_bytes()
+    }
+    pub(crate) fn resume_receive(&self) {
+        self.tcp_stream().resume_receive();
     }
 
     /// Conservative estimate of rustls-internal buffered bytes not visible
@@ -352,27 +388,6 @@ impl RtmpConnection {
         self.tcp_stream().shutdown(how)
     }
 
-    /// What interest to register after a blocked read or write. `fallback`
-    /// is the naive per-direction guess (correct for plain TCP, where read
-    /// and write are independent); TLS connections instead ask the
-    /// underlying `rustls::ClientConnection` what it actually needs, since
-    /// one direction blocking does not imply that same direction is what
-    /// unblocks it (see module docs).
-    pub(crate) fn interest_hint(&self, fallback: Interest) -> Interest {
-        match &self.state {
-            RtmpConnectionState::Plain(_)
-            | RtmpConnectionState::Ktls(_)
-            | RtmpConnectionState::Failed(_) => fallback,
-            RtmpConnectionState::Tls(Some(stream)) => {
-                let hint = Interest {
-                    readable: stream.conn.wants_read(),
-                    writable: stream.conn.wants_write(),
-                };
-                if hint.is_empty() { fallback } else { hint }
-            }
-            RtmpConnectionState::Tls(None) => fallback,
-        }
-    }
     fn advance_tls_handshake(&mut self) -> io::Result<()> {
         if let RtmpConnectionState::Tls(Some(stream)) = &mut self.state
             && (stream.conn.is_handshaking() || stream.conn.wants_write())
@@ -407,6 +422,8 @@ impl RtmpConnection {
                 return Ok(());
             };
             let ready_to_handoff = !stream.conn.wants_write()
+                && stream.sock.pending_write_bytes() == 0
+                && stream.sock.pending_receive_bytes() == 0
                 && !stream
                     .conn
                     .reader()
@@ -485,6 +502,7 @@ impl RtmpConnection {
             RTMPS_COUNTERS.ktls_error.fetch_add(1, Ordering::Relaxed);
             return Err(error);
         }
+        socket.set_ktls_mode();
         self.state = RtmpConnectionState::Ktls(KtlsConnection {
             stream: socket,
             version,

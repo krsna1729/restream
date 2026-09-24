@@ -8,25 +8,6 @@ fn budget() -> WorkBudgetConfig {
     WorkBudgetConfig::new(8, 4096, Duration::from_millis(50))
 }
 
-#[test]
-fn ready_queue_rejection_is_counted_without_growing() {
-    let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(1).unwrap(), feed(), budget(), 4096)
-            .with_leaf_capacity(1);
-    let event = TcpReadyLeaf {
-        fd: -1,
-        key: LeafKey(0),
-        generation: 1,
-        readable: false,
-        writable: true,
-    };
-
-    assert!(backend.enqueue_ready(event));
-    assert!(!backend.enqueue_ready(event));
-    assert_eq!(backend.ready.len(), 1);
-    assert_eq!(backend.queue_overflows, 1);
-}
-
 fn feed() -> RingFeed {
     RingFeed::new(
         Arc::new(crate::media::ring_buffer::RingBuffer::new(4)),
@@ -152,6 +133,115 @@ use rml_rtmp::sessions::{
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream as StdTcpStream};
 use std::thread;
+struct ScriptedPoller {
+    ready_capacity: usize,
+    events: std::collections::VecDeque<TcpReadyLeaf>,
+}
+
+impl RtmpReadinessPoller for ScriptedPoller {
+    fn ready_capacity(&self) -> usize {
+        self.ready_capacity
+    }
+
+    fn start_connect(
+        &mut self,
+        peer_addr: SocketAddr,
+        _key: LeafKey,
+        _generation: u64,
+        _timeout: Duration,
+    ) -> Result<TcpConnectAttempt, TcpEgressPollError> {
+        let stream = StdTcpStream::connect(peer_addr).map_err(|error| {
+            TcpEgressPollError::new(
+                "scripted_connect",
+                error.raw_os_error().unwrap_or(libc::EIO),
+                error.to_string(),
+            )
+        })?;
+        stream.set_nonblocking(true).map_err(|error| {
+            TcpEgressPollError::new(
+                "scripted_connect",
+                error.raw_os_error().unwrap_or(libc::EIO),
+                error.to_string(),
+            )
+        })?;
+        Ok(TcpConnectAttempt::Connected(
+            super::super::compio_tcp::CompioTcpStream::from_std(stream),
+        ))
+    }
+
+    fn register_leaf(
+        &mut self,
+        _fd: std::os::fd::RawFd,
+        _key: LeafKey,
+        _generation: u64,
+        _interest: super::super::tcp::TcpEgressInterest,
+    ) -> Result<(), TcpEgressPollError> {
+        Ok(())
+    }
+
+    fn remove(&mut self, _fd: std::os::fd::RawFd) -> Result<(), TcpEgressPollError> {
+        Ok(())
+    }
+
+    fn poll_leaves(
+        &mut self,
+        _timeout_ms: i32,
+        ready: &mut Vec<TcpReadyLeaf>,
+    ) -> Result<usize, TcpEgressPollError> {
+        ready.clear();
+        ready.extend(self.events.drain(..).take(self.ready_capacity));
+        Ok(ready.len())
+    }
+}
+
+#[test]
+fn simultaneous_completions_keep_the_write_needed_by_the_handshake() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut c0c1 = [0; 1537];
+        stream.read_exact(&mut c0c1).unwrap();
+        assert_eq!(c0c1[0], 3);
+    });
+    let poller = ScriptedPoller {
+        ready_capacity: 4,
+        events: std::collections::VecDeque::new(),
+    };
+    let mut backend = RtmpShardBackend::new(poller, feed(), budget(), 4096);
+    let output_id = OutputId::new("out-simultaneous");
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-simultaneous",
+        &format!("rtmp://{address}/live/key"),
+        1,
+    )));
+    assert!(backend.complete_pending_connect(&output_id, 1, address));
+    let socket = backend.output_sockets[&output_id];
+    backend.poller.events.extend([
+        TcpReadyLeaf {
+            fd: socket.fd,
+            key: socket.key,
+            generation: 1,
+            readable: true,
+            writable: false,
+        },
+        TcpReadyLeaf {
+            fd: socket.fd,
+            key: socket.key,
+            generation: 1,
+            readable: false,
+            writable: true,
+        },
+    ]);
+
+    backend.poll_ready();
+    assert_eq!(backend.ready.len(), 1, "one visit handles both completions");
+    backend.on_ready();
+    peer.join().unwrap();
+}
 
 /// Accepts a publish request and then immediately drops the connection, so the
 /// shard observes the close. Tests that need the peer to stay connected use

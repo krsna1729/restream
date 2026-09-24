@@ -25,6 +25,7 @@ const TLS_CIPHER_AES_GCM_256: u16 = 52;
 pub(crate) const RECORD_TYPE_ALERT: u8 = 21;
 pub(crate) const RECORD_TYPE_HANDSHAKE: u8 = 22;
 pub(crate) const RECORD_TYPE_DATA: u8 = 23;
+#[cfg(test)]
 #[repr(align(8))]
 struct ControlBuffer([u8; 24]);
 
@@ -32,6 +33,35 @@ fn control_data_offset() -> usize {
     (size_of::<libc::cmsghdr>() + 7) & !7
 }
 
+pub(crate) fn record_type_from_control(control: &[u8], truncated: bool) -> io::Result<u8> {
+    if truncated {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "truncated kTLS record-type control message",
+        ));
+    }
+    let data_offset = control_data_offset();
+    if control.len() < data_offset + 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "missing kTLS record-type control message",
+        ));
+    }
+    let header = unsafe { std::ptr::read_unaligned(control.as_ptr().cast::<libc::cmsghdr>()) };
+    if header.cmsg_len < data_offset + 1
+        || header.cmsg_len > control.len()
+        || header.cmsg_level != SOL_TLS
+        || header.cmsg_type != TLS_GET_RECORD_TYPE
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "missing kTLS record-type control message",
+        ));
+    }
+    Ok(unsafe { *control.as_ptr().add(data_offset) })
+}
+
+#[cfg(test)]
 pub(crate) fn recv_record(fd: RawFd, buffer: &mut [u8]) -> io::Result<(usize, u8)> {
     let mut iov = libc::iovec {
         iov_base: buffer.as_mut_ptr().cast(),
@@ -50,28 +80,10 @@ pub(crate) fn recv_record(fd: RawFd, buffer: &mut [u8]) -> io::Result<(usize, u8
     if received == 0 {
         return Ok((0, RECORD_TYPE_DATA));
     }
-    if message.msg_flags & libc::MSG_CTRUNC != 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "truncated kTLS record-type control message",
-        ));
-    }
-    let header = message.msg_control.cast::<libc::cmsghdr>();
-    let data_offset = control_data_offset();
-    if message.msg_controllen < data_offset + 1
-        || unsafe {
-            (*header).cmsg_len < data_offset + 1
-                || (*header).cmsg_len > message.msg_controllen
-                || (*header).cmsg_level != SOL_TLS
-                || (*header).cmsg_type != TLS_GET_RECORD_TYPE
-        }
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "missing kTLS record-type control message",
-        ));
-    }
-    let record_type = unsafe { *message.msg_control.cast::<u8>().add(data_offset) };
+    let record_type = record_type_from_control(
+        &control.0[..message.msg_controllen],
+        message.msg_flags & libc::MSG_CTRUNC != 0,
+    )?;
     Ok((received as usize, record_type))
 }
 
@@ -442,6 +454,37 @@ mod tests {
         let _ = supports(
             ProtocolVersion::TLSv1_2,
             CipherSuite::TLS13_AES_128_GCM_SHA256,
+        );
+    }
+    #[test]
+    fn ancillary_record_type_parser_validates_metadata_and_truncation() {
+        let mut control = ControlBuffer([0; 24]);
+        let data_offset = control_data_offset();
+        let header = libc::cmsghdr {
+            cmsg_len: data_offset + 1,
+            cmsg_level: SOL_TLS,
+            cmsg_type: TLS_GET_RECORD_TYPE,
+        };
+        unsafe {
+            std::ptr::write(control.0.as_mut_ptr().cast::<libc::cmsghdr>(), header);
+            *control.0.as_mut_ptr().add(data_offset) = RECORD_TYPE_ALERT;
+        }
+
+        assert_eq!(
+            record_type_from_control(&control.0, false).unwrap(),
+            RECORD_TYPE_ALERT
+        );
+        assert_eq!(
+            record_type_from_control(&control.0, true)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            record_type_from_control(&control.0[..data_offset], false)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
         );
     }
 
