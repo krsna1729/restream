@@ -467,6 +467,7 @@ impl MixedCheck {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MixedOutputProtocol {
     Rtmp,
+    Rtmps,
     Srt,
 }
 
@@ -474,6 +475,7 @@ impl MixedOutputProtocol {
     pub(crate) fn from_name(value: &str) -> Option<Self> {
         match value {
             "rtmp" => Some(Self::Rtmp),
+            "rtmps" => Some(Self::Rtmps),
             "srt" => Some(Self::Srt),
             _ => None,
         }
@@ -510,12 +512,19 @@ impl MixedOutputCase {
     }
 
     pub(crate) fn rtmp_mode_name(&self) -> Option<&'static str> {
-        matches!(self.protocol, MixedOutputProtocol::Rtmp).then(|| self.rtmp_mode.as_str())
+        matches!(
+            self.protocol,
+            MixedOutputProtocol::Rtmp | MixedOutputProtocol::Rtmps
+        )
+        .then(|| self.rtmp_mode.as_str())
     }
 
     pub(crate) fn output_config(&self) -> OutputConfig {
         let mut config = super::output_config_from_harness_label(&self.encoding);
-        if matches!(self.protocol, MixedOutputProtocol::Rtmp) {
+        if matches!(
+            self.protocol,
+            MixedOutputProtocol::Rtmp | MixedOutputProtocol::Rtmps
+        ) {
             config = config.with_rtmp_mode(self.rtmp_mode);
         }
         config
@@ -524,10 +533,12 @@ impl MixedOutputCase {
     pub(crate) fn expected_video_codec_for_input(&self, input: MixedInputCase) -> &'static str {
         match self.protocol {
             MixedOutputProtocol::Srt => input.expected_video_codec(),
-            MixedOutputProtocol::Rtmp if self.rtmp_mode == RtmpOutputMode::Enhanced => {
+            MixedOutputProtocol::Rtmp | MixedOutputProtocol::Rtmps
+                if self.rtmp_mode == RtmpOutputMode::Enhanced =>
+            {
                 input.expected_video_codec()
             }
-            MixedOutputProtocol::Rtmp => "h264",
+            MixedOutputProtocol::Rtmp | MixedOutputProtocol::Rtmps => "h264",
         }
     }
 
@@ -617,6 +628,7 @@ impl MixedScenarioPlan {
 pub(crate) fn mixed_output_protocol_name(protocol: MixedOutputProtocol) -> &'static str {
     match protocol {
         MixedOutputProtocol::Rtmp => "rtmp",
+        MixedOutputProtocol::Rtmps => "rtmps",
         MixedOutputProtocol::Srt => "srt",
     }
 }
@@ -637,6 +649,7 @@ mod tests {
                 (0..duplicates_per_output).map(move |duplicate| {
                     let url = match output_case.protocol() {
                         MixedOutputProtocol::Rtmp => "rtmp://example/live/out",
+                        MixedOutputProtocol::Rtmps => "rtmps://localhost/live/out",
                         MixedOutputProtocol::Srt => "srt://example:9000?streamid=publish:out",
                     };
                     PlannedOutput::new(

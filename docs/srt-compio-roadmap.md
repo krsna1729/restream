@@ -2322,6 +2322,11 @@ Status: implementation complete; live qualification in progress.
 - `/metrics/system` exposes request, attempt, success, unsupported, error, and
   capability state; RTMPS live preflight fails explicitly if the host cannot
   support the required AES-GCM kTLS path.
+- kTLS receive preserves TLS 1.3 record types; tickets are discarded after the
+  buffered Rustls handoff (no session resumption), and KeyUpdate fails closed
+  until the unbuffered `KernelConnection` handoff is used.
+- Focused TLS 1.2/TLS 1.3 kTLS tests exchange application data and consume
+  `close_notify`; the real-media fault suite remains the acceptance gate.
 - Qualification covers actual RTMPS media, reconnect after receiver loss,
   stalled receivers, transport failure, and clean shutdown. It does not add a
   new CPU/byte benchmark or derive production constants.
@@ -2664,6 +2669,7 @@ WI10
 WI3.7's current-host evidence is frozen provisionally. Do not rerun its
 performance matrix, derive a new shard coefficient, or change production
 defaults in this transport-convergence work.
+Sequence: `WI4A -> WI5 -> WI6 -> live-CI convergence`.
 
 WI4A SRT productionization is complete. The current milestone finishes WI5/WI6
 through actual RTMP/RTMPS/SRT media and reconnect, slow-receiver, failure, and

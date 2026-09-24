@@ -2,6 +2,8 @@
 mod egress;
 #[path = "fault_recovery/resilience.rs"]
 mod resilience;
+#[path = "fault_recovery/rtmps_egress.rs"]
+mod rtmps_egress;
 #[path = "fault_recovery/srt_stall.rs"]
 mod srt_stall;
 

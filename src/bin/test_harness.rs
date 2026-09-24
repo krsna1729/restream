@@ -146,6 +146,7 @@ fn planned_mixed_stage_count(
             (0..duplicates_per_output).map(move |duplicate| {
                 let url = match output_case.protocol() {
                     MixedOutputProtocol::Rtmp => "rtmp://example/live/out",
+                    MixedOutputProtocol::Rtmps => "rtmps://example/live/out",
                     MixedOutputProtocol::Srt => "srt://example:9000?streamid=publish:out",
                 };
                 PlannedOutput::new(
@@ -201,7 +202,7 @@ fn main() {
         }
         if let Err(error) = run().await {
             eprintln!("test harness failed: {error}");
-            // Native FFmpeg/libsrt worker threads can still be alive on a failed
+            // Native FFmpeg/SRT worker threads can still be alive on a failed
             // test. Avoid process-global C teardown while those threads exist.
             unsafe { libc::_exit(1) };
         }

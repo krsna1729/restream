@@ -178,8 +178,8 @@ fn mixed_fast_breadth_is_small_but_axis_rich() {
         .iter()
         .map(|case| mixed_output_cases_for_input(*case).len())
         .sum();
-    assert_eq!(selected_cells, 81);
-    assert_eq!(total_cells, 232);
+    assert_eq!(selected_cells, 83);
+    assert_eq!(total_cells, 234);
     assert!(
         selected_cells < total_cells / 2,
         "fast breadth should stay quick enough to run before the exhaustive matrix"

@@ -105,6 +105,17 @@ pub(crate) async fn ramp_family_correctness() -> Result<Value, String> {
 
     stop_child(&mut restream).await;
     stop_child(&mut mediamtx).await;
+    let failed_configs = case_results
+        .iter()
+        .filter(|&result| !result["passed"].as_bool().unwrap_or(false))
+        .map(|result| result["config"].as_str().unwrap_or("unknown"))
+        .collect::<Vec<_>>();
+    if !failed_configs.is_empty() {
+        return Err(format!(
+            "ramp-family output dimensions failed for: {}",
+            failed_configs.join(", ")
+        ));
+    }
 
     Ok(json!({
         "passed": true,
@@ -270,6 +281,7 @@ async fn run_ramp_config(
     let first_dims = check_ramp_stream("out1", &first_url, expected, 10).await;
     let last_dims =
         check_ramp_stream(&format!("out{}", env.n_outputs), &last_url, expected, 10).await;
+    let passed = ramp_spot_checks_passed(expected, first_dims.as_deref(), last_dims.as_deref());
 
     stop_child(&mut publisher).await;
     for output_id in &output_ids {
@@ -282,6 +294,7 @@ async fn run_ramp_config(
     tokio::time::sleep(env.cleanup_sleep).await;
 
     Ok(json!({
+        "passed": passed,
         "config": config.name,
         "pipelineId": pipeline_id,
         "outputs": output_ids.len(),
@@ -387,6 +400,10 @@ fn read_url(config: RampConfig, env: &RampEnv, output_index: usize) -> String {
     }
 }
 
+fn ramp_spot_checks_passed(expected: &str, first: Option<&str>, last: Option<&str>) -> bool {
+    first == Some(expected) && last == Some(expected)
+}
+
 async fn check_ramp_stream(
     label: &str,
     url: &str,
@@ -411,4 +428,28 @@ async fn check_ramp_stream(
         last.as_deref().unwrap_or("none")
     );
     last
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ramp_spot_checks_passed;
+
+    #[test]
+    fn ramp_requires_both_spot_checks_to_match_expected_dimensions() {
+        assert!(ramp_spot_checks_passed(
+            "1920x1080",
+            Some("1920x1080"),
+            Some("1920x1080")
+        ));
+        assert!(!ramp_spot_checks_passed(
+            "1920x1080",
+            None,
+            Some("1920x1080")
+        ));
+        assert!(!ramp_spot_checks_passed(
+            "1920x1080",
+            Some("1920x1080"),
+            Some("0x0")
+        ));
+    }
 }

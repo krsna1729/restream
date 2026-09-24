@@ -159,8 +159,8 @@ fn validate_msr_ffprobe_sample(output: &MsrOutputSpec, probe: &Value) -> Result<
     // from the next IDR, so the first video packet arrives up to one full GOP
     // (plus connect jitter) after audio starts — that leading wait is the
     // publisher's GOP structure, not an egress defect. The correctness signal
-    // is continuity *after* video starts: a real delivery hole (e.g. libsrt
-    // TLPKTDROP starving the large fragmented video PES while small audio
+    // is continuity *after* video starts: a real delivery hole (e.g. an SRT
+    // late-packet drop starving the large fragmented video PES while small audio
     // messages survive) shows up as a multi-second inter-packet DTS gap.
     let max_gap_budget = env_secs("MSR_FFPROBE_MAX_VIDEO_GAP_SECS", 2) as f64;
     if max_video_gap > max_gap_budget {

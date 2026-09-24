@@ -142,6 +142,14 @@
           "expectedAudioTracks": 1
         },
         {
+          "id": "rtmps.src.a0",
+          "protocol": "rtmps",
+          "encoding": "source",
+          "rtmpMode": "enhanced",
+          "expectedDimensions": "1920x1080",
+          "expectedAudioTracks": 1
+        },
+        {
           "id": "rtmp.720p.a0",
           "protocol": "rtmp",
           "encoding": "720p",

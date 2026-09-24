@@ -248,6 +248,10 @@ surface already covers it.
   - `compio_rtmp_listener_shutdown_joins_acceptor_and_session_workers`
     (cancellation drops accepted bridges and joins every registered listener
     and session worker thread)
+- `src/media/egress/backends/rtmp_shard_tests.rs`
+  - `feed_wake_delivers_media_published_after_the_leaf_goes_idle` (production
+    Compio shard group + feed watcher + real RTMP peer; a later FLV frame arrives
+    after the leaf sends its initial frame and parks)
 - `src/media/srt_stream_id.rs`
   - `media::srt_stream_id::tests` (stream-key normalization and mode parsing)
 - `src/media/ts_chunk_ring.rs`

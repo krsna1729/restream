@@ -563,6 +563,11 @@ pub(crate) async fn recovery_live_cases(
             Duration::from_secs(25),
         )
         .await;
+        let first_recovery_sink = json!({
+            "connections": sink_metrics.connections.load(Ordering::Relaxed),
+            "publishing": sink_metrics.publishing.load(Ordering::Relaxed),
+            "videoCount": sink_metrics.video_count.load(Ordering::Relaxed),
+        });
 
         if let Some(server) = sink_server.take() {
             stop_generalized_sink_server(server);
@@ -580,6 +585,11 @@ pub(crate) async fn recovery_live_cases(
             Duration::from_secs(25),
         )
         .await;
+        let second_recovery_sink = json!({
+            "connections": sink_metrics.connections.load(Ordering::Relaxed),
+            "publishing": sink_metrics.publishing.load(Ordering::Relaxed),
+            "videoCount": sink_metrics.video_count.load(Ordering::Relaxed),
+        });
 
         let final_output = observe_final_output(api, &pid, &oid).await;
         let passed = baseline_video >= RECOVERY_WARM_VIDEO_MIN
@@ -617,10 +627,12 @@ pub(crate) async fn recovery_live_cases(
             "firstHealthRetrying": first_retry.health_visible,
             "firstRetryError": first_retry.has_error,
             "firstRecovered": first_recovered,
+            "firstRecoverySink": first_recovery_sink,
             "secondRetrying": second_retry.status_visible,
             "secondHealthRetrying": second_retry.health_visible,
             "secondRetryError": second_retry.has_error,
             "secondRecovered": second_recovered,
+            "secondRecoverySink": second_recovery_sink,
             "finalStatusRunning": final_output.running,
             "finalRetrying": final_output.retrying,
             "finalErrorCleared": final_output.error_cleared,

@@ -956,7 +956,7 @@ pub(super) fn finish(work_dir: &Path) -> Result<Option<PathBuf>, String> {
         "samples": samples,
         "unavailable": {
             "schedulerWakeRate": "ShardMetrics::record_useful_wake/record_empty_wake have no production caller in the current tree, so feedWakesUseful/feedWakesEmpty read 0 for every backend. loopIterationsPerSec, mediaTicksPerSec and readyVisitsPerSec are the scheduler-activity signals that are actually produced.",
-            "sqesPerSubmission": "Compio's runtime ring counters are not exposed; the shard sqes/cqes fields are written only by the native RTMP dataplane, so the SRT Owner path has no producer.",
+            "sqesPerSubmission": "Compio runtime ring counters are not exposed; current RTMP and SRT Owner production paths do not publish shard sqes/cqes counters, so these values remain zero.",
             "ioUringEntersPerSec": "Same gap: no runtime enter counter is published.",
             "cyclesPerPacket": "No PMU on the reference hosts; cpuMicrosPerSrtPacket is the portable stand-in.",
         }

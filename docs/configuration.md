@@ -13,7 +13,7 @@ in SQLite.
 - [Ingest URLs](#ingest-urls)
 - [Output Configuration](#output-configuration)
 - [File Ingest Configuration](#file-ingest-configuration)
-- [SRT Socket Policy](#srt-socket-policy)
+- [SRT transport configuration](#srt-transport-configuration)
 - [HLS Pull and Authorization](#hls-pull-and-authorization)
 
 ## Fixed Runtime Values and Environment Variables
@@ -44,7 +44,7 @@ in SQLite.
 | Egress fabric timer batch | `64` timers per loop | `RESTREAM_EGRESS_TIMER_BATCH` |
 | Egress native leaf capacity | `4096` reusable leaf slots per shard | `RESTREAM_EGRESS_MAX_LEAVES_PER_SHARD` (clamped to `1..=1000000`; output creation is rejected after the per-shard slab is full) |
 | Egress fabric idle wait | `1` ms | `RESTREAM_EGRESS_IDLE_WAIT_MS` |
-| RTMP fabric poll events | `1024` events per shard poller | `RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS` |
+| RTMP/RTMPS readiness result capacity | `1024` entries per shard | `RESTREAM_EGRESS_TCP_POLLER_MAX_EVENTS` |
 | Egress fabric visit units | `32` units per visit | `RESTREAM_EGRESS_VISIT_MAX_UNITS` |
 | Egress fabric visit bytes | `262144` bytes per visit | `RESTREAM_EGRESS_VISIT_MAX_BYTES` |
 | Egress fabric visit time | `2000` µs per visit | `RESTREAM_EGRESS_VISIT_MAX_US` |
@@ -57,10 +57,9 @@ in SQLite.
 | SRT egress muxer max shards | `64` | `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` (hard guardrail for dynamic SRT muxer sharding; once reached, new outputs are assigned to the least-loaded existing shard and a warning is emitted) |
 | SRT egress connect timeout | `10000` ms | `RESTREAM_SRT_CONNECT_TIMEOUT_MS` (each output's request-local handshake attempt duration: it becomes that output's `LeafPolicy.connect_timeout` and its `CallerConfig` attempt deadline, whose clock starts when the pool ADMITS the request, so time spent queued behind the concurrency bound is excluded; raised from a 3s default: a live scale run showed a burst of 600+ simultaneous handshakes to one peer still completing the SRT handshake when the old 3s timeout tore the socket down first, surfacing as `SRT_ENOCONN` on the next send — see `docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`) |
 | SRT egress connect concurrency | `64` | `RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` (clamped to `1..=4096`; each SRT egress Owner's caller-pool `max_in_flight` — the transport's per-`(shard, address family)` handshake capacity, with an equally sized bounded queue behind it; capacity only, it never sets a timeout or changes the Owner's service budget; a request beyond both is refused and its output fails and retries. Decouples handshake concurrency from output count) |
-| Require SRT bonding support | Disabled | `RESTREAM_REQUIRE_SRT_BONDING` (retained compatibility setting; srt-rs bonded ingress is enabled by the listener) |
 | SRT encryption | Disabled | `RESTREAM_SRT_PASSPHRASE`; `RESTREAM_SRT_PBKEYLEN` selects the key length and defaults to `16` |
-| SRT UDP socket buffer | `8388608` bytes on SRT Owner sockets (`DESIRED_UDP_BUF` / `set_sock_bufs`) | `RESTREAM_SRT_UDP_BUF_BYTES` (A/B knob; unset keeps the current 8 MiB request and leaves Caller/Listener `SocketBufferConfig::Auto` alone. When set to a positive `usize`, the SRT ingress Owner socket and the egress family Owner sockets use that request.) |
-| SRT receive budget | `64` datagrams | `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` (A/B knob for the test-harness SRT sinks only; the production Owner's receive work is bounded by `OwnerServiceBudget`, not this setting. The measurement sink keeps `RecvBudget::new(8, 512)` unless this env is set.) |
+| SRT UDP socket buffer | `8388608` bytes requested by SRT egress; ingress uses the transport default unless overridden | `RESTREAM_SRT_UDP_BUF_BYTES` (optional positive byte count applied to ingress and egress Owner socket configuration; Linux may clamp the effective size to its UDP buffer ceilings) |
+| SRT receive budget | `512` datagrams for the measurement sink | `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` (A/B knob for the test-harness SRT sinks only; the production Owner's receive work is bounded by `OwnerServiceBudget`. The sink uses `RecvBudget::new(8, 512)` unless this env is set.) |
 | AVIO queue capacity (async↔OS-thread bridge) | `524288` bytes (512 KiB) | `RESTREAM_AVIO_QUEUE_CAPACITY` (measured peak HWM = 398 KiB at 8 Mb/s RTMP with zero blocked writes; raise only for very high-latency SRT links) |
 | File descriptor limit | `65536` | `RESTREAM_NOFILE_LIMIT` |
 | Output reconciliation interval | 1 second | `RESTREAM_RECONCILE_INTERVAL_MS` |
@@ -77,9 +76,16 @@ in SQLite.
 | RTMP pre-auth socket buffers | `131072` bytes | `RESTREAM_RTMP_PREAUTH_BUFFER_BYTES` |
 | RTMP streaming socket buffers | `8388608` bytes | `RESTREAM_RTMP_STREAM_BUFFER_BYTES` |
 | RTMP egress chunk size | `16384` bytes | `RESTREAM_RTMP_EGRESS_CHUNK_SIZE` (sent with the RTMP `SetChunkSize` message; 16 KiB was the best measured loopback fanout point in the RTMP-only MSR chunk-size sweep) |
+| RTMPS extra trust roots | Public WebPKI roots | `RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM` (path to PEM CA certificates added to the default trust roots) |
 | HLS minimum segment length | 1 second | `RESTREAM_HLS_MIN_SEGMENT_MS` |
 | HLS live window length | 20 segments | `RESTREAM_HLS_MAX_SEGMENTS` |
 | HLS segment accumulator capacity | 8 MiB | `RESTREAM_HLS_SEGMENT_CAPACITY_BYTES` |
+
+RTMPS outputs use the RTMP Compio TCP path and require Linux kTLS after the
+Rustls handshake. If the host cannot install kTLS for the negotiated suite, the
+output fails; there is no implicit userspace-TLS fallback. Configure
+`RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM` only when the destination uses a
+private CA.
 
 `FFMPEG_BIN_PATH` overrides the shared subprocess FFmpeg path used by the
 external transcoder, the default file-ingest backend, and post-recording
@@ -222,9 +228,9 @@ Supported routing behavior:
 
 | URL | Runtime behavior |
 |---|---|
-| `rtmp://...` | Native RTMP egress; IPv6 addresses in bracket notation (`[::1]`) are supported |
-| `rtmps://...` | Native RTMPS egress through the RTMP path with TLS before handshake |
-| `srt://...` | Native SRT MPEG-TS egress; percent-encoded characters in the `streamid` query parameter are decoded automatically |
+| `rtmp://...` | Compio TCP RTMP egress; IPv6 addresses in bracket notation (`[::1]`) are supported |
+| `rtmps://...` | Compio TCP RTMPS egress using Linux kTLS for record processing |
+| `srt://...` | SRT egress through the `srt-rs` Compio Owner; percent-encoded `streamid` characters are decoded automatically |
 | `hls://...` | Starts the pipeline's local in-memory HLS segmenter |
 | `sink://...` | Discards media through the egress fabric for diagnostics, soak tests, and capacity measurement |
 | `pipeline://...` | In-process pipeline recirculation; candidate topology and target input are validated before backend ownership starts |
@@ -303,93 +309,84 @@ re-encodes video to H.264, audio to AAC, disables scene-cut GOP drift, and
 forces keyframes at the configured `targetGopSeconds` cadence for steadier HLS
 preview and recording from sparse-GOP source files.
 
-## SRT Socket Policy
+## SRT transport configuration
 
-Both SRT play (subscriber) and SRT egress connections wait up to 200 ms per
-poll for the ingest probe to complete before creating the MPEG-TS muxer.
-If no video metadata is available the server polls every 200 ms; if the ingest
-disappears during the wait the connection is closed gracefully.
+SRT is implemented with `srt-rs` (`srt-proto` and `srt-transport`) and Compio
+`Owner` threads. The transport owns SRT protocol state and its UDP sockets.
+The production path uses this transport directly; no alternate SRT transport is wired into runtime configuration.
 
-The runtime calls its high-bitrate helper for the SRT listener and single-link
-egress sockets:
+### Ingest latency and encryption
 
-- 250 ms latency (default; see "SRT ingest latency" below for the
-  global/per-pipeline override)
-- 256-packet loss/reorder tolerance
-- 8 MiB UDP send/receive buffers
-- 12 MiB SRT send/receive buffers (default; scales up for a higher
-  configured latency — see below)
-- 32768-packet flow-control window (default; scales with the buffer above)
-- unlimited automatic maximum bandwidth
+The global `srtIngest.latencyMs` setting defaults to `250` ms and accepts
+`20–8000` ms. A pipeline's `srtIngestPolicy.latencyMs` overrides the global
+value; an omitted per-pipeline value inherits it. Configure the global value
+through `PATCH /api/v1/settings` and the per-pipeline value through the
+pipeline's SRT ingest policy. Both settings are also exposed in the dashboard.
 
-The code does not explicitly apply the UDP-buffer/loss-tolerance/maxbw
-portion of the helper to accepted sockets or bonded egress groups. Do not
-assume those sockets have every requested value without runtime
-verification. Latency/RCVBUF/FC, in contrast, are explicitly re-applied to
-every accepted socket in the accept-hook (see below) — those three are not
-just the listener's inherited default.
+Restream supplies this value as the SRT listener's peer latency policy during
+admission. The caller can propose a larger receive delay, so the delay
+negotiated for a connection can exceed the configured listener value. This
+setting does not calculate or set per-caller receive-buffer or flow-control
+values; transport buffering is owned by `srt-transport`.
 
-### SRT ingest latency
+SRT ingest encryption is configured through the global or per-pipeline API
+policy, not through caller-supplied StreamID text. Plaintext is the default.
+Encrypted mode requires a valid passphrase and supports key lengths of 16, 24,
+or 32 bytes.
 
-Every ingest connection's `SRTO_RCVLATENCY` — and, derived from it, its
-`SRTO_RCVBUF`/`SRTO_FC` — is resolved from `SrtGlobalIngestConfig::latencyMs`
-(global default, 250 ms) or a per-pipeline
-`SrtPipelineIngestConfig::latencyMs` override, the same inherit/override
-shape already used for SRT ingest encryption. Configurable via
-`PATCH /api/v1/settings` (`srtIngest.latencyMs`) for the global default, or
-per pipeline through its `srtIngestPolicy.latencyMs` field — both also have
-dashboard fields (Settings → Global SRT Ingest; the pipeline editor's SRT
-Ingest Policy section). Valid range: `20–8000` ms, the SRT wire protocol's
-own documented range for the negotiated TSBPD delay field
-(`docs/features/handshake.md`'s `TsbPdDelay`/`RcvTsbPdDelay`/`SndTsbPdDelay`
-in the vendored libsrt source).
+The `RESTREAM_SRT_UDP_BUF_BYTES` environment variable optionally requests an
+OS UDP socket-buffer size for SRT listener and caller sockets. When unset, the
+listener uses the transport's default buffer policy and egress requests 8 MiB.
+Linux may clamp the effective value to `net.core.rmem_max` and
+`net.core.wmem_max`; inspect runtime health and host limits when tuning this
+setting. `RESTREAM_SRT_RECV_BUDGET_DATAGRAMS` applies only to the harness's
+measurement sink; production Owner work is bounded by `OwnerServiceBudget`.
 
-`RCVBUF`/`FC` scale with the resolved latency using the same formula
-egress's `SNDBUF` ceiling uses (worst-case assumed bitrate × latency ×
-margin), floored at the historical flat 12 MiB/32768-packet preset so the
-default-latency case is unchanged. This can only ever be sized from the
-value configured here, never the value actually negotiated with the caller
-(`max(this value, the caller's own PEERLATENCY)`) — `SRTO_RCVBUF` is a
-PREBIND option, locked before libsrt processes the caller's proposed
-latency at all (confirmed directly against the vendored libsrt source:
-`acceptAndRespond` in `srtcore/core.cpp` calls `interpretSrtHandshake`,
-which negotiates latency, before `prepareBuffers`, which allocates the
-receive buffer — but `SRTO_RCVBUF` was already locked well before either
-call, in the accept-hook). A caller who proposes a higher latency than
-configured here can still push the negotiated result above what the
-buffer was sized for; nothing on either end can close that gap, since
-libsrt does not validate the peer's proposed latency at all.
+### Recognized SRT egress URL parameters
 
-Linux startup checks warn when `net.core.rmem_max` or `net.core.wmem_max` cannot
-support the requested UDP buffers. Receive-path pressure on the SRT listener is
-reported by `srtListener.ingressOwner` (`rxRingDropped`, `rxTruncated`,
-`rxRingDepth`) in `/api/v1/engine/health`.
+Restream reads only these query parameters from an `srt://` output URL.
+Unrecognized parameters are ignored; in particular, `sndbuf`, `rcvbuf`,
+`fc`, `latency`, and `maxbw` are not egress URL settings:
 
-Quiet-host A/B of these knobs (BBB fixture, `MSR_PEER=sink`,
-`srt-only`, 2026-09-07, see
-[srt-tokio-ab-knobs-2026-09-07.md](archive/quality/srt-tokio-ab-knobs-2026-09-07.md))
-is N=200, not 600: N=600 reached 600/600 then failed sink verification
-with no `msr.json`. At N=200 with a 20 s sample, one change at a time:
+| Parameter | Purpose |
+|---|---|
+| `streamid` | Stream ID presented to the destination; percent-decoded |
+| `passphrase` | AES passphrase for an encrypted link; percent-decoded |
+| `pbkeylen` | AES key length in bytes (`16`, `24`, or `32`) |
+| `bond` | Comma-separated additional peer addresses |
+| `type` | Bond mode: `backup` (default) or `broadcast` |
 
-```sh
-# Measured: rssPeak −156 MB (−34%), unattributedPeakKb −155 MB (−37%).
-# This is not a kernel-skmem-only knob — Caller/Listener switch from
-# SocketBufferConfig::Auto to Bytes, which can size userspace buffers.
-RESTREAM_SRT_UDP_BUF_BYTES=262144
+For a bond, the URL authority is the primary peer and `bond=` contains the
+additional legs. `backup` prefers the authority and uses other legs as
+standbys; `broadcast` sends over each healthy leg. All legs must use the same
+address family because one SRT Owner socket serves the group. The peers must
+also participate in the same receiving group.
 
-# Measured: rssPeak +73 MB (+16%) and 5 fabric-leaf deaths (baseline 0).
-RESTREAM_SRT_RECV_BUDGET_DATAGRAMS=8
+Example:
 
+```text
+srt://primary.example:10080?streamid=publish:key&bond=backup1.example:10080,backup2.example:10080&type=backup
 ```
 
-Each override logs once at info (`SRT A/B knob override`). Sender-window
-occupancy against RssAnon still uses `#155`'s `srtSendBufBytes` /
-`msSendBuf` / `srtFlightSizePkts`.
+Caller-controlled ingest buffer settings are not accepted from the SRT URL.
+The caller's own socket options configure that caller's socket; Restream's
+listener buffers are controlled by the operator and transport configuration.
+The caller's SRT latency proposal is negotiated by the protocol, independently
+of URL parsing by Restream.
 
-For a fresh Linux host, both `scripts/dev/bootstrap.sh` and
+Inbound bonding uses the SRT listener's explicit group-input policy. A
+publisher-created Broadcast or Backup group is authenticated as one logical
+SRT input; matching independent sockets remain independent publishers. The
+logical input retains its identity when a physical leg fails and exposes both
+per-leg and deduplicated aggregate telemetry.
+
+
+### Linux host and harness capacity
+
+For a fresh Linux host, `scripts/dev/bootstrap.sh` and
 `scripts/dev/bootstrap-runtime.sh` report whether private user/network
 namespaces and the required SRT UDP buffer ceilings are available. To persist
-the known-good live-harness values deliberately from either bootstrap path, run:
+the harness host settings, run:
 
 ```sh
 scripts/dev/bootstrap.sh --configure-harness-host
@@ -397,157 +394,39 @@ scripts/dev/bootstrap.sh --configure-harness-host
 scripts/dev/bootstrap-runtime.sh --configure-harness-host
 ```
 
-This writes `kernel.unprivileged_userns_clone=1`,
+Both bootstrappers delegate to `scripts/dev/harness-host-prereqs.sh`. They
+configure `kernel.unprivileged_userns_clone=1`,
 `user.max_user_namespaces=28633`, `net.core.rmem_max=26214400`, and
-`net.core.wmem_max=8388608` to `/etc/sysctl.d/99-restream-harness.conf`.
-Both bootstrappers delegate to `scripts/dev/harness-host-prereqs.sh`, so the
-sysctl policy cannot drift. They do not disable AppArmor or other host security
-policy; use `--no-netns` as a temporary fallback when the host administrator
-has not approved unprivileged namespaces.
+`net.core.wmem_max=8388608` in
+`/etc/sysctl.d/99-restream-harness.conf`. They do not disable AppArmor or other
+host security policy; use `--no-netns` only as a temporary fallback when the
+host administrator has not approved unprivileged namespaces.
 
-### Production and scale-host capacity contract
-
-Restream and the live harness deliberately depend on host capacity settings.
-They expose effective SRT buffer and open-file limits in runtime health, and
-`scripts/dev/harness-host-prereqs.sh` prints the complete harness-side
-diagnostic. Run it before a scale capture:
+Run the prerequisite script before a scale capture:
 
 ```sh
 scripts/dev/harness-host-prereqs.sh
 ```
 
-| Setting | Required policy | Why it matters |
+| Setting | Harness baseline | Why it matters |
 |---|---:|---|
-| `RLIMIT_NOFILE` hard limit | at least `65536` | Restream requests this at startup; the MSR harness raises its soft limit based on the largest requested checkpoint but cannot exceed the inherited hard limit. For systemd, set `LimitNOFILE=65536` or higher. |
-| `net.core.rmem_max` | at least `26214400` | Lets the shared SRT ingest socket obtain its requested 8 MiB receive buffer after Linux accounting/clamping. |
-| `net.core.wmem_max` | at least `8388608` | Lets SRT sockets obtain their requested send-buffer ceiling. |
+| `RLIMIT_NOFILE` hard limit | at least `65536` | Restream requests this at startup; the MSR harness raises its soft limit based on the largest requested checkpoint but cannot exceed the inherited hard limit. |
+| `net.core.rmem_max` | `26214400` | Conservative receive-buffer ceiling for SRT UDP workloads; the effective request depends on the transport default and `RESTREAM_SRT_UDP_BUF_BYTES`. |
+| `net.core.wmem_max` | `8388608` | Supports the default 8 MiB SRT egress UDP socket-buffer request; raise it when using a larger override. |
 | `net.core.somaxconn` | at least `4096` for the 1,200-output MSR | Bounds pending TCP accepts during the RTMP connection burst. |
 | `net.ipv4.ip_local_port_range` | at least `4096` ports | Bounds concurrent outbound loopback/egress connections; the normal Linux range is ample. |
-| `fs.file-max` | above aggregate process demand | Host-wide file-descriptor ceiling; it must leave room for Restream, harness peers, MediaMTX, and publishers. |
-| `kernel.unprivileged_userns_clone=1`, `user.max_user_namespaces=28633` | required for default live-harness isolation | Enables the private user/network namespace used by integration tests. `--no-netns` is only a host-network fallback. |
+| `fs.file-max` | above aggregate process demand | Host-wide descriptor ceiling; leave room for Restream, harness peers, MediaMTX, and publishers. |
+| `kernel.unprivileged_userns_clone`, `user.max_user_namespaces` | `1`, `28633` | Enables the private user/network namespace used by default integration tests. |
 
 `net.core.rmem_default`, `net.core.wmem_default`, `net.core.netdev_max_backlog`,
-`net.ipv4.udp_mem`, CPU affinity/quota, cgroup memory/pid limits, and available
-RAM do not have one portable minimum: they are workload-dependent. Record them
-alongside scale artifacts because they cap burst tolerance, SRT packet loss,
-scheduler capacity, and process fan-out. The prerequisite script prints the
-network values; process limits, affinity, cgroup quota, and memory are exposed
-by Restream's runtime health endpoints.
+`net.ipv4.udp_mem`, CPU affinity/quota, cgroup limits, and available RAM have
+workload-dependent requirements. Record them with scale artifacts; runtime
+health exposes process limits, affinity, cgroup quota, and memory.
 
-SRT egress backup links can be supplied with:
+The host-specific SRT buffer and receive-budget A/B measurements are preserved
+in [`srt-tokio-ab-knobs-2026-09-07.md`](archive/quality/srt-tokio-ab-knobs-2026-09-07.md);
+they are diagnostic evidence, not portable defaults or shard-policy inputs.
 
-```text
-srt://primary.example:10080?streamid=publish:key&bond=backup1.example:10080,backup2.example:10080
-```
-
-This code path is unit-tested for URL parsing and socket-option constants, but
-still needs live multi-link interoperability validation.
-
-### Recognized SRT egress URL parameters
-
-Only these query parameters are read from an `srt://` output URL. Anything
-else (including `mss`, `oheadbw`, `tlpktdrop`, `nakreport`, and other names
-used by ffmpeg or libsrt's own tools) is **silently ignored** — it is not an
-error, it simply has no effect:
-
-| Parameter | Purpose | Default when omitted | Clamped range |
-|---|---|---|---|
-| `streamid` | Stream ID presented to the destination | — | — |
-| `passphrase` | AES passphrase for an encrypted link | — | — |
-| `pbkeylen` | AES key length (`16`, `24`, `32`) | — | — |
-| `bond` | Comma-separated backup links (see above) | — | — |
-| `sndbuf` | SRT send-buffer ceiling, in bytes (`SRTO_SNDBUF`) | `bitrate x latency x 4` formula, ~6.25 MB at the worst-case bitrate assumption | 2 MB – 12 MB |
-| `rcvbuf` | SRT receive-buffer ceiling, in bytes (`SRTO_RCVBUF`) | 1 MB — egress only ever receives small ACK/NAK control traffic, never media | 64 KB – 4 MB |
-| `latency` | Timestamp-based-delivery latency window, in ms (`SRTO_LATENCY`) | 250 ms | 20 ms – 8000 ms |
-| `maxbw` | Bandwidth ceiling, in **bytes/sec** — libsrt's own unit, not bits/sec (`SRTO_MAXBW`) | `-1` (unlimited/input-relative) | unclamped beyond `>= -1` — a pacing rate, not a preallocated buffer |
-| `fc` | Flow-control window, in packets (`SRTO_FC`) | 32768 | 256 – 32768 |
-
-`sndbuf`'s formula default is in `srt_egress_sndbuf_bytes` (`src/media/srt/socket.rs`).
-Raise it for a destination that legitimately needs more in-flight headroom;
-lower it to cut per-output memory on many-destination fan-outs. Every
-allocation-sized field is clamped in `EgressBufferOpts::with_overrides`
-(`src/media/srt/socket.rs`) regardless of what the URL asks for — an output
-URL is operator/API-configured rather than anonymous wire input, but nothing
-stops a typo or an untrusted upstream config source from asking for gigabytes
-per destination, and that cost multiplies by output count.
-
-Example combining several overrides on one destination:
-
-```text
-srt://dest.example:9000?streamid=publish:key&sndbuf=3000000&latency=400&maxbw=6250000
-```
-
-All five are **pre-connect** settings: libsrt marks every one of them `PRE` or
-`PREBIND`, so none can be changed after the connection is established (see
-`EgressBufferOpts` in `src/media/srt/socket.rs` for the full rationale,
-including why this rules out true post-connect/adaptive resizing). The
-effective `sndbuf` value actually in force is read back from libsrt at connect
-time and reported as `srtSndbufConfiguredBytes` in output quality telemetry
-(and in the dashboard's publisher-quality panel as "Send buffer ceiling
-(configured)"), so what is in force can always be confirmed rather than
-inferred. The negotiated `latency` is already visible the same way through the
-existing `msSendTsbPdDelay`/`msReceiveTsbPdDelay` quality fields.
-
-### No per-caller SRT ingest buffer/FC parameters
-
-Ingest intentionally does **not** offer `rcvbuf=`/`fc=`/`latency=`-style
-per-caller overrides, unlike egress's URL parameters above. This isn't
-missing scope — it was implemented and then removed once the standard SRT
-URL convention (libsrt's own reference option table,
-`.local/build/static/src/srt/apps/socketoptions.hpp`) made clear there is
-no standard mechanism for it, and building a non-standard one is worse than
-not having the feature:
-
-- `rcvbuf`/`sndbuf`/`fc` are real, standard SRT URL query parameters — but
-  standard usage always configures the *local* socket of whoever's URL it
-  is. A caller's own `srt://ourserver:port?rcvbuf=...` connect URL sets
-  *their* `SRTO_RCVBUF`, never ours. These options are never wire-negotiated
-  (confirmed against the vendored libsrt source: no `SRTO_RCVBUF`/`SRTO_FC`
-  field exists anywhere in the handshake extension blocks), so there is no
-  standard — or even physically possible — way for a caller's URL to reach
-  across and configure the listener's own buffers. The only way to attempt
-  it would be inventing a non-standard convention (e.g. smuggling query
-  params inside the `streamid` field's text content, which no real SRT tool
-  does or interprets), which was tried here and reverted for exactly that
-  reason.
-- `latency` is different, and needs no code at all: it genuinely is
-  wire-negotiated (`SRTO_PEERLATENCY`, sent in the real HSREQ/HSRSP
-  extension — see `docs/features/handshake.md`). A caller who sets their
-  own standard `srt://ourserver:port?streamid=...&latency=400` on their own
-  connect call already gets that value carried onto the wire by libsrt
-  automatically, and this repo's existing `SRTO_RCVLATENCY` setting on the
-  listener already participates in that negotiation
-  (`max(local RCVLATENCY, peer PEERLATENCY)`, per
-  `docs/API/API-socket-options.md`). Nothing needs to be parsed or applied
-  on our side for a caller's latency preference to take effect.
-
-If per-caller ingest buffer sizing becomes a real need later, the only
-correct lever is an *operator*-controlled one (e.g. per-pipeline listener
-config, not caller-supplied input) — see `EgressBufferOpts` in
-`src/media/srt/buffer_sizing.rs` for the equivalent egress-side reasoning
-about who benefits from, and who should control, this kind of override.
-
-Ingest encryption is configured through the API/pipeline settings, not the
-streamid.
-
-Inbound bonding is enabled through the srt-rs listener's explicit group-input
-policy. A publisher-created Broadcast or Backup group is authenticated as one
-logical SRT input; matching independent sockets remain independent publishers.
-The logical input retains its identity when a physical leg fails, and exposes
-both per-leg and deduplicated aggregate telemetry.
-
-Bonded egress URLs use `bond=` plus the standard optional `type=`. The default is
-`backup`: the URL authority is primary and comma-separated `bond=` values are
-standbys. Set `type=broadcast` to send media over every healthy leg. A bond is
-one logical SRT group: its endpoints need not share a hostname or IP, but they
-must resolve at protocol level to the same remote receiving group, otherwise the
-output fails (see `docs/media-pipeline.md`).
-
-Practical note: if you validate bonded ingest or egress across multiple NICs or
-WAN paths with one wildcard listener, upstream SRT recommends a build with
-`ENABLE_PKTINFO=ON`. Without packet-info support, replies from a wildcard
-listener can leave from the wrong source IP, which breaks real multi-interface
-bonding even though same-host or single-interface tests may still pass.
 
 ## HLS Pull and Authorization
 

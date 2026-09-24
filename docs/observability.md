@@ -20,7 +20,7 @@ It does not expose a Prometheus text endpoint, proxy Grafana, or poll a sidecar.
 | `GET /healthz` | None | Process liveness: `{ "status": "ok" }` |
 | `GET /api/v1/engine/health` | Session | Pipeline input/output state, transport quality, recording state, SRT listener pressure |
 | `GET /api/v1/engine/resource-map` | Session | Runtime or pipeline-scoped resource attribution: CPU/RSS/thread summary plus measured/derived resource nodes; defaults to grouped top-N for large fleets |
-| `GET /metrics/system` | Session | Host CPU/memory/disk/network plus restream engine self metrics, including child FFmpeg CPU/RSS and observe-only service-center capacity (JSON, not Prometheus) |
+| `GET /metrics/system` | Session | Host CPU/memory/disk/network plus restream engine self metrics, child FFmpeg CPU/RSS, observe-only service-center capacity, and RTMPS/kTLS state (JSON, not Prometheus) |
 | `GET /api/v1/engine` | Session | Restream build/toolchain, linked native-library versions, SBOM summary, and System information: OS, kernel, memory, CPU topology/features, and virtualization context |
 | `GET /api/v1/engine/sbom` | Session | CycloneDX 1.5 runtime SBOM for resolved Rust crates and linked native libraries |
 | `GET /api/v1/pipelines/:id/probe` | Session | Active input codec, dimensions, audio tracks, bitrate, and GOP summary |
@@ -260,6 +260,22 @@ hangs, the output surfaces a structured `upload_segment` or `upload_playlist`
 failure and transitions through the normal retrying/backoff contract instead of
 remaining wedged in an active-but-stuck sender loop.
 
+### RTMPS kTLS telemetry
+
+Both summary and full `GET /metrics/system` responses include an `rtmps`
+object. Its process-lifetime counters are `connections`, negotiated `tls12`
+and `tls13`, `ktlsRequested`, `ktlsAttempts`, `ktlsSuccess`,
+`ktlsUnsupported`, `ktlsError`, and `userspaceTlsConnections`.
+`ktlsCapabilities` reports cached current-host support probes for TLS 1.2/1.3
+AES-128/256-GCM.
+
+`ktlsRequested` records intent, not successful offload. `ktlsSuccess` records a
+completed kernel handoff; `ktlsUnsupported` records an unsupported negotiated
+suite/capability and `ktlsError` a handoff setup failure. There is no
+userspace-TLS fallback. `userspaceTlsConnections` counts connections dropped
+after the TLS handshake but before kTLS handoff; it is diagnostic evidence of
+an interrupted setup, not an alternate operating mode.
+
 ### Egress telemetry parity status
 
 This list describes the current, verified state. The `StageMetrics` output
@@ -390,10 +406,11 @@ deadline slack, errors, and retransmit amplification.
 }
 ```
 
-The same response includes `ioUring`, a cached startup capability probe for
-the native dataplane (`pollAdd`, fixed-path protocol operations, multishot
-receive, `sendZc`, and related kernel features). `available: false` means the
-host denied or lacks io_uring; it does not change control-plane behavior.
+The same response includes `ioUring`, a cached host capability probe for Linux
+io_uring features (`pollAdd`, fixed-file operations, multishot receive, `sendZc`,
+and related kernel features). It reports kernel capability, not a separate RTMP
+transport selection. `available: false` means the host denied or lacks
+io_uring; it does not change control-plane behavior.
 
 The JSON diagnostic run (`POST /api/v1/pipelines/:id/diagnostics/run`) is
 protocol-aware and infers the protocol from the active ingest; the request has

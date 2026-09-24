@@ -68,7 +68,7 @@ The architecture must:
 This design does not:
 
 - make RTMP and SRT wire operations identical;
-- force TCP epoll and SRT's Compio Owner activity into one physical
+- force Compio TCP readiness and SRT's Compio Owner activity into one physical
   polling API;
 - move the API, database, reconciler, ingest, recording, or codec execution onto
   an egress thread-per-core runtime;
@@ -195,11 +195,12 @@ flowchart LR
 There is no protocol-specific bypass around the manager, shard scheduler,
 common lifecycle, or backpressure policy.
 
-A shard may use a protocol-native network path. RTMP shards use one native
-`io_uring` TCP readiness owner per shard. SRT shards run one Compio runtime on
-the shard thread with at most one `srt_transport::compio::Owner` per address
-family (IPv4, IPv6), each owning one shared caller UDP socket. All variants stay
-under the same application topology, not a separate egress architecture.
+A shard may use a protocol-native network path. RTMP/RTMPS shards own one
+Compio runtime and their Compio TCP streams/readiness registrations. SRT shards
+run one Compio runtime on the shard thread with at most one
+`srt_transport::compio::Owner` per address family (IPv4, IPv6), each owning
+one shared caller UDP socket. All variants stay under the same application
+topology, not a separate egress architecture.
 
 ## Shared preparation graph
 
@@ -348,9 +349,9 @@ pub struct EgressShard<B: EgressBackend> {
 
 A shard owns:
 
-- its protocol-specific network backend (RTMP/RTMPS: a Linux epoll
-  instance; SRT: one Compio runtime and at most two family `Owner`s, built on
-  the shard thread);
+- its protocol-specific network backend (RTMP/RTMPS: one Compio runtime with
+  Compio-owned TCP streams and `PollFd` readiness; SRT: one Compio runtime and
+  at most two family `Owner`s, built on the shard thread);
 - all leaf protocol and transport state assigned to it;
 - its ready queue and scheduling flags;
 - connect, handshake, progress, and retry timers;
@@ -503,16 +504,25 @@ specialized.
 
 ### TCP and TLS backend
 
-RTMP and RTMPS use non-blocking TCP readiness. The protocol engine owns RTMP
-and TLS state and performs partial reads and writes. It must not call
-`write_all` from a shared shard loop.
+RTMP and RTMPS use Compio-owned non-blocking TCP streams and Compio
+`PollFd` readiness. The protocol engine owns RTMP state and performs bounded
+partial reads and writes after readiness; it must not call `write_all` from a
+shared shard loop.
 
-A pending RTMP write should retain shared payload ownership where possible and
-track independent offsets for headers and payloads. A writable visit is bounded
-and stops on `WouldBlock`.
+RTMPS uses Rustls for the handshake, then requires Linux kTLS for application
+records. Unsupported negotiated suites, missing kTLS capability, or handoff
+errors fail the output; there is no silent userspace-TLS fallback.
 
-RTMPS drives TLS incrementally. Plaintext accepted by TLS and encrypted output
-retained by the connection are both included in per-leaf memory limits.
+The kTLS read path preserves TLS record types: TLS 1.3 session tickets are
+discarded after the buffered Rustls handoff, so RTMPS session resumption is not
+used; a TLS 1.3 KeyUpdate fails the output closed. Supporting KeyUpdate requires
+the Rustls unbuffered `KernelConnection` handoff.
+
+A pending RTMP write retains shared payload ownership where possible and
+tracks independent offsets for headers and payloads. Each writable visit is
+bounded and stops on `WouldBlock`. RTMPS plaintext accepted by TLS and
+encrypted output retained by the connection remain subject to per-leaf memory
+limits.
 
 ### SRT backend
 
@@ -623,10 +633,11 @@ moving buffering into the protocol stack does not make it free or unbounded.
 ### Direction: Compio as the network I/O substrate
 
 Shard ownership, bounded scheduling, work budgets and the protocol-neutral
-leaf contract stay normative; Compio is the network I/O substrate. SRT egress
-and ingress are both on it (above). The remaining direct `io_uring` code in this
-repository — the RTMP `IoUringTcpPoller` — is transitional and will be replaced
-when RTMP moves over; new work should not deepen it.
+leaf contract stay normative. RTMP ingress and RTMP/RTMPS egress now use
+Compio TCP ownership; RTMP egress readiness is driven by Compio `PollFd`.
+SRT egress and ingress use the same Compio substrate with protocol `Owner`s.
+The former RTMP `IoUringTcpPoller` production path and epoll fallback are
+removed; test-only standard-TCP and epoll adapters remain behind `cfg(test)`.
 
 ### Future backends
 
@@ -1049,8 +1060,8 @@ Retained tradeoffs of the fabric itself:
 
 - one lifecycle and failure policy, fixed application thread count, and
   bounded memory under slow consumers;
-- more explicit partial-I/O (RTMP/TLS epoll plus SRT's Owner-driven leaves), and
-  scheduler/timer obligations versus one independent async task per
+- more explicit partial-I/O (RTMP/TLS Compio readiness plus SRT Owner-driven
+  leaves), and scheduler/timer obligations versus one independent async task per
   destination at tiny scale;
 - prefer narrow abstractions proven by RTMP and SRT over a framework for
   hypothetical protocols; do not hide wire semantics behind a vague transport

@@ -3,9 +3,9 @@ use super::super::resource_sweep::ffmpeg_children_stats;
 use super::super::*;
 use super::egress::{
     fault_rtmp_egress_output_churn, fault_rtmp_egress_sink_disappear,
-    fault_rtmp_egress_sink_stalls, fault_rtmps_egress_sink_disappear,
-    fault_rtmps_egress_sink_stalls, fault_srt_egress_sink_disappear,
+    fault_rtmp_egress_sink_stalls, fault_srt_egress_sink_disappear,
 };
+use super::rtmps_egress::{fault_rtmps_egress_sink_disappear, fault_rtmps_egress_sink_stalls};
 
 pub(crate) async fn create_pipeline_with_stream_key(
     api: &RampApi,
@@ -496,16 +496,37 @@ pub(crate) async fn fault_resilience() -> Result<Value, String> {
     let external_transcoder_history = verify_external_transcoder_history_contract(&api).await?;
     println!("[fault.resilience] history contract verified");
 
-    let shutdown_pipeline = create_pipeline(&api, "fault-graceful-rtmps").await?;
-    let shutdown_metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let shutdown_sink = start_generalized_rtmps_sink_server(
+    let shutdown_pipeline = create_pipeline(&api, "fault-graceful-rtmp-rtmps").await?;
+    let rtmp_shutdown_port = sink_port
+        .checked_add(1)
+        .ok_or_else(|| "SINK_PORT must leave room for the RTMP shutdown sink".to_string())?;
+    let rtmp_shutdown_metrics = Arc::new(GeneralizedSinkMetrics::default());
+    let rtmp_shutdown_sink =
+        start_generalized_sink_server(rtmp_shutdown_port, rtmp_shutdown_metrics.clone()).await?;
+    let rtmps_shutdown_metrics = Arc::new(GeneralizedSinkMetrics::default());
+    let rtmps_shutdown_sink = match start_generalized_rtmps_sink_server(
         sink_port,
         &rtmps_cert,
         &rtmps_key,
-        shutdown_metrics.clone(),
+        rtmps_shutdown_metrics.clone(),
+    )
+    .await
+    {
+        Ok(server) => server,
+        Err(error) => {
+            stop_generalized_sink_server(rtmp_shutdown_sink);
+            return Err(error);
+        }
+    };
+    let rtmp_shutdown_output_id = create_output(
+        &api,
+        &shutdown_pipeline,
+        "rtmp-shutdown-sink",
+        &format!("rtmp://127.0.0.1:{rtmp_shutdown_port}/live/fault-graceful-rtmp-sink"),
+        "source",
     )
     .await?;
-    let shutdown_output_id = create_output(
+    let rtmps_shutdown_output_id = create_output(
         &api,
         &shutdown_pipeline,
         "rtmps-shutdown-sink",
@@ -515,54 +536,82 @@ pub(crate) async fn fault_resilience() -> Result<Value, String> {
     .await?;
     let mut shutdown_publisher = spawn_publisher(
         &fixture_h264,
-        &format!("rtmp://127.0.0.1:{}/live/fault-graceful-rtmps", ports.rtmp),
+        &format!(
+            "rtmp://127.0.0.1:{}/live/fault-graceful-transport",
+            ports.rtmp
+        ),
         "flv",
         false,
     )
     .await?;
     let startup_result = async {
         wait_for_api_input_live(&api, &shutdown_pipeline, timeout).await?;
-        start_output(&api, &shutdown_pipeline, &shutdown_output_id).await?;
-        Ok::<bool, String>(wait_for_sink_video_above(&shutdown_metrics, 9, timeout).await)
+        start_output(&api, &shutdown_pipeline, &rtmp_shutdown_output_id).await?;
+        start_output(&api, &shutdown_pipeline, &rtmps_shutdown_output_id).await?;
+        let rtmp_initial_media =
+            wait_for_sink_video_above(&rtmp_shutdown_metrics, 9, timeout).await;
+        let rtmps_initial_media =
+            wait_for_sink_video_above(&rtmps_shutdown_metrics, 9, timeout).await;
+        Ok::<(bool, bool), String>((rtmp_initial_media, rtmps_initial_media))
     }
     .await;
-    let initial_media = match startup_result {
+    let (rtmp_initial_media, rtmps_initial_media) = match startup_result {
         Ok(initial_media) => initial_media,
         Err(error) => {
             stop_child(&mut shutdown_publisher).await;
-            stop_generalized_sink_server(shutdown_sink);
+            stop_generalized_sink_server(rtmp_shutdown_sink);
+            stop_generalized_sink_server(rtmps_shutdown_sink);
             stop_child(&mut child).await;
             return Err(error);
         }
     };
-    stop_generalized_sink_server(shutdown_sink);
+    stop_generalized_sink_server(rtmp_shutdown_sink);
+    stop_generalized_sink_server(rtmps_shutdown_sink);
 
     let retry_deadline = Instant::now() + Duration::from_secs(10);
-    let mut saw_retrying = false;
-    while Instant::now() < retry_deadline {
-        if let Ok((status, _)) = api
-            .get_output_status(&shutdown_pipeline, &shutdown_output_id)
-            .await
-            && status.status == "retrying"
+    let mut rtmp_saw_retrying = false;
+    let mut rtmps_saw_retrying = false;
+    while Instant::now() < retry_deadline && !(rtmp_saw_retrying && rtmps_saw_retrying) {
+        if !rtmp_saw_retrying
+            && let Ok((status, _)) = api
+                .get_output_status(&shutdown_pipeline, &rtmp_shutdown_output_id)
+                .await
         {
-            saw_retrying = true;
-            break;
+            rtmp_saw_retrying = status.status == "retrying";
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        if !rtmps_saw_retrying
+            && let Ok((status, _)) = api
+                .get_output_status(&shutdown_pipeline, &rtmps_shutdown_output_id)
+                .await
+        {
+            rtmps_saw_retrying = status.status == "retrying";
+        }
+        if !(rtmp_saw_retrying && rtmps_saw_retrying) {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
     }
 
     let shutdown_result = terminate_restream_gracefully(&mut child, &log_path).await;
     stop_child(&mut shutdown_publisher).await;
-    let mut shutdown_result = match shutdown_result {
+    let shutdown_result = match shutdown_result {
         Ok(result) => result,
         Err(error) => json!({"passed": false, "error": error}),
     };
-    shutdown_result["test"] = json!("rtmps-egress-reconnect-shutdown");
-    shutdown_result["initialMedia"] = json!(initial_media);
-    shutdown_result["sawRetrying"] = json!(saw_retrying);
-    shutdown_result["passed"] =
-        json!(initial_media && saw_retrying && shutdown_result["passed"] == true);
-    results.push(shutdown_result);
+    let shutdown_passed = shutdown_result["passed"] == true;
+    let mut rtmp_shutdown_result = shutdown_result.clone();
+    rtmp_shutdown_result["test"] = json!("rtmp-egress-reconnect-shutdown");
+    rtmp_shutdown_result["initialMedia"] = json!(rtmp_initial_media);
+    rtmp_shutdown_result["sawRetrying"] = json!(rtmp_saw_retrying);
+    rtmp_shutdown_result["passed"] =
+        json!(rtmp_initial_media && rtmp_saw_retrying && shutdown_passed);
+    results.push(rtmp_shutdown_result);
+    let mut rtmps_shutdown_result = shutdown_result;
+    rtmps_shutdown_result["test"] = json!("rtmps-egress-reconnect-shutdown");
+    rtmps_shutdown_result["initialMedia"] = json!(rtmps_initial_media);
+    rtmps_shutdown_result["sawRetrying"] = json!(rtmps_saw_retrying);
+    rtmps_shutdown_result["passed"] =
+        json!(rtmps_initial_media && rtmps_saw_retrying && shutdown_passed);
+    results.push(rtmps_shutdown_result);
 
     stop_child(&mut child).await;
 
