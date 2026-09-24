@@ -286,14 +286,21 @@ fn spawn_compio_acceptor(
                 loop {
                     tokio::select! {
                         biased;
-                        _ = shutdown.cancelled() => break,
+                        _ = shutdown.cancelled() => {
+                            while let Some(result) = bridges.next().await {
+                                if let Err(error) = result {
+                                    warn!(%error, "Compio RTMP connection bridge failed during shutdown");
+                                }
+                            }
+                            break;
+                        }
                         accepted = listener.accept() => {
                             let (stream, peer_addr) = accepted?;
                             stream.set_nodelay(true)?;
                             let socket_fd = duplicate_socket_fd(stream.as_raw_fd());
                             let (application_stream, bridge_stream) =
                                 tokio::io::duplex(64 * 1024);
-                            let closed = CancellationToken::new();
+                            let closed = shutdown.child_token();
                             let accepted = AcceptedRtmpConnection {
                                 stream: application_stream,
                                 peer_addr,
