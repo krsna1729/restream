@@ -2,7 +2,7 @@
 
 use std::io;
 use std::net::SocketAddr;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -48,15 +48,19 @@ enum RtmpClientIo {
 
 pub(super) struct RtmpClientSocket {
     io: RtmpClientIo,
-    fd: RawFd,
+    socket_fd: Option<OwnedFd>,
     closed: Option<CancellationToken>,
 }
 
 impl RtmpClientSocket {
-    pub(super) fn from_duplex(stream: DuplexStream, fd: RawFd, closed: CancellationToken) -> Self {
+    pub(super) fn from_duplex(
+        stream: DuplexStream,
+        socket_fd: Option<OwnedFd>,
+        closed: CancellationToken,
+    ) -> Self {
         Self {
             io: RtmpClientIo::Duplex(stream),
-            fd,
+            socket_fd,
             closed: Some(closed),
         }
     }
@@ -64,11 +68,32 @@ impl RtmpClientSocket {
     #[cfg(test)]
     pub(super) fn from_tcp(stream: TcpStream) -> Self {
         Self {
-            fd: stream.as_raw_fd(),
             io: RtmpClientIo::Tcp(stream),
+            socket_fd: None,
             closed: None,
         }
     }
+
+    fn raw_fd(&self) -> Option<RawFd> {
+        match &self.io {
+            RtmpClientIo::Duplex(_) => self.socket_fd.as_ref().map(AsRawFd::as_raw_fd),
+            #[cfg(test)]
+            RtmpClientIo::Tcp(stream) => Some(stream.as_raw_fd()),
+        }
+    }
+}
+
+pub(super) fn duplicate_socket_fd(fd: RawFd) -> Option<OwnedFd> {
+    let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicate < 0 {
+        warn!(
+            error = %io::Error::last_os_error(),
+            "failed to retain RTMP socket descriptor for TCP statistics"
+        );
+        return None;
+    }
+    // SAFETY: successful F_DUPFD_CLOEXEC returns a new descriptor owned by this caller.
+    Some(unsafe { OwnedFd::from_raw_fd(duplicate) })
 }
 
 impl Drop for RtmpClientSocket {
@@ -76,12 +101,6 @@ impl Drop for RtmpClientSocket {
         if let Some(closed) = &self.closed {
             closed.cancel();
         }
-    }
-}
-
-impl AsRawFd for RtmpClientSocket {
-    fn as_raw_fd(&self) -> RawFd {
-        self.fd
     }
 }
 
@@ -203,7 +222,9 @@ pub(super) async fn handle_rtmp_client(
 ) -> Result<(), &'static str> {
     let client_ip = client_addr.ip().to_string();
     let client_addr_text = client_addr.to_string();
-    set_tcp_socket_buffers(socket.as_raw_fd(), engine.config.rtmp_preauth_buffer_bytes);
+    if let Some(fd) = socket.raw_fd() {
+        set_tcp_socket_buffers(fd, engine.config.rtmp_preauth_buffer_bytes);
+    }
     let mut buffer = vec![0u8; 4096];
 
     // 1. Handshake Loop
@@ -328,39 +349,48 @@ pub(super) async fn handle_rtmp_client(
             }
             _ = tcp_stats_interval.tick(), if active_ingest.is_some() => {
                 let now = Instant::now();
-                let quality = match collect_tcp_stats_by_fd(socket.as_raw_fd()) {
-                    Ok(stats) => {
-                        let receive_rate = stats.tcp_bytes_received.and_then(|bytes| {
-                            let rate = previous_tcp_bytes.and_then(|(previous, sampled_at)| {
-                                crate::media::tcp_stats::bytes_delta_rate_mbps(
-                                    bytes,
-                                    previous,
-                                    now.duration_since(sampled_at).as_secs_f64(),
-                                )
+                let quality = match socket.raw_fd() {
+                    Some(fd) => match collect_tcp_stats_by_fd(fd) {
+                        Ok(stats) => {
+                            let receive_rate = stats.tcp_bytes_received.and_then(|bytes| {
+                                let rate = previous_tcp_bytes.and_then(|(previous, sampled_at)| {
+                                    crate::media::tcp_stats::bytes_delta_rate_mbps(
+                                        bytes,
+                                        previous,
+                                        now.duration_since(sampled_at).as_secs_f64(),
+                                    )
+                                });
+                                previous_tcp_bytes = Some((bytes, now));
+                                rate
                             });
-                            previous_tcp_bytes = Some((bytes, now));
-                            rate
-                        });
-                        PublisherQuality {
-                            tcp_congestion_algorithm: stats.tcp_congestion_algorithm,
-                            tcp_rtt_ms: stats.tcp_rtt_ms,
-                            tcp_rtt_var_ms: stats.tcp_rtt_var_ms,
-                            tcp_bytes_received: stats.tcp_bytes_received,
-                            tcp_last_rcv_ms: stats.tcp_last_rcv_ms,
-                            tcp_rcv_rtt_ms: stats.tcp_rcv_rtt_ms,
-                            tcp_rcv_space: stats.tcp_rcv_space,
-                            tcp_rcv_ooopack: stats.tcp_rcv_ooopack,
-                            tcp_skmem_rmem_alloc: stats.tcp_skmem_rmem_alloc,
-                            tcp_skmem_rmem_max: stats.tcp_skmem_rmem_max,
-                            tcp_receive_rate_mbps: receive_rate,
-                            ..PublisherQuality::default()
+                            PublisherQuality {
+                                tcp_congestion_algorithm: stats.tcp_congestion_algorithm,
+                                tcp_rtt_ms: stats.tcp_rtt_ms,
+                                tcp_rtt_var_ms: stats.tcp_rtt_var_ms,
+                                tcp_bytes_received: stats.tcp_bytes_received,
+                                tcp_last_rcv_ms: stats.tcp_last_rcv_ms,
+                                tcp_rcv_rtt_ms: stats.tcp_rcv_rtt_ms,
+                                tcp_rcv_space: stats.tcp_rcv_space,
+                                tcp_rcv_ooopack: stats.tcp_rcv_ooopack,
+                                tcp_skmem_rmem_alloc: stats.tcp_skmem_rmem_alloc,
+                                tcp_skmem_rmem_max: stats.tcp_skmem_rmem_max,
+                                tcp_receive_rate_mbps: receive_rate,
+                                ..PublisherQuality::default()
+                            }
                         }
-                    }
-                    Err(error) => PublisherQuality {
-                        tcp_stats_unavailable_reason: Some(match error.kind() {
-                            std::io::ErrorKind::Unsupported => "not_linux",
-                            _ => "collection_failed",
-                        }.to_string()),
+                        Err(error) => PublisherQuality {
+                            tcp_stats_unavailable_reason: Some(
+                                match error.kind() {
+                                    std::io::ErrorKind::Unsupported => "not_linux",
+                                    _ => "collection_failed",
+                                }
+                                .to_string(),
+                            ),
+                            ..PublisherQuality::default()
+                        },
+                    },
+                    None => PublisherQuality {
+                        tcp_stats_unavailable_reason: Some("descriptor_unavailable".to_string()),
                         ..PublisherQuality::default()
                     },
                 };
@@ -543,10 +573,9 @@ async fn handle_session_results(
                             timestamp_mapper: InputTimestampMapper::default(),
                             standby_gop: StandbyGopCache::default(),
                         });
-                        set_tcp_socket_buffers(
-                            socket.as_raw_fd(),
-                            engine.config.rtmp_stream_buffer_bytes,
-                        );
+                        if let Some(fd) = socket.raw_fd() {
+                            set_tcp_socket_buffers(fd, engine.config.rtmp_stream_buffer_bytes);
+                        }
 
                         // Success! Accept publish request
                         let resp = session
@@ -811,4 +840,37 @@ async fn handle_session_results(
         }
     }
     Ok(())
+}
+#[cfg(all(test, target_os = "linux"))]
+mod socket_fd_tests {
+    use super::RtmpClientSocket;
+    use std::net::{TcpListener, TcpStream};
+    use std::os::fd::AsRawFd;
+    use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn duplicated_socket_descriptor_outlives_the_compio_bridge() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = TcpStream::connect(address).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let original_fd = client.as_raw_fd();
+        let retained_fd = super::duplicate_socket_fd(original_fd)
+            .expect("socket descriptor should be retained before bridge handoff");
+        let socket = RtmpClientSocket::from_duplex(
+            tokio::io::duplex(32).0,
+            Some(retained_fd),
+            CancellationToken::new(),
+        );
+        let retained_fd = socket
+            .raw_fd()
+            .expect("socket descriptor should remain owned by the session");
+        assert_ne!(retained_fd, original_fd);
+
+        drop(client);
+        super::collect_tcp_stats_by_fd(retained_fd)
+            .expect("TCP_INFO remains readable after the bridge descriptor closes");
+        drop(socket);
+        drop(server);
+    }
 }

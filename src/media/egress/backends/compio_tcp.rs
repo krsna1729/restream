@@ -1,15 +1,13 @@
-use std::collections::HashMap;
-use std::future::Future;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, IoSlice, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use compio::runtime::fd::PollFd;
 use futures_util::future::{Either, FutureExt, select};
 use futures_util::pin_mut;
-use futures_util::stream::{FuturesUnordered, StreamExt};
 
 use crate::media::egress::scheduler::LeafKey;
 use crate::media::egress::shard::EgressShardIdleWake;
@@ -185,21 +183,18 @@ struct Registration {
     interest: TcpEgressInterest,
 }
 type CompioReadyEvent = (RawFd, LeafKey, u64, bool, bool);
-type CompioReadyFuture<'a> = Pin<Box<dyn Future<Output = io::Result<CompioReadyEvent>> + 'a>>;
-type CompioReadyEventsFuture<'a> =
-    Pin<Box<dyn Future<Output = io::Result<Option<CompioReadyEvent>>> + 'a>>;
-
 /// One Compio readiness owner for one RTMP fabric shard.
 ///
-/// Registration is represented by Compio `PollFd` futures instead of a second
-/// protocol-specific epoll/io_uring implementation. The protocol engine still
-/// receives the same generation-tagged ready events, so scheduler, retries,
-/// drain deadlines, and slow-peer isolation stay unchanged.
+/// Each `PollFd` retains its own readiness submissions. A rotating scan fills
+/// a bounded ready queue without rebuilding one future per registered socket.
+/// The protocol engine still receives generation-tagged events, so scheduler,
+/// retries, drain deadlines, and slow-peer isolation stay unchanged.
 pub(crate) struct CompioTcpPoller {
     runtime: compio::runtime::Runtime,
     registrations: HashMap<RawFd, Registration>,
-    // The idle wait consumes one PollFd completion; hand it to the shard's scheduled visit.
-    pending_ready: Option<CompioReadyEvent>,
+    registration_order: Vec<RawFd>,
+    next_registration: usize,
+    ready_queue: VecDeque<CompioReadyEvent>,
     ready_capacity: usize,
 }
 
@@ -207,11 +202,14 @@ impl CompioTcpPoller {
     pub(crate) fn new(max_events: usize) -> Result<Self, TcpEgressPollError> {
         let runtime = compio::runtime::Runtime::new()
             .map_err(|error| Self::error("compio_tcp_runtime", error))?;
+        let ready_capacity = max_events.max(1);
         Ok(Self {
             runtime,
-            registrations: HashMap::with_capacity(max_events.max(1)),
-            pending_ready: None,
-            ready_capacity: max_events.max(1),
+            registrations: HashMap::with_capacity(ready_capacity),
+            registration_order: Vec::with_capacity(ready_capacity),
+            next_registration: 0,
+            ready_queue: VecDeque::with_capacity(ready_capacity),
+            ready_capacity,
         })
     }
 
@@ -281,11 +279,30 @@ impl CompioTcpPoller {
                 interest,
             },
         );
+        self.registration_order.push(fd);
         Ok(())
     }
 
     pub(crate) fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError> {
-        self.registrations.remove(&fd);
+        if self.registrations.remove(&fd).is_none() {
+            return Ok(());
+        }
+        self.ready_queue.retain(|event| event.0 != fd);
+        if let Some(index) = self
+            .registration_order
+            .iter()
+            .position(|registered| *registered == fd)
+        {
+            let last = self.registration_order.len() - 1;
+            self.registration_order.swap_remove(index);
+            if self.registration_order.is_empty() {
+                self.next_registration = 0;
+            } else if self.next_registration == index || self.next_registration == last {
+                self.next_registration = index % self.registration_order.len();
+            } else {
+                self.next_registration %= self.registration_order.len();
+            }
+        }
         Ok(())
     }
 
@@ -295,18 +312,20 @@ impl CompioTcpPoller {
         ready: &mut Vec<TcpReadyLeaf>,
     ) -> Result<usize, TcpEgressPollError> {
         ready.clear();
-        let event = match self.pending_ready.take() {
-            Some(event) => Some(event),
-            None => self.wait_one(Duration::from_millis(timeout_ms.max(0) as u64))?,
-        };
-        if let Some((fd, key, generation, readable, writable)) = event {
-            ready.push(TcpReadyLeaf {
-                fd,
-                key,
-                generation,
-                readable,
-                writable,
-            });
+        if self.ready_queue.is_empty() {
+            self.wait_one(Duration::from_millis(timeout_ms.max(0) as u64))?;
+        }
+        let count = self.ready_queue.len().min(self.ready_capacity);
+        for _ in 0..count {
+            if let Some((fd, key, generation, readable, writable)) = self.ready_queue.pop_front() {
+                ready.push(TcpReadyLeaf {
+                    fd,
+                    key,
+                    generation,
+                    readable,
+                    writable,
+                });
+            }
         }
         Ok(ready.len())
     }
@@ -316,11 +335,16 @@ impl CompioTcpPoller {
         commands: &flume::Receiver<crate::media::egress::command::EgressCommand>,
         max_wait: Duration,
     ) -> EgressShardIdleWake {
-        if self.pending_ready.is_some() {
+        if !self.ready_queue.is_empty() {
             return EgressShardIdleWake::BackendActivity;
         }
-        let (wake, mut ready) = {
-            let waits = self.wait_any();
+        let wake = {
+            let runtime = &self.runtime;
+            let registrations = &self.registrations;
+            let registration_order = &self.registration_order;
+            let next_registration = &mut self.next_registration;
+            let ready_queue = &mut self.ready_queue;
+            let ready_capacity = self.ready_capacity;
             let command = async {
                 match commands.recv_async().await {
                     Ok(command) => EgressShardIdleWake::Command(command),
@@ -328,12 +352,22 @@ impl CompioTcpPoller {
                 }
             };
             let activity = async {
-                match waits.await {
-                    Ok(Some(event)) => (EgressShardIdleWake::BackendActivity, Some(event)),
-                    Ok(None) => (EgressShardIdleWake::Timeout, None),
+                match std::future::poll_fn(|cx| {
+                    poll_ready_batch(
+                        registrations,
+                        registration_order,
+                        next_registration,
+                        ready_queue,
+                        ready_capacity,
+                        cx,
+                    )
+                })
+                .await
+                {
+                    Ok(()) => EgressShardIdleWake::BackendActivity,
                     Err(error) => {
                         tracing::warn!(%error, "Compio RTMP readiness wait failed");
-                        (EgressShardIdleWake::BackendActivity, None)
+                        EgressShardIdleWake::BackendActivity
                     }
                 }
             };
@@ -345,52 +379,69 @@ impl CompioTcpPoller {
             let activity = activity.fuse();
             let timeout = timeout.fuse();
             pin_mut!(command, activity, timeout);
-            self.runtime.block_on(async {
+            runtime.block_on(async {
                 match select(command, select(activity, timeout)).await {
-                    Either::Left((wake, _)) => (wake, None),
-                    Either::Right((Either::Left(((wake, ready), _)), _)) => (wake, ready),
-                    Either::Right((Either::Right((wake, _)), _)) => (wake, None),
+                    Either::Left((wake, _)) => wake,
+                    Either::Right((Either::Left((wake, _)), _)) => wake,
+                    Either::Right((Either::Right((wake, _)), _)) => wake,
                 }
             })
         };
         if matches!(&wake, EgressShardIdleWake::Command(_)) && !self.registrations.is_empty() {
-            // A ready command makes block_on return before the Compio driver polls pending
-            // PollFd submissions; advance the driver once so sustained wake traffic cannot starve I/O.
-            match self
-                .runtime
-                .block_on(async { self.wait_any().now_or_never() })
-            {
-                Some(Ok(event)) => ready = event,
-                Some(Err(error)) => tracing::warn!(%error, "Compio RTMP readiness wait failed"),
-                None => {}
+            // Commands must not keep pending PollFd submissions from progressing.
+            let readiness = {
+                let runtime = &self.runtime;
+                let registrations = &self.registrations;
+                let registration_order = &self.registration_order;
+                let next_registration = &mut self.next_registration;
+                let ready_queue = &mut self.ready_queue;
+                let ready_capacity = self.ready_capacity;
+                runtime.block_on(async {
+                    std::future::poll_fn(|cx| {
+                        poll_ready_batch(
+                            registrations,
+                            registration_order,
+                            next_registration,
+                            ready_queue,
+                            ready_capacity,
+                            cx,
+                        )
+                    })
+                    .now_or_never()
+                })
+            };
+            if let Some(Err(error)) = readiness {
+                tracing::warn!(%error, "Compio RTMP readiness wait failed");
             }
             self.runtime.poll_with(Some(Duration::ZERO));
         }
-        self.pending_ready = ready;
         wake
     }
 
-    fn wait_one(
-        &mut self,
-        timeout: Duration,
-    ) -> Result<Option<CompioReadyEvent>, TcpEgressPollError> {
-        let wait = self.wait_any();
-        match self.runtime.block_on(compio::time::timeout(timeout, wait)) {
-            Err(_) => Ok(None),
+    fn wait_one(&mut self, timeout: Duration) -> Result<(), TcpEgressPollError> {
+        let runtime = &self.runtime;
+        let registrations = &self.registrations;
+        let registration_order = &self.registration_order;
+        let next_registration = &mut self.next_registration;
+        let ready_queue = &mut self.ready_queue;
+        let ready_capacity = self.ready_capacity;
+        match runtime.block_on(compio::time::timeout(
+            timeout,
+            std::future::poll_fn(|cx| {
+                poll_ready_batch(
+                    registrations,
+                    registration_order,
+                    next_registration,
+                    ready_queue,
+                    ready_capacity,
+                    cx,
+                )
+            }),
+        )) {
+            Err(_) => Ok(()),
             Ok(Err(error)) => Err(Self::error("compio_tcp_poll", error)),
-            Ok(Ok(event)) => Ok(event),
+            Ok(Ok(())) => Ok(()),
         }
-    }
-
-    fn wait_any(&self) -> CompioReadyEventsFuture<'_> {
-        let mut waits = FuturesUnordered::new();
-        for registration in self.registrations.values() {
-            waits.push(wait_registration(registration));
-        }
-        if waits.is_empty() {
-            return Box::pin(std::future::pending());
-        }
-        Box::pin(async move { waits.next().await.transpose() })
     }
 
     fn error(operation: &'static str, error: io::Error) -> TcpEgressPollError {
@@ -399,6 +450,63 @@ impl CompioTcpPoller {
             error.raw_os_error().unwrap_or(libc::EIO),
             error.to_string(),
         )
+    }
+}
+
+fn poll_ready_batch(
+    registrations: &HashMap<RawFd, Registration>,
+    registration_order: &[RawFd],
+    next_registration: &mut usize,
+    ready: &mut VecDeque<CompioReadyEvent>,
+    capacity: usize,
+    cx: &mut Context<'_>,
+) -> Poll<io::Result<()>> {
+    let count = registration_order.len();
+    if count == 0 {
+        return Poll::Pending;
+    }
+
+    let mut index = *next_registration % count;
+    let mut scanned = 0;
+    while scanned < count && ready.len() < capacity {
+        if let Some(registration) = registrations.get(&registration_order[index]) {
+            let mut readable = false;
+            let mut writable = false;
+            if registration.interest.readable {
+                match registration.stream.poll_read_ready(cx) {
+                    Poll::Ready(Ok(())) => readable = true,
+                    Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                    Poll::Pending => {}
+                }
+            }
+            if registration.interest.writable {
+                match registration.stream.poll_write_ready(cx) {
+                    Poll::Ready(Ok(())) => writable = true,
+                    Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                    Poll::Pending => {}
+                }
+            }
+            if readable || writable {
+                ready.push_back((
+                    registration.fd,
+                    registration.key,
+                    registration.generation,
+                    readable,
+                    writable,
+                ));
+            }
+        }
+        scanned += 1;
+        index += 1;
+        if index == count {
+            index = 0;
+        }
+    }
+    *next_registration = index;
+    if ready.is_empty() {
+        Poll::Pending
+    } else {
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -472,46 +580,6 @@ fn socket_address(peer_addr: SocketAddr) -> (libc::sockaddr_storage, libc::sockl
             )
         }
     }
-}
-
-fn wait_registration<'a>(registration: &'a Registration) -> CompioReadyFuture<'a> {
-    let read = registration.interest.readable;
-    let write = registration.interest.writable;
-    Box::pin(async move {
-        let (readable, writable) = match (read, write) {
-            (true, false) => {
-                registration.stream.read_ready().await?;
-                (true, false)
-            }
-            (false, true) => {
-                registration.stream.write_ready().await?;
-                (false, true)
-            }
-            (true, true) => {
-                let read_ready = registration.stream.read_ready().boxed_local();
-                let write_ready = registration.stream.write_ready().boxed_local();
-                pin_mut!(read_ready, write_ready);
-                match select(read_ready, write_ready).await {
-                    Either::Left((result, _)) => {
-                        result?;
-                        (true, false)
-                    }
-                    Either::Right((result, _)) => {
-                        result?;
-                        (false, true)
-                    }
-                }
-            }
-            (false, false) => futures_util::future::pending().await,
-        };
-        Ok((
-            registration.fd,
-            registration.key,
-            registration.generation,
-            readable,
-            writable,
-        ))
-    })
 }
 
 #[cfg(test)]
@@ -623,6 +691,35 @@ mod tests {
     }
 
     #[test]
+    fn compio_poller_reports_simultaneous_read_and_write_readiness() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut peer, _) = listener.accept().unwrap();
+            peer.write_all(b"x").unwrap();
+        });
+        let client = TcpStream::connect(address).unwrap();
+        client.set_nonblocking(true).unwrap();
+        let mut poller = CompioTcpPoller::new(4).unwrap();
+        let stream = poller.adopt(client).unwrap();
+        let fd = stream.raw_fd();
+        let key = LeafKey(4);
+        poller
+            .register_leaf(fd, key, 13, super::TcpEgressInterest::READ_WRITE)
+            .unwrap();
+        server.join().unwrap();
+
+        let mut events = Vec::new();
+        assert_eq!(poller.poll_leaves(2_000, &mut events).unwrap(), 1);
+        assert_eq!((events[0].key, events[0].generation), (key, 13));
+        assert!(events[0].readable);
+        assert!(events[0].writable);
+
+        poller.remove(fd).unwrap();
+        drop(stream);
+    }
+
+    #[test]
     fn nonblocking_compio_socket_supports_synchronous_protocol_io() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let address = listener.local_addr().unwrap();
@@ -651,5 +748,120 @@ mod tests {
         }
         assert_eq!(&response, b"world");
         server.join().unwrap();
+    }
+    fn run_compio_poller_fanout(report_metrics: bool) {
+        const REGISTRATIONS: usize = 96;
+        const ACTIVE: usize = 24;
+        const BATCH: usize = 8;
+        const SAMPLES: usize = 20;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut poller = CompioTcpPoller::new(BATCH).unwrap();
+        let mut clients = Vec::with_capacity(REGISTRATIONS);
+        let mut peers = Vec::with_capacity(REGISTRATIONS);
+        for index in 0..REGISTRATIONS {
+            let client = TcpStream::connect(address).unwrap();
+            let (peer, _) = listener.accept().unwrap();
+            client.set_nonblocking(true).unwrap();
+            let stream = poller.adopt(client).unwrap();
+            poller
+                .register_leaf(
+                    stream.raw_fd(),
+                    LeafKey(index),
+                    7,
+                    super::TcpEgressInterest::READ,
+                )
+                .unwrap();
+            clients.push(stream);
+            peers.push(peer);
+        }
+
+        let active = (0..REGISTRATIONS)
+            .filter(|index| index % 4 == 0)
+            .collect::<Vec<_>>();
+        assert_eq!(active.len(), ACTIVE);
+        let mut is_active = [false; REGISTRATIONS];
+        for index in &active {
+            is_active[*index] = true;
+        }
+
+        let mut elapsed_ns = Vec::with_capacity(SAMPLES);
+        let mut poll_calls = Vec::with_capacity(SAMPLES);
+        let mut allocation_counts = Vec::with_capacity(SAMPLES * ACTIVE);
+        let mut ready = Vec::with_capacity(BATCH);
+        assert_eq!(
+            poller.poll_leaves(1, &mut ready).unwrap(),
+            0,
+            "warm persistent PollFd readiness registrations before measurement"
+        );
+        crate::test_alloc::begin();
+        crate::test_alloc::end();
+        for sample in 0..SAMPLES {
+            for index in &active {
+                peers[*index].write_all(&[sample as u8]).unwrap();
+            }
+
+            let started = std::time::Instant::now();
+            let mut seen = [false; REGISTRATIONS];
+            let mut seen_count = 0;
+            let mut calls = 0;
+            while seen_count < ACTIVE {
+                calls += 1;
+                assert!(
+                    calls <= ACTIVE,
+                    "active RTMP registrations were not serviced fairly"
+                );
+                crate::test_alloc::begin();
+                let poll_result = poller.poll_leaves(1_000, &mut ready);
+                let allocations = crate::test_alloc::end();
+                allocation_counts.push(allocations);
+                assert!(
+                    allocations < REGISTRATIONS,
+                    "{allocations} allocations for {REGISTRATIONS} registrations; per-registration readiness allocations regressed"
+                );
+                assert!(poll_result.unwrap() > 0);
+                for event in ready.drain(..) {
+                    let index = event.key.0;
+                    assert!(is_active[index], "idle registration reported ready");
+                    assert_eq!(event.generation, 7);
+                    assert!(!seen[index], "ready registration was reported twice");
+                    seen[index] = true;
+                    seen_count += 1;
+                    let mut byte = [0];
+                    clients[index].read_exact(&mut byte).unwrap();
+                    assert_eq!(byte[0], sample as u8);
+                }
+            }
+            elapsed_ns.push(started.elapsed().as_nanos());
+            poll_calls.push(calls);
+        }
+
+        if report_metrics {
+            elapsed_ns.sort_unstable();
+            allocation_counts.sort_unstable();
+            poll_calls.sort_unstable();
+            eprintln!(
+                "[rtmp-poller-bench] registrations={REGISTRATIONS} active={ACTIVE} batch={BATCH} samples={SAMPLES} median_allocations_per_wait={} max_allocations_per_wait={} allocating_waits={} total_allocations={} median_ns={} p95_ns={} median_poll_calls={}",
+                allocation_counts[allocation_counts.len() / 2],
+                allocation_counts.last().copied().unwrap_or_default(),
+                allocation_counts.iter().filter(|count| **count > 0).count(),
+                allocation_counts.iter().sum::<usize>(),
+                elapsed_ns[SAMPLES / 2],
+                elapsed_ns[SAMPLES * 95 / 100],
+                poll_calls[SAMPLES / 2],
+            );
+        }
+    }
+
+    #[test]
+    fn compio_poller_fans_out_active_sockets_among_idle_registrations() {
+        run_compio_poller_fanout(false);
+    }
+
+    #[test]
+    #[ignore = "manual readiness latency and allocation benchmark"]
+    fn compio_poller_fanout_benchmark() {
+        run_compio_poller_fanout(true);
     }
 }

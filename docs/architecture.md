@@ -79,11 +79,13 @@ mux/demux work, and child-process pipe I/O. Compio transport owners own RTMP
 TCP and SRT transport sockets/readiness. Work that can block independently
 of the async scheduler is isolated:
 
-- RTMP ingress uses one Compio acceptor thread/runtime for its listener and
-  accepted TCP sockets; a bounded 64 KiB duplex bridge feeds fixed
-  current-thread Tokio session workers. The acceptor and worker thread handles
-  are registered with engine shutdown; cancellation closes bridges and joins
-  those threads;
+- RTMP ingress uses one Compio acceptor thread/runtime for the listener and
+  accepted TCP sockets. The byte-stream handoff is a bounded 64 KiB Tokio
+  duplex with backpressure; Tokio workers own RTMP session state, not the
+  Compio stream. Before the accepted connection crosses the worker queue, the
+  acceptor attaches a CLOEXEC `OwnedFd` duplicate used only for socket-buffer
+  configuration and `TCP_INFO`; the session drops it on exit. Shutdown cancels
+  bridges and joins the registered acceptor and worker threads;
 - RTMP/RTMPS and SRT **egress** run on the egress fabric: a small
   CPU-derived pool of dedicated shard OS threads, output-count-scaled for
   RTMP/RTMPS/sink/pipeline feeds while SRT retains the CPU-derived ceiling.

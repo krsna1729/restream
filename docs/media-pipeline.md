@@ -433,6 +433,15 @@ flowchart LR
     Send --> Dest["Destination RTMP/RTMPS server"]
 ```
 
+The bridge is the ownership boundary: Compio keeps the TCP stream and pumps
+bytes through the bounded duplex; fixed current-thread Tokio workers own RTMP
+and FLV session state on the other side. Before the duplex endpoint enters the
+bounded worker queue, the acceptor duplicates the socket fd with
+`F_DUPFD_CLOEXEC` into an `OwnedFd`. The session uses that duplicate only for
+TCP statistics and socket-buffer options, then drops it on exit, so bridge
+shutdown cannot leave it sampling a recycled raw fd. If duplication fails,
+the media session continues with TCP statistics unavailable.
+
 | Hop | Thread/process model | Memory owner |
 |---|---|---|
 | Compio TCP accept | One Compio acceptor thread/runtime owns the listener and accepted TCP sockets; shutdown cancels and joins the registered thread | Kernel socket buffers plus one bounded 64 KiB duplex bridge per admitted session |
@@ -531,6 +540,12 @@ observed substrate, RawReadiness only inside a working io_uring runtime) and one
 Owner owns the socket, the `PeerTable`, handshake admission, timers, ACK/NAK,
 listener TX and every peer's send/disconnect/retire. There is no second protocol
 table on Tokio.
+
+The `srt-rs` Owner holds up to 256 managed-RX buffer leases in its bounded
+completion ring. Restream provisions 512 Compio provided buffers, leaving one
+ring's worth of headroom so a full completion ring can drop its next datagram
+and return the lease instead of exhausting the provided-buffer ring. At the
+2,048-byte slot size, the ingress ring costs 1 MiB.
 
 - **Admission** is synchronous on the owner thread: the resolver reads the
   `SrtIngestPolicyStore` (mode validation, `UNAUTHORIZED`/`BAD_MODE`/

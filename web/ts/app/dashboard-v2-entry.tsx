@@ -28,43 +28,36 @@ import {
 import { DashboardV2PipelineInputStatus } from "./dashboard-v2/pipeline-input-status.js";
 import { DashboardV2PipelineOutputOverview } from "./dashboard-v2/pipeline-output-overview.js";
 
-const dashboardV2Container = document.getElementById("dashboard-v2-root");
-if (!dashboardV2Container)
-  throw new Error("Dashboard v2 root is missing");
-const container: HTMLElement = dashboardV2Container;
-container.dataset.uiV2Shell = "Dashboard v2 active";
+function requireDashboardV2Root(id: string, error: string): HTMLElement {
+  const element = document.getElementById(id);
+  if (!element) throw new Error(error);
+  return element;
+}
+
+const container = requireDashboardV2Root(
+  "dashboard-v2-root",
+  "Dashboard v2 root is missing",
+);
 let root: Root | null = null;
-const pipelineSelectorContainer = document.getElementById(
+const selectorContainer = requireDashboardV2Root(
   "dashboard-v2-pipeline-selector-root",
+  "Dashboard v2 pipeline selector root is missing",
 );
-if (!pipelineSelectorContainer) {
-  throw new Error("Dashboard v2 pipeline selector root is missing");
-}
-const selectorContainer: HTMLElement = pipelineSelectorContainer;
 let selectorRoot: Root | null = null;
-const pipelineHeaderContainer = document.getElementById(
+const headerContainer = requireDashboardV2Root(
   "dashboard-v2-pipeline-header-root",
+  "Dashboard v2 pipeline header root is missing",
 );
-if (!pipelineHeaderContainer) {
-  throw new Error("Dashboard v2 pipeline header root is missing");
-}
-const headerContainer: HTMLElement = pipelineHeaderContainer;
 let headerRoot: Root | null = null;
-const pipelineInputStatusContainer = document.getElementById(
+const inputStatusContainer = requireDashboardV2Root(
   "dashboard-v2-pipeline-input-status-root",
+  "Dashboard v2 pipeline input status root is missing",
 );
-if (!pipelineInputStatusContainer) {
-  throw new Error("Dashboard v2 pipeline input status root is missing");
-}
-const inputStatusContainer: HTMLElement = pipelineInputStatusContainer;
 let inputStatusRoot: Root | null = null;
-const pipelineOutputOverviewContainer = document.getElementById(
+const outputOverviewContainer = requireDashboardV2Root(
   "dashboard-v2-pipeline-output-overview-root",
+  "Dashboard v2 pipeline output overview root is missing",
 );
-if (!pipelineOutputOverviewContainer) {
-  throw new Error("Dashboard v2 pipeline output overview root is missing");
-}
-const outputOverviewContainer: HTMLElement = pipelineOutputOverviewContainer;
 let outputOverviewRoot: Root | null = null;
 
 export function renderDashboardV2Overview(

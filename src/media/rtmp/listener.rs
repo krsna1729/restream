@@ -2,7 +2,7 @@
 
 use std::io;
 use std::net::SocketAddr;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -19,14 +19,14 @@ use crate::media::engine::MediaEngine;
 use crate::media::ingest_auth::PipelineAccessAuthenticator;
 use crate::media::security::IngestSecurityService;
 
-use super::ingest::{RtmpClientSocket, handle_rtmp_client};
+use super::ingest::{RtmpClientSocket, duplicate_socket_fd, handle_rtmp_client};
 
 const MAX_COMPIO_RTMP_WORKERS: usize = 8;
 
 struct AcceptedRtmpConnection {
     stream: DuplexStream,
     peer_addr: SocketAddr,
-    socket_fd: RawFd,
+    socket_fd: Option<OwnedFd>,
     closed: CancellationToken,
 }
 
@@ -290,7 +290,7 @@ fn spawn_compio_acceptor(
                         accepted = listener.accept() => {
                             let (stream, peer_addr) = accepted?;
                             stream.set_nodelay(true)?;
-                            let socket_fd = stream.as_raw_fd();
+                            let socket_fd = duplicate_socket_fd(stream.as_raw_fd());
                             let (application_stream, bridge_stream) =
                                 tokio::io::duplex(64 * 1024);
                             let closed = CancellationToken::new();
@@ -424,8 +424,8 @@ fn bind_rtmp_listener_with_backlog(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_COMPIO_RTMP_WORKERS, compio_rtmp_worker_count, start_rtmp_server_on_with_shutdown,
-        worker_channel_capacity,
+        MAX_COMPIO_RTMP_WORKERS, bind_rtmp_listener_with_backlog, compio_rtmp_worker_count,
+        start_rtmp_server_on_with_shutdown, worker_channel_capacity,
     };
     use crate::domain::ingest_security::IngestSecurityConfig;
     use crate::media::engine::MediaEngine;
@@ -529,9 +529,19 @@ mod tests {
             .expect("thread join task should not panic");
 
         drop(client);
-        let rebound = tokio::net::TcpListener::bind(address)
-            .await
-            .expect("RTMP listener port should be released after shutdown");
+        let rebound = bind_rtmp_listener_with_backlog(address.port(), 512).unwrap_or_else(|error| {
+            let open_fds = std::fs::read_dir("/proc/self/fd")
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .filter_map(|entry| {
+                    std::fs::read_link(entry.path()).ok().map(|target| {
+                        format!("{} -> {}", entry.file_name().to_string_lossy(), target.display())
+                    })
+                })
+                .collect::<Vec<_>>();
+            panic!("RTMP listener port should be released after shutdown: {error}; open_fds={open_fds:?}");
+        });
         drop(rebound);
     }
 }

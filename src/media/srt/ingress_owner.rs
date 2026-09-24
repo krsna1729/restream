@@ -34,8 +34,8 @@ use futures_util::future::{Either, pending, select};
 use srt_proto::{ConnectionEvent, Timestamp};
 use srt_transport::advanced::admission::{AdmissionEvent, BondedInputPolicy, LogicalPeerId};
 use srt_transport::compio::{
-    Owner, OwnerRxMode, OwnerServiceBudget, OwnerServiceReport, ProductionRuntimeConfig,
-    RxModePolicy, observe_production_runtime,
+    MANAGED_RX_RING_DEPTH, Owner, OwnerRxMode, OwnerServiceBudget, OwnerServiceReport,
+    ProductionRuntimeConfig, RxModePolicy, observe_production_runtime,
 };
 use srt_transport::{ListenerConfig, ListenerTopology, PromotionPolicy};
 use tokio::sync::mpsc;
@@ -179,8 +179,13 @@ fn build(
     telemetry: mpsc::Sender<QualitySample>,
 ) -> Result<(OwnerLoop, SocketAddr), String> {
     // The runtime and the Owner are born on this thread and never leave it.
-    let runtime_config =
+    let mut runtime_config =
         ProductionRuntimeConfig::for_owner(INGRESS_TX_CAPACITY, SRT_OWNER_WIRE_CEILING);
+    // srt-rs retains up to MANAGED_RX_RING_DEPTH leases in its Owner queue.
+    // Keep a full ring of additional Compio buffers so overflow drops the next
+    // datagram and returns its lease instead of exhausting the provided ring.
+    runtime_config.rx_ring_entries = u16::try_from(MANAGED_RX_RING_DEPTH * 2)
+        .map_err(|_| "SRT ingress RX buffer ring is too large".to_string())?;
     let runtime = production_runtime(runtime_config)?;
     let profile = runtime.block_on(observe_production_runtime(
         &runtime,
@@ -224,6 +229,7 @@ fn build(
         receiver_group_id = format_args!("{:#010x}", config.receiver_group.wire_id()),
         tx_capacity = INGRESS_TX_CAPACITY,
         wire_ceiling = SRT_OWNER_WIRE_CEILING,
+        rx_ring_entries = runtime_config.rx_ring_entries,
         command_capacity = config.command_capacity,
         event_capacity = config.event_capacity,
         commands_per_visit = COMMANDS_PER_VISIT,

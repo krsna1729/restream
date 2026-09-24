@@ -195,6 +195,7 @@ pub(crate) async fn recovery() -> Result<Value, String> {
         sink_port,
         hls_put_port,
         timeout,
+        &work_dir,
     )
     .await?;
 
@@ -308,6 +309,7 @@ pub(crate) async fn fault_resilience() -> Result<Value, String> {
             sink_port,
             hls_put_port,
             timeout,
+            &work_dir,
         )
         .await?,
     );

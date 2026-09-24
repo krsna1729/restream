@@ -227,22 +227,29 @@ where
     tokio::spawn(async move {
         tracing::info!(feed_id = %feed_id, "{kind} fabric wake watcher started");
         let mut last_head = watcher_feed.head_sequence();
-        // The pre-loop snapshot may already include a publish that happened
-        // before this task's first poll. Always deliver on the first pass.
-        let mut first_iteration = true;
+        let mut last_notify: Option<Arc<tokio::sync::Notify>> = None;
         loop {
             let notify = watcher_feed.notify_handle();
-            let notified = notify.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
+            let same_notify = last_notify
+                .as_ref()
+                .is_some_and(|previous| Arc::ptr_eq(previous, &notify));
+            let current_head = {
+                let notified = notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
 
-            let current_head = watcher_feed.head_sequence();
-            let notify_is_current = Arc::ptr_eq(&notify, &watcher_feed.notify_handle());
-            if current_head == last_head && notify_is_current && !first_iteration {
-                notified.await;
-            }
-            first_iteration = false;
-            last_head = watcher_feed.head_sequence();
+                let current_head = watcher_feed.head_sequence();
+                let notify_is_current = Arc::ptr_eq(&notify, &watcher_feed.notify_handle());
+                if current_head == last_head && same_notify && notify_is_current {
+                    notified.await;
+                }
+                watcher_feed.head_sequence()
+            };
+            last_head = current_head;
+            // A ring replacement can keep the same write index. Track the
+            // notifier identity as well, so a replacement between iterations
+            // still produces a wake instead of sleeping on the new ring.
+            last_notify = Some(notify);
             let handles = wake_handles.lock().unwrap().clone();
             for handle in &handles {
                 let _ = handle.deliver();
