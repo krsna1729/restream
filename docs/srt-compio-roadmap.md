@@ -2296,26 +2296,29 @@ single-owner convergence contract. WI3.7 remains provisional and Q-025 deferred.
 
 ### WI5 — Compio TCP
 
-Status: initial Compio TCP cutover present; WI5B convergence and hosted final-code
-acceptance remain open.
+Status: initial Compio TCP cutover present; WI5B local source cutover is in
+verification, with hosted final-code acceptance still open.
 
-- RTMP ingress currently has a Compio acceptor/runtime and a bounded 64 KiB
-  Tokio duplex to fixed Tokio RTMP session workers. This is transitional, not
-  the target owner boundary.
-- RTMP/RTMPS egress currently uses one Compio runtime per fabric shard,
-  `PollFd` readiness, and synchronous nonblocking socket operations. The
-  protocol engine, generations, pending-byte bounds, retry, drain, and
-  TCP_INFO contracts remain in the fabric.
-- Egress runtime construction uses Compio defaults; WI5B must establish an
-  explicit production io_uring requirement with a typed startup failure, not
-  infer it from a Compio runtime existing.
+- RTMP ingress now has one fixed Compio/io_uring owner thread/runtime for the
+  listener, accepted sockets, RTMP handshake/session parsing, command state,
+  media extraction, protocol responses, TCP statistics, and teardown. Tokio
+  retains auth and pipeline/ring work through bounded typed commands and
+  decoded media. There is no production Tokio duplex byte bridge or duplicated
+  TCP descriptor.
+- RTMP/RTMPS egress uses one Compio/io_uring runtime per fabric shard.
+  Established streams share one Compio TCP object between bounded one-shot RX
+  and TX workers; active completions are generation-tagged and coalesced before
+  protocol visits. `PollFd` is retained only for pending connects and scanned
+  with a rotating per-call budget.
+- Both RTMP production paths fail explicitly if the required io_uring runtime
+  cannot start; there is no Tokio, epoll, or legacy native fallback.
 - Preserve fixed shard ownership, pending-byte limits, generation safety,
   reconnect policy, shutdown draining, and TCP_INFO/send-queue quality.
 
 ### WI6 — RTMPS/kTLS
 
-Status: initial kTLS handoff present; same-owner convergence and hosted
-final-code acceptance remain open.
+Status: kTLS handoff remains fail-closed on the same egress Compio owner;
+real-media and hosted final-code acceptance remain open.
 
 - Rustls performs the handshake over the same Compio-owned TCP path; Linux
   kTLS is required for application records.
@@ -2338,7 +2341,8 @@ final-code acceptance remain open.
 
 ### WI5B — Single-owner real-time transport convergence
 
-Status: ACTIVE; completion criteria are not yet met.
+Status: source convergence is locally implemented but not yet qualified;
+WI5B completion criteria are not met.
 
 Each production SRT/RTMP/RTMPS connection must have one fixed Compio/io_uring
 owner for its socket, protocol state, timers, receive and pending-transmit
@@ -2347,28 +2351,52 @@ teardown. Tokio remains the control/application plane. Bounded typed commands,
 lifecycle events, snapshots, and decoded/shared media may cross domains; live
 transport byte streams, Tokio network wrappers, and borrowed FDs may not.
 
-WI5B preserves SRT Owner ownership and the current egress fabric. RTMP ingress
-moves handshake, parsing, command state, media extraction, protocol responses,
-and teardown onto the same Compio shard as its TCP socket; auth and engine/ring
-work remain in Tokio. RTMP egress moves toward persistent Compio receive and
-queued-write completions without population-wide readiness discovery. RTMPS
-keeps Rustls handoff and explicit fail-closed kTLS on that same connection
-owner.
+RTMP ingress runs protocol handling on the same Compio owner as its socket;
+auth and pipeline/ring work remain in Tokio. The current 64 MiB RTMP media
+handoff budget covers permit-backed queued/processing command payloads, not
+parser working sets. A blocked handoff can coexist with one completed
+24-bit-size message and the next incomplete parser assembly per connection,
+plus a 4 KiB socket read, a separate 4 KiB parser staging buffer, and small
+event metadata; this residual scales with
+the configured connection limit. At the default 512-connection cap, the two
+maximum payloads alone approach 16 GiB; at the configured maximum of 16,384,
+they approach 512 GiB. These payload-only theoretical ceilings are not RSS
+estimates; parser/session and other transport allocations add more.
+
+RTMP egress uses bounded one-shot Compio RX/TX completions on the existing
+fabric; established sockets do not use population-wide readiness scans.
+Pending connects alone retain `PollFd`, visited with a rotating per-call
+budget. RTMPS keeps Rustls handoff and explicit fail-closed kTLS on that same
+connection owner.
+
+Nominal active-leaf transport-adapter capacity is 16 KiB plain RTMP and
+16 KiB + 24 B for RTMPS. At the default upper topology of 8 shards × 4,096
+leaves (32,768), this is about 512 MiB / 512.75 MiB. Configured shard/leaf
+overrides scale total capacity. This excludes protocol/TLS/runtime/task/event
+structures, allocator overhead, and kernel socket buffers; the existing
+per-leaf application pending-byte bound is separate.
 
 Acceptance gates:
 
 - production RTMP requires Compio/io_uring or fails explicitly; no hidden
   Tokio, epoll, or legacy transport fallback;
-- no per-connection thread/runtime, unbounded bridge, population-wide ready
-  scan, unbounded completion drain, or service-to-quiescence loop;
+- no per-connection thread/runtime, unbounded bridge, established-leaf
+  population scan, unbounded completion drain, or service-to-quiescence loop;
 - commands, events, RX/TX buffers, handshake/connect/retry population, media
-  retention, per-visit work, and shutdown drain remain bounded;
+  retention, per-visit work, and shutdown drain remain bounded and documented;
 - active publish/output shutdown closes sockets, cancels and reaps operations,
   drops connection state on its owner thread, and joins shards;
 - publish/play, auth, generation safety, backpressure, TCP_INFO, kTLS, media
   timestamps, and existing lifecycle behavior remain unchanged;
 - focused architecture/concurrency tests, real RTMP/RTMPS/SRT media and fault
   gates, fresh container execution, PR smoke, and redevelop matrix are green.
+
+One earlier hosted run on `b64bd760` was not green: allocation hygiene produced
+cross-thread false positives, and `fault.resilience` faulted SRT ingress with
+`RxStreamFailed` after managed RX reported that its buffer ring had no available
+buffer. The local changes isolate allocation counting to the executing thread
+and keep SRT ingress on raw readiness until managed `ENOBUFS` is retryable.
+Those gates must be rerun on the final source revision.
 
 Do not begin WI7 before WI5B's final-code acceptance is green. HLS PUT and
 FFmpeg process-pipe migration remain separate, evidence-driven experiments,

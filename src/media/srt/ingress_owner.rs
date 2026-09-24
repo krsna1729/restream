@@ -34,8 +34,8 @@ use futures_util::future::{Either, pending, select};
 use srt_proto::{ConnectionEvent, Timestamp};
 use srt_transport::advanced::admission::{AdmissionEvent, BondedInputPolicy, LogicalPeerId};
 use srt_transport::compio::{
-    MANAGED_RX_RING_DEPTH, Owner, OwnerRxMode, OwnerServiceBudget, OwnerServiceReport,
-    ProductionRuntimeConfig, RxModePolicy, observe_production_runtime,
+    Owner, OwnerRxMode, OwnerServiceBudget, OwnerServiceReport, ProductionRuntimeConfig,
+    RxModePolicy, observe_production_runtime,
 };
 use srt_transport::{ListenerConfig, ListenerTopology, PromotionPolicy};
 use tokio::sync::mpsc;
@@ -179,13 +179,8 @@ fn build(
     telemetry: mpsc::Sender<QualitySample>,
 ) -> Result<(OwnerLoop, SocketAddr), String> {
     // The runtime and the Owner are born on this thread and never leave it.
-    let mut runtime_config =
+    let runtime_config =
         ProductionRuntimeConfig::for_owner(INGRESS_TX_CAPACITY, SRT_OWNER_WIRE_CEILING);
-    // srt-rs retains up to MANAGED_RX_RING_DEPTH leases in its Owner queue.
-    // Keep a full ring of additional Compio buffers so overflow drops the next
-    // datagram and returns its lease instead of exhausting the provided ring.
-    runtime_config.rx_ring_entries = u16::try_from(MANAGED_RX_RING_DEPTH * 2)
-        .map_err(|_| "SRT ingress RX buffer ring is too large".to_string())?;
     let runtime = production_runtime(runtime_config)?;
     let profile = runtime.block_on(observe_production_runtime(
         &runtime,
@@ -205,9 +200,11 @@ fn build(
         .build()
         .map_err(|error| format!("failed to build srt-rs listener config: {error}"))?;
     let mut owner = Owner::new_with_ceiling(INGRESS_TX_CAPACITY, SRT_OWNER_WIRE_CEILING);
-    owner
-        .set_rx_substrate(substrate)
-        .map_err(|error| format!("failed to declare RX substrate: {error}"))?;
+    // In this pinned srt-rs/Compio combination, transient managed-receive
+    // ENOBUFS ends the RX stream and faults the listener. Until that error is
+    // retryable, leave the substrate uninstalled so ManagedPreferred selects
+    // the documented raw-readiness fallback for ingress. Keep the observation
+    // for diagnostics; egress retains its independently qualified managed RX.
     owner.set_rx_mode_policy(rx_policy);
     let resolver = ingress_resolver(config.policy_store, config.receiver_group);
     runtime

@@ -1,36 +1,34 @@
-//! Shared RTMP client and server handshake state machines.
+//! RTMP client and server handshake state machines.
 
 use super::ingest::RtmpClientSocket;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 #[cfg(test)]
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(test)]
 use tokio_util::sync::CancellationToken;
 
 pub(super) async fn perform_server_handshake(
     socket: &mut RtmpClientSocket,
-    buffer: &mut [u8],
-) -> Result<Vec<u8>, &'static str> {
+    mut buffer: Vec<u8>,
+) -> Result<(Vec<u8>, Vec<u8>), &'static str> {
     let mut handshake = Handshake::new(PeerType::Server);
-
     loop {
-        let n = socket
+        let (count, returned) = socket
             .read(buffer)
             .await
             .map_err(|_| "Socket read error during handshake")?;
-        if n == 0 {
+        buffer = returned;
+        if count == 0 {
             return Err("Socket closed during handshake");
         }
-
         let result = handshake
-            .process_bytes(&buffer[..n])
+            .process_bytes(&buffer[..count])
             .map_err(|_| "Handshake parsing error")?;
         match result {
             HandshakeProcessResult::InProgress { response_bytes } => {
                 if !response_bytes.is_empty() {
                     socket
-                        .write_all(&response_bytes)
+                        .write_all(response_bytes)
                         .await
                         .map_err(|_| "Socket write error during handshake")?;
                 }
@@ -41,11 +39,11 @@ pub(super) async fn perform_server_handshake(
             } => {
                 if !response_bytes.is_empty() {
                     socket
-                        .write_all(&response_bytes)
+                        .write_all(response_bytes)
                         .await
                         .map_err(|_| "Socket write error during handshake")?;
                 }
-                return Ok(remaining_bytes);
+                return Ok((remaining_bytes, buffer));
             }
         }
     }

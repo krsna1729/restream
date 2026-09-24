@@ -1,15 +1,21 @@
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
 use restream_dataplane::{FeedCursor, MediaArena, MediaRing, ReadyQueue, TxPool};
 
 struct CountingAllocator;
 
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+}
 
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        let _ = ALLOCATIONS.try_with(|allocations| {
+            if let Some(count) = allocations.get() {
+                allocations.set(Some(count.saturating_add(1)));
+            }
+        });
         unsafe { System.alloc(layout) }
     }
 
@@ -21,17 +27,22 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
+fn count_allocations(f: impl FnOnce()) -> usize {
+    ALLOCATIONS.with(|allocations| allocations.set(Some(0)));
+    f();
+    ALLOCATIONS.with(|allocations| allocations.replace(None).unwrap_or_default())
+}
+
 #[test]
 fn dataplane_hot_paths_do_not_allocate() {
     let mut queue = ReadyQueue::new(64, 64).unwrap();
-    ALLOCATIONS.store(0, Ordering::Relaxed);
-
-    for _ in 0..10_000 {
-        assert!(queue.enqueue(0));
-        assert_eq!(queue.pop(), Some(0));
-    }
-
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+    let queue_allocations = count_allocations(|| {
+        for _ in 0..10_000 {
+            assert!(queue.enqueue(0));
+            assert_eq!(queue.pop(), Some(0));
+        }
+    });
+    assert_eq!(queue_allocations, 0);
 
     let mut ring = MediaRing::new(
         MediaArena::new(128, 256).unwrap(),
@@ -41,28 +52,28 @@ fn dataplane_hot_paths_do_not_allocate() {
     )
     .unwrap();
     let payload = [7_u8; 128];
-    ALLOCATIONS.store(0, Ordering::Relaxed);
-
-    for sequence in 0..10_000_u64 {
-        let reference = ring.arena_mut().acquire_copy(&payload).unwrap();
-        ring.push(reference, std::time::Instant::now(), sequence % 30 == 0)
-            .unwrap();
-        let cursor = FeedCursor::new(ring.epoch(), ring.next_sequence().saturating_sub(1));
-        let current = ring.read_cursor(cursor).unwrap();
-        assert!(ring.retain(current));
-        assert!(ring.release(current));
-    }
-
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+    let ring_allocations = count_allocations(|| {
+        for sequence in 0..10_000_u64 {
+            let reference = ring.arena_mut().acquire_copy(&payload).unwrap();
+            ring.push(reference, std::time::Instant::now(), sequence % 30 == 0)
+                .unwrap();
+            let cursor = FeedCursor::new(ring.epoch(), ring.next_sequence().saturating_sub(1));
+            let current = ring.read_cursor(cursor).unwrap();
+            assert!(ring.retain(current));
+            assert!(ring.release(current));
+        }
+    });
+    assert_eq!(ring_allocations, 0);
 
     let mut tx = TxPool::new(8, 256).unwrap();
-    ALLOCATIONS.store(0, Ordering::Relaxed);
-    for _ in 0..10_000 {
-        let lease = tx.acquire().unwrap();
-        tx.slot_mut(lease).unwrap()[0] = 1;
-        assert!(tx.submit(lease));
-        assert!(tx.complete(lease));
-        assert!(tx.release(lease));
-    }
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+    let tx_allocations = count_allocations(|| {
+        for _ in 0..10_000 {
+            let lease = tx.acquire().unwrap();
+            tx.slot_mut(lease).unwrap()[0] = 1;
+            assert!(tx.submit(lease));
+            assert!(tx.complete(lease));
+            assert!(tx.release(lease));
+        }
+    });
+    assert_eq!(tx_allocations, 0);
 }

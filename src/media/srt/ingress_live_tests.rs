@@ -49,6 +49,10 @@ async fn direct_publisher_reaches_the_pipeline_ring() {
         .snapshot();
     assert!(stats.rx_packets > 0 && stats.tx_packets > 0, "{stats:?}");
     assert!(!stats.faulted);
+    assert!(
+        !stats.managed_rx,
+        "SRT ingress stays on raw readiness until managed ENOBUFS is retryable"
+    );
     server.stop().await;
 }
 

@@ -55,7 +55,7 @@ use std::{sync::Arc, time::Duration};
 #[cfg(test)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(test)]
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 #[cfg(test)]
 use tokio_util::sync::CancellationToken;
 
@@ -80,7 +80,5 @@ use flv::{
 };
 #[cfg(test)]
 use handshake::perform_client_handshake;
-#[cfg(test)]
-use ingest::{RtmpClientSocket, handle_rtmp_client};
 #[cfg(test)]
 use timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};

@@ -1,9 +1,8 @@
 //! Native Linux TCP statistics for RTMP publishers and egress targets.
 //!
-//! RTMP ingress retains a CLOEXEC duplicate of the Compio socket descriptor
-//! before the 64 KiB Tokio duplex handoff; egress samples the descriptor held
-//! by its connection. Both keep `TCP_INFO` and `SO_MEMINFO` tied to the live
-//! socket without spawning `ss` or matching address strings.
+//! RTMP ingress and egress sample socket-owned descriptors on their Compio
+//! owner threads. Both keep `TCP_INFO` and `SO_MEMINFO` tied to the live socket
+//! without spawning `ss` or matching address strings.
 
 use std::io;
 
@@ -453,9 +452,9 @@ fn collect_tcp_stats(socket: &tokio::net::TcpStream) -> io::Result<TcpReceiverSt
 }
 
 /// Same as [`collect_tcp_stats`] but takes a caller-owned raw fd. RTMP ingress
-/// passes an `OwnedFd` duplicate captured before its Compio-to-Tokio bridge
-/// handoff; RTMP egress samples the descriptor held by `RtmpConnection`.
-/// Callers must keep the TCP descriptor valid for this call.
+/// calls it on the Compio owner for the live socket; RTMP egress samples the
+/// descriptor held by `RtmpConnection`. Callers must keep the TCP descriptor
+/// valid for this call.
 #[cfg(target_os = "linux")]
 pub fn collect_tcp_stats_by_fd(fd: std::os::fd::RawFd) -> io::Result<TcpReceiverStats> {
     let mut info = LinuxTcpInfo::default();
