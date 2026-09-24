@@ -16,3 +16,13 @@ include!("tests/egress_startup.rs");
 include!("tests/flv.rs");
 include!("tests/endpoint.rs");
 include!("tests/metadata_timestamps.rs");
+
+#[test]
+fn rtmp_ingress_keeps_only_the_existing_transitional_byte_bridge() {
+    const LISTENER: &str = include_str!("listener.rs");
+    assert_eq!(
+        LISTENER.matches("tokio::io::duplex(").count(),
+        1,
+        "WI5B must remove this sole transitional RTMP ingress byte bridge"
+    );
+}

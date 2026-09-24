@@ -2289,30 +2289,33 @@ packets stress per-packet work.
 
 ## 24. RTMP / RTMPS Transport Convergence
 
-WI5 and WI6 migrate transport ownership while preserving the shared fabric
-scheduler, lifecycle, retry, backpressure, generation safety, TCP quality
-reporting, and shutdown behavior. This is not a performance-tuning phase;
-WI3.7 remains provisional and Q-025 remains deferred.
+WI5/WI6 established the initial Compio transport cutovers while preserving the
+shared fabric scheduler, lifecycle, retry, backpressure, generation safety, TCP
+quality reporting, and shutdown behavior. This does not complete the WI5B
+single-owner convergence contract. WI3.7 remains provisional and Q-025 deferred.
 
 ### WI5 — Compio TCP
 
-Status: implementation complete; local live qualification complete.
-Hosted PR/redevelop CI is pending.
+Status: initial Compio TCP cutover present; WI5B convergence and hosted final-code
+acceptance remain open.
 
-- RTMP ingress uses a Compio acceptor thread/runtime for the listener and
-  accepted streams, with a bounded 64 KiB duplex bridge to fixed Tokio session
-  workers.
-- RTMP egress uses one Compio runtime per fabric shard, owning its TCP streams
-  and `PollFd` readiness; protocol I/O remains bounded and non-blocking.
-- There is no production io_uring or epoll fallback; standard-TCP and epoll
-  adapters exist only under `cfg(test)`.
+- RTMP ingress currently has a Compio acceptor/runtime and a bounded 64 KiB
+  Tokio duplex to fixed Tokio RTMP session workers. This is transitional, not
+  the target owner boundary.
+- RTMP/RTMPS egress currently uses one Compio runtime per fabric shard,
+  `PollFd` readiness, and synchronous nonblocking socket operations. The
+  protocol engine, generations, pending-byte bounds, retry, drain, and
+  TCP_INFO contracts remain in the fabric.
+- Egress runtime construction uses Compio defaults; WI5B must establish an
+  explicit production io_uring requirement with a typed startup failure, not
+  infer it from a Compio runtime existing.
 - Preserve fixed shard ownership, pending-byte limits, generation safety,
   reconnect policy, shutdown draining, and TCP_INFO/send-queue quality.
 
 ### WI6 — RTMPS/kTLS
 
-Status: implementation complete; local live qualification complete.
-Hosted PR/redevelop CI is pending.
+Status: initial kTLS handoff present; same-owner convergence and hosted
+final-code acceptance remain open.
 
 - Rustls performs the handshake over the same Compio-owned TCP path; Linux
   kTLS is required for application records.
@@ -2332,6 +2335,44 @@ Hosted PR/redevelop CI is pending.
 - Qualification covers actual RTMPS media, reconnect after receiver loss,
   stalled receivers, transport failure, and clean shutdown. It does not add a
   new CPU/byte benchmark or derive production constants.
+
+### WI5B — Single-owner real-time transport convergence
+
+Status: ACTIVE; completion criteria are not yet met.
+
+Each production SRT/RTMP/RTMPS connection must have one fixed Compio/io_uring
+owner for its socket, protocol state, timers, receive and pending-transmit
+buffers, I/O submissions/completions, bounded scheduling, telemetry, and
+teardown. Tokio remains the control/application plane. Bounded typed commands,
+lifecycle events, snapshots, and decoded/shared media may cross domains; live
+transport byte streams, Tokio network wrappers, and borrowed FDs may not.
+
+WI5B preserves SRT Owner ownership and the current egress fabric. RTMP ingress
+moves handshake, parsing, command state, media extraction, protocol responses,
+and teardown onto the same Compio shard as its TCP socket; auth and engine/ring
+work remain in Tokio. RTMP egress moves toward persistent Compio receive and
+queued-write completions without population-wide readiness discovery. RTMPS
+keeps Rustls handoff and explicit fail-closed kTLS on that same connection
+owner.
+
+Acceptance gates:
+
+- production RTMP requires Compio/io_uring or fails explicitly; no hidden
+  Tokio, epoll, or legacy transport fallback;
+- no per-connection thread/runtime, unbounded bridge, population-wide ready
+  scan, unbounded completion drain, or service-to-quiescence loop;
+- commands, events, RX/TX buffers, handshake/connect/retry population, media
+  retention, per-visit work, and shutdown drain remain bounded;
+- active publish/output shutdown closes sockets, cancels and reaps operations,
+  drops connection state on its owner thread, and joins shards;
+- publish/play, auth, generation safety, backpressure, TCP_INFO, kTLS, media
+  timestamps, and existing lifecycle behavior remain unchanged;
+- focused architecture/concurrency tests, real RTMP/RTMPS/SRT media and fault
+  gates, fresh container execution, PR smoke, and redevelop matrix are green.
+
+Do not begin WI7 before WI5B's final-code acceptance is green. HLS PUT and
+FFmpeg process-pipe migration remain separate, evidence-driven experiments,
+not WI5B prerequisites. Do not re-derive WI3.7 shard coefficients here.
 
 ## 25. WI4A — SRT Productionization
 
@@ -2572,10 +2613,10 @@ Keep these in:
 Keep the SRT shard-law decision open. WI3.7 is provisional current-host
 evidence, not a production coefficient.
 
-Resume measurement only after WI4A–WI6 transport convergence, WI7/WI9 cleanup,
-and WI8 runtime/host calibration. Run the shard-law matrix against that final
-topology, then use WI10 cross-host qualification before finalizing a default.
-Do not rerun WI3.7 or change production policy as part of the current package.
+Resume measurement only after WI5B convergence, WI7/WI9 cleanup, and WI8
+runtime/host calibration. Run the shard-law matrix against that final topology,
+then use WI10 cross-host qualification before finalizing a default. Do not
+rerun WI3.7 or change production policy as part of the current package.
 
 ### Q-026
 
@@ -2634,12 +2675,16 @@ WI4A
     SRT Compio Owner productionization complete; no policy/default change
 
 WI5
-    RTMP ingress/egress Compio TCP implementation and local live qualification
-    complete; hosted PR/redevelop live-CI acceptance remains pending
+    initial RTMP ingress/egress Compio TCP cutover and local live qualification
+    complete; this remains transitional and does not meet WI5B.
 
 WI6
-    RTMPS on the same Compio path with strict kTLS handoff; local live
-    qualification complete; hosted PR/redevelop live-CI acceptance remains pending
+    initial RTMPS/kTLS handoff and local live qualification complete; same-owner
+    convergence and hosted final-code acceptance remain open.
+
+WI5B
+    ACTIVE; single-owner connection state, explicit production io_uring,
+    completion-driven egress, boundedness/fairness, and hosted acceptance open
 
 local live evidence (2026-09-24; single Linux host, `--no-netns`):
     Restream SHA: d30454afaa4cf27edb4f46fa375488e2c1f3c89b
@@ -2648,27 +2693,32 @@ local live evidence (2026-09-24; single Linux host, `--no-netns`):
     A1/A2 BF0/BF2 modes passed.
     evidence: .local/artifacts/final-srt-crypto/ and
               .local/artifacts/final-mixed/
-    PR: not created; hosted CI pending; srt-rs unchanged.
+    Historical at this local-evidence run: PR not yet created; srt-rs unchanged.
     First H.264 A2/BF0 signal run reported a 256.5ms audio gap; exact rerun
     passed at 0.37ms. No cause identified; both artifacts retained.
     No cross-host or performance-capacity claim; Q-025/WI8/WI10 remain deferred.
 
 Transport live CI
-    short PR SRT/RTMP smoke; broader redevelop media/crypto/fault matrix;
-    nightly full certification and churn/measurement lanes
+    Required: two complete hosted sets on final transport code. Each includes
+    PR live smoke, redevelop media/fault matrix, real RTMPS media and container
+    qualification without path skips.
 
 WI7
-    delete obsolete dataplane machinery after transport convergence
+    delete obsolete dataplane machinery only after WI5B final-code acceptance
 
 WI9
     compress abstractions after the active dataplane is known; retain a stable
     post-cleanup baseline
 
+Optional transport experiments
+    evaluate Compio HLS PUT or FFmpeg pipes only with measured evidence; neither
+    is a prerequisite for WI5B or WI9
+
 WI8
-    runtime Performance Oracle and host calibration
+    runtime Performance Oracle and host calibration after topology stabilizes
 
 Q-025
-    re-derive and validate a dynamic shard model at the final topology
+    re-derive and validate the dynamic shard model against the final topology
 
 Continuous regression / experiment loop
     observe, diagnose, benchmark candidates, live-qualify, then adopt or drop
@@ -2683,20 +2733,31 @@ WI10
 WI3.7's current-host evidence is frozen provisionally. Do not rerun its
 performance matrix, derive a new shard coefficient, or change production
 defaults in this transport-convergence work.
-Sequence: `WI4A -> WI5 -> WI6 -> live-CI convergence`.
 
-WI4A SRT productionization and local WI5/WI6 live qualification are complete.
-Next run the PR/redevelop live-CI tiers; Q-025 stays open until the final
-topology and WI8 Performance Oracle are ready.
+Sequence: `WI4A -> WI5/WI6 initial cutovers -> WI5B -> WI7 -> WI9 ->
+optional evidence-driven I/O experiments -> WI8/Q-025 -> WI10`.
 
-After those acceptance gates, the next roadmap work is WI7 dataplane cleanup,
-then WI9 abstraction compression and a stable baseline, followed by WI8, Q-025
-dynamic-model validation, the continuous regression/experiment loop, and final
-WI10 cross-host qualification.
+First commit the canonical ownership architecture, updated existing Compio/WI5B
+roadmap, and an architecture regression guard as a separate tranche. Then
+converge RTMP ingress/egress and close boundedness/lifecycle gaps. WI5B requires
+two green hosted sets on final transport code; the first hosted attempt on
+`b64bd760f6368e1c327f28bbeaec072578932545` was not green:
+
+- PR run `36042044386`: dataplane allocation hygiene measured four unrelated
+  cross-thread allocations against an expected zero; live tests were skipped.
+- Redevelop run `36042038495`: allocation hygiene failed, and the SRT ingress
+  Owner faulted with `RxStreamFailed` (`side=listener`,
+  `buffer ring has no available buffer`) during the sink-flap fault case,
+  shutting down the app and losing media/API readiness.
+
+These are in-scope failures, not accepted infrastructure noise. Local
+remediation is in progress and remains unproven until focused gates and both
+hosted sets pass. WI7 cannot start earlier.
 
 ## 37. Definition of Success
 
-The SRT/Compio program is successful when all of the following are true:
+The SRT/Compio and RTMP/RTMPS transport-convergence program is successful when
+all of the following are true:
 
 Architecture:
 
@@ -2708,6 +2769,12 @@ Architecture:
 - bounded memory
 - bounded queues
 - no thread/task/socket per output
+- SRT, RTMP, and RTMPS connections keep socket, protocol, timers, buffers,
+  completions, and teardown on one fixed Compio owner.
+- Tokio receives only bounded typed control/lifecycle data and shared/decoded
+  media; no production TCP byte stream or transport FD crosses into Tokio.
+- RTMP egress has bounded completion-driven progress without population-wide
+  readiness discovery.
 
 Correctness:
 
@@ -2719,6 +2786,9 @@ Correctness:
 - slow peers are isolated
 - retries are bounded
 - stale events are harmless
+- RTMP publish/play, auth, metrics, TCP quality, and cancellation are preserved
+- RTMPS media uses same-owner Rustls/kTLS and fails closed on unsupported paths
+- real-media and fault recovery gates pass for RTMP, RTMPS, and SRT
 
 Operations:
 
@@ -2727,6 +2797,7 @@ Operations:
 - RawReadiness is observable
 - ManagedMultishot is observable
 - no hidden runtime fallback
+- production RTMP requires io_uring explicitly; startup fails without it
 
 Performance:
 
@@ -2743,3 +2814,4 @@ Transport strategy:
 - RTMP/RTMPS stays on kernel TCP
 - kTLS remains available for RTMPS
 - no universal packet-I/O abstraction is created merely for symmetry
+- HLS PUT and FFmpeg pipe migrations are adopted only with measured evidence

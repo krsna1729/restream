@@ -82,7 +82,7 @@ This design does not:
 ## Architectural decision
 
 Restream will use a protocol-neutral egress fabric with protocol-specialized
-preparation feeds, engines, and readiness backends.
+preparation feeds, engines, and protocol-native transport backends.
 
 ```mermaid
 flowchart TD
@@ -94,7 +94,7 @@ flowchart TD
     ShardGroup --> Shard["Fixed egress shard"]
     Shard --> Leaf["Protocol-neutral leaf shell"]
     Leaf --> Engine["Protocol engine"]
-    Engine --> Transport["Non-blocking transport and readiness backend"]
+    Engine --> Transport["Protocol-native transport backend"]
 ```
 
 The stable boundary is policy versus mechanism:
@@ -104,7 +104,7 @@ The stable boundary is policy versus mechanism:
 | Output assignment and supervision | Handshake bytes and state |
 | Leaf lifecycle | Wire serialization |
 | Work budgets and fairness | Protocol acknowledgements and control messages |
-| Feed cursors and overrun policy | TCP/TLS/SRT readiness mechanics |
+| Feed cursors and overrun policy | Protocol-specific transport mechanics and progress |
 | Backpressure and stall policy | Partial-write or message-send semantics |
 | Retry delay and admission control | Protocol error classification |
 | Shutdown and removal | Socket options and transport setup |
@@ -121,7 +121,7 @@ Properties the fabric must keep preserving:
 - expensive transforms are shared by typed stage identity;
 - compatible SRT outputs share MPEG-TS preparation through `TsChunkRing`;
 - RTMP/RTMPS and SRT leaves share fabric lifecycle, backpressure, and retry
-  policy while retaining protocol-specialized engines and readiness backends;
+  policy while retaining protocol-specialized engines and transport backends;
 - slow ring readers can recover after bounded overflow;
 - Tokio worker count and egress shard count are independent,
   measurement-driven knobs (separate sweeps). SRT keeps a CPU-derived shard
@@ -195,12 +195,14 @@ flowchart LR
 There is no protocol-specific bypass around the manager, shard scheduler,
 common lifecycle, or backpressure policy.
 
-A shard may use a protocol-native network path. RTMP/RTMPS shards own one
-Compio runtime and their Compio TCP streams/readiness registrations. SRT shards
-run one Compio runtime on the shard thread with at most one
+A shard may use a protocol-native transport backend, but remains under the same
+application topology. Current RTMP/RTMPS shards own one Compio runtime, their
+TCP streams and protocol state, and `PollFd` readiness. WI5B replaces readiness
+polling and population-wide discovery with bounded owner-local I/O completions
+while preserving the fabric and leaf lifecycle. SRT shards run one Compio
+runtime on the shard thread with at most one
 `srt_transport::compio::Owner` per address family (IPv4, IPv6), each owning
-one shared caller UDP socket. All variants stay under the same application
-topology, not a separate egress architecture.
+one shared caller UDP socket.
 
 ## Shared preparation graph
 
@@ -349,9 +351,10 @@ pub struct EgressShard<B: EgressBackend> {
 
 A shard owns:
 
-- its protocol-specific network backend (RTMP/RTMPS: one Compio runtime with
-  Compio-owned TCP streams and `PollFd` readiness; SRT: one Compio runtime and
-  at most two family `Owner`s, built on the shard thread);
+- its protocol-specific network backend (current RTMP/RTMPS: one Compio runtime
+  with Compio-owned TCP streams and `PollFd` readiness; WI5B target: bounded
+  completion-driven I/O on that shard; SRT: one Compio runtime and at most two
+  family `Owner`s, built on the shard thread);
 - all leaf protocol and transport state assigned to it;
 - its ready queue and scheduling flags;
 - connect, handshake, progress, and retry timers;
@@ -372,7 +375,9 @@ per-thread Compio runtime, an `Rc`-based owner — without
 `EgressShardGroup::spawn` remain as conveniences for already-built `Send`
 backends (tests); production groups use the factory forms.
 
-A shard loop performs bounded work in this order:
+The current RTMP/RTMPS readiness implementation performs bounded work in this
+order; WI5B preserves the budgets and fabric lifecycle while removing
+population-wide readiness discovery:
 
 1. process a limited batch of high-priority control commands;
 2. invoke backend readiness processing (`on_ready` / `poll_ready`) and
@@ -383,8 +388,9 @@ A shard loop performs bounded work in this order:
 6. publish aggregated metrics when due;
 7. when idle, wait for control activity, backend I/O or completion activity,
    or the next relevant deadline (the earlier of the next application timer and
-   the shard idle bound), then resume from step 1 so quiet shards still
-   rediscover write-interested leaves on the next readiness pass.
+   the shard idle bound), then resume from step 1. In the current RTMP/RTMPS
+   readiness path, quiet shards rediscover write-interested leaves on the next
+   pass; WI5B replaces that population-wide rediscovery with owner-local events.
 
 Control processing itself is budgeted so a large update burst cannot starve
 media progress.
@@ -499,8 +505,10 @@ factory code where it is not performance-sensitive.
 
 ## Readiness backends
 
-The application topology and scheduler are common; native readiness remains
-specialized.
+The current RTMP/RTMPS backend uses Compio `PollFd` readiness. WI5B moves
+connection progress to bounded Compio I/O completions without changing the
+fabric scheduler, lifecycle, or fairness contract. The details below describe
+the current backend until that cutover; SRT already uses its Compio `Owner`.
 
 ### TCP and TLS backend
 

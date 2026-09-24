@@ -74,38 +74,55 @@ The current layering sequence and stop rules live in
 
 ## Runtime ownership
 
-Tokio runtimes own Axum, reconciliation, application protocol state, native
-mux/demux work, and child-process pipe I/O. Compio transport owners own RTMP
-TCP and SRT transport sockets/readiness. Work that can block independently
-of the async scheduler is isolated:
+Tokio owns Axum, reconciliation, application/database policy, authentication,
+media orchestration, native mux/demux work, and asynchronous child-process
+supervision. Dedicated processes or guarded OS threads own blocking FFmpeg
+work. Compio owns the production SRT transport and the current RTMP/RTMPS
+transport shards; WI5B is still converging RTMP protocol ownership and
+completion-driven TCP I/O.
 
-- RTMP ingress uses one Compio acceptor thread/runtime for the listener and
-  accepted TCP sockets. The byte-stream handoff is a bounded 64 KiB Tokio
-  duplex with backpressure; Tokio workers own RTMP session state, not the
-  Compio stream. Before the accepted connection crosses the worker queue, the
-  acceptor attaches a CLOEXEC `OwnedFd` duplicate used only for socket-buffer
-  configuration and `TCP_INFO`; the session drops it on exit. Shutdown cancels
-  bridges and joins the registered acceptor and worker threads;
-- RTMP/RTMPS and SRT **egress** run on the egress fabric: a small
-  CPU-derived pool of dedicated shard OS threads, output-count-scaled for
-  RTMP/RTMPS/sink/pipeline feeds while SRT retains the CPU-derived ceiling.
-  Each RTMP/RTMPS shard owns one Compio runtime, TCP streams, and `PollFd`
-  readiness; each SRT shard owns one Compio runtime and at most one
-  `srt-rs` Compio `Owner` per address family, each with one shared caller UDP
-  socket. SRT uses no per-output task, socket, or Owner; see
-  [egress architecture](egress-architecture.md) for the live contract and
-  [archive/egress/implementation.md](archive/egress/implementation.md) for
-  migration history;
-- SRT ingress runs on one dedicated owner thread with one Compio runtime and one
-  `srt-rs` `Owner` listener (`Owner::listen_with_resolver`); Tokio addresses its
-  sessions only by `LogicalPeerId` through bounded commands and events (see
-  [media pipeline](media-pipeline.md#srt-ingress-owner));
-- the former direct RTMP io_uring/epoll production path is removed; remaining
-  generic dataplane cleanup is tracked under WI7;
-- in-process FFmpeg codec work runs on guarded OS threads;
-- recording uses a feeder task and a writer thread;
-- the default transcoder and file-ingest paths use managed FFmpeg child
-  processes with asynchronous stdin, stdout, and stderr handling.
+- RTMP ingress is transitional: one Compio acceptor/runtime owns the listener
+  and socket I/O, then pumps bytes through a bounded 64 KiB Tokio duplex to
+  fixed current-thread Tokio workers that own RTMP session state. A CLOEXEC
+  `OwnedFd` duplicate crosses that boundary for TCP_INFO and socket options.
+  WI5B removes the byte bridge and FD crossing; the final connection owner
+  holds the socket and RTMP protocol state on the same Compio shard.
+- RTMP/RTMPS egress runs on the fixed egress fabric: each shard owns one
+  Compio runtime, TCP streams, protocol state, and `PollFd` readiness. WI5B
+  retains the fabric and bounded scheduler while moving connection progress
+  to persistent I/O completions and eliminating population-wide readiness
+  discovery. Production RTMP io_uring startup requirements are not yet complete.
+- SRT egress runs on fixed Compio shard threads with at most one `srt-rs`
+  Compio `Owner` per address family and a shared caller UDP socket per Owner.
+  SRT ingress runs on one dedicated owner thread with a Compio runtime and one
+  `Owner::listen_with_resolver`; Tokio addresses sessions only by
+  `LogicalPeerId` through bounded commands and events. The SRT Owner model is
+  the reference boundary for WI5B.
+- The former direct RTMP io_uring/epoll production path is removed; remaining
+  generic dataplane cleanup is tracked under WI7.
+- In-process FFmpeg codec work runs on guarded OS threads; recording uses a
+  feeder task and writer thread. Default transcoder and file-ingest paths use
+  managed FFmpeg child processes with asynchronous pipe I/O.
+
+The WI5B target is single-owner transport execution: each SRT/RTMP/RTMPS
+connection's Compio shard owns its socket, protocol and handshake state,
+transport timers, receive and pending-transmit buffers, I/O submissions and
+completions, fairness accounting, telemetry, and teardown. Tokio may exchange
+bounded typed control/lifecycle messages, snapshots, and decoded/shared media
+buffers with those shards; live network byte streams, Tokio duplex streams,
+borrowed transport FDs, and Tokio network wrappers must not cross the boundary.
+RTMP ingress keeps auth/database and pipeline/ring work in Tokio but parses
+RTMP on the socket-owning Compio shard. RTMPS retains the same owner through
+Rustls handoff and kTLS; unsupported behavior remains fail-closed.
+
+Fixed shard ownership, explicit per-visit and completion budgets, bounded
+queues/buffers, and generation-safe lifecycle handling are required. Persistent
+receive operations and buffer rings are optional mechanisms, not protocol
+requirements. Production RTMP must require a working Compio/io_uring runtime
+or fail explicitly; no silent Tokio, epoll, or legacy-native fallback is
+permitted. HLS PUT and FFmpeg pipe I/O remain Tokio paths unless later
+capacity evidence justifies a separate experiment. Codec work never moves to
+the I/O reactors.
 
 Thread and process entry points tied to media lifecycle catch panics or child
 failures, surface status, and cancel their stage rather than terminating the
@@ -121,6 +138,11 @@ The important boundary is ownership, not a copied thread-count formula. Exact
 counts vary with active publishers, outputs, recordings, stage sharing, codec
 backend selection, and native-library internals. Runtime health and engineering
 telemetry are the appropriate source for a running process.
+
+Detailed WI5B execution order and acceptance gates live in the
+[SRT / Compio roadmap](srt-compio-roadmap.md). The per-protocol media and memory
+flows below describe current code until each tranche is cut over; they are not
+permission to add another byte-stream bridge or production runtime path.
 
 [Media pipeline § Thread and memory ownership, ingest to egress](media-pipeline.md#thread-and-memory-ownership-ingest-to-egress)
 applies this policy to RTMP and SRT specifically: which hop runs on a Tokio
