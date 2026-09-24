@@ -41,8 +41,9 @@ profile:
   fallback driver, runtime or backend.
 
 `/healthz` therefore does not prove the deployment works. The repository's
-container smoke (`scripts/check/container-smoke.sh`) proves real SRT egress
-under this profile and records what the engine's default profile does.
+container smoke (`scripts/check/container-smoke.sh`) proves real SRT egress and
+RTMP-ingest to RTMPS-egress media under this profile, then records what the
+engine's default profile does.
 
 ## What the profile is
 

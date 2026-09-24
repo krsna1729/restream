@@ -137,11 +137,15 @@ FROM runtime-tree AS harness-build
 
 RUN scripts/build/bench-harness.sh
 
+# Seed the state directory as a copyable path; WORKDIR alone did not make it
+# writable by UID 1000 in rootless container engines.
+FROM native-deps AS runtime-state
+RUN mkdir -p /restream-state && touch /restream-state/.keep
+
 # ── Stage 4: distroless runtime ──────────────────────────────────────────────
 #
-# Runtime state lives under `/.restream`. Docker creates that writable parent
-# as the runtime user; Restream creates its data/logs/media/runtime children at
-# startup.
+# Runtime state lives under `/.restream`, seeded with UID 1000 so the app can
+# create its data/logs/media/runtime children at startup.
 #
 # Example:
 #   docker run -d \
@@ -159,11 +163,10 @@ LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
 
 EXPOSE 3030 1935 10080/udp
 
+COPY --from=runtime-state --chown=1000:1000 /restream-state /.restream
+
 USER 1000:1000
 
-# `WORKDIR` creates the directory using the active USER, giving the app a
-# writable parent for its relative `.restream/...` defaults.
-WORKDIR /.restream
 WORKDIR /
 
 ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
@@ -204,8 +207,10 @@ LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
     org.opencontainers.image.licenses="MIT AND GPL-2.0-or-later AND MPL-2.0 AND Apache-2.0"
 
 EXPOSE 3030 1935 10080/udp
+
+COPY --from=runtime-state --chown=1000:1000 /restream-state /.restream
+
 USER 1000:1000
-WORKDIR /.restream
 WORKDIR /
 ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
 ENTRYPOINT ["/restream"]

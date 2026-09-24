@@ -4,11 +4,10 @@
 # lets the existing harness (`resource-sweep`, ...) drive the SHIPPED image
 # through the normal application lifecycle -- no second protocol harness.
 #
-# The container runs on the host network (harness peers live on loopback), as
-# the image's own non-root user, with no mounts. Host-path settings the harness
-# passes for its own process (`RESTREAM_DB_PATH`, `RESTREAM_LOG_DIR`, ...) are
-# dropped so the image uses its own writable state; the container's stdout and
-# stderr become the harness's restream log.
+# The container runs on the host network (harness peers live on loopback) as
+# the image's non-root user. Host-path database and log settings are dropped,
+# leaving application state image-owned; caller-supplied extra args can mount
+# test artifacts. Container stdout/stderr become the harness's restream log.
 #
 # Environment:
 #   CONTAINER_ENGINE     docker (default) or a Docker-compatible engine

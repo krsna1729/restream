@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Build and prove the supported container runtime without a mount. This is the
-# canonical container-release smoke used locally and by release automation.
+# Build and prove the supported container runtime under the shipped profile.
+# The health probe has no mounts; the RTMPS media probe mounts only its trust
+# certificate at the same absolute path used by the host-side live harness.
 #
 # It proves the deployment contract, not just process startup:
 #   1. the image starts as the expected non-root user with no mounts and
 #      answers /healthz under the SHIPPED seccomp profile;
-#   2. the shipped image performs REAL SRT egress under that profile -- the
-#      ordinary application lifecycle (live input -> pipeline -> output ->
-#      SRT fabric -> Compio Owner -> external SRT sink) via the existing live
-#      harness, with observed byte progress;
-#   3. a negative control under the engine's DEFAULT seccomp profile records
+#   2. the shipped image performs real SRT egress under that profile via the
+#      ordinary application lifecycle and existing live harness;
+#   3. the shipped image performs RTMP ingest and RTMPS media egress under the
+#      shipped profile, including the production kTLS handoff;
+#   4. a negative control under the engine's DEFAULT seccomp profile records
 #      whether it blocks the io_uring syscalls Restream needs. That outcome is
 #      reported, and it never fails the run when it is the expected io_uring
 #      denial (or when a future default profile allows io_uring and works).
@@ -33,10 +34,11 @@ Usage: scripts/check/container-smoke.sh [--image NAME] [--archive PATH]
 
 Builds Docker's default `runtime` target, or loads an existing image archive,
 proves it starts as the expected non-root user with no mounts, verifies the
-HTTP health endpoint, and proves real SRT egress under the shipped seccomp
-profile (default: distribution/docker/restream-seccomp.json; a release passes
-the profile shipped next to the archive). When --archive is supplied, writes a
-reproducible gzip-compressed Docker image archive for a GitHub Release asset.
+HTTP health endpoint, and exercises real SRT plus RTMP-ingest/RTMPS-egress
+media under the shipped seccomp profile (default:
+distribution/docker/restream-seccomp.json; a release passes the profile shipped
+next to the archive). When --archive is supplied, writes a reproducible
+gzip-compressed Docker image archive for a GitHub Release asset.
 
 Options:
   --use-existing-image   test IMAGE as-is (no build, no load)
@@ -47,8 +49,8 @@ Environment:
   CONTAINER_ENGINE                  docker (default) or a Docker-compatible engine
   CONTAINER_EXTRA_ARGS              extra engine run arguments (engine workarounds)
   RESTREAM_HARNESS_BIN              live harness (default target/bench/test_harness)
-  RESTREAM_CONTAINER_SMOKE_REPORT   write a JSON report of the three outcomes here
-  RESTREAM_CONTAINER_SMOKE_SKIP_SRT=1  skip the SRT capability proof (loudly; never in CI)
+  RESTREAM_CONTAINER_SMOKE_REPORT   write a JSON report of all outcomes here
+  RESTREAM_CONTAINER_SMOKE_SKIP_SRT=1  skip all live transport proofs (loudly; never in CI)
 EOF
 }
 
@@ -108,26 +110,28 @@ workdirs=()
 # Outcomes for the durable report; written by the EXIT trap so it exists whether
 # the smoke passes or fails (and even when the image cannot be built).
 default_health="not-run"; default_srt="not-run"; default_note=""
-shipped_health="not-run"; shipped_srt="not-run"; unconfined_srt="not-run"
-stage="start"; smoke_passed=0; probe_logs=""; default_probe_logs=""; shipped_probe_logs=""; srt_log=""
+shipped_health="not-run"; shipped_srt="not-run"; shipped_rtmps="not-run"; unconfined_srt="not-run"
+stage="start"; smoke_passed=0; probe_logs=""; default_probe_logs=""; shipped_probe_logs=""; srt_log=""; rtmps_log=""; rtmps_harness_log=""
 write_report() {
     [[ -n "${RESTREAM_CONTAINER_SMOKE_REPORT:-}" ]] || return 0
     local dir
     dir="$(dirname "$RESTREAM_CONTAINER_SMOKE_REPORT")"
     mkdir -p "$dir"
-    # Logs that back the report: the default-profile startup, and the shipped
-    # profile's Restream log (io_uring / RX substrate / mode lines live here).
+    # Logs that back the report: default-profile startup plus the shipped
+    # profile's RTMP/SRT transport and live-media probes.
     [[ -z "$default_probe_logs" ]] || printf '%s\n' "$default_probe_logs" | sed 's/\x1b\[[0-9;]*m//g' >"$dir/default-profile-startup.log"
     [[ -z "$shipped_probe_logs" ]] || printf '%s\n' "$shipped_probe_logs" | sed 's/\x1b\[[0-9;]*m//g' >"$dir/shipped-profile-startup.log"
     [[ -z "$srt_log" ]] || printf '%s\n' "$srt_log" | sed 's/\x1b\[[0-9;]*m//g' >"$dir/last-srt-probe-restream.log"
-    printf '{"result":"%s","failed_stage":"%s","image":"%s","engine":"%s","engine_version":"%s","kernel":"%s","default_seccomp":{"health":"%s","srt":"%s","note":"%s"},"shipped_profile":{"path":"%s","health":"%s","srt":"%s"},"unconfined_control":"%s"}\n' \
+    [[ -z "$rtmps_log" ]] || printf '%s\n' "$rtmps_log" | sed 's/\x1b\[[0-9;]*m//g' >"$dir/last-rtmps-probe-restream.log"
+    [[ -z "$rtmps_harness_log" ]] || printf '%s\n' "$rtmps_harness_log" | sed 's/\x1b\[[0-9;]*m//g' >"$dir/last-rtmps-probe-harness.log"
+    printf '{"result":"%s","failed_stage":"%s","image":"%s","engine":"%s","engine_version":"%s","kernel":"%s","default_seccomp":{"health":"%s","srt":"%s","note":"%s"},"shipped_profile":{"path":"%s","health":"%s","srt":"%s","rtmps":"%s"},"unconfined_control":"%s"}\n' \
         "$([[ $smoke_passed == 1 ]] && echo pass || echo fail)" \
         "$([[ $smoke_passed == 1 ]] && echo "" || echo "$stage")" \
         "$IMAGE" "$ENGINE" \
         "$("$ENGINE" version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)" \
         "$(uname -sr)" \
         "$default_health" "$default_srt" "$default_note" \
-        "$SECCOMP_PROFILE" "$shipped_health" "$shipped_srt" "$unconfined_srt" \
+        "$SECCOMP_PROFILE" "$shipped_health" "$shipped_srt" "$shipped_rtmps" "$unconfined_srt" \
         >"$RESTREAM_CONTAINER_SMOKE_REPORT" || true
 }
 cleanup() {
@@ -269,6 +273,47 @@ srt_probe() {
     return "$status"
 }
 
+# rtmps_probe <label> <CONTAINER_SECCOMP value>: real RTMP ingest and RTMPS
+# egress through the mixed-media harness. The trust root and temporary media
+# directory are bind-mounted; the image otherwise runs as its shipped user.
+rtmps_probe() {
+    local label_text=$1 seccomp=$2
+    local harness="${RESTREAM_HARNESS_BIN:-target/bench/test_harness}"
+    local trust_root="$ROOT/test/fixtures/tls/mediamtx-rtmps-cert.pem"
+    [[ -x "$harness" ]] || {
+        echo "container-smoke: the RTMPS media proof needs the live harness ($harness)." >&2
+        echo "container-smoke: build it with scripts/build/bench-harness.sh" >&2
+        return 3
+    }
+    [[ -r "$trust_root" ]] || {
+        echo "container-smoke: RTMPS trust fixture is unreadable: $trust_root" >&2
+        return 3
+    }
+    local dir
+    dir="$(mktemp -d)"
+    workdirs+=("$dir")
+    mkdir -p "$dir/media"
+    chmod 0777 "$dir" "$dir/media"
+    local container_args="${CONTAINER_EXTRA_ARGS:-}"
+    container_args="${container_args:+$container_args }--volume $trust_root:$trust_root:ro"
+    container_args+=" --volume $dir/media:$dir/media:rw --env RESTREAM_MEDIA_DIR=$dir/media"
+    local status=0
+    CONTAINER_ENGINE="$ENGINE" CONTAINER_IMAGE="$IMAGE" CONTAINER_SECCOMP="$seccomp" \
+        CONTAINER_EXTRA_ARGS="$container_args" CONTAINER_LABEL="$label" \
+        RESTREAM_BIN="$ROOT/scripts/check/container-restream-shim.sh" \
+        HARNESS_BIN="$harness" BENCH_BUILD=never \
+        MIXED_OUTPUT_GROUPS=rtmps.src.a0 MIXED_RESTREAM_LOG="$dir/restream.log" \
+        RESTREAM_MEDIA_DIR="$dir/media" \
+        WORK_DIR="$dir" \
+        timeout 600 scripts/harness/run.sh mixed.live.rtmp.h264.a1.bf0 -- --no-netns \
+        >"$dir/harness.log" 2>&1 || status=$?
+    rtmps_log="$(cat "$dir/restream.log" 2>/dev/null || true)"
+    rtmps_harness_log="$(cat "$dir/harness.log" 2>/dev/null || true)"
+    echo "container-smoke: [$label_text] RTMP-to-RTMPS harness exit=$status"
+    grep -E 'outputs-progress (start|pass)|harness failed|rtmps.src.a0' "$dir/harness.log" | sed 's/^/  /' || true
+    return "$status"
+}
+
 stage="default-seccomp-control"
 echo "container-smoke: === default engine seccomp profile (negative control) ==="
 if health_probe "default seccomp"; then
@@ -312,7 +357,9 @@ fi
 shipped_health="ok"
 shipped_probe_logs="$probe_logs"
 if [[ "${RESTREAM_CONTAINER_SMOKE_SKIP_SRT:-0}" == "1" ]]; then
-    echo "container-smoke: WARNING: SRT capability proof SKIPPED by request; this does NOT prove SRT egress" >&2
+    shipped_srt="skipped"
+    shipped_rtmps="skipped"
+    echo "container-smoke: WARNING: all live transport proofs SKIPPED by request; this does NOT prove container egress" >&2
 else
     shipped_srt="fail"
     if ! srt_probe "shipped profile" "$SECCOMP_PROFILE"; then
@@ -326,8 +373,16 @@ else
     }
     shipped_srt="ok"
     grep -E 'srt egress owner attached' <<<"$srt_log" | head -n 1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^/  /' || true
+
+    shipped_rtmps="fail"
+    if ! rtmps_probe "shipped profile" "$SECCOMP_PROFILE"; then
+        echo "container-smoke: RTMP ingest to RTMPS media egress FAILED under the shipped seccomp profile" >&2
+        printf '%s\n' "$rtmps_harness_log" | tail -n 30 >&2
+        exit 1
+    fi
+    shipped_rtmps="ok"
 fi
-echo "container-smoke: shipped profile: health=$shipped_health srt=$shipped_srt"
+echo "container-smoke: shipped profile: health=$shipped_health srt=$shipped_srt rtmps=$shipped_rtmps"
 
 if [[ "$DIAGNOSTIC_UNCONFINED" == "1" ]]; then
     echo "container-smoke: === DIAGNOSTIC control: seccomp=unconfined (never a deployment recommendation) ==="
