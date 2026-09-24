@@ -176,18 +176,6 @@ function getPublisherQualityMetrics(publisher: Publisher | null): QualityMetric[
             alertCheck: () => false,
         });
         addNumericMetric({
-            code: 'srt_sndbuf_configured',
-            label: 'Send buffer ceiling (configured)',
-            description:
-                'The SRTO_SNDBUF value this connection was set up with — fixed for the life of ' +
-                'the connection (SRT does not allow changing it after connect). Egress-only: derived ' +
-                'from an explicit sndbuf= URL override, or a bitrate*latency*margin formula ' +
-                'default when none was given.',
-            rawValue: q.srtSndbufConfiguredBytes,
-            alertCheck: () => false,
-            formatter: formatBytes,
-        });
-        addNumericMetric({
             code: 'srt_link_capacity',
             label: 'Estimated network capacity (Mbps)',
             description: 'SRT estimate of available bandwidth between publisher and receiver.',

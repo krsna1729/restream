@@ -95,6 +95,16 @@ export function DashboardV2PipelineInputStatus({
             {model.publisherHealth ? (
               <StatusBadge status={model.publisherHealth} />
             ) : null}
+            {model.publisherHealth ? (
+              <button
+                aria-label="View publisher health details"
+                className="btn btn-xs btn-ghost"
+                onClick={() => actions.openPublisherHealthModal(model.id)}
+                type="button"
+              >
+                Details
+              </button>
+            ) : null}
           </div>
           <p
             className="text-base-content/55 mt-1 truncate text-xs"

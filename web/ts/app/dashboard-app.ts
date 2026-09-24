@@ -283,6 +283,7 @@ export function initDashboardApp(): void {
     copyIngestUrl: copyPipelineIngestUrl,
     copyStreamKey: copyPipelineStreamKey,
     editAudioTrack: editPipelineAudioTrack,
+    openPublisherHealthModal,
     mountPreview: mountPipelineInputPreview,
     saveAudioTrack: savePipelineAudioTrack,
     selectProtocol: selectPipelineIngestProtocol,
@@ -344,7 +345,6 @@ export function initDashboardApp(): void {
   });
 
   setPipelineViewDependencies({
-    openPublisherHealthModal,
     isOutputToggleBusy,
     startOutBtn,
     stopOutBtn,
