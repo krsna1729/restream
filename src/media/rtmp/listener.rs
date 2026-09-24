@@ -283,6 +283,7 @@ fn spawn_compio_acceptor(
             let result = runtime.block_on(async move {
                 let listener = compio::net::TcpListener::from_std(listener)?;
                 let mut bridges = FuturesUnordered::new();
+                let accept_result = async {
                 loop {
                     tokio::select! {
                         biased;
@@ -330,7 +331,12 @@ fn spawn_compio_acceptor(
                         }
                     }
                 }
-                Ok::<(), io::Error>(())
+                    Ok::<(), io::Error>(())
+                }
+                .await;
+                // Await close so the canceled accept releases its bound socket before exit.
+                let close_result = listener.close().await;
+                accept_result.and(close_result)
             });
             if let Err(error) = result {
                 engine
