@@ -5,7 +5,7 @@
 use super::super::*;
 use crate::media::egress::command::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::{FeedEpoch, TsFeed};
-use crate::media::egress::policy::{LeafPolicy, WorkBudget};
+use crate::media::egress::policy::{LeafPolicy, WorkBudgetConfig};
 use crate::media::ts_chunk_ring::TsChunkRing;
 use bytes::Bytes;
 use srt_transport::compio::{Owner, OwnerServiceBudget};
@@ -17,8 +17,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
-pub(super) fn budget() -> WorkBudget {
-    WorkBudget::new(8, 64 * 1024, Duration::from_millis(5))
+pub(super) fn budget() -> WorkBudgetConfig {
+    WorkBudgetConfig::new(8, 64 * 1024, Duration::from_millis(5))
 }
 
 /// A ring plus a feed reading it, so a test can keep publishing.

@@ -7,7 +7,7 @@ use super::{SrtResolveRequest, SrtResolvedConnect, SrtShardBackend, srt_resolve_
 use crate::media::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::metrics::ShardMetrics;
-use crate::media::egress::policy::WorkBudget;
+use crate::media::egress::policy::WorkBudgetConfig;
 use crate::media::egress::shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake,
 };
@@ -185,7 +185,7 @@ where
 /// runtime that cannot be built is a typed error, not a panic.
 pub(crate) fn resolving_srt_shard_backend(
     feed: TsFeed,
-    budget: WorkBudget,
+    budget: WorkBudgetConfig,
     drain_timeout: std::time::Duration,
     leaf_capacity: usize,
     owner_settings: SrtOwnerSettings,

@@ -11,8 +11,8 @@ fn feed() -> TsFeed {
     TsFeed::new(&ring, Arc::new(FeedEpoch::new()))
 }
 
-fn budget() -> WorkBudget {
-    WorkBudget::new(8, 1024, Duration::from_millis(1))
+fn budget() -> WorkBudgetConfig {
+    WorkBudgetConfig::new(8, 1024, Duration::from_millis(1))
 }
 
 fn shard_config() -> EgressShardConfig {

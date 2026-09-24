@@ -54,7 +54,7 @@ fn resync_count_increments_on_a_real_feed_overrun() {
 
     // Drive a bit longer so the engine actually reaches its first feed
     // read attempt (and settles into `Interest::NONE`, same as
-    // `feed_wake_delivers_media_published_after_the_leaf_goes_idle`)
+    // `feed_wake_delivers_media_after_idle_when_factory_start_is_delayed`)
     // before the overrun is injected below.
     let settle_deadline = std::time::Instant::now() + Duration::from_millis(200);
     while std::time::Instant::now() < settle_deadline {
@@ -180,7 +180,7 @@ fn sweep_stalled_leaves_reports_feed_lag_and_backpressure_state_for_a_healthy_le
 
     // Drive a bit longer so the engine actually reaches its first feed
     // read attempt before the unit below is published, same as
-    // `feed_wake_delivers_media_published_after_the_leaf_goes_idle`.
+    // `feed_wake_delivers_media_after_idle_when_factory_start_is_delayed`.
     let settle_deadline = std::time::Instant::now() + Duration::from_millis(200);
     while std::time::Instant::now() < settle_deadline {
         backend.on_ready();

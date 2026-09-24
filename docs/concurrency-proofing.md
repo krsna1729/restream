@@ -249,7 +249,7 @@ surface already covers it.
     (cancellation drops accepted bridges and joins every registered listener
     and session worker thread)
 - `src/media/egress/backends/rtmp_shard_tests.rs`
-  - `feed_wake_delivers_media_published_after_the_leaf_goes_idle` (production
+  - `feed_wake_delivers_media_after_idle_when_factory_start_is_delayed` (production
     Compio shard group + feed watcher + real RTMP peer; a later FLV frame arrives
     after the leaf sends its initial frame and parks)
 - `src/media/srt_stream_id.rs`

@@ -13,7 +13,7 @@ use crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_ba
 use crate::media::egress::backends::tcp::TcpEgressPollError;
 use crate::media::egress::command::ShardId;
 use crate::media::egress::journal::{RingFeed, TsFeed};
-use crate::media::egress::policy::WorkBudget;
+use crate::media::egress::policy::WorkBudgetConfig;
 use crate::media::egress::shard::{
     EgressShardConfig, EgressShardGroup, EgressShardGroupError, EgressShardGroupSpawnError,
 };
@@ -31,7 +31,7 @@ pub(crate) enum SrtFabricShardGroupError<E> {
 pub(crate) fn spawn_srt_fabric_shard_group<F>(
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
-    budget: WorkBudget,
+    budget: WorkBudgetConfig,
     mut feed_for: F,
     owner_settings: SrtOwnerSettings,
 ) -> Result<EgressShardGroup, SrtFabricShardGroupError<String>>
@@ -63,7 +63,7 @@ pub(crate) fn spawn_rtmp_fabric_shard_group<F>(
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
     poller_max_events: usize,
-    budget: WorkBudget,
+    budget: WorkBudgetConfig,
     chunk_size: u32,
     rtmps_client_config: Arc<tokio_rustls::rustls::ClientConfig>,
     startup_source: SharedRtmpPublishStartupSource,
@@ -108,7 +108,7 @@ where
 pub(crate) fn spawn_sink_fabric_shard_group<F>(
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
-    budget: WorkBudget,
+    budget: WorkBudgetConfig,
     mut feed_for: F,
 ) -> Result<EgressShardGroup, EgressShardGroupError>
 where
@@ -128,7 +128,7 @@ where
 pub(crate) fn spawn_pipeline_fabric_shard_group<F>(
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
-    budget: WorkBudget,
+    budget: WorkBudgetConfig,
     target_source: SharedPipelineTargetSource,
     mut feed_for: F,
 ) -> Result<EgressShardGroup, EgressShardGroupError>

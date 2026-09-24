@@ -57,7 +57,7 @@ impl RtmpReadinessPoller for CountingPoller {
 fn visit_one_ready_leaf_skips_reregistration_when_interest_is_unchanged() {
     // Drives a real connection through handshake, negotiation, publish
     // acceptance, an idle settle window, and a feed-wake-triggered publish
-    // — the same lifecycle `feed_wake_delivers_media_published_after_the_leaf_goes_idle`
+    // — the same lifecycle `feed_wake_delivers_media_after_idle_when_factory_start_is_delayed`
     // exercises — while recording every `register_leaf` call's interest.
     //
     // Real socket timing is too noisy to assert "N calls happened during

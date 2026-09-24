@@ -14,13 +14,12 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use crate::media::egress::backend::{CloseReason, ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::leaf::LeafCommon;
-use crate::media::egress::policy::{LeafLimits, WorkBudget};
+use crate::media::egress::policy::{LeafLimits, WorkBudget, WorkBudgetConfig};
 use crate::media::egress::scheduler::{LeafKey, ReadyQueue, VisitDecision, try_enqueue};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
@@ -132,9 +131,7 @@ where
     S: PipelineTargetSource,
 {
     feed: RingFeed,
-    budget_max_units: usize,
-    budget_max_bytes: usize,
-    budget_window: Duration,
+    budget_config: WorkBudgetConfig,
     target_source: S,
     leaves: Vec<Option<PipelineFabricLeaf>>,
     free_leaf_keys: Vec<LeafKey>,
@@ -146,15 +143,10 @@ impl<S> PipelineShardBackend<S>
 where
     S: PipelineTargetSource,
 {
-    pub(crate) fn new(feed: RingFeed, budget: WorkBudget, target_source: S) -> Self {
-        let budget_window = budget
-            .deadline
-            .saturating_duration_since(std::time::Instant::now());
+    pub(crate) fn new(feed: RingFeed, budget: WorkBudgetConfig, target_source: S) -> Self {
         Self {
             feed,
-            budget_max_units: budget.max_units,
-            budget_max_bytes: budget.max_bytes,
-            budget_window,
+            budget_config: budget,
             target_source,
             leaves: Vec::new(),
             free_leaf_keys: Vec::new(),
@@ -248,11 +240,7 @@ where
                 continue;
             };
             let generation = leaf.common.generation;
-            let budget = WorkBudget::new(
-                self.budget_max_units,
-                self.budget_max_bytes,
-                self.budget_window,
-            );
+            let budget = self.budget_config.new_visit();
             let result = leaf.visit_ready(generation, &self.feed, budget);
             let decision = match result {
                 EngineVisitResult::StaleGeneration => VisitDecision::Suspend,

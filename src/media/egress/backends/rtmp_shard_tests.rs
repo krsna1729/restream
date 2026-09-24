@@ -1,11 +1,11 @@
 use super::*;
 use crate::media::egress::journal::FeedEpoch;
 use crate::media::egress::leaf::EgressProgressSink;
-use crate::media::egress::policy::LeafPolicy;
+use crate::media::egress::policy::{LeafPolicy, WorkBudgetConfig};
 use std::sync::Arc;
 
-fn budget() -> WorkBudget {
-    WorkBudget::new(8, 4096, Duration::from_millis(50))
+fn budget() -> WorkBudgetConfig {
+    WorkBudgetConfig::new(8, 4096, Duration::from_millis(50))
 }
 
 #[test]
@@ -570,10 +570,11 @@ fn run_accepting_server_peer_reporting_video_after_idle(
 }
 
 /// Exercises the production Compio shard group and feed-wake watcher against
-/// a real RTMP peer: publish an initial FLV keyframe, idle, then require a
-/// later FLV keyframe to arrive after the leaf has parked.
+/// a real RTMP peer: publish a keyframe, idle, then require another keyframe
+/// after the leaf parks. The factory must preserve its configured visit
+/// window even when shard startup is delayed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn feed_wake_delivers_media_published_after_the_leaf_goes_idle() {
+async fn feed_wake_delivers_media_after_idle_when_factory_start_is_delayed() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let (publish_tx, publish_rx) = std::sync::mpsc::channel::<()>();
@@ -599,11 +600,13 @@ async fn feed_wake_delivers_media_published_after_the_leaf_goes_idle() {
     ring.push(packet(0));
     let startup_source =
         crate::media::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource::new();
+    let delayed_budget = budget();
+    tokio::time::sleep(Duration::from_millis(60)).await;
     let group = crate::media::egress::factory::spawn_rtmp_fabric_shard_group(
         std::num::NonZeroU32::new(1).unwrap(),
         EgressShardConfig::new(16, 4, 4, 4, Duration::from_millis(5)).unwrap(),
         4,
-        budget(),
+        delayed_budget,
         4096,
         crate::media::rtmp::resolve_rtmps_client_config(None).unwrap(),
         startup_source.clone(),

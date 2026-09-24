@@ -292,6 +292,29 @@ impl WorkBudget {
     }
 }
 
+/// Per-visit limits retained while a shard is being created. Unlike
+/// `WorkBudget`, this has no absolute deadline that can expire during startup.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WorkBudgetConfig {
+    pub(crate) max_units: usize,
+    pub(crate) max_bytes: usize,
+    pub(crate) window: Duration,
+}
+
+impl WorkBudgetConfig {
+    pub(crate) fn new(max_units: usize, max_bytes: usize, window: Duration) -> Self {
+        Self {
+            max_units,
+            max_bytes,
+            window,
+        }
+    }
+
+    pub(crate) fn new_visit(self) -> WorkBudget {
+        WorkBudget::new(self.max_units, self.max_bytes, self.window)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -362,6 +385,13 @@ mod tests {
         let budget = WorkBudget::new(5, 10_000, Duration::from_secs(10));
         assert!(!budget.is_exhausted(4, 0));
         assert!(budget.is_exhausted(5, 0));
+    }
+
+    #[test]
+    fn work_budget_config_starts_a_fresh_deadline_after_factory_delay() {
+        let config = WorkBudgetConfig::new(5, 100, Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(!config.new_visit().is_exhausted(0, 0));
     }
 
     #[test]

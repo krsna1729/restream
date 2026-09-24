@@ -20,13 +20,12 @@
 //! poller-driven backends make against their own idle-poll cadence.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use crate::media::egress::backend::{CloseReason, ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::leaf::LeafCommon;
-use crate::media::egress::policy::{LeafLimits, WorkBudget};
+use crate::media::egress::policy::{LeafLimits, WorkBudget, WorkBudgetConfig};
 use crate::media::egress::scheduler::{LeafKey, ReadyQueue, VisitDecision, try_enqueue};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
@@ -68,9 +67,7 @@ impl SinkFabricLeaf {
 
 pub(crate) struct SinkShardBackend {
     feed: RingFeed,
-    budget_max_units: usize,
-    budget_max_bytes: usize,
-    budget_window: Duration,
+    budget_config: WorkBudgetConfig,
     leaves: Vec<Option<SinkFabricLeaf>>,
     free_leaf_keys: Vec<LeafKey>,
     output_leaves: HashMap<OutputId, LeafKey>,
@@ -78,15 +75,10 @@ pub(crate) struct SinkShardBackend {
 }
 
 impl SinkShardBackend {
-    pub(crate) fn new(feed: RingFeed, budget: WorkBudget) -> Self {
-        let budget_window = budget
-            .deadline
-            .saturating_duration_since(std::time::Instant::now());
+    pub(crate) fn new(feed: RingFeed, budget: WorkBudgetConfig) -> Self {
         Self {
             feed,
-            budget_max_units: budget.max_units,
-            budget_max_bytes: budget.max_bytes,
-            budget_window,
+            budget_config: budget,
             leaves: Vec::new(),
             free_leaf_keys: Vec::new(),
             output_leaves: HashMap::new(),
@@ -177,11 +169,7 @@ impl SinkShardBackend {
                 continue;
             };
             let generation = leaf.common.generation;
-            let budget = WorkBudget::new(
-                self.budget_max_units,
-                self.budget_max_bytes,
-                self.budget_window,
-            );
+            let budget = self.budget_config.new_visit();
             let result = leaf.visit_ready(generation, &self.feed, budget);
             let decision = match result {
                 EngineVisitResult::StaleGeneration => VisitDecision::Suspend,

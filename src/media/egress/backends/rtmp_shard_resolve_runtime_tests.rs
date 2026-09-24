@@ -6,7 +6,7 @@ use crate::media::egress::command::{FeedId, OutputId};
 use crate::media::egress::journal::FeedEpoch;
 use crate::media::egress::leaf::EgressProgressSink;
 use crate::media::egress::metrics::ShardMetrics;
-use crate::media::egress::policy::LeafPolicy;
+use crate::media::egress::policy::{LeafPolicy, WorkBudgetConfig};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use rml_rtmp::handshake::{
     Handshake as PeerHandshake, HandshakeProcessResult as PeerResult, PeerType,
@@ -20,8 +20,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-fn budget() -> WorkBudget {
-    WorkBudget::new(8, 4096, Duration::from_millis(50))
+fn budget() -> WorkBudgetConfig {
+    WorkBudgetConfig::new(8, 4096, Duration::from_millis(50))
 }
 
 fn feed() -> RingFeed {

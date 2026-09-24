@@ -22,7 +22,9 @@ use crate::media::egress::feed::EgressFeed;
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::metrics::ShardMetrics;
-use crate::media::egress::policy::{LeafLimits, LeafStallClass, WorkBudget, classify_stall};
+use crate::media::egress::policy::{
+    LeafLimits, LeafStallClass, WorkBudget, WorkBudgetConfig, classify_stall,
+};
 use crate::media::egress::scheduler::{LeafKey, VisitDecision};
 use crate::media::egress::shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardConfig,
@@ -301,16 +303,9 @@ where
     resolved_connects: Vec<RtmpResolvedConnect>,
     startup_source: S,
     feed: RingFeed,
-    /// Per-visit limits. `WorkBudget::deadline` is an absolute `Instant`
-    /// computed at construction time — storing one `WorkBudget` and reusing
-    /// it for every visit (as this backend used to) makes `is_exhausted()`
-    /// permanently `true` once that one deadline passes, silently stopping
-    /// every leaf on this shard from reading or sending anything ever
-    /// again. A fresh `WorkBudget` is constructed from these fields for
-    /// every visit instead (see `visit_one_ready_leaf`).
-    budget_max_units: usize,
-    budget_max_bytes: usize,
-    budget_window: Duration,
+    /// Per-visit limits and window remain valid throughout shard startup;
+    /// each visit receives a fresh absolute deadline.
+    budget_config: WorkBudgetConfig,
     chunk_size: u32,
     rtmps_client_config: Arc<ClientConfig>,
     leaves: Vec<Option<RtmpFabricLeaf>>,
@@ -347,15 +342,12 @@ where
     pub(crate) fn with_runtime_components(
         poller: P,
         feed: RingFeed,
-        budget: WorkBudget,
+        budget: WorkBudgetConfig,
         chunk_size: u32,
         rtmps_client_config: Arc<ClientConfig>,
         resolve_completions: RtmpResolveCompletionQueue,
         startup_source: S,
     ) -> Self {
-        let budget_window = budget
-            .deadline
-            .saturating_duration_since(std::time::Instant::now());
         let ready_capacity = poller.ready_capacity();
         Self {
             poller,
@@ -363,9 +355,7 @@ where
             resolved_connects: Vec::with_capacity(1024),
             startup_source,
             feed,
-            budget_max_units: budget.max_units,
-            budget_max_bytes: budget.max_bytes,
-            budget_window,
+            budget_config: budget,
             chunk_size,
             rtmps_client_config,
             leaves: (0..EgressShardConfig::DEFAULT_LEAF_CAPACITY)
@@ -571,11 +561,7 @@ where
     /// majority in steady state) pays nothing for it.
     fn visit_one_ready_leaf(&mut self) -> Option<(Option<OutputId>, VisitDecision)> {
         let event = self.ready.pop_front()?;
-        let budget = WorkBudget::new(
-            self.budget_max_units,
-            self.budget_max_bytes,
-            self.budget_window,
-        );
+        let budget = self.budget_config.new_visit();
         let feed = &self.feed;
         let leaf = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)?;
         let result = leaf.visit_ready(
@@ -879,7 +865,12 @@ where
     // (see rtmp_shard_resolve_runtime.rs); this convenience constructor is
     // only used by tests.
     #[cfg(test)]
-    pub(crate) fn new(poller: P, feed: RingFeed, budget: WorkBudget, chunk_size: u32) -> Self {
+    pub(crate) fn new(
+        poller: P,
+        feed: RingFeed,
+        budget: WorkBudgetConfig,
+        chunk_size: u32,
+    ) -> Self {
         let (_sender, queue) = rtmp_resolve_completion_queue(1);
         Self::with_runtime_components(
             poller,

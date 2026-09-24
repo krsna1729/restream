@@ -563,6 +563,7 @@ pub(crate) async fn recovery_live_cases(
             Duration::from_secs(25),
         )
         .await;
+        let first_recovery_output = observe_final_output(api, &pid, &oid).await;
         let first_recovery_sink = json!({
             "connections": sink_metrics.connections.load(Ordering::Relaxed),
             "publishing": sink_metrics.publishing.load(Ordering::Relaxed),
@@ -628,6 +629,10 @@ pub(crate) async fn recovery_live_cases(
             "firstRetryError": first_retry.has_error,
             "firstRecovered": first_recovered,
             "firstRecoverySink": first_recovery_sink,
+            "firstRecoveryOutput": {
+                "status": first_recovery_output.status.unwrap_or(Value::Null),
+                "health": first_recovery_output.health,
+            },
             "secondRetrying": second_retry.status_visible,
             "secondHealthRetrying": second_retry.health_visible,
             "secondRetryError": second_retry.has_error,

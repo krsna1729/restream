@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use crate::capacity::CapacityLimits;
-use crate::media::egress::policy::WorkBudget;
+use crate::media::egress::policy::WorkBudgetConfig;
 use crate::media::egress::shard::EgressShardConfig;
 use crate::planner::BackendPolicy;
 
@@ -273,8 +273,8 @@ impl EgressFabricConfig {
         .with_drain_timeout(Duration::from_millis(self.drain_timeout_ms))
     }
 
-    pub(crate) fn work_budget(&self) -> WorkBudget {
-        WorkBudget::new(
+    pub(crate) fn work_budget(&self) -> WorkBudgetConfig {
+        WorkBudgetConfig::new(
             self.visit_max_units,
             self.visit_max_bytes,
             Duration::from_micros(self.visit_max_us),

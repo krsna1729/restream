@@ -28,7 +28,7 @@ use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, Protoco
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::leaf::LeafCommon;
 use crate::media::egress::metrics::ShardMetrics;
-use crate::media::egress::policy::{LeafLimits, WorkBudget};
+use crate::media::egress::policy::{LeafLimits, WorkBudgetConfig};
 use crate::media::egress::scheduler::{LeafKey, VisitDecision};
 use crate::media::egress::shard::{
     EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake,
@@ -211,12 +211,9 @@ pub(crate) struct SrtShardBackend {
     resolve_completions: SrtResolveCompletionQueue,
     resolved_connects: Vec<SrtResolvedConnect>,
     feed: TsFeed,
-    /// Per-visit limits. `WorkBudget::deadline` is an absolute `Instant`, so
-    /// a fresh `WorkBudget` is built from these fields for every visit rather
-    /// than reusing one whose deadline would pass once and stay exhausted.
-    budget_max_units: usize,
-    budget_max_bytes: usize,
-    budget_window: Duration,
+    /// Per-visit limits and window remain valid throughout shard startup;
+    /// each visit receives a fresh absolute deadline.
+    budget_config: WorkBudgetConfig,
     /// The shard's Compio runtime and family Owners (`!Send`, thread-affine).
     owners: SrtOwners,
     leaves: Vec<Option<SrtFabricLeaf>>,
@@ -261,19 +258,16 @@ fn push_bounded<T>(queue: &mut VecDeque<T>, value: T, capacity: usize) -> bool {
 impl SrtShardBackend {
     pub(crate) fn with_runtime_components(
         feed: TsFeed,
-        budget: WorkBudget,
+        budget: WorkBudgetConfig,
         resolve_completions: SrtResolveCompletionQueue,
         owners: SrtOwners,
     ) -> Self {
-        let budget_window = budget.deadline.saturating_duration_since(Instant::now());
         let capacity = crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY;
         let mut backend = Self {
             resolve_completions,
             resolved_connects: Vec::with_capacity(1024),
             feed,
-            budget_max_units: budget.max_units,
-            budget_max_bytes: budget.max_bytes,
-            budget_window,
+            budget_config: budget,
             owners,
             leaves: Vec::new(),
             free_leaf_keys: Vec::new(),
@@ -636,11 +630,7 @@ impl SrtShardBackend {
     fn visit_one_ready_leaf(&mut self) -> Option<(Option<OutputId>, VisitDecision)> {
         let event = self.ready.pop_front()?;
         self.leaf_visits = self.leaf_visits.saturating_add(1);
-        let budget = WorkBudget::new(
-            self.budget_max_units,
-            self.budget_max_bytes,
-            self.budget_window,
-        );
+        let budget = self.budget_config.new_visit();
         let feed = &self.feed;
         let now = self.owners.timestamp();
         let leaf = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)?;

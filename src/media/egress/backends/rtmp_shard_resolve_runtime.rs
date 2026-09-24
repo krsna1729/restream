@@ -11,7 +11,7 @@ use std::thread::JoinHandle;
 use crate::media::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::metrics::ShardMetrics;
-use crate::media::egress::policy::WorkBudget;
+use crate::media::egress::policy::WorkBudgetConfig;
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::rtmp::parse_rtmp_url;
 
@@ -192,7 +192,7 @@ pub(crate) type ResolvingRtmpShardBackendWithPoller<P, S> =
 pub(crate) fn resolving_rtmp_shard_backend<P, S>(
     poller: P,
     feed: RingFeed,
-    budget: WorkBudget,
+    budget: WorkBudgetConfig,
     chunk_size: u32,
     rtmps_client_config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
     startup_source: S,
