@@ -4,9 +4,7 @@ use std::time::Duration;
 
 use crate::media::egress::scheduler::LeafKey;
 
-use super::rtmp::RtmpNativeSender;
 use super::tcp::{TcpConnectAttempt, TcpEgressInterest, TcpEgressPollError, TcpReadyLeaf};
-use restream_dataplane::tcp::TcpSendCompletion;
 
 pub(crate) trait RtmpReadinessPoller {
     fn ready_capacity(&self) -> usize;
@@ -35,65 +33,12 @@ pub(crate) trait RtmpReadinessPoller {
         ready: &mut Vec<TcpReadyLeaf>,
     ) -> Result<usize, TcpEgressPollError>;
 
-    fn supports_native_send(&self) -> bool {
-        false
-    }
-
-    fn submit_native_send(
+    fn wait_idle(
         &mut self,
-        _fd: RawFd,
-        _slot: u32,
-        _generation: u64,
-        _bytes: &[u8],
-    ) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "poller has no native send owner",
-        ))
-    }
-
-    fn submit_native_send_vectored(
-        &mut self,
-        _fd: RawFd,
-        _slot: u32,
-        _generation: u64,
-        _buffers: &[&[u8]],
-    ) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "poller has no native send owner",
-        ))
-    }
-
-    fn drain_send_completions(&mut self, _completions: &mut Vec<TcpSendCompletion>) {}
-
-    fn native_metrics(&self) -> restream_dataplane::tcp::TcpPollerMetrics {
-        restream_dataplane::tcp::TcpPollerMetrics::default()
-    }
-}
-
-impl<P> RtmpNativeSender for P
-where
-    P: RtmpReadinessPoller,
-{
-    fn submit_send(
-        &mut self,
-        fd: RawFd,
-        slot: u32,
-        generation: u64,
-        bytes: &[u8],
-    ) -> std::io::Result<()> {
-        self.submit_native_send(fd, slot, generation, bytes)
-    }
-
-    fn submit_send_vectored(
-        &mut self,
-        fd: RawFd,
-        slot: u32,
-        generation: u64,
-        buffers: &[&[u8]],
-    ) -> std::io::Result<()> {
-        self.submit_native_send_vectored(fd, slot, generation, buffers)
+        _commands: &flume::Receiver<crate::media::egress::command::EgressCommand>,
+        _max_wait: Duration,
+    ) -> Option<crate::media::egress::shard::EgressShardIdleWake> {
+        None
     }
 }
 
@@ -119,11 +64,12 @@ where
                 connect_timeout: timeout,
             },
         )
+        .map(super::compio_tcp::CompioTcpStream::from_std)
         .map(TcpConnectAttempt::Connected)
         .map_err(|error| TcpEgressPollError {
-            operation: error.operation,
+            operation: "compio_tcp_test_connect",
             code: error.source.raw_os_error().unwrap_or(libc::EIO),
-            message: error.source.to_string(),
+            message: error.to_string(),
         })
     }
 
@@ -150,7 +96,7 @@ where
     }
 }
 
-impl RtmpReadinessPoller for super::tcp::IoUringTcpPoller {
+impl RtmpReadinessPoller for super::compio_tcp::CompioTcpPoller {
     fn ready_capacity(&self) -> usize {
         self.ready_capacity()
     }
@@ -160,9 +106,9 @@ impl RtmpReadinessPoller for super::tcp::IoUringTcpPoller {
         peer_addr: SocketAddr,
         key: LeafKey,
         generation: u64,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<TcpConnectAttempt, TcpEgressPollError> {
-        self.start_connect(peer_addr, key, generation)
+        self.start_connect(peer_addr, key, generation, timeout)
     }
 
     fn register_leaf(
@@ -187,37 +133,11 @@ impl RtmpReadinessPoller for super::tcp::IoUringTcpPoller {
         self.poll_leaves(timeout_ms, ready)
     }
 
-    fn supports_native_send(&self) -> bool {
-        true
-    }
-
-    fn submit_native_send(
+    fn wait_idle(
         &mut self,
-        fd: RawFd,
-        slot: u32,
-        generation: u64,
-        bytes: &[u8],
-    ) -> std::io::Result<()> {
-        super::tcp::IoUringTcpPoller::submit_native_send(self, fd, slot, generation, bytes)
-    }
-
-    fn submit_native_send_vectored(
-        &mut self,
-        fd: RawFd,
-        slot: u32,
-        generation: u64,
-        buffers: &[&[u8]],
-    ) -> std::io::Result<()> {
-        super::tcp::IoUringTcpPoller::submit_native_send_vectored(
-            self, fd, slot, generation, buffers,
-        )
-    }
-
-    fn drain_send_completions(&mut self, completions: &mut Vec<TcpSendCompletion>) {
-        self.drain_native_send_completions(completions);
-    }
-
-    fn native_metrics(&self) -> restream_dataplane::tcp::TcpPollerMetrics {
-        self.metrics()
+        commands: &flume::Receiver<crate::media::egress::command::EgressCommand>,
+        max_wait: Duration,
+    ) -> Option<crate::media::egress::shard::EgressShardIdleWake> {
+        Some(self.wait_idle(commands, max_wait))
     }
 }

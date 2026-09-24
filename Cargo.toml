@@ -81,9 +81,8 @@ srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "86369b0815
 flume = { version = "0.12", default-features = false, features = ["async"] }
 # The SRT egress backend owns one Compio runtime per shard thread, so it
 # names the runtime type directly.
-# The substrate benchmark harness compares the Compio UDP submission path with a
-# native io_uring one, so both crates are named directly here (io-uring is the
-# same version `restream-dataplane` already uses for the RTMP path).
+# The substrate benchmark harness compares Compio UDP submission with a direct
+# io_uring baseline; production RTMP egress uses Compio TCP.
 compio = { version = "=0.19.2", default-features = false, features = ["runtime", "time", "net"] }
 io-uring = "0.7.15"
 tracing = { version = "0.1", features = ["max_level_debug"] }

@@ -14,9 +14,6 @@ fn test_parts() -> RtmpUrlParts {
     crate::media::rtmp::parse_rtmp_url("rtmp://127.0.0.1:1935/live/stream-key").unwrap()
 }
 
-#[path = "rtmp_native_send_tests.rs"]
-mod native_send_tests;
-
 /// Real, synchronous `rml_rtmp` server-side peer that performs only the
 /// handshake, for tests that stop driving the client once the handshake
 /// completes (before any connect-request bytes are flushed).

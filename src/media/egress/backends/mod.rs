@@ -1,3 +1,4 @@
+pub mod compio_tcp;
 pub mod pipeline;
 pub mod pipeline_shard;
 pub mod rtmp;

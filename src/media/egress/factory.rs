@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
+use crate::media::egress::backends::compio_tcp::CompioTcpPoller;
 use crate::media::egress::backends::pipeline_shard::{
     PipelineShardBackend, SharedPipelineTargetSource,
 };
@@ -9,7 +10,7 @@ use crate::media::egress::backends::rtmp_shard_resolve_runtime::resolving_rtmp_s
 use crate::media::egress::backends::sink_shard::SinkShardBackend;
 use crate::media::egress::backends::srt::SrtOwnerSettings;
 use crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend;
-use crate::media::egress::backends::tcp::{IoUringTcpPoller, TcpEgressPollError};
+use crate::media::egress::backends::tcp::TcpEgressPollError;
 use crate::media::egress::command::ShardId;
 use crate::media::egress::journal::{RingFeed, TsFeed};
 use crate::media::egress::policy::WorkBudget;
@@ -77,10 +78,10 @@ where
         let feed = feed_for(shard_id);
         let rtmps_client_config = rtmps_client_config.clone();
         let startup_source = startup_source.clone();
-        // The io_uring poller is created on the shard thread that will drive
-        // it, so a creation failure surfaces here as `Backend`.
+        // The Compio runtime is created on the shard thread that drives it,
+        // so a creation failure surfaces here as `Backend`.
         move || {
-            let poller = IoUringTcpPoller::new(poller_max_events)?;
+            let poller = CompioTcpPoller::new(poller_max_events)?;
             Ok(resolving_rtmp_shard_backend(
                 poller,
                 feed,

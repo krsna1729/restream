@@ -1,19 +1,16 @@
-//! TCP readiness backends for the RTMP/RTMPS fabric.
+//! Test-only TCP readiness differential backend for the RTMP/RTMPS fabric.
 //!
-//! Production uses one fixed-file `io_uring` poller per shard. The epoll
-//! implementation is test-only deterministic differential coverage. Both use
-//! generation-tagged registration and an `Ops` trait so the epoll syscalls can
-//! be faked in tests. SRT egress owns native UDP pollers in its shard backend
-//! rather than using this TCP-specific module.
-
-use std::collections::HashMap;
-use std::io;
-use std::net::{SocketAddr, TcpStream};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-use std::os::raw::c_int;
-use std::time::Duration;
+//! Production uses [`super::compio_tcp::CompioTcpPoller`], which owns each
+//! socket on the shard's Compio runtime. This module retains the epoll model
+//! only for deterministic scheduler and generation-tag tests; it is not linked
+//! into ordinary runtime construction.
 
 use crate::media::egress::scheduler::LeafKey;
+#[cfg(test)]
+use std::collections::HashMap;
+use std::io;
+use std::os::fd::RawFd;
+use std::os::raw::c_int;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct TcpEgressInterest {
@@ -22,8 +19,8 @@ pub(crate) struct TcpEgressInterest {
 }
 
 impl TcpEgressInterest {
-    // Only constructed by tests; production only ever registers WRITE
-    // interest (the fabric writes to already-connected TCP sockets).
+    // Only constructed by tests; production registers the protocol's current
+    // Compio readiness interest through the same trait.
     #[cfg(test)]
     pub const READ: Self = Self {
         readable: true,
@@ -57,13 +54,19 @@ pub(crate) struct TcpEgressPollError {
 }
 
 impl TcpEgressPollError {
-    fn new(operation: &'static str, code: c_int, message: String) -> Self {
+    pub(crate) fn new(operation: &'static str, code: c_int, message: String) -> Self {
         Self {
             operation,
             code,
             message,
         }
     }
+}
+
+#[derive(Debug)]
+pub(crate) enum TcpConnectAttempt {
+    Connected(super::compio_tcp::CompioTcpStream),
+    InProgress(super::compio_tcp::CompioTcpStream),
 }
 
 #[cfg(test)]
@@ -82,225 +85,6 @@ where
     ops: O,
     events: Vec<libc::epoll_event>,
     registered: HashMap<RawFd, TcpRegisteredLeaf>,
-}
-
-/// Production RTMP readiness backend. The epoll implementation above remains
-/// available only to deterministic differential tests.
-pub(crate) struct IoUringTcpPoller {
-    inner: restream_dataplane::tcp::UringTcpPoller,
-    ready: Box<[restream_dataplane::tcp::TcpReadyEvent]>,
-    send_completions: Box<[restream_dataplane::tcp::TcpSendCompletion]>,
-    registrations: HashMap<RawFd, u32>,
-}
-
-pub(crate) enum TcpConnectAttempt {
-    Connected(TcpStream),
-    InProgress(TcpStream),
-}
-
-impl IoUringTcpPoller {
-    pub(crate) fn new(max_events: usize) -> Result<Self, TcpEgressPollError> {
-        let max_events = max_events.max(1);
-        let ring_entries = max_events
-            .next_power_of_two()
-            .max(32)
-            .try_into()
-            .map_err(|_| {
-                TcpEgressPollError::new(
-                    "io_uring_setup",
-                    libc::EINVAL,
-                    "io_uring entry count overflow".to_owned(),
-                )
-            })?;
-        let inner = restream_dataplane::tcp::UringTcpPoller::new_fixed(max_events, ring_entries)
-            .map_err(|error| {
-                TcpEgressPollError::new(
-                    "io_uring_setup",
-                    error.raw_os_error().unwrap_or(libc::EINVAL),
-                    error.to_string(),
-                )
-            })?;
-        Ok(Self {
-            inner,
-            ready: vec![
-                restream_dataplane::tcp::TcpReadyEvent {
-                    fd: -1,
-                    slot: 0,
-                    generation: 0,
-                    readable: false,
-                    writable: false,
-                };
-                max_events
-            ]
-            .into_boxed_slice(),
-            send_completions: vec![
-                restream_dataplane::tcp::TcpSendCompletion {
-                    slot: 0,
-                    generation: 0,
-                    result: 0,
-                };
-                max_events
-            ]
-            .into_boxed_slice(),
-            registrations: HashMap::with_capacity(max_events),
-        })
-    }
-
-    pub(crate) fn submit_native_send(
-        &mut self,
-        fd: RawFd,
-        slot: u32,
-        generation: u64,
-        bytes: &[u8],
-    ) -> std::io::Result<()> {
-        let generation = u32::try_from(generation).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "leaf generation exceeds io_uring tag width",
-            )
-        })?;
-        self.inner.submit_send(fd, slot, generation, bytes)
-    }
-
-    pub(crate) fn submit_native_send_vectored(
-        &mut self,
-        fd: RawFd,
-        slot: u32,
-        generation: u64,
-        buffers: &[&[u8]],
-    ) -> std::io::Result<()> {
-        let generation = u32::try_from(generation).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "leaf generation exceeds io_uring tag width",
-            )
-        })?;
-        self.inner
-            .submit_send_vectored(fd, slot, generation, buffers)
-    }
-
-    pub(crate) fn drain_native_send_completions(
-        &mut self,
-        completions: &mut Vec<restream_dataplane::tcp::TcpSendCompletion>,
-    ) {
-        let count = self
-            .inner
-            .drain_send_completions(&mut self.send_completions);
-        completions.extend_from_slice(&self.send_completions[..count]);
-    }
-
-    pub(crate) fn metrics(&self) -> restream_dataplane::tcp::TcpPollerMetrics {
-        self.inner.metrics()
-    }
-
-    pub(crate) fn register_leaf(
-        &mut self,
-        fd: RawFd,
-        key: LeafKey,
-        generation: u64,
-        interest: TcpEgressInterest,
-    ) -> Result<(), TcpEgressPollError> {
-        let generation = u32::try_from(generation).map_err(|_| {
-            TcpEgressPollError::new(
-                "io_uring_register",
-                libc::EINVAL,
-                "leaf generation exceeds io_uring tag width".to_owned(),
-            )
-        })?;
-        let slot = u32::try_from(key.0).map_err(|_| {
-            TcpEgressPollError::new(
-                "io_uring_register",
-                libc::EINVAL,
-                "leaf slot exceeds io_uring tag width".to_owned(),
-            )
-        })?;
-        self.inner
-            .register_fixed(
-                fd,
-                slot,
-                generation,
-                restream_dataplane::tcp::TcpInterest {
-                    readable: interest.readable,
-                    writable: interest.writable,
-                },
-            )
-            .map_err(|error| Self::error("io_uring_register", error))?;
-        self.registrations.insert(fd, slot);
-        Ok(())
-    }
-
-    pub(crate) fn ready_capacity(&self) -> usize {
-        self.ready.len()
-    }
-
-    pub(crate) fn start_connect(
-        &mut self,
-        peer_addr: SocketAddr,
-        key: LeafKey,
-        generation: u64,
-    ) -> Result<TcpConnectAttempt, TcpEgressPollError> {
-        let stream = open_nonblocking_tcp(peer_addr)?;
-        let fd = stream.as_raw_fd();
-        let (address, address_len) = socket_address(peer_addr);
-        let result = unsafe {
-            libc::connect(
-                fd,
-                (&address as *const libc::sockaddr_storage).cast(),
-                address_len,
-            )
-        };
-        if result == 0 {
-            return Ok(TcpConnectAttempt::Connected(stream));
-        }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::EINPROGRESS) {
-            return Err(Self::error("connect", error));
-        }
-        self.register_leaf(fd, key, generation, TcpEgressInterest::WRITE)?;
-        Ok(TcpConnectAttempt::InProgress(stream))
-    }
-
-    pub(crate) fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError> {
-        let Some(slot) = self.registrations.remove(&fd) else {
-            return Ok(());
-        };
-        self.inner
-            .remove(slot)
-            .map_err(|error| Self::error("io_uring_remove", error))
-    }
-
-    pub(crate) fn poll_leaves(
-        &mut self,
-        timeout_ms: i32,
-        ready: &mut Vec<TcpReadyLeaf>,
-    ) -> Result<usize, TcpEgressPollError> {
-        ready.clear();
-        let count = self
-            .inner
-            .poll(
-                Duration::from_millis(timeout_ms.max(0) as u64),
-                &mut self.ready,
-            )
-            .map_err(|error| Self::error("io_uring_poll", error))?;
-        for event in self.ready.iter().take(count) {
-            ready.push(TcpReadyLeaf {
-                fd: event.fd,
-                key: LeafKey(event.slot as usize),
-                generation: event.generation as u64,
-                readable: event.readable,
-                writable: event.writable,
-            });
-        }
-        Ok(count)
-    }
-
-    fn error(operation: &'static str, error: std::io::Error) -> TcpEgressPollError {
-        TcpEgressPollError::new(
-            operation,
-            error.raw_os_error().unwrap_or(libc::EIO),
-            error.to_string(),
-        )
-    }
 }
 
 pub(crate) fn connect_error(fd: RawFd) -> io::Result<()> {
@@ -322,87 +106,6 @@ pub(crate) fn connect_error(fd: RawFd) -> io::Result<()> {
         Ok(())
     } else {
         Err(io::Error::from_raw_os_error(error))
-    }
-}
-
-fn open_nonblocking_tcp(peer_addr: SocketAddr) -> Result<TcpStream, TcpEgressPollError> {
-    let domain = match peer_addr {
-        SocketAddr::V4(_) => libc::AF_INET,
-        SocketAddr::V6(_) => libc::AF_INET6,
-    };
-    let fd = unsafe {
-        libc::socket(
-            domain,
-            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
-            0,
-        )
-    };
-    if fd < 0 {
-        return Err(TcpEgressPollError::new(
-            "socket",
-            io::Error::last_os_error()
-                .raw_os_error()
-                .unwrap_or(libc::EIO),
-            io::Error::last_os_error().to_string(),
-        ));
-    }
-    let stream = unsafe { TcpStream::from_raw_fd(fd) };
-    stream.set_nodelay(true).map_err(|error| {
-        TcpEgressPollError::new(
-            "set_nodelay",
-            error.raw_os_error().unwrap_or(libc::EIO),
-            error.to_string(),
-        )
-    })?;
-    Ok(stream)
-}
-
-fn socket_address(peer_addr: SocketAddr) -> (libc::sockaddr_storage, libc::socklen_t) {
-    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
-    match peer_addr {
-        SocketAddr::V4(address) => {
-            let value = libc::sockaddr_in {
-                sin_family: libc::AF_INET as libc::sa_family_t,
-                sin_port: address.port().to_be(),
-                sin_addr: libc::in_addr {
-                    s_addr: u32::from_ne_bytes(address.ip().octets()),
-                },
-                sin_zero: [0; 8],
-            };
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    (&value as *const libc::sockaddr_in).cast::<u8>(),
-                    (&mut storage as *mut libc::sockaddr_storage).cast::<u8>(),
-                    std::mem::size_of::<libc::sockaddr_in>(),
-                );
-            }
-            (
-                storage,
-                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
-            )
-        }
-        SocketAddr::V6(address) => {
-            let value = libc::sockaddr_in6 {
-                sin6_family: libc::AF_INET6 as libc::sa_family_t,
-                sin6_port: address.port().to_be(),
-                sin6_flowinfo: address.flowinfo(),
-                sin6_addr: libc::in6_addr {
-                    s6_addr: address.ip().octets(),
-                },
-                sin6_scope_id: address.scope_id(),
-            };
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    (&value as *const libc::sockaddr_in6).cast::<u8>(),
-                    (&mut storage as *mut libc::sockaddr_storage).cast::<u8>(),
-                    std::mem::size_of::<libc::sockaddr_in6>(),
-                );
-            }
-            (
-                storage,
-                std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
-            )
-        }
     }
 }
 

@@ -1,4 +1,4 @@
-//! Native RTMP ingest and egress using `rml_rtmp`.
+//! RTMP ingest and egress protocol handling using `rml_rtmp`.
 //!
 //! TCP admission, ingest sessions, and egress publication are separate owners.
 //! The public entry points remain re-exported here for callers.
@@ -31,7 +31,9 @@ pub(crate) use egress_packets::{
     should_send_startup_audio_sequence_header, startup_video_sequence_header,
     validate_rtmp_output_audio_packet_track,
 };
-pub(crate) use egress_transport::{RtmpUrlParts, parse_rtmp_url, resolve_rtmps_client_config};
+pub(crate) use egress_transport::{
+    RtmpUrlParts, parse_rtmp_url, resolve_rtmps_client_config, supports_rtmps_cipher_suite,
+};
 // Only reachable via now-test-only callers (RtmpConnection::tls, RtmpShardBackend::new).
 #[cfg(test)]
 pub(crate) use egress_transport::rustls_client_config;

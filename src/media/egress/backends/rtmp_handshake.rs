@@ -1,11 +1,8 @@
 //! Non-blocking RTMP client handshake for the fabric TCP leaf.
 //!
-//! Drives `rml_rtmp::handshake::Handshake` — the same pure, socket-
-//! independent state machine the existing Tokio adapter uses
-//! (`src/media/rtmp/handshake.rs`) — over a non-blocking `TcpStream`
-//! instead of an async one, one bounded step per call so it fits the
-//! fabric's readiness-driven visit model (`TcpEgressPoller` +
-//! `tcp_connect`) rather than an `.await`ed read/write loop.
+//! Drives `rml_rtmp::handshake::Handshake` over the RTMP leaf's Compio-owned
+//! TCP stream. Each shard visit advances it by one bounded nonblocking step
+//! and returns the next read/write interest to Compio readiness.
 
 use std::io::{ErrorKind, Read, Write};
 

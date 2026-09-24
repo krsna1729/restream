@@ -177,9 +177,7 @@ fn run_accepting_server_peer(mut stream: StdTcpStream, done_tx: std::sync::mpsc:
 }
 
 /// End-to-end proof of the full `Add` → resolve → connect → handshake →
-/// negotiate → publish path with no manual `complete_pending_connect` call —
-/// only `on_command`/`on_media_tick`/`on_ready`, the same three calls a real
-/// shard event loop makes.
+/// negotiate → publish path through the production Compio idle-wait path.
 #[test]
 fn add_command_resolves_connects_and_reaches_publish_accepted_against_a_real_peer() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -191,7 +189,7 @@ fn add_command_resolves_connects_and_reaches_publish_accepted_against_a_real_pee
     });
 
     let mut backend = resolving_rtmp_shard_backend(
-        TcpEgressPoller::new(4).unwrap(),
+        super::super::compio_tcp::CompioTcpPoller::new(4).unwrap(),
         feed(),
         budget(),
         4096,
@@ -200,25 +198,36 @@ fn add_command_resolves_connects_and_reaches_publish_accepted_against_a_real_pee
         Duration::from_secs(3),
         8,
     );
-
     backend.on_command(EgressCommand::Add(output_spec(
         "out-1",
         &format!("rtmp://{}/live/key", addr),
         1,
     )));
+    let (_command_tx, commands) = flume::unbounded();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         assert!(
             std::time::Instant::now() < deadline,
-            "shard never reached publish acceptance via the resolving decorator"
+            "shard never reached publish acceptance via Compio idle readiness"
         );
         if done_rx.try_recv().is_ok() {
             break;
         }
         backend.on_media_tick();
         backend.on_ready();
-        thread::sleep(Duration::from_millis(1));
+        match backend.wait_idle(&commands, Duration::from_millis(100)) {
+            crate::media::egress::shard::EgressShardIdleWake::BackendActivity
+            | crate::media::egress::shard::EgressShardIdleWake::Timeout => {
+                backend.on_ready();
+            }
+            crate::media::egress::shard::EgressShardIdleWake::Command(command) => {
+                backend.on_command(command);
+            }
+            crate::media::egress::shard::EgressShardIdleWake::Disconnected => {
+                panic!("test command channel disconnected")
+            }
+        }
     }
 
     server.join().unwrap();

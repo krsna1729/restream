@@ -4,9 +4,8 @@
 //! on `srt_transport::compio::Owner` (see `docs/srt-compio-roadmap.md`). What
 //! survives here is:
 //!
-//! * the native TCP/`io_uring` mechanism the remaining RTMP path still uses
-//!   (`tcp`, `files`): one owner thread, one `io_uring`, generation-safe
-//!   operation tags;
+//! * the legacy TCP/`io_uring` mechanisms (`tcp`, `files`), retained for
+//!   dataplane tests; production RTMP egress now uses Compio TCP;
 //! * reusable scheduler and media primitives (`ReadyQueue`, `DeadlineIndex`,
 //!   `MediaArena`/`MediaRing`, `FeedCursor`, `TxPool`) and generic `io_uring`
 //!   capability probing;

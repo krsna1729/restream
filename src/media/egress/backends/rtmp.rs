@@ -1,6 +1,6 @@
-//! RTMP fabric protocol engine: the shard-scheduled, readiness-driven
-//! counterpart to the RTMP fabric's [`crate::media::egress::backends::tcp`]
-//! poller and [`crate::media::egress::backends::tcp_connect`] dial.
+//! RTMP fabric protocol engine: a shard-scheduled, readiness-driven state
+//! machine whose production sockets and readiness are owned by Compio TCP.
+//! Test-only TCP adapters exercise the same protocol logic without that runtime.
 //!
 //! This slice covers the full connection lifecycle through steady-state
 //! media publication: the RTMP handshake (via
@@ -14,8 +14,7 @@
 //! startup handoff supplied by the surrounding RTMP backend.
 
 use std::collections::VecDeque;
-use std::io::{self, ErrorKind, IoSlice, Read, Write};
-use std::os::unix::io::RawFd;
+use std::io::{ErrorKind, IoSlice, Read, Write};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -50,43 +49,6 @@ use rtmp_wire::RtmpWireMessage;
 
 const SESSION_READ_BUFFER: usize = 4096;
 const MAX_VECTORED_PACKETS: usize = 16;
-
-/// Shard-owned native TCP submission. The implementation retains the
-/// pointed-to bytes until the matching CQE is delivered; `MediaPublisher`
-/// keeps its `PendingWrite` in place while a send is in flight.
-pub(crate) trait RtmpNativeSender {
-    fn submit_send(
-        &mut self,
-        fd: RawFd,
-        slot: u32,
-        generation: u64,
-        bytes: &[u8],
-    ) -> io::Result<()>;
-
-    fn submit_send_vectored(
-        &mut self,
-        fd: RawFd,
-        slot: u32,
-        generation: u64,
-        buffers: &[&[u8]],
-    ) -> io::Result<()> {
-        if buffers.len() == 1 {
-            self.submit_send(fd, slot, generation, buffers[0])
-        } else {
-            Err(io::Error::new(
-                ErrorKind::Unsupported,
-                "native sender has no vectored path",
-            ))
-        }
-    }
-}
-
-pub(crate) struct RtmpNativeSend<'a> {
-    pub(crate) sender: &'a mut dyn RtmpNativeSender,
-    pub(crate) slot: u32,
-    pub(crate) generation: u64,
-    pub(crate) send_result: Option<i32>,
-}
 
 /// Startup context needed to begin RTMP media publication once the peer
 /// accepts the publish request. Deliberately mirrors
@@ -190,7 +152,6 @@ struct MediaPublisher {
     /// packets.
     current_batch: VecDeque<MediaWirePacket>,
     pending_write: Option<MediaPendingWrite>,
-    native_send_pending: bool,
     /// True once a feed-derived unit's packets have been queued into
     /// `current_batch` but not yet counted as consumed — distinguishes "just
     /// finished flushing a real unit" from "nothing queued yet" so the
@@ -251,7 +212,6 @@ impl MediaPublisher {
             defer_audio_until_video_ready: startup.defer_audio_until_video_ready,
             current_batch,
             pending_write: None,
-            native_send_pending: false,
             unit_in_flight: false,
             actions: Vec::with_capacity(2),
             pending_units: Vec::with_capacity(FEED_READ_BURST),
@@ -377,18 +337,6 @@ impl MediaPublisher {
         cursor: &mut FeedCursor,
         budget: WorkBudget,
     ) -> EngineProgress {
-        self.advance_with_native(stream, readiness, feed, cursor, budget, None)
-    }
-
-    fn advance_with_native(
-        &mut self,
-        stream: &mut RtmpConnection,
-        readiness: Readiness,
-        feed: &RingFeed,
-        cursor: &mut FeedCursor,
-        budget: WorkBudget,
-        mut native: Option<RtmpNativeSend<'_>>,
-    ) -> EngineProgress {
         let mut total_bytes = 0usize;
         let mut total_units = 0usize;
 
@@ -413,94 +361,7 @@ impl MediaPublisher {
                 );
             }
 
-            if self.native_send_pending {
-                let Some(result) = native.as_mut().and_then(|native| native.send_result.take())
-                else {
-                    return Self::finish(
-                        total_bytes,
-                        total_units,
-                        WaitCondition::Io(Interest::READ_WRITE),
-                    );
-                };
-                self.native_send_pending = false;
-                if result <= 0 {
-                    return EngineProgress::Failed(ProtocolFailure {
-                        reason: "rtmp_media_write",
-                        detail: if result == 0 {
-                            "peer closed during write".to_string()
-                        } else {
-                            io::Error::from_raw_os_error(-result).to_string()
-                        },
-                        retryable: true,
-                    });
-                }
-                let written = usize::try_from(result).unwrap_or(usize::MAX);
-                total_bytes = total_bytes.saturating_add(written);
-                let Some(pending) = &mut self.pending_write else {
-                    return EngineProgress::Failed(ProtocolFailure {
-                        reason: "rtmp_media_write",
-                        detail: "native send completed without a pending buffer".to_string(),
-                        retryable: false,
-                    });
-                };
-                pending.consume(written);
-                if pending.is_complete() {
-                    self.pending_write = None;
-                }
-                if self.pending_write.is_some() {
-                    continue;
-                }
-            }
-
             if let Some(pending) = &mut self.pending_write {
-                if let Some(native) = native.as_mut()
-                    && stream.supports_native_send()
-                {
-                    let result = match pending {
-                        MediaPendingWrite::Bytes { bytes, offset } => native.sender.submit_send(
-                            stream.raw_fd(),
-                            native.slot,
-                            native.generation,
-                            &bytes[*offset..],
-                        ),
-                        MediaPendingWrite::Vectored(message) => {
-                            let mut buffers: [&[u8]; MAX_VECTORED_PACKETS] =
-                                [&[]; MAX_VECTORED_PACKETS];
-                            let (count, _) = message
-                                .fill_buffers(budget.remaining_bytes(total_bytes), &mut buffers);
-                            native.sender.submit_send_vectored(
-                                stream.raw_fd(),
-                                native.slot,
-                                native.generation,
-                                &buffers[..count],
-                            )
-                        }
-                    };
-                    match result {
-                        Ok(()) => {
-                            self.native_send_pending = true;
-                            return Self::finish(
-                                total_bytes,
-                                total_units,
-                                WaitCondition::Io(Interest::READ_WRITE),
-                            );
-                        }
-                        Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                            return Self::finish(
-                                total_bytes,
-                                total_units,
-                                WaitCondition::Io(Interest::READ_WRITE),
-                            );
-                        }
-                        Err(error) => {
-                            return EngineProgress::Failed(ProtocolFailure {
-                                reason: "rtmp_media_submit",
-                                detail: error.to_string(),
-                                retryable: true,
-                            });
-                        }
-                    }
-                }
                 if !readiness.writable {
                     return Self::finish(
                         total_bytes,
@@ -575,23 +436,12 @@ impl MediaPublisher {
                 total_units += 1;
             }
 
-            // Steady-state publishing is otherwise write-only: nothing here
-            // ever calls `stream.read()` on the RTMP control channel, so the
-            // shard poller (whose registration mirrors whatever `Interest`
-            // this method returns — see `next_registration_interest` in
-            // `rtmp_shard.rs`) never watches this socket for readability once
-            // the initial batch is flushed. A server-sent Acknowledgement,
-            // WindowAckSize, or UserControl message, or the peer closing the
-            // connection, then goes undetected until the next write attempt
-            // happens to fail — not a crash, but a real steady-state gap
-            // (external review finding). Draining and feeding readable bytes
-            // through the same `RtmpSessionCore::handle_server_input` session
-            // negotiation already uses closes it: one bounded read per loop
-            // pass (converges once the kernel receive buffer is drained,
-            // matching `SessionNegotiation::advance`'s per-visit discipline),
-            // any reply packets (e.g. an Acknowledgement) get queued for the
-            // next write pass, and `Ok(0)` is treated as a real peer close
-            // instead of being silently missed.
+            // Keep the RTMP control channel readable after publish startup.
+            // Otherwise server acknowledgements and peer closes remain unseen
+            // until a write happens to fail. Parse one bounded read per visit
+            // with the active session and queue any replies for the next write
+            // pass. Further readiness visits drain the kernel buffer, matching
+            // `SessionNegotiation::advance`, and make `Ok(0)` an observed close.
             if readiness.readable {
                 let mut buffer = [0u8; SESSION_READ_BUFFER];
                 match stream.read(&mut buffer) {
@@ -750,33 +600,6 @@ impl RtmpFabricEngine {
             ),
             _ => None,
         }
-    }
-
-    /// Advance the publishing state with the shard's native send owner. The
-    /// handshake and negotiation states intentionally keep their synchronous
-    /// Rustls/RTMP writes; they run only during connection setup and may not
-    /// submit raw plaintext through a not-yet-handover RTMPS socket.
-    pub(crate) fn advance_native(
-        &mut self,
-        transport: &mut RtmpConnection,
-        readiness: Readiness,
-        feed: &RingFeed,
-        cursor: &mut FeedCursor,
-        budget: WorkBudget,
-        native: RtmpNativeSend<'_>,
-    ) -> EngineProgress {
-        if !matches!(self.state, Some(RtmpFabricState::Publishing(_))) {
-            return <Self as ProtocolEngine>::advance(
-                self, transport, readiness, feed, cursor, budget,
-            );
-        }
-        let Some(RtmpFabricState::Publishing(mut publisher)) = self.state.take() else {
-            unreachable!("publishing state was checked above")
-        };
-        let progress =
-            publisher.advance_with_native(transport, readiness, feed, cursor, budget, Some(native));
-        self.state = Some(RtmpFabricState::Publishing(publisher));
-        progress
     }
 }
 

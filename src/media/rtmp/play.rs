@@ -3,7 +3,6 @@
 use rml_rtmp::sessions::{ServerSession, ServerSessionResult};
 use rml_rtmp::time::RtmpTimestamp;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 use tracing::{error, info};
 
 use crate::media::engine::MediaEngine;
@@ -15,9 +14,10 @@ use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader};
 
 use super::timestamps::RtmpTimestampGuard;
 
+use super::ingest::RtmpClientSocket;
 pub(super) struct RtmpPlayRequest<'a> {
     pub(super) session: &'a mut ServerSession,
-    pub(super) socket: &'a mut TcpStream,
+    pub(super) socket: &'a mut RtmpClientSocket,
     pub(super) pipeline_access: &'a dyn PipelineAccessAuthenticator,
     pub(super) engine: &'a MediaEngine,
     pub(super) client_ip: &'a str,

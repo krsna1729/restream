@@ -35,9 +35,8 @@ pub(crate) trait PipelineTargetSource {
     fn take_target(&mut self, output_id: &OutputId) -> Option<PipelineTarget>;
 }
 
-/// Never supplies a target — every `Add` is rejected. Correct default
-/// until the application-layer source is wired in, matching
-/// `EmptyRtmpPublishStartupSource`'s role for RTMP.
+/// Never supplies a target — every `Add` is rejected. Used by backend tests
+/// that bypass the application-layer target source.
 #[derive(Debug, Default)]
 pub(crate) struct EmptyPipelineTargetSource;
 

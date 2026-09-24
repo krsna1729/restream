@@ -43,9 +43,8 @@ pub struct EgressFabricConfig {
     pub timer_batch_budget: usize,
     pub max_leaves_per_shard: usize,
     pub idle_wait_ms: u64,
-    /// Max epoll events per `epoll_wait` for the RTMP/RTMPS fabric's TCP
-    /// readiness poller (`TcpEgressPoller`). SRT egress has no poller: its
-    /// leaves own their `srt-rs` connections and are driven directly.
+    /// Maximum event batch size for the RTMP/RTMPS Compio TCP readiness poller.
+    /// SRT egress is driven by its Compio `Owner`.
     pub tcp_poller_max_events: usize,
     pub visit_max_units: usize,
     pub visit_max_bytes: usize,
@@ -313,20 +312,16 @@ pub struct AppConfig {
     pub ring_headroom_secs: f64,
     pub ring_capacity: usize,
     pub transcoder_ring_capacity: usize,
-    pub require_srt_bonding: bool,
     pub external_ffmpeg_permits: usize,
     pub ffmpeg_bin_path: Option<String>,
     pub log_dir: String,
     pub no_color: bool,
     pub srt_passphrase: Option<String>,
     pub srt_pbkeylen: i32,
-    /// Per-leaf SRT egress connect timeout. Live-evidenced at real MSR
-    /// scale: a live handshake burst of 600-700 concurrent SRT egress
-    /// connects to one peer reliably completes within ~3-9s but not
-    /// within the old 3s default, so every leaf whose handshake landed
-    /// past 3s hit libsrt's own connect-timeout ENOCONN and paid a full
-    /// retry+backoff cycle instead of just finishing. 10s cleared the
-    /// same burst with zero failures
+    /// Per-leaf SRT egress connect timeout. Live-evidenced at real MSR scale:
+    /// a burst of 600-700 concurrent handshakes to one peer reliably completes
+    /// within ~3-9s but not the old 3s default, so attempts past 3s paid a full
+    /// retry/backoff cycle. 10s cleared the same burst with zero failures
     /// (`docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`,
     /// "sink-mode bugs fixed; real ~600-connection SRT egress ceiling
     /// characterized"). Not scale-tested past 700 in one pipeline.
@@ -422,64 +417,26 @@ fn default_egress_fabric_shards(effective_cpus: usize) -> u32 {
 }
 
 /// Outputs a single shard can carry before another shard is worth its
-/// fixed per-shard `epoll_wait`/`clock_gettime` overhead (see
+/// fixed per-shard runtime/readiness overhead (see
 /// `default_egress_fabric_shards`'s doc comment). Chosen so this formula
 /// saturates at `default_egress_fabric_shards(effective_cpus)` right
 /// around 1,200 outputs on an 8-core host (`1200 / 8 = 150`... rounded
-/// down to a rounder, slightly more conservative number) — matching the
-/// scale the shard-count sweep above was actually measured at, rather
-/// than an unvalidated guess. This threshold is RTMP-shaped: see
-/// `EgressShardProfile::SrtCpuParallel` for why SRT egress does not use
-/// it.
+/// RTMP-shaped output-count scaling threshold. The profile is bounded by the
+/// CPU-derived shard ceiling and is not used for SRT.
 const OUTPUTS_PER_SHARD: u32 = 128;
 
 /// How one egress fabric runtime's shard pool should scale with its
 /// output count. A runtime is per (protocol, feed); the profile is chosen
 /// by the owning engine path, not inferred here.
 ///
-/// RTMP-shaped scaling (`OutputCount`) amortizes one shard over
-/// `OUTPUTS_PER_SHARD` outputs: the marginal cost of an RTMP connection
-/// is low (no per-multiplexer thread model, no hard delivery deadline),
-/// so shards exist to spread `epoll_wait`/`clock_gettime` overhead, not
-/// to buy parallelism per connection.
+/// RTMP (`OutputCount`) spreads per-shard protocol and Compio TCP readiness
+/// work across outputs. SRT (`SrtCpuParallel`) instead budgets parallelism
+/// across the per-family Compio Owners each shard can host.
 ///
-/// SRT egress is different: every leaf on one shard shares that shard's
-/// per-family Compio `Owner` (one shared caller UDP socket, one caller pool,
-/// a fixed TX pool), all driven from the shard thread, and every send races a
-/// hard 250ms TSBPD delivery deadline. The right shard count for SRT is an
-/// Owner-parallelism budget — bounded by CPU count, not by how many outputs
-/// happen to land on one feed.
-///
-/// **This policy is provisional.** It was derived from the libsrt
-/// one-`CSndQueue`-worker-per-multiplexer model, which no longer describes
-/// the mechanism; the srt-rs path has no per-multiplexer worker thread.
-/// It is retained unchanged because changing a scaling law without a
-/// matched shard-count/caller-density remeasurement would be worse than a
-/// stale rationale — see the follow-up in
-/// `docs/agent-guidance/quality/backlog.md`. A feed with ~60 SRT outputs (MSR's
-/// real 5% slice at n=1,200) must not be capped at 1 shard / 1 multiplexer
-/// by an RTMP-shaped 128-outputs-per-shard threshold — that is the
-/// documented blocker for scaling SRT egress past the low hundreds
-/// (`docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`,
-/// "The real scalability ceiling").
-///
-/// An output-count-scaled variant of this profile (a much smaller
-/// SRT-specific per-shard threshold than RTMP's 128, shrinking shard count
-/// for small feeds) was implemented on 2026-08-14 and live-tested against
-/// this profile's unmodified (output-count-*independent*) baseline in a
-/// controlled 4-worktree, 16-run comparison. Both variants failed
-/// `srt-only` at 1,200 outputs identically (~85-99% of outputs progressing
-/// before stalling), while both passed every other mix (rtmp-only, 50/50,
-/// 95/5) cleanly — the failure was traced to the test *environment*
-/// (`unshare --net` unavailable, forcing every run onto the host's shared,
-/// non-isolated network namespace; a measured ~90% UDP receive-buffer
-/// overflow rate at 1,200 concurrent real-bitrate SRT flows over that
-/// shared loopback), not to this profile's shard-count formula. See
-/// `docs/archive/quality/msr-1200-netns-confound-investigation-2026-08-14.md`
-/// for the full campaign data. Output-count scaling for `SrtCpuParallel`
-/// therefore remains unshipped only for lack of a *valid* live re-proof
-/// (one run under real network-namespace isolation), not because it was
-/// shown unsafe.
+/// Keep the SRT policy unchanged: WI3.7 current-host measurements are
+/// provisional evidence, not a portable shard law. Revisit it only after the
+/// final transport is in place and cross-host qualification is available.
+/// Q-025 tracks that decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EgressShardProfile {
     /// RTMP/sink/pipeline feeds: grow one shard per `OUTPUTS_PER_SHARD`
@@ -674,7 +631,6 @@ impl Default for AppConfig {
             ring_headroom_secs: 6.0,
             ring_capacity: 1024,
             transcoder_ring_capacity: 512,
-            require_srt_bonding: false,
             external_ffmpeg_permits: derived_permits,
             ffmpeg_bin_path: None,
             log_dir: ".restream/logs".to_string(),
@@ -745,7 +701,6 @@ impl AppConfig {
         let ring_capacity = env_usize("RESTREAM_RING_CAPACITY", 1024).clamp(64, 16384);
         let transcoder_ring_capacity =
             env_usize("RESTREAM_TRANSCODER_RING_CAPACITY", 512).clamp(64, 16384);
-        let require_srt_bonding = std::env::var_os("RESTREAM_REQUIRE_SRT_BONDING").is_some();
         let ffmpeg_bin_path = std::env::var("FFMPEG_BIN_PATH").ok();
         let log_dir =
             std::env::var("RESTREAM_LOG_DIR").unwrap_or_else(|_| ".restream/logs".to_string());
@@ -819,7 +774,6 @@ impl AppConfig {
             ring_headroom_secs,
             ring_capacity,
             transcoder_ring_capacity,
-            require_srt_bonding,
             external_ffmpeg_permits: permits,
             ffmpeg_bin_path,
             log_dir,
@@ -915,7 +869,6 @@ impl AppConfig {
                 "transcoderRingCapacity": self.transcoder_ring_capacity,
             },
             "srt": {
-                "requireBonding": self.require_srt_bonding,
                 "passphraseConfigured": self.srt_passphrase.is_some(),
                 "pbkeylen": self.srt_pbkeylen,
                 "connectTimeoutMs": self.srt_connect_timeout_ms,

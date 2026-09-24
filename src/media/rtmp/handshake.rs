@@ -1,15 +1,15 @@
 //! Shared RTMP client and server handshake state machines.
 
+use super::ingest::RtmpClientSocket;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 #[cfg(test)]
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 #[cfg(test)]
 use tokio_util::sync::CancellationToken;
 
 pub(super) async fn perform_server_handshake(
-    socket: &mut TcpStream,
+    socket: &mut RtmpClientSocket,
     buffer: &mut [u8],
 ) -> Result<Vec<u8>, &'static str> {
     let mut handshake = Handshake::new(PeerType::Server);

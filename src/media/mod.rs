@@ -42,10 +42,6 @@ pub mod ingest_auth;
 pub mod input_gate;
 pub mod metadata;
 pub mod mpegts;
-/// Native Linux dataplane boundary; protocol cutovers land behind this crate.
-pub mod native_dataplane {
-    pub use restream_dataplane::*;
-}
 pub mod packet;
 pub mod pipe_metrics;
 pub mod profiles;

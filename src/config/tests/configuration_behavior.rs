@@ -581,18 +581,10 @@ fn target_egress_fabric_shards_matches_known_cases() {
 
     // --- SrtCpuParallel ---
 
-    // SRT shard count is a libsrt-multiplexer parallelism budget, not an
-    // output-count amortization: the target is the CPU-derived ceiling
-    // even with one output, so a ~60-output SRT feed (MSR's real 5% slice
-    // at n=1,200) is not capped at 1 shard / 1 egress multiplexer by the
-    // RTMP-shaped OUTPUTS_PER_SHARD threshold. This is the fix for the
-    // documented SRT scalability ceiling (see
-    // docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md).
-    // An output-count-scaled variant was tried and reverted after failing
-    // live at 1,200 outputs -- see the doc comment on
-    // `EgressShardProfile::SrtCpuParallel` and
-    // docs/archive/quality/msr-1200-resource-attribution-2026-08-13.md
-    // "Efficiency evaluation" before changing this again.
+    // The SRT shard target remains the CPU-derived ceiling regardless of
+    // output count. WI3.7 current-host measurements are provisional evidence;
+    // changing the policy still requires a matched post-cutover scaling
+    // qualification (Q-025).
     assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 0, 8), 8);
     assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 1, 8), 8);
     assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 60, 8), 8);

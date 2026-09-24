@@ -136,7 +136,14 @@ async fn malformed_chunk_after_publish_surfaces_error_and_clears_ingest_registra
     let engine_c = engine.clone();
     let server = tokio::spawn(async move {
         let (socket, client_addr) = listener.accept().await.unwrap();
-        handle_rtmp_client(socket, client_addr, pipeline_access, security, engine_c).await
+        handle_rtmp_client(
+            RtmpClientSocket::from_tcp(socket),
+            client_addr,
+            pipeline_access,
+            security,
+            engine_c,
+        )
+        .await
     });
 
     let mut client = TcpStream::connect(addr).await.unwrap();
@@ -187,7 +194,14 @@ async fn truncated_chunk_then_disconnect_clears_ingest_registration_without_erro
     let engine_c = engine.clone();
     let server = tokio::spawn(async move {
         let (socket, client_addr) = listener.accept().await.unwrap();
-        handle_rtmp_client(socket, client_addr, pipeline_access, security, engine_c).await
+        handle_rtmp_client(
+            RtmpClientSocket::from_tcp(socket),
+            client_addr,
+            pipeline_access,
+            security,
+            engine_c,
+        )
+        .await
     });
 
     let mut client = TcpStream::connect(addr).await.unwrap();

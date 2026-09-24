@@ -222,8 +222,8 @@ pub trait EgressShardBackend: 'static {
         0
     }
 
-    /// Copy protocol-native counters into the shard snapshot. Backends that
-    /// do not own a native dataplane keep the default no-op.
+    /// Copy backend-specific transport counters into the shard snapshot.
+    /// Backends without such counters keep the default no-op.
     fn observe_metrics(&self, _metrics: &mut ShardMetrics) {}
 }
 

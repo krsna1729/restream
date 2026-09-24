@@ -1,11 +1,7 @@
-//! Non-blocking-after-connect TCP dial for the RTMP/RTMPS fabric.
+//! Test-only blocking dialer retained for the epoll differential tests.
 //!
-//! Mirrors the SRT fabric's connect shape
-//! (`src/media/srt/egress_connect/single.rs`): a bounded blocking connect on
-//! the shard's dedicated OS thread — acceptable there because it blocks only
-//! that shard's own leaves for at most the connect timeout, not the process
-//! — followed by an explicit switch to non-blocking mode for the steady-state
-//! read/write path driven by `TcpEgressPoller`.
+//! Production RTMP connects with a nonblocking socket and Compio readiness in
+//! `CompioTcpPoller`; this helper is not linked into ordinary builds.
 
 use std::io;
 use std::net::{SocketAddr, TcpStream};

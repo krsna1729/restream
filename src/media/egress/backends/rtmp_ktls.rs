@@ -1,9 +1,8 @@
 //! Linux kTLS handoff for an already-completed Rustls client handshake.
 //!
-//! Linux exposes the TLS 1.2 AES-GCM record format through `SOL_TLS`. Rustls
-//! supplies the negotiated traffic keys and record sequence numbers; after
-//! this handoff ordinary `read`/`write` syscalls use kernel TLS records and no
-//! userspace ciphertext buffer remains.
+//! Linux exposes TLS 1.2/1.3 AES-GCM through `SOL_TLS`. Rustls supplies the
+//! negotiated traffic keys and record sequence numbers; `recvmsg` preserves
+//! TLS 1.3 inner record types so RTMP never sees post-handshake messages.
 
 use std::collections::HashMap;
 use std::io;
@@ -17,11 +16,126 @@ use tokio_rustls::rustls::{
 const SOL_TLS: libc::c_int = 0x11a;
 const TLS_TX: libc::c_int = 1;
 const TLS_RX: libc::c_int = 2;
+const TLS_GET_RECORD_TYPE: libc::c_int = 2;
 const TCP_ULP: libc::c_int = 31;
 const TLS_1_2: u16 = 0x0303;
 const TLS_1_3: u16 = 0x0304;
 const TLS_CIPHER_AES_GCM_128: u16 = 51;
 const TLS_CIPHER_AES_GCM_256: u16 = 52;
+pub(crate) const RECORD_TYPE_ALERT: u8 = 21;
+pub(crate) const RECORD_TYPE_HANDSHAKE: u8 = 22;
+pub(crate) const RECORD_TYPE_DATA: u8 = 23;
+#[repr(align(8))]
+struct ControlBuffer([u8; 24]);
+
+fn control_data_offset() -> usize {
+    (size_of::<libc::cmsghdr>() + 7) & !7
+}
+
+pub(crate) fn recv_record(fd: RawFd, buffer: &mut [u8]) -> io::Result<(usize, u8)> {
+    let mut iov = libc::iovec {
+        iov_base: buffer.as_mut_ptr().cast(),
+        iov_len: buffer.len(),
+    };
+    let mut control = ControlBuffer([0; 24]);
+    let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+    message.msg_iov = &mut iov;
+    message.msg_iovlen = 1;
+    message.msg_control = control.0.as_mut_ptr().cast();
+    message.msg_controllen = control.0.len();
+    let received = unsafe { libc::recvmsg(fd, &mut message, libc::MSG_DONTWAIT) };
+    if received < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if received == 0 {
+        return Ok((0, RECORD_TYPE_DATA));
+    }
+    if message.msg_flags & libc::MSG_CTRUNC != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "truncated kTLS record-type control message",
+        ));
+    }
+    let header = message.msg_control.cast::<libc::cmsghdr>();
+    let data_offset = control_data_offset();
+    if message.msg_controllen < data_offset + 1
+        || unsafe {
+            (*header).cmsg_len < data_offset + 1
+                || (*header).cmsg_len > message.msg_controllen
+                || (*header).cmsg_level != SOL_TLS
+                || (*header).cmsg_type != TLS_GET_RECORD_TYPE
+        }
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "missing kTLS record-type control message",
+        ));
+    }
+    let record_type = unsafe { *message.msg_control.cast::<u8>().add(data_offset) };
+    Ok((received as usize, record_type))
+}
+
+pub(crate) fn install(
+    fd: RawFd,
+    version: ProtocolVersion,
+    suite: CipherSuite,
+    secrets: &ExtractedSecrets,
+) -> io::Result<()> {
+    if capability_for(version, suite).is_none() {
+        return Err(unsupported(
+            "TLS version or cipher is unsupported by Linux kTLS",
+        ));
+    }
+    let ulp = b"tls\0";
+    set_socket_option(
+        fd,
+        libc::IPPROTO_TCP,
+        TCP_ULP,
+        ulp.as_ptr().cast(),
+        ulp.len(),
+    )?;
+    install_direction(fd, version, suite, TLS_TX, secrets.tx.0, &secrets.tx.1)?;
+    install_direction(fd, version, suite, TLS_RX, secrets.rx.0, &secrets.rx.1)
+}
+
+fn install_direction(
+    fd: RawFd,
+    version: ProtocolVersion,
+    suite: CipherSuite,
+    direction: libc::c_int,
+    sequence: u64,
+    secret: &ConnectionTrafficSecrets,
+) -> io::Result<()> {
+    let (tls13, cipher) =
+        capability_for(version, suite).ok_or_else(|| unsupported("unsupported kTLS cipher"))?;
+    let wire_version = if tls13 { TLS_1_3 } else { TLS_1_2 };
+    let cipher_type = match cipher {
+        KtlsCipher::Aes128Gcm => TLS_CIPHER_AES_GCM_128,
+        KtlsCipher::Aes256Gcm => TLS_CIPHER_AES_GCM_256,
+    };
+    match cipher {
+        KtlsCipher::Aes128Gcm => {
+            let info = aes128_info(wire_version, cipher_type, sequence, secret)?;
+            set_socket_option(
+                fd,
+                SOL_TLS,
+                direction,
+                &info as *const Tls12AesGcm128 as *const libc::c_void,
+                size_of_val(&info),
+            )
+        }
+        KtlsCipher::Aes256Gcm => {
+            let info = aes256_info(wire_version, cipher_type, sequence, secret)?;
+            set_socket_option(
+                fd,
+                SOL_TLS,
+                direction,
+                &info as *const Tls12AesGcm256 as *const libc::c_void,
+                size_of_val(&info),
+            )
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -50,31 +164,12 @@ struct Tls12AesGcm256 {
     rec_seq: [u8; 8],
 }
 
-pub(crate) fn available() -> bool {
-    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
-    if fd < 0 {
-        return false;
-    }
-    let ulp = b"tls\0";
-    let result = unsafe {
-        libc::setsockopt(
-            fd,
-            libc::IPPROTO_TCP,
-            TCP_ULP,
-            ulp.as_ptr().cast(),
-            ulp.len() as libc::socklen_t,
-        )
-    };
-    unsafe { libc::close(fd) };
-    result == 0
-}
-
 /// Exact `(TLS version, AES-GCM cipher)` combinations the running kernel has
-/// proven it accepts through `SOL_TLS`. `available()` only proves
-/// `TCP_ULP="tls"` exists; it says nothing about TLS 1.3 or about a
-/// particular cipher. Probing the exact matrix *before* the caller consumes
-/// its Rustls connection via secret extraction keeps an unsupported kTLS
-/// attempt a userspace-TLS session instead of a failed output.
+/// proven it accepts on a connected local TCP pair, including `TCP_ULP` and
+/// both `SOL_TLS` directions. An unconnected-socket probe can produce a false
+/// negative on kernels that require an established TCP connection. Probe the
+/// exact matrix before consuming the Rustls connection via secret extraction,
+/// so an unsupported kTLS attempt fails explicitly without userspace fallback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum KtlsCipher {
     Aes128Gcm,
@@ -107,11 +202,10 @@ pub(crate) fn supports(version: ProtocolVersion, suite: CipherSuite) -> bool {
 }
 
 fn capability_for(version: ProtocolVersion, suite: CipherSuite) -> Option<(bool, KtlsCipher)> {
-    let tls13 = match version {
-        ProtocolVersion::TLSv1_2 => false,
-        ProtocolVersion::TLSv1_3 => true,
-        _ => return None,
-    };
+    if !crate::media::rtmp::supports_rtmps_cipher_suite(version, suite) {
+        return None;
+    }
+    let tls13 = version == ProtocolVersion::TLSv1_3;
     let cipher = match suite {
         CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
         | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
@@ -252,81 +346,6 @@ fn install_capability_mismatch(
     !matches!(version, ProtocolVersion::TLSv1_2 | ProtocolVersion::TLSv1_3)
 }
 
-pub(crate) fn install(
-    fd: RawFd,
-    version: ProtocolVersion,
-    suite: CipherSuite,
-    secrets: &ExtractedSecrets,
-) -> io::Result<()> {
-    let wire_version = match version {
-        ProtocolVersion::TLSv1_2 => TLS_1_2,
-        ProtocolVersion::TLSv1_3 => TLS_1_3,
-        _ => return Err(unsupported("Linux kTLS requires TLS 1.2 or TLS 1.3")),
-    };
-    let cipher_type = match suite {
-        CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
-        | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
-        | CipherSuite::TLS13_AES_128_GCM_SHA256 => TLS_CIPHER_AES_GCM_128,
-        CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
-        | CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
-        | CipherSuite::TLS13_AES_256_GCM_SHA384 => TLS_CIPHER_AES_GCM_256,
-        _ => {
-            return Err(unsupported(
-                "TLS cipher is not supported by the kTLS baseline",
-            ));
-        }
-    };
-
-    let ulp = b"tls\0";
-    set_socket_option(
-        fd,
-        libc::IPPROTO_TCP,
-        TCP_ULP,
-        ulp.as_ptr().cast(),
-        ulp.len(),
-    )?;
-    match cipher_type {
-        TLS_CIPHER_AES_GCM_128 => {
-            let tx = aes128_info(wire_version, cipher_type, secrets.tx.0, &secrets.tx.1)?;
-            let rx = aes128_info(wire_version, cipher_type, secrets.rx.0, &secrets.rx.1)?;
-            set_socket_option(
-                fd,
-                SOL_TLS,
-                TLS_TX,
-                &tx as *const Tls12AesGcm128 as *const libc::c_void,
-                size_of_val(&tx),
-            )?;
-            set_socket_option(
-                fd,
-                SOL_TLS,
-                TLS_RX,
-                &rx as *const Tls12AesGcm128 as *const libc::c_void,
-                size_of_val(&rx),
-            )?;
-        }
-        TLS_CIPHER_AES_GCM_256 => {
-            let tx = aes256_info(wire_version, cipher_type, secrets.tx.0, &secrets.tx.1)?;
-            let rx = aes256_info(wire_version, cipher_type, secrets.rx.0, &secrets.rx.1)?;
-            set_socket_option(
-                fd,
-                SOL_TLS,
-                TLS_TX,
-                &tx as *const Tls12AesGcm256 as *const libc::c_void,
-                size_of_val(&tx),
-            )?;
-            set_socket_option(
-                fd,
-                SOL_TLS,
-                TLS_RX,
-                &rx as *const Tls12AesGcm256 as *const libc::c_void,
-                size_of_val(&rx),
-            )?;
-        }
-        _ => unreachable!(),
-    }
-    Ok(())
-}
-
 fn aes128_info(
     version: u16,
     cipher_type: u16,
@@ -416,7 +435,6 @@ mod tests {
 
     #[test]
     fn capability_probe_is_safe_on_linux() {
-        let _ = available();
         let _ = supports(
             ProtocolVersion::TLSv1_3,
             CipherSuite::TLS13_AES_128_GCM_SHA256,

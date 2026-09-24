@@ -153,6 +153,16 @@ where
         self.backend.on_ready()
     }
 
+    /// Preserve the wrapped Compio idle wait; the default channel-only wait
+    /// bypasses its readiness runtime.
+    fn wait_idle(
+        &mut self,
+        commands: &flume::Receiver<EgressCommand>,
+        max_wait: std::time::Duration,
+    ) -> crate::media::egress::shard::EgressShardIdleWake {
+        self.backend.wait_idle(commands, max_wait)
+    }
+
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         self.backend.on_media_tick()
     }

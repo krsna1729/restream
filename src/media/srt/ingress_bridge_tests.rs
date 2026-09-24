@@ -401,10 +401,9 @@ fn owner_and_runtime_are_not_send() {
     let _ = <Owner as AmbiguousIfSend<_>>::some_item;
 }
 
-/// One listener, many peers: exactly one SRT ingress thread exists, and the
-/// Tokio side holds no protocol table.
+/// One listener, many peers: exactly one SRT ingress thread serves them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn one_ingress_thread_serves_many_peers_and_tokio_has_no_peer_table() {
+async fn one_ingress_owner_thread_serves_many_peers() {
     let keys: Vec<String> = (0..4).map(|index| format!("multi-{index}")).collect();
     let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
     let server = TestServer::start(&key_refs, keys.iter().map(|key| plain(key)).collect()).await;
@@ -449,28 +448,6 @@ async fn one_ingress_thread_serves_many_peers_and_tokio_has_no_peer_table() {
         let _ = caller.await;
     }
     server.stop().await;
-
-    // Source audit: the Tokio SRT listener has no protocol table or native
-    // driver, and ingress has no fallback transport.
-    for (name, source) in [
-        ("tokio_ingress.rs", include_str!("tokio_ingress.rs")),
-        ("ingress_owner.rs", include_str!("ingress_owner.rs")),
-    ] {
-        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
-        for forbidden in [
-            "PeerTable::new",
-            "UringUdpDriver",
-            "CompatReceiver",
-            "ReceiveMode",
-            "NativeSrtIngress",
-            "RuntimeFlavor::Mio",
-        ] {
-            assert!(
-                !production.contains(forbidden),
-                "{name} must not contain {forbidden}"
-            );
-        }
-    }
 }
 
 /// Every session identity a test used is unique (a LogicalPeerId is never

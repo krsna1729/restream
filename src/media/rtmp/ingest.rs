@@ -1,15 +1,21 @@
 //! RTMP publisher session handling.
 
+use std::io;
 use std::net::SocketAddr;
+use std::os::fd::{AsRawFd, RawFd};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf};
+#[cfg(test)]
 use tokio::net::TcpStream;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::media::engine::{IngestRegistration, MediaEngine};
@@ -23,7 +29,7 @@ use crate::media::security::IngestSecurityService;
 use crate::media::snapshots::PublisherQuality;
 use crate::media::stage_metrics::StageMetrics;
 use crate::media::standby_gop::StandbyGopCache;
-use crate::media::tcp_stats::collect_rtmp_receiver_stats;
+use crate::media::tcp_stats::collect_tcp_stats_by_fd;
 use crate::secret_display::redact_secret;
 
 use super::flv::{
@@ -33,6 +39,115 @@ use super::flv::{
 use super::handshake::perform_server_handshake;
 use super::ingest_packets::try_promote_cached_rtmp;
 use super::play::{RtmpPlayRequest, handle_play_request};
+
+enum RtmpClientIo {
+    Duplex(DuplexStream),
+    #[cfg(test)]
+    Tcp(TcpStream),
+}
+
+pub(super) struct RtmpClientSocket {
+    io: RtmpClientIo,
+    fd: RawFd,
+    closed: Option<CancellationToken>,
+}
+
+impl RtmpClientSocket {
+    pub(super) fn from_duplex(stream: DuplexStream, fd: RawFd, closed: CancellationToken) -> Self {
+        Self {
+            io: RtmpClientIo::Duplex(stream),
+            fd,
+            closed: Some(closed),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn from_tcp(stream: TcpStream) -> Self {
+        Self {
+            fd: stream.as_raw_fd(),
+            io: RtmpClientIo::Tcp(stream),
+            closed: None,
+        }
+    }
+}
+
+impl Drop for RtmpClientSocket {
+    fn drop(&mut self) {
+        if let Some(closed) = &self.closed {
+            closed.cancel();
+        }
+    }
+}
+
+impl AsRawFd for RtmpClientSocket {
+    fn as_raw_fd(&self) -> RawFd {
+        self.fd
+    }
+}
+
+impl AsyncRead for RtmpClientSocket {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match &mut self.get_mut().io {
+            RtmpClientIo::Duplex(stream) => Pin::new(stream).poll_read(cx, buffer),
+            #[cfg(test)]
+            RtmpClientIo::Tcp(stream) => Pin::new(stream).poll_read(cx, buffer),
+        }
+    }
+}
+
+impl AsyncWrite for RtmpClientSocket {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match &mut self.get_mut().io {
+            RtmpClientIo::Duplex(stream) => Pin::new(stream).poll_write(cx, buffer),
+            #[cfg(test)]
+            RtmpClientIo::Tcp(stream) => Pin::new(stream).poll_write(cx, buffer),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut self.get_mut().io {
+            RtmpClientIo::Duplex(stream) => Pin::new(stream).poll_flush(cx),
+            #[cfg(test)]
+            RtmpClientIo::Tcp(stream) => Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut self.get_mut().io {
+            RtmpClientIo::Duplex(stream) => Pin::new(stream).poll_shutdown(cx),
+            #[cfg(test)]
+            RtmpClientIo::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
+        }
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        match &self.io {
+            RtmpClientIo::Duplex(stream) => stream.is_write_vectored(),
+            #[cfg(test)]
+            RtmpClientIo::Tcp(stream) => stream.is_write_vectored(),
+        }
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffers: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        match &mut self.get_mut().io {
+            RtmpClientIo::Duplex(stream) => Pin::new(stream).poll_write_vectored(cx, buffers),
+            #[cfg(test)]
+            RtmpClientIo::Tcp(stream) => Pin::new(stream).poll_write_vectored(cx, buffers),
+        }
+    }
+}
 
 pub(super) struct RtmpIngestHandle {
     pub(super) pipeline_id: String,
@@ -45,17 +160,14 @@ pub(super) struct RtmpIngestHandle {
     pub(super) standby_gop: StandbyGopCache,
 }
 #[cfg(target_os = "linux")]
-fn set_tcp_socket_buffers(socket: &TcpStream, size: usize) {
-    use std::os::unix::io::AsRawFd;
-
+fn set_tcp_socket_buffers(fd: RawFd, size: usize) {
     let Ok(size) = libc::c_int::try_from(size) else {
         warn!("RTMP socket buffer size does not fit c_int");
         return;
     };
-    let fd = socket.as_raw_fd();
-    // SAFETY: setsockopt is a POSIX socket API. The file descriptor `fd` is a
-    // valid socket from tokio's TcpStream. `size` is a stack-allocated c_int,
-    // and c_void is the canonical opaque pointer for setsockopt option values.
+    // SAFETY: `fd` is the live TCP socket retained by the Compio bridge.
+    // `setsockopt` reads the stack-allocated `size` value of the stated length.
+    // The socket option values are valid for both calls below.
     unsafe {
         if libc::setsockopt(
             fd,
@@ -81,9 +193,9 @@ fn set_tcp_socket_buffers(socket: &TcpStream, size: usize) {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn set_tcp_socket_buffers(_socket: &TcpStream, _size: usize) {}
+fn set_tcp_socket_buffers(_fd: RawFd, _size: usize) {}
 pub(super) async fn handle_rtmp_client(
-    mut socket: TcpStream,
+    mut socket: RtmpClientSocket,
     client_addr: SocketAddr,
     pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
     security: Arc<IngestSecurityService>,
@@ -91,9 +203,7 @@ pub(super) async fn handle_rtmp_client(
 ) -> Result<(), &'static str> {
     let client_ip = client_addr.ip().to_string();
     let client_addr_text = client_addr.to_string();
-    // Configure socket for low jitter and fast response
-    let _ = socket.set_nodelay(true);
-    set_tcp_socket_buffers(&socket, engine.config.rtmp_preauth_buffer_bytes);
+    set_tcp_socket_buffers(socket.as_raw_fd(), engine.config.rtmp_preauth_buffer_bytes);
     let mut buffer = vec![0u8; 4096];
 
     // 1. Handshake Loop
@@ -218,7 +328,7 @@ pub(super) async fn handle_rtmp_client(
             }
             _ = tcp_stats_interval.tick(), if active_ingest.is_some() => {
                 let now = Instant::now();
-                let quality = match collect_rtmp_receiver_stats(&socket) {
+                let quality = match collect_tcp_stats_by_fd(socket.as_raw_fd()) {
                     Ok(stats) => {
                         let receive_rate = stats.tcp_bytes_received.and_then(|bytes| {
                             let rate = previous_tcp_bytes.and_then(|(previous, sampled_at)| {
@@ -301,7 +411,7 @@ struct ProbeState {
 async fn handle_session_results(
     session: &mut ServerSession,
     results: Vec<ServerSessionResult>,
-    socket: &mut TcpStream,
+    socket: &mut RtmpClientSocket,
     pipeline_access: &dyn PipelineAccessAuthenticator,
     security: &IngestSecurityService,
     engine: &MediaEngine,
@@ -433,7 +543,10 @@ async fn handle_session_results(
                             timestamp_mapper: InputTimestampMapper::default(),
                             standby_gop: StandbyGopCache::default(),
                         });
-                        set_tcp_socket_buffers(socket, engine.config.rtmp_stream_buffer_bytes);
+                        set_tcp_socket_buffers(
+                            socket.as_raw_fd(),
+                            engine.config.rtmp_stream_buffer_bytes,
+                        );
 
                         // Success! Accept publish request
                         let resp = session

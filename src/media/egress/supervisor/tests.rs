@@ -78,7 +78,9 @@ impl EgressShardBackend for TestBackend {
                     .unwrap();
                 EgressShardCommandEffect::Continue
             }
-            Self::Panic => panic!("scripted shard panic"),
+            Self::Panic => crate::test_support::with_expected_panic_suppressed(|| {
+                panic!("scripted shard panic")
+            }),
             Self::Probe(probe) => {
                 let (lock, condvar) = &*probe.inner;
                 let mut commands = lock.lock().unwrap();

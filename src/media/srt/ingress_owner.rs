@@ -285,8 +285,11 @@ impl OwnerLoop {
             // touching the driver, so a loop that never parks would never reap
             // TX completions or receive datagrams. One non-blocking driver
             // poll per visit keeps both flowing (the egress shard's contract).
-            self.runtime.poll_with(Some(Duration::ZERO));
-            self.runtime.run();
+            // Compio tasks (notably TX workers) require Runtime::current while polled.
+            self.runtime.enter(|| {
+                self.runtime.poll_with(Some(Duration::ZERO));
+                self.runtime.run();
+            });
 
             let now = self.timestamp();
             self.retry_deferred(now);
@@ -796,8 +799,10 @@ impl OwnerLoop {
             self.report_fault(detail);
         } else {
             for _ in 0..SHUTDOWN_FLUSH_VISITS {
-                self.runtime.poll_with(Some(Duration::ZERO));
-                self.runtime.run();
+                self.runtime.enter(|| {
+                    self.runtime.poll_with(Some(Duration::ZERO));
+                    self.runtime.run();
+                });
                 let now = self.timestamp();
                 let owner = &mut self.owner;
                 let report = self.runtime.block_on(async {

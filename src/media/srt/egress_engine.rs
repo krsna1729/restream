@@ -8,20 +8,10 @@ use crate::media::egress::feed::{EgressFeed, FeedCursor, FeedRead, ReadBudget};
 use crate::media::egress::journal::TsFeed;
 use crate::media::egress::policy::WorkBudget;
 
-/// Maximum bytes per logical-caller send in message mode: 7 × 188-byte MPEG-TS
-/// packets, matching legacy SRT egress's fixed send buffer
-/// (the historical SRT egress path) and the live-mode payload ceiling.
-///
-/// A muxed TS feed unit is one chunk boundary from the shared muxer
-/// (`src/media/srt/shared_muxer.rs`), which can span many packets — a
-/// keyframe burst is commonly tens of KB. Sending a unit larger than this in
-/// one call fails with SRT error 5009 ("Incorrect use of Message API");
-/// legacy never hits this because it re-chunks the byte stream to 1316 bytes
-/// on the way out regardless of original chunk boundaries. The engine
-/// fragments a retained unit into ≤1316-byte pieces here instead, sending as
-/// many fragments as the visit's budget allows (see `send_pending`) so a
-/// single visit's work stays bounded without costing one scheduler cycle per
-/// fragment.
+/// Maximum bytes per logical-caller message send: the SRT message payload
+/// ceiling is seven 188-byte MPEG-TS packets. Muxed TS feed units can exceed
+/// that limit, so the engine fragments each retained unit into bounded
+/// messages and sends only as many fragments as the visit budget allows.
 pub(super) const MAX_SRT_MESSAGE_PAYLOAD: usize = 1316;
 
 /// Feed units pulled per `feed.read_from` refill once `pending_units` is

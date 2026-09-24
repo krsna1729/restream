@@ -554,8 +554,11 @@ impl SrtOwners {
         // the driver, so a shard that never idles would never reap TX
         // completions or receive datagrams. One non-blocking driver poll per
         // ready batch keeps both flowing.
-        self.runtime.poll_with(Some(Duration::ZERO));
-        self.runtime.run();
+        // Scheduled TX workers call Runtime::current while polled.
+        self.runtime.enter(|| {
+            self.runtime.poll_with(Some(Duration::ZERO));
+            self.runtime.run();
+        });
         let owners = &mut self.owners;
         self.runtime.block_on(async {
             for (index, slot) in owners.iter_mut().enumerate() {

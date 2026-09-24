@@ -72,19 +72,12 @@ impl EgressFabricRuntime {
     /// event-driven, no background timer. A no-op (no allocation, no
     /// rehoming) on the common case where the target hasn't changed.
     ///
-    /// `factory_for(shard_id)` returns the fallible factory that builds the
-    /// shard's backend on the new shard thread, because constructing a real
-    /// shard's readiness poller can fail: `TcpEgressPoller::new` (RTMP/TCP) does a
-    /// real `epoll_create1` syscall that can fail under resource
-    /// exhaustion. The SRT path has no such per-shard construction step —
-    /// its one fallible resource (the shared `srt-rs` Tokio runtime) is
-    /// checked once at initial fabric spawn, not per grown shard, so its
-    /// factory is effectively infallible. Either way, a
-    /// failed grow attempt stops growing for this call (logged by the
-    /// caller via the returned `Err`) rather than panicking or silently
-    /// continuing with fewer shards than `touched` would suggest; whatever
-    /// grew successfully before the failure stays, so this call can simply
-    /// be retried on the next `Add`/`Remove`.
+    /// `factory_for(shard_id)` builds each new backend on its shard thread.
+    /// The RTMP Compio poller and SRT Compio runtime/Owners can both fail to
+    /// initialize; a failed grow attempt stops growing for this call (logged
+    /// by the caller via the returned `Err`) rather than panicking or silently
+    /// continuing with fewer shards than `touched` would suggest. Shards that
+    /// grew before the failure stay, so the next `Add`/`Remove` can retry.
     ///
     /// Returns the shard ids touched (grown or shut down) on success, for
     /// logging.
@@ -217,14 +210,11 @@ impl FabricWatchFeed for crate::media::egress::journal::TsFeed {
 /// snapshot) picks it up without needing to know shards can resize at all.
 ///
 /// Clones the feed's reader side (shared ring/journal + epoch) rather than
-/// holding only the `Notify` handle: `notify_waiters()` only wakes waiters
-/// already polling `.notified()` at the moment it fires, so a bare
-/// `notify.notified().await` loop can miss a publish that happens between
-/// loop iterations. Following the same check-register-recheck-then-await
-/// pattern as `Reader::wait_for_data` (`src/media/ring_buffer/reader.rs`)
-/// closes that window: the head is read again after registering interest,
-/// so a publish landing in the gap is still observed this iteration instead
-/// of being lost until some later push.
+/// holding only the `Notify` handle: `notify_waiters()` only wakes registered
+/// waiters, so the watcher pins and enables a `Notified` future before checking
+/// the head. `RingFeed` can move to a replacement ring, so each iteration also
+/// reacquires the active notify handle and avoids awaiting one made stale during
+/// that check.
 pub(crate) fn spawn_fabric_wake_watcher<F>(
     kind: &'static str,
     feed_id: FeedId,
@@ -236,21 +226,19 @@ where
 {
     tokio::spawn(async move {
         tracing::info!(feed_id = %feed_id, "{kind} fabric wake watcher started");
-        let notify = watcher_feed.notify_handle();
         let mut last_head = watcher_feed.head_sequence();
-        // `last_head`'s pre-loop snapshot can already reflect data published
-        // before this task's first poll (e.g. scheduler delay from
-        // `EgressFabricRuntime::rescale`'s synchronous shard shutdowns) --
-        // treating that as "already seen" would await a `notify_waiters()`
-        // wake that already fired with no registered waiter, hanging
-        // forever. `first_iteration` forces the first pass to always fall
-        // through to deliver instead of awaiting, regardless of what
-        // `last_head` reads.
+        // The pre-loop snapshot may already include a publish that happened
+        // before this task's first poll. Always deliver on the first pass.
         let mut first_iteration = true;
         loop {
+            let notify = watcher_feed.notify_handle();
             let notified = notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
             let current_head = watcher_feed.head_sequence();
-            if current_head == last_head && !first_iteration {
+            let notify_is_current = Arc::ptr_eq(&notify, &watcher_feed.notify_handle());
+            if current_head == last_head && notify_is_current && !first_iteration {
                 notified.await;
             }
             first_iteration = false;
@@ -283,6 +271,8 @@ mod tests {
     struct ProbeState {
         commands: Vec<String>,
         shutdowns: u64,
+        feed_wake_commands: u64,
+        feed_wakes_completed: u64,
     }
 
     #[derive(Clone, Debug, Default)]
@@ -302,15 +292,31 @@ mod tests {
             assert!(result.0.commands.len() >= target);
         }
 
+        fn wait_for_completed_feed_wakes(&self, target: u64) {
+            let (lock, condvar) = &*self.inner;
+            let state = lock.lock().unwrap();
+            let result = condvar
+                .wait_timeout_while(state, Duration::from_secs(2), |state| {
+                    state.feed_wakes_completed < target
+                })
+                .unwrap();
+            assert!(
+                result.0.feed_wakes_completed >= target,
+                "expected {target} completed feed wakes, got {}",
+                result.0.feed_wakes_completed
+            );
+        }
+
         fn state(&self) -> ProbeState {
             let state = self.inner.0.lock().unwrap();
             ProbeState {
                 commands: state.commands.clone(),
                 shutdowns: state.shutdowns,
+                feed_wake_commands: state.feed_wake_commands,
+                feed_wakes_completed: state.feed_wakes_completed,
             }
         }
     }
-
     #[derive(Debug)]
     struct ProbeBackend {
         probe: Probe,
@@ -318,6 +324,7 @@ mod tests {
 
     impl EgressShardBackend for ProbeBackend {
         fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect {
+            let is_feed_wake = matches!(&command, EgressCommand::FeedWake);
             let label = match command {
                 EgressCommand::Add(spec) => format!("add:{}", spec.id),
                 EgressCommand::Update(spec) => format!("update:{}", spec.id),
@@ -329,6 +336,17 @@ mod tests {
             let (lock, condvar) = &*self.probe.inner;
             let mut state = lock.lock().unwrap();
             state.commands.push(label);
+            if is_feed_wake {
+                state.feed_wake_commands = state.feed_wake_commands.saturating_add(1);
+            }
+            condvar.notify_all();
+            EgressShardCommandEffect::Continue
+        }
+
+        fn on_media_tick(&mut self) -> EgressShardCommandEffect {
+            let (lock, condvar) = &*self.probe.inner;
+            let mut state = lock.lock().unwrap();
+            state.feed_wakes_completed = state.feed_wake_commands;
             condvar.notify_all();
             EgressShardCommandEffect::Continue
         }
@@ -550,5 +568,45 @@ mod tests {
         assert_eq!(touched, vec![ShardId::new(1)]);
         assert_eq!(runtime.snapshots().len(), 1);
         runtime.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fabric_wake_watcher_tracks_ring_growth() {
+        use crate::media::egress::journal::{FeedEpoch, RingFeed};
+        use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
+        use crate::media::ring_buffer::RingBuffer;
+
+        let packet = |timestamp| MediaPacket {
+            media_type: MediaType::Video,
+            format: PayloadFormat::Raw,
+            is_keyframe: true,
+            track_index: 0,
+            pts: timestamp,
+            dts: timestamp,
+            payload: bytes::Bytes::new(),
+        };
+        let old_ring = Arc::new(RingBuffer::new(4));
+        let feed = RingFeed::new(old_ring.clone(), Arc::new(FeedEpoch::new()));
+        let probe = Probe::default();
+        let group = group(1, std::slice::from_ref(&probe));
+        let handles = Arc::new(Mutex::new(group.feed_wake_handles()));
+        let watcher =
+            spawn_fabric_wake_watcher("test", FeedId::new("feed-1"), feed.clone_reader(), handles);
+
+        probe.wait_for_completed_feed_wakes(1);
+        old_ring.push(packet(0));
+        probe.wait_for_completed_feed_wakes(2);
+
+        let new_ring = Arc::new(RingBuffer::new_continuing(8, old_ring.get_write_idx()));
+        new_ring.seed_readable_tail_from(&old_ring);
+        old_ring.seal_and_forward(new_ring.clone());
+        probe.wait_for_completed_feed_wakes(3);
+        new_ring.push(packet(33));
+        probe.wait_for_completed_feed_wakes(4);
+
+        assert_eq!(feed.head_sequence(), 2);
+        watcher.abort();
+        let _ = watcher.await;
+        group.shutdown_and_join();
     }
 }

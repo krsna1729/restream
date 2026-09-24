@@ -1,4 +1,4 @@
-use std::net::{SocketAddr, TcpStream};
+use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
@@ -14,7 +14,7 @@ pub(super) struct PendingRtmpConnect {
 pub(super) struct ConnectingRtmpConnect {
     pub(super) common: LeafCommon,
     pub(super) parts: crate::media::rtmp::RtmpUrlParts,
-    pub(super) stream: TcpStream,
+    pub(super) stream: super::super::compio_tcp::CompioTcpStream,
     pub(super) deadline: Instant,
 }
 
@@ -207,7 +207,6 @@ where
             draining_since: None,
             draining_reason: None,
             previous_tcp_bytes: None,
-            pending_send_result: None,
         });
         self.enqueue_stall_candidate(key);
         if let Some(previous) = self

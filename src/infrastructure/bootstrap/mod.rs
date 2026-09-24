@@ -72,7 +72,6 @@ pub async fn run_app(config: Arc<AppConfig>) {
         internal_hevc_to_h264 = config.backend_policy.internal_hevc_to_h264,
         internal_hls_preview = config.backend_policy.internal_hls_preview,
         internal_complex_audio = config.backend_policy.internal_complex_audio,
-        require_srt_bonding = config.require_srt_bonding,
         summary = %config.effective_summary(),
         "effective startup configuration",
     );

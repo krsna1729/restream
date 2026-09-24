@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
+use crate::media::egress::backends::compio_tcp::CompioTcpPoller;
 use crate::media::egress::backends::rtmp::RtmpPublishStartup;
 use crate::media::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource;
 use crate::media::egress::backends::rtmp_shard_resolve_runtime::resolving_rtmp_shard_backend;
-use crate::media::egress::backends::tcp::{IoUringTcpPoller, TcpEgressPollError};
+use crate::media::egress::backends::tcp::TcpEgressPollError;
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId};
 use crate::media::egress::factory::{RtmpFabricShardGroupError, spawn_rtmp_fabric_shard_group};
 use crate::media::egress::journal::RingFeed;
@@ -188,9 +189,8 @@ impl MediaEngine {
                 let startup_source = startup_source.clone();
                 let drain_timeout = shard_config.drain_timeout();
                 let leaf_capacity = shard_config.leaf_capacity().get();
-                // The poller is created on the new shard's own thread.
                 move || {
-                    let poller = IoUringTcpPoller::new(poller_max_events)?;
+                    let poller = CompioTcpPoller::new(poller_max_events)?;
                     Ok::<_, TcpEgressPollError>(resolving_rtmp_shard_backend(
                         poller,
                         feed,

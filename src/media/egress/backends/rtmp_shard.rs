@@ -1,16 +1,10 @@
-//! RTMP fabric shard backend: wires [`RtmpFabricEngine`] into
-//! [`EgressShardBackend`], mirroring [`crate::media::egress::backends::srt::SrtShardBackend`]'s
-//! shape — a real `io_uring`-backed poller, leaf slab, ready queue, and
-//! nonblocking descriptor connect — with DNS resolution split onto a
-//! dedicated worker thread and completion queue, since `ToSocketAddrs` has no
-//! timeout of its own and could otherwise stall the shard on a hung resolver.
+//! RTMP fabric shard backend. A shard-local Compio runtime owns TCP readiness
+//! registrations and socket descriptors; DNS resolution stays on a dedicated
+//! worker so a slow resolver cannot stall the shard.
 //!
-//! Unlike the SRT fabric (always write-registered — libsrt handles
-//! acknowledgement internally), RTMP genuinely alternates between wanting
-//! read and write readiness across its handshake, negotiation, and
-//! publishing states, so this backend re-registers each leaf's poller
-//! interest after every visit based on the `Interest` the engine's last
-//! `EngineProgress` carried, rather than registering once at connect time.
+//! The engine requests read/write readiness across handshake, negotiation,
+//! and publication. The backend updates each leaf's registered interest only
+//! when that request changes.
 
 use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -36,7 +30,7 @@ use crate::media::egress::shard::{
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::rtmp::parse_rtmp_url;
 
-use super::rtmp::{RtmpFabricEngine, RtmpNativeSend, RtmpPublishStartup};
+use super::rtmp::{RtmpFabricEngine, RtmpPublishStartup};
 use super::rtmp_connection::RtmpConnection;
 #[cfg(test)]
 use super::tcp::TcpConnectAttempt;
@@ -56,16 +50,14 @@ pub(crate) use super::rtmp_shard_poller::RtmpReadinessPoller;
 /// Supplies the immutable [`RtmpPublishStartup`] snapshot for one output.
 /// The application layer assembles this (querying `MediaEngine`, output
 /// registries, and ring state — none of which a leaf visit may touch) before
-/// the output is added to a shard; wiring a real, shared-map-backed source
-/// from the application layer is the next slice after this one.
+/// adding the output; production writes it into the shared source before the
+/// shard receives the `Add` command.
 pub(crate) trait RtmpPublishStartupSource {
     fn take_startup(&mut self, output_id: &OutputId) -> Option<RtmpPublishStartup>;
 }
 
-/// Always supplies an empty startup snapshot (no metadata, no cached
-/// sequence headers). Correct for an output whose ring has not produced any
-/// startup state yet, and the default until the application-layer source is
-/// wired in.
+/// Supplies an empty startup snapshot for backend tests that bypass the
+/// application-layer startup handoff.
 #[derive(Debug, Default)]
 pub(crate) struct EmptyRtmpPublishStartupSource;
 
@@ -168,18 +160,11 @@ struct RtmpFabricLeaf {
     engine: RtmpFabricEngine,
     transport: RtmpConnection,
     /// What the poller is currently registered to watch for this leaf's fd.
-    /// `visit_one_ready_leaf` only calls `register_leaf` (an `epoll_ctl`
-    /// syscall) when the engine's next requested interest actually differs
-    /// from this — unlike SRT (always `WRITE`), RTMP's interest genuinely
-    /// changes across handshake/negotiation/publishing, but consecutive
-    /// visits commonly request the *same* interest as last time (e.g. two
-    /// `Progress{interest: WRITE}` results in a row while draining a large
-    /// batch), and re-registering an unchanged interest is a syscall that
-    /// changes nothing.
+    /// The registered readiness interest; only changed when the engine asks
+    /// for a different direction.
     registered_interest: TcpEgressInterest,
-    /// Fallback "last progress" instant for `observe_stall` when a leaf has
-    /// never made any byte/protocol progress at all (e.g. still mid-connect
-    /// or mid-handshake) — mirrors `NativeSrtLeaf::observed_since`.
+    /// Last-progress fallback while a leaf has made no byte or protocol
+    /// progress yet, such as during connect or handshake.
     observed_since: Instant,
     /// Set when this leaf has been asked to close (via `Remove`,
     /// `DrainShard`, or `Shutdown`) but still had queued application bytes
@@ -197,20 +182,16 @@ struct RtmpFabricLeaf {
     /// needed to compute `tcp_send_rate_mbps` as a two-sample delta —
     /// mirrors `rtmp/ingest.rs`'s `previous_tcp_bytes` for the receive side.
     previous_tcp_bytes: Option<(u64, Instant)>,
-    pending_send_result: Option<i32>,
 }
 
 impl RtmpFabricLeaf {
-    fn visit_ready<P: RtmpReadinessPoller>(
+    fn visit_ready(
         &mut self,
         generation: u64,
         readiness: Readiness,
         feed: &RingFeed,
         budget: WorkBudget,
-        poller: &mut P,
-        key: LeafKey,
     ) -> EngineVisitResult {
-        let send_result = self.pending_send_result.take();
         EngineVisit {
             generation,
             common: &mut self.common,
@@ -220,36 +201,12 @@ impl RtmpFabricLeaf {
             feed,
             budget,
         }
-        .run_with(|engine, transport, readiness, feed, cursor, budget| {
-            if poller.supports_native_send() && transport.supports_native_send() {
-                engine.advance_native(
-                    transport,
-                    readiness,
-                    feed,
-                    cursor,
-                    budget,
-                    RtmpNativeSend {
-                        sender: poller,
-                        slot: key.0 as u32,
-                        generation,
-                        send_result,
-                    },
-                )
-            } else {
-                engine.advance(transport, readiness, feed, cursor, budget)
-            }
-        })
+        .run()
     }
 
-    /// Classify this leaf's send-path health from its pending application
-    /// bytes (`common.pending_application_bytes`, wired up per-visit by
-    /// `RtmpShardBackend::visit_one_ready_leaf`) and how long it's been
-    /// since the last byte/protocol progress. Mirrors
-    /// `NativeSrtLeaf::observe_stall` exactly (`src/media/egress/backends/srt.rs`)
-    /// — RTMP has no native transport backlog to probe, so this is simpler:
-    /// no FFI call, just the shared `classify_stall` on `common.progress`,
-    /// which every protocol already updates identically via
-    /// `EngineVisit::run`'s call to `apply_progress_to_common`.
+    /// Classify send-path health from pending application bytes and time
+    /// since the last byte or protocol progress. The shared stall classifier
+    /// consumes the progress state updated by `EngineVisit::run`.
     fn observe_stall(&self, now: Instant) -> LeafStallClass {
         let last_progress = self
             .common
@@ -302,13 +259,11 @@ fn requeue_after_rtmp_visit(decision: VisitDecision) -> bool {
     matches!(decision, VisitDecision::Continue)
 }
 
-/// Registration interest for the next visit, derived from what the engine's
-/// last `EngineProgress` said it needs. Variants that don't carry an
-/// `Interest` (`HandshakeComplete`, `FeedOverrun`) are always paired with an
-/// immediate requeue (see `requeue_after_rtmp_visit`), so the stale
-/// registration is only observed if the shard's visit budget is exhausted
-/// before that requeued visit runs — `READ_WRITE` is a safe superset for
-/// that brief window.
+/// Registration interest for the next visit, derived from the engine's last
+/// progress. `HandshakeComplete` and `FeedOverrun` need one immediate
+/// nonblocking visit after the state/cursor transition; relying on a zero-time
+/// poll can miss a ready descriptor and leave the leaf parked indefinitely.
+/// That synthetic visit is queued in `visit_one_ready_leaf`.
 fn next_registration_interest(
     progress: &crate::media::egress::backend::EngineProgress,
 ) -> Interest {
@@ -366,7 +321,6 @@ where
     stall_candidates: VecDeque<LeafKey>,
     queue_capacity: usize,
     poll_buffer: Vec<TcpReadyLeaf>,
-    send_completions: Vec<restream_dataplane::tcp::TcpSendCompletion>,
     pending_connects: HashMap<OutputId, PendingRtmpConnect>,
     connecting: HashMap<LeafKey, ConnectingRtmpConnect>,
     connecting_by_output: HashMap<OutputId, LeafKey>,
@@ -382,8 +336,6 @@ where
     /// for the repeated-resync alert (`derive_alerts`, `src/alerts.rs`).
     resync_count: u64,
     budget_exhaustions: u64,
-    native_tx_packets: u64,
-    native_tx_bytes: u64,
     queue_overflows: u64,
 }
 
@@ -429,7 +381,6 @@ where
             stall_candidates: VecDeque::with_capacity(ready_capacity),
             queue_capacity: EgressShardConfig::DEFAULT_LEAF_CAPACITY,
             poll_buffer: Vec::with_capacity(ready_capacity),
-            send_completions: Vec::with_capacity(ready_capacity),
             pending_connects: HashMap::new(),
             connecting: HashMap::new(),
             connecting_by_output: HashMap::new(),
@@ -437,8 +388,6 @@ where
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
             budget_exhaustions: 0,
-            native_tx_packets: 0,
-            native_tx_bytes: 0,
             queue_overflows: 0,
         }
     }
@@ -513,18 +462,8 @@ where
     /// feed publishes more media. The queue is populated at visit time, so a
     /// feed wake does not scan every output on the shard.
     ///
-    /// Mirrors `poll_ready()`'s push-with-dedup shape exactly (same
-    /// `enqueued` check and set), using `self.ready` directly instead of a
-    /// real `epoll_wait()`. Replaces the previous `epoll_ctl`-widening
-    /// implementation of this method, which forced every leaf's
-    /// registration to `READ_WRITE` on the (mistaken — RTMP's steady-state
-    /// publisher always keeps at least `READ` registered, see
-    /// `MediaPublisher::advance`'s `FeedRead::Empty` handling) assumption
-    /// that a drained leaf's registration had gone empty; the *actual*
-    /// effect of that widening was manufacturing a spurious writable event
-    /// for the next real `epoll_wait()` to discover, since a TCP socket is
-    /// almost always writable — an indirect, syscall-costly wake signal
-    /// this replaces with a direct one.
+    /// Feed wakes go directly to the deduplicated ready queue rather than
+    /// manufacturing a socket-readiness event.
     ///
     /// Safe against the regression an earlier direct-enqueue attempt hit
     /// (documented in this method's prior history): that attempt pushed a
@@ -572,49 +511,6 @@ where
         if self.poller.poll_leaves(0, &mut self.poll_buffer).is_err() {
             return;
         }
-        self.send_completions.clear();
-        self.poller
-            .drain_send_completions(&mut self.send_completions);
-        let mut completions = std::mem::take(&mut self.send_completions);
-        for completion in completions.drain(..) {
-            if completion.result >= 0 {
-                self.native_tx_packets = self.native_tx_packets.saturating_add(1);
-                self.native_tx_bytes = self
-                    .native_tx_bytes
-                    .saturating_add(completion.result as u64);
-            }
-            let key = LeafKey(completion.slot as usize);
-            let event = self
-                .leaves
-                .get_mut(key.0)
-                .and_then(Option::as_mut)
-                .and_then(|leaf| {
-                    if leaf.common.generation != completion.generation as u64 {
-                        None
-                    } else if leaf.common.schedule.enqueued {
-                        leaf.pending_send_result = Some(completion.result);
-                        None
-                    } else {
-                        leaf.pending_send_result = Some(completion.result);
-                        leaf.common.schedule.enqueued = true;
-                        Some(TcpReadyLeaf {
-                            fd: leaf.transport.raw_fd(),
-                            key,
-                            generation: leaf.common.generation,
-                            readable: false,
-                            writable: true,
-                        })
-                    }
-                });
-            let Some(event) = event else {
-                continue;
-            };
-            let admitted = self.enqueue_ready(event);
-            if !admitted && let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::as_mut) {
-                leaf.common.schedule.enqueued = false;
-            }
-        }
-        self.send_completions = completions;
         let mut poll_buffer = std::mem::take(&mut self.poll_buffer);
         for event in poll_buffer.drain(..) {
             if self.connecting.contains_key(&event.key) {
@@ -690,8 +586,6 @@ where
             },
             feed,
             budget,
-            &mut self.poller,
-            event.key,
         );
 
         let (progress, decision) = match result {
@@ -706,6 +600,11 @@ where
                 (outcome.progress, outcome.decision)
             }
         };
+        let transition_needs_visit = matches!(
+            &progress,
+            crate::media::egress::backend::EngineProgress::HandshakeComplete
+                | crate::media::egress::backend::EngineProgress::FeedOverrun
+        );
         if matches!(
             progress,
             crate::media::egress::backend::EngineProgress::FeedOverrun
@@ -716,8 +615,9 @@ where
             .engine
             .pending_application_bytes()
             .saturating_add(leaf.transport.rustls_pending_bytes_estimate());
-        let feed_waiting = matches!(decision, VisitDecision::Suspend)
-            && leaf.common.schedule.wants_feed_wake
+        // Progress can still end on an empty feed. Keep that leaf parked for
+        // the next publication even though this visit returns `Continue`.
+        let feed_waiting = leaf.common.schedule.wants_feed_wake
             && !leaf.common.schedule.enqueued
             && !leaf.common.schedule.feed_wake_queued;
         if feed_waiting {
@@ -752,11 +652,8 @@ where
 
         {
             let interest = tcp_interest(next_registration_interest(&progress));
-            // `register_leaf` is an `epoll_ctl(EPOLL_CTL_MOD)` syscall; skip
-            // it when the requested interest already matches what's
-            // registered (common across consecutive visits of the same
-            // leaf — e.g. several `Progress{interest: WRITE}` results in a
-            // row while draining a large batch).
+            // Avoid refreshing the Compio readiness registration when the
+            // requested interest has not changed.
             if let Some(leaf) = self.leaves.get_mut(event.key.0).and_then(Option::as_mut)
                 && leaf.registered_interest != interest
             {
@@ -787,6 +684,25 @@ where
                 leaf.registered_interest = interest;
             }
         }
+        if transition_needs_visit {
+            let admitted = push_bounded(
+                &mut self.ready,
+                TcpReadyLeaf {
+                    fd: event.fd,
+                    key: event.key,
+                    generation: event.generation,
+                    readable: true,
+                    writable: true,
+                },
+                self.queue_capacity,
+            );
+            if !admitted {
+                self.queue_overflows = self.queue_overflows.saturating_add(1);
+            }
+            if let Some(leaf) = self.leaves.get_mut(event.key.0).and_then(Option::as_mut) {
+                leaf.common.schedule.enqueued = admitted;
+            }
+        }
 
         Some((None, decision))
     }
@@ -794,7 +710,7 @@ where
 
 impl<P, S> EgressShardBackend for RtmpShardBackend<P, S>
 where
-    P: RtmpReadinessPoller + Send + 'static,
+    P: RtmpReadinessPoller + 'static,
     S: RtmpPublishStartupSource + Send + 'static,
 {
     fn resync_count(&self) -> u64 {
@@ -806,13 +722,12 @@ where
     }
 
     fn observe_metrics(&self, metrics: &mut ShardMetrics) {
-        let native = self.poller.native_metrics();
-        metrics.tx_packets = self.native_tx_packets;
-        metrics.tx_bytes = self.native_tx_bytes;
-        metrics.sqes = native.sqes;
-        metrics.cqes = native.completions;
-        metrics.stale_completions = native.stale_completions;
-        metrics.cq_overflows = native.cq_overflows;
+        metrics.tx_packets = 0;
+        metrics.tx_bytes = 0;
+        metrics.sqes = 0;
+        metrics.cqes = 0;
+        metrics.stale_completions = 0;
+        metrics.cq_overflows = 0;
         metrics.budget_exhaustions = self.budget_exhaustions;
         metrics.queue_overflows = self.queue_overflows;
     }
@@ -891,6 +806,24 @@ where
         }
     }
 
+    fn wait_idle(
+        &mut self,
+        commands: &flume::Receiver<EgressCommand>,
+        max_wait: Duration,
+    ) -> crate::media::egress::shard::EgressShardIdleWake {
+        if let Some(wake) = self.poller.wait_idle(commands, max_wait) {
+            return wake;
+        }
+        match commands.recv_timeout(max_wait) {
+            Ok(command) => crate::media::egress::shard::EgressShardIdleWake::Command(command),
+            Err(flume::RecvTimeoutError::Timeout) => {
+                crate::media::egress::shard::EgressShardIdleWake::Timeout
+            }
+            Err(flume::RecvTimeoutError::Disconnected) => {
+                crate::media::egress::shard::EgressShardIdleWake::Disconnected
+            }
+        }
+    }
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         let mut resolved = std::mem::take(&mut self.resolved_connects);
         resolved.clear();

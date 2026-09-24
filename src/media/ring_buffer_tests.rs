@@ -1,30 +1,5 @@
 use super::*;
 use bytes::Bytes;
-use std::sync::Mutex;
-
-static EXPECTED_PANIC_HOOK_LOCK: Mutex<()> = Mutex::new(());
-
-type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
-
-struct ScopedSilentPanicHook(Option<PanicHook>);
-
-impl ScopedSilentPanicHook {
-    fn new() -> Self {
-        Self(Some(std::panic::take_hook()))
-    }
-
-    fn silence(&mut self) {
-        std::panic::set_hook(Box::new(|_| {}));
-    }
-}
-
-impl Drop for ScopedSilentPanicHook {
-    fn drop(&mut self) {
-        if let Some(hook) = self.0.take() {
-            std::panic::set_hook(hook);
-        }
-    }
-}
 
 fn video_packet(pts: i64, dts: i64, keyframe: bool) -> MediaPacket {
     MediaPacket {
