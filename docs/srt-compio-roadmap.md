@@ -2354,16 +2354,29 @@ lifecycle events, snapshots, and decoded/shared media may cross domains; live
 transport byte streams, Tokio network wrappers, and borrowed FDs may not.
 
 RTMP ingress runs protocol handling on the same Compio owner as its socket;
-auth and pipeline/ring work remain in Tokio. The current 64 MiB RTMP media
-handoff budget covers permit-backed queued/processing command payloads, not
-parser working sets. A blocked handoff can coexist with one completed
-24-bit-size message and the next incomplete parser assembly per connection,
-plus a 4 KiB socket read, a separate 4 KiB parser staging buffer, and small
-event metadata; this residual scales with
-the configured connection limit. At the default 512-connection cap, the two
-maximum payloads alone approach 16 GiB; at the configured maximum of 16,384,
-they approach 512 GiB. These payload-only theoretical ceilings are not RSS
-estimates; parser/session and other transport allocations add more.
+auth and pipeline/ring work remain in Tokio. Ingest memory is bounded in two
+layers (WI5B.1):
+
+- before handoff: a declared RTMP message longer than
+  `RESTREAM_RTMP_MAX_MESSAGE_BYTES` (default 8 MiB, clamped 64 KiB-16 MiB) is
+  rejected when its chunk header is decoded, before any payload is buffered;
+  the parser grows with received bytes rather than reserving a declared
+  length. Bytes every ingest parser holds, plus completed media still awaiting
+  a handoff permit, are charged to one aggregate budget
+  (`RESTREAM_RTMP_INGEST_PARSER_BUDGET_BYTES`, default 256 MiB); the
+  connection whose input would exceed it is rejected. The budget is a plain
+  counter on the single ingest owner thread.
+- after handoff: the 64 MiB media-handoff semaphore covers queued and
+  processing payloads.
+
+Pre-handoff memory is therefore bounded by the budget independent of the
+connection count, plus per-connection socket reads and session metadata. The
+default maximum message leaves more than 2x headroom over a high-end 4K
+keyframe (100 Mbps at 30 fps: mean frame ~420 KB, keyframes up to ~8x). The
+parser change is a minimal vendored patch to `rml_rtmp` 0.8.0
+(`vendor/rml_rtmp/RESTREAM_PATCHES.md`): previously one 128-byte chunk
+declaring 16 MiB forced a 16 MiB allocation, and the budget applied only
+after a message completed.
 
 RTMP egress uses bounded one-shot Compio RX/TX completions on the existing
 fabric; established sockets do not use population-wide readiness scans.
@@ -2399,12 +2412,14 @@ sized from the connection limit. DNS resolution for RTMP and SRT egress has a
 bounded failure completion, rejects explicitly when its request queue is full,
 and joins its worker on the owning shard thread.
 
-Nominal active-leaf transport-adapter capacity is 16 KiB plain RTMP and
-16 KiB + 24 B for RTMPS. At the default upper topology of 8 shards × 4,096
-leaves (32,768), this is about 512 MiB / 512.75 MiB. Configured shard/leaf
-overrides scale total capacity. This excludes protocol/TLS/runtime/task/event
-structures, allocator overhead, and kernel socket buffers; the existing
-per-leaf application pending-byte bound is separate.
+Per-leaf transport-adapter capacity is 64 KiB TX staging plus 4 KiB RX (plus
+24 B for RTMPS record metadata). At the default upper topology of 8 shards x
+4,096 leaves (32,768) that is about 2.1 GiB theoretical; configured shard/leaf
+overrides scale it. It excludes protocol/TLS/runtime/task/event structures,
+allocator overhead and kernel socket buffers, and staged TX bytes count toward
+each leaf's separate application pending-byte bound (default 256 KiB). The TX
+size was chosen by measurement (see "Egress CPU after the completion
+rewrite").
 
 Acceptance gates:
 
@@ -2471,6 +2486,28 @@ Hosted acceptance history:
     lifecycle proof green again) and dispatch run `36134416775` (Docker smoke
     executed, lifecycle proof green).
 
+Egress CPU after the completion rewrite (post-acceptance A/B, 2026-09-25):
+the completion-driven RTMP egress (`53f343ac`) was measured against the last
+readiness-driven egress (`b64bd760`) with the resource sweep: 1 SRT ingest at
+8 Mbps, RTMP or RTMPS fan-out, the same `test_harness` binary for both builds,
+3 interleaved repetitions, median restream CPU %. Receiver-side delivery and
+fairness (`resource_sweep/delivery.rs`: per-destination rate over offered
+rate, worst 1 s interval, Jain's index, nginx-media method) were full in every
+run: all destinations delivered at ratio ~0.97-0.99, Jain >= 0.99996.
+
+| 100 outputs | baseline | as accepted | slice copies `a7c5316c` | 64 KiB TX batch |
+|---|---|---|---|---|
+| RTMP CPU % | 30-36 | 92.6 (3.1x) | 60.8 (1.7x) | 31.9 vs 33.3 (0.96x) |
+| RTMPS CPU % | 43-45 | 106.4 (2.3x) | 81.5 (1.8x) | 40.3 vs 42.9 (0.94x) |
+
+`perf` attributed 28.7% of daemon time to per-byte ring draining; after slice
+copies the profile was flat and dominated by per-completion cost (task wakes,
+event channel, visits) at one completion per 4 KiB. A buffer swap instead of
+a staging copy (`9d0b8837`) was neutral. A 64 KiB TX batch returns egress to
+baseline CPU; worst 1 s delivery intervals (0.67-0.96) match the baseline's
+spread. Single-host relative evidence, not a capacity claim; artifacts under
+`.local/artifacts/perf-*` (local).
+
 Known non-blocking local debt observed during this work: on the 6-CPU WSL2
 development host, `mixed.live.srt.h264.a2.bf2` can fail SRT signal validation
 on audio PTS gaps (106.5 ms and 256.2 ms observed; a 256.5 ms gap was already
@@ -2500,16 +2537,19 @@ calibration belongs to WI8 and final cross-host qualification to WI10.
 
 ## 26. WI7 — Dataplane Shrink
 
-Remove obsolete generic/native transport code after SRT + RTMP migration.
+Status: ACTIVE.
 
-Candidates:
-
-- old UDP io_uring machinery
-- old TCP io_uring machinery
-- fixed-file abstractions with no remaining consumer
-- legacy pollers
-- compatibility wrappers
-- dead runtime traits
+- WI7.1 DONE (`83c92cb9`): deleted the test-only epoll `TcpEgressPoller` and
+  `tcp_connect`; RTMP shard tests run on the production Compio poller; guard
+  against epoll returning.
+- WI7.2 DONE (`9dcddd00`): deleted the retired `restream-dataplane` crate
+  (native TCP/UDP io_uring machinery, fixed-file tables, dataplane scheduler
+  and media copies) and its fuzz crate; `UringCapabilities` moved to
+  `src/media/uring_capabilities.rs`; the CI O(ready) gate now targets the
+  production ready queue.
+- WI7.3 NEXT: residual audit for compatibility wrappers, dead runtime traits,
+  stale configuration and metrics against the current tree, not the original
+  candidate list.
 
 Keep only primitives with active value.
 
@@ -2813,8 +2853,15 @@ Transport live CI
     PR live smoke, redevelop media/fault matrix, real RTMPS media and container
     qualification without path skips.
 
+WI5B.1
+    DONE: RTMP ingest parser memory bounded before handoff (max message size
+    checked at header decode, aggregate parser budget incl. completed media
+    awaiting handoff); transport ownership guards; egress CPU back to the
+    readiness baseline with receiver-side delivery/fairness evidence
+
 WI7
-    delete obsolete dataplane machinery only after WI5B final-code acceptance
+    ACTIVE: WI7.1 (epoll adapter) and WI7.2 (restream-dataplane crate) done;
+    WI7.3 residual dead-code audit next
 
 WI9
     compress abstractions after the active dataplane is known; retain a stable
@@ -2840,21 +2887,22 @@ WI10
 
 ## 36. Immediate Next Action
 
-WI3.7's current-host evidence is frozen provisionally. Do not rerun its
-performance matrix, derive a new shard coefficient, or change production
-defaults in this transport-convergence work.
+WI5B and WI5B.1 are done. Next, in order:
 
-Sequence: `WI4A -> WI5/WI6 initial cutovers -> WI5B -> WI7 -> WI9 ->
-optional evidence-driven I/O experiments -> WI8/Q-025 -> WI10`.
+1. WI7.3: residual dead-code/compatibility audit against the current tree.
+2. Production delivery telemetry: per-output offered/delivered rate (TCP
+   `bytes_acked`, SRT unique-minus-dropped payload) and per-feed Jain index in
+   Restream itself, cross-checked by the harness's receiver-side measurement.
+3. WI8/Q-025 measurement questions, answered with data before any redesign:
+   - RTMP ingress runs on one owner thread: measure owner busy %, protocol us,
+     loop latency and handoff blocking against ingest count to decide whether
+     N owners (SO_REUSEPORT or accepted-connection assignment) are needed;
+   - RTMP/SRT egress runs a shard group per feed: measure threads, rings,
+     memory, idle CPU and context switches against feed count versus the
+     isolation it buys, before choosing a host-wide shard pool.
 
-WI5B is DONE at `d77997ec` (§24 lists both green hosted sets). Next is WI7:
-delete obsolete dataplane machinery. The first candidate is the `#[cfg(test)]`
-epoll `TcpEgressPoller`: RTMP shard unit tests still run on that
-level-triggered adapter while production is edge-triggered completions, which
-is why the WI5B lost-wakeup bugs surfaced only in live CI. Move those tests onto
-`CompioTcpPoller`, then delete the adapter and any other machinery without an
-active consumer. WI9, the optional HLS PUT / FFmpeg pipe experiments, WI8/Q-025
-and WI10 follow in the sequence above.
+Do not change HLS PUT, FFmpeg pipes, shard coefficients, NUMA policy or owner
+topology ahead of those measurements.
 
 ## 37. Definition of Success
 
