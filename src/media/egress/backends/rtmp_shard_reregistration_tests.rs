@@ -46,6 +46,10 @@ impl RtmpReadinessPoller for CountingPoller {
         self.inner.remove(fd)
     }
 
+    fn completion_counts(&self) -> (u64, u64) {
+        self.inner.completion_counts()
+    }
+
     fn wait_idle(
         &mut self,
         commands: &flume::Receiver<EgressCommand>,

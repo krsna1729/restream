@@ -68,6 +68,10 @@ pub(crate) struct CompioTcpPoller {
     event_tx: flume::Sender<TcpReadyLeaf>,
     event_rx: flume::Receiver<TcpReadyLeaf>,
     ready_capacity: usize,
+    /// I/O completion events consumed, and those dropped as stale (an older
+    /// generation or a removed connection), for shard metrics.
+    completions: u64,
+    stale_completions: u64,
 }
 
 impl CompioTcpPoller {
@@ -101,11 +105,18 @@ impl CompioTcpPoller {
             event_tx,
             event_rx,
             ready_capacity,
+            completions: 0,
+            stale_completions: 0,
         })
     }
 
     pub(crate) fn ready_capacity(&self) -> usize {
         self.ready_capacity
+    }
+
+    /// `(consumed, stale)` I/O completion events since creation.
+    pub(crate) fn completion_counts(&self) -> (u64, u64) {
+        (self.completions, self.stale_completions)
     }
     fn completion_current(&self, event: &TcpReadyLeaf) -> bool {
         self.io_tasks
@@ -346,8 +357,11 @@ impl CompioTcpPoller {
         }
         while ready.len() < self.ready_capacity {
             match self.event_rx.try_recv() {
-                Ok(event) if self.completion_current(&event) => ready.push(event),
-                Ok(_) => continue,
+                Ok(event) if self.completion_current(&event) => {
+                    self.completions += 1;
+                    ready.push(event);
+                }
+                Ok(_) => self.stale_completions += 1,
                 Err(_) => break,
             }
         }
@@ -372,8 +386,11 @@ impl CompioTcpPoller {
             }
             while ready.len() < self.ready_capacity {
                 match self.event_rx.try_recv() {
-                    Ok(event) if self.completion_current(&event) => ready.push(event),
-                    Ok(_) => continue,
+                    Ok(event) if self.completion_current(&event) => {
+                        self.completions += 1;
+                        ready.push(event);
+                    }
+                    Ok(_) => self.stale_completions += 1,
                     Err(_) => break,
                 }
             }
@@ -457,6 +474,7 @@ impl CompioTcpPoller {
             }
             Wake::Completion(event) => {
                 if self.completion_current(&event) {
+                    self.completions += 1;
                     self.ready_queue.push_back((
                         event.fd,
                         event.key,
@@ -466,6 +484,7 @@ impl CompioTcpPoller {
                     ));
                     EgressShardIdleWake::BackendActivity
                 } else {
+                    self.stale_completions += 1;
                     EgressShardIdleWake::Timeout
                 }
             }

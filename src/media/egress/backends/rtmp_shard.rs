@@ -359,6 +359,9 @@ where
     /// for the repeated-resync alert (`derive_alerts`, `src/alerts.rs`).
     resync_count: u64,
     budget_exhaustions: u64,
+    /// Media units and bytes the engine handed to its transports.
+    tx_units: u64,
+    tx_bytes: u64,
     queue_overflows: u64,
 }
 
@@ -407,6 +410,8 @@ where
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             resync_count: 0,
             budget_exhaustions: 0,
+            tx_units: 0,
+            tx_bytes: 0,
             queue_overflows: 0,
         }
     }
@@ -573,6 +578,10 @@ where
         let (progress, decision) = match result {
             EngineVisitResult::StaleGeneration => return Some((None, VisitDecision::Suspend)),
             EngineVisitResult::Visited(outcome) => {
+                if let EngineProgress::Progress { bytes, units, .. } = &outcome.progress {
+                    self.tx_bytes = self.tx_bytes.saturating_add(*bytes as u64);
+                    self.tx_units = self.tx_units.saturating_add(*units as u64);
+                }
                 if matches!(&outcome.progress, EngineProgress::Yield) {
                     self.budget_exhaustions = self.budget_exhaustions.saturating_add(1);
                 }
@@ -667,12 +676,14 @@ where
     }
 
     fn observe_metrics(&self, metrics: &mut ShardMetrics) {
-        metrics.tx_packets = 0;
-        metrics.tx_bytes = 0;
-        metrics.sqes = 0;
-        metrics.cqes = 0;
-        metrics.stale_completions = 0;
-        metrics.cq_overflows = 0;
+        // RTMP observes media units and bytes handed to its transports and
+        // the completion events it consumes; io_uring SQ/CQ counters are not
+        // visible through Compio and stay unset.
+        let (completions, stale_completions) = self.poller.completion_counts();
+        metrics.tx_packets = self.tx_units;
+        metrics.tx_bytes = self.tx_bytes;
+        metrics.cqes = completions;
+        metrics.stale_completions = stale_completions;
         metrics.budget_exhaustions = self.budget_exhaustions;
         metrics.queue_overflows = self.queue_overflows;
     }

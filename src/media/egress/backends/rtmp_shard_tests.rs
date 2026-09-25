@@ -184,6 +184,11 @@ impl RtmpReadinessPoller for ScriptedPoller {
         Ok(())
     }
 
+    /// Scripted events are not I/O completions.
+    fn completion_counts(&self) -> (u64, u64) {
+        (0, 0)
+    }
+
     fn poll_leaves(
         &mut self,
         _timeout_ms: i32,
@@ -400,6 +405,12 @@ fn shard_driven_leaf_reaches_publish_accepted_against_a_real_peer() {
         backend.on_ready();
         thread::sleep(Duration::from_millis(1));
     }
+
+    // Reaching publish acceptance consumed real completions; the shard reports
+    // them instead of a fabricated zero.
+    let mut metrics = ShardMetrics::default();
+    backend.observe_metrics(&mut metrics);
+    assert!(metrics.cqes > 0, "consumed completions must be reported");
 
     server.join().unwrap();
 }

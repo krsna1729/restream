@@ -28,6 +28,9 @@ pub(crate) trait RtmpReadinessPoller {
 
     fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError>;
 
+    /// `(consumed, stale)` I/O completion events, for shard metrics.
+    fn completion_counts(&self) -> (u64, u64);
+
     fn poll_leaves(
         &mut self,
         timeout_ms: i32,
@@ -69,6 +72,10 @@ impl RtmpReadinessPoller for super::compio_tcp::CompioTcpPoller {
     }
     fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError> {
         self.remove(fd)
+    }
+
+    fn completion_counts(&self) -> (u64, u64) {
+        super::compio_tcp::CompioTcpPoller::completion_counts(self)
     }
 
     fn poll_leaves(

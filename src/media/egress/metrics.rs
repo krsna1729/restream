@@ -92,16 +92,6 @@ pub struct OwnerFamilyMetrics {
 pub struct ShardMetrics {
     pub shard_id: Option<ShardId>,
 
-    // --- Leaf counts ---
-    /// Total leaves currently assigned to this shard.
-    pub leaves_total: u32,
-    /// Leaves in each lifecycle state (indexed by ordinal — filled at publish
-    /// time from the actual slab in Phase 3).
-    pub leaves_active: u32,
-    pub leaves_connecting: u32,
-    pub leaves_retry_wait: u32,
-    pub leaves_closing: u32,
-
     // --- Ready queue ---
     /// Current depth of the ready queue.
     pub ready_depth: u32,
@@ -128,10 +118,6 @@ pub struct ShardMetrics {
     pub media_ticks: u64,
     /// Sum of loop durations for latency percentile computation (Phase 3).
     pub loop_duration_sum_us: u64,
-
-    // --- Connect / handshake concurrency ---
-    pub concurrent_connects: u32,
-    pub concurrent_handshakes: u32,
 
     // --- Retry ---
     pub retry_events: u64,
