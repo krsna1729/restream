@@ -12,6 +12,10 @@ use super::super::tcp::TcpReadyLeaf;
 /// Compio completions; the synchronous protocol engine only consumes or
 /// produces bytes here.
 pub(super) const TRANSPORT_BUFFER_CAPACITY: usize = 4096;
+/// TX staging bound per connection. Each transmit completion carries up to
+/// this many bytes, so it sets the completion (event + visit) rate per byte
+/// of fan-out; RX stays at `TRANSPORT_BUFFER_CAPACITY`.
+pub(super) const TRANSMIT_BUFFER_CAPACITY: usize = 64 * 1024;
 pub(crate) type SharedIoBuffers = std::rc::Rc<std::cell::RefCell<IoBuffers>>;
 
 #[derive(Debug, Default)]
@@ -258,7 +262,7 @@ impl Write for CompioTcpStream {
                     return Err(io::Error::new(*kind, message.clone()));
                 }
                 let available =
-                    TRANSPORT_BUFFER_CAPACITY.saturating_sub(buffers.pending_write_bytes);
+                    TRANSMIT_BUFFER_CAPACITY.saturating_sub(buffers.pending_write_bytes);
                 let count = buf.len().min(available);
                 if count == 0 {
                     return Err(io::ErrorKind::WouldBlock.into());
@@ -281,7 +285,7 @@ impl Write for CompioTcpStream {
                     return Err(io::Error::new(*kind, message.clone()));
                 }
                 let mut available =
-                    TRANSPORT_BUFFER_CAPACITY.saturating_sub(buffers.pending_write_bytes);
+                    TRANSMIT_BUFFER_CAPACITY.saturating_sub(buffers.pending_write_bytes);
                 let mut count = 0;
                 for buf in bufs.iter().filter(|buf| !buf.is_empty()) {
                     let take = available.min(buf.len());
