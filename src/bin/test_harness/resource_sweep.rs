@@ -49,6 +49,8 @@ use config::{
 };
 #[path = "resource_sweep/burst.rs"]
 mod burst;
+#[path = "resource_sweep/delivery.rs"]
+mod delivery;
 #[path = "resource_sweep/first_progress.rs"]
 mod first_progress;
 #[path = "resource_sweep/measurement.rs"]

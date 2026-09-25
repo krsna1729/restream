@@ -386,6 +386,7 @@ fn report_uses_engine_health_wording_and_sink_columns_in_sink_mode() {
 fn report_test_aggregate() -> MsrCheckpointAggregate {
     MsrCheckpointAggregate {
         resource: ResourceAggregate {
+            delivery: Default::default(),
             scenario: MSR_MODE.to_string(),
             label: "30-outputs".to_string(),
             lifecycle: "continuous".to_string(),
