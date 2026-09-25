@@ -76,19 +76,6 @@ jobs:
           scripts/build/resource-limit.sh cargo check \
             --lib --no-default-features --features mcp-embedded
 
-  egress-scheduler-shape:
-    name: Egress scheduler shape gate
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/ci-bootstrap
-        with:
-          rust_cache: 'true'
-      - name: Assert production ready-queue cost shape (O(ready), not O(population))
-        run: |
-          scripts/build/resource-limit.sh cargo test \
-            --test egress_scheduler_shape
-
   architecture-guardrails:
     name: Source architecture audit
     runs-on: ubuntu-24.04
@@ -242,6 +229,8 @@ jobs:
           rust_cache: 'true'
       - name: Run fast concurrency proof
         run: bash ./scripts/check/concurrency/fast.sh
+      - name: Assert egress ready-queue cost shape (O(ready), not O(population))
+        run: scripts/build/resource-limit.sh cargo test --test egress_scheduler_shape
 
   concurrency-contract:
     if: ${{ github.ref == 'refs/heads/redevelop' }}
