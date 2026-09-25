@@ -14,6 +14,7 @@
 //! loop rather than a hang.
 
 use super::*;
+use std::sync::Arc;
 
 /// Builds a backend wired to a real `RtmpResolveCompletionQueue` so this
 /// test can push a connect completion the same way the production resolve
@@ -56,7 +57,7 @@ fn on_media_tick_schedules_ready_work_when_a_connect_completes() {
         .send(RtmpResolvedConnect {
             output_id: output_id.clone(),
             generation: 1,
-            peer_addr: addr,
+            peer_addr: Some(addr),
         })
         .unwrap();
 
@@ -86,4 +87,34 @@ fn on_media_tick_is_a_no_op_when_nothing_resolved() {
         EgressShardCommandEffect::Continue,
         "an idle tick with no resolved connects must not schedule ready work"
     );
+}
+
+#[test]
+fn failed_resolution_terminates_the_pending_connect() {
+    let (mut backend, sender) = backend_with_resolve_queue();
+    let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut spec = output_spec(
+        "unresolvable-leaf",
+        "rtmp://unresolvable.invalid/live/key",
+        1,
+    );
+    let output_id = spec.id.clone();
+    spec.progress.terminated_unexpectedly = Some(Arc::clone(&terminated));
+    backend.on_command(EgressCommand::Add(spec));
+    assert!(backend.has_pending_connect(&output_id));
+
+    sender
+        .send(RtmpResolvedConnect {
+            output_id: output_id.clone(),
+            generation: 1,
+            peer_addr: None,
+        })
+        .unwrap();
+    assert_eq!(backend.on_media_tick(), EgressShardCommandEffect::Continue);
+
+    assert!(
+        !backend.has_pending_connect(&output_id),
+        "a failed resolution must not keep holding leaf capacity"
+    );
+    assert!(terminated.load(std::sync::atomic::Ordering::Relaxed));
 }

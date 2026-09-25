@@ -70,6 +70,23 @@ where
         self.pending_connects.get(output_id)
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_pending_connect(&self, output_id: &OutputId) -> bool {
+        self.pending_connects.contains_key(output_id)
+    }
+
+    pub(super) fn fail_pending_connect(&mut self, output_id: &OutputId, generation: u64) {
+        let Some(pending) = self.pending_connects.remove(output_id) else {
+            return;
+        };
+        if pending.common.generation != generation {
+            self.pending_connects.insert(output_id.clone(), pending);
+            return;
+        }
+        tracing::warn!(output_id = %output_id, "rtmp fabric leaf rejected: peer resolution failed");
+        pending.common.progress_sink.mark_terminated_unexpectedly();
+    }
+
     pub(super) fn complete_pending_connect(
         &mut self,
         output_id: &OutputId,

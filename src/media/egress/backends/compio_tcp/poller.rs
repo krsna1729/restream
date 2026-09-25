@@ -278,7 +278,7 @@ impl CompioTcpPoller {
                 let _ = tasks.transmit.task.await;
             });
         }
-        let removed = self.registrations.remove(&fd).is_some();
+        self.registrations.remove(&fd);
         self.ready_queue.retain(|event| event.0 != fd);
         if let Some(index) = self
             .registration_order
@@ -295,7 +295,6 @@ impl CompioTcpPoller {
                 self.next_registration %= self.registration_order.len();
             }
         }
-        let _ = removed;
         Ok(())
     }
 

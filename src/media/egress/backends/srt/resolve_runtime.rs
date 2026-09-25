@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 
@@ -21,7 +21,7 @@ pub(crate) type ResolvingSrtShardBackendDefault = ResolvingSrtShardBackend<SrtSh
 
 pub(crate) struct SrtResolveWorkerSet {
     request_sender: Option<SyncSender<SrtResolveRequest>>,
-    pending: Arc<AtomicUsize>,
+    stopping: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -29,10 +29,13 @@ impl SrtResolveWorkerSet {
     pub(crate) fn new(completion_sender: SyncSender<SrtResolvedConnect>) -> Self {
         let (request_sender, request_receiver) =
             mpsc::sync_channel::<SrtResolveRequest>(SRT_RESOLVE_REQUEST_QUEUE_CAPACITY);
-        let pending = Arc::new(AtomicUsize::new(0));
-        let worker_pending = Arc::clone(&pending);
+        let stopping = Arc::new(AtomicBool::new(false));
+        let worker_stopping = Arc::clone(&stopping);
         let worker = std::thread::spawn(move || {
             while let Ok(request) = request_receiver.recv() {
+                if worker_stopping.load(Ordering::SeqCst) {
+                    break;
+                }
                 let output_id = request.output_id.clone();
                 let generation = request.generation;
                 if super::resolve_srt_peer_hosts(request, completion_sender.clone()).is_err() {
@@ -45,12 +48,11 @@ impl SrtResolveWorkerSet {
                         peer_addrs: Vec::new(),
                     });
                 }
-                worker_pending.fetch_sub(1, Ordering::Relaxed);
             }
         });
         Self {
             request_sender: Some(request_sender),
-            pending,
+            stopping,
             worker: Some(worker),
         }
     }
@@ -61,19 +63,16 @@ impl SrtResolveWorkerSet {
             return;
         };
         for request in requests {
-            self.pending.fetch_add(1, Ordering::Relaxed);
             if sender.try_send(request).is_err() {
-                self.pending.fetch_sub(1, Ordering::Relaxed);
                 break;
             }
         }
     }
 
     fn shutdown(&mut self) {
+        self.stopping.store(true, Ordering::SeqCst);
         self.request_sender.take();
-        if let Some(worker) = self.worker.take()
-            && worker.is_finished()
-        {
+        if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
     }
@@ -86,6 +85,7 @@ impl Drop for SrtResolveWorkerSet {
 }
 
 pub(crate) struct ResolvingSrtShardBackend<B> {
+    // Keep the completion receiver before the worker set in drop order.
     backend: B,
     resolve_workers: SrtResolveWorkerSet,
     /// Pending resolves buffered during `on_command` and flushed in
@@ -164,7 +164,6 @@ where
 
     fn on_shutdown(&mut self) {
         self.backend.on_shutdown();
-        self.resolve_workers.shutdown();
     }
 
     fn resync_count(&self) -> u64 {

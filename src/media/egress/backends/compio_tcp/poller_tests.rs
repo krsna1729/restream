@@ -282,6 +282,74 @@ fn compio_completion_workers_roundtrip_connection_io() {
     drop(stream);
     server.join().unwrap();
 }
+
+#[test]
+fn dropping_poller_joins_workers_and_closes_active_connection() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_seen_tx, request_seen_rx) = std::sync::mpsc::channel();
+    let (peer_closed_tx, peer_closed_rx) = std::sync::mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut request = [0; 5];
+        peer.read_exact(&mut request).unwrap();
+        assert_eq!(&request, b"hello");
+        peer.write_all(b"world").unwrap();
+
+        peer.read_exact(&mut request).unwrap();
+        assert_eq!(&request, b"again");
+        request_seen_tx.send(()).unwrap();
+
+        let mut trailing = [0; 1];
+        assert_eq!(peer.read(&mut trailing).unwrap(), 0);
+        peer_closed_tx.send(()).unwrap();
+    });
+
+    let client = TcpStream::connect(address).unwrap();
+    client.set_nonblocking(true).unwrap();
+    let mut poller = CompioTcpPoller::new(4).unwrap();
+    let mut stream = poller.adopt(client).unwrap();
+    let fd = stream.raw_fd();
+    let key = LeafKey(13);
+    poller.register_connection(fd, key, 42, &stream).unwrap();
+    assert_eq!(stream.write(b"hello").unwrap(), 5);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut response = [0; 5];
+    let mut response_len = 0;
+    while response_len < response.len() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "active response did not arrive before shutdown"
+        );
+        wait_for_read(&mut poller, fd, key, 42);
+        match stream.read(&mut response[response_len..]) {
+            Ok(count) => response_len += count,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("reading active response failed: {error}"),
+        }
+    }
+    assert_eq!(&response, b"world");
+
+    assert_eq!(stream.write(b"again").unwrap(), 5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while request_seen_rx.try_recv().is_err() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "active TX did not reach peer before shutdown"
+        );
+        let mut events = Vec::new();
+        poller.poll_leaves(50, &mut events).unwrap();
+    }
+
+    drop(stream);
+    drop(poller);
+    peer_closed_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("poller shutdown must cancel and join I/O workers before FD close");
+    server.join().unwrap();
+}
 #[test]
 fn command_and_socket_readiness_are_serviced_fairly() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();

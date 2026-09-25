@@ -46,7 +46,7 @@ fn output_spec(id: &str, url: &str, generation: u64) -> OutputSpec {
 }
 
 #[test]
-fn add_command_spawns_a_resolve_worker_reaped_on_next_media_tick() {
+fn rejected_resolver_request_does_not_leave_output_pending() {
     let mut backend = resolving_rtmp_shard_backend(
         TcpEgressPoller::new(4).unwrap(),
         feed(),
@@ -57,43 +57,23 @@ fn add_command_spawns_a_resolve_worker_reaped_on_next_media_tick() {
         Duration::from_secs(3),
         8,
     );
+    drop(backend.resolve_workers.request_sender.take());
+    backend
+        .resolve_workers
+        .worker
+        .take()
+        .expect("resolver worker")
+        .join()
+        .expect("resolver worker should exit after its request sender closes");
 
-    backend.on_command(EgressCommand::Add(output_spec(
-        "out-1",
-        "rtmp://127.0.0.1:1/live/key",
-        1,
-    )));
-    assert!(
-        backend.resolve_workers.worker.is_some(),
-        "each shard owns one resolver worker regardless of output count"
-    );
+    let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut spec = output_spec("out-1", "rtmp://127.0.0.1:1/live/key", 1);
+    let output_id = spec.id.clone();
+    spec.progress.terminated_unexpectedly = Some(Arc::clone(&terminated));
+    backend.on_command(EgressCommand::Add(spec));
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while backend.worker_count() > 0 {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "resolve worker never finished"
-        );
-        backend.on_media_tick();
-        thread::sleep(Duration::from_millis(1));
-    }
-}
-
-#[test]
-fn invalid_url_spawns_no_resolve_worker() {
-    let mut backend = resolving_rtmp_shard_backend(
-        TcpEgressPoller::new(4).unwrap(),
-        feed(),
-        budget(),
-        4096,
-        crate::media::rtmp::rustls_client_config(),
-        EmptyRtmpPublishStartupSource,
-        Duration::from_secs(3),
-        8,
-    );
-
-    backend.on_command(EgressCommand::Add(output_spec("out-1", "not a url", 1)));
-    assert_eq!(backend.worker_count(), 0);
+    assert!(terminated.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(!backend.backend.has_pending_connect(&output_id));
 }
 
 fn run_accepting_server_peer(mut stream: StdTcpStream, done_tx: std::sync::mpsc::Sender<()>) {

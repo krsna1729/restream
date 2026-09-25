@@ -118,7 +118,10 @@ impl RtmpPublishStartupSource for SharedRtmpPublishStartupSource {
 pub(crate) struct RtmpResolvedConnect {
     pub(crate) output_id: OutputId,
     pub(crate) generation: u64,
-    pub(crate) peer_addr: SocketAddr,
+    /// `None` is the bounded failure completion: resolution failed, so the
+    /// shard fails the matching pending connect instead of keeping it
+    /// resident (and holding leaf capacity) forever.
+    pub(crate) peer_addr: Option<SocketAddr>,
 }
 
 pub(crate) struct RtmpResolveCompletionQueue {
@@ -749,12 +752,15 @@ where
         self.resolve_completions.drain_resolved(&mut resolved);
         let mut connected_any = false;
         for completion in resolved.drain(..) {
-            let connected = self.complete_pending_connect(
+            let Some(peer_addr) = completion.peer_addr else {
+                self.fail_pending_connect(&completion.output_id, completion.generation);
+                continue;
+            };
+            connected_any |= self.complete_pending_connect(
                 &completion.output_id,
                 completion.generation,
-                completion.peer_addr,
+                peer_addr,
             );
-            connected_any |= connected;
         }
         self.resolved_connects = resolved;
         self.sweep_connecting_leaves(Instant::now());
