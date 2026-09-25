@@ -195,14 +195,12 @@ flowchart LR
 There is no protocol-specific bypass around the manager, shard scheduler,
 common lifecycle, or backpressure policy.
 
-A shard may use a protocol-native transport backend, but remains under the same
-application topology. Current RTMP/RTMPS shards own one Compio runtime, their
-TCP streams and protocol state, and `PollFd` readiness. WI5B replaces readiness
-polling and population-wide discovery with bounded owner-local I/O completions
-while preserving the fabric and leaf lifecycle. SRT shards run one Compio
-runtime on the shard thread with at most one
-`srt_transport::compio::Owner` per address family (IPv4, IPv6), each owning
-one shared caller UDP socket.
+Each RTMP/RTMPS shard owns one Compio/io_uring runtime, its TCP streams,
+protocol state, and bounded completion workers. Established sockets use
+one-shot RX/TX operations; only pending connects use `PollFd` readiness. SRT
+shards run one Compio runtime on the shard thread with at most one
+`srt_transport::compio::Owner` per address family (IPv4, IPv6), each owning one
+shared caller UDP socket.
 
 ## Shared preparation graph
 
@@ -351,9 +349,9 @@ pub struct EgressShard<B: EgressBackend> {
 
 A shard owns:
 
-- its protocol-specific network backend (current RTMP/RTMPS: one Compio runtime
-  with Compio-owned TCP streams and `PollFd` readiness; WI5B target: bounded
-  completion-driven I/O on that shard; SRT: one Compio runtime and at most two
+- its protocol-specific network backend (RTMP/RTMPS: one Compio/io_uring
+  runtime, shared Compio TCP streams, bounded RX/TX workers and event queues;
+  pending connects alone use `PollFd`; SRT: one Compio runtime and at most two
   family `Owner`s, built on the shard thread);
 - all leaf protocol and transport state assigned to it;
 - its ready queue and scheduling flags;
@@ -375,22 +373,24 @@ per-thread Compio runtime, an `Rc`-based owner — without
 `EgressShardGroup::spawn` remain as conveniences for already-built `Send`
 backends (tests); production groups use the factory forms.
 
-The current RTMP/RTMPS readiness implementation performs bounded work in this
-order; WI5B preserves the budgets and fabric lifecycle while removing
-population-wide readiness discovery:
+The RTMP/RTMPS completion backend performs bounded work in this order:
 
 1. process a limited batch of high-priority control commands;
-2. invoke backend readiness processing (`on_ready` / `poll_ready`) and
-   consume any ready-leaf events the backend produced;
+2. process a bounded batch of generation-tagged completion events and make a
+   rotating, per-call-budgeted scan of pending-connect `PollFd`s;
 3. process expired timers;
 4. schedule leaves whose feeds advanced;
 5. service ready leaves under per-leaf and per-loop budgets;
 6. publish aggregated metrics when due;
-7. when idle, wait for control activity, backend I/O or completion activity,
-   or the next relevant deadline (the earlier of the next application timer and
-   the shard idle bound), then resume from step 1. In the current RTMP/RTMPS
-   readiness path, quiet shards rediscover write-interested leaves on the next
-   pass; WI5B replaces that population-wide rediscovery with owner-local events.
+7. when idle, wait for control activity, active-I/O completions, pending-connect
+   readiness, or the next relevant deadline (the earlier of the next
+   application timer and shard idle bound).
+
+Established leaves never enter the PollFd set. One-shot RX workers pause after a
+bounded read until the shard consumes the completion; TX workers queue at most
+one bounded chunk in flight and wait when their bounded event channel is full.
+This applies backpressure instead of scanning active connections or draining a
+completion source to quiescence.
 
 Control processing itself is budgeted so a large update burst cannot starve
 media progress.
@@ -400,17 +400,13 @@ reports `Full` or `Closed`, FIFO), chosen because its receiver supports both
 blocking and Future-based receive. The idle wait is a backend hook,
 `EgressShardBackend::wait_idle(commands, max_wait)`, returning one of
 `Command`, `BackendActivity`, `Timeout` or `Disconnected`. `max_wait` is the
-shard's own bound, the earliest of the idle wait, the next application timer and,
-once `Shutdown` has started a drain, the drain deadline, so `drain_timeout` is a
-real upper bound however long `idle_wait` is; a backend may return sooner when a deadline it owns is due,
-and such protocol deadlines are not mirrored into the shard `TimerWheel`, which
-stays for application lifecycle timers. A `Command` wake goes through the same
-`process_command` path as one found by `try_recv`. `BackendActivity` only
-schedules one ordinary ready visit, so the backend's `on_ready` runs under the
-shared readiness budget and lifecycle policy; it is not a command. The default
-waiter blocks on the command channel alone and is what the RTMP/RTMPS, sink and
-pipeline backends use. The SRT backend overrides it to enter its shard-local
-Compio runtime and await commands and `Owner::wait_for_activity` together.
+shard's own bound, the earliest of the idle wait, the next application timer
+and, once `Shutdown` has started a drain, the drain deadline. A `Command` wake
+goes through the same `process_command` path as one found by `try_recv`;
+`BackendActivity` schedules one ordinary ready visit under the shared budget.
+RTMP/RTMPS and SRT waiters enter their shard-local Compio runtime to wait for
+commands and transport activity together. Sink and pipeline backends use the
+default command-channel waiter.
 
 ## Leaf ownership
 
@@ -505,21 +501,42 @@ factory code where it is not performance-sensitive.
 
 ## Readiness backends
 
-The current RTMP/RTMPS backend uses Compio `PollFd` readiness. WI5B moves
-connection progress to bounded Compio I/O completions without changing the
-fabric scheduler, lifecycle, or fairness contract. The details below describe
-the current backend until that cutover; SRT already uses its Compio `Owner`.
+This section describes the current RTMP/RTMPS completion transport; the
+`Readiness` values consumed by the protocol engine are coalesced completion
+flags, not population-wide readiness results. SRT uses its Compio `Owner`.
 
 ### TCP and TLS backend
 
-RTMP and RTMPS use Compio-owned non-blocking TCP streams and Compio
-`PollFd` readiness. The protocol engine owns RTMP state and performs bounded
-partial reads and writes after readiness; it must not call `write_all` from a
-shared shard loop.
+Each established RTMP leaf shares one Compio TCP stream between the RX and TX
+workers. The workers use bounded 4 KiB chunks, connection-local receive/send
+queues, and one bounded generation-tagged completion channel. A leaf's read and
+write completion flags are ORed before its next protocol visit, so simultaneous
+one-shot completions cannot suppress the other direction. Shutdown aborts and
+joins both workers before connection state is dropped.
+
+Each peer is started with a single nonblocking `connect(2)` call. Immediate
+success activates the Compio stream directly; `EINPROGRESS` is the only state
+registered with `PollFd`, and its duplicate descriptor is removed when the
+connection activates. A rotating scan visits at most the configured connect
+budget per poll, including while established completions are arriving. Active
+connections are not registered or discovered by a population-wide readiness
+scan. Established RTMP data I/O has no synchronous `send`/`recv` fast path;
+Compio completion workers own it. Egress requires a working Compio/io_uring
+runtime and fails shard construction explicitly if it is unavailable.
 
 RTMPS uses Rustls for the handshake, then requires Linux kTLS for application
 records. Unsupported negotiated suites, missing kTLS capability, or handoff
-errors fail the output; there is no silent userspace-TLS fallback.
+errors fail the output; there is no silent userspace-TLS fallback. Ancillary
+receive staging preserves TLS record-type association for kTLS.
+
+Nominal transport-adapter capacity is 16 KiB per plain RTMP leaf and 16 KiB +
+24 B per RTMPS leaf (the 4 KiB receive queue, receive-worker buffer, outgoing
+control staging). At the default upper topology of 8 shards × 4,096 leaf slots
+(32,768 active leaves), this is about 512 MiB / 512.75 MiB before allocator
+overhead. Configured shard/leaf overrides scale total capacity. This excludes
+protocol-engine/TLS/task/event state and kernel socket buffers; it is not a
+total per-leaf or process RSS estimate. The existing application pending-byte
+ceiling is a separate bound.
 
 The kTLS read path preserves TLS record types: TLS 1.3 session tickets are
 discarded after the buffered Rustls handoff, so RTMPS session resumption is not
@@ -641,9 +658,11 @@ moving buffering into the protocol stack does not make it free or unbounded.
 ### Direction: Compio as the network I/O substrate
 
 Shard ownership, bounded scheduling, work budgets and the protocol-neutral
-leaf contract stay normative. RTMP ingress and RTMP/RTMPS egress now use
-Compio TCP ownership; RTMP egress readiness is driven by Compio `PollFd`.
-SRT egress and ingress use the same Compio substrate with protocol `Owner`s.
+leaf contract stay normative. RTMP ingress and RTMP/RTMPS egress use Compio TCP
+ownership. Established RTMP egress sockets are completion-driven; bounded
+rotating Compio `PollFd` scans cover pending connects only. SRT egress and
+ingress use the same Compio substrate with protocol `Owner`s.
+
 The former RTMP `IoUringTcpPoller` production path and epoll fallback are
 removed; test-only standard-TCP and epoll adapters remain behind `cfg(test)`.
 
@@ -1068,9 +1087,9 @@ Retained tradeoffs of the fabric itself:
 
 - one lifecycle and failure policy, fixed application thread count, and
   bounded memory under slow consumers;
-- more explicit partial-I/O (RTMP/TLS Compio readiness plus SRT Owner-driven
-  leaves), and scheduler/timer obligations versus one independent async task per
-  destination at tiny scale;
+- more explicit partial-I/O (RTMP/TLS Compio completions, with pending-connect
+  `PollFd` scans, plus SRT Owner-driven leaves), and scheduler/timer obligations
+  versus one independent async task per destination at tiny scale;
 - prefer narrow abstractions proven by RTMP and SRT over a framework for
   hypothetical protocols; do not hide wire semantics behind a vague transport
   trait or treat average throughput as proof of tail fairness.
