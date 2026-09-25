@@ -555,3 +555,54 @@ fn zero_timeout_polls_alone_complete_socket_io() {
     drop(stream);
     server.join().unwrap();
 }
+
+/// kTLS handoff race seen in hosted CI ("missing kTLS record-type control
+/// message"): an io_uring `recvmsg` posted before `TLS_RX` consumed the
+/// peer's bytes on the plain socket and completed after the handoff. Before
+/// kTLS, a waiting RTMPS receive must consume nothing in the kernel: bytes that
+/// arrive while it waits stay in the socket until the owner reads them.
+#[test]
+fn rtmps_receive_before_ktls_consumes_nothing_while_waiting() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut peer = TcpStream::connect(address).unwrap();
+    let (client, _) = listener.accept().unwrap();
+    client.set_nonblocking(true).unwrap();
+
+    let mut poller = CompioTcpPoller::new(4).unwrap();
+    let stream = poller.adopt(client).unwrap();
+    stream.set_ancillary_mode();
+    let fd = stream.raw_fd();
+    poller
+        .register_connection(fd, LeafKey(32), 9, &stream)
+        .unwrap();
+    // Let the receive worker reach its wait against the silent peer.
+    let mut events = Vec::new();
+    for _ in 0..8 {
+        poller.poll_leaves(0, &mut events).unwrap();
+    }
+
+    peer.write_all(b"ticket").unwrap();
+    // Syscalls on this thread run any io_uring task work that would complete
+    // an in-flight receive, as they would in the owner before a handoff.
+    thread::sleep(Duration::from_millis(50));
+    stream.set_ktls_mode();
+
+    let mut peek = [0u8; 16];
+    let peeked = unsafe {
+        libc::recv(
+            fd,
+            peek.as_mut_ptr().cast(),
+            peek.len(),
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    assert_eq!(
+        peeked, 6,
+        "pre-kTLS receive consumed peer bytes the kTLS handoff would miss"
+    );
+    assert!(stream.io_buffers().unwrap().borrow().received.is_empty());
+
+    poller.remove(fd).unwrap();
+    drop(stream);
+}

@@ -440,22 +440,112 @@ pub(super) async fn receive_worker(
     }
 }
 
+/// Keeps the Compio stream alive for an in-flight readiness poll.
+struct PollTarget(Rc<compio::net::TcpStream>);
+
+impl std::os::fd::AsFd for PollTarget {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        // SAFETY: the `Rc` held by `self` keeps the descriptor open for the
+        // lifetime of the borrow.
+        unsafe { std::os::fd::BorrowedFd::borrow_raw(self.0.as_raw_fd()) }
+    }
+}
+
+/// One Rustls-phase receive: wait for readability with an io_uring poll, which
+/// consumes no bytes, then read synchronously on this owner thread. Returns
+/// `None` when the socket was not readable after all, or when kTLS was
+/// installed while the poll was pending.
+async fn receive_before_ktls(
+    stream: &Rc<compio::net::TcpStream>,
+    buffers: &SharedIoBuffers,
+    room: usize,
+    data: &mut Vec<u8>,
+) -> Option<io::Result<usize>> {
+    let poll = compio::driver::op::PollOnce::new(
+        PollTarget(Rc::clone(stream)),
+        compio::driver::op::Interest::Readable,
+    );
+    let compio::BufResult(result, _) = compio::runtime::submit(poll).await;
+    if let Err(error) = result {
+        return Some(Err(error));
+    }
+    if buffers.borrow().ktls_active {
+        return None;
+    }
+    data.clear();
+    data.resize(room, 0);
+    let count = unsafe {
+        libc::recv(
+            stream.as_raw_fd(),
+            data.as_mut_ptr().cast(),
+            room,
+            libc::MSG_DONTWAIT,
+        )
+    };
+    if count < 0 {
+        let error = io::Error::last_os_error();
+        data.clear();
+        return (error.kind() != io::ErrorKind::WouldBlock).then_some(Err(error));
+    }
+    data.truncate(count as usize);
+    Some(Ok(count as usize))
+}
+
 async fn receive_ancillary_worker(
     stream: Rc<compio::net::TcpStream>,
     buffers: SharedIoBuffers,
     events: flume::Sender<TcpReadyLeaf>,
     event: TcpReadyLeaf,
 ) {
+    let owned_stream = Rc::clone(&stream);
     let mut stream = stream.as_ref();
     use compio::io::ancillary::{AsyncReadAncillary, ReturnFlags};
 
-    // RTMPS uses one-shot recvmsg completions so kTLS handoff can prove there
-    // is no receive operation in flight before enabling record-type metadata.
+    // Until kTLS is installed, receives never run in the kernel concurrently
+    // with a protocol visit: an io_uring `recvmsg` in flight at the handoff
+    // could consume post-handshake ciphertext Rustls never sees, leaving the
+    // kernel's record sequence behind the extracted secrets. That phase waits
+    // for readiness and reads synchronously, so every consumed byte is staged
+    // before the next visit and the handoff's staged-receive check feeds it to
+    // Rustls first. After the handoff, one-shot `recvmsg` completions carry the
+    // kTLS record type.
     let mut data = Vec::with_capacity(IO_CHUNK);
     let mut control = vec![0; 24];
     loop {
         let room = ReceiveRoom(buffers.clone()).await;
         ReceiveArm(buffers.clone()).await;
+        if !buffers.borrow().ktls_active {
+            match receive_before_ktls(&owned_stream, &buffers, room, &mut data).await {
+                None => {
+                    // Not readable after all, or handed off meanwhile: retry
+                    // without waiting for another protocol visit.
+                    buffers.borrow_mut().receive_armed = true;
+                }
+                Some(Ok(0)) => {
+                    buffers.borrow_mut().eof = true;
+                    let _ = notify_readable(&events, event).await;
+                    return;
+                }
+                Some(Ok(count)) => {
+                    {
+                        let mut state = buffers.borrow_mut();
+                        debug_assert!(count <= room);
+                        state.received.extend(data[..count].iter().copied());
+                        debug_assert!(state.received.len() <= TRANSPORT_BUFFER_CAPACITY);
+                    }
+                    data.clear();
+                    if !notify_readable(&events, event).await {
+                        return;
+                    }
+                }
+                Some(Err(error)) => {
+                    store_receive_error(&buffers, error);
+                    let _ = notify_readable(&events, event).await;
+                    return;
+                }
+            }
+            continue;
+        }
         if data.capacity() != room {
             data = Vec::with_capacity(room);
         }
