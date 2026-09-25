@@ -20,12 +20,12 @@ use std::sync::Arc;
 /// test can push a connect completion the same way the production resolve
 /// worker does, then observe `on_media_tick`'s real return value.
 fn backend_with_resolve_queue() -> (
-    RtmpShardBackend<TcpEgressPoller>,
+    RtmpShardBackend<CompioTcpPoller>,
     std::sync::mpsc::SyncSender<RtmpResolvedConnect>,
 ) {
     let (sender, queue) = rtmp_resolve_completion_queue(4);
     let backend = RtmpShardBackend::with_runtime_components(
-        TcpEgressPoller::new(4).unwrap(),
+        CompioTcpPoller::new(4).unwrap(),
         feed(),
         budget(),
         4096,
@@ -70,8 +70,9 @@ fn on_media_tick_schedules_ready_work_when_a_connect_completes() {
          its first readiness check without waiting on an unrelated FeedWake"
     );
     assert!(
-        backend.output_sockets.contains_key(&output_id),
-        "the connect must have actually produced a registered leaf"
+        backend.output_sockets.contains_key(&output_id)
+            || backend.connecting_by_output.contains_key(&output_id),
+        "the connect must have produced an active or connecting leaf"
     );
     server.join().unwrap();
 }

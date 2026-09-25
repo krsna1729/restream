@@ -31,14 +31,14 @@ use crate::media::egress::shard::{
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
 use crate::media::rtmp::parse_rtmp_url;
 
+#[cfg(test)]
+use super::compio_tcp::CompioTcpPoller;
 use super::rtmp::{RtmpFabricEngine, RtmpPublishStartup};
 use super::rtmp_connection::RtmpConnection;
 #[cfg(test)]
 use super::tcp::TcpConnectAttempt;
 #[cfg(test)]
 use super::tcp::TcpEgressPollError;
-#[cfg(test)]
-use super::tcp::TcpEgressPoller;
 use super::tcp::TcpReadyLeaf;
 
 use self::rtmp_shard_connect::{ConnectingRtmpConnect, PendingRtmpConnect};

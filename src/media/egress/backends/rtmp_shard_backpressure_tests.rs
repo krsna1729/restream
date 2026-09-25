@@ -25,7 +25,7 @@ fn resync_count_increments_on_a_real_feed_overrun() {
 
     let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
     let mut backend = RtmpShardBackend::new(
-        TcpEgressPoller::new(4).unwrap(),
+        CompioTcpPoller::new(4).unwrap(),
         RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new())),
         budget(),
         4096,
@@ -125,7 +125,7 @@ fn sweep_stalled_leaves_reports_feed_lag_and_backpressure_state_for_a_healthy_le
 
     let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
     let mut backend = RtmpShardBackend::new(
-        TcpEgressPoller::new(4).unwrap(),
+        CompioTcpPoller::new(4).unwrap(),
         RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new())),
         budget(),
         4096,

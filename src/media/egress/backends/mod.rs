@@ -11,5 +11,3 @@ pub mod sink;
 pub mod sink_shard;
 pub mod srt;
 pub mod tcp;
-#[cfg(test)]
-pub mod tcp_connect;

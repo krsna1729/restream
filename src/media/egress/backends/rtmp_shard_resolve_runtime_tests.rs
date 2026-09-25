@@ -1,6 +1,6 @@
 use super::*;
+use crate::media::egress::backends::compio_tcp::CompioTcpPoller;
 use crate::media::egress::backends::rtmp_shard::EmptyRtmpPublishStartupSource;
-use crate::media::egress::backends::tcp::TcpEgressPoller;
 use crate::media::egress::command::ShardId;
 use crate::media::egress::command::{FeedId, OutputId};
 use crate::media::egress::journal::FeedEpoch;
@@ -48,7 +48,7 @@ fn output_spec(id: &str, url: &str, generation: u64) -> OutputSpec {
 #[test]
 fn rejected_resolver_request_does_not_leave_output_pending() {
     let mut backend = resolving_rtmp_shard_backend(
-        TcpEgressPoller::new(4).unwrap(),
+        CompioTcpPoller::new(4).unwrap(),
         feed(),
         budget(),
         4096,

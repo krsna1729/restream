@@ -32,7 +32,7 @@ fn output_spec(id: &str, url: &str, generation: u64) -> OutputSpec {
 #[test]
 fn queues_a_pending_connect_on_add() {
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
 
     backend.on_command(EgressCommand::Add(output_spec(
         "out-1",
@@ -50,7 +50,7 @@ fn queues_a_pending_connect_on_add() {
 #[test]
 fn invalid_url_is_rejected_without_panicking() {
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
 
     backend.on_command(EgressCommand::Add(output_spec("out-1", "not a url", 1)));
 
@@ -60,7 +60,7 @@ fn invalid_url_is_rejected_without_panicking() {
 #[test]
 fn remove_drops_a_pending_connect() {
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let output_id = OutputId::new("out-1");
 
     backend.on_command(EgressCommand::Add(output_spec(
@@ -77,7 +77,7 @@ fn remove_drops_a_pending_connect() {
 #[test]
 fn stale_generation_resolve_completion_is_ignored() {
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let output_id = OutputId::new("out-1");
 
     backend.on_command(EgressCommand::Add(output_spec(
@@ -99,7 +99,7 @@ fn stale_generation_resolve_completion_is_ignored() {
 #[test]
 fn connect_failure_drops_the_pending_connect_without_panicking() {
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let output_id = OutputId::new("out-1");
 
     backend.on_command(EgressCommand::Add(output_spec(
@@ -169,12 +169,13 @@ impl RtmpReadinessPoller for ScriptedPoller {
         ))
     }
 
-    fn register_leaf(
+    /// Completions are scripted in `events`; there is no I/O worker to start.
+    fn register_connection(
         &mut self,
         _fd: std::os::fd::RawFd,
         _key: LeafKey,
         _generation: u64,
-        _interest: super::super::tcp::TcpEgressInterest,
+        _stream: &super::super::compio_tcp::CompioTcpStream,
     ) -> Result<(), TcpEgressPollError> {
         Ok(())
     }
@@ -191,6 +192,15 @@ impl RtmpReadinessPoller for ScriptedPoller {
         ready.clear();
         ready.extend(self.events.drain(..).take(self.ready_capacity));
         Ok(ready.len())
+    }
+
+    /// No runtime to park in; tests drive `on_ready` directly.
+    fn wait_idle(
+        &mut self,
+        _commands: &flume::Receiver<EgressCommand>,
+        _max_wait: Duration,
+    ) -> Option<crate::media::egress::shard::EgressShardIdleWake> {
+        None
     }
 }
 
@@ -364,17 +374,18 @@ fn shard_driven_leaf_reaches_publish_accepted_against_a_real_peer() {
     });
 
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let output_id = OutputId::new("out-1");
     backend.on_command(EgressCommand::Add(output_spec(
         "out-1",
         &format!("rtmp://{}/live/key", addr),
         1,
     )));
-    backend.complete_pending_connect(&output_id, 1, addr);
+    assert!(backend.complete_pending_connect(&output_id, 1, addr));
     assert!(
-        backend.output_sockets.contains_key(&output_id),
-        "leaf must be connected and registered"
+        backend.output_sockets.contains_key(&output_id)
+            || backend.connecting_by_output.contains_key(&output_id),
+        "the nonblocking connect must leave an active or connecting leaf"
     );
 
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -432,7 +443,7 @@ fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
     });
 
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let stuck_id = OutputId::new("stuck");
     let healthy_id = OutputId::new("healthy");
     backend.on_command(EgressCommand::Add(output_spec(
@@ -520,7 +531,7 @@ fn shard_removes_the_leaf_once_the_peer_closes_after_publish_acceptance() {
     });
 
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let output_id = OutputId::new("out-1");
     backend.on_command(EgressCommand::Add(output_spec(
         "out-1",
@@ -780,7 +791,7 @@ mod wake_tests;
 #[test]
 fn leaf_slots_are_fixed_and_exhaustion_does_not_grow_the_slab() {
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096)
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096)
             .with_leaf_capacity(1);
 
     assert_eq!(backend.leaves.len(), 1);
@@ -792,7 +803,7 @@ fn leaf_slots_are_fixed_and_exhaustion_does_not_grow_the_slab() {
 #[test]
 fn shard_work_queues_have_a_hard_leaf_bound() {
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096)
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096)
             .with_leaf_capacity(1);
     let event = TcpReadyLeaf {
         fd: -1,

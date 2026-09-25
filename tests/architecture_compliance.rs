@@ -368,6 +368,42 @@ fn production_srt_does_not_own_native_udp_transport() {
     }
 }
 
+/// RTMP/RTMPS transport is Compio/io_uring only. The retired epoll egress
+/// poller must not return, not even as a test adapter: level-triggered test
+/// readiness hid edge-triggered completion wakeup bugs from unit tests (WI5B).
+#[test]
+fn media_transport_has_no_epoll_readiness_path() {
+    const FORBIDDEN: &[&str] = &[
+        "epoll_create",
+        "epoll_ctl",
+        "epoll_wait",
+        "TcpEgressPoller",
+        "TcpPollOps",
+    ];
+    collect_rust_sources(std::path::Path::new("src/media"), &mut |path, source| {
+        let code: String = source
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect();
+        for forbidden in FORBIDDEN {
+            assert!(
+                !code.contains(forbidden),
+                "{} reintroduces retired epoll transport `{forbidden}`",
+                path.display()
+            );
+        }
+    });
+    for retired in [
+        "src/media/egress/backends/tcp_connect.rs",
+        "src/media/egress/backends/tcp_tests.rs",
+    ] {
+        assert!(
+            !std::path::Path::new(retired).exists(),
+            "{retired} was deleted and must not return"
+        );
+    }
+}
+
 /// Kernel-queue telemetry from the removed native SRT UDP monitor must not come
 /// back as fabricated zero-valued fields, alerts or docs. SRT listener state is
 /// `srtListener.ingressOwner`, published by the Compio Owner.

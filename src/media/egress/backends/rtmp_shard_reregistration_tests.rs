@@ -5,10 +5,10 @@ use super::*;
 
 use crate::media::egress::backends::tcp::TcpEgressInterest;
 use std::sync::Mutex;
-/// Wraps the test TCP poller and records registration calls so the feed-wake
-/// test can prove that scheduling media does not invoke the socket poller.
+/// Wraps the production Compio poller and records registration calls so the
+/// feed-wake test can prove that scheduling media does not invoke the poller.
 struct CountingPoller {
-    inner: TcpEgressPoller,
+    inner: CompioTcpPoller,
     register_calls: Arc<Mutex<Vec<TcpEgressInterest>>>,
 }
 
@@ -28,19 +28,30 @@ impl RtmpReadinessPoller for CountingPoller {
             .start_connect(peer_addr, key, generation, timeout)
     }
 
-    fn register_leaf(
+    fn register_connection(
         &mut self,
         fd: RawFd,
         key: LeafKey,
         generation: u64,
-        interest: TcpEgressInterest,
+        stream: &crate::media::egress::backends::compio_tcp::CompioTcpStream,
     ) -> Result<(), TcpEgressPollError> {
-        self.register_calls.lock().unwrap().push(interest);
-        self.inner.register_leaf(fd, key, generation, interest)
+        self.register_calls.lock().unwrap().push(TcpEgressInterest {
+            readable: true,
+            writable: true,
+        });
+        self.inner.register_connection(fd, key, generation, stream)
     }
 
     fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError> {
         self.inner.remove(fd)
+    }
+
+    fn wait_idle(
+        &mut self,
+        commands: &flume::Receiver<EgressCommand>,
+        max_wait: Duration,
+    ) -> Option<crate::media::egress::shard::EgressShardIdleWake> {
+        Some(self.inner.wait_idle(commands, max_wait))
     }
 
     fn poll_leaves(
@@ -69,7 +80,7 @@ fn feed_wake_enqueues_the_leaf_without_any_poller_call() {
     let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
     let register_calls = Arc::new(Mutex::new(Vec::new()));
     let poller = CountingPoller {
-        inner: TcpEgressPoller::new(4).unwrap(),
+        inner: CompioTcpPoller::new(4).unwrap(),
         register_calls: register_calls.clone(),
     };
     let mut backend = RtmpShardBackend::new(
@@ -170,7 +181,7 @@ fn feed_wake_never_enqueues_a_handshaking_leaf() {
 
     let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
     let mut backend = RtmpShardBackend::new(
-        TcpEgressPoller::new(4).unwrap(),
+        CompioTcpPoller::new(4).unwrap(),
         RingFeed::new(ring, Arc::new(FeedEpoch::new())),
         budget(),
         4096,

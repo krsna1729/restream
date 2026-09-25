@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::media::egress::scheduler::LeafKey;
 
-use super::tcp::{TcpConnectAttempt, TcpEgressInterest, TcpEgressPollError, TcpReadyLeaf};
+use super::tcp::{TcpConnectAttempt, TcpEgressPollError, TcpReadyLeaf};
 
 pub(crate) trait RtmpReadinessPoller {
     fn ready_capacity(&self) -> usize;
@@ -17,31 +17,14 @@ pub(crate) trait RtmpReadinessPoller {
         timeout: Duration,
     ) -> Result<TcpConnectAttempt, TcpEgressPollError>;
 
-    fn register_leaf(
-        &mut self,
-        fd: RawFd,
-        key: LeafKey,
-        generation: u64,
-        interest: TcpEgressInterest,
-    ) -> Result<(), TcpEgressPollError>;
-
+    /// Hand an established connection to completion-driven I/O.
     fn register_connection(
         &mut self,
         fd: RawFd,
         key: LeafKey,
         generation: u64,
-        _stream: &super::compio_tcp::CompioTcpStream,
-    ) -> Result<(), TcpEgressPollError> {
-        self.register_leaf(
-            fd,
-            key,
-            generation,
-            TcpEgressInterest {
-                readable: true,
-                writable: true,
-            },
-        )
-    }
+        stream: &super::compio_tcp::CompioTcpStream,
+    ) -> Result<(), TcpEgressPollError>;
 
     fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError>;
 
@@ -51,67 +34,13 @@ pub(crate) trait RtmpReadinessPoller {
         ready: &mut Vec<TcpReadyLeaf>,
     ) -> Result<usize, TcpEgressPollError>;
 
+    /// Park the shard inside the poller's runtime until a command,
+    /// completion or timeout; the poller owns the only wait that drives I/O.
     fn wait_idle(
         &mut self,
-        _commands: &flume::Receiver<crate::media::egress::command::EgressCommand>,
-        _max_wait: Duration,
-    ) -> Option<crate::media::egress::shard::EgressShardIdleWake> {
-        None
-    }
-}
-
-#[cfg(test)]
-impl<O> RtmpReadinessPoller for super::tcp::TcpEgressPoller<O>
-where
-    O: super::tcp::TcpPollOps,
-{
-    fn ready_capacity(&self) -> usize {
-        self.ready_capacity()
-    }
-
-    fn start_connect(
-        &mut self,
-        peer_addr: SocketAddr,
-        _key: LeafKey,
-        _generation: u64,
-        timeout: Duration,
-    ) -> Result<TcpConnectAttempt, TcpEgressPollError> {
-        super::tcp_connect::connect_fabric_tcp_egress_socket(
-            super::tcp_connect::TcpFabricConnectConfig {
-                peer_addr,
-                connect_timeout: timeout,
-            },
-        )
-        .map(super::compio_tcp::CompioTcpStream::from_std)
-        .map(TcpConnectAttempt::Connected)
-        .map_err(|error| TcpEgressPollError {
-            operation: "compio_tcp_test_connect",
-            code: error.source.raw_os_error().unwrap_or(libc::EIO),
-            message: error.to_string(),
-        })
-    }
-
-    fn register_leaf(
-        &mut self,
-        fd: RawFd,
-        key: LeafKey,
-        generation: u64,
-        interest: TcpEgressInterest,
-    ) -> Result<(), TcpEgressPollError> {
-        self.register_leaf(fd, key, generation, interest)
-    }
-
-    fn remove(&mut self, fd: RawFd) -> Result<(), TcpEgressPollError> {
-        self.remove(fd)
-    }
-
-    fn poll_leaves(
-        &mut self,
-        timeout_ms: i32,
-        ready: &mut Vec<TcpReadyLeaf>,
-    ) -> Result<usize, TcpEgressPollError> {
-        self.poll_leaves(timeout_ms, ready)
-    }
+        commands: &flume::Receiver<crate::media::egress::command::EgressCommand>,
+        max_wait: Duration,
+    ) -> Option<crate::media::egress::shard::EgressShardIdleWake>;
 }
 
 impl RtmpReadinessPoller for super::compio_tcp::CompioTcpPoller {
@@ -127,16 +56,6 @@ impl RtmpReadinessPoller for super::compio_tcp::CompioTcpPoller {
         timeout: Duration,
     ) -> Result<TcpConnectAttempt, TcpEgressPollError> {
         self.start_connect(peer_addr, key, generation, timeout)
-    }
-
-    fn register_leaf(
-        &mut self,
-        fd: RawFd,
-        key: LeafKey,
-        generation: u64,
-        interest: TcpEgressInterest,
-    ) -> Result<(), TcpEgressPollError> {
-        self.register_leaf(fd, key, generation, interest)
     }
 
     fn register_connection(

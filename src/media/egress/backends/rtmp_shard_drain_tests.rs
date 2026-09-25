@@ -10,7 +10,7 @@ use super::*;
 /// tests can manipulate `pending_application_bytes`/`draining_since`
 /// deterministically instead of racing real I/O timing.
 fn connected_backend_for_drain_tests() -> (
-    RtmpShardBackend<TcpEgressPoller>,
+    RtmpShardBackend<CompioTcpPoller>,
     OutputId,
     thread::JoinHandle<()>,
 ) {
@@ -23,7 +23,7 @@ fn connected_backend_for_drain_tests() -> (
     });
 
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let output_id = OutputId::new("draining-leaf");
     backend.on_command(EgressCommand::Add(output_spec(
         "draining-leaf",
@@ -195,7 +195,7 @@ fn startup_deadline_terminates_a_leaf_that_never_reaches_publish() {
     });
 
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut spec = output_spec("silent-peer", &format!("rtmp://{addr}/live/key"), 1);
     let output_id = spec.id.clone();
