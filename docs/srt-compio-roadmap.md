@@ -2341,8 +2341,10 @@ real-media and hosted final-code acceptance remain open.
 
 ### WI5B — Single-owner real-time transport convergence
 
-Status: source convergence is locally implemented but not yet qualified;
-WI5B completion criteria are not met.
+Status: ACTIVE. Source convergence is implemented and the first complete
+hosted set on final transport code is green (`d75fd6d4`, 2026-09-25); the
+second required hosted set is pending. WI5B completion criteria are not yet
+all met.
 
 Each production SRT/RTMP/RTMPS connection must have one fixed Compio/io_uring
 owner for its socket, protocol state, timers, receive and pending-transmit
@@ -2369,6 +2371,34 @@ Pending connects alone retain `PollFd`, visited with a rotating per-call
 budget. RTMPS keeps Rustls handoff and explicit fail-closed kTLS on that same
 connection owner.
 
+Completion scheduling contract (established by the `a32bb86d` hosted failures):
+completions are edge events, so after every visit a leaf must hold a real wake
+source — a transmit completion (bytes in flight), a receive completion (the
+receive worker is re-armed by the visit), or a feed wake (`Feed`/`FeedOrIo`).
+`local_followup_visit` gives one bounded local visit at the ready-queue tail
+exactly when none exists: `Yield`, state transitions, write-wait with nothing
+in flight, and read-wait with receive state already staged in the adapter
+(negotiation can write and return `Pending(READ)` without reading the reply
+that triggered the visit). While Rustls owns the socket, `interest_hint`
+reports what Rustls needs, so a handshake blocked on the server flight waits
+for its receive completion instead of self-requeuing. `on_ready` reaps
+completions at least once per ready-queue round, and a zero-timeout poll runs
+`drive_nonblocking` (bounded executor tick, zero-timeout driver poll, tick):
+compio's `block_on(timeout(ZERO, ..))` returns after one tick without
+submitting or reaping io_uring work. A leaf that has not reached publish
+acceptance by activation + the output's `connect_timeout` (default 30 s) is
+terminated through the bounded stall sweep, because handshake/negotiation
+queue no application bytes and the pending-byte classifier reports them idle.
+
+Each RTMP egress shard ring uses compio's default size (1024 SQ entries, the
+pre-completion value). SQ size bounds submissions per `io_uring_enter`, not
+in-flight operations; compio submits and reaps on a full SQ. Per-leaf-slot
+sizing (8192 SQ / 16384 CQ per shard, one shard set per RTMP feed) failed ring
+setup with ENOMEM on a many-feed host. The single RTMP ingress ring remains
+sized from the connection limit. DNS resolution for RTMP and SRT egress has a
+bounded failure completion, rejects explicitly when its request queue is full,
+and joins its worker on the owning shard thread.
+
 Nominal active-leaf transport-adapter capacity is 16 KiB plain RTMP and
 16 KiB + 24 B for RTMPS. At the default upper topology of 8 shards × 4,096
 leaves (32,768), this is about 512 MiB / 512.75 MiB. Configured shard/leaf
@@ -2391,12 +2421,40 @@ Acceptance gates:
 - focused architecture/concurrency tests, real RTMP/RTMPS/SRT media and fault
   gates, fresh container execution, PR smoke, and redevelop matrix are green.
 
-One earlier hosted run on `b64bd760` was not green: allocation hygiene produced
-cross-thread false positives, and `fault.resilience` faulted SRT ingress with
-`RxStreamFailed` after managed RX reported that its buffer ring had no available
-buffer. The local changes isolate allocation counting to the executing thread
-and keep SRT ingress on raw readiness until managed `ENOBUFS` is retryable.
-Those gates must be rerun on the final source revision.
+Hosted acceptance history:
+
+- `b64bd760` — not green: allocation hygiene produced cross-thread false
+  positives, and `fault.resilience` faulted SRT ingress with `RxStreamFailed`
+  after managed RX reported an empty buffer ring. Fixed by thread-local
+  allocation counting and keeping SRT ingress on raw readiness until managed
+  `ENOBUFS` is retryable. The transport matrix itself passed on this revision.
+- `a32bb86d` (run `36075601863`) — not green: 8 transport shards
+  (`mixed.live.srt.*` ×6, `srt-crypto-matrix`, `fault.resilience`) and the
+  lifecycle proof, each with 1–8 RTMP egress outputs stuck at `bytesOut=0`.
+  Root cause: the completion lost wakeups above, introduced by `53f343ac`.
+  Local reproduction on `mixed.live.srt.h264.a2.bf2` went 34/38 → 36/38 →
+  38/38 outputs progressing across `168b5e8b`'s two wake rules, with
+  unexpected RTMP terminations 12 → 0.
+- `f562efa6` (run `36111564484`) — not green: RTMPS handshake self-requeue
+  livelock (container smoke RTMPS 0/2, lifecycle-proof RTMPS cases), busy-path
+  I/O starvation, and ring-setup ENOMEM. Fixed in `d75fd6d4`.
+- `d75fd6d4` — **green, set 1 of 2**: push run `36115521296` (27 jobs
+  succeeded, `integration-shards` skipped on redevelop pushes by design) and
+  PR run `36115528379`. This includes the redevelop transport matrix (10
+  `mixed.live.*` shards, `srt-crypto-matrix`, `fault.resilience`), the
+  concurrency live lifecycle proof, and the Docker runtime source-build
+  smoke, which executed (runtime paths changed) and built the image and
+  carried SRT and RTMP→RTMPS media under the shipped seccomp profile. Local
+  replay on the same revision (6-CPU WSL2, `--no-netns`): `fault.resilience`,
+  `mixed.live.srt.h265.a2.bf0` (38/38) and `mixed.live.rtmp.h264.a1.bf2`
+  (18/18) passed.
+
+Known non-blocking local debt observed during this work: on the 6-CPU WSL2
+development host, `mixed.live.srt.h264.a2.bf2` can fail SRT signal validation
+on audio PTS gaps (106.5 ms and 256.2 ms observed; a 256.5 ms gap was already
+recorded at `d30454af`, before this RTMP work) — hosted runs pass. Also,
+`srt::tests::send_fairness::one_ready_batch_is_one_owner_service_pass` failed
+once under a parallel full-module run and passed 5/5 in isolation.
 
 Do not begin WI7 before WI5B's final-code acceptance is green. HLS PUT and
 FFmpeg process-pipe migration remain separate, evidence-driven experiments,
@@ -2711,7 +2769,8 @@ WI6
     convergence and hosted final-code acceptance remain open.
 
 WI5B
-    ACTIVE; single-owner connection state, explicit production io_uring,
+    ACTIVE; hosted set 1 of 2 green on d75fd6d4 (see §24);
+    single-owner connection state, explicit production io_uring,
     completion-driven egress, boundedness/fairness, and hosted acceptance open
 
 local live evidence (2026-09-24; single Linux host, `--no-netns`):
@@ -2765,22 +2824,21 @@ defaults in this transport-convergence work.
 Sequence: `WI4A -> WI5/WI6 initial cutovers -> WI5B -> WI7 -> WI9 ->
 optional evidence-driven I/O experiments -> WI8/Q-025 -> WI10`.
 
-First commit the canonical ownership architecture, updated existing Compio/WI5B
-roadmap, and an architecture regression guard as a separate tranche. Then
-converge RTMP ingress/egress and close boundedness/lifecycle gaps. WI5B requires
-two green hosted sets on final transport code; the first hosted attempt on
-`b64bd760f6368e1c327f28bbeaec072578932545` was not green:
+The ownership architecture, regression guard, RTMP ingress/egress convergence,
+and the completion-scheduling, boundedness and lifecycle fixes are committed
+(§24 lists the hosted history). WI5B requires two green hosted sets on final
+transport code:
 
-- PR run `36042044386`: dataplane allocation hygiene measured four unrelated
-  cross-thread allocations against an expected zero; live tests were skipped.
-- Redevelop run `36042038495`: allocation hygiene failed, and the SRT ingress
-  Owner faulted with `RxStreamFailed` (`side=listener`,
-  `buffer ring has no available buffer`) during the sink-flap fault case,
-  shutting down the app and losing media/API readiness.
+- set 1: `d75fd6d4` — push run `36115521296` and PR run `36115528379`, green,
+  with the transport matrix, fault suite, lifecycle proof and an executed
+  Docker media smoke;
+- set 2: pending on the next head. It must again include the PR live smoke,
+  the redevelop media/fault matrix, real RTMPS media and a container run that
+  was not path-skipped (a `workflow_dispatch` run forces the Docker smoke).
 
-These are in-scope failures, not accepted infrastructure noise. Local
-remediation is in progress and remains unproven until focused gates and both
-hosted sets pass. WI7 cannot start earlier.
+Any red run on final transport code is diagnosed from its artifacts and fixed
+as an in-scope failure, not retried to green. WI7 cannot start until both
+sets are green.
 
 ## 37. Definition of Success
 
