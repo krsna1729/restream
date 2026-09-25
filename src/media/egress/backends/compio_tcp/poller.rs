@@ -16,7 +16,7 @@ use super::CompioTcpStream;
 use super::stream::TRANSPORT_BUFFER_CAPACITY;
 use super::stream::{SharedIoBuffers, receive_worker, transmit_worker};
 use crate::media::egress::scheduler::LeafKey;
-use crate::media::egress::shard::{EgressShardConfig, EgressShardIdleWake};
+use crate::media::egress::shard::EgressShardIdleWake;
 impl Drop for CompioTcpPoller {
     fn drop(&mut self) {
         for tasks in self.io_tasks.values() {
@@ -53,10 +53,11 @@ type CompioReadyEvent = (RawFd, LeafKey, u64, bool, bool);
 /// One Compio owner for one RTMP fabric shard. Connecting sockets alone use
 /// `PollFd`; established sockets are driven only by bounded completions.
 ///
-/// SQ covers two in-flight socket operations for each of the shard's fixed
-/// leaf slots (8192 entries at the current 4096-leaf limit), rounded to the
-/// next power of two; CQ is twice SQ so completions can queue while the owner
-/// services bounded event batches.
+/// The ring keeps compio's default size, as the pre-completion poller did.
+/// SQ size bounds submissions per `io_uring_enter`, not in-flight operations:
+/// compio submits and reaps when the SQ is full. Sizing it per leaf slot
+/// (8192 SQ / 16384 CQ) made ring setup fail with ENOMEM once a host ran many
+/// RTMP feeds, each with its own shards.
 pub(crate) struct CompioTcpPoller {
     runtime: Runtime,
     registrations: HashMap<RawFd, Registration>,
@@ -72,14 +73,8 @@ pub(crate) struct CompioTcpPoller {
 impl CompioTcpPoller {
     pub(crate) fn new(max_events: usize) -> Result<Self, TcpEgressPollError> {
         let ready_capacity = max_events.max(1);
-        let operation_capacity = EgressShardConfig::DEFAULT_LEAF_CAPACITY.saturating_mul(2);
-        let sq_capacity = operation_capacity.next_power_of_two() as u32;
-        let cq_size = sq_capacity.saturating_mul(2);
         let mut proactor = ProactorBuilder::new();
-        proactor
-            .driver_type(DriverType::IoUring)
-            .capacity(sq_capacity)
-            .cqsize(cq_size);
+        proactor.driver_type(DriverType::IoUring);
         let mut runtime_builder = RuntimeBuilder::new();
         runtime_builder.with_proactor(proactor);
         let runtime = runtime_builder
@@ -98,11 +93,11 @@ impl CompioTcpPoller {
         let (event_tx, event_rx) = flume::bounded(ready_capacity);
         Ok(Self {
             runtime,
-            registrations: HashMap::with_capacity(EgressShardConfig::DEFAULT_LEAF_CAPACITY),
-            registration_order: Vec::with_capacity(EgressShardConfig::DEFAULT_LEAF_CAPACITY),
+            registrations: HashMap::with_capacity(ready_capacity),
+            registration_order: Vec::with_capacity(ready_capacity),
             next_registration: 0,
             ready_queue: VecDeque::with_capacity(ready_capacity),
-            io_tasks: HashMap::with_capacity(EgressShardConfig::DEFAULT_LEAF_CAPACITY),
+            io_tasks: HashMap::with_capacity(ready_capacity),
             event_tx,
             event_rx,
             ready_capacity,
@@ -357,7 +352,11 @@ impl CompioTcpPoller {
             }
         }
         if ready.is_empty() {
-            self.wait_one(Duration::from_millis(timeout_ms.max(0) as u64))?;
+            if timeout_ms <= 0 {
+                self.drive_nonblocking();
+            } else {
+                self.wait_one(Duration::from_millis(timeout_ms as u64))?;
+            }
             while ready.len() < self.ready_capacity {
                 let Some((fd, key, generation, readable, writable)) = self.ready_queue.pop_front()
                 else {
@@ -474,6 +473,22 @@ impl CompioTcpPoller {
             Wake::Timeout => EgressShardIdleWake::Timeout,
             Wake::Disconnected => EgressShardIdleWake::Disconnected,
         }
+    }
+
+    /// Advance socket I/O without blocking: run woken workers so their
+    /// operations reach the submission queue, submit and reap completions
+    /// with a zero-timeout driver poll, then run the workers those
+    /// completions woke. Each executor tick is bounded by compio's
+    /// `max_interval`. `block_on(timeout(ZERO, ..))` is not equivalent: its
+    /// zero sleep resolves on the first poll, so it returns after one tick
+    /// without submitting or reaping any I/O.
+    fn drive_nonblocking(&mut self) {
+        let runtime = &self.runtime;
+        runtime.enter(|| {
+            runtime.run();
+            runtime.poll_with(Some(Duration::ZERO));
+            runtime.run();
+        });
     }
 
     fn wait_one(&mut self, timeout: Duration) -> Result<(), TcpEgressPollError> {

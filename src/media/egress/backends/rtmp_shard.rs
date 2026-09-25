@@ -335,6 +335,11 @@ where
     free_leaf_keys: Vec<LeafKey>,
     output_sockets: HashMap<OutputId, RtmpLeafSocket>,
     ready: VecDeque<TcpReadyLeaf>,
+    /// Visits left before completions are reaped again even though `ready`
+    /// is non-empty: one ready-queue round. Local follow-up visits requeue
+    /// without I/O, so polling only on an empty queue could starve the very
+    /// completion a requeued leaf is waiting for.
+    visits_until_poll: usize,
     feed_waiting: VecDeque<LeafKey>,
     stall_candidates: VecDeque<LeafKey>,
     queue_capacity: usize,
@@ -390,6 +395,7 @@ where
                 .collect(),
             output_sockets: HashMap::new(),
             ready: VecDeque::with_capacity(ready_capacity),
+            visits_until_poll: 0,
             feed_waiting: VecDeque::with_capacity(ready_capacity),
             stall_candidates: VecDeque::with_capacity(ready_capacity),
             queue_capacity: EgressShardConfig::DEFAULT_LEAF_CAPACITY,
@@ -716,9 +722,11 @@ where
     /// addition to the existing "this leaf wants to continue" case) fixes
     /// that: a blocked leaf never blocks its already-ready neighbors.
     fn on_ready(&mut self) -> EgressShardCommandEffect {
-        if self.ready.is_empty() {
+        if self.ready.is_empty() || self.visits_until_poll == 0 {
             self.poll_ready();
+            self.visits_until_poll = self.ready.len().max(1);
         }
+        self.visits_until_poll -= 1;
 
         let outcome = self.visit_one_ready_leaf();
         if let Some((Some(output_id), VisitDecision::Close)) = &outcome {

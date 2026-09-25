@@ -253,11 +253,19 @@ fn compio_completion_workers_roundtrip_connection_io() {
             writable: false,
         })
         .unwrap();
-    let mut stale_events = Vec::new();
-    assert_eq!(poller.poll_leaves(0, &mut stale_events).unwrap(), 0);
+    // A zero-timeout poll drives real I/O, so the `hello` transmit completion
+    // may already be reported here; the stale-generation event never is.
+    let mut first_events = Vec::new();
+    poller.poll_leaves(0, &mut first_events).unwrap();
+    assert!(
+        first_events
+            .iter()
+            .all(|event| (event.key, event.generation) == (key, generation)),
+        "stale-generation completion leaked: {first_events:?}"
+    );
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    let mut readable = false;
-    let mut writable = false;
+    let mut readable = first_events.iter().any(|event| event.readable);
+    let mut writable = first_events.iter().any(|event| event.writable);
     let mut response_read = false;
     let mut response = [0; 5];
     while !readable || !writable || !response_read {
@@ -496,4 +504,54 @@ fn compio_poller_reports_simultaneous_read_and_write_readiness() {
 
     poller.remove(fd).unwrap();
     drop(stream);
+}
+
+/// A busy shard only ever polls with a zero timeout: its ready queue never
+/// empties long enough to reach the idle wait. Socket I/O must still be
+/// submitted and reaped on that path, or a leaf waiting for a completion is
+/// starved by the leaves being visited ahead of it.
+#[test]
+fn zero_timeout_polls_alone_complete_socket_io() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut peer, _) = listener.accept().unwrap();
+        let mut request = [0; 4];
+        peer.read_exact(&mut request).unwrap();
+        assert_eq!(&request, b"ping");
+        peer.write_all(b"pong").unwrap();
+    });
+
+    let client = TcpStream::connect(address).unwrap();
+    client.set_nonblocking(true).unwrap();
+    let mut poller = CompioTcpPoller::new(4).unwrap();
+    let mut stream = poller.adopt(client).unwrap();
+    let fd = stream.raw_fd();
+    let key = LeafKey(21);
+    poller.register_connection(fd, key, 3, &stream).unwrap();
+    assert_eq!(stream.write(b"ping").unwrap(), 4);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut response = [0; 4];
+    let mut response_len = 0;
+    let mut events = Vec::new();
+    while response_len < response.len() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "zero-timeout polls never completed the socket round trip"
+        );
+        poller.poll_leaves(0, &mut events).unwrap();
+        match stream.read(&mut response[response_len..]) {
+            Ok(count) => response_len += count,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                stream.resume_receive();
+                thread::yield_now();
+            }
+            Err(error) => panic!("reading response failed: {error}"),
+        }
+    }
+    assert_eq!(&response, b"pong");
+    poller.remove(fd).unwrap();
+    drop(stream);
+    server.join().unwrap();
 }

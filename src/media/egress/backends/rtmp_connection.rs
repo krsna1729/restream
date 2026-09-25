@@ -339,8 +339,22 @@ impl RtmpConnection {
         self.completion_stream()
     }
 
+    /// The interest that will actually unblock a `WouldBlock`. While Rustls
+    /// owns the socket (handshake, then until the kTLS handoff), the RTMP
+    /// state machine's requested direction is not what gates progress: a
+    /// handshake write blocks on reading the server's flight. Reporting the
+    /// request there would make the completion scheduler revisit a leaf that
+    /// has nothing in flight and no staged input, over and over, instead of
+    /// waiting for the receive completion.
     pub(crate) fn interest_hint(&self, requested: Interest) -> Interest {
-        requested
+        let RtmpConnectionState::Tls(Some(stream)) = &self.state else {
+            return requested;
+        };
+        let hint = Interest {
+            readable: stream.conn.wants_read() || stream.sock.pending_receive_bytes() > 0,
+            writable: stream.conn.wants_write() || stream.sock.pending_write_bytes() > 0,
+        };
+        if hint.is_empty() { requested } else { hint }
     }
 
     pub(crate) fn raw_fd(&self) -> RawFd {
