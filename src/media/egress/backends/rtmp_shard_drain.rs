@@ -139,9 +139,18 @@ where
                             leaf.common.pending_application_bytes == 0
                                 || now.saturating_duration_since(since) >= drain_timeout
                         });
+                        let startup_expired =
+                            !leaf.engine.is_publish_accepted() && now >= leaf.startup_deadline;
+                        if startup_expired {
+                            tracing::warn!(
+                                output_id = %leaf.common.output_id,
+                                handshake_done = leaf.engine.is_handshake_done(),
+                                "rtmp fabric leaf did not reach publish acceptance before its startup deadline"
+                            );
+                        }
                         (
                             leaf.common.output_id.clone(),
-                            draining || matches!(reason, Some("stalled")),
+                            draining || startup_expired || matches!(reason, Some("stalled")),
                         )
                     })
             else {

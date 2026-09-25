@@ -16,6 +16,9 @@ pub(super) struct ConnectingRtmpConnect {
     pub(super) parts: crate::media::rtmp::RtmpUrlParts,
     pub(super) stream: super::super::compio_tcp::CompioTcpStream,
     pub(super) deadline: Instant,
+    /// Bound on handshake + negotiation once connected (the policy's
+    /// connect timeout).
+    pub(super) startup_timeout: Duration,
 }
 
 impl<P, S> RtmpShardBackend<P, S>
@@ -122,6 +125,7 @@ where
                     parts: pending.parts,
                     stream,
                     deadline: Instant::now(),
+                    startup_timeout: pending.connect_timeout,
                 },
                 key,
             ),
@@ -134,6 +138,7 @@ where
                         parts: pending.parts,
                         stream,
                         deadline: Instant::now() + pending.connect_timeout,
+                        startup_timeout: pending.connect_timeout,
                     },
                 );
                 true
@@ -158,6 +163,7 @@ where
         key: LeafKey,
     ) -> bool {
         let progress_sink = connecting.common.progress_sink.clone();
+        let startup_timeout = connecting.startup_timeout;
         let generation = connecting.common.generation;
         let fd = connecting.stream.as_raw_fd();
         let stream = if connecting.parts.tls {
@@ -217,6 +223,7 @@ where
             transport: stream,
             pending_readiness: super::Readiness::default(),
             observed_since: Instant::now(),
+            startup_deadline: Instant::now() + startup_timeout,
             draining_since: None,
             draining_reason: None,
             previous_tcp_bytes: None,

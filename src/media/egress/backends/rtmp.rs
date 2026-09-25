@@ -566,7 +566,6 @@ impl RtmpFabricEngine {
         })
     }
 
-    #[cfg(test)]
     pub(crate) fn is_handshake_done(&self) -> bool {
         !matches!(self.state, Some(RtmpFabricState::Handshaking(_)))
     }
@@ -582,7 +581,6 @@ impl RtmpFabricEngine {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn is_publish_accepted(&self) -> bool {
         matches!(self.state, Some(RtmpFabricState::Publishing(_)))
     }

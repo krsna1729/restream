@@ -172,6 +172,10 @@ struct RtmpFabricLeaf {
     /// Last-progress fallback while a leaf has made no byte or protocol
     /// progress yet, such as during connect or handshake.
     observed_since: Instant,
+    /// Handshake and session negotiation must reach publish acceptance by
+    /// this instant. They queue no application bytes, so the pending-byte
+    /// stall classifier alone would report a wedged startup as idle forever.
+    startup_deadline: Instant,
     /// Set when this leaf has been asked to close (via `Remove`,
     /// `DrainShard`, or `Shutdown`) but still had queued application bytes
     /// at that moment. While `Some`, the leaf stays registered and visited
