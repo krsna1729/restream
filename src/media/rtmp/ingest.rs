@@ -38,6 +38,8 @@ use super::handshake::perform_server_handshake;
 use super::ingest_packets::try_promote_cached_rtmp;
 use super::play::{PlayAuthorization, RtmpPlayRequest, handle_play_request};
 
+#[path = "ingest/parser_budget.rs"]
+pub(super) mod parser_budget;
 #[path = "ingest/session.rs"]
 mod session;
 use session::{ProbeState, handle_session_results, process_audio_data, process_video_data};
@@ -627,6 +629,7 @@ pub(super) async fn handle_rtmp_client(
     shutdown: CancellationToken,
     engine: Arc<MediaEngine>,
     media_handoff: Arc<tokio::sync::Semaphore>,
+    parser_budget: parser_budget::ParserBudget,
 ) -> Result<(), &'static str> {
     let mut socket = RtmpClientSocket::new(stream, shutdown.clone());
     let client_ip = client_addr.ip().to_string();
@@ -645,8 +648,12 @@ pub(super) async fn handle_rtmp_client(
     };
     let (remaining, buffer) = handshake.map_err(|_| "RTMP handshake timed out")??;
 
-    let (mut session, initial_results) = ServerSession::new(ServerSessionConfig::new())
-        .map_err(|_| "Failed to initialize server session")?;
+    let mut session_config = ServerSessionConfig::new();
+    session_config.max_message_length =
+        u32::try_from(engine.config.rtmp_max_message_bytes).unwrap_or(u32::MAX);
+    let (mut session, initial_results) =
+        ServerSession::new(session_config).map_err(|_| "Failed to initialize server session")?;
+    let mut parser_charge = parser_budget.charge();
     for result in initial_results {
         if let ServerSessionResult::OutboundResponse(packet) = result {
             socket
@@ -660,6 +667,13 @@ pub(super) async fn handle_rtmp_client(
     let mut disconnect = None;
     if !remaining.is_empty() {
         match session.handle_input(&remaining) {
+            Ok(results)
+                if parser_charge
+                    .update(session.inbound_buffered_bytes() + awaiting_handoff_bytes(&results))
+                    .is_err() =>
+            {
+                disconnect = Some(("session", PARSER_BUDGET_EXHAUSTED, true));
+            }
             Ok(results) => {
                 match handle_session_results(
                     &mut session,
@@ -683,9 +697,11 @@ pub(super) async fn handle_rtmp_client(
                         });
                     }
                 }
+                // Handed-off media is now bounded by the handoff semaphore.
+                parser_charge.release_to(session.inbound_buffered_bytes());
             }
-            Err(_) => {
-                disconnect = Some(("session", "Session parse error on remaining bytes", true));
+            Err(error) => {
+                disconnect = Some(("session", session_error_reason(&error), true));
             }
         }
     }
@@ -726,12 +742,25 @@ pub(super) async fn handle_rtmp_client(
         }
         let results = match session.handle_input(&buffer[..count]) {
             Ok(results) => results,
-            Err(_) => {
-                warn!("session parse error for {}", client_addr_text);
-                disconnect = Some(("session", "Session parse error", true));
+            Err(error) => {
+                warn!(%error, "session parse error for {}", client_addr_text);
+                disconnect = Some(("session", session_error_reason(&error), true));
                 break;
             }
         };
+        // Completed media still awaiting a handoff permit counts too, so the
+        // budget bounds everything held before the 64 MiB handoff takes over.
+        if parser_charge
+            .update(session.inbound_buffered_bytes() + awaiting_handoff_bytes(&results))
+            .is_err()
+        {
+            warn!(
+                "RTMP ingest parser budget exhausted; rejecting {}",
+                client_addr_text
+            );
+            disconnect = Some(("session", PARSER_BUDGET_EXHAUSTED, true));
+            break;
+        }
         match handle_session_results(
             &mut session,
             results,
@@ -754,6 +783,8 @@ pub(super) async fn handle_rtmp_client(
                 });
             }
         }
+        // Handed-off media is now bounded by the handoff semaphore.
+        parser_charge.release_to(session.inbound_buffered_bytes());
         buffer.clear();
     }
 
@@ -781,6 +812,33 @@ pub(super) async fn handle_rtmp_client(
         }
     }
     if had_error { Err(reason) } else { Ok(()) }
+}
+
+const PARSER_BUDGET_EXHAUSTED: &str = "RTMP ingest parser budget exhausted";
+
+/// Media payload bytes in parsed results that still await a handoff permit.
+fn awaiting_handoff_bytes(results: &[ServerSessionResult]) -> usize {
+    results
+        .iter()
+        .map(|result| match result {
+            ServerSessionResult::RaisedEvent(
+                ServerSessionEvent::VideoDataReceived { data, .. }
+                | ServerSessionEvent::AudioDataReceived { data, .. },
+            ) => data.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Operator-facing reason: an oversized declared message is distinct from
+/// malformed input.
+fn session_error_reason(error: &rml_rtmp::sessions::ServerSessionError) -> &'static str {
+    match error {
+        rml_rtmp::sessions::ServerSessionError::ChunkDeserializationError(
+            rml_rtmp::chunk_io::ChunkDeserializationError::MessageTooLarge { .. },
+        ) => "RTMP message exceeds the maximum message size",
+        _ => "Session parse error",
+    }
 }
 
 fn sample_publisher_quality(

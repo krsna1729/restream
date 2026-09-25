@@ -73,6 +73,8 @@ in SQLite.
 | RTMP accept backlog | `1024` | `RESTREAM_RTMP_LISTENER_BACKLOG` |
 | RTMP concurrent connection cap | `512` | `RESTREAM_RTMP_MAX_CONNECTIONS` |
 | RTMP handshake timeout | `10000` ms | `RESTREAM_RTMP_HANDSHAKE_TIMEOUT_MS` |
+| RTMP maximum inbound message size (larger declared messages are rejected before any payload is buffered; clamped 64 KiB–16 MiB) | `8388608` bytes | `RESTREAM_RTMP_MAX_MESSAGE_BYTES` |
+| RTMP ingest parser budget (bytes all ingest parsers may hold before messages complete; the connection that would exceed it is rejected; never below the maximum message size) | `268435456` bytes | `RESTREAM_RTMP_INGEST_PARSER_BUDGET_BYTES` |
 | RTMP pre-auth socket buffers | `131072` bytes | `RESTREAM_RTMP_PREAUTH_BUFFER_BYTES` |
 | RTMP streaming socket buffers | `8388608` bytes | `RESTREAM_RTMP_STREAM_BUFFER_BYTES` |
 | RTMP egress chunk size | `16384` bytes | `RESTREAM_RTMP_EGRESS_CHUNK_SIZE` (sent with the RTMP `SetChunkSize` message; 16 KiB was the best measured loopback fanout point in the RTMP-only MSR chunk-size sweep) |

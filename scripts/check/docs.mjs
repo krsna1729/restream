@@ -54,8 +54,10 @@ function markdownFiles() {
 
   // Include new documentation before it is staged.
   collectMarkdown(path.join(root, "docs"), files);
+  // Vendored third-party crates keep their upstream documentation as-is.
   return [...files]
     .filter(fs.existsSync)
+    .filter((filename) => !relativePath(filename).startsWith("vendor/"))
     .sort();
 }
 

@@ -205,3 +205,7 @@ codegen-units = 16
 debug = 1
 split-debuginfo = "unpacked"
 panic = "unwind"
+
+# Vendored with a small memory-hardening patch (see vendor/rml_rtmp/RESTREAM_PATCHES.md).
+[patch.crates-io]
+rml_rtmp = { path = "vendor/rml_rtmp" }

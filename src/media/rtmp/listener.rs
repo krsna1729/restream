@@ -273,6 +273,9 @@ async fn run_compio_owner(
     connection_limit: usize,
 ) -> io::Result<()> {
     let connection_shutdown = CancellationToken::new();
+    let parser_budget = super::ingest::parser_budget::ParserBudget::new(
+        engine.config.rtmp_ingest_parser_budget_bytes,
+    );
     let mut connections = FuturesUnordered::new();
     let accept_result = loop {
         tokio::select! {
@@ -306,6 +309,7 @@ async fn run_compio_owner(
                     continue;
                 }
                 let connection_media_handoff = media_handoff.clone();
+                let connection_parser_budget = parser_budget.clone();
                 let connection_engine = engine.clone();
                 connections.push(Box::pin(async move {
                     if let Err(error) = handle_rtmp_client(
@@ -315,6 +319,7 @@ async fn run_compio_owner(
                         session_shutdown,
                         connection_engine,
                         connection_media_handoff,
+                        connection_parser_budget,
                     ).await {
                         warn!(%error, %peer_addr, "error handling RTMP client");
                     }

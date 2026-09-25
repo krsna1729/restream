@@ -99,6 +99,9 @@ COPY scripts/build/app-native.sh scripts/build/bench-harness.sh scripts/build/em
 # so ordinary src/ edits only need to rebuild our crate in the next layer.
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY .cargo/ .cargo/
+# `[patch.crates-io]` path dependencies must exist before Cargo can resolve the
+# graph (tests/docker_build_recipe.rs enforces this).
+COPY vendor/ vendor/
 # The workspace has no path members; if one is added, stage its manifest and a
 # dummy lib here (tests/docker_build_recipe.rs enforces this).
 RUN mkdir -p benches src \

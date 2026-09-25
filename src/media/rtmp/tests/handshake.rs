@@ -369,7 +369,19 @@ async fn start_ingress_test_server(
     std::net::SocketAddr,
     tokio::task::JoinHandle<()>,
 ) {
-    let (engine, security) = test_engine_and_security();
+    let (engine, _) = test_engine_and_security();
+    start_ingress_test_server_with_engine(pipeline_access, engine).await
+}
+
+async fn start_ingress_test_server_with_engine(
+    pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
+    engine: Arc<MediaEngine>,
+) -> (
+    Arc<MediaEngine>,
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<()>,
+) {
+    let security = Arc::new(IngestSecurityService::new(IngestSecurityConfig::default()));
     let (started_tx, started_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(super::listener::start_rtmp_server_on_with_shutdown(
         pipeline_access,

@@ -298,6 +298,12 @@ pub struct AppConfig {
     pub backend_policy: BackendPolicy,
     pub rtmp_backlog: u32,
     pub rtmp_max_connections: usize,
+    /// Largest inbound RTMP message a publisher may declare; longer ones are
+    /// rejected before their payload is buffered.
+    pub rtmp_max_message_bytes: usize,
+    /// Bytes all RTMP ingest parsers together may hold before messages
+    /// complete; the connection that would exceed it is rejected.
+    pub rtmp_ingest_parser_budget_bytes: usize,
     pub rtmp_handshake_timeout_ms: u64,
     pub rtmp_preauth_buffer_bytes: usize,
     pub rtmp_stream_buffer_bytes: usize,
@@ -617,6 +623,8 @@ impl Default for AppConfig {
             },
             rtmp_backlog: 1024,
             rtmp_max_connections: 512,
+            rtmp_max_message_bytes: 8 * 1024 * 1024,
+            rtmp_ingest_parser_budget_bytes: 256 * 1024 * 1024,
             rtmp_handshake_timeout_ms: 10_000,
             rtmp_preauth_buffer_bytes: 128 * 1024,
             rtmp_stream_buffer_bytes: 8 * 1024 * 1024,
@@ -669,6 +677,13 @@ impl AppConfig {
         let backend_policy = backend_policy_from_env();
         let rtmp_backlog = env_u32("RESTREAM_RTMP_LISTENER_BACKLOG", 1024);
         let rtmp_max_connections = env_usize("RESTREAM_RTMP_MAX_CONNECTIONS", 512).clamp(1, 16384);
+        let rtmp_max_message_bytes = env_usize("RESTREAM_RTMP_MAX_MESSAGE_BYTES", 8 * 1024 * 1024)
+            .clamp(64 * 1024, 0x00FF_FFFF);
+        let rtmp_ingest_parser_budget_bytes = env_usize(
+            "RESTREAM_RTMP_INGEST_PARSER_BUDGET_BYTES",
+            256 * 1024 * 1024,
+        )
+        .clamp(rtmp_max_message_bytes, 16 * 1024 * 1024 * 1024);
         let rtmp_handshake_timeout_ms =
             env_u64("RESTREAM_RTMP_HANDSHAKE_TIMEOUT_MS", 10_000).clamp(100, 300_000);
         let rtmp_preauth_buffer_bytes = env_usize("RESTREAM_RTMP_PREAUTH_BUFFER_BYTES", 128 * 1024)
@@ -760,6 +775,8 @@ impl AppConfig {
             backend_policy,
             rtmp_backlog,
             rtmp_max_connections,
+            rtmp_max_message_bytes,
+            rtmp_ingest_parser_budget_bytes,
             rtmp_handshake_timeout_ms,
             rtmp_preauth_buffer_bytes,
             rtmp_stream_buffer_bytes,
@@ -881,6 +898,8 @@ impl AppConfig {
             "rtmp": {
                 "backlog": self.rtmp_backlog,
                 "maxConnections": self.rtmp_max_connections,
+                "maxMessageBytes": self.rtmp_max_message_bytes,
+                "ingestParserBudgetBytes": self.rtmp_ingest_parser_budget_bytes,
                 "handshakeTimeoutMs": self.rtmp_handshake_timeout_ms,
                 "preauthBufferBytes": self.rtmp_preauth_buffer_bytes,
                 "streamBufferBytes": self.rtmp_stream_buffer_bytes,

@@ -122,3 +122,29 @@ fn the_real_sources_are_touched_so_cargo_rebuilds_them_over_the_warm_dummies() {
     };
     assert!(tree.contains(expected), "touch must cover `{expected}`");
 }
+
+/// `[patch.crates-io]` path overrides are part of dependency resolution: the
+/// warm layer must stage each one before its dependency-only build.
+#[test]
+fn every_patch_path_is_staged_before_the_warm_build() {
+    let warm = stage("rust-build");
+    let warm_build = warm
+        .find("RESTREAM_BUILD_PROFILE=release")
+        .expect("rust-build warms the dependency graph");
+    let Some(patches) = CARGO_TOML.split("[patch.crates-io]").nth(1) else {
+        return;
+    };
+    let patches = patches.split("\n[").next().unwrap_or(patches);
+    for path in patches.split("path = \"").skip(1) {
+        let path = path.split('"').next().expect("quoted path");
+        let top = path.split('/').next().expect("path has a first component");
+        let copy = format!("COPY {top}/ {top}/");
+        let staged = warm
+            .find(&copy)
+            .unwrap_or_else(|| panic!("rust-build must stage `{copy}` for patch path {path}"));
+        assert!(
+            staged < warm_build,
+            "{path} must be staged before the warm build"
+        );
+    }
+}
