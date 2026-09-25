@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use tokio_rustls::rustls::ClientConfig;
 
-use crate::media::egress::backend::{CloseReason, ProtocolEngine, Readiness};
+use crate::media::egress::backend::{CloseReason, EngineProgress, ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::feed::EgressFeed;
 use crate::media::egress::journal::RingFeed;
@@ -260,6 +260,41 @@ impl RtmpFabricLeaf {
             rate
         });
         Some(stats.into_egress_quality(send_rate))
+    }
+}
+
+/// The local visit a leaf needs after `progress`, or `None` when a real wake
+/// source is already pending.
+///
+/// Completions are edge events: a leaf is only visited again if its visit left
+/// it a wake source. Transmit completions exist only while bytes are in flight,
+/// receive completions only for new peer bytes, and feed wakes only for
+/// `Feed`/`FeedOrIo`. A visit may also write without reading, leaving bytes,
+/// EOF or an error that an already-consumed receive completion staged in the
+/// adapter. So a write-wanting leaf with nothing in flight, a read-wanting leaf
+/// with staged receive state, a budget `Yield`, and a state transition each
+/// get one bounded local visit at the ready-queue tail, round-robin with other
+/// ready leaves. WouldBlock with bytes in flight waits for the real transmit
+/// completion instead of spinning.
+fn local_followup_visit(
+    progress: &EngineProgress,
+    transmit_in_flight: bool,
+    buffered_receive: bool,
+) -> Option<Readiness> {
+    let wait_interest = match progress {
+        EngineProgress::Needs(wait) | EngineProgress::Progress { wait, .. } => wait.io_interest(),
+        EngineProgress::HandshakeComplete | EngineProgress::FeedOverrun | EngineProgress::Yield => {
+            return Some(Readiness::BOTH);
+        }
+        EngineProgress::PeerClosed | EngineProgress::Failed(_) => return None,
+    };
+    let write = wait_interest.writable && !transmit_in_flight;
+    let read = wait_interest.readable && buffered_receive;
+    match (read, write) {
+        (true, true) => Some(Readiness::BOTH),
+        (true, false) => Some(Readiness::READABLE),
+        (false, true) => Some(Readiness::WRITABLE),
+        (false, false) => None,
     }
 }
 
@@ -528,34 +563,17 @@ where
         let (progress, decision) = match result {
             EngineVisitResult::StaleGeneration => return Some((None, VisitDecision::Suspend)),
             EngineVisitResult::Visited(outcome) => {
-                if matches!(
-                    &outcome.progress,
-                    crate::media::egress::backend::EngineProgress::Yield
-                ) {
+                if matches!(&outcome.progress, EngineProgress::Yield) {
                     self.budget_exhaustions = self.budget_exhaustions.saturating_add(1);
                 }
                 (outcome.progress, outcome.decision)
             }
         };
-        // Read completions and feed wakes can leave protocol bytes staged
-        // without a socket event for the bounded adapter to accept them.
-        // Prime one local writable visit; WouldBlock then waits for a real
-        // completion instead of spinning.
-        let needs_writable = matches!(
+        let followup = local_followup_visit(
             &progress,
-            crate::media::egress::backend::EngineProgress::Needs(
-                crate::media::egress::backend::WaitCondition::Io(interest)
-            ) if interest.writable
+            leaf.transport.pending_transport_write_bytes() > 0,
+            leaf.transport.has_buffered_receive(),
         );
-        let immediate_write_visit = readiness.readable && readiness.writable && needs_writable;
-        let local_write_visit = !readiness.readable && !readiness.writable && needs_writable;
-        let transition_needs_visit = immediate_write_visit
-            || local_write_visit
-            || matches!(
-                &progress,
-                crate::media::egress::backend::EngineProgress::HandshakeComplete
-                    | crate::media::egress::backend::EngineProgress::FeedOverrun
-            );
         if matches!(
             progress,
             crate::media::egress::backend::EngineProgress::FeedOverrun
@@ -602,12 +620,7 @@ where
             return Some((Some(leaf.common.output_id.clone()), decision));
         }
 
-        if transition_needs_visit {
-            let followup_readiness = if immediate_write_visit || local_write_visit {
-                Readiness::WRITABLE
-            } else {
-                Readiness::BOTH
-            };
+        if let Some(followup_readiness) = followup {
             leaf.pending_readiness = followup_readiness;
             let admitted = push_bounded(
                 &mut self.ready,

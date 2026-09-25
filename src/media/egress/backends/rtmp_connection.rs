@@ -353,6 +353,9 @@ impl RtmpConnection {
     pub(crate) fn resume_receive(&self) {
         self.tcp_stream().resume_receive();
     }
+    pub(crate) fn has_buffered_receive(&self) -> bool {
+        self.tcp_stream().has_buffered_receive()
+    }
 
     /// Conservative estimate of rustls-internal buffered bytes not visible
     /// to `MediaPublisher::pending_bytes()`. rustls exposes no occupancy

@@ -774,6 +774,8 @@ mod drain_tests;
 mod media_tick_tests;
 #[path = "rtmp_shard_reregistration_tests.rs"]
 mod reregistration_tests;
+#[path = "rtmp_shard_wake_tests.rs"]
+mod wake_tests;
 
 #[test]
 fn leaf_slots_are_fixed_and_exhaustion_does_not_grow_the_slab() {

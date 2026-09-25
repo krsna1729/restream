@@ -89,6 +89,16 @@ impl CompioTcpStream {
             .map_or(0, |buffers| buffers.borrow().received.len())
     }
 
+    /// Whether the adapter holds receive state the protocol has not consumed
+    /// yet (bytes, EOF, or an error). A receive completion is an edge event,
+    /// so the scheduler must revisit a read-waiting leaf in this state itself.
+    pub(crate) fn has_buffered_receive(&self) -> bool {
+        self.io_buffers().is_some_and(|buffers| {
+            let buffers = buffers.borrow();
+            !buffers.received.is_empty() || buffers.eof || buffers.error.is_some()
+        })
+    }
+
     pub(crate) fn resume_receive(&self) {
         if let Some(buffers) = self.io_buffers() {
             let mut buffers = buffers.borrow_mut();
