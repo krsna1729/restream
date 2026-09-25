@@ -157,9 +157,7 @@ impl CompioTcpStream {
                 } else {
                     (23, buf.len().min(buffers.received.len()))
                 };
-                for (dst, src) in buf[..count].iter_mut().zip(buffers.received.drain(..count)) {
-                    *dst = src;
-                }
+                take_front(&mut buffers.received, &mut buf[..count]);
                 if count > 0 {
                     wake(&mut buffers.rx_space_waker);
                     Ok((count, record_type))
@@ -227,9 +225,7 @@ impl Read for CompioTcpStream {
             Self::Compio { buffers, .. } => {
                 let mut buffers = buffers.borrow_mut();
                 let count = buf.len().min(buffers.received.len());
-                for (dst, src) in buf[..count].iter_mut().zip(buffers.received.drain(..count)) {
-                    *dst = src;
-                }
+                take_front(&mut buffers.received, &mut buf[..count]);
                 if count > 0 {
                     wake(&mut buffers.rx_space_waker);
                     Ok(count)
@@ -316,6 +312,18 @@ impl Write for CompioTcpStream {
 }
 const IO_CHUNK: usize = 4096;
 
+/// Move the front `dst.len()` bytes of `deque` into `dst`: at most two slice
+/// copies (a ring's contents are at most two contiguous runs), then an O(1)
+/// front drop. Per-byte iteration here dominated RTMP egress CPU.
+pub(super) fn take_front(deque: &mut VecDeque<u8>, dst: &mut [u8]) {
+    let count = dst.len();
+    let (front, back) = deque.as_slices();
+    let first = front.len().min(count);
+    dst[..first].copy_from_slice(&front[..first]);
+    dst[first..].copy_from_slice(&back[..count - first]);
+    deque.drain(..count);
+}
+
 fn wake(slot: &mut Option<std::task::Waker>) {
     if let Some(waker) = slot.take() {
         waker.wake();
@@ -366,7 +374,8 @@ async fn take_transmit(buffers: &SharedIoBuffers, output: &mut Vec<u8>) {
             return Poll::Pending;
         }
         let count = IO_CHUNK.min(buffers.outgoing.len());
-        output.extend(buffers.outgoing.drain(..count));
+        output.resize(count, 0);
+        take_front(&mut buffers.outgoing, output);
         Poll::Ready(())
     })
     .await;
@@ -423,7 +432,7 @@ pub(super) async fn receive_worker(
                 {
                     let mut state = buffers.borrow_mut();
                     debug_assert!(count <= room);
-                    state.received.extend(buffer[..count].iter().copied());
+                    state.received.extend(&buffer[..count]);
                     debug_assert!(state.received.len() <= TRANSPORT_BUFFER_CAPACITY);
                 }
                 buffer.clear();
@@ -530,7 +539,7 @@ async fn receive_ancillary_worker(
                     {
                         let mut state = buffers.borrow_mut();
                         debug_assert!(count <= room);
-                        state.received.extend(data[..count].iter().copied());
+                        state.received.extend(&data[..count]);
                         debug_assert!(state.received.len() <= TRANSPORT_BUFFER_CAPACITY);
                     }
                     data.clear();
@@ -589,7 +598,7 @@ async fn receive_ancillary_worker(
                 {
                     let mut state = buffers.borrow_mut();
                     debug_assert!(count <= room);
-                    state.received.extend(data[..count].iter().copied());
+                    state.received.extend(&data[..count]);
                     debug_assert!(state.received.len() <= TRANSPORT_BUFFER_CAPACITY);
                     if let Some(record_type) = record_type {
                         state.record_type = Some((count, record_type));
@@ -622,8 +631,9 @@ pub(super) async fn transmit_worker(
     let mut data = Vec::with_capacity(IO_CHUNK);
     loop {
         take_transmit(&buffers, &mut data).await;
-        let mut offset = 0;
-        while offset < data.len() {
+        // A partial write keeps its unsent tail in `data` and writes it next,
+        // ahead of anything queued later, without re-queuing it byte by byte.
+        while !data.is_empty() {
             let compio::BufResult(result, returned) = stream.write(std::mem::take(&mut data)).await;
             data = returned;
             match result {
@@ -644,20 +654,11 @@ pub(super) async fn transmit_worker(
                     return;
                 }
                 Ok(count) => {
-                    offset += count;
-                    let partial = offset < data.len();
                     {
                         let mut state = buffers.borrow_mut();
                         state.pending_write_bytes = state.pending_write_bytes.saturating_sub(count);
-                        if partial {
-                            for byte in data[offset..].iter().rev() {
-                                state.outgoing.push_front(*byte);
-                            }
-                        }
                     }
-                    if partial {
-                        data.clear();
-                    }
+                    data.drain(..count);
                     if events
                         .send_async(TcpReadyLeaf {
                             writable: true,
@@ -667,9 +668,6 @@ pub(super) async fn transmit_worker(
                         .is_err()
                     {
                         return;
-                    }
-                    if partial {
-                        break;
                     }
                 }
                 Err(error) => {

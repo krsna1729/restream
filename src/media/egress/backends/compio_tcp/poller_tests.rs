@@ -606,3 +606,29 @@ fn rtmps_receive_before_ktls_consumes_nothing_while_waiting() {
     poller.remove(fd).unwrap();
     drop(stream);
 }
+
+/// `take_front` replaced per-byte draining on the RTMP TX/RX paths; it must
+/// copy across a ring wrap (two slices) in order and leave the rest queued.
+#[test]
+fn take_front_copies_across_a_wrapped_ring_in_order() {
+    let mut deque = std::collections::VecDeque::<u8>::with_capacity(8);
+    let capacity = deque.capacity();
+    deque.extend((0..capacity).map(|value| value as u8));
+    // Pop while non-empty so the head advances, then push so the tail wraps.
+    for _ in 0..3 {
+        deque.pop_front();
+    }
+    deque.extend(&[200u8, 201, 202]);
+    let (front, back) = deque.as_slices();
+    assert!(
+        !front.is_empty() && !back.is_empty(),
+        "test needs a wrapped ring"
+    );
+    let expected: Vec<u8> = deque.iter().copied().collect();
+
+    let take = front.len() + 1;
+    let mut out = vec![0u8; take];
+    super::super::stream::take_front(&mut deque, &mut out);
+    assert_eq!(out, expected[..take]);
+    assert_eq!(deque.iter().copied().collect::<Vec<_>>(), expected[take..]);
+}
