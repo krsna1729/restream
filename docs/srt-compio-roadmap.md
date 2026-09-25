@@ -2341,10 +2341,10 @@ real-media and hosted final-code acceptance remain open.
 
 ### WI5B — Single-owner real-time transport convergence
 
-Status: ACTIVE. Source convergence is implemented and the first complete
-hosted set on final transport code is green (`d75fd6d4`, 2026-09-25); the
-second required hosted set is pending. WI5B completion criteria are not yet
-all met.
+Status: DONE (2026-09-25) at `d77997ec`. Two complete hosted sets on final
+transport code are green (see "Hosted acceptance history" below). No
+production capacity coefficient, shard default, or CPU/NUMA policy was changed;
+Q-025/WI8/WI10 remain deferred.
 
 Each production SRT/RTMP/RTMPS connection must have one fixed Compio/io_uring
 owner for its socket, protocol state, timers, receive and pending-transmit
@@ -2438,7 +2438,7 @@ Hosted acceptance history:
 - `f562efa6` (run `36111564484`) — not green: RTMPS handshake self-requeue
   livelock (container smoke RTMPS 0/2, lifecycle-proof RTMPS cases), busy-path
   I/O starvation, and ring-setup ENOMEM. Fixed in `d75fd6d4`.
-- `d75fd6d4` — **green, set 1 of 2**: push run `36115521296` (27 jobs
+- `d75fd6d4` — green once: push run `36115521296` (27 jobs
   succeeded, `integration-shards` skipped on redevelop pushes by design) and
   PR run `36115528379`. This includes the redevelop transport matrix (10
   `mixed.live.*` shards, `srt-crypto-matrix`, `fault.resilience`), the
@@ -2448,6 +2448,28 @@ Hosted acceptance history:
   replay on the same revision (6-CPU WSL2, `--no-netns`): `fault.resilience`,
   `mixed.live.srt.h265.a2.bf0` (38/38) and `mixed.live.rtmp.h264.a1.bf2`
   (18/18) passed.
+
+- `c26932eb` (dispatch run `36121735877`) — not green: RTMPS lifecycle cases
+  failed with `rtmp_handshake: missing kTLS record-type control message`; an
+  io_uring `recvmsg` posted on the plain socket could read post-handshake
+  ciphertext and complete after `TLS_RX` was installed. Fixed in `d4801333`:
+  before kTLS, the RTMPS receive worker waits on a consuming-nothing readiness
+  poll and reads synchronously on the owner thread; `recvmsg` is posted only
+  after the handoff. (compio's per-op `with_cancel` was probed and is a silent
+  no-op in this build, so cancellation was not used.)
+- `d4801333` — push `36126593601` and PR `36126598834` green; dispatch
+  `36129044514` failed only the lifecycle proof's rapid SRT replacement case,
+  a harness false positive: a SIGKILLed publisher's session stays `on` for the
+  SRT idle + shutdown timeouts, so "input on + sink progress" matched the dead
+  session. `d77997ec` requires a different live publisher address.
+- `d77997ec` — **WI5B acceptance, two complete green sets**:
+  - set A: push run `36131938153` attempt 1 (27 jobs: 12 redevelop transport
+    shards incl. `fault.resilience` and `srt-crypto-matrix`, lifecycle proof)
+    and PR run `36131944598` (Docker runtime smoke executed: image build, SRT
+    and RTMP→RTMPS media under the shipped seccomp profile);
+  - set B: push run `36131938153` attempt 2 (27 jobs, same matrix and
+    lifecycle proof green again) and dispatch run `36134416775` (Docker smoke
+    executed, lifecycle proof green).
 
 Known non-blocking local debt observed during this work: on the 6-CPU WSL2
 development host, `mixed.live.srt.h264.a2.bf2` can fail SRT signal validation
@@ -2769,9 +2791,10 @@ WI6
     convergence and hosted final-code acceptance remain open.
 
 WI5B
-    ACTIVE; hosted set 1 of 2 green on d75fd6d4 (see §24);
-    single-owner connection state, explicit production io_uring,
-    completion-driven egress, boundedness/fairness, and hosted acceptance open
+    DONE at d77997ec; two complete green hosted sets (see §24): single-owner
+    RTMP/RTMPS/SRT transport, explicit production io_uring, completion-driven
+    egress with an explicit wake-source contract, bounded startup/resolution,
+    and a race-free kTLS handoff
 
 local live evidence (2026-09-24; single Linux host, `--no-netns`):
     Restream SHA: d30454afaa4cf27edb4f46fa375488e2c1f3c89b
@@ -2824,21 +2847,14 @@ defaults in this transport-convergence work.
 Sequence: `WI4A -> WI5/WI6 initial cutovers -> WI5B -> WI7 -> WI9 ->
 optional evidence-driven I/O experiments -> WI8/Q-025 -> WI10`.
 
-The ownership architecture, regression guard, RTMP ingress/egress convergence,
-and the completion-scheduling, boundedness and lifecycle fixes are committed
-(§24 lists the hosted history). WI5B requires two green hosted sets on final
-transport code:
-
-- set 1: `d75fd6d4` — push run `36115521296` and PR run `36115528379`, green,
-  with the transport matrix, fault suite, lifecycle proof and an executed
-  Docker media smoke;
-- set 2: pending on the next head. It must again include the PR live smoke,
-  the redevelop media/fault matrix, real RTMPS media and a container run that
-  was not path-skipped (a `workflow_dispatch` run forces the Docker smoke).
-
-Any red run on final transport code is diagnosed from its artifacts and fixed
-as an in-scope failure, not retried to green. WI7 cannot start until both
-sets are green.
+WI5B is DONE at `d77997ec` (§24 lists both green hosted sets). Next is WI7:
+delete obsolete dataplane machinery. The first candidate is the `#[cfg(test)]`
+epoll `TcpEgressPoller`: RTMP shard unit tests still run on that
+level-triggered adapter while production is edge-triggered completions, which
+is why the WI5B lost-wakeup bugs surfaced only in live CI. Move those tests onto
+`CompioTcpPoller`, then delete the adapter and any other machinery without an
+active consumer. WI9, the optional HLS PUT / FFmpeg pipe experiments, WI8/Q-025
+and WI10 follow in the sequence above.
 
 ## 37. Definition of Success
 
