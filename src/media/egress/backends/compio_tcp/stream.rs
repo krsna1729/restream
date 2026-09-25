@@ -17,7 +17,10 @@ pub(crate) type SharedIoBuffers = std::rc::Rc<std::cell::RefCell<IoBuffers>>;
 #[derive(Debug, Default)]
 pub(crate) struct IoBuffers {
     pub(super) received: VecDeque<u8>,
-    outgoing: VecDeque<u8>,
+    /// Append-only TX staging. The transmit worker swaps the whole buffer
+    /// out instead of copying from it; `pending_write_bytes` (staged plus in
+    /// flight) keeps it within `TRANSPORT_BUFFER_CAPACITY`.
+    outgoing: Vec<u8>,
     pub(super) record_type: Option<(usize, u8)>,
     pending_write_bytes: usize,
     rx_space_waker: Option<std::task::Waker>,
@@ -260,7 +263,7 @@ impl Write for CompioTcpStream {
                 if count == 0 {
                     return Err(io::ErrorKind::WouldBlock.into());
                 }
-                buffers.outgoing.extend(&buf[..count]);
+                buffers.outgoing.extend_from_slice(&buf[..count]);
                 buffers.pending_write_bytes += count;
                 wake(&mut buffers.tx_waker);
                 Ok(count)
@@ -285,7 +288,7 @@ impl Write for CompioTcpStream {
                     if take == 0 {
                         break;
                     }
-                    buffers.outgoing.extend(&buf[..take]);
+                    buffers.outgoing.extend_from_slice(&buf[..take]);
                     buffers.pending_write_bytes += take;
                     available -= take;
                     count += take;
@@ -373,9 +376,9 @@ async fn take_transmit(buffers: &SharedIoBuffers, output: &mut Vec<u8>) {
             buffers.tx_waker = Some(cx.waker().clone());
             return Poll::Pending;
         }
-        let count = IO_CHUNK.min(buffers.outgoing.len());
-        output.resize(count, 0);
-        take_front(&mut buffers.outgoing, output);
+        // Hand the staged bytes to the writer by swapping buffers; both keep
+        // their capacity, so steady state neither copies nor allocates.
+        std::mem::swap(output, &mut buffers.outgoing);
         Poll::Ready(())
     })
     .await;
