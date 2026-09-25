@@ -9,7 +9,6 @@ use std::thread;
 use compio::driver::{DriverType, ProactorBuilder};
 use compio::runtime::RuntimeBuilder;
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use tokio::net::TcpSocket;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -374,15 +373,64 @@ fn is_fd_exhaustion_error(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE))
 }
 
+/// Create the listening socket the Compio owner adopts: IPv4 any-address,
+/// `SO_REUSEADDR`, nonblocking and close-on-exec, with an explicit backlog
+/// (std's `TcpListener::bind` cannot set one). Plain syscalls, so no Tokio
+/// network type ever touches the RTMP transport socket.
 fn bind_rtmp_listener_with_backlog(
     port: u16,
     backlog: u32,
 ) -> Result<std::net::TcpListener, io::Error> {
-    let socket = TcpSocket::new_v4()?;
-    socket.set_reuseaddr(true)?;
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    socket.bind(addr)?;
-    socket.listen(backlog)?.into_std()
+    use std::os::fd::{FromRawFd, OwnedFd};
+
+    let fd = unsafe {
+        libc::socket(
+            libc::AF_INET,
+            libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+            0,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `fd` is a fresh socket owned by nothing else; `OwnedFd` closes it
+    // on every early return below.
+    let socket = unsafe { OwnedFd::from_raw_fd(fd) };
+    let check = |result: libc::c_int| {
+        if result < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    };
+    let enable: libc::c_int = 1;
+    check(unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            (&enable as *const libc::c_int).cast(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    })?;
+    let address = libc::sockaddr_in {
+        sin_family: libc::AF_INET as libc::sa_family_t,
+        sin_port: port.to_be(),
+        sin_addr: libc::in_addr {
+            s_addr: u32::from(std::net::Ipv4Addr::UNSPECIFIED).to_be(),
+        },
+        sin_zero: [0; 8],
+    };
+    check(unsafe {
+        libc::bind(
+            fd,
+            (&address as *const libc::sockaddr_in).cast(),
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        )
+    })?;
+    let backlog = libc::c_int::try_from(backlog).unwrap_or(libc::c_int::MAX);
+    check(unsafe { libc::listen(fd, backlog) })?;
+    Ok(std::net::TcpListener::from(socket))
 }
 
 #[cfg(test)]
