@@ -6,8 +6,8 @@ use sysinfo::{Disks, Networks, System};
 
 use crate::api::state::AppState;
 use crate::media::egress::backends::rtmp_connection::rtmps_telemetry_snapshot;
+use crate::media::uring_capabilities::UringCapabilities;
 use crate::system_sampling::{ProcessResourceSnapshot, sample_process_resources};
-use restream_dataplane::UringCapabilities;
 
 use super::configured_media_root;
 

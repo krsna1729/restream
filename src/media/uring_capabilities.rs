@@ -1,10 +1,26 @@
-//! Runtime io_uring capability discovery.
+//! Runtime io_uring capability discovery for operator telemetry.
+//!
+//! Probes one short-lived ring; it does not select or configure a transport
+//! (production transports require io_uring through Compio and fail
+//! explicitly without it).
 
 use std::io;
 
 use io_uring::{IoUring, Probe, opcode};
 
-use crate::build_ring;
+fn build_ring(entries: u32) -> io::Result<IoUring> {
+    let mut builder = IoUring::builder();
+    builder
+        .setup_single_issuer()
+        .setup_defer_taskrun()
+        .setup_coop_taskrun()
+        .setup_taskrun_flag()
+        .setup_cqsize(entries.saturating_mul(2));
+    match builder.build(entries) {
+        Ok(ring) => Ok(ring),
+        Err(_) => IoUring::new(entries),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UringCapabilities {
@@ -85,7 +101,7 @@ impl UringCapabilities {
             sendmsg_iovec: probe.is_supported(opcode::SendMsg::CODE),
             send_zc: probe.is_supported(opcode::SendZc::CODE),
             send_bundle: probe.is_supported(opcode::SendBundle::CODE),
-            // No NAPI busy-poll registration is performed by this crate yet;
+            // No NAPI busy-poll registration is performed by restream yet;
             // the host OS alone is not evidence that the feature is usable.
             napi: false,
         })

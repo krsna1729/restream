@@ -65,6 +65,7 @@ pub mod tcp_stats;
 pub mod timing;
 pub mod transcoder;
 pub mod ts_chunk_ring;
+pub mod uring_capabilities;
 
 use ring_buffer::MEDIA_PULL_BURST_PACKETS;
 

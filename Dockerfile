@@ -99,16 +99,11 @@ COPY scripts/build/app-native.sh scripts/build/bench-harness.sh scripts/build/em
 # so ordinary src/ edits only need to rebuild our crate in the next layer.
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY .cargo/ .cargo/
-# The root manifest declares a path workspace: every member's manifest must be
-# present or Cargo cannot even load the workspace. Stage each member's manifest
-# (only) here and give it dummy sources, so the dependency-only layer keeps its
-# cache boundary; `runtime-tree` below brings in the real member sources.
-COPY crates/restream-dataplane/Cargo.toml crates/restream-dataplane/Cargo.toml
-RUN mkdir -p benches src crates/restream-dataplane/src crates/restream-dataplane/benches \
+# The workspace has no path members; if one is added, stage its manifest and a
+# dummy lib here (tests/docker_build_recipe.rs enforces this).
+RUN mkdir -p benches src \
     && awk '/^\[\[bench\]\]$/ { in_bench = 1; next } in_bench && /^name = "/ { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name); printf "fn main() {}\\n" > ("benches/" name ".rs"); in_bench = 0 }' Cargo.toml \
-    && awk '/^\[\[bench\]\]$/ { in_bench = 1; next } in_bench && /^name = "/ { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name); printf "fn main() {}\\n" > ("crates/restream-dataplane/benches/" name ".rs"); in_bench = 0 }' crates/restream-dataplane/Cargo.toml \
-    && printf 'fn main() {}\n' > src/main.rs \
-    && printf '' > crates/restream-dataplane/src/lib.rs
+    && printf 'fn main() {}\n' > src/main.rs
 RUN RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 
 # Return to the application build stage for its runtime filesystem assembly.
@@ -118,15 +113,14 @@ FROM rust-build AS runtime-tree
 # built frontend assets from the frontend stage. Rust-only edits therefore skip
 # frontend rebuilds, while frontend edits reuse the warmed Cargo dependency
 # target directory above.
-COPY crates/restream-dataplane/ crates/restream-dataplane/
 COPY src/ src/
 COPY --from=frontend-build /workspace/public public
 COPY --from=native-deps /workspace/public/bin/ffmpeg public/bin/ffmpeg
 # COPY keeps each file's original (checkout-time) mtime, which is OLDER than the
 # dummy sources the warm layer compiled, so Cargo would treat the warmed dummy
-# artifacts (an empty dataplane lib, a stub main) as up to date. Touch the real
-# sources so the final build compiles them.
-RUN find crates src -type f -name '*.rs' -exec touch {} + \
+# artifacts (a stub main) as up to date. Touch the real sources so the final
+# build compiles them.
+RUN find src -type f -name '*.rs' -exec touch {} + \
     && RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 
 # The harness image is an explicit target, so this extra bench build is paid

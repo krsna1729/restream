@@ -2601,7 +2601,6 @@ dependencies = [
  "rand 0.10.2",
  "rcgen",
  "reqwest",
- "restream-dataplane",
  "rml_rtmp",
  "rust-embed",
  "rustls-pki-types",
@@ -2626,17 +2625,6 @@ dependencies = [
  "url",
  "webpki-roots",
  "wide",
-]
-
-[[package]]
-name = "restream-dataplane"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "io-uring",
- "libc",
- "loom",
- "proptest",
 ]
 
 [[package]]

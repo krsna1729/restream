@@ -8,8 +8,6 @@ license = "MIT"
 repository = "https://github.com/krsna1729/restream"
 
 [workspace]
-members = ["crates/restream-dataplane"]
-exclude = ["fuzz"]
 resolver = "3"
 
 [lints.rust]
@@ -48,7 +46,6 @@ libsqlite3-sys = { version = "0.37.0", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 bytes = "1.12"
-restream-dataplane = { path = "crates/restream-dataplane" }
 sysinfo = "0.39"
 libc = "0.2"
 futures-util = "0.3"

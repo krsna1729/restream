@@ -1,7 +1,7 @@
 //! The production image is built by Dockerfile stages that stage the Cargo
 //! workspace by hand: a dependency-warming layer (member MANIFESTS only, so the
 //! cache boundary survives) and the real build (`runtime-tree`, with the real
-//! member sources). Adding a path workspace member without teaching the recipe
+//! member sources). The workspace currently has no path members. Adding a path workspace member without teaching the recipe
 //! breaks release-image construction ("failed to load manifest for workspace
 //! member"), which local `cargo` never notices. This guard keeps the two in
 //! step; it is a cheap source check, not a Dockerfile parser.
@@ -14,13 +14,15 @@ fn workspace_members() -> Vec<String> {
         .split("[workspace]")
         .nth(1)
         .expect("root Cargo.toml has a [workspace] table");
-    let members = workspace
-        .split("members")
-        .nth(1)
-        .and_then(|rest| rest.split('[').nth(1))
-        .and_then(|rest| rest.split(']').next())
-        .expect("workspace.members array");
+    let workspace = workspace.split("\n[").next().unwrap_or(workspace);
+    let Some(members) = workspace.split("members").nth(1) else {
+        return Vec::new();
+    };
     members
+        .split('[')
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+        .expect("workspace.members array")
         .split('"')
         .skip(1)
         .step_by(2)
@@ -40,14 +42,21 @@ fn stage(name: &str) -> &'static str {
     &rest[..end]
 }
 
+/// A deleted member must not linger in the recipe: staging a directory that no
+/// longer exists fails the image build.
 #[test]
-fn the_workspace_has_members_the_recipe_must_stage() {
-    assert!(
-        workspace_members()
-            .iter()
-            .any(|member| member == "crates/restream-dataplane"),
-        "the guard below is only meaningful while the workspace has path members"
-    );
+fn the_recipe_stages_no_path_outside_the_workspace_members() {
+    let members = workspace_members();
+    for line in DOCKERFILE
+        .lines()
+        .filter(|line| line.trim_start().starts_with("COPY crates/"))
+    {
+        assert!(
+            members.iter().any(|member| line.contains(member.as_str())),
+            "Dockerfile stages a non-member path: `{}`",
+            line.trim()
+        );
+    }
 }
 
 #[test]
@@ -93,8 +102,9 @@ fn every_workspace_member_real_source_is_staged_for_the_final_build() {
 }
 
 /// COPY preserves checkout-time mtimes, older than the dummy sources the warm
-/// layer compiled; without a touch Cargo reuses the dummy artifacts (an empty
-/// dataplane lib) and the real build fails or ships a stub.
+/// layer compiled; without a touch Cargo reuses the dummy artifacts (a stub
+/// main, and an empty lib per path member) and the real build fails or ships a
+/// stub.
 #[test]
 fn the_real_sources_are_touched_so_cargo_rebuilds_them_over_the_warm_dummies() {
     let tree = stage("runtime-tree");
@@ -105,8 +115,10 @@ fn the_real_sources_are_touched_so_cargo_rebuilds_them_over_the_warm_dummies() {
         .find("RESTREAM_BUILD_PROFILE=release")
         .expect("final build");
     assert!(touch_at < build_at);
-    assert!(
-        tree.contains("find crates src"),
-        "touch must cover members and src"
-    );
+    let expected = if workspace_members().is_empty() {
+        "find src"
+    } else {
+        "find crates src"
+    };
+    assert!(tree.contains(expected), "touch must cover `{expected}`");
 }
