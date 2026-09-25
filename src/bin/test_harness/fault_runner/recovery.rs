@@ -119,6 +119,11 @@ pub(crate) async fn recovery_live_cases(
         .await;
         let baseline_video = metrics.video_count.load(Ordering::Relaxed);
         let baseline_connections = metrics.connections.load(Ordering::Relaxed);
+        // A killed publisher stays `on` until SRT timeouts: recovery needs a new address.
+        let health = api.get_json("/api/v1/engine/health").await.ok();
+        let original_publisher = health.map_or(Value::Null, |health| {
+            health["pipelines"][&pid]["input"]["publisher"]["remoteAddr"].clone()
+        });
 
         stop_child(&mut pub_child).await;
 
@@ -170,7 +175,10 @@ pub(crate) async fn recovery_live_cases(
                 }
             }
 
-            let disconnect_cleared = input["status"] == "on"
+            let publisher = &input["publisher"]["remoteAddr"];
+            let replacement_live = publisher.is_string() && *publisher != original_publisher;
+            let disconnect_cleared = replacement_live
+                && input["status"] == "on"
                 && input["probeStatus"] == "ready"
                 && input["lastSessionProtocol"].is_null()
                 && input["lastDisconnectReason"].is_null()
@@ -209,6 +217,7 @@ pub(crate) async fn recovery_live_cases(
         let final_recent_disconnect_count =
             final_input["recentDisconnectCount"].as_u64().unwrap_or(0);
         let passed = baseline_video >= RECOVERY_WARM_VIDEO_MIN
+            && original_publisher.is_string()
             && baseline_connections == 1
             && recovered
             && final_connections == baseline_connections
@@ -238,6 +247,7 @@ pub(crate) async fn recovery_live_cases(
             "passed": passed,
             "baselineVideo": baseline_video,
             "baselineConnections": baseline_connections,
+            "originalPublisher": original_publisher,
             "recovered": recovered,
             "replacementAttempts": replacement_attempts,
             "sawGapGrace": saw_gap_grace,
