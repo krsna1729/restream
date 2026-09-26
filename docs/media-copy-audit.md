@@ -82,9 +82,22 @@ needs AVCC/HVCC + raw AAC.
 
 ### SRT egress (`srt-rs`, pinned git rev in `Cargo.toml`)
 
-Not yet audited in this pass. Next: profile an SRT-ingest → SRT fan-out at
-10/100 outputs. Note that the SRT receive side (mediamtx) is the current
-bottleneck for SRT fan-out qualification; see the roadmap §36 finding.
+Profiled at `40ebacde`: SRT H.264 ingest → 10 SRT outputs (mediamtx
+receivers), `perf -F 499` with DWARF stacks and kernel symbols, 7.2K
+samples. Copies are not the SRT cost:
+
+| Cost | Share | Where | Lever (all in srt-rs) |
+|---|---:|---|---|
+| userspace memcpy | ~1% | `PendingDatagram::encode_into` 0.26% (payload into the TX datagram), compio completion plumbing | Low value; a header + payload iovec send would remove the 0.26%. |
+| kernel spinlock: receiver wakeup on our send | 2.7% + 0.96% | `udp_sendmsg` → loopback → `__udp_enqueue_schedule_skb` → `sock_def_readable` → `__wake_up_sync_key` (+ mediamtx `ep_poll_callback`) | On loopback the sender pays the receiver's wakeup (partly a test-topology artifact). UDP GSO / `sendmmsg` batching cuts per-packet sends and wakeups; measure on loopback and a real NIC. |
+| io_uring timed waits | ~2% | `io_cqring_wait` → `schedule_hrtimeout` → `hrtimer_try_to_cancel` (+ `task_work_run` lock 1.56%) | Fewer timed waits in the Owner loop (wait without a timeout when no SRT timer is due, or coarser deadlines). |
+| SipHash in `CallerTable` maps | ~1% | `poll_outbound_bounded_to_with_visits`, `sync_deadline`, `feed`, `send_shared` | A non-cryptographic hasher for internal id-keyed maps (ids are not attacker-chosen), or dense `Vec` indexing by `LogicalCallerId`. Add a hasher bench before choosing. |
+
+Next action: take these into the srt-rs repo as separate, benchmarked
+changes (Stage-B bench surface: `wi3-owner-bench` feature), then bump the pin
+here and rerun the SRT fan-out A/B. The SRT receive side (mediamtx at ~130%
+CPU for 10 readers) still limits end-to-end SRT fan-out qualification; see the
+roadmap §36 finding.
 
 ## Work items and status
 
@@ -117,7 +130,8 @@ State as of this writing, in order:
      (`kptr_restrict=1` at record time); to attribute kTLS cost, record with
      `kernel.kptr_restrict=0` (restore afterwards).
    The earlier ingest change (item 2) was folded into this commit.
-4. SRT egress copy audit (see above).
+4. **SRT egress audit: profiled** (see the SRT egress section). The work
+   moves to srt-rs.
 
 ## Rust Allocator API exploration
 
@@ -175,6 +189,19 @@ Leverage points, in the order to try them:
    lands.
 
 Do not start 3–7 before 1–2 show allocation is a real share of media-path CPU.
+
+**Result of step 1 (malloc attribution, after `40ebacde`).** SRT H.264 →
+100 RTMPS outputs, 4.3K samples (`perf script` stacks folded by leaf
+symbol): the malloc/free family is 3.0% of Restream samples. Of that, 77%
+runs on `restream-tokio` (API/telemetry JSON serving the harness's
+once-per-second polling: `serde` serialization, health/telemetry/system
+snapshots, hyper writes). Egress shard and SRT ingest threads together are
+~0.4% of samples. The earlier ~8% was mostly per-output conversion `Vec`s,
+which the payload cache (`95dd6355`) removed. Conclusion: allocation is not
+a media-path cost worth an allocator change today. Steps 2–7 are parked
+until a profile shows media-thread allocation above ~2%. If API polling cost
+matters for operators, reduce allocation in the telemetry JSON builders
+first; that is ordinary code, not an allocator question.
 
 ## How to measure
 
