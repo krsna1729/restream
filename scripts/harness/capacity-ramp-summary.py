@@ -70,6 +70,7 @@ def main(root):
         lines += [
             f"- commit `{provenance.get('commit', '?')}`"
             + (" (dirty)" if provenance.get("dirty") else ""),
+            f"- build profile: {provenance.get('build_profile', 'bench')}",
             f"- CPU: {provenance.get('cpu_model', '?')}, {provenance.get('online_cpus', '?')} online,"
             f" NUMA nodes {provenance.get('numa_nodes', '?')}, hypervisor {provenance.get('hypervisor', '?')}",
             f"- kernel {provenance.get('kernel', '?')}; {provenance.get('memory', '')}",

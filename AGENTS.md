@@ -45,6 +45,10 @@ Use the pinned Rust toolchain from `rust-toolchain.toml`.
 
 - Prefix Cargo and other heavy commands with `scripts/build/resource-limit.sh`.
 - Use `--profile bench` instead of `--release` for local or agent builds.
+  Exception: performance evidence that gets committed (capacity ramps, A/B
+  runs, profiles) uses real release binaries from
+  `scripts/build/release-harness.sh` (`target/qual-release/`); keep the bench
+  profile for the day-to-day inner loop.
 - Cargo hardcodes `target/release` as the output dir for a profile named
   `bench` (long-standing `cargo bench` compatibility quirk); `cargo build
   --profile bench` alone does not populate `target/bench/`. For measurement

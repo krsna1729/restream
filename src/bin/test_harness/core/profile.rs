@@ -14,7 +14,10 @@ fn path_profile(path: &Path) -> Option<&'static str> {
                 .and_then(|value| value.as_os_str().to_str())
                 .and_then(|value| match value {
                     "debug" => Some("debug"),
-                    "release" => Some("release"),
+                    // `target/qual-release` holds release-profile copies from
+                    // scripts/build/release-harness.sh (kept apart from
+                    // target/release, which the bench profile also writes).
+                    "release" | "qual-release" => Some("release"),
                     "bench" => Some("bench"),
                     _ => None,
                 });
@@ -244,6 +247,16 @@ pub(crate) fn default_restream_bin() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn qualification_release_copies_count_as_optimized() {
+        assert!(super::is_optimized_profile(std::path::Path::new(
+            "/repo/target/qual-release/test_harness"
+        )));
+        assert!(!super::is_optimized_profile(std::path::Path::new(
+            "/repo/target/debug/test_harness"
+        )));
+    }
+
     use super::msr_nofile_target;
 
     #[test]

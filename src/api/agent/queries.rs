@@ -136,10 +136,10 @@ pub async fn agent_investigation_handler(
     } else {
         crate::api_runtime_views::engine_telemetry(&state.engine).await
     };
-    let system = System::new_all();
+    let process = crate::system_sampling::sampled_system(process_resource_snapshot);
     let resource_map = crate::api_runtime_views::resource_map(
         &state.engine,
-        process_resource_snapshot(&system),
+        process,
         request.pipeline_id.as_deref(),
         ResourceMapOptions::new(ResourceMapView::Grouped, Some(25)),
     )

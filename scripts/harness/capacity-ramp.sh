@@ -35,7 +35,10 @@ Environment (all optional):
   CAPACITY_STOP_AFTER_FAIL stop a protocol's ladder after a rung where no repeat
                            passed (default 1)
   CAPACITY_ARTIFACT_ROOT   output root (default .local/artifacts/capacity-ramp/<utc stamp>)
-  CAPACITY_SKIP_BUILD      1 to reuse existing target/bench binaries
+  CAPACITY_SKIP_BUILD      1 to reuse the existing binaries
+  CAPACITY_BUILD_PROFILE   release (default: target/qual-release via
+                           scripts/build/release-harness.sh) or bench (inner-loop
+                           target/bench via scripts/build/bench-harness.sh)
   CAPACITY_ALLOW_DIRTY     1 to run on a dirty worktree (recorded in provenance)
 
 A rung passes when the receiver saw every destination at >= 0.95 of the
@@ -124,15 +127,21 @@ export MTX_API=$((port_base + 10)) MTX_HLS=$((port_base + 11))
 export MTX_RTMP=$((port_base + 100)) MTX_RTMPS=$((port_base + 200)) MTX_SRT=$((port_base + 300))
 
 mkdir -p "$root"
+build_profile="${CAPACITY_BUILD_PROFILE:-release}"
+case "$build_profile" in
+  release) bin_dir=target/qual-release build_script=scripts/build/release-harness.sh ;;
+  bench) bin_dir=target/bench build_script=scripts/build/bench-harness.sh ;;
+  *) echo "capacity-ramp: CAPACITY_BUILD_PROFILE must be release or bench" >&2; exit 2 ;;
+esac
 if [[ "${CAPACITY_SKIP_BUILD:-0}" != 1 ]]; then
   export RESTREAM_BUILD_LOCK_FILE="${RESTREAM_BUILD_LOCK_FILE:-/tmp/restream-build.lock}"
-  scripts/build/bench-harness.sh >"$root/build.log" 2>&1 || {
+  "$build_script" >"$root/build.log" 2>&1 || {
     echo "capacity-ramp: build failed; see $root/build.log" >&2
     exit 4
   }
 fi
-[[ -x target/bench/restream && -x target/bench/test_harness ]] || {
-  echo "capacity-ramp: target/bench binaries missing (run scripts/build/bench-harness.sh)" >&2
+[[ -x $bin_dir/restream && -x $bin_dir/test_harness ]] || {
+  echo "capacity-ramp: $bin_dir binaries missing (run $build_script)" >&2
   exit 4
 }
 
@@ -164,6 +173,7 @@ json.dump({
     "ffmpeg": sh("ffmpeg", "-version").split("\n")[0],
     "restream_cpus": "$restream_cpus",
     "harness_cpus": "$harness_cpus",
+    "build_profile": "$build_profile",
     "egress_shards": "${CAPACITY_EGRESS_SHARDS:-default}",
     "malloc_arena_max": "${CAPACITY_MALLOC_ARENA_MAX:-restream provisional default}",
     "sink_threads": $sink_threads,
@@ -213,14 +223,14 @@ run_rung() {
     RESTREAM_CPUSET="$restream_cpus" \
     MSR_PEER=sink PEER_COUNT="$peer_count" \
     HARNESS_SRT_SINK_THREADS="$sink_threads" \
-    RESTREAM_BIN="$PWD/target/bench/restream" WORK_DIR="$dir" \
+    RESTREAM_BIN="$PWD/$bin_dir/restream" WORK_DIR="$dir" \
     RESOURCE_SWEEP_SCENARIOS="$(scenario_for "$protocol")" \
     RESOURCE_SWEEP_INGEST_COUNTS=1 RESOURCE_SWEEP_EGRESS_COUNTS="$outputs" \
     RESOURCE_SWEEP_BITRATE="$bitrate" \
     RESOURCE_SWEEP_RTMPS_CERT="$tls_cert" RESOURCE_SWEEP_RTMPS_KEY="$tls_key" \
     RESTREAM_RTMPS_EXTRA_TRUST_ROOTS_PEM="$tls_cert" \
     RESOURCE_SWEEP_SETTLE_SECS="$settle_secs" RESOURCE_SWEEP_SAMPLE_SECS="$window_secs" \
-    taskset -c "$harness_cpus" target/bench/test_harness resource-sweep --no-netns \
+    taskset -c "$harness_cpus" "$bin_dir/test_harness" resource-sweep --no-netns \
     >"$dir/harness.log" 2>&1
 }
 

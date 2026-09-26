@@ -54,7 +54,9 @@ git checkout <agreed commit>
 scripts/harness/capacity-ramp.sh
 ```
 
-It builds the bench binaries (`scripts/build/bench-harness.sh`), refuses a
+It builds release binaries (`scripts/build/release-harness.sh`, into
+`target/qual-release/`; `CAPACITY_BUILD_PROFILE=bench` uses the inner-loop
+bench profile instead), refuses a
 dirty worktree or running `restream`/`mediamtx`/`ffmpeg`, and writes
 `.local/artifacts/capacity-ramp/<utc stamp>/` with `summary.md`,
 `summary.csv`, `provenance.json` and one resource-sweep directory per rung

@@ -72,6 +72,7 @@ write-ups live in the [documentation archive](archive/README.md).
 - [Current priorities](current-priorities.md) — maintained forward-looking
   priorities.
 - [Layering roadmap](layering-roadmap.md) — maintained refactor sequence.
+- [Runtime crossings audit](runtime-crossings.md) — every Compio/Tokio/FFmpeg crossing with mechanism, rate, bound and verdict, plus open measurement items.
 - [Egress capacity ramp](capacity-ramp.md) — reproducible RTMP/RTMPS/SRT fan-out capacity measurement against in-process sinks, reference results, and a handoff prompt for other hosts.
 - [Media copy audit and allocator exploration](media-copy-audit.md) — per-byte copy inventory with justifications, memcpy/byte-search decision data, in-flight zero-copy work and Rust Allocator API leverage plan.
 - [SRT / Compio dataplane roadmap](srt-compio-roadmap.md) — execution order, invariants, performance targets and decision gates for the SRT Owner migration and packet-rate program.

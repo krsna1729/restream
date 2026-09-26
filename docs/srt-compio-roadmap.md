@@ -2609,6 +2609,44 @@ NIC bottleneck
 peer/network bottleneck
 ```
 
+### WI11 — Media execution plane (proposed; measure first)
+
+Transport now lives on Compio, but continuous media work still runs on Tokio
+because it was grouped with application logic: SRT MPEG-TS demux, RTMP FLV
+classification/probing, standby GOP caching and promotion, timestamp mapping
+and input gating, ring publication, the direct-play `PlayNext` dispatch, and
+the SRT TS muxer (`docs/runtime-crossings.md`). None of it needs Tokio; it
+inherits the Tokio home of `RtmpIngestHandle` and the SRT publisher session.
+
+Target invariant (to replace the `high-performance-data-path.md` statement
+that assigns inline mux/demux to Tokio once WI11 lands): **no continuous,
+per-packet or per-playback-burst processing requires scheduling on the Tokio
+control runtime.** Tokio receives lifecycle events, metadata, telemetry
+snapshots and configuration commands. Compio owns transport I/O. A fixed
+pool of dedicated media workers (one publication owner per pipeline, no OS
+thread per stream) owns container parsing, GOP state, input selection,
+timeline mapping and ring publication. "Off Tokio" does not mean "onto the
+single ingress owner": CPU-heavy media work must not delay socket completions
+or SRT timers. Audit the executor that runs a piece of work, not `tokio::`
+imports (a `tokio::select!` inside a Compio future runs on Compio).
+
+Order:
+
+1. **Measure** with release binaries and symbol-resolved profiles: Tokio CPU
+   split into control, telemetry and media functions at RTMP/SRT publish
+   scale (M1/M3 in `runtime-crossings.md`), and scheduling delay of the
+   publish path under control-plane load.
+2. **First tranche**: GOP caching, input promotion, demux/FLV inspection,
+   timestamp mapping and ring publication behind one media-execution boundary
+   for both SRT and RTMP, with tests proving identical failover and timestamp
+   behavior; A/B against the Tokio path under the same load.
+3. **Separately**: the direct-play `Reader` onto its Compio owner (M2); FFmpeg
+   pipe I/O and HLS PUT evaluated later (not transport blockers).
+
+The goal is fewer hot-path scheduler dependencies, predictable latency and a
+capacity model with separately measurable transport, media, codec and control
+demand, not a claim that dedicated threads always outperform Tokio.
+
 ### WI8 RTMP workloads are three, not one
 
 The Oracle must model these separately; one "RTMP" cost coefficient is wrong:

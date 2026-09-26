@@ -372,6 +372,77 @@ pub(crate) fn sample_child_process_resources(
     resources
 }
 
+/// One long-lived host sampler shared by every API handler. Each handler
+/// used to build `System::new_all()` + `refresh_all()` per request: every
+/// process on the host with command lines, environments and per-thread task
+/// lists, from a Tokio worker. The capacity harness requests
+/// `/metrics/system` on every tick, and in its RTMP fan-out profile Tokio was
+/// 43.7% of Restream samples, dominated by procfs reads. A fresh `System` also
+/// cannot report host CPU usage (there is no previous sample to diff), so the
+/// value was wrong. Now CPU usage is a delta between successive calls, and
+/// only Restream and its child processes are refreshed.
+static HOST_SAMPLER: std::sync::LazyLock<std::sync::Mutex<System>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Mutex::new(System::new_with_specifics(
+            sysinfo::RefreshKind::nothing()
+                .with_cpu(sysinfo::CpuRefreshKind::nothing().with_cpu_usage())
+                .with_memory(sysinfo::MemoryRefreshKind::everything()),
+        ))
+    });
+
+/// Refresh host CPU usage and memory plus Restream and its children only,
+/// then run `read` on the refreshed view. `read` must not block: the sampler
+/// is shared.
+pub(crate) fn sampled_system<R>(read: impl FnOnce(&System) -> R) -> R {
+    let mut sys = HOST_SAMPLER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    sys.refresh_cpu_usage();
+    sys.refresh_memory();
+    let own = sysinfo::Pid::from_u32(std::process::id());
+    let refresh = sysinfo::ProcessRefreshKind::nothing().with_memory();
+    match own_child_pids() {
+        Some(children) => {
+            let mut pids: Vec<sysinfo::Pid> =
+                children.into_iter().map(sysinfo::Pid::from_u32).collect();
+            pids.push(own);
+            // Children that exited since the last sample are dropped: the
+            // previous set is refreshed too, with dead ones removed.
+            let known: Vec<sysinfo::Pid> = sys.processes().keys().copied().collect();
+            pids.extend(known);
+            pids.sort_unstable();
+            pids.dedup();
+            sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::Some(&pids), true, refresh);
+        }
+        // No `/proc/<pid>/task/<tid>/children` (kernel without
+        // CONFIG_PROC_CHILDREN): fall back to the process list, still without
+        // command lines, environments or task lists.
+        None => {
+            sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, refresh);
+        }
+    }
+    read(&sys)
+}
+
+/// Direct children of this process, from each thread's procfs `children`
+/// list (children are recorded against the thread that forked them).
+fn own_child_pids() -> Option<Vec<u32>> {
+    let tasks = std::fs::read_dir("/proc/self/task").ok()?;
+    let mut children = Vec::new();
+    let mut readable = false;
+    for task in tasks.flatten() {
+        let Ok(list) = std::fs::read_to_string(task.path().join("children")) else {
+            continue;
+        };
+        readable = true;
+        children.extend(
+            list.split_whitespace()
+                .filter_map(|pid| pid.parse::<u32>().ok()),
+        );
+    }
+    readable.then_some(children)
+}
+
 pub(crate) fn engine_process_pids(sys: &System) -> Vec<u32> {
     let own_pid = std::process::id();
     let own_sys_pid = sysinfo::Pid::from_u32(own_pid);
@@ -539,5 +610,46 @@ mod tests {
         assert_eq!(parse_cpu_max_quota("100000 100000"), Some(1));
         assert_eq!(parse_cpu_max_quota("150000 100000"), Some(2));
         assert_eq!(parse_cpu_max_quota("250000 100000"), Some(3));
+    }
+}
+
+#[cfg(test)]
+mod sampler_tests {
+    use super::*;
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn sampler_sees_restream_and_its_spawned_children() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .expect("spawn a child process");
+        let child_pid = child.id();
+        let children = own_child_pids().expect("procfs children lists are readable");
+        assert!(
+            children.contains(&child_pid),
+            "{child_pid} not in {children:?}"
+        );
+        let (own, child_seen) = sampled_system(|sys| {
+            (
+                sys.process(sysinfo::Pid::from_u32(std::process::id()))
+                    .is_some(),
+                sys.process(sysinfo::Pid::from_u32(child_pid)).is_some(),
+            )
+        });
+        assert!(
+            own && child_seen,
+            "the sampler refreshes Restream and its children"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn host_cpu_usage_is_a_percentage_across_successive_samples() {
+        let _ = sampled_system(|sys| sys.global_cpu_usage());
+        std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+        let usage = sampled_system(|sys| sys.global_cpu_usage());
+        assert!((0.0..=100.0).contains(&usage), "{usage}");
     }
 }

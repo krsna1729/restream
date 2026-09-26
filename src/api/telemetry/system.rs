@@ -14,21 +14,24 @@ use super::configured_media_root;
 /// Builds the dashboard/system metrics payload, with a summary mode that keeps
 /// only the fields needed by compact operator surfaces.
 pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> serde_json::Value {
-    let mut sys = System::new_all();
-    sys.refresh_all();
-
-    let cpu_pct = sys.global_cpu_usage() as f64;
-    let total_mem = sys.total_memory();
-    let used_mem = sys.used_memory();
+    let (cpu_pct, total_mem, used_mem, core_count, engine) =
+        crate::system_sampling::sampled_system(|sys| {
+            let core_count = sys.cpus().len();
+            (
+                sys.global_cpu_usage() as f64,
+                sys.total_memory(),
+                sys.used_memory(),
+                core_count,
+                engine_metrics(sys, core_count),
+            )
+        });
     let free_mem = total_mem.saturating_sub(used_mem);
     let mem_pct = if total_mem > 0 {
         (used_mem as f64 / total_mem as f64) * 100.0
     } else {
         0.0
     };
-    let core_count = sys.cpus().len();
     let load_avg = System::load_average();
-    let engine = engine_metrics(&sys, core_count);
     let capacity = state.engine.capacity_snapshot().await;
     let egress_shards = state
         .engine
