@@ -7,7 +7,7 @@ use super::checks::{
     check_active_outputs, check_engine_status, check_file_ingest_runtime, check_file_source,
     check_gop_analysis, check_ingest_stream_info, check_network_bandwidth,
     check_preview_recording_state, check_publisher_transport, check_ring_buffer_health,
-    check_srt_listener_socket, check_system_resources,
+    check_srt_listener_owner, check_system_resources,
 };
 use super::model::{DiagnosticsReport, FileDiagnosticsContext};
 
@@ -43,7 +43,7 @@ pub async fn run_diagnostics(
         checks.push(check_network_bandwidth(7).await);
 
         if probe_protocol == "srt" {
-            checks.push(check_srt_listener_socket(8, &engine).await);
+            checks.push(check_srt_listener_owner(8, &engine).await);
         }
     }
 

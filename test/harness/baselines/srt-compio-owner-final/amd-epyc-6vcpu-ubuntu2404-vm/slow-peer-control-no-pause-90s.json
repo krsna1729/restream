@@ -1,0 +1,1080 @@
+{
+  "feedRingPayloadBytes": {
+    "first": 2640422,
+    "max": 9398953
+  },
+  "finalHealthyCheck": "ok",
+  "healthyMinAdvancingPerSecond": 10,
+  "healthyOutputs": 10,
+  "healthyRetryOrFailed": [],
+  "healthyWindowStalls": [],
+  "label": "slow-peer-control-no-pause-90s",
+  "mode": "srt.slow-peer",
+  "ownerFaulted": false,
+  "passed": true,
+  "restreamThreadsNote": "one shard when RESTREAM_BIN pins Restream to a single CPU",
+  "samples": [
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 2640422,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 1347584,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 1163,
+      "t": 1
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 3243736,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 1655716,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 1390,
+      "t": 2
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 3824561,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 1952004,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 1726,
+      "t": 3
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 4517009,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 2305256,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 2022,
+      "t": 4
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 5036163,
+      "slow": {
+        "backpressureReason": "backpressured",
+        "bytesOut": 2570712,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 2203,
+      "t": 5
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 5449935,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 2866248,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 2455,
+      "t": 6
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 5592797,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 3137720,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 2751,
+      "t": 7
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 5917854,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 3443220,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 2966,
+      "t": 8
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 6465692,
+      "slow": {
+        "backpressureReason": "backpressured",
+        "bytesOut": 3817716,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 3291,
+      "t": 9
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 6689426,
+      "slow": {
+        "backpressureReason": "backpressured",
+        "bytesOut": 4188076,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 3519,
+      "t": 10
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 6963490,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 4436612,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 3852,
+      "t": 11
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 7101121,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 4723500,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 4018,
+      "t": 12
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 7395913,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 5025240,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 4280,
+      "t": 13
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 7662188,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 5287500,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 4542,
+      "t": 14
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 8226130,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 5728924,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 4865,
+      "t": 15
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 8500760,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 6044764,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 5092,
+      "t": 16
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 8828950,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 6351956,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 5344,
+      "t": 17
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 8932758,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 6624368,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 5674,
+      "t": 18
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9185598,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 6887192,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 5803,
+      "t": 19
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9176791,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 7297784,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 6232,
+      "t": 20
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9231316,
+      "slow": {
+        "backpressureReason": "backpressured",
+        "bytesOut": 7657616,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 6460,
+      "t": 21
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9216956,
+      "slow": {
+        "backpressureReason": "backpressured",
+        "bytesOut": 7920252,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 6730,
+      "t": 22
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9094580,
+      "slow": {
+        "backpressureReason": "backpressured",
+        "bytesOut": 8210148,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 6959,
+      "t": 23
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9122448,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 8511888,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 7221,
+      "t": 24
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 8993392,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 8789564,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 7516,
+      "t": 25
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9237752,
+      "slow": {
+        "backpressureReason": "backpressured",
+        "bytesOut": 9215572,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 7806,
+      "t": 26
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9226829,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 9475200,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 8033,
+      "t": 27
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9297721,
+      "slow": {
+        "backpressureReason": "backpressured",
+        "bytesOut": 9838604,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 8285,
+      "t": 28
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9113401,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 10089396,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 8517,
+      "t": 29
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9115967,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 10373840,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 8744,
+      "t": 30
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9036914,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 10670128,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 9080,
+      "t": 31
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9224201,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 11067560,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 9376,
+      "t": 32
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9184426,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 11349748,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 9557,
+      "t": 33
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9171016,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 11645096,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 9849,
+      "t": 34
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9250111,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 11977104,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 10102,
+      "t": 35
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9056580,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 12184656,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 10335,
+      "t": 36
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9290041,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 12642812,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 10694,
+      "t": 37
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9206044,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 12908456,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 10917,
+      "t": 38
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9216792,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 13151728,
+        "feedLagUnits": 1,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 11207,
+      "t": 39
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9037840,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 13494640,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 11373,
+      "t": 40
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9131628,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 13797508,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 11679,
+      "t": 41
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 8993356,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 14021040,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 11929,
+      "t": 42
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9272498,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 14509840,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 12219,
+      "t": 43
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9225118,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 14775296,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 12498,
+      "t": 44
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9256122,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 15070832,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 12750,
+      "t": 45
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9112866,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 15342304,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 13028,
+      "t": 46
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9115408,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 15605128,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 13213,
+      "t": 47
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9176039,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 16012712,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 13583,
+      "t": 48
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9368974,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 16371416,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 13811,
+      "t": 49
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9183669,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 16578028,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 14020,
+      "t": 50
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9170283,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 16873376,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 14264,
+      "t": 51
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9119264,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 17226816,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 14572,
+      "t": 52
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9008217,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 17492084,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 14837,
+      "t": 53
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9237224,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 17933508,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 15107,
+      "t": 54
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9226285,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 18193136,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 15387,
+      "t": 55
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9398953,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 18542440,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 15639,
+      "t": 56
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9007113,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 18726304,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 15871,
+      "t": 57
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9131274,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 19029548,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 16098,
+      "t": 58
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9036409,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 19388064,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 16434,
+      "t": 59
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9226744,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 19785496,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 16730,
+      "t": 60
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9183875,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 20064676,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 16948,
+      "t": 61
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9170472,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 20363032,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 17203,
+      "t": 62
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9249568,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 20695040,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 17457,
+      "t": 63
+    },
+    {
+      "healthyAdvancing": 10,
+      "ringPayloadBytes": 9056129,
+      "slow": {
+        "backpressureReason": null,
+        "bytesOut": 20902592,
+        "feedLagUnits": 0,
+        "packetsSentDrop": 0,
+        "pendingBytes": null,
+        "phase": "sending",
+        "retryAttempts": null,
+        "status": "running"
+      },
+      "slowSinkDataEvents": 17687,
+      "t": 64
+    }
+  ],
+  "slowSinkConnectedAtEnd": 1,
+  "slowSinkDataEventsBeforePause": 410,
+  "slowSinkDataEventsDuringPause": 16756,
+  "watchSecs": 90,
+  "harness_exit": 0,
+  "pinned_cpus": "5",
+  "owner_final": {
+    "shard0/v4": {
+      "txCapacity": 16,
+      "txHighWater": 16,
+      "txExhaustions": 0,
+      "txInFlight": 0,
+      "txCompletedOk": 142909,
+      "faulted": false,
+      "serviceVisits": 51822,
+      "protocolOutputFailures": 0,
+      "callerExpired": 0,
+      "callerFailed": 0,
+      "rxTruncated": 0
+    },
+    "shard1/v4": {
+      "txCapacity": 16,
+      "txHighWater": 16,
+      "txExhaustions": 0,
+      "txInFlight": 0,
+      "txCompletedOk": 250489,
+      "faulted": false,
+      "serviceVisits": 80538,
+      "protocolOutputFailures": 0,
+      "callerExpired": 0,
+      "callerFailed": 0,
+      "rxTruncated": 0
+    }
+  },
+  "shards_with_owner": [
+    "shard0/v4",
+    "shard1/v4"
+  ]
+}

@@ -133,21 +133,6 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
 
     // ── Engine-level checks ───────────────────────────────────────────────────
 
-    let srt = &snapshot["srtListener"];
-    let udp_drops = srt.get("udpDrops").and_then(|v| v.as_u64()).unwrap_or(0);
-    if udp_drops > 0 {
-        alerts.push(Alert::new(
-            "engine:srt_listener:udp_drops".into(),
-            Severity::Warning,
-            Scope::Engine,
-            "SRT listener UDP drops detected",
-            "The SRT listener's kernel receive queue is overflowing.",
-            vec![format!("udpDrops = {}", udp_drops)],
-            "Increase SO_RCVBUF or reduce SRT publisher bandwidth.",
-            &generated_at,
-        ));
-    }
-
     let nofile = &snapshot["runtimeLimits"]["nofile"];
     if nofile
         .get("satisfied")
@@ -232,7 +217,7 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                 .get("publisher")
                 .and_then(|publisher| publisher.get("quality"))
                 .and_then(srt_recv_buffer_occupancy);
-            if let Some((recv_bytes, total_bytes, pct)) = srt_recv_buffer
+            if let Some((recv_packets, capacity_packets, pct)) = srt_recv_buffer
                 && pct >= SRT_RECV_BUFFER_WARN_PCT
             {
                 let critical = pct >= SRT_RECV_BUFFER_CRITICAL_PCT;
@@ -256,10 +241,10 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                         "The SRT application receive buffer is full or nearly full. The publisher can still be connected while Restream is not draining ingest data, so downstream outputs will stall.",
                         vec![
                             format!(
-                                "srtRecvBufBytes = {} / {} ({:.0}%)",
-                                recv_bytes, total_bytes, pct
+                                "srtRecvBufPackets = {} / {} ({:.0}%)",
+                                recv_packets, capacity_packets, pct
                             ),
-                            "kernel UDP queue may still be empty because packets have already entered libsrt".into(),
+                            "kernel UDP queue may still be empty because packets have already entered the srt-rs Owner".into(),
                         ],
                         "Treat this as an input/ingest issue first: restart the affected publisher or Restream, then inspect SRT ingest readiness if it recurs.",
                         &generated_at,
@@ -762,13 +747,16 @@ fn blocked_output_action(phase: &str) -> &'static str {
 }
 
 fn srt_recv_buffer_occupancy(quality: &serde_json::Value) -> Option<(u64, u64, f64)> {
-    let recv = quality.get("srtRecvBufBytes")?.as_i64()?.max(0) as u64;
-    let avail = quality.get("srtRecvBufAvailBytes")?.as_i64()?.max(0) as u64;
-    let total = recv.saturating_add(avail);
-    if total == 0 {
+    let buffered = quality.get("srtRecvBufPackets")?.as_u64()?;
+    let capacity = quality.get("srtRecvBufCapacityPackets")?.as_u64()?;
+    if capacity == 0 {
         return None;
     }
-    Some((recv, total, recv as f64 / total as f64 * 100.0))
+    Some((
+        buffered,
+        capacity,
+        buffered as f64 / capacity as f64 * 100.0,
+    ))
 }
 
 fn sorted(mut alerts: Vec<Alert>) -> Vec<Alert> {

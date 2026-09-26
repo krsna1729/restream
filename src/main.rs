@@ -1,10 +1,13 @@
 //! Binary entry point — delegates to `restream::run_app()`.
-//! The tokio multi-threaded runtime is used for all async I/O.
-//! CPU-bound FFmpeg work runs on dedicated OS threads (see `src/lib.rs` docs).
+//! Tokio owns application and control async work (API, database, pipeline
+//! lifecycle, telemetry). Production SRT and RTMP/RTMPS transport I/O runs on
+//! dedicated Compio/io_uring owner threads; blocking FFmpeg/codec work runs on
+//! dedicated OS threads or subprocesses (see `src/lib.rs` docs).
 
 const TOKIO_THREAD_NAME: &str = "restream-tokio";
 
 fn main() {
+    restream::malloc_tuning::apply_from_env();
     let mut args = std::env::args_os();
     let _program = args.next();
     if let Some(flag) = args.next() {

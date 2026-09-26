@@ -144,15 +144,17 @@ Before changing `src/media/`, read:
 
 Core invariants:
 
-- Tokio tasks own sockets, API handlers, timers, and inline mux/demux work.
-- Blocking FFmpeg calls and blocking `srt_send()` belong on dedicated OS threads.
-- Wrap FFmpeg/libsrt OS-thread entry points with `catch_unwind(AssertUnwindSafe(...))`.
+- Tokio owns the control plane: API handlers, reconciliation, timers, application session state and inline mux/demux work.
+- SRT transport sockets and protocol state (`PeerTable`, timers, ACK/NAK, TX) are owned by dedicated Compio `Owner` threads: one ingress owner thread, and one Compio runtime with at most one `Owner` per address family per egress shard. Never move SRT sockets or `PeerTable` state onto Tokio; address SRT sessions from Tokio only by `LogicalPeerId` through bounded commands and events.
+- RTMP/RTMPS sockets stay on the native TCP/io_uring shard workers until the Compio TCP migration.
+- Blocking FFmpeg and other blocking calls belong on dedicated OS threads or the blocking pool, never on Tokio workers or an Owner thread.
+- Wrap OS-thread entry points that cross native FFmpeg/FFI boundaries with `catch_unwind(AssertUnwindSafe(...))`; the Compio Owner threads report an `Owner` fault as a bridge event, and a panic there closes the bridge, which Tokio treats as a listener stop.
 - No internal or external failure path may crash the engine; isolate faults and surface errors.
 - Keep media timestamps separate from wall-clock/application time.
 - Respect `MediaPacket.format`; consumers must handle `Flv` and `Raw` explicitly.
 - RTMP video timestamps are DTS; signed FLV composition offset derives PTS.
 - Normalize SRT Stream IDs before lookup.
-- Duplicate SRT publishers are not bonded ingest; only libsrt group connections are bonds.
+- Duplicate SRT publishers are not bonded ingest; bonding is an `srt-rs` group connection (one `LogicalPeerId`), never independent publishers sharing a StreamID.
 - HLS storage is in-memory unless an explicit design change says otherwise.
 
 Frontend assets are embedded with `rust-embed`, with a disk-first fallback during development.

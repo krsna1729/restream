@@ -19,14 +19,13 @@
 //! — it just costs one extra tick of latency, the same tradeoff the
 //! poller-driven backends make against their own idle-poll cadence.
 
-use std::collections::{HashMap, VecDeque};
-use std::time::Duration;
+use std::collections::HashMap;
 
 use crate::media::egress::backend::{CloseReason, ProtocolEngine, Readiness};
 use crate::media::egress::command::{EgressCommand, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::RingFeed;
 use crate::media::egress::leaf::LeafCommon;
-use crate::media::egress::policy::{LeafLimits, WorkBudget};
+use crate::media::egress::policy::{LeafLimits, WorkBudget, WorkBudgetConfig};
 use crate::media::egress::scheduler::{LeafKey, ReadyQueue, VisitDecision, try_enqueue};
 use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
 use crate::media::egress::visit::{EngineVisit, EngineVisitResult};
@@ -68,32 +67,54 @@ impl SinkFabricLeaf {
 
 pub(crate) struct SinkShardBackend {
     feed: RingFeed,
-    budget_max_units: usize,
-    budget_max_bytes: usize,
-    budget_window: Duration,
+    budget_config: WorkBudgetConfig,
     leaves: Vec<Option<SinkFabricLeaf>>,
+    free_leaf_keys: Vec<LeafKey>,
     output_leaves: HashMap<OutputId, LeafKey>,
     ready: ReadyQueue,
 }
 
 impl SinkShardBackend {
-    pub(crate) fn new(feed: RingFeed, budget: WorkBudget) -> Self {
-        let budget_window = budget
-            .deadline
-            .saturating_duration_since(std::time::Instant::now());
+    pub(crate) fn new(feed: RingFeed, budget: WorkBudgetConfig) -> Self {
         Self {
             feed,
-            budget_max_units: budget.max_units,
-            budget_max_bytes: budget.max_bytes,
-            budget_window,
+            budget_config: budget,
             leaves: Vec::new(),
+            free_leaf_keys: Vec::new(),
             output_leaves: HashMap::new(),
             ready: ReadyQueue::new(),
         }
+        .with_leaf_capacity(crate::media::egress::shard::EgressShardConfig::DEFAULT_LEAF_CAPACITY)
+    }
+
+    pub(crate) fn with_leaf_capacity(mut self, capacity: usize) -> Self {
+        self.leaves = (0..capacity).map(|_| None).collect();
+        self.free_leaf_keys = (0..capacity as u32)
+            .rev()
+            .map(|slot| LeafKey(slot as usize))
+            .collect();
+        self.ready = ReadyQueue::with_capacity(capacity);
+        self
     }
 
     fn add_leaf(&mut self, spec: OutputSpec) {
         let output_id = spec.id.clone();
+        let previous = self.output_leaves.get(&output_id).copied();
+        if previous.is_none() && self.free_leaf_keys.is_empty() {
+            tracing::warn!(
+                output_id = %output_id,
+                "sink fabric leaf rejected: shard leaf capacity exhausted"
+            );
+            spec.progress.mark_terminated_unexpectedly();
+            return;
+        }
+        if let Some(previous) = previous {
+            self.remove_leaf_key(previous);
+        }
+        let Some(key) = self.free_leaf_keys.pop() else {
+            spec.progress.mark_terminated_unexpectedly();
+            return;
+        };
         let common = LeafCommon::new(
             spec.id,
             spec.generation,
@@ -101,15 +122,12 @@ impl SinkShardBackend {
             LeafLimits::from_policy(&spec.policy),
         )
         .with_progress_sink(spec.progress);
-        let key = LeafKey(self.leaves.len());
-        self.leaves.push(Some(SinkFabricLeaf {
+        self.leaves[key.0] = Some(SinkFabricLeaf {
             common,
             engine: SinkEngine::default(),
             transport: SinkTransport::default(),
-        }));
-        if let Some(previous) = self.output_leaves.insert(output_id, key) {
-            self.remove_leaf_key(previous);
-        }
+        });
+        self.output_leaves.insert(output_id, key);
         self.enqueue(key);
     }
 
@@ -126,18 +144,19 @@ impl SinkShardBackend {
     }
 
     fn remove_leaf_key(&mut self, key: LeafKey) {
+        self.ready.remove_key(key);
         if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) {
             let mut leaf = leaf;
             leaf.engine.close(&mut leaf.transport, CloseReason::Removed);
+            self.free_leaf_keys.push(key);
         }
     }
 
     /// The only readiness signal this backend has — see the module doc.
     /// Re-enqueues every leaf that isn't already pending a visit.
     fn enqueue_all_leaves(&mut self) {
-        let keys: Vec<LeafKey> = (0..self.leaves.len()).map(LeafKey).collect();
-        for key in keys {
-            self.enqueue(key);
+        for index in 0..self.leaves.len() {
+            self.enqueue(LeafKey(index));
         }
     }
 
@@ -150,11 +169,7 @@ impl SinkShardBackend {
                 continue;
             };
             let generation = leaf.common.generation;
-            let budget = WorkBudget::new(
-                self.budget_max_units,
-                self.budget_max_bytes,
-                self.budget_window,
-            );
+            let budget = self.budget_config.new_visit();
             let result = leaf.visit_ready(generation, &self.feed, budget);
             let decision = match result {
                 EngineVisitResult::StaleGeneration => VisitDecision::Suspend,
@@ -164,11 +179,8 @@ impl SinkShardBackend {
                 VisitDecision::Continue => self.enqueue(key),
                 VisitDecision::Suspend => {}
                 VisitDecision::Close => {
-                    if let Some(leaf) = self.leaves.get_mut(key.0).and_then(Option::take) {
-                        let mut leaf = leaf;
-                        self.output_leaves.remove(&leaf.common.output_id);
-                        leaf.engine.close(&mut leaf.transport, CloseReason::Removed);
-                    }
+                    self.output_leaves.retain(|_, queued| *queued != key);
+                    self.remove_leaf_key(key);
                 }
             }
         }
@@ -198,14 +210,13 @@ impl EgressShardBackend for SinkShardBackend {
     }
 
     fn on_shutdown(&mut self) {
-        let leaves: Vec<Option<SinkFabricLeaf>> = self.leaves.drain(..).collect();
-        for leaf in leaves.into_iter().flatten() {
+        self.ready.drain().for_each(drop);
+        for leaf in self.leaves.iter_mut().filter_map(Option::take) {
             let mut leaf = leaf;
             leaf.engine
                 .close(&mut leaf.transport, CloseReason::ShardShutdown);
         }
         self.output_leaves.clear();
-        let _: VecDeque<LeafKey> = self.ready.drain().collect();
     }
 }
 

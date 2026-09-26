@@ -81,6 +81,29 @@ fn server_ports_are_loaded_by_config_module() {
 }
 
 #[test]
+fn capacity_limits_accept_host_calibration_overrides() {
+    with_env_vars(
+        &[
+            ("RESTREAM_CAPACITY_INGRESS_PPS", "1234"),
+            ("RESTREAM_CAPACITY_EGRESS_PPS", "5678"),
+            ("RESTREAM_CAPACITY_NIC_BPS", "9000000000"),
+            ("RESTREAM_CAPACITY_MEMORY_BYTES", "123456789"),
+            ("RESTREAM_CAPACITY_FFMPEG_STAGES", "3.5"),
+            ("RESTREAM_CAPACITY_DISK_BPS", "456789"),
+        ],
+        || {
+            let config = AppConfig::from_env();
+            assert_eq!(config.capacity_limits.ingress_pps, 1234.0);
+            assert_eq!(config.capacity_limits.egress_pps, 5678.0);
+            assert_eq!(config.capacity_limits.nic_bps, 9_000_000_000.0);
+            assert_eq!(config.capacity_limits.memory_bytes, 123_456_789.0);
+            assert_eq!(config.capacity_limits.ffmpeg_stages, 3.5);
+            assert_eq!(config.capacity_limits.disk_bps, 456_789.0);
+        },
+    );
+}
+
+#[test]
 fn server_ports_reject_zero_and_fall_back_to_defaults() {
     with_env_vars(
         &[
@@ -409,48 +432,6 @@ fn backend_policy_does_not_use_global_internal_switch_for_all_stages() {
 }
 
 #[test]
-fn srt_egress_reuse_local_port_defaults_on_and_allows_override() {
-    with_env_overlay(&[], &["RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT"], || {
-        assert!(AppConfig::from_env().srt_egress_reuse_local_port);
-    });
-    with_env_vars(&[("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT", "true")], || {
-        assert!(AppConfig::from_env().srt_egress_reuse_local_port);
-    });
-    with_env_vars(&[("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT", "1")], || {
-        assert!(AppConfig::from_env().srt_egress_reuse_local_port);
-    });
-    with_env_vars(&[("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT", "false")], || {
-        assert!(!AppConfig::from_env().srt_egress_reuse_local_port);
-    });
-    with_env_vars(&[("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT", "0")], || {
-        assert!(!AppConfig::from_env().srt_egress_reuse_local_port);
-    });
-}
-
-#[test]
-fn srt_egress_muxer_port_pipeline_scoped_defaults_on_and_allows_override() {
-    with_env_overlay(
-        &[],
-        &["RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED"],
-        || {
-            assert!(AppConfig::from_env().srt_egress_muxer_port_pipeline_scoped);
-        },
-    );
-    with_env_vars(
-        &[("RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED", "false")],
-        || {
-            assert!(!AppConfig::from_env().srt_egress_muxer_port_pipeline_scoped);
-        },
-    );
-    with_env_vars(
-        &[("RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED", "0")],
-        || {
-            assert!(!AppConfig::from_env().srt_egress_muxer_port_pipeline_scoped);
-        },
-    );
-}
-
-#[test]
 fn srt_connect_timeout_defaults_and_allows_override() {
     with_env_overlay(&[], &["RESTREAM_SRT_CONNECT_TIMEOUT_MS"], || {
         assert_eq!(AppConfig::from_env().srt_connect_timeout_ms, 10_000);
@@ -600,18 +581,10 @@ fn target_egress_fabric_shards_matches_known_cases() {
 
     // --- SrtCpuParallel ---
 
-    // SRT shard count is a libsrt-multiplexer parallelism budget, not an
-    // output-count amortization: the target is the CPU-derived ceiling
-    // even with one output, so a ~60-output SRT feed (MSR's real 5% slice
-    // at n=1,200) is not capped at 1 shard / 1 egress multiplexer by the
-    // RTMP-shaped OUTPUTS_PER_SHARD threshold. This is the fix for the
-    // documented SRT scalability ceiling (see
-    // docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md).
-    // An output-count-scaled variant was tried and reverted after failing
-    // live at 1,200 outputs -- see the doc comment on
-    // `EgressShardProfile::SrtCpuParallel` and
-    // docs/archive/quality/msr-1200-resource-attribution-2026-08-13.md
-    // "Efficiency evaluation" before changing this again.
+    // The SRT shard target remains the CPU-derived ceiling regardless of
+    // output count. WI3.7 current-host measurements are provisional evidence;
+    // changing the policy still requires a matched post-cutover scaling
+    // qualification (Q-025).
     assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 0, 8), 8);
     assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 1, 8), 8);
     assert_eq!(target_egress_fabric_shards(SrtCpuParallel, 60, 8), 8);

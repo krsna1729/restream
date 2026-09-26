@@ -10,7 +10,7 @@ use super::*;
 /// tests can manipulate `pending_application_bytes`/`draining_since`
 /// deterministically instead of racing real I/O timing.
 fn connected_backend_for_drain_tests() -> (
-    RtmpShardBackend<TcpEgressPoller>,
+    RtmpShardBackend<CompioTcpPoller>,
     OutputId,
     thread::JoinHandle<()>,
 ) {
@@ -23,7 +23,7 @@ fn connected_backend_for_drain_tests() -> (
     });
 
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let output_id = OutputId::new("draining-leaf");
     backend.on_command(EgressCommand::Add(output_spec(
         "draining-leaf",
@@ -178,4 +178,104 @@ fn shutdown_marks_every_connected_leaf_draining() {
         leaf.draining_reason,
         Some(crate::media::egress::backend::CloseReason::ShardShutdown)
     );
+}
+
+/// A peer that accepts TCP but never answers the handshake queues no
+/// application bytes, so the pending-byte stall classifier reports it idle.
+/// The startup deadline must still terminate it instead of holding the leaf
+/// slot, silently, forever.
+#[test]
+fn startup_deadline_terminates_a_leaf_that_never_reaches_publish() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let (_silent_peer, _) = listener.accept().unwrap();
+        let _ = release_rx.recv_timeout(Duration::from_secs(10));
+    });
+
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let terminated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut spec = output_spec("silent-peer", &format!("rtmp://{addr}/live/key"), 1);
+    let output_id = spec.id.clone();
+    spec.policy.connect_timeout = Duration::from_millis(200);
+    spec.progress.terminated_unexpectedly = Some(Arc::clone(&terminated));
+    backend.on_command(EgressCommand::Add(spec));
+    assert!(backend.complete_pending_connect(&output_id, 1, addr));
+    for _ in 0..8 {
+        backend.on_ready();
+    }
+
+    let free_before = backend.free_leaf_keys.len();
+    let before_deadline = Instant::now();
+    backend.sweep_stalled_leaves(before_deadline);
+    assert!(backend.output_sockets.contains_key(&output_id));
+    assert!(!terminated.load(std::sync::atomic::Ordering::Relaxed));
+
+    backend.last_stall_sweep = None;
+    backend.sweep_stalled_leaves(before_deadline + Duration::from_millis(250));
+    assert!(
+        !backend.output_sockets.contains_key(&output_id),
+        "a wedged startup must release its leaf slot"
+    );
+    assert!(terminated.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(
+        backend.free_leaf_keys.len(),
+        free_before + 1,
+        "the swept leaf's key must return to the free list"
+    );
+    assert!(
+        backend.stall_candidates.is_empty() && backend.ready.is_empty(),
+        "no queue may keep the closed leaf's key"
+    );
+
+    release_tx.send(()).unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn stall_sweep_samples_each_leaf_once_so_two_sample_rates_have_a_real_window() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let (_peer, _) = listener.accept().unwrap();
+        let _ = release_rx.recv_timeout(Duration::from_secs(10));
+    });
+
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let quality = Arc::new(std::sync::Mutex::new(
+        crate::media::snapshots::PublisherQuality::default(),
+    ));
+    let mut spec = output_spec("sampled", &format!("rtmp://{addr}/live/key"), 1);
+    let output_id = spec.id.clone();
+    spec.policy.connect_timeout = Duration::from_secs(30);
+    spec.progress.quality = Some(Arc::clone(&quality));
+    backend.on_command(EgressCommand::Add(spec));
+    assert!(backend.complete_pending_connect(&output_id, 1, addr));
+    for _ in 0..8 {
+        backend.on_ready();
+    }
+
+    let start = Instant::now();
+    backend.sweep_stalled_leaves(start);
+    backend.last_stall_sweep = None;
+    backend.sweep_stalled_leaves(start + crate::media::egress::delivery::DELIVERY_WINDOW);
+    let sampled = quality
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert!(
+        sampled.tcp_send_rate_mbps.is_some(),
+        "the second sweep must rate against the first, not against itself: {sampled:?}"
+    );
+    assert_eq!(
+        sampled.delivered_bps, None,
+        "delivery is rated only after publish acceptance, not over handshake bytes"
+    );
+
+    release_tx.send(()).unwrap();
+    server.join().unwrap();
 }

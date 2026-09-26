@@ -2,7 +2,7 @@ use super::*;
 use crate::media::egress::command::{FeedId, OutputId, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::FeedEpoch;
 use crate::media::egress::leaf::EgressProgressSink;
-use crate::media::egress::policy::LeafPolicy;
+use crate::media::egress::policy::{LeafPolicy, WorkBudgetConfig};
 use crate::media::egress::shard::{EgressShardConfig, EgressShardHandle};
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
 use crate::media::ring_buffer::RingBuffer;
@@ -52,7 +52,10 @@ fn sink_shard_backend_discards_a_real_unit_on_a_real_shard_thread() {
     let handle = EgressShardHandle::spawn(
         crate::media::egress::command::ShardId::new(0),
         config(),
-        SinkShardBackend::new(feed, WorkBudget::new(8, 4096, Duration::from_millis(50))),
+        SinkShardBackend::new(
+            feed,
+            WorkBudgetConfig::new(8, 4096, Duration::from_millis(50)),
+        ),
     );
 
     let bytes_sent = Arc::new(AtomicU64::new(0));
@@ -90,7 +93,10 @@ fn sink_shard_backend_discards_units_published_after_the_leaf_goes_idle() {
     let handle = EgressShardHandle::spawn(
         crate::media::egress::command::ShardId::new(0),
         config(),
-        SinkShardBackend::new(feed, WorkBudget::new(8, 4096, Duration::from_millis(50))),
+        SinkShardBackend::new(
+            feed,
+            WorkBudgetConfig::new(8, 4096, Duration::from_millis(50)),
+        ),
     );
 
     let bytes_sent = Arc::new(AtomicU64::new(0));
@@ -132,7 +138,10 @@ fn sink_shard_backend_stops_discarding_after_remove() {
     let handle = EgressShardHandle::spawn(
         crate::media::egress::command::ShardId::new(0),
         config(),
-        SinkShardBackend::new(feed, WorkBudget::new(8, 4096, Duration::from_millis(50))),
+        SinkShardBackend::new(
+            feed,
+            WorkBudgetConfig::new(8, 4096, Duration::from_millis(50)),
+        ),
     );
 
     let bytes_sent = Arc::new(AtomicU64::new(0));

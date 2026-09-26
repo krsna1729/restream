@@ -2,22 +2,13 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
-use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use shiguredo_srt::{ConnectionEvent, Timestamp};
-use srt_transport::{
-    AdmissionEvent, AdmissionResolution, BondedInputPolicy, HighResWaiter, IngressTelemetry,
-    ListenerConfig, ListenerEncryptionConfig, ListenerPeerPolicy, ListenerTopology, LogicalPeerId,
-    MonotonicDeadline, PeerTable, PolicyOverride, RecvBatch, RecvBudget, RejectionReason,
-    RuntimeFlavor,
-};
-use tokio::net::UdpSocket;
+use srt_transport::advanced::admission::LogicalPeerId;
 use tracing::{error, info, warn};
 
-use crate::domain::srt_ingest::ResolvedSrtCrypto;
 use crate::media::engine::MediaEngine;
 use crate::media::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessMode};
 use crate::media::input_gate::InputTimestampMapper;
@@ -25,19 +16,61 @@ use crate::media::ring_buffer::RingBuffer;
 use crate::media::security::{IngestSecurityService, RateLimitScope};
 use crate::media::srt_stream_id::{SrtConnectionMode, parse_srt_stream_id};
 
-use super::tokio_egress::timestamp_now;
 use crate::media::standby_gop::StandbyGopCache;
 use crate::media::ts_chunk_ring::TsChunkReader;
 
 pub(crate) use super::srt_policy::SrtIngestPolicyStore;
+
+use super::ingress_admission::ReceiverGroupId;
+use super::ingress_owner::{
+    INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, INGRESS_TELEMETRY_CAPACITY, IngressCommand,
+    IngressConfig, SrtIngressEvent, SrtIngressHandle,
+};
+use super::ingress_quality::{QualityFold, QualitySample};
 
 #[path = "ingest_packets.rs"]
 mod ingest_packets;
 
 const SRT_MESSAGE_PAYLOAD_MAX: usize = 1316;
 /// Upper bound for listener parks so reader pull and shutdown stay responsive
-/// when the next protocol deadline is farther out.
+/// when no Owner event arrives.
 const LISTENER_IDLE: Duration = Duration::from_millis(5);
+/// Owner events handled per Tokio pass before readers and deletion checks run.
+const EVENTS_PER_PASS: usize = 64;
+/// Owner telemetry samples folded per Tokio pass.
+const TELEMETRY_PER_PASS: usize = 64;
+/// Send commands one reader may queue per Tokio pass, so one busy reader
+/// cannot monopolize the command bridge.
+const READER_SENDS_PER_PASS: usize = 32;
+
+/// Tokio's end of the ingress Owner: the bounded command bridge plus the
+/// disconnects waiting for bridge room. Sessions are addressed only by
+/// `LogicalPeerId`; the protocol state they name lives on the owner thread.
+struct Ingress {
+    handle: SrtIngressHandle,
+    pending_disconnects: VecDeque<LogicalPeerId>,
+}
+
+impl Ingress {
+    /// Ask the Owner to disconnect (and then retire) a peer. Never lost: a
+    /// full bridge leaves it queued for the next pass.
+    fn disconnect(&mut self, peer: LogicalPeerId) {
+        self.pending_disconnects.push_back(peer);
+        self.flush_disconnects();
+    }
+
+    fn flush_disconnects(&mut self) {
+        while let Some(peer) = self.pending_disconnects.pop_front() {
+            if let Err(IngressCommand::Disconnect { logical_peer }) = self
+                .handle
+                .try_send(IngressCommand::Disconnect { logical_peer: peer })
+            {
+                self.pending_disconnects.push_front(logical_peer);
+                break;
+            }
+        }
+    }
+}
 
 pub(crate) struct SrtServer {
     pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
@@ -69,36 +102,26 @@ impl SrtServer {
                 return;
             }
         };
-        let prepared = match ListenerConfig::builder(bind)
-            .topology(ListenerTopology::PerPort)
-            .bonded_inputs(BondedInputPolicy::Accept)
-            .configure_transport(super::tokio_egress::apply_optional_udp_buf)
-            .build()
-            .and_then(|config| config.prepare(RuntimeFlavor::Tokio))
+        let handle = match SrtIngressHandle::start(IngressConfig {
+            bind,
+            policy_store: self.ingest_policy_store.clone(),
+            receiver_group: ReceiverGroupId::generate(),
+            stats: self.engine.listener_stats_handle(),
+            command_capacity: INGRESS_COMMAND_CAPACITY,
+            event_capacity: INGRESS_EVENT_CAPACITY,
+            telemetry_capacity: INGRESS_TELEMETRY_CAPACITY,
+        })
+        .await
         {
-            Ok(prepared) => prepared,
+            Ok(handle) => handle,
             Err(error) => {
-                error!(port, %error, "failed to prepare srt-rs listener");
+                error!(port, %error, "failed to start the SRT ingress owner");
                 return;
             }
         };
-        let mut sockets = match prepared.bind_sockets() {
-            Ok(sockets) => sockets,
-            Err(error) => {
-                error!(port, %error, "failed to bind srt-rs listener");
-                return;
-            }
-        };
-        let Some(socket) = sockets.pop() else {
-            error!(port, "srt-rs listener produced no UDP socket");
-            return;
-        };
-        let socket = match UdpSocket::from_std(socket) {
-            Ok(socket) => socket,
-            Err(error) => {
-                error!(port, %error, "failed to adopt SRT listener UDP socket into Tokio");
-                return;
-            }
+        let mut ingress = Ingress {
+            handle,
+            pending_disconnects: VecDeque::new(),
         };
 
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -107,99 +130,66 @@ impl SrtServer {
             shutdown_hook.store(true, std::sync::atomic::Ordering::Release);
         });
 
-        let mut peers = prepared.peer_table();
         self.engine
             .listener_stats_handle()
             .bonding_available
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        let admission = prepared.admission_options();
-        let telemetry = IngressTelemetry::default();
+        // Protocol state (the Compio Owner, its PeerTable, timers, replies)
+        // lives on the ingress owner thread. Tokio keeps session and media
+        // lifecycle keyed by `LogicalPeerId` and reaches the protocol only
+        // through bounded commands. There is no second protocol table here.
         let mut peer_sessions = HashMap::new();
-        let mut events = Vec::new();
-        let mut outbound = Vec::new();
-        let mut recv_batch = RecvBatch::new();
-        let mut waiter = match HighResWaiter::<()>::new() {
-            Ok(waiter) => waiter,
-            Err(error) => {
-                error!(port, %error, "failed to create SRT listener HighResWaiter");
-                return;
-            }
-        };
-        if let Err(error) = waiter.register((), socket.as_raw_fd()) {
-            error!(port, %error, "failed to register SRT listener with HighResWaiter");
-            return;
-        }
-        let mut due = Vec::new();
-        let mut ready = Vec::new();
 
-        info!(port, "SRT listener ready (srt-rs/Tokio)");
-        while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
-            let wait = listener_wait_duration(&mut peers, timestamp_now());
-            match tokio::task::block_in_place(|| {
-                park_listener(&mut waiter, &mut due, &mut ready, wait)
-            }) {
-                Ok(socket_ready) => {
-                    if socket_ready {
-                        let now = timestamp_now();
-                        // HighResWaiter observed the raw fd. `drain_readable`
-                        // requires Tokio READABLE, which is still unset here,
-                        // so handshake datagrams would be dropped as WouldBlock.
-                        match drain_woken_listener(
-                            &socket,
-                            &mut recv_batch,
-                            super::tokio_egress::recv_budget(),
-                            |addr, data| {
-                                let Some(peer) = addr else {
-                                    return;
-                                };
-                                let policy_store = self.ingest_policy_store.clone();
-                                let _ = peers.admit_with_resolver(
-                                    peer,
-                                    data,
-                                    now,
-                                    &admission,
-                                    0,
-                                    1,
-                                    &telemetry,
-                                    move |request| resolve_listener_policy(&policy_store, request),
-                                );
-                            },
-                        ) {
-                            Ok(_) => {}
-                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                            Err(error) => {
-                                warn!(%error, "SRT listener receive failed");
-                                tokio::time::sleep(Duration::from_millis(10)).await;
-                            }
-                        }
-                    }
+        info!(port, bind = %ingress.handle.local_addr(), "SRT listener ready (srt-rs compio Owner ingress)");
+        let mut owner_fault = None;
+        'listener: while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
+            ingress.flush_disconnects();
+            close_deleted_srt_publishers(&self.engine, &mut ingress, &mut peer_sessions).await;
+            drive_srt_readers(&self.engine, &mut ingress, &mut peer_sessions).await;
+            let first = tokio::time::timeout(LISTENER_IDLE, ingress.handle.events.recv()).await;
+            let mut next = match first {
+                Ok(Some(event)) => Some(event),
+                Ok(None) => {
+                    owner_fault = Some("the SRT ingress owner thread stopped".to_string());
+                    break;
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(error) => {
-                    warn!(%error, "SRT listener wait failed");
-                    tokio::time::sleep(Duration::from_millis(10)).await;
+                Err(_) => None,
+            };
+            let mut handled = 0;
+            while let Some(event) = next.take() {
+                if let SrtIngressEvent::Fault { detail } = &event {
+                    owner_fault = Some(detail.clone());
+                    break 'listener;
                 }
-            }
-
-            let now = timestamp_now();
-            close_deleted_srt_publishers(&self.engine, &mut peers, &mut peer_sessions, now).await;
-            drive_srt_readers(&self.engine, &mut peers, &mut peer_sessions, now).await;
-            peers.poll_outbound(now, &mut outbound);
-            for (peer, packet) in outbound.drain(..) {
-                let _ = socket.send_to(&packet, peer).await;
-            }
-            peers.poll_events(&mut events);
-            for AdmissionEvent {
-                representative_peer: peer,
-                logical_peer,
-                event,
-            } in events.drain(..)
-            {
-                self.handle_peer_event(&mut peers, &mut peer_sessions, peer, logical_peer, event)
+                self.handle_ingress_event(&mut ingress, &mut peer_sessions, event)
                     .await;
+                handled += 1;
+                if handled >= EVENTS_PER_PASS {
+                    break;
+                }
+                next = ingress.handle.events.try_recv().ok();
+            }
+            self.fold_telemetry(&mut ingress, &mut peer_sessions).await;
+            if ingress.handle.is_closed() {
+                owner_fault = Some("the SRT ingress owner thread stopped".to_string());
+                break;
             }
         }
 
+        // Ask every live peer to close orderly, then stop the owner and report
+        // its truthful verdict before the listener is marked stopped.
+        for logical_peer in peer_sessions.keys().copied().collect::<Vec<_>>() {
+            ingress.disconnect(logical_peer);
+        }
+        let exit = ingress.handle.shutdown().await;
+        if let Some(fault) = owner_fault.as_ref().or(exit.fault.as_ref()) {
+            error!(port, fault = %fault, quiescent = exit.quiescent, "SRT listener stopped after an owner fault");
+        } else if !exit.quiescent {
+            warn!(
+                port,
+                "SRT ingress owner did not reach quiescence at shutdown"
+            );
+        }
         for (_logical_peer, session) in peer_sessions.drain() {
             if let RustSrtSession::Publish(publisher) = session {
                 self.finish_publisher(*publisher).await;
@@ -209,103 +199,144 @@ impl SrtServer {
             .listener_stats_handle()
             .bonding_available
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        info!(port, "SRT listener stopped");
+        info!(port, quiescent = exit.quiescent, "SRT listener stopped");
     }
 
-    async fn handle_peer_event(
+    /// Fold the Owner's stamped receive-quality samples into their publishers'
+    /// ingest snapshots (generation-safe through the registration). Bounded per
+    /// pass; a sample for a peer with no publisher session is dropped, and the
+    /// next one (about a second later) replaces it.
+    async fn fold_telemetry(
         &self,
-        peers: &mut PeerTable,
+        ingress: &mut Ingress,
         sessions: &mut HashMap<LogicalPeerId, RustSrtSession>,
-        peer: SocketAddr,
-        logical_peer: LogicalPeerId,
-        event: ConnectionEvent,
+    ) {
+        for _ in 0..TELEMETRY_PER_PASS {
+            let Ok(QualitySample { peer, observation }) = ingress.handle.telemetry.try_recv()
+            else {
+                break;
+            };
+            let Some(RustSrtSession::Publish(publisher)) = sessions.get_mut(&peer) else {
+                continue;
+            };
+            let Some(quality) = publisher.quality_fold.fold(observation) else {
+                continue;
+            };
+            self.engine
+                .update_ingest_session_quality(&publisher.registration, quality)
+                .await;
+        }
+    }
+
+    async fn handle_ingress_event(
+        &self,
+        ingress: &mut Ingress,
+        sessions: &mut HashMap<LogicalPeerId, RustSrtSession>,
+        event: SrtIngressEvent,
     ) {
         match event {
-            ConnectionEvent::Connected => {
-                let stream_id = peers
-                    .logical_peer(&logical_peer)
-                    .and_then(|entry| entry.stream_id().map(str::to_owned))
-                    .unwrap_or_default();
-                let parsed = parse_srt_stream_id(&stream_id);
-                let client_ip = peer.ip().to_string();
-                let access_mode = match parsed.mode {
-                    SrtConnectionMode::Publish => PipelineAccessMode::SrtPublish,
-                    SrtConnectionMode::Read => PipelineAccessMode::SrtRead,
-                };
-                if self
-                    .security
-                    .is_ip_banned_for(RateLimitScope::SrtPublish, &client_ip)
-                    .or_else(|| {
-                        self.security
-                            .is_ip_banned_for(RateLimitScope::SrtRead, &client_ip)
-                    })
-                    .is_some()
-                {
-                    let _ = peers.remove(logical_peer);
-                    return;
-                }
-                let pipeline = match self
-                    .pipeline_access
-                    .authenticate(access_mode, &parsed.stream_key, &client_ip)
-                    .await
-                {
-                    Ok(pipeline) => pipeline,
-                    Err(error) => {
-                        warn!(peer = %peer, error = ?error, "rejecting unauthorized SRT stream");
-                        let _ = peers.remove(logical_peer);
-                        return;
-                    }
-                };
-                match parsed.mode {
-                    SrtConnectionMode::Publish => {
-                        match self
-                            .start_publisher(peer, pipeline, parsed.stream_key)
-                            .await
-                        {
-                            Ok(session) => {
-                                sessions.insert(
-                                    logical_peer,
-                                    RustSrtSession::Publish(Box::new(session)),
-                                );
-                            }
-                            Err(error) => {
-                                warn!(peer = %peer, %error, "rejecting SRT publisher");
-                                let _ = peers.remove(logical_peer);
-                            }
-                        }
-                    }
-                    SrtConnectionMode::Read => match self.start_reader(&pipeline.id).await {
-                        Ok(reader) => {
-                            sessions.insert(logical_peer, RustSrtSession::Read(reader));
-                        }
-                        Err(error) => {
-                            warn!(peer = %peer, %error, "rejecting SRT reader");
-                            let _ = peers.remove(logical_peer);
-                        }
-                    },
-                }
+            SrtIngressEvent::Fault { .. } => {}
+            SrtIngressEvent::Connected {
+                peer,
+                logical_peer,
+                stream_id,
+            } => {
+                self.handle_connected(ingress, sessions, peer, logical_peer, stream_id)
+                    .await;
             }
-            ConnectionEvent::DataReceived { payload, .. } => {
+            SrtIngressEvent::Media {
+                logical_peer,
+                payload,
+            } => {
                 if let Some(RustSrtSession::Publish(publisher)) = sessions.get_mut(&logical_peer) {
                     publisher.accept_payload(&self.engine, payload).await;
                 }
             }
-            ConnectionEvent::Disconnected { reason } => {
+            SrtIngressEvent::Disconnected {
+                peer,
+                logical_peer,
+                reason,
+            } => {
                 if let Some(session) = sessions.remove(&logical_peer)
                     && let RustSrtSession::Publish(publisher) = session
                 {
                     self.finish_publisher(*publisher).await;
                 }
+                // The owner retires the terminal peer itself; nothing to remove.
                 info!(peer = %peer, %reason, "SRT peer disconnected");
-                let _ = peers.remove(logical_peer);
             }
-            ConnectionEvent::StateChanged(_)
-            | ConnectionEvent::Error(_)
-            | ConnectionEvent::KeyRefreshNeeded { .. } => {}
         }
     }
 
-    async fn start_publisher(
+    async fn handle_connected(
+        &self,
+        ingress: &mut Ingress,
+        sessions: &mut HashMap<LogicalPeerId, RustSrtSession>,
+        peer: SocketAddr,
+        logical_peer: LogicalPeerId,
+        stream_id: String,
+    ) {
+        {
+            let parsed = parse_srt_stream_id(&stream_id);
+            let client_ip = peer.ip().to_string();
+            let access_mode = match parsed.mode {
+                SrtConnectionMode::Publish => PipelineAccessMode::SrtPublish,
+                SrtConnectionMode::Read => PipelineAccessMode::SrtRead,
+            };
+            if self
+                .security
+                .is_ip_banned_for(RateLimitScope::SrtPublish, &client_ip)
+                .or_else(|| {
+                    self.security
+                        .is_ip_banned_for(RateLimitScope::SrtRead, &client_ip)
+                })
+                .is_some()
+            {
+                ingress.disconnect(logical_peer);
+                return;
+            }
+            let pipeline = match self
+                .pipeline_access
+                .authenticate(access_mode, &parsed.stream_key, &client_ip)
+                .await
+            {
+                Ok(pipeline) => pipeline,
+                Err(error) => {
+                    warn!(peer = %peer, error = ?error, "rejecting unauthorized SRT stream");
+                    ingress.disconnect(logical_peer);
+                    return;
+                }
+            };
+            match parsed.mode {
+                SrtConnectionMode::Publish => {
+                    match self
+                        .start_publisher(peer, pipeline, parsed.stream_key)
+                        .await
+                    {
+                        Ok(session) => {
+                            sessions
+                                .insert(logical_peer, RustSrtSession::Publish(Box::new(session)));
+                        }
+                        Err(error) => {
+                            warn!(peer = %peer, %error, "rejecting SRT publisher");
+                            ingress.disconnect(logical_peer);
+                        }
+                    }
+                }
+                SrtConnectionMode::Read => match self.start_reader(&pipeline.id).await {
+                    Ok(reader) => {
+                        sessions.insert(logical_peer, RustSrtSession::Read(reader));
+                    }
+                    Err(error) => {
+                        warn!(peer = %peer, %error, "rejecting SRT reader");
+                        ingress.disconnect(logical_peer);
+                    }
+                },
+            }
+        }
+    }
+
+    pub(super) async fn start_publisher(
         &self,
         peer: SocketAddr,
         pipeline: crate::media::ingest_auth::AuthenticatedPipeline,
@@ -363,6 +394,7 @@ impl SrtServer {
             last_progress_ms,
             probe_sent: false,
             closing: false,
+            quality_fold: QualityFold::default(),
         })
     }
 
@@ -391,7 +423,7 @@ impl SrtServer {
         })
     }
 
-    async fn finish_publisher(&self, mut publisher: RustSrtPublisher) {
+    pub(super) async fn finish_publisher(&self, mut publisher: RustSrtPublisher) {
         publisher.demuxer.flush();
         if publisher.demuxer.drain_into(&mut publisher.packets) > 0 {
             ingest_packets::forward_ingest_packets(
@@ -423,7 +455,7 @@ enum RustSrtSession {
     Read(RustSrtReader),
 }
 
-struct RustSrtPublisher {
+pub(super) struct RustSrtPublisher {
     pipeline_id: String,
     registration: crate::media::engine::IngestRegistration,
     ring_buffer: Arc<RingBuffer>,
@@ -437,10 +469,12 @@ struct RustSrtPublisher {
     last_progress_ms: Arc<std::sync::atomic::AtomicU64>,
     probe_sent: bool,
     closing: bool,
+    /// Tracks the last Owner observation, so rates use Owner-to-Owner intervals.
+    quality_fold: QualityFold,
 }
 
 impl RustSrtPublisher {
-    async fn accept_payload(&mut self, engine: &MediaEngine, payload: Bytes) {
+    pub(super) async fn accept_payload(&mut self, engine: &MediaEngine, payload: Bytes) {
         self.demuxer.feed(payload.as_ref());
         if self.demuxer.drain_into(&mut self.packets) > 0 {
             ingest_packets::forward_ingest_packets(
@@ -515,9 +549,8 @@ struct RustSrtReader {
 
 async fn close_deleted_srt_publishers(
     engine: &MediaEngine,
-    peers: &mut PeerTable,
+    ingress: &mut Ingress,
     sessions: &mut HashMap<LogicalPeerId, RustSrtSession>,
-    now: Timestamp,
 ) {
     let live_pipelines = engine.ingests.pipelines.read().await;
     let publisher_peers: Vec<_> = sessions
@@ -538,22 +571,19 @@ async fn close_deleted_srt_publishers(
         if publisher.closing {
             continue;
         }
-        let Some(mut entry) = peers.logical_peer_mut(&peer) else {
-            continue;
-        };
         // A sink pipeline can disappear while its SRT publisher connection is
-        // still healthy. Close that connection immediately so the producing
-        // egress observes a normal peer shutdown and enters retry/cleanup.
-        entry.disconnect(now);
+        // still healthy. Close that connection immediately (an Owner command
+        // against the real logical peer) so the producing egress observes a
+        // normal peer shutdown and enters retry/cleanup.
+        ingress.disconnect(peer);
         publisher.closing = true;
     }
 }
 
 async fn drive_srt_readers(
     engine: &MediaEngine,
-    peers: &mut PeerTable,
+    ingress: &mut Ingress,
     sessions: &mut HashMap<LogicalPeerId, RustSrtSession>,
-    now: Timestamp,
 ) {
     // The pipeline ring is removed by pipeline deletion immediately, while
     // the active ingest entry intentionally remains until the peer teardown
@@ -569,14 +599,12 @@ async fn drive_srt_readers(
         .collect();
     for (peer, reader) in reader_peers {
         if !live_pipelines.contains_key(&reader.pipeline_id) {
-            if !reader.closing
-                && let Some(mut entry) = peers.logical_peer_mut(&peer)
-            {
+            if !reader.closing {
                 // A target pipeline can be deleted independently of the SRT
-                // socket. Send a protocol shutdown so the remote egress sees
-                // the disappearance promptly instead of waiting for idle
-                // timeout/retry handling.
-                entry.disconnect(now);
+                // socket. Ask the Owner to close the real peer so the remote
+                // egress sees the disappearance promptly instead of waiting
+                // for idle timeout/retry handling.
+                ingress.disconnect(peer);
                 reader.closing = true;
             }
             continue;
@@ -604,210 +632,44 @@ async fn drive_srt_readers(
                 }
             }
         }
-        while let Some(payload) = reader.pending.front().cloned() {
-            let Some(mut entry) = peers.logical_peer_mut(&peer) else {
-                break;
-            };
-            let sent = match entry.send(&payload, now) {
-                Ok(_) => {
-                    reader.pending.pop_front();
-                    true
-                }
-                Err(error) => {
-                    warn!(
-                        peer = ?peer,
-                        error = ?error,
-                        payload_len = payload.len(),
-                        "SRT reader send failed"
-                    );
-                    false
-                }
-            };
-            if !sent
-                || !peers
-                    .logical_peer_mut(&peer)
-                    .is_some_and(|mut entry| entry.can_send())
-            {
-                break;
-            }
-        }
-    }
-}
-
-fn resolve_listener_policy(
-    store: &SrtIngestPolicyStore,
-    request: &srt_transport::AdmissionRequest,
-) -> AdmissionResolution {
-    let stream_id = request
-        .claimed_identity
-        .stream_id
-        .as_deref()
-        .unwrap_or_default();
-    let parsed = parse_srt_stream_id(stream_id);
-    if parsed.stream_key.is_empty()
-        || !matches!(
-            parsed.mode,
-            SrtConnectionMode::Publish | SrtConnectionMode::Read
-        )
-    {
-        return AdmissionResolution::Reject {
-            reason: RejectionReason::BAD_MODE,
-        };
-    }
-    let Some(resolved) = store.resolved_policy(&parsed.stream_key) else {
-        return AdmissionResolution::Reject {
-            reason: RejectionReason::UNAUTHORIZED,
-        };
-    };
-    let mut policy = ListenerPeerPolicy {
-        latency: PolicyOverride::Set(Duration::from_millis(resolved.latency_ms.max(0) as u64)),
-        encryption: PolicyOverride::Set(None),
-        ..ListenerPeerPolicy::default()
-    };
-    if let ResolvedSrtCrypto::Encrypted {
-        passphrase,
-        pbkeylen,
-    } = resolved.crypto
-    {
-        let Some(key_length) = shiguredo_srt::KeyLength::from_len(pbkeylen as usize) else {
-            return AdmissionResolution::Reject {
-                reason: RejectionReason::BAD_REQUEST,
-            };
-        };
-        let Ok(encryption) = ListenerEncryptionConfig::new(passphrase, key_length) else {
-            return AdmissionResolution::Reject {
-                reason: RejectionReason::BAD_REQUEST,
-            };
-        };
-        policy.encryption = PolicyOverride::Set(Some(encryption));
-    }
-    AdmissionResolution::Configure(policy)
-}
-
-fn listener_wait_duration(peers: &mut PeerTable, now: Timestamp) -> Duration {
-    Duration::from_micros(
-        peers
-            .time_until_next_deadline(now, listener_idle_micros())
-            .min(listener_idle_micros()),
-    )
-}
-
-fn listener_idle_micros() -> u64 {
-    u64::try_from(LISTENER_IDLE.as_micros()).unwrap_or(u64::MAX)
-}
-
-fn park_listener(
-    waiter: &mut HighResWaiter<()>,
-    due: &mut Vec<()>,
-    ready: &mut Vec<()>,
-    wait: Duration,
-) -> std::io::Result<bool> {
-    waiter.set_deadline((), MonotonicDeadline::after(wait));
-    waiter.wait(due, ready)?;
-    Ok(!ready.is_empty())
-}
-
-/// Drain a socket that `HighResWaiter` already reported readable.
-///
-/// Must not use [`srt_transport::tokio_transport::drain_readable`]: that
-/// helper's `try_io(READABLE)` returns WouldBlock unless Tokio itself saw
-/// the wake. After a waiter park the kernel queue is full and Tokio is
-/// not, which is the post-#153 MSR sink/ingress handshake stall.
-fn drain_woken_listener(
-    socket: &UdpSocket,
-    recv_batch: &mut RecvBatch,
-    budget: RecvBudget,
-    on_datagram: impl FnMut(Option<std::net::SocketAddr>, &[u8]),
-) -> std::io::Result<srt_transport::RecvDrainReport> {
-    srt_transport::drain_recv_fd(socket.as_raw_fd(), recv_batch, budget, on_datagram)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn empty_peer_table_caps_listener_wait_at_idle() {
-        let mut peers = PeerTable::new();
-        assert_eq!(
-            listener_wait_duration(&mut peers, timestamp_now()),
-            LISTENER_IDLE
-        );
-    }
-
-    fn pending_datagram_socket() -> std::net::UdpSocket {
-        let receiver = std::net::UdpSocket::bind("127.0.0.1:0").expect("receiver binds");
-        receiver
-            .set_nonblocking(true)
-            .expect("receiver is nonblocking");
-        let dest = receiver.local_addr().expect("receiver address");
-        let sender = std::net::UdpSocket::bind("127.0.0.1:0").expect("sender binds");
-        sender.send_to(b"ping", dest).expect("send datagram");
-        receiver
-    }
-
-    fn with_woken_listener(
-        test: impl FnOnce(UdpSocket, &mut HighResWaiter<()>, &mut Vec<()>, &mut Vec<()>),
-    ) {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .build()
-            .expect("Tokio runtime builds");
-        let receiver = pending_datagram_socket();
-        runtime.block_on(async {
-            let sock = UdpSocket::from_std(receiver).expect("tokio adopts the socket");
-            let mut waiter = HighResWaiter::<()>::new().expect("waiter");
-            waiter
-                .register((), sock.as_raw_fd())
-                .expect("register listener fd");
-            let mut due = Vec::new();
-            let mut ready = Vec::new();
-            assert!(
-                park_listener(&mut waiter, &mut due, &mut ready, LISTENER_IDLE).expect("wait"),
-                "listener fd should be ready after a datagram"
-            );
-            test(sock, &mut waiter, &mut due, &mut ready);
-        });
-    }
-
-    #[test]
-    fn high_res_waiter_wakes_the_listener_socket() {
-        with_woken_listener(|_, _, _, _| {});
-    }
-
-    #[test]
-    fn woken_listener_drains_without_tokio_readable() {
-        with_woken_listener(|sock, _, _, _| {
-            let mut batch = RecvBatch::new();
-            let mut got = Vec::new();
-            let report =
-                drain_woken_listener(&sock, &mut batch, RecvBudget::default(), |_, data| {
-                    got.push(data.to_vec())
+        // A fragment leaves `pending` only once the bounded command bridge has
+        // accepted it. A full bridge stops the pull for this reader (the next
+        // burst is not fetched while fragments wait), so nothing is dropped.
+        submit_pending(&mut reader.pending, READER_SENDS_PER_PASS, |payload| {
+            ingress
+                .handle
+                .try_send(IngressCommand::Send {
+                    logical_peer: peer,
+                    payload,
                 })
-                .expect("drain after waiter");
-            assert_eq!(report.datagrams, 1);
-            assert_eq!(got, [b"ping".to_vec()]);
+                .map_err(|command| match command {
+                    IngressCommand::Send { payload, .. } => payload,
+                    IngressCommand::Disconnect { .. } | IngressCommand::Shutdown => {
+                        unreachable!("only a Send command was offered")
+                    }
+                })
         });
     }
+}
 
-    #[test]
-    fn drain_readable_misses_a_waiter_wake_without_tokio_readable() {
-        with_woken_listener(|sock, _, _, _| {
-            let mut batch = RecvBatch::new();
-            let mut got = Vec::new();
-            let report = srt_transport::tokio_transport::drain_readable(
-                &sock,
-                &mut batch,
-                RecvBudget::default(),
-                |_, data| got.push(data.to_vec()),
-            )
-            .expect("drain_readable after waiter");
-            assert_eq!(
-                report.datagrams, 0,
-                "Tokio try_io is unset after HighResWaiter; this is the #153 MSR stall"
-            );
-            assert!(report.would_block);
-            assert!(got.is_empty());
-        });
+/// Offer up to `limit` pending fragments to a bounded sink. A fragment leaves
+/// `pending` only once the sink has accepted it, so a full bridge stops the
+/// pass with nothing lost and order preserved. Returns the accepted count.
+pub(super) fn submit_pending(
+    pending: &mut VecDeque<Bytes>,
+    limit: usize,
+    mut offer: impl FnMut(Bytes) -> Result<(), Bytes>,
+) -> usize {
+    let mut accepted = 0;
+    while accepted < limit {
+        let Some(payload) = pending.front().cloned() else {
+            break;
+        };
+        if offer(payload).is_err() {
+            break;
+        }
+        pending.pop_front();
+        accepted += 1;
     }
+    accepted
 }

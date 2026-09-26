@@ -72,10 +72,25 @@ pub async fn run_app(config: Arc<AppConfig>) {
         internal_hevc_to_h264 = config.backend_policy.internal_hevc_to_h264,
         internal_hls_preview = config.backend_policy.internal_hls_preview,
         internal_complex_audio = config.backend_policy.internal_complex_audio,
-        require_srt_bonding = config.require_srt_bonding,
         summary = %config.effective_summary(),
         "effective startup configuration",
     );
+    match crate::malloc_tuning::applied() {
+        Some(setting @ crate::malloc_tuning::ArenaSetting::Failed { .. })
+        | Some(setting @ crate::malloc_tuning::ArenaSetting::InvalidOverride { .. }) => warn!(
+            event_class = "lifecycle",
+            event_type = "restream.malloc.arenas",
+            setting = %setting,
+            "malloc arena policy not applied as requested",
+        ),
+        Some(setting) => info!(
+            event_class = "lifecycle",
+            event_type = "restream.malloc.arenas",
+            setting = %setting,
+            "malloc arena policy",
+        ),
+        None => {}
+    }
     for warning in config
         .egress_fabric
         .validate(crate::system_sampling::effective_cpu_count())

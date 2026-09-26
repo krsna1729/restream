@@ -1,31 +1,6 @@
 use super::*;
 use proptest::prelude::*;
 use std::sync::Arc;
-use std::sync::Mutex;
-
-static EXPECTED_PANIC_HOOK_LOCK: Mutex<()> = Mutex::new(());
-
-type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
-
-struct ScopedSilentPanicHook(Option<PanicHook>);
-
-impl ScopedSilentPanicHook {
-    fn new() -> Self {
-        Self(Some(std::panic::take_hook()))
-    }
-
-    fn silence(&mut self) {
-        std::panic::set_hook(Box::new(|_| {}));
-    }
-}
-
-impl Drop for ScopedSilentPanicHook {
-    fn drop(&mut self) {
-        if let Some(hook) = self.0.take() {
-            std::panic::set_hook(hook);
-        }
-    }
-}
 
 #[tokio::test]
 async fn write_batch_preserves_chunk_order() {
@@ -75,20 +50,15 @@ async fn read_recovers_from_poisoned_mutex() {
     // then verify that write() and read_nonblocking() do not panic.
     // We use Arc<MemoryQueue> so the poisoning thread can share the object.
     let queue = Arc::new(MemoryQueue::new());
-    {
-        let _panic_hook_lock = EXPECTED_PANIC_HOOK_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut panic_hook = ScopedSilentPanicHook::new();
-        panic_hook.silence();
-        let q = queue.clone();
-        // unwrap() inside a thread that panics → the Mutex becomes poisoned
-        let _ = std::thread::spawn(move || {
+    let q = queue.clone();
+    // unwrap() inside a thread that panics → the Mutex becomes poisoned
+    let _ = std::thread::spawn(move || {
+        crate::test_support::with_expected_panic_suppressed(|| {
             let _guard = q.inner.lock().unwrap();
             panic!("deliberate poison");
-        })
-        .join(); // returns Err(payload) — that's expected, we just consume it
-    }
+        });
+    })
+    .join(); // returns Err(payload) — that's expected, we just consume it
     // The mutex is now poisoned. write() and read_nonblocking() must
     // recover via `unwrap_or_else(|e| e.into_inner())` and not panic.
     queue.write(b"hello").await;

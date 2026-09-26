@@ -20,7 +20,7 @@ It does not expose a Prometheus text endpoint, proxy Grafana, or poll a sidecar.
 | `GET /healthz` | None | Process liveness: `{ "status": "ok" }` |
 | `GET /api/v1/engine/health` | Session | Pipeline input/output state, transport quality, recording state, SRT listener pressure |
 | `GET /api/v1/engine/resource-map` | Session | Runtime or pipeline-scoped resource attribution: CPU/RSS/thread summary plus measured/derived resource nodes; defaults to grouped top-N for large fleets |
-| `GET /metrics/system` | Session | Host CPU/memory/disk/network plus restream engine self metrics, including child FFmpeg CPU/RSS (JSON, not Prometheus) |
+| `GET /metrics/system` | Session | Host CPU/memory/disk/network plus restream engine self metrics, child FFmpeg CPU/RSS, observe-only service-center capacity, and RTMPS/kTLS state (JSON, not Prometheus) |
 | `GET /api/v1/engine` | Session | Restream build/toolchain, linked native-library versions, SBOM summary, and System information: OS, kernel, memory, CPU topology/features, and virtualization context |
 | `GET /api/v1/engine/sbom` | Session | CycloneDX 1.5 runtime SBOM for resolved Rust crates and linked native libraries |
 | `GET /api/v1/pipelines/:id/probe` | Session | Active input codec, dimensions, audio tracks, bitrate, and GOP summary |
@@ -53,12 +53,26 @@ recording settings in SQLite.
   "pipelines": {},
   "srtListener": {
     "bondingAvailable": false,
-    "udpRxQueueBytes": 0,
-    "udpRxQueuePeakBytes": 0,
-    "udpDrops": 0
+    "ingressOwner": {
+      "faulted": false,
+      "managedRx": true,
+      "serviceVisits": 0,
+      "rxPackets": 0,
+      "txPackets": 0,
+      "peers": 0
+    }
   }
 }
 ```
+
+`srtListener.ingressOwner` is published by the SRT ingress Owner thread and is
+low-cardinality by construction (no peer or StreamID labels). The sample shows a
+subset; the full set is service visits/actions/maintenance actions and budget
+exhaustion, TX capacity/in-flight/high-water/exhaustions/packets/completions/
+failures, RX packets/bytes/ring depth/ring drops/truncation, peers, admission
+policy telemetry, command and event bridge depth high-water, event-bridge-full
+visits, dropped telemetry samples, deferred read sends, stale commands,
+overload disconnects and send failures.
 
 `status` is currently always `ready` when the handler returns.
 
@@ -113,23 +127,48 @@ hosts or collection failure, `tcpStatsUnavailableReason` explains the absence.
 
 ### SRT publisher quality
 
-The receive loop samples `srt_bistats()` approximately once per second.
-Cumulative loss/drop/retransmit/undecrypt counters are retained for context;
-alerting should use per-second delta fields so a recovered connection can
-return to healthy.
+The ingress Owner thread samples `srt-rs` receiver statistics about once per
+second and stamps each sample with its own observation time. Samples reach Tokio
+over a separate bounded, lossy telemetry bridge (a full bridge drops the sample
+and counts it in `ingressOwner.telemetryDropped`; it never delays protocol
+service). Per-second rates are computed between two consecutive Owner
+observations; a duplicate observation is ignored and a counter that moved
+backwards yields no rate rather than zero. Cumulative loss/drop/retransmit/
+undecrypt counters are retained for context; alerting should use the per-second
+delta fields so a recovered connection can return to healthy.
 
-The snapshot also includes SRT buffer occupancy and packets in flight. For
-bonded publishers it additionally reports:
+The snapshot includes receive-buffer occupancy in packets, but no in-flight
+count (the ingest receiver does not report one). `mbpsReceiveRate` is the
+Owner's smoothed wire receive rate for a direct publisher and the LOGICAL
+payload rate (one copy of each delivered payload, from successive samples) for a
+bond. For bonded publishers it additionally reports:
 
 | Field | Meaning |
 |---|---|
-| `srtBonded` | Whether libsrt accepted this publisher as a socket group |
+| `srtBonded` | Whether srt-rs admitted this publisher as a bonded group |
 | `srtGroupMemberCount` | Total member tuples currently reported |
-| `srtGroupConnectedMembers` | Members in the connected state |
+| `srtGroupConnectedMembers` | Members in a connected state (active, standby, or unstable) |
 | `srtGroupActiveMembers` | Members carrying the active backup-group path |
 | `srtGroupBrokenMembers` | Members reported broken |
+| `srtGroupWireReceiverPacketsLost` | Receiver-side missing sequence numbers summed over all legs (wire) |
+| `srtGroupWirePacketsUndecryptable` | Decryption rejections summed over all legs (wire) |
 
-The member-count fields are omitted for ordinary single-link publishers.
+A bond's leg-level degradation is reported only through the explicit `wire`
+fields: one degraded leg does not mean the deduplicated logical stream lost
+data, so the ordinary `packetsReceivedLoss`/`Drop`/`Retrans`/`Undecrypt` fields
+are not set for a bond. The member-count and wire fields are omitted for
+ordinary single-link publishers.
+
+`srt-rs` retains the last receiver statistics of every leg it has seen,
+including legs that never completed a handshake and legs that failed, so a
+bond's instantaneous RTT, jitter, latency span and receive-buffer occupancy
+(`msRtt`, `msReceiveBuf`, `srtRecvBufPackets` and friends) are computed from
+connected legs only — an unstable leg still counts, because upstream defines it
+as a connected link the group excludes from delivery under backpressure, while a
+broken leg's stale full buffer must never be the "fullest leg" the
+`_recv_buffer_saturated` alert reads. The cumulative `wire` counters remain
+summed over every leg. A bond with no connected leg reports no new quality
+sample rather than describing the dead legs' last-known state.
 
 ### Output status
 
@@ -156,12 +195,12 @@ Active native egresses appear in `pipelines[id].outputs`:
 | `recentFailureCount` | Number of recent egress failures still inside the short downstream flap window. Carries forward onto the recovered active attempt so operators can see repeated sink churn even after the output is running again. |
 | `flapping` | `true` when repeated downstream failures happened inside that flap window, even if the output has already recovered and resumed sending. |
 | `retrying`, `retryAttempts`, `retryBackoffMs`, `nextRetryAt`, `retryRemainingMs` | Present while reconciler backoff is actively delaying the next automatic egress start. During this window the output `status` is promoted to `retrying` even though the preserved runtime phase remains `failed`. |
-| `quality` | Egress transport quality. RTMP/RTMPS expose sender-side `TCP_INFO`/`SO_MEMINFO`; SRT exposes sender-side `srt_bistats()` and bonded group member state when available. |
+| `quality` | Egress transport quality. RTMP/RTMPS expose sender-side `TCP_INFO`/`SO_MEMINFO`; SRT exposes sender-side `srt-rs` logical-caller statistics (RTT, send rate from the local wire byte delta, sent loss/drop, send-buffer backlog). |
 | `endedAt`, `endedAgeMs` | Present on recent output snapshots after unregister/cleanup so operators can tell when the last classified egress state ended |
 | `fabric`, `shardId` | `true` and the owning shard index for every network egress output — the egress fabric runtime is now the only egress path |
 | `resyncCount` | Total feed resynchronizations for this leaf (see `docs/archive/egress/implementation.md` Phase 6); a leaf that falls behind its retained feed window resyncs to the latest sync point in place rather than closing |
 | `feedLagUnits` | Feed units this leaf's cursor is currently behind the feed head; updated once per second by the shard's stall sweep for every live leaf, not just ones about to be force-closed |
-| `backpressureReason` | `null` when idle/healthy, `"backpressured"` when send-path bytes are queued but within the no-progress deadline, `"stalled"` when that deadline has passed (the same classification the stall sweep uses to decide force-close) |
+| `backpressureReason` | `null` when idle/healthy, `"backpressured"` when send-path bytes are queued but within the no-progress deadline, `"stalled"` when that deadline has passed (the same classification the stall sweep uses to decide force-close), `"shard_saturated"` (SRT) when the deadline has passed while at least four, and at least a quarter, of the shard's outputs are backpressured or stalled: the output is kept connected instead of force-closed, because reconnecting it into the same saturated Owner only adds load |
 
 Stopped configured outputs are still defined by `/api/v1/settings`, but
 `/api/v1/engine/health` now also preserves the most recent classified output
@@ -197,16 +236,22 @@ and only when the byte counter advances.
 
 RTMP egress phases cover URL parsing, TCP/TLS connect, RTMP handshake,
 application connect, publish acceptance, and packet send. SRT egress phases
-cover resolve, connect, sender-capacity rejection, and `srt_send()` failures.
+cover resolve, connect, sender-capacity rejection, and Owner send failures.
 RTMP ingest and RTMP/RTMPS egress quality include the kernel TCP congestion
 control algorithm. RTMP/RTMPS egress quality also includes sender-side RTT,
 bytes sent/acked/retrans, unacked/lost/retrans packet counts,
 congestion/window state, not-sent bytes, pacing and delivery rate,
 send-buffer limitation time, RTO counters, and send-side socket memory.
 
-SRT egress quality includes `srt_bistats()` sender rate, RTT, link capacity,
-send buffer occupancy, flight/flow/congestion windows, sent loss/drop/retrans
-totals and per-second rates, received NAKs, and bonded group member counts.
+SRT egress quality comes from `srt-rs` logical-caller statistics: RTT, sent
+loss/drop totals and the sender-buffer backlog. `mbpsSendRate` is the interval
+delta of the caller's own wire sender bytes — a direct caller's
+`total_srt_bytes_sent`, a bond's summed `wire_srt_bytes_sent` — sampled at the
+shard's ~1 Hz stall sweep, never the peer's advertised receive rate from ACK
+feedback. A first sample, a counter reset, or an absent sender direction
+reports `null` rather than zero, and `msRtt`/`packetsSentDrop` stay `null` until
+the transport reports them (a bond has no aggregate sender TLPKTDROP counter,
+so its drop value is never a fabricated zero).
 HLS PUT egress reports upload progress for segment and playlist PUTs. These
 signals are local sender evidence; they do not prove that a third-party platform
 accepted or played the stream unless a readback/verification probe is also run.
@@ -214,6 +259,22 @@ HLS PUT requests are also bounded by an internal timeout; when an upload target
 hangs, the output surfaces a structured `upload_segment` or `upload_playlist`
 failure and transitions through the normal retrying/backoff contract instead of
 remaining wedged in an active-but-stuck sender loop.
+
+### RTMPS kTLS telemetry
+
+Both summary and full `GET /metrics/system` responses include an `rtmps`
+object. Its process-lifetime counters are `connections`, negotiated `tls12`
+and `tls13`, `ktlsRequested`, `ktlsAttempts`, `ktlsSuccess`,
+`ktlsUnsupported`, `ktlsError`, and `userspaceTlsConnections`.
+`ktlsCapabilities` reports cached current-host support probes for TLS 1.2/1.3
+AES-128/256-GCM.
+
+`ktlsRequested` records intent, not successful offload. `ktlsSuccess` records a
+completed kernel handoff; `ktlsUnsupported` records an unsupported negotiated
+suite/capability and `ktlsError` a handoff setup failure. There is no
+userspace-TLS fallback. `userspaceTlsConnections` counts connections dropped
+after the TLS handshake but before kTLS handoff; it is diagnostic evidence of
+an interrupted setup, not an alternate operating mode.
 
 ### Egress telemetry parity status
 
@@ -231,7 +292,8 @@ Implemented egress parity:
 - last successful send/upload timestamp and progress age
 - per-output bytes, bitrate, and StageMetrics output counters
 - RTMP/RTMPS sender-side TCP quality
-- SRT sender-side `srt_bistats()` quality and bonded egress member state
+- per-destination delivery ratio and per-feed Jain fairness
+- SRT sender-side `srt-rs` quality and bonded egress member state
 - graph, health, v1 telemetry, diagnostics, and alert surfacing for failed or
   stale active egresses
 - process-lifetime egress failure events through `GET /api/v1/events`
@@ -260,6 +322,32 @@ as:
 }
 ```
 
+### Per-destination delivery
+
+Each fabric output's `quality` carries `deliveredBps`, `offeredBps`, and
+`deliveryRatio`, computed by its shard thread over a 5 s window (sampled in
+the 1 s stall sweep, off the media path):
+
+- **offered**: bytes the output's feed published (the ring's
+  `published_bytes` counter: a relaxed single-producer add).
+- **delivered, RTMP/RTMPS**: TCP `tcpi_bytes_acked` delta — wire bytes the
+  peer acknowledged, so a healthy output reads slightly above 1.0 (chunk
+  headers).
+- **delivered, SRT**: srt-rs `SenderStats::total_bytes_acked`, the payload
+  the peer's cumulative ACK retired (sender-dropped packets excluded). This is an **upper bound** on what the receiver got: a receiver
+  that drops late packets itself (its TLPKTDROP) still ACKs past the gap, so
+  the sender counts those packets as delivered. Cross-check with a receiver
+  when it matters. Bonded outputs report `null` (no aggregate buffer view).
+- The window starts only once media flows (RTMP: after publish acceptance),
+  so handshake bytes and the startup burst do not inflate the first window.
+
+`GET /api/v1/pipelines/:pipelineId/telemetry` folds these per feed (outputs
+reading the same terminal stage) into `delivery`: `rated`, `delivered` (outputs
+at or above the 0.95 floor), `ratioMin`, and Jain's fairness index `jain` over
+delivered rates. The resource-sweep harness measures the same ratio at the
+receivers and records both, so a disagreement between them is itself a
+finding.
+
 ### Recording state
 
 ```json
@@ -276,18 +364,80 @@ as:
 
 ### SRT listener state
 
-The shared SRT listener monitor reads Linux `/proc/net/udp` and tracks:
+The SRT listener is one `srt-rs` Compio `Owner` on its own owner thread (see
+[media pipeline](media-pipeline.md#srt-ingress-owner)). `bondingAvailable` is
+true while that listener is running with bonded-input support; the live listener
+counters are `srtListener.ingressOwner`, published by the owner thread. These are
+listener-wide values, not per-pipeline.
 
-- whether the linked libsrt accepted `SRTO_GROUPCONNECT` at startup
-- current receive-queue bytes
-- peak receive-queue bytes since process start
-- cumulative kernel UDP drops
+Per-publisher SRT receive quality (`publisher.quality`) is sampled by the Owner
+thread from `srt-rs` receiver statistics about once per second and folded into
+the ingest snapshot: RTT, receive rate, negotiated latency, latency-buffer span,
+loss/drop/retransmission/undecryptable totals and per-second rates, and receive
+buffer occupancy as `srtRecvBufPackets` / `srtRecvBufCapacityPackets` (plus exact
+`srtRecvBufPayloadBytes`). Buffer capacity is a packet limit, so no byte-capacity
+or "available bytes" field exists. The `srt_recv_buffer_saturated` alert and the
+Publisher Transport diagnostic read these fields.
 
-These are listener-wide values, not per-pipeline. `bondingAvailable: false`
-means ordinary SRT works but the pinned repo-managed libsrt build was not
-prepared with bonding support or the wrong binary was linked.
+Use `ingressOwner.rxRingDropped`, `rxTruncated` and `rxRingDepth` for receive-path
+loss and pressure, and `txFailed`, `txExhaustions` and `faulted` for the transmit
+path and Owner health.
+
+Per-shard SRT Owner counters are also published in `/metrics/system`
+`egressShards[].srtOwners[]`. Alongside `txPackets` they carry `txClass`, the
+`DatagramClass` breakdown of exactly those submissions (`dataFirst`,
+`dataRetransmit`, `ack`, `ackack`, `nak`, `keepalive`, `handshake`,
+`dropRequest`, `keyMaterial`, `shutdown`, `otherControl`). DATA pps,
+retransmission rate and protocol-control pps are read from that breakdown; a
+`txClass.total()` that does not equal `txPackets` would mean the breakdown is
+incomplete.
 
 ## Diagnostic checks
+
+`GET /metrics/system` also includes an observe-only `capacity` object. It
+projects measured ingest bitrate/packet rate, active fanout, stage count, and
+egress shard count onto calibrated service centers; it does not reject or
+defer work. `hottestCenter` identifies the largest projected utilization, and
+the per-center `*Util` fields are ratios (`1.0` means fully occupied). `flow`
+is the Flow Doctor view of the hottest observed shard, including queue growth,
+deadline slack, errors, and retransmit amplification.
+
+```json
+{
+  "capacity": {
+    "ingressPps": 1200,
+    "mediaBps": 2400000,
+    "egressPps": 3600,
+    "hottestShardUtil": 0.0048,
+    "nicUtil": 0.0007,
+    "memoryUtil": 0.0008,
+    "ffmpegUtil": 0,
+    "diskUtil": 0,
+    "activeLeaves": 3,
+    "uniqueStages": 0,
+    "hottestCenter": "egress",
+    "projectedUtilization": 0.0048,
+    "flow": {
+      "center": "egress",
+      "utilization": 0.0048,
+      "queue": 0,
+      "backlogSlope": 0,
+      "deadlineSlackMs": 1000,
+      "delayMs": 0,
+      "errors": 0,
+      "amplification": 1,
+      "status": "healthy"
+    },
+    "observeOnly": true
+  }
+}
+```
+
+The same response includes `ioUring`, a cached host capability probe for Linux
+io_uring features (`pollAdd`, fixed-file operations, multishot receive, `sendZc`,
+and related kernel features). It reports kernel capability, not a separate RTMP
+transport selection. `available: false` means the host denied or lacks
+io_uring; it does not change control-plane behavior.
 
 The JSON diagnostic run (`POST /api/v1/pipelines/:id/diagnostics/run`) is
 protocol-aware and infers the protocol from the active ingest; the request has
@@ -303,12 +453,12 @@ RTMP and SRT ingests run these checks:
 | 1 | Engine Status | Ingest/egress state, uptime, bytes, source ring, max reader lag, total overflows, and max unread packet age |
 | 2 | Stream Info | Codec and track metadata |
 | 3 | GOP Analysis | Keyframe interval; uses media PTS when available |
-| 4 | Publisher Transport | RTMP `TCP_INFO`/`SO_MEMINFO` or SRT `srt_bistats()`, including bonded member state |
+| 4 | Publisher Transport | RTMP `TCP_INFO`/`SO_MEMINFO` or SRT `srt-rs` receiver statistics. For a bonded SRT publisher the bond identity and explicit wire degradation counters are reported instead of the ordinary logical loss/drop/retransmit/undecrypt counters, which are unknown for a bond |
 | 5 | Ring Buffer Health | Buffer state plus per-reader lag slots, overflow counters, and unread packet age |
 | 6 | Active Outputs | Output state and bytes; egresses associated via `ActiveEgress.pipeline_id` |
 | 7 | System Resources | CPU, RAM, disk |
 | 8 | Network Bandwidth | Host-wide interface rates (not pipeline-specific latency) |
-| 9 | SRT Listener Socket | SRT-only: bonding availability, shared UDP queue/peak/drops (listener-wide, Linux-specific) |
+| 9 | SRT Listener Owner | SRT-only: bonding availability, Owner fault, receive mode, peers, RX/TX counters, ring drops/truncation, admission counters and dropped publisher-telemetry samples (listener-wide, from the Compio Owner) |
 
 File ingests run a file-specific set instead:
 

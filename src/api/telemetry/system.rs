@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use sysinfo::{Disks, Networks, System};
 
 use crate::api::state::AppState;
+use crate::media::egress::backends::rtmp_connection::rtmps_telemetry_snapshot;
+use crate::media::uring_capabilities::UringCapabilities;
 use crate::system_sampling::{ProcessResourceSnapshot, sample_process_resources};
 
 use super::configured_media_root;
@@ -26,6 +29,16 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     let core_count = sys.cpus().len();
     let load_avg = System::load_average();
     let engine = engine_metrics(&sys, core_count);
+    let capacity = state.engine.capacity_snapshot().await;
+    let egress_shards = state
+        .engine
+        .egress_fabric_shard_statuses(std::time::Duration::from_secs(5))
+        .await
+        .into_iter()
+        .map(|status| status.to_json())
+        .collect::<Vec<_>>();
+    let io_uring = uring_capabilities();
+    let rtmps = rtmps_telemetry_snapshot();
 
     let media_root = {
         let absolute = configured_media_root(&state.media_dir);
@@ -127,6 +140,26 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
                 "usedPercent": mem_pct
             },
             "engine": engine,
+            "capacity": capacity,
+            "egressShards": egress_shards,
+            "ioUring": io_uring,
+            "rtmps": {
+                "connections": rtmps.connections,
+                "tls12": rtmps.tls12,
+                "tls13": rtmps.tls13,
+                "ktlsRequested": rtmps.ktls_requested,
+                "ktlsAttempts": rtmps.ktls_attempts,
+                "ktlsSuccess": rtmps.ktls_success,
+                "ktlsUnsupported": rtmps.ktls_unsupported,
+                "ktlsError": rtmps.ktls_error,
+                "userspaceTlsConnections": rtmps.userspace_tls_connections,
+                "ktlsCapabilities": {
+                    "tls12Aes128Gcm": rtmps.ktls_tls12_aes128_gcm,
+                    "tls12Aes256Gcm": rtmps.ktls_tls12_aes256_gcm,
+                    "tls13Aes128Gcm": rtmps.ktls_tls13_aes128_gcm,
+                    "tls13Aes256Gcm": rtmps.ktls_tls13_aes256_gcm,
+                },
+            },
             "disk": {
                 "usedPercent": disk_pct,
             },
@@ -150,6 +183,26 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
                 "usedPercent": mem_pct
             },
             "engine": engine,
+            "capacity": capacity,
+            "egressShards": egress_shards,
+            "ioUring": io_uring,
+            "rtmps": {
+                "connections": rtmps.connections,
+                "tls12": rtmps.tls12,
+                "tls13": rtmps.tls13,
+                "ktlsRequested": rtmps.ktls_requested,
+                "ktlsAttempts": rtmps.ktls_attempts,
+                "ktlsSuccess": rtmps.ktls_success,
+                "ktlsUnsupported": rtmps.ktls_unsupported,
+                "ktlsError": rtmps.ktls_error,
+                "userspaceTlsConnections": rtmps.userspace_tls_connections,
+                "ktlsCapabilities": {
+                    "tls12Aes128Gcm": rtmps.ktls_tls12_aes128_gcm,
+                    "tls12Aes256Gcm": rtmps.ktls_tls12_aes256_gcm,
+                    "tls13Aes128Gcm": rtmps.ktls_tls13_aes128_gcm,
+                    "tls13Aes256Gcm": rtmps.ktls_tls13_aes256_gcm,
+                },
+            },
             "disk": {
                 "totalBytes": total_disk,
                 "usedBytes": used_disk,
@@ -172,6 +225,37 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
             }
         })
     }
+}
+
+fn uring_capabilities() -> &'static serde_json::Value {
+    static CAPABILITIES: OnceLock<serde_json::Value> = OnceLock::new();
+    CAPABILITIES.get_or_init(|| match UringCapabilities::probe(8) {
+        Ok(caps) => serde_json::json!({
+            "available": true,
+            "pollAdd": caps.poll_add,
+            "accept": caps.accept,
+            "acceptMultishot": caps.accept_multishot,
+            "connect": caps.connect,
+            "recv": caps.recv,
+            "recvMsg": caps.recv_msg,
+            "recvMsgMulti": caps.recv_msg_multi,
+            "recvMultishot": caps.recv_multishot,
+            "provideBuffers": caps.provide_buffers,
+            "recvBundle": caps.recv_bundle,
+            "recvZc": caps.recv_zc,
+            "send": caps.send,
+            "sendMsg": caps.send_msg,
+            "sendmsgIovec": caps.sendmsg_iovec,
+            "sendZc": caps.send_zc,
+            "sendBundle": caps.send_bundle,
+            "napi": caps.napi,
+            "deploymentTier": caps.deployment_tier().as_str(),
+        }),
+        Err(error) => serde_json::json!({
+            "available": false,
+            "error": error.kind().to_string(),
+        }),
+    })
 }
 
 fn disk_usage_for_path(disks: &Disks, path: &Path) -> Option<(u64, u64, String)> {

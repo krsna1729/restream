@@ -99,6 +99,11 @@ COPY scripts/build/app-native.sh scripts/build/bench-harness.sh scripts/build/em
 # so ordinary src/ edits only need to rebuild our crate in the next layer.
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY .cargo/ .cargo/
+# `[patch.crates-io]` path dependencies must exist before Cargo can resolve the
+# graph (tests/docker_build_recipe.rs enforces this).
+COPY vendor/ vendor/
+# The workspace has no path members; if one is added, stage its manifest and a
+# dummy lib here (tests/docker_build_recipe.rs enforces this).
 RUN mkdir -p benches src \
     && awk '/^\[\[bench\]\]$/ { in_bench = 1; next } in_bench && /^name = "/ { name = $0; sub(/^name = "/, "", name); sub(/"$/, "", name); printf "fn main() {}\\n" > ("benches/" name ".rs"); in_bench = 0 }' Cargo.toml \
     && printf 'fn main() {}\n' > src/main.rs
@@ -114,7 +119,12 @@ FROM rust-build AS runtime-tree
 COPY src/ src/
 COPY --from=frontend-build /workspace/public public
 COPY --from=native-deps /workspace/public/bin/ffmpeg public/bin/ffmpeg
-RUN RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
+# COPY keeps each file's original (checkout-time) mtime, which is OLDER than the
+# dummy sources the warm layer compiled, so Cargo would treat the warmed dummy
+# artifacts (a stub main) as up to date. Touch the real sources so the final
+# build compiles them.
+RUN find src -type f -name '*.rs' -exec touch {} + \
+    && RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 
 # The harness image is an explicit target, so this extra bench build is paid
 # only by `--target harness`, never by the production runtime image. It must
@@ -124,11 +134,15 @@ FROM runtime-tree AS harness-build
 
 RUN scripts/build/bench-harness.sh
 
+# Seed the state directory as a copyable path; WORKDIR alone did not make it
+# writable by UID 1000 in rootless container engines.
+FROM native-deps AS runtime-state
+RUN mkdir -p /restream-state && touch /restream-state/.keep
+
 # ── Stage 4: distroless runtime ──────────────────────────────────────────────
 #
-# Runtime state lives under `/.restream`. Docker creates that writable parent
-# as the runtime user; Restream creates its data/logs/media/runtime children at
-# startup.
+# Runtime state lives under `/.restream`, seeded with UID 1000 so the app can
+# create its data/logs/media/runtime children at startup.
 #
 # Example:
 #   docker run -d \
@@ -146,11 +160,10 @@ LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
 
 EXPOSE 3030 1935 10080/udp
 
+COPY --from=runtime-state --chown=1000:1000 /restream-state /.restream
+
 USER 1000:1000
 
-# `WORKDIR` creates the directory using the active USER, giving the app a
-# writable parent for its relative `.restream/...` defaults.
-WORKDIR /.restream
 WORKDIR /
 
 ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
@@ -191,8 +204,10 @@ LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
     org.opencontainers.image.licenses="MIT AND GPL-2.0-or-later AND MPL-2.0 AND Apache-2.0"
 
 EXPOSE 3030 1935 10080/udp
+
+COPY --from=runtime-state --chown=1000:1000 /restream-state /.restream
+
 USER 1000:1000
-WORKDIR /.restream
 WORKDIR /
 ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
 ENTRYPOINT ["/restream"]

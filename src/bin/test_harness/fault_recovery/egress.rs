@@ -357,7 +357,7 @@ pub(super) async fn fault_rtmp_egress_sink_stalls(
     }))
 }
 
-pub(super) async fn wait_for_outputs_live_and_progressing(
+pub(crate) async fn wait_for_outputs_live_and_progressing(
     api: &RampApi,
     pipeline_id: &str,
     output_ids: &[String],
@@ -916,7 +916,7 @@ pub(crate) async fn wait_for_output_retry_observation(
     observation
 }
 
-async fn wait_for_output_retry_or_cleanup_observation(
+pub(super) async fn wait_for_output_retry_or_cleanup_observation(
     api: &RampApi,
     pipeline_id: &str,
     output_id: &str,

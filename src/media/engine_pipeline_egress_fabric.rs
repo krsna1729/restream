@@ -159,11 +159,15 @@ impl MediaEngine {
             effective_cpus,
             shard_config,
             |_shard_id| {
-                Ok::<_, std::convert::Infallible>(PipelineShardBackend::new(
-                    feed.clone_reader(),
-                    budget,
-                    target_source.clone(),
-                ))
+                let feed = feed.clone_reader();
+                let target_source = target_source.clone();
+                let leaf_capacity = shard_config.leaf_capacity().get();
+                move || {
+                    Ok::<_, std::convert::Infallible>(
+                        PipelineShardBackend::new(feed, budget, target_source)
+                            .with_leaf_capacity(leaf_capacity),
+                    )
+                }
             },
         );
         match result {

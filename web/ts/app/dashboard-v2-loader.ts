@@ -60,6 +60,7 @@ export interface DashboardV2PipelineInputStatusActions
     pipelineId: string,
     container: HTMLElement,
   ) => void;
+  readonly openPublisherHealthModal: (pipelineId: string) => void;
   readonly saveAudioTrack: (pipelineId: string, key: string) => void;
   readonly selectProtocol: (
     pipelineId: string,

@@ -68,7 +68,7 @@ The architecture must:
 This design does not:
 
 - make RTMP and SRT wire operations identical;
-- force TCP epoll and SRT's drive-owned-leaves readiness into one physical
+- force Compio TCP readiness and SRT's Compio Owner activity into one physical
   polling API;
 - move the API, database, reconciler, ingest, recording, or codec execution onto
   an egress thread-per-core runtime;
@@ -82,7 +82,7 @@ This design does not:
 ## Architectural decision
 
 Restream will use a protocol-neutral egress fabric with protocol-specialized
-preparation feeds, engines, and readiness backends.
+preparation feeds, engines, and protocol-native transport backends.
 
 ```mermaid
 flowchart TD
@@ -94,7 +94,7 @@ flowchart TD
     ShardGroup --> Shard["Fixed egress shard"]
     Shard --> Leaf["Protocol-neutral leaf shell"]
     Leaf --> Engine["Protocol engine"]
-    Engine --> Transport["Non-blocking transport and readiness backend"]
+    Engine --> Transport["Protocol-native transport backend"]
 ```
 
 The stable boundary is policy versus mechanism:
@@ -104,7 +104,7 @@ The stable boundary is policy versus mechanism:
 | Output assignment and supervision | Handshake bytes and state |
 | Leaf lifecycle | Wire serialization |
 | Work budgets and fairness | Protocol acknowledgements and control messages |
-| Feed cursors and overrun policy | TCP/TLS/SRT readiness mechanics |
+| Feed cursors and overrun policy | Protocol-specific transport mechanics and progress |
 | Backpressure and stall policy | Partial-write or message-send semantics |
 | Retry delay and admission control | Protocol error classification |
 | Shutdown and removal | Socket options and transport setup |
@@ -121,12 +121,13 @@ Properties the fabric must keep preserving:
 - expensive transforms are shared by typed stage identity;
 - compatible SRT outputs share MPEG-TS preparation through `TsChunkRing`;
 - RTMP/RTMPS and SRT leaves share fabric lifecycle, backpressure, and retry
-  policy while retaining protocol-specialized engines and readiness backends;
+  policy while retaining protocol-specialized engines and transport backends;
 - slow ring readers can recover after bounded overflow;
 - Tokio worker count and egress shard count are independent,
   measurement-driven knobs (separate sweeps). SRT keeps a CPU-derived shard
-  ceiling as a shared UDP socket / `CallerTable` parallelism budget rather
-  than scaling shards purely with output count.
+  ceiling as an Owner-parallelism budget (each shard runs its own Compio
+  runtime and family Owners) rather than scaling shards purely with output
+  count.
 
 Legacy per-destination RTMP tasks and per-destination SRT sender threads are
 gone; see [archive/egress/implementation.md](archive/egress/implementation.md)
@@ -194,11 +195,12 @@ flowchart LR
 There is no protocol-specific bypass around the manager, shard scheduler,
 common lifecycle, or backpressure policy.
 
-A shard may use a protocol-native readiness path. RTMP shards use Linux epoll
-for TCP/TLS readiness. SRT shards do not: `srt-rs` has no epoll equivalent, so
-the SRT backend drives owned sockets and the shared `CallerTable` directly and
-treats every pending leaf as write-interested. That specialization stays under
-the same application topology, not a separate egress architecture.
+Each RTMP/RTMPS shard owns one Compio/io_uring runtime, its TCP streams,
+protocol state, and bounded completion workers. Established sockets use
+one-shot RX/TX operations; only pending connects use `PollFd` readiness. SRT
+shards run one Compio runtime on the shard thread with at most one
+`srt_transport::compio::Owner` per address family (IPv4, IPv6), each owning one
+shared caller UDP socket.
 
 ## Shared preparation graph
 
@@ -225,8 +227,10 @@ chunking, acknowledgement, connection, and optional TLS state.
 
 SRT leaves consume immutable MPEG-TS messages produced once for compatible
 outputs. Each leaf still owns SRT connection and protocol state in the
-`srt-rs` stack (congestion, retransmission, encryption) rather than in a
-separate libsrt multiplexer thread pair.
+`srt-rs` stack (congestion, retransmission, encryption). The shard's family
+`Owner` owns one shared caller UDP socket, one bounded caller pool and the
+logical callers; a leaf holds only its `LogicalCallerId`. A bonded output is
+one leaf and one logical caller whose legs must share one address family.
 
 Sink leaves consume prepared media and discard it after accounting progress.
 They have no transport readiness adapter, but they still run through the same
@@ -345,9 +349,10 @@ pub struct EgressShard<B: EgressBackend> {
 
 A shard owns:
 
-- its protocol-specific readiness backend (RTMP/RTMPS: a Linux epoll
-  instance; SRT: drive-based readiness with no poller — owned sockets and
-  the shared `CallerTable`);
+- its protocol-specific network backend (RTMP/RTMPS: one Compio/io_uring
+  runtime, shared Compio TCP streams, bounded RX/TX workers and event queues;
+  pending connects alone use `PollFd`; SRT: one Compio runtime and at most two
+  family `Owner`s, built on the shard thread);
 - all leaf protocol and transport state assigned to it;
 - its ready queue and scheduling flags;
 - connect, handshake, progress, and retry timers;
@@ -358,21 +363,50 @@ A shard owns:
 No hot-path global mutex is required for leaf scheduling or socket state.
 Mutable leaf state does not migrate between threads during normal operation.
 
-A shard loop performs bounded work in this order:
+The backend is built, driven and dropped on the shard's own OS thread.
+`EgressShardBackend` is therefore not `Send`; only the factory passed to
+`EgressShardHandle::spawn_with` (or `try_spawn_with` for fallible construction
+such as an `io_uring` poller) crosses the thread boundary, and it must be
+`Send`. This is what lets a backend own thread-affine runtime state — a
+per-thread Compio runtime, an `Rc`-based owner — without
+`Arc<Mutex<Runtime>>` or `unsafe impl Send`. `EgressShardHandle::spawn` and
+`EgressShardGroup::spawn` remain as conveniences for already-built `Send`
+backends (tests); production groups use the factory forms.
+
+The RTMP/RTMPS completion backend performs bounded work in this order:
 
 1. process a limited batch of high-priority control commands;
-2. invoke backend readiness processing (`on_ready` / `poll_ready`) and
-   consume any ready-leaf events the backend produced;
+2. process a bounded batch of generation-tagged completion events and make a
+   rotating, per-call-budgeted scan of pending-connect `PollFd`s;
 3. process expired timers;
 4. schedule leaves whose feeds advanced;
 5. service ready leaves under per-leaf and per-loop budgets;
 6. publish aggregated metrics when due;
-7. when idle, wait on the command channel with a bounded timeout
-   (`recv_timeout(idle_wait)`), then resume from step 1 so quiet shards
-   still rediscover write-interested leaves on the next readiness pass.
+7. when idle, wait for control activity, active-I/O completions, pending-connect
+   readiness, or the next relevant deadline (the earlier of the next
+   application timer and shard idle bound).
+
+Established leaves never enter the PollFd set. One-shot RX workers pause after a
+bounded read until the shard consumes the completion; TX workers queue at most
+one bounded chunk in flight and wait when their bounded event channel is full.
+This applies backpressure instead of scanning active connections or draining a
+completion source to quiescence.
 
 Control processing itself is budgeted so a large update burst cannot starve
 media progress.
+
+The command channel is a bounded `flume` channel (exact capacity, `try_send`
+reports `Full` or `Closed`, FIFO), chosen because its receiver supports both
+blocking and Future-based receive. The idle wait is a backend hook,
+`EgressShardBackend::wait_idle(commands, max_wait)`, returning one of
+`Command`, `BackendActivity`, `Timeout` or `Disconnected`. `max_wait` is the
+shard's own bound, the earliest of the idle wait, the next application timer
+and, once `Shutdown` has started a drain, the drain deadline. A `Command` wake
+goes through the same `process_command` path as one found by `try_recv`;
+`BackendActivity` schedules one ordinary ready visit under the shared budget.
+RTMP/RTMPS and SRT waiters enter their shard-local Compio runtime to wait for
+commands and transport activity together. Sink and pipeline backends use the
+default command-channel waiter.
 
 ## Leaf ownership
 
@@ -467,45 +501,188 @@ factory code where it is not performance-sensitive.
 
 ## Readiness backends
 
-The application topology and scheduler are common; native readiness remains
-specialized.
+This section describes the current RTMP/RTMPS completion transport; the
+`Readiness` values consumed by the protocol engine are coalesced completion
+flags, not population-wide readiness results. SRT uses its Compio `Owner`.
 
 ### TCP and TLS backend
 
-RTMP and RTMPS use non-blocking TCP readiness. The protocol engine owns RTMP
-and TLS state and performs partial reads and writes. It must not call
-`write_all` from a shared shard loop.
+Each established RTMP leaf shares one Compio TCP stream between the RX and TX
+workers. The workers use bounded 4 KiB chunks, connection-local receive/send
+queues, and one bounded generation-tagged completion channel. A leaf's read and
+write completion flags are ORed before its next protocol visit, so simultaneous
+one-shot completions cannot suppress the other direction. Shutdown aborts and
+joins both workers before connection state is dropped.
 
-A pending RTMP write should retain shared payload ownership where possible and
-track independent offsets for headers and payloads. A writable visit is bounded
-and stops on `WouldBlock`.
+Each peer is started with a single nonblocking `connect(2)` call. Immediate
+success activates the Compio stream directly; `EINPROGRESS` is the only state
+registered with `PollFd`, and its duplicate descriptor is removed when the
+connection activates. A rotating scan visits at most the configured connect
+budget per poll, including while established completions are arriving. Active
+connections are not registered or discovered by a population-wide readiness
+scan. Established RTMP data I/O has no synchronous `send`/`recv` fast path;
+Compio completion workers own it. Egress requires a working Compio/io_uring
+runtime and fails shard construction explicitly if it is unavailable.
 
-RTMPS drives TLS incrementally. Plaintext accepted by TLS and encrypted output
-retained by the connection are both included in per-leaf memory limits.
+RTMPS uses Rustls for the handshake, then requires Linux kTLS for application
+records. Unsupported negotiated suites, missing kTLS capability, or handoff
+errors fail the output; there is no silent userspace-TLS fallback. Ancillary
+receive staging preserves TLS record-type association for kTLS.
+
+Nominal transport-adapter bound per established RTMP/RTMPS leaf
+(`compio_tcp/stream.rs`):
+
+| Buffer | Bound |
+|---|---:|
+| queued RX (`TRANSPORT_BUFFER_CAPACITY`) | 4 KiB |
+| receive-worker buffer (`IO_CHUNK`) | 4 KiB |
+| TX staging, staged plus in flight (`TRANSMIT_BUFFER_CAPACITY`) | 64 KiB |
+| TX segment list (≤ 257 `Bytes` handles) and copied-run capacity | ~12 KiB |
+| **worst case** | **~84 KiB** |
+
+At the default upper topology of 8 shards × 4,096 leaf slots (32,768 active
+leaves) that is about **2.6 GiB** of adapter state before allocator overhead,
+not the ~512 MiB this section quoted before 64 KiB TX batching. Configured
+shard/leaf overrides scale it. Media payload in TX staging is mostly shared
+`Bytes` slices of the feed (zero-copy since `40ebacde`), so the private
+per-leaf copy is usually the headers/control run, far below 64 KiB, but the
+bound is what capacity planning must assume. It excludes protocol-engine,
+TLS, task and event state and kernel socket buffers; the application
+pending-byte ceiling is a separate bound.
+
+Measured, for calibration: in the capacity ramp (`docs/capacity-ramp.md`,
+8 Mbit/s outputs) Restream RSS grew from 184 MB at 250 RTMP outputs to 295 MB
+at 1,000, about **150 KB per output** of total process growth (all Restream
+state, not only the adapter). WI8's memory model should start from these
+figures.
+
+The kTLS read path preserves TLS record types: TLS 1.3 session tickets are
+discarded after the buffered Rustls handoff, so RTMPS session resumption is not
+used; a TLS 1.3 KeyUpdate fails the output closed. Supporting KeyUpdate requires
+the Rustls unbuffered `KernelConnection` handoff.
+
+A pending RTMP write retains shared payload ownership where possible and
+tracks independent offsets for headers and payloads. Each writable visit is
+bounded and stops on `WouldBlock`. RTMPS plaintext accepted by TLS and
+encrypted output retained by the connection remain subject to per-leaf memory
+limits.
 
 ### SRT backend
 
-SRT egress runs on `srt-rs` (Tokio UDP plus in-process protocol state), not
-libsrt epoll. `srt-rs` has no epoll-style readiness multiplexer: each shard's
-`poll_ready()` drives owned transports, then marks every not-yet-enqueued leaf
-writable so the common scheduler can visit it.
+SRT egress runs on `srt-rs`'s Compio `Owner`. Topology per shard:
 
-Local-port reuse still scopes one shared UDP socket and `CallerTable` per
-`(pipeline, shard)` (`SrtEgressMuxerPorts`). Direct or bonded leaves drive
-their own sockets; shared-port leaves share one table that the shard drives
-once per `poll_ready` pass (and again on the send path per accepted message).
-Application-owned per-destination byte queues and sender threads remain
-removed.
+```text
+shard OS thread
+  └── one Compio runtime (production profile, io_uring; built on this thread)
+        ├── IPv4 Owner  (lazy; one caller UDP socket, caller pool, fixed TX pool)
+        ├── IPv6 Owner  (lazy; likewise)
+        └── SRT leaves: OutputId/generation, feed cursor, family, LogicalCallerId
+```
+
+- **One runtime, at most two Owners.** There is never a runtime, task, socket
+  or Owner per output. Many direct and bonded callers share one Owner's socket;
+  TX lanes and the receive consumer are the Owner's fixed substrate.
+- **Connect admission is the Owner's caller pool.** `Owner::connect` /
+  `connect_bonded` return `Admitted`, `Queued` or `Full`. A queued request is
+  correlated by `(family, PoolRequestId)` to its output and generation; the
+  pool event that later admits it is attached only if that output and
+  generation are still current, otherwise the stale caller is retired. There is
+  no Restream-side connect semaphore or backlog. DNS resolution stays
+  off-thread and bounded, before the Owner is involved. The Owner is a resource
+  governor: `set_caller_pool_capacity` bounds in-flight handshakes, while each
+  output's `LeafPolicy.connect_timeout` (`RESTREAM_SRT_CONNECT_TIMEOUT_MS`)
+  rides on that output's own `CallerConfig` as its attempt deadline. The pool
+  starts the clock at admission, so queue wait never consumes it, and no
+  Restream-side timer exists to defeat that.
+- **Bonded outputs** are one leaf and one logical caller; all legs must resolve
+  to one address family (a mixed-family bond fails the output explicitly) and
+  carry one identical request deadline. Backup/Broadcast selection and per-leg
+  state belong to `srt-rs`. Endpoints are never rejected for differing hosts;
+  the handshake's remote group identity decides. A `PeerGroupCollision` (typed
+  `CallerGroupFault`: logical caller, leg peer, member, expected/actual group
+  id) is drained in the normal bounded event pass -- after the pool `Admitted`
+  events of that pass, so a queued request is installed before its collision is
+  applied -- and fails exactly that output (session-local, never an Owner fault);
+  an ordinary leg failure keeps the sibling legs.
+- **Scheduling.** A ready batch services each existing Owner once under a
+  finite `OwnerServiceBudget` (upstream defaults, independent of pool capacity
+  and fan-out: `max_actions` bounds protocol TX and `max_maintenance_actions`
+  bounds pool/lifecycle maintenance on separate axes), drains bounded Owner
+  event queues, moves queued
+  candidates to the ready queue, and then visits leaves one per `on_ready`.
+  Payload submission (`send_shared`) only enqueues into protocol state and never
+  services an Owner. Backpressured or still-connecting leaves park; Owner
+  activity re-examines a bounded rotating slice of them, so a network wake does
+  bounded work and nothing spins. Each batch first does one non-blocking
+  driver poll (`Runtime::block_on` returns without touching the driver once its
+  future is ready), so a shard that never idles still reaps TX completions and
+  receives datagrams; without it all TX slots stay in flight and leaves starve
+  (regression test `a_shard_that_never_parks_still_reaps_tx_completions`).
+- **Waiting.** The backend overrides `wait_idle` to park inside its Compio
+  runtime, awaiting the command channel, each Owner's network/completion
+  activity and the earliest of the generic bound and each Owner's protocol
+  deadline. SRT protocol timers (ACK/NAK, keepalive, pacing, retransmission,
+  handshake) stay inside the Owner; Restream's timer wheel keeps only product
+  and lifecycle timers.
+- **Faults.** A peer-local or transient TX failure is attributed to one caller
+  (and leg) and never faults anything else. A structural Owner fault retires the
+  leaves on that family and stops admission there; the sibling family keeps
+  running.
+- **Shutdown.** Leaves flush inside the shard drain window minus a small
+  reserve; each instantiated Owner is then torn down with
+  `shutdown_and_drain`, proving no send in flight, a whole TX pool, joined lanes
+  and no receive consumer, or reporting the miss in shard metrics.
+- **Observability.** `ShardMetrics.srt_owners[family]` carries low-cardinality
+  Owner gauges/counters (TX pool capacity/free/high-water/exhaustions, in-flight,
+  caller-pool in-flight/queued/expired/failed/cancelled, receive mode and ring
+  depth/drops/truncation, service visits and budget exhaustions, cumulative
+  protocol `service_actions` and `maintenance_actions`, peer-group collisions,
+  fault state);
+  the shard also records whether its runtime is io_uring and whether the managed
+  receive substrate exists. The receive mode is `ManagedPreferred`: a host
+  without provided-buffer rings runs the readiness receiver, and that is
+  visible in `OwnerRxMode` and these metrics rather than silently claimed.
+
+**Runtime states and deployment requirements.** Three states are distinct and
+must not be confused:
+
+| State | What the runtime observed | Result |
+|---|---|---|
+| A. io_uring unavailable or denied | the forced io_uring Compio runtime cannot be built (e.g. a container seccomp profile denies `io_uring_setup`, `EPERM`/`ENOSYS`) | the SRT shard fails closed: `SrtFabricShardGroupError::Backend` ("SRT egress Compio runtime failed to build: ..."), no shard is left running, no fallback driver/runtime/backend exists |
+| B. io_uring works, no managed substrate | provided-buffer ring registration failed (or multishot is unsupported) | `ManagedPreferred` selects `OwnerRxMode::RawReadiness`; a valid receive mode of the same Compio Owner, not a second backend |
+| C. full substrate | io_uring + provided-buffer ring + `recvmsg` multishot | `OwnerRxMode::ManagedMultishot` |
+
+RawReadiness does not make io_uring optional. SRT egress always requires a
+kernel and container syscall policy that permit the forced io_uring runtime
+(for Docker: the shipped profile, `distribution/docker/README.md`); managed
+multishot receive additionally requires `IORING_REGISTER_PBUF_RING` and
+`recvmsg` multishot; RawReadiness needs neither. Capability is read from the
+live runtime, never inferred from a kernel version. Startup logs one
+`srt egress shard runtime ready` line per shard (`driver`, `io_uring`,
+`managed_rx` substrate, `substrate_diagnosis`) and one
+`srt egress owner attached` line per address family when its Owner selects a
+receive mode (`rx_mode`, `substrate`, `substrate_diagnosis`), so a RawReadiness
+fallback and its reason are always visible; `substrate_diagnosis` separates a
+policy denial (`buffer-ring-denied-by-policy`, `EPERM`/`EACCES`) from an
+unsupported kernel feature (`buffer-ring-unsupported-by-kernel`, `EINVAL`). At
+shard shutdown one `srt egress owner final counters` line per family records the
+cumulative service, RX/TX and TX-pool counters.
 
 SRT sender-buffer limits remain part of the leaf's total buffering policy;
 moving buffering into the protocol stack does not make it free or unbounded.
+`RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` sets each Owner's caller-pool
+`max_in_flight` (its queue holds as many again); it is capacity only.
 
-`RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT` and
-`RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED` keep the isolation rule:
-reuse is per `(pipeline, shard)` by default so unrelated pipelines do not
-share a contention or failure domain merely because their shard-assignment
-formulas produced the same numeric id. Disabling pipeline scoping is an
-operator opt-out toward fewer shared sockets at the cost of that isolation.
+### Direction: Compio as the network I/O substrate
+
+Shard ownership, bounded scheduling, work budgets and the protocol-neutral
+leaf contract stay normative. RTMP ingress and RTMP/RTMPS egress use Compio TCP
+ownership. Established RTMP egress sockets are completion-driven; bounded
+rotating Compio `PollFd` scans cover pending connects only. SRT egress and
+ingress use the same Compio substrate with protocol `Owner`s.
+
+The former RTMP `IoUringTcpPoller` production path and epoll fallback are
+removed; test-only standard-TCP and epoll adapters remain behind `cfg(test)`.
 
 ### Future backends
 
@@ -660,10 +837,10 @@ protected by:
 - optional per-host or per-destination-class limits if live evidence requires
   them.
 
-For SRT, a process-wide connect-admission semaphore
-(`RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY`, `srt_connect_admission.rs`) now
-implements the first bullet for both the initial mass-`Add` path and
-reconnects; the per-shard and per-host/per-destination-class refinements
+For SRT, each family Owner's bounded caller pool
+(`RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY` as its `max_in_flight`, with an
+equal queue) is the per-shard concurrent-connect limit for both the initial
+mass-`Add` path and reconnects; the process-wide and per-host refinements
 remain open, as does equivalent admission control for RTMP.
 
 These controls prevent a large dead-destination set from causing DNS, TCP, TLS,
@@ -928,9 +1105,9 @@ Retained tradeoffs of the fabric itself:
 
 - one lifecycle and failure policy, fixed application thread count, and
   bounded memory under slow consumers;
-- more explicit partial-I/O (RTMP/TLS epoll plus SRT drive-owned-leaves), and
-  scheduler/timer obligations versus one independent async task per
-  destination at tiny scale;
+- more explicit partial-I/O (RTMP/TLS Compio completions, with pending-connect
+  `PollFd` scans, plus SRT Owner-driven leaves), and scheduler/timer obligations
+  versus one independent async task per destination at tiny scale;
 - prefer narrow abstractions proven by RTMP and SRT over a framework for
   hypothetical protocols; do not hide wire semantics behind a vague transport
   trait or treat average throughput as proof of tail fairness.

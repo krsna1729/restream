@@ -47,14 +47,11 @@ fn reader_drop_cleans_up_on_poisoned_mutex() {
     let reader = Reader::new("r".into(), rb.clone());
 
     let poisoned_ring = rb.clone();
-    let _panic_hook_lock = EXPECTED_PANIC_HOOK_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut panic_hook = ScopedSilentPanicHook::new();
-    panic_hook.silence();
     let poison_thread = std::thread::spawn(move || {
-        let _guard = poisoned_ring.readers.lock().unwrap();
-        panic!("intentional poison");
+        crate::test_support::with_expected_panic_suppressed(|| {
+            let _guard = poisoned_ring.readers.lock().unwrap();
+            panic!("intentional poison");
+        });
     });
     let _ = poison_thread.join();
 

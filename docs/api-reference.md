@@ -781,7 +781,9 @@ Query params:
             "srtGroupMemberCount": 2,
             "srtGroupConnectedMembers": 2,
             "srtGroupActiveMembers": 1,
-            "srtGroupBrokenMembers": 0
+            "srtGroupBrokenMembers": 0,
+            "srtGroupWireReceiverPacketsLost": 0,
+            "srtGroupWirePacketsUndecryptable": 0
           }
         }
       },
@@ -800,9 +802,14 @@ Query params:
   },
   "srtListener": {
     "bondingAvailable": false,
-    "udpRxQueueBytes": 0,
-    "udpRxQueuePeakBytes": 0,
-    "udpDrops": 0
+    "ingressOwner": {
+      "faulted": false,
+      "managedRx": true,
+      "serviceVisits": 0,
+      "rxPackets": 0,
+      "txPackets": 0,
+      "peers": 0
+    }
   },
   "rtmpListener": {
     "acceptErrors": 0,
@@ -860,7 +867,7 @@ Query params:
       "required": null,
       "unit": "threads",
       "status": "ok",
-      "detail": "upper bound for spawn_blocking work such as SRT handshakes and epoll waiters; protects ramp-up latency without unbounded idle thread footprint"
+      "detail": "upper bound for spawn_blocking work such as DNS resolution and blocking child-process waits; protects ramp-up latency without unbounded idle thread footprint"
     },
     {
       "key": "runtime.cpu.available_parallelism",
@@ -947,6 +954,16 @@ Query params:
 This route remains the generic host-metrics surface. The dashboard now prefers
 `/api/v1/dashboard/runtime` whenever it also needs engine health in the same
 refresh.
+
+Every response includes an observe-only `capacity` object with measured
+`ingressPps`, `mediaBps`, and fanout `egressPps`, plus calibrated service-center
+utilization (`hottestShardUtil`, `nicUtil`, `memoryUtil`, `ffmpegUtil`, and
+`diskUtil`). `hottestCenter` and `projectedUtilization` identify the projected
+bottleneck. `flow` is the Flow Doctor view of the hottest observed shard;
+`activeLeaves`, `uniqueStages`, and `observeOnly` provide context.
+The capacity model is diagnostic only and does not make admission decisions.
+The response also includes a cached `ioUring` capability object from startup;
+`available: false` records a host without usable io_uring support.
 
 ### `GET /api/v1/engine`
 
@@ -1201,7 +1218,7 @@ Aggregate alerts across all pipelines. Each alert carries `id`, `severity`,
 `scope`, `evidence`, `recommendedAction`, `firstSeen`, and `lastSeen` fields.
 Sorted Critical-first. `firstSeen` is stamped on first observation;
 `lastSeen` updates on every subsequent observation. Resolved alerts are
-pruned automatically. Engine-level alerts include SRT UDP drops, RTMP listener
+pruned automatically. Engine-level alerts include RTMP listener
 file-descriptor exhaustion, and a runtime nofile limit below the configured
 target.
 
@@ -1380,9 +1397,14 @@ and egresses for a single pipeline.
   "ingest": { "protocol": "srt", "uptimeSecs": 10.0, "bytesReceived": 500000, "metrics": { ... } },
   "sourceRing": { "fill": 42, "capacity": 8192, "readers": [ { "name": "...", "lagSlots": 5, "overflowCount": 0, "packetAgeMs": 120 } ] },
   "stages": [ { "kind": "video:720p", "metrics": { ... } } ],
-  "egresses": [ { "outputId": "...", "uptimeSecs": 10.0, "bytesOut": 400000 } ]
+  "egresses": [ { "outputId": "...", "uptimeSecs": 10.0, "bytesOut": 400000 } ],
+  "delivery": [ { "feed": "pipe1:source", "destinations": 3, "rated": 3, "delivered": 3, "floor": 0.95, "ratioMin": 0.998, "jain": 0.9999 } ]
 }
 ```
+
+`delivery` groups outputs by the stage they read and reports how many met the
+delivery floor and how evenly they were served; see
+[Observability](observability.md#per-destination-delivery).
 
 ### `GET /api/v1/stages/:stageKey/telemetry`
 

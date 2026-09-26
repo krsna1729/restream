@@ -12,6 +12,7 @@ use rml_rtmp::messages::RtmpMessage;
 use rml_rtmp::rml_amf0::Amf0Value;
 
 include!("tests/handshake.rs");
+include!("tests/parser_memory.rs");
 include!("tests/egress_startup.rs");
 include!("tests/flv.rs");
 include!("tests/endpoint.rs");

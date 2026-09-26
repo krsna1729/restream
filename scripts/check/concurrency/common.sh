@@ -49,16 +49,14 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test write_batch_round_trips_random_chunks --lib -- --nocapture
   "$run_step_fn" lib-avio-unit \
     scripts/build/resource-limit.sh cargo test 'media::avio::tests' --lib -- --nocapture
-  "$run_step_fn" lib-srt-epoll \
-    scripts/build/resource-limit.sh cargo test epoll_waiter_coordination --lib -- --nocapture
-  "$run_step_fn" lib-srt-readiness-loom \
-    scripts/build/resource-limit.sh cargo test loom_srt_readiness_retry_does_not_depend_on_epoll_wake --lib -- --nocapture
-  "$run_step_fn" lib-srt-readiness-proptest \
-    scripts/build/resource-limit.sh cargo test proptest_srt_readiness_retry_model_never_requires_epoll_wake --lib -- --nocapture
   "$run_step_fn" lib-srt-stream-id-normalization \
-    scripts/build/resource-limit.sh cargo test srt_stream_ids_normalize_equivalent --lib -- --nocapture
-  "$run_step_fn" lib-srt-sender-semaphore \
-    scripts/build/resource-limit.sh cargo test srt_sender_semaphore --lib -- --nocapture
+    scripts/build/resource-limit.sh cargo test media::srt_stream_id::tests --lib -- --nocapture
+  "$run_step_fn" lib-srt-ingress-owner \
+    scripts/build/resource-limit.sh cargo test media::srt::ingress_live_tests --lib -- --nocapture
+  "$run_step_fn" lib-srt-ingress-bridges \
+    scripts/build/resource-limit.sh cargo test media::srt::ingress_bridge_tests --lib -- --nocapture
+  "$run_step_fn" lib-srt-ingress-admission \
+    scripts/build/resource-limit.sh cargo test media::srt::ingress_admission --lib -- --nocapture
   "$run_step_fn" external-transcoder-routing \
     scripts/build/resource-limit.sh cargo test external_output_stream_idx_routes_known_tracks_without_aliasing --lib -- --nocapture
   "$run_step_fn" external-transcoder-routing-proptest \
@@ -81,6 +79,10 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_enabled --lib -- --nocapture
   "$run_step_fn" test-harness-process-lifecycle \
     scripts/build/resource-limit.sh cargo test --bin test_harness tests::kill_and_wait_child_terminates_spawned_process -- --exact --nocapture
+  "$run_step_fn" rtmp-ingress-listener-shutdown \
+    scripts/build/resource-limit.sh cargo test compio_rtmp_listener_shutdown_joins_acceptor_and_session_workers --lib -- --nocapture
+  "$run_step_fn" lib-compio-rtmp-readiness-fairness \
+    scripts/build/resource-limit.sh cargo test media::egress::backends::compio_tcp::tests --lib -- --nocapture
   "$run_step_fn" test-harness-slow-sink-sibling-count \
     scripts/build/resource-limit.sh cargo test --bin test_harness tests::fault_output_stall_sibling_count_honors_n_per_group_cap -- --exact --nocapture
   "$run_step_fn" lib-recent-egress \
@@ -111,6 +113,4 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test fresh_leaf_first_visit --lib -- --nocapture
   "$run_step_fn" recording-drain-bounded-on-cancel \
     scripts/build/resource-limit.sh cargo test media::recording::tests::drain_ready_bursts --lib -- --nocapture
-  "$run_step_fn" lib-srt-egress-muxer-port-shard-scoping \
-    scripts/build/resource-limit.sh cargo test muxer_port --lib -- --nocapture
 }

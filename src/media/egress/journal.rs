@@ -266,6 +266,11 @@ pub struct RingFeed {
 }
 
 impl RingFeed {
+    /// Cumulative payload bytes published to this feed (offered load).
+    pub(crate) fn published_bytes(&self) -> u64 {
+        self.ring.published_bytes()
+    }
+
     pub fn new(ring: Arc<RingBuffer>, epoch: Arc<FeedEpoch>) -> Self {
         Self {
             ring,
@@ -274,14 +279,27 @@ impl RingFeed {
         }
     }
 
-    fn refresh_oldest(&self) -> u64 {
-        let oldest = oldest_retained_sequence(&self.ring);
+    fn current_ring(&self) -> Arc<RingBuffer> {
+        let mut ring = Arc::clone(&self.ring);
+        while let Some(next) = ring.next.load_full() {
+            ring = next;
+        }
+        ring
+    }
+
+    fn refresh_oldest_from(&self, ring: &RingBuffer) -> u64 {
+        let oldest = oldest_retained_sequence(ring);
         self.cached_oldest.store(oldest, Ordering::Relaxed);
         oldest
     }
 
+    fn refresh_oldest(&self) -> u64 {
+        self.refresh_oldest_from(&self.current_ring())
+    }
+
     pub fn retention_snapshot(&self) -> FeedRetentionSnapshot {
-        retention_snapshot(&self.ring)
+        let ring = self.current_ring();
+        retention_snapshot(&ring)
     }
 
     pub fn limit_status(&self, limits: &FeedLimits) -> FeedLimitStatus {
@@ -299,7 +317,7 @@ impl RingFeed {
     }
 
     pub fn notify_handle(&self) -> Arc<tokio::sync::Notify> {
-        self.ring.get_notify()
+        self.current_ring().get_notify()
     }
 }
 
@@ -317,7 +335,7 @@ impl EgressFeed for RingFeed {
     type Unit = Arc<MediaPacket>;
 
     fn head_sequence(&self) -> u64 {
-        self.ring.get_write_idx() as u64
+        self.current_ring().get_write_idx() as u64
     }
 
     fn oldest_sequence(&self) -> u64 {
@@ -335,8 +353,9 @@ impl EgressFeed for RingFeed {
             return FeedRead::EpochMismatch { current_epoch };
         }
 
-        let head = self.ring.get_write_idx() as u64;
-        let oldest = self.refresh_oldest();
+        let ring = self.current_ring();
+        let head = ring.get_write_idx() as u64;
+        let oldest = self.refresh_oldest_from(&ring);
 
         if cursor.next_sequence < oldest {
             return FeedRead::Overrun {
@@ -352,7 +371,7 @@ impl EgressFeed for RingFeed {
         let mut total_bytes = 0usize;
 
         while seq < head && units.len() < budget.max_units && total_bytes < budget.max_bytes {
-            match self.ring.read_at(seq as usize) {
+            match ring.read_at(seq as usize) {
                 Some(pkt) => {
                     total_bytes += pkt.payload.len();
                     units.push(pkt);
@@ -360,7 +379,7 @@ impl EgressFeed for RingFeed {
                 }
                 None => {
                     // Slot was overwritten while we were reading.
-                    let new_oldest = self.refresh_oldest();
+                    let new_oldest = self.refresh_oldest_from(&ring);
                     return FeedRead::Overrun {
                         oldest_sequence: new_oldest,
                     };
@@ -378,16 +397,66 @@ impl EgressFeed for RingFeed {
         }
     }
 
+    fn read_from_into(
+        &self,
+        cursor: FeedCursor,
+        budget: ReadBudget,
+        units: &mut Vec<Self::Unit>,
+    ) -> FeedRead<()> {
+        let current_epoch = self.epoch.current();
+        if cursor.epoch != current_epoch {
+            return FeedRead::EpochMismatch { current_epoch };
+        }
+
+        let ring = self.current_ring();
+        let head = ring.get_write_idx() as u64;
+        let oldest = self.refresh_oldest_from(&ring);
+        if cursor.next_sequence < oldest {
+            return FeedRead::Overrun {
+                oldest_sequence: oldest,
+            };
+        }
+        if cursor.next_sequence >= head {
+            return FeedRead::Empty;
+        }
+
+        units.clear();
+        let mut seq = cursor.next_sequence;
+        let mut total_bytes = 0usize;
+        while seq < head && units.len() < budget.max_units && total_bytes < budget.max_bytes {
+            match ring.read_at(seq as usize) {
+                Some(pkt) => {
+                    total_bytes += pkt.payload.len();
+                    units.push(pkt);
+                    seq += 1;
+                }
+                None => {
+                    return FeedRead::Overrun {
+                        oldest_sequence: self.refresh_oldest_from(&ring),
+                    };
+                }
+            }
+        }
+        if units.is_empty() {
+            return FeedRead::Empty;
+        }
+        FeedRead::Units {
+            units: Vec::new(),
+            next_cursor: FeedCursor::new(cursor.epoch, seq),
+        }
+    }
+
     fn latest_sync_point(&self) -> Option<FeedCursor> {
         let epoch = self.epoch.current();
-        let head = self.ring.get_write_idx();
+        let ring = self.current_ring();
+        let head = ring.get_write_idx();
         // `fast_forward` returns the most recent keyframe index; we use it
         // as a read-only O(1) lookup (it only makes sense when head > 0).
         if head == 0 {
             return None;
         }
-        let kf_idx = self.ring.fast_forward(head);
-        if kf_idx >= self.refresh_oldest() as usize && kf_idx < head {
+        let kf_idx = ring.fast_forward(head);
+        if kf_idx >= self.refresh_oldest_from(&ring) as usize && kf_idx < head {
             Some(FeedCursor::new(epoch, kf_idx as u64))
         } else {
             None
@@ -396,13 +465,14 @@ impl EgressFeed for RingFeed {
 
     fn sync_point_at_or_after(&self, sequence: u64) -> Option<FeedCursor> {
         let epoch = self.epoch.current();
-        let head = self.ring.get_write_idx() as u64;
-        let oldest = self.refresh_oldest();
+        let ring = self.current_ring();
+        let head = ring.get_write_idx() as u64;
+        let oldest = self.refresh_oldest_from(&ring);
         let start = sequence.max(oldest);
 
         // Linear scan — only used during resync, not on the hot path.
         for idx in start..head {
-            if self.ring.read_at(idx as usize).is_some_and(|p| {
+            if ring.read_at(idx as usize).is_some_and(|p| {
                 p.media_type == crate::media::packet::MediaType::Video && p.is_keyframe
             }) {
                 return Some(FeedCursor::new(epoch, idx));
@@ -429,6 +499,11 @@ pub struct TsFeed {
 }
 
 impl TsFeed {
+    /// Cumulative TS payload bytes published to this feed (offered load).
+    pub(crate) fn published_bytes(&self) -> u64 {
+        self.ring.published_bytes()
+    }
+
     /// Construct from a `TsChunkRing` by cloning its inner `Arc<RingBuffer>`.
     pub fn new(ts_ring: &TsChunkRing, epoch: Arc<FeedEpoch>) -> Self {
         Self {
@@ -536,6 +611,54 @@ impl EgressFeed for TsFeed {
 
         FeedRead::Units {
             units,
+            next_cursor: FeedCursor::new(cursor.epoch, seq),
+        }
+    }
+
+    fn read_from_into(
+        &self,
+        cursor: FeedCursor,
+        budget: ReadBudget,
+        units: &mut Vec<Self::Unit>,
+    ) -> FeedRead<()> {
+        let current_epoch = self.epoch.current();
+        if cursor.epoch != current_epoch {
+            return FeedRead::EpochMismatch { current_epoch };
+        }
+
+        let head = self.ring.get_write_idx() as u64;
+        let oldest = self.refresh_oldest();
+        if cursor.next_sequence < oldest {
+            return FeedRead::Overrun {
+                oldest_sequence: oldest,
+            };
+        }
+        if cursor.next_sequence >= head {
+            return FeedRead::Empty;
+        }
+
+        units.clear();
+        let mut seq = cursor.next_sequence;
+        let mut total_bytes = 0usize;
+        while seq < head && units.len() < budget.max_units && total_bytes < budget.max_bytes {
+            match self.ring.read_at(seq as usize) {
+                Some(pkt) => {
+                    total_bytes += pkt.payload.len();
+                    units.push(pkt.payload.clone());
+                    seq += 1;
+                }
+                None => {
+                    return FeedRead::Overrun {
+                        oldest_sequence: self.refresh_oldest(),
+                    };
+                }
+            }
+        }
+        if units.is_empty() {
+            return FeedRead::Empty;
+        }
+        FeedRead::Units {
+            units: Vec::new(),
             next_cursor: FeedCursor::new(cursor.epoch, seq),
         }
     }

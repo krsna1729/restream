@@ -120,6 +120,9 @@ dead sinks.
 `fault.resilience` includes RTMP and SRT connected-standby promotions with a
 10-second publisher GOP and a five-second progress deadline, proving cached
 replay rather than eventual next-keyframe recovery.
+`fault.resilience` also verifies real RTMP-input to RTMPS-egress media, sink
+loss entering `retrying`, then bounded SIGTERM shutdown with the completion
+event present.
 `fault.output-stall` owns the stalled-output contract for connected-but-not-
 draining RTMP sinks. `recovery` is the focused reconnect/grace/retry contract
 so we can target that behavior directly without depending on the broader
@@ -197,16 +200,22 @@ surface already covers it.
   - `first_visit_primes_the_cursor_epoch_from_the_feed`
   - `fresh_leaf_first_visit_starts_at_the_retained_keyframe_not_sequence_zero`
   - `fresh_leaf_first_visit_starts_at_the_live_edge_when_no_keyframe_is_retained`
-- `src/media/egress/backends/srt/muxer_ports.rs` (per-shard SRT egress
-  multiplexer scoping — one shared `srt-rs` UDP socket/`CallerTable` per
-  shard instead of one for the whole process; gate step
-  `lib-srt-egress-muxer-port-shard-scoping`)
-  - `distinct_shards_get_distinct_reuse_state`
-  - `repeated_lookups_for_one_shard_share_reuse_state`
-  - `clones_share_one_registry`
-  - `srt_fabric_shard_backends_give_each_shard_its_own_muxer_port_state`
-  - `srt_fabric_shard_backends_leave_muxer_port_reuse_off_without_a_registry`
-  - `srt_fabric_runtime_claims_one_libsrt_muxer_port_per_shard_shared_across_feeds`
+- `src/media/egress/backends/srt/owner_set.rs` (the shard's Compio runtime and
+  its at-most-two family `Owner`s; thread affinity is a `!Send` type plus a
+  debug home-thread assertion)
+  - `runtime_and_owners_live_and_die_on_the_shard_thread`
+  - `many_ipv4_outputs_share_one_owner_and_one_caller_socket`
+  - `ipv4_and_ipv6_outputs_coexist_on_two_family_owners`
+  - `mixed_family_bond_is_rejected_without_partial_admission`
+- SRT egress scheduling and admission
+  (`src/media/egress/backends/srt/tests/`)
+  - `stale_queued_admission_never_attaches_to_a_replacement_generation`
+  - `late_dns_for_an_old_generation_is_ignored`
+  - `one_ready_batch_is_one_owner_service_pass`
+  - `a_wake_examines_a_bounded_slice_of_parked_leaves`
+  - `command_wakes_a_parked_compio_wait_promptly`
+  - `owner_protocol_deadline_bounds_the_park`
+  - `shutdown_under_active_tx_reaches_owner_quiescence`
 - `src/media/avio.rs`
   - close/wake/backpressure loom coverage in `tests/avio_loom.rs`
   - `media::avio::tests`
@@ -222,13 +231,29 @@ surface already covers it.
   - `external_1080p_stage_remuxes_marker_fixture_with_monotone_dts`
 - `src/media/hls/`
   - `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream`
-- `src/media/srt.rs`
-  - `epoll_waiter_coordination`
-  - `srt_stream_ids_normalize_plain_publish_keys_before_registration`
-  - `srt_stream_ids_normalize_plain_read_keys_before_auth`
-  - `srt_stream_ids_keep_slashes_as_literal_key_data`
-  - `srt_sender_semaphore_is_bounded`
-  - `srt_sender_semaphore_releases_on_drop`
+- `src/media/srt/ingress_owner.rs`, `ingress_bridge.rs`, `ingress_admission.rs`,
+  `ingress_quality.rs`, `ingress_live_tests.rs`, `ingress_bridge_tests.rs`
+  (the SRT ingress owner thread: one Compio runtime, one listener `Owner`,
+  bounded `LogicalPeerId` command/event bridges)
+  - `read_play_sends_through_the_owner_and_target_deletion_disconnects`
+  - `asynchronous_rejection_disconnects_the_owner_peer`
+  - `event_bridge_saturation_never_loses_accepted_media`
+  - `command_bridge_saturation_never_loses_reader_fragments`
+  - `owner_samples_receive_quality_and_forgets_retired_peers`
+  - `publisher_receive_quality_reaches_the_ingest_snapshot`
+  - `one_ingress_thread_serves_many_peers_and_tokio_has_no_peer_table`
+  - `owner_and_runtime_are_not_send`
+  - `media::srt::ingress_admission::tests`
+- `src/media/rtmp/listener.rs`
+  - `compio_rtmp_listener_shutdown_joins_acceptor_and_session_workers`
+    (cancellation drops accepted bridges and joins every registered listener
+    and session worker thread)
+- `src/media/egress/backends/rtmp_shard_tests.rs`
+  - `feed_wake_delivers_media_after_idle_when_factory_start_is_delayed` (production
+    Compio shard group + feed watcher + real RTMP peer; a later FLV frame arrives
+    after the leaf sends its initial frame and parks)
+- `src/media/srt_stream_id.rs`
+  - `media::srt_stream_id::tests` (stream-key normalization and mode parsing)
 - `src/media/ts_chunk_ring.rs`
   - `live_reader_starts_after_existing_chunks`
 - `src/bin/test_harness.rs`

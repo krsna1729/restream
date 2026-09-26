@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - redevelop
   pull_request:
   workflow_dispatch:
 
@@ -111,7 +112,10 @@ jobs:
           fi
 
           git fetch --no-tags origin "$base" --depth=1 || true
-          if git diff --name-only "$base" "$GITHUB_SHA" | grep -Eq '^(Dockerfile|scripts/build/app-native\.sh|scripts/release/package-binaries\.sh|scripts/release/package-runtime-image\.sh|scripts/check/container-smoke\.sh|scripts/check/release-evidence\.sh|scripts/release/prepare-build-tree\.sh|distribution/|\.github/workflows/release\.yml|\.github/workflows/ci-harness-runtime-image\.yml)$'; then
+          # `distribution/` covers the shipped seccomp profile and its deployment
+          # documentation. RTMP/RTMPS transport sources also run the real media
+          # container proof; that profile is part of the runtime contract.
+          if git diff --name-only "$base" "$GITHUB_SHA" | grep -Eq '^(Dockerfile|scripts/build/app-native\.sh|scripts/release/package-binaries\.sh|scripts/release/package-runtime-image\.sh|scripts/check/container-smoke\.sh|scripts/check/container-restream-shim\.sh|scripts/check/release-evidence\.sh|scripts/release/prepare-build-tree\.sh|distribution/|tests/seccomp_profile\.rs|src/media/rtmp[^/]*\.rs|src/media/rtmp/.*|src/media/srt[^/]*\.rs|src/media/srt/.*|src/media/egress/.*|\.github/workflows/release\.yml|\.github/workflows/ci-harness-runtime-image\.yml)$'; then
             echo "run=true" >>"$GITHUB_OUTPUT"
           else
             echo "run=false" >>"$GITHUB_OUTPUT"
@@ -126,20 +130,41 @@ jobs:
         uses: ./.github/actions/ci-bootstrap
         with:
           node_version: '22'
-          system_deps_profile: build
+          npm_ci: 'true'
+          # `live` (not `build`): the SRT and RTMP(S) media proofs drive the live
+          # harness, which needs FFmpeg and the harness host tools.
+          system_deps_profile: live
           native_prefix: 'true'
           rust_cache: 'true'
+      - if: ${{ steps.scope.outputs.run == 'true' }}
+        name: Build frontend assets for the harness binary
+        run: npm run build:frontend
+      - if: ${{ steps.scope.outputs.run == 'true' }}
+        name: Build the live harness used by the SRT and RTMP(S) media proofs
+        run: ./scripts/build/bench-harness.sh
       - if: ${{ steps.scope.outputs.run == 'true' }}
         uses: docker/setup-buildx-action@v4
       - if: ${{ steps.scope.outputs.run == 'true' }}
         name: Build runtime image from Dockerfile
         run: scripts/release/prepare-build-tree.sh
       - if: ${{ steps.scope.outputs.run == 'true' }}
-        name: Smoke production runtime image
+        name: Smoke production image (health + SRT and RTMP-to-RTMPS media under shipped seccomp)
         env:
           RESTREAM_CONTAINER_IMAGE: restream:pr-runtime-smoke
           RESTREAM_DOCKER_GHA_CACHE: "1"
+          RESTREAM_CONTAINER_SMOKE_REPORT: .local/artifacts/container-smoke/report.json
         run: scripts/check/container-smoke.sh --image "$RESTREAM_CONTAINER_IMAGE"
+      - if: ${{ always() && steps.scope.outputs.run == 'true' }}
+        name: Upload container smoke report
+        uses: actions/upload-artifact@v7
+        with:
+          name: container-smoke-report
+          # report.json (engine, default-profile and shipped-profile outcomes)
+          # plus the container logs that back it; kept whether the smoke passed
+          # or failed so a run is reviewable without scraping the build log.
+          path: .local/artifacts/container-smoke/
+          if-no-files-found: warn
+          retention-days: 14
 
   api-contract:
     name: API contract smoke
@@ -190,10 +215,29 @@ jobs:
       - name: Run isolated app E2E
         run: npm run test:e2e
 
-  concurrency-contract:
-    name: Concurrency lifecycle proof
+  concurrency-fast:
+    name: Concurrency fast proof
     runs-on: ubuntu-24.04
     needs: api-contract
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/ci-bootstrap
+        with:
+          system_deps_profile: base
+          native_prefix: 'true'
+          rust_cache: 'true'
+      - name: Run fast concurrency proof
+        run: bash ./scripts/check/concurrency/fast.sh
+      - name: Assert egress ready-queue cost shape (O(ready), not O(population))
+        run: scripts/build/resource-limit.sh cargo test --test egress_scheduler_shape
+
+  concurrency-contract:
+    if: ${{ github.ref == 'refs/heads/redevelop' }}
+    name: Concurrency live lifecycle proof
+    runs-on: ubuntu-24.04
+    needs: api-contract
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/ci-bootstrap
@@ -208,6 +252,19 @@ jobs:
           # fallback used by the other hosted harness jobs.
           CONCURRENCY_HARNESS_ARGS: "--no-netns"
         run: bash ./scripts/check/concurrency/contract.sh
+      - name: Upload concurrency fault evidence
+        if: ${{ always() && (failure() || cancelled()) }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: concurrency-lifecycle-${{ github.sha }}
+          path: |
+            .local/artifacts/concurrency-contract-logs/
+            .local/artifacts/concurrency-contract/
+            .local/artifacts/concurrency-fault-egress-retry/
+            .local/artifacts/concurrency-fault-output-stall/
+            .local/artifacts/concurrency-recovery/
+          if-no-files-found: ignore
+          retention-days: 7
 
   test:
     name: Rust unit hygiene and fixtures
@@ -260,7 +317,7 @@ jobs:
           cargo llvm-cov report --summary-only 2>/dev/null || true
 
   integration-build:
-    name: PR live-smoke harness build
+    name: Transport live-harness build
     runs-on: ubuntu-24.04
     needs: test
     steps:
@@ -276,7 +333,7 @@ jobs:
         run: npm run build:frontend
       - name: Build bench-profile harness binaries
         run: ./scripts/build/bench-harness.sh
-      - name: Stage PR live-smoke harness artifact
+      - name: Stage transport harness artifact
         run: |
           mkdir -p .local/ci-harness-bin
           cp target/bench/restream target/bench/test_harness .local/ci-harness-bin/
@@ -287,6 +344,7 @@ jobs:
           retention-days: 1
 
   integration-shards:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/redevelop' }}
     needs: integration-build
     uses: ./.github/workflows/_harness-runtime-shards.yml
     with:
@@ -295,15 +353,37 @@ jobs:
       install_dir: target/bench
       harness_bin: target/bench/test_harness
       restream_bin: target/bench/restream
-      shard_name_prefix: PR live-smoke shard
+      shard_name_prefix: PR transport smoke
       artifact_upload_prefix: integration
       artifact_upload_path: .local/artifacts/
       artifact_retention_days: 3
       upload_artifacts_mode: failure_or_cancelled
-      timeout_minutes: 30
-      max_parallel: 9
+      timeout_minutes: 35
+      max_parallel: 2
       shards_json: >-
-        ["mixed.live.srt.h265.a2.bf0","mixed.live.srt.h265.a2.bf2","mixed.live.srt.h265.a1.bf0","mixed.live.srt.h265.a1.bf2","mixed.live.rtmp.h264.a1.bf0","mixed.live.rtmp.h264.a1.bf2","smoke","mixed.live.srt.h264.a1.bf0","mixed.live.srt.h264.a1.bf2"]
+        ["mixed.live.srt.h264.a1.bf0","mixed.live.rtmp.h264.a1.bf0"]
+    secrets:
+      gh_token: ${{ github.token }}
+
+  redevelop-transport-shards:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/redevelop' }}
+    needs: integration-build
+    uses: ./.github/workflows/_harness-runtime-shards.yml
+    with:
+      artifact_name: ci-harness-bin-${{ github.sha }}
+      artifact_path: .local/ci-harness-bin
+      install_dir: target/bench
+      harness_bin: target/bench/test_harness
+      restream_bin: target/bench/restream
+      shard_name_prefix: Redevelop transport qualification
+      artifact_upload_prefix: redevelop-transport
+      artifact_upload_path: .local/artifacts/
+      artifact_retention_days: 7
+      upload_artifacts_mode: failure_or_cancelled
+      timeout_minutes: 70
+      max_parallel: 5
+      shards_json: >-
+        ["mixed.live.srt.h264.a1.bf0","mixed.live.srt.h264.a1.bf2","mixed.live.srt.h264.a2.bf0","mixed.live.srt.h264.a2.bf2","mixed.live.srt.h265.a1.bf0","mixed.live.srt.h265.a1.bf2","mixed.live.srt.h265.a2.bf0","mixed.live.srt.h265.a2.bf2","mixed.live.rtmp.h264.a1.bf0","mixed.live.rtmp.h264.a1.bf2","srt-crypto-matrix","fault.resilience"]
     secrets:
       gh_token: ${{ github.token }}
 

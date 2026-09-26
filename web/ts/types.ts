@@ -113,12 +113,16 @@ export interface PublisherQuality {
   msReceiveBuf?: number | null;
   mbpsLinkCapacity?: number | null;
   packetsSentNAK?: number | null;
-  srtSndbufConfiguredBytes?: number | null;
   srtBonded?: boolean | null;
   srtGroupMemberCount?: number | null;
   srtGroupConnectedMembers?: number | null;
   srtGroupActiveMembers?: number | null;
   srtGroupBrokenMembers?: number | null;
+  srtGroupWireReceiverPacketsLost?: number | null;
+  srtGroupWirePacketsUndecryptable?: number | null;
+  srtRecvBufPackets?: number | null;
+  srtRecvBufCapacityPackets?: number | null;
+  srtRecvBufPayloadBytes?: number | null;
   tcpRttMs?: number | null;
   tcpRttVarMs?: number | null;
   tcpBytesReceived?: number | null;

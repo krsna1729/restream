@@ -23,13 +23,21 @@ pub enum EgressShardGroupError {
     },
 }
 
+/// Failure of [`EgressShardGroup::try_spawn_with`]: either the group itself
+/// could not be assembled or a shard's backend factory failed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EgressShardGroupSpawnError<E> {
+    Backend(E),
+    Group(EgressShardGroupError),
+}
+
 #[derive(Debug)]
 pub struct EgressShardGroup {
     handles: Vec<EgressShardHandle>,
 }
 
 impl EgressShardGroup {
-    pub fn spawn<B: EgressShardBackend>(
+    pub fn spawn<B: EgressShardBackend + Send>(
         shard_count: NonZeroU32,
         config: EgressShardConfig,
         backends: Vec<B>,
@@ -51,6 +59,61 @@ impl EgressShardGroup {
                 config,
                 backend,
             ));
+        }
+        Ok(Self { handles })
+    }
+
+    /// Spawn `shard_count` shards, each building its backend on its own
+    /// shard thread from the factory `factory_for(shard_id)` returns. The
+    /// backends need not be `Send`; only the factories cross threads.
+    pub fn spawn_with<B, F, G>(
+        shard_count: NonZeroU32,
+        config: EgressShardConfig,
+        mut factory_for: G,
+    ) -> Result<Self, EgressShardGroupError>
+    where
+        B: EgressShardBackend,
+        F: FnOnce() -> B + Send + 'static,
+        G: FnMut(ShardId) -> F,
+    {
+        match Self::try_spawn_with(shard_count, config, |shard_id| {
+            let factory = factory_for(shard_id);
+            move || Ok::<B, std::convert::Infallible>(factory())
+        }) {
+            Ok(group) => Ok(group),
+            Err(EgressShardGroupSpawnError::Group(error)) => Err(error),
+            Err(EgressShardGroupSpawnError::Backend(never)) => match never {},
+        }
+    }
+
+    /// [`Self::spawn_with`] for fallible factories. A construction error
+    /// shuts down the shards already started and is returned as-is.
+    pub fn try_spawn_with<B, E, F, G>(
+        shard_count: NonZeroU32,
+        config: EgressShardConfig,
+        mut factory_for: G,
+    ) -> Result<Self, EgressShardGroupSpawnError<E>>
+    where
+        B: EgressShardBackend,
+        E: Send + 'static,
+        F: FnOnce() -> Result<B, E> + Send + 'static,
+        G: FnMut(ShardId) -> F,
+    {
+        let expected = usize::try_from(shard_count.get()).map_err(|_| {
+            EgressShardGroupSpawnError::Group(EgressShardGroupError::ShardCountTooLarge)
+        })?;
+        let mut handles = Vec::with_capacity(expected);
+        for index in 0..shard_count.get() {
+            let shard_id = ShardId::new(index);
+            match EgressShardHandle::try_spawn_with(shard_id, config, factory_for(shard_id)) {
+                Ok(handle) => handles.push(handle),
+                Err(error) => {
+                    for handle in handles {
+                        let _ = handle.shutdown_and_join();
+                    }
+                    return Err(EgressShardGroupSpawnError::Backend(error));
+                }
+            }
         }
         Ok(Self { handles })
     }
@@ -96,14 +159,15 @@ impl EgressShardGroup {
             .collect()
     }
 
-    pub fn replace_panicked<B, F>(
+    pub fn replace_panicked<B, F, G>(
         &mut self,
         config: EgressShardConfig,
-        mut backend_for: F,
+        mut factory_for: G,
     ) -> Vec<ShardId>
     where
         B: EgressShardBackend,
-        F: FnMut(ShardId) -> B,
+        F: FnOnce() -> B + Send + 'static,
+        G: FnMut(ShardId) -> F,
     {
         let mut replaced = Vec::new();
         for handle in &mut self.handles {
@@ -112,7 +176,8 @@ impl EgressShardGroup {
                 continue;
             }
             let shard_id = snapshot.shard_id;
-            let replacement = EgressShardHandle::spawn(shard_id, config, backend_for(shard_id));
+            let replacement =
+                EgressShardHandle::spawn_with(shard_id, config, factory_for(shard_id));
             let old = std::mem::replace(handle, replacement);
             let _ = old.shutdown_and_join();
             replaced.push(shard_id);
@@ -120,19 +185,26 @@ impl EgressShardGroup {
         replaced
     }
 
-    /// Add one shard at the next index, running `backend`. Used for
-    /// output-count-driven scale-out (`EgressFabricRuntime::rescale`) —
-    /// mirrors `replace_panicked`'s spawn shape, but appends a new handle
-    /// instead of replacing one in place.
-    pub fn grow<B: EgressShardBackend>(
+    /// Add one shard at the next index, building its backend on the new
+    /// shard thread with `factory`. Used for output-count-driven scale-out
+    /// (`EgressFabricRuntime::rescale`) — mirrors `replace_panicked`'s spawn
+    /// shape, but appends a new handle instead of replacing one in place.
+    /// A construction error leaves the group unchanged.
+    pub fn grow_with<B, E, F>(
         &mut self,
         config: EgressShardConfig,
-        backend: B,
-    ) -> ShardId {
+        factory: F,
+    ) -> Result<ShardId, E>
+    where
+        B: EgressShardBackend,
+        E: Send + 'static,
+        F: FnOnce() -> Result<B, E> + Send + 'static,
+    {
         let shard_id = ShardId::new(u32::try_from(self.handles.len()).unwrap_or(u32::MAX));
-        self.handles
-            .push(EgressShardHandle::spawn(shard_id, config, backend));
-        shard_id
+        self.handles.push(EgressShardHandle::try_spawn_with(
+            shard_id, config, factory,
+        )?);
+        Ok(shard_id)
     }
 
     /// Remove and gracefully shut down the highest-index shard, if any.
@@ -173,6 +245,35 @@ pub struct EgressShardHeartbeat {
     pub command_depth: u32,
     pub command_capacity: u32,
     pub resync_count: u64,
+    pub ready_depth: u32,
+    pub ready_depth_hwm: u32,
+    pub ready_visits: u64,
+    pub budget_exhaustions: u64,
+    pub rx_packets: u64,
+    pub rx_bytes: u64,
+    pub tx_packets: u64,
+    pub tx_bytes: u64,
+    pub cqes: u64,
+    pub sqes: u64,
+    pub stale_completions: u64,
+    pub rx_pool_empty: u64,
+    pub tx_pool_empty: u64,
+    pub send_zc_attempts: u64,
+    pub send_zc_fallbacks: u64,
+    pub cq_overflows: u64,
+    pub ready_overflows: u64,
+    pub queue_overflows: u64,
+    pub feed_wakes_useful: u64,
+    pub feed_wakes_empty: u64,
+    pub loop_duration_sum_us: u64,
+    pub driver_budget_violations: u64,
+    pub driver_overrun_us: u64,
+    pub retry_events: u64,
+    /// SRT Compio Owner metrics per address family (index 0 = IPv4), and the
+    /// shard runtime's io_uring / managed-RX substrate flags.
+    pub srt_owners: [crate::media::egress::metrics::OwnerFamilyMetrics; 2],
+    pub srt_runtime_io_uring: bool,
+    pub srt_managed_rx_available: bool,
 }
 
 impl EgressShardHeartbeat {
@@ -216,6 +317,33 @@ impl EgressShardHeartbeat {
             command_depth: snapshot.metrics.command_depth,
             command_capacity,
             resync_count: snapshot.metrics.feed_resyncs,
+            ready_depth: snapshot.metrics.ready_depth,
+            ready_depth_hwm: snapshot.metrics.ready_depth_hwm,
+            ready_visits: snapshot.metrics.ready_visits,
+            budget_exhaustions: snapshot.metrics.budget_exhaustions,
+            rx_packets: snapshot.metrics.rx_packets,
+            rx_bytes: snapshot.metrics.rx_bytes,
+            tx_packets: snapshot.metrics.tx_packets,
+            tx_bytes: snapshot.metrics.tx_bytes,
+            cqes: snapshot.metrics.cqes,
+            sqes: snapshot.metrics.sqes,
+            stale_completions: snapshot.metrics.stale_completions,
+            rx_pool_empty: snapshot.metrics.rx_pool_empty,
+            tx_pool_empty: snapshot.metrics.tx_pool_empty,
+            send_zc_attempts: snapshot.metrics.send_zc_attempts,
+            send_zc_fallbacks: snapshot.metrics.send_zc_fallbacks,
+            cq_overflows: snapshot.metrics.cq_overflows,
+            ready_overflows: snapshot.metrics.ready_overflows,
+            queue_overflows: snapshot.metrics.queue_overflows,
+            feed_wakes_useful: snapshot.metrics.feed_wakes_useful,
+            feed_wakes_empty: snapshot.metrics.feed_wakes_empty,
+            loop_duration_sum_us: snapshot.metrics.loop_duration_sum_us,
+            driver_budget_violations: snapshot.metrics.driver_budget_violations,
+            driver_overrun_us: snapshot.metrics.driver_overrun_us,
+            retry_events: snapshot.metrics.retry_events,
+            srt_owners: snapshot.metrics.srt_owners,
+            srt_runtime_io_uring: snapshot.metrics.srt_runtime_io_uring,
+            srt_managed_rx_available: snapshot.metrics.srt_managed_rx_available,
         }
     }
 }

@@ -32,12 +32,33 @@ declare -a NOISE_PATTERNS=(
 )
 
 echo "[test-hygiene] scanning passing log for known noisy patterns"
-if rg -n -e "$(printf '%s|' "${NOISE_PATTERNS[@]}" | sed 's/|$//')" "$LOG_FILE"; then
+scan_status=0
+python3 - "$LOG_FILE" "${NOISE_PATTERNS[@]}" <<'PY' || scan_status=$?
+import re
+import sys
+
+try:
+    pattern = re.compile("|".join(f"(?:{item})" for item in sys.argv[2:]))
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as log:
+        matches = [(number, line.rstrip("\n")) for number, line in enumerate(log, 1) if pattern.search(line)]
+except Exception as error:
+    print(f"[test-hygiene] noise scanner failed: {error}", file=sys.stderr)
+    sys.exit(2)
+
+for number, line in matches:
+    print(f"{number}:{line}")
+sys.exit(1 if matches else 0)
+PY
+
+if [[ "$scan_status" -eq 1 ]]; then
   cat >&2 <<'EOF'
 [test-hygiene] noisy output detected in a passing test run.
 Quiet the helper or test harness at the source instead of teaching CI to ignore it.
 EOF
   exit 1
+elif [[ "$scan_status" -ne 0 ]]; then
+  echo "[test-hygiene] noise scanner exited with status $scan_status" >&2
+  exit "$scan_status"
 fi
 
 echo "[test-hygiene] passed"

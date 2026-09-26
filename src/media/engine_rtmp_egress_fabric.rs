@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
+use crate::media::egress::backends::compio_tcp::CompioTcpPoller;
 use crate::media::egress::backends::rtmp::RtmpPublishStartup;
 use crate::media::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource;
 use crate::media::egress::backends::rtmp_shard_resolve_runtime::resolving_rtmp_shard_backend;
-use crate::media::egress::backends::tcp::{TcpEgressPollError, TcpEgressPoller};
+use crate::media::egress::backends::tcp::TcpEgressPollError;
 use crate::media::egress::command::{EgressCommand, FeedId, OutputId};
 use crate::media::egress::factory::{RtmpFabricShardGroupError, spawn_rtmp_fabric_shard_group};
 use crate::media::egress::journal::RingFeed;
@@ -183,16 +184,24 @@ impl MediaEngine {
             effective_cpus,
             shard_config,
             |_shard_id| {
-                let poller = TcpEgressPoller::new(poller_max_events)?;
-                Ok::<_, TcpEgressPollError>(resolving_rtmp_shard_backend(
-                    poller,
-                    feed.clone_reader(),
-                    budget,
-                    chunk_size,
-                    rtmps_client_config.clone(),
-                    startup_source.clone(),
-                    shard_config.drain_timeout(),
-                ))
+                let feed = feed.clone_reader();
+                let rtmps_client_config = rtmps_client_config.clone();
+                let startup_source = startup_source.clone();
+                let drain_timeout = shard_config.drain_timeout();
+                let leaf_capacity = shard_config.leaf_capacity().get();
+                move || {
+                    let poller = CompioTcpPoller::new(poller_max_events)?;
+                    Ok::<_, TcpEgressPollError>(resolving_rtmp_shard_backend(
+                        poller,
+                        feed,
+                        budget,
+                        chunk_size,
+                        rtmps_client_config,
+                        startup_source,
+                        drain_timeout,
+                        leaf_capacity,
+                    ))
+                }
             },
         );
         match result {

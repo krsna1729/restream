@@ -4,6 +4,12 @@
 //! acknowledgements, and discards application payloads after delivery to the
 //! protocol core. The transport bounds queued unread delivery, so its receive
 //! window remains a real source of sender backpressure.
+//!
+//! [`RawSrtSink::set_paused`] models a genuinely slow APPLICATION consumer (as
+//! opposed to a frozen peer): the sink keeps receiving datagrams and driving
+//! srt-rs protocol timers and control traffic, but stops draining application
+//! delivery events, so the bounded receive window fills and the sender sees real
+//! receiver-window backpressure on a live connection.
 
 use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
@@ -12,11 +18,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use shiguredo_srt::{ConnectionEvent, Timestamp};
-use srt_transport::{
-    HighResWaiter, IngressTelemetry, ListenerConfig, ListenerTopology, MonotonicDeadline,
-    PeerTable, RecvBatch, RecvBudget, RuntimeFlavor,
-};
+use srt_proto::{ConnectionEvent, Timestamp};
+use srt_transport::advanced::admission::PeerTable;
+use srt_transport::advanced::driver::RecvBudget;
+use srt_transport::advanced::native_io::{HighResWaiter, MonotonicDeadline, RecvBatch};
+use srt_transport::advanced::telemetry::IngressTelemetry;
+use srt_transport::{ListenerConfig, ListenerTopology, RuntimeFlavor};
 use tokio::net::UdpSocket;
 
 #[derive(Default)]
@@ -53,6 +60,7 @@ impl RawSrtSinkObservation {
 pub(crate) struct RawSrtSink {
     port: u16,
     stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     counters: Arc<SinkCounters>,
     thread: Option<JoinHandle<()>>,
 }
@@ -77,7 +85,9 @@ impl RawSrtSink {
         let admission = prepared.admission_options();
         let stop = Arc::new(AtomicBool::new(false));
         let counters = Arc::new(SinkCounters::default());
+        let paused = Arc::new(AtomicBool::new(false));
         let thread_stop = stop.clone();
+        let thread_paused = paused.clone();
         let thread_counters = counters.clone();
         let thread = std::thread::Builder::new()
             .name(format!("srt-rs-stall-sink-{port}"))
@@ -89,12 +99,19 @@ impl RawSrtSink {
                     Ok(runtime) => runtime,
                     Err(_) => return,
                 };
-                runtime.block_on(run_sink(socket, admission, thread_stop, thread_counters));
+                runtime.block_on(run_sink(
+                    socket,
+                    admission,
+                    thread_stop,
+                    thread_paused,
+                    thread_counters,
+                ));
             })
             .map_err(|error| format!("spawn raw SRT sink: {error}"))?;
         Ok(Self {
             port,
             stop,
+            paused,
             counters,
             thread: Some(thread),
         })
@@ -102,6 +119,12 @@ impl RawSrtSink {
 
     pub(crate) fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Pause (or resume) APPLICATION delivery only: UDP receive, protocol
+    /// timers and ACK/NAK/control output keep running while paused.
+    pub(crate) fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Release);
     }
 
     pub(crate) fn observe(&self) -> RawSrtSinkObservation {
@@ -133,14 +156,15 @@ impl Drop for RawSrtSink {
 
 async fn run_sink(
     std_socket: std::net::UdpSocket,
-    admission: srt_transport::AdmissionOptions,
+    admission: srt_transport::advanced::admission::AdmissionOptions,
     stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     counters: Arc<SinkCounters>,
 ) {
     let Ok(socket) = UdpSocket::from_std(std_socket) else {
         return;
     };
-    let mut peers = srt_transport::PeerTable::new();
+    let mut peers = srt_transport::advanced::admission::PeerTable::new();
     let telemetry = IngressTelemetry::default();
     let mut recv_batch = RecvBatch::new();
     let mut outbound = Vec::new();
@@ -184,6 +208,11 @@ async fn run_sink(
         for (peer, packet) in outbound.drain(..) {
             let _ = socket.send_to(&packet, peer).await;
         }
+        // While paused, leave delivery events undrained: the protocol core's
+        // bounded unread-delivery queue (and so its receive window) fills.
+        if paused.load(Ordering::Acquire) {
+            continue;
+        }
         peers.poll_events(&mut events);
         for event in events.drain(..) {
             match event.event {
@@ -226,7 +255,7 @@ fn park_listener(
     ready: &mut Vec<()>,
     wait: Duration,
 ) -> std::io::Result<bool> {
-    waiter.set_deadline((), MonotonicDeadline::after(wait));
+    waiter.set_deadline((), MonotonicDeadline::after(wait))?;
     waiter.wait(due, ready)?;
     Ok(!ready.is_empty())
 }
@@ -236,8 +265,13 @@ fn drain_woken_listener(
     recv_batch: &mut RecvBatch,
     budget: RecvBudget,
     on_datagram: impl FnMut(Option<SocketAddr>, &[u8]),
-) -> std::io::Result<srt_transport::RecvDrainReport> {
-    srt_transport::drain_recv_fd(socket.as_raw_fd(), recv_batch, budget, on_datagram)
+) -> std::io::Result<srt_transport::advanced::native_io::RecvDrainReport> {
+    srt_transport::advanced::native_io::drain_recv_fd(
+        socket.as_raw_fd(),
+        recv_batch,
+        budget,
+        on_datagram,
+    )
 }
 
 fn sink_timestamp(started: Instant) -> Timestamp {

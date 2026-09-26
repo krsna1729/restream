@@ -38,6 +38,7 @@ pub(crate) fn bind_mixed_env_to_shared_stack(env: &mut MixedEnv, stack_env: &Mix
     env.restream_rtmp = stack_env.restream_rtmp;
     env.restream_srt = stack_env.restream_srt;
     env.mtx_rtmp = stack_env.mtx_rtmp;
+    env.mtx_rtmps = stack_env.mtx_rtmps;
     env.mtx_srt = stack_env.mtx_srt;
     env.mtx_hls = stack_env.mtx_hls;
     env.mtx_api = stack_env.mtx_api;

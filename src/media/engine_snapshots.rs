@@ -208,18 +208,17 @@ impl MediaEngine {
     pub async fn srt_listener_diag_snapshot(&self) -> SrtListenerDiagSnapshot {
         SrtListenerDiagSnapshot {
             bonding_available: self.bonding_available(),
-            rx_queue_bytes: self
-                .runtime
-                .listener_stats
-                .rx_queue_bytes
-                .load(Ordering::Relaxed),
-            rx_queue_peak_bytes: self
-                .runtime
-                .listener_stats
-                .rx_queue_max_bytes
-                .load(Ordering::Relaxed),
-            drops: self.runtime.listener_stats.drops.load(Ordering::Relaxed),
-            active_ingest_count: self.active_ingest_count().await,
+            ingress_owner: self.runtime.listener_stats.ingress_owner.snapshot(),
+            // The listener is SRT-only state: counting every protocol here
+            // would let a concurrent RTMP ingest inflate the SRT number.
+            active_ingest_count: self
+                .ingests
+                .active
+                .read()
+                .await
+                .values()
+                .filter(|ingest| ingest.protocol == "srt")
+                .count(),
         }
     }
 }

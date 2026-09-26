@@ -4,7 +4,8 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use crate::media::egress::policy::WorkBudget;
+use crate::capacity::CapacityLimits;
+use crate::media::egress::policy::WorkBudgetConfig;
 use crate::media::egress::shard::EgressShardConfig;
 use crate::planner::BackendPolicy;
 
@@ -40,10 +41,10 @@ pub struct EgressFabricConfig {
     pub command_batch_budget: usize,
     pub readiness_batch_budget: usize,
     pub timer_batch_budget: usize,
+    pub max_leaves_per_shard: usize,
     pub idle_wait_ms: u64,
-    /// Max epoll events per `epoll_wait` for the RTMP/RTMPS fabric's TCP
-    /// readiness poller (`TcpEgressPoller`). SRT egress has no poller: its
-    /// leaves own their `srt-rs` connections and are driven directly.
+    /// Maximum event batch size for the RTMP/RTMPS Compio TCP readiness poller.
+    /// SRT egress is driven by its Compio `Owner`.
     pub tcp_poller_max_events: usize,
     pub visit_max_units: usize,
     pub visit_max_bytes: usize,
@@ -91,6 +92,7 @@ impl Default for EgressFabricConfig {
             command_batch_budget: 32,
             readiness_batch_budget: 64,
             timer_batch_budget: 64,
+            max_leaves_per_shard: EgressShardConfig::DEFAULT_LEAF_CAPACITY,
             idle_wait_ms: 25,
             tcp_poller_max_events: 1024,
             visit_max_units: 32,
@@ -122,6 +124,27 @@ impl RuntimeTuning {
     }
 }
 
+#[cfg(feature = "wi37-shard-bench")]
+const WI37_SRT_SHARDS_ENV: &str = "RESTREAM_WI37_SRT_SHARDS";
+
+/// Benchmark-only exact SRT shard override. Invalid values are ignored here;
+/// the egress-duty harness rejects them before starting a measurement. Keeping
+/// parsing in the product config makes the feature seam explicit and leaves
+/// every default build on the production CPU-derived policy.
+fn wi37_srt_shard_override() -> Option<u32> {
+    #[cfg(feature = "wi37-shard-bench")]
+    {
+        return std::env::var(WI37_SRT_SHARDS_ENV)
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .filter(|value| (1..=4).contains(value));
+    }
+    #[cfg(not(feature = "wi37-shard-bench"))]
+    {
+        None
+    }
+}
+
 impl EgressFabricConfig {
     pub fn from_env() -> Self {
         let defaults = Self::default();
@@ -147,6 +170,11 @@ impl EgressFabricConfig {
                 defaults.timer_batch_budget,
             )
             .clamp(1, 4096),
+            max_leaves_per_shard: env_usize(
+                "RESTREAM_EGRESS_MAX_LEAVES_PER_SHARD",
+                defaults.max_leaves_per_shard,
+            )
+            .clamp(1, 1_000_000),
             idle_wait_ms: env_u64("RESTREAM_EGRESS_IDLE_WAIT_MS", defaults.idle_wait_ms)
                 .clamp(1, 1_000),
             tcp_poller_max_events: env_usize(
@@ -175,6 +203,13 @@ impl EgressFabricConfig {
 
     pub(crate) fn shard_count(&self) -> NonZeroU32 {
         NonZeroU32::new(self.shards).expect("egress fabric shard count is clamped nonzero")
+    }
+
+    /// SRT's initial shard count. The benchmark-only WI3.7 seam is applied
+    /// only to the SRT fabric; RTMP/sink/pipeline retain `shards`.
+    pub(crate) fn srt_shard_count(&self) -> NonZeroU32 {
+        NonZeroU32::new(wi37_srt_shard_override().unwrap_or(self.shards))
+            .expect("egress fabric shard count is clamped nonzero")
     }
 
     /// Cross-field sanity checks the per-field clamps in `from_env` can't
@@ -234,11 +269,12 @@ impl EgressFabricConfig {
             Duration::from_millis(self.idle_wait_ms),
         )
         .expect("egress fabric shard config is clamped nonzero")
+        .with_leaf_capacity(self.max_leaves_per_shard)
         .with_drain_timeout(Duration::from_millis(self.drain_timeout_ms))
     }
 
-    pub(crate) fn work_budget(&self) -> WorkBudget {
-        WorkBudget::new(
+    pub(crate) fn work_budget(&self) -> WorkBudgetConfig {
+        WorkBudgetConfig::new(
             self.visit_max_units,
             self.visit_max_bytes,
             Duration::from_micros(self.visit_max_us),
@@ -252,6 +288,9 @@ pub struct AppConfig {
     pub http_bind_addr: String,
     pub tuning: RuntimeTuning,
     pub egress_fabric: EgressFabricConfig,
+    /// Host-specific service-center capacities. These remain observe-only;
+    /// admission is not enforced until calibration is validated externally.
+    pub capacity_limits: CapacityLimits,
     pub tokio_runtime: TokioRuntimeConfig,
     pub db_path: String,
     pub media_dir: String,
@@ -259,6 +298,12 @@ pub struct AppConfig {
     pub backend_policy: BackendPolicy,
     pub rtmp_backlog: u32,
     pub rtmp_max_connections: usize,
+    /// Largest inbound RTMP message a publisher may declare; longer ones are
+    /// rejected before their payload is buffered.
+    pub rtmp_max_message_bytes: usize,
+    /// Bytes all RTMP ingest parsers together may hold before messages
+    /// complete; the connection that would exceed it is rejected.
+    pub rtmp_ingest_parser_budget_bytes: usize,
     pub rtmp_handshake_timeout_ms: u64,
     pub rtmp_preauth_buffer_bytes: usize,
     pub rtmp_stream_buffer_bytes: usize,
@@ -273,54 +318,30 @@ pub struct AppConfig {
     pub ring_headroom_secs: f64,
     pub ring_capacity: usize,
     pub transcoder_ring_capacity: usize,
-    pub srt_udp_buffer: usize,
-    pub require_srt_bonding: bool,
     pub external_ffmpeg_permits: usize,
     pub ffmpeg_bin_path: Option<String>,
     pub log_dir: String,
     pub no_color: bool,
     pub srt_passphrase: Option<String>,
     pub srt_pbkeylen: i32,
-    /// Per-leaf SRT egress connect timeout. Live-evidenced at real MSR
-    /// scale: a live handshake burst of 600-700 concurrent SRT egress
-    /// connects to one peer reliably completes within ~3-9s but not
-    /// within the old 3s default, so every leaf whose handshake landed
-    /// past 3s hit libsrt's own connect-timeout ENOCONN and paid a full
-    /// retry+backoff cycle instead of just finishing. 10s cleared the
-    /// same burst with zero failures
+    /// Per-leaf SRT egress connect timeout. Live-evidenced at real MSR scale:
+    /// a burst of 600-700 concurrent handshakes to one peer reliably completes
+    /// within ~3-9s but not the old 3s default, so attempts past 3s paid a full
+    /// retry/backoff cycle. 10s cleared the same burst with zero failures
     /// (`docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`,
     /// "sink-mode bugs fixed; real ~600-connection SRT egress ceiling
     /// characterized"). Not scale-tested past 700 in one pipeline.
     pub srt_connect_timeout_ms: u64,
-    pub srt_egress_reuse_local_port: bool,
     pub srt_egress_muxer_max_outputs_per_shard: usize,
     pub srt_egress_muxer_max_shards: usize,
-    /// Whether `SrtEgressMuxerPorts`' local-port-reuse registry (see
-    /// `muxer_ports.rs`) is keyed per `(pipeline, shard)` (`true`, default)
-    /// or per shard alone, shared engine-wide across every pipeline
-    /// (`false`, the pre-2026-08-14 behavior). Per-pipeline scoping closes
-    /// a real cross-tenant coupling: two unrelated pipelines' shard *N*
-    /// would otherwise share one egress multiplexer — today one
-    /// application-owned UDP socket and `srt-rs` `CallerTable`, formerly
-    /// one libsrt multiplexer and its `CSndQueue` worker thread — purely
-    /// because their shard-assignment formulas both produced the same
-    /// numeric shard id. Numerically a no-op for any
-    /// single-pipeline deployment (including every MSR measurement to
-    /// date); multiplexer count scales with `shard_count x
-    /// active_pipeline_count` instead of a flat `shard_count` when enabled.
-    pub srt_egress_muxer_port_pipeline_scoped: bool,
-    /// Engine-wide bound on concurrent in-flight SRT egress connects
-    /// (`srt_connect_admission.rs`). Decouples connection-*establishment*
-    /// concurrency from shard count: a mass output-creation burst (all of
-    /// MSR's outputs added together) can resolve far more connects at once
-    /// than shard count alone would ever expose to the transport without
-    /// this. **Provisional after the srt-rs cutover**: the current value was
-    /// sized with margin under the measured ~120-connections-per-multiplexer
-    /// libsrt `CSndQueue` saturation point
-    /// (`docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`),
-    /// a mechanism that no longer exists — egress now drives an
-    /// application-owned socket and `CallerTable` explicitly. Retained
-    /// pending remeasurement rather than re-derived without evidence.
+    /// `max_in_flight` of each SRT egress Owner's bounded caller pool: the
+    /// transport's connect admission. One value applies per (shard, address
+    /// family) Owner; the pool queues up to the same number of further
+    /// requests and refuses beyond that. Decouples handshake concurrency from
+    /// output count so a mass output-creation burst queues in the Owner's
+    /// bounded pool instead of opening every handshake at once. Per-Owner,
+    /// not engine-wide: total in-flight connects scale with shard count x
+    /// active families.
     pub srt_egress_connect_concurrency: usize,
     pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
@@ -349,8 +370,38 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+fn env_positive_f64(name: &str, default: f64) -> f64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value: &f64| value.is_finite() && value.is_sign_positive())
+        .unwrap_or(default)
+}
+
+fn capacity_limits_from_env(parallelism: usize) -> CapacityLimits {
+    let defaults = CapacityLimits::from_parallelism(parallelism.min(u32::MAX as usize) as u32);
+    CapacityLimits {
+        ingress_pps: env_positive_f64("RESTREAM_CAPACITY_INGRESS_PPS", defaults.ingress_pps),
+        egress_pps: env_positive_f64("RESTREAM_CAPACITY_EGRESS_PPS", defaults.egress_pps),
+        nic_bps: env_positive_f64("RESTREAM_CAPACITY_NIC_BPS", defaults.nic_bps),
+        memory_bytes: env_positive_f64("RESTREAM_CAPACITY_MEMORY_BYTES", defaults.memory_bytes),
+        ffmpeg_stages: env_positive_f64("RESTREAM_CAPACITY_FFMPEG_STAGES", defaults.ffmpeg_stages),
+        disk_bps: env_positive_f64("RESTREAM_CAPACITY_DISK_BPS", defaults.disk_bps),
+    }
+}
+
 /// Positive `usize` override for thin A/B knobs. Unset, unparseable, or `0`
 /// means "leave the caller default alone".
+/// The malloc arena environment, read once at startup before any thread
+/// exists: `(MALLOC_ARENA_MAX, RESTREAM_MALLOC_ARENA_MAX)`. Interpreted by
+/// `crate::malloc_tuning`.
+pub fn malloc_arena_env() -> (Option<String>, Option<String>) {
+    (
+        std::env::var("MALLOC_ARENA_MAX").ok(),
+        std::env::var("RESTREAM_MALLOC_ARENA_MAX").ok(),
+    )
+}
+
 pub(crate) fn env_optional_positive_usize(name: &str) -> Option<usize> {
     std::env::var(name)
         .ok()
@@ -382,66 +433,26 @@ fn default_egress_fabric_shards(effective_cpus: usize) -> u32 {
 }
 
 /// Outputs a single shard can carry before another shard is worth its
-/// fixed per-shard `epoll_wait`/`clock_gettime` overhead (see
+/// fixed per-shard runtime/readiness overhead (see
 /// `default_egress_fabric_shards`'s doc comment). Chosen so this formula
 /// saturates at `default_egress_fabric_shards(effective_cpus)` right
 /// around 1,200 outputs on an 8-core host (`1200 / 8 = 150`... rounded
-/// down to a rounder, slightly more conservative number) — matching the
-/// scale the shard-count sweep above was actually measured at, rather
-/// than an unvalidated guess. This threshold is RTMP-shaped: see
-/// `EgressShardProfile::SrtCpuParallel` for why SRT egress does not use
-/// it.
+/// RTMP-shaped output-count scaling threshold. The profile is bounded by the
+/// CPU-derived shard ceiling and is not used for SRT.
 const OUTPUTS_PER_SHARD: u32 = 128;
 
 /// How one egress fabric runtime's shard pool should scale with its
 /// output count. A runtime is per (protocol, feed); the profile is chosen
 /// by the owning engine path, not inferred here.
 ///
-/// RTMP-shaped scaling (`OutputCount`) amortizes one shard over
-/// `OUTPUTS_PER_SHARD` outputs: the marginal cost of an RTMP connection
-/// is low (no per-multiplexer thread model, no hard delivery deadline),
-/// so shards exist to spread `epoll_wait`/`clock_gettime` overhead, not
-/// to buy parallelism per connection.
+/// RTMP (`OutputCount`) spreads per-shard protocol and Compio TCP readiness
+/// work across outputs. SRT (`SrtCpuParallel`) instead budgets parallelism
+/// across the per-family Compio Owners each shard can host.
 ///
-/// SRT egress is different: every leaf on one shard shares that shard's
-/// egress multiplexer (`SrtEgressMuxerPorts`, `muxer_ports.rs`) — since the
-/// srt-rs cutover, one application-owned UDP socket and `CallerTable` driven
-/// from the shard thread; previously one libsrt multiplexer and its own
-/// `CSndQueue` worker thread — and every send races a hard 250ms TSBPD
-/// delivery deadline. The right shard count for SRT is a
-/// multiplexer-parallelism budget — bounded by CPU count, not by how many
-/// outputs happen to land on one feed.
-///
-/// **This policy is provisional.** It was derived from the libsrt
-/// one-`CSndQueue`-worker-per-multiplexer model, which no longer describes
-/// the mechanism; the srt-rs path has no per-multiplexer worker thread.
-/// It is retained unchanged because changing a scaling law without a
-/// matched shard-count/caller-density remeasurement would be worse than a
-/// stale rationale — see the follow-up in
-/// `docs/agent-guidance/quality/backlog.md`. A feed with ~60 SRT outputs (MSR's
-/// real 5% slice at n=1,200) must not be capped at 1 shard / 1 multiplexer
-/// by an RTMP-shaped 128-outputs-per-shard threshold — that is the
-/// documented blocker for scaling SRT egress past the low hundreds
-/// (`docs/archive/quality/srt-egress-scale-investigation-2026-08-10.md`,
-/// "The real scalability ceiling").
-///
-/// An output-count-scaled variant of this profile (a much smaller
-/// SRT-specific per-shard threshold than RTMP's 128, shrinking shard count
-/// for small feeds) was implemented on 2026-08-14 and live-tested against
-/// this profile's unmodified (output-count-*independent*) baseline in a
-/// controlled 4-worktree, 16-run comparison. Both variants failed
-/// `srt-only` at 1,200 outputs identically (~85-99% of outputs progressing
-/// before stalling), while both passed every other mix (rtmp-only, 50/50,
-/// 95/5) cleanly — the failure was traced to the test *environment*
-/// (`unshare --net` unavailable, forcing every run onto the host's shared,
-/// non-isolated network namespace; a measured ~90% UDP receive-buffer
-/// overflow rate at 1,200 concurrent real-bitrate SRT flows over that
-/// shared loopback), not to this profile's shard-count formula. See
-/// `docs/archive/quality/msr-1200-netns-confound-investigation-2026-08-14.md`
-/// for the full campaign data. Output-count scaling for `SrtCpuParallel`
-/// therefore remains unshipped only for lack of a *valid* live re-proof
-/// (one run under real network-namespace isolation), not because it was
-/// shown unsafe.
+/// Keep the SRT policy unchanged: WI3.7 current-host measurements are
+/// provisional evidence, not a portable shard law. Revisit it only after the
+/// final transport is in place and cross-host qualification is available.
+/// Q-025 tracks that decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EgressShardProfile {
     /// RTMP/sink/pipeline feeds: grow one shard per `OUTPUTS_PER_SHARD`
@@ -457,18 +468,20 @@ pub(crate) enum EgressShardProfile {
 /// Live, output-count-aware shard target for one egress fabric runtime
 /// (one instance per protocol per feed — see `EgressFabricRuntime`), used
 /// to rescale the shard pool as outputs are added/removed instead of
-/// paying for a fixed shard count picked once at startup. Pure function
-/// of (the feed's protocol profile, how many outputs this fabric runtime
-/// currently owns, how many CPUs the process has) — no lookup table, no
-/// cached classification: the CPU-derived ceiling is
-/// `default_egress_fabric_shards` unchanged, and output count only ever
-/// pushes the target *down* from that ceiling, never past it.
+/// paying for a fixed shard count picked once at startup. Default builds
+/// remain a pure CPU-derived policy. The benchmark-only WI3.7 feature may
+/// supply an exact 1..=4 SRT target through `RESTREAM_WI37_SRT_SHARDS`.
 pub(crate) fn target_egress_fabric_shards(
     profile: EgressShardProfile,
     output_count: usize,
     effective_cpus: usize,
 ) -> u32 {
     let cpu_max = default_egress_fabric_shards(effective_cpus);
+    if matches!(profile, EgressShardProfile::SrtCpuParallel)
+        && let Some(requested) = wi37_srt_shard_override()
+    {
+        return requested;
+    }
     let by_outputs = match profile {
         EgressShardProfile::OutputCount => u32::try_from(output_count)
             .unwrap_or(u32::MAX)
@@ -486,16 +499,6 @@ fn env_bool(name: &str) -> Option<bool> {
             "1" | "true" | "yes" | "on"
         )
     })
-}
-
-fn env_bool_default_true(name: &str) -> bool {
-    !matches!(
-        std::env::var(name)
-            .ok()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .as_deref(),
-        Some("0" | "false" | "no" | "off")
-    )
 }
 
 fn derive_external_ffmpeg_permits(
@@ -617,6 +620,7 @@ impl Default for AppConfig {
             http_bind_addr: "127.0.0.1".to_string(),
             tuning,
             egress_fabric: EgressFabricConfig::default(),
+            capacity_limits: CapacityLimits::from_parallelism(cpus as u32),
             tokio_runtime,
             db_path: ".restream/data/restream.db".to_string(),
             media_dir: DEFAULT_MEDIA_DIR.to_string(),
@@ -629,6 +633,8 @@ impl Default for AppConfig {
             },
             rtmp_backlog: 1024,
             rtmp_max_connections: 512,
+            rtmp_max_message_bytes: 8 * 1024 * 1024,
+            rtmp_ingest_parser_budget_bytes: 256 * 1024 * 1024,
             rtmp_handshake_timeout_ms: 10_000,
             rtmp_preauth_buffer_bytes: 128 * 1024,
             rtmp_stream_buffer_bytes: 8 * 1024 * 1024,
@@ -643,8 +649,6 @@ impl Default for AppConfig {
             ring_headroom_secs: 6.0,
             ring_capacity: 1024,
             transcoder_ring_capacity: 512,
-            srt_udp_buffer: 8 * 1024 * 1024,
-            require_srt_bonding: false,
             external_ffmpeg_permits: derived_permits,
             ffmpeg_bin_path: None,
             log_dir: ".restream/logs".to_string(),
@@ -652,10 +656,8 @@ impl Default for AppConfig {
             srt_passphrase: None,
             srt_pbkeylen: 16,
             srt_connect_timeout_ms: 10_000,
-            srt_egress_reuse_local_port: true,
             srt_egress_muxer_max_outputs_per_shard: 0,
             srt_egress_muxer_max_shards: 64,
-            srt_egress_muxer_port_pipeline_scoped: true,
             srt_egress_connect_concurrency: 64,
             use_internal_file_ingest: false,
             initial_admin_password: None,
@@ -672,6 +674,10 @@ impl AppConfig {
             std::env::var("RESTREAM_HTTP_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
         let tuning = RuntimeTuning::from_env();
         let egress_fabric = EgressFabricConfig::from_env();
+        let cpus = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1);
+        let capacity_limits = capacity_limits_from_env(cpus);
         let tokio_runtime = TokioRuntimeConfig::from_env();
         let db_path = std::env::var("RESTREAM_DB_PATH")
             .unwrap_or_else(|_| ".restream/data/restream.db".to_string());
@@ -681,6 +687,13 @@ impl AppConfig {
         let backend_policy = backend_policy_from_env();
         let rtmp_backlog = env_u32("RESTREAM_RTMP_LISTENER_BACKLOG", 1024);
         let rtmp_max_connections = env_usize("RESTREAM_RTMP_MAX_CONNECTIONS", 512).clamp(1, 16384);
+        let rtmp_max_message_bytes = env_usize("RESTREAM_RTMP_MAX_MESSAGE_BYTES", 8 * 1024 * 1024)
+            .clamp(64 * 1024, 0x00FF_FFFF);
+        let rtmp_ingest_parser_budget_bytes = env_usize(
+            "RESTREAM_RTMP_INGEST_PARSER_BUDGET_BYTES",
+            256 * 1024 * 1024,
+        )
+        .clamp(rtmp_max_message_bytes, 16 * 1024 * 1024 * 1024);
         let rtmp_handshake_timeout_ms =
             env_u64("RESTREAM_RTMP_HANDSHAKE_TIMEOUT_MS", 10_000).clamp(100, 300_000);
         let rtmp_preauth_buffer_bytes = env_usize("RESTREAM_RTMP_PREAUTH_BUFFER_BYTES", 128 * 1024)
@@ -713,9 +726,6 @@ impl AppConfig {
         let ring_capacity = env_usize("RESTREAM_RING_CAPACITY", 1024).clamp(64, 16384);
         let transcoder_ring_capacity =
             env_usize("RESTREAM_TRANSCODER_RING_CAPACITY", 512).clamp(64, 16384);
-        let srt_udp_buffer =
-            env_usize("RESTREAM_SRT_UDP_BUFFER", 8 * 1024 * 1024).clamp(65536, 268_435_456);
-        let require_srt_bonding = std::env::var_os("RESTREAM_REQUIRE_SRT_BONDING").is_some();
         let ffmpeg_bin_path = std::env::var("FFMPEG_BIN_PATH").ok();
         let log_dir =
             std::env::var("RESTREAM_LOG_DIR").unwrap_or_else(|_| ".restream/logs".to_string());
@@ -726,14 +736,10 @@ impl AppConfig {
             .and_then(|v| v.parse::<i32>().ok())
             .unwrap_or(16);
         let srt_connect_timeout_ms = env_u64("RESTREAM_SRT_CONNECT_TIMEOUT_MS", 10_000);
-        let srt_egress_reuse_local_port =
-            env_bool_default_true("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT");
         let srt_egress_muxer_max_outputs_per_shard =
             env_usize("RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD", 0).min(10_000);
         let srt_egress_muxer_max_shards =
             env_usize("RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS", 64).clamp(1, 64);
-        let srt_egress_muxer_port_pipeline_scoped =
-            env_bool_default_true("RESTREAM_SRT_EGRESS_MUXER_PORT_PIPELINE_SCOPED");
         let srt_egress_connect_concurrency =
             env_usize("RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY", 64).clamp(1, 4096);
         let use_internal_file_ingest =
@@ -749,9 +755,6 @@ impl AppConfig {
         {
             v
         } else {
-            let cpus = std::thread::available_parallelism()
-                .map(std::num::NonZeroUsize::get)
-                .unwrap_or(1);
             let reserve = std::env::var("RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE")
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
@@ -774,6 +777,7 @@ impl AppConfig {
             http_bind_addr,
             tuning,
             egress_fabric,
+            capacity_limits,
             tokio_runtime,
             db_path,
             media_dir,
@@ -781,6 +785,8 @@ impl AppConfig {
             backend_policy,
             rtmp_backlog,
             rtmp_max_connections,
+            rtmp_max_message_bytes,
+            rtmp_ingest_parser_budget_bytes,
             rtmp_handshake_timeout_ms,
             rtmp_preauth_buffer_bytes,
             rtmp_stream_buffer_bytes,
@@ -795,8 +801,6 @@ impl AppConfig {
             ring_headroom_secs,
             ring_capacity,
             transcoder_ring_capacity,
-            srt_udp_buffer,
-            require_srt_bonding,
             external_ffmpeg_permits: permits,
             ffmpeg_bin_path,
             log_dir,
@@ -804,10 +808,8 @@ impl AppConfig {
             srt_passphrase,
             srt_pbkeylen,
             srt_connect_timeout_ms,
-            srt_egress_reuse_local_port,
             srt_egress_muxer_max_outputs_per_shard,
             srt_egress_muxer_max_shards,
-            srt_egress_muxer_port_pipeline_scoped,
             srt_egress_connect_concurrency,
             use_internal_file_ingest,
             initial_admin_password,
@@ -843,6 +845,7 @@ impl AppConfig {
                 "commandBatchBudget": self.egress_fabric.command_batch_budget,
                 "readinessBatchBudget": self.egress_fabric.readiness_batch_budget,
                 "timerBatchBudget": self.egress_fabric.timer_batch_budget,
+                "maxLeavesPerShard": self.egress_fabric.max_leaves_per_shard,
                 "idleWaitMs": self.egress_fabric.idle_wait_ms,
                 "tcpPollerMaxEvents": self.egress_fabric.tcp_poller_max_events,
                 "visitMaxUnits": self.egress_fabric.visit_max_units,
@@ -850,6 +853,14 @@ impl AppConfig {
                 "visitMaxUs": self.egress_fabric.visit_max_us,
                 "maxPendingBytes": self.egress_fabric.max_pending_bytes,
                 "drainTimeoutMs": self.egress_fabric.drain_timeout_ms,
+            },
+            "capacity": {
+                "ingressPps": self.capacity_limits.ingress_pps,
+                "egressPps": self.capacity_limits.egress_pps,
+                "nicBps": self.capacity_limits.nic_bps,
+                "memoryBytes": self.capacity_limits.memory_bytes,
+                "ffmpegStages": self.capacity_limits.ffmpeg_stages,
+                "diskBps": self.capacity_limits.disk_bps,
             },
             "paths": {
                 "db": self.db_path,
@@ -885,14 +896,11 @@ impl AppConfig {
                 "transcoderRingCapacity": self.transcoder_ring_capacity,
             },
             "srt": {
-                "udpBuffer": self.srt_udp_buffer,
-                "requireBonding": self.require_srt_bonding,
                 "passphraseConfigured": self.srt_passphrase.is_some(),
                 "pbkeylen": self.srt_pbkeylen,
                 "connectTimeoutMs": self.srt_connect_timeout_ms,
                 "egressMuxerMaxOutputsPerShard": self.srt_egress_muxer_max_outputs_per_shard,
                 "egressMuxerMaxShards": self.srt_egress_muxer_max_shards,
-                "egressMuxerPortPipelineScoped": self.srt_egress_muxer_port_pipeline_scoped,
             },
             "security": {
                 "secureSessionCookies": self.secure_session_cookies,
@@ -900,6 +908,8 @@ impl AppConfig {
             "rtmp": {
                 "backlog": self.rtmp_backlog,
                 "maxConnections": self.rtmp_max_connections,
+                "maxMessageBytes": self.rtmp_max_message_bytes,
+                "ingestParserBudgetBytes": self.rtmp_ingest_parser_budget_bytes,
                 "handshakeTimeoutMs": self.rtmp_handshake_timeout_ms,
                 "preauthBufferBytes": self.rtmp_preauth_buffer_bytes,
                 "streamBufferBytes": self.rtmp_stream_buffer_bytes,

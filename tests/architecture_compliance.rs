@@ -121,10 +121,12 @@ fn release_policy_metadata_is_declared_and_enforced() {
             "build.rs missing native input policy for {native_input}"
         );
     }
-    // SRT moved from the vendored libsrt+mbedTLS static stack to the
-    // pure-Rust srt-rs workspace consumed as a pinned git dependency.
-    assert!(cargo_toml.contains("git = \"https://github.com/krsna1729/srt-rs\""));
-    assert!(cargo_toml.contains("shiguredo_srt"));
+    // SRT is the pinned pure-Rust final upstream srt-rs. Keep the revision
+    // visible in the root manifest so release metadata cannot silently drift
+    // back to an unpinned dependency.
+    assert!(cargo_toml.contains("https://github.com/krsna1729/srt-rs"));
+    assert!(cargo_toml.contains("d81e9583e474bd18c83fa95e8283e187f729f8ba"));
+    assert!(cargo_toml.contains("srt_proto"));
     assert!(cargo_toml.contains("srt-transport"));
 
     let deny_toml = include_str!("../deny.toml");
@@ -307,6 +309,109 @@ fn srt_policy_store_consumes_typed_policies_without_persistence_dependencies() {
     assert!(
         !srt_policy.contains("serde_json") && !srt_policy.contains("serialized_policy"),
         "media SRT policy store should consume typed policy values, not persisted JSON"
+    );
+}
+
+/// Production SRT rides `srt_transport::compio::Owner` in both directions. The
+/// retired Restream-native UDP/io_uring transport must not come back into
+/// production SRT source (benchmark-only packet-I/O experiments elsewhere are
+/// intentionally not covered by this guard).
+#[test]
+fn production_srt_does_not_own_native_udp_transport() {
+    const FORBIDDEN: &[&str] = &[
+        "UringUdpDriver",
+        "UringUdpPoller",
+        "UringUdpReceiver",
+        "NativeSrtIngress",
+        "CompatReceiver",
+        "restream_dataplane::udp",
+    ];
+    let roots = ["src/media/srt", "src/media/egress/backends/srt"];
+    let files = ["src/media/srt.rs", "src/media/egress/backends/srt.rs"];
+    let mut inspect = |path: &std::path::Path, source: &str| {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        let is_test_file = name.ends_with("_tests.rs")
+            || name == "tests.rs"
+            || path.components().any(|part| part.as_os_str() == "tests");
+        if is_test_file {
+            return;
+        }
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+        for forbidden in FORBIDDEN {
+            assert!(
+                !production.contains(forbidden),
+                "{} references retired native SRT transport `{forbidden}`",
+                path.display()
+            );
+        }
+    };
+    for root in roots {
+        collect_rust_sources(std::path::Path::new(root), &mut inspect);
+    }
+    for file in files {
+        let source = std::fs::read_to_string(file).expect("SRT module root is readable");
+        inspect(std::path::Path::new(file), &source);
+    }
+    for retired in [
+        "crates/restream-dataplane/src/udp.rs",
+        "crates/restream-dataplane/src/udp_recv.rs",
+        "src/media/srt/native_ingress.rs",
+        "src/media/srt/native_ingress_drive.rs",
+    ] {
+        assert!(
+            !std::path::Path::new(retired).exists(),
+            "{retired} was deleted and must not return"
+        );
+    }
+}
+
+/// Kernel-queue telemetry from the removed native SRT UDP monitor must not come
+/// back as fabricated zero-valued fields, alerts or docs. SRT listener state is
+/// `srtListener.ingressOwner`, published by the Compio Owner.
+#[test]
+fn dead_srt_udp_queue_telemetry_does_not_return() {
+    // Fields nobody writes, and retired names/claims describing the removed
+    // kernel-queue monitor or libsrt-era statistics.
+    const DEAD: &[&str] = &[
+        "udpRxQueueBytes",
+        "udpRxQueuePeakBytes",
+        "udpDrops",
+        "srtRecvBufBytes",
+        "srtRecvBufAvailBytes",
+        "srt_recv_buf_avail_bytes",
+        "srt_bistats",
+        "SRT monitor task",
+        "/proc/net/udp",
+        "SRT UDP drops",
+    ];
+    let mut inspect = |path: &std::path::Path, source: &str| {
+        for dead in DEAD {
+            assert!(
+                !source.contains(dead),
+                "{} reintroduces dead SRT telemetry `{dead}`",
+                path.display()
+            );
+        }
+    };
+    collect_rust_sources(std::path::Path::new("src"), &mut inspect);
+    for doc in [
+        "docs/api-reference.md",
+        "docs/observability.md",
+        "docs/configuration.md",
+        "README.md",
+    ] {
+        let source = std::fs::read_to_string(doc).expect("active doc is readable");
+        inspect(std::path::Path::new(doc), &source);
+    }
+    // The publisher-quality UI describes srt-rs, not a libsrt runtime.
+    let quality_ui = std::fs::read_to_string("web/ts/features/publisher-quality.ts")
+        .expect("publisher quality UI is readable");
+    assert!(
+        !quality_ui.contains("libsrt"),
+        "publisher-quality.ts must not describe a libsrt runtime"
     );
 }
 

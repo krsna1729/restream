@@ -8,6 +8,7 @@ use super::super::{
     HarnessSrtCrypto, default_restream_bin, default_work_db_path, env_secs, env_usize,
     harness_port_defaults, harness_srt_crypto_from_env,
 };
+use super::packet_contract_peers::PeerStateConfig;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ResourceSweepLifecycle {
@@ -55,6 +56,13 @@ pub(super) enum ResourceSweepPeer {
 }
 
 impl ResourceSweepPeer {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Mediamtx => "mediamtx",
+            Self::Sink => "sink",
+        }
+    }
+
     fn from_env() -> Result<Self, String> {
         match std::env::var("MSR_PEER")
             .unwrap_or_else(|_| "mediamtx".to_string())
@@ -95,11 +103,19 @@ pub(super) struct ResourceSweepEnv {
     /// `MSR_PEER` (default `mediamtx`): which process type backs the peer
     /// instances above.
     pub(super) peer_mode: ResourceSweepPeer,
+    /// Remote SRT sink hosts (`RESOURCE_SWEEP_SRT_PEER_HOSTS`, comma
+    /// separated; empty means loopback). Set it to run a rung against sink
+    /// peers on other machines — the ≥25 GbE multi-host qualification setup —
+    /// with `test_harness srt-sink` running on each of them.
+    pub(super) srt_peer_hosts: Vec<String>,
     pub(super) sample_secs: u64,
     pub(super) sample_interval_ms: u64,
     pub(super) settle_secs: u64,
     pub(super) ingest_counts: Vec<usize>,
     pub(super) egress_counts: Vec<usize>,
+    /// Publisher fixture bitrate label (`RESOURCE_SWEEP_BITRATE`, default
+    /// `1.5M`). The WI3.4 packet-rate contract runs the `8M` workload.
+    pub(super) bitrate: String,
     pub(super) scenario_filter: Option<HashSet<String>>,
     pub(super) lifecycle: ResourceSweepLifecycle,
     pub(super) no_cleanup: bool,
@@ -143,11 +159,13 @@ impl ResourceSweepEnv {
             mtx_api: ports.mtx_api,
             peer_count: env_usize("PEER_COUNT", 1).max(1),
             peer_mode: ResourceSweepPeer::from_env()?,
+            srt_peer_hosts: parse_string_list("RESOURCE_SWEEP_SRT_PEER_HOSTS"),
             sample_secs: env_secs("RESOURCE_SWEEP_SAMPLE_SECS", 6),
             sample_interval_ms: env_secs("RESOURCE_SWEEP_SAMPLE_INTERVAL_MS", 1000),
             settle_secs: env_secs("RESOURCE_SWEEP_SETTLE_SECS", 4),
             ingest_counts: parse_usize_list("RESOURCE_SWEEP_INGEST_COUNTS", "1,3,5"),
             egress_counts: parse_usize_list("RESOURCE_SWEEP_EGRESS_COUNTS", "1,5,10"),
+            bitrate: std::env::var("RESOURCE_SWEEP_BITRATE").unwrap_or_else(|_| "1.5M".to_string()),
             scenario_filter: parse_string_set("RESOURCE_SWEEP_SCENARIOS"),
             lifecycle: ResourceSweepLifecycle::from_env()?,
             no_cleanup: std::env::var("RESOURCE_SWEEP_NO_CLEANUP")
@@ -166,6 +184,47 @@ impl ResourceSweepEnv {
         })
     }
 
+    /// The remote sink peers' state endpoints, when SRT outputs are
+    /// retargeted. Their same-window drop counters gate a remote rung's
+    /// validity, so this must resolve whenever `srt_peer_hosts` is set.
+    pub(super) fn peer_state_config(&self) -> Option<PeerStateConfig> {
+        if self.srt_peer_hosts.is_empty() {
+            return None;
+        }
+        let port = std::env::var("RESOURCE_SWEEP_SRT_PEER_STATE_PORT")
+            .ok()
+            .and_then(|value| value.trim().parse::<u16>().ok())
+            .unwrap_or_else(|| harness_port_defaults().mtx_api);
+        Some(PeerStateConfig {
+            hosts: self.srt_peer_hosts.clone(),
+            port,
+            // Filled by the runner once the rung's outputs exist, so delivery
+            // can be checked per peer against the workload.
+            expected_outputs_per_host: Vec::new(),
+        })
+    }
+
+    /// Where SRT outputs point: the configured remote hosts, or loopback.
+    pub(super) fn srt_peer_targets(&self) -> Vec<String> {
+        if self.srt_peer_hosts.is_empty() {
+            vec!["127.0.0.1".to_string()]
+        } else {
+            self.srt_peer_hosts.clone()
+        }
+    }
+
+    /// Stable host choice for one output: the same output keeps the same peer
+    /// across a run, and the load spreads over the configured hosts.
+    pub(super) fn srt_peer_host_for(&self, name: &str) -> Option<&str> {
+        if self.srt_peer_hosts.is_empty() {
+            return None;
+        }
+        let index = name.bytes().fold(0_usize, |hash, byte| {
+            hash.wrapping_mul(31).wrapping_add(usize::from(byte))
+        }) % self.srt_peer_hosts.len();
+        Some(self.srt_peer_hosts[index].as_str())
+    }
+
     pub(super) fn scenario_enabled(&self, scenario: &str) -> bool {
         self.scenario_filter
             .as_ref()
@@ -180,6 +239,18 @@ pub(super) fn parse_usize_list(name: &str, default: &str) -> Vec<usize> {
         .filter_map(|part| part.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
         .collect()
+}
+
+pub(super) fn parse_string_list(name: &str) -> Vec<String> {
+    std::env::var(name)
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub(super) fn parse_string_set(name: &str) -> Option<HashSet<String>> {

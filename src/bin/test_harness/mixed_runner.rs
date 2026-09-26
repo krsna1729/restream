@@ -46,7 +46,10 @@ pub(super) use mixed_artifact_index::{
     write_mixed_root_artifact_index,
 };
 pub(super) use mixed_artifacts::{HarnessOutputCell, HarnessOutputRegistry, infer_output_protocol};
-pub(super) use mixed_checks::{verify_mixed_output_cases_inner, verify_mixed_output_dimensions};
+pub(super) use mixed_checks::{
+    preflight_mixed_rtmps_capabilities, preflight_rtmps_ktls_capabilities,
+    verify_mixed_output_cases_inner, verify_mixed_output_dimensions,
+};
 pub(super) use mixed_control::{
     MixedResume, mixed_output_checks_need_live_progress_gate,
     mixed_output_progress_timeout_for_case, mixed_progress_output_ids,
@@ -136,6 +139,7 @@ pub(super) struct MixedEnv {
     pub(super) restream_rtmp: u16,
     pub(super) restream_srt: u16,
     pub(super) mtx_rtmp: u16,
+    pub(super) mtx_rtmps: u16,
     pub(super) mtx_srt: u16,
     pub(super) mtx_hls: u16,
     pub(super) mtx_api: u16,
@@ -215,6 +219,7 @@ impl MixedEnv {
             restream_rtmp: ports.restream_rtmp,
             restream_srt: ports.restream_srt,
             mtx_rtmp: ports.mtx_rtmp,
+            mtx_rtmps: ports.mtx_rtmps,
             mtx_srt: ports.mtx_srt,
             mtx_hls: ports.mtx_hls,
             mtx_api: ports.mtx_api,

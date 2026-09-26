@@ -144,18 +144,6 @@ fn internal_backend_smoke_filters_hevc_codec_edge_output_groups() {
 }
 
 #[test]
-fn mixed_signal_skips_rtmp_hevc_publish_probe_rows() {
-    let source = include_str!("../mixed_checks.rs");
-
-    assert!(source.contains(
-        "let mediamtx_publish_probe = matches!(case.protocol(), MixedOutputProtocol::Rtmp)"
-    ));
-    assert!(source.contains("env.check_selected(\"audio-route\")"));
-    assert!(source.contains("env.check_selected(\"decode-scan\")"));
-    assert!(source.contains("&& !mediamtx_publish_probe"));
-}
-
-#[test]
 fn backend_policy_matrix_is_separate_from_symmetric_mixed_matrix() {
     let matrix_spec = mode_spec("mixed.matrix").expect("mixed.matrix must be listed");
     let policy_spec =
@@ -355,6 +343,7 @@ fn single_track_output_matrix_exercises_all_protocol_encoding_pairs() {
         pairs,
         vec![
             ("rtmp", "source"),
+            ("rtmps", "source"),
             ("rtmp", "720p"),
             ("rtmp", "720p"),
             ("rtmp", "1080p"),
@@ -390,6 +379,7 @@ fn single_track_output_matrix_reports_same_rows_it_executes() {
         groups,
         vec![
             "rtmp.src.a0",
+            "rtmps.src.a0",
             "rtmp.720p.a0",
             "rtmp.720p-enh.a0",
             "rtmp.1080p.a0",
@@ -398,6 +388,31 @@ fn single_track_output_matrix_reports_same_rows_it_executes() {
             "srt.720p.a0",
             "srt.1080p.a0",
         ]
+    );
+}
+#[test]
+fn rtmps_output_matrix_row_is_limited_to_rtmp_ingest() {
+    let rtmp_input = mixed_input_cases()
+        .iter()
+        .copied()
+        .find(|case| case.protocol() == MixedInputProtocol::Rtmp)
+        .expect("RTMP input row");
+    let non_rtmp_input = mixed_input_cases()
+        .iter()
+        .copied()
+        .find(|case| case.protocol() == MixedInputProtocol::Srt)
+        .expect("SRT input row");
+    let rtmps_rows: Vec<_> = mixed_output_cases_for_input(rtmp_input)
+        .iter()
+        .filter(|case| case.protocol() == MixedOutputProtocol::Rtmps)
+        .map(MixedOutputCase::id)
+        .collect();
+
+    assert_eq!(rtmps_rows, vec!["rtmps.src.a0"]);
+    assert!(
+        mixed_output_cases_for_input(non_rtmp_input)
+            .iter()
+            .all(|case| case.protocol() != MixedOutputProtocol::Rtmps)
     );
 }
 

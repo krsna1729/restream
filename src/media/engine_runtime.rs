@@ -18,22 +18,6 @@ impl MediaEngine {
         self.runtime.sender_semaphore.clone()
     }
 
-    /// Engine-wide per-shard libsrt egress multiplexer port registry. Each
-    /// egress-fabric shard resolves its own entry, so shards do not share a
-    /// libsrt sender thread — see
-    /// `crate::media::egress::backends::srt::muxer_ports`.
-    pub(crate) fn srt_egress_muxer_ports_handle(
-        &self,
-    ) -> crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPorts {
-        self.runtime.srt_egress_muxer_ports.clone()
-    }
-
-    /// Engine-wide SRT egress connect-concurrency admission control — see
-    /// `crate::media::egress::backends::srt_connect_admission`.
-    pub(crate) fn srt_egress_connect_admission_handle(&self) -> Arc<tokio::sync::Semaphore> {
-        self.runtime.srt_egress_connect_admission.clone()
-    }
-
     pub fn bonding_available(&self) -> bool {
         self.runtime
             .listener_stats

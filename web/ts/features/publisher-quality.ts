@@ -75,7 +75,7 @@ function getPublisherQualityMetrics(publisher: Publisher | null): QualityMetric[
                 code: 'srt_bond_members',
                 label: 'Bond member links',
                 description:
-                    'Number of network paths currently attached to this libsrt socket group.',
+                    'Number of network paths currently attached to this srt-rs bonded group.',
                 rawValue: q.srtGroupMemberCount,
                 alertCheck: (v) => v < 2,
                 alwaysShow: true,
@@ -93,8 +93,29 @@ function getPublisherQualityMetrics(publisher: Publisher | null): QualityMetric[
                 code: 'srt_bond_broken',
                 label: 'Bond broken links',
                 description:
-                    'Member links that libsrt reports as broken. Any broken path reduces redundancy.',
+                    'Member links srt-rs reports as broken. Any broken path reduces redundancy.',
                 rawValue: q.srtGroupBrokenMembers,
+                alertCheck: (v) => v > 0,
+                alwaysShow: true,
+            });
+            addNumericMetric({
+                code: 'srt_bond_wire_lost',
+                label: 'Bond wire packets lost (all legs)',
+                description:
+                    'Missing sequence numbers summed over every bond leg. This is a wire view: a lost ' +
+                    'copy on one leg can leave the deduplicated publisher stream intact, so it is not ' +
+                    'logical publisher loss.',
+                rawValue: q.srtGroupWireReceiverPacketsLost,
+                alertCheck: () => false,
+                alwaysShow: true,
+            });
+            addNumericMetric({
+                code: 'srt_bond_wire_undecrypt',
+                label: 'Bond wire packets undecryptable (all legs)',
+                description:
+                    'Packets rejected at decryption on any bond leg. Any non-zero total indicates an ' +
+                    'encryption mismatch on that path.',
+                rawValue: q.srtGroupWirePacketsUndecryptable,
                 alertCheck: (v) => v > 0,
                 alwaysShow: true,
             });
@@ -153,18 +174,6 @@ function getPublisherQualityMetrics(publisher: Publisher | null): QualityMetric[
                 'Current receive-buffer timespan. Approaching the negotiated buffer increases late-drop risk.',
             rawValue: q.msReceiveBuf,
             alertCheck: () => false,
-        });
-        addNumericMetric({
-            code: 'srt_sndbuf_configured',
-            label: 'Send buffer ceiling (configured)',
-            description:
-                'The SRTO_SNDBUF value this connection was set up with — fixed for the life of ' +
-                'the connection (libsrt rejects changing it after connect). Egress-only: derived ' +
-                'from an explicit sndbuf= URL override, or a bitrate*latency*margin formula ' +
-                'default when none was given.',
-            rawValue: q.srtSndbufConfiguredBytes,
-            alertCheck: () => false,
-            formatter: formatBytes,
         });
         addNumericMetric({
             code: 'srt_link_capacity',

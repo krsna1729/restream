@@ -56,6 +56,31 @@ fn command_channel_is_bounded() {
 }
 
 #[test]
+fn failed_feed_wake_delivery_does_not_stick_the_coalescing_gate() {
+    let gate = Gate::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        config(1, 1),
+        BlockingBackend { gate: gate.clone() },
+    );
+
+    handle
+        .try_send(EgressCommand::Add(output_spec("out-a")))
+        .unwrap();
+    gate.wait_until_entered();
+    handle
+        .try_send(EgressCommand::Add(output_spec("out-b")))
+        .unwrap();
+
+    assert_eq!(handle.deliver_feed_wake(), Err(EgressShardSendError::Full));
+    assert!(!handle.wake_gate().is_pending());
+
+    gate.release();
+    let snapshot = handle.shutdown_and_join();
+    assert!(snapshot.stopped);
+}
+
+#[test]
 fn command_batch_budget_allows_media_ticks_during_flood() {
     let probe = Probe::default();
     let handle = EgressShardHandle::spawn(
@@ -330,6 +355,34 @@ fn stale_timer_generation_is_ignored_on_shard_thread() {
 }
 
 #[test]
+fn earliest_timer_wakes_an_idle_shard_without_waiting_for_idle_poll() {
+    let probe = Probe::default();
+    let handle = EgressShardHandle::spawn(
+        ShardId::new(0),
+        EgressShardConfig::new(8, 4, 4, 4, Duration::from_secs(5)).unwrap(),
+        TimerBackend {
+            probe: probe.clone(),
+            delay: Duration::from_millis(20),
+        },
+    );
+    let sent_at = Instant::now();
+
+    assert_eq!(
+        handle.try_send(EgressCommand::Add(output_spec("out-deadline-wake"))),
+        Ok(())
+    );
+    probe.wait_for_timers(1);
+    assert!(
+        sent_at.elapsed() < Duration::from_secs(1),
+        "deadline waited for the fixed idle interval"
+    );
+
+    let snapshot = handle.shutdown_and_join();
+    assert_eq!(snapshot.timers_processed, 1);
+    assert!(snapshot.stopped);
+}
+
+#[test]
 fn removed_output_timer_is_ignored_on_shard_thread() {
     let probe = Probe::default();
     let handle = EgressShardHandle::spawn(
@@ -524,4 +577,125 @@ fn idle_shard_polls_on_ready_periodically_without_any_external_trigger() {
 
     let snapshot = handle.shutdown_and_join();
     assert!(snapshot.stopped);
+}
+
+/// A backend that owns `Rc` state is `!Send`. It records the thread of its
+/// construction, every command and its drop, so the test can prove all three
+/// happened on the one shard thread.
+mod non_send_backend {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
+    use std::thread::{self, ThreadId};
+
+    type Seen = Arc<Mutex<Vec<(&'static str, ThreadId)>>>;
+
+    struct RcBackend {
+        commands: Rc<RefCell<u32>>,
+        seen: Seen,
+    }
+
+    impl RcBackend {
+        fn new(seen: Seen) -> Self {
+            seen.lock().unwrap().push(("new", thread::current().id()));
+            Self {
+                commands: Rc::new(RefCell::new(0)),
+                seen,
+            }
+        }
+    }
+
+    impl EgressShardBackend for RcBackend {
+        fn on_command(&mut self, _command: EgressCommand) -> EgressShardCommandEffect {
+            *self.commands.borrow_mut() += 1;
+            self.seen
+                .lock()
+                .unwrap()
+                .push(("command", thread::current().id()));
+            EgressShardCommandEffect::Continue
+        }
+    }
+
+    impl Drop for RcBackend {
+        fn drop(&mut self) {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(("drop", thread::current().id()));
+        }
+    }
+
+    // Compile-time proof that `RcBackend` is `!Send`: if it ever became
+    // `Send`, `AmbiguousIfSend<_>` would have two applicable impls and this
+    // would fail to infer.
+    trait AmbiguousIfSend<A> {
+        fn probe() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSend<()> for T {}
+    impl<T: ?Sized + Send> AmbiguousIfSend<u8> for T {}
+    const _: fn() = || <RcBackend as AmbiguousIfSend<_>>::probe();
+
+    #[test]
+    fn non_send_backend_runs_through_the_production_shard_loop() {
+        let seen = Seen::default();
+        let factory_seen = Arc::clone(&seen);
+        let handle = EgressShardHandle::spawn_with(ShardId::new(0), config(4, 4), move || {
+            RcBackend::new(factory_seen)
+        });
+
+        assert_eq!(
+            handle.try_send(EgressCommand::Add(output_spec("out-a"))),
+            Ok(())
+        );
+        let snapshot = handle.shutdown_and_join();
+        assert!(snapshot.stopped);
+        assert!(!snapshot.panicked);
+
+        let seen = seen.lock().unwrap();
+        let labels: Vec<_> = seen.iter().map(|(label, _)| *label).collect();
+        assert_eq!(labels.first(), Some(&"new"));
+        assert!(labels.contains(&"command"));
+        assert_eq!(labels.last(), Some(&"drop"));
+        let shard_thread = seen[0].1;
+        assert_ne!(shard_thread, thread::current().id());
+        assert!(
+            seen.iter().all(|(_, thread)| *thread == shard_thread),
+            "construction, use and drop must share one shard thread: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn non_send_backends_build_on_their_own_group_shard_threads() {
+        let seen = Seen::default();
+        let group = EgressShardGroup::spawn_with(
+            std::num::NonZeroU32::new(2).unwrap(),
+            config(4, 4),
+            |_| {
+                let seen = Arc::clone(&seen);
+                move || RcBackend::new(seen)
+            },
+        )
+        .unwrap();
+        let _ = group.shutdown_and_join();
+
+        let seen = seen.lock().unwrap();
+        let mut built: Vec<_> = seen
+            .iter()
+            .filter(|(label, _)| *label == "new")
+            .map(|(_, thread)| *thread)
+            .collect();
+        built.sort_by_key(|thread| format!("{thread:?}"));
+        built.dedup();
+        assert_eq!(built.len(), 2, "each shard builds on its own thread");
+        assert!(!built.contains(&thread::current().id()));
+    }
+
+    #[test]
+    fn fallible_factory_error_is_returned_and_starts_no_shard() {
+        let result = EgressShardHandle::try_spawn_with(ShardId::new(0), config(4, 4), || {
+            Err::<RcBackend, _>("poller unavailable")
+        });
+        assert_eq!(result.err(), Some("poller unavailable"));
+    }
 }

@@ -47,10 +47,35 @@ use config::{
     ResourceSweepEnv, ResourceSweepLifecycle, ResourceSweepPeer, parse_string_set,
     parse_sweep_configs, parse_usize_list, sweep_configs,
 };
+#[path = "resource_sweep/burst.rs"]
+mod burst;
+#[path = "resource_sweep/delivery.rs"]
+mod delivery;
+#[path = "resource_sweep/first_progress.rs"]
+mod first_progress;
 #[path = "resource_sweep/measurement.rs"]
 mod measurement;
 pub(super) use measurement::ffmpeg_children_stats;
 pub(crate) use measurement::read_proc_status_kb_checked;
+#[path = "resource_sweep/packet_contract.rs"]
+mod packet_contract;
+#[path = "resource_sweep/packet_contract_peers.rs"]
+mod packet_contract_peers;
+#[path = "resource_sweep/packet_contract_run.rs"]
+mod packet_contract_run;
+#[path = "resource_sweep/packet_contract_summary.rs"]
+mod packet_contract_summary;
+#[path = "resource_sweep/packet_contract_tests.rs"]
+#[cfg(test)]
+mod packet_contract_tests;
+#[path = "resource_sweep/packet_contract_verdict.rs"]
+mod packet_contract_verdict;
+#[path = "resource_sweep/packet_contract_verdict_tests.rs"]
+#[cfg(test)]
+mod packet_contract_verdict_tests;
+#[path = "resource_sweep/sweep_tests.rs"]
+#[cfg(test)]
+mod sweep_tests;
 use measurement::{
     ResourceAggregate, ResourceScenarioMeta, csv_escape, read_proc_stat_ticks,
     resource_aggregate_json, sample_resource_window, write_resource_sweep_csv,
@@ -88,6 +113,9 @@ struct ResourceSweepStack {
 #[derive(Default)]
 struct SinkPeerStack {
     rtmp: Vec<GeneralizedSinkServer>,
+    /// Counting-only metrics of every RTMP/RTMPS sink listener, for
+    /// per-connection delivery.
+    rtmp_metrics: Vec<Arc<GeneralizedSinkMetrics>>,
     srt_pool: Option<HarnessSrtSinkPool>,
 }
 
@@ -105,6 +133,7 @@ async fn stop_harness_sink_peers(stack: &mut SinkPeerStack) {
     for server in stack.rtmp.drain(..) {
         stop_generalized_sink_server(server);
     }
+    stack.rtmp_metrics.clear();
     if let Some(pool) = stack.srt_pool.take() {
         pool.stop();
     }
@@ -116,11 +145,12 @@ pub(crate) async fn resource_sweep() -> Result<Value, String> {
     let _ = std::fs::remove_file(&env.summary_csv);
     let _ = std::fs::remove_file(&env.summary_json);
     let _ = std::fs::remove_file(&env.samples_jsonl);
+    packet_contract::begin(&env.work_dir, packet_contract::RunMetadata::from_env(&env));
 
     let mut stack = if env.lifecycle == ResourceSweepLifecycle::Isolated {
         None
     } else {
-        Some(start_resource_sweep_stack(&env).await?)
+        Some(start_resource_sweep_stack(&env, LocalPeerNeeds::ALL).await?)
     };
     let mut retained_publishers: Vec<Child> = Vec::new();
     let mut aggregates = Vec::new();
@@ -164,6 +194,7 @@ pub(crate) async fn resource_sweep() -> Result<Value, String> {
     }
 
     write_resource_sweep_csv(&env.summary_csv, &aggregates)?;
+    let packet_contract_summary = packet_contract::finish(&env.work_dir)?;
     let result = json!({
         "mode": "resource-sweep",
         "lifecycle": env.lifecycle.as_str(),
@@ -171,6 +202,8 @@ pub(crate) async fn resource_sweep() -> Result<Value, String> {
             "summaryJson": env.summary_json,
             "summaryCsv": env.summary_csv,
             "samplesJsonl": env.samples_jsonl,
+            "packetContractSamplesJsonl": packet_contract::samples_jsonl(&env.work_dir),
+            "packetContractJson": packet_contract_summary,
             "restreamLog": env.restream_log,
             "mediamtxLog": env.mediamtx_log,
         },
@@ -336,44 +369,117 @@ async fn start_resource_sweep_peers(env: &ResourceSweepEnv) -> Result<Vec<Child>
 /// *total* thread budget for the shared SRT pool
 /// (`HarnessSrtSinkPool`), partitioned with exclusive port ownership
 /// across every `PEER_COUNT` port, not a per-port thread count.
-async fn start_harness_sink_peers(env: &ResourceSweepEnv) -> Result<SinkPeerStack, String> {
+async fn start_harness_sink_peers(
+    env: &ResourceSweepEnv,
+    needs: LocalPeerNeeds,
+) -> Result<SinkPeerStack, String> {
     let mut rtmp = Vec::with_capacity(env.peer_count);
+    let mut rtmp_metrics = Vec::with_capacity(env.peer_count);
     let mut srt_ports = Vec::with_capacity(env.peer_count);
     for index in 0..env.peer_count {
-        let (rtmp_port, _rtmps, srt_port, _api) = peer_instance_ports(env, index);
-        let metrics = Arc::new(GeneralizedSinkMetrics::default());
-        match start_generalized_sink_server(rtmp_port, metrics).await {
-            Ok(server) => rtmp.push(server),
-            Err(err) => {
-                for server in rtmp {
-                    stop_generalized_sink_server(server);
+        let (rtmp_port, rtmps_port, srt_port, _api) = peer_instance_ports(env, index);
+        if needs.rtmp
+            && let Some((cert, key)) = &env.rtmps_tls
+        {
+            let metrics = Arc::new(GeneralizedSinkMetrics::counting_only());
+            match crate::sinks::start_generalized_rtmps_sink_server(
+                rtmps_port,
+                cert,
+                key,
+                metrics.clone(),
+            )
+            .await
+            {
+                Ok(server) => {
+                    rtmp.push(server);
+                    rtmp_metrics.push(metrics);
                 }
-                return Err(format!("harness sink RTMP listener on {rtmp_port}: {err}"));
+                Err(err) => {
+                    for server in rtmp {
+                        stop_generalized_sink_server(server);
+                    }
+                    return Err(format!(
+                        "harness sink RTMPS listener on {rtmps_port}: {err}"
+                    ));
+                }
+            }
+        }
+        if needs.rtmp {
+            let metrics = Arc::new(GeneralizedSinkMetrics::counting_only());
+            match start_generalized_sink_server(rtmp_port, metrics.clone()).await {
+                Ok(server) => {
+                    rtmp.push(server);
+                    rtmp_metrics.push(metrics);
+                }
+                Err(err) => {
+                    for server in rtmp {
+                        stop_generalized_sink_server(server);
+                    }
+                    return Err(format!("harness sink RTMP listener on {rtmp_port}: {err}"));
+                }
             }
         }
         srt_ports.push(srt_port);
     }
 
-    let default_sink_threads =
-        std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
-    let discard_threads = env_usize("HARNESS_SRT_SINK_THREADS", default_sink_threads);
-    let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024);
-    let srt_pool = match HarnessSrtSinkPool::start(&srt_ports, udp_buffer, discard_threads) {
-        Ok(pool) => pool,
-        Err(err) => {
-            for server in rtmp {
-                stop_generalized_sink_server(server);
+    let srt_pool = if needs.srt {
+        let default_sink_threads =
+            std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
+        let discard_threads = env_usize("HARNESS_SRT_SINK_THREADS", default_sink_threads);
+        let udp_buffer = env_usize("HARNESS_SRT_SINK_UDP_BUFFER", 8 * 1024 * 1024);
+        match HarnessSrtSinkPool::start(&srt_ports, udp_buffer, discard_threads) {
+            Ok(pool) => Some(pool),
+            Err(err) => {
+                for server in rtmp {
+                    stop_generalized_sink_server(server);
+                }
+                return Err(format!("harness SRT sink pool on {srt_ports:?}: {err}"));
             }
-            return Err(format!("harness SRT sink pool on {srt_ports:?}: {err}"));
         }
+    } else {
+        None
     };
     Ok(SinkPeerStack {
         rtmp,
-        srt_pool: Some(srt_pool),
+        rtmp_metrics,
+        srt_pool,
     })
 }
 
-async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSweepStack, String> {
+/// Which local sink peers a scenario needs. RTMP outputs always terminate on
+/// local peers; SRT outputs do only when no remote hosts are configured, so a
+/// remote SRT-only rung starts no local sink pool at all — idle workers there
+/// would only perturb scheduling and the host counters the contract reads.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct LocalPeerNeeds {
+    rtmp: bool,
+    srt: bool,
+}
+
+impl LocalPeerNeeds {
+    const ALL: Self = Self {
+        rtmp: true,
+        srt: true,
+    };
+
+    fn for_output_kinds(env: &ResourceSweepEnv, kinds: &[SweepOutputKind]) -> Self {
+        let is_srt = |kind: &SweepOutputKind| {
+            matches!(
+                kind,
+                SweepOutputKind::SrtSource | SweepOutputKind::Srt720p | SweepOutputKind::Srt1080p
+            )
+        };
+        Self {
+            rtmp: kinds.iter().any(|kind| !is_srt(kind)),
+            srt: kinds.iter().any(is_srt) && env.srt_peer_hosts.is_empty(),
+        }
+    }
+}
+
+async fn start_resource_sweep_stack(
+    env: &ResourceSweepEnv,
+    needs: LocalPeerNeeds,
+) -> Result<ResourceSweepStack, String> {
     if !env.restream_bin.exists() {
         return Err(format!(
             "restream binary not found at {}",
@@ -386,12 +492,23 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
     let mut sink_peers = SinkPeerStack::default();
     match env.peer_mode {
         ResourceSweepPeer::Mediamtx => mediamtx = start_resource_sweep_peers(env).await?,
-        ResourceSweepPeer::Sink => sink_peers = start_harness_sink_peers(env).await?,
+        ResourceSweepPeer::Sink => sink_peers = start_harness_sink_peers(env, needs).await?,
     }
 
     let restream_log = std::fs::File::create(&env.restream_log).map_err(|e| e.to_string())?;
     let restream_err = restream_log.try_clone().map_err(|e| e.to_string())?;
-    let mut restream_cmd = Command::new(&env.restream_bin);
+    // The measured datapath runs on its own CPUs when the operator partitions
+    // the host (`RESTREAM_CPUSET`), so receiver work cannot steal the core
+    // under measurement. The contract records the *observed* mask from
+    // `/proc/<pid>/status`, not this request.
+    let mut restream_cmd = match std::env::var("RESTREAM_CPUSET") {
+        Ok(mask) if !mask.trim().is_empty() => {
+            let mut cmd = Command::new("taskset");
+            cmd.arg("-c").arg(mask.trim()).arg(&env.restream_bin);
+            cmd
+        }
+        _ => Command::new(&env.restream_bin),
+    };
     restream_cmd
         .env("RESTREAM_HTTP_PORT", env.restream_http.to_string())
         .env("RESTREAM_RTMP_PORT", env.restream_rtmp.to_string())
@@ -436,9 +553,10 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
 async fn ensure_resource_stack<'a>(
     env: &ResourceSweepEnv,
     stack: &'a mut Option<ResourceSweepStack>,
+    needs: LocalPeerNeeds,
 ) -> Result<&'a mut ResourceSweepStack, String> {
     if stack.is_none() {
-        *stack = Some(start_resource_sweep_stack(env).await?);
+        *stack = Some(start_resource_sweep_stack(env, needs).await?);
     }
     stack
         .as_mut()
@@ -452,14 +570,14 @@ async fn run_resource_baseline(
 ) -> Result<ResourceAggregate, String> {
     let local_only = env.lifecycle == ResourceSweepLifecycle::Isolated;
     let mut local_stack = if local_only {
-        Some(start_resource_sweep_stack(env).await?)
+        Some(start_resource_sweep_stack(env, LocalPeerNeeds::ALL).await?)
     } else {
         None
     };
     let active = if local_only {
         local_stack.as_mut().unwrap()
     } else {
-        ensure_resource_stack(env, stack).await?
+        ensure_resource_stack(env, stack, LocalPeerNeeds::ALL).await?
     };
     let meta = ResourceScenarioMeta {
         scenario: "baseline-empty",
@@ -488,14 +606,14 @@ async fn run_resource_ingest_only(
 ) -> Result<ResourceAggregate, String> {
     let local_only = env.lifecycle == ResourceSweepLifecycle::Isolated;
     let mut local_stack = if local_only {
-        Some(start_resource_sweep_stack(env).await?)
+        Some(start_resource_sweep_stack(env, LocalPeerNeeds::ALL).await?)
     } else {
         None
     };
     let active = if local_only {
         local_stack.as_mut().unwrap()
     } else {
-        ensure_resource_stack(env, stack).await?
+        ensure_resource_stack(env, stack, LocalPeerNeeds::ALL).await?
     };
     let stream_key = format!("resource-{}", config.name);
     let pipeline_id = create_resource_pipeline(&active.api, config.name, &stream_key).await?;
@@ -533,14 +651,14 @@ async fn run_resource_ingest_growth(
 ) -> Result<Vec<ResourceAggregate>, String> {
     let local_only = env.lifecycle == ResourceSweepLifecycle::Isolated;
     let mut local_stack = if local_only {
-        Some(start_resource_sweep_stack(env).await?)
+        Some(start_resource_sweep_stack(env, LocalPeerNeeds::ALL).await?)
     } else {
         None
     };
     let active = if local_only {
         local_stack.as_mut().unwrap()
     } else {
-        ensure_resource_stack(env, stack).await?
+        ensure_resource_stack(env, stack, LocalPeerNeeds::ALL).await?
     };
 
     let mut publishers = Vec::new();
@@ -624,27 +742,46 @@ async fn run_resource_egress_growth(
     output_kinds: &[SweepOutputKind],
 ) -> Result<Vec<ResourceAggregate>, String> {
     let local_only = env.lifecycle == ResourceSweepLifecycle::Isolated;
+    let peer_needs = LocalPeerNeeds::for_output_kinds(env, output_kinds);
     let mut local_stack = if local_only {
-        Some(start_resource_sweep_stack(env).await?)
+        Some(start_resource_sweep_stack(env, peer_needs).await?)
     } else {
         None
     };
     let active = if local_only {
         local_stack.as_mut().unwrap()
     } else {
-        ensure_resource_stack(env, stack).await?
+        ensure_resource_stack(env, stack, peer_needs).await?
     };
     let stream_key = format!("resource-{scenario_name}");
     let pipeline_id = create_resource_pipeline(&active.api, scenario_name, &stream_key).await?;
     let mut publisher = spawn_resource_publisher(env, config, &stream_key)?;
     wait_for_api_input_live(&active.api, &pipeline_id, Duration::from_secs(45)).await?;
     let mut output_ids = Vec::new();
+    let mut output_names: Vec<String> = Vec::new();
+    let mut output_starts: Vec<(String, Instant)> = Vec::new();
     let max_outputs = *env.egress_counts.iter().max().unwrap_or(&1);
     let mut out = Vec::new();
+    let burst_mode = burst::burst_enabled();
+    if burst_mode {
+        let mut specs: Vec<burst::BurstSpec> = Vec::new();
+        for index in 1..=max_outputs {
+            for kind in output_kinds {
+                let name = format!("{scenario_name}-{}-{index}", kind.label());
+                let (url, encoding) = resource_output_url(env, config, *kind, &name);
+                specs.push((name, url, encoding, kind.rtmp_mode()));
+            }
+        }
+        for (id, at) in burst::create_and_start_all(&active.api, &pipeline_id, &specs).await? {
+            output_ids.push(id.clone());
+            output_starts.push((id, at));
+        }
+    }
     for index in 1..=max_outputs {
-        for kind in output_kinds {
+        for kind in output_kinds.iter().filter(|_| !burst_mode) {
             let name = format!("{scenario_name}-{}-{index}", kind.label());
             let (url, encoding) = resource_output_url(env, config, *kind, &name);
+            output_names.push(name.clone());
             let output_id = create_output_with_rtmp_mode(
                 &active.api,
                 &pipeline_id,
@@ -655,12 +792,34 @@ async fn run_resource_egress_growth(
             )
             .await?;
             start_output(&active.api, &pipeline_id, &output_id).await?;
+            output_starts.push((output_id.clone(), Instant::now()));
             output_ids.push(output_id);
         }
         if env.egress_counts.contains(&index) {
             let progress_timeout = resource_output_progress_timeout(output_ids.len());
+            first_progress::record_first_progress(
+                &active.api,
+                &pipeline_id,
+                &output_starts,
+                progress_timeout,
+                &env.work_dir
+                    .join(format!("first-progress-{}.json", output_ids.len())),
+            )
+            .await;
             wait_for_outputs_progress(&active.api, &pipeline_id, &output_ids, progress_timeout)
                 .await?;
+            // Which peer is expected to receive how many outputs of this rung,
+            // so the contract can check delivered payload against the workload
+            // instead of trusting it.
+            let mut expected_per_host = vec![0_usize; env.srt_peer_hosts.len()];
+            for name in &output_names {
+                if let Some(host) = env.srt_peer_host_for(name)
+                    && let Some(index) = env.srt_peer_hosts.iter().position(|peer| peer == host)
+                {
+                    expected_per_host[index] += 1;
+                }
+            }
+            packet_contract::set_peer_expected_outputs(expected_per_host);
             out.push(
                 sample_resource_window(
                     env,
@@ -746,7 +905,7 @@ fn spawn_resource_publisher(
         &env.srt_crypto,
         config,
         stream_key,
-        "1.5M",
+        &env.bitrate,
     )
 }
 
@@ -784,16 +943,37 @@ fn spawn_resource_publisher_with_bitrate(
     spawn_publisher_with_selection(&fixture, &url, format, selection, Some(&log_path))
 }
 
+/// Move one harness-built SRT publish URL onto a remote peer host. Only the
+/// loopback authority the harness itself builds is replaced, and IPv6 hosts are
+/// bracketed, so a rung against `RESOURCE_SWEEP_SRT_PEER_HOSTS` reaches a real
+/// remote sink without touching any other part of the URL.
+fn srt_url_on_host(url: &str, host: &str) -> String {
+    let authority = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    url.replacen("srt://127.0.0.1:", &format!("srt://{authority}:"), 1)
+}
+
 fn resource_output_url(
     env: &ResourceSweepEnv,
     config: SweepConfig,
     kind: SweepOutputKind,
     name: &str,
 ) -> (String, String) {
-    (
-        kind.publish_url(env.mtx_rtmp, env.mtx_rtmps, env.mtx_srt, name),
-        kind.encoding(config.multi_audio).to_string(),
-    )
+    let url = kind.publish_url(env.mtx_rtmp, env.mtx_rtmps, env.mtx_srt, name);
+    // SRT outputs can target sink peers on another host
+    // (`RESOURCE_SWEEP_SRT_PEER_HOSTS`), which is what the multi-host rungs of
+    // the packet-rate ladder need. RTMP output kinds keep loopback peers.
+    let url = match (env.srt_peer_host_for(name), kind) {
+        (
+            Some(host),
+            SweepOutputKind::SrtSource | SweepOutputKind::Srt720p | SweepOutputKind::Srt1080p,
+        ) => srt_url_on_host(&url, host),
+        _ => url,
+    };
+    (url, kind.encoding(config.multi_audio).to_string())
 }
 
 fn resource_output_progress_timeout(output_count: usize) -> Duration {
@@ -813,70 +993,4 @@ pub(crate) fn scaled_output_progress_timeout(
     let extra_outputs = output_count.saturating_sub(1) as u64;
     let scaled_secs = base_secs.saturating_add(extra_outputs.saturating_mul(per_output_secs));
     Duration::from_secs(scaled_secs.min(cap_secs))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_env() -> ResourceSweepEnv {
-        ResourceSweepEnv {
-            work_dir: PathBuf::from("."),
-            summary_json: PathBuf::from("summary.json"),
-            summary_csv: PathBuf::from("summary.csv"),
-            samples_jsonl: PathBuf::from("samples.jsonl"),
-            restream_log: PathBuf::from("restream.log"),
-            mediamtx_log: PathBuf::from("mediamtx.log"),
-            mediamtx_config: PathBuf::from("mediamtx.yml"),
-            restream_bin: PathBuf::from("restream"),
-            restream_db_path: PathBuf::from("restream.db"),
-            restream_http: 3030,
-            restream_rtmp: 1935,
-            restream_srt: 10080,
-            mtx_rtmp: 1936,
-            mtx_rtmps: 1937,
-            mtx_srt: 8891,
-            mtx_api: 9997,
-            peer_count: 4,
-            peer_mode: ResourceSweepPeer::Mediamtx,
-            sample_secs: 1,
-            sample_interval_ms: 1000,
-            settle_secs: 1,
-            ingest_counts: Vec::new(),
-            egress_counts: Vec::new(),
-            scenario_filter: None,
-            lifecycle: ResourceSweepLifecycle::Continuous,
-            no_cleanup: false,
-            srt_crypto: HarnessSrtCrypto::plaintext(),
-            backend_policy_env: Vec::new(),
-            rtmps_tls: None,
-        }
-    }
-
-    #[test]
-    fn peer_instance_ports_offset_from_instance_zero() {
-        let env = test_env();
-        // Instance 0 always matches the pre-existing single-mediamtx ports.
-        assert_eq!(peer_instance_ports(&env, 0), (1936, 1937, 8891, 9997));
-        assert_eq!(peer_instance_ports(&env, 3), (1939, 1940, 8894, 10000));
-    }
-
-    #[test]
-    fn instance_suffixed_path_leaves_instance_zero_unchanged() {
-        let path = PathBuf::from("/work/msr-mediamtx.yml");
-        assert_eq!(instance_suffixed_path(&path, 0), path);
-        assert_eq!(
-            instance_suffixed_path(&path, 2),
-            PathBuf::from("/work/msr-mediamtx-2.yml")
-        );
-    }
-
-    #[test]
-    fn instance_suffixed_path_handles_extensionless_paths() {
-        let path = PathBuf::from("/work/mediamtx-log");
-        assert_eq!(
-            instance_suffixed_path(&path, 1),
-            PathBuf::from("/work/mediamtx-log-1")
-        );
-    }
 }

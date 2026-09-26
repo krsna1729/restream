@@ -1,75 +1,95 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 
-use super::{
-    SrtResolveRequest, SrtResolveWorkerError, SrtResolvedConnect, SrtShardBackend,
-    duration_millis_u64, srt_resolve_completion_queue,
-};
+use super::owner_set::{SrtOwnerSettings, SrtOwners};
+use super::{SrtResolveRequest, SrtResolvedConnect, SrtShardBackend, srt_resolve_completion_queue};
 use crate::media::egress::command::{EgressCommand, OutputSpec, ProtocolSpec};
 use crate::media::egress::journal::TsFeed;
-use crate::media::egress::policy::WorkBudget;
-use crate::media::egress::shard::{EgressShardBackend, EgressShardCommandEffect};
+use crate::media::egress::metrics::ShardMetrics;
+use crate::media::egress::policy::WorkBudgetConfig;
+use crate::media::egress::shard::{
+    EgressShardBackend, EgressShardCommandEffect, EgressShardIdleWake,
+};
 use crate::media::srt::SrtFabricEgressConnectSpec;
 use std::sync::mpsc::SyncSender;
 
 const SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY: usize = 1024;
+const SRT_RESOLVE_REQUEST_QUEUE_CAPACITY: usize = 1024;
 
 pub(crate) type ResolvingSrtShardBackendDefault = ResolvingSrtShardBackend<SrtShardBackend>;
 
-#[derive(Debug)]
 pub(crate) struct SrtResolveWorkerSet {
-    completion_sender: SyncSender<SrtResolvedConnect>,
-    workers: Vec<JoinHandle<Result<(), SrtResolveWorkerError>>>,
+    request_sender: Option<SyncSender<SrtResolveRequest>>,
+    stopping: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl SrtResolveWorkerSet {
     pub(crate) fn new(completion_sender: SyncSender<SrtResolvedConnect>) -> Self {
+        let (request_sender, request_receiver) =
+            mpsc::sync_channel::<SrtResolveRequest>(SRT_RESOLVE_REQUEST_QUEUE_CAPACITY);
+        let stopping = Arc::new(AtomicBool::new(false));
+        let worker_stopping = Arc::clone(&stopping);
+        let worker = std::thread::spawn(move || {
+            while let Ok(request) = request_receiver.recv() {
+                if worker_stopping.load(Ordering::SeqCst) {
+                    break;
+                }
+                let output_id = request.output_id.clone();
+                let generation = request.generation;
+                if super::resolve_srt_peer_hosts(request, completion_sender.clone()).is_err() {
+                    // An empty address list is the bounded failure completion:
+                    // the shard removes the matching pending connect instead
+                    // of leaving an unresolved output resident forever.
+                    let _ = completion_sender.send(SrtResolvedConnect {
+                        output_id,
+                        generation,
+                        peer_addrs: Vec::new(),
+                    });
+                }
+            }
+        });
         Self {
-            completion_sender,
-            workers: Vec::new(),
+            request_sender: Some(request_sender),
+            stopping,
+            worker: Some(worker),
         }
     }
 
-    /// Spawn a single worker that resolves a batch of requests, collapsing
-    /// N thread creations into 1. Each request is resolved sequentially in
-    /// the worker; completions are sent to the shared completion queue.
+    /// Queue a bounded batch for the one resolver worker owned by this shard.
     fn spawn_batch(&mut self, requests: Vec<SrtResolveRequest>) {
-        if requests.is_empty() {
+        let Some(sender) = self.request_sender.as_ref() else {
             return;
-        }
-        let sender = self.completion_sender.clone();
-        self.workers.push(std::thread::spawn(move || {
-            for request in requests {
-                let _ = super::resolve_srt_peer_hosts(request, sender.clone());
-            }
-            Ok(())
-        }));
-    }
-
-    fn reap_finished(&mut self) {
-        let mut index = 0;
-        while index < self.workers.len() {
-            if self.workers[index].is_finished() {
-                let worker = self.workers.swap_remove(index);
-                let _ = worker.join();
-            } else {
-                index += 1;
+        };
+        for request in requests {
+            if sender.try_send(request).is_err() {
+                break;
             }
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn worker_count(&self) -> usize {
-        self.workers.len()
+    fn shutdown(&mut self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        self.request_sender.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+impl Drop for SrtResolveWorkerSet {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
 pub(crate) struct ResolvingSrtShardBackend<B> {
+    // Keep the completion receiver before the worker set in drop order.
     backend: B,
     resolve_workers: SrtResolveWorkerSet,
     /// Pending resolves buffered during `on_command` and flushed in
-    /// `on_media_tick` — batches N resolves into one thread instead of
-    /// spawning a thread per command. At 1,200-output scale this reduces
-    /// thread creations from 1,200 to ~shard-iterations (~30/s = 40/iter).
+    /// `on_media_tick` into the shard's bounded resolver request queue.
     pending_resolves: Vec<SrtResolveRequest>,
 }
 
@@ -82,13 +102,8 @@ impl<B> ResolvingSrtShardBackend<B> {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn worker_count(&self) -> usize {
-        self.resolve_workers.worker_count()
-    }
-
-    /// The wrapped shard backend, so factory-wiring tests can inspect what
-    /// this decorator was actually constructed around.
+    /// The wrapped shard backend, so tests can inspect what this decorator
+    /// was actually constructed around.
     #[cfg(test)]
     pub(crate) fn inner_backend(&self) -> &B {
         &self.backend
@@ -124,6 +139,16 @@ where
         self.backend.on_ready()
     }
 
+    /// The idle wait belongs to the wrapped backend (it parks inside its
+    /// Compio runtime); the default channel wait here would bypass it.
+    fn wait_idle(
+        &mut self,
+        commands: &flume::Receiver<EgressCommand>,
+        max_wait: std::time::Duration,
+    ) -> EgressShardIdleWake {
+        self.backend.wait_idle(commands, max_wait)
+    }
+
     fn on_media_tick(&mut self) -> EgressShardCommandEffect {
         let effect = self.backend.on_media_tick();
         // Flush buffered resolve requests into the worker set, batching
@@ -134,42 +159,46 @@ where
             let batch = std::mem::take(&mut self.pending_resolves);
             self.resolve_workers.spawn_batch(batch);
         }
-        self.resolve_workers.reap_finished();
         effect
     }
 
     fn on_shutdown(&mut self) {
         self.backend.on_shutdown();
-        self.resolve_workers.reap_finished();
+    }
+
+    fn resync_count(&self) -> u64 {
+        self.backend.resync_count()
+    }
+
+    fn budget_exhaustion_count(&self) -> u64 {
+        self.backend.budget_exhaustion_count()
+    }
+
+    fn observe_metrics(&self, metrics: &mut ShardMetrics) {
+        self.backend.observe_metrics(metrics);
     }
 }
 
+/// Build one SRT shard backend. Runs on the shard OS thread (it is the shard
+/// factory's body) because it constructs the shard's Compio runtime; a
+/// runtime that cannot be built is a typed error, not a panic.
 pub(crate) fn resolving_srt_shard_backend(
     feed: TsFeed,
-    budget: WorkBudget,
-    // This shard's application-owned UDP socket and logical caller table
-    // (see `SrtShardBackend::with_srt_egress_muxer_port_reuse`).
-    // `None` leaves reuse disabled (every existing test/no-config caller);
-    // `Some` is the per-shard state minted by `SrtEgressMuxerPorts::shard`
-    // in `factory.rs`/`engine_egress_fabric.rs`, so leaves on this shard
-    // share one srt-rs socket/table and other shards get their own.
-    srt_egress_muxer_port_reuse: Option<super::muxer_ports::SrtEgressMuxerPortState>,
+    budget: WorkBudgetConfig,
     drain_timeout: std::time::Duration,
-    // Engine-wide connect-concurrency admission control (see
-    // `srt_connect_admission.rs`). `None` leaves connects unthrottled
-    // (every existing test/no-config caller); `Some` is the one shared
-    // handle from `MediaEngine::srt_egress_connect_admission_handle`.
-    connect_admission: Option<std::sync::Arc<tokio::sync::Semaphore>>,
-) -> ResolvingSrtShardBackendDefault {
+    leaf_capacity: usize,
+    owner_settings: SrtOwnerSettings,
+) -> Result<ResolvingSrtShardBackendDefault, String> {
+    let owners = SrtOwners::new(owner_settings)?;
     let (completion_sender, completion_queue) =
         srt_resolve_completion_queue(SRT_RESOLVE_COMPLETION_QUEUE_CAPACITY);
-    let mut backend = SrtShardBackend::with_runtime_components(feed, budget, completion_queue)
-        .with_drain_timeout(drain_timeout)
-        .with_connect_admission(connect_admission);
-    if let Some(state) = srt_egress_muxer_port_reuse {
-        backend = backend.with_srt_egress_muxer_port_reuse(state, true);
-    }
-    ResolvingSrtShardBackend::new(backend, SrtResolveWorkerSet::new(completion_sender))
+    let backend = SrtShardBackend::with_runtime_components(feed, budget, completion_queue, owners)
+        .with_leaf_capacity(leaf_capacity)
+        .with_drain_timeout(drain_timeout);
+    Ok(ResolvingSrtShardBackend::new(
+        backend,
+        SrtResolveWorkerSet::new(completion_sender),
+    ))
 }
 
 fn resolve_request_from_command(command: &EgressCommand) -> Option<SrtResolveRequest> {
@@ -188,8 +217,7 @@ fn resolve_request_from_output_spec(spec: &OutputSpec) -> Option<SrtResolveReque
     let ProtocolSpec::Srt { url } = &spec.protocol else {
         return None;
     };
-    let connect_spec =
-        SrtFabricEgressConnectSpec::from_url(url, duration_millis_u64(spec.policy.connect_timeout));
+    let connect_spec = SrtFabricEgressConnectSpec::from_url(url, spec.policy.connect_timeout);
     let peer_hosts = connect_spec.peer_hosts().to_vec();
     if peer_hosts.is_empty() {
         return None;

@@ -164,6 +164,16 @@ fn host_settings_json(engine: &MediaEngine, snapshot: &HostSettingsSnapshot) -> 
             Some("needed for SRT UDP send buffers".to_string()),
         ),
         host_info_setting_json(
+            "runtime.malloc.arena_max",
+            "glibc malloc arenas",
+            serde_json::json!(
+                crate::malloc_tuning::applied()
+                    .map_or_else(|| "not set at startup".to_string(), ToString::to_string)
+            ),
+            "arenas",
+            "caps resident per-thread allocator memory; 2 is provisional until cross-host qualification (RESTREAM_MALLOC_ARENA_MAX, docs/capacity-ramp.md)",
+        ),
+        host_info_setting_json(
             "runtime.tokio.worker_threads",
             "Tokio async workers",
             serde_json::json!(engine.config.tokio_runtime.worker_threads),
@@ -175,7 +185,7 @@ fn host_settings_json(engine: &MediaEngine, snapshot: &HostSettingsSnapshot) -> 
             "Tokio blocking thread cap",
             serde_json::json!(engine.config.tokio_runtime.max_blocking_threads),
             "threads",
-            "upper bound for spawn_blocking work such as SRT handshakes and epoll waiters; protects ramp-up latency without unbounded idle thread footprint",
+            "upper bound for spawn_blocking work such as DNS resolution and blocking child-process waits; protects ramp-up latency without unbounded idle thread footprint",
         ),
     ];
     rows.extend(cpu_capacity_settings(&snapshot.cpu_capacity));
@@ -431,17 +441,12 @@ pub(crate) async fn health_snapshot(
         }
     }
 
-    let rx_queue = engine
+    let ingress_owner = engine
         .runtime
         .listener_stats
-        .rx_queue_bytes
-        .load(Ordering::Relaxed);
-    let rx_max = engine
-        .runtime
-        .listener_stats
-        .rx_queue_max_bytes
-        .load(Ordering::Relaxed);
-    let drops = engine.runtime.listener_stats.drops.load(Ordering::Relaxed);
+        .ingress_owner
+        .snapshot()
+        .to_json();
     let bonding_available = engine
         .runtime
         .listener_stats
@@ -494,9 +499,7 @@ pub(crate) async fn health_snapshot(
         },
         "srtListener": {
             "bondingAvailable": bonding_available,
-            "udpRxQueueBytes": rx_queue,
-            "udpRxQueuePeakBytes": rx_max,
-            "udpDrops": drops,
+            "ingressOwner": ingress_owner,
         },
         "egressFabricShards": egress_fabric_shards,
         "tuning": {

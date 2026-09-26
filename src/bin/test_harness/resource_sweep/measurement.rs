@@ -82,6 +82,7 @@ pub(super) struct ResourceAggregate {
     pub(super) egresses_peak: usize,
     pub(super) stages_peak: usize,
     pub(super) pipeline_count_peak: usize,
+    pub(super) delivery: super::delivery::DeliverySummary,
 }
 
 /// Static labels and dimensions for one resource-sweep scenario.
@@ -112,13 +113,38 @@ pub(super) async fn sample_resource_window(
     meta: ResourceScenarioMeta<'_>,
 ) -> Result<ResourceAggregate, String> {
     tokio::time::sleep(Duration::from_secs(env.settle_secs)).await;
+    // Prime before the rated clock starts: peers are polled first, the local
+    // `/metrics/system` snapshot is fetched after they return, and the common
+    // barrier is stamped then. No evidence is spent on a baseline, and
+    // peer-poll latency cannot inflate the rated window.
+    let api = &stack.api;
+    super::packet_contract::prime(
+        || async { api.get_json("/metrics/system?view=summary").await },
+        &meta,
+    )
+    .await?;
     let mut samples = Vec::new();
     let mut prev_ticks = read_proc_stat_ticks(stack.restream_pid)?;
     let mut prev_ffmpeg_ticks: HashMap<u32, u64> = HashMap::new();
     let mut prev_ctxt = read_proc_ctxt_switches(stack.restream_pid)?;
     let mut prev_instant = Instant::now();
-    let deadline = Instant::now() + Duration::from_secs(env.sample_secs);
-    while Instant::now() < deadline {
+    let srt_sink = stack
+        .sink_peers
+        .srt_pool
+        .as_ref()
+        .map(crate::harness_srt_sink::HarnessSrtSinkPool::counters);
+    let sinks = super::delivery::HarnessSinks {
+        rtmp: &stack.sink_peers.rtmp_metrics,
+        srt: srt_sink.as_ref(),
+    };
+    let mut delivery_samples: Vec<super::delivery::DeliverySample> =
+        super::delivery::sample(env, api, sinks)
+            .await
+            .ok()
+            .into_iter()
+            .collect();
+    let rated_started = Instant::now();
+    while rated_started.elapsed() < Duration::from_secs(env.sample_secs) {
         tokio::time::sleep(Duration::from_millis(env.sample_interval_ms)).await;
         let now = Instant::now();
         let ticks = read_proc_stat_ticks(stack.restream_pid)?;
@@ -152,6 +178,16 @@ pub(super) async fn sample_resource_window(
         let rollup = read_smaps_rollup(stack.restream_pid)?;
         let telemetry = stack.api.get_json("/api/v1/engine/telemetry").await?;
         let health = stack.api.get_json("/api/v1/engine/health").await?;
+        let system = stack.api.get_json("/metrics/system?view=summary").await?;
+        let restream_cpus = read_proc_status_text(stack.restream_pid, "Cpus_allowed_list");
+        super::packet_contract::record(
+            &system,
+            interval_secs,
+            restream_cpu_pct,
+            &meta,
+            restream_cpus.as_deref(),
+        )
+        .await?;
         let accounting = &telemetry["memoryAccounting"];
         let retained_kb = accounting["retainedPayloadBytes"].as_u64().unwrap_or(0) / 1024;
         let source_ring_kb = accounting["sourceRings"]
@@ -240,8 +276,13 @@ pub(super) async fn sample_resource_window(
             ),
         )?;
         samples.push(sample);
+        if let Ok(delivery) = super::delivery::sample(env, api, sinks).await {
+            delivery_samples.push(delivery);
+        }
     }
-    Ok(summarize_resource_samples(meta, env.lifecycle, &samples))
+    let mut aggregate = summarize_resource_samples(meta, env.lifecycle, &samples);
+    aggregate.delivery = super::delivery::summarize(&delivery_samples);
+    Ok(aggregate)
 }
 
 pub(super) fn summarize_resource_samples(
@@ -262,6 +303,7 @@ pub(super) fn summarize_resource_samples(
         .sum();
     let rss_sum: u64 = samples.iter().map(|s| s.rss_kb).sum();
     ResourceAggregate {
+        delivery: super::delivery::DeliverySummary::default(),
         scenario: meta.scenario.to_string(),
         label: meta.label,
         lifecycle: lifecycle.as_str().to_string(),
@@ -371,6 +413,15 @@ fn read_proc_ctxt_switches(pid: u32) -> Result<ProcCtxtSwitches, String> {
         voluntary: read_proc_status_kb(pid, "voluntary_ctxt_switches").unwrap_or(0),
         nonvoluntary: read_proc_status_kb(pid, "nonvoluntary_ctxt_switches").unwrap_or(0),
     })
+}
+
+/// One textual `/proc/<pid>/status` field, e.g. `Cpus_allowed_list`.
+pub(super) fn read_proc_status_text(pid: u32, key: &str) -> Option<String> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{key}:")))
+        .map(|value| value.trim().to_string())
 }
 
 fn read_proc_status_kb(pid: u32, key: &str) -> Result<u64, String> {
@@ -506,7 +557,7 @@ fn resource_sample_json(sample: &ResourceSample) -> Value {
 }
 
 pub(super) fn resource_aggregate_json(aggregate: &ResourceAggregate) -> Value {
-    json!({
+    let mut value = json!({
         "scenario": aggregate.scenario,
         "label": aggregate.label,
         "lifecycle": aggregate.lifecycle,
@@ -546,7 +597,18 @@ pub(super) fn resource_aggregate_json(aggregate: &ResourceAggregate) -> Value {
         "egressesPeak": aggregate.egresses_peak,
         "stagesPeak": aggregate.stages_peak,
         "pipelineCountPeak": aggregate.pipeline_count_peak,
-    })
+    });
+    value["delivery"] = json!({
+        "destinations": aggregate.delivery.destinations,
+        "delivered": aggregate.delivery.delivered,
+        "floor": super::delivery::DELIVERY_FLOOR,
+        "offeredBps": aggregate.delivery.offered_bps,
+        "ratioMin": aggregate.delivery.ratio_min,
+        "ratioMedian": aggregate.delivery.ratio_median,
+        "intervalRatioMin": aggregate.delivery.interval_ratio_min,
+        "jain": aggregate.delivery.jain,
+    });
+    value
 }
 
 pub(super) fn write_resource_sweep_csv(
@@ -554,11 +616,11 @@ pub(super) fn write_resource_sweep_csv(
     rows: &[ResourceAggregate],
 ) -> Result<(), String> {
     let mut text = String::from(
-        "scenario,label,lifecycle,pipelines,outputs,ingest_types,egress_mix,transcode,sample_count,restream_cpu_avg_pct,restream_cpu_peak_pct,ffmpeg_cpu_avg_pct,ffmpeg_cpu_peak_pct,total_cpu_avg_pct,total_cpu_peak_pct,voluntary_ctxt_switches_avg_per_sec,voluntary_ctxt_switches_peak_per_sec,nonvoluntary_ctxt_switches_avg_per_sec,nonvoluntary_ctxt_switches_peak_per_sec,thread_count_peak,rss_avg_kb,rss_peak_kb,ffmpeg_rss_peak_kb,retained_peak_kb,source_ring_peak_kb,transcoder_ring_peak_kb,tsmux_ring_peak_kb,avio_len_peak_kb,avio_hwm_peak_kb,anonymous_peak_kb,private_dirty_peak_kb,shared_clean_peak_kb,pss_peak_kb,unattributed_peak_kb,active_transcoder_buffers_peak,ingests_peak,egresses_peak,stages_peak,pipeline_count_peak\n",
+        "scenario,label,lifecycle,pipelines,outputs,ingest_types,egress_mix,transcode,sample_count,restream_cpu_avg_pct,restream_cpu_peak_pct,ffmpeg_cpu_avg_pct,ffmpeg_cpu_peak_pct,total_cpu_avg_pct,total_cpu_peak_pct,voluntary_ctxt_switches_avg_per_sec,voluntary_ctxt_switches_peak_per_sec,nonvoluntary_ctxt_switches_avg_per_sec,nonvoluntary_ctxt_switches_peak_per_sec,thread_count_peak,rss_avg_kb,rss_peak_kb,ffmpeg_rss_peak_kb,retained_peak_kb,source_ring_peak_kb,transcoder_ring_peak_kb,tsmux_ring_peak_kb,avio_len_peak_kb,avio_hwm_peak_kb,anonymous_peak_kb,private_dirty_peak_kb,shared_clean_peak_kb,pss_peak_kb,unattributed_peak_kb,active_transcoder_buffers_peak,ingests_peak,egresses_peak,stages_peak,pipeline_count_peak,delivery_destinations,delivery_delivered,delivery_offered_bps,delivery_ratio_min,delivery_ratio_median,delivery_interval_ratio_min,delivery_jain,restream_delivery_rated,restream_delivery_delivered,restream_delivery_ratio_min,restream_delivery_jain_min\n",
     );
     for row in rows {
         text.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{:.2},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{:.2},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.0},{:.4},{:.4},{:.4},{:.5},{},{},{},{}\n",
             csv_escape(&row.scenario),
             csv_escape(&row.label),
             csv_escape(&row.lifecycle),
@@ -598,9 +660,28 @@ pub(super) fn write_resource_sweep_csv(
             row.egresses_peak,
             row.stages_peak,
             row.pipeline_count_peak,
+            row.delivery.destinations,
+            row.delivery.delivered,
+            row.delivery.offered_bps,
+            row.delivery.ratio_min,
+            row.delivery.ratio_median,
+            row.delivery.interval_ratio_min,
+            row.delivery.jain,
+            optional_csv(row.delivery.reported.map(|r| r.rated as f64), 0),
+            optional_csv(row.delivery.reported.map(|r| r.delivered as f64), 0),
+            optional_csv(row.delivery.reported.map(|r| r.ratio_min), 4),
+            optional_csv(row.delivery.reported.map(|r| r.jain_min), 5),
         ));
     }
     std::fs::write(path, text).map_err(|e| e.to_string())
+}
+
+/// Empty cell when the build does not report the value (e.g. the baseline).
+fn optional_csv(value: Option<f64>, decimals: usize) -> String {
+    value
+        .filter(|value| value.is_finite())
+        .map(|value| format!("{value:.decimals$}"))
+        .unwrap_or_default()
 }
 
 pub(super) fn csv_escape(value: &str) -> String {

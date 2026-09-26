@@ -41,17 +41,18 @@ impl EgressSupervisor {
         group.heartbeat(now, self.config.stall_after)
     }
 
-    pub fn recover_panicked_shards<B, F>(
+    pub fn recover_panicked_shards<B, F, G>(
         &self,
         manager: &mut EgressManager,
         group: &mut EgressShardGroup,
-        backend_for: F,
+        factory_for: G,
     ) -> Result<EgressSupervisorRecovery, EgressSupervisorError>
     where
         B: EgressShardBackend,
-        F: FnMut(ShardId) -> B,
+        F: FnOnce() -> B + Send + 'static,
+        G: FnMut(ShardId) -> F,
     {
-        let replaced = group.replace_panicked(self.config.shard_config, backend_for);
+        let replaced = group.replace_panicked(self.config.shard_config, factory_for);
         let mut recoveries = Vec::with_capacity(replaced.len());
         for shard_id in replaced {
             let outcome = manager.dispatch_recreate_shard(shard_id, |shard_id, command| {

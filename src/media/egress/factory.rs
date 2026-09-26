@@ -1,25 +1,22 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
+use crate::media::egress::backends::compio_tcp::CompioTcpPoller;
 use crate::media::egress::backends::pipeline_shard::{
     PipelineShardBackend, SharedPipelineTargetSource,
 };
-use crate::media::egress::backends::rtmp_shard::{
-    RtmpReadinessPoller, SharedRtmpPublishStartupSource,
-};
-use crate::media::egress::backends::rtmp_shard_resolve_runtime::{
-    ResolvingRtmpShardBackendWithPoller, resolving_rtmp_shard_backend,
-};
+use crate::media::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource;
+use crate::media::egress::backends::rtmp_shard_resolve_runtime::resolving_rtmp_shard_backend;
 use crate::media::egress::backends::sink_shard::SinkShardBackend;
-use crate::media::egress::backends::srt::muxer_ports::SrtEgressMuxerPorts;
-use crate::media::egress::backends::srt::resolve_runtime::{
-    ResolvingSrtShardBackendDefault, resolving_srt_shard_backend,
-};
-use crate::media::egress::backends::tcp::{TcpEgressPollError, TcpEgressPoller};
+use crate::media::egress::backends::srt::SrtOwnerSettings;
+use crate::media::egress::backends::srt::resolve_runtime::resolving_srt_shard_backend;
+use crate::media::egress::backends::tcp::TcpEgressPollError;
 use crate::media::egress::command::ShardId;
 use crate::media::egress::journal::{RingFeed, TsFeed};
-use crate::media::egress::policy::WorkBudget;
-use crate::media::egress::shard::{EgressShardConfig, EgressShardGroup, EgressShardGroupError};
+use crate::media::egress::policy::WorkBudgetConfig;
+use crate::media::egress::shard::{
+    EgressShardConfig, EgressShardGroup, EgressShardGroupError, EgressShardGroupSpawnError,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SrtFabricShardGroupError<E> {
@@ -27,93 +24,32 @@ pub(crate) enum SrtFabricShardGroupError<E> {
     Group(EgressShardGroupError),
 }
 
+/// Spawn the SRT shard group. Each shard's backend -- including its Compio
+/// runtime and Owners -- is constructed by the factory on that shard's own OS
+/// thread; a runtime that cannot be built surfaces here as
+/// `SrtFabricShardGroupError::Backend` and no shard is left running.
 pub(crate) fn spawn_srt_fabric_shard_group<F>(
-    pipeline_id: &str,
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
-    budget: WorkBudget,
-    feed_for: F,
-    srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
-    connect_admission: Option<Arc<tokio::sync::Semaphore>>,
+    budget: WorkBudgetConfig,
+    mut feed_for: F,
+    owner_settings: SrtOwnerSettings,
 ) -> Result<EgressShardGroup, SrtFabricShardGroupError<String>>
 where
     F: FnMut(ShardId) -> TsFeed,
 {
-    spawn_srt_fabric_shard_group_with_runtime_check(
-        pipeline_id,
-        shard_count,
-        shard_config,
-        budget,
-        feed_for,
-        crate::media::srt::ensure_srt_runtime,
-        srt_egress_muxer_port_reuse,
-        connect_admission,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn spawn_srt_fabric_shard_group_with_runtime_check<F, E>(
-    pipeline_id: &str,
-    shard_count: NonZeroU32,
-    shard_config: EgressShardConfig,
-    budget: WorkBudget,
-    feed_for: F,
-    runtime_check: impl FnOnce() -> Result<(), E>,
-    srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
-    connect_admission: Option<Arc<tokio::sync::Semaphore>>,
-) -> Result<EgressShardGroup, SrtFabricShardGroupError<E>>
-where
-    F: FnMut(ShardId) -> TsFeed,
-{
-    runtime_check().map_err(SrtFabricShardGroupError::Backend)?;
-    let backends = srt_fabric_shard_backends(
-        pipeline_id,
-        shard_count,
-        budget,
-        feed_for,
-        srt_egress_muxer_port_reuse,
-        shard_config.drain_timeout(),
-        connect_admission,
-    );
-    EgressShardGroup::spawn(shard_count, shard_config, backends)
-        .map_err(SrtFabricShardGroupError::Group)
-}
-
-fn srt_fabric_shard_backends<F>(
-    pipeline_id: &str,
-    shard_count: NonZeroU32,
-    budget: WorkBudget,
-    mut feed_for: F,
-    srt_egress_muxer_port_reuse: Option<SrtEgressMuxerPorts>,
-    drain_timeout: std::time::Duration,
-    connect_admission: Option<Arc<tokio::sync::Semaphore>>,
-) -> Vec<ResolvingSrtShardBackendDefault>
-where
-    F: FnMut(ShardId) -> TsFeed,
-{
-    let mut backends = Vec::with_capacity(shard_count.get() as usize);
-    for shard_index in 0..shard_count.get() {
-        let shard_id = ShardId::new(shard_index);
-        backends.push(resolving_srt_shard_backend(
-            feed_for(shard_id),
-            budget,
-            // Per (pipeline, shard), not one state shared engine-wide or
-            // shared across pipelines: libsrt gives each bound local port
-            // exactly one `CSndQueue` worker thread, so a group-wide port
-            // would funnel every leaf on every shard through a single
-            // libsrt sender thread, and a pipeline-agnostic port would let
-            // unrelated pipelines share that thread (see `muxer_ports.rs`).
-            srt_egress_muxer_port_reuse
-                .as_ref()
-                .map(|ports| ports.shard(pipeline_id, shard_id)),
-            drain_timeout,
-            // Shared engine-wide, not per shard: this bounds total
-            // in-flight SRT connect concurrency, independent of shard
-            // count (see `srt_connect_admission.rs`).
-            connect_admission.clone(),
-        ));
-    }
-    backends
+    let drain_timeout = shard_config.drain_timeout();
+    let leaf_capacity = shard_config.leaf_capacity().get();
+    EgressShardGroup::try_spawn_with(shard_count, shard_config, |shard_id| {
+        let feed = feed_for(shard_id);
+        move || {
+            resolving_srt_shard_backend(feed, budget, drain_timeout, leaf_capacity, owner_settings)
+        }
+    })
+    .map_err(|error| match error {
+        EgressShardGroupSpawnError::Backend(error) => SrtFabricShardGroupError::Backend(error),
+        EgressShardGroupSpawnError::Group(error) => SrtFabricShardGroupError::Group(error),
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -127,92 +63,41 @@ pub(crate) fn spawn_rtmp_fabric_shard_group<F>(
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
     poller_max_events: usize,
-    budget: WorkBudget,
+    budget: WorkBudgetConfig,
     chunk_size: u32,
     rtmps_client_config: Arc<tokio_rustls::rustls::ClientConfig>,
     startup_source: SharedRtmpPublishStartupSource,
-    feed_for: F,
+    mut feed_for: F,
 ) -> Result<EgressShardGroup, RtmpFabricShardGroupError<TcpEgressPollError>>
 where
     F: FnMut(ShardId) -> RingFeed,
 {
-    spawn_rtmp_fabric_shard_group_with_poller(
-        shard_count,
-        shard_config,
-        budget,
-        chunk_size,
-        rtmps_client_config,
-        startup_source,
-        feed_for,
-        |shard_id| {
-            let _ = shard_id;
-            TcpEgressPoller::new(poller_max_events)
-        },
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn spawn_rtmp_fabric_shard_group_with_poller<P, E, F, G>(
-    shard_count: NonZeroU32,
-    shard_config: EgressShardConfig,
-    budget: WorkBudget,
-    chunk_size: u32,
-    rtmps_client_config: Arc<tokio_rustls::rustls::ClientConfig>,
-    startup_source: SharedRtmpPublishStartupSource,
-    feed_for: F,
-    poller_for: G,
-) -> Result<EgressShardGroup, RtmpFabricShardGroupError<E>>
-where
-    P: RtmpReadinessPoller + Send + 'static,
-    F: FnMut(ShardId) -> RingFeed,
-    G: FnMut(ShardId) -> Result<P, E>,
-{
-    let backends = rtmp_fabric_shard_backends_with_poller(
-        shard_count,
-        budget,
-        chunk_size,
-        rtmps_client_config,
-        startup_source,
-        shard_config.drain_timeout(),
-        feed_for,
-        poller_for,
-    )
-    .map_err(RtmpFabricShardGroupError::Backend)?;
-    EgressShardGroup::spawn(shard_count, shard_config, backends)
-        .map_err(RtmpFabricShardGroupError::Group)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn rtmp_fabric_shard_backends_with_poller<P, E, F, G>(
-    shard_count: NonZeroU32,
-    budget: WorkBudget,
-    chunk_size: u32,
-    rtmps_client_config: Arc<tokio_rustls::rustls::ClientConfig>,
-    startup_source: SharedRtmpPublishStartupSource,
-    drain_timeout: std::time::Duration,
-    mut feed_for: F,
-    mut poller_for: G,
-) -> Result<Vec<ResolvingRtmpShardBackendWithPoller<P, SharedRtmpPublishStartupSource>>, E>
-where
-    P: RtmpReadinessPoller,
-    F: FnMut(ShardId) -> RingFeed,
-    G: FnMut(ShardId) -> Result<P, E>,
-{
-    let mut backends = Vec::with_capacity(shard_count.get() as usize);
-    for shard_index in 0..shard_count.get() {
-        let shard_id = ShardId::new(shard_index);
-        let poller = poller_for(shard_id)?;
-        backends.push(resolving_rtmp_shard_backend(
-            poller,
-            feed_for(shard_id),
-            budget,
-            chunk_size,
-            rtmps_client_config.clone(),
-            startup_source.clone(),
-            drain_timeout,
-        ));
-    }
-    Ok(backends)
+    let drain_timeout = shard_config.drain_timeout();
+    let leaf_capacity = shard_config.leaf_capacity().get();
+    EgressShardGroup::try_spawn_with(shard_count, shard_config, |shard_id| {
+        let feed = feed_for(shard_id);
+        let rtmps_client_config = rtmps_client_config.clone();
+        let startup_source = startup_source.clone();
+        // The Compio runtime is created on the shard thread that drives it,
+        // so a creation failure surfaces here as `Backend`.
+        move || {
+            let poller = CompioTcpPoller::new(poller_max_events)?;
+            Ok(resolving_rtmp_shard_backend(
+                poller,
+                feed,
+                budget,
+                chunk_size,
+                rtmps_client_config,
+                startup_source,
+                drain_timeout,
+                leaf_capacity,
+            ))
+        }
+    })
+    .map_err(|error| match error {
+        EgressShardGroupSpawnError::Backend(error) => RtmpFabricShardGroupError::Backend(error),
+        EgressShardGroupSpawnError::Group(error) => RtmpFabricShardGroupError::Group(error),
+    })
 }
 
 /// Spawns one [`SinkShardBackend`] per shard, all bound to the same feed —
@@ -223,18 +108,17 @@ where
 pub(crate) fn spawn_sink_fabric_shard_group<F>(
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
-    budget: WorkBudget,
+    budget: WorkBudgetConfig,
     mut feed_for: F,
 ) -> Result<EgressShardGroup, EgressShardGroupError>
 where
     F: FnMut(ShardId) -> RingFeed,
 {
-    let mut backends = Vec::with_capacity(shard_count.get() as usize);
-    for shard_index in 0..shard_count.get() {
-        let shard_id = ShardId::new(shard_index);
-        backends.push(SinkShardBackend::new(feed_for(shard_id), budget));
-    }
-    EgressShardGroup::spawn(shard_count, shard_config, backends)
+    let leaf_capacity = shard_config.leaf_capacity().get();
+    EgressShardGroup::spawn_with(shard_count, shard_config, |shard_id| {
+        let feed = feed_for(shard_id);
+        move || SinkShardBackend::new(feed, budget).with_leaf_capacity(leaf_capacity)
+    })
 }
 
 /// Spawns one [`PipelineShardBackend`] per shard, all bound to the same
@@ -244,23 +128,21 @@ where
 pub(crate) fn spawn_pipeline_fabric_shard_group<F>(
     shard_count: NonZeroU32,
     shard_config: EgressShardConfig,
-    budget: WorkBudget,
+    budget: WorkBudgetConfig,
     target_source: SharedPipelineTargetSource,
     mut feed_for: F,
 ) -> Result<EgressShardGroup, EgressShardGroupError>
 where
     F: FnMut(ShardId) -> RingFeed,
 {
-    let mut backends = Vec::with_capacity(shard_count.get() as usize);
-    for shard_index in 0..shard_count.get() {
-        let shard_id = ShardId::new(shard_index);
-        backends.push(PipelineShardBackend::new(
-            feed_for(shard_id),
-            budget,
-            target_source.clone(),
-        ));
-    }
-    EgressShardGroup::spawn(shard_count, shard_config, backends)
+    let leaf_capacity = shard_config.leaf_capacity().get();
+    EgressShardGroup::spawn_with(shard_count, shard_config, |shard_id| {
+        let feed = feed_for(shard_id);
+        let target_source = target_source.clone();
+        move || {
+            PipelineShardBackend::new(feed, budget, target_source).with_leaf_capacity(leaf_capacity)
+        }
+    })
 }
 
 #[cfg(test)]

@@ -14,6 +14,11 @@ VERSION="${1:?usage: scripts/release/package-runtime-image.sh <version>}"
 OUT_DIR="${RESTREAM_RELEASE_DIR:-dist}"
 IMAGE="${RESTREAM_CONTAINER_IMAGE:-restream:release}"
 ARCHIVE="$OUT_DIR/restream-$VERSION-oci.tar.gz"
+# The runtime image needs a seccomp profile that permits io_uring (Docker's
+# default denies it), so the supported profile ships NEXT TO the image archive:
+# users must not need a source checkout to obtain it.
+SECCOMP_PROFILE_SOURCE="distribution/docker/restream-seccomp.json"
+SECCOMP_PROFILE="$OUT_DIR/restream-$VERSION-seccomp.json"
 BINARY="${RESTREAM_RELEASE_BINARY:-target/release/restream}"
 
 restream_release_require_version package-runtime-image "$VERSION"
@@ -58,4 +63,9 @@ fi
 
 mkdir -p "$OUT_DIR"
 docker save "$IMAGE" | gzip -n >"$ARCHIVE"
-echo "package-runtime-image: PASS archive=$ARCHIVE image=$IMAGE"
+[[ -s "$SECCOMP_PROFILE_SOURCE" ]] || {
+    echo "package-runtime-image: missing supported seccomp profile: $SECCOMP_PROFILE_SOURCE" >&2
+    exit 1
+}
+install -m 0644 "$SECCOMP_PROFILE_SOURCE" "$SECCOMP_PROFILE"
+echo "package-runtime-image: PASS archive=$ARCHIVE seccomp=$SECCOMP_PROFILE image=$IMAGE"

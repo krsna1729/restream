@@ -125,10 +125,13 @@ impl MediaEngine {
             effective_cpus,
             shard_config,
             |_shard_id| {
-                Ok::<_, std::convert::Infallible>(SinkShardBackend::new(
-                    feed.clone_reader(),
-                    budget,
-                ))
+                let feed = feed.clone_reader();
+                let leaf_capacity = shard_config.leaf_capacity().get();
+                move || {
+                    Ok::<_, std::convert::Infallible>(
+                        SinkShardBackend::new(feed, budget).with_leaf_capacity(leaf_capacity),
+                    )
+                }
             },
         );
         match result {

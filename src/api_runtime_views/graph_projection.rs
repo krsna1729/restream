@@ -55,10 +55,8 @@ pub(super) fn processing_graph_ingest_details(ingest: &ActiveIngest) -> serde_js
     {
         health_status = Some("warning");
         health_reason = Some(format!(
-            "SRT receive buffer {:.0}% full ({} / {})",
-            pct,
-            human_bytes(recv),
-            human_bytes(total)
+            "SRT receive buffer {:.0}% full ({} / {} packets)",
+            pct, recv, total
         ));
     }
     if health_status.is_none() && last_progress_age_ms.is_some_and(|age| age >= 10_000) {
@@ -81,8 +79,8 @@ pub(super) fn processing_graph_ingest_details(ingest: &ActiveIngest) -> serde_js
         "lastProgressAgeMs": last_progress_age_ms,
     });
     if let Some((recv, total, pct)) = srt_recv_buffer {
-        details["srtRecvBufferBytes"] = serde_json::json!(recv);
-        details["srtRecvBufferTotalBytes"] = serde_json::json!(total);
+        details["srtRecvBufferPackets"] = serde_json::json!(recv);
+        details["srtRecvBufferCapacityPackets"] = serde_json::json!(total);
         details["srtRecvBufferPercent"] = serde_json::json!((pct * 10.0).round() / 10.0);
     }
     if let Some(status) = health_status {
@@ -94,24 +92,20 @@ pub(super) fn processing_graph_ingest_details(ingest: &ActiveIngest) -> serde_js
     details
 }
 
+/// Receive-buffer occupancy `(packets buffered, capacity in packets, percent)`
+/// from authoritative `srt-rs` receiver statistics. Unknown or zero capacity
+/// yields no occupancy rather than a guess.
 fn srt_recv_buffer_occupancy(quality: &PublisherQuality) -> Option<(u64, u64, f64)> {
-    let recv = quality.srt_recv_buf_bytes?.max(0) as u64;
-    let avail = quality.srt_recv_buf_avail_bytes?.max(0) as u64;
-    let total = recv.saturating_add(avail);
-    if total == 0 {
+    let buffered = u64::from(quality.srt_recv_buf_packets?);
+    let capacity = u64::from(quality.srt_recv_buf_capacity_packets?);
+    if capacity == 0 {
         return None;
     }
-    Some((recv, total, recv as f64 / total as f64 * 100.0))
-}
-
-fn human_bytes(bytes: u64) -> String {
-    if bytes < 1024 {
-        return format!("{bytes} B");
-    }
-    if bytes < 1024 * 1024 {
-        return format!("{:.1} KiB", bytes as f64 / 1024.0);
-    }
-    format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+    Some((
+        buffered,
+        capacity,
+        buffered as f64 / capacity as f64 * 100.0,
+    ))
 }
 
 fn human_duration_ms(ms: u64) -> String {
@@ -293,15 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn human_units_preserve_existing_boundaries() {
-        assert_eq!(human_bytes(0), "0 B");
-        assert_eq!(human_bytes(1023), "1023 B");
-        assert_eq!(human_bytes(1024), "1.0 KiB");
-        assert_eq!(human_bytes(1024 * 1024), "1.0 MiB");
-        assert_eq!(human_bytes(1024 * 1024 - 1), "1024.0 KiB");
-        let rendered_bytes = human_bytes(u64::MAX);
-        assert!(rendered_bytes.ends_with(" MiB"));
-        assert!(!rendered_bytes.contains("GiB"));
+    fn human_duration_preserves_existing_boundaries() {
         assert_eq!(human_duration_ms(0), "0 ms");
         assert_eq!(human_duration_ms(999), "999 ms");
         assert_eq!(human_duration_ms(1000), "1.0 s");
@@ -312,16 +298,16 @@ mod tests {
         assert!(!rendered_duration.contains("hour"));
     }
 
-    fn quality_with_srt_recv_buf(recv: Option<i32>, avail: Option<i32>) -> PublisherQuality {
+    fn quality_with_srt_recv_buf(buffered: Option<u32>, capacity: Option<u32>) -> PublisherQuality {
         PublisherQuality {
-            srt_recv_buf_bytes: recv,
-            srt_recv_buf_avail_bytes: avail,
+            srt_recv_buf_packets: buffered,
+            srt_recv_buf_capacity_packets: capacity,
             ..Default::default()
         }
     }
 
     #[test]
-    fn srt_recv_buffer_occupancy_handles_missing_zero_and_negative_values() {
+    fn srt_recv_buffer_occupancy_handles_missing_and_zero_capacity() {
         assert_eq!(
             srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(None, Some(10))),
             None
@@ -331,19 +317,7 @@ mod tests {
             None
         );
         assert_eq!(
-            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(None, None)),
-            None
-        );
-        assert_eq!(
-            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(0), Some(0))),
-            None
-        );
-        assert_eq!(
-            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(-1), Some(100))),
-            Some((0, 100, 0.0))
-        );
-        assert_eq!(
-            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(-1), Some(-1))),
+            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(10), Some(0))),
             None
         );
     }
@@ -351,15 +325,15 @@ mod tests {
     #[test]
     fn srt_recv_buffer_occupancy_computes_percentage_without_overflow() {
         assert_eq!(
-            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(250), Some(750))),
+            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(250), Some(1000))),
             Some((250, 1000, 25.0))
         );
-        let (recv, total, pct) =
-            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(i32::MAX), Some(i32::MAX)))
-                .expect("both fields are non-negative and nonzero");
-        assert_eq!(recv, i32::MAX as u64);
-        assert_eq!(total, 2 * i32::MAX as u64);
-        assert!((pct - 50.0).abs() < f64::EPSILON);
+        let (buffered, capacity, pct) =
+            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(u32::MAX), Some(u32::MAX)))
+                .expect("nonzero capacity");
+        assert_eq!(buffered, u64::from(u32::MAX));
+        assert_eq!(capacity, u64::from(u32::MAX));
+        assert!((pct - 100.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -379,8 +353,8 @@ mod tests {
             metadata: RwLock::new(crate::media::engine::IngestMetadata {
                 remote_addr: Some("127.0.0.1:9000".to_string()),
                 quality: PublisherQuality {
-                    srt_recv_buf_bytes: Some(8_218_796),
-                    srt_recv_buf_avail_bytes: Some(1_500),
+                    srt_recv_buf_packets: Some(8_192),
+                    srt_recv_buf_capacity_packets: Some(8_192),
                     ..Default::default()
                 },
                 ..Default::default()

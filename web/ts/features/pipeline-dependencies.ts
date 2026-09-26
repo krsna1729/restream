@@ -1,7 +1,6 @@
 import type { PipelineFileIngestState } from "../types.js";
 
 export interface PipelineViewDependencies {
-  openPublisherHealthModal: ((pipeId: string) => void) | null;
   isOutputToggleBusy: ((pipeId: string, outId: string) => boolean) | null;
   startOutBtn:
     | ((
@@ -44,7 +43,6 @@ export interface PipelineViewDependencies {
 }
 
 export const pipelineViewDependencies: PipelineViewDependencies = {
-  openPublisherHealthModal: null,
   isOutputToggleBusy: null,
   startOutBtn: null,
   stopOutBtn: null,

@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+# Namespace-separated benchmark topology for the single-host development lane.
+#
+# Creates a veth pair with one end in a dedicated network namespace so a sink
+# peer has its own network stack, socket tables, routing and qdisc path instead
+# of the loopback special case, and writes the environment a run needs:
+#
+#   scripts/harness/veth-topology.sh up [--cpus <restream> <sink>]
+#   scripts/harness/veth-topology.sh down
+#   scripts/harness/veth-topology.sh status
+#
+# The generated env file (`<work-dir>/wi3-topology.env`) pins the peer host,
+# both peer ports and both CPU masks; the harness records the *observed* masks
+# (restream's Cpus_allowed_list, each peer's /state mask) in the artifact.
+#
+# This is development qualification, not NIC qualification: a veth path says
+# nothing about PCIe/DMA, hardware queues, IRQ/NAPI placement, offloads or
+# physical-link behaviour. Those belong to the multi-host lane.
+set -euo pipefail
+
+ROOT_DIR="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
+NETNS="${WI3_NETNS:-wi3-sink}"
+VETH_HOST="${WI3_VETH_HOST:-veth-wi3}"
+VETH_PEER="${WI3_VETH_PEER:-veth-wi3p}"
+# A /16 keeps a whole destination prefix local inside the namespace, so a
+# benchmark can address 1000 distinct destinations while one wildcard drain
+# socket receives them all.
+# Destination prefix the namespace accepts as local (see the route added below):
+# a benchmark addresses 1000 distinct destinations inside it while one wildcard
+# drain socket receives them all. Both ends are /32 addresses so the prefix is
+# reached through the peer as a gateway rather than by resolving 1000
+# neighbours.
+WI3_DEST_PREFIX="${WI3_DEST_PREFIX:-10.53.0.0/16}"
+HOST_ADDR="${WI3_HOST_ADDR:-10.53.0.1/32}"
+PEER_ADDR="${WI3_PEER_ADDR:-10.53.0.2/32}"
+SRT_PORT="${WI3_SRT_PORT:-8891}"
+STATE_PORT="${WI3_STATE_PORT:-9997}"
+WORK_DIR="${WORK_DIR:-$ROOT_DIR/.local/artifacts/wi3-topology}"
+ENV_FILE="${WI3_TOPOLOGY_ENV:-$WORK_DIR/wi3-topology.env}"
+
+usage() {
+  cat >&2 <<EOF
+usage:
+  scripts/harness/veth-topology.sh up [--cpus <sender-cpu> <harness-mask> <receiver-mask>]
+  scripts/harness/veth-topology.sh start-peer [srt-sink|udp-drain]
+  scripts/harness/veth-topology.sh down
+  scripts/harness/veth-topology.sh status
+
+env overrides: WI3_NETNS WI3_VETH_HOST WI3_VETH_PEER WI3_HOST_ADDR WI3_PEER_ADDR
+               WI3_SRT_PORT WI3_STATE_PORT WORK_DIR WI3_TOPOLOGY_ENV
+EOF
+}
+
+require_root() {
+  if [[ "$(id -u)" -ne 0 ]]; then
+    echo "[veth-topology] needs root (or CAP_NET_ADMIN) to create namespaces" >&2
+    exit 2
+  fi
+}
+
+netns_exec() {
+  ip netns exec "$NETNS" "$@"
+}
+
+# Default partition: half the CPUs for the measured datapath, the rest for the
+# receiver, so the sink cannot consume the core under measurement.
+# Sender attribution needs three disjoint placements: the measured sender on one
+# CPU, harness/control elsewhere, and the receiver plus its peer-side receive
+# processing (RPS) on a third set. The peer veth's rx queue is redirected to the
+# receiver mask, because veth otherwise runs peer RX work in the sender's path
+# and contaminates every sender-side number (WI3.5 showed `rps_cpus` moving the
+# measured ceiling).
+default_cpu_masks() {
+  local cpus
+  cpus=$(nproc)
+  if (( cpus < 3 )); then
+    echo "[veth-topology] at least 3 CPUs are needed to partition sender, harness and receiver" >&2
+    exit 2
+  fi
+  if (( cpus == 3 )); then
+    echo "0 1 2"
+  else
+    echo "0 1 2-$(( cpus - 1 ))"
+  fi
+}
+
+# CPU mask as the kernel's rps_cpus format (hex bitmap, comma-separated per word).
+rps_mask() {
+  local mask="$1" cpu bit=0 word=0 out=""
+  local -a words=()
+  local part start end
+  for part in ${mask//,/ }; do
+    if [[ "$part" == *-* ]]; then
+      start="${part%%-*}"; end="${part##*-}"
+    else
+      start="$part"; end="$part"
+    fi
+    for ((cpu = start; cpu <= end; cpu++)); do
+      word=$((cpu / 32)); bit=$((cpu % 32))
+      while [[ "${#words[@]}" -le "$word" ]]; do words+=("0"); done
+      words[$word]=$(( words[$word] | (1 << bit) ))
+    done
+  done
+  for word in "${words[@]}"; do
+    [[ -n "$out" ]] && out+=","
+    out+="$(printf '%x' "$word")"
+  done
+  echo "${out:-0}"
+}
+
+cmd_up() {
+  local sender_cpu harness_mask receiver_mask restream_mask sink_mask rps rps_observed
+  local backlog backlog_observed backlog_original
+  if [[ "${1:-}" == "--cpus" ]]; then
+    sender_cpu="${2:?--cpus needs three masks}"
+    harness_mask="${3:?--cpus needs three masks}"
+    receiver_mask="${4:?--cpus needs three masks}"
+  else
+    read -r sender_cpu harness_mask receiver_mask <<<"$(default_cpu_masks)"
+  fi
+  # Restream runs on sender+harness; the sink owns the receiver mask.
+  restream_mask="${sender_cpu},${harness_mask}"
+  sink_mask="$receiver_mask"
+  require_root
+  mkdir -p "$WORK_DIR"
+
+  if ip netns list | grep -q "^${NETNS}\b"; then
+    echo "[veth-topology] namespace ${NETNS} already exists; run 'down' first" >&2
+    exit 2
+  fi
+  ip netns add "$NETNS"
+  ip link add "$VETH_HOST" type veth peer name "$VETH_PEER"
+  ip link set "$VETH_PEER" netns "$NETNS"
+  ip addr add "$HOST_ADDR" dev "$VETH_HOST"
+  ip link set "$VETH_HOST" up
+  netns_exec ip addr add "$PEER_ADDR" dev "$VETH_PEER"
+  netns_exec ip link set "$VETH_PEER" up
+  netns_exec ip link set lo up
+  # Point-to-point addressing: only the peer address needs resolution, and the
+  # destination prefix is routed through it.
+  ip route add "$PEER_ADDR" dev "$VETH_HOST"
+  ip route add "$WI3_DEST_PREFIX" via "${PEER_ADDR%%/*}" dev "$VETH_HOST"
+  netns_exec ip route add "$HOST_ADDR" dev "$VETH_PEER"
+
+  # The namespace accepts the whole destination prefix as local, so packets
+  # addressed to any of the 1000 destinations are delivered to its sockets.
+  netns_exec ip route add local "$WI3_DEST_PREFIX" dev "$VETH_PEER"
+
+  # Peer-side receive processing moves off the measured sender core.
+  # Receiver-side queue depth for the redirected receive path. Recorded, read
+  # back, and removed with the namespace; it is lane configuration, not a
+  # benchmark parameter, and a peer-side drop claim is not attributed to it
+  # until the softnet counters in `/state` show where the drops happened.
+  # `netdev_max_backlog` is not namespaced on this kernel (the namespace exposes
+  # only net.core entries that are per-net), so the lane knob is host-wide and is
+  # restored by `down`. Save the original first so teardown is exact.
+  backlog="${WI3_NETDEV_MAX_BACKLOG:-1000000}"
+  backlog_original="$(cat /proc/sys/net/core/netdev_max_backlog 2>/dev/null || echo unavailable)"
+  # Record the original before changing anything, so a failure below can still
+  # restore the host to its prior state.
+  mkdir -p "$(dirname "$ENV_FILE")"
+  cat > "$ENV_FILE" <<EOF
+# Generated by scripts/harness/veth-topology.sh — source before a benchmark run.
+export WI3_NETDEV_MAX_BACKLOG_ORIGINAL=${backlog_original}
+EOF
+  trap 'if [[ "${backlog_original:-}" != "unavailable" && -n "${backlog_original:-}" ]]; then sysctl -qw "net.core.netdev_max_backlog=${backlog_original}" 2>/dev/null || true; fi' ERR
+  sysctl -qw "net.core.netdev_max_backlog=${backlog}" 2>/dev/null || true
+  backlog_observed="$(cat /proc/sys/net/core/netdev_max_backlog 2>/dev/null || echo unavailable)"
+  trap - ERR
+
+  rps="$(rps_mask "$receiver_mask")"
+  netns_exec sh -c "echo ${rps} > /sys/class/net/${VETH_PEER}/queues/rx-0/rps_cpus" 2>/dev/null || true
+  rps_observed="$(netns_exec cat /sys/class/net/${VETH_PEER}/queues/rx-0/rps_cpus 2>/dev/null || echo unavailable)"
+  echo "[veth-topology] namespace treats ${WI3_DEST_PREFIX} as local"
+
+  # Keep the veth path out of the host's forwarding/NAT rules.
+  sysctl -qw "net.ipv4.conf.${VETH_HOST}.forwarding=0" || true
+
+  cat > "$ENV_FILE" <<EOF
+# Generated by scripts/harness/veth-topology.sh — source before a benchmark run.
+export WI3_NETDEV_MAX_BACKLOG_ORIGINAL=${backlog_original}
+export RESTREAM_BENCH_TOPOLOGY=netns-veth
+export RESTREAM_BENCH_NETNS=${NETNS}
+export RESOURCE_SWEEP_SRT_PEER_HOSTS=${PEER_ADDR%%/*}
+export WI3_DEST_PREFIX=${WI3_DEST_PREFIX}
+export MTX_SRT=${SRT_PORT}
+export MTX_API=${STATE_PORT}
+export RESTREAM_CPUSET=${restream_mask}
+export SRT_SINK_CPUSET=${sink_mask}
+export WI3_SENDER_CPU=${sender_cpu}
+export WI3_HARNESS_CPUS=${harness_mask}
+export WI3_RECEIVER_CPUS=${receiver_mask}
+export WI3_RPS_CPUS_REQUESTED=${rps}
+export WI3_RPS_CPUS_OBSERVED=${rps_observed}
+export WI3_NETDEV_MAX_BACKLOG_REQUESTED=${backlog}
+export WI3_NETDEV_MAX_BACKLOG_OBSERVED=${backlog_observed}
+export WI3_NETDEV_MAX_BACKLOG_ORIGINAL=${backlog_original}
+EOF
+
+  echo "[veth-topology] up: ${VETH_HOST} $(echo "$HOST_ADDR" | cut -d/ -f1) <-> ${NETNS}:${VETH_PEER} $(echo "$PEER_ADDR" | cut -d/ -f1)"
+  echo "[veth-topology] sender cpu ${sender_cpu}, harness cpus ${harness_mask}, receiver cpus ${receiver_mask} (restream ${restream_mask}, sink ${sink_mask})"
+  echo "[veth-topology] peer rx rps_cpus requested ${rps}, observed ${rps_observed}"
+  echo "[veth-topology] netdev_max_backlog (host-wide) was ${backlog_original}, requested ${backlog}, observed ${backlog_observed}"
+  echo "[veth-topology] env written to ${ENV_FILE}"
+  cat <<EOF
+[veth-topology] run the peer inside the namespace:
+  source ${ENV_FILE}
+  scripts/harness/veth-topology.sh start-peer [srt-sink|udp-drain]
+EOF
+}
+
+cmd_down() {
+  require_root
+  # Restore the host-wide sysctl from saved state first, and independently of
+  # whether the namespace still exists: `up` may have failed after changing it,
+  # or the namespace may have been removed by hand.
+  local original=""
+  if [[ -f "$ENV_FILE" ]]; then
+    original="$(sed -n 's/^export WI3_NETDEV_MAX_BACKLOG_ORIGINAL=\(.*\)$/\1/p' "$ENV_FILE")"
+  fi
+  if [[ -z "$original" ]]; then
+    original="${WI3_NETDEV_MAX_BACKLOG_ORIGINAL:-}"
+  fi
+  if [[ -n "$original" && "$original" != "unavailable" ]]; then
+    sysctl -qw "net.core.netdev_max_backlog=${original}" 2>/dev/null || true
+    echo "[veth-topology] restored netdev_max_backlog=${original}"
+  fi
+  # Deleting the namespace removes the veth pair, the peer's local route and its
+  # RPS setting with it; the host-side route is removed first in case the pair
+  # was already detached.
+  ip route del "$WI3_DEST_PREFIX" via "${PEER_ADDR%%/*}" dev "$VETH_HOST" 2>/dev/null || true
+  ip route del "$PEER_ADDR" dev "$VETH_HOST" 2>/dev/null || true
+  ip link del "$VETH_HOST" 2>/dev/null || true
+  rm -f "$ENV_FILE"
+  if ip netns list | grep -q "^${NETNS}\b"; then
+    ip netns del "$NETNS"
+  fi
+  echo "[veth-topology] down: ${VETH_HOST} and ${NETNS} removed"
+}
+
+cmd_status() {
+  echo "[veth-topology] netns:"
+  ip netns list | sed 's/^/  /' || true
+  echo "[veth-topology] ${VETH_HOST}:"
+  ip -brief addr show "$VETH_HOST" 2>/dev/null | sed 's/^/  /' || echo "  absent"
+  echo "[veth-topology] env file: ${ENV_FILE}"
+  [[ -f "$ENV_FILE" ]] && sed 's/^/  /' "$ENV_FILE" || echo "  absent"
+}
+
+# Start the peer process inside the namespace on the sink CPUs, with the ports
+# and masks from the generated env file. `env` is required: `ip netns exec`
+# would otherwise try to execute the assignment as a program.
+cmd_start_peer() {
+  local mode="${1:-srt-sink}"
+  [[ -f "$ENV_FILE" ]] || { echo "[veth-topology] run 'up' first (${ENV_FILE} missing)" >&2; exit 2; }
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  local binary="${WI3_PEER_BIN:-$ROOT_DIR/target/bench/sink-peer/test_harness}"
+  [[ -x "$binary" ]] || { echo "[veth-topology] peer binary missing: ${binary}" >&2; exit 2; }
+  case "$mode" in
+    srt-sink)
+      exec sudo -n ip netns exec "$NETNS" env \
+        SRT_SINK_PORTS="$SRT_PORT" SRT_SINK_STATE_PORT="$STATE_PORT" \
+        SRT_SINK_CPUSET="$SRT_SINK_CPUSET" HARNESS_SRT_SINK_THREADS="${HARNESS_SRT_SINK_THREADS:-4}" \
+        HARNESS_SRT_SINK_UDP_BUFFER="${HARNESS_SRT_SINK_UDP_BUFFER:-33554432}" \
+        "$binary" srt-sink --no-netns
+      ;;
+    udp-drain)
+      exec sudo -n ip netns exec "$NETNS" env \
+        UDP_DRAIN_PORT="${UDP_DRAIN_PORT:-9000}" UDP_DRAIN_STATE_PORT="$STATE_PORT" \
+        UDP_DRAIN_CPUSET="$SRT_SINK_CPUSET" \
+        UDP_DRAIN_THREADS="${UDP_DRAIN_THREADS:-4}" \
+        UDP_DRAIN_BATCH="${UDP_DRAIN_BATCH:-32}" \
+        UDP_DRAIN_SOCKET_BUFFER="${UDP_DRAIN_SOCKET_BUFFER:-67108864}" \
+        UDP_DRAIN_REPORT_SECS="${UDP_DRAIN_REPORT_SECS:-5}" \
+        "$binary" udp-drain --no-netns
+      ;;
+    *)
+      echo "[veth-topology] unknown peer mode ${mode}; expected srt-sink or udp-drain" >&2
+      exit 2
+      ;;
+  esac
+}
+
+case "${1:-}" in
+  up) shift; cmd_up "$@" ;;
+  down) cmd_down ;;
+  status) cmd_status ;;
+  start-peer) shift; cmd_start_peer "$@" ;;
+  *) usage; exit 2 ;;
+esac

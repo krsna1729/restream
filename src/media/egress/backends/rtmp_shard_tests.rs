@@ -1,11 +1,11 @@
 use super::*;
 use crate::media::egress::journal::FeedEpoch;
 use crate::media::egress::leaf::EgressProgressSink;
-use crate::media::egress::policy::LeafPolicy;
+use crate::media::egress::policy::{LeafPolicy, WorkBudgetConfig};
 use std::sync::Arc;
 
-fn budget() -> WorkBudget {
-    WorkBudget::new(8, 4096, Duration::from_millis(50))
+fn budget() -> WorkBudgetConfig {
+    WorkBudgetConfig::new(8, 4096, Duration::from_millis(50))
 }
 
 fn feed() -> RingFeed {
@@ -32,7 +32,7 @@ fn output_spec(id: &str, url: &str, generation: u64) -> OutputSpec {
 #[test]
 fn queues_a_pending_connect_on_add() {
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
 
     backend.on_command(EgressCommand::Add(output_spec(
         "out-1",
@@ -50,7 +50,7 @@ fn queues_a_pending_connect_on_add() {
 #[test]
 fn invalid_url_is_rejected_without_panicking() {
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
 
     backend.on_command(EgressCommand::Add(output_spec("out-1", "not a url", 1)));
 
@@ -60,7 +60,7 @@ fn invalid_url_is_rejected_without_panicking() {
 #[test]
 fn remove_drops_a_pending_connect() {
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let output_id = OutputId::new("out-1");
 
     backend.on_command(EgressCommand::Add(output_spec(
@@ -77,7 +77,7 @@ fn remove_drops_a_pending_connect() {
 #[test]
 fn stale_generation_resolve_completion_is_ignored() {
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let output_id = OutputId::new("out-1");
 
     backend.on_command(EgressCommand::Add(output_spec(
@@ -99,7 +99,7 @@ fn stale_generation_resolve_completion_is_ignored() {
 #[test]
 fn connect_failure_drops_the_pending_connect_without_panicking() {
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let output_id = OutputId::new("out-1");
 
     backend.on_command(EgressCommand::Add(output_spec(
@@ -133,6 +133,130 @@ use rml_rtmp::sessions::{
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream as StdTcpStream};
 use std::thread;
+struct ScriptedPoller {
+    ready_capacity: usize,
+    events: std::collections::VecDeque<TcpReadyLeaf>,
+}
+
+impl RtmpReadinessPoller for ScriptedPoller {
+    fn ready_capacity(&self) -> usize {
+        self.ready_capacity
+    }
+
+    fn start_connect(
+        &mut self,
+        peer_addr: SocketAddr,
+        _key: LeafKey,
+        _generation: u64,
+        _timeout: Duration,
+    ) -> Result<TcpConnectAttempt, TcpEgressPollError> {
+        let stream = StdTcpStream::connect(peer_addr).map_err(|error| {
+            TcpEgressPollError::new(
+                "scripted_connect",
+                error.raw_os_error().unwrap_or(libc::EIO),
+                error.to_string(),
+            )
+        })?;
+        stream.set_nonblocking(true).map_err(|error| {
+            TcpEgressPollError::new(
+                "scripted_connect",
+                error.raw_os_error().unwrap_or(libc::EIO),
+                error.to_string(),
+            )
+        })?;
+        Ok(TcpConnectAttempt::Connected(
+            super::super::compio_tcp::CompioTcpStream::from_std(stream),
+        ))
+    }
+
+    /// Completions are scripted in `events`; there is no I/O worker to start.
+    fn register_connection(
+        &mut self,
+        _fd: std::os::fd::RawFd,
+        _key: LeafKey,
+        _generation: u64,
+        _stream: &super::super::compio_tcp::CompioTcpStream,
+    ) -> Result<(), TcpEgressPollError> {
+        Ok(())
+    }
+
+    fn remove(&mut self, _fd: std::os::fd::RawFd) -> Result<(), TcpEgressPollError> {
+        Ok(())
+    }
+
+    /// Scripted events are not I/O completions.
+    fn completion_counts(&self) -> (u64, u64) {
+        (0, 0)
+    }
+
+    fn poll_leaves(
+        &mut self,
+        _timeout_ms: i32,
+        ready: &mut Vec<TcpReadyLeaf>,
+    ) -> Result<usize, TcpEgressPollError> {
+        ready.clear();
+        ready.extend(self.events.drain(..).take(self.ready_capacity));
+        Ok(ready.len())
+    }
+
+    /// No runtime to park in; tests drive `on_ready` directly.
+    fn wait_idle(
+        &mut self,
+        _commands: &flume::Receiver<EgressCommand>,
+        _max_wait: Duration,
+    ) -> Option<crate::media::egress::shard::EgressShardIdleWake> {
+        None
+    }
+}
+
+#[test]
+fn simultaneous_completions_keep_the_write_needed_by_the_handshake() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut c0c1 = [0; 1537];
+        stream.read_exact(&mut c0c1).unwrap();
+        assert_eq!(c0c1[0], 3);
+    });
+    let poller = ScriptedPoller {
+        ready_capacity: 4,
+        events: std::collections::VecDeque::new(),
+    };
+    let mut backend = RtmpShardBackend::new(poller, feed(), budget(), 4096);
+    let output_id = OutputId::new("out-simultaneous");
+    backend.on_command(EgressCommand::Add(output_spec(
+        "out-simultaneous",
+        &format!("rtmp://{address}/live/key"),
+        1,
+    )));
+    assert!(backend.complete_pending_connect(&output_id, 1, address));
+    let socket = backend.output_sockets[&output_id];
+    backend.poller.events.extend([
+        TcpReadyLeaf {
+            fd: socket.fd,
+            key: socket.key,
+            generation: 1,
+            readable: true,
+            writable: false,
+        },
+        TcpReadyLeaf {
+            fd: socket.fd,
+            key: socket.key,
+            generation: 1,
+            readable: false,
+            writable: true,
+        },
+    ]);
+
+    backend.poll_ready();
+    assert_eq!(backend.ready.len(), 1, "one visit handles both completions");
+    backend.on_ready();
+    peer.join().unwrap();
+}
 
 /// Accepts a publish request and then immediately drops the connection, so the
 /// shard observes the close. Tests that need the peer to stay connected use
@@ -255,17 +379,18 @@ fn shard_driven_leaf_reaches_publish_accepted_against_a_real_peer() {
     });
 
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let output_id = OutputId::new("out-1");
     backend.on_command(EgressCommand::Add(output_spec(
         "out-1",
         &format!("rtmp://{}/live/key", addr),
         1,
     )));
-    backend.complete_pending_connect(&output_id, 1, addr);
+    assert!(backend.complete_pending_connect(&output_id, 1, addr));
     assert!(
-        backend.output_sockets.contains_key(&output_id),
-        "leaf must be connected and registered"
+        backend.output_sockets.contains_key(&output_id)
+            || backend.connecting_by_output.contains_key(&output_id),
+        "the nonblocking connect must leave an active or connecting leaf"
     );
 
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -280,6 +405,12 @@ fn shard_driven_leaf_reaches_publish_accepted_against_a_real_peer() {
         backend.on_ready();
         thread::sleep(Duration::from_millis(1));
     }
+
+    // Reaching publish acceptance consumed real completions; the shard reports
+    // them instead of a fabricated zero.
+    let mut metrics = ShardMetrics::default();
+    backend.observe_metrics(&mut metrics);
+    assert!(metrics.cqes > 0, "consumed completions must be reported");
 
     server.join().unwrap();
 }
@@ -323,7 +454,7 @@ fn sweep_stalled_leaves_closes_only_the_leaf_with_no_recent_progress() {
     });
 
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let stuck_id = OutputId::new("stuck");
     let healthy_id = OutputId::new("healthy");
     backend.on_command(EgressCommand::Add(output_spec(
@@ -411,7 +542,7 @@ fn shard_removes_the_leaf_once_the_peer_closes_after_publish_acceptance() {
     });
 
     let mut backend =
-        RtmpShardBackend::new(TcpEgressPoller::new(4).unwrap(), feed(), budget(), 4096);
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
     let output_id = OutputId::new("out-1");
     backend.on_command(EgressCommand::Add(output_spec(
         "out-1",
@@ -450,18 +581,16 @@ fn shard_removes_the_leaf_once_the_peer_closes_after_publish_acceptance() {
 }
 
 /// Server peer that accepts connect/publish like [`run_accepting_server_peer`],
-/// signals `publish_tx` once publish is accepted, then keeps reading (with
-/// nothing further to send) and signals `video_tx` and returns on the first
-/// `VideoDataReceived` event — proving media published *after* the feed
-/// went idle is still delivered, the exact gap a feed-wake liveness
-/// regression would miss.
+/// signals `publish_tx` once publish is accepted, then keeps reading and
+/// signals each of the first two `VideoDataReceived` events. The second video
+/// proves media published after the feed has gone idle is still delivered.
 fn run_accepting_server_peer_reporting_video_after_idle(
     mut stream: StdTcpStream,
     publish_tx: std::sync::mpsc::Sender<()>,
     video_tx: std::sync::mpsc::Sender<()>,
 ) {
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(15)))
         .unwrap();
 
     let mut handshake = PeerHandshake::new(PeerType::Server);
@@ -469,7 +598,9 @@ fn run_accepting_server_peer_reporting_video_after_idle(
     let remaining;
     loop {
         let n = stream.read(&mut buf).expect("server handshake read");
-        assert_ne!(n, 0);
+        if n == 0 {
+            return;
+        }
         match handshake.process_bytes(&buf[..n]).unwrap() {
             PeerResult::InProgress { response_bytes } => {
                 if !response_bytes.is_empty() {
@@ -498,6 +629,7 @@ fn run_accepting_server_peer_reporting_video_after_idle(
     }
 
     let mut pending_input = remaining;
+    let mut video_events = 0;
     loop {
         if !pending_input.is_empty() {
             let input = std::mem::take(&mut pending_input);
@@ -531,7 +663,10 @@ fn run_accepting_server_peer_reporting_video_after_idle(
                         ..
                     }) => {
                         let _ = video_tx.send(());
-                        return;
+                        video_events += 1;
+                        if video_events == 2 {
+                            return;
+                        }
                     }
                     _ => {}
                 }
@@ -539,22 +674,19 @@ fn run_accepting_server_peer_reporting_video_after_idle(
         }
 
         let n = stream.read(&mut buf).expect("server session read");
-        assert_ne!(n, 0);
+        if n == 0 {
+            return;
+        }
         pending_input = buf[..n].to_vec();
     }
 }
 
-/// Reproduces and proves the fix for a real liveness bug: once a
-/// publishing leaf fully drains its feed, its poller registration stops
-/// watching any I/O direction (`EngineProgress::Needs(Interest::NONE)`).
-/// Before `RtmpShardBackend::on_command` handled `EgressCommand::FeedWake`,
-/// that leaf would never be revisited — a `FeedWake` delivered after the
-/// feed went idle was a silent no-op, so a second unit published later
-/// would never be sent. This drives the feed empty first, waits past
-/// publish acceptance with nothing queued, *then* pushes a unit and
-/// delivers `FeedWake`, and asserts the server actually receives it.
-#[test]
-fn feed_wake_delivers_media_published_after_the_leaf_goes_idle() {
+/// Exercises the production Compio shard group and feed-wake watcher against
+/// a real RTMP peer: publish a keyframe, idle, then require another keyframe
+/// after the leaf parks. The factory must preserve its configured visit
+/// window even when shard startup is delayed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn feed_wake_delivers_media_after_idle_when_factory_start_is_delayed() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let (publish_tx, publish_rx) = std::sync::mpsc::channel::<()>();
@@ -565,82 +697,95 @@ fn feed_wake_delivers_media_published_after_the_leaf_goes_idle() {
     });
 
     let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(4));
-    let mut backend = RtmpShardBackend::new(
-        TcpEgressPoller::new(4).unwrap(),
-        RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new())),
-        budget(),
-        4096,
-    );
-    let output_id = OutputId::new("out-1");
-    backend.on_command(EgressCommand::Add(output_spec(
-        "out-1",
-        &format!("rtmp://{}/live/key", addr),
-        1,
-    )));
-    backend.complete_pending_connect(&output_id, 1, addr);
-
-    // Drive with an empty feed until the server confirms publish is
-    // accepted -- the same proven wait pattern
-    // `shard_driven_leaf_reaches_publish_accepted_against_a_real_peer` uses,
-    // rather than assuming a fixed wall-clock window is enough.
-    let publish_deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        assert!(
-            std::time::Instant::now() < publish_deadline,
-            "leaf never reached publish acceptance"
-        );
-        if publish_rx.try_recv().is_ok() {
-            break;
-        }
-        backend.on_ready();
-        thread::sleep(Duration::from_millis(1));
-    }
-
-    // Publish is accepted; drive a bit longer with the still-empty feed so
-    // the leaf settles into Interest::NONE (nothing left to send) -- the
-    // exact idle state a stale FeedWake would fail to wake from.
-    let settle_deadline = std::time::Instant::now() + Duration::from_millis(200);
-    while std::time::Instant::now() < settle_deadline {
-        backend.on_ready();
-        thread::sleep(Duration::from_millis(1));
-    }
-    assert!(
-        video_rx.try_recv().is_err(),
-        "no media was published yet, so nothing should have been received"
-    );
-
-    // Now publish a real unit and deliver the coalesced feed wake exactly
-    // the way the fabric's feed-wake watcher does in production.
-    let payload = bytes::Bytes::from_static(&[
-        0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0xf4, 0x05, 1, 0xec, 0x80, 0, 0, 0, 1, 0x68, 0xce, 0x06,
-        0xe2, 0, 0, 0, 1, 0x65, 0x88,
-    ]);
-    ring.push(crate::media::packet::MediaPacket {
+    let feed = RingFeed::new(ring.clone(), Arc::new(FeedEpoch::new()));
+    let packet = |timestamp| crate::media::packet::MediaPacket {
         media_type: crate::media::packet::MediaType::Video,
-        format: crate::media::packet::PayloadFormat::Raw,
+        format: crate::media::packet::PayloadFormat::Flv,
         is_keyframe: true,
         track_index: 0,
-        pts: 100,
-        dts: 80,
-        payload,
-    });
-    backend.on_command(EgressCommand::FeedWake);
+        pts: timestamp,
+        dts: timestamp,
+        payload: bytes::Bytes::from_static(&[
+            0x17, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x65, 0x88,
+        ]),
+    };
+    ring.push(packet(0));
+    let startup_source =
+        crate::media::egress::backends::rtmp_shard::SharedRtmpPublishStartupSource::new();
+    let delayed_budget = budget();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let group = crate::media::egress::factory::spawn_rtmp_fabric_shard_group(
+        std::num::NonZeroU32::new(1).unwrap(),
+        EgressShardConfig::new(16, 4, 4, 4, Duration::from_millis(5)).unwrap(),
+        4,
+        delayed_budget,
+        4096,
+        crate::media::rtmp::resolve_rtmps_client_config(None).unwrap(),
+        startup_source.clone(),
+        |_| feed.clone_reader(),
+    )
+    .unwrap();
+    let manager_config = crate::media::egress::manager::EgressManagerConfig::new(1, 16).unwrap();
+    let mut runtime =
+        crate::media::egress::runtime::EgressFabricRuntime::new(manager_config, group).unwrap();
+    let watcher = crate::media::egress::runtime::spawn_fabric_wake_watcher(
+        "rtmp",
+        crate::media::egress::command::FeedId::new("feed"),
+        feed.clone_reader(),
+        runtime.feed_wake_handles(),
+    );
+    startup_source.set(
+        crate::media::egress::command::OutputId::new("out-1"),
+        crate::media::egress::backends::rtmp::RtmpPublishStartup::default(),
+    );
+    runtime
+        .dispatch(EgressCommand::Add(output_spec(
+            "out-1",
+            &format!("rtmp://{}/live/key", addr),
+            1,
+        )))
+        .unwrap();
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "media published after the leaf went idle was never delivered \
-             (feed-wake liveness regression)"
-        );
-        if video_rx.try_recv().is_ok() {
-            break;
+    let publish_accepted = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if publish_rx.try_recv().is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
-        backend.on_ready();
-        thread::sleep(Duration::from_millis(1));
-    }
+    })
+    .await
+    .is_ok();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let initial_video_received = video_rx.try_recv().is_ok();
 
+    ring.push(packet(33));
+
+    let video_received_after_idle = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if video_rx.try_recv().is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .is_ok();
+
+    watcher.abort();
+    let _ = watcher.await;
+    runtime.shutdown();
     server.join().unwrap();
+
+    assert!(publish_accepted, "RTMP peer never accepted the publish");
+    assert!(
+        initial_video_received,
+        "the pre-populated FLV keyframe never reached the RTMP peer"
+    );
+    assert!(
+        video_received_after_idle,
+        "the later FLV keyframe never reached the RTMP peer"
+    );
 }
 
 #[path = "rtmp_shard_backpressure_tests.rs"]
@@ -651,3 +796,36 @@ mod drain_tests;
 mod media_tick_tests;
 #[path = "rtmp_shard_reregistration_tests.rs"]
 mod reregistration_tests;
+#[path = "rtmp_shard_wake_tests.rs"]
+mod wake_tests;
+
+#[test]
+fn leaf_slots_are_fixed_and_exhaustion_does_not_grow_the_slab() {
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096)
+            .with_leaf_capacity(1);
+
+    assert_eq!(backend.leaves.len(), 1);
+    assert_eq!(backend.allocate_leaf_key(), Some(LeafKey(0)));
+    assert_eq!(backend.allocate_leaf_key(), None);
+    assert_eq!(backend.leaves.len(), 1);
+}
+
+#[test]
+fn shard_work_queues_have_a_hard_leaf_bound() {
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096)
+            .with_leaf_capacity(1);
+    let event = TcpReadyLeaf {
+        fd: -1,
+        key: LeafKey(0),
+        generation: 0,
+        readable: false,
+        writable: true,
+    };
+    let capacity = backend.queue_capacity;
+
+    assert!(push_bounded(&mut backend.ready, event, capacity));
+    assert!(!push_bounded(&mut backend.ready, event, capacity));
+    assert_eq!(backend.ready.len(), 1);
+}

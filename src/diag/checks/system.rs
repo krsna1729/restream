@@ -121,68 +121,101 @@ pub(in crate::diag) async fn check_system_resources(idx: u32, media_dir: &str) -
     .with_issues(issues)
 }
 
-pub(in crate::diag) async fn check_srt_listener_socket(
+pub(in crate::diag) async fn check_srt_listener_owner(
     idx: u32,
     engine: &Arc<MediaEngine>,
 ) -> DiagResult {
     let start = Instant::now();
     let stats = engine.srt_listener_diag_snapshot().await;
-    let rx_queue = stats.rx_queue_bytes;
-    let rx_peak = stats.rx_queue_peak_bytes;
-    let drops = stats.drops;
-    let bonding_available = stats.bonding_available;
-    let configured = crate::media::srt::desired_udp_buf() as u64;
-    let active_count = stats.active_ingest_count;
+    let owner = &stats.ingress_owner;
 
     let mut lines = vec![];
     let mut issues = vec![];
 
-    lines.push(format!("Active SRT ingest streams: {}", active_count));
+    lines.push(format!(
+        "Active SRT ingest streams: {}",
+        stats.active_ingest_count
+    ));
     lines.push(format!(
         "Bonded ingest available: {}",
-        if bonding_available { "yes" } else { "no" }
+        if stats.bonding_available { "yes" } else { "no" }
     ));
+    lines.push(format!("Owner faulted: {}", owner.faulted));
     lines.push(format!(
-        "UDP recv queue: {}KB / {}KB ({:.1}%)",
-        rx_queue / 1024,
-        configured / 1024,
-        if configured > 0 {
-            rx_queue as f64 / configured as f64 * 100.0
+        "Receive mode: {}",
+        if owner.managed_rx {
+            "ManagedMultishot"
         } else {
-            0.0
+            "RawReadiness"
         }
     ));
-    lines.push(format!("UDP recv queue peak: {}KB", rx_peak / 1024));
-    lines.push(format!("Kernel UDP drops (total): {}", drops));
+    lines.push(format!("Live peers: {}", owner.peers));
+    lines.push(format!(
+        "RX: {} packets, {} bytes, ring depth {}, ring drops {}, truncated {}",
+        owner.rx_packets,
+        owner.rx_bytes,
+        owner.rx_ring_depth,
+        owner.rx_ring_dropped,
+        owner.rx_truncated
+    ));
+    lines.push(format!(
+        "TX: {} packets, in flight {}/{}, failed {}, pool exhaustions {}",
+        owner.tx_packets,
+        owner.tx_in_flight,
+        owner.tx_capacity,
+        owner.tx_failed,
+        owner.tx_exhaustions
+    ));
+    lines.push(format!(
+        "Admission: {} requests, {} rejected, {} deferred, {} credential failures",
+        owner.policy_requests,
+        owner.policy_rejections,
+        owner.policy_deferred,
+        owner.credential_failures
+    ));
+    // The quality bridge is deliberately lossy under pressure: a dropped
+    // sample is a gap in publisher telemetry, never a protocol problem, so
+    // this is reported without a threshold. `telemetryDropped` is cumulative
+    // since listener start; a historical value is not a current fault.
+    lines.push(format!(
+        "Publisher telemetry: {} dropped samples",
+        owner.telemetry_dropped
+    ));
 
-    if drops > 0 {
-        issues.push(format!(
-            "Kernel has dropped {} UDP packets — data loss occurred. \
-             Increase net.core.rmem_max and restart.",
-            drops
-        ));
+    if owner.faulted {
+        issues.push(
+            "The SRT ingress Owner faulted; the listener has stopped and needs a restart."
+                .to_string(),
+        );
     }
-    if !bonding_available {
+    if !stats.bonding_available {
         issues.push("The srt-rs listener has not started with bonded-input support.".to_string());
     }
-    if rx_queue > configured * 3 / 4 {
+    if owner.rx_ring_dropped > 0 {
         issues.push(format!(
-            "UDP recv queue is {:.0}% full — imminent packet loss risk with {} streams.",
-            rx_queue as f64 / configured as f64 * 100.0,
-            active_count,
+            "The Owner receive ring dropped {} datagrams — input was lost before protocol \
+             processing.",
+            owner.rx_ring_dropped
         ));
-    } else if rx_queue > configured / 2 {
+    }
+    if owner.rx_truncated > 0 {
         issues.push(format!(
-            "UDP recv queue is {:.0}% full — buffer pressure building.",
-            rx_queue as f64 / configured as f64 * 100.0,
+            "{} received datagrams were truncated by the receive path.",
+            owner.rx_truncated
+        ));
+    }
+    if owner.tx_failed > 0 {
+        issues.push(format!(
+            "{} SRT listener datagram sends failed or were short.",
+            owner.tx_failed
         ));
     }
 
     DiagResult::ok(
         idx,
-        "SRT Listener Socket",
-        "Shared UDP socket buffer occupancy for all SRT ingest streams",
-        "read /proc/net/udp",
+        "SRT Listener Owner",
+        "Compio Owner receive, transmit and admission state for all SRT ingest streams",
+        "srt-transport Compio Owner metrics",
         lines.join("\n"),
         start.elapsed().as_millis() as u64,
     )
@@ -248,6 +281,56 @@ pub(in crate::diag) async fn check_network_bandwidth(idx: u32) -> DiagResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The SRT listener check reports real Owner state and raises exactly the
+    /// Owner-derived issues; it never mentions kernel queue occupancy.
+    #[tokio::test]
+    async fn srt_listener_owner_check_reports_owner_state_and_issues() {
+        let engine = Arc::new(MediaEngine::new());
+        let stats = engine.listener_stats_handle();
+        stats
+            .bonding_available
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let healthy = check_srt_listener_owner(8, &engine).await;
+        assert_eq!(healthy.name, "SRT Listener Owner");
+        assert!(healthy.issues.is_empty(), "{:?}", healthy.issues);
+        assert!(healthy.stdout.contains("Owner faulted: false"));
+        assert!(
+            healthy
+                .stdout
+                .contains("Publisher telemetry: 0 dropped samples")
+        );
+        assert!(!healthy.stdout.contains("UDP recv queue"));
+
+        let owner = &stats.ingress_owner;
+        owner
+            .faulted
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        owner
+            .rx_ring_dropped
+            .store(3, std::sync::atomic::Ordering::Relaxed);
+        owner
+            .rx_truncated
+            .store(2, std::sync::atomic::Ordering::Relaxed);
+        owner
+            .tx_failed
+            .store(1, std::sync::atomic::Ordering::Relaxed);
+        owner
+            .telemetry_dropped
+            .store(5, std::sync::atomic::Ordering::Relaxed);
+        let unhealthy = check_srt_listener_owner(8, &engine).await;
+        assert_eq!(
+            unhealthy.issues.len(),
+            4,
+            "a dropped telemetry sample is not a diagnostic issue: {:?}",
+            unhealthy.issues
+        );
+        assert!(
+            unhealthy
+                .stdout
+                .contains("Publisher telemetry: 5 dropped samples")
+        );
+    }
 
     #[test]
     fn media_root_path_joins_relative_dir_onto_cwd() {

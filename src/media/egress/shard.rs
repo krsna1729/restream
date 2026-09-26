@@ -1,7 +1,7 @@
+use flume::{Receiver, Sender, TrySendError};
 use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -12,7 +12,10 @@ use crate::media::egress::metrics::ShardMetrics;
 use crate::media::egress::timer::TimerWheel;
 
 mod group;
-pub use group::{EgressShardGroup, EgressShardGroupError, EgressShardHealth, EgressShardHeartbeat};
+pub use group::{
+    EgressShardGroup, EgressShardGroupError, EgressShardGroupSpawnError, EgressShardHealth,
+    EgressShardHeartbeat,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EgressShardConfigError {
@@ -28,6 +31,7 @@ pub struct EgressShardConfig {
     command_batch_budget: NonZeroUsize,
     readiness_batch_budget: NonZeroUsize,
     timer_batch_budget: NonZeroUsize,
+    leaf_capacity: NonZeroUsize,
     idle_wait: Duration,
     drain_timeout: Duration,
 }
@@ -37,6 +41,7 @@ impl EgressShardConfig {
     /// leaves before forcing a close, when no explicit
     /// [`Self::with_drain_timeout`] override is given.
     pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
+    pub const DEFAULT_LEAF_CAPACITY: usize = 4096;
 
     pub fn new(
         command_channel_capacity: usize,
@@ -58,9 +63,20 @@ impl EgressShardConfig {
             command_batch_budget,
             readiness_batch_budget,
             timer_batch_budget,
+            leaf_capacity: NonZeroUsize::new(Self::DEFAULT_LEAF_CAPACITY)
+                .expect("default leaf capacity is nonzero"),
             idle_wait,
             drain_timeout: Self::DEFAULT_DRAIN_TIMEOUT,
         })
+    }
+
+    /// Set the fixed number of reusable network leaf slots owned by each
+    /// shard. A shard rejects work after this bound rather than growing its
+    /// per-output storage indefinitely.
+    pub fn with_leaf_capacity(mut self, leaf_capacity: usize) -> Self {
+        self.leaf_capacity =
+            NonZeroUsize::new(leaf_capacity).expect("egress shard leaf capacity must be nonzero");
+        self
     }
 
     /// Override the drain-on-shutdown deadline. Tests use this for fast,
@@ -84,6 +100,10 @@ impl EgressShardConfig {
 
     pub fn readiness_batch_budget(self) -> NonZeroUsize {
         self.readiness_batch_budget
+    }
+
+    pub fn leaf_capacity(self) -> NonZeroUsize {
+        self.leaf_capacity
     }
 
     pub fn idle_wait(self) -> Duration {
@@ -126,7 +146,13 @@ impl EgressShardSnapshot {
     }
 }
 
-pub trait EgressShardBackend: Send + 'static {
+/// Shard-local state driven by one shard OS thread.
+///
+/// Deliberately not `Send`: a backend is constructed, mutated and dropped on
+/// its shard thread (see [`EgressShardHandle::spawn_with`]), so it may own
+/// thread-affine runtime state (`Rc`, a per-thread io runtime, ...). Only the
+/// factory that builds it crosses the thread boundary.
+pub trait EgressShardBackend: 'static {
     fn on_command(&mut self, command: EgressCommand) -> EgressShardCommandEffect;
 
     fn timer_generation(&self, _output_id: &OutputId) -> Option<u64> {
@@ -159,6 +185,29 @@ pub trait EgressShardBackend: Send + 'static {
 
     fn on_shutdown(&mut self) {}
 
+    /// Block the shard thread until there is something to do or `max_wait`
+    /// elapses. `max_wait` is the shard's own bound (its idle wait, already
+    /// shortened to the next application timer); a backend may return sooner
+    /// when a deadline of its own is due.
+    ///
+    /// The default waits on the command channel only, which is what every
+    /// current native backend needs. A backend that owns a thread-affine
+    /// completion runtime overrides this and enters that runtime here to wait
+    /// for commands and its own I/O together, so the shard never blocks the
+    /// thread outside it. Scheduling, budgets, timers and shutdown stay with
+    /// the shard loop: a wake only says what woke it.
+    fn wait_idle(
+        &mut self,
+        commands: &Receiver<EgressCommand>,
+        max_wait: Duration,
+    ) -> EgressShardIdleWake {
+        match commands.recv_timeout(max_wait) {
+            Ok(command) => EgressShardIdleWake::Command(command),
+            Err(flume::RecvTimeoutError::Timeout) => EgressShardIdleWake::Timeout,
+            Err(flume::RecvTimeoutError::Disconnected) => EgressShardIdleWake::Disconnected,
+        }
+    }
+
     /// Total `EngineProgress::FeedOverrun` resynchronizations this backend
     /// has observed across every leaf it has ever visited. Read once per
     /// loop iteration into `ShardMetrics::feed_resyncs` for the
@@ -167,6 +216,32 @@ pub trait EgressShardBackend: Send + 'static {
     fn resync_count(&self) -> u64 {
         0
     }
+
+    /// Total visits that stopped because their finite work budget was spent.
+    fn budget_exhaustion_count(&self) -> u64 {
+        0
+    }
+
+    /// Copy backend-specific transport counters into the shard snapshot.
+    /// Backends without such counters keep the default no-op.
+    fn observe_metrics(&self, _metrics: &mut ShardMetrics) {}
+}
+
+/// Why [`EgressShardBackend::wait_idle`] returned.
+// The command is moved by value through the channel already; boxing it would
+// add an allocation per idle wake to save stack space on the control path.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum EgressShardIdleWake {
+    /// A command arrived; it is handled exactly like one found by `try_recv`.
+    Command(EgressCommand),
+    /// The backend has I/O or completion work worth servicing. The shard
+    /// schedules one ordinary backend-ready visit; it is not a command.
+    BackendActivity,
+    /// `max_wait` (or an earlier backend deadline) elapsed with nothing else.
+    Timeout,
+    /// Every command sender is gone; the shard stops.
+    Disconnected,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,7 +268,7 @@ pub enum EgressShardSendError {
 #[derive(Debug, Clone)]
 pub struct FeedWakeHandle {
     gate: Arc<WakeGate>,
-    sender: SyncSender<EgressCommand>,
+    sender: Sender<EgressCommand>,
 }
 
 impl FeedWakeHandle {
@@ -201,13 +276,20 @@ impl FeedWakeHandle {
     /// transition, so at most one wake is in flight per shard.
     pub fn deliver(&self) -> Result<(), EgressShardSendError> {
         if self.gate.notify() {
-            return self
-                .sender
-                .try_send(EgressCommand::FeedWake)
-                .map_err(|err| match err {
-                    TrySendError::Full(_) => EgressShardSendError::Full,
-                    TrySendError::Disconnected(_) => EgressShardSendError::Closed,
-                });
+            return match self.sender.try_send(EgressCommand::FeedWake) {
+                Ok(()) => Ok(()),
+                Err(TrySendError::Full(_)) => {
+                    // No wake was delivered. Leave the gate clear so the
+                    // caller can retry, rather than permanently suppressing
+                    // every later publication for this shard.
+                    self.gate.take();
+                    Err(EgressShardSendError::Full)
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    self.gate.take();
+                    Err(EgressShardSendError::Closed)
+                }
+            };
         }
         Ok(())
     }
@@ -216,19 +298,81 @@ impl FeedWakeHandle {
 #[derive(Debug)]
 pub struct EgressShardHandle {
     shard_id: ShardId,
-    sender: SyncSender<EgressCommand>,
+    sender: Sender<EgressCommand>,
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
     wake_gate: Arc<WakeGate>,
     join: Option<JoinHandle<()>>,
 }
 
 impl EgressShardHandle {
-    pub fn spawn<B: EgressShardBackend>(
+    /// Spawn a shard whose backend is built on the shard thread by `factory`.
+    ///
+    /// Only `factory` (and what it captures) crosses the thread boundary and
+    /// must be `Send`; the backend it returns need not be. Construction,
+    /// every backend call and destruction all happen on the shard thread. A
+    /// panicking factory is reported like any other shard panic
+    /// (`EgressShardSnapshot::panicked`).
+    pub fn spawn_with<B, F>(shard_id: ShardId, config: EgressShardConfig, factory: F) -> Self
+    where
+        B: EgressShardBackend,
+        F: FnOnce() -> B + Send + 'static,
+    {
+        Self::spawn_thread(shard_id, config, move || Some(factory()))
+    }
+
+    /// Like [`Self::spawn_with`] for a fallible factory: waits for
+    /// construction and returns its error to the caller instead of starting
+    /// a shard.
+    pub fn try_spawn_with<B, E, F>(
+        shard_id: ShardId,
+        config: EgressShardConfig,
+        factory: F,
+    ) -> Result<Self, E>
+    where
+        B: EgressShardBackend,
+        E: Send + 'static,
+        F: FnOnce() -> Result<B, E> + Send + 'static,
+    {
+        let (ready_tx, ready_rx) = flume::bounded::<Result<(), E>>(1);
+        let mut handle = Self::spawn_thread(shard_id, config, move || match factory() {
+            Ok(backend) => {
+                let _ = ready_tx.send(Ok(()));
+                Some(backend)
+            }
+            Err(error) => {
+                let _ = ready_tx.send(Err(error));
+                None
+            }
+        });
+        // A disconnected channel means the factory panicked; that is already
+        // recorded in the snapshot, so hand back the (panicked) shard.
+        if let Ok(Err(error)) = ready_rx.recv() {
+            if let Some(join) = handle.join.take() {
+                let _ = join.join();
+            }
+            return Err(error);
+        }
+        Ok(handle)
+    }
+
+    /// Spawn a shard around an already-built `Send` backend. Convenience for
+    /// tests and callers whose backend is trivially movable; production
+    /// fabric paths use [`Self::spawn_with`] so the backend is born on its
+    /// shard thread.
+    pub fn spawn<B: EgressShardBackend + Send>(
         shard_id: ShardId,
         config: EgressShardConfig,
         backend: B,
     ) -> Self {
-        let (sender, receiver) = mpsc::sync_channel(config.command_channel_capacity.get());
+        Self::spawn_with(shard_id, config, move || backend)
+    }
+
+    fn spawn_thread<B, I>(shard_id: ShardId, config: EgressShardConfig, init: I) -> Self
+    where
+        B: EgressShardBackend,
+        I: FnOnce() -> Option<B> + Send + 'static,
+    {
+        let (sender, receiver) = flume::bounded(config.command_channel_capacity.get());
         let snapshot = Arc::new(Mutex::new(EgressShardSnapshot::new(shard_id)));
         let thread_snapshot = Arc::clone(&snapshot);
         let wake_gate = Arc::new(WakeGate::new());
@@ -240,7 +384,7 @@ impl EgressShardHandle {
                     shard_id,
                     config,
                     receiver,
-                    backend,
+                    init,
                     thread_snapshot,
                     thread_wake_gate,
                 )
@@ -323,18 +467,29 @@ fn run_shard_thread<B: EgressShardBackend>(
     shard_id: ShardId,
     config: EgressShardConfig,
     receiver: Receiver<EgressCommand>,
-    mut backend: B,
+    init: impl FnOnce() -> Option<B>,
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
     wake_gate: Arc<WakeGate>,
 ) {
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        // Construction, use and drop of the backend all stay inside this
+        // closure, i.e. on the shard thread.
+        let Some(mut backend) = init() else {
+            return;
+        };
         let mut runtime = EgressShardRuntime {
             shard_id,
             config,
             receiver,
             backend: &mut backend,
-            ready_backlog: VecDeque::new(),
-            timers: TimerWheel::new(),
+            ready_backlog: VecDeque::with_capacity(
+                config
+                    .command_channel_capacity()
+                    .get()
+                    .saturating_add(config.readiness_batch_budget().get()),
+            ),
+            timers: TimerWheel::with_capacity(config.leaf_capacity().get()),
+            expired_timers: Vec::with_capacity(config.timer_batch_budget().get()),
             metrics: ShardMetrics::new(shard_id),
             snapshot: Arc::clone(&snapshot),
             wake_gate,
@@ -356,6 +511,7 @@ struct EgressShardRuntime<'a, B: EgressShardBackend> {
     backend: &'a mut B,
     ready_backlog: VecDeque<()>,
     timers: TimerWheel<OutputId>,
+    expired_timers: Vec<(OutputId, u64)>,
     metrics: ShardMetrics,
     snapshot: Arc<Mutex<EgressShardSnapshot>>,
     wake_gate: Arc<WakeGate>,
@@ -377,7 +533,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             let mut ready_processed = self.process_ready_batch(&mut running);
             let mut timers_processed = self.process_timer_batch(&mut running);
             if running && processed == 0 && ready_processed == 0 && timers_processed == 0 {
-                processed = self.wait_for_command(&mut running);
+                processed = self.wait_for_activity(&mut running);
                 if running {
                     ready_processed += self.process_ready_batch(&mut running);
                 }
@@ -450,17 +606,39 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
         processed
     }
 
-    fn wait_for_command(&mut self, running: &mut bool) -> usize {
-        match self.receiver.recv_timeout(self.config.idle_wait) {
-            Ok(command) => {
+    /// The longest the shard may park: the earliest of the idle bound, the
+    /// next application timer and, once draining, the drain deadline. Every
+    /// backend waiter sees this same bound, so none can sleep past the
+    /// generic drain deadline.
+    fn idle_wait_bound(&mut self, now: Instant) -> Duration {
+        let mut wait = self.config.idle_wait();
+        if let Some(deadline) = self.timers.next_deadline() {
+            wait = wait.min(deadline.saturating_duration_since(now));
+        }
+        if let Some(deadline) = self.draining_until {
+            wait = wait.min(deadline.saturating_duration_since(now));
+        }
+        wait
+    }
+
+    fn wait_for_activity(&mut self, running: &mut bool) -> usize {
+        let wait = self.idle_wait_bound(Instant::now());
+        match self.backend.wait_idle(&self.receiver, wait) {
+            EgressShardIdleWake::Command(command) => {
                 let effect = self.process_command(command);
                 if self.apply_effect(effect).stops_shard() {
                     *running = false;
                 }
                 1
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => 0,
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
+            EgressShardIdleWake::BackendActivity => {
+                // Same path as any other readiness request: the ready batch
+                // that follows runs `on_ready` under the shared budget.
+                self.apply_effect(EgressShardCommandEffect::ScheduleReady { count: 1 });
+                0
+            }
+            EgressShardIdleWake::Timeout => 0,
+            EgressShardIdleWake::Disconnected => {
                 *running = false;
                 0
             }
@@ -521,18 +699,21 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 break;
             }
         }
+        self.metrics.ready_visits = self.metrics.ready_visits.saturating_add(processed as u64);
         processed
     }
 
     fn process_timer_batch(&mut self, running: &mut bool) -> usize {
         let now = Instant::now();
-        let expired = self.timers.drain_expired_limited(
+        let mut expired = std::mem::take(&mut self.expired_timers);
+        self.timers.drain_expired_limited_into(
             now,
             self.config.timer_batch_budget.get(),
             |output_id| self.backend.timer_generation(output_id),
+            &mut expired,
         );
         let mut processed = 0;
-        for (output_id, generation) in expired {
+        for (output_id, generation) in expired.drain(..) {
             processed += 1;
             let effect = self.backend.on_timer(output_id, generation);
             if self.apply_effect(effect).stops_shard() {
@@ -540,6 +721,7 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 break;
             }
         }
+        self.expired_timers = expired;
         processed
     }
 
@@ -550,11 +732,22 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
                 generation,
                 fire_at,
             } => {
-                self.timers.insert(fire_at, output_id, generation);
+                if !self.timers.insert(fire_at, output_id, generation) {
+                    self.metrics.queue_overflows = self.metrics.queue_overflows.saturating_add(1);
+                }
                 EgressShardCommandEffect::Continue
             }
             EgressShardCommandEffect::ScheduleReady { count } => {
-                self.ready_backlog.extend(std::iter::repeat_n((), count));
+                let available = self
+                    .ready_backlog
+                    .capacity()
+                    .saturating_sub(self.ready_backlog.len());
+                let accepted = count.min(available);
+                self.ready_backlog.extend(std::iter::repeat_n((), accepted));
+                self.metrics.ready_overflows = self
+                    .metrics
+                    .ready_overflows
+                    .saturating_add((count - accepted) as u64);
                 EgressShardCommandEffect::Continue
             }
             effect => effect,
@@ -582,6 +775,8 @@ impl<B: EgressShardBackend> EgressShardRuntime<'_, B> {
             .observe_ready_depth(u32::try_from(self.ready_backlog.len()).unwrap_or(u32::MAX));
         self.metrics.media_ticks = self.metrics.media_ticks.saturating_add(1);
         self.metrics.feed_resyncs = self.backend.resync_count();
+        self.metrics.budget_exhaustions = self.backend.budget_exhaustion_count();
+        self.backend.observe_metrics(&mut self.metrics);
         self.metrics.collected_at = Some(Instant::now());
 
         let mut snapshot = self.snapshot.lock().unwrap();

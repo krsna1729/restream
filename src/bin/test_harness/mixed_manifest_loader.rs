@@ -1,7 +1,7 @@
 //! Embedded mixed-matrix manifest loading, selection, and expected coverage.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
 use restream::domain::stage::StageKind;
 use restream::planner::{BackendPolicy, PlannedOutput, plan_pipeline_graph};
@@ -130,8 +130,10 @@ impl MixedDslOutputCase<'_> {
     pub(crate) fn to_output_case(&self) -> Result<MixedOutputCase, String> {
         let protocol = MixedOutputProtocol::from_name(self.protocol)
             .ok_or_else(|| format!("{} has unknown output protocol {}", self.id, self.protocol))?;
-        if !matches!(protocol, MixedOutputProtocol::Rtmp)
-            && !matches!(self.rtmp_mode, RtmpOutputMode::Legacy)
+        if !matches!(
+            protocol,
+            MixedOutputProtocol::Rtmp | MixedOutputProtocol::Rtmps
+        ) && !matches!(self.rtmp_mode, RtmpOutputMode::Legacy)
         {
             return Err(format!(
                 "{} sets rtmpMode for non-RTMP output protocol {}",
@@ -171,6 +173,14 @@ static MIXED_FAST_BREADTH_CASES_FROM_DSL: OnceLock<Vec<MixedFastBreadthCase>> = 
 static MIXED_FAST_BREADTH_BATCHES_FROM_DSL: OnceLock<Vec<MixedFastBreadthBatch>> = OnceLock::new();
 static SINGLE_TRACK_MIXED_OUTPUT_CASES_FROM_DSL: OnceLock<Vec<MixedOutputCase>> = OnceLock::new();
 static MULTI_TRACK_MIXED_OUTPUT_CASES_FROM_DSL: OnceLock<Vec<MixedOutputCase>> = OnceLock::new();
+static SINGLE_TRACK_MIXED_OUTPUT_CASES_WITHOUT_RTMPS: LazyLock<Vec<MixedOutputCase>> =
+    LazyLock::new(|| {
+        single_track_mixed_output_cases()
+            .iter()
+            .filter(|output| output.protocol() != MixedOutputProtocol::Rtmps)
+            .cloned()
+            .collect()
+    });
 static MIXED_DEFAULT_CHECKS_FROM_DSL: OnceLock<Vec<MixedCheck>> = OnceLock::new();
 
 pub(crate) fn mixed_input_cases() -> &'static [MixedInputCase] {
@@ -298,8 +308,10 @@ pub(crate) fn mixed_default_checks() -> &'static [MixedCheck] {
 pub(crate) fn mixed_output_cases_for_input(case: MixedInputCase) -> &'static [MixedOutputCase] {
     if case.is_multi_track() {
         multi_track_mixed_output_cases()
-    } else {
+    } else if case.protocol() == MixedInputProtocol::Rtmp {
         single_track_mixed_output_cases()
+    } else {
+        SINGLE_TRACK_MIXED_OUTPUT_CASES_WITHOUT_RTMPS.as_slice()
     }
 }
 
@@ -459,6 +471,7 @@ pub(crate) fn expected_mixed_stage_count_for_outputs(
         .map(|output_case| {
             let url = match output_case.protocol() {
                 MixedOutputProtocol::Rtmp => "rtmp://example/live/out",
+                MixedOutputProtocol::Rtmps => "rtmps://localhost/live/out",
                 MixedOutputProtocol::Srt => "srt://example:9000?streamid=publish:out",
             };
             PlannedOutput::new(

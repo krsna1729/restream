@@ -5,7 +5,7 @@
 //! populates them, while API, diagnostics, alerts, and harness code consume
 //! them through stable runtime-facing shapes.
 
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Per-pipeline ingest quality snapshot (RTMP TCP or SRT link stats).
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -85,16 +85,15 @@ pub struct PublisherQuality {
     pub packets_received_retrans_per_sec: Option<f64>,
     pub packets_received_undecrypt_per_sec: Option<f64>,
     // SRT buffer occupancy
-    /// The configured `SRTO_SNDBUF` ceiling itself (not occupancy) — read
-    /// back from libsrt once at connect time since it's a PREBIND option
-    /// and cannot change afterward. Egress-only today: reflects whatever
-    /// `srt_egress_sndbuf_bytes` resolved to (formula default or an
-    /// explicit `sndbuf=` URL override) for this specific destination.
-    pub srt_sndbuf_configured_bytes: Option<i32>,
     pub srt_send_buf_bytes: Option<i32>,
-    pub srt_recv_buf_bytes: Option<i32>,
+    /// Ingest receive-buffer occupancy from `srt-rs` receiver statistics: packets
+    /// buffered, the configured capacity in packets, and the exact payload bytes
+    /// held. Byte capacity is not reported (the limit is in packets), so there is
+    /// deliberately no available-bytes field.
+    pub srt_recv_buf_packets: Option<u32>,
+    pub srt_recv_buf_capacity_packets: Option<u32>,
+    pub srt_recv_buf_payload_bytes: Option<u64>,
     pub srt_send_buf_avail_bytes: Option<i32>,
-    pub srt_recv_buf_avail_bytes: Option<i32>,
     pub srt_flight_size_pkts: Option<i32>,
     pub srt_flow_window_pkts: Option<i32>,
     pub srt_congestion_window_pkts: Option<i32>,
@@ -103,9 +102,24 @@ pub struct PublisherQuality {
     pub srt_group_connected_members: Option<u32>,
     pub srt_group_active_members: Option<u32>,
     pub srt_group_broken_members: Option<u32>,
+    /// Bonded ingest only: receiver-side missing sequence numbers and
+    /// decryption rejections summed over all legs. These are WIRE views; a bond's
+    /// deduplicated logical stream can be intact while one leg degrades, so they
+    /// are deliberately not folded into the ordinary publisher loss counters.
+    pub srt_group_wire_receiver_packets_lost: Option<u64>,
+    pub srt_group_wire_packets_undecryptable: Option<u64>,
     pub inbound_rtp_packets_lost: Option<u64>,
     pub inbound_rtp_packets_in_error: Option<u64>,
     pub inbound_rtp_packets_jitter: Option<f64>,
+    // Egress delivery (sampled once per second by the output's shard).
+    /// Bytes per second the peer acknowledged: TCP `bytes_acked` delta for
+    /// RTMP/RTMPS (wire bytes, so healthy is slightly above the offered
+    /// payload rate); unique-minus-dropped payload for SRT.
+    pub delivered_bps: Option<f64>,
+    /// The output feed's published payload rate over the same window.
+    pub offered_bps: Option<f64>,
+    /// `delivered_bps / offered_bps`; below ~0.95 the output is not keeping up.
+    pub delivery_ratio: Option<f64>,
 }
 
 use crate::media::metadata::{AudioMeta, VideoMeta};
@@ -145,9 +159,7 @@ pub struct RingBufferDiagSnapshot {
 #[derive(Debug, Clone)]
 pub struct SrtListenerDiagSnapshot {
     pub bonding_available: bool,
-    pub rx_queue_bytes: u64,
-    pub rx_queue_peak_bytes: u64,
-    pub drops: u64,
+    pub ingress_owner: SrtIngressOwnerSnapshot,
     pub active_ingest_count: usize,
 }
 
@@ -167,13 +179,83 @@ pub struct FileIngestDependencySnapshot {
     pub child_registered: bool,
 }
 
-/// Shared SRT listener socket state, updated by the SRT monitor task.
+/// Shared SRT listener state, published by the SRT ingress Owner thread.
 #[derive(Debug, Default)]
 pub struct ListenerSocketStats {
     pub bonding_available: AtomicBool,
-    pub rx_queue_bytes: AtomicU64,
-    pub rx_queue_max_bytes: AtomicU64,
-    pub drops: AtomicU64,
+    /// Counters published by the SRT ingress Owner thread.
+    pub ingress_owner: SrtIngressOwnerStats,
+}
+
+macro_rules! ingress_owner_stats {
+    ($($counter:ident),* $(,)?; $($gauge:ident),* $(,)?) => {
+        /// Low-cardinality SRT ingress Owner counters and gauges. Written only
+        /// by the ingress Owner thread (and the bridge accounting it owns);
+        /// read by status/diagnostics. No peer or StreamID labels.
+        #[derive(Debug, Default)]
+        pub struct SrtIngressOwnerStats {
+            $(pub $counter: AtomicU64,)*
+            $(pub $gauge: AtomicU64,)*
+            pub faulted: AtomicBool,
+            pub managed_rx: AtomicBool,
+        }
+
+        /// Plain-value copy of [`SrtIngressOwnerStats`].
+        #[derive(Debug, Clone, Default, PartialEq, Eq)]
+        pub struct SrtIngressOwnerSnapshot {
+            $(pub $counter: u64,)*
+            $(pub $gauge: u64,)*
+            pub faulted: bool,
+            pub managed_rx: bool,
+        }
+
+        impl SrtIngressOwnerStats {
+            pub fn snapshot(&self) -> SrtIngressOwnerSnapshot {
+                SrtIngressOwnerSnapshot {
+                    $($counter: self.$counter.load(Ordering::Relaxed),)*
+                    $($gauge: self.$gauge.load(Ordering::Relaxed),)*
+                    faulted: self.faulted.load(Ordering::Relaxed),
+                    managed_rx: self.managed_rx.load(Ordering::Relaxed),
+                }
+            }
+        }
+    };
+}
+
+ingress_owner_stats! {
+    // Cumulative counters.
+    service_visits,
+    service_actions,
+    maintenance_actions,
+    budget_exhausted,
+    tx_exhaustions,
+    tx_packets,
+    tx_completed_ok,
+    tx_failed,
+    rx_packets,
+    rx_bytes,
+    rx_ring_dropped,
+    rx_truncated,
+    policy_requests,
+    policy_rejections,
+    policy_deferred,
+    credential_failures,
+    stale_commands,
+    overload_disconnects,
+    send_failures,
+    event_bridge_full_visits,
+    telemetry_dropped,
+    ;
+    // Gauges and high-water marks.
+    tx_capacity,
+    tx_in_flight,
+    tx_high_water,
+    rx_ring_depth,
+    peers,
+    command_depth_hwm,
+    event_depth_hwm,
+    deferred_sends,
+    deferred_sends_hwm,
 }
 
 /// Shared RTMP listener accept/error counters.
@@ -181,4 +263,44 @@ pub struct ListenerSocketStats {
 pub struct RtmpListenerStats {
     pub rtmp_accept_errors: AtomicU64,
     pub rtmp_fd_exhaustion_errors: AtomicU64,
+}
+
+impl SrtIngressOwnerSnapshot {
+    /// The status-API projection: camelCase, low-cardinality, no identities.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "faulted": self.faulted,
+            "managedRx": self.managed_rx,
+            "serviceVisits": self.service_visits,
+            "serviceActions": self.service_actions,
+            "maintenanceActions": self.maintenance_actions,
+            "budgetExhausted": self.budget_exhausted,
+            "txCapacity": self.tx_capacity,
+            "txInFlight": self.tx_in_flight,
+            "txHighWater": self.tx_high_water,
+            "txExhaustions": self.tx_exhaustions,
+            "txPackets": self.tx_packets,
+            "txCompletedOk": self.tx_completed_ok,
+            "txFailed": self.tx_failed,
+            "rxPackets": self.rx_packets,
+            "rxBytes": self.rx_bytes,
+            "rxRingDepth": self.rx_ring_depth,
+            "rxRingDropped": self.rx_ring_dropped,
+            "rxTruncated": self.rx_truncated,
+            "peers": self.peers,
+            "policyRequests": self.policy_requests,
+            "policyRejections": self.policy_rejections,
+            "policyDeferred": self.policy_deferred,
+            "credentialFailures": self.credential_failures,
+            "commandDepthHighWater": self.command_depth_hwm,
+            "eventDepthHighWater": self.event_depth_hwm,
+            "eventBridgeFullVisits": self.event_bridge_full_visits,
+            "telemetryDropped": self.telemetry_dropped,
+            "deferredSends": self.deferred_sends,
+            "deferredSendsHighWater": self.deferred_sends_hwm,
+            "staleCommands": self.stale_commands,
+            "overloadDisconnects": self.overload_disconnects,
+            "sendFailures": self.send_failures,
+        })
+    }
 }

@@ -1,4 +1,4 @@
-//! Native RTMP ingest and egress using `rml_rtmp`.
+//! RTMP ingest and egress protocol handling using `rml_rtmp`.
 //!
 //! TCP admission, ingest sessions, and egress publication are separate owners.
 //! The public entry points remain re-exported here for callers.
@@ -7,6 +7,7 @@ mod egress_connection;
 mod egress_engine;
 mod egress_metadata;
 mod egress_packets;
+pub(crate) mod egress_payload_cache;
 mod egress_transport;
 mod enhanced;
 mod flv;
@@ -17,6 +18,7 @@ mod listener;
 mod play;
 mod timestamps;
 
+pub(crate) use listener::start_rtmp_server_on_with_shutdown;
 pub use listener::{start_rtmp_server, start_rtmp_server_on};
 
 pub(crate) use egress_connection::{RtmpSessionCore, RtmpSessionError, RtmpSessionEvent};
@@ -30,7 +32,9 @@ pub(crate) use egress_packets::{
     should_send_startup_audio_sequence_header, startup_video_sequence_header,
     validate_rtmp_output_audio_packet_track,
 };
-pub(crate) use egress_transport::{RtmpUrlParts, parse_rtmp_url, resolve_rtmps_client_config};
+pub(crate) use egress_transport::{
+    RtmpUrlParts, parse_rtmp_url, resolve_rtmps_client_config, supports_rtmps_cipher_suite,
+};
 // Only reachable via now-test-only callers (RtmpConnection::tls, RtmpShardBackend::new).
 #[cfg(test)]
 pub(crate) use egress_transport::rustls_client_config;
@@ -52,7 +56,7 @@ use std::{sync::Arc, time::Duration};
 #[cfg(test)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(test)]
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 #[cfg(test)]
 use tokio_util::sync::CancellationToken;
 
@@ -77,7 +81,5 @@ use flv::{
 };
 #[cfg(test)]
 use handshake::perform_client_handshake;
-#[cfg(test)]
-use ingest::handle_rtmp_client;
 #[cfg(test)]
 use timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
