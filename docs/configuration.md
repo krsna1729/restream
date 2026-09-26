@@ -24,7 +24,7 @@ in SQLite.
 | RTMP listener | `0.0.0.0:1935` | `RESTREAM_RTMP_PORT` |
 | SRT listener | `0.0.0.0:10080` | `RESTREAM_SRT_PORT` |
 | Tokio scheduler workers | Derived from the effective CPU mask/quota | `RESTREAM_TOKIO_WORKER_THREADS` |
-| glibc malloc arenas | `2` (set at startup with `mallopt`); keeps freed per-thread memory from staying resident: −34 to −47 MB RSS at 50 SRT / 500 RTMP outputs, frozen-SRT-destination surge 66–72 MB → 37 MB, no measurable CPU change | `MALLOC_ARENA_MAX` (when set, Restream leaves glibc's own handling alone) |
+| glibc malloc arenas | **Provisional** `2` (set at startup with `mallopt`, return value checked; the effective setting is logged as `restream.malloc.arenas` and shown as `runtime.malloc.arena_max` in host settings). Measured on one 6-CPU host only: −34 to −47 MB RSS at 50 SRT / 500 RTMP outputs, frozen-SRT-destination surge 66–72 MB → 30–47 MB, no measurable CPU change. Arenas reduce allocator lock contention, so qualify per host (`docs/capacity-ramp.md`) before treating 2 as final | `RESTREAM_MALLOC_ARENA_MAX` (`default` = glibc policy, or a positive count); an operator `MALLOC_ARENA_MAX` takes precedence and is applied by glibc |
 | Tokio blocking-thread ceiling | `512` | `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` |
 | Transcoder backend | External FFmpeg subprocess | `RESTREAM_INTERNAL_VIDEO_PRESETS`, `RESTREAM_INTERNAL_HEVC_TO_H264`, `RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX` (`1`/`true`/`yes`/`on` enable each in-process stage family independently) |
 | File-ingest backend | External embedded FFmpeg subprocess | `RESTREAM_USE_INTERNAL_FILE_INGEST` (`1`/`true`/`yes`/`on` to enable in-process remux + demux for passthrough file ingest) |

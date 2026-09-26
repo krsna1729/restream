@@ -71,28 +71,33 @@ impl RtmpClientSocket {
     /// keeping them (`read` overwrites from the start). The cap keeps one read
     /// from landing more than the parser budget checks per step, however far
     /// the buffer's capacity has grown.
-    async fn append(&mut self, mut buffer: BytesMut) -> io::Result<(usize, BytesMut)> {
+    ///
+    /// Takes `&self`: a read may stay in flight while this connection writes
+    /// (io_uring allows one read and one write on a socket at once), which the
+    /// play loop relies on to keep handling client commands during playback.
+    pub(super) async fn append(&self, mut buffer: BytesMut) -> io::Result<(usize, BytesMut)> {
         use compio::buf::{IntoInner, IoBuf};
         use compio::io::AsyncRead;
         buffer.reserve(INGEST_READ_BYTES);
         let start = buffer.len();
-        let compio::BufResult(result, slice) = self
-            .stream
+        let mut stream = &self.stream;
+        let compio::BufResult(result, slice) = stream
             .read(buffer.slice(start..start + INGEST_READ_BYTES))
             .await;
         let buffer = slice.into_inner();
         result.map(|count| (count, buffer))
     }
 
-    pub(super) async fn write_all(&mut self, buffer: Vec<u8>) -> io::Result<()> {
+    pub(super) async fn write_all(&self, buffer: Vec<u8>) -> io::Result<()> {
         use compio::io::AsyncWriteExt;
+        let mut stream = &self.stream;
         tokio::select! {
             biased;
             _ = self.shutdown.cancelled() => Err(io::Error::new(
                 io::ErrorKind::Interrupted,
                 "RTMP listener shutting down",
             )),
-            compio::BufResult(result, _buffer) = self.stream.write_all(buffer) => result,
+            compio::BufResult(result, _buffer) = stream.write_all(buffer) => result,
         }
     }
 }
@@ -128,6 +133,9 @@ pub(super) enum RtmpControlCommand {
     },
     PlayNext {
         reply: oneshot::Sender<Option<Vec<Arc<MediaPacket>>>>,
+        /// The previous burst's vector, emptied by the Compio side, so the
+        /// control session refills it instead of allocating per burst.
+        recycled: Vec<Arc<MediaPacket>>,
     },
     Cancel,
     Quality(Box<PublisherQuality>),
@@ -314,11 +322,14 @@ pub(super) async fn run_rtmp_control_session(
                 ));
                 let _ = reply.send(state.0);
             }
-            RtmpControlCommand::PlayNext { reply } => {
-                let Some((pipeline_id, reader, burst)) = playback.as_mut() else {
+            RtmpControlCommand::PlayNext { reply, recycled } => {
+                let Some((_pipeline_id, reader, burst)) = playback.as_mut() else {
                     let _ = reply.send(None);
                     continue;
                 };
+                if burst.capacity() == 0 {
+                    *burst = recycled;
+                }
                 burst.clear();
                 let mut cancelled = false;
                 'pull: loop {
@@ -349,10 +360,11 @@ pub(super) async fn run_rtmp_control_session(
                         Ok(_) => break,
                     }
                 }
+                // No per-burst log: at hundreds of players a burst-rate log
+                // line is itself a material cost.
                 let packets = if cancelled || commands.is_closed() {
                     None
                 } else {
-                    info!(pipeline = %pipeline_id, "RTMP play media burst pulled");
                     Some(std::mem::take(burst))
                 };
                 let finished = packets.is_none();

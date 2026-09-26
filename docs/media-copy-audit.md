@@ -137,8 +137,10 @@ Restream on 3 pinned CPUs, 5 interleaved reps, baseline `10ef9b65`.
 | — | Also fixed: `compio_production_fanout` lacked `harness = false`, so it never ran. **Open:** with it running, it submits 0 datagrams at fan-out ≥ 100. | srt-rs `d81e958` message. |
 
 Restream overload collapse: **done in Restream**. The SRT stall sweep treats
-a shard where ≥ 25% of the previous sweep's outputs (≥ 4) were backpressured
-or stalled as saturated. Stalled outputs are then kept connected
+a shard where at least four, and at least 25%, of the previous sweep's
+outputs were backpressured or stalled as saturated (the minimum is on
+pressured outputs, so 1 stuck of 4 is still recycled; corrected after review,
+the first version required only 4 visited). Stalled outputs are then kept connected
 (`backpressureReason: "shard_saturated"`) instead of being force-closed and
 reconnected into the same Owner. A lone stuck destination is still recycled
 (unit tests), and `fault.srt-output-stall` passes.

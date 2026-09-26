@@ -192,7 +192,7 @@ async fn shutdown_cancels_pending_publish_auth_before_owner_join() {
     join_test_owner_threads(&engine).await;
 }
 
-async fn drive_client_play_handshake(socket: &mut TcpStream, stream_key: &str) {
+async fn drive_client_play_handshake(socket: &mut TcpStream, stream_key: &str) -> ClientSession {
     let cancel = CancellationToken::new();
     let remaining = perform_client_handshake(socket, &cancel)
         .await
@@ -243,7 +243,7 @@ async fn drive_client_play_handshake(socket: &mut TcpStream, stream_key: &str) {
             }
         }
         if playing {
-            return;
+            return session;
         }
     }
 }
@@ -713,4 +713,92 @@ async fn media_handoff_backpressures_and_releases_weighted_permits() {
         .is_err()
     );
     assert_eq!(budget.available_permits(), 4);
+}
+
+/// A playing client's commands must be handled while media flows: stopping
+/// playback (closeStream) mid-stream detaches the server's ring reader
+/// instead of waiting until the play loop ends on its own.
+#[tokio::test]
+async fn client_stop_during_playback_detaches_the_reader() {
+    let pipeline_id = "pipe-play-client-stop";
+    let pipeline_access: Arc<dyn PipelineAccessAuthenticator> =
+        Arc::new(AcceptAllAuthenticator {
+            pipeline_id: pipeline_id.to_string(),
+        });
+    let (engine, addr, server) = start_ingress_test_server(pipeline_access).await;
+    let mut publisher = TcpStream::connect(addr).await.unwrap();
+    assert!(drive_client_publish_handshake(&mut publisher, "any-key").await);
+    let ring = engine.get_or_create_pipeline(pipeline_id).await;
+
+    let feeding = CancellationToken::new();
+    let feeder = {
+        let ring = ring.clone();
+        let feeding = feeding.clone();
+        tokio::spawn(async move {
+            let mut index = 0i64;
+            while !feeding.is_cancelled() {
+                let is_keyframe = index % 30 == 0;
+                let mut payload = vec![0x55; 512];
+                payload[0] = if is_keyframe { 0x17 } else { 0x27 };
+                payload[1] = 1;
+                let nalu_len = (payload.len() - 9) as u32;
+                payload[5..9].copy_from_slice(&nalu_len.to_be_bytes());
+                payload[9] = if is_keyframe { 0x65 } else { 0x41 };
+                ring.push(crate::media::packet::MediaPacket {
+                    media_type: crate::media::packet::MediaType::Video,
+                    format: crate::media::packet::PayloadFormat::Flv,
+                    is_keyframe,
+                    track_index: 0,
+                    pts: index * 33,
+                    dts: index * 33,
+                    payload: bytes::Bytes::from(payload),
+                });
+                index += 1;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+    };
+
+    let mut player = TcpStream::connect(addr).await.unwrap();
+    let mut session = drive_client_play_handshake(&mut player, "any-key").await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while ring.active_reader_count() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("playback reader attaches");
+    // Media is flowing to the player.
+    let mut sink = vec![0u8; 64 * 1024];
+    let received = tokio::time::timeout(Duration::from_secs(5), player.read(&mut sink))
+        .await
+        .expect("media arrives")
+        .unwrap();
+    assert!(received > 0);
+
+    for result in session.stop_playback().expect("stop playback") {
+        if let ClientSessionResult::OutboundResponse(packet) = result {
+            player.write_all(&packet.bytes).await.unwrap();
+        }
+    }
+    // Keep draining so the server is never blocked on a full socket.
+    let detached = tokio::time::timeout(Duration::from_secs(5), async {
+        while ring.active_reader_count() > 0 {
+            let _ = tokio::time::timeout(Duration::from_millis(20), player.read(&mut sink)).await;
+        }
+    })
+    .await;
+    assert!(
+        detached.is_ok(),
+        "closeStream during playback must detach the ring reader while media flows"
+    );
+
+    feeding.cancel();
+    let _ = feeder.await;
+    drop(player);
+    drop(publisher);
+    engine.shutdown_listeners();
+    wait_for_ingest_cleanup(&engine, pipeline_id).await;
+    let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
+    join_test_owner_threads(&engine).await;
 }

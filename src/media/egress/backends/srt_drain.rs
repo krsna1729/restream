@@ -168,16 +168,17 @@ impl SrtShardBackend {
     }
 }
 
-/// Share of a sweep's leaves that must be backpressured or stalled (with at
-/// least `SATURATED_MIN_LEAVES` visited) for the shard to count as saturated.
+/// A shard is saturated when at least `SATURATED_MIN_PRESSURED_LEAVES` of the
+/// leaves one full sweep visited, and at least a quarter of them, were
+/// backpressured or stalled: the Owner, not one destination, is behind. The
+/// minimum is on pressured leaves, not on population, so one stuck
+/// destination on a small shard (1 of 4) is still recycled.
 const SATURATED_SHARE_DENOMINATOR: usize = 4;
-const SATURATED_MIN_LEAVES: usize = 4;
+const SATURATED_MIN_PRESSURED_LEAVES: usize = 4;
 
-/// A shard is saturated when a quarter or more of the leaves one full sweep
-/// visited were backpressured or stalled: the Owner, not one destination, is
-/// behind. A lone stuck destination among healthy siblings stays below this.
 pub(super) fn shard_saturated(visited: usize, pressured: usize) -> bool {
-    visited >= SATURATED_MIN_LEAVES && pressured * SATURATED_SHARE_DENOMINATOR >= visited
+    pressured >= SATURATED_MIN_PRESSURED_LEAVES
+        && pressured * SATURATED_SHARE_DENOMINATOR >= visited
 }
 
 #[cfg(test)]
@@ -186,22 +187,26 @@ mod saturation_tests {
 
     #[test]
     fn a_lone_stuck_destination_does_not_saturate_the_shard() {
+        assert!(!shard_saturated(4, 1), "1 of 4 is one bad destination");
+        assert!(!shard_saturated(8, 2));
         assert!(!shard_saturated(100, 1));
         assert!(!shard_saturated(100, 24));
     }
 
     #[test]
-    fn a_quarter_of_the_shard_behind_is_saturation() {
+    fn a_quarter_of_the_shard_and_at_least_four_outputs_behind_is_saturation() {
+        assert!(shard_saturated(16, 4));
         assert!(shard_saturated(100, 25));
         assert!(shard_saturated(200, 200));
     }
 
     #[test]
-    fn tiny_shards_never_count_as_saturated() {
+    fn fewer_than_four_pressured_outputs_are_never_saturation() {
         assert!(
             !shard_saturated(3, 3),
-            "one or two outputs must still be recycled"
+            "small shards still recycle stalled outputs"
         );
+        assert!(!shard_saturated(4, 3));
         assert!(!shard_saturated(0, 0));
     }
 }

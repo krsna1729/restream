@@ -237,7 +237,7 @@ pub(crate) struct SrtShardBackend {
     sweep_visited: usize,
     sweep_pressured: usize,
     /// Whether the previous full sweep found the shard saturated (see
-    /// `srt_drain::SATURATED_SHARE`).
+    /// `srt_drain::shard_saturated`).
     shard_saturated: bool,
     /// Leaves get `drain_timeout` minus the Owner-teardown reserve to flush,
     /// so shutdown stays inside the generic shard drain deadline.

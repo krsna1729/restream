@@ -26,6 +26,7 @@ pub mod events;
 pub mod ffmpeg_extract;
 pub mod infrastructure;
 pub mod logging;
+pub mod malloc_tuning;
 pub mod media;
 pub mod planner;
 pub mod runtime;

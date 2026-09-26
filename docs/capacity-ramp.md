@@ -74,6 +74,9 @@ harness, publisher and sinks the second half. On large hosts:
   `CAPACITY_PEER_COUNT` (more sink ports/listeners) if the receiver, not
   Restream, saturates. Check the sink side with `top` during a high rung: the
   `test_harness` process should stay below its CPU budget.
+- `CAPACITY_MALLOC_ARENA_MAX` sets Restream's glibc arena cap for the run
+  (`default` = glibc policy). Restream's own default of 2 was measured on one
+  6-CPU host only; qualify it per host before treating it as final.
 - Extend the ladders on big hosts, for example
   `CAPACITY_RTMP_OUTPUTS=500,1000,2000,4000,8000`
   `CAPACITY_SRT_OUTPUTS=100,200,400,800,1600`. A ladder stops after a rung
@@ -148,6 +151,14 @@ and report results comparable to the reference host in docs/capacity-ramp.md.
      CAPACITY_SRT_OUTPUTS=100,200,400,800,1600 \
      scripts/harness/capacity-ramp.sh
    Run B: same ladders plus CAPACITY_EGRESS_SHARDS=<number of Restream CPUs>.
+   Run C (malloc arena qualification; Restream's arena cap of 2 is
+   provisional): with Run A's shard setting, repeat each protocol at two
+   representative rungs (the highest rung that passed in Run A and half of
+   it), plus CAPACITY_PROTOCOLS=transcode at its default ladder, once per
+   CAPACITY_MALLOC_ARENA_MAX in: default, 2, 4, 8. Report CPU, RSS and
+   delivery for every combination; the startup log line
+   `restream.malloc.arenas` in each rung's restream log records what was
+   applied.
    During the highest passing and first failing rung of each protocol,
    sample `top -b -n 3 -d 5` to record Restream vs test_harness CPU. If the
    test_harness process is at its CPU budget, the receiver is the limit:

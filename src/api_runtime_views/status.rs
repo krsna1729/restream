@@ -164,6 +164,16 @@ fn host_settings_json(engine: &MediaEngine, snapshot: &HostSettingsSnapshot) -> 
             Some("needed for SRT UDP send buffers".to_string()),
         ),
         host_info_setting_json(
+            "runtime.malloc.arena_max",
+            "glibc malloc arenas",
+            serde_json::json!(
+                crate::malloc_tuning::applied()
+                    .map_or_else(|| "not set at startup".to_string(), ToString::to_string)
+            ),
+            "arenas",
+            "caps resident per-thread allocator memory; 2 is provisional until cross-host qualification (RESTREAM_MALLOC_ARENA_MAX, docs/capacity-ramp.md)",
+        ),
+        host_info_setting_json(
             "runtime.tokio.worker_threads",
             "Tokio async workers",
             serde_json::json!(engine.config.tokio_runtime.worker_threads),

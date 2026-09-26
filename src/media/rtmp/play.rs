@@ -1,6 +1,6 @@
 //! RTMP play admission and owner-side protocol delivery.
 
-use rml_rtmp::sessions::{ServerSession, ServerSessionResult};
+use rml_rtmp::sessions::{ServerSession, ServerSessionEvent, ServerSessionResult};
 use rml_rtmp::time::RtmpTimestamp;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -116,47 +116,124 @@ pub(super) async fn handle_play_request(request: RtmpPlayRequest<'_>) -> Result<
     }
 
     let mut timestamp_guard = RtmpTimestampGuard::new();
+    let socket: &RtmpClientSocket = request.socket;
+    let session = request.session;
+    // One read stays in flight for the whole playback, so client commands
+    // (closeStream, deleteStream, pings, acknowledgements) are handled while
+    // media flows instead of queueing unread until playback ends. A new read
+    // is armed only when the loop continues, so ending playback normally never
+    // drops a read that could hold the client's next bytes.
+    let mut inbound = Box::pin(socket.append(session.take_input_buffer()));
+    let mut recycled = Vec::new();
     loop {
         let (reply, response) = oneshot::channel();
         tokio::select! {
             _ = request.shutdown.cancelled() => return Err("Play finished"),
-            result = request.commands.send(RtmpControlCommand::PlayNext { reply }) => {
+            result = request.commands.send(RtmpControlCommand::PlayNext { reply, recycled }) => {
                 result.map_err(|_| "RTMP control session closed")?;
             }
         }
-        let packets = tokio::select! {
-            result = response => result.map_err(|_| "RTMP control session closed")?,
-            _ = request.shutdown.cancelled() => {
-                let _ = request.commands.try_send(RtmpControlCommand::Cancel);
-                return Err("Play finished");
+        let mut response = response;
+        let packets = loop {
+            tokio::select! {
+                biased;
+                _ = request.shutdown.cancelled() => {
+                    let _ = request.commands.try_send(RtmpControlCommand::Cancel);
+                    return Err("Play finished");
+                }
+                read = &mut inbound => {
+                    match handle_play_input(session, socket, read).await {
+                        PlayInput::Continue => {
+                            inbound = Box::pin(socket.append(session.take_input_buffer()));
+                        }
+                        PlayInput::Finished => {
+                            let _ = request.commands.try_send(RtmpControlCommand::Cancel);
+                            info!(pipeline = %pipeline_id, "[rtmp] Play stopped by client");
+                            return Ok(());
+                        }
+                        PlayInput::Disconnected(reason) => {
+                            let _ = request.commands.try_send(RtmpControlCommand::Cancel);
+                            info!(pipeline = %pipeline_id, "[rtmp] Play subscriber disconnected");
+                            return Err(reason);
+                        }
+                    }
+                }
+                result = &mut response => {
+                    break result.map_err(|_| "RTMP control session closed")?;
+                }
             }
         };
         let Some(packets) = packets else {
             return Err("Play finished");
         };
-        if let Err(error) = send_media_packets(
-            request.session,
-            request.socket,
+        recycled = match send_media_packets(
+            session,
+            socket,
             request.stream_id,
             &mut timestamp_guard,
             packets,
         )
         .await
         {
-            info!(pipeline = %pipeline_id, "[rtmp] Play subscriber disconnected");
-            return Err(error);
+            Ok(emptied) => emptied,
+            Err(error) => {
+                info!(pipeline = %pipeline_id, "[rtmp] Play subscriber disconnected");
+                return Err(error);
+            }
+        };
+    }
+}
+
+enum PlayInput {
+    Continue,
+    Finished,
+    Disconnected(&'static str),
+}
+
+/// Feed client bytes received during playback to the session: write its
+/// responses, and report whether the client ended playback or the
+/// connection.
+async fn handle_play_input(
+    session: &mut ServerSession,
+    socket: &RtmpClientSocket,
+    read: std::io::Result<(usize, bytes::BytesMut)>,
+) -> PlayInput {
+    let (count, buffer) = match read {
+        Ok((0, _)) | Err(_) => return PlayInput::Disconnected("Play subscriber disconnected"),
+        Ok(read) => read,
+    };
+    let Ok(results) = session.handle_buffered_input(buffer, count) else {
+        return PlayInput::Disconnected("RTMP session parse error during playback");
+    };
+    let mut finished = false;
+    for result in results {
+        match result {
+            ServerSessionResult::OutboundResponse(packet) => {
+                if socket.write_all(packet.bytes).await.is_err() {
+                    return PlayInput::Disconnected("Play subscriber disconnected");
+                }
+            }
+            ServerSessionResult::RaisedEvent(ServerSessionEvent::PlayStreamFinished { .. }) => {
+                finished = true;
+            }
+            _ => {}
         }
+    }
+    if finished {
+        PlayInput::Finished
+    } else {
+        PlayInput::Continue
     }
 }
 
 async fn send_media_packets(
     session: &mut ServerSession,
-    socket: &mut RtmpClientSocket,
+    socket: &RtmpClientSocket,
     stream_id: u32,
     timestamp_guard: &mut RtmpTimestampGuard,
-    packets: Vec<std::sync::Arc<MediaPacket>>,
-) -> Result<(), &'static str> {
-    for media_packet in packets {
+    mut packets: Vec<std::sync::Arc<MediaPacket>>,
+) -> Result<Vec<std::sync::Arc<MediaPacket>>, &'static str> {
+    for media_packet in packets.drain(..) {
         let timestamp = timestamp_guard.packet_timestamp(&media_packet);
         let payload = media_packet.payload.clone();
         let result = match media_packet.media_type {
@@ -171,5 +248,5 @@ async fn send_media_packets(
             .await
             .map_err(|_| "Play subscriber disconnected")?;
     }
-    Ok(())
+    Ok(packets)
 }

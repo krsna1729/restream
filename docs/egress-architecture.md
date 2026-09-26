@@ -529,14 +529,32 @@ records. Unsupported negotiated suites, missing kTLS capability, or handoff
 errors fail the output; there is no silent userspace-TLS fallback. Ancillary
 receive staging preserves TLS record-type association for kTLS.
 
-Nominal transport-adapter capacity is 16 KiB per plain RTMP leaf and 16 KiB +
-24 B per RTMPS leaf (the 4 KiB receive queue, receive-worker buffer, outgoing
-control staging). At the default upper topology of 8 shards × 4,096 leaf slots
-(32,768 active leaves), this is about 512 MiB / 512.75 MiB before allocator
-overhead. Configured shard/leaf overrides scale total capacity. This excludes
-protocol-engine/TLS/task/event state and kernel socket buffers; it is not a
-total per-leaf or process RSS estimate. The existing application pending-byte
-ceiling is a separate bound.
+Nominal transport-adapter bound per established RTMP/RTMPS leaf
+(`compio_tcp/stream.rs`):
+
+| Buffer | Bound |
+|---|---:|
+| queued RX (`TRANSPORT_BUFFER_CAPACITY`) | 4 KiB |
+| receive-worker buffer (`IO_CHUNK`) | 4 KiB |
+| TX staging, staged plus in flight (`TRANSMIT_BUFFER_CAPACITY`) | 64 KiB |
+| TX segment list (≤ 257 `Bytes` handles) and copied-run capacity | ~12 KiB |
+| **worst case** | **~84 KiB** |
+
+At the default upper topology of 8 shards × 4,096 leaf slots (32,768 active
+leaves) that is about **2.6 GiB** of adapter state before allocator overhead,
+not the ~512 MiB this section quoted before 64 KiB TX batching. Configured
+shard/leaf overrides scale it. Media payload in TX staging is mostly shared
+`Bytes` slices of the feed (zero-copy since `40ebacde`), so the private
+per-leaf copy is usually the headers/control run, far below 64 KiB, but the
+bound is what capacity planning must assume. It excludes protocol-engine,
+TLS, task and event state and kernel socket buffers; the application
+pending-byte ceiling is a separate bound.
+
+Measured, for calibration: in the capacity ramp (`docs/capacity-ramp.md`,
+8 Mbit/s outputs) Restream RSS grew from 184 MB at 250 RTMP outputs to 295 MB
+at 1,000, about **150 KB per output** of total process growth (all Restream
+state, not only the adapter). WI8's memory model should start from these
+figures.
 
 The kTLS read path preserves TLS record types: TLS 1.3 session tickets are
 discarded after the buffered Rustls handoff, so RTMPS session resumption is not

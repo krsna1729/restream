@@ -75,7 +75,8 @@ def main(root):
             f"- kernel {provenance.get('kernel', '?')}; {provenance.get('memory', '')}",
             f"- Restream CPUs `{provenance.get('restream_cpus')}`, harness/sink CPUs"
             f" `{provenance.get('harness_cpus')}`, egress shards {provenance.get('egress_shards')},"
-            f" SRT sink threads {provenance.get('sink_threads')}",
+            f" SRT sink threads {provenance.get('sink_threads')},"
+            f" malloc arenas {provenance.get('malloc_arena_max', 'restream provisional default')}",
             f"- one ingest at {provenance.get('bitrate')}, window {provenance.get('window_secs')} s,"
             f" {provenance.get('repeats')} repeats per rung; pass = every destination >= 0.95",
             "",

@@ -2609,6 +2609,34 @@ NIC bottleneck
 peer/network bottleneck
 ```
 
+### WI8 RTMP workloads are three, not one
+
+The Oracle must model these separately; one "RTMP" cost coefficient is wrong:
+
+| Workload | Path | Crossing |
+|---|---|---|
+| RTMP publish (ingest) | Compio ingress owner parses; decoded `Bytes` handed to the connection's Tokio control session (bounded channel of 16, shared 64 MiB byte permit) → ring publish | one channel op and possible cross-runtime wake per decoded audio/video message (~77/s per 30 fps + AAC publisher) |
+| Direct RTMP play (clients of Restream's `play` endpoint) | Tokio control session pulls ≤ 32 `Arc<MediaPacket>` per `PlayNext` request/reply; the same Compio ingress owner serializes and writes | one request/reply per burst; at the live edge bursts can be a single packet; players share the ingress owner with publishers |
+| Configured RTMP/RTMPS outputs | egress fabric Compio shards reading shared feeds | none per packet; the capacity ramp's RTMP numbers measure only this |
+
+Before changing either boundary, measure: publish handoff permit/queue wait
+(p50/p99); `PlayNext` response latency (p50/p99) and packets per burst;
+ingress-owner busy time and scheduling lag with publishers and players mixed;
+Tokio CPU and ring-reader wakeups; allocation and logging profiles. If
+`PlayNext` latency or wake CPU is material, try moving only the playback
+`Reader` onto the Compio owner (the ring's read side is atomic/`Arc`-based and
+`wait_for_data` is `Notify`-based) and compare both under the same load; the
+risk is more media scheduling on the owner that also parses publishers.
+
+Fixed from the static review that motivated this: the per-burst `info!` log
+is gone; the burst `Vec` is handed back with the next `PlayNext`, so steady
+state no longer allocates per burst; and the play loop now keeps a read in
+flight, so client commands during playback (closeStream, deleteStream,
+pings, acknowledgements) are handled while media flows. Before, they sat
+unread until playback ended (`client_stop_during_playback_detaches_the_reader`).
+A direct-play scaling harness mode does not exist yet; it is the next WI8
+instrument.
+
 ### WI8 delivery telemetry (landed)
 
 Each fabric output's `quality` now carries `deliveredBps`, `offeredBps` and
@@ -2971,7 +2999,12 @@ Architecture:
 - bounded work
 - bounded memory
 - bounded queues
-- no thread/task/socket per output
+- no OS thread or runtime per connection or output
+- no independent media backlog per output (outputs read shared feeds)
+- SRT: no UDP socket, task, or Owner per caller
+- RTMP/RTMPS: one TCP socket per connection is intrinsic; owner-local, bounded
+  Compio I/O tasks per established connection (the RX/TX completion workers)
+  are allowed and are the intended design, not a violation
 - SRT, RTMP, and RTMPS connections keep socket, protocol, timers, buffers,
   completions, and teardown on one fixed Compio owner.
 - Tokio receives only bounded typed control/lifecycle data and shared/decoded

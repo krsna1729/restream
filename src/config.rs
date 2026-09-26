@@ -392,6 +392,16 @@ fn capacity_limits_from_env(parallelism: usize) -> CapacityLimits {
 
 /// Positive `usize` override for thin A/B knobs. Unset, unparseable, or `0`
 /// means "leave the caller default alone".
+/// The malloc arena environment, read once at startup before any thread
+/// exists: `(MALLOC_ARENA_MAX, RESTREAM_MALLOC_ARENA_MAX)`. Interpreted by
+/// `crate::malloc_tuning`.
+pub fn malloc_arena_env() -> (Option<String>, Option<String>) {
+    (
+        std::env::var("MALLOC_ARENA_MAX").ok(),
+        std::env::var("RESTREAM_MALLOC_ARENA_MAX").ok(),
+    )
+}
+
 pub(crate) fn env_optional_positive_usize(name: &str) -> Option<usize> {
     std::env::var(name)
         .ok()

@@ -15,10 +15,13 @@ usage() {
 usage: scripts/harness/capacity-ramp.sh
 
 Environment (all optional):
-  CAPACITY_PROTOCOLS       comma list of rtmp,rtmps,srt (default all three)
+  CAPACITY_PROTOCOLS       comma list of rtmp,rtmps,srt,transcode (default rtmp,rtmps,srt)
   CAPACITY_RTMP_OUTPUTS    RTMP ladder   (default 100,250,500,1000,2000,4000)
   CAPACITY_RTMPS_OUTPUTS   RTMPS ladder  (default 100,250,500,1000,2000)
   CAPACITY_SRT_OUTPUTS     SRT ladder    (default 50,100,150,200,300,400,600,800)
+  CAPACITY_TRANSCODE_OUTPUTS transcode ladder, FFmpeg renditions fanned out (default 10,25,50,100)
+  CAPACITY_MALLOC_ARENA_MAX  Restream's RESTREAM_MALLOC_ARENA_MAX for the run: `default`
+                           (glibc policy) or a count; unset = Restream's provisional default
   CAPACITY_BITRATE         publisher fixture bitrate label (default 8M)
   CAPACITY_WINDOW_SECS     rated window per rung (default 30)
   CAPACITY_SETTLE_SECS     settle before the window (default 10)
@@ -51,6 +54,8 @@ protocols="${CAPACITY_PROTOCOLS:-rtmp,rtmps,srt}"
 rtmp_outputs="${CAPACITY_RTMP_OUTPUTS:-100,250,500,1000,2000,4000}"
 rtmps_outputs="${CAPACITY_RTMPS_OUTPUTS:-100,250,500,1000,2000}"
 srt_outputs="${CAPACITY_SRT_OUTPUTS:-50,100,150,200,300,400,600,800}"
+transcode_outputs="${CAPACITY_TRANSCODE_OUTPUTS:-10,25,50,100}"
+arena_max="${CAPACITY_MALLOC_ARENA_MAX:-}"
 bitrate="${CAPACITY_BITRATE:-8M}"
 window_secs="${CAPACITY_WINDOW_SECS:-30}"
 settle_secs="${CAPACITY_SETTLE_SECS:-10}"
@@ -160,13 +165,14 @@ json.dump({
     "restream_cpus": "$restream_cpus",
     "harness_cpus": "$harness_cpus",
     "egress_shards": "${CAPACITY_EGRESS_SHARDS:-default}",
+    "malloc_arena_max": "${CAPACITY_MALLOC_ARENA_MAX:-restream provisional default}",
     "sink_threads": $sink_threads,
     "peer_count": $peer_count,
     "bitrate": "$bitrate",
     "window_secs": $window_secs,
     "settle_secs": $settle_secs,
     "repeats": $repeats,
-    "ladders": {"rtmp": "$rtmp_outputs", "rtmps": "$rtmps_outputs", "srt": "$srt_outputs"},
+    "ladders": {"rtmp": "$rtmp_outputs", "rtmps": "$rtmps_outputs", "srt": "$srt_outputs", "transcode": "$transcode_outputs"},
 }, open(sys.argv[1], "w"), indent=2)
 EOF
 echo "capacity-ramp: artifacts in $root (restream cpus $restream_cpus, harness cpus $harness_cpus)"
@@ -177,6 +183,7 @@ scenario_for() {
     rtmp) echo egress-growth-source-same ;;
     rtmps) echo egress-growth-source-rtmps ;;
     srt) echo egress-growth-source-srt ;;
+    transcode) echo egress-growth-transcode-mixed ;;
     *) echo "capacity-ramp: unknown protocol $1" >&2; exit 2 ;;
   esac
 }
@@ -185,6 +192,7 @@ ladder_for() {
     rtmp) echo "$rtmp_outputs" ;;
     rtmps) echo "$rtmps_outputs" ;;
     srt) echo "$srt_outputs" ;;
+    transcode) echo "$transcode_outputs" ;;
   esac
 }
 
@@ -197,6 +205,9 @@ run_rung() {
   local shards_env=()
   if [[ -n "${CAPACITY_EGRESS_SHARDS:-}" ]]; then
     shards_env=(RESTREAM_EGRESS_SHARDS="$CAPACITY_EGRESS_SHARDS")
+  fi
+  if [[ -n "$arena_max" ]]; then
+    shards_env+=(RESTREAM_MALLOC_ARENA_MAX="$arena_max")
   fi
   env "${shards_env[@]}" \
     RESTREAM_CPUSET="$restream_cpus" \
