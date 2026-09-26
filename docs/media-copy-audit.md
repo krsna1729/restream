@@ -121,6 +121,28 @@ budget (Restream-limited).
 | S6 | **Public stable id for `LogicalPeerId`** (`as_u64` is `pub(crate)`), for telemetry keys. | The harness sink had to invent a per-pool sequence to key per-connection bytes (`e521492b`). | Minor API. |
 | S7 | **Re-verify the frozen-destination RSS regression after the Owner cutover**. It was recorded at the Compio pivot: `fault.srt-output-stall` RSS growth 78–93 MB versus 46–54 MB before, suspected in `CallerLeg::send_shared` queuing into the protocol output queue (16 MiB / 8192 actions per connection). | Session memory note from `ec8832d9`; not re-measured since. | Rerun `fault.srt-output-stall`; fix only if it still reproduces. |
 
+**Status (srt-rs branch `perf/owner-tx-efficiency` at `d81e958`, pinned by
+Restream).** Fixed-load A/B: SRT H.264 → 50 SRT outputs into harness sinks,
+Restream on 3 pinned CPUs, 5 interleaved reps, baseline `10ef9b65`.
+
+| # | Outcome | Evidence |
+|---|---|---|
+| S1 | **Done** (`d81e958`): same-socket, same-peer, equal-length datagrams committed in one Owner visit join the staged job and leave as one `sendmsg` with `UDP_SEGMENT` (≤ 44 segments / 60 KB). Per-datagram slots, completion policy and in-flight counts are unchanged. A GSO rejection turns coalescing off and counts transient losses, never an Owner fault. | Restream CPU median 129.9% → **106.3%** (−18%), delivery 50/50 in all 10 runs. `io_sendmsg` 43.6% → 28.7% of samples (≈ 57 → 31 points of a core); what remains is mostly the loopback receive softirq charged to our send. New srt-rs tests include a real-socket GSO round trip. |
+| S2 | **Tried and rejected.** Waking on a TX completion only under TX pressure left completions unreaped, so their pool slots stayed out and the next burst had a smaller window. | Restream `one_ready_batch_is_one_owner_service_pass`: ≤ 2 → 16 Owner service passes. Completion wakes are unchanged; S1 already cuts completions per datagram. |
+| S3 | **Done** (`d4bd860`): `IdHashMap` (multiply-rotate) for `CallerTable` sessions/routes/sched, whose keys are ids srt-rs allocates, so hash flooding is impossible. | Criterion `caller_table_scheduling` vs main, median: reschedule −72..−76%, all_ready −37..−61%, sparse_ready −31..−40%, one_due −16..−41%, one_ready −9..−48%, churn −5..−20%, idle_poll noise. |
+| S4 | **Declined on evidence.** | Remaining memcpy is ~1.2% of samples in the S1 build, so the payload copy is ≤ ~1%. Removing it changes srt-proto's slot contract (and with AES the copy is the ciphertext output). It cannot meet srt-rs's own ≥ 5% live-sentinel retention bar. |
+| S5 | **Done** (`e0e7af8`): `SenderStats::total_bytes_acked`; Restream's SRT delivery uses it. | Unit test `acked_bytes_count_live_payload_retired_by_peer_acks`; inline footprint +8 bytes, recorded. |
+| S6 | **Done** (`d4bd860`): `LogicalCallerId::as_u64` / `LogicalPeerId::as_u64` public. | — |
+| S7 | **Reproduced, then fixed in Restream.** The frozen-destination surge was pre-existing (baseline growth 71.6 MB, S1 build 66–72 MB, gate limit 64 MB). RSS sampling shows a plateau, not a leak. About half was glibc per-thread arenas keeping freed memory resident. Restream now calls `mallopt(M_ARENA_MAX, 2)` at startup unless `MALLOC_ARENA_MAX` is set. | Gate: growth 46.6 / 30.5 MB, **PASS ×2**. Arena cap A/B: SRT×50 CPU 103.6% → 101.3% (3 reps), RTMP×500 100.0% → 95.2% median (7 reps, noise), RSS −34 / −47 MB. An idle orphaned Restream from a heaptrack attempt ran during that A/B (both arms interleaved). |
+| — | Also fixed: `compio_production_fanout` lacked `harness = false`, so it never ran. **Open:** with it running, it submits 0 datagrams at fan-out ≥ 100. | srt-rs `d81e958` message. |
+
+Restream overload collapse: **done in Restream**. The SRT stall sweep treats
+a shard where ≥ 25% of the previous sweep's outputs (≥ 4) were backpressured
+or stalled as saturated. Stalled outputs are then kept connected
+(`backpressureReason: "shard_saturated"`) instead of being force-closed and
+reconnected into the same Owner. A lone stuck destination is still recycled
+(unit tests), and `fault.srt-output-stall` passes.
+
 Not srt-rs, but found in the same runs:
 
 - **Restream overload collapse (policy).** At 200–400 SRT outputs on 3 CPUs,

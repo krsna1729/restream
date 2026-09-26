@@ -7,6 +7,7 @@
 const TOKIO_THREAD_NAME: &str = "restream-tokio";
 
 fn main() {
+    limit_malloc_arenas();
     let mut args = std::env::args_os();
     let _program = args.next();
     if let Some(flag) = args.next() {
@@ -52,6 +53,24 @@ fn main() {
         .block_on(restream::run_app(config));
 
     restream::ffmpeg_extract::cleanup_ffmpeg();
+}
+
+/// Cap glibc's malloc arenas at two unless the operator set
+/// `MALLOC_ARENA_MAX`. glibc otherwise grows up to eight arenas per core and
+/// keeps each one's freed memory resident: in the `fault.srt-output-stall`
+/// proof an SRT destination freezing surged RSS by 66–72 MB (plateauing, not
+/// leaking) against 37 MB with two arenas, and at 500 RTMP / 50 SRT outputs
+/// steady RSS fell 47 / 34 MB with no measurable CPU change (7 and 3
+/// interleaved runs). Must run before any thread starts.
+fn limit_malloc_arenas() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
+        // SAFETY: mallopt only adjusts allocator tuning; called on the main
+        // thread before any other thread exists.
+        unsafe {
+            libc::mallopt(libc::M_ARENA_MAX, 2);
+        }
+    }
 }
 
 fn print_usage_and_exit() -> ! {

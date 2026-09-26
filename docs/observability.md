@@ -200,7 +200,7 @@ Active native egresses appear in `pipelines[id].outputs`:
 | `fabric`, `shardId` | `true` and the owning shard index for every network egress output — the egress fabric runtime is now the only egress path |
 | `resyncCount` | Total feed resynchronizations for this leaf (see `docs/archive/egress/implementation.md` Phase 6); a leaf that falls behind its retained feed window resyncs to the latest sync point in place rather than closing |
 | `feedLagUnits` | Feed units this leaf's cursor is currently behind the feed head; updated once per second by the shard's stall sweep for every live leaf, not just ones about to be force-closed |
-| `backpressureReason` | `null` when idle/healthy, `"backpressured"` when send-path bytes are queued but within the no-progress deadline, `"stalled"` when that deadline has passed (the same classification the stall sweep uses to decide force-close) |
+| `backpressureReason` | `null` when idle/healthy, `"backpressured"` when send-path bytes are queued but within the no-progress deadline, `"stalled"` when that deadline has passed (the same classification the stall sweep uses to decide force-close), `"shard_saturated"` (SRT) when the deadline has passed while a quarter or more of the shard's outputs are backpressured or stalled: the output is kept connected instead of force-closed, because reconnecting it into the same saturated Owner only adds load |
 
 Stopped configured outputs are still defined by `/api/v1/settings`, but
 `/api/v1/engine/health` now also preserves the most recent classified output
@@ -333,9 +333,8 @@ the 1 s stall sweep, off the media path):
 - **delivered, RTMP/RTMPS**: TCP `tcpi_bytes_acked` delta — wire bytes the
   peer acknowledged, so a healthy output reads slightly above 1.0 (chunk
   headers).
-- **delivered, SRT**: payload first-sent minus sender-TLPKTDROP-dropped minus
-  payload still in the send buffer, i.e. payload the peer's cumulative ACK has
-  covered. This is an **upper bound** on what the receiver got: a receiver
+- **delivered, SRT**: srt-rs `SenderStats::total_bytes_acked`, the payload
+  the peer's cumulative ACK retired (sender-dropped packets excluded). This is an **upper bound** on what the receiver got: a receiver
   that drops late packets itself (its TLPKTDROP) still ACKs past the gap, so
   the sender counts those packets as delivered. Cross-check with a receiver
   when it matters. Bonded outputs report `null` (no aggregate buffer view).

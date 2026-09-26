@@ -67,11 +67,12 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 percent-encoding = "2"
 shiguredo_mp4 = "2026.5.0"
-# Upstream srt-rs (merged main). SRT egress and ingress both run on
+# srt-rs branch perf/owner-tx-efficiency (main 86369b0 + GSO send coalescing,
+# id hashing, acked-bytes stats; see docs/media-copy-audit.md). SRT egress and ingress both run on
 # `srt_transport::compio::Owner`; ingress attaches with
 # `Owner::listen_with_resolver`.
-srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "86369b0815c09333547c965652250e17f580e834" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "86369b0815c09333547c965652250e17f580e834", features = ["compio"] }
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "d81e9583e474bd18c83fa95e8283e187f729f8ba" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "d81e9583e474bd18c83fa95e8283e187f729f8ba", features = ["compio"] }
 # Bounded shard command channel with both blocking and Future-based receive, so
 # a backend that owns a thread-affine completion runtime can await commands
 # alongside its own I/O without a second wake source.

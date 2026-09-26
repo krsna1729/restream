@@ -60,6 +60,10 @@ impl SrtShardBackend {
             return;
         }
         self.last_stall_sweep = Some(now);
+        self.shard_saturated = shard_saturated(self.sweep_visited, self.sweep_pressured);
+        self.sweep_visited = 0;
+        self.sweep_pressured = 0;
+        let shard_saturated = self.shard_saturated;
         let head_sequence = crate::media::egress::feed::EgressFeed::head_sequence(&self.feed);
         let feed_published_bytes = self.feed.published_bytes();
         let drain_timeout = self.drain_timeout;
@@ -72,45 +76,55 @@ impl SrtShardBackend {
                 break;
             };
             let owners = &self.owners;
-            let Some((output_id, close)) =
-                self.leaves
-                    .get_mut(key.0)
-                    .and_then(Option::as_mut)
-                    .map(|leaf| {
-                        let lag_units = if leaf.common().cursor_primed {
-                            head_sequence.saturating_sub(leaf.common().cursor.next_sequence)
-                        } else {
-                            0
-                        };
-                        let stats = owners.stats(&leaf.caller);
-                        let backlog = stats.as_ref().and_then(send_backlog);
-                        let quality = stats.as_ref().and_then(|stats| {
-                            leaf.sample_quality(stats, now, feed_published_bytes)
-                        });
-                        let drops = quality.as_ref().and_then(|q| q.packets_sent_drop);
-                        let reason = match leaf.observe_stall(now, drops, lag_units, backlog) {
-                            LeafStallClass::Idle => None,
-                            LeafStallClass::Backpressured => Some("backpressured"),
-                            LeafStallClass::Stalled => Some("stalled"),
-                        };
-                        leaf.common()
-                            .progress_sink
-                            .record_backpressure_state(lag_units, reason);
-                        if let Some(quality) = quality {
-                            leaf.common().progress_sink.record_quality(quality);
-                        }
-                        let draining = leaf.draining_since.is_some_and(|since| {
-                            !leaf.pressure(backlog).is_backpressured()
-                                || now.saturating_duration_since(since) >= drain_timeout
-                        });
-                        (
-                            leaf.common().output_id.clone(),
-                            draining || matches!(reason, Some("stalled")),
-                        )
-                    })
+            let Some((output_id, close, pressured)) = self
+                .leaves
+                .get_mut(key.0)
+                .and_then(Option::as_mut)
+                .map(|leaf| {
+                    let lag_units = if leaf.common().cursor_primed {
+                        head_sequence.saturating_sub(leaf.common().cursor.next_sequence)
+                    } else {
+                        0
+                    };
+                    let stats = owners.stats(&leaf.caller);
+                    let backlog = stats.as_ref().and_then(send_backlog);
+                    let quality = stats
+                        .as_ref()
+                        .and_then(|stats| leaf.sample_quality(stats, now, feed_published_bytes));
+                    let drops = quality.as_ref().and_then(|q| q.packets_sent_drop);
+                    let reason = match leaf.observe_stall(now, drops, lag_units, backlog) {
+                        LeafStallClass::Idle => None,
+                        LeafStallClass::Backpressured => Some("backpressured"),
+                        // A saturated shard stalls many leaves at once;
+                        // closing them only reconnects them into the same
+                        // saturated Owner (a reconnect storm). Keep them
+                        // and let SRT's too-late drop shed the backlog.
+                        LeafStallClass::Stalled if shard_saturated => Some("shard_saturated"),
+                        LeafStallClass::Stalled => Some("stalled"),
+                    };
+                    leaf.common()
+                        .progress_sink
+                        .record_backpressure_state(lag_units, reason);
+                    if let Some(quality) = quality {
+                        leaf.common().progress_sink.record_quality(quality);
+                    }
+                    let draining = leaf.draining_since.is_some_and(|since| {
+                        !leaf.pressure(backlog).is_backpressured()
+                            || now.saturating_duration_since(since) >= drain_timeout
+                    });
+                    (
+                        leaf.common().output_id.clone(),
+                        draining || matches!(reason, Some("stalled")),
+                        reason.is_some(),
+                    )
+                })
             else {
                 continue;
             };
+            self.sweep_visited += 1;
+            if pressured {
+                self.sweep_pressured += 1;
+            }
             if !close {
                 self.enqueue_stall_candidate(key);
                 continue;
@@ -151,5 +165,43 @@ impl SrtShardBackend {
             }
             self.enqueue_ready_candidate(key);
         }
+    }
+}
+
+/// Share of a sweep's leaves that must be backpressured or stalled (with at
+/// least `SATURATED_MIN_LEAVES` visited) for the shard to count as saturated.
+const SATURATED_SHARE_DENOMINATOR: usize = 4;
+const SATURATED_MIN_LEAVES: usize = 4;
+
+/// A shard is saturated when a quarter or more of the leaves one full sweep
+/// visited were backpressured or stalled: the Owner, not one destination, is
+/// behind. A lone stuck destination among healthy siblings stays below this.
+pub(super) fn shard_saturated(visited: usize, pressured: usize) -> bool {
+    visited >= SATURATED_MIN_LEAVES && pressured * SATURATED_SHARE_DENOMINATOR >= visited
+}
+
+#[cfg(test)]
+mod saturation_tests {
+    use super::shard_saturated;
+
+    #[test]
+    fn a_lone_stuck_destination_does_not_saturate_the_shard() {
+        assert!(!shard_saturated(100, 1));
+        assert!(!shard_saturated(100, 24));
+    }
+
+    #[test]
+    fn a_quarter_of_the_shard_behind_is_saturation() {
+        assert!(shard_saturated(100, 25));
+        assert!(shard_saturated(200, 200));
+    }
+
+    #[test]
+    fn tiny_shards_never_count_as_saturated() {
+        assert!(
+            !shard_saturated(3, 3),
+            "one or two outputs must still be recycled"
+        );
+        assert!(!shard_saturated(0, 0));
     }
 }

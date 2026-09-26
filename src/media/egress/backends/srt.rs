@@ -232,6 +232,13 @@ pub(crate) struct SrtShardBackend {
     pending_connects: HashMap<OutputId, PendingSrtConnect>,
     event_scratch: Vec<owner_set::SrtOwnerEvent>,
     last_stall_sweep: Option<Instant>,
+    /// Leaves the current stall sweep visited, and how many of them were
+    /// backpressured or stalled.
+    sweep_visited: usize,
+    sweep_pressured: usize,
+    /// Whether the previous full sweep found the shard saturated (see
+    /// `srt_drain::SATURATED_SHARE`).
+    shard_saturated: bool,
     /// Leaves get `drain_timeout` minus the Owner-teardown reserve to flush,
     /// so shutdown stays inside the generic shard drain deadline.
     drain_timeout: Duration,
@@ -282,6 +289,9 @@ impl SrtShardBackend {
             pending_connects: HashMap::new(),
             event_scratch: Vec::with_capacity(256),
             last_stall_sweep: None,
+            sweep_visited: 0,
+            sweep_pressured: 0,
+            shard_saturated: false,
             drain_timeout: crate::media::egress::shard::EgressShardConfig::DEFAULT_DRAIN_TIMEOUT,
             owner_shutdown_reserve: owner_set::OWNER_SHUTDOWN_RESERVE,
             resync_count: 0,

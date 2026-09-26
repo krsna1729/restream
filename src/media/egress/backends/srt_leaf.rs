@@ -126,18 +126,15 @@ impl SrtFabricLeaf {
         feed_published_bytes: u64,
     ) -> Option<PublisherQuality> {
         let mut quality = self.quality_sampler.sample(stats, now)?;
-        // A payload packet leaves the send buffer only when the peer ACKs it
-        // or TLPKTDROP discards it, so payload enqueued minus dropped minus
-        // still buffered is what the peer acknowledged. A bond has no
-        // aggregate buffer/drop view, so its delivery stays unknown rather
-        // than estimated.
+        // Payload the peer's cumulative ACK confirmed (srt-rs
+        // `total_bytes_acked`). An upper bound on what it played: a receiver
+        // that drops late packets itself still ACKs past them. A bond has no
+        // aggregate sender view, so its delivery stays unknown rather than
+        // estimated.
         if let LogicalCallerStats::Direct(direct) = stats
             && let Some(sender) = direct.sender
         {
-            let acknowledged = sender
-                .total_bytes_sent
-                .saturating_sub(sender.total_bytes_dropped)
-                .saturating_sub(sender.payload_bytes_in_buffer);
+            let acknowledged = sender.total_bytes_acked;
             let delivery = self
                 .delivery
                 .sample(acknowledged, feed_published_bytes, now);

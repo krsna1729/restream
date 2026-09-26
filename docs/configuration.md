@@ -24,6 +24,7 @@ in SQLite.
 | RTMP listener | `0.0.0.0:1935` | `RESTREAM_RTMP_PORT` |
 | SRT listener | `0.0.0.0:10080` | `RESTREAM_SRT_PORT` |
 | Tokio scheduler workers | Derived from the effective CPU mask/quota | `RESTREAM_TOKIO_WORKER_THREADS` |
+| glibc malloc arenas | `2` (set at startup with `mallopt`); keeps freed per-thread memory from staying resident: −34 to −47 MB RSS at 50 SRT / 500 RTMP outputs, frozen-SRT-destination surge 66–72 MB → 37 MB, no measurable CPU change | `MALLOC_ARENA_MAX` (when set, Restream leaves glibc's own handling alone) |
 | Tokio blocking-thread ceiling | `512` | `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` |
 | Transcoder backend | External FFmpeg subprocess | `RESTREAM_INTERNAL_VIDEO_PRESETS`, `RESTREAM_INTERNAL_HEVC_TO_H264`, `RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX` (`1`/`true`/`yes`/`on` enable each in-process stage family independently) |
 | File-ingest backend | External embedded FFmpeg subprocess | `RESTREAM_USE_INTERNAL_FILE_INGEST` (`1`/`true`/`yes`/`on` to enable in-process remux + demux for passthrough file ingest) |
