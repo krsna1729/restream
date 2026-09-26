@@ -2629,8 +2629,9 @@ shards with fewer than 256 leaves. The sweep now visits each queued leaf once
 fails on the old loop).
 
 Ring counter cost (`ring_buffer/producer`, same-session criterion A/B against
-the counter compiled out): 5/10 benches improved 5–8%, 3 no change, 2 within
-noise; no regression.
+the counter compiled out): no measurable regression (5/10 benches read 5–8%
+faster, 3 no change, 2 within noise; adding work cannot speed a bench up, so
+the "faster" results are noise).
 
 Cross-check, 6-CPU KVM VPS, 1 ingest at 8 Mbit/s, `--no-netns`:
 
@@ -2643,10 +2644,13 @@ Cross-check, 6-CPU KVM VPS, 1 ingest at 8 Mbit/s, `--no-netns`:
 | SRT | 10 | 0 / 0.631 / 0.99693 | 10 / 7 / 0.9153 / 0.99949 |
 | SRT | 100 | 0 / 0.007 / 0.87604 | 100 / 95 / 0.8316 / 0.98569 |
 
-RTMP/RTMPS agree. SRT disagrees because a peer that ACKs and then drops late
-packets (receiver TLPKTDROP) is invisible to a sender's ACK view; a quiet
-isolated SRT×10 rerun read receiver 0.928/0.957 (min/median) against
-Restream 0.982. The receiver gap is the open finding in §36.
+RTMP/RTMPS agree on who met the floor; Restream's worst ratio reads up to
+~2.5 points lower at RTMP×100 (0.9568 vs 0.981; Jain 0.99168 vs 1.00000),
+since its window is shorter and ACK-timed. SRT disagrees because SRT
+"delivered" is ACK coverage, an upper bound: a receiver that drops late
+packets (its TLPKTDROP) still ACKs past them. The large SRT receiver gap was
+mediamtx, not Restream: against the harness sinks (`MSR_PEER=sink`) SRT×100
+delivered 100/100 (see §36).
 
 ## 28. WI9 — Abstraction Compression
 

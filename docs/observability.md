@@ -333,10 +333,14 @@ the 1 s stall sweep, off the media path):
 - **delivered, RTMP/RTMPS**: TCP `tcpi_bytes_acked` delta — wire bytes the
   peer acknowledged, so a healthy output reads slightly above 1.0 (chunk
   headers).
-- **delivered, SRT**: payload enqueued minus TLPKTDROP-dropped minus payload
-  still in the send buffer. A packet leaves the buffer only when the peer ACKs
-  it, so this is acknowledged payload. Bonded outputs report `null` (no
-  aggregate buffer view).
+- **delivered, SRT**: payload first-sent minus sender-TLPKTDROP-dropped minus
+  payload still in the send buffer, i.e. payload the peer's cumulative ACK has
+  covered. This is an **upper bound** on what the receiver got: a receiver
+  that drops late packets itself (its TLPKTDROP) still ACKs past the gap, so
+  the sender counts those packets as delivered. Cross-check with a receiver
+  when it matters. Bonded outputs report `null` (no aggregate buffer view).
+- The window starts only once media flows (RTMP: after publish acceptance),
+  so handshake bytes and the startup burst do not inflate the first window.
 
 `GET /api/v1/pipelines/:pipelineId/telemetry` folds these per feed (outputs
 reading the same terminal stage) into `delivery`: `rated`, `delivered` (outputs

@@ -133,6 +133,9 @@ pub struct ShardMetrics {
     pub rx_bytes: u64,
     pub tx_packets: u64,
     pub tx_bytes: u64,
+    /// Completion events the shard consumed: readiness notifications that
+    /// Compio worker tasks send after their io_uring operations complete, not
+    /// raw io_uring CQEs (one notification can follow several CQEs).
     pub cqes: u64,
     pub sqes: u64,
     pub ready_visits: u64,

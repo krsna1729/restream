@@ -261,21 +261,27 @@ pub(crate) async fn pipeline_telemetry(
     value
 }
 
-/// Per-feed delivery fairness: outputs reading the same terminal stage share
-/// one feed, so their peer-acknowledged rates are compared with Jain's index
-/// and counted against the delivery floor. Built from each output's latest
+/// Per-feed delivery fairness: outputs reading the same terminal stage over
+/// the same protocol share one feed and one wire format, so their
+/// peer-acknowledged rates are comparable with Jain's index and counted
+/// against the delivery floor. (RTMP and SRT outputs of one stage carry
+/// different framing overhead, so they form separate rows.) Built from each output's latest
 /// quality sample; outputs without a sample yet are listed but not rated.
 fn feed_delivery_json(egresses: &[serde_json::Value]) -> serde_json::Value {
     const DELIVERY_FLOOR: f64 = 0.95;
-    let mut feeds: std::collections::BTreeMap<String, Vec<&serde_json::Value>> =
+    let mut feeds: std::collections::BTreeMap<(String, String), Vec<&serde_json::Value>> =
         std::collections::BTreeMap::new();
     for egress in egresses {
-        let feed = egress["terminalStage"].as_str().unwrap_or("unknown");
-        feeds.entry(feed.to_string()).or_default().push(egress);
+        let stage = egress["terminalStage"].as_str().unwrap_or("unknown");
+        let protocol = egress["protocol"].as_str().unwrap_or("unknown");
+        feeds
+            .entry((stage.to_string(), protocol.to_string()))
+            .or_default()
+            .push(egress);
     }
     let rows: Vec<serde_json::Value> = feeds
         .into_iter()
-        .map(|(feed, outputs)| {
+        .map(|((stage, protocol), outputs)| {
             let rated: Vec<(f64, f64)> = outputs
                 .iter()
                 .filter_map(|egress| {
@@ -288,7 +294,8 @@ fn feed_delivery_json(egresses: &[serde_json::Value]) -> serde_json::Value {
                 .collect();
             let rates: Vec<f64> = rated.iter().map(|(rate, _)| *rate).collect();
             serde_json::json!({
-                "feed": feed,
+                "feed": stage,
+                "protocol": protocol,
                 "destinations": outputs.len(),
                 "rated": rated.len(),
                 "delivered": rated.iter().filter(|(_, ratio)| *ratio >= DELIVERY_FLOOR).count(),
@@ -335,6 +342,7 @@ mod tests {
         let output = |feed: &str, delivered: Option<f64>, ratio: Option<f64>| {
             serde_json::json!({
                 "terminalStage": feed,
+                "protocol": "rtmp",
                 "quality": { "deliveredBps": delivered, "deliveryRatio": ratio },
             })
         };
@@ -357,6 +365,18 @@ mod tests {
         let source = &rows[1];
         assert_eq!(source["delivered"], 2);
         assert_eq!(source["jain"], 1.0);
+
+        // Same stage, different protocol: separate rows, so different wire
+        // overhead does not read as unfairness.
+        let mixed = feed_delivery_json(&[
+            serde_json::json!({"terminalStage": "p:source", "protocol": "rtmp",
+                "quality": {"deliveredBps": 8.1e6, "deliveryRatio": 1.01}}),
+            serde_json::json!({"terminalStage": "p:source", "protocol": "srt",
+                "quality": {"deliveredBps": 8.6e6, "deliveryRatio": 1.0}}),
+        ]);
+        let rows = mixed.as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row["jain"] == 1.0));
     }
     use crate::domain::stage::{StageKey, StageKind};
     use crate::media::avio::MemoryQueue;

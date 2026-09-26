@@ -67,11 +67,20 @@ impl RtmpClientSocket {
         result.map(|count| (count, buffer))
     }
 
-    /// Read into the spare capacity after `buffer`'s current bytes, keeping
-    /// them (`read` overwrites from the start).
-    async fn append(&mut self, buffer: BytesMut) -> io::Result<(usize, BytesMut)> {
-        use compio::io::AsyncReadExt;
-        let compio::BufResult(result, buffer) = self.stream.append(buffer).await;
+    /// Read at most `INGEST_READ_BYTES` after `buffer`'s current bytes,
+    /// keeping them (`read` overwrites from the start). The cap keeps one read
+    /// from landing more than the parser budget checks per step, however far
+    /// the buffer's capacity has grown.
+    async fn append(&mut self, mut buffer: BytesMut) -> io::Result<(usize, BytesMut)> {
+        use compio::buf::{IntoInner, IoBuf};
+        use compio::io::AsyncRead;
+        buffer.reserve(INGEST_READ_BYTES);
+        let start = buffer.len();
+        let compio::BufResult(result, slice) = self
+            .stream
+            .read(buffer.slice(start..start + INGEST_READ_BYTES))
+            .await;
+        let buffer = slice.into_inner();
         result.map(|count| (count, buffer))
     }
 
@@ -725,8 +734,7 @@ pub(super) async fn handle_rtmp_client(
     while disconnect.is_none() {
         // Read straight into the session's own input buffer: the only copy of
         // a received byte before chunk reassembly is the kernel's.
-        let mut input = session.take_input_buffer();
-        input.reserve(INGEST_READ_BYTES);
+        let input = session.take_input_buffer();
         let Some(read_result) = read_rtmp_input_or_quality(
             &mut socket,
             input,

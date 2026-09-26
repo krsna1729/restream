@@ -255,9 +255,16 @@ impl RtmpFabricLeaf {
     ) -> Option<crate::media::snapshots::PublisherQuality> {
         let stats =
             crate::media::tcp_stats::collect_tcp_stats_by_fd(self.transport.raw_fd()).ok()?;
-        let delivery = stats
-            .tcp_bytes_acked
-            .map(|acked| self.delivery.sample(acked, feed_published_bytes, now));
+        // Rate delivery only once media flows: handshake/connect bytes and the
+        // startup burst would otherwise skew the first window.
+        let delivery = if self.engine.is_publish_accepted() {
+            stats
+                .tcp_bytes_acked
+                .map(|acked| self.delivery.sample(acked, feed_published_bytes, now))
+        } else {
+            self.delivery = Default::default();
+            None
+        };
         let send_rate = stats.tcp_bytes_sent.and_then(|bytes| {
             let rate = self.previous_tcp_bytes.and_then(|(previous, sampled_at)| {
                 crate::media::tcp_stats::bytes_delta_rate_mbps(

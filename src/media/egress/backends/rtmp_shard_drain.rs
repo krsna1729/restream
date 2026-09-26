@@ -168,13 +168,12 @@ where
             let Some(socket_ref) = self.output_sockets.remove(&output_id) else {
                 continue;
             };
-            let _ = self.poller.remove(socket_ref.fd);
-            if let Some(leaf) = self.leaves.get_mut(socket_ref.key.0).and_then(Option::take) {
-                let mut leaf = leaf;
+            if let Some(leaf) = self.leaves.get(socket_ref.key.0).and_then(Option::as_ref) {
                 leaf.common.progress_sink.mark_terminated_unexpectedly();
-                leaf.engine
-                    .close(&mut leaf.transport, CloseReason::NoProgress);
             }
+            // The shared removal path returns the key to `free_leaf_keys` and
+            // purges it from every queue; closing in place leaked the slot.
+            self.remove_leaf_socket(socket_ref, CloseReason::NoProgress);
         }
     }
 }

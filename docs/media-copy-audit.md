@@ -67,7 +67,7 @@ needs AVCC/HVCC + raw AAC.
 
 | # | Copy | Status / justification |
 |---|---|---|
-| E0 | Annex B → AVCC conversion into a scratch `Vec`, then `Bytes::copy_from_slice` | **Fixed:** `src/media/rtmp/egress_payload_cache.rs`, a per-shard FIFO of the 64 most recent conversions, searched newest-first and keyed by source payload identity plus timing flags. Converts once per shard and writes straight into the buffer that becomes the shared `Bytes`, so the second copy is gone. The per-output parameter-set scan is skipped for packets without SPS/PPS. Profile at 100 outputs: `RtmpMediaEncoder::encode` 10.9% inclusive → conversion 0.9% inclusive; memcpy share 8.3% → 4.5%. |
+| E0 | Annex B → AVCC conversion into a scratch `Vec`, then `Bytes::copy_from_slice` | **Fixed:** `src/media/rtmp/egress_payload_cache.rs`, a per-shard FIFO of the 64 most recent conversions (64 packets, audio included, each holding source plus converted payload; retained while the feed is idle), searched newest-first and keyed by source payload identity plus timing flags. Converts once per shard and writes straight into the buffer that becomes the shared `Bytes`, so the second copy is gone. The parameter-set scan runs once per shard per packet instead of once per output; outputs only copy the result when a packet carries parameter sets. Profile at 100 outputs: `RtmpMediaEncoder::encode` 10.9% inclusive → conversion 0.9% inclusive; memcpy share 8.3% → 4.5%. |
 | E0' | FLV feed (RTMP ingest) | Already zero-copy (`packet.payload.clone()`). |
 
 ### RTMP/RTMPS egress transport (`src/media/egress/backends/compio_tcp/stream.rs`)
@@ -113,8 +113,8 @@ State as of this writing, in order:
    saw it too; it coincided with a CPU spike to 91% and 23 involuntary
    switches/s (host preemption burst). The worst-destination receiver ratio
    spread wider on the cache build (0.892–0.994 vs 0.970–0.980). **Watch
-   item:** repeat the 100-output A/B after the TX change; if dips recur only
-   with the cache, bisect them.
+   item:** still open. `40ebacde`'s A/B cannot close it (both arms contain
+   the cache); rerun cache vs `702bc3df` into the harness sinks if dips recur.
 2. **Ingest direct read (I2):** see item 3.
 3. **Zero-copy TX (T1/T2) and ingest direct read (I2): committed together.**
    Correctness: `mixed.live.rtmp.h264.a1.bf2` (18/18 outputs, sink probes
@@ -195,8 +195,9 @@ symbol): the malloc/free family is 3.0% of Restream samples. Of that, 77%
 runs on `restream-tokio` (API/telemetry JSON serving the harness's
 once-per-second polling: `serde` serialization, health/telemetry/system
 snapshots, hyper writes). Egress shard and SRT ingest threads together are
-~0.4% of samples. The earlier ~8% was mostly per-output conversion `Vec`s,
-which the payload cache (`95dd6355`) removed. Conclusion: allocation is not
+~0.4% of samples. The earlier ~8% (RTMP profile, before `95dd6355`) was never broken down by
+caller; that it was mostly per-output conversion `Vec`s is an inference from
+the payload cache removing them, not a measurement. Conclusion: allocation is not
 a media-path cost worth an allocator change today. Steps 2–7 are parked
 until a profile shows media-thread allocation above ~2%. If API polling cost
 matters for operators, reduce allocation in the telemetry JSON builders

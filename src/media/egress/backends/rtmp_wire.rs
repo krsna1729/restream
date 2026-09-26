@@ -254,6 +254,42 @@ mod tests {
     use super::*;
     use rml_rtmp::chunk_io::ChunkDeserializer;
 
+    #[test]
+    fn fill_parts_matches_fill_buffers_and_shares_only_payload() {
+        let payload = Bytes::from((0..10_000u32).map(|n| n as u8).collect::<Vec<u8>>());
+        let mut expected_message =
+            RtmpWireMessage::new(9, RtmpTimestamp::new(40), 1, payload.clone(), 4_096).unwrap();
+        let expected = serialize(&mut expected_message);
+
+        let mut message =
+            RtmpWireMessage::new(9, RtmpTimestamp::new(40), 1, payload.clone(), 4_096).unwrap();
+        let range = payload.as_ptr_range();
+        let mut wire = Vec::new();
+        while !message.is_complete() {
+            let mut parts: [TxPart<'_>; MAX_CHUNKS_PER_IOV * 2] =
+                std::array::from_fn(|_| TxPart::Copy(&[]));
+            let (count, bytes) = message.fill_parts(4_096 + 64, &mut parts);
+            assert!(bytes > 0);
+            for part in &parts[..count] {
+                match part {
+                    TxPart::Share(shared) => {
+                        assert!(
+                            range.contains(&shared.as_ptr()),
+                            "shared slices point into the payload"
+                        );
+                        wire.extend_from_slice(shared);
+                    }
+                    TxPart::Copy(copied) => {
+                        assert!(copied.len() <= MAX_HEADER_BYTES, "only headers are copied");
+                        wire.extend_from_slice(copied);
+                    }
+                }
+            }
+            message.consume(bytes);
+        }
+        assert_eq!(wire, expected);
+    }
+
     fn serialize(message: &mut RtmpWireMessage) -> Vec<u8> {
         let mut output = Vec::new();
         while !message.is_complete() {

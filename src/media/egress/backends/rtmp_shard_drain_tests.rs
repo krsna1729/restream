@@ -207,6 +207,7 @@ fn startup_deadline_terminates_a_leaf_that_never_reaches_publish() {
         backend.on_ready();
     }
 
+    let free_before = backend.free_leaf_keys.len();
     let before_deadline = Instant::now();
     backend.sweep_stalled_leaves(before_deadline);
     assert!(backend.output_sockets.contains_key(&output_id));
@@ -219,6 +220,15 @@ fn startup_deadline_terminates_a_leaf_that_never_reaches_publish() {
         "a wedged startup must release its leaf slot"
     );
     assert!(terminated.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(
+        backend.free_leaf_keys.len(),
+        free_before + 1,
+        "the swept leaf's key must return to the free list"
+    );
+    assert!(
+        backend.stall_candidates.is_empty() && backend.ready.is_empty(),
+        "no queue may keep the closed leaf's key"
+    );
 
     release_tx.send(()).unwrap();
     server.join().unwrap();
@@ -258,8 +268,12 @@ fn stall_sweep_samples_each_leaf_once_so_two_sample_rates_have_a_real_window() {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
     assert!(
-        sampled.delivered_bps.is_some() && sampled.tcp_send_rate_mbps.is_some(),
+        sampled.tcp_send_rate_mbps.is_some(),
         "the second sweep must rate against the first, not against itself: {sampled:?}"
+    );
+    assert_eq!(
+        sampled.delivered_bps, None,
+        "delivery is rated only after publish acceptance, not over handshake bytes"
     );
 
     release_tx.send(()).unwrap();

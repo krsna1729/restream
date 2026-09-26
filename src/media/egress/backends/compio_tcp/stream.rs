@@ -54,6 +54,18 @@ pub(crate) enum TxPart<'a> {
 /// more than copying a few hundred bytes.
 const SHARE_MIN_BYTES: usize = 512;
 
+/// Initial capacity of the copied-bytes run (headers and control messages
+/// between shared payload slices).
+const COPIED_RUN_CAPACITY: usize = 4096;
+
+/// Kernel limit on iovecs per `writev` (`UIO_MAXIOV`).
+const MAX_WRITE_SEGMENTS: usize = 1024;
+
+// Every shared segment is at least `SHARE_MIN_BYTES` and each can be preceded
+// by one sealed copied run, so one staged batch holds at most this many
+// segments; exceeding `UIO_MAXIOV` would turn every send into EINVAL.
+const _: () = assert!(2 * TRANSMIT_BUFFER_CAPACITY.div_ceil(SHARE_MIN_BYTES) < MAX_WRITE_SEGMENTS);
+
 impl TxPart<'_> {
     fn as_slice(&self) -> &[u8] {
         match self {
@@ -91,6 +103,9 @@ impl IoBuffers {
     pub(super) fn new() -> SharedIoBuffers {
         std::rc::Rc::new(std::cell::RefCell::new(Self {
             receive_armed: true,
+            // A non-zero original capacity lets `split` + `reserve` reuse or
+            // regrow the run in one step instead of doubling up from zero.
+            copied: BytesMut::with_capacity(COPIED_RUN_CAPACITY),
             ..Self::default()
         }))
     }
@@ -481,8 +496,9 @@ async fn take_transmit(buffers: &SharedIoBuffers, output: &mut Vec<Bytes>) {
             return Poll::Pending;
         }
         // Hand the staged segments to the writer by swapping lists; both keep
-        // their capacity, so steady state neither copies payload nor
-        // reallocates the list.
+        // their capacity, so payload is never copied and the list is not
+        // reallocated. (Sealed copied runs and Compio's iovec array are small
+        // per-flush allocations.)
         buffers.seal_copied();
         std::mem::swap(output, &mut buffers.outgoing);
         Poll::Ready(())
@@ -810,5 +826,60 @@ pub(super) async fn transmit_worker(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod staging_tests {
+    use super::*;
+
+    fn staged(buffers: &mut IoBuffers) -> Vec<Bytes> {
+        buffers.seal_copied();
+        std::mem::take(&mut buffers.outgoing)
+    }
+
+    #[test]
+    fn staging_keeps_wire_order_and_shares_large_payload_without_copying() {
+        let mut buffers = IoBuffers::default();
+        let payload = Bytes::from(vec![7_u8; 4096]);
+        buffers.stage_copy(b"hd1");
+        buffers.stage_share(payload.clone());
+        buffers.stage_copy(b"hd2");
+        buffers.stage_share(Bytes::from_static(b"tiny"));
+        buffers.stage_copy(b"hd3");
+        let segments = staged(&mut buffers);
+
+        let wire: Vec<u8> = segments.iter().flat_map(|s| s.iter().copied()).collect();
+        let mut expected = b"hd1".to_vec();
+        expected.extend_from_slice(&payload);
+        expected.extend_from_slice(b"hd2tinyhd3");
+        assert_eq!(wire, expected);
+        assert_eq!(segments.len(), 3, "run, shared payload, run");
+        assert_eq!(
+            segments[1].as_ptr(),
+            payload.as_ptr(),
+            "large payload is sent from its own buffer"
+        );
+    }
+
+    #[test]
+    fn consume_segments_drops_written_segments_and_advances_a_partial_one() {
+        let mut segments = vec![
+            Bytes::from_static(b"abc"),
+            Bytes::from_static(b"defg"),
+            Bytes::from_static(b"hi"),
+        ];
+        consume_segments(&mut segments, 3);
+        assert_eq!(
+            segments,
+            vec![Bytes::from_static(b"defg"), Bytes::from_static(b"hi")]
+        );
+        consume_segments(&mut segments, 2);
+        assert_eq!(
+            segments,
+            vec![Bytes::from_static(b"fg"), Bytes::from_static(b"hi")]
+        );
+        consume_segments(&mut segments, 4);
+        assert!(segments.is_empty());
     }
 }
