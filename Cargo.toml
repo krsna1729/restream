@@ -68,11 +68,11 @@ url = "2"
 percent-encoding = "2"
 shiguredo_mp4 = "2026.5.0"
 # srt-rs branch perf/owner-tx-efficiency (main 86369b0 + GSO send coalescing,
-# id hashing, acked-bytes stats; see docs/media-copy-audit.md). SRT egress and ingress both run on
+# id hashing, acked-bytes stats, TX-blocked work fix; see docs/media-copy-audit.md). SRT egress and ingress both run on
 # `srt_transport::compio::Owner`; ingress attaches with
 # `Owner::listen_with_resolver`.
-srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "d81e9583e474bd18c83fa95e8283e187f729f8ba" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "d81e9583e474bd18c83fa95e8283e187f729f8ba", features = ["compio"] }
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "e6bbb24b4d8a876e7a091c5c383a280f5a4947b2" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "e6bbb24b4d8a876e7a091c5c383a280f5a4947b2", features = ["compio"] }
 # Bounded shard command channel with both blocking and Future-based receive, so
 # a backend that owns a thread-affine completion runtime can await commands
 # alongside its own I/O without a second wake source.

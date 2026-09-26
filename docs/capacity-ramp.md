@@ -123,6 +123,14 @@ and, past its limit, delivery collapsed for every destination rather than
 degrading for a few. The SRT sink stayed within its CPU budget, so Restream
 was the limit. Causes and fixes: [media copy audit](media-copy-audit.md#srt-rs-backlog-evidence-backed).
 
+**Comparing runs.** On this shared KVM VPS the same binary's CPU at the same
+rung moved by ~30% between sessions (RTMPS×500: 124% in the baseline ramp,
+158% in a later session for both baseline and current). Compare builds only
+with interleaved A/B runs in one session; treat cross-session capacity
+tables as indicative. The baseline numbers above used the bench profile;
+evidence committed from now on uses release binaries
+(`scripts/build/release-harness.sh`).
+
 ## Prompt for running on another machine
 
 Give this to an agent (or follow it by hand) on the target machine:
