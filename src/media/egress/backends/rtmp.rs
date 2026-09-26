@@ -15,7 +15,7 @@
 
 use crate::media::rtmp::egress_payload_cache::{RtmpPayloadCache, SharedRtmpPayloadCache};
 use std::collections::VecDeque;
-use std::io::{ErrorKind, IoSlice, Read, Write};
+use std::io::{ErrorKind, Read};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -36,6 +36,7 @@ use crate::media::rtmp::{
     resolve_deferred_audio_sequence_header, validate_rtmp_output_audio_packet_track,
 };
 
+use super::compio_tcp::TxPart;
 use super::rtmp_connection::RtmpConnection;
 use super::rtmp_handshake::{HandshakeOutcome, NonBlockingRtmpHandshake};
 use rtmp_negotiation::{SessionAdvanceOutcome, SessionNegotiation};
@@ -375,18 +376,18 @@ impl MediaPublisher {
                         WaitCondition::Io(Interest::READ_WRITE),
                     );
                 }
+                // Media payload is queued by reference (no per-output copy);
+                // only chunk headers and small control messages are copied.
                 let result = match pending {
-                    MediaPendingWrite::Bytes { bytes, offset } => stream.write(&bytes[*offset..]),
+                    MediaPendingWrite::Bytes { bytes, offset } => {
+                        stream.write_shared(&[TxPart::Share(bytes.slice(*offset..))])
+                    }
                     MediaPendingWrite::Vectored(message) => {
-                        let mut buffers: [&[u8]; MAX_VECTORED_PACKETS] =
-                            [&[]; MAX_VECTORED_PACKETS];
+                        let mut parts: [TxPart<'_>; MAX_VECTORED_PACKETS] =
+                            std::array::from_fn(|_| TxPart::Copy(&[]));
                         let (count, _) =
-                            message.fill_buffers(budget.remaining_bytes(total_bytes), &mut buffers);
-                        let mut slices = [IoSlice::new(&[]); MAX_VECTORED_PACKETS];
-                        for (slice, buffer) in slices.iter_mut().zip(&buffers[..count]) {
-                            *slice = IoSlice::new(buffer);
-                        }
-                        stream.write_vectored(&slices[..count])
+                            message.fill_parts(budget.remaining_bytes(total_bytes), &mut parts);
+                        stream.write_shared(&parts[..count])
                     }
                 };
                 match result {

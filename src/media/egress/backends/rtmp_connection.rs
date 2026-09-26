@@ -560,6 +560,24 @@ impl Read for RtmpConnection {
     }
 }
 
+impl RtmpConnection {
+    /// Zero-copy counterpart of `write_vectored` for media: shared payload
+    /// slices are queued by reference. Only plain and kTLS connections carry
+    /// media; Rustls-owned sockets refuse like `write` does.
+    pub(crate) fn write_shared(
+        &mut self,
+        parts: &[crate::media::egress::backends::compio_tcp::TxPart<'_>],
+    ) -> io::Result<usize> {
+        self.advance_tls_handshake()?;
+        match &mut self.state {
+            RtmpConnectionState::Plain(stream) => stream.write_shared(parts),
+            RtmpConnectionState::Ktls(connection) => connection.stream.write_shared(parts),
+            RtmpConnectionState::Tls(_) => Err(io::ErrorKind::WouldBlock.into()),
+            RtmpConnectionState::Failed(_) => Err(io::Error::other("TLS handoff failed")),
+        }
+    }
+}
+
 impl Write for RtmpConnection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.advance_tls_handshake()?;

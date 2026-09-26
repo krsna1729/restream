@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
 };
@@ -38,6 +38,10 @@ use super::handshake::perform_server_handshake;
 use super::ingest_packets::try_promote_cached_rtmp;
 use super::play::{PlayAuthorization, RtmpPlayRequest, handle_play_request};
 
+/// Spare capacity reserved for each ingest socket read: the size of the
+/// separate read buffer this replaced.
+const INGEST_READ_BYTES: usize = 4096;
+
 #[path = "ingest/parser_budget.rs"]
 pub(super) mod parser_budget;
 #[path = "ingest/session.rs"]
@@ -60,6 +64,14 @@ impl RtmpClientSocket {
     pub(super) async fn read(&mut self, buffer: Vec<u8>) -> io::Result<(usize, Vec<u8>)> {
         use compio::io::AsyncRead;
         let compio::BufResult(result, buffer) = self.stream.read(buffer).await;
+        result.map(|count| (count, buffer))
+    }
+
+    /// Read into the spare capacity after `buffer`'s current bytes, keeping
+    /// them (`read` overwrites from the start).
+    async fn append(&mut self, buffer: BytesMut) -> io::Result<(usize, BytesMut)> {
+        use compio::io::AsyncReadExt;
+        let compio::BufResult(result, buffer) = self.stream.append(buffer).await;
         result.map(|count| (count, buffer))
     }
 
@@ -646,7 +658,7 @@ pub(super) async fn handle_rtmp_client(
     let Some(handshake) = handshake else {
         return Ok(());
     };
-    let (remaining, buffer) = handshake.map_err(|_| "RTMP handshake timed out")??;
+    let (remaining, _handshake_buffer) = handshake.map_err(|_| "RTMP handshake timed out")??;
 
     let mut session_config = ServerSessionConfig::new();
     session_config.max_message_length =
@@ -710,11 +722,14 @@ pub(super) async fn handle_rtmp_client(
     let mut stats_tick: Pin<Box<dyn Future<Output = ()>>> =
         Box::pin(compio::time::sleep(Duration::from_secs(2)));
     let fd = socket.raw_fd();
-    let mut buffer = buffer;
     while disconnect.is_none() {
+        // Read straight into the session's own input buffer: the only copy of
+        // a received byte before chunk reassembly is the kernel's.
+        let mut input = session.take_input_buffer();
+        input.reserve(INGEST_READ_BYTES);
         let Some(read_result) = read_rtmp_input_or_quality(
             &mut socket,
-            std::mem::take(&mut buffer),
+            input,
             &shutdown,
             &mut stats_tick,
             publishing,
@@ -727,7 +742,7 @@ pub(super) async fn handle_rtmp_client(
             disconnect = Some(("shutdown", "RTMP listener shutting down", false));
             break;
         };
-        let (count, returned_buffer) = match read_result {
+        let (count, input) = match read_result {
             Ok(result) => result,
             Err(_) => {
                 warn!("read error in main loop for {}", client_addr_text);
@@ -735,12 +750,11 @@ pub(super) async fn handle_rtmp_client(
                 break;
             }
         };
-        buffer = returned_buffer;
         if count == 0 {
             disconnect = Some(("disconnect", "publisher disconnected", false));
             break;
         }
-        let results = match session.handle_input(&buffer[..count]) {
+        let results = match session.handle_buffered_input(input, count) {
             Ok(results) => results,
             Err(error) => {
                 warn!(%error, "session parse error for {}", client_addr_text);
@@ -785,7 +799,6 @@ pub(super) async fn handle_rtmp_client(
         }
         // Handed-off media is now bounded by the handoff semaphore.
         parser_charge.release_to(session.inbound_buffered_bytes());
-        buffer.clear();
     }
 
     let (phase, reason, had_error) =
@@ -890,15 +903,15 @@ fn sample_publisher_quality(
 #[allow(clippy::too_many_arguments)]
 async fn read_rtmp_input_or_quality(
     socket: &mut RtmpClientSocket,
-    buffer: Vec<u8>,
+    buffer: BytesMut,
     shutdown: &CancellationToken,
     stats_tick: &mut Pin<Box<dyn Future<Output = ()>>>,
     publishing: bool,
     fd: RawFd,
     previous_tcp_bytes: &mut Option<(u64, Instant)>,
     commands: &mpsc::Sender<RtmpControlCommand>,
-) -> Option<io::Result<(usize, Vec<u8>)>> {
-    let read_future = socket.read(buffer);
+) -> Option<io::Result<(usize, BytesMut)>> {
+    let read_future = socket.append(buffer);
     tokio::pin!(read_future);
     loop {
         tokio::select! {

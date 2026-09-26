@@ -80,7 +80,7 @@ flume = { version = "0.12", default-features = false, features = ["async"] }
 # names the runtime type directly.
 # The substrate benchmark harness compares Compio UDP submission with a direct
 # io_uring baseline; production RTMP egress uses Compio TCP.
-compio = { version = "=0.19.2", default-features = false, features = ["runtime", "time", "net"] }
+compio = { version = "=0.19.2", default-features = false, features = ["runtime", "time", "net", "bytes"] }
 io-uring = "0.7.15"
 tracing = { version = "0.1", features = ["max_level_debug"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }

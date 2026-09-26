@@ -56,7 +56,7 @@ are what matter; ingest copies scale with ingest bitrate only.
 | # | Copy | Status / justification |
 |---|---|---|
 | I1 | kernel → user read buffer | Required (io_uring read). |
-| I2 | read buffer → deserializer `BytesMut` (`get_next_message` `extend_from_slice`) | **Removal in progress (stashed, not yet compiled):** `ServerSession::take_input_buffer` / `handle_buffered_input` let the socket read straight into the deserializer buffer. Leftover partial chunks are reclaimed in place by `BytesMut::reserve`. |
+| I2 | read buffer → deserializer `BytesMut` (`get_next_message` `extend_from_slice`) | **Removed:** `ServerSession::take_input_buffer` / `handle_buffered_input` let the socket append straight into the deserializer buffer (Compio `AsyncReadExt::append`: plain `read` overwrites from offset 0 and corrupted leftover partial chunks, which `aggregate_parser_budget_rejects_the_connection_that_exceeds_it` caught). Leftover partial chunks are reclaimed in place by `BytesMut::reserve`. |
 | I3 | chunk payload → `current_payload_data` reassembly | Kept. Multi-chunk messages need chunk headers stripped into one contiguous payload. For single-chunk messages a zero-copy `split_to().freeze()` was rejected: the frozen `Bytes` would pin the whole read allocation (≥4 KiB) behind every ~200-byte audio frame for as long as the ring retains it (~20x memory amplification, outside `ParserBudget` accounting). |
 | — | message → `RtmpMessage::{Audio,Video}Data` → `MediaPacket` | Already zero-copy (`Bytes` moves / refcount). |
 
@@ -74,7 +74,7 @@ needs AVCC/HVCC + raw AAC.
 
 | # | Copy | Status / justification |
 |---|---|---|
-| T1 | chunk headers + payload slices → 64 KiB `outgoing` `Vec<u8>` (`write_vectored`) | **In progress (stashed, not yet compiled):** staging becomes `Vec<Bytes>`: shared payload slices (`Bytes::slice_ref` of the message payload) plus sealed `BytesMut` runs of copied bytes, sent with one io_uring `writev`. After E0, T1 was 3.86% of the 4.53% memcpy share at 100 outputs. |
+| T1 | chunk headers + payload slices → 64 KiB `outgoing` `Vec<u8>` (`write_vectored`) | **Removed:** staging is `Vec<Bytes>`: shared payload slices (`RtmpWireMessage::fill_parts`, `Bytes::slice_ref` of the message payload) plus sealed `BytesMut` runs of copied bytes, sent with one io_uring `writev` via `CompioTcpStream::write_shared` / `RtmpConnection::write_shared`. The 64 KiB `pending_write_bytes` backpressure is unchanged. |
 | T2 | partial write → `data.drain(..n)` memmove of the unsent tail | Replaced by the same change: finished segments leave the list; the first unfinished one `advance`s. |
 | T3 | user → kernel send | Required. Candidate follow-up: `MSG_ZEROCOPY`/`IORING_OP_SEND_ZC`, but completion notifications cost more than a copy for sends under ~10 KiB. Measure before adopting. |
 | T4 | pre-kTLS rustls records | Kept: rustls encrypts into its own buffers; kTLS takes over after the handshake. |
@@ -103,19 +103,20 @@ State as of this writing, in order:
    spread wider on the cache build (0.892–0.994 vs 0.970–0.980). **Watch
    item:** repeat the 100-output A/B after the TX change; if dips recur only
    with the cache, bisect them.
-2. **Ingest direct read (I2).** Stashed as `wip: ingest direct read + zero-copy TX` (`git stash list`) together with item 3. Vendored API plus test
-   (`buffered_input_parses_like_handle_input_across_split_reads`), the ingest
-   loop change, `compio` `bytes` feature, and the `RESTREAM_PATCHES.md` entry
-   are written but not yet compiled. Gate: `cargo test rtmp`, the vendored
-   crate tests, and the `tests/parser_memory.rs` budget tests.
-3. **Zero-copy TX (T1/T2).** `stream.rs` staging is converted; still to do:
-   `CompioTcpStream::write_shared(&[TxPart])` (the `Std` test variant falls
-   back to `write_vectored`), `RtmpConnection::write_shared` forwarding for
-   Plain/kTLS, and the `rtmp.rs` media write path mapping `fill_buffers`
-   slices to `TxPart::Share(payload.slice_ref(..))` or `TxPart::Copy`. Keep
-   the 64 KiB `pending_write_bytes` backpressure exactly as is. Gate:
-   `cargo test compio_tcp rtmp`, the RTMPS/kTLS tests, then an interleaved
-   RTMP and RTMPS fan-out A/B and a profile.
+2. **Ingest direct read (I2):** see item 3.
+3. **Zero-copy TX (T1/T2) and ingest direct read (I2): committed together.**
+   Correctness: `mixed.live.rtmp.h264.a1.bf2` (18/18 outputs, sink probes
+   pass) and `mixed.live.srt.h264.a2.bf0` (38/38) pass; full `cargo test`
+   passes. 5 interleaved reps at 100 outputs against `95dd6355`:
+   - RTMP (SRT H.264 ingest): CPU median 47.2% → 39.4% (mean 46.8 → 42.5),
+     RSS 189 → 176 MiB, delivery 100/100 in every run.
+   - RTMPS/kTLS: CPU median 54.6% → 57.2%, mean 56.7 → 56.3 (runs span
+     48–70%: no measurable change), RSS 189 → 176 MiB, delivery 100/100.
+     Profile (4K samples each): userspace memcpy 3.59% → 0.73%, libc
+     9.9% → 8.2%, kernel share ~74% → ~76%. Kernel symbols were unresolvable
+     (`kptr_restrict=1` at record time); to attribute kTLS cost, record with
+     `kernel.kptr_restrict=0` (restore afterwards).
+   The earlier ingest change (item 2) was folded into this commit.
 4. SRT egress copy audit (see above).
 
 ## Rust Allocator API exploration

@@ -6,6 +6,8 @@ use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
+use bytes::{Buf, Bytes, BytesMut};
+
 use super::super::tcp::TcpReadyLeaf;
 
 /// Bounded protocol-facing buffers. All socket reads and writes are driven by
@@ -21,10 +23,14 @@ pub(crate) type SharedIoBuffers = std::rc::Rc<std::cell::RefCell<IoBuffers>>;
 #[derive(Debug, Default)]
 pub(crate) struct IoBuffers {
     pub(super) received: VecDeque<u8>,
-    /// Append-only TX staging. The transmit worker swaps the whole buffer
-    /// out instead of copying from it; `pending_write_bytes` (staged plus in
-    /// flight) keeps it within `TRANSPORT_BUFFER_CAPACITY`.
-    outgoing: Vec<u8>,
+    /// TX staging, in wire order: shared payload slices and sealed runs of
+    /// copied bytes. The transmit worker swaps the whole list out and sends it
+    /// with one vectored write; `pending_write_bytes` (staged plus in flight)
+    /// keeps it within `TRANSMIT_BUFFER_CAPACITY`.
+    outgoing: Vec<Bytes>,
+    /// Open run of copied bytes (chunk headers, control messages, TLS
+    /// records), sealed into `outgoing` before the next shared slice.
+    copied: BytesMut,
     pub(super) record_type: Option<(usize, u8)>,
     pending_write_bytes: usize,
     rx_space_waker: Option<std::task::Waker>,
@@ -37,7 +43,51 @@ pub(crate) struct IoBuffers {
     error: Option<(io::ErrorKind, String)>,
 }
 
+/// One piece of a zero-copy write: bytes the caller owns only for the call
+/// (copied), or a payload slice whose buffer is shared into the send.
+pub(crate) enum TxPart<'a> {
+    Copy(&'a [u8]),
+    Share(Bytes),
+}
+
+/// Shared slices shorter than this are copied instead: one more iovec costs
+/// more than copying a few hundred bytes.
+const SHARE_MIN_BYTES: usize = 512;
+
+impl TxPart<'_> {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Copy(bytes) => bytes,
+            Self::Share(bytes) => bytes,
+        }
+    }
+}
+
 impl IoBuffers {
+    fn stage_copy(&mut self, bytes: &[u8]) {
+        self.copied.extend_from_slice(bytes);
+    }
+
+    fn stage_share(&mut self, bytes: Bytes) {
+        if bytes.len() < SHARE_MIN_BYTES {
+            self.copied.extend_from_slice(&bytes);
+            return;
+        }
+        self.seal_copied();
+        self.outgoing.push(bytes);
+    }
+
+    fn seal_copied(&mut self) {
+        if !self.copied.is_empty() {
+            let run = self.copied.split().freeze();
+            self.outgoing.push(run);
+        }
+    }
+
+    fn has_outgoing(&self) -> bool {
+        !self.outgoing.is_empty() || !self.copied.is_empty()
+    }
+
     pub(super) fn new() -> SharedIoBuffers {
         std::rc::Rc::new(std::cell::RefCell::new(Self {
             receive_armed: true,
@@ -250,6 +300,56 @@ impl Read for CompioTcpStream {
     }
 }
 
+impl CompioTcpStream {
+    /// Queue `parts` in wire order without copying shared payload slices.
+    /// Accepts a prefix within the TX bound and reports its length, like
+    /// `write_vectored`; `WouldBlock` when nothing fits.
+    pub(crate) fn write_shared(&mut self, parts: &[TxPart<'_>]) -> io::Result<usize> {
+        match self {
+            Self::Compio { buffers, .. } => {
+                let mut buffers = buffers.borrow_mut();
+                if let Some((kind, message)) = &buffers.error {
+                    return Err(io::Error::new(*kind, message.clone()));
+                }
+                let mut available =
+                    TRANSMIT_BUFFER_CAPACITY.saturating_sub(buffers.pending_write_bytes);
+                let mut count = 0;
+                for part in parts {
+                    let len = part.as_slice().len();
+                    let take = available.min(len);
+                    if take == 0 {
+                        if len == 0 {
+                            continue;
+                        }
+                        break;
+                    }
+                    match part {
+                        TxPart::Copy(bytes) => buffers.stage_copy(&bytes[..take]),
+                        TxPart::Share(bytes) => buffers.stage_share(bytes.slice(..take)),
+                    }
+                    buffers.pending_write_bytes += take;
+                    available -= take;
+                    count += take;
+                }
+                if count == 0 && parts.iter().any(|part| !part.as_slice().is_empty()) {
+                    Err(io::ErrorKind::WouldBlock.into())
+                } else {
+                    wake(&mut buffers.tx_waker);
+                    Ok(count)
+                }
+            }
+            #[cfg(test)]
+            Self::Std(stream) => {
+                let slices: Vec<IoSlice<'_>> = parts
+                    .iter()
+                    .map(|part| IoSlice::new(part.as_slice()))
+                    .collect();
+                stream.write_vectored(&slices)
+            }
+        }
+    }
+}
+
 impl Write for CompioTcpStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.is_empty() {
@@ -267,7 +367,7 @@ impl Write for CompioTcpStream {
                 if count == 0 {
                     return Err(io::ErrorKind::WouldBlock.into());
                 }
-                buffers.outgoing.extend_from_slice(&buf[..count]);
+                buffers.stage_copy(&buf[..count]);
                 buffers.pending_write_bytes += count;
                 wake(&mut buffers.tx_waker);
                 Ok(count)
@@ -292,7 +392,7 @@ impl Write for CompioTcpStream {
                     if take == 0 {
                         break;
                     }
-                    buffers.outgoing.extend_from_slice(&buf[..take]);
+                    buffers.stage_copy(&buf[..take]);
                     buffers.pending_write_bytes += take;
                     available -= take;
                     count += take;
@@ -372,16 +472,18 @@ impl Future for ReceiveArm {
     }
 }
 
-async fn take_transmit(buffers: &SharedIoBuffers, output: &mut Vec<u8>) {
+async fn take_transmit(buffers: &SharedIoBuffers, output: &mut Vec<Bytes>) {
     output.clear();
     std::future::poll_fn(|cx| {
         let mut buffers = buffers.borrow_mut();
-        if buffers.outgoing.is_empty() {
+        if !buffers.has_outgoing() {
             buffers.tx_waker = Some(cx.waker().clone());
             return Poll::Pending;
         }
-        // Hand the staged bytes to the writer by swapping buffers; both keep
-        // their capacity, so steady state neither copies nor allocates.
+        // Hand the staged segments to the writer by swapping lists; both keep
+        // their capacity, so steady state neither copies payload nor
+        // reallocates the list.
+        buffers.seal_copied();
         std::mem::swap(output, &mut buffers.outgoing);
         Poll::Ready(())
     })
@@ -627,6 +729,21 @@ async fn receive_ancillary_worker(
     }
 }
 
+/// Drop the first `count` written bytes: whole segments leave the list, the
+/// first partially written one advances in place.
+fn consume_segments(segments: &mut Vec<Bytes>, mut count: usize) {
+    let mut written = 0;
+    for segment in segments.iter_mut() {
+        if count < segment.len() {
+            segment.advance(count);
+            break;
+        }
+        count -= segment.len();
+        written += 1;
+    }
+    segments.drain(..written);
+}
+
 pub(super) async fn transmit_worker(
     stream: Rc<compio::net::TcpStream>,
     buffers: SharedIoBuffers,
@@ -635,13 +752,14 @@ pub(super) async fn transmit_worker(
 ) {
     let mut stream = stream.as_ref();
     use compio::io::AsyncWrite;
-    let mut data = Vec::with_capacity(IO_CHUNK);
+    let mut data: Vec<Bytes> = Vec::new();
     loop {
         take_transmit(&buffers, &mut data).await;
-        // A partial write keeps its unsent tail in `data` and writes it next,
-        // ahead of anything queued later, without re-queuing it byte by byte.
+        // A partial write keeps its unsent segments in `data` and writes them
+        // next, ahead of anything queued later, without moving any bytes.
         while !data.is_empty() {
-            let compio::BufResult(result, returned) = stream.write(std::mem::take(&mut data)).await;
+            let compio::BufResult(result, returned) =
+                stream.write_vectored(std::mem::take(&mut data)).await;
             data = returned;
             match result {
                 Ok(0) => {
@@ -665,7 +783,7 @@ pub(super) async fn transmit_worker(
                         let mut state = buffers.borrow_mut();
                         state.pending_write_bytes = state.pending_write_bytes.saturating_sub(count);
                     }
-                    data.drain(..count);
+                    consume_segments(&mut data, count);
                     if events
                         .send_async(TcpReadyLeaf {
                             writable: true,

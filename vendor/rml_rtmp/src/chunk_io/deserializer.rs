@@ -203,6 +203,26 @@ impl ChunkDeserializer {
         self.max_message_length = max_length.min(PROTOCOL_MAX_MESSAGE_LENGTH);
     }
 
+    /// Hand the unprocessed-input buffer to the caller so the transport can
+    /// read straight into its spare capacity, then give it back with
+    /// `restore_input_buffer`; saves copying every received byte out of a
+    /// separate read buffer. (restream vendor patch)
+    pub fn take_input_buffer(&mut self) -> BytesMut {
+        mem::take(&mut self.buffer)
+    }
+
+    /// Return a buffer taken with `take_input_buffer`, now holding the
+    /// previous unprocessed bytes followed by newly received ones.
+    /// (restream vendor patch)
+    pub fn restore_input_buffer(&mut self, buffer: BytesMut) {
+        if self.buffer.is_empty() {
+            self.buffer = buffer;
+        } else {
+            // Only reachable if a caller fed input while the buffer was out.
+            self.buffer.extend_from_slice(&buffer);
+        }
+    }
+
     /// Bytes this deserializer currently holds: unprocessed input plus the
     /// partially assembled message payload. (restream vendor patch)
     pub fn in_progress_bytes(&self) -> usize {

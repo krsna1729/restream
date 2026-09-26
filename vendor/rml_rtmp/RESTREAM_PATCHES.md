@@ -17,6 +17,13 @@ Patch scope, marked `restream vendor patch` in the source:
   `ServerSession::inbound_buffered_bytes` expose the bytes a session holds
   before a message completes; `ServerSessionConfig::max_message_length`
   configures the limit.
+- `ServerSession::take_input_buffer` / `handle_buffered_input` (backed by
+  `ChunkDeserializer::take_input_buffer` / `restore_input_buffer`) let the
+  transport read straight into the session's unprocessed-input `BytesMut`
+  instead of copying every received byte from a separate read buffer.
+  `handle_input` is unchanged and shares the same parse path. The taken
+  buffer can still hold unparsed bytes, so the caller must append (Compio:
+  `AsyncReadExt::append`; plain `read` overwrites from the start).
 
 Tests for each change live next to the patched code. Keep this patch minimal;
 drop it if upstream gains equivalent admission control.

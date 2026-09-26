@@ -1,6 +1,8 @@
 use bytes::Bytes;
 use rml_rtmp::time::RtmpTimestamp;
 
+use crate::media::egress::backends::compio_tcp::TxPart;
+
 const MAX_CHUNKS_PER_IOV: usize = 8;
 const MAX_HEADER_BYTES: usize = 16;
 
@@ -130,6 +132,31 @@ impl RtmpWireMessage {
                 break;
             }
             chunk += 1;
+        }
+        (count, bytes)
+    }
+
+    /// `fill_buffers` for a zero-copy write: payload slices become shared
+    /// references into the payload buffer, headers stay copies.
+    pub(super) fn fill_parts<'a>(
+        &'a mut self,
+        max_bytes: usize,
+        parts: &mut [TxPart<'a>; MAX_CHUNKS_PER_IOV * 2],
+    ) -> (usize, usize) {
+        let payload = self.payload.clone();
+        let payload_range = payload.as_ptr_range();
+        let mut buffers: [&'a [u8]; MAX_CHUNKS_PER_IOV * 2] = [&[]; MAX_CHUNKS_PER_IOV * 2];
+        let (count, bytes) = self.fill_buffers(max_bytes, &mut buffers);
+        for (part, buffer) in parts.iter_mut().zip(&buffers[..count]) {
+            let range = buffer.as_ptr_range();
+            *part = if !buffer.is_empty()
+                && payload_range.start <= range.start
+                && range.end <= payload_range.end
+            {
+                TxPart::Share(payload.slice_ref(buffer))
+            } else {
+                TxPart::Copy(buffer)
+            };
         }
         (count, bytes)
     }

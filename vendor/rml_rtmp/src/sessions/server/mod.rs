@@ -13,7 +13,7 @@ mod tests;
 use self::active_stream::{ActiveStream, StreamState};
 use self::outstanding_requests::OutstandingRequest;
 use self::session_state::SessionState;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use chunk_io::{ChunkDeserializer, ChunkSerializer, Packet};
 use messages::{PeerBandwidthLimitType, RtmpMessage, UserControlEventType};
 use rml_amf0::Amf0Value;
@@ -157,11 +157,39 @@ impl ServerSession {
         &mut self,
         bytes: &[u8],
     ) -> Result<Vec<ServerSessionResult>, ServerSessionError> {
+        self.process_input(bytes.len(), bytes)
+    }
+
+    /// The session's unprocessed-input buffer, for the transport to read into
+    /// directly; pass it back with `handle_buffered_input`. Saves copying each
+    /// received byte from a separate read buffer. The buffer may still hold
+    /// unparsed bytes: new input must be appended after them, never written
+    /// over them. (restream vendor patch)
+    pub fn take_input_buffer(&mut self) -> BytesMut {
+        self.deserializer.take_input_buffer()
+    }
+
+    /// Like `handle_input`, for a buffer from `take_input_buffer` whose last
+    /// `received` bytes were just read from the peer. (restream vendor patch)
+    pub fn handle_buffered_input(
+        &mut self,
+        buffer: BytesMut,
+        received: usize,
+    ) -> Result<Vec<ServerSessionResult>, ServerSessionError> {
+        self.deserializer.restore_input_buffer(buffer);
+        self.process_input(received, &[])
+    }
+
+    fn process_input(
+        &mut self,
+        received: usize,
+        bytes: &[u8],
+    ) -> Result<Vec<ServerSessionResult>, ServerSessionError> {
         let mut results = Vec::new();
-        self.bytes_received += bytes.len() as u64;
+        self.bytes_received += received as u64;
 
         if let Some(peer_ack_size) = self.peer_window_ack_size {
-            self.bytes_received_since_last_ack += bytes.len() as u32;
+            self.bytes_received_since_last_ack += received as u32;
             if self.bytes_received_since_last_ack >= peer_ack_size {
                 let ack_message = RtmpMessage::Acknowledgement {
                     sequence_number: self.bytes_received_since_last_ack,

@@ -573,6 +573,66 @@ fn can_receive_audio_data_on_published_stream() {
     }
 }
 
+// restream vendor patch: reading straight into the session's input buffer
+// must parse exactly like `handle_input`, however the reads split the bytes.
+#[test]
+fn buffered_input_parses_like_handle_input_across_split_reads() {
+    let (mut deserializer, mut serializer, mut session) = common_basic_setup();
+    perform_connection(
+        TEST_APP_NAME,
+        &mut session,
+        &mut serializer,
+        &mut deserializer,
+    );
+    let stream_id = create_active_stream(&mut session, &mut serializer, &mut deserializer);
+    start_publishing(
+        TEST_STREAM_KEY,
+        stream_id,
+        &mut session,
+        &mut serializer,
+        &mut deserializer,
+    );
+
+    // Larger than the default 128-byte chunk size: several chunks.
+    let video: Vec<u8> = (0..1_000u32).map(|n| n as u8).collect();
+    let mut wire = Vec::new();
+    for (timestamp, data) in [(10, video.clone()), (20, vec![7_u8; 3])] {
+        let payload = RtmpMessage::VideoData {
+            data: Bytes::from(data),
+        }
+        .into_message_payload(RtmpTimestamp::new(timestamp), stream_id)
+        .unwrap();
+        wire.extend_from_slice(&serializer.serialize(&payload, false, false).unwrap().bytes);
+    }
+
+    let mut received = Vec::new();
+    for read in wire.chunks(7) {
+        let mut buffer = session.take_input_buffer();
+        buffer.extend_from_slice(read);
+        let results = session.handle_buffered_input(buffer, read.len()).unwrap();
+        let (_, events) = split_results(&mut deserializer, results);
+        received.extend(events);
+    }
+
+    let data: Vec<_> = received
+        .into_iter()
+        .map(|event| match event {
+            ServerSessionEvent::VideoDataReceived {
+                data, timestamp, ..
+            } => (timestamp, data.to_vec()),
+            event => panic!("Expected VideoDataReceived, got: {:?}", event),
+        })
+        .collect();
+    assert_eq!(
+        data,
+        vec![
+            (RtmpTimestamp::new(10), video),
+            (RtmpTimestamp::new(20), vec![7_u8; 3])
+        ]
+    );
+    assert_eq!(session.inbound_buffered_bytes(), 0);
+}
+
 #[test]
 fn can_receive_video_data_on_published_stream() {
     let (mut deserializer, mut serializer, mut session) = common_basic_setup();
