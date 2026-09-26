@@ -113,7 +113,12 @@ fn synthesized_harness_port_range(name: &str, width: u16, reserved: &HashSet<u16
     // default while still allowing explicit env overrides when needed.
     let width = width.max(1) as u32;
     let min_port = 20_000u32;
-    let max_port = 50_000u32;
+    // Stay below the kernel's ephemeral range: a listener port synthesized
+    // inside it can collide with a live outbound connection (for example
+    // one of a previous rung's 1,000 egress sockets) and fail to bind.
+    let max_port = ephemeral_port_floor()
+        .filter(|floor| *floor > min_port + width)
+        .map_or(50_000u32, |floor| floor.min(50_000));
     let span = max_port
         .checked_sub(min_port)?
         .checked_sub(width)?
@@ -135,4 +140,14 @@ fn synthesized_harness_port_range(name: &str, width: u16, reserved: &HashSet<u16
         }
     }
     None
+}
+
+/// First port of `net.ipv4.ip_local_port_range`, when readable.
+fn ephemeral_port_floor() -> Option<u32> {
+    std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .ok()?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
 }
