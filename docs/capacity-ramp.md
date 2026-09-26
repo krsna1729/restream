@@ -94,25 +94,29 @@ A full default run takes roughly 1–2 hours (3 repeats, 30 s windows).
 
 ## Reference results
 
-6-CPU AMD EPYC KVM VPS (1 NUMA node), kernel 6.8, commit `26d2a490` plus
-the harness changes that introduced this script, Restream on CPUs 0–2,
-harness on 3–5, product-default shards, 20 s windows, one repeat per rung
-(exploratory, not the script's 3-repeat run):
+Baseline: 6-CPU AMD EPYC KVM VPS (1 NUMA node), kernel 6.8, commit
+`6616fa85`, `scripts/harness/capacity-ramp.sh` defaults (Restream on CPUs
+0–2, harness on 3–5, product-default shards, 30 s windows, 3 repeats per
+rung). CPU is % of one core; Restream's budget is 300%.
 
-| protocol | outputs | receiver delivered | worst ratio | Jain | Restream CPU (avg, % of one core) | RSS MB |
-|---|---:|---:|---:|---:|---:|---:|
-| RTMP | 100 | 100/100 | 0.971 | 1.00000 | 33 | 149 |
-| RTMP | 250 | 250/250 | 0.966 | 1.00000 | 54 | 183 |
-| RTMP | 500 | 500/500 | 0.955 | 0.99998 | 88 | 230 |
-| RTMP | 1000 | 1000/1000 | 0.964 | 0.99997 | 138 | 295 |
-| SRT | 150 | 150/150 | 0.982 | — | 185 | — |
-| SRT | 200 | 111/200 (one run 0/200) | 0.401 | — | 234 | 294 |
+| protocol | capacity | rung | passed | rx delivered min | rx ratio min | CPU avg | CPU peak | RSS MB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| RTMP | **1000** | 250 | 3/3 | 250 | 0.962 | 60.7% | 115.5% | 184 |
+| | | 500 | 3/3 | 500 | 0.959 | 83.6% | 141.1% | 232 |
+| | | 1000 | 3/3 | 1000 | 0.964 | 135.3% | 194.9% | 295 |
+| | | 2000 | 1/3 | 422 | 0.944 | 216.3% | 259.0% | 452 |
+| RTMPS | **1000** | 250 | 3/3 | 250 | 0.963 | 73.5% | 115.9% | 194 |
+| | | 500 | 3/3 | 500 | 0.966 | 124.1% | 168.0% | 238 |
+| | | 1000 | 3/3 | 1000 | 0.954 | 235.2% | 282.0% | 327 |
+| | | 2000 | 0/2 | 0 | 0.343 | 292.5% | 297.6% | 565 |
+| SRT | **50** | 50 | 3/3 | 50 | 0.986 | 127.1% | 185.4% | 160 |
+| | | 100 | 2/3 | 35 | 0.878 | 168.8% | 253.9% | 204 |
+| | | 150 | 0/3 | 0 | 0.000 | 208.2% | 279.8% | 266 |
 
-SRT costs ~1.2–1.7% of a core per 8 Mbit/s output against RTMP's ~0.14%, and
-at its limit SRT delivery degraded for many destinations at once (one run
-collapsed to 0/200). The SRT sink used ~1.5 of its 3 CPUs, so Restream was
-the limit. See [media copy audit](media-copy-audit.md) for the SRT profile
-(loopback receiver wakeups, io_uring timed waits, SipHash in `CallerTable`).
+SRT costs ~2.5% of a core per 8 Mbit/s output (RTMP ~0.14%, RTMPS ~0.24%)
+and, past its limit, delivery collapsed for every destination rather than
+degrading for a few. The SRT sink stayed within its CPU budget, so Restream
+was the limit. Causes and fixes: [media copy audit](media-copy-audit.md#srt-rs-backlog-evidence-backed).
 
 ## Prompt for running on another machine
 

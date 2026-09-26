@@ -146,7 +146,9 @@ for line in sh("lscpu").splitlines():
 meminfo = open("/proc/meminfo").read().split("\n")[0]
 json.dump({
     "commit": sh("git", "rev-parse", "HEAD"),
-    "dirty": sh("git", "status", "--porcelain") != "",
+    # Tracked changes only, matching the preflight check; untracked scratch
+    # files do not change the build.
+    "dirty": sh("git", "status", "--porcelain", "--untracked-files=no") != "",
     "kernel": platform.release(),
     "cpu_model": lscpu.get("Model name", ""),
     "online_cpus": $total_cpus,

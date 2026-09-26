@@ -98,6 +98,50 @@ changes (Stage-B bench surface: `wi3-owner-bench` feature), then bump the pin
 here and rerun the SRT fan-out A/B. Measure SRT fan-out against the harness sink
 (`MSR_PEER=sink`): mediamtx is the bottleneck for SRT (roadmap §36).
 
+### srt-rs backlog (evidence-backed)
+
+srt-rs is ours (`/home/dev/srt-rs`, pinned in `Cargo.toml`). Evidence comes
+from the SRT fan-out profile (SRT H.264 → 10 SRT outputs, `perf -F 499`,
+DWARF stacks, kernel symbols; 7.2K samples, `40ebacde`) and the capacity
+ramp into harness sinks (Restream pinned to 3 CPUs, `6616fa85`).
+
+Context (baseline ramp, `docs/capacity-ramp.md`, 3 repeats, 30 s windows,
+Restream on 3 pinned CPUs): capacity RTMP 1000, RTMPS 1000, SRT 50 outputs;
+SRT 100 passed 2/3 and SRT 150 collapsed to 0/3. SRT costs ~2.5% of a core
+per 8 Mbit/s output versus RTMP ~0.14%, and the SRT sink stayed within its
+budget (Restream-limited).
+
+| # | Fix (srt-rs) | Evidence | Expected effect |
+|---|---|---|---|
+| S1 | **Batch sends: one io_uring `sendmsg` with UDP GSO (`UDP_SEGMENT`) per peer burst**, instead of one `send_to` per datagram. The Compio Owner's `TxEngine` runs up to 64 lane tasks (`runtimes/compio.rs` `tx_lane_worker`), each awaiting `job.sock.send_to(job.buf, job.peer)` for a single datagram. srt-rs already has `sendmmsg` batching (`socket_io::sendmsg_batch`), but only the non-Compio paths use it. | `io_uring_enter` 43.1% inclusive, `io_sendmsg` → `udp_sendmsg` 26.2% / 23.6% (one kernel send path per ~1.3 KB datagram), `io_submit_sqes` 28.1%. RTMP sends up to 64 KiB per operation and costs ~9x less per byte. | Biggest lever: amortizes the per-datagram syscall, IP output and SQE/CQE handling across a burst. Must respect pacing: batch only packets already due (for example within one pacing tick). Data packets carrying 7×188-byte TS are equal-sized, which GSO needs. Measure on loopback and a real NIC. |
+| S2 | **Wait without arming a timer when a CQE is already imminent**: `Owner::wait` wraps the activity `poll_fn` in `compio::time::timeout(timeout, …)` on every iteration (`runtimes/compio.rs` ~4106), so each wake arms and cancels an hrtimer. | `io_cqring_wait` 13.9% inclusive; `schedule_hrtimeout_range_clock` 11.3% inclusive / 2.2% self; `hrtimer_try_to_cancel` chains ~1.9%; `task_work_run` lock 1.56%. | Poll first and wait untimed when TX completions are outstanding (they wake the Owner). Otherwise use the protocol deadline with coarse, reusable timers. Worth ~2–5% at 10 outputs, more at scale. |
+| S3 | **Replace SipHash maps on the per-packet path**: `CallerTable` `sessions: HashMap<LogicalCallerId, CallerSession>`, `routes: HashMap<u32, CallerRoute>`, `sched: HashMap<LogicalCallerId, SchedEntry>` (`caller.rs` ~412–417) use std's SipHash, although the keys are internal ids and not attacker-chosen. | `hash_one`/SipHasher 1.47% of samples, from `poll_outbound_bounded_to_with_visits` 0.32%, `sync_deadline` 0.22%, `feed` 0.21%, `send_shared` 0.10%. | Dense `Vec` indexing by `LogicalCallerId` (slab), or a fast non-cryptographic hasher. `routes` is keyed by a peer-chosen socket id, so keep DoS resistance there (for example a keyed fast hasher). Add a micro-bench first. |
+| S4 | **Avoid the payload copy into the datagram**: `PendingDatagram::encode_into` copies header and payload into one TX buffer per datagram, because `send_to` takes a contiguous buffer. | memcpy leaf 0.26% under `encode_into` (libc memcpy+malloc 5.4% total). | With S1's `sendmsg`, pass header and payload as iovecs (payload stays `Bytes`). Small on its own; lands with S1. |
+| S5 | **Expose peer-acknowledged payload directly** (`SenderStats`): Restream derives "delivered" as `total_bytes_sent − total_bytes_dropped − payload_bytes_in_buffer`, which leans on internal accounting (first-send counting, tombstones), and a receiver's own TLPKTDROP after ACK is invisible to it. | Review of `702bc3df`: SRT Restream-vs-receiver disagreement (SRT×100 into mediamtx: receiver 0.007, Restream 0.83). | An `acked_payload_bytes` counter, plus a receiver-drop estimate if the peer reports one, so delivery is not an upper bound by construction. |
+| S6 | **Public stable id for `LogicalPeerId`** (`as_u64` is `pub(crate)`), for telemetry keys. | The harness sink had to invent a per-pool sequence to key per-connection bytes (`e521492b`). | Minor API. |
+| S7 | **Re-verify the frozen-destination RSS regression after the Owner cutover**. It was recorded at the Compio pivot: `fault.srt-output-stall` RSS growth 78–93 MB versus 46–54 MB before, suspected in `CallerLeg::send_shared` queuing into the protocol output queue (16 MiB / 8192 actions per connection). | Session memory note from `ec8832d9`; not re-measured since. | Rerun `fault.srt-output-stall`; fix only if it still reproduces. |
+
+Not srt-rs, but found in the same runs:
+
+- **Restream overload collapse (policy).** At 200–400 SRT outputs on 3 CPUs,
+  Restream's stall sweep closed 401 leaves ("no progress (stalled)", lag
+  ≈ 300 units, some `blocked`), producing 586 "output failed" retries and 168
+  peer disconnects within ~50 s. Reconnects add load to a saturated Owner, so
+  delivery collapses for nearly every destination instead of degrading for a
+  few. Needs overload-aware stall handling (for example, do not reconnect
+  into a saturated shard; shed the newest outputs) before or alongside S1.
+- **Healthy SRT memory is fine.** About 0.35 MB per output at 100 outputs
+  (RSS 163 → 194 MB from 10 to 100), against ~0.13–0.16 MB for RTMP. Growth to
+  ~1.4 MB per output appears only under overload backlog.
+- **Loopback receive cost.** ~11% of the profile is the loopback receive
+  softirq (`net_rx_action` → `udp_rcv`) charged to our send; on a real NIC it
+  lands elsewhere. Compare S1 on loopback and on a NIC or veth pair
+  (`scripts/harness/veth-topology.sh`).
+
+Order: S1 (with S4), then S2, then S3, re-running
+`scripts/harness/capacity-ramp.sh` with `CAPACITY_PROTOCOLS=srt` after each.
+The Restream collapse policy can proceed in parallel.
+
 ## Work items and status
 
 State as of this writing, in order:
