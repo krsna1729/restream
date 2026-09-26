@@ -43,3 +43,17 @@ mod concurrency;
 mod overflow;
 #[path = "ring_buffer_tests/reader.rs"]
 mod reader;
+
+#[test]
+fn published_bytes_counts_every_payload_on_both_publish_paths() {
+    let ring = RingBuffer::new(4);
+    let single = video_packet(0, 0, true);
+    let single_len = single.payload.len() as u64;
+    ring.push(single);
+    assert_eq!(ring.published_bytes(), single_len);
+
+    let batch: Vec<_> = (1..4).map(|pts| video_packet(pts, pts, false)).collect();
+    let batch_len: u64 = batch.iter().map(|packet| packet.payload.len() as u64).sum();
+    assert_eq!(ring.push_batch(batch), 3);
+    assert_eq!(ring.published_bytes(), single_len + batch_len);
+}

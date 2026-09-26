@@ -192,6 +192,8 @@ struct RtmpFabricLeaf {
     /// needed to compute `tcp_send_rate_mbps` as a two-sample delta —
     /// mirrors `rtmp/ingest.rs`'s `previous_tcp_bytes` for the receive side.
     previous_tcp_bytes: Option<(u64, Instant)>,
+    /// Peer-acknowledged vs feed-published bytes, rated over one window.
+    delivery: crate::media::egress::delivery::DeliveryTracker,
 }
 
 impl RtmpFabricLeaf {
@@ -249,9 +251,13 @@ impl RtmpFabricLeaf {
     fn sample_quality(
         &mut self,
         now: Instant,
+        feed_published_bytes: u64,
     ) -> Option<crate::media::snapshots::PublisherQuality> {
         let stats =
             crate::media::tcp_stats::collect_tcp_stats_by_fd(self.transport.raw_fd()).ok()?;
+        let delivery = stats
+            .tcp_bytes_acked
+            .map(|acked| self.delivery.sample(acked, feed_published_bytes, now));
         let send_rate = stats.tcp_bytes_sent.and_then(|bytes| {
             let rate = self.previous_tcp_bytes.and_then(|(previous, sampled_at)| {
                 crate::media::tcp_stats::bytes_delta_rate_mbps(
@@ -263,7 +269,13 @@ impl RtmpFabricLeaf {
             self.previous_tcp_bytes = Some((bytes, now));
             rate
         });
-        Some(stats.into_egress_quality(send_rate))
+        let mut quality = stats.into_egress_quality(send_rate);
+        if let Some(delivery) = delivery {
+            quality.delivered_bps = delivery.delivered_bps;
+            quality.offered_bps = delivery.offered_bps;
+            quality.delivery_ratio = delivery.ratio;
+        }
+        Some(quality)
     }
 }
 

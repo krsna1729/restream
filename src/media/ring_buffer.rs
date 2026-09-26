@@ -133,6 +133,9 @@ pub struct RingBuffer {
     slots: Vec<RingSlot>,
     write_idx: AlignedAtomicUsize,
     last_keyframe_idx: AlignedAtomicUsize,
+    /// Cumulative payload bytes published: the offered load for delivery
+    /// telemetry. Single producer, so a relaxed load/store suffices.
+    published_bytes: AtomicU64,
     capacity: usize,
     created_at: Instant,
     notify: Arc<tokio::sync::Notify>,
@@ -185,6 +188,7 @@ impl RingBuffer {
                 // would also produce index 0 if we started from AtomicUsize::new(0)).
                 val: AtomicUsize::new(usize::MAX),
             },
+            published_bytes: AtomicU64::new(0),
             capacity,
             created_at: Instant::now(),
             notify: Arc::new(tokio::sync::Notify::new()),
@@ -366,6 +370,7 @@ impl RingBuffer {
         let idx = self.write_idx.val.load(Ordering::Relaxed);
         let slot_idx = idx % self.capacity;
         let is_keyframe = packet.media_type == MediaType::Video && packet.is_keyframe;
+        let payload_bytes = packet.payload.len() as u64;
 
         self.slots[slot_idx]
             .published_at_us
@@ -375,6 +380,7 @@ impl RingBuffer {
         if is_keyframe {
             self.last_keyframe_idx.val.store(idx, Ordering::Release);
         }
+        self.add_published_bytes(payload_bytes);
 
         self.write_idx.val.store(idx + 1, Ordering::Release);
         self.notify.notify_waiters();
@@ -391,11 +397,13 @@ impl RingBuffer {
     {
         let start_idx = self.write_idx.val.load(Ordering::Relaxed);
         let mut count = 0usize;
+        let mut payload_bytes = 0u64;
 
         for packet in packets {
             let idx = start_idx + count;
             let slot_idx = idx % self.capacity;
             let is_keyframe = packet.media_type == MediaType::Video && packet.is_keyframe;
+            payload_bytes += packet.payload.len() as u64;
 
             self.slots[slot_idx]
                 .published_at_us
@@ -408,6 +416,7 @@ impl RingBuffer {
         }
 
         if count > 0 {
+            self.add_published_bytes(payload_bytes);
             self.write_idx
                 .val
                 .store(start_idx + count, Ordering::Release);
@@ -434,6 +443,18 @@ impl RingBuffer {
     pub fn read_at(&self, idx: usize) -> Option<Arc<MediaPacket>> {
         let slot_idx = idx % self.capacity;
         self.slots[slot_idx].data.load_full()
+    }
+
+    fn add_published_bytes(&self, bytes: u64) {
+        // Single producer: no read-modify-write instruction needed.
+        let total = self.published_bytes.load(Ordering::Relaxed);
+        self.published_bytes
+            .store(total.wrapping_add(bytes), Ordering::Relaxed);
+    }
+
+    /// Cumulative payload bytes published so far (offered load).
+    pub fn published_bytes(&self) -> u64 {
+        self.published_bytes.load(Ordering::Relaxed)
     }
 
     fn elapsed_us(&self) -> u64 {

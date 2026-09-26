@@ -1397,9 +1397,14 @@ and egresses for a single pipeline.
   "ingest": { "protocol": "srt", "uptimeSecs": 10.0, "bytesReceived": 500000, "metrics": { ... } },
   "sourceRing": { "fill": 42, "capacity": 8192, "readers": [ { "name": "...", "lagSlots": 5, "overflowCount": 0, "packetAgeMs": 120 } ] },
   "stages": [ { "kind": "video:720p", "metrics": { ... } } ],
-  "egresses": [ { "outputId": "...", "uptimeSecs": 10.0, "bytesOut": 400000 } ]
+  "egresses": [ { "outputId": "...", "uptimeSecs": 10.0, "bytesOut": 400000 } ],
+  "delivery": [ { "feed": "pipe1:source", "destinations": 3, "rated": 3, "delivered": 3, "floor": 0.95, "ratioMin": 0.998, "jain": 0.9999 } ]
 }
 ```
+
+`delivery` groups outputs by the stage they read and reports how many met the
+delivery floor and how evenly they were served; see
+[Observability](observability.md#per-destination-delivery).
 
 ### `GET /api/v1/stages/:stageKey/telemetry`
 

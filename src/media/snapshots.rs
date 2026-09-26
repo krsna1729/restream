@@ -111,6 +111,15 @@ pub struct PublisherQuality {
     pub inbound_rtp_packets_lost: Option<u64>,
     pub inbound_rtp_packets_in_error: Option<u64>,
     pub inbound_rtp_packets_jitter: Option<f64>,
+    // Egress delivery (sampled once per second by the output's shard).
+    /// Bytes per second the peer acknowledged: TCP `bytes_acked` delta for
+    /// RTMP/RTMPS (wire bytes, so healthy is slightly above the offered
+    /// payload rate); unique-minus-dropped payload for SRT.
+    pub delivered_bps: Option<f64>,
+    /// The output feed's published payload rate over the same window.
+    pub offered_bps: Option<f64>,
+    /// `delivered_bps / offered_bps`; below ~0.95 the output is not keeping up.
+    pub delivery_ratio: Option<f64>,
 }
 
 use crate::media::metadata::{AudioMeta, VideoMeta};

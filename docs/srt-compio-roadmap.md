@@ -2460,7 +2460,7 @@ Hosted acceptance history:
   concurrency live lifecycle proof, and the Docker runtime source-build
   smoke, which executed (runtime paths changed) and built the image and
   carried SRT and RTMP→RTMPS media under the shipped seccomp profile. Local
-  replay on the same revision (6-CPU WSL2, `--no-netns`): `fault.resilience`,
+  replay on the same revision (6-CPU KVM VPS, `--no-netns`): `fault.resilience`,
   `mixed.live.srt.h265.a2.bf0` (38/38) and `mixed.live.rtmp.h264.a1.bf2`
   (18/18) passed.
 
@@ -2508,7 +2508,7 @@ baseline CPU; worst 1 s delivery intervals (0.67-0.96) match the baseline's
 spread. Single-host relative evidence, not a capacity claim; artifacts under
 `.local/artifacts/perf-*` (local).
 
-Known non-blocking local debt observed during this work: on the 6-CPU WSL2
+Known non-blocking local debt observed during this work: on the 6-CPU KVM VPS
 development host, `mixed.live.srt.h264.a2.bf2` can fail SRT signal validation
 on audio PTS gaps (106.5 ms and 256.2 ms observed; a 256.5 ms gap was already
 recorded at `d30454af`, before this RTMP work) — hosted runs pass. Also,
@@ -2608,6 +2608,45 @@ io_uring submission bottleneck
 NIC bottleneck
 peer/network bottleneck
 ```
+
+### WI8 delivery telemetry (landed)
+
+Each fabric output's `quality` now carries `deliveredBps`, `offeredBps` and
+`deliveryRatio` over a 5 s window, computed on the shard thread in the 1 s
+stall sweep: offered is the feed ring's `published_bytes` (single-producer
+relaxed add); delivered is TCP `bytes_acked` for RTMP/RTMPS and ACK-confirmed
+payload (enqueued − TLPKTDROP-dropped − still buffered) for SRT. Pipeline
+telemetry folds outputs per feed into `delivery` (rated, delivered ≥ 0.95,
+`ratioMin`, Jain). The resource-sweep CSV records Restream's view next to the
+receiver-side view.
+
+Found while wiring it: the stall sweep's fixed 256-visit loop re-popped
+requeued keys at the same `now`, so every two-sample rate (the existing
+`tcpSendRateMbps` included) collapsed to a zero window and read `null` for
+shards with fewer than 256 leaves. The sweep now visits each queued leaf once
+(`rtmp_shard_drain.rs`, `srt_drain.rs`; regression test
+`stall_sweep_samples_each_leaf_once_so_two_sample_rates_have_a_real_window`
+fails on the old loop).
+
+Ring counter cost (`ring_buffer/producer`, same-session criterion A/B against
+the counter compiled out): 5/10 benches improved 5–8%, 3 no change, 2 within
+noise; no regression.
+
+Cross-check, 6-CPU KVM VPS, 1 ingest at 8 Mbit/s, `--no-netns`:
+
+| scenario | outputs | receiver delivered / ratio min / Jain | Restream rated / delivered / ratio min / Jain min |
+|---|---:|---|---|
+| RTMP | 10 | 10 / 0.991 / 1.00000 | 10 / 10 / 1.0005 / 1.00000 |
+| RTMP | 100 | 100 / 0.981 / 1.00000 | 100 / 100 / 0.9568 / 0.99168 |
+| RTMPS | 10 | 10 / 0.980 / 1.00000 | 10 / 10 / 1.0019 / 1.00000 |
+| RTMPS | 100 | 100 / 0.981 / 1.00000 | 100 / 100 / 1.0019 / 0.99999 |
+| SRT | 10 | 0 / 0.631 / 0.99693 | 10 / 7 / 0.9153 / 0.99949 |
+| SRT | 100 | 0 / 0.007 / 0.87604 | 100 / 95 / 0.8316 / 0.98569 |
+
+RTMP/RTMPS agree. SRT disagrees because a peer that ACKs and then drops late
+packets (receiver TLPKTDROP) is invisible to a sender's ACK view; a quiet
+isolated SRT×10 rerun read receiver 0.928/0.957 (min/median) against
+Restream 0.982. The receiver gap is the open finding in §36.
 
 ## 28. WI9 — Abstraction Compression
 
@@ -2890,9 +2929,12 @@ WI10
 WI5B and WI5B.1 are done. Next, in order:
 
 1. WI7.3: residual dead-code/compatibility audit against the current tree.
-2. Production delivery telemetry: per-output offered/delivered rate (TCP
-   `bytes_acked`, SRT unique-minus-dropped payload) and per-feed Jain index in
-   Restream itself, cross-checked by the harness's receiver-side measurement.
+2. DONE: production delivery telemetry (see WI8 delivery evidence below).
+   Open finding from it: SRT fan-out into mediamtx receivers under-delivers at
+   10+ outputs on both b64bd760 and current (receiver median 0.90 vs 0.84 at
+   10 outputs, same session), with mediamtx at ~130% CPU for 10 SRT readers;
+   qualify SRT fan-out against a receiver that is not the bottleneck before
+   attributing it to Restream.
 3. WI8/Q-025 measurement questions, answered with data before any redesign:
    - RTMP ingress runs on one owner thread: measure owner busy %, protocol us,
      loop latency and handoff blocking against ingest count to decide whether

@@ -108,8 +108,13 @@ where
         }
         self.last_stall_sweep = Some(now);
         let head_sequence = self.feed.head_sequence();
+        let feed_published_bytes = self.feed.published_bytes();
         let drain_timeout = self.drain_timeout;
-        for _ in 0..256 {
+        // Visit each queued leaf at most once per sweep: live keys return to
+        // the tail, so a fixed count would revisit them at the same `now` and
+        // collapse every two-sample rate (send rate, delivery) to a zero window.
+        let visits = self.stall_candidates.len().min(256);
+        for _ in 0..visits {
             let Some(key) = self.stall_candidates.pop_front() else {
                 break;
             };
@@ -123,7 +128,7 @@ where
                         } else {
                             0
                         };
-                        let quality = leaf.sample_quality(now);
+                        let quality = leaf.sample_quality(now, feed_published_bytes);
                         let reason = match leaf.observe_stall(now) {
                             LeafStallClass::Idle => None,
                             LeafStallClass::Backpressured => Some("backpressured"),

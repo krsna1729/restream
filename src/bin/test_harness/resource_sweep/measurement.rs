@@ -607,11 +607,11 @@ pub(super) fn write_resource_sweep_csv(
     rows: &[ResourceAggregate],
 ) -> Result<(), String> {
     let mut text = String::from(
-        "scenario,label,lifecycle,pipelines,outputs,ingest_types,egress_mix,transcode,sample_count,restream_cpu_avg_pct,restream_cpu_peak_pct,ffmpeg_cpu_avg_pct,ffmpeg_cpu_peak_pct,total_cpu_avg_pct,total_cpu_peak_pct,voluntary_ctxt_switches_avg_per_sec,voluntary_ctxt_switches_peak_per_sec,nonvoluntary_ctxt_switches_avg_per_sec,nonvoluntary_ctxt_switches_peak_per_sec,thread_count_peak,rss_avg_kb,rss_peak_kb,ffmpeg_rss_peak_kb,retained_peak_kb,source_ring_peak_kb,transcoder_ring_peak_kb,tsmux_ring_peak_kb,avio_len_peak_kb,avio_hwm_peak_kb,anonymous_peak_kb,private_dirty_peak_kb,shared_clean_peak_kb,pss_peak_kb,unattributed_peak_kb,active_transcoder_buffers_peak,ingests_peak,egresses_peak,stages_peak,pipeline_count_peak,delivery_destinations,delivery_delivered,delivery_offered_bps,delivery_ratio_min,delivery_ratio_median,delivery_interval_ratio_min,delivery_jain\n",
+        "scenario,label,lifecycle,pipelines,outputs,ingest_types,egress_mix,transcode,sample_count,restream_cpu_avg_pct,restream_cpu_peak_pct,ffmpeg_cpu_avg_pct,ffmpeg_cpu_peak_pct,total_cpu_avg_pct,total_cpu_peak_pct,voluntary_ctxt_switches_avg_per_sec,voluntary_ctxt_switches_peak_per_sec,nonvoluntary_ctxt_switches_avg_per_sec,nonvoluntary_ctxt_switches_peak_per_sec,thread_count_peak,rss_avg_kb,rss_peak_kb,ffmpeg_rss_peak_kb,retained_peak_kb,source_ring_peak_kb,transcoder_ring_peak_kb,tsmux_ring_peak_kb,avio_len_peak_kb,avio_hwm_peak_kb,anonymous_peak_kb,private_dirty_peak_kb,shared_clean_peak_kb,pss_peak_kb,unattributed_peak_kb,active_transcoder_buffers_peak,ingests_peak,egresses_peak,stages_peak,pipeline_count_peak,delivery_destinations,delivery_delivered,delivery_offered_bps,delivery_ratio_min,delivery_ratio_median,delivery_interval_ratio_min,delivery_jain,restream_delivery_rated,restream_delivery_delivered,restream_delivery_ratio_min,restream_delivery_jain_min\n",
     );
     for row in rows {
         text.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{:.2},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.0},{:.4},{:.4},{:.4},{:.5}\n",
+            "{},{},{},{},{},{},{},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{:.2},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.0},{:.4},{:.4},{:.4},{:.5},{},{},{},{}\n",
             csv_escape(&row.scenario),
             csv_escape(&row.label),
             csv_escape(&row.lifecycle),
@@ -658,9 +658,21 @@ pub(super) fn write_resource_sweep_csv(
             row.delivery.ratio_median,
             row.delivery.interval_ratio_min,
             row.delivery.jain,
+            optional_csv(row.delivery.reported.map(|r| r.rated as f64), 0),
+            optional_csv(row.delivery.reported.map(|r| r.delivered as f64), 0),
+            optional_csv(row.delivery.reported.map(|r| r.ratio_min), 4),
+            optional_csv(row.delivery.reported.map(|r| r.jain_min), 5),
         ));
     }
     std::fs::write(path, text).map_err(|e| e.to_string())
+}
+
+/// Empty cell when the build does not report the value (e.g. the baseline).
+fn optional_csv(value: Option<f64>, decimals: usize) -> String {
+    value
+        .filter(|value| value.is_finite())
+        .map(|value| format!("{value:.decimals$}"))
+        .unwrap_or_default()
 }
 
 pub(super) fn csv_escape(value: &str) -> String {

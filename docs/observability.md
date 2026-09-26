@@ -292,6 +292,7 @@ Implemented egress parity:
 - last successful send/upload timestamp and progress age
 - per-output bytes, bitrate, and StageMetrics output counters
 - RTMP/RTMPS sender-side TCP quality
+- per-destination delivery ratio and per-feed Jain fairness
 - SRT sender-side `srt-rs` quality and bonded egress member state
 - graph, health, v1 telemetry, diagnostics, and alert surfacing for failed or
   stale active egresses
@@ -320,6 +321,29 @@ as:
   "result": "pass"
 }
 ```
+
+### Per-destination delivery
+
+Each fabric output's `quality` carries `deliveredBps`, `offeredBps`, and
+`deliveryRatio`, computed by its shard thread over a 5 s window (sampled in
+the 1 s stall sweep, off the media path):
+
+- **offered**: bytes the output's feed published (the ring's
+  `published_bytes` counter: a relaxed single-producer add).
+- **delivered, RTMP/RTMPS**: TCP `tcpi_bytes_acked` delta — wire bytes the
+  peer acknowledged, so a healthy output reads slightly above 1.0 (chunk
+  headers).
+- **delivered, SRT**: payload enqueued minus TLPKTDROP-dropped minus payload
+  still in the send buffer. A packet leaves the buffer only when the peer ACKs
+  it, so this is acknowledged payload. Bonded outputs report `null` (no
+  aggregate buffer view).
+
+`GET /api/v1/pipelines/:pipelineId/telemetry` folds these per feed (outputs
+reading the same terminal stage) into `delivery`: `rated`, `delivered` (outputs
+at or above the 0.95 floor), `ratioMin`, and Jain's fairness index `jain` over
+delivered rates. The resource-sweep harness measures the same ratio at the
+receivers and records both, so a disagreement between them is itself a
+finding.
 
 ### Recording state
 

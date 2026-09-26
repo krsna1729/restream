@@ -27,6 +27,19 @@ pub(super) struct DeliverySample {
     /// Cumulative publisher bytes received by Restream, summed over pipelines.
     pub(super) offered_bytes: u64,
     pub(super) pipelines: usize,
+    /// Restream's own per-feed delivery telemetry at this tick, when the build
+    /// reports it (`/api/v1/pipelines/{id}/telemetry` `delivery`).
+    pub(super) reported: Option<ReportedDelivery>,
+}
+
+/// Restream-reported delivery folded over every feed: the cross-check for the
+/// receiver-side numbers.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(super) struct ReportedDelivery {
+    pub(super) rated: usize,
+    pub(super) delivered: usize,
+    pub(super) ratio_min: f64,
+    pub(super) jain_min: f64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -38,6 +51,7 @@ pub(super) struct DeliverySummary {
     pub(super) ratio_median: f64,
     pub(super) interval_ratio_min: f64,
     pub(super) jain: f64,
+    pub(super) reported: Option<ReportedDelivery>,
 }
 
 /// Jain's fairness index: `(Σx)² / (n·Σx²)`, 1.0 when all rates are equal and
@@ -116,6 +130,7 @@ pub(super) fn summarize(samples: &[DeliverySample]) -> DeliverySummary {
             0.0
         },
         jain: jain(&rates),
+        reported: last.reported,
     }
 }
 
@@ -149,6 +164,35 @@ pub(super) async fn sample(
     }
     let health = api.get_json("/api/v1/engine/health").await?;
     let pipelines = health["pipelines"].as_object();
+    let mut reported: Option<ReportedDelivery> = None;
+    for pipeline_id in pipelines.into_iter().flat_map(|pipelines| pipelines.keys()) {
+        let Ok(telemetry) = api
+            .get_json(&format!("/api/v1/pipelines/{pipeline_id}/telemetry"))
+            .await
+        else {
+            continue;
+        };
+        for feed in telemetry["delivery"].as_array().into_iter().flatten() {
+            let (Some(rated), Some(delivered)) =
+                (feed["rated"].as_u64(), feed["delivered"].as_u64())
+            else {
+                continue;
+            };
+            let entry = reported.get_or_insert(ReportedDelivery {
+                ratio_min: f64::INFINITY,
+                jain_min: f64::INFINITY,
+                ..ReportedDelivery::default()
+            });
+            entry.rated += rated as usize;
+            entry.delivered += delivered as usize;
+            if let Some(ratio) = feed["ratioMin"].as_f64() {
+                entry.ratio_min = entry.ratio_min.min(ratio);
+            }
+            if let Some(jain) = feed["jain"].as_f64() {
+                entry.jain_min = entry.jain_min.min(jain);
+            }
+        }
+    }
     let offered_bytes = pipelines
         .into_iter()
         .flat_map(|pipelines| pipelines.values())
@@ -159,6 +203,7 @@ pub(super) async fn sample(
         destinations,
         offered_bytes,
         pipelines: pipelines.map_or(0, |pipelines| pipelines.len()),
+        reported,
     })
 }
 
@@ -175,6 +220,7 @@ mod tests {
                 .collect(),
             offered_bytes: offered,
             pipelines: 1,
+            reported: None,
         }
     }
 

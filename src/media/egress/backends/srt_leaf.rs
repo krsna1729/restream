@@ -32,6 +32,8 @@ pub(crate) struct SrtFabricLeaf {
     /// Sent-rate sampling state for this leaf's caller: the previous wire
     /// byte counter reading, so a cumulative counter becomes an interval rate.
     quality_sampler: SenderQualitySampler,
+    /// Peer-acknowledged vs feed-published payload, rated over one window.
+    delivery: crate::media::egress::delivery::DeliveryTracker,
     /// Set when this leaf has been asked to close but still had queued
     /// send-path bytes: it stays registered and visited so it can flush, and
     /// is force-closed once flushed or `drain_timeout` has passed.
@@ -54,6 +56,7 @@ impl SrtFabricLeaf {
             last_packets_sent_drop: 0,
             observed_since: Instant::now(),
             quality_sampler: SenderQualitySampler::default(),
+            delivery: Default::default(),
             draining_since: None,
             draining_reason: None,
             blocked_queued: false,
@@ -120,8 +123,28 @@ impl SrtFabricLeaf {
         &mut self,
         stats: &LogicalCallerStats,
         now: Instant,
+        feed_published_bytes: u64,
     ) -> Option<PublisherQuality> {
         let mut quality = self.quality_sampler.sample(stats, now)?;
+        // A payload packet leaves the send buffer only when the peer ACKs it
+        // or TLPKTDROP discards it, so payload enqueued minus dropped minus
+        // still buffered is what the peer acknowledged. A bond has no
+        // aggregate buffer/drop view, so its delivery stays unknown rather
+        // than estimated.
+        if let LogicalCallerStats::Direct(direct) = stats
+            && let Some(sender) = direct.sender
+        {
+            let acknowledged = sender
+                .total_bytes_sent
+                .saturating_sub(sender.total_bytes_dropped)
+                .saturating_sub(sender.payload_bytes_in_buffer);
+            let delivery = self
+                .delivery
+                .sample(acknowledged, feed_published_bytes, now);
+            quality.delivered_bps = delivery.delivered_bps;
+            quality.offered_bps = delivery.offered_bps;
+            quality.delivery_ratio = delivery.ratio;
+        }
         if let Some(backlog) = crate::media::srt::egress_stats::send_backlog(stats) {
             apply_send_backlog(&mut quality, backlog);
         }

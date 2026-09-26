@@ -223,3 +223,45 @@ fn startup_deadline_terminates_a_leaf_that_never_reaches_publish() {
     release_tx.send(()).unwrap();
     server.join().unwrap();
 }
+
+#[test]
+fn stall_sweep_samples_each_leaf_once_so_two_sample_rates_have_a_real_window() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let (_peer, _) = listener.accept().unwrap();
+        let _ = release_rx.recv_timeout(Duration::from_secs(10));
+    });
+
+    let mut backend =
+        RtmpShardBackend::new(CompioTcpPoller::new(4).unwrap(), feed(), budget(), 4096);
+    let quality = Arc::new(std::sync::Mutex::new(
+        crate::media::snapshots::PublisherQuality::default(),
+    ));
+    let mut spec = output_spec("sampled", &format!("rtmp://{addr}/live/key"), 1);
+    let output_id = spec.id.clone();
+    spec.policy.connect_timeout = Duration::from_secs(30);
+    spec.progress.quality = Some(Arc::clone(&quality));
+    backend.on_command(EgressCommand::Add(spec));
+    assert!(backend.complete_pending_connect(&output_id, 1, addr));
+    for _ in 0..8 {
+        backend.on_ready();
+    }
+
+    let start = Instant::now();
+    backend.sweep_stalled_leaves(start);
+    backend.last_stall_sweep = None;
+    backend.sweep_stalled_leaves(start + crate::media::egress::delivery::DELIVERY_WINDOW);
+    let sampled = quality
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert!(
+        sampled.delivered_bps.is_some() && sampled.tcp_send_rate_mbps.is_some(),
+        "the second sweep must rate against the first, not against itself: {sampled:?}"
+    );
+
+    release_tx.send(()).unwrap();
+    server.join().unwrap();
+}

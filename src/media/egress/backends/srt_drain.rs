@@ -61,8 +61,13 @@ impl SrtShardBackend {
         }
         self.last_stall_sweep = Some(now);
         let head_sequence = crate::media::egress::feed::EgressFeed::head_sequence(&self.feed);
+        let feed_published_bytes = self.feed.published_bytes();
         let drain_timeout = self.drain_timeout;
-        for _ in 0..256 {
+        // Visit each queued leaf at most once per sweep: live keys return to
+        // the tail, so a fixed count would revisit them at the same `now` and
+        // collapse every two-sample rate (send rate, delivery) to a zero window.
+        let visits = self.stall_candidates.len().min(256);
+        for _ in 0..visits {
             let Some(key) = self.stall_candidates.pop_front() else {
                 break;
             };
@@ -79,9 +84,9 @@ impl SrtShardBackend {
                         };
                         let stats = owners.stats(&leaf.caller);
                         let backlog = stats.as_ref().and_then(send_backlog);
-                        let quality = stats
-                            .as_ref()
-                            .and_then(|stats| leaf.sample_quality(stats, now));
+                        let quality = stats.as_ref().and_then(|stats| {
+                            leaf.sample_quality(stats, now, feed_published_bytes)
+                        });
                         let drops = quality.as_ref().and_then(|q| q.packets_sent_drop);
                         let reason = match leaf.observe_stall(now, drops, lag_units, backlog) {
                             LeafStallClass::Idle => None,

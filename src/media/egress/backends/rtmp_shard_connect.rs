@@ -227,6 +227,7 @@ where
             draining_since: None,
             draining_reason: None,
             previous_tcp_bytes: None,
+            delivery: Default::default(),
         });
         self.enqueue_stall_candidate(key);
         if let Some(previous) = self

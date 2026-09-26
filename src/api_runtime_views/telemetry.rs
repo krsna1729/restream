@@ -248,14 +248,57 @@ pub(crate) async fn pipeline_telemetry(
         })
         .collect();
 
-    api_view_models::pipeline_telemetry_json(
+    let delivery = feed_delivery_json(&pipeline_egresses);
+    let mut value = api_view_models::pipeline_telemetry_json(
         generated_at,
         pipeline_id,
         ingest,
         ring_info,
         stages,
         pipeline_egresses,
-    )
+    );
+    value["delivery"] = delivery;
+    value
+}
+
+/// Per-feed delivery fairness: outputs reading the same terminal stage share
+/// one feed, so their peer-acknowledged rates are compared with Jain's index
+/// and counted against the delivery floor. Built from each output's latest
+/// quality sample; outputs without a sample yet are listed but not rated.
+fn feed_delivery_json(egresses: &[serde_json::Value]) -> serde_json::Value {
+    const DELIVERY_FLOOR: f64 = 0.95;
+    let mut feeds: std::collections::BTreeMap<String, Vec<&serde_json::Value>> =
+        std::collections::BTreeMap::new();
+    for egress in egresses {
+        let feed = egress["terminalStage"].as_str().unwrap_or("unknown");
+        feeds.entry(feed.to_string()).or_default().push(egress);
+    }
+    let rows: Vec<serde_json::Value> = feeds
+        .into_iter()
+        .map(|(feed, outputs)| {
+            let rated: Vec<(f64, f64)> = outputs
+                .iter()
+                .filter_map(|egress| {
+                    let quality = &egress["quality"];
+                    Some((
+                        quality["deliveredBps"].as_f64()?,
+                        quality["deliveryRatio"].as_f64()?,
+                    ))
+                })
+                .collect();
+            let rates: Vec<f64> = rated.iter().map(|(rate, _)| *rate).collect();
+            serde_json::json!({
+                "feed": feed,
+                "destinations": outputs.len(),
+                "rated": rated.len(),
+                "delivered": rated.iter().filter(|(_, ratio)| *ratio >= DELIVERY_FLOOR).count(),
+                "floor": DELIVERY_FLOOR,
+                "ratioMin": rated.iter().map(|(_, ratio)| *ratio).reduce(f64::min),
+                "jain": crate::media::egress::delivery::jain_index(&rates),
+            })
+        })
+        .collect();
+    serde_json::Value::Array(rows)
 }
 
 pub(crate) async fn stage_telemetry_by_display(
@@ -286,6 +329,35 @@ pub(crate) async fn stage_telemetry_by_display(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feed_delivery_groups_by_terminal_stage_and_rates_fairness() {
+        let output = |feed: &str, delivered: Option<f64>, ratio: Option<f64>| {
+            serde_json::json!({
+                "terminalStage": feed,
+                "quality": { "deliveredBps": delivered, "deliveryRatio": ratio },
+            })
+        };
+        let summary = feed_delivery_json(&[
+            output("p:source", Some(8e6), Some(1.01)),
+            output("p:source", Some(8e6), Some(1.0)),
+            output("p:720p", Some(4e6), Some(1.0)),
+            output("p:720p", Some(1e6), Some(0.25)),
+            output("p:720p", None, None),
+        ]);
+        let rows = summary.as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        let p720 = &rows[0];
+        assert_eq!(p720["feed"], "p:720p");
+        assert_eq!(p720["destinations"], 3);
+        assert_eq!(p720["rated"], 2, "an output without a sample is not rated");
+        assert_eq!(p720["delivered"], 1);
+        assert_eq!(p720["ratioMin"], 0.25);
+        assert!(p720["jain"].as_f64().unwrap() < 0.8);
+        let source = &rows[1];
+        assert_eq!(source["delivered"], 2);
+        assert_eq!(source["jain"], 1.0);
+    }
     use crate::domain::stage::{StageKey, StageKind};
     use crate::media::avio::MemoryQueue;
     use crate::media::pipe_metrics::PipeMetrics;
