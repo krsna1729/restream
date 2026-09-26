@@ -13,6 +13,7 @@
 //! readiness instead of `.await`, with shard registration and application
 //! startup handoff supplied by the surrounding RTMP backend.
 
+use crate::media::rtmp::egress_payload_cache::{RtmpPayloadCache, SharedRtmpPayloadCache};
 use std::collections::VecDeque;
 use std::io::{ErrorKind, IoSlice, Read, Write};
 use std::sync::Arc;
@@ -170,11 +171,16 @@ struct MediaPublisher {
 const FEED_READ_BURST: usize = 32;
 
 impl MediaPublisher {
-    fn new(mut core: RtmpSessionCore, startup: RtmpPublishStartup) -> Result<Self, String> {
+    fn new(
+        mut core: RtmpSessionCore,
+        startup: RtmpPublishStartup,
+        payloads: SharedRtmpPayloadCache,
+    ) -> Result<Self, String> {
         let mut encoder = RtmpMediaEncoder::new(
             startup.enhanced_hevc_video,
             startup.raw_video_parameter_sets,
         );
+        encoder.share_payload_cache(payloads);
         let mut current_batch = VecDeque::with_capacity(32);
 
         if let Some(metadata) = startup.publish_metadata.as_ref() {
@@ -546,9 +552,17 @@ pub(crate) struct RtmpFabricEngine {
     publish_startup: Option<RtmpPublishStartup>,
     chunk_size: u32,
     enhanced: bool,
+    /// Raw → FLV conversions, handed to the media publisher; private unless
+    /// the shard shares its cache with `share_payload_cache`.
+    payloads: SharedRtmpPayloadCache,
 }
 
 impl RtmpFabricEngine {
+    /// Share Raw → FLV conversions with the other outputs on this shard.
+    pub(crate) fn share_payload_cache(&mut self, payloads: SharedRtmpPayloadCache) {
+        self.payloads = payloads;
+    }
+
     pub(crate) fn new_client(
         parts: RtmpUrlParts,
         chunk_size: u32,
@@ -563,6 +577,7 @@ impl RtmpFabricEngine {
             publish_startup: Some(publish_startup),
             chunk_size,
             enhanced,
+            payloads: RtmpPayloadCache::shared(),
         })
     }
 
@@ -668,7 +683,11 @@ impl ProtocolEngine for RtmpFabricEngine {
                             .publish_startup
                             .take()
                             .expect("publish_startup is only taken once, on this transition");
-                        match MediaPublisher::new(negotiation.core, publish_startup) {
+                        match MediaPublisher::new(
+                            negotiation.core,
+                            publish_startup,
+                            self.payloads.clone(),
+                        ) {
                             Ok(publisher) => {
                                 self.state = Some(RtmpFabricState::Publishing(Box::new(publisher)));
                                 EngineProgress::HandshakeComplete

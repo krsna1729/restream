@@ -334,6 +334,8 @@ where
     S: RtmpPublishStartupSource,
 {
     poller: P,
+    /// Raw → FLV conversions shared by every leaf on this shard thread.
+    payload_cache: crate::media::rtmp::egress_payload_cache::SharedRtmpPayloadCache,
     resolve_completions: RtmpResolveCompletionQueue,
     resolved_connects: Vec<RtmpResolvedConnect>,
     startup_source: S,
@@ -425,6 +427,7 @@ where
             tx_units: 0,
             tx_bytes: 0,
             queue_overflows: 0,
+            payload_cache: crate::media::rtmp::egress_payload_cache::RtmpPayloadCache::shared(),
         }
     }
 

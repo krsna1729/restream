@@ -2935,7 +2935,11 @@ WI5B and WI5B.1 are done. Next, in order:
    10 outputs, same session), with mediamtx at ~130% CPU for 10 SRT readers;
    qualify SRT fan-out against a receiver that is not the bottleneck before
    attributing it to Restream.
-3. WI8/Q-025 measurement questions, answered with data before any redesign:
+3. IN PROGRESS: media copy audit (vendored rml_rtmp ingest direct reads,
+   per-shard Raw→FLV payload cache, zero-copy RTMP TX) and the Rust Allocator
+   API exploration; state, evidence and next actions live in
+   [media-copy-audit.md](media-copy-audit.md).
+4. WI8/Q-025 measurement questions, answered with data before any redesign:
    - RTMP ingress runs on one owner thread: measure owner busy %, protocol us,
      loop latency and handoff blocking against ingest count to decide whether
      N owners (SO_REUSEPORT or accepted-connection assignment) are needed;

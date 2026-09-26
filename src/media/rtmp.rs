@@ -7,6 +7,7 @@ mod egress_connection;
 mod egress_engine;
 mod egress_metadata;
 mod egress_packets;
+pub(crate) mod egress_payload_cache;
 mod egress_transport;
 mod enhanced;
 mod flv;

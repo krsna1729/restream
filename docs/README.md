@@ -72,6 +72,7 @@ write-ups live in the [documentation archive](archive/README.md).
 - [Current priorities](current-priorities.md) — maintained forward-looking
   priorities.
 - [Layering roadmap](layering-roadmap.md) — maintained refactor sequence.
+- [Media copy audit and allocator exploration](media-copy-audit.md) — per-byte copy inventory with justifications, memcpy/byte-search decision data, in-flight zero-copy work and Rust Allocator API leverage plan.
 - [SRT / Compio dataplane roadmap](srt-compio-roadmap.md) — execution order, invariants, performance targets and decision gates for the SRT Owner migration and packet-rate program.
 - [Frontend layering audit](archive/audits/frontend-layering-audit-2026-07-21.md) — dated three-lens frontend architecture audit.
 - [Testing decision record](testing-strategy.md) — accepted rationale for the

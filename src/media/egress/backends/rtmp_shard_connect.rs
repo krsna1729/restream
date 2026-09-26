@@ -197,7 +197,10 @@ where
             false,
             publish_startup,
         ) {
-            Ok(engine) => engine,
+            Ok(mut engine) => {
+                engine.share_payload_cache(self.payload_cache.clone());
+                engine
+            }
             Err(error) => {
                 tracing::warn!(output_id = %output_id, error = %error, "rtmp fabric leaf init failed");
                 let _ = self.poller.remove(fd);
