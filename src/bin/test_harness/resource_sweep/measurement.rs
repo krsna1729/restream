@@ -128,8 +128,17 @@ pub(super) async fn sample_resource_window(
     let mut prev_ffmpeg_ticks: HashMap<u32, u64> = HashMap::new();
     let mut prev_ctxt = read_proc_ctxt_switches(stack.restream_pid)?;
     let mut prev_instant = Instant::now();
+    let srt_sink = stack
+        .sink_peers
+        .srt_pool
+        .as_ref()
+        .map(crate::harness_srt_sink::HarnessSrtSinkPool::counters);
+    let sinks = super::delivery::HarnessSinks {
+        rtmp: &stack.sink_peers.rtmp_metrics,
+        srt: srt_sink.as_ref(),
+    };
     let mut delivery_samples: Vec<super::delivery::DeliverySample> =
-        super::delivery::sample(env, api)
+        super::delivery::sample(env, api, sinks)
             .await
             .ok()
             .into_iter()
@@ -267,7 +276,7 @@ pub(super) async fn sample_resource_window(
             ),
         )?;
         samples.push(sample);
-        if let Ok(delivery) = super::delivery::sample(env, api).await {
+        if let Ok(delivery) = super::delivery::sample(env, api, sinks).await {
             delivery_samples.push(delivery);
         }
     }

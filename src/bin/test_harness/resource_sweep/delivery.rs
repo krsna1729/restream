@@ -19,6 +19,13 @@ use super::*;
 /// healthy ratio sit slightly above 1.0.
 pub(super) const DELIVERY_FLOOR: f64 = 0.95;
 
+/// In-process harness sink counters (`MSR_PEER=sink`); empty for MediaMTX.
+#[derive(Clone, Copy, Default)]
+pub(super) struct HarnessSinks<'a> {
+    pub(super) rtmp: &'a [Arc<GeneralizedSinkMetrics>],
+    pub(super) srt: Option<&'a crate::harness_srt_sink::SrtSinkCountersHandle>,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct DeliverySample {
     pub(super) at: Instant,
@@ -134,15 +141,33 @@ pub(super) fn summarize(samples: &[DeliverySample]) -> DeliverySummary {
     }
 }
 
-/// One tick: MediaMTX per-path receiver bytes on every peer instance plus
-/// Restream's per-pipeline publisher bytes.
+/// One tick: receiver bytes per destination plus Restream's per-pipeline
+/// publisher bytes. MediaMTX peers report per path; the harness SRT sink
+/// (`MSR_PEER=sink`) reports per connection, so SRT fan-out can be measured
+/// with a receiver that is not the bottleneck.
 pub(super) async fn sample(
     env: &ResourceSweepEnv,
     api: &RampApi,
+    sinks: HarnessSinks<'_>,
 ) -> Result<DeliverySample, String> {
     let client = reqwest::Client::new();
     let mut destinations = BTreeMap::new();
-    for index in 0..env.peer_count.max(1) {
+    for (listener, metrics) in sinks.rtmp.iter().enumerate() {
+        for (connection, bytes) in metrics.per_connection_bytes().into_iter().enumerate() {
+            destinations.insert(format!("rtmp-sink:{listener}:{connection}"), bytes);
+        }
+    }
+    if let Some(sink) = sinks.srt {
+        for ((port, peer), bytes) in sink.per_peer_bytes() {
+            destinations.insert(format!("srt-sink:{port}:{peer}"), bytes);
+        }
+    }
+    let mediamtx_instances = if env.peer_mode == ResourceSweepPeer::Mediamtx {
+        env.peer_count.max(1)
+    } else {
+        0
+    };
+    for index in 0..mediamtx_instances {
         let (_, _, _, api_port) = peer_instance_ports(env, index);
         let body = client
             .get(format!("http://127.0.0.1:{api_port}/v3/paths/list"))

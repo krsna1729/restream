@@ -113,6 +113,9 @@ struct ResourceSweepStack {
 #[derive(Default)]
 struct SinkPeerStack {
     rtmp: Vec<GeneralizedSinkServer>,
+    /// Counting-only metrics of every RTMP/RTMPS sink listener, for
+    /// per-connection delivery.
+    rtmp_metrics: Vec<Arc<GeneralizedSinkMetrics>>,
     srt_pool: Option<HarnessSrtSinkPool>,
 }
 
@@ -130,6 +133,7 @@ async fn stop_harness_sink_peers(stack: &mut SinkPeerStack) {
     for server in stack.rtmp.drain(..) {
         stop_generalized_sink_server(server);
     }
+    stack.rtmp_metrics.clear();
     if let Some(pool) = stack.srt_pool.take() {
         pool.stop();
     }
@@ -370,13 +374,43 @@ async fn start_harness_sink_peers(
     needs: LocalPeerNeeds,
 ) -> Result<SinkPeerStack, String> {
     let mut rtmp = Vec::with_capacity(env.peer_count);
+    let mut rtmp_metrics = Vec::with_capacity(env.peer_count);
     let mut srt_ports = Vec::with_capacity(env.peer_count);
     for index in 0..env.peer_count {
-        let (rtmp_port, _rtmps, srt_port, _api) = peer_instance_ports(env, index);
+        let (rtmp_port, rtmps_port, srt_port, _api) = peer_instance_ports(env, index);
+        if needs.rtmp
+            && let Some((cert, key)) = &env.rtmps_tls
+        {
+            let metrics = Arc::new(GeneralizedSinkMetrics::counting_only());
+            match crate::sinks::start_generalized_rtmps_sink_server(
+                rtmps_port,
+                cert,
+                key,
+                metrics.clone(),
+            )
+            .await
+            {
+                Ok(server) => {
+                    rtmp.push(server);
+                    rtmp_metrics.push(metrics);
+                }
+                Err(err) => {
+                    for server in rtmp {
+                        stop_generalized_sink_server(server);
+                    }
+                    return Err(format!(
+                        "harness sink RTMPS listener on {rtmps_port}: {err}"
+                    ));
+                }
+            }
+        }
         if needs.rtmp {
-            let metrics = Arc::new(GeneralizedSinkMetrics::default());
-            match start_generalized_sink_server(rtmp_port, metrics).await {
-                Ok(server) => rtmp.push(server),
+            let metrics = Arc::new(GeneralizedSinkMetrics::counting_only());
+            match start_generalized_sink_server(rtmp_port, metrics.clone()).await {
+                Ok(server) => {
+                    rtmp.push(server);
+                    rtmp_metrics.push(metrics);
+                }
                 Err(err) => {
                     for server in rtmp {
                         stop_generalized_sink_server(server);
@@ -405,7 +439,11 @@ async fn start_harness_sink_peers(
     } else {
         None
     };
-    Ok(SinkPeerStack { rtmp, srt_pool })
+    Ok(SinkPeerStack {
+        rtmp,
+        rtmp_metrics,
+        srt_pool,
+    })
 }
 
 /// Which local sink peers a scenario needs. RTMP outputs always terminate on

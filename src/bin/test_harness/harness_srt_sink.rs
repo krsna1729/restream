@@ -4,14 +4,15 @@
 //! crates as production. It performs no media parsing and records only byte
 //! and connection counters, so MediaMTX is not in the scaling critical path.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::os::fd::AsRawFd;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use srt_proto::ConnectionEvent;
 use srt_transport::advanced::admission::PeerTable;
@@ -30,6 +31,21 @@ pub(crate) struct SrtSinkCountersHandle {
 }
 
 impl SrtSinkCountersHandle {
+    /// Cumulative payload bytes per logical connection, keyed by (sink port,
+    /// pool-wide connection sequence for each srt-rs `LogicalPeerId`) — not by
+    /// address: Restream's SRT callers share
+    /// UDP sockets, so many connections arrive from one address. Published by
+    /// each sink thread every `PER_PEER_PUBLISH`.
+    pub(crate) fn per_peer_bytes(&self) -> Vec<((u16, u64), u64)> {
+        self.counters
+            .per_peer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|(peer, bytes)| (*peer, *bytes))
+            .collect()
+    }
+
     pub(crate) fn snapshot(&self) -> SrtSinkCounters {
         SrtSinkCounters {
             accepted: self.counters.accepted.load(Ordering::Relaxed),
@@ -52,7 +68,15 @@ struct SinkCounters {
     accepted: AtomicU64,
     discarded_bytes: AtomicU64,
     closed: AtomicU64,
+    per_peer: Mutex<HashMap<(u16, u64), u64>>,
+    /// Pool-wide connection sequence: sink threads can share a port, so a
+    /// per-thread index would collide.
+    next_connection: AtomicU64,
 }
+
+/// How often a sink thread publishes its per-connection byte counts; far
+/// below the delivery sampler's 1 s tick, and off the per-packet path.
+const PER_PEER_PUBLISH: Duration = Duration::from_millis(100);
 
 pub(crate) struct HarnessSrtSinkPool {
     ports: Vec<u16>,
@@ -244,6 +268,14 @@ async fn sink_port(
         .map_err(|error| error.to_string())?;
     let mut due = Vec::new();
     let mut ready = Vec::new();
+    let port = socket
+        .local_addr()
+        .map_err(|error| error.to_string())?
+        .port();
+    // Connection index per logical peer (its raw id is private to srt-rs).
+    let mut per_peer: HashMap<srt_transport::advanced::admission::LogicalPeerId, (u64, u64)> =
+        HashMap::new();
+    let mut published_at = Instant::now();
     while !stop.load(Ordering::Acquire) {
         let wait = listener_wait_duration(&mut peers, srt_now());
         // Dedicated current-thread runtime: park directly. `block_in_place`
@@ -281,12 +313,39 @@ async fn sink_port(
                     counters
                         .discarded_bytes
                         .fetch_add(payload.len() as u64, Ordering::Relaxed);
+                    per_peer
+                        .entry(event.logical_peer)
+                        .or_insert_with(|| {
+                            (counters.next_connection.fetch_add(1, Ordering::Relaxed), 0)
+                        })
+                        .1 += payload.len() as u64;
                 }
                 ConnectionEvent::Disconnected { .. } => {
                     counters.closed.fetch_add(1, Ordering::Relaxed);
+                    // A closed connection is no longer a destination: keep
+                    // reused sink stacks from reporting it as a stalled one.
+                    if let Some((index, _)) = per_peer.remove(&event.logical_peer) {
+                        counters
+                            .per_peer
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .remove(&(port, index));
+                    }
                 }
                 _ => {}
             }
+        }
+        if published_at.elapsed() >= PER_PEER_PUBLISH {
+            published_at = Instant::now();
+            counters
+                .per_peer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend(
+                    per_peer
+                        .values()
+                        .map(|(index, bytes)| ((port, *index), *bytes)),
+                );
         }
     }
     Ok(())

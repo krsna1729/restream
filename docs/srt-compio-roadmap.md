@@ -2930,11 +2930,14 @@ WI5B and WI5B.1 are done. Next, in order:
 
 1. WI7.3: residual dead-code/compatibility audit against the current tree.
 2. DONE: production delivery telemetry (see WI8 delivery evidence below).
-   Open finding from it: SRT fan-out into mediamtx receivers under-delivers at
-   10+ outputs on both b64bd760 and current (receiver median 0.90 vs 0.84 at
-   10 outputs, same session), with mediamtx at ~130% CPU for 10 SRT readers;
-   qualify SRT fan-out against a receiver that is not the bottleneck before
-   attributing it to Restream.
+   Finding from it, resolved: SRT fan-out into mediamtx under-delivered at
+   10+ outputs on both b64bd760 and current, with mediamtx at ~130% CPU for 10
+   SRT readers. Against the harness's own sinks (`MSR_PEER=sink`, now with
+   per-connection delivery) SRT H.264 → 100 SRT outputs delivered 100/100
+   (worst 0.983, Jain 0.99995), so the receiver was the bottleneck, not
+   Restream. RTMP and RTMPS reach 100/100 into the sinks as well (worst
+   0.971, Jain 1.00000). Qualify fan-out beyond mediamtx's limits with sink
+   peers.
 3. IN PROGRESS: media copy audit (vendored rml_rtmp ingest direct reads,
    per-shard Raw→FLV payload cache, zero-copy RTMP TX) and the Rust Allocator
    API exploration; state, evidence and next actions live in

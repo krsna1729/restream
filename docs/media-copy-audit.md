@@ -95,9 +95,8 @@ samples. Copies are not the SRT cost:
 
 Next action: take these into the srt-rs repo as separate, benchmarked
 changes (Stage-B bench surface: `wi3-owner-bench` feature), then bump the pin
-here and rerun the SRT fan-out A/B. The SRT receive side (mediamtx at ~130%
-CPU for 10 readers) still limits end-to-end SRT fan-out qualification; see the
-roadmap §36 finding.
+here and rerun the SRT fan-out A/B. Measure SRT fan-out against the harness sink
+(`MSR_PEER=sink`): mediamtx is the bottleneck for SRT (roadmap §36).
 
 ## Work items and status
 

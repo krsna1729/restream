@@ -29,6 +29,47 @@ pub(crate) struct GeneralizedSinkMetrics {
     pub(crate) packets: Mutex<Vec<SinkPacket>>,
     pub(crate) video_codec: Mutex<Option<String>>,
     pub(crate) audio_codec: Mutex<Option<String>>,
+    /// Record per-packet history and codecs (correctness probes). Scale runs
+    /// use `counting_only`: a shared, ever-growing history behind one mutex
+    /// would make the sink, not Restream, the bottleneck.
+    pub(crate) record_packets: bool,
+    /// Cumulative wire bytes read per accepted connection, in accept order.
+    pub(crate) per_connection: Mutex<Vec<Arc<AtomicU64>>>,
+}
+
+/// Removes a connection's byte counter when its handler returns, so a closed
+/// connection stops counting as a destination.
+struct ConnectionCounter<'a> {
+    metrics: &'a GeneralizedSinkMetrics,
+    bytes: &'a Arc<AtomicU64>,
+}
+
+impl Drop for ConnectionCounter<'_> {
+    fn drop(&mut self) {
+        self.metrics
+            .per_connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|bytes| !Arc::ptr_eq(bytes, self.bytes));
+    }
+}
+
+impl GeneralizedSinkMetrics {
+    pub(crate) fn counting_only() -> Self {
+        Self {
+            record_packets: false,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn per_connection_bytes(&self) -> Vec<u64> {
+        self.per_connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|bytes| bytes.load(Ordering::Relaxed))
+            .collect()
+    }
 }
 
 impl Default for GeneralizedSinkMetrics {
@@ -44,6 +85,8 @@ impl Default for GeneralizedSinkMetrics {
             packets: Mutex::new(Vec::new()),
             video_codec: Mutex::new(None),
             audio_codec: Mutex::new(None),
+            record_packets: true,
+            per_connection: Mutex::new(Vec::new()),
         }
     }
 }
@@ -131,13 +174,24 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
     metrics.connections.fetch_add(1, Ordering::Relaxed);
+    let wire_bytes = Arc::new(AtomicU64::new(0));
+    metrics
+        .per_connection
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(wire_bytes.clone());
+    let _registered = ConnectionCounter {
+        metrics: &metrics,
+        bytes: &wire_bytes,
+    };
     let mut handshake = Handshake::new(PeerType::Server);
-    let mut buffer = vec![0u8; 8_192];
+    let mut buffer = vec![0u8; 64 * 1024];
     let remaining = loop {
         let n = socket
             .read(&mut buffer)
             .await
             .map_err(|error| format!("RTMP handshake read: {error}"))?;
+        wire_bytes.fetch_add(n as u64, Ordering::Relaxed);
         if n == 0 {
             return Err("socket closed during handshake".to_string());
         }
@@ -182,6 +236,7 @@ where
         if n == 0 {
             return Ok(());
         }
+        wire_bytes.fetch_add(n as u64, Ordering::Relaxed);
         let results = session
             .handle_input(&buffer[..n])
             .map_err(|e| format!("{e:?}"))?;
@@ -220,6 +275,18 @@ where
                         .map_err(|e| format!("{e:?}"))?;
                     metrics.publishing.fetch_add(1, Ordering::Relaxed);
                     pending.extend(accepted.drain(..));
+                }
+                ServerSessionEvent::VideoDataReceived { data, .. } if !metrics.record_packets => {
+                    metrics.messages.fetch_add(1, Ordering::Relaxed);
+                    metrics
+                        .bytes
+                        .fetch_add(data.len() as u64, Ordering::Relaxed);
+                }
+                ServerSessionEvent::AudioDataReceived { data, .. } if !metrics.record_packets => {
+                    metrics.messages.fetch_add(1, Ordering::Relaxed);
+                    metrics
+                        .bytes
+                        .fetch_add(data.len() as u64, Ordering::Relaxed);
                 }
                 ServerSessionEvent::VideoDataReceived {
                     data, timestamp, ..
