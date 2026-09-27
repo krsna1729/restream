@@ -13,8 +13,6 @@ use super::{agent_health_snapshot, context::build_agent_context};
 use crate::api_runtime_views::{ResourceMapOptions, ResourceMapView};
 #[cfg(feature = "agent-plane")]
 use crate::{alerts, events};
-#[cfg(feature = "agent-plane")]
-use sysinfo::System;
 
 #[cfg(feature = "agent-plane")]
 const AGENT_PROCESSING_GRAPH_OUTPUT_LIMIT: usize = 50;
