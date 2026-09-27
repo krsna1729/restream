@@ -75,10 +75,9 @@ pub(super) use mixed_outputs::{
     mixed_output_publish_url, mixed_output_read_url,
 };
 pub(super) use mixed_playback::{verify_mixed_recording, verify_optional_mixed_hls_preview};
-#[cfg(test)]
-pub(super) use mixed_probes::decode_scan_needs_video_dts_fallback;
 pub(super) use mixed_probes::{
-    MixedProbeSpec, ffprobe_compact_audio_track_count, ffprobe_compact_validate_dts,
+    MixedProbeSpec, decode_scan_needs_video_dts_fallback, ffmpeg_decode_scan,
+    ffprobe_compact_audio_track_count, ffprobe_compact_validate_dts,
     ffprobe_compact_video_dimensions, verify_mixed_audio_route, verify_mixed_decode_scan,
     verify_mixed_stream, warm_mixed_stream,
 };

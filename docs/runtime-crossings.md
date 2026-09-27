@@ -62,9 +62,10 @@ FFmpeg threads   transcoders (blocking AVIO callbacks)
 
 - **M1** RTMP publish handoff: permit/queue wait p50/p99, handoffs/s, Tokio
   CPU per publisher (publish scaling mode, WI8).
-- **M2** (replaced) Direct play from ingest is a debug/diagnostic path: verify
-  it with a real player (ffplay/ffmpeg) and show an attached player does not
-  interfere with the hot path; no scaling study.
+- **M2** (replaced) Direct play from ingest is a debug/diagnostic path. The
+  player check runs in CI (`direct-play` shard: ffprobe structure plus an
+  ffmpeg null-sink decode of SRT `read` and RTMP `play`); non-interference is
+  a with/without-player A/B when WI11 changes these paths. No scaling study.
 - **M3** SRT publish at N publishers: `SrtServer::run` task CPU and event
   queue depth, owner→Tokio event rate; decides batching or per-publisher
   demux sharding.

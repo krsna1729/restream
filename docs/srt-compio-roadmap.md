@@ -3099,18 +3099,16 @@ GSO counters; runtime-crossings audit with interim verdicts
 
 Open, in order:
 
-1. **Direct play from ingest in CI.** Debug/diagnostic path only: it must work
-   with a real player and must not interfere with the hot path. Existing
-   checks are outside CI: `srt.policy` (ffprobe SRT `read` from Restream's
-   ingest; failing with an ffprobe timeout when last run on 2026-09-19) and
-   `timestamp.bframe` (ffprobe RTMP `play`: ≥ 30 packets, B-frames, monotone
-   DTS). `srt-crypto-matrix` in CI publishes only; its declared
-   `readSucceeds` check never reads Restream's ingest. Run both modes, fix
-   what fails, add a decode check (`ffmpeg -i <url> -t 20 -f null -`: exit 0,
-   no decode errors, frames ≈ duration × fps) next to ffprobe's structure
-   check, and add the modes to the redevelop transport shards (PR smoke if
-   cheap). Non-interference is a with/without-player interleaved A/B (SRT×50,
-   RTMP×100), not a CI gate.
+1. **DONE: direct play from ingest in CI.** New `direct-play` shard
+   (`scripts/lib/release-shards.sh`: `srt.policy` + `timestamp.bframe`) in the
+   PR smoke and redevelop transport lists. Both modes read Restream's own
+   ingest (SRT `read` plain and encrypted, RTMP `play`), check structure with
+   ffprobe, and decode five seconds like a player
+   (`assert_direct_play_decodes`: ffmpeg into a null sink, exit 0, no
+   decode-error patterns). Local run on the current tree: all reads decode
+   clean with no DTS fallback; the 2026-09-19 `srt.policy` timeout no longer
+   reproduces. Still open, not a CI gate: the with/without-player
+   non-interference A/B (SRT×50, RTMP×100) when WI11 touches these paths.
 2. **Measure before WI11**: M3 (SRT ingest at N publishers: `SrtServer::run`
    CPU and event-queue depth; ~1% of a core per 8 Mbit/s publisher suggests a
    serial ceiling near ~100), M1 (RTMP publish handoff), M4 (ingress owner busy
