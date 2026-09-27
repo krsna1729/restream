@@ -57,6 +57,8 @@ mod first_progress;
 mod measurement;
 pub(super) use measurement::ffmpeg_children_stats;
 pub(crate) use measurement::read_proc_status_kb_checked;
+#[path = "resource_sweep/hls_sink.rs"]
+mod hls_sink;
 #[path = "resource_sweep/peer_ports.rs"]
 mod peer_ports;
 use peer_ports::{instance_suffixed_path, peer_instance_ports, resource_output_url};
@@ -122,6 +124,7 @@ struct SinkPeerStack {
     /// per-connection delivery.
     rtmp_metrics: Vec<Arc<GeneralizedSinkMetrics>>,
     srt_pool: Option<HarnessSrtSinkPool>,
+    hls: Option<hls_sink::HlsCountingSink>,
 }
 
 /// Stop every child in a peer-instance Vec (or any other child list),
@@ -141,6 +144,9 @@ async fn stop_harness_sink_peers(stack: &mut SinkPeerStack) {
     stack.rtmp_metrics.clear();
     if let Some(pool) = stack.srt_pool.take() {
         pool.stop();
+    }
+    if let Some(sink) = stack.hls.take() {
+        sink.stop();
     }
 }
 
@@ -412,10 +418,27 @@ async fn start_harness_sink_peers(
     } else {
         None
     };
+    let hls = if needs.hls {
+        match hls_sink::HlsCountingSink::start(harness_port_defaults().hls_put).await {
+            Ok(sink) => Some(sink),
+            Err(err) => {
+                for server in rtmp {
+                    stop_generalized_sink_server(server);
+                }
+                if let Some(pool) = srt_pool {
+                    pool.stop();
+                }
+                return Err(err);
+            }
+        }
+    } else {
+        None
+    };
     Ok(SinkPeerStack {
         rtmp,
         rtmp_metrics,
         srt_pool,
+        hls,
     })
 }
 
@@ -427,12 +450,14 @@ async fn start_harness_sink_peers(
 struct LocalPeerNeeds {
     rtmp: bool,
     srt: bool,
+    hls: bool,
 }
 
 impl LocalPeerNeeds {
     const ALL: Self = Self {
         rtmp: true,
         srt: true,
+        hls: true,
     };
 
     fn for_output_kinds(env: &ResourceSweepEnv, kinds: &[SweepOutputKind]) -> Self {
@@ -442,9 +467,11 @@ impl LocalPeerNeeds {
                 SweepOutputKind::SrtSource | SweepOutputKind::Srt720p | SweepOutputKind::Srt1080p
             )
         };
+        let is_hls = |kind: &SweepOutputKind| *kind == SweepOutputKind::HlsPut;
         Self {
-            rtmp: kinds.iter().any(|kind| !is_srt(kind)),
+            rtmp: kinds.iter().any(|kind| !is_srt(kind) && !is_hls(kind)),
             srt: kinds.iter().any(is_srt) && env.srt_peer_hosts.is_empty(),
+            hls: kinds.iter().any(is_hls),
         }
     }
 }

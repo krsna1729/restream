@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Egress capacity ramp: RTMP, RTMPS and SRT fan-out from one 8 Mbit/s ingest
+# Egress capacity ramp: RTMP, RTMPS, SRT and HLS PUT fan-out from one 8 Mbit/s ingest
 # into the harness's in-process sinks (MSR_PEER=sink), with Restream and the
 # receiver apparatus on disjoint CPU sets. Reports per-destination delivery
-# (floor 0.95) and Jain fairness at the receiver, Restream's own delivery
+# (floor 0.95; HLS PUT per segment, see below) and Jain fairness at the receiver, Restream's own delivery
 # view, CPU and RSS per rung, plus the highest rung where every repeat
 # delivered to every destination.
 set -euo pipefail
@@ -15,10 +15,14 @@ usage() {
 usage: scripts/harness/capacity-ramp.sh
 
 Environment (all optional):
-  CAPACITY_PROTOCOLS       comma list of rtmp,rtmps,srt,transcode (default rtmp,rtmps,srt)
-  CAPACITY_RTMP_OUTPUTS    RTMP ladder   (default 100,250,500,1000,2000,4000)
-  CAPACITY_RTMPS_OUTPUTS   RTMPS ladder  (default 100,250,500,1000,2000)
-  CAPACITY_SRT_OUTPUTS     SRT ladder    (default 50,100,150,200,300,400,600,800)
+  CAPACITY_PROTOCOLS       comma list of rtmp,rtmps,srt,hls,transcode
+                           (default rtmp,rtmps,srt,hls)
+  CAPACITY_RTMP_OUTPUTS    RTMP ladder   (default 100,250,500,1000)
+  CAPACITY_RTMPS_OUTPUTS   RTMPS ladder  (default 100,250,500,1000)
+  CAPACITY_SRT_OUTPUTS     SRT ladder    (default 50,100,150,200,300,500,1000)
+  CAPACITY_HLS_OUTPUTS     HLS PUT ladder (default 50,100,250,500,1000); an output
+                           passes when it received every segment of the window,
+                           each within 3 s of the first output to receive it
   CAPACITY_TRANSCODE_OUTPUTS transcode ladder, FFmpeg renditions fanned out (default 10,25,50,100)
   CAPACITY_MALLOC_ARENA_MAX  Restream's RESTREAM_MALLOC_ARENA_MAX for the run: `default`
                            (glibc policy) or a count; unset = Restream's provisional default
@@ -55,10 +59,11 @@ if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
 fi
 [[ $# -eq 0 ]] || { usage; exit 2; }
 
-protocols="${CAPACITY_PROTOCOLS:-rtmp,rtmps,srt}"
-rtmp_outputs="${CAPACITY_RTMP_OUTPUTS:-100,250,500,1000,2000,4000}"
-rtmps_outputs="${CAPACITY_RTMPS_OUTPUTS:-100,250,500,1000,2000}"
-srt_outputs="${CAPACITY_SRT_OUTPUTS:-50,100,150,200,300,400,600,800}"
+protocols="${CAPACITY_PROTOCOLS:-rtmp,rtmps,srt,hls}"
+rtmp_outputs="${CAPACITY_RTMP_OUTPUTS:-100,250,500,1000}"
+rtmps_outputs="${CAPACITY_RTMPS_OUTPUTS:-100,250,500,1000}"
+srt_outputs="${CAPACITY_SRT_OUTPUTS:-50,100,150,200,300,500,1000}"
+hls_outputs="${CAPACITY_HLS_OUTPUTS:-50,100,250,500,1000}"
 transcode_outputs="${CAPACITY_TRANSCODE_OUTPUTS:-10,25,50,100}"
 arena_max="${CAPACITY_MALLOC_ARENA_MAX:-}"
 bitrate="${CAPACITY_BITRATE:-8M}"
@@ -128,6 +133,7 @@ port_base=$(( ephemeral_low > 26000 ? 21000 : 11000 ))
 export RESTREAM_HTTP=$port_base RESTREAM_RTMP=$((port_base + 1)) RESTREAM_SRT=$((port_base + 2))
 export MTX_API=$((port_base + 10)) MTX_HLS=$((port_base + 11))
 export MTX_RTMP=$((port_base + 100)) MTX_RTMPS=$((port_base + 200)) MTX_SRT=$((port_base + 300))
+export HLS_PUT_PORT=$((port_base + 400))
 
 mkdir -p "$root"
 build_profile="${CAPACITY_BUILD_PROFILE:-release}"
@@ -185,7 +191,7 @@ json.dump({
     "window_secs": $window_secs,
     "settle_secs": $settle_secs,
     "repeats": $repeats,
-    "ladders": {"rtmp": "$rtmp_outputs", "rtmps": "$rtmps_outputs", "srt": "$srt_outputs", "transcode": "$transcode_outputs"},
+    "ladders": {"rtmp": "$rtmp_outputs", "rtmps": "$rtmps_outputs", "srt": "$srt_outputs", "hls": "$hls_outputs", "transcode": "$transcode_outputs"},
 }, open(sys.argv[1], "w"), indent=2)
 EOF
 echo "capacity-ramp: artifacts in $root (restream cpus $restream_cpus, harness cpus $harness_cpus)"
@@ -196,6 +202,7 @@ scenario_for() {
     rtmp) echo egress-growth-source-same ;;
     rtmps) echo egress-growth-source-rtmps ;;
     srt) echo egress-growth-source-srt ;;
+    hls) echo egress-growth-source-hls ;;
     transcode) echo egress-growth-transcode-mixed ;;
     *) echo "capacity-ramp: unknown protocol $1" >&2; exit 2 ;;
   esac
@@ -205,6 +212,7 @@ ladder_for() {
     rtmp) echo "$rtmp_outputs" ;;
     rtmps) echo "$rtmps_outputs" ;;
     srt) echo "$srt_outputs" ;;
+    hls) echo "$hls_outputs" ;;
     transcode) echo "$transcode_outputs" ;;
   esac
 }

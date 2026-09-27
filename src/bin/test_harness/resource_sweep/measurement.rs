@@ -133,9 +133,15 @@ pub(super) async fn sample_resource_window(
         .srt_pool
         .as_ref()
         .map(crate::harness_srt_sink::HarnessSrtSinkPool::counters);
+    let hls_sink = stack
+        .sink_peers
+        .hls
+        .as_ref()
+        .map(super::hls_sink::HlsCountingSink::handle);
     let sinks = super::delivery::HarnessSinks {
         rtmp: &stack.sink_peers.rtmp_metrics,
         srt: srt_sink.as_ref(),
+        hls: hls_sink.as_ref(),
     };
     let mut delivery_samples: Vec<super::delivery::DeliverySample> =
         super::delivery::sample(env, api, sinks)
@@ -283,6 +289,11 @@ pub(super) async fn sample_resource_window(
     save_pipeline_telemetry(env, api, &meta).await;
     let mut aggregate = summarize_resource_samples(meta, env.lifecycle, &samples);
     aggregate.delivery = super::delivery::summarize(&delivery_samples);
+    if let Some(hls) = &hls_sink {
+        aggregate
+            .delivery
+            .add_hls(hls.window(rated_started, Instant::now()));
+    }
     Ok(aggregate)
 }
 
@@ -608,6 +619,15 @@ pub(super) fn resource_aggregate_json(aggregate: &ResourceAggregate) -> Value {
         "ratioMedian": aggregate.delivery.ratio_median,
         "intervalRatioMin": aggregate.delivery.interval_ratio_min,
         "jain": aggregate.delivery.jain,
+        "hls": aggregate.delivery.hls.as_ref().map(|hls| json!({
+            "lagBudgetMs": super::hls_sink::HLS_LAG_BUDGET.as_millis() as u64,
+            "dueSegments": hls.due_segments,
+            "destinations": hls.destinations,
+            "delivered": hls.delivered,
+            "lagP50Ms": hls.lag_p50_ms,
+            "lagP99Ms": hls.lag_p99_ms,
+            "lagMaxMs": hls.lag_max_ms,
+        })),
     });
     value
 }

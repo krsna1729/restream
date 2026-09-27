@@ -31,7 +31,13 @@ fn ramp_json_dsl_carries_current_config_contract() {
 
 #[test]
 fn resource_egress_scenario_table_carries_branch_contract() {
-    assert_eq!(resource_egress_scenarios().len(), 11);
+    assert_eq!(resource_egress_scenarios().len(), 12);
+    assert_eq!(
+        resource_egress_scenario("egress-growth-source-hls")
+            .unwrap()
+            .output_kinds,
+        vec![SweepOutputKind::HlsPut]
+    );
     assert_eq!(
         resource_egress_scenarios()
             .iter()

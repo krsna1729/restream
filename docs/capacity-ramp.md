@@ -23,8 +23,13 @@ resource-sweep` run:
 - **Receiver delivery**: per-destination bytes at the sink over the rated
   window divided by the offered (ingest) rate. A destination is delivered at
   ≥ 0.95. A rung **passes** when every destination was delivered.
+- **HLS PUT** is graded per segment, not by bytes: a 30 s window holds only
+  about ten segments, so a byte ratio is too coarse. A segment is due once any
+  output has it and 3 s have passed; an output is delivered when it received
+  every due segment of the window, each within 3 s of the first output
+  (`resource-sweep-results.json` `delivery.hls` carries the lag p50/p99/max).
 - **Worst interval ratio**: the lowest one-sample ratio, which exposes stalls
-  an average hides.
+  an average hides (not applicable to HLS PUT).
 - **Jain fairness** over destination rates.
 - **Restream's own view** (`/api/v1/pipelines/{id}/telemetry` `delivery`):
   RTMP from TCP `bytes_acked`, SRT from ACK coverage (an upper bound; see
@@ -32,6 +37,14 @@ resource-sweep` run:
 - Restream CPU (average and peak, % of one core), RSS and thread count.
 
 **Capacity** for a protocol is the highest rung where every repeat passed.
+Default ladders stop at 1000 outputs per protocol (`CAPACITY_*_OUTPUTS`
+overrides them); protocols default to `rtmp,rtmps,srt,hls`.
+
+**Observation cost.** The harness polls `/api/v1/engine/health` and each
+pipeline's telemetry every second, and Restream builds those responses as
+`serde_json::Value` trees. At RTMP×100 (release, 43b68dc0) API handling was
+~21% of Restream samples, the health snapshot alone 7–10%, and it grows with
+output count; Restream CPU in the tables includes it.
 
 ## Run it
 

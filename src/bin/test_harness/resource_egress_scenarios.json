@@ -14,6 +14,13 @@
     ]
   },
   {
+    "name": "egress-growth-source-hls",
+    "configIndex": 1,
+    "outputKinds": [
+      "hlsPut"
+    ]
+  },
+  {
     "name": "egress-growth-source-mixed",
     "configIndex": 1,
     "outputKinds": [

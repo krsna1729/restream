@@ -95,11 +95,23 @@ def main(root):
             " | Restream delivered min | CPU avg (median) | CPU peak | RSS MB |",
             "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
+        # HLS PUT is graded per segment (ratio = due segments received); the
+        # byte-interval ratio and Restream's fabric-leaf delivery view do not
+        # apply to it.
+        hls = protocol == "hls"
+        if hls:
+            lines[-2:-2] = [
+                "HLS PUT: rx ratio is the share of due segments received; an output"
+                " passes with every due segment, each within 3 s of the first output.",
+                "",
+            ]
         for row in protocol_rows:
+            interval = "—" if hls else f"{row['rx_interval_min']:.3f}"
+            restream_delivered = "—" if hls else row["restream_delivered_min"]
             lines.append(
                 f"| {row['outputs']} | {row['passed']}/{row['repeats']} | {row['rx_delivered_min']}"
-                f" | {row['rx_ratio_min']:.3f} | {row['rx_interval_min']:.3f} | {row['rx_jain_min']:.5f}"
-                f" | {row['restream_delivered_min']} | {row['cpu_avg_median']:.1f}%"
+                f" | {row['rx_ratio_min']:.3f} | {interval} | {row['rx_jain_min']:.5f}"
+                f" | {restream_delivered} | {row['cpu_avg_median']:.1f}%"
                 f" | {row['cpu_peak_max']:.1f}% | {row['rss_peak_mb_max']:.0f} |"
             )
         lines.append("")

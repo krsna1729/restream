@@ -18,6 +18,8 @@ pub(crate) enum SweepOutputKind {
     Rtmp1080p,
     Srt1080p,
     RtmpsSource,
+    /// HLS PUT upload to the harness counting sink (`MSR_PEER=sink` only).
+    HlsPut,
 }
 
 impl SweepOutputKind {
@@ -32,6 +34,7 @@ impl SweepOutputKind {
             Self::Rtmp1080p => "rtmp.1080p.a0",
             Self::Srt1080p => "srt.1080p.a0",
             Self::RtmpsSource => "rtmps-source",
+            Self::HlsPut => "hls-put",
         }
     }
 
@@ -53,6 +56,7 @@ impl SweepOutputKind {
             // listener, separate from the plain `rtmpAddress` port —
             // there is no same-port auto-detection.
             Self::RtmpsSource => format!("rtmps://127.0.0.1:{rtmps_port}/live/{name}"),
+            Self::HlsPut => hls_put_output_url(name),
         }
     }
 
@@ -71,6 +75,7 @@ impl SweepOutputKind {
                 harness_srt_output_url(srt_port, name, HarnessSrtMode::Read)
             }
             Self::RtmpsSource => format!("rtmps://127.0.0.1:{rtmps_port}/live/{name}"),
+            Self::HlsPut => hls_put_output_url(name),
         }
     }
 
@@ -78,7 +83,9 @@ impl SweepOutputKind {
         match (self, multi_audio) {
             (Self::RtmpSource, true) => "source+atrack:0",
             (Self::SrtSource, true) => "source+atrack:0,1",
-            (Self::RtmpSource | Self::SrtSource | Self::RtmpsSource, false) => "source",
+            (Self::RtmpSource | Self::SrtSource | Self::RtmpsSource, false) | (Self::HlsPut, _) => {
+                "source"
+            }
             (Self::RtmpSourceDownmix | Self::SrtSourceDownmix, _) => "source+downmix:0",
             (Self::Rtmp720p, true) => "720p+atrack:0",
             (Self::Srt720p, true) => "720p+atrack:0,1",
@@ -93,12 +100,21 @@ impl SweepOutputKind {
     pub(crate) const fn rtmp_mode(self) -> RtmpOutputMode {
         match self {
             Self::RtmpSource | Self::RtmpSourceDownmix => RtmpOutputMode::Enhanced,
-            Self::Rtmp720p | Self::Rtmp1080p | Self::RtmpsSource => RtmpOutputMode::Legacy,
+            Self::Rtmp720p | Self::Rtmp1080p | Self::RtmpsSource | Self::HlsPut => {
+                RtmpOutputMode::Legacy
+            }
             Self::SrtSource | Self::SrtSourceDownmix | Self::Srt720p | Self::Srt1080p => {
                 RtmpOutputMode::Legacy
             }
         }
     }
+}
+
+/// YouTube-style HLS PUT URL on the harness sink's port; `cid` names the
+/// output so the sink can count per destination.
+fn hls_put_output_url(name: &str) -> String {
+    let port = super::super::harness_port_defaults().hls_put;
+    format!("http://127.0.0.1:{port}/upload?cid={name}&copy=0&file=out.m3u8")
 }
 
 /// Declarative resource-sweep egress scenario row.

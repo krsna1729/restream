@@ -24,6 +24,7 @@ pub(super) const DELIVERY_FLOOR: f64 = 0.95;
 pub(super) struct HarnessSinks<'a> {
     pub(super) rtmp: &'a [Arc<GeneralizedSinkMetrics>],
     pub(super) srt: Option<&'a crate::harness_srt_sink::SrtSinkCountersHandle>,
+    pub(super) hls: Option<&'a super::hls_sink::HlsSinkHandle>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +60,25 @@ pub(super) struct DeliverySummary {
     pub(super) interval_ratio_min: f64,
     pub(super) jain: f64,
     pub(super) reported: Option<ReportedDelivery>,
+    /// HLS PUT outputs, graded per segment (see `hls_sink`), not by bytes.
+    pub(super) hls: Option<super::hls_sink::HlsWindow>,
+}
+
+impl DeliverySummary {
+    /// Fold HLS PUT outputs graded by the segment rule into the totals that
+    /// the byte-rate rule produced for every other destination.
+    pub(super) fn add_hls(&mut self, window: super::hls_sink::HlsWindow) {
+        let only_hls = self.destinations == 0;
+        self.destinations += window.destinations;
+        self.delivered += window.delivered;
+        if only_hls {
+            self.ratio_min = window.ratio_min;
+            self.ratio_median = window.ratio_median;
+        } else {
+            self.ratio_min = self.ratio_min.min(window.ratio_min);
+        }
+        self.hls = Some(window);
+    }
 }
 
 /// Jain's fairness index: `(Σx)² / (n·Σx²)`, 1.0 when all rates are equal and
@@ -93,15 +113,22 @@ pub(super) fn summarize(samples: &[DeliverySample]) -> DeliverySummary {
     if offered_bps <= 0.0 {
         return DeliverySummary::default();
     }
-    let rates: Vec<f64> = first
+    // HLS PUT counters arrive a whole segment at a time; `add_hls` grades
+    // them per segment instead.
+    let byte_rated = |name: &String| !name.starts_with(super::hls_sink::HLS_DESTINATION_PREFIX);
+    let window_rate = |(name, start): (&String, &u64)| {
+        let end = last.destinations.get(name).copied().unwrap_or(*start);
+        bytes_rate(end, *start, seconds)
+    };
+    // Fairness spans every destination: HLS outputs share one segment
+    // cadence, so equal service still gives equal window bytes.
+    let rates: Vec<f64> = first.destinations.iter().map(window_rate).collect();
+    let mut ratios: Vec<f64> = first
         .destinations
         .iter()
-        .map(|(name, start)| {
-            let end = last.destinations.get(name).copied().unwrap_or(*start);
-            bytes_rate(end, *start, seconds)
-        })
+        .filter(|(name, _)| byte_rated(name))
+        .map(|destination| window_rate(destination) / offered_bps)
         .collect();
-    let mut ratios: Vec<f64> = rates.iter().map(|rate| rate / offered_bps).collect();
     ratios.sort_by(f64::total_cmp);
 
     let mut interval_ratio_min = f64::INFINITY;
@@ -115,7 +142,11 @@ pub(super) fn summarize(samples: &[DeliverySample]) -> DeliverySummary {
         if span <= 0.0 || offered <= 0.0 {
             continue;
         }
-        for (name, start) in &first.destinations {
+        for (name, start) in first
+            .destinations
+            .iter()
+            .filter(|(name, _)| byte_rated(name))
+        {
             let before = pair[0].destinations.get(name).copied().unwrap_or(*start);
             let after = pair[1].destinations.get(name).copied().unwrap_or(before);
             interval_ratio_min = interval_ratio_min.min(bytes_rate(after, before, span) / offered);
@@ -138,6 +169,7 @@ pub(super) fn summarize(samples: &[DeliverySample]) -> DeliverySummary {
         },
         jain: jain(&rates),
         reported: last.reported,
+        hls: None,
     }
 }
 
@@ -160,6 +192,14 @@ pub(super) async fn sample(
     if let Some(sink) = sinks.srt {
         for ((port, peer), bytes) in sink.per_peer_bytes() {
             destinations.insert(format!("srt-sink:{port}:{peer}"), bytes);
+        }
+    }
+    if let Some(sink) = sinks.hls {
+        for (cid, bytes) in sink.per_output_bytes() {
+            destinations.insert(
+                format!("{}{cid}", super::hls_sink::HLS_DESTINATION_PREFIX),
+                bytes,
+            );
         }
     }
     let mediamtx_instances = if env.peer_mode == ResourceSweepPeer::Mediamtx {
