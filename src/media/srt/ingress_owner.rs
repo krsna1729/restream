@@ -396,7 +396,8 @@ impl OwnerLoop {
                 }
             }
             IngressCommand::ProbeApplied { logical_peer, ring } => {
-                self.media.probe_applied(logical_peer, ring);
+                self.media
+                    .probe_applied(logical_peer, ring, &self.stats.ingress_owner);
             }
             IngressCommand::Disconnect { logical_peer } => self.disconnect(logical_peer, now),
             IngressCommand::Shutdown => self.shutting_down = true,

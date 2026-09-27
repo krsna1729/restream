@@ -80,8 +80,13 @@ reports it: `mediaPayloads` (payloads demuxed and published), `mediaWorkUs`
 single pass), `mediaSlowPasses5ms` / `mediaSlowPasses20ms` (passes over 5 and
 20 ms; each delays that Owner's protocol service), `mediaUnattachedDropped`
 (payloads dropped past the bound held while Tokio admits a peer) and
-`mediaProbeHoldOverflows` (probe answers that took too long, so held packets
-were published to the current ring). The event bridge carries session
+`mediaProbeHoldOverflows` (a probe hold that reached its byte budget, per
+publisher 4 MiB or Owner-wide 64 MiB, or its 2 s timeout: held packets were
+published to the current ring and holding stopped) and `mediaProbeAckMaxUs`
+(longest wait for Tokio to answer a stream probe). Pre-admission media is
+bounded in bytes too: 2.5 MB per peer and 32 MiB Owner-wide, where a full
+Owner-wide cap evicts from the largest queue so a new publisher keeps its
+first payloads. The event bridge carries session
 lifecycle only (connect, stream probe, disconnect), so `eventBridgeFullVisits`
 should stay at zero.
 

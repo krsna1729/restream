@@ -14,9 +14,12 @@ proves safety, not that Tokio is the right steady-state executor; WI11 in
 Execution contexts:
 
 ```text
-Tokio            control plane: API, DB, pipeline state, ring publish,
-                 RTMP control sessions, SRT ingest demux, SRT/TS muxing
-Compio/io_uring  RTMP ingress owner (one), SRT ingress Owner (one),
+Tokio            control plane: API, DB, pipeline state, session lifecycle;
+                 still per-packet: RTMP publish (ring publish), shared SRT/TS
+                 muxing, HLS segmenting, transcoder input (WI11 steps 2-3)
+Compio/io_uring  RTMP ingress owner (one); SRT ingress Owner (one), which
+                 also runs SRT ingest media to completion (demux, gate,
+                 timestamps, GOP, ring publish) and direct SRT play;
                  egress fabric shards (RTMP/RTMPS/SRT, per feed)
 FFmpeg threads   transcoders (blocking AVIO callbacks)
 ```

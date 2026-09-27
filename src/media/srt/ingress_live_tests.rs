@@ -211,7 +211,7 @@ async fn read_play_sends_through_the_owner_and_target_deletion_disconnects() {
         for chunk in ts_chunks(5000) {
             if let Some(probe) = media.on_payload(0, chunk, &stats) {
                 let ring = feeder_server.apply_probe(&session, probe).await;
-                media.probe_applied(0, ring);
+                media.probe_applied(0, ring, &stats);
             }
             tokio::time::sleep(Duration::from_millis(3)).await;
         }

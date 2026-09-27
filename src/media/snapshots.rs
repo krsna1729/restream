@@ -263,6 +263,7 @@ ingress_owner_stats! {
     deferred_sends,
     deferred_sends_hwm,
     media_pass_max_us,
+    media_probe_ack_max_us,
 }
 
 /// Shared RTMP listener accept/error counters.
@@ -315,6 +316,7 @@ impl SrtIngressOwnerSnapshot {
             "mediaSlowPasses20ms": self.media_slow_passes_20ms,
             "mediaUnattachedDropped": self.media_unattached_dropped,
             "mediaProbeHoldOverflows": self.media_probe_hold_overflows,
+            "mediaProbeAckMaxUs": self.media_probe_ack_max_us,
         })
     }
 }
