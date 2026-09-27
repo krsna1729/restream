@@ -874,6 +874,7 @@ impl SrtOwners {
                 tx_packets: counters.tx_packets,
                 tx_bytes: counters.tx_bytes,
                 tx_class: counters.tx_class,
+                tx_batching: owner.tx_batching(),
                 tx_completed_ok: counters.completed_ok,
                 tx_short_sends: counters.short_sends,
                 tx_failed_sends: counters.failed_sends,

@@ -697,6 +697,14 @@ pub(super) async fn record_at(
                 sum_field(&owners, "rxRingDropped"),
             ),
             ("ownerRxTruncatedTotal", sum_field(&owners, "rxTruncated")),
+            (
+                "ownerTxBatchedSendsTotal",
+                sum_field(&owners, "txBatchedSends"),
+            ),
+            (
+                "ownerTxCoalescedDatagramsTotal",
+                sum_field(&owners, "txCoalescedDatagrams"),
+            ),
             ("shardFeedResyncsTotal", sum_field(&shards, "resyncCount")),
             (
                 "shardDriverBudgetViolationsTotal",

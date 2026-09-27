@@ -392,6 +392,13 @@ retransmission rate and protocol-control pps are read from that breakdown; a
 `txClass.total()` that does not equal `txPackets` would mean the breakdown is
 incomplete.
 
+`txBatchedSends`, `txCoalescedDatagrams` and `txGsoFallbacks` are the Owner's
+UDP GSO counters: sends that carried more than one datagram, datagrams that
+joined an already staged send (one submission saved each), and times the path
+rejected GSO and coalescing was switched off. Only consecutive datagrams to
+the same destination address coalesce, so many outputs to one server coalesce
+far more than the same outputs to distinct servers.
+
 ## Diagnostic checks
 
 `GET /metrics/system` also includes an observe-only `capacity` object. It

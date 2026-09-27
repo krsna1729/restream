@@ -74,7 +74,14 @@ harness, publisher and sinks the second half. On large hosts:
   shards buy capacity.
 - `CAPACITY_SINK_THREADS` defaults to the harness CPU count; raise
   `CAPACITY_PEER_COUNT` (more sink ports/listeners) if the receiver, not
-  Restream, saturates. Check the sink side with `top` during a high rung: the
+  Restream, saturates. The sink port count also changes Restream's SRT cost:
+  srt-rs GSO coalesces consecutive datagrams to one destination address, so
+  outputs sharing a sink port share sends. SRT×50, same binary, interleaved:
+  one port 102–105% CPU with ~10 datagrams per batched send; three ports
+  135–144% with ~2.9; one port per output (the real-fan-out case) 142–156%
+  with ~1. The default (one port per sink thread) is therefore close to, but
+  slightly under, the cost of fully distinct destinations; compare SRT rows
+  only across runs with the same `peer_count`. Check the sink side with `top` during a high rung: the
   `test_harness` process should stay below its CPU budget.
 - `CAPACITY_MALLOC_ARENA_MAX` sets Restream's glibc arena cap for the run
   (`default` = glibc policy). Restream's own default of 2 was measured on one

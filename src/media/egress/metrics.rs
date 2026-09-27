@@ -45,6 +45,10 @@ pub struct OwnerFamilyMetrics {
     /// DATA-first versus DATA-retransmit versus control is what packet-rate
     /// work needs, and it cannot be derived from the total.
     pub tx_class: srt_transport::compio::OwnerTxClassCounters,
+    /// UDP GSO coalescing: sends that carried several datagrams, and the
+    /// datagrams that joined a staged send (submissions saved). Coalescing
+    /// needs consecutive datagrams to one destination address.
+    pub tx_batching: srt_transport::compio::OwnerTxBatchingCounters,
     pub tx_completed_ok: u64,
     pub tx_short_sends: u64,
     pub tx_failed_sends: u64,
