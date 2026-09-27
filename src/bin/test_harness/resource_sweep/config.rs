@@ -108,6 +108,10 @@ pub(super) struct ResourceSweepEnv {
     /// peers on other machines — the ≥25 GbE multi-host qualification setup —
     /// with `test_harness srt-sink` running on each of them.
     pub(super) srt_peer_hosts: Vec<String>,
+    /// `RESOURCE_SWEEP_INGEST_GROWTH_CONFIG` (default `h264-srt`): the sweep
+    /// config every publisher of `ingest-growth-same` uses, e.g. `h264-rtmp`
+    /// to grow RTMP publishers.
+    pub(super) ingest_growth_config: String,
     pub(super) sample_secs: u64,
     pub(super) sample_interval_ms: u64,
     pub(super) settle_secs: u64,
@@ -160,6 +164,8 @@ impl ResourceSweepEnv {
             peer_count: env_usize("PEER_COUNT", 1).max(1),
             peer_mode: ResourceSweepPeer::from_env()?,
             srt_peer_hosts: parse_string_list("RESOURCE_SWEEP_SRT_PEER_HOSTS"),
+            ingest_growth_config: std::env::var("RESOURCE_SWEEP_INGEST_GROWTH_CONFIG")
+                .unwrap_or_else(|_| "h264-srt".to_string()),
             sample_secs: env_secs("RESOURCE_SWEEP_SAMPLE_SECS", 6),
             sample_interval_ms: env_secs("RESOURCE_SWEEP_SAMPLE_INTERVAL_MS", 1000),
             settle_secs: env_secs("RESOURCE_SWEEP_SETTLE_SECS", 4),

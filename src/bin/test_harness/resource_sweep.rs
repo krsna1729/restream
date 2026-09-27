@@ -61,6 +61,8 @@ pub(crate) use measurement::read_proc_status_kb_checked;
 mod hls_sink;
 #[path = "resource_sweep/peer_ports.rs"]
 mod peer_ports;
+#[path = "resource_sweep/thread_cpu.rs"]
+mod thread_cpu;
 use peer_ports::{instance_suffixed_path, peer_instance_ports, resource_output_url};
 #[cfg(test)]
 use peer_ports::{peer_instance_for, srt_url_on_host};
@@ -664,12 +666,16 @@ async fn run_resource_ingest_growth(
     let mut publishers = Vec::new();
     let mut pipeline_ids = Vec::new();
     let max_ingests = *env.ingest_counts.iter().max().unwrap_or(&1);
+    let same_growth = *sweep_configs()
+        .iter()
+        .find(|config| config.name == env.ingest_growth_config)
+        .ok_or_else(|| format!("unknown ingest growth config {}", env.ingest_growth_config))?;
     let mut out = Vec::new();
     for index in 1..=max_ingests {
         let config = if mixed {
             sweep_configs()[index - 1]
         } else {
-            sweep_configs()[1]
+            same_growth
         };
         let stream_key = format!("resource-growth-{index}-{}", config.name);
         let pipeline_id = create_resource_pipeline(
@@ -691,7 +697,7 @@ async fn run_resource_ingest_growth(
                     .collect::<Vec<_>>()
                     .join(",")
             } else {
-                "h264-srt".to_string()
+                same_growth.name.to_string()
             };
             out.push(
                 sample_resource_window(

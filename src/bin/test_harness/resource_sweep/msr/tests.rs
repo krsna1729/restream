@@ -177,6 +177,7 @@ fn srt_outputs_use_mediamtx_standard_stream_id() {
         peer_count: 1,
         peer_mode: ResourceSweepPeer::Mediamtx,
         srt_peer_hosts: Vec::new(),
+        ingest_growth_config: "h264-srt".to_string(),
         sample_secs: 1,
         sample_interval_ms: 1000,
         settle_secs: 1,
@@ -289,6 +290,7 @@ fn base_test_env() -> ResourceSweepEnv {
         peer_count: 1,
         peer_mode: ResourceSweepPeer::Mediamtx,
         srt_peer_hosts: Vec::new(),
+        ingest_growth_config: "h264-srt".to_string(),
         sample_secs: 1,
         sample_interval_ms: 1000,
         settle_secs: 1,
@@ -387,6 +389,7 @@ fn report_test_aggregate() -> MsrCheckpointAggregate {
     MsrCheckpointAggregate {
         resource: ResourceAggregate {
             delivery: Default::default(),
+            thread_cpu_pct: Default::default(),
             scenario: MSR_MODE.to_string(),
             label: "30-outputs".to_string(),
             lifecycle: "continuous".to_string(),

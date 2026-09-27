@@ -3109,10 +3109,24 @@ Open, in order:
    clean with no DTS fallback; the 2026-09-19 `srt.policy` timeout no longer
    reproduces. Still open, not a CI gate: the with/without-player
    non-interference A/B (SRT×50, RTMP×100) when WI11 touches these paths.
-2. **Measure before WI11**: M3 (SRT ingest at N publishers: `SrtServer::run`
-   CPU and event-queue depth; ~1% of a core per 8 Mbit/s publisher suggests a
-   serial ceiling near ~100), M1 (RTMP publish handoff), M4 (ingress owner busy
-   time versus publisher count).
+2. **Measure before WI11: done for M1/M3/M4** (results in
+   [runtime-crossings.md](runtime-crossings.md#open-measurement-items)).
+   Harness support: `RESOURCE_SWEEP_INGEST_GROWTH_CONFIG` (grow RTMP or SRT
+   publishers), per-thread-group CPU per window (`threadCpuPct`), and engine
+   health snapshots at each window's start and end. Findings that change the
+   plan: the first SRT ingest ceiling is the single SRT ingress Owner thread
+   (~1.8% of a core per 8 Mbit/s publisher, ~55 per Owner), not
+   `SrtServer::run`; the Owner→Tokio bridge fills from stalls of 20–200 ms
+   whose cause is still open (not API polling, not runtime sharing in steady
+   state, not the arena cap). Still open: RTMP handoff wait p50/p99 (not
+   instrumented); the stall cause; SRT publisher counts above ~40, which need
+   a bigger host or external publishers. Side findings to size later: the
+   SQLite worker is 13.8% of Restream samples in an ingest-only steady state
+   (32 SRT publishers), and RSS is ~1 GB at 32 pipelines (12.8 s rings).
+2a. **SRT ingress Owner sharding** (new, from M4): several Owners on the
+   ingest port (SO_REUSEPORT, one thread each) so SRT ingest scales past one
+   core. Design with WI11's batched handoff; evidence gate: publishers per
+   Owner core before and after.
 3. **WI11 media execution plane**, in order: SRT demux/publish off
    `SrtServer::run` with batched Owner handoff → RTMP publish/GOP → shared TS
    muxer. The media worker pool takes an explicit CPU set from the start.

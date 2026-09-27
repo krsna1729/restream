@@ -83,6 +83,8 @@ pub(super) struct ResourceAggregate {
     pub(super) stages_peak: usize,
     pub(super) pipeline_count_peak: usize,
     pub(super) delivery: super::delivery::DeliverySummary,
+    /// Restream CPU % of one core per thread group over the rated window.
+    pub(super) thread_cpu_pct: std::collections::BTreeMap<String, f64>,
 }
 
 /// Static labels and dimensions for one resource-sweep scenario.
@@ -149,7 +151,9 @@ pub(super) async fn sample_resource_window(
             .ok()
             .into_iter()
             .collect();
+    save_engine_health(env, api, &meta, "start").await;
     let rated_started = Instant::now();
+    let thread_ticks_start = super::thread_cpu::thread_group_ticks(stack.restream_pid);
     while rated_started.elapsed() < Duration::from_secs(env.sample_secs) {
         tokio::time::sleep(Duration::from_millis(env.sample_interval_ms)).await;
         let now = Instant::now();
@@ -286,9 +290,13 @@ pub(super) async fn sample_resource_window(
             delivery_samples.push(delivery);
         }
     }
+    let thread_ticks_end = super::thread_cpu::thread_group_ticks(stack.restream_pid);
+    let rated_secs = rated_started.elapsed().as_secs_f64();
     save_pipeline_telemetry(env, api, &meta).await;
     let mut aggregate = summarize_resource_samples(meta, env.lifecycle, &samples);
     aggregate.delivery = super::delivery::summarize(&delivery_samples);
+    aggregate.thread_cpu_pct =
+        super::thread_cpu::thread_group_cpu_pct(&thread_ticks_start, &thread_ticks_end, rated_secs);
     if let Some(hls) = &hls_sink {
         aggregate
             .delivery
@@ -316,6 +324,7 @@ pub(super) fn summarize_resource_samples(
     let rss_sum: u64 = samples.iter().map(|s| s.rss_kb).sum();
     ResourceAggregate {
         delivery: super::delivery::DeliverySummary::default(),
+        thread_cpu_pct: Default::default(),
         scenario: meta.scenario.to_string(),
         label: meta.label,
         lifecycle: lifecycle.as_str().to_string(),
@@ -610,6 +619,7 @@ pub(super) fn resource_aggregate_json(aggregate: &ResourceAggregate) -> Value {
         "stagesPeak": aggregate.stages_peak,
         "pipelineCountPeak": aggregate.pipeline_count_peak,
     });
+    value["threadCpuPct"] = json!(aggregate.thread_cpu_pct);
     value["delivery"] = json!({
         "destinations": aggregate.delivery.destinations,
         "delivered": aggregate.delivery.delivered,
@@ -737,12 +747,42 @@ async fn save_pipeline_telemetry(
             pipelines.insert(pipeline_id.clone(), telemetry);
         }
     }
-    let path = env.work_dir.join(format!(
-        "pipeline-telemetry-{}-{}.json",
-        meta.scenario, meta.outputs
-    ));
+    // Pipelines and outputs both in the name: ingest-growth windows all have
+    // zero outputs and would overwrite each other.
+    let stem = format!("{}-p{}-o{}", meta.scenario, meta.pipelines, meta.outputs);
     let _ = std::fs::write(
-        path,
+        env.work_dir.join(format!("pipeline-telemetry-{stem}.json")),
         serde_json::to_string_pretty(&serde_json::Value::Object(pipelines)).unwrap_or_default(),
+    );
+    write_engine_health(env, &health, &stem, "end");
+}
+
+/// Listener and shard state (SRT ingress Owner event-queue high water,
+/// bridge-full visits, budget exhaustion, RTMP accept errors). The counters
+/// are cumulative; `start` and `end` snapshots bracket the rated window, so
+/// their difference excludes the setup between windows (pipeline creation,
+/// publisher handshakes).
+async fn save_engine_health(
+    env: &ResourceSweepEnv,
+    api: &RampApi,
+    meta: &ResourceScenarioMeta<'_>,
+    phase: &str,
+) {
+    if let Ok(health) = api.get_json("/api/v1/engine/health").await {
+        let stem = format!("{}-p{}-o{}", meta.scenario, meta.pipelines, meta.outputs);
+        write_engine_health(env, &health, &stem, phase);
+    }
+}
+
+fn write_engine_health(env: &ResourceSweepEnv, health: &Value, stem: &str, phase: &str) {
+    let engine = json!({
+        "rtmpListener": health["rtmpListener"],
+        "srtListener": health["srtListener"],
+        "egressFabricShards": health["egressFabricShards"],
+    });
+    let _ = std::fs::write(
+        env.work_dir
+            .join(format!("engine-health-{stem}-{phase}.json")),
+        serde_json::to_string_pretty(&engine).unwrap_or_default(),
     );
 }

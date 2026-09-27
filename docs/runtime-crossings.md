@@ -34,7 +34,7 @@ FFmpeg threads   transcoders (blocking AVIO callbacks)
 |---|---|---|---|---|---|
 | C1 | RTMP publish: Compio ingress owner → Tokio control session | decoded message `Bytes` (zero-copy) over a per-connection `mpsc` (16), gated by a shared 64 MiB byte semaphore | one channel op (and possible cross-runtime wake) per audio/video message, ~77/s per publisher | 16 messages per connection + 64 MiB shared | **Interim (WI11).** Parsing and socket I/O correctly stay with the transport owner. Ring publish, timestamp mapping, input gate and GOP cache are per-packet media work that sits on Tokio only because the control session owns `RtmpIngestHandle`; `StandbyGopCache` and `InputTimestampMapper` are synchronous and `InputPacketGate` is atomics, so none needs Tokio. Messages larger than a read rarely batch (a 4 KiB read seldom completes more than one message), so batching buys little. Cost not yet measured; see M1. |
 | C2 | Direct RTMP play: Tokio control session ↔ Compio ingress owner | `PlayNext` request + oneshot reply carrying ≤ 32 `Arc<MediaPacket>` | one round trip per burst; bursts can be a single packet at the live edge | one outstanding burst per player | **Fixed; no scaling work.** Direct play from ingest is a debug/diagnostic path, not a production fan-out path. Requirements: it works with a real player (ffplay/ffmpeg), and an attached player does not interfere with the hot path (with/without-player A/B). The per-burst `info!` log is gone, the burst `Vec` is recycled, and client commands are now read during playback. |
-| C3 | SRT publish: SRT ingress Owner → Tokio | one `SrtIngressEvent::Media` (1316-byte TS `Bytes`) per datagram over one shared `mpsc` (256) | ~760/s per publisher | 256 events shared by all SRT publishers | **Interim (WI11); the most significant crossing.** ~10x C1's rate, and a single Tokio task (`SrtServer::run`) TS-demuxes and publishes for every SRT publisher and also drives SRT play readers. One task runs on one worker at a time, so it is a process-wide serial ceiling. Release profile at one 8 Mbit/s publisher (`symprof/now-rtmp100`, 43b68dc0): `SrtServer::run` 2.6% inclusive and TS demux 0.6% of Restream samples, ≈1% of a core per publisher, so the task would saturate near ~100 publishers (extrapolated; M3 confirms). Target: sharded media workers own demux and publication; the Owner hands off one batch per peer per service pass. |
+| C3 | SRT publish: SRT ingress Owner → Tokio | one `SrtIngressEvent::Media` (1316-byte TS `Bytes`) per datagram over one shared `mpsc` (256) | ~760/s per publisher | 256 events shared by all SRT publishers | **Interim (WI11); the most significant crossing.** ~10x C1's rate, and a single Tokio task (`SrtServer::run`) TS-demuxes and publishes for every SRT publisher and also drives SRT play readers. One task runs on one worker at a time, so it is a process-wide serial ceiling, but M3/M4 show it is not the first one: it is on CPU ~0.7% of a core per 8 Mbit/s publisher (~140 publishers), while the SRT ingress Owner thread costs ~1.8% (~55 publishers per Owner). Its event bridge (256 shared) is full on a growing share of Owner passes from 8 publishers up, from stalls whose cause is still open (M3). Target: sharded media workers own demux and publication; the Owner hands off one batch per peer per service pass. |
 | C4 | Ring → SRT egress: shared TS muxer | one Tokio task per pipeline stage reads the ring and writes `TsChunkRing`; shards read it | per packet, **once per feed** (not per output) | TS ring capacity | **Justified sharing, interim executor (WI11).** Muxing once per feed and sharing TS chunks is what makes SRT fan-out O(feed) in mux cost; keep that. The muxer is still a `tokio::spawn` per feed doing per-packet conversion and TS packaging, which at hundreds of feeds is continuous Tokio load: it moves to the media executors (one logical muxer per stage, not one thread each); metadata acquisition can stay on Tokio. |
 | C5 | Ring → RTMP/RTMPS egress | fabric shards read `RingFeed` directly (atomic cursor); Raw→FLV converted once per shard (`egress_payload_cache`) | no per-packet crossing, only wakes (W1) | ring capacity, per-leaf cursors | **Justified** (already the cheap form). |
 | C7 | Direct SRT play: Tokio → SRT ingress Owner | `SrtServer::run` advances each player's `TsChunkReader` and issues bounded send commands by `LogicalPeerId` | per TS chunk per player | bounded Owner command queue | **Accepted (diagnostic path).** Direct play from ingest is debug/diagnostic only. It shares C3's serial task with every SRT publisher, so the requirement is non-interference: an attached player must not change ingest or output delivery (with/without-player A/B), and it must keep working when SRT ingest moves off that task. |
@@ -60,14 +60,35 @@ FFmpeg threads   transcoders (blocking AVIO callbacks)
 
 ## Open measurement items
 
-- **M1** RTMP publish handoff: permit/queue wait p50/p99, handoffs/s, Tokio
-  CPU per publisher (publish scaling mode, WI8).
+- **M1** RTMP publish handoff. Measured (2026-09-27, release, ingest only,
+  `ingest-growth-same` with `RESOURCE_SWEEP_INGEST_GROWTH_CONFIG=h264-rtmp`):
+  64 RTMP publishers at 8 Mbit/s held 7.5 Mbit/s each; per publisher the RTMP
+  ingress owner costs ~0.66% of a core and Tokio ~0.45% (API polling
+  included). Open: permit/queue wait p50/p99 is not instrumented.
 - **M2** (replaced) Direct play from ingest is a debug/diagnostic path. The
   player check runs in CI (`direct-play` shard: ffprobe structure plus an
   ffmpeg null-sink decode of SRT `read` and RTMP `play`); non-interference is
   a with/without-player A/B when WI11 changes these paths. No scaling study.
-- **M3** SRT publish at N publishers: `SrtServer::run` task CPU and event
-  queue depth, owner→Tokio event rate; decides batching or per-publisher
-  demux sharding.
-- **M4** Ingress owners: single RTMP ingress owner and single SRT ingress
-  Owner busy time versus publisher count (roadmap §36 WI8 question).
+- **M3** SRT publish at N publishers. Measured (2026-09-27, release, ingest
+  only, Restream on 3 CPUs; window-only counter deltas from the harness's
+  `engine-health-*-start/end.json`): 8/16/24/32 publishers at 8 Mbit/s held
+  ~7.9 Mbit/s each, Restream 34/50–66/66–90/85–112% CPU. The Owner→Tokio
+  event bridge (256 shared) was full on a growing share of Owner passes:
+  74–100, 220–970, 590–1,140 and 1,330–2,030 `eventBridgeFullVisits` per
+  30 s window. Timing the `SrtServer::run` loop showed 1–5 passes per 5 s
+  over 20 ms (worst 86–215 ms), mostly waiting rather than on CPU
+  (`SrtServer::run` is ~0.7% of a core per publisher on CPU: TS demux 42%,
+  forwarding 21%). Ruled out by interleaved A/B: harness API polling rate
+  (1 s vs 5 s), running `SrtServer::run` on its own current-thread runtime
+  (steady state unchanged; it only helps while pipelines are being created),
+  and the malloc arena cap (2 vs glibc default). A 4096-slot bridge
+  (whole-run counters, growth included) had ~0 bridge-full visits but a
+  cumulative high-water of 4096, so it absorbs stalls without removing them;
+  the stall cause remains open. The harness cannot drive more than ~40 SRT
+  publishers on this host (libsrt publishers cost 6% of a harness core each).
+- **M4** Ingress owners. The SRT ingress Owner thread (`srt-in`) costs ~1.8%
+  of a core per 8 Mbit/s publisher (50–68% at 32), so one Owner saturates
+  near ~55 publishers: the first SRT ingest ceiling, before `SrtServer::run`
+  (~140 by its on-CPU cost). Moving demux off Tokio (WI11) does not lift it;
+  more Owners on the port (SO_REUSEPORT) would. The RTMP ingress owner is
+  ~0.66% per publisher (~150 per core).
