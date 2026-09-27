@@ -12,7 +12,7 @@ use crate::media::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
 };
 use crate::media::egress::runtime::{
-    EgressFabricRuntime, EgressFabricRuntimeError, spawn_fabric_wake_watcher,
+    EgressFabricRuntime, EgressFabricRuntimeError, subscribe_fabric_wakes,
 };
 use crate::media::egress::shard::EgressShardGroupError;
 #[cfg(test)]
@@ -65,19 +65,15 @@ impl MediaEngine {
             let runtime = EgressFabricRuntime::new(manager_config, group)
                 .map_err(RtmpFabricEnsureError::Runtime)?;
 
-            let watcher = spawn_fabric_wake_watcher(
-                "rtmp",
-                feed_id.clone(),
-                feed.clone_reader(),
-                runtime.feed_wake_handles(),
-            );
+            let wakes =
+                subscribe_fabric_wakes("rtmp", feed_id.clone(), feed, runtime.feed_wake_handles());
 
             tracing::info!(feed_id = %feed_id, "rtmp fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);
             registry
                 .startup_sources
                 .insert(feed_id.clone(), startup_source);
-            registry.feed_watchers.insert(feed_id.clone(), watcher);
+            registry.feed_wakes.insert(feed_id.clone(), wakes);
             registry.feeds.insert(feed_id.clone(), feed.clone_reader());
             registry
                 .rtmps_client_configs
@@ -229,9 +225,7 @@ impl MediaEngine {
             registry.startup_sources.remove(feed_id);
             registry.feeds.remove(feed_id);
             registry.rtmps_client_configs.remove(feed_id);
-            if let Some(watcher) = registry.feed_watchers.remove(feed_id) {
-                watcher.abort();
-            }
+            registry.feed_wakes.remove(feed_id);
             registry.runtimes.remove(feed_id)
         };
 
@@ -277,9 +271,7 @@ impl MediaEngine {
             let mut registry = self.fabric.rtmp.lock().await;
             registry.active_outputs.clear();
             registry.startup_sources.clear();
-            for watcher in registry.feed_watchers.drain() {
-                watcher.1.abort();
-            }
+            registry.feed_wakes.clear();
             std::mem::take(&mut registry.runtimes)
         };
         let count = runtimes.len();

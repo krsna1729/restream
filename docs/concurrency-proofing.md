@@ -250,8 +250,12 @@ surface already covers it.
     and session worker thread)
 - `src/media/egress/backends/rtmp_shard_tests.rs`
   - `feed_wake_delivers_media_after_idle_when_factory_start_is_delayed` (production
-    Compio shard group + feed watcher + real RTMP peer; a later FLV frame arrives
-    after the leaf sends its initial frame and parks)
+    Compio shard group + feed-wake subscription + real RTMP peer; a later FLV
+    frame arrives after the leaf sends its initial frame and parks)
+- `src/media/egress/runtime.rs`
+  - `fabric_feed_wakes_follow_ring_growth_rescale_and_stop_on_drop` (wakes
+    are delivered from the publishing thread, follow a replacement ring,
+    reach a shard added by rescale, and stop when the subscription drops)
 - `src/media/srt_stream_id.rs`
   - `media::srt_stream_id::tests` (stream-key normalization and mode parsing)
 - `src/media/ts_chunk_ring.rs`

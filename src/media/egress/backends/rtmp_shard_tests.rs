@@ -681,7 +681,7 @@ fn run_accepting_server_peer_reporting_video_after_idle(
     }
 }
 
-/// Exercises the production Compio shard group and feed-wake watcher against
+/// Exercises the production Compio shard group and feed-wake subscription against
 /// a real RTMP peer: publish a keyframe, idle, then require another keyframe
 /// after the leaf parks. The factory must preserve its configured visit
 /// window even when shard startup is delayed.
@@ -728,10 +728,10 @@ async fn feed_wake_delivers_media_after_idle_when_factory_start_is_delayed() {
     let manager_config = crate::media::egress::manager::EgressManagerConfig::new(1, 16).unwrap();
     let mut runtime =
         crate::media::egress::runtime::EgressFabricRuntime::new(manager_config, group).unwrap();
-    let watcher = crate::media::egress::runtime::spawn_fabric_wake_watcher(
+    let wakes = crate::media::egress::runtime::subscribe_fabric_wakes(
         "rtmp",
         crate::media::egress::command::FeedId::new("feed"),
-        feed.clone_reader(),
+        &feed,
         runtime.feed_wake_handles(),
     );
     startup_source.set(
@@ -772,8 +772,7 @@ async fn feed_wake_delivers_media_after_idle_when_factory_start_is_delayed() {
     .await
     .is_ok();
 
-    watcher.abort();
-    let _ = watcher.await;
+    drop(wakes);
     runtime.shutdown();
     server.join().unwrap();
 

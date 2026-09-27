@@ -316,8 +316,10 @@ impl RingFeed {
         }
     }
 
-    pub fn notify_handle(&self) -> Arc<tokio::sync::Notify> {
-        self.current_ring().get_notify()
+    /// The ring the feed's producer currently publishes into, for fabric
+    /// wake subscriptions.
+    pub fn publication_ring(&self) -> Arc<RingBuffer> {
+        self.current_ring()
     }
 }
 
@@ -535,10 +537,10 @@ impl TsFeed {
         limits.evaluate(self.retention_snapshot())
     }
 
-    /// The inner ring's publish notifier, used by feed watchers to bridge
-    /// publications into coalesced shard wake deliveries.
-    pub fn notify_handle(&self) -> Arc<tokio::sync::Notify> {
-        self.ring.get_notify()
+    /// The inner ring the TS producer publishes into, for fabric wake
+    /// subscriptions.
+    pub fn publication_ring(&self) -> Arc<RingBuffer> {
+        Arc::clone(&self.ring)
     }
 }
 

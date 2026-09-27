@@ -157,35 +157,45 @@ fn ring_feed_head_sequence_matches_write_idx() {
     assert_eq!(feed.head_sequence(), 2);
 }
 
-#[tokio::test]
-async fn ring_feed_follows_grown_ring_for_reads_and_wakes() {
+#[test]
+fn ring_feed_follows_grown_ring_for_reads_and_wakes() {
+    #[derive(Default)]
+    struct CountingWake(std::sync::atomic::AtomicUsize);
+    impl crate::media::ring_buffer::PublishWake for CountingWake {
+        fn wake(&self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    let wakes = |counter: &CountingWake| counter.0.load(std::sync::atomic::Ordering::Relaxed);
+
     let old_ring = Arc::new(RingBuffer::new(4));
     push_packet(&old_ring, b"before-grow-keyframe", true);
     push_packet(&old_ring, b"before-grow-tail", false);
     let feed = RingFeed::new(old_ring.clone(), Arc::new(FeedEpoch::new()));
     let old_head = feed.head_sequence();
 
-    let old_notify = feed.notify_handle();
-    let old_notified = old_notify.notified();
-    tokio::pin!(old_notified);
-    old_notified.as_mut().enable();
+    let counter = Arc::new(CountingWake::default());
+    assert!(Arc::ptr_eq(&feed.publication_ring(), &old_ring));
+    feed.publication_ring()
+        .publication_subscribers()
+        .subscribe(counter.clone());
 
     let grown_ring = Arc::new(RingBuffer::new_continuing(16, old_head as usize));
     assert_eq!(grown_ring.seed_readable_tail_from(&old_ring), 2);
     old_ring.seal_and_forward(grown_ring.clone());
-    tokio::time::timeout(std::time::Duration::from_secs(1), old_notified)
-        .await
-        .expect("sealing the old ring must wake its registered waiter");
+    assert_eq!(
+        wakes(&counter),
+        1,
+        "sealing the old ring must wake its subscribers"
+    );
 
-    let grown_notify = feed.notify_handle();
-    assert!(Arc::ptr_eq(&grown_notify, &grown_ring.get_notify()));
-    let grown_notified = grown_notify.notified();
-    tokio::pin!(grown_notified);
-    grown_notified.as_mut().enable();
+    assert!(Arc::ptr_eq(&feed.publication_ring(), &grown_ring));
     push_packet(&grown_ring, b"after-grow-read", false);
-    tokio::time::timeout(std::time::Duration::from_secs(1), grown_notified)
-        .await
-        .expect("the active ring notification must wake its registered waiter");
+    assert_eq!(
+        wakes(&counter),
+        2,
+        "the replacement ring must inherit the subscribers"
+    );
 
     assert_eq!(feed.head_sequence(), old_head + 1);
     assert_eq!(feed.retention_snapshot().head_sequence, old_head + 1);

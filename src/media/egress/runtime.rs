@@ -1,6 +1,8 @@
 use std::num::NonZeroU32;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use arc_swap::ArcSwap;
 
 use crate::media::egress::command::{EgressCommand, FeedId, ShardId};
 use crate::media::egress::feed::EgressFeed;
@@ -11,6 +13,7 @@ use crate::media::egress::shard::{
     EgressShardBackend, EgressShardConfig, EgressShardGroup, EgressShardGroupError,
     EgressShardHeartbeat, EgressShardSnapshot, FeedWakeHandle,
 };
+use crate::media::ring_buffer::{PublishSubscribers, PublishWake, RingBuffer};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EgressFabricRuntimeError {
@@ -21,14 +24,11 @@ pub(crate) enum EgressFabricRuntimeError {
 pub(crate) struct EgressFabricRuntime {
     manager: EgressManager,
     group: EgressShardGroup,
-    /// Shared with the feed-wake watcher task (`retain_*_fabric_runtime`'s
-    /// `tokio::spawn`), which reads through this on every wake instead of
-    /// iterating a `Vec` snapshot captured once at watcher-startup time.
-    /// Without sharing it, a shard added later by `rescale` would have no
-    /// way to reach that already-running watcher — its leaves would still
-    /// work (via the shard's own idle-poll fallback) but lose the fast
-    /// feed-wake path indefinitely.
-    wake_handles: Arc<Mutex<Vec<FeedWakeHandle>>>,
+    /// Shared with every feed's publication subscription
+    /// (`subscribe_fabric_wakes`), which the feed's producer reads through on
+    /// every publication. `rescale` stores a fresh list, so a shard grown
+    /// later gets the fast feed-wake path on feeds subscribed before it.
+    wake_handles: Arc<ArcSwap<Vec<FeedWakeHandle>>>,
 }
 
 impl EgressFabricRuntime {
@@ -41,7 +41,7 @@ impl EgressFabricRuntime {
         if actual != expected {
             return Err(EgressFabricRuntimeError::ShardCountMismatch { expected, actual });
         }
-        let wake_handles = Arc::new(Mutex::new(group.feed_wake_handles()));
+        let wake_handles = Arc::new(ArcSwap::from_pointee(group.feed_wake_handles()));
         Ok(Self {
             manager: EgressManager::new(manager_config),
             group,
@@ -63,11 +63,9 @@ impl EgressFabricRuntime {
             .observe_queued_commands(|shard_id| group.queued_commands(shard_id));
     }
 
-    /// Shared handle list for the feed-wake watcher task to read through
-    /// on every wake (see the field doc on `wake_handles`). Clone the
-    /// returned `Arc` into the watcher at startup; `rescale` keeps the
-    /// pointed-to `Vec` fresh as shards grow or shrink.
-    pub(crate) fn feed_wake_handles(&self) -> Arc<Mutex<Vec<FeedWakeHandle>>> {
+    /// Shared handle list for feed publication subscriptions (see the field
+    /// doc on `wake_handles`); `rescale` keeps it current.
+    pub(crate) fn feed_wake_handles(&self) -> Arc<ArcSwap<Vec<FeedWakeHandle>>> {
         Arc::clone(&self.wake_handles)
     }
 
@@ -138,12 +136,12 @@ impl EgressFabricRuntime {
                 });
             }
             // Grown/shut-down shards changed the group's real handle set;
-            // refresh the shared list the feed-wake watcher reads through
-            // (see the `wake_handles` field doc) so it stays correct
-            // without the watcher needing to know shards can resize at
-            // all -- including on a partial failure below, since whatever
-            // grew before the failure is still real and needs a wake path.
-            *self.wake_handles.lock().unwrap() = self.group.feed_wake_handles();
+            // publish the new list every feed subscription reads through
+            // (see the `wake_handles` field doc) -- including on a partial
+            // failure below, since whatever grew before the failure is
+            // still real and needs a wake path.
+            self.wake_handles
+                .store(Arc::new(self.group.feed_wake_handles()));
         }
 
         match grow_error {
@@ -186,84 +184,90 @@ impl EgressFabricRuntime {
     }
 }
 
-/// Feed types the fabric wake watcher (`spawn_fabric_wake_watcher`) can run
-/// against: a wake `Notify` handle. The caller passes an already-cloned
-/// reader in (see each `retain_*_fabric_runtime`'s `feed.clone_reader()`),
-/// so this trait only needs to expose what the watcher loop itself reads.
+/// Feed types whose publications can wake a fabric: the ring the feed's
+/// producer publishes into. `RingFeed` resolves its current ring; a later
+/// replacement shares the subscriber set (`RingBuffer::seal_and_forward`).
 pub(crate) trait FabricWatchFeed: EgressFeed + Send + 'static {
-    fn notify_handle(&self) -> Arc<tokio::sync::Notify>;
+    fn publication_ring(&self) -> Arc<RingBuffer>;
 }
 
 impl FabricWatchFeed for crate::media::egress::journal::RingFeed {
-    fn notify_handle(&self) -> Arc<tokio::sync::Notify> {
-        crate::media::egress::journal::RingFeed::notify_handle(self)
+    fn publication_ring(&self) -> Arc<RingBuffer> {
+        crate::media::egress::journal::RingFeed::publication_ring(self)
     }
 }
 
 impl FabricWatchFeed for crate::media::egress::journal::TsFeed {
-    fn notify_handle(&self) -> Arc<tokio::sync::Notify> {
-        crate::media::egress::journal::TsFeed::notify_handle(self)
+    fn publication_ring(&self) -> Arc<RingBuffer> {
+        crate::media::egress::journal::TsFeed::publication_ring(self)
     }
 }
 
-/// Bridge feed publications into coalesced shard wakes for one fabric
-/// runtime: one watcher per feed, one gate per shard, at most one
-/// outstanding wake per (feed, shard). Shared by all four
-/// `engine_*_egress_fabric.rs` callers (`kind` only changes the log
-/// message, e.g. `"srt"`, `"rtmp"`, `"sink"`, `"pipeline"`).
+/// Delivers one coalesced wake per shard from the publishing thread. Each
+/// `FeedWakeHandle::deliver` is an atomic swap on the shard's gate, plus one
+/// bounded `try_send` on its clear-to-set transition, so at most one wake per
+/// shard is in flight however fast the feed publishes.
+struct FabricWakers {
+    handles: Arc<ArcSwap<Vec<FeedWakeHandle>>>,
+}
+
+impl PublishWake for FabricWakers {
+    #[inline]
+    fn wake(&self) {
+        for handle in self.handles.load().iter() {
+            // Full or closed: the gate stays clear, so the next publication
+            // retries; the shard's idle poll covers a quiet feed meanwhile.
+            let _ = handle.deliver();
+        }
+    }
+}
+
+/// A feed's fabric wake registration. Dropping it unsubscribes.
+pub(crate) struct FeedWakeSubscription {
+    subscribers: Arc<PublishSubscribers>,
+    waker: Arc<dyn PublishWake>,
+}
+
+impl std::fmt::Debug for FeedWakeSubscription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FeedWakeSubscription")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for FeedWakeSubscription {
+    fn drop(&mut self) {
+        self.subscribers.unsubscribe(&self.waker);
+    }
+}
+
+/// Wake a fabric's shards directly from the feed's producer: each
+/// publication (and each seal or end of stream) calls into the shards'
+/// coalescing wake gates on the publishing thread, with no watcher task or
+/// runtime hop in between (WI11). Shared by all four
+/// `engine_*_egress_fabric.rs` callers (`kind` only labels the log line).
 ///
-/// `wake_handles` is shared with `EgressFabricRuntime::rescale`: a shard the
-/// manager grows after this watcher starts appends its handle there, so the
-/// watcher (which reads through the lock every wake rather than a one-time
-/// snapshot) picks it up without needing to know shards can resize at all.
-///
-/// Clones the feed's reader side (shared ring/journal + epoch) rather than
-/// holding only the `Notify` handle: `notify_waiters()` only wakes registered
-/// waiters, so the watcher pins and enables a `Notified` future before checking
-/// the head. `RingFeed` can move to a replacement ring, so each iteration also
-/// reacquires the active notify handle and avoids awaiting one made stale during
-/// that check.
-pub(crate) fn spawn_fabric_wake_watcher<F>(
+/// `wake_handles` is shared with `EgressFabricRuntime::rescale`, so shards
+/// that grow later are woken too. One wake is delivered on subscribe, so a
+/// publication that landed before registration is not left waiting for the
+/// shards' idle poll.
+pub(crate) fn subscribe_fabric_wakes<F>(
     kind: &'static str,
     feed_id: FeedId,
-    watcher_feed: F,
-    wake_handles: Arc<Mutex<Vec<FeedWakeHandle>>>,
-) -> tokio::task::JoinHandle<()>
+    feed: &F,
+    wake_handles: Arc<ArcSwap<Vec<FeedWakeHandle>>>,
+) -> FeedWakeSubscription
 where
     F: FabricWatchFeed,
 {
-    tokio::spawn(async move {
-        tracing::info!(feed_id = %feed_id, "{kind} fabric wake watcher started");
-        let mut last_head = watcher_feed.head_sequence();
-        let mut last_notify: Option<Arc<tokio::sync::Notify>> = None;
-        loop {
-            let notify = watcher_feed.notify_handle();
-            let same_notify = last_notify
-                .as_ref()
-                .is_some_and(|previous| Arc::ptr_eq(previous, &notify));
-            let current_head = {
-                let notified = notify.notified();
-                tokio::pin!(notified);
-                notified.as_mut().enable();
-
-                let current_head = watcher_feed.head_sequence();
-                let notify_is_current = Arc::ptr_eq(&notify, &watcher_feed.notify_handle());
-                if current_head == last_head && same_notify && notify_is_current {
-                    notified.await;
-                }
-                watcher_feed.head_sequence()
-            };
-            last_head = current_head;
-            // A ring replacement can keep the same write index. Track the
-            // notifier identity as well, so a replacement between iterations
-            // still produces a wake instead of sleeping on the new ring.
-            last_notify = Some(notify);
-            let handles = wake_handles.lock().unwrap().clone();
-            for handle in &handles {
-                let _ = handle.deliver();
-            }
-        }
-    })
+    let subscribers = feed.publication_ring().publication_subscribers();
+    let waker: Arc<dyn PublishWake> = Arc::new(FabricWakers {
+        handles: wake_handles,
+    });
+    subscribers.subscribe(Arc::clone(&waker));
+    waker.wake();
+    tracing::info!(feed_id = %feed_id, "{kind} fabric feed wakes subscribed");
+    FeedWakeSubscription { subscribers, waker }
 }
 
 #[cfg(test)]
@@ -614,8 +618,8 @@ mod tests {
         runtime.shutdown();
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn fabric_wake_watcher_tracks_ring_growth() {
+    #[test]
+    fn fabric_feed_wakes_follow_ring_growth_rescale_and_stop_on_drop() {
         use crate::media::egress::journal::{FeedEpoch, RingFeed};
         use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
         use crate::media::ring_buffer::RingBuffer;
@@ -631,26 +635,44 @@ mod tests {
         };
         let old_ring = Arc::new(RingBuffer::new(4));
         let feed = RingFeed::new(old_ring.clone(), Arc::new(FeedEpoch::new()));
-        let probe = Probe::default();
-        let group = group(1, std::slice::from_ref(&probe));
-        let handles = Arc::new(Mutex::new(group.feed_wake_handles()));
-        let watcher =
-            spawn_fabric_wake_watcher("test", FeedId::new("feed-1"), feed.clone_reader(), handles);
+        let probes = [Probe::default(), Probe::default()];
+        let group = group(2, &probes);
+        let handles = Arc::new(ArcSwap::from_pointee(vec![
+            group.feed_wake_handles()[0].clone(),
+        ]));
+        let subscription =
+            subscribe_fabric_wakes("test", FeedId::new("feed-1"), &feed, handles.clone());
 
-        probe.wait_for_completed_feed_wakes(1);
+        // One wake on subscribe, then one per publication, delivered on the
+        // publishing thread.
+        probes[0].wait_for_completed_feed_wakes(1);
         old_ring.push(packet(0));
-        probe.wait_for_completed_feed_wakes(2);
+        probes[0].wait_for_completed_feed_wakes(2);
 
+        // Sealing wakes; the replacement ring inherits the subscription.
         let new_ring = Arc::new(RingBuffer::new_continuing(8, old_ring.get_write_idx()));
         new_ring.seed_readable_tail_from(&old_ring);
         old_ring.seal_and_forward(new_ring.clone());
-        probe.wait_for_completed_feed_wakes(3);
+        probes[0].wait_for_completed_feed_wakes(3);
         new_ring.push(packet(33));
-        probe.wait_for_completed_feed_wakes(4);
-
+        probes[0].wait_for_completed_feed_wakes(4);
         assert_eq!(feed.head_sequence(), 2);
-        watcher.abort();
-        let _ = watcher.await;
+
+        // A shard added to the shared list (as `rescale` does) is woken by
+        // the existing subscription.
+        handles.store(Arc::new(group.feed_wake_handles()));
+        new_ring.push(packet(66));
+        probes[0].wait_for_completed_feed_wakes(5);
+        probes[1].wait_for_completed_feed_wakes(1);
+
+        // Dropping the subscription stops wakes: the gates are clear, so a
+        // wake would be sent if anything were still subscribed.
+        drop(subscription);
+        assert!(new_ring.publication_subscribers().is_empty());
+        new_ring.push(packet(99));
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(probes[0].state().feed_wake_commands, 5);
+        assert_eq!(probes[1].state().feed_wake_commands, 1);
         group.shutdown_and_join();
     }
 }

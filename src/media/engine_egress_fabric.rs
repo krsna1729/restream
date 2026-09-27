@@ -6,7 +6,7 @@ use crate::media::egress::manager::{
     EgressManagerConfig, EgressManagerDispatchError, ManagerCommandOutcome,
 };
 use crate::media::egress::runtime::{
-    EgressFabricRuntime, EgressFabricRuntimeError, spawn_fabric_wake_watcher,
+    EgressFabricRuntime, EgressFabricRuntimeError, subscribe_fabric_wakes,
 };
 use crate::media::egress::shard::EgressShardGroupError;
 #[cfg(test)]
@@ -63,16 +63,12 @@ impl MediaEngine {
             let runtime = EgressFabricRuntime::new(manager_config, group)
                 .map_err(SrtFabricEnsureError::Runtime)?;
 
-            let watcher = spawn_fabric_wake_watcher(
-                "srt",
-                feed_id.clone(),
-                feed.clone_reader(),
-                runtime.feed_wake_handles(),
-            );
+            let wakes =
+                subscribe_fabric_wakes("srt", feed_id.clone(), feed, runtime.feed_wake_handles());
 
             tracing::info!(feed_id = %feed_id, "srt fabric runtime created");
             registry.runtimes.insert(feed_id.clone(), runtime);
-            registry.feed_watchers.insert(feed_id.clone(), watcher);
+            registry.feed_wakes.insert(feed_id.clone(), wakes);
             registry.feeds.insert(feed_id.clone(), feed.clone_reader());
             true
         };
@@ -175,9 +171,7 @@ impl MediaEngine {
             }
             registry.active_outputs.remove(feed_id);
             registry.feeds.remove(feed_id);
-            if let Some(watcher) = registry.feed_watchers.remove(feed_id) {
-                watcher.abort();
-            }
+            registry.feed_wakes.remove(feed_id);
             registry.runtimes.remove(feed_id)
         };
 
@@ -237,9 +231,7 @@ impl MediaEngine {
         let runtimes = {
             let mut registry = self.fabric.srt.lock().await;
             registry.active_outputs.clear();
-            for watcher in registry.feed_watchers.drain() {
-                watcher.1.abort();
-            }
+            registry.feed_wakes.clear();
             std::mem::take(&mut registry.runtimes)
         };
         let count = runtimes.len();

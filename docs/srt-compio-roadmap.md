@@ -3162,8 +3162,15 @@ Open, in order:
      [runtime-crossings.md](runtime-crossings.md) C1.
    - Step 3: shared TS mux and HLS segmenter as producer-side stages on the
      owner that publishes the feed; FFmpeg input pulls the ring directly.
-   - Step 4: direct feed wakes from the publishing owner to egress shards
-     (removes the Tokio feed watcher).
+   - **Landed, fan-out A/B pending** Step 4: direct feed wakes from the
+     publishing thread to egress shards. The Tokio feed watcher is gone:
+     the ring calls its publication subscribers (`PublishWake`), each
+     fabric subscribes one coalescing waker per feed
+     (`subscribe_fabric_wakes`), and replacement rings inherit the set. A
+     ring with no subscribers pays one atomic load per publish
+     (`ring_buffer` producer bench within noise of 7bccb734). Next
+     refinement: clear the shard wake gate only before parking, so a busy
+     shard costs the producer one atomic and no channel push.
    - Step 5 (with 2a): several ingress owners per protocol. RTMP: one accept
      socket hands connections to N owners. SRT: several Owners on the port
      using srt-rs multi-acceptor routing and bonded-group promotion (fix any
