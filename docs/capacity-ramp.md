@@ -99,9 +99,8 @@ harness, publisher and sinks the second half. On large hosts:
 - `CAPACITY_MALLOC_ARENA_MAX` sets Restream's glibc arena cap for the run
   (`default` = glibc policy). Restream's own default of 2 was measured on one
   6-CPU host only; qualify it per host before treating it as final.
-- Extend the ladders on big hosts, for example
-  `CAPACITY_RTMP_OUTPUTS=500,1000,2000,4000,8000`
-  `CAPACITY_SRT_OUTPUTS=100,200,400,800,1600`. A ladder stops after a rung
+- Ladders stop at 1000 outputs by default; go beyond only when that is the
+  question being asked (`CAPACITY_*_OUTPUTS`). A ladder stops after a rung
   with no passing repeat (`CAPACITY_STOP_AFTER_FAIL=0` to keep going).
 
 A full default run takes roughly 1–2 hours (3 repeats, 30 s windows).
@@ -119,29 +118,50 @@ A full default run takes roughly 1–2 hours (3 repeats, 30 s windows).
 
 ## Reference results
 
-Baseline: 6-CPU AMD EPYC KVM VPS (1 NUMA node), kernel 6.8, commit
-`6616fa85`, `scripts/harness/capacity-ramp.sh` defaults (Restream on CPUs
-0–2, harness on 3–5, product-default shards, 30 s windows, 3 repeats per
-rung). CPU is % of one core; Restream's budget is 300%.
+Reference: 6-CPU AMD EPYC KVM VPS (1 NUMA node), kernel 6.8, commit
+`1a2e7e12`, release binaries, `scripts/harness/capacity-ramp.sh` defaults
+(Restream on CPUs 0–2, harness on 3–5, product-default shards, SRT sink
+threads and peer count 3, 30 s windows, 3 repeats per rung; ladders capped at
+1000). CPU is % of one core; Restream's budget is 300%. Artifacts:
+`.local/artifacts/capacity-ramp/20260927T055241Z/`.
 
 | protocol | capacity | rung | passed | rx delivered min | rx ratio min | CPU avg | CPU peak | RSS MB |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| RTMP | **1000** | 250 | 3/3 | 250 | 0.962 | 60.7% | 115.5% | 184 |
-| | | 500 | 3/3 | 500 | 0.959 | 83.6% | 141.1% | 232 |
-| | | 1000 | 3/3 | 1000 | 0.964 | 135.3% | 194.9% | 295 |
-| | | 2000 | 1/3 | 422 | 0.944 | 216.3% | 259.0% | 452 |
-| RTMPS | **1000** | 250 | 3/3 | 250 | 0.963 | 73.5% | 115.9% | 194 |
-| | | 500 | 3/3 | 500 | 0.966 | 124.1% | 168.0% | 238 |
-| | | 1000 | 3/3 | 1000 | 0.954 | 235.2% | 282.0% | 327 |
-| | | 2000 | 0/2 | 0 | 0.343 | 292.5% | 297.6% | 565 |
-| SRT | **50** | 50 | 3/3 | 50 | 0.986 | 127.1% | 185.4% | 160 |
-| | | 100 | 2/3 | 35 | 0.878 | 168.8% | 253.9% | 204 |
-| | | 150 | 0/3 | 0 | 0.000 | 208.2% | 279.8% | 266 |
+| RTMP | **≥ 1000** (cap) | 100 | 3/3 | 100 | 0.971 | 32.6% | 64.9% | 110 |
+| | | 250 | 3/3 | 250 | 0.959 | 82.0% | 130.5% | 133 |
+| | | 500 | 3/3 | 500 | 0.964 | 99.5% | 172.5% | 178 |
+| | | 1000 | 3/3 | 1000 | 0.964 | 155.8% | 210.2% | 253 |
+| RTMPS | **≥ 1000** (cap) | 100 | 3/3 | 100 | 0.970 | 38.7% | 64.4% | 105 |
+| | | 250 | 3/3 | 250 | 0.963 | 111.2% | 192.2% | 139 |
+| | | 500 | 3/3 | 500 | 0.964 | 157.5% | 251.1% | 185 |
+| | | 1000 | 3/3 | 1000 | 0.962 | 236.2% | 280.0% | 258 |
+| SRT | **50** | 50 | 3/3 | 50 | 0.989 | 155.2% | 193.4% | 128 |
+| | | 100 | 2/3 | 57 | 0.905 | 190.4% | 251.3% | 166 |
+| | | 150 | 1/3 | 81 | 0.000 | 216.4% | 262.8% | 209 |
+| | | 200 | 0/3 | 31 | 0.000 | 239.8% | 273.9% | 300 |
+| HLS PUT | **≥ 1000** (cap) | 50 | 3/3 | 50 | 1.000 | 23.0% | 45.0% | 139 |
+| | | 100 | 3/3 | 100 | 1.000 | 32.4% | 80.0% | 143 |
+| | | 250 | 3/3 | 250 | 1.000 | 52.5% | 98.1% | 180 |
+| | | 500 | 3/3 | 500 | 1.000 | 76.8% | 118.0% | 252 |
+| | | 1000 | 3/3 | 1000 | 1.000 | 117.8% | 165.8% | 383 |
 
-SRT costs ~2.5% of a core per 8 Mbit/s output (RTMP ~0.14%, RTMPS ~0.24%)
-and, past its limit, delivery collapsed for every destination rather than
-degrading for a few. The SRT sink stayed within its CPU budget, so Restream
-was the limit. Causes and fixes: [media copy audit](media-copy-audit.md#srt-rs-backlog-evidence-backed).
+HLS PUT ratio is the share of due segments received. Segment lag behind the
+first output: p99 0.7–0.9 s at 500 outputs and 1.1–1.9 s at 1000 (worst
+single segment 2.7 s, inside the 3 s budget), so ~1000 is near HLS's limit
+on these cores.
+
+Per output, roughly: RTMP ~0.13%, RTMPS ~0.22%, HLS PUT ~0.10%, SRT ~2.9% of
+a core (SRT at distinct-enough destinations; see the sink-port note in
+[Run it](#run-it)). Past its limit SRT degrades for many destinations at
+once rather than a few. SRT's per-output cost is srt-rs per-packet protocol
+work; see the [media copy audit](media-copy-audit.md#srt-rs-backlog-evidence-backed).
+Every CPU figure includes the harness's per-second health and telemetry
+polling ([runtime crossings](runtime-crossings.md) O2).
+
+Earlier ramps (bench profile at `6616fa85`; release at `b4159089` and
+`43b68dc0`, uncapped ladders) are superseded. They also showed that
+`RTMP×4000` failed on the command-admission bug fixed in `85a6699f`, and that
+single-port SRT sinks understated SRT CPU by about a third.
 
 **Comparing runs.** On this shared KVM VPS the same binary's CPU at the same
 rung moved by ~30% between sessions (RTMPS×500: 124% in the baseline ramp,
@@ -156,12 +176,13 @@ evidence committed from now on uses release binaries
 Give this to an agent (or follow it by hand) on the target machine:
 
 ```text
-Goal: measure Restream egress capacity (RTMP, RTMPS, SRT fan-out from one
-8 Mbit/s ingest) on this machine with the repository's reproducible script,
+Goal: measure Restream egress capacity (RTMP, RTMPS, SRT and HLS PUT fan-out
+from one 8 Mbit/s ingest) on this machine with the repository's reproducible script,
 and report results comparable to the reference host in docs/capacity-ramp.md.
 
 1. Clone https://github.com/krsna1729/restream and check out the agreed
-   commit: <COMMIT SHA>. Do not modify tracked files. If you must change
+   commit: 6549358b (the measured ramp code of 1a2e7e12 plus a CI build fix).
+   Do not modify tracked files. If you must change
    anything to get it running, stop and report the exact change and reason.
 2. Set up the toolchain: scripts/dev/bootstrap.sh (Debian/Ubuntu) then
    scripts/dev/prepare.sh. Record the OS, kernel (uname -a), `lscpu`,
@@ -175,11 +196,10 @@ and report results comparable to the reference host in docs/capacity-ramp.md.
    - More than one NUMA node: CAPACITY_RESTREAM_CPUS = all CPUs of node 0,
      CAPACITY_HARNESS_CPUS = all CPUs of node 1.
    - One node: leave the defaults (half and half).
-5. Run A (product defaults), with ladders sized for this host:
-     CAPACITY_RTMP_OUTPUTS=250,500,1000,2000,4000,8000 \
-     CAPACITY_RTMPS_OUTPUTS=250,500,1000,2000,4000 \
-     CAPACITY_SRT_OUTPUTS=100,200,400,800,1600 \
+5. Run A (product defaults; ladders stop at 1000 outputs per protocol):
      scripts/harness/capacity-ramp.sh
+   Compare hosts by CPU per output at equal rungs, not only by capacity:
+   a protocol that passes 1000 on both hosts is capped, not equal.
    Run B: same ladders plus CAPACITY_EGRESS_SHARDS=<number of Restream CPUs>.
    Run C (malloc arena qualification; Restream's arena cap of 2 is
    provisional): with Run A's shard setting, repeat each protocol at two
@@ -194,8 +214,10 @@ and report results comparable to the reference host in docs/capacity-ramp.md.
    test_harness process is at its CPU budget, the receiver is the limit:
    rerun that protocol with CAPACITY_PEER_COUNT=4 and say so.
 6. Report, for each run: the full summary.md, provenance.json, the per
-   protocol capacity, CPU per output at 1000 RTMP / 1000 RTMPS / 200 SRT
-   outputs (or the closest passing rung), how SRT failed at its limit
+   protocol capacity, CPU per output at 1000 RTMP / 1000 RTMPS / 1000 HLS
+   PUT / 100 SRT outputs (or the closest passing rung), HLS segment lag
+   p99/max (each rung's resource-sweep-results.json `delivery.hls`), how SRT
+   failed at its limit
    (graceful vs collapse), any harness failures with the last 50 lines of the
    rung's harness.log, and the top samples from step 5. Do not summarize
    away failed repeats.

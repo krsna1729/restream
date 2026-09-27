@@ -2614,7 +2614,7 @@ peer/network bottleneck
 Transport now lives on Compio, but continuous media work still runs on Tokio
 because it was grouped with application logic: SRT MPEG-TS demux, RTMP FLV
 classification/probing, standby GOP caching and promotion, timestamp mapping
-and input gating, ring publication, the direct-play `PlayNext` dispatch, and
+and input gating, ring publication, the (diagnostic) direct-play `PlayNext` dispatch, and
 the SRT TS muxer (`docs/runtime-crossings.md`). None of it needs Tokio; it
 inherits the Tokio home of `RtmpIngestHandle` and the SRT publisher session.
 
@@ -2640,12 +2640,60 @@ Order:
    timestamp mapping and ring publication behind one media-execution boundary
    for both SRT and RTMP, with tests proving identical failover and timestamp
    behavior; A/B against the Tokio path under the same load.
-3. **Separately**: the direct-play `Reader` onto its Compio owner (M2); FFmpeg
-   pipe I/O and HLS PUT evaluated later (not transport blockers).
+3. **Direct play from ingest** (debug/diagnostic only): no scaling work. Two
+   requirements, checked after every step above that touches its path: it
+   works with a real player (ffplay/ffmpeg reading RTMP `play` and SRT
+   `read` from Restream's own ingest), and an attached player does not
+   interfere with the hot path (ingest and configured-output delivery and
+   CPU unchanged, interleaved A/B with and without a player). FFmpeg pipe I/O
+   and HLS PUT are evaluated later (not transport blockers).
 
 The goal is fewer hot-path scheduler dependencies, predictable latency and a
 capacity model with separately measurable transport, media, codec and control
 demand, not a claim that dedicated threads always outperform Tokio.
+
+Hot-path task classes, from a packet entering to leaving:
+
+| # | Stage | Class | Scales with | Timing | Today | Target |
+|---|---|---|---|---|---|---|
+| 1 | Socket receive (TCP read, UDP recv) | transport I/O | connections | completion-driven; stalls overflow kernel buffers | Compio ingress owners | same |
+| 2 | Protocol state (RTMP handshake, chunks, acks; SRT reorder, ACK/NAK, TSBPD, decrypt, keepalive) | transport protocol | connections × packets | hard deadlines (SRT ACK every 10 ms, retransmit windows) | ingress owners | same |
+| 3 | Container parse (FLV tag → `MediaPacket`; TS PES reassembly, PAT/PMT, parameter sets) | media | feeds × bytes | none of its own; bursty (a large I-frame, a TS PES) | RTMP: Tokio session; SRT: `SrtServer::run` (Tokio) | media workers |
+| 4 | Media policy (input gate, timestamp mapping, standby GOP cache and replay) | media | feeds; state-proportional bursts (GOP replay up to 16 MiB / 2048 packets) | continuity, not deadlines | Tokio | media workers |
+| 5 | Publication (single-producer ring push, wake) | media | feeds × packets | cheap, per packet | Tokio | media workers |
+| 6 | Shared transforms (Raw→FLV once per shard, TS mux once per feed, HLS segmenting once per pipeline) | shared packaging | feeds (not outputs) | throughput | FLV: shards; TS mux, HLS: Tokio | shards / media workers |
+| 7 | Transcoding | codec | renditions | heavy, blocking | FFmpeg threads and processes | same |
+| 8 | Per-output protocol (RTMP framing, SRT session per output, TLS record via kTLS, HTTP PUT) | fan-out protocol | outputs × packets (dominant cost) | SRT: deadlines per output | egress shards (HLS PUT: Tokio) | same |
+| 9 | Socket send (writev, sendmsg, GSO) | transport I/O | outputs | completion-driven | egress shards | same |
+| — | Admission, lifecycle, config, DB, telemetry | control | events | none | Tokio | Tokio |
+
+Why media work (3–5, and the Tokio part of 6) must not be absorbed into the
+transport owners (1–2):
+
+- **Different scaling unit.** One RTMP ingress owner and one SRT ingress Owner
+  serve every publisher. Media work there makes one thread the ceiling for all
+  ingest media, the same flaw as today's single `SrtServer::run` task.
+- **Deadlines versus bursts.** Protocol work is small per packet but
+  deadline-bound; media work is bursty and proportional to accumulated state.
+  A GOP replay or a large keyframe run inline delays socket completions and
+  SRT timers for every connection on that owner: late ACKs, spurious NAKs and
+  retransmits, receive-buffer overflow (the 208 KB ingest rcvbuf dropped
+  5,876 datagrams per run before it was raised).
+- **Fault isolation.** Pathological or malformed input costs parser CPU; it
+  must not slow transport for other publishers.
+- **Independent sizing.** Owners are few by design and resharding sockets is
+  costly; media workers can scale with feeds.
+
+Why not keep it on Tokio: Tokio's work-stealing workers are shared with API
+and DB bursts (O2 in `runtime-crossings.md`) and give media work no latency
+isolation. Why not in egress shards: shards consume shared feeds; producing
+there would either duplicate parsing per shard or couple ingest to egress
+capacity, and the ring has one producer per feed.
+
+The boundary is not absolute: constant, bounded work per packet (for example
+tagging a decoded RTMP message) may run inline on the owner within its budget.
+Work that grows with accumulated state or arrives in bursts belongs on media
+workers.
 
 Review of 43b68dc0 (media-execution convergence), with evidence:
 
@@ -2679,8 +2727,9 @@ Review of 43b68dc0 (media-execution convergence), with evidence:
   input-selection commands, DB, config, aggregated telemetry, HLS PUT
   (Reqwest; measured separately in the capacity ramp) and the feed-wake
   watcher (< 0.05% of samples).
-- **Ordering**: instrument (M1–M4) → SRT demux/publish → RTMP publish/GOP →
-  shared TS muxer → direct play, each qualified independently with the egress
+- **Ordering**: instrument (M1, M3, M4) → SRT demux/publish → RTMP
+  publish/GOP → shared TS muxer, each qualified independently (including the
+  direct-play check in step 3) with the egress
   topology unchanged; rebaseline WI8/Q-025 capacity only after the execution
   topology is stable. Tokio's observation cost (O2: health/telemetry `Value`
   trees, 7–10% of samples at RTMP×100) is separate work and should be fixed
@@ -2693,17 +2742,16 @@ The Oracle must model these separately; one "RTMP" cost coefficient is wrong:
 | Workload | Path | Crossing |
 |---|---|---|
 | RTMP publish (ingest) | Compio ingress owner parses; decoded `Bytes` handed to the connection's Tokio control session (bounded channel of 16, shared 64 MiB byte permit) → ring publish | one channel op and possible cross-runtime wake per decoded audio/video message (~77/s per 30 fps + AAC publisher) |
-| Direct RTMP play (clients of Restream's `play` endpoint) | Tokio control session pulls ≤ 32 `Arc<MediaPacket>` per `PlayNext` request/reply; the same Compio ingress owner serializes and writes | one request/reply per burst; at the live edge bursts can be a single packet; players share the ingress owner with publishers |
+| Direct RTMP play (clients of Restream's `play` endpoint; debug/diagnostic only, not modelled for capacity) | Tokio control session pulls ≤ 32 `Arc<MediaPacket>` per `PlayNext` request/reply; the same Compio ingress owner serializes and writes | one request/reply per burst; at the live edge bursts can be a single packet; players share the ingress owner with publishers |
 | Configured RTMP/RTMPS outputs | egress fabric Compio shards reading shared feeds | none per packet; the capacity ramp's RTMP numbers measure only this |
 
-Before changing either boundary, measure: publish handoff permit/queue wait
-(p50/p99); `PlayNext` response latency (p50/p99) and packets per burst;
-ingress-owner busy time and scheduling lag with publishers and players mixed;
-Tokio CPU and ring-reader wakeups; allocation and logging profiles. If
-`PlayNext` latency or wake CPU is material, try moving only the playback
-`Reader` onto the Compio owner (the ring's read side is atomic/`Arc`-based and
-`wait_for_data` is `Notify`-based) and compare both under the same load; the
-risk is more media scheduling on the owner that also parses publishers.
+Direct play from ingest is a debug/diagnostic path, so only the publish
+boundary gets a scaling study: publish handoff permit/queue wait (p50/p99),
+ingress-owner busy time and scheduling lag versus publisher count, Tokio CPU,
+and allocation and logging profiles. Direct play must work with a real player
+(ffplay/ffmpeg) and must not interfere with the hot path: with a player
+attached, ingest and configured-output delivery and Restream CPU stay within
+noise of the same run without one.
 
 Fixed from the static review that motivated this: the per-burst `info!` log
 is gone; the burst `Vec` is handed back with the next `PlayNext`, so steady
@@ -2711,8 +2759,8 @@ state no longer allocates per burst; and the play loop now keeps a read in
 flight, so client commands during playback (closeStream, deleteStream,
 pings, acknowledgements) are handled while media flows. Before, they sat
 unread until playback ended (`client_stop_during_playback_detaches_the_reader`).
-A direct-play scaling harness mode does not exist yet; it is the next WI8
-instrument.
+No direct-play scaling harness mode is planned; the check is a live player
+plus an interleaved with/without-player A/B.
 
 ### WI8 delivery telemetry (landed)
 
@@ -3035,32 +3083,94 @@ WI10
 
 ## 36. Immediate Next Action
 
-WI5B and WI5B.1 are done. Next, in order:
+This is the handoff queue: any agent can pick up from the first open item.
+Evidence rules: release binaries (`scripts/build/release-harness.sh`) for
+committed performance claims, interleaved A/B within one session (this VPS
+drifts ~30% across sessions), symbol-resolved profiles for attribution, and
+no cargo work while a live pipeline or benchmark runs.
 
-1. WI7.3: residual dead-code/compatibility audit against the current tree.
-2. DONE: production delivery telemetry (see WI8 delivery evidence below).
-   Finding from it, resolved: SRT fan-out into mediamtx under-delivered at
-   10+ outputs on both b64bd760 and current, with mediamtx at ~130% CPU for 10
-   SRT readers. Against the harness's own sinks (`MSR_PEER=sink`, now with
-   per-connection delivery) SRT H.264 → 100 SRT outputs delivered 100/100
-   (worst 0.983, Jain 0.99995), so the receiver was the bottleneck, not
-   Restream. RTMP and RTMPS reach 100/100 into the sinks as well (worst
-   0.971, Jain 1.00000). Qualify fan-out beyond mediamtx's limits with sink
-   peers.
-3. IN PROGRESS: media copy audit (vendored rml_rtmp ingest direct reads,
-   per-shard Raw→FLV payload cache, zero-copy RTMP TX) and the Rust Allocator
-   API exploration; state, evidence and next actions live in
-   [media-copy-audit.md](media-copy-audit.md).
-4. WI8/Q-025 measurement questions, answered with data before any redesign:
-   - RTMP ingress runs on one owner thread: measure owner busy %, protocol us,
-     loop latency and handoff blocking against ingest count to decide whether
-     N owners (SO_REUSEPORT or accepted-connection assignment) are needed;
-   - RTMP/SRT egress runs a shard group per feed: measure threads, rings,
-     memory, idle CPU and context switches against feed count versus the
-     isolation it buys, before choosing a host-wide shard pool.
+Done (details in the linked docs): WI5B/WI5B.1; delivery telemetry; media copy
+audit tranche ([media-copy-audit.md](media-copy-audit.md)); harness sinks past
+mediamtx's limits; capacity ramp with HLS PUT and 1000-output ladders
+([capacity-ramp.md](capacity-ramp.md), reference at `1a2e7e12`); O1 host
+sampler; command admission against the real shard queue (`85a6699f`); Owner
+GSO counters; runtime-crossings audit with interim verdicts
+([runtime-crossings.md](runtime-crossings.md)).
 
-Do not change HLS PUT, FFmpeg pipes, shard coefficients, NUMA policy or owner
-topology ahead of those measurements.
+Open, in order:
+
+1. **Direct play from ingest in CI.** Debug/diagnostic path only: it must work
+   with a real player and must not interfere with the hot path. Existing
+   checks are outside CI: `srt.policy` (ffprobe SRT `read` from Restream's
+   ingest; failing with an ffprobe timeout when last run on 2026-09-19) and
+   `timestamp.bframe` (ffprobe RTMP `play`: ≥ 30 packets, B-frames, monotone
+   DTS). `srt-crypto-matrix` in CI publishes only; its declared
+   `readSucceeds` check never reads Restream's ingest. Run both modes, fix
+   what fails, add a decode check (`ffmpeg -i <url> -t 20 -f null -`: exit 0,
+   no decode errors, frames ≈ duration × fps) next to ffprobe's structure
+   check, and add the modes to the redevelop transport shards (PR smoke if
+   cheap). Non-interference is a with/without-player interleaved A/B (SRT×50,
+   RTMP×100), not a CI gate.
+2. **Measure before WI11**: M3 (SRT ingest at N publishers: `SrtServer::run`
+   CPU and event-queue depth; ~1% of a core per 8 Mbit/s publisher suggests a
+   serial ceiling near ~100), M1 (RTMP publish handoff), M4 (ingress owner busy
+   time versus publisher count).
+3. **WI11 media execution plane**, in order: SRT demux/publish off
+   `SrtServer::run` with batched Owner handoff → RTMP publish/GOP → shared TS
+   muxer. The media worker pool takes an explicit CPU set from the start.
+   Qualify each step independently, including item 1's direct-play checks.
+4. **Core segregation after WI11**: disjoint control (Tokio, blocking pool,
+   sqlx) and hot-path (egress shards, ingress owners, media workers) CPU
+   sets from `sched_getaffinity`; pin at thread start; size shards from the
+   hot set and Tokio from the control set; no split at ≤ 2 CPUs; FFmpeg
+   placement decided by measurement. Interleaved on/off A/B at RTMP×1000,
+   SRT×100, HLS×500 under API load. Not before WI11: until then ingest media
+   still runs on Tokio, so the split would mix classes and be measured twice.
+5. **O2 API observation cost**: health/telemetry build `serde_json::Value`
+   trees per request (health snapshot 7–10% of Restream samples at RTMP×100).
+   It does not interrupt egress (the API reads published atomics and
+   snapshots); it costs Tokio CPU and can delay ingest media still on Tokio.
+   Quantify at 1000 outputs, then typed serialization, a short-TTL cache for
+   `sample_host_settings`, and a lighter delivery endpoint for the harness.
+6. **SRT per-output cost** (~2.9% of a core per 8 Mbit/s output, ~20× RTMP):
+   srt-rs per-packet protocol work; backlog in
+   [media-copy-audit.md](media-copy-audit.md#srt-rs-backlog-evidence-backed).
+   srt-rs branch `perf/owner-tx-efficiency` (pinned `e6bbb24`) is not merged
+   to srt-rs main; open its PR through the srt-rs process.
+7. **Shard sizing on big hosts**: shards cap at `effective_cpus.clamp(2, 8)`
+   and `effective_cpus` is read once at startup. Revisit with cross-host data
+   (item 10); ties into Q-025.
+8. **HLS PUT on Compio via cyper (evaluation).** HLS PUT uploads with Reqwest
+   on Tokio (`src/media/hls/upload.rs`: one uploader per output polling the
+   in-memory store every 500 ms). `cyper` 0.9 (hyper 1 on compio `^0.19`)
+   matches the pinned compio 0.19.2. Adopt only if it qualifies on every one
+   of: signed URLs and YouTube-style `file=` query parameters;
+   segment-before-playlist ordering and playlist-update visibility; rustls
+   certificate verification, SNI and HTTP/2 negotiation; HTTP 307/308
+   redirects preserving the PUT method and body; timeouts, cancellation during
+   an outstanding request, retries and reconnects; connection reuse across
+   successive segments and playlists; and CPU per uploaded GiB, allocations,
+   syscalls, wakeups and tail upload latency against Reqwest (interleaved A/B;
+   the ramp's HLS rungs give lag p99/max). Current baseline: HLS×1000 at 118%
+   of 3 cores, p99 lag 1.1–1.9 s. This is the "optional transport experiment"
+   in §35, not a prerequisite for anything else.
+9. **SRT overload behaviour** (product decision): past capacity, SRT degrades
+   many destinations at once. Choose admission control or load shedding.
+10. **Cross-host capacity run** (user-run, prompt in
+    [capacity-ramp.md](capacity-ramp.md#prompt-for-running-on-another-machine)
+    at `6549358b`), including the malloc arena matrix
+    (`RESTREAM_MALLOC_ARENA_MAX` default 2 is provisional).
+11. **WI7.3**: residual dead-code and compatibility audit against the current
+    tree.
+
+Watch items: an RTMP ramp once showed repeats where all outputs sat uniformly
+just under the 0.95 floor alongside 15–20% host iowait (not reproduced in the
+`1a2e7e12` ramp); a full-suite run once failed one test that passed on two
+reruns (not identified).
+
+Do not change FFmpeg pipes, shard coefficients, NUMA policy or owner topology
+ahead of the measurements above, and do not change HLS PUT except through
+item 8's evaluation.
 
 ## 37. Definition of Success
 
