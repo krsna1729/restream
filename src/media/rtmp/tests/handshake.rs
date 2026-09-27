@@ -511,16 +511,31 @@ async fn truncated_chunk_then_disconnect_clears_ingest_registration() {
     stop_ingress_test_server(&engine, server).await;
 }
 
+/// libx264 AVCDecoderConfigurationRecord (1920x1080@50) as an FLV sequence
+/// header tag body.
+#[rustfmt::skip]
+const AVC_SEQUENCE_HEADER: [u8; 44] = [
+    0x17, 0x00, 0x00, 0x00, 0x00,
+    0x01, 0x42, 0xc0, 0x2a, 0xff, 0xe1, 0x00, 0x18,
+    0x67, 0x42, 0xc0, 0x2a, 0xda, 0x01, 0xe0, 0x08,
+    0x9f, 0x97, 0x01, 0x10, 0x00, 0x00, 0x03, 0x00,
+    0x10, 0x00, 0x00, 0x06, 0x48, 0xf1, 0x83, 0x2a,
+    0x01, 0x00, 0x04, 0x68, 0xce, 0x0f, 0xc8,
+];
+
+/// Publish media runs on the owner: the control session authorizes and hands
+/// the publisher's media state over; the owner (this test) publishes each
+/// message to the ring in order, writes the sequence header into the
+/// engine's cache synchronously, and reports only the one-time probe, which
+/// the control session records as ingest metadata.
 #[tokio::test]
-async fn bounded_media_handoff_preserves_video_audio_order() {
+async fn owner_publishes_media_in_order_and_reports_only_probes() {
     let engine = Arc::new(MediaEngine::new());
     let security = Arc::new(IngestSecurityService::new(IngestSecurityConfig::default()));
     let (commands, receiver) = tokio::sync::mpsc::channel(1);
-    let media_handoff = Arc::new(tokio::sync::Semaphore::new(1024));
-    let actor_shutdown = CancellationToken::new();
     let actor = tokio::spawn(super::ingest::run_rtmp_control_session(
         receiver,
-        actor_shutdown,
+        CancellationToken::new(),
         Arc::new(AcceptAllAuthenticator {
             pipeline_id: "pipe-media-order".to_string(),
         }),
@@ -538,39 +553,35 @@ async fn bounded_media_handoff_preserves_video_audio_order() {
         })
         .await
         .unwrap();
-    assert!(matches!(
-        response.await.unwrap(),
-        super::ingest::PublishAuthorization::Accepted
-    ));
+    let super::ingest::PublishAuthorization::Accepted(mut media) = response.await.unwrap() else {
+        panic!("publish accepted");
+    };
+
+    // The owner side.
+    let header = bytes::Bytes::from_static(&AVC_SEQUENCE_HEADER);
+    let keyframe = bytes::Bytes::from(vec![0x17, 0x01, 0, 0, 0, 0, 0, 0, 1, 0x65]);
+    let audio = bytes::Bytes::from(vec![0x2f, 0xc0]);
+    let probe = media.on_video(header.clone(), 0);
+    let Some(super::ingest_media::RtmpMediaEvent::Video(meta)) = probe else {
+        panic!("the sequence header yields the video probe");
+    };
+    assert_eq!((meta.width, meta.height), (1920, 1080));
+    assert!(media.on_video(keyframe.clone(), 10).is_none(), "probed once");
+    let _ = media.on_audio(audio.clone(), 20);
+
+    // Sequence headers are in the engine's cache without a Tokio round trip.
+    let (cached_video, _) = engine
+        .get_ingest_session_sequence_headers(&media.registration)
+        .await;
+    assert_eq!(cached_video.as_deref(), Some(header.as_ref()));
+
+    // The probe goes to the control session as ingest metadata.
     commands
-        .send(super::ingest::RtmpControlCommand::PublishAccepted {
-            client_ip: "127.0.0.1".to_string(),
-        })
+        .send(super::ingest::RtmpControlCommand::MediaProbe(
+            super::ingest_media::RtmpMediaEvent::Video(meta),
+        ))
         .await
         .unwrap();
-    let video = vec![0x17, 0x01, 0, 0, 0, 1, 0x65];
-    let audio = vec![0x2f, 0xc0];
-    let shutdown = CancellationToken::new();
-    super::ingest::handoff_media_data(
-        &commands,
-        &media_handoff,
-        &shutdown,
-        crate::media::packet::MediaType::Video,
-        bytes::Bytes::from(video.clone()),
-        10,
-    )
-    .await
-    .unwrap();
-    super::ingest::handoff_media_data(
-        &commands,
-        &media_handoff,
-        &shutdown,
-        crate::media::packet::MediaType::Audio,
-        bytes::Bytes::from(audio.clone()),
-        20,
-    )
-    .await
-    .unwrap();
     let (reply, response) = tokio::sync::oneshot::channel();
     commands
         .send(super::ingest::RtmpControlCommand::Finish {
@@ -585,134 +596,80 @@ async fn bounded_media_handoff_preserves_video_audio_order() {
     actor.await.unwrap();
 
     let ring = engine.get_or_create_pipeline("pipe-media-order").await;
-    let mut reader = crate::media::ring_buffer::Reader::new("rtmp-media-order".to_string(), ring);
-    let first = reader.pull().unwrap().unwrap();
-    let second = reader.pull().unwrap().unwrap();
-    assert_eq!(first.media_type, crate::media::packet::MediaType::Video);
-    assert_eq!(first.payload.as_ref(), video.as_slice());
-    assert_eq!(second.media_type, crate::media::packet::MediaType::Audio);
-    assert_eq!(second.payload.as_ref(), audio.as_slice());
+    assert_eq!(ring.get_write_idx(), 3);
+    let packets: Vec<_> = (0..3).map(|index| ring.read_at(index).unwrap()).collect();
+    assert_eq!(packets[0].payload.as_ref(), header.as_ref());
+    assert_eq!(packets[1].payload.as_ref(), keyframe.as_ref());
+    assert!(packets[1].is_keyframe);
+    assert_eq!(packets[2].media_type, crate::media::packet::MediaType::Audio);
+    assert_eq!(packets[2].payload.as_ref(), audio.as_ref());
+    assert_eq!(
+        media.keyframe_times.lock().unwrap().as_slice(),
+        &[packets[1].pts],
+        "keyframe times recorded on the owner"
+    );
 }
 
-#[tokio::test]
-async fn media_handoff_backpressures_and_releases_weighted_permits() {
-    let (commands, mut receiver) = tokio::sync::mpsc::channel(2);
-    let budget = Arc::new(tokio::sync::Semaphore::new(4));
-    let shutdown = CancellationToken::new();
-    super::ingest::handoff_media_data(
-        &commands,
-        &budget,
-        &shutdown,
-        crate::media::packet::MediaType::Video,
-        bytes::Bytes::from(vec![1, 2, 3]),
-        0,
-    )
-    .await
-    .unwrap();
-    assert_eq!(budget.available_permits(), 1);
+/// A standby publisher caches its GOP on the owner; once the gate is armed
+/// for promotion, the next complete GOP is replayed with the sequence headers
+/// first, and its keyframe times are recorded.
+#[test]
+fn standby_publisher_promotes_with_headers_before_the_cached_gop() {
+    use crate::media::input_gate::InputPacketGate;
+    use crate::media::packet::MediaType;
+    let gate = Arc::new(InputPacketGate::standby());
+    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(64));
+    let mut media = super::ingest_media::RtmpPublisherMedia {
+        registration: crate::media::engine::IngestRegistration {
+            cancel_token: CancellationToken::new(),
+            attempt_id: 1,
+            input_id: "standby".to_string(),
+            gate: gate.clone(),
+            last_forwarded_dts: Arc::new(std::sync::atomic::AtomicI64::new(1_000)),
+            preview_ring: Arc::new(arc_swap::ArcSwapOption::empty()),
+        },
+        ring: ring.clone(),
+        bytes_received: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        ingest_metrics: Arc::new(crate::media::stage_metrics::StageMetrics::new()),
+        last_progress_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        keyframe_times: Arc::new(std::sync::Mutex::new(Vec::new())),
+        video_sequence_header: Arc::new(std::sync::Mutex::new(None)),
+        audio_sequence_header: Arc::new(std::sync::Mutex::new(None)),
+        timestamp_mapper: crate::media::input_gate::InputTimestampMapper::default(),
+        standby_gop: crate::media::standby_gop::StandbyGopCache::default(),
+        video_probed: false,
+        audio_probed: false,
+    };
+    let keyframe = |ts: u8| bytes::Bytes::from(vec![0x17, 0x01, 0, 0, 0, 0, 0, 0, 1, 0x65, ts]);
+    let inter = bytes::Bytes::from(vec![0x27, 0x01, 0, 0, 0, 0, 0, 0, 1, 0x41]);
 
-    let mut second = Box::pin(super::ingest::handoff_media_data(
-        &commands,
-        &budget,
-        &shutdown,
-        crate::media::packet::MediaType::Audio,
-        bytes::Bytes::from(vec![4, 5]),
-        1,
-    ));
-    assert!(
-        tokio::time::timeout(Duration::from_millis(20), &mut second)
-            .await
-            .is_err(),
-        "second payload must wait while the first lease is held"
-    );
-    drop(receiver.recv().await.unwrap());
-    second.await.unwrap();
-    assert_eq!(budget.available_permits(), 2);
-    drop(receiver.recv().await.unwrap());
-    assert_eq!(budget.available_permits(), 4);
+    let _ = media.on_video(bytes::Bytes::from_static(&AVC_SEQUENCE_HEADER), 0);
+    let _ = media.on_video(keyframe(1), 40);
+    let _ = media.on_video(inter.clone(), 80);
+    assert_eq!(ring.get_write_idx(), 0, "standby publishes nothing");
 
-    let (commands, mut receiver) = tokio::sync::mpsc::channel(1);
-    let budget = Arc::new(tokio::sync::Semaphore::new(4));
-    let send_shutdown = CancellationToken::new();
-    super::ingest::handoff_media_data(
-        &commands,
-        &budget,
-        &send_shutdown,
-        crate::media::packet::MediaType::Video,
-        bytes::Bytes::from(vec![1, 2, 3]),
-        0,
-    )
-    .await
-    .unwrap();
-    let mut blocked_send = Box::pin(super::ingest::handoff_media_data(
-        &commands,
-        &budget,
-        &send_shutdown,
-        crate::media::packet::MediaType::Audio,
-        bytes::Bytes::from(vec![4]),
-        1,
-    ));
-    assert!(
-        tokio::time::timeout(Duration::from_millis(20), &mut blocked_send)
-            .await
-            .is_err(),
-        "second command should hold a lease while bounded channel is full"
-    );
-    assert_eq!(budget.available_permits(), 0);
-    send_shutdown.cancel();
-    assert!(blocked_send.await.is_err());
-    assert_eq!(budget.available_permits(), 1);
-    drop(receiver.recv().await.unwrap());
-    assert_eq!(budget.available_permits(), 4);
+    gate.arm_for_promotion();
+    let _ = media.on_video(inter, 120);
 
-    let (commands, mut receiver) = tokio::sync::mpsc::channel(1);
-    let budget = Arc::new(tokio::sync::Semaphore::new(4));
-    let held_shutdown = CancellationToken::new();
-    super::ingest::handoff_media_data(
-        &commands,
-        &budget,
-        &held_shutdown,
-        crate::media::packet::MediaType::Video,
-        bytes::Bytes::from(vec![1, 2, 3, 4]),
-        0,
-    )
-    .await
-    .unwrap();
-    let mut cancelled = Box::pin(super::ingest::handoff_media_data(
-        &commands,
-        &budget,
-        &held_shutdown,
-        crate::media::packet::MediaType::Audio,
-        bytes::Bytes::from(vec![5]),
-        1,
-    ));
-    assert!(
-        tokio::time::timeout(Duration::from_millis(20), &mut cancelled)
-            .await
-            .is_err(),
-        "payload should be waiting on the weighted lease"
+    let published: Vec<_> = (0..ring.get_write_idx())
+        .map(|index| ring.read_at(index).unwrap())
+        .collect();
+    assert!(published.len() >= 3, "{} packets", published.len());
+    assert_eq!(
+        published[0].payload.as_ref(),
+        &AVC_SEQUENCE_HEADER[..],
+        "the sequence header precedes the replayed GOP"
     );
-    held_shutdown.cancel();
-    assert!(cancelled.await.is_err());
-    drop(receiver.recv().await.unwrap());
-    assert_eq!(budget.available_permits(), 4);
-
-    let (commands, receiver) = tokio::sync::mpsc::channel(1);
-    let budget = Arc::new(tokio::sync::Semaphore::new(4));
-    drop(receiver);
+    let first_media = published.iter().position(|packet| packet.is_keyframe).unwrap();
+    assert!(published[first_media].dts > published[0].dts);
     assert!(
-        super::ingest::handoff_media_data(
-            &commands,
-            &budget,
-            &CancellationToken::new(),
-            crate::media::packet::MediaType::Audio,
-            bytes::Bytes::from(vec![9, 8]),
-            2,
-        )
-        .await
-        .is_err()
+        published
+            .windows(2)
+            .all(|pair| pair[0].dts <= pair[1].dts),
+        "replayed in DTS order"
     );
-    assert_eq!(budget.available_permits(), 4);
+    assert!(published.iter().all(|packet| packet.media_type == MediaType::Video));
+    assert!(!media.keyframe_times.lock().unwrap().is_empty());
 }
 
 /// A playing client's commands must be handled while media flows: stopping

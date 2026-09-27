@@ -148,7 +148,7 @@ Before changing `src/media/`, read:
 
 Core invariants:
 
-- Tokio owns the control plane: API handlers, reconciliation, timers and application session state. Per-packet media work does not belong on Tokio (WI11): SRT ingest media runs to completion on the SRT ingress Owner; RTMP publish, the shared TS mux and the HLS segmenter are still on Tokio and are moving to the owner that publishes the feed.
+- Tokio owns the control plane: API handlers, reconciliation, timers and application session state. Per-packet media work does not belong on Tokio (WI11): SRT and RTMP ingest media run to completion on their ingress owners; the shared TS mux and the HLS segmenter are still on Tokio and are moving to the owner that publishes the feed.
 - SRT transport sockets and protocol state (`PeerTable`, timers, ACK/NAK, TX) are owned by dedicated Compio `Owner` threads: one ingress owner thread, and one Compio runtime with at most one `Owner` per address family per egress shard. Never move SRT sockets or `PeerTable` state onto Tokio; address SRT sessions from Tokio only by `LogicalPeerId` through bounded commands and events.
 - RTMP/RTMPS sockets stay on the native TCP/io_uring shard workers until the Compio TCP migration.
 - Blocking FFmpeg and other blocking calls belong on dedicated OS threads or the blocking pool, never on Tokio workers or an Owner thread.

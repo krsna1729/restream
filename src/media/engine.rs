@@ -56,8 +56,10 @@ pub struct ActiveIngest {
     pub metadata: std::sync::RwLock<IngestMetadata>,
     pub audio_tracks: std::sync::Mutex<Arc<Vec<AudioMeta>>>,
     pub keyframe_times: Arc<std::sync::Mutex<Vec<i64>>>,
-    pub video_sequence_header: std::sync::Mutex<Option<bytes::Bytes>>,
-    pub audio_sequence_header: std::sync::Mutex<Option<bytes::Bytes>>,
+    /// Shared with the RTMP ingress owner, which updates and reads them
+    /// synchronously while running the publisher's media.
+    pub video_sequence_header: Arc<std::sync::Mutex<Option<bytes::Bytes>>>,
+    pub audio_sequence_header: Arc<std::sync::Mutex<Option<bytes::Bytes>>>,
     pub prev_bytes_received: AtomicU64,
     pub prev_sample_time: std::sync::Mutex<Instant>,
     pub bitrate_kbps: std::sync::Mutex<Option<f64>>,

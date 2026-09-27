@@ -13,7 +13,7 @@ mod enhanced;
 mod flv;
 mod handshake;
 mod ingest;
-mod ingest_packets;
+mod ingest_media;
 mod listener;
 mod play;
 mod timestamps;

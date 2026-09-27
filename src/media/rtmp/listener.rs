@@ -22,14 +22,6 @@ use super::ingest::{RtmpControlCommand, handle_rtmp_client, run_rtmp_control_ses
 
 const CONTROL_SESSION_CAPACITY: usize = 16;
 const MAX_IO_URING_ENTRIES: u32 = 32_768;
-// Bounds bytes handed across domains and held by permit-backed queued or
-// processing commands. It excludes decoded media awaiting permits: a
-// connection may retain one completed 24-bit message in the result Vec while
-// the parser assembles the next 24-bit message, plus a 4 KiB socket read and
-// a 4 KiB parser staging buffer and small event metadata. Aggregate residual
-// memory scales with connection limit.
-const MEDIA_HANDOFF_BYTES: usize = 64 * 1024 * 1024;
-
 struct ControlSession {
     commands: mpsc::Receiver<RtmpControlCommand>,
     shutdown: CancellationToken,
@@ -102,7 +94,6 @@ pub(crate) async fn start_rtmp_server_on_with_shutdown(
 
     let connection_limit = engine.config.rtmp_max_connections.clamp(1, 16_384);
     let (control_tx, mut control_rx) = mpsc::channel(connection_limit);
-    let media_handoff = Arc::new(tokio::sync::Semaphore::new(MEDIA_HANDOFF_BYTES));
     let (ready_tx, ready_rx) = oneshot::channel();
     let acceptor = match spawn_compio_owner(
         listener,
@@ -110,7 +101,6 @@ pub(crate) async fn start_rtmp_server_on_with_shutdown(
         shutdown.clone(),
         engine.clone(),
         ready_tx,
-        media_handoff,
         connection_limit,
     ) {
         Ok(acceptor) => acceptor,
@@ -192,7 +182,6 @@ fn spawn_compio_owner(
     shutdown: CancellationToken,
     engine: Arc<MediaEngine>,
     ready: oneshot::Sender<Result<(), String>>,
-    media_handoff: Arc<tokio::sync::Semaphore>,
     connection_limit: usize,
 ) -> io::Result<thread::JoinHandle<()>> {
     thread::Builder::new()
@@ -242,7 +231,6 @@ fn spawn_compio_owner(
                     control_tx,
                     shutdown,
                     owner_engine,
-                    media_handoff,
                     connection_limit,
                 )
                 .await
@@ -269,7 +257,6 @@ async fn run_compio_owner(
     control_tx: mpsc::Sender<ControlSession>,
     shutdown: CancellationToken,
     engine: Arc<MediaEngine>,
-    media_handoff: Arc<tokio::sync::Semaphore>,
     connection_limit: usize,
 ) -> io::Result<()> {
     let connection_shutdown = CancellationToken::new();
@@ -308,7 +295,6 @@ async fn run_compio_owner(
                     drop(stream);
                     continue;
                 }
-                let connection_media_handoff = media_handoff.clone();
                 let connection_parser_budget = parser_budget.clone();
                 let connection_engine = engine.clone();
                 connections.push(Box::pin(async move {
@@ -318,7 +304,6 @@ async fn run_compio_owner(
                         command_tx,
                         session_shutdown,
                         connection_engine,
-                        connection_media_handoff,
                         connection_parser_budget,
                     ).await {
                         warn!(%error, %peer_addr, "error handling RTMP client");

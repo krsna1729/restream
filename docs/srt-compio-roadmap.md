@@ -3097,6 +3097,18 @@ sampler; command admission against the real shard queue (`85a6699f`); Owner
 GSO counters; runtime-crossings audit with interim verdicts
 ([runtime-crossings.md](runtime-crossings.md)).
 
+Exit criterion for this programme (user, 2026-09-27): **no unaccounted or
+unjustified work anywhere in the hot path.** Hot path = every thread that
+touches media per packet or per output (ingress owners, egress shards, FFmpeg
+feeding, and any Tokio work that remains). Evidence: symbol-resolved release
+profiles of each of those threads at standard workloads (SRT and RTMP ingest;
+RTMP/RTMPS/SRT/HLS fan-out; one transcode), attributed into a single ledger
+where every copy, allocation, syscall, wake, lock and crossing has a measured
+share and a justification; anything unjustified is fixed or queued with a
+reason. The copy audit ([media-copy-audit.md](media-copy-audit.md)) and the
+crossings audit ([runtime-crossings.md](runtime-crossings.md)) become sections
+of that ledger. Done when the ledger accounts for ≥ 99% of hot-path samples.
+
 Open, in order:
 
 1. **DONE: direct play from ingest in CI.** New `direct-play` shard
@@ -3142,7 +3154,12 @@ Open, in order:
      adoption), srt-rs zero-copy receive (every datagram is copied into a
      new `Bytes` in `SrtPacket::decode`), and buffer reuse in the TS
      demuxer and the per-frame parameter-set scan.
-   - Step 2: RTMP publish inline on the RTMP ingress owner.
+   - **DONE** Step 2: RTMP publish inline on the RTMP ingress owner. The
+     control session keeps lifecycle and receives only the one-time media
+     probe; sequence headers are shared behind `std::sync::Mutex`. Release
+     A/B vs 8d037400 (RTMP ingest, 2 reps): Restream CPU −26 to −40%, Tokio
+     −55 to −64% at 16/32/64 publishers, same offered load; see
+     [runtime-crossings.md](runtime-crossings.md) C1.
    - Step 3: shared TS mux and HLS segmenter as producer-side stages on the
      owner that publishes the feed; FFmpeg input pulls the ring directly.
    - Step 4: direct feed wakes from the publishing owner to egress shards

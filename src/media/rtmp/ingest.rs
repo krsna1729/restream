@@ -1,11 +1,12 @@
-//! RTMP connection ownership and Tokio-side ingest control plane.
+//! RTMP connection ownership and the Tokio-side ingest control plane. Publish
+//! media runs to completion on the RTMP ingress owner (`ingest_media`); Tokio
+//! sees authorization, registration, stream probes, quality and finish.
 
 use std::io;
 use std::net::SocketAddr;
 use std::os::fd::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::{Bytes, BytesMut};
@@ -20,22 +21,17 @@ use crate::media::engine::{IngestRegistration, MediaEngine};
 use crate::media::ingest_auth::{
     PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode,
 };
-use crate::media::input_gate::{InputForwardState, InputPacketBoundary, InputTimestampMapper};
-use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader, RingBuffer};
+use crate::media::input_gate::InputTimestampMapper;
+use crate::media::packet::MediaPacket;
+use crate::media::ring_buffer::{MEDIA_PULL_BURST_PACKETS, Reader};
 use crate::media::security::IngestSecurityService;
 use crate::media::snapshots::PublisherQuality;
-use crate::media::stage_metrics::StageMetrics;
 use crate::media::standby_gop::StandbyGopCache;
 use crate::media::tcp_stats::collect_tcp_stats_by_fd;
 use crate::secret_display::redact_secret;
 
-use super::flv::{
-    FlvVideoPacketKind, classify_flv_video_packet, flv_avcc_config_annexb_parameter_sets,
-    flv_video_composition_time_ms, parse_flv_audio_meta, parse_flv_video_meta,
-};
 use super::handshake::perform_server_handshake;
-use super::ingest_packets::try_promote_cached_rtmp;
+use super::ingest_media::{RtmpMediaEvent, RtmpPublisherMedia};
 use super::play::{PlayAuthorization, RtmpPlayRequest, handle_play_request};
 
 /// Spare capacity reserved for each ingest socket read: the size of the
@@ -46,7 +42,7 @@ const INGEST_READ_BYTES: usize = 4096;
 pub(super) mod parser_budget;
 #[path = "ingest/session.rs"]
 mod session;
-use session::{ProbeState, handle_session_results, process_audio_data, process_video_data};
+use session::handle_session_results;
 pub(super) struct RtmpClientSocket {
     stream: compio::net::TcpStream,
     shutdown: CancellationToken,
@@ -112,16 +108,8 @@ pub(super) enum RtmpControlCommand {
     PublishAccepted {
         client_ip: String,
     },
-    VideoData {
-        data: Bytes,
-        timestamp: u32,
-        permit: tokio::sync::OwnedSemaphorePermit,
-    },
-    AudioData {
-        data: Bytes,
-        timestamp: u32,
-        permit: tokio::sync::OwnedSemaphorePermit,
-    },
+    /// The publisher's one-time stream probe, for ingest metadata.
+    MediaProbe(RtmpMediaEvent),
     PlayRequested {
         stream_key: String,
         client_ip: String,
@@ -147,41 +135,6 @@ pub(super) enum RtmpControlCommand {
     },
 }
 
-pub(super) async fn handoff_media_data(
-    commands: &mpsc::Sender<RtmpControlCommand>,
-    media_handoff: &Arc<tokio::sync::Semaphore>,
-    shutdown: &CancellationToken,
-    media_type: MediaType,
-    data: Bytes,
-    timestamp: u32,
-) -> Result<(), &'static str> {
-    let permits = u32::try_from(data.len()).map_err(|_| "RTMP media message too large")?;
-    let permit = tokio::select! {
-        _ = shutdown.cancelled() => return Err("RTMP listener shutting down"),
-        result = media_handoff.clone().acquire_many_owned(permits) => {
-            result.map_err(|_| "RTMP media handoff closed")?
-        }
-    };
-    let command = match media_type {
-        MediaType::Video => RtmpControlCommand::VideoData {
-            data,
-            timestamp,
-            permit,
-        },
-        MediaType::Audio => RtmpControlCommand::AudioData {
-            data,
-            timestamp,
-            permit,
-        },
-    };
-    tokio::select! {
-        _ = shutdown.cancelled() => Err("RTMP listener shutting down"),
-        result = commands.send(command) => {
-            result.map_err(|_| "RTMP control session closed")
-        }
-    }
-}
-
 async fn send_control_command(
     commands: &mpsc::Sender<RtmpControlCommand>,
     shutdown: &CancellationToken,
@@ -197,7 +150,8 @@ async fn send_control_command(
 }
 
 pub(super) enum PublishAuthorization {
-    Accepted,
+    /// The publisher's media state, which the owner runs from here on.
+    Accepted(Box<RtmpPublisherMedia>),
     Cancelled,
     Rejected {
         code: &'static str,
@@ -213,11 +167,7 @@ pub(super) async fn run_rtmp_control_session(
     security: Arc<IngestSecurityService>,
     engine: Arc<MediaEngine>,
 ) {
-    let mut active_ingest: Option<RtmpIngestHandle> = None;
-    let mut probe = ProbeState {
-        video_done: false,
-        audio_done: false,
-    };
+    let mut active_ingest: Option<RtmpIngestSession> = None;
     let mut playback: Option<(String, Reader, Vec<Arc<MediaPacket>>)> = None;
     let mut disconnect = None;
     let mut finish_reply = None;
@@ -265,27 +215,11 @@ pub(super) async fn run_rtmp_control_session(
             RtmpControlCommand::PublishAccepted { client_ip } => {
                 security.record_success(&client_ip);
             }
-            RtmpControlCommand::VideoData {
-                data,
-                timestamp,
-                permit: _permit,
-            } => {
-                if let Some(active) = active_ingest.as_mut() {
+            RtmpControlCommand::MediaProbe(event) => {
+                if let Some(active) = active_ingest.as_ref() {
                     tokio::select! {
                         _ = shutdown.cancelled() => break 'actor,
-                        _ = process_video_data(&engine, active, &mut probe, data, timestamp) => {}
-                    }
-                }
-            }
-            RtmpControlCommand::AudioData {
-                data,
-                timestamp,
-                permit: _permit,
-            } => {
-                if let Some(active) = active_ingest.as_mut() {
-                    tokio::select! {
-                        _ = shutdown.cancelled() => break 'actor,
-                        _ = process_audio_data(&engine, active, &mut probe, data, timestamp) => {}
+                        _ = record_media_probe(&engine, active, event) => {}
                     }
                 }
             }
@@ -444,7 +378,7 @@ async fn authorize_publish(
     engine: &MediaEngine,
     shutdown: &CancellationToken,
     context: PublishContext<'_>,
-    active_ingest: &mut Option<RtmpIngestHandle>,
+    active_ingest: &mut Option<RtmpIngestSession>,
 ) -> PublishAuthorization {
     if security.is_ip_banned(context.client_ip).is_some() {
         return PublishAuthorization::Rejected {
@@ -518,6 +452,9 @@ async fn authorize_publish(
                 ingest.bytes_received.clone(),
                 ingest.metrics.clone(),
                 ingest.last_progress_ms.clone(),
+                ingest.keyframe_times.clone(),
+                ingest.video_sequence_header.clone(),
+                ingest.audio_sequence_header.clone(),
             )
         }) => ingest,
         _ = shutdown.cancelled() => {
@@ -527,7 +464,15 @@ async fn authorize_publish(
             return PublishAuthorization::Cancelled;
         }
     };
-    let Some((bytes_received, ingest_metrics, last_progress_ms)) = ingest else {
+    let Some((
+        bytes_received,
+        ingest_metrics,
+        last_progress_ms,
+        keyframe_times,
+        video_sequence_header,
+        audio_sequence_header,
+    )) = ingest
+    else {
         engine
             .unregister_ingest_if_current(&pipeline.id, &registration)
             .await;
@@ -552,18 +497,72 @@ async fn authorize_publish(
             return PublishAuthorization::Cancelled;
         }
     };
-    *active_ingest = Some(RtmpIngestHandle {
+    *active_ingest = Some(RtmpIngestSession {
         pipeline_id: pipeline.id.clone(),
+        registration: registration.clone(),
+    });
+    info!(pipeline = %pipeline.id, "[rtmp] Ingest registered");
+    PublishAuthorization::Accepted(Box::new(RtmpPublisherMedia {
         registration,
         ring,
         bytes_received,
         ingest_metrics,
         last_progress_ms,
+        keyframe_times,
+        video_sequence_header,
+        audio_sequence_header,
         timestamp_mapper: InputTimestampMapper::default(),
         standby_gop: StandbyGopCache::default(),
-    });
-    info!(pipeline = %pipeline.id, "[rtmp] Ingest registered");
-    PublishAuthorization::Accepted
+        video_probed: false,
+        audio_probed: false,
+    }))
+}
+
+/// Record a publisher's one-time stream probe as ingest metadata.
+async fn record_media_probe(
+    engine: &MediaEngine,
+    active: &RtmpIngestSession,
+    event: RtmpMediaEvent,
+) {
+    match event {
+        RtmpMediaEvent::Video(meta) => {
+            info!(
+                "[rtmp] Probed video: {} {}x{} profile={:?} level={:?}",
+                meta.codec, meta.width, meta.height, meta.profile, meta.level
+            );
+            engine
+                .update_ingest_session_meta(
+                    &active.pipeline_id,
+                    &active.registration,
+                    Some(meta),
+                    None,
+                    None,
+                )
+                .await;
+        }
+        RtmpMediaEvent::Audio(meta) => {
+            info!(
+                "[rtmp] Probed audio: {} {}Hz {}ch",
+                meta.codec, meta.sample_rate, meta.channels
+            );
+            engine
+                .update_ingest_session_meta(
+                    &active.pipeline_id,
+                    &active.registration,
+                    None,
+                    Some(meta.clone()),
+                    None,
+                )
+                .await;
+            engine
+                .update_ingest_session_audio_tracks(
+                    &active.pipeline_id,
+                    &active.registration,
+                    vec![meta],
+                )
+                .await;
+        }
+    }
 }
 
 async fn authorize_play(
@@ -611,15 +610,11 @@ async fn authorize_play(
     }
 }
 
-pub(super) struct RtmpIngestHandle {
+/// What the Tokio control session keeps about a publisher: identity for
+/// bookkeeping; its media state runs on the owner.
+pub(super) struct RtmpIngestSession {
     pub(super) pipeline_id: String,
     pub(super) registration: IngestRegistration,
-    pub(super) ring: Arc<RingBuffer>,
-    pub(super) bytes_received: Arc<AtomicU64>,
-    pub(super) ingest_metrics: Arc<StageMetrics>,
-    pub(super) last_progress_ms: Arc<AtomicU64>,
-    pub(super) timestamp_mapper: InputTimestampMapper,
-    pub(super) standby_gop: StandbyGopCache,
 }
 #[cfg(target_os = "linux")]
 fn set_tcp_socket_buffers(fd: RawFd, size: usize) {
@@ -661,7 +656,6 @@ pub(super) async fn handle_rtmp_client(
     commands: mpsc::Sender<RtmpControlCommand>,
     shutdown: CancellationToken,
     engine: Arc<MediaEngine>,
-    media_handoff: Arc<tokio::sync::Semaphore>,
     parser_budget: parser_budget::ParserBudget,
 ) -> Result<(), &'static str> {
     let mut socket = RtmpClientSocket::new(stream, shutdown.clone());
@@ -697,6 +691,8 @@ pub(super) async fn handle_rtmp_client(
     }
 
     let mut publishing = false;
+    // Set when the publish is authorized: this connection's media, run here.
+    let mut publisher: Option<Box<RtmpPublisherMedia>> = None;
     let mut disconnect = None;
     if !remaining.is_empty() {
         match session.handle_input(&remaining) {
@@ -717,7 +713,7 @@ pub(super) async fn handle_rtmp_client(
                     &client_addr_text,
                     &engine,
                     &shutdown,
-                    &media_handoff,
+                    &mut publisher,
                 )
                 .await
                 {
@@ -730,7 +726,7 @@ pub(super) async fn handle_rtmp_client(
                         });
                     }
                 }
-                // Handed-off media is now bounded by the handoff semaphore.
+                // Completed media has been published to the ring.
                 parser_charge.release_to(session.inbound_buffered_bytes());
             }
             Err(error) => {
@@ -782,8 +778,7 @@ pub(super) async fn handle_rtmp_client(
                 break;
             }
         };
-        // Completed media still awaiting a handoff permit counts too, so the
-        // budget bounds everything held before the 64 MiB handoff takes over.
+        // Completed media in this batch counts too, until it is published.
         if parser_charge
             .update(session.inbound_buffered_bytes() + awaiting_handoff_bytes(&results))
             .is_err()
@@ -804,7 +799,7 @@ pub(super) async fn handle_rtmp_client(
             &client_addr_text,
             &engine,
             &shutdown,
-            &media_handoff,
+            &mut publisher,
         )
         .await
         {
@@ -817,7 +812,7 @@ pub(super) async fn handle_rtmp_client(
                 });
             }
         }
-        // Handed-off media is now bounded by the handoff semaphore.
+        // Completed media has been published to the ring.
         parser_charge.release_to(session.inbound_buffered_bytes());
     }
 
@@ -849,7 +844,7 @@ pub(super) async fn handle_rtmp_client(
 
 const PARSER_BUDGET_EXHAUSTED: &str = "RTMP ingest parser budget exhausted";
 
-/// Media payload bytes in parsed results that still await a handoff permit.
+/// Media payload bytes in parsed results not yet published to the ring.
 fn awaiting_handoff_bytes(results: &[ServerSessionResult]) -> usize {
     results
         .iter()
