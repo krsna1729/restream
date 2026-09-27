@@ -85,3 +85,17 @@ fn instance_suffixed_path_handles_extensionless_paths() {
         PathBuf::from("/work/mediamtx-log-1")
     );
 }
+
+#[test]
+fn outputs_spread_across_peer_instances() {
+    let mut counts = [0usize; 3];
+    for index in 0..300 {
+        counts[peer_instance_for(&format!("resource-sweep-out-{index}"), 3)] += 1;
+    }
+    assert!(counts.iter().all(|count| *count > 60), "{counts:?}");
+    assert_eq!(
+        peer_instance_for("any", 1),
+        0,
+        "one peer keeps every output"
+    );
+}

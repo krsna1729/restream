@@ -38,16 +38,14 @@ use crate::media::egress::metrics::{OwnerFamilyMetrics, ShardMetrics};
 use crate::media::egress::shard::EgressShardIdleWake;
 use crate::media::srt::{AddressFamily, SrtConnectKind, SrtConnectRequest, SrtSendResult};
 
-/// Concurrent datagram sends per family Owner (its TX pool and lane count,
-/// "K"). The retired native driver allowed 16 concurrent UDP send operations
-/// per family; that physical in-flight envelope is kept as the starting point.
+/// Default concurrent datagram sends per family Owner (its TX pool and lane
+/// count, "K"); `RESTREAM_SRT_EGRESS_TX_CAPACITY` overrides it. The retired
+/// native driver allowed 16 concurrent UDP send operations per family; that
+/// envelope was kept as the starting point. The runtime is sized for both
+/// families: `AddressFamily::COUNT * K`.
 /// Unsent protocol output waits in bounded protocol state, not in a Restream
 /// transport queue, so this is the whole TX envelope of one family.
 pub(crate) const SRT_OWNER_TX_CAPACITY: usize = 16;
-
-/// Runtime TX envelope: both family Owners may exist at once, so the single
-/// shard runtime is sized for `AddressFamily::COUNT * K`, not just K.
-pub(crate) const SRT_RUNTIME_TX_ENVELOPE: usize = AddressFamily::COUNT * SRT_OWNER_TX_CAPACITY;
 
 /// Largest datagram an Owner will carry: SRT live payload (1316) + header and
 /// GCM tag fit under the 1500-byte control ceiling, which therefore dominates.
@@ -128,6 +126,8 @@ pub(crate) struct SrtOwnerSettings {
     pub(crate) rx_policy: RxModePolicy,
     /// How the shard's Compio runtime is built (production: forced io_uring).
     pub(crate) runtime_builder: RuntimeBuilder,
+    /// Datagrams in flight per family Owner (TX pool slots and lanes).
+    pub(crate) tx_capacity: usize,
 }
 
 impl SrtOwnerSettings {
@@ -138,7 +138,13 @@ impl SrtOwnerSettings {
             service_budget: OwnerServiceBudget::default(),
             rx_policy: RxModePolicy::ManagedPreferred,
             runtime_builder: production_runtime,
+            tx_capacity: SRT_OWNER_TX_CAPACITY,
         }
+    }
+
+    pub(crate) fn with_tx_capacity(mut self, tx_capacity: usize) -> Self {
+        self.tx_capacity = tx_capacity.max(1);
+        self
     }
 
     #[cfg(test)]
@@ -285,12 +291,12 @@ impl SrtOwners {
     /// thread. Fails with a typed message when the production runtime cannot
     /// be built (e.g. io_uring unavailable): the shard then does not start.
     pub(crate) fn new(settings: SrtOwnerSettings) -> Result<Self, String> {
-        let config =
-            ProductionRuntimeConfig::for_owner(SRT_RUNTIME_TX_ENVELOPE, SRT_OWNER_WIRE_CEILING);
+        let tx_envelope = AddressFamily::COUNT * settings.tx_capacity;
+        let config = ProductionRuntimeConfig::for_owner(tx_envelope, SRT_OWNER_WIRE_CEILING);
         let runtime = (settings.runtime_builder)(config)?;
         let profile = runtime.block_on(observe_production_runtime(
             &runtime,
-            SRT_RUNTIME_TX_ENVELOPE,
+            tx_envelope,
             SRT_OWNER_WIRE_CEILING,
         ));
         let substrate = profile.managed_rx_substrate();
@@ -300,8 +306,8 @@ impl SrtOwners {
             io_uring = profile.is_io_uring,
             managed_rx = ?substrate,
             substrate_diagnosis = substrate_diagnosis(substrate),
-            tx_capacity_per_family = SRT_OWNER_TX_CAPACITY,
-            runtime_tx_envelope = SRT_RUNTIME_TX_ENVELOPE,
+            tx_capacity_per_family = settings.tx_capacity,
+            runtime_tx_envelope = tx_envelope,
             wire_ceiling = SRT_OWNER_WIRE_CEILING,
             "srt egress shard runtime ready"
         );
@@ -351,7 +357,7 @@ impl SrtOwners {
     }
 
     fn new_family_owner(&self) -> Result<FamilyOwner, String> {
-        let mut owner = Owner::new_with_ceiling(SRT_OWNER_TX_CAPACITY, SRT_OWNER_WIRE_CEILING);
+        let mut owner = Owner::new_with_ceiling(self.settings.tx_capacity, SRT_OWNER_WIRE_CEILING);
         owner
             .set_rx_substrate(self.substrate)
             .map_err(|error| error.to_string())?;

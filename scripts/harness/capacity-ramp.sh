@@ -31,7 +31,9 @@ Environment (all optional):
   CAPACITY_EGRESS_SHARDS   RESTREAM_EGRESS_SHARDS override (default: product default,
                            CPU-derived and clamped 2..=8)
   CAPACITY_SINK_THREADS    SRT sink thread budget (default: CPUs in the harness set)
-  CAPACITY_PEER_COUNT      sink instances / ports (default 1)
+  CAPACITY_PEER_COUNT      sink instances / ports (default: the SRT sink thread count, so
+                           each sink thread owns one port; a single port funnels a shard's
+                           SRT flows onto one SO_REUSEPORT socket)
   CAPACITY_STOP_AFTER_FAIL stop a protocol's ladder after a rung where no repeat
                            passed (default 1)
   CAPACITY_ARTIFACT_ROOT   output root (default .local/artifacts/capacity-ramp/<utc stamp>)
@@ -64,7 +66,7 @@ window_secs="${CAPACITY_WINDOW_SECS:-30}"
 settle_secs="${CAPACITY_SETTLE_SECS:-10}"
 repeats="${CAPACITY_REPEATS:-3}"
 stop_after_fail="${CAPACITY_STOP_AFTER_FAIL:-1}"
-peer_count="${CAPACITY_PEER_COUNT:-1}"
+peer_count="${CAPACITY_PEER_COUNT:-}"
 root="${CAPACITY_ARTIFACT_ROOT:-.local/artifacts/capacity-ramp/$(date -u +%Y%m%dT%H%M%SZ)}"
 
 # --- CPU split -------------------------------------------------------------
@@ -89,6 +91,7 @@ count_cpus() {
 }
 harness_cpu_count=$(count_cpus "$harness_cpus")
 sink_threads="${CAPACITY_SINK_THREADS:-$harness_cpu_count}"
+peer_count="${peer_count:-$sink_threads}"
 
 # --- Preflight ---------------------------------------------------------------
 for process in restream mediamtx ffmpeg; do

@@ -34,6 +34,7 @@ impl MediaEngine {
     /// `CallerConfig` and counted from pool admission.
     fn srt_owner_settings(&self) -> SrtOwnerSettings {
         SrtOwnerSettings::new(self.config.srt_egress_connect_concurrency)
+            .with_tx_capacity(self.config.srt_egress_tx_capacity)
     }
 
     pub(crate) async fn retain_srt_fabric_runtime(

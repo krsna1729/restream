@@ -280,6 +280,7 @@ pub(super) async fn sample_resource_window(
             delivery_samples.push(delivery);
         }
     }
+    save_pipeline_telemetry(env, api, &meta).await;
     let mut aggregate = summarize_resource_samples(meta, env.lifecycle, &samples);
     aggregate.delivery = super::delivery::summarize(&delivery_samples);
     Ok(aggregate)
@@ -690,4 +691,38 @@ pub(super) fn csv_escape(value: &str) -> String {
     } else {
         value.to_string()
     }
+}
+
+/// Keep each pipeline's telemetry at the end of the rated window (egress
+/// shard assignment, per-output quality and delivery) as a rung artifact, so
+/// a failing rung can be attributed to shards and outputs afterwards.
+async fn save_pipeline_telemetry(
+    env: &ResourceSweepEnv,
+    api: &RampApi,
+    meta: &ResourceScenarioMeta<'_>,
+) {
+    let Ok(health) = api.get_json("/api/v1/engine/health").await else {
+        return;
+    };
+    let mut pipelines = serde_json::Map::new();
+    for pipeline_id in health["pipelines"]
+        .as_object()
+        .into_iter()
+        .flat_map(|p| p.keys())
+    {
+        if let Ok(telemetry) = api
+            .get_json(&format!("/api/v1/pipelines/{pipeline_id}/telemetry"))
+            .await
+        {
+            pipelines.insert(pipeline_id.clone(), telemetry);
+        }
+    }
+    let path = env.work_dir.join(format!(
+        "pipeline-telemetry-{}-{}.json",
+        meta.scenario, meta.outputs
+    ));
+    let _ = std::fs::write(
+        path,
+        serde_json::to_string_pretty(&serde_json::Value::Object(pipelines)).unwrap_or_default(),
+    );
 }

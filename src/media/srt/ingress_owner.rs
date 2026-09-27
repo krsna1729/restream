@@ -193,7 +193,14 @@ fn build(
         .topology(ListenerTopology::PerPort)
         .bonded_inputs(BondedInputPolicy::Accept)
         .configure_transport(|transport| {
-            super::apply_optional_udp_buf(transport);
+            // Same receive buffer as egress Owner sockets (`desired_udp_buf`,
+            // 8 MiB unless RESTREAM_SRT_UDP_BUF_BYTES overrides). With the
+            // kernel default (208 KB) the listener dropped 5,876 publisher
+            // datagrams in one SRT x150 run (`ss -uam`), which ARQ then had to
+            // recover.
+            if let Some(bytes) = std::num::NonZeroUsize::new(super::desired_udp_buf()) {
+                transport.socket_buffers = srt_transport::SocketBufferConfig::Bytes(bytes);
+            }
             // The Owner has no relocation target.
             transport.promotion = PromotionPolicy::Never;
         })

@@ -45,7 +45,7 @@ mod srt_events;
 #[path = "srt_leaf.rs"]
 mod srt_leaf;
 
-pub(crate) use owner_set::{SrtCaller, SrtOwnerSettings, SrtOwners};
+pub(crate) use owner_set::{SRT_OWNER_TX_CAPACITY, SrtCaller, SrtOwnerSettings, SrtOwners};
 pub(crate) use srt_leaf::SrtFabricLeaf;
 
 /// Blocked (backpressured or connecting) leaves re-examined per ready batch.

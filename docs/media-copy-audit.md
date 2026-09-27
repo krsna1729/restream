@@ -145,6 +145,31 @@ the first version required only 4 visited). Stalled outputs are then kept connec
 reconnected into the same Owner. A lone stuck destination is still recycled
 (unit tests), and `fault.srt-output-stall` passes.
 
+**SRT fan-out limit on the capacity host (release binaries, `33dfb248`+).**
+At SRT×150 every output collapsed: senders dropped ~10,000 packets each as
+too late (srt-rs expires a packet unacknowledged `max(1.25 × latency, 1 s)`
+after enqueue), leaves lagged the TS feed by 595–1,061 units, and Restream
+CPU was 216% of 300%. Attribution, in order:
+1. **Owner TX window**: `ownerTxInFlightMax` 16 with ~199k TX-exhaustion
+   events looked binding, but a sweep of `RESTREAM_SRT_EGRESS_TX_CAPACITY`
+   16/64/256 (3 reps each at ×100 and ×150) cut exhaustion to ~1k without
+   improving delivery. A symptom, not the cause; the default stays 16.
+2. **Receiver apparatus**: `ss -uam` showed one harness sink `SO_REUSEPORT`
+   socket dropping 1.08M datagrams (siblings 0). Restream's callers share a
+   UDP socket per shard, so the kernel's 4-tuple hash sees a handful of
+   flows. The resource sweep now spreads outputs across `PEER_COUNT` sink
+   ports, and `capacity-ramp.sh` defaults `PEER_COUNT` to the sink thread
+   count: sink drops fell to 4k/44k/11k across three sockets.
+3. **Restream SRT ingest socket**: it ran with the kernel default 208 KB
+   receive buffer and dropped 5,876 publisher datagrams; it now requests the
+   same 8 MiB as egress (verified 16 MiB effective, 0 drops).
+4. With 1–3 fixed, SRT×150 still fails (38/150 delivered) with Restream at
+   252% of its 300% budget and the sink near its own limit: on this 6-CPU host
+   SRT fan-out capacity is ~100 outputs and CPU-bound on both sides. Remaining
+   levers are srt-rs per-packet cost and **overload behaviour**: past
+   capacity every output degrades together (Jain 0.41) instead of a subset
+   being shed. Load shedding/admission is an open WI8 product decision.
+
 Not srt-rs, but found in the same runs:
 
 - **Restream overload collapse (policy).** At 200–400 SRT outputs on 3 CPUs,

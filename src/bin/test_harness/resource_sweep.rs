@@ -57,6 +57,11 @@ mod first_progress;
 mod measurement;
 pub(super) use measurement::ffmpeg_children_stats;
 pub(crate) use measurement::read_proc_status_kb_checked;
+#[path = "resource_sweep/peer_ports.rs"]
+mod peer_ports;
+use peer_ports::{instance_suffixed_path, peer_instance_ports, resource_output_url};
+#[cfg(test)]
+use peer_ports::{peer_instance_for, srt_url_on_host};
 #[path = "resource_sweep/packet_contract.rs"]
 mod packet_contract;
 #[path = "resource_sweep/packet_contract_peers.rs"]
@@ -237,38 +242,6 @@ pub(crate) async fn resource_sweep() -> Result<Value, String> {
         }
     }
     Ok(result)
-}
-
-/// Ports for peer instance `index` (0-based): each of `mtx_rtmp`/`mtx_rtmps`/
-/// `mtx_srt`/`mtx_api` offset by `index`. Instance 0 always matches the
-/// pre-existing single-mediamtx ports, so `peer_count == 1` is byte-identical
-/// to prior behavior.
-fn peer_instance_ports(env: &ResourceSweepEnv, index: usize) -> (u16, u16, u16, u16) {
-    let offset = index as u16;
-    (
-        env.mtx_rtmp.wrapping_add(offset),
-        env.mtx_rtmps.wrapping_add(offset),
-        env.mtx_srt.wrapping_add(offset),
-        env.mtx_api.wrapping_add(offset),
-    )
-}
-
-/// Suffix `path` with `-{index}` (before the extension) for `index > 0`,
-/// leaving `index == 0` untouched so instance-0 artifact filenames stay
-/// stable for existing tooling and single-instance runs.
-fn instance_suffixed_path(path: &Path, index: usize) -> PathBuf {
-    if index == 0 {
-        return path.to_path_buf();
-    }
-    let stem = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("instance");
-    let file_name = match path.extension().and_then(|ext| ext.to_str()) {
-        Some(ext) => format!("{stem}-{index}.{ext}"),
-        None => format!("{stem}-{index}"),
-    };
-    path.with_file_name(file_name)
 }
 
 async fn spawn_mediamtx_peer(env: &ResourceSweepEnv, index: usize) -> Result<Child, String> {
@@ -941,39 +914,6 @@ fn spawn_resource_publisher_with_bitrate(
         )
     };
     spawn_publisher_with_selection(&fixture, &url, format, selection, Some(&log_path))
-}
-
-/// Move one harness-built SRT publish URL onto a remote peer host. Only the
-/// loopback authority the harness itself builds is replaced, and IPv6 hosts are
-/// bracketed, so a rung against `RESOURCE_SWEEP_SRT_PEER_HOSTS` reaches a real
-/// remote sink without touching any other part of the URL.
-fn srt_url_on_host(url: &str, host: &str) -> String {
-    let authority = if host.contains(':') && !host.starts_with('[') {
-        format!("[{host}]")
-    } else {
-        host.to_string()
-    };
-    url.replacen("srt://127.0.0.1:", &format!("srt://{authority}:"), 1)
-}
-
-fn resource_output_url(
-    env: &ResourceSweepEnv,
-    config: SweepConfig,
-    kind: SweepOutputKind,
-    name: &str,
-) -> (String, String) {
-    let url = kind.publish_url(env.mtx_rtmp, env.mtx_rtmps, env.mtx_srt, name);
-    // SRT outputs can target sink peers on another host
-    // (`RESOURCE_SWEEP_SRT_PEER_HOSTS`), which is what the multi-host rungs of
-    // the packet-rate ladder need. RTMP output kinds keep loopback peers.
-    let url = match (env.srt_peer_host_for(name), kind) {
-        (
-            Some(host),
-            SweepOutputKind::SrtSource | SweepOutputKind::Srt720p | SweepOutputKind::Srt1080p,
-        ) => srt_url_on_host(&url, host),
-        _ => url,
-    };
-    (url, kind.encoding(config.multi_audio).to_string())
 }
 
 fn resource_output_progress_timeout(output_count: usize) -> Duration {

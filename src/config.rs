@@ -343,6 +343,9 @@ pub struct AppConfig {
     /// not engine-wide: total in-flight connects scale with shard count x
     /// active families.
     pub srt_egress_connect_concurrency: usize,
+    /// Datagrams in flight per SRT egress family Owner (its TX pool and lane
+    /// count): the per-shard SRT send window.
+    pub srt_egress_tx_capacity: usize,
     pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
     pub secure_session_cookies: bool,
@@ -659,6 +662,7 @@ impl Default for AppConfig {
             srt_egress_muxer_max_outputs_per_shard: 0,
             srt_egress_muxer_max_shards: 64,
             srt_egress_connect_concurrency: 64,
+            srt_egress_tx_capacity: crate::media::egress::backends::srt::SRT_OWNER_TX_CAPACITY,
             use_internal_file_ingest: false,
             initial_admin_password: None,
             secure_session_cookies: false,
@@ -742,6 +746,11 @@ impl AppConfig {
             env_usize("RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS", 64).clamp(1, 64);
         let srt_egress_connect_concurrency =
             env_usize("RESTREAM_SRT_EGRESS_CONNECT_CONCURRENCY", 64).clamp(1, 4096);
+        let srt_egress_tx_capacity = env_usize(
+            "RESTREAM_SRT_EGRESS_TX_CAPACITY",
+            crate::media::egress::backends::srt::SRT_OWNER_TX_CAPACITY,
+        )
+        .clamp(1, 4096);
         let use_internal_file_ingest =
             std::env::var_os("RESTREAM_USE_INTERNAL_FILE_INGEST").is_some();
         let initial_admin_password = std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok();
@@ -811,6 +820,7 @@ impl AppConfig {
             srt_egress_muxer_max_outputs_per_shard,
             srt_egress_muxer_max_shards,
             srt_egress_connect_concurrency,
+            srt_egress_tx_capacity,
             use_internal_file_ingest,
             initial_admin_password,
             secure_session_cookies,
