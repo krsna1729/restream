@@ -431,6 +431,11 @@ impl EgressShardHandle {
         })
     }
 
+    /// Commands sent but not yet taken by the shard thread.
+    pub fn queued_commands(&self) -> usize {
+        self.sender.len()
+    }
+
     pub fn snapshot(&self) -> EgressShardSnapshot {
         self.snapshot.lock().unwrap().clone()
     }

@@ -88,6 +88,17 @@ impl EgressManager {
             .unwrap_or(0)
     }
 
+    /// Reset each shard's command depth to its real queue length. Dispatch
+    /// only ever adds to the depth, so a caller with live shards must call
+    /// this before dispatching; otherwise the depth counts every command
+    /// sent over the manager's life and admission eventually refuses
+    /// everything with `CommandChannelFull`.
+    pub fn observe_queued_commands(&mut self, queued: impl Fn(ShardId) -> usize) {
+        for (index, depth) in self.command_depths.iter_mut().enumerate() {
+            *depth = queued(ShardId::new(u32::try_from(index).unwrap_or(u32::MAX)));
+        }
+    }
+
     pub fn complete_one_command(&mut self, shard_id: ShardId) {
         if let Some(depth) = self.command_depths.get_mut(shard_id.index() as usize) {
             *depth = depth.saturating_sub(1);

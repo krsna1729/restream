@@ -53,7 +53,14 @@ impl EgressFabricRuntime {
         &mut self,
         command: EgressCommand,
     ) -> Result<ManagerCommandOutcome, EgressManagerDispatchError<EgressShardGroupError>> {
+        self.observe_queued_commands();
         self.manager.dispatch_to_group(command, &self.group)
+    }
+
+    fn observe_queued_commands(&mut self) {
+        let group = &self.group;
+        self.manager
+            .observe_queued_commands(|shard_id| group.queued_commands(shard_id));
     }
 
     /// Shared handle list for the feed-wake watcher task to read through
@@ -124,6 +131,7 @@ impl EgressFabricRuntime {
             if let Some(new_count) =
                 NonZeroU32::new(u32::try_from(self.group.shard_count()).unwrap_or(1))
             {
+                self.observe_queued_commands();
                 let group = &self.group;
                 let _ = self.manager.rehome(new_count, |shard_id, command| {
                     group.try_send_to(shard_id, command)
@@ -419,6 +427,36 @@ mod tests {
     }
 
     #[test]
+    fn command_admission_tracks_the_real_queue_not_lifetime_dispatches() {
+        // Regression: the manager's per-shard command depth was incremented
+        // on every dispatch and never released in production, so a feed that
+        // sent more than `command_channel_capacity` commands over its life
+        // (4000 outputs on 3 shards, or ordinary add/remove churn) got
+        // `CommandChannelFull` forever although every shard queue was empty.
+        let probe = Probe::default();
+        let mut runtime = EgressFabricRuntime::new(
+            manager_config(1).unwrap(),
+            group(1, std::slice::from_ref(&probe)),
+        )
+        .unwrap();
+
+        let dispatches = 16 * 4;
+        for index in 0..dispatches {
+            let outcome =
+                runtime.dispatch(EgressCommand::Add(output_spec(&format!("out-{index}"))));
+            assert_eq!(
+                outcome,
+                Ok(ManagerCommandOutcome::Enqueued {
+                    shard_id: ShardId::new(0)
+                }),
+                "dispatch {index} of {dispatches}"
+            );
+            probe.wait_for_commands(index + 1);
+        }
+        runtime.shutdown();
+    }
+
+    #[test]
     fn runtime_rejects_group_with_wrong_shard_count() {
         let probes = vec![Probe::default(), Probe::default()];
         let result = EgressFabricRuntime::new(manager_config(1).unwrap(), group(2, &probes));
@@ -464,9 +502,8 @@ mod tests {
     fn rescale_grows_and_rehomes_when_output_count_crosses_the_threshold() {
         let probe = Probe::default();
         // A larger command-channel capacity than the shared `manager_config`
-        // helper's: nothing in this test acks commands (no
-        // `complete_one_command` call, unlike production's real feedback
-        // loop), so 200 unacked `Add`s plus the `Remove`+`Add` pairs
+        // helper's: this test dispatches without waiting for the shard to
+        // take commands, so 200 queued `Add`s plus the `Remove`+`Add` pairs
         // `rehome` issues for moved outputs must all fit under one cap --
         // both the manager's soft admission-control depth and the real
         // shard mpsc channel `EgressShardHandle::spawn` sizes from
