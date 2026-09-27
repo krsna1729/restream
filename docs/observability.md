@@ -74,6 +74,17 @@ policy telemetry, command and event bridge depth high-water, event-bridge-full
 visits, dropped telemetry samples, deferred read sends, stale commands,
 overload disconnects and send failures.
 
+SRT ingest media runs to completion on the Owner thread, so the Owner also
+reports it: `mediaPayloads` (payloads demuxed and published), `mediaWorkUs`
+(cumulative time in the receive-and-publish pass), `mediaPassMaxUs` (longest
+single pass), `mediaSlowPasses5ms` / `mediaSlowPasses20ms` (passes over 5 and
+20 ms; each delays that Owner's protocol service), `mediaUnattachedDropped`
+(payloads dropped past the bound held while Tokio admits a peer) and
+`mediaProbeHoldOverflows` (probe answers that took too long, so held packets
+were published to the current ring). The event bridge carries session
+lifecycle only (connect, stream probe, disconnect), so `eventBridgeFullVisits`
+should stay at zero.
+
 `status` is currently always `ready` when the handler returns.
 
 ### Input status

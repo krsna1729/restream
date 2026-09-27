@@ -2585,6 +2585,7 @@ dependencies = [
  "chrono",
  "compio",
  "criterion",
+ "crossbeam-queue",
  "ffmpeg-next",
  "flume",
  "futures-util",
@@ -2602,6 +2603,7 @@ dependencies = [
  "rcgen",
  "reqwest",
  "rml_rtmp",
+ "rtrb",
  "rust-embed",
  "rustls-pki-types",
  "scrypt",
@@ -2663,6 +2665,12 @@ dependencies = [
  "sha2 0.9.9",
  "thiserror 1.0.69",
 ]
+
+[[package]]
+name = "rtrb"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fae8ee26b0371a29a77d2b2d6b3ae13aa81def6f9bf1b1b92a32d279a5e709b7"
 
 [[package]]
 name = "rust-embed"
@@ -3351,7 +3359,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

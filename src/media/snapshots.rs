@@ -245,6 +245,12 @@ ingress_owner_stats! {
     send_failures,
     event_bridge_full_visits,
     telemetry_dropped,
+    media_payloads,
+    media_work_us,
+    media_slow_passes_5ms,
+    media_slow_passes_20ms,
+    media_unattached_dropped,
+    media_probe_hold_overflows,
     ;
     // Gauges and high-water marks.
     tx_capacity,
@@ -256,6 +262,7 @@ ingress_owner_stats! {
     event_depth_hwm,
     deferred_sends,
     deferred_sends_hwm,
+    media_pass_max_us,
 }
 
 /// Shared RTMP listener accept/error counters.
@@ -301,6 +308,13 @@ impl SrtIngressOwnerSnapshot {
             "staleCommands": self.stale_commands,
             "overloadDisconnects": self.overload_disconnects,
             "sendFailures": self.send_failures,
+            "mediaPayloads": self.media_payloads,
+            "mediaWorkUs": self.media_work_us,
+            "mediaPassMaxUs": self.media_pass_max_us,
+            "mediaSlowPasses5ms": self.media_slow_passes_5ms,
+            "mediaSlowPasses20ms": self.media_slow_passes_20ms,
+            "mediaUnattachedDropped": self.media_unattached_dropped,
+            "mediaProbeHoldOverflows": self.media_probe_hold_overflows,
         })
     }
 }

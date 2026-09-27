@@ -181,16 +181,16 @@ async fn read_play_sends_through_the_owner_and_target_deletion_disconnects() {
     let server = TestServer::start(&["live-rw"], vec![plain("live-rw")]).await;
     let remote = server.remote;
 
-    // Fixture: an active publisher session built through the production
-    // publisher path (`start_publisher` + `accept_payload`: registration, demux,
-    // probe metadata, ring adaptation), fed the checked MPEG-TS fixture without
-    // a second SRT caller.
+    // Fixture: an active publisher built through the production publisher
+    // path (`start_publisher` registration, the Owner-side `IngressMedia`
+    // demux/gate/publish, and `apply_probe` metadata and ring adaptation),
+    // fed the checked MPEG-TS fixture without a second SRT caller.
     let authenticated = AuthenticatedPipeline {
         id: PIPELINE.to_string(),
         input_id: "input-live-rw".to_string(),
         selected: true,
     };
-    let mut publisher = server
+    let (session, publisher_media) = server
         .server
         .start_publisher(
             SocketAddr::from(([127, 0, 0, 1], 9)),
@@ -203,13 +203,19 @@ async fn read_play_sends_through_the_owner_and_target_deletion_disconnects() {
 
     // Keep the pipeline live for the whole test (about 15 s of paced media);
     // the reader attaches at the live edge whenever it connects.
-    let feeder_engine = server.engine.clone();
+    let feeder_server = server.server.clone();
     let feeder = tokio::spawn(async move {
+        let stats = crate::media::snapshots::SrtIngressOwnerStats::default();
+        let mut media = super::ingress_media::IngressMedia::<u64>::default();
+        let _ = media.attach_publisher(0, publisher_media, &stats);
         for chunk in ts_chunks(5000) {
-            publisher.accept_payload(&feeder_engine, chunk).await;
+            if let Some(probe) = media.on_payload(0, chunk, &stats) {
+                let ring = feeder_server.apply_probe(&session, probe).await;
+                media.probe_applied(0, ring);
+            }
             tokio::time::sleep(Duration::from_millis(3)).await;
         }
-        publisher
+        media
     });
 
     let engine = server.engine.clone();

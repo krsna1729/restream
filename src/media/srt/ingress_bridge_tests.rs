@@ -11,7 +11,7 @@ use srt_transport::compio::Owner;
 use crate::domain::srt_ingest::SrtGlobalIngestConfig;
 
 use super::ingress_admission::ReceiverGroupId;
-use super::ingress_owner::{IngressConfig, SrtIngressEvent, SrtIngressHandle};
+use super::ingress_owner::{IngressCommand, IngressConfig, SrtIngressEvent, SrtIngressHandle};
 use super::tokio_ingress::SrtIngestPolicyStore;
 
 use super::ingress_test_support::*;
@@ -20,11 +20,12 @@ use super::ingress_test_support::*;
 // Bridges and thread ownership
 // ---------------------------------------------------------------------------
 
-/// With a one-slot event bridge and a deliberately slow consumer, every
-/// accepted message still arrives, in order: saturation backpressures the
-/// protocol instead of dropping accepted media.
+/// A publisher's media runs to completion on the Owner: with a one-slot
+/// lifecycle bridge and this test acting as Tokio (attach on `Connected`,
+/// answer the stream probe), every payload the caller sent is demuxed and
+/// published, none crosses the bridge, and none is lost.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn event_bridge_saturation_never_loses_accepted_media() {
+async fn owner_runs_publisher_media_to_completion_without_losing_payloads() {
     let entries = vec![plain("sat-key")];
     let store = Arc::new(SrtIngestPolicyStore::new(
         SrtGlobalIngestConfig::default(),
@@ -45,66 +46,89 @@ async fn event_bridge_saturation_never_loses_accepted_media() {
     .expect("ingress owner starts");
     let remote = handle.local_addr();
 
-    const MESSAGES: usize = 120;
-    let messages: Vec<Bytes> = (0..MESSAGES)
-        .map(|index| {
-            let mut payload = vec![0u8; 200];
-            payload[..4].copy_from_slice(&(index as u32).to_be_bytes());
-            Bytes::from(payload)
-        })
-        .collect();
-    let mut caller_messages = messages.clone().into_iter().enumerate();
-    let mut pending: Option<(usize, Bytes)> = None;
-    let sender = tokio::task::spawn_blocking(move || {
+    const CHUNKS: usize = 600;
+    let chunks = ts_chunks(CHUNKS);
+    let sent_bytes = chunks.iter().map(Bytes::len).sum::<usize>() as u64;
+    let caller = tokio::task::spawn_blocking(move || {
         run_caller(
             direct(remote, "#!::r=sat-key,m=publish", None),
             Duration::from_secs(30),
-            move |ctx| {
-                if !ctx.connected() {
-                    return false;
-                }
-                loop {
-                    let (index, payload) = match pending.take().or_else(|| caller_messages.next()) {
-                        Some(next) => next,
-                        None => return true,
-                    };
-                    if !ctx.send(&payload) {
-                        pending = Some((index, payload));
-                        return false;
-                    }
-                }
-            },
+            publish_step(chunks),
         )
     });
 
-    // A slow consumer.
-    let mut received = Vec::new();
+    let ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(8192));
+    let (media, bytes_received) = test_publisher_media(ring.clone());
+    let mut media = Some(media);
     let deadline = Instant::now() + Duration::from_secs(25);
-    while received.len() < MESSAGES && Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_millis(300), handle.events.recv()).await {
-            Ok(Some(SrtIngressEvent::Media { payload, .. })) => {
-                received.push(u32::from_be_bytes(payload[..4].try_into().unwrap()));
-                tokio::time::sleep(Duration::from_millis(8)).await;
+    while Instant::now() < deadline
+        && bytes_received.load(std::sync::atomic::Ordering::Relaxed) < sent_bytes
+    {
+        match tokio::time::timeout(Duration::from_millis(100), handle.events.recv()).await {
+            Ok(Some(SrtIngressEvent::Connected { logical_peer, .. })) => {
+                let command = IngressCommand::AttachPublisher {
+                    logical_peer,
+                    media: media.take().expect("one publisher"),
+                };
+                assert!(handle.try_send(command).is_ok());
+            }
+            Ok(Some(SrtIngressEvent::Probe { logical_peer, .. })) => {
+                let command = IngressCommand::ProbeApplied {
+                    logical_peer,
+                    ring: None,
+                };
+                assert!(handle.try_send(command).is_ok());
             }
             Ok(Some(_)) | Err(_) => {}
             Ok(None) => break,
         }
     }
-    let _ = sender.await;
-    let expected: Vec<u32> = (0..MESSAGES as u32).collect();
+    let report = caller.await.expect("caller thread");
+    assert!(report.connected, "{report:?}");
     assert_eq!(
-        received, expected,
-        "no accepted message was lost or reordered"
+        bytes_received.load(std::sync::atomic::Ordering::Relaxed),
+        sent_bytes,
+        "every sent payload was accepted on the Owner"
     );
+    assert!(ring.get_write_idx() > 0, "demuxed media reached the ring");
     let snapshot = stats.ingress_owner.snapshot();
-    assert!(
-        snapshot.event_bridge_full_visits > 0,
-        "the one-slot bridge really saturated: {snapshot:?}"
-    );
-    assert!(snapshot.event_depth_hwm <= 1);
+    assert_eq!(snapshot.media_payloads, CHUNKS as u64, "{snapshot:?}");
+    assert_eq!(snapshot.media_unattached_dropped, 0, "{snapshot:?}");
     let exit = handle.shutdown().await;
     assert!(exit.quiescent, "{exit:?}");
     assert!(exit.fault.is_none());
+}
+
+/// A publisher's Owner-side media state wired to `ring`, plus its received
+/// byte counter.
+fn test_publisher_media(
+    ring: Arc<crate::media::ring_buffer::RingBuffer>,
+) -> (
+    Box<super::ingress_media::SrtPublisherMedia>,
+    Arc<std::sync::atomic::AtomicU64>,
+) {
+    let bytes_received = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let media = Box::new(super::ingress_media::SrtPublisherMedia {
+        registration: crate::media::engine::IngestRegistration {
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+            attempt_id: 1,
+            input_id: "input".to_string(),
+            gate: Arc::new(crate::media::input_gate::InputPacketGate::active()),
+            last_forwarded_dts: Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN)),
+            preview_ring: Arc::new(arc_swap::ArcSwapOption::empty()),
+        },
+        ring_buffer: ring,
+        demuxer: crate::media::mpegts::TsDemuxer::new(),
+        timestamp_mapper: crate::media::input_gate::InputTimestampMapper::default(),
+        standby_gop: crate::media::standby_gop::StandbyGopCache::default(),
+        packets: Vec::new(),
+        keyframe_times: Arc::new(std::sync::Mutex::new(Vec::new())),
+        bytes_received: bytes_received.clone(),
+        ingest_metrics: Arc::new(crate::media::stage_metrics::StageMetrics::new()),
+        last_progress_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        probe_sent: false,
+    });
+    (media, bytes_received)
 }
 
 async fn start_quality_owner(
@@ -227,11 +251,9 @@ async fn a_full_telemetry_bridge_drops_samples_and_never_delays_the_protocol() {
         "#!::r=t-key,m=publish",
         Duration::from_secs(4),
     );
-    let mut media = 0_usize;
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         match tokio::time::timeout(Duration::from_millis(200), handle.events.recv()).await {
-            Ok(Some(SrtIngressEvent::Media { payload, .. })) => media += payload.len(),
             Ok(Some(SrtIngressEvent::Disconnected { .. })) => break,
             Ok(Some(_)) | Err(_) => {}
             Ok(None) => break,
@@ -247,7 +269,10 @@ async fn a_full_telemetry_bridge_drops_samples_and_never_delays_the_protocol() {
         snapshot.telemetry_dropped >= 1,
         "samples were dropped and counted: {snapshot:?}"
     );
-    assert!(media >= 40 * CHUNK, "media still flowed: {media}");
+    assert!(
+        snapshot.rx_packets >= 40,
+        "the protocol kept receiving: {snapshot:?}"
+    );
     let exit = handle.shutdown().await;
     assert!(exit.quiescent, "{exit:?}");
 }
@@ -356,37 +381,6 @@ async fn bonded_publisher_quality_reports_group_state_not_summed_legs() {
     assert!(quality.srt_recv_buf_capacity_packets.unwrap_or(0) > 0);
     let _ = caller.await;
     server.stop().await;
-}
-
-/// A fragment leaves the reader's pending queue only once the bounded command
-/// bridge accepted it; a full bridge loses nothing and preserves order.
-#[test]
-fn command_bridge_saturation_never_loses_reader_fragments() {
-    let (sink, drained) = flume::bounded::<Bytes>(2);
-    let mut pending: std::collections::VecDeque<Bytes> =
-        (0u8..10).map(|index| Bytes::from(vec![index; 4])).collect();
-    let offer = |payload: Bytes| {
-        sink.try_send(payload)
-            .map_err(flume::TrySendError::into_inner)
-    };
-
-    assert_eq!(
-        super::tokio_ingress::submit_pending(&mut pending, 32, offer),
-        2
-    );
-    assert_eq!(pending.len(), 8, "the rest stays queued, not dropped");
-    let mut delivered: Vec<u8> = drained.try_iter().map(|payload| payload[0]).collect();
-    // Drain and refill repeatedly: everything arrives once, in order.
-    while !pending.is_empty() {
-        let offer = |payload: Bytes| {
-            sink.try_send(payload)
-                .map_err(flume::TrySendError::into_inner)
-        };
-        let accepted = super::tokio_ingress::submit_pending(&mut pending, 32, offer);
-        assert!(accepted > 0);
-        delivered.extend(drained.try_iter().map(|payload| payload[0]));
-    }
-    assert_eq!(delivered, (0u8..10).collect::<Vec<_>>());
 }
 
 /// The Owner and its runtime are `!Send`: they cannot cross to Tokio.

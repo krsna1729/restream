@@ -110,7 +110,11 @@ standby cache bounds in addition to the selected pipeline.
 
 ## Native and child-process boundaries
 
-Tokio owns control/application work and inline native mux/demux processing.
+Tokio owns control/application work. Per-packet media work is moving off it
+(WI11): SRT ingest media (TS demux, input gate, timestamps, standby GOP, ring
+publish) runs to completion on the SRT ingress Owner; RTMP publish, the shared
+TS mux and the HLS segmenter still run on Tokio until they move to the owner
+that publishes the feed.
 Compio/io_uring owns production RTMP, RTMPS, and SRT transport sockets and
 connection protocol state. Calls that may block are isolated on guarded OS
 threads. The default codec-heavy transform path launches an FFmpeg child and

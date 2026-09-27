@@ -94,6 +94,8 @@ sha2 = "0.11"
 
 [dev-dependencies]
 criterion = "0.8"
+rtrb = "0.3"
+crossbeam-queue = "0.3"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 pulp = { version = "0.22", features = ["x86-v4"] }
@@ -113,6 +115,10 @@ harness = false
 
 [[bench]]
 name = "ring_buffer"
+harness = false
+
+[[bench]]
+name = "ingest_handoff"
 harness = false
 
 [[bench]]

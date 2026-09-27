@@ -3127,10 +3127,27 @@ Open, in order:
    ingest port (SO_REUSEPORT, one thread each) so SRT ingest scales past one
    core. Design with WI11's batched handoff; evidence gate: publishers per
    Owner core before and after.
-3. **WI11 media execution plane**, in order: SRT demux/publish off
-   `SrtServer::run` with batched Owner handoff → RTMP publish/GOP → shared TS
-   muxer. The media worker pool takes an explicit CPU set from the start.
-   Qualify each step independently, including item 1's direct-play checks.
+3. **WI11 media execution plane: two pools** (ingress owners run ingest to
+   completion; egress shards consume; FFmpeg is the optional third pool;
+   Tokio is control only). Steps:
+   - **DONE step 1: SRT ingest inline on the SRT ingress Owner**
+     (`src/media/srt/ingress_media.rs`). Evidence in
+     [runtime-crossings.md](runtime-crossings.md) C3/C7: at 32 publishers
+     Restream CPU −28%, Tokio 41–43% → 10–11%, bridge-full 0. Open: rare
+     20–128 ms single-payload stalls (`mediaSlowPasses20ms`), present before
+     on Tokio; not reclaim/compaction.
+   - Step 2: RTMP publish inline on the RTMP ingress owner.
+   - Step 3: shared TS mux and HLS segmenter as producer-side stages on the
+     owner that publishes the feed; FFmpeg input pulls the ring directly.
+   - Step 4: direct feed wakes from the publishing owner to egress shards
+     (removes the Tokio feed watcher).
+   - Step 5 (with 2a): several ingress owners per protocol. RTMP: one accept
+     socket hands connections to N owners. SRT: several Owners on the port
+     using srt-rs multi-acceptor routing and bonded-group promotion (fix any
+     srt-rs gap there).
+   A cross-thread handoff, if one is ever needed, uses the wait-free SPSC
+   ring measured in `benches/ingest_handoff.rs` (rtrb 18.6 M payloads/s vs
+   5.3 M for today's Tokio mpsc).
 4. **Core segregation after WI11**: disjoint control (Tokio, blocking pool,
    sqlx) and hot-path (egress shards, ingress owners, media workers) CPU
    sets from `sched_getaffinity`; pin at thread start; size shards from the

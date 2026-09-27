@@ -14,6 +14,8 @@ mod ingress_bridge_tests;
 #[cfg(test)]
 #[path = "srt/ingress_live_tests.rs"]
 mod ingress_live_tests;
+#[path = "srt/ingress_media.rs"]
+mod ingress_media;
 #[path = "srt/ingress_owner.rs"]
 mod ingress_owner;
 #[path = "srt/ingress_quality.rs"]

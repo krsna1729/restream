@@ -3,15 +3,19 @@
 //! protocol object behind it (handshake admission, timers, ACK/NAK, listener
 //! TX, receive state, per-peer send/disconnect/retire).
 //!
-//! Tokio owns the control plane and the media application state. The two sides
-//! meet only through two lossless bounded bridges (plus one lossy telemetry
+//! Media runs to completion here too: every received payload goes through TS
+//! demux, input gating, timestamp mapping, standby GOP and ring publication on
+//! this thread (`ingress_media`), and direct SRT read/play is driven here.
+//! Tokio owns session lifecycle only. The two sides meet through two lossless
+//! bounded bridges that carry lifecycle, never media (plus one lossy telemetry
 //! bridge, below):
 //!
-//! * `IngressCommand` (Tokio -> Owner): `Send`, `Disconnect`, `Shutdown`, all
-//!   addressed by `LogicalPeerId`. A `LogicalPeerId` is the sole cross-thread
-//!   session handle; no protocol object, table reference, socket id or
-//!   `SocketAddr` identifies a session.
-//! * `SrtIngressEvent` (Owner -> Tokio): `Connected`, `Media`, `Disconnected`,
+//! * `IngressCommand` (Tokio -> Owner): `AttachPublisher`, `AttachReader`,
+//!   `ProbeApplied`, `Disconnect`, `Shutdown`, all addressed by
+//!   `LogicalPeerId`. A `LogicalPeerId` is the sole cross-thread session
+//!   handle; no protocol object, table reference, socket id or `SocketAddr`
+//!   identifies a session.
+//! * `SrtIngressEvent` (Owner -> Tokio): `Connected`, `Probe`, `Disconnected`,
 //!   plus the terminal `Fault`.
 //! * `QualitySample` (Owner -> Tokio, LOSSY): per-peer receive-quality
 //!   observations stamped with the time the Owner took them. Sent with
@@ -51,7 +55,12 @@ pub(crate) use super::ingress_bridge::{
     INGRESS_COMMAND_CAPACITY, INGRESS_EVENT_CAPACITY, INGRESS_TELEMETRY_CAPACITY, IngressCommand,
     IngressConfig, IngressExit, SrtIngressEvent, SrtIngressHandle,
 };
+use super::ingress_media::IngressMedia;
+
+#[path = "ingress_owner_send.rs"]
+mod send;
 use super::ingress_quality::{Observation, QualitySample, sample_from_stats};
+use send::DeferredSends;
 
 /// Concurrent datagram sends (TX pool slots and lanes) for the ingress Owner.
 /// Ingress TX is protocol replies (handshake, ACK/NAK, SHUTDOWN) plus SRT
@@ -70,6 +79,19 @@ const DEFERRED_PER_PEER: usize = 32;
 /// Deferred read/play fragments across all peers. Exceeding it disconnects the
 /// peer that would exceed it; it never blocks other peers' commands.
 const DEFERRED_TOTAL: usize = 1024;
+
+/// Park bound while direct-play readers are attached, so their pulls keep
+/// pace with the feed.
+const READER_POLL: Duration = Duration::from_millis(5);
+
+/// Fragments one reader may send per visit, so one busy reader cannot
+/// monopolize the Owner.
+const READER_SENDS_PER_VISIT: usize = 32;
+
+/// Lifecycle events waiting for Tokio. Media no longer waits on this bridge;
+/// only past this many undelivered lifecycle events does the Owner stop
+/// draining protocol events (backpressure through SRT flow control).
+const PENDING_EVENTS_MAX: usize = 1024;
 
 /// Longest the owner parks when nothing is due. Commands, Owner activity and
 /// event-bridge capacity all wake it earlier; protocol deadlines shorten it.
@@ -92,30 +114,6 @@ const SAMPLES_PER_VISIT: usize = 16;
 const SHUTDOWN_FLUSH_VISITS: u32 = 20;
 const SHUTDOWN_DRAIN_DEADLINE: Duration = Duration::from_secs(2);
 
-/// Deferred read/play fragments, per peer, in arrival order.
-#[derive(Default)]
-struct DeferredSends {
-    per_peer: HashMap<LogicalPeerId, VecDeque<Bytes>>,
-    total: usize,
-}
-
-impl DeferredSends {
-    fn len_for(&self, peer: &LogicalPeerId) -> usize {
-        self.per_peer.get(peer).map_or(0, VecDeque::len)
-    }
-
-    fn push(&mut self, peer: LogicalPeerId, payload: Bytes) {
-        self.per_peer.entry(peer).or_default().push_back(payload);
-        self.total += 1;
-    }
-
-    fn forget(&mut self, peer: &LogicalPeerId) {
-        if let Some(queue) = self.per_peer.remove(peer) {
-            self.total -= queue.len();
-        }
-    }
-}
-
 struct ClosingPeer {
     peer: LogicalPeerId,
     since: Instant,
@@ -137,6 +135,11 @@ struct OwnerLoop {
     /// so it is bounded by one Owner drain and accepted media is never lost.
     pending_events: VecDeque<SrtIngressEvent>,
     scratch: Vec<AdmissionEvent>,
+    /// Every publisher's and reader's media state (run to completion here).
+    media: IngressMedia,
+    /// Representative address of each admitted peer, for lifecycle events.
+    addrs: HashMap<LogicalPeerId, SocketAddr>,
+    reader_scratch: Vec<Bytes>,
     deferred: DeferredSends,
     closing: VecDeque<ClosingPeer>,
     /// Peers the owner has disconnected as overloaded; further sends to them
@@ -262,6 +265,9 @@ fn build(
             epoch: Instant::now(),
             pending_events: VecDeque::with_capacity(64),
             scratch: Vec::with_capacity(64),
+            media: IngressMedia::default(),
+            addrs: HashMap::new(),
+            reader_scratch: Vec::with_capacity(READER_SENDS_PER_VISIT),
             deferred: DeferredSends::default(),
             closing: VecDeque::new(),
             overloaded: std::collections::HashSet::new(),
@@ -344,6 +350,7 @@ impl OwnerLoop {
                 break;
             }
             self.drain_owner_events();
+            self.drive_readers(now);
             self.flush_events();
 
             let busy = report.work_remaining
@@ -362,142 +369,38 @@ impl OwnerLoop {
     /// Apply one command to Owner-owned state.
     fn apply(&mut self, command: IngressCommand, now: Timestamp) {
         match command {
-            IngressCommand::Send {
+            IngressCommand::AttachPublisher {
                 logical_peer,
-                payload,
-            } => self.send(logical_peer, payload, now),
+                media,
+            } => {
+                if !self.live.contains(&logical_peer) {
+                    // Retired while Tokio admitted it: nothing to run.
+                    return;
+                }
+                if let Some(probe) =
+                    self.media
+                        .attach_publisher(logical_peer, media, &self.stats.ingress_owner)
+                {
+                    self.pending_events.push_back(SrtIngressEvent::Probe {
+                        logical_peer,
+                        probe,
+                    });
+                }
+            }
+            IngressCommand::AttachReader {
+                logical_peer,
+                reader,
+            } => {
+                if self.live.contains(&logical_peer) {
+                    self.media.attach_reader(logical_peer, reader);
+                }
+            }
+            IngressCommand::ProbeApplied { logical_peer, ring } => {
+                self.media.probe_applied(logical_peer, ring);
+            }
             IngressCommand::Disconnect { logical_peer } => self.disconnect(logical_peer, now),
             IngressCommand::Shutdown => self.shutting_down = true,
         }
-    }
-
-    fn send(&mut self, peer: LogicalPeerId, payload: Bytes, now: Timestamp) {
-        if self.overloaded.contains(&peer) {
-            // Already being disconnected as overloaded.
-            self.stats
-                .ingress_owner
-                .stale_commands
-                .fetch_add(1, Ordering::Relaxed);
-            return;
-        }
-        // Per-peer order: anything already waiting goes first.
-        if self.deferred.len_for(&peer) > 0 {
-            self.defer(peer, payload, now);
-            return;
-        }
-        match self.try_send_now(&peer, &payload, now) {
-            SendOutcome::Sent | SendOutcome::Dropped => {}
-            SendOutcome::NoWindow => self.defer(peer, payload, now),
-        }
-    }
-
-    fn try_send_now(
-        &mut self,
-        peer: &LogicalPeerId,
-        payload: &Bytes,
-        now: Timestamp,
-    ) -> SendOutcome {
-        let Some(mut entry) = self.owner.listener_peer_mut(*peer) else {
-            // Retired (terminal event, overload, closing): harmless and counted.
-            self.stats
-                .ingress_owner
-                .stale_commands
-                .fetch_add(1, Ordering::Relaxed);
-            return SendOutcome::Dropped;
-        };
-        if !entry.can_send() {
-            return SendOutcome::NoWindow;
-        }
-        match entry.send_shared(payload.clone(), now) {
-            Ok(_) => SendOutcome::Sent,
-            Err(error) if error.kind == srt_proto::ErrorKind::InvalidState => {
-                self.stats
-                    .ingress_owner
-                    .stale_commands
-                    .fetch_add(1, Ordering::Relaxed);
-                SendOutcome::Dropped
-            }
-            Err(error) => {
-                warn!(peer = ?peer, %error, payload_len = payload.len(), "SRT reader send failed");
-                self.stats
-                    .ingress_owner
-                    .send_failures
-                    .fetch_add(1, Ordering::Relaxed);
-                SendOutcome::Dropped
-            }
-        }
-    }
-
-    /// The peer's send window is closed: keep the fragment, bounded, or fail
-    /// the overloaded peer explicitly. Never a silent drop.
-    fn defer(&mut self, peer: LogicalPeerId, payload: Bytes, now: Timestamp) {
-        if self.deferred.len_for(&peer) >= DEFERRED_PER_PEER
-            || self.deferred.total >= DEFERRED_TOTAL
-        {
-            warn!(peer = ?peer, "SRT reader is not draining; disconnecting the overloaded peer");
-            self.stats
-                .ingress_owner
-                .overload_disconnects
-                .fetch_add(1, Ordering::Relaxed);
-            self.overloaded.insert(peer);
-            self.deferred.forget(&peer);
-            self.disconnect(peer, now);
-            return;
-        }
-        self.deferred.push(peer, payload);
-        let stats = &self.stats.ingress_owner;
-        stats
-            .deferred_sends
-            .store(self.deferred.total as u64, Ordering::Relaxed);
-        stats
-            .deferred_sends_hwm
-            .fetch_max(self.deferred.total as u64, Ordering::Relaxed);
-    }
-
-    /// Flush deferred fragments for peers whose window has reopened. One pass
-    /// over the (bounded) deferred set per visit.
-    fn retry_deferred(&mut self, now: Timestamp) {
-        if self.deferred.total == 0 {
-            return;
-        }
-        let peers: Vec<LogicalPeerId> = self.deferred.per_peer.keys().copied().collect();
-        for peer in peers {
-            while let Some(payload) = self
-                .deferred
-                .per_peer
-                .get(&peer)
-                .and_then(|queue| queue.front())
-                .cloned()
-            {
-                match self.try_send_now(&peer, &payload, now) {
-                    SendOutcome::Sent => {
-                        if let Some(queue) = self.deferred.per_peer.get_mut(&peer) {
-                            queue.pop_front();
-                            self.deferred.total -= 1;
-                        }
-                    }
-                    SendOutcome::Dropped => {
-                        // The peer is gone or the fragment failed: nothing more
-                        // can be delivered to it.
-                        self.deferred.forget(&peer);
-                        break;
-                    }
-                    SendOutcome::NoWindow => break,
-                }
-            }
-            if self
-                .deferred
-                .per_peer
-                .get(&peer)
-                .is_some_and(VecDeque::is_empty)
-            {
-                self.deferred.per_peer.remove(&peer);
-            }
-        }
-        self.stats
-            .ingress_owner
-            .deferred_sends
-            .store(self.deferred.total as u64, Ordering::Relaxed);
     }
 
     fn disconnect(&mut self, peer: LogicalPeerId, now: Timestamp) {
@@ -569,6 +472,16 @@ impl OwnerLoop {
                 continue;
             }
             if entry.since.elapsed() >= CLOSING_GRACE {
+                // No terminal event came: report the end ourselves so Tokio's
+                // session bookkeeping always runs.
+                if let Some(peer) = self.addrs.get(&entry.peer).copied() {
+                    self.pending_events
+                        .push_back(SrtIngressEvent::Disconnected {
+                            peer,
+                            logical_peer: entry.peer,
+                            reason: "closed locally".to_string(),
+                        });
+                }
                 self.retire(entry.peer);
             } else {
                 self.closing.push_back(entry);
@@ -586,15 +499,25 @@ impl OwnerLoop {
         self.deferred.forget(&peer);
         self.overloaded.remove(&peer);
         self.live.remove(&peer);
+        self.addrs.remove(&peer);
+        // Flushes a publisher's last media into the ring and drops any reader
+        // or held state.
+        self.media.detach(peer);
     }
 
-    /// Translate Owner listener events into the application vocabulary. Only
-    /// runs when the previous batch has been handed to Tokio, so accepted media
-    /// is never discarded: protocol flow control absorbs the backpressure.
+    /// Run received media to completion and translate lifecycle events for
+    /// Tokio. Stops draining only if Tokio has fallen [`PENDING_EVENTS_MAX`]
+    /// lifecycle events behind, so protocol flow control absorbs that
+    /// backpressure; media itself never waits on Tokio.
     fn drain_owner_events(&mut self) {
-        if !self.pending_events.is_empty() {
+        if self.pending_events.len() >= PENDING_EVENTS_MAX {
+            self.stats
+                .ingress_owner
+                .event_bridge_full_visits
+                .fetch_add(1, Ordering::Relaxed);
             return;
         }
+        let started = Instant::now();
         self.owner.poll_listener_events(&mut self.scratch);
         let mut scratch = std::mem::take(&mut self.scratch);
         for event in scratch.drain(..) {
@@ -612,6 +535,7 @@ impl OwnerLoop {
                         .unwrap_or_default();
                     self.peers += 1;
                     self.live.insert(logical_peer);
+                    self.addrs.insert(logical_peer, peer);
                     self.pending_events.push_back(SrtIngressEvent::Connected {
                         peer,
                         logical_peer,
@@ -619,10 +543,15 @@ impl OwnerLoop {
                     });
                 }
                 ConnectionEvent::DataReceived { payload, .. } => {
-                    self.pending_events.push_back(SrtIngressEvent::Media {
-                        logical_peer,
-                        payload,
-                    });
+                    if let Some(probe) =
+                        self.media
+                            .on_payload(logical_peer, payload, &self.stats.ingress_owner)
+                    {
+                        self.pending_events.push_back(SrtIngressEvent::Probe {
+                            logical_peer,
+                            probe,
+                        });
+                    }
                 }
                 ConnectionEvent::Disconnected { reason } => {
                     self.pending_events
@@ -641,6 +570,18 @@ impl OwnerLoop {
             }
         }
         self.scratch = scratch;
+        let elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let stats = &self.stats.ingress_owner;
+        stats.media_work_us.fetch_add(elapsed_us, Ordering::Relaxed);
+        stats
+            .media_pass_max_us
+            .fetch_max(elapsed_us, Ordering::Relaxed);
+        if elapsed_us > 5_000 {
+            stats.media_slow_passes_5ms.fetch_add(1, Ordering::Relaxed);
+            if elapsed_us > 20_000 {
+                stats.media_slow_passes_20ms.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 
     fn events_has_room(&self) -> bool {
@@ -751,6 +692,9 @@ impl OwnerLoop {
         let default_us = u64::try_from(IDLE_PARK.as_micros()).unwrap_or(u64::MAX);
         let mut wait = Duration::from_micros(self.owner.time_until_next_deadline(now, default_us))
             .min(IDLE_PARK);
+        if self.media.has_readers() {
+            wait = wait.min(READER_POLL);
+        }
         // The next sampling round is a deadline too, while peers are live.
         if !self.live.is_empty() {
             wait = wait.min(
@@ -805,6 +749,10 @@ impl OwnerLoop {
     /// verdict truthfully. A live managed-RX Owner is never just dropped.
     fn finish(&mut self, fault: Option<String>) -> IngressExit {
         self.assert_home_thread();
+        // Flush every publisher's last media into its ring.
+        for peer in self.media.publisher_peers() {
+            self.media.detach(peer);
+        }
         if let Some(detail) = &fault {
             self.report_fault(detail);
         } else {
@@ -878,12 +826,4 @@ async fn first_ready<T>(
     match select(a, b).await {
         Either::Left((value, _)) | Either::Right((value, _)) => value,
     }
-}
-
-enum SendOutcome {
-    Sent,
-    /// The peer's send window is closed right now.
-    NoWindow,
-    /// Nothing more can or should be delivered for this fragment.
-    Dropped,
 }

@@ -1,18 +1,24 @@
 //! The Tokio-facing half of the SRT ingress owner: the command and event
 //! vocabulary, the lossy quality-telemetry channel, the start/exit types, and [`SrtIngressHandle`], Tokio's end of
 //! the two bounded bridges. The owner thread itself lives in `ingress_owner`.
+//!
+//! Both bridges carry session lifecycle only (admission, the one-time stream
+//! probe, disconnect). Media runs to completion on the Owner thread
+//! (`ingress_media`); nothing per packet crosses either bridge.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
 use srt_transport::advanced::admission::LogicalPeerId;
 use tokio::sync::mpsc;
 
+use crate::media::mpegts::DemuxProbe;
+use crate::media::ring_buffer::RingBuffer;
 use crate::media::snapshots::ListenerSocketStats;
 
 use super::ingress_admission::ReceiverGroupId;
+use super::ingress_media::{SrtPublisherMedia, SrtReaderMedia};
 use super::ingress_owner::run_owner_thread;
 use super::ingress_quality::QualitySample;
 use super::srt_policy::SrtIngestPolicyStore;
@@ -20,7 +26,8 @@ use super::srt_policy::SrtIngestPolicyStore;
 /// Tokio -> Owner command bridge capacity.
 pub(crate) const INGRESS_COMMAND_CAPACITY: usize = 256;
 
-/// Owner -> Tokio event bridge capacity.
+/// Owner -> Tokio lifecycle-event bridge capacity (connect, probe,
+/// disconnect, fault).
 pub(crate) const INGRESS_EVENT_CAPACITY: usize = 256;
 
 /// Owner -> Tokio receive-quality telemetry bridge capacity. Unlike the command
@@ -29,10 +36,20 @@ pub(crate) const INGRESS_EVENT_CAPACITY: usize = 256;
 pub(crate) const INGRESS_TELEMETRY_CAPACITY: usize = 256;
 
 pub(crate) enum IngressCommand {
-    /// Send one SRT message payload to a connected reader peer.
-    Send {
+    /// Tokio admitted the peer as a publisher; the Owner runs its media.
+    AttachPublisher {
         logical_peer: LogicalPeerId,
-        payload: Bytes,
+        media: Box<SrtPublisherMedia>,
+    },
+    /// Tokio admitted the peer as a direct read/play reader.
+    AttachReader {
+        logical_peer: LogicalPeerId,
+        reader: SrtReaderMedia,
+    },
+    /// Tokio applied the publisher's stream probe; `ring` replaces its ring.
+    ProbeApplied {
+        logical_peer: LogicalPeerId,
+        ring: Option<Arc<RingBuffer>>,
     },
     /// Begin an orderly protocol disconnect of one peer. The owner retires the
     /// peer when its terminal event arrives (or after a short grace).
@@ -41,17 +58,20 @@ pub(crate) enum IngressCommand {
     Shutdown,
 }
 
-/// Narrow application vocabulary from the Owner to Tokio.
+/// Session-lifecycle vocabulary from the Owner to Tokio.
 pub(crate) enum SrtIngressEvent {
     Connected {
         peer: SocketAddr,
         logical_peer: LogicalPeerId,
         stream_id: String,
     },
-    Media {
+    /// A publisher's first stream probe. Its packets are held on the Owner
+    /// until Tokio answers with [`IngressCommand::ProbeApplied`].
+    Probe {
         logical_peer: LogicalPeerId,
-        payload: Bytes,
+        probe: DemuxProbe,
     },
+    /// Terminal. The Owner has already flushed the publisher's media.
     Disconnected {
         peer: SocketAddr,
         logical_peer: LogicalPeerId,

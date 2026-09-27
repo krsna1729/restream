@@ -75,7 +75,9 @@ The current layering sequence and stop rules live in
 ## Runtime ownership
 
 Tokio owns Axum, reconciliation, application/database policy, authentication,
-media orchestration, native mux/demux work, and asynchronous child-process
+media orchestration, the native mux/demux work not yet moved to the ingress
+owners (RTMP publish, shared TS mux, HLS segmenter; SRT ingest media already
+runs on the SRT ingress Owner, WI11), and asynchronous child-process
 supervision. Dedicated processes or guarded OS threads own blocking FFmpeg
 work. Compio/io_uring owns the production SRT and RTMP/RTMPS transport paths.
 
