@@ -3133,9 +3133,15 @@ Open, in order:
    - **DONE step 1: SRT ingest inline on the SRT ingress Owner**
      (`src/media/srt/ingress_media.rs`). Evidence in
      [runtime-crossings.md](runtime-crossings.md) C3/C7: at 32 publishers
-     Restream CPU −28%, Tokio 41–43% → 10–11%, bridge-full 0. Open: rare
-     20–128 ms single-payload stalls (`mediaSlowPasses20ms`), present before
-     on Tokio; not reclaim/compaction.
+     Restream CPU −28%, Tokio 41–43% → 10–11%, bridge-full 0. The rare 20–128 ms
+     single-payload stalls are hypervisor vCPU descheduling on this VPS
+     (an empty pinned spin loop loses ~3% of wall time in gaps up to 122 ms
+     with zero reported steal); see runtime-crossings C3. Measured CPU wins
+     found on the way, queued: mimalloc (Owner media time −40%, total CPU
+     −13% at 32 publishers, +90 MB RSS; needs a fan-out A/B before
+     adoption), srt-rs zero-copy receive (every datagram is copied into a
+     new `Bytes` in `SrtPacket::decode`), and buffer reuse in the TS
+     demuxer and the per-frame parameter-set scan.
    - Step 2: RTMP publish inline on the RTMP ingress owner.
    - Step 3: shared TS mux and HLS segmenter as producer-side stages on the
      owner that publishes the feed; FFmpeg input pulls the ring directly.

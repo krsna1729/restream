@@ -42,6 +42,8 @@ Environment (all optional):
                            passed (default 1)
   CAPACITY_ARTIFACT_ROOT   output root (default .local/artifacts/capacity-ramp/<utc stamp>)
   CAPACITY_SKIP_BUILD      1 to reuse the existing binaries
+  CAPACITY_JITTER_SECS     seconds of host-jitter probing per Restream CPU before the
+                           ramp (default 10; 0 skips it)
   CAPACITY_BUILD_PROFILE   release (default: target/qual-release via
                            scripts/build/release-harness.sh) or bench (inner-loop
                            target/bench via scripts/build/bench-harness.sh)
@@ -154,6 +156,23 @@ fi
   exit 4
 }
 
+# --- Host jitter --------------------------------------------------------------
+# Gaps a CPU loses with nothing else scheduled on it (on a VM: the hypervisor
+# descheduling the vCPU, often with zero reported steal). Every thread on that
+# CPU loses the same time, so read capacity and tail latency against it.
+jitter_secs="${CAPACITY_JITTER_SECS:-10}"
+host_jitter="{}"
+if [[ "$jitter_secs" != 0 ]]; then
+  jitter_entries=()
+  IFS=, read -ra jitter_cpus <<<"$restream_cpus"
+  for cpu in "${jitter_cpus[@]}"; do
+    result=$(taskset -c "$cpu" python3 scripts/harness/host-jitter.py "$jitter_secs" 5)
+    jitter_entries+=("\"$cpu\": $result")
+  done
+  host_jitter="{$(IFS=,; echo "${jitter_entries[*]}")}"
+  echo "capacity-ramp: host jitter on Restream CPUs: $host_jitter"
+fi
+
 # --- Provenance --------------------------------------------------------------
 python3 - "$root/provenance.json" <<EOF
 import json, os, platform, subprocess, sys
@@ -186,6 +205,7 @@ json.dump({
     "egress_shards": "${CAPACITY_EGRESS_SHARDS:-default}",
     "malloc_arena_max": "${CAPACITY_MALLOC_ARENA_MAX:-restream provisional default}",
     "sink_threads": $sink_threads,
+    "host_jitter": $host_jitter,
     "peer_count": $peer_count,
     "bitrate": "$bitrate",
     "window_secs": $window_secs,

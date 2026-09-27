@@ -163,6 +163,13 @@ Earlier ramps (bench profile at `6616fa85`; release at `b4159089` and
 `RTMP×4000` failed on the command-admission bug fixed in `85a6699f`, and that
 single-port SRT sinks understated SRT CPU by about a third.
 
+**Host jitter.** `scripts/harness/host-jitter.py`, which the ramp runs on every
+Restream CPU before starting (`provenance.json` `host_jitter`, summary header),
+spins on a monotonic clock and counts gaps over 5 ms. On the reference VPS an
+idle pinned CPU loses 0.6–3% of wall time in gaps up to ~120 ms with zero
+reported steal: the hypervisor descheduling the vCPU. Every Restream thread on
+that CPU loses the same time, so compare hosts with jitter in view.
+
 **Comparing runs.** On this shared KVM VPS the same binary's CPU at the same
 rung moved by ~30% between sessions (RTMPS×500: 124% in the baseline ramp,
 158% in a later session for both baseline and current). Compare builds only

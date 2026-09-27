@@ -78,6 +78,11 @@ def main(root):
             f" `{provenance.get('harness_cpus')}`, egress shards {provenance.get('egress_shards')},"
             f" SRT sink threads {provenance.get('sink_threads')},"
             f" malloc arenas {provenance.get('malloc_arena_max', 'restream provisional default')}",
+            f"- host jitter (gaps > 5 ms on each Restream CPU, nothing else scheduled): "
+            + (", ".join(
+                f"cpu{cpu} {result.get('lost_pct')}% lost, worst {result.get('worst_ms')} ms"
+                for cpu, result in (provenance.get("host_jitter") or {}).items()
+            ) or "not measured"),
             f"- one ingest at {provenance.get('bitrate')}, window {provenance.get('window_secs')} s,"
             f" {provenance.get('repeats')} repeats per rung; pass = every destination >= 0.95",
             "",
