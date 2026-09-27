@@ -2647,6 +2647,45 @@ The goal is fewer hot-path scheduler dependencies, predictable latency and a
 capacity model with separately measurable transport, media, codec and control
 demand, not a claim that dedicated threads always outperform Tokio.
 
+Review of 43b68dc0 (media-execution convergence), with evidence:
+
+- **Transport convergence is done; media-execution convergence is not.**
+  `runtime-crossings.md` now marks C1, C3, C4, C7 and C8 **interim**: bounded
+  and safe, but continuous media work on Tokio. Boundedness proves safety,
+  not the right executor.
+- **SRT ingest is the first target.** `SrtServer::run` is one task for every
+  SRT publisher (demux, selection, publication) and every direct SRT player.
+  Release profile, one 8 Mbit/s publisher: ≈1% of a core per publisher, so
+  the single task is a process-wide ceiling near ~100 publishers
+  (extrapolated; M3 measures it). Move demux and per-publisher media state to
+  sharded media workers, and hand off from the Owner in batches (per peer per
+  service pass), keeping ACK/NAK, retransmission and timers on the Owner.
+- **RTMP publish**: split the control session (admission, auth, lifecycle,
+  metadata) from a per-publisher media processor (FLV classification, GOP
+  cache, gate, timestamp mapping, publication). Light processing may run in a
+  budgeted Compio connection visit; GOP replay must progress in bounded steps,
+  never as one long operation on the sole ingress owner. Owner busy time and
+  scheduling delay decide owner-local versus media-worker placement.
+- **Shared TS muxer**: keep one mux per compatible group of SRT destinations;
+  run it on the media executors (one logical muxer per stage, no thread per
+  muxer). Metadata acquisition stays on Tokio.
+- **Ring writer contract**: `RingBuffer::push` is single-producer by runtime
+  discipline (`InputPacketGate` plus serialized selection), not by type. RTMP
+  publishers are already separate tasks on different Tokio workers, so moving
+  them to media workers adds no new race class, but the gate, drain,
+  timestamp-continuity and GOP-replay guarantees must move with them and stay
+  covered by the existing failover tests.
+- **Stays on Tokio**: admission, auth, pipeline create/delete, reconciliation,
+  input-selection commands, DB, config, aggregated telemetry, HLS PUT
+  (Reqwest; measured separately in the capacity ramp) and the feed-wake
+  watcher (< 0.05% of samples).
+- **Ordering**: instrument (M1–M4) → SRT demux/publish → RTMP publish/GOP →
+  shared TS muxer → direct play, each qualified independently with the egress
+  topology unchanged; rebaseline WI8/Q-025 capacity only after the execution
+  topology is stable. Tokio's observation cost (O2: health/telemetry `Value`
+  trees, 7–10% of samples at RTMP×100) is separate work and should be fixed
+  before capacity numbers are final, since the harness pays it every second.
+
 ### WI8 RTMP workloads are three, not one
 
 The Oracle must model these separately; one "RTMP" cost coefficient is wrong:
