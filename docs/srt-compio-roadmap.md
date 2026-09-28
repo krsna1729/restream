@@ -3217,7 +3217,12 @@ Open, in order:
    A cross-thread handoff, if one is ever needed, uses the wait-free SPSC
    ring measured in `benches/ingest_handoff.rs` (rtrb 18.6 M payloads/s vs
    5.3 M for today's Tokio mpsc).
-4. **Core segregation after WI11**: disjoint control (Tokio, blocking pool,
+4. **Core segregation after WI11** (written: branch `wi11/cores`, off by
+   default, compiled and live-checked: `RESTREAM_CONTROL_CPUS` /
+   `RESTREAM_HOT_CPUS` / `RESTREAM_MEDIA_CPUS`; Tokio and the main thread
+   on control, owners/shards/FFmpeg I/O on hot, FFmpeg on media, shards
+   sized from the hot set; sets outside the starting affinity mask, e.g. a
+   container cpuset, disable it; the on/off A/B below decides adoption): disjoint control (Tokio, blocking pool,
    sqlx) and hot-path (egress shards, ingress owners, media workers) CPU
    sets from `sched_getaffinity`; pin at thread start; size shards from the
    hot set and Tokio from the control set; no split at ≤ 2 CPUs; FFmpeg
@@ -3238,7 +3243,11 @@ Open, in order:
 7. **Shard sizing on big hosts**: shards cap at `effective_cpus.clamp(2, 8)`
    and `effective_cpus` is read once at startup. Revisit with cross-host data
    (item 10); ties into Q-025.
-8. **HLS PUT on Compio via cyper (evaluation).** HLS PUT uploads with Reqwest
+8. **HLS PUT on Compio via cyper (evaluation).** Written: branch
+   `wi11/hls-cyper`, compile-time feature `hls-put-cyper`; the upload loop
+   is shared and only the transport differs (Reqwest on Tokio vs cyper on
+   one `restream-hls-put` Compio thread). Both builds pass clippy and the 9
+   uploader tests (real PUT sink, timeout, retry). HLS PUT uploads with Reqwest
    on Tokio (`src/media/hls/upload.rs`: one uploader per output polling the
    in-memory store every 500 ms). `cyper` 0.9 (hyper 1 on compio `^0.19`)
    matches the pinned compio 0.19.2. Adopt only if it qualifies on every one
@@ -3293,13 +3302,24 @@ Open, in order:
       srt-rs branch `perf/rx-payload-slab`, unpushed).
     - Readiness runtimes (tokio, mio) copy twice: `recvmmsg` into fixed
       `RecvBatch` scratch, then `feed_recv_buf(&[u8])` copies the payload.
-      Real zero-copy for srt-rs users: `recvmmsg` straight into a
-      `BytesMut` arena, split per datagram, and a `feed_recv_bytes(Bytes)`
-      API that slices the payload. Does not change Restream (Compio).
+      Written and tested (srt-rs branch `perf/readiness-zero-copy`, 991
+      srt-proto/srt-transport tests pass): `BytesRecvBatch` receives with
+      `recvmmsg` into a zeroed `BytesMut` chunk, and
+      `SrtConnection::feed_recv_bytes` slices the payload (no copy, one
+      allocation per chunk).
+    - **Correction (2026-09-28): Restream's SRT Owners do not use managed RX
+      on this host.** Kernel 6.8 rejects `IORING_REGISTER_PBUF_RING`
+      (`EINVAL`, known in srt-rs as "Noble 6.8"), so every Owner falls back
+      to `RawReadiness` (`managedRx: false` in every release A/B), which
+      does one `recvfrom` per datagram (`compio.rs` `service_rx_listener`)
+      and then copies it in `feed_recv_buf`. At 32 publishers that is ~24k
+      syscalls/s (an estimated 2–5% of a core) plus the copies. Next srt-rs
+      change: drain the raw-readiness path with `recvmmsg` into
+      `BytesRecvBatch` and feed `feed_recv_bytes`; evidence gate is an SRT
+      ingest release A/B (Owner CPU, syscalls/s).
 15. **mimalloc decision**: `alloc-mimalloc` / `alloc-jemalloc` features and
-    `#[global_allocator]` are uncommitted in the main tree (`Cargo.toml`,
-    `Cargo.lock`, `src/main.rs`). Needs the fan-out A/B, then adopt or
-    drop.
+    `#[global_allocator]` are on local branch `wip/alloc-ab` (462c411e).
+    Needs the fan-out A/B, then adopt or drop.
 16. **Hot-path ledger** (the exit criterion above): symbol-resolved release
     profiles of every hot thread, with sections for copies
     ([media-copy-audit.md](media-copy-audit.md)), crossings
@@ -3320,8 +3340,11 @@ reached 10 video frames before the sink was stopped) and
 `transient-srt-drop-preserves-egress` with `inputOff=false` 9.5 s after the
 SRT publisher drop (disconnect not yet detected). Neither path is touched by
 the review fixes; CI's contract job passed at 482a2c6b (includes step 4).
-Next: interleaved repeat runs at 7bccb734 (before step 4) vs the current head
-to decide flake vs regression. Also: an RTMP ramp once showed repeats where all outputs sat uniformly
+Interleaved repeat runs (debug, 4 each) at 7bccb734 (before step 4) and
+6f69b442: 8/8 passed, so no evidence of a regression; kept as an
+intermittent. Also intermittent under parallel load:
+`hevc_scaled_rtmp_audio_routes_emit_both_selected_tracks` (wall-clock
+deadline) failed once in a cold parallel run, then passed 5/5. Also: an RTMP ramp once showed repeats where all outputs sat uniformly
 just under the 0.95 floor alongside 15–20% host iowait (not reproduced in the
 `1a2e7e12` ramp); a full-suite run once failed one test that passed on two
 reruns (not identified).
