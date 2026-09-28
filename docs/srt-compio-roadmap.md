@@ -3179,7 +3179,16 @@ Open, in order:
      run inline on the publishing owner only under a stated service quantum
      (with an overrun counter), otherwise on a per-shard media executor
      class fed from the ring (local or SPSC), never back on Tokio.
-     (External review, 2026-09-28.)
+     (External review, 2026-09-28.) Measured (bench profile, this host):
+     TS mux 1.46 µs per 8 KB video packet, 44.6 µs per 60-packet burst,
+     127 µs per second of 1080p60 8 Mbit/s (`stage_feeder`, `hls_cost`
+     `mux_one_second`), so the shared TS mux fits inline on the publishing
+     owner. HLS `push_segment` (every ~6 s) costs 69 µs at 720p, 145 µs
+     1080p30, 362 µs 1080p60 and 988 µs at 4K HEVC: within a 500 µs
+     quantum up to 1080p60, over it at 4K, so the segment boundary needs
+     the media executor or a bounded split. Playlist/segment snapshots
+     (3.5–21 ms, `window_push_and_snapshot`) are reader-side (HTTP, HLS
+     PUT) and must never run on an owner.
    - **DONE** Step 4 (108bc129): direct feed wakes from the
      publishing thread to egress shards. The Tokio feed watcher is gone:
      the ring calls its publication subscribers (`PublishWake`), each
@@ -3271,8 +3280,11 @@ Open, in order:
     tree.
 12. **WI11 follow-ups** (2026-09-28):
     - Annex B walker (allocation-free per-frame parameter-set scan): branch
-      `wi11/bufreuse`, CI green; needs `codec_conversions` bench before and
-      after, then merge. TS demuxer buffer reuse (per-PES allocation) not
+      `wi11/bufreuse`, CI green. `codec_conversions` before/after is
+      inconclusive: unchanged benches moved −27% to +9%; walker paths
+      `annexb_to_avcc/two_pass` −16%/−27% (P-frames), `with_scratch` and
+      `video_for_rtmp` IDR +9%/+12%. The parameter-set scan it targets has
+      no direct bench: add one, then interleaved repeats, before adopting. TS demuxer buffer reuse (per-PES allocation) not
       started.
     - Wake gate armed before park: the shard clears its `WakeGate` every
       loop iteration, so a busy shard still costs the producer about one
@@ -3313,10 +3325,18 @@ Open, in order:
       to `RawReadiness` (`managedRx: false` in every release A/B), which
       does one `recvfrom` per datagram (`compio.rs` `service_rx_listener`)
       and then copies it in `feed_recv_buf`. At 32 publishers that is ~24k
-      syscalls/s (an estimated 2–5% of a core) plus the copies. Next srt-rs
-      change: drain the raw-readiness path with `recvmmsg` into
-      `BytesRecvBatch` and feed `feed_recv_bytes`; evidence gate is an SRT
-      ingest release A/B (Owner CPU, syscalls/s).
+      syscalls/s plus the copies. **DONE (srt-rs 1f30a04):** the listener's
+      raw-readiness path drains with `recvmmsg` into a preallocated
+      `RecvBatch` (wire-ceiling slots). Release A/B, SRT ingest: no CPU
+      change at 16/32 publishers (the socket queue is mostly one datagram
+      deep per wake, so the 2–5% syscall estimate did not hold), but at the
+      Owner's ceiling (48 publishers × 8 Mbit/s, 3 interleaved reps) ingest
+      accepted per pipeline rose from 3.11/4.80/3.63 to 6.01/6.82/7.56
+      Mbit/s (mean 3.85 → 6.80, +77%; ~185 → ~326 Mbit/s total). The copy
+      remains; zero-copy through admission (`feed_recv_bytes`) is the next
+      step only if a profile still shows it. srt-rs workspace: 1553 pass;
+      `compio_owner_bond_to_independent_libsrt_receivers_reports_a_peer_group_collision`
+      fails on the unchanged base as well (pre-existing, libsrt interop).
 15. **mimalloc decision**: `alloc-mimalloc` / `alloc-jemalloc` features and
     `#[global_allocator]` are on local branch `wip/alloc-ab` (462c411e).
     Needs the fan-out A/B, then adopt or drop.
@@ -3327,7 +3347,13 @@ Open, in order:
     wakes, allocations and syscalls. Also check whether Restream's SRT DNS
     resolver threads (`egress/backends/srt/resolve_runtime.rs`) duplicate
     anything srt-rs callers already do; everything else SRT in Restream is
-    integration on public srt-rs APIs, not reimplementation.
+    integration on public srt-rs APIs, not reimplementation. Compared with
+    Robotweax SRT 0.2.6 (2026-09-28): coalesced read notifications, shared
+    socket readiness, bounded rotating visits and bounded UDP backpressure
+    retries are already in place; its send-cursor fix does not apply
+    (srt-rs sends at submit and retransmits from a loss queue); batched
+    receive (its future work) landed above. Still to measure: RSS per idle
+    SRT session at 1000 outputs (lazy payload memory on the receive side).
 17. **Housekeeping**: native worktrees under `.local/worktrees/`
     (`wi11-feedwake` and `wi11-ffmpeg-input` are merged and can go;
     `wi11-bufreuse` pending) and pushed branches `wi11/ffmpeg-input`
