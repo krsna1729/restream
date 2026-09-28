@@ -3193,10 +3193,27 @@ Open, in order:
      host stall and delivered 11/50; SRT cost is srt-rs send work). Next
      refinement: clear the shard wake gate only before parking, so a busy
      shard costs the producer one atomic and no channel push.
-   - Step 5 (with 2a): several ingress owners per protocol. RTMP: one accept
-     socket hands connections to N owners. SRT: several Owners on the port
-     using srt-rs multi-acceptor routing and bonded-group promotion (fix any
-     srt-rs gap there).
+   - Step 5 (with 2a): several ingress owners per protocol.
+     - RTMP (written, branch `wi11/ingress-shards`, unbuilt): N owner
+       threads, each with its own `SO_REUSEPORT` listener on the port; the
+       kernel spreads connections by 4-tuple hash, so there is no accept
+       hand-off. Connection limit and parser budget split evenly
+       (`RESTREAM_RTMP_INGRESS_OWNERS`, default 1 until a ramp shows the
+       scaling). All owners feed the one Tokio control-session loop.
+     - SRT (design, needs srt-rs work, confirm with the user first): the
+       Compio `Owner` supports only a `PerPort` listener and
+       `Promotion::Never`; there is no multi-acceptor Compio driver.
+       Plain publishers shard trivially with `SO_REUSEPORT` (one 4-tuple
+       always hashes to one Owner). Bonded members arrive from different
+       4-tuples and may land on different Owners, and relocating one would
+       mean forwarding its packets across threads forever. Proposed: a
+       classic-BPF reuseport program (`SO_ATTACH_REUSEPORT_CBPF`) that
+       selects the socket from the SRT destination socket ID (header bytes
+       12–16), with srt-rs encoding the owning Owner's index in the socket
+       IDs it assigns. Handshakes (destination ID 0) fall back to the hash;
+       a bonded member whose handshake lands on the wrong Owner is handed
+       over once at connect (a lifecycle event), after which the kernel
+       delivers its packets straight to the group's Owner.
    A cross-thread handoff, if one is ever needed, uses the wait-free SPSC
    ring measured in `benches/ingest_handoff.rs` (rtrb 18.6 M payloads/s vs
    5.3 M for today's Tokio mpsc).
