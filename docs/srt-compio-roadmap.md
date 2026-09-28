@@ -3168,8 +3168,12 @@ Open, in order:
      A/B vs 8d037400 (RTMP ingest, 2 reps): Restream CPU −26 to −40%, Tokio
      −55 to −64% at 16/32/64 publishers, same offered load; see
      [runtime-crossings.md](runtime-crossings.md) C1.
-   - Step 3: shared TS mux and HLS segmenter as producer-side stages on the
-     owner that publishes the feed; FFmpeg input pulls the ring directly.
+   - **DONE** Step 3a (794339a1): FFmpeg input pulls the ring directly.
+     In-process stages refill their AVIO queue from the ring on the FFmpeg
+     thread; external stages use one dedicated stdin thread and one stdout
+     thread. See [runtime-crossings.md](runtime-crossings.md) C8.
+   - Step 3b: shared TS mux and HLS segmenter as producer-side stages on the
+     owner that publishes the feed.
    - **DONE** Step 4 (108bc129): direct feed wakes from the
      publishing thread to egress shards. The Tokio feed watcher is gone:
      the ring calls its publication subscribers (`PublishWake`), each
@@ -3233,6 +3237,58 @@ Open, in order:
     (`RESTREAM_MALLOC_ARENA_MAX` default 2 is provisional).
 11. **WI7.3**: residual dead-code and compatibility audit against the current
     tree.
+12. **WI11 follow-ups** (2026-09-28):
+    - Annex B walker (allocation-free per-frame parameter-set scan): branch
+      `wi11/bufreuse`, CI green; needs `codec_conversions` bench before and
+      after, then merge. TS demuxer buffer reuse (per-PES allocation) not
+      started.
+    - Wake gate armed before park: the shard clears its `WakeGate` every
+      loop iteration, so a busy shard still costs the producer about one
+      channel push per iteration. Clear it only just before parking (arm,
+      SeqCst fence, re-check feed heads, sleep), like io_uring
+      `SQ_NEED_WAKEUP`.
+    - Spin before park (optional): poll-mode spinning does not pay here
+      (one park/wake ≈ 2–5 µs vs a whole core; media rates are ~10³–10⁵
+      packets/s). Only if the ledger shows park/unpark or wake-to-drain
+      latency mattering, try a 20–50 µs spin before parking; measure shard
+      parks/s and wake-to-drain latency first.
+13. **srt-rs taskless Owner** (measure first): no thread hops exist on the
+    SRT paths (ingress Owner and egress shard each run srt-rs and Restream on
+    one thread), but the Compio Owner hops between tasks on its thread: one
+    RX task per socket (`managed_rx_task`) pushes into a `RefCell` ring and
+    wakes the Owner; N TX lane tasks (`tx_lane_worker`) take send jobs and
+    wake it on completion. Profile Owner and shard threads for Compio
+    scheduler/waker/task-poll share; if above a couple of percent, poll the
+    multishot RX stream inside the Owner loop, then hold in-flight send
+    futures in the Owner instead of lane tasks. srt-rs pushes go only to
+    `perf/owner-tx-efficiency`.
+14. **srt-rs receive copies**:
+    - Compio managed RX (what Restream uses) keeps one copy by design: the
+      datagram lands in a provided-buffer slot that must return to the
+      kernel at once. A 32 KiB payload slab that removes only the
+      per-datagram allocation was measured and dropped (see step 1 above;
+      srt-rs branch `perf/rx-payload-slab`, unpushed).
+    - Readiness runtimes (tokio, mio) copy twice: `recvmmsg` into fixed
+      `RecvBatch` scratch, then `feed_recv_buf(&[u8])` copies the payload.
+      Real zero-copy for srt-rs users: `recvmmsg` straight into a
+      `BytesMut` arena, split per datagram, and a `feed_recv_bytes(Bytes)`
+      API that slices the payload. Does not change Restream (Compio).
+15. **mimalloc decision**: `alloc-mimalloc` / `alloc-jemalloc` features and
+    `#[global_allocator]` are uncommitted in the main tree (`Cargo.toml`,
+    `Cargo.lock`, `src/main.rs`). Needs the fan-out A/B, then adopt or
+    drop.
+16. **Hot-path ledger** (the exit criterion above): symbol-resolved release
+    profiles of every hot thread, with sections for copies
+    ([media-copy-audit.md](media-copy-audit.md)), crossings
+    ([runtime-crossings.md](runtime-crossings.md)), task hops (item 13),
+    wakes, allocations and syscalls. Also check whether Restream's SRT DNS
+    resolver threads (`egress/backends/srt/resolve_runtime.rs`) duplicate
+    anything srt-rs callers already do; everything else SRT in Restream is
+    integration on public srt-rs APIs, not reimplementation.
+17. **Housekeeping**: native worktrees under `.local/worktrees/`
+    (`wi11-feedwake` and `wi11-ffmpeg-input` are merged and can go;
+    `wi11-bufreuse` pending) and pushed branches `wi11/ffmpeg-input`
+    (merged) and `wi11/bufreuse` (pending) to delete after merge.
 
 Watch items: an RTMP ramp once showed repeats where all outputs sat uniformly
 just under the 0.95 floor alongside 15–20% host iowait (not reproduced in the
