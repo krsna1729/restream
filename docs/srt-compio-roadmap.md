@@ -3153,7 +3153,15 @@ Open, in order:
      −13% at 32 publishers, +90 MB RSS; needs a fan-out A/B before
      adoption), srt-rs zero-copy receive (every datagram is copied into a
      new `Bytes` in `SrtPacket::decode`), and buffer reuse in the TS
-     demuxer and the per-frame parameter-set scan.
+     demuxer and the per-frame parameter-set scan. **srt-rs receive,
+     measured and dropped (2026-09-28):** zero-copy does not fit, because
+     managed RX receives into io_uring provided-buffer slots that must go
+     back to the kernel at once (holding them through the latency window
+     would drain the ring), so the copy stays. Removing only the
+     per-datagram allocation (a 32 KiB payload slab, srt-rs branch
+     `perf/rx-payload-slab`, unpushed) showed no CPU change in a release
+     SRT ingest A/B at 16/32 publishers (within host noise; one run +150 MB
+     RSS). Expected: ~24k datagrams/s × ~40 ns ≈ 0.1% of a core. Not merged.
    - **DONE** Step 2: RTMP publish inline on the RTMP ingress owner. The
      control session keeps lifecycle and receives only the one-time media
      probe; sequence headers are shared behind `std::sync::Mutex`. Release

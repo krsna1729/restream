@@ -22,7 +22,6 @@ use crate::media::avio::MemoryQueue;
 use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ffmpeg::stage_output::{StageOutputNormalizer, StageOutputSink};
 use crate::media::packet::{MediaPacket, MediaType, PayloadFormat};
-use crate::media::transcoder::InternalMemoryQueueSink;
 
 #[cfg(test)]
 use crate::media::ring_buffer::RingBuffer;
@@ -119,13 +118,15 @@ pub(crate) async fn run_h264_codec_edge_stage(
     engine: Arc<crate::media::engine::MediaEngine>,
     cancel_token: CancellationToken,
     stage_key: StageKey,
-    mut input_pump: StageInputPump,
+    input_pump: StageInputPump,
     output_normalizer: StageOutputNormalizer,
 ) {
     let input_queue = Arc::new(MemoryQueue::new_with_capacity(engine.config.avio_capacity));
     engine
         .register_input_queue(stage_key.clone(), input_queue.clone())
         .await;
+
+    input_queue.set_refill(Box::new(input_pump.into_queue_refill(cancel_token.clone())));
 
     // Spawn OS thread for FFmpeg decode→encode
     let iq_clone = input_queue.clone();
@@ -150,9 +151,9 @@ pub(crate) async fn run_h264_codec_edge_stage(
     });
     engine.register_os_thread(handle);
 
-    // Input pumping: shared pump (plan dispatch)
-    let mut sink = InternalMemoryQueueSink::new(input_queue.clone(), cancel_token.clone());
-    let _ = input_pump.pump_to(&mut sink, &cancel_token).await;
+    // The FFmpeg thread pulls its input from the ring itself (AVIO refill);
+    // wait for cancellation, end of input or the thread exiting.
+    cancel_token.cancelled().await;
 
     input_queue.close();
     engine.remove_input_queue(&stage_key).await;

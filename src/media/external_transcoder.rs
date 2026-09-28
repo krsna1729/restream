@@ -38,7 +38,6 @@
 
 use std::process::Stdio;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tracing::{error, info};
 
@@ -46,19 +45,18 @@ use crate::media::ffmpeg::backend::{BackendError, StageRunContext};
 use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ffmpeg::stage_output::StageOutputNormalizer;
 use crate::media::ffmpeg::stage_plan::{FfmpegStagePlan, VideoStageOp};
-use crate::media::mpegts::TsDemuxer;
 use crate::media::pipe_metrics::PipeMetrics;
 
-use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
-use crate::media::ring_buffer::MEDIA_PRODUCER_BATCH_PACKETS;
 use crate::media::stage_lifecycle::{StageBackendKind, StageLifecycleGuard, StagePhase};
 
 mod ffmpeg_process;
-use ffmpeg_process::{ExternalStdinSink, spawn_external_stderr_logger};
 pub use ffmpeg_process::{
     build_stage_ffmpeg_args, build_stage_ffmpeg_args_for_input,
     build_stage_ffmpeg_args_for_input_streams, build_stage_ffmpeg_args_for_observed_input_streams,
     build_stage_ffmpeg_video_only_args, build_stage_ffmpeg_video_only_args_for_input,
+};
+use ffmpeg_process::{
+    spawn_external_stderr_logger, spawn_external_stdin_writer, spawn_external_stdout_reader,
 };
 
 /// Stdin writes or stdout reads exceeding this threshold are counted as stalls/idles.
@@ -108,7 +106,7 @@ fn external_output_stream_idx(
 pub(crate) async fn run_external_ffmpeg_backend(
     plan: FfmpegStagePlan,
     input_pump: StageInputPump,
-    mut output_normalizer: StageOutputNormalizer,
+    output_normalizer: StageOutputNormalizer,
     ctx: StageRunContext,
 ) -> Result<(), BackendError> {
     let pipeline_id = ctx.pipeline_id.clone();
@@ -280,46 +278,37 @@ pub(crate) async fn run_external_ffmpeg_backend(
         encoding.clone(),
     );
 
-    // stdout demux task → output normalizer
-    let cancel_out = ctx.cancel.clone();
-    let out_pipe_metrics = pipe_metrics.clone();
-    let out_timing_clock = timing_clock;
-    tokio::spawn(async move {
-        let mut stdout = stdout;
-        let mut demuxer = TsDemuxer::new();
-        let mut buf = vec![0u8; MEDIA_TS_BATCH_TARGET_BYTES];
-        let mut pkts = Vec::with_capacity(MEDIA_PRODUCER_BATCH_PACKETS);
-        loop {
-            let t0 = out_timing_clock.now();
-            let result = stdout.read(&mut buf).await;
-            let idle_us = out_timing_clock.delta_us(t0);
-            match result {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if idle_us > PIPE_STALL_THRESHOLD_US {
-                        out_pipe_metrics.record_idle(idle_us);
-                    }
-                    demuxer.feed(&buf[..n]);
-                    demuxer.drain_into(&mut pkts);
-                    for pkt in pkts.drain(..) {
-                        output_normalizer.push(pkt);
-                    }
-                }
-            }
-        }
-        demuxer.flush();
-        demuxer.drain_into(&mut pkts);
-        for pkt in pkts.drain(..) {
-            output_normalizer.push(pkt);
-        }
-        output_normalizer.mark_end_of_stream();
-        cancel_out.cancel();
+    // FFmpeg I/O runs on dedicated threads, not Tokio (WI11): one pulls the
+    // source ring and writes stdin, one demuxes stdout into the output ring.
+    let (input_done_tx, mut input_done_rx) = tokio::sync::oneshot::channel();
+    let io_started = spawn_external_stdout_reader(
+        stdout,
+        output_normalizer,
+        pipe_metrics.clone(),
+        timing_clock,
+        ctx.cancel.clone(),
+    )
+    .and_then(|()| {
+        spawn_external_stdin_writer(
+            stdin,
+            input_pump.into_queue_refill(ctx.cancel.clone()),
+            pipe_metrics.clone(),
+            timing_clock,
+            input_done_tx,
+        )
     });
-
-    let mut input_pump = input_pump;
-
-    let mut stdin_sink = ExternalStdinSink::new(stdin, pipe_metrics.clone(), timing_clock);
-    if let Err(e) = input_pump.pump_to(&mut stdin_sink, &ctx.cancel).await {
+    let input_result = match io_started {
+        Err(error) => Err(format!("failed to start ffmpeg I/O threads: {error}")),
+        // Cancellation stops the writer at its next refill; a writer blocked
+        // on a stalled child is released by the kill below.
+        Ok(()) => tokio::select! {
+            result = &mut input_done_rx => {
+                result.unwrap_or_else(|_| Err("stdin writer exited without a result".to_string()))
+            }
+            _ = ctx.cancel.cancelled() => Ok(()),
+        },
+    };
+    if let Err(e) = input_result {
         error!(
             correlation_id=%correlation_id,
             pipeline_id=%pipeline_id,
@@ -331,8 +320,6 @@ pub(crate) async fn run_external_ffmpeg_backend(
         );
     }
 
-    let _ = stdin_sink.stdin.shutdown().await;
-    drop(stdin_sink);
     if tokio::time::timeout(std::time::Duration::from_secs(30), child.wait())
         .await
         .is_err()

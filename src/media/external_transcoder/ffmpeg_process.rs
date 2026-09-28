@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
@@ -9,73 +9,122 @@ use crate::domain::output_spec::{StagePresetSpec, VideoCodecKind};
 use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::startup_policy;
 
-/// Byte sink that writes MPEG-TS batches to the external FFmpeg child's stdin.
-pub(super) struct ExternalStdinSink {
-    pub(super) stdin: tokio::process::ChildStdin,
+/// A Tokio child pipe as a blocking `File`, for a dedicated I/O thread.
+fn blocking_pipe(fd: std::os::fd::OwnedFd) -> std::io::Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    let raw = fd.as_raw_fd();
+    // SAFETY: `raw` is a valid descriptor owned by `fd` for this call.
+    let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(raw, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(std::fs::File::from(fd))
+}
+
+/// Feed the external FFmpeg child's stdin from its source ring on a dedicated
+/// thread (WI11): the input pump pulls the ring and encodes TS on this
+/// thread, and blocking pipe writes carry the back-pressure. Ends at end of
+/// input, on cancellation or on a write error, then closes stdin so FFmpeg
+/// sees EOF. The outcome is sent on `done`.
+pub(super) fn spawn_external_stdin_writer(
+    stdin: tokio::process::ChildStdin,
+    mut input: crate::media::ffmpeg::stage_input::StageInputRefill,
     pipe_metrics: Arc<PipeMetrics>,
     timing_clock: crate::media::timing::Clock,
-}
+    done: tokio::sync::oneshot::Sender<Result<(), String>>,
+) -> std::io::Result<()> {
+    use crate::media::avio::QueueRefill;
+    use std::io::Write;
 
-impl ExternalStdinSink {
-    pub(super) fn new(
-        stdin: tokio::process::ChildStdin,
-        pipe_metrics: Arc<PipeMetrics>,
-        timing_clock: crate::media::timing::Clock,
-    ) -> Self {
-        // Increase the stdin pipe buffer so a full input burst fits without
-        // back-pressure stalls.  256 KB accommodates ~90 packets (a 3-second
-        // 18-stream burst) while staying well below the Linux 1 MB max.
-        #[cfg(target_os = "linux")]
-        {
-            use std::os::fd::AsRawFd;
-            let fd = stdin.as_raw_fd();
-            const PIPE_BUF_SIZE: libc::c_int = 256 * 1024;
-            let _ = unsafe { libc::fcntl(fd, libc::F_SETPIPE_SZ, PIPE_BUF_SIZE) };
-        }
-        Self {
-            stdin,
-            pipe_metrics,
-            timing_clock,
-        }
+    let fd = stdin.into_owned_fd()?;
+    // Increase the stdin pipe buffer so a full input burst fits without
+    // back-pressure stalls.  256 KB accommodates ~90 packets (a 3-second
+    // 18-stream burst) while staying well below the Linux 1 MB max.
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        const PIPE_BUF_SIZE: libc::c_int = 256 * 1024;
+        let _ = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETPIPE_SZ, PIPE_BUF_SIZE) };
     }
+    let mut stdin = blocking_pipe(fd)?;
+    std::thread::Builder::new()
+        .name("restream-ffin".to_string())
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut batch = Vec::with_capacity(crate::media::MEDIA_TS_BATCH_TARGET_BYTES);
+                loop {
+                    batch.clear();
+                    if !input.refill(&mut batch) {
+                        return Ok(());
+                    }
+                    let t0 = timing_clock.now();
+                    stdin
+                        .write_all(&batch)
+                        .map_err(|error| format!("stdin write failed: {error}"))?;
+                    let write_us = timing_clock.delta_us(t0);
+                    if write_us > super::PIPE_STALL_THRESHOLD_US {
+                        pipe_metrics.record_stall(write_us);
+                    }
+                }
+            }))
+            .unwrap_or_else(|_| Err("stdin writer panicked".to_string()));
+            drop(stdin);
+            let _ = done.send(result);
+        })?;
+    Ok(())
 }
 
-impl crate::media::ffmpeg::stage_input::StageByteSink for ExternalStdinSink {
-    async fn write_ts(&mut self, bytes: &[u8], cancel: &CancellationToken) -> Result<(), String> {
-        if bytes.is_empty() {
-            return Ok(());
-        }
-        let t0 = self.timing_clock.now();
-        let mut remaining = bytes;
-        loop {
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled() => {
-                    let write_us = self.timing_clock.delta_us(t0);
-                    if write_us > super::PIPE_STALL_THRESHOLD_US {
-                        self.pipe_metrics.record_stall(write_us);
-                    }
-                    return Err("cancelled: stdin write interrupted".to_string());
-                }
-                result = self.stdin.write(remaining) => {
+/// Demux the external FFmpeg child's stdout into the stage's output ring on
+/// a dedicated thread (WI11). Marks end of stream and cancels the stage when
+/// FFmpeg closes stdout.
+pub(super) fn spawn_external_stdout_reader(
+    stdout: tokio::process::ChildStdout,
+    mut output: crate::media::ffmpeg::stage_output::StageOutputNormalizer,
+    pipe_metrics: Arc<PipeMetrics>,
+    timing_clock: crate::media::timing::Clock,
+    cancel: CancellationToken,
+) -> std::io::Result<()> {
+    use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
+    use crate::media::mpegts::TsDemuxer;
+    use crate::media::ring_buffer::MEDIA_PRODUCER_BATCH_PACKETS;
+    use std::io::Read;
+
+    let mut stdout = blocking_pipe(stdout.into_owned_fd()?)?;
+    std::thread::Builder::new()
+        .name("restream-ffout".to_string())
+        .spawn(move || {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut demuxer = TsDemuxer::new();
+                let mut buf = vec![0u8; MEDIA_TS_BATCH_TARGET_BYTES];
+                let mut pkts = Vec::with_capacity(MEDIA_PRODUCER_BATCH_PACKETS);
+                loop {
+                    let t0 = timing_clock.now();
+                    let result = stdout.read(&mut buf);
+                    let idle_us = timing_clock.delta_us(t0);
                     match result {
-                        Ok(0) => return Err("stdin write returned 0 (pipe closed)".to_string()),
+                        Ok(0) | Err(_) => break,
                         Ok(n) => {
-                            remaining = &remaining[n..];
-                            if remaining.is_empty() {
-                                let write_us = self.timing_clock.delta_us(t0);
-                                if write_us > super::PIPE_STALL_THRESHOLD_US {
-                                    self.pipe_metrics.record_stall(write_us);
-                                }
-                                return Ok(());
+                            if idle_us > super::PIPE_STALL_THRESHOLD_US {
+                                pipe_metrics.record_idle(idle_us);
+                            }
+                            demuxer.feed(&buf[..n]);
+                            demuxer.drain_into(&mut pkts);
+                            for pkt in pkts.drain(..) {
+                                output.push(pkt);
                             }
                         }
-                        Err(e) => return Err(format!("stdin write failed: {e}")),
                     }
                 }
-            }
-        }
-    }
+                demuxer.flush();
+                demuxer.drain_into(&mut pkts);
+                for pkt in pkts.drain(..) {
+                    output.push(pkt);
+                }
+                output.mark_end_of_stream();
+            }));
+            cancel.cancel();
+        })?;
+    Ok(())
 }
 
 /// Build FFmpeg arguments for a **shared transcoder stage**.
