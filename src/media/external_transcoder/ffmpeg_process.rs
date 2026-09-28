@@ -10,7 +10,7 @@ use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::startup_policy;
 
 /// A Tokio child pipe as a blocking `File`, for a dedicated I/O thread.
-fn blocking_pipe(fd: std::os::fd::OwnedFd) -> std::io::Result<std::fs::File> {
+pub(super) fn blocking_pipe(fd: std::os::fd::OwnedFd) -> std::io::Result<std::fs::File> {
     use std::os::fd::AsRawFd;
     let raw = fd.as_raw_fd();
     // SAFETY: `raw` is a valid descriptor owned by `fd` for this call.
@@ -25,14 +25,15 @@ fn blocking_pipe(fd: std::os::fd::OwnedFd) -> std::io::Result<std::fs::File> {
 /// thread (WI11): the input pump pulls the ring and encodes TS on this
 /// thread, and blocking pipe writes carry the back-pressure. Ends at end of
 /// input, on cancellation or on a write error, then closes stdin so FFmpeg
-/// sees EOF. The outcome is sent on `done`.
+/// sees EOF. The outcome is sent on `done`; the caller joins the returned
+/// thread after reaping the child ([`reap_external_child`]).
 pub(super) fn spawn_external_stdin_writer(
     stdin: tokio::process::ChildStdin,
     mut input: crate::media::ffmpeg::stage_input::StageInputRefill,
     pipe_metrics: Arc<PipeMetrics>,
     timing_clock: crate::media::timing::Clock,
     done: tokio::sync::oneshot::Sender<Result<(), String>>,
-) -> std::io::Result<()> {
+) -> std::io::Result<std::thread::JoinHandle<()>> {
     use crate::media::avio::QueueRefill;
     use std::io::Write;
 
@@ -70,8 +71,7 @@ pub(super) fn spawn_external_stdin_writer(
             .unwrap_or_else(|_| Err("stdin writer panicked".to_string()));
             drop(stdin);
             let _ = done.send(result);
-        })?;
-    Ok(())
+        })
 }
 
 /// Demux the external FFmpeg child's stdout into the stage's output ring on
@@ -83,7 +83,7 @@ pub(super) fn spawn_external_stdout_reader(
     pipe_metrics: Arc<PipeMetrics>,
     timing_clock: crate::media::timing::Clock,
     cancel: CancellationToken,
-) -> std::io::Result<()> {
+) -> std::io::Result<std::thread::JoinHandle<()>> {
     use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
     use crate::media::mpegts::TsDemuxer;
     use crate::media::ring_buffer::MEDIA_PRODUCER_BATCH_PACKETS;
@@ -123,8 +123,39 @@ pub(super) fn spawn_external_stdout_reader(
                 output.mark_end_of_stream();
             }));
             cancel.cancel();
-        })?;
-    Ok(())
+        })
+}
+
+/// How long FFmpeg may take to exit after its input ended normally (it
+/// flushes the encoder and writes the tail).
+pub(super) const EXTERNAL_EOF_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long FFmpeg may take to exit once the stage is cancelled. Its output
+/// is being torn down, and a stdin writer blocked on a stalled child is only
+/// released when the child goes away.
+pub(super) const EXTERNAL_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Reap the external FFmpeg child, then join its I/O threads. The child
+/// gets [`EXTERNAL_EOF_GRACE`] after a normal end of input and
+/// [`EXTERNAL_CANCEL_GRACE`] after cancellation, and is killed past that.
+/// Once it is gone its pipes are broken, so a writer blocked in `write_all`
+/// fails and the stdout reader sees EOF: the joins are bounded.
+pub(super) async fn reap_external_child(
+    child: &mut tokio::process::Child,
+    cancelled: bool,
+    io_threads: Vec<std::thread::JoinHandle<()>>,
+) {
+    let grace = if cancelled {
+        EXTERNAL_CANCEL_GRACE
+    } else {
+        EXTERNAL_EOF_GRACE
+    };
+    if tokio::time::timeout(grace, child.wait()).await.is_err() {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
+    for thread in io_threads {
+        let _ = tokio::task::spawn_blocking(move || thread.join()).await;
+    }
 }
 
 /// Build FFmpeg arguments for a **shared transcoder stage**.

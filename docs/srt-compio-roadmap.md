@@ -3172,8 +3172,14 @@ Open, in order:
      In-process stages refill their AVIO queue from the ring on the FFmpeg
      thread; external stages use one dedicated stdin thread and one stdout
      thread. See [runtime-crossings.md](runtime-crossings.md) C8.
-   - Step 3b: shared TS mux and HLS segmenter as producer-side stages on the
-     owner that publishes the feed.
+   - Step 3b: shared TS mux and HLS segmenter off Tokio. Ownership
+     locality, not reactor monopolization: per-payload work of ~4–5 µs is
+     fine inline on an owner, but a TS mux burst, HLS segment boundary or
+     playlist update is chunkier. Measure their per-invocation cost first;
+     run inline on the publishing owner only under a stated service quantum
+     (with an overrun counter), otherwise on a per-shard media executor
+     class fed from the ring (local or SPSC), never back on Tokio.
+     (External review, 2026-09-28.)
    - **DONE** Step 4 (108bc129): direct feed wakes from the
      publishing thread to egress shards. The Tokio feed watcher is gone:
      the ring calls its publication subscribers (`PublishWake`), each
@@ -3290,14 +3296,23 @@ Open, in order:
     `wi11-bufreuse` pending) and pushed branches `wi11/ffmpeg-input`
     (merged) and `wi11/bufreuse` (pending) to delete after merge.
 
-Watch items: an RTMP ramp once showed repeats where all outputs sat uniformly
+Watch items: local `fault.resilience` (2026-09-28, debug build, 4 runs on the
+tree after step 4 and the review fixes) failed twice, on different cases:
+`rtmps-egress-sink-disappear` with `initialDelivery=false` (the sink never
+reached 10 video frames before the sink was stopped) and
+`transient-srt-drop-preserves-egress` with `inputOff=false` 9.5 s after the
+SRT publisher drop (disconnect not yet detected). Neither path is touched by
+the review fixes; CI's contract job passed at 482a2c6b (includes step 4).
+Next: interleaved repeat runs at 7bccb734 (before step 4) vs the current head
+to decide flake vs regression. Also: an RTMP ramp once showed repeats where all outputs sat uniformly
 just under the 0.95 floor alongside 15–20% host iowait (not reproduced in the
 `1a2e7e12` ramp); a full-suite run once failed one test that passed on two
 reruns (not identified).
 
-Do not change FFmpeg pipes, shard coefficients, NUMA policy or owner topology
-ahead of the measurements above, and do not change HLS PUT except through
-item 8's evaluation.
+Do not change shard coefficients, NUMA policy or owner topology ahead of the
+measurements above, and do not change HLS PUT except through item 8's
+evaluation. (FFmpeg stage I/O moved off Tokio in step 3a, 794339a1, with
+evidence; the FFmpeg processes and pipes themselves are unchanged.)
 
 ## 37. Definition of Success
 

@@ -6,8 +6,11 @@
 //!
 //! Architecture (same pattern as `transcoder.rs`):
 //!
-//!   tokio task:  source RingBuffer → TsMuxer → MemoryQueue
-//!   std::thread: MemoryQueue → FFmpeg demux → decode H.265 → encode H.264 → output RingBuffer
+//!   std::thread: FFmpeg AVIO read → refill from source RingBuffer (TS
+//!                encode on this thread) → FFmpeg demux → decode H.265 →
+//!                encode H.264 → output RingBuffer
+//!
+//! The Tokio task only waits for the stage to end and cleans up (WI11).
 //!
 //! The output RingBuffer carries H.264 video (PayloadFormat::Raw) plus
 //! passthrough audio — exactly what the RTMP egress reader expects.
@@ -111,7 +114,8 @@ fn send_h264_frame_with_drain(
 ///
 /// 1. Waits for ingest metadata (video + audio tracks).
 /// 2. Spawns a blocking OS thread for FFmpeg decode→encode.
-/// 3. Forwards source RingBuffer packets to the MemoryQueue as MPEG-TS.
+/// 3. The FFmpeg thread pulls its input from the source ring through the
+///    queue's refill hook; this task waits for cancellation or the end.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_h264_codec_edge_stage(
     pipeline_id: String,

@@ -56,7 +56,8 @@ pub use ffmpeg_process::{
     build_stage_ffmpeg_video_only_args, build_stage_ffmpeg_video_only_args_for_input,
 };
 use ffmpeg_process::{
-    spawn_external_stderr_logger, spawn_external_stdin_writer, spawn_external_stdout_reader,
+    reap_external_child, spawn_external_stderr_logger, spawn_external_stdin_writer,
+    spawn_external_stdout_reader,
 };
 
 /// Stdin writes or stdout reads exceeding this threshold are counted as stalls/idles.
@@ -281,6 +282,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
     // FFmpeg I/O runs on dedicated threads, not Tokio (WI11): one pulls the
     // source ring and writes stdin, one demuxes stdout into the output ring.
     let (input_done_tx, mut input_done_rx) = tokio::sync::oneshot::channel();
+    let mut io_threads = Vec::with_capacity(2);
     let io_started = spawn_external_stdout_reader(
         stdout,
         output_normalizer,
@@ -288,7 +290,8 @@ pub(crate) async fn run_external_ffmpeg_backend(
         timing_clock,
         ctx.cancel.clone(),
     )
-    .and_then(|()| {
+    .and_then(|reader| {
+        io_threads.push(reader);
         spawn_external_stdin_writer(
             stdin,
             input_pump.into_queue_refill(ctx.cancel.clone()),
@@ -296,16 +299,23 @@ pub(crate) async fn run_external_ffmpeg_backend(
             timing_clock,
             input_done_tx,
         )
-    });
-    let input_result = match io_started {
-        Err(error) => Err(format!("failed to start ffmpeg I/O threads: {error}")),
-        // Cancellation stops the writer at its next refill; a writer blocked
-        // on a stalled child is released by the kill below.
+    })
+    .map(|writer| io_threads.push(writer));
+    // Cancellation (including the stdout reader seeing FFmpeg exit) stops
+    // the writer at its next refill; a writer blocked on a stalled child is
+    // released when `reap_external_child` kills it after the short cancel
+    // grace.
+    let (input_result, cancelled) = match io_started {
+        Err(error) => (
+            Err(format!("failed to start ffmpeg I/O threads: {error}")),
+            true,
+        ),
         Ok(()) => tokio::select! {
-            result = &mut input_done_rx => {
-                result.unwrap_or_else(|_| Err("stdin writer exited without a result".to_string()))
-            }
-            _ = ctx.cancel.cancelled() => Ok(()),
+            result = &mut input_done_rx => (
+                result.unwrap_or_else(|_| Err("stdin writer exited without a result".to_string())),
+                false,
+            ),
+            _ = ctx.cancel.cancelled() => (Ok(()), true),
         },
     };
     if let Err(e) = input_result {
@@ -320,13 +330,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
         );
     }
 
-    if tokio::time::timeout(std::time::Duration::from_secs(30), child.wait())
-        .await
-        .is_err()
-    {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-    }
+    reap_external_child(&mut child, cancelled, io_threads).await;
     ctx.cancel.cancel();
 
     ctx.engine.remove_stage_metrics(&stage_key).await;

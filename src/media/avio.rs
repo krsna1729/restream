@@ -57,6 +57,10 @@ pub struct MemoryQueue {
     refill: Mutex<Option<RefillState>>,
     /// Lets plain queues skip the `refill` lock on every read.
     has_refill: AtomicBool,
+    /// Bytes of the current refilled batch not yet read. Kept outside the
+    /// `refill` lock, which the reading thread holds while it waits for
+    /// input, so `len`/`stats` never block on it.
+    refill_pending: AtomicUsize,
     cvar: Condvar,
     space_available: Notify,
     capacity: usize,
@@ -101,6 +105,7 @@ impl MemoryQueue {
             }),
             refill: Mutex::new(None),
             has_refill: AtomicBool::new(false),
+            refill_pending: AtomicUsize::new(0),
             cvar: Condvar::new(),
             space_available: Notify::new(),
             capacity,
@@ -277,6 +282,7 @@ impl MemoryQueue {
             .unwrap_or_else(|e| e.into_inner())
             .buf
             .len()
+            + self.refill_pending.load(Ordering::Relaxed)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -286,7 +292,7 @@ impl MemoryQueue {
     pub fn stats(&self) -> MemoryQueueStats {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         MemoryQueueStats {
-            len: inner.buf.len(),
+            len: inner.buf.len() + self.refill_pending.load(Ordering::Relaxed),
             capacity: self.capacity,
             high_water_bytes: self.high_water_bytes.load(Ordering::Relaxed),
             blocked_writes: self.blocked_writes.load(Ordering::Relaxed),
@@ -319,6 +325,8 @@ impl MemoryQueue {
                 target[..to_read]
                     .copy_from_slice(&state.pending[state.offset..state.offset + to_read]);
                 state.offset += to_read;
+                self.refill_pending
+                    .store(state.pending.len() - state.offset, Ordering::Relaxed);
                 return to_read;
             }
             state.pending.clear();
@@ -328,6 +336,8 @@ impl MemoryQueue {
                 return 0;
             }
             self.record_depth(state.pending.len());
+            self.refill_pending
+                .store(state.pending.len(), Ordering::Relaxed);
         }
     }
 

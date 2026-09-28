@@ -446,3 +446,39 @@ proptest! {
         prop_assert_eq!(actual, expected);
     }
 }
+
+/// A refill-driven queue reports the unread part of its current batch as
+/// depth, like bytes staged by a writer, and reads it back in order.
+#[test]
+fn refilled_batch_counts_toward_queue_depth() {
+    struct OneBatch(Option<Vec<u8>>);
+    impl QueueRefill for OneBatch {
+        fn refill(&mut self, out: &mut Vec<u8>) -> bool {
+            match self.0.take() {
+                Some(batch) => {
+                    out.extend_from_slice(&batch);
+                    true
+                }
+                None => false,
+            }
+        }
+    }
+
+    let batch: Vec<u8> = (0..1000u32).map(|i| i as u8).collect();
+    let queue = MemoryQueue::new();
+    queue.set_refill(Box::new(OneBatch(Some(batch.clone()))));
+    assert_eq!(queue.len(), 0);
+
+    let mut first = [0u8; 300];
+    assert_eq!(queue.read(&mut first), 300);
+    assert_eq!(queue.len(), 700);
+    assert_eq!(queue.stats().len, 700);
+    assert_eq!(queue.stats().high_water_bytes, 1000);
+
+    let mut rest = [0u8; 1000];
+    assert_eq!(queue.read(&mut rest), 700);
+    assert_eq!(queue.len(), 0);
+    assert_eq!([&first[..], &rest[..700]].concat(), batch);
+    assert_eq!(queue.read(&mut rest), 0, "end of input closes the queue");
+    assert!(queue.is_closed());
+}

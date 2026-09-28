@@ -66,3 +66,4 @@ include!("external_transcoder_tests/metadata.rs");
 include!("external_transcoder_tests/hevc_pipeline.rs");
 include!("external_transcoder_tests/h264_pipeline.rs");
 include!("external_transcoder_tests/hevc_fixtures.rs");
+include!("external_transcoder_tests/reap.rs");

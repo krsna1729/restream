@@ -114,9 +114,9 @@ impl StageInputPump {
         }
     }
 
-    /// Pull one burst from the ring and append its TS to `ts_batch`. Awaits
-    /// only for the rare engine sequence-header refresh.
-    async fn encode_burst(&mut self, packets: &mut Vec<Arc<MediaPacket>>, ts_batch: &mut Vec<u8>) {
+    /// Pull one burst from the ring and append its TS to `ts_batch`. Never
+    /// waits: it runs on the FFmpeg (or stdin writer) thread.
+    fn encode_burst(&mut self, packets: &mut Vec<Arc<MediaPacket>>, ts_batch: &mut Vec<u8>) {
         packets.clear();
         if self
             .reader
@@ -154,8 +154,7 @@ impl StageInputPump {
                 } else if let Some((engine, pipeline_id)) = &self.engine_refresh {
                     // Fallback: fetch AVCC sequence header from engine
                     // ingest state (set by RTMP handler on connect/reconnect).
-                    let (video_sh, _) = engine.get_sequence_headers(pipeline_id).await;
-                    if let Some(header) = video_sh {
+                    if let Some(header) = engine.try_video_sequence_header(pipeline_id) {
                         self.feeder.set_video_sequence_header_from_avcc(&header);
                     }
                 }
@@ -196,7 +195,7 @@ impl crate::media::avio::QueueRefill for StageInputRefill {
             if !data || self.pump.reader.is_caught_up_to_end_of_stream() {
                 return false;
             }
-            block_on(self.pump.encode_burst(&mut self.packets, out));
+            self.pump.encode_burst(&mut self.packets, out);
             if !out.is_empty() {
                 return true;
             }
@@ -205,8 +204,8 @@ impl crate::media::avio::QueueRefill for StageInputRefill {
 }
 
 /// Run `future` to completion on the calling (non-Tokio) thread, parking it
-/// while pending. The stage futures here only wait on runtime-agnostic
-/// primitives (`Notify`, `CancellationToken`, Tokio locks). The waker is
+/// while pending. Used only to wait for ring data or cancellation, both
+/// runtime-agnostic primitives (`Notify`, `CancellationToken`). The waker is
 /// cached per thread, so a poll that completes at once allocates nothing.
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
     use std::task::{Context, Poll, Wake, Waker};
