@@ -3313,13 +3313,21 @@ Open, in order:
       kernel at once. A 32 KiB payload slab that removes only the
       per-datagram allocation was measured and dropped (see step 1 above;
       srt-rs branch `perf/rx-payload-slab`, unpushed).
-    - Readiness runtimes (tokio, mio) copy twice: `recvmmsg` into fixed
+    - Readiness runtimes (tokio, mio) copied twice: `recvmmsg` into fixed
       `RecvBatch` scratch, then `feed_recv_buf(&[u8])` copies the payload.
-      Written and tested (srt-rs branch `perf/readiness-zero-copy`, 991
-      srt-proto/srt-transport tests pass): `BytesRecvBatch` receives with
-      `recvmmsg` into a zeroed `BytesMut` chunk, and
-      `SrtConnection::feed_recv_bytes` slices the payload (no copy, one
-      allocation per chunk).
+      **DONE (srt-rs PR #129, `7261871`):** mio's and tokio's listener paths
+      (and tokio's per-connection `Conn`) now receive through `BytesRecvBatch`
+      (chunk-backed `recvmmsg` scratch), and admission gained an
+      owned-datagram entry whose established direct-DATA case hands the
+      connection a slice (`SrtConnection::feed_recv_bytes`) instead of a
+      copy. Caller sides and bonded group legs keep the borrowing scratch:
+      ACK/NAK/control carries no payload to copy and would pay 4x the scratch
+      memory per socket. A/B, arms interleaved, 1316-byte payloads: 1225 ->
+      1094 ns/datagram (-10.7%) and 1.0001 -> 0.0156 allocations/datagram
+      (srt-rs `docs/results/readiness-recv-path-f9c676c.txt`); a real libsrt
+      publisher delivered 3374 DATA payloads / 4.44 MB through the switched
+      library `mio::Owner` listener. Restream is unaffected (compio ingress),
+      so the pin stays at `2416a4f`.
     - **Correction (2026-09-28): Restream's SRT Owners do not use managed RX
       on this host.** Kernel 6.8 rejects `IORING_REGISTER_PBUF_RING`
       (`EINVAL`, known in srt-rs as "Noble 6.8"), so every Owner falls back
