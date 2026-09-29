@@ -3305,8 +3305,9 @@ Open, in order:
     wake it on completion. Profile Owner and shard threads for Compio
     scheduler/waker/task-poll share; if above a couple of percent, poll the
     multishot RX stream inside the Owner loop, then hold in-flight send
-    futures in the Owner instead of lane tasks. srt-rs pushes go only to
-    `perf/owner-tx-efficiency`.
+    futures in the Owner instead of lane tasks. This remains an unstarted,
+    measure-first experiment; any implementation belongs in a focused PR
+    against srt-rs `main`.
 14. **srt-rs receive copies**:
     - Compio managed RX (what Restream uses) keeps one copy by design: the
       datagram lands in a provided-buffer slot that must return to the
