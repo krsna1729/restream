@@ -121,7 +121,7 @@ budget (Restream-limited).
 | S6 | **Public stable id for `LogicalPeerId`** (`as_u64` is `pub(crate)`), for telemetry keys. | The harness sink had to invent a per-pool sequence to key per-connection bytes (`e521492b`). | Minor API. |
 | S7 | **Re-verify the frozen-destination RSS regression after the Owner cutover**. It was recorded at the Compio pivot: `fault.srt-output-stall` RSS growth 78–93 MB versus 46–54 MB before, suspected in `CallerLeg::send_shared` queuing into the protocol output queue (16 MiB / 8192 actions per connection). | Session memory note from `ec8832d9`; not re-measured since. | Rerun `fault.srt-output-stall`; fix only if it still reproduces. |
 
-**Status (srt-rs branch `perf/owner-tx-efficiency` at `d81e958`, pinned by
+**Status (merged to srt-rs `main` as `2416a4f`, PR #128, pinned by
 Restream).** Fixed-load A/B: SRT H.264 → 50 SRT outputs into harness sinks,
 Restream on 3 pinned CPUs, 5 interleaved reps, baseline `10ef9b65`.
 

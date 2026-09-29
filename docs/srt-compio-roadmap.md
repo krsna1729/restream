@@ -3247,8 +3247,9 @@ Open, in order:
 6. **SRT per-output cost** (~2.9% of a core per 8 Mbit/s output, ~20× RTMP):
    srt-rs per-packet protocol work; backlog in
    [media-copy-audit.md](media-copy-audit.md#srt-rs-backlog-evidence-backed).
-   srt-rs branch `perf/owner-tx-efficiency` (pinned `e6bbb24`) is not merged
-   to srt-rs main; open its PR through the srt-rs process.
+   The branch landed on srt-rs `main` as PR #128 (`2416a4f`, pinned by
+   Restream): GSO send coalescing, id hashing without SipHash, acked-bytes
+   stats, the TX-blocked-work fix and batched raw-readiness receive.
 7. **Shard sizing on big hosts**: shards cap at `effective_cpus.clamp(2, 8)`
    and `effective_cpus` is read once at startup. Revisit with cross-host data
    (item 10); ties into Q-025.
@@ -3325,7 +3326,7 @@ Open, in order:
       to `RawReadiness` (`managedRx: false` in every release A/B), which
       does one `recvfrom` per datagram (`compio.rs` `service_rx_listener`)
       and then copies it in `feed_recv_buf`. At 32 publishers that is ~24k
-      syscalls/s plus the copies. **DONE (srt-rs 1f30a04):** the listener's
+      syscalls/s plus the copies. **DONE (srt-rs PR #128, `2416a4f`):** the listener's
       raw-readiness path drains with `recvmmsg` into a preallocated
       `RecvBatch` (wire-ceiling slots). Release A/B, SRT ingest: no CPU
       change at 16/32 publishers (the socket queue is mostly one datagram
@@ -3334,9 +3335,11 @@ Open, in order:
       accepted per pipeline rose from 3.11/4.80/3.63 to 6.01/6.82/7.56
       Mbit/s (mean 3.85 → 6.80, +77%; ~185 → ~326 Mbit/s total). The copy
       remains; zero-copy through admission (`feed_recv_bytes`) is the next
-      step only if a profile still shows it. srt-rs workspace: 1553 pass;
-      `compio_owner_bond_to_independent_libsrt_receivers_reports_a_peer_group_collision`
-      fails on the unchanged base as well (pre-existing, libsrt interop).
+      step only if a profile still shows it. Gates on the merge tree: `cargo
+      fmt`/`clippy -D warnings` clean, reportcard PASS, workspace tests green
+      including `libsrt_interop` 32/32 (the bonded-interop failure recorded on
+      the branch head does not reproduce there); PR #128 also passed ASan,
+      Miri, fuzz, coverage and both live libsrt interop jobs.
 15. **mimalloc decision**: `alloc-mimalloc` / `alloc-jemalloc` features and
     `#[global_allocator]` are on local branch `wip/alloc-ab` (462c411e).
     Needs the fan-out A/B, then adopt or drop.
