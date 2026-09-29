@@ -3309,11 +3309,11 @@ Open, in order:
     measure-first experiment; any implementation belongs in a focused PR
     against srt-rs `main`.
 14. **srt-rs receive copies**:
-    - Compio managed RX (what Restream uses) keeps one copy by design: the
-      datagram lands in a provided-buffer slot that must return to the
-      kernel at once. A 32 KiB payload slab that removes only the
-      per-datagram allocation was measured and dropped (see step 1 above;
-      srt-rs branch `perf/rx-payload-slab`, unpushed).
+    - Compio managed RX (when the kernel provides a registered buffer ring)
+      keeps one copy by design: the datagram lands in a provided-buffer slot
+      that must return to the kernel at once. A 32 KiB payload slab that
+      removes only the per-datagram allocation was measured and dropped (see
+      step 1 above; srt-rs branch `perf/rx-payload-slab`, unpushed).
     - Readiness runtimes (tokio, mio) copied twice: `recvmmsg` into fixed
       `RecvBatch` scratch, then `feed_recv_buf(&[u8])` copies the payload.
       **DONE (srt-rs PR #129, `7261871`):** mio's and tokio's listener paths
@@ -3332,15 +3332,14 @@ Open, in order:
     - **Correction (2026-09-28): Restream's SRT Owners do not use managed RX
       on this host.** Kernel 6.8 rejects `IORING_REGISTER_PBUF_RING`
       (`EINVAL`, known in srt-rs as "Noble 6.8"), so every Owner falls back
-      to `RawReadiness` (`managedRx: false` in every release A/B), which
-      does one `recvfrom` per datagram (`compio.rs` `service_rx_listener`)
-      and then copies it in `feed_recv_buf`. At 32 publishers that is ~24k
-      syscalls/s plus the copies. **DONE (srt-rs PR #128, `2416a4f`):** the listener's
-      raw-readiness path drains with `recvmmsg` into a preallocated
-      `RecvBatch` (wire-ceiling slots). Release A/B, SRT ingest: no CPU
-      change at 16/32 publishers (the socket queue is mostly one datagram
-      deep per wake, so the 2–5% syscall estimate did not hold), but at the
-      Owner's ceiling (48 publishers × 8 Mbit/s, 3 interleaved reps) ingest
+      to `RawReadiness` (`managedRx: false` in every release A/B). PR #128
+      replaced its one-`recvfrom`-per-datagram loop in `service_rx_listener`
+      with batched `recvmmsg` into a preallocated `RecvBatch`
+      (wire-ceiling slots). Established DATA still copies in `feed_recv_buf`.
+      The release A/B showed no CPU change at 16/32 publishers: the socket
+      queue was mostly one datagram deep per wake, so the 2–5% syscall
+      estimate did not hold. At the Owner's ceiling (48 publishers × 8 Mbit/s,
+      3 interleaved reps), ingest
       accepted per pipeline rose from 3.11/4.80/3.63 to 6.01/6.82/7.56
       Mbit/s (mean 3.85 → 6.80, +77%; ~185 → ~326 Mbit/s total). The copy
       remains; zero-copy through admission (`feed_recv_bytes`) is the next
