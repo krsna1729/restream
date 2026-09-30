@@ -46,6 +46,7 @@ pub(super) const OWNER_COUNTER_FIELDS: &[&str] = &[
     "rxPackets",
     "rxBytes",
     "rxRingDropped",
+    "rxBufferExhaustions",
     "rxTruncated",
     "serviceVisits",
     "serviceActions",

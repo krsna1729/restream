@@ -807,6 +807,9 @@ Query params:
       "managedRx": true,
       "serviceVisits": 0,
       "rxPackets": 0,
+      "rxRingDropped": 0,
+      "rxBufferExhaustions": 0,
+      "rxTruncated": 0,
       "txPackets": 0,
       "peers": 0
     }
@@ -926,6 +929,11 @@ above 80% of `commandCapacity`, and a Critical alert for `panicked`
 shards. `tuning.outputMaxRetries` mirrors `RESTREAM_OUTPUT_MAX_RETRIES`;
 `/api/v1/alerts` derives a Warning for any output whose `retryAttempts`
 (under `pipelines.<id>.outputs.<id>`) has reached 80% of that ceiling.
+
+`srtListener.ingressOwner.rxBufferExhaustions` and each SRT egress Owner's
+`rxBufferExhaustions` count transient managed-buffer pressure, separately from
+actual completion discards (`rxRingDropped`) and oversized datagrams
+(`rxTruncated`). Buffer pressure alone is neither a loss count nor an Owner fault.
 
 See [Observability](observability.md) for field derivation, publisher quality,
 and diagnostic check details.

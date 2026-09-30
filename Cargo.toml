@@ -67,13 +67,14 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 percent-encoding = "2"
 shiguredo_mp4 = "2026.5.0"
-# srt-rs main 2416a4f (PR #128: GSO send coalescing, id hashing without
-# SipHash, acked-bytes stats, TX-blocked work fix, batched raw-readiness
-# listener receive; see docs/media-copy-audit.md). SRT egress and ingress both run on
-# `srt_transport::compio::Owner`; ingress attaches with
+# srt-rs main 43b9429 (PR #131: cooperative taskrun, separate managed-RX
+# buffer exhaustion counter; PR #130: transient managed buffer exhaustion;
+# PR #128: GSO send coalescing, id hashing without SipHash, acked-bytes stats,
+# TX-blocked work fix, batched raw-readiness listener receive). SRT egress and
+# ingress both run on `srt_transport::compio::Owner`; ingress attaches with
 # `Owner::listen_with_resolver`.
-srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "2416a4f85d4b84f83f61a64705c6c673fc841e61" }
-srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "2416a4f85d4b84f83f61a64705c6c673fc841e61", features = ["compio"] }
+srt_proto = { package = "srt-proto", git = "https://github.com/krsna1729/srt-rs", rev = "43b9429b2b5bbda8bfcd155d6b50fa7260e931c7" }
+srt-transport = { git = "https://github.com/krsna1729/srt-rs", rev = "43b9429b2b5bbda8bfcd155d6b50fa7260e931c7", features = ["compio"] }
 # Bounded shard command channel with both blocking and Future-based receive, so
 # a backend that owns a thread-affine completion runtime can await commands
 # alongside its own I/O without a second wake source.

@@ -210,11 +210,10 @@ fn build(
         .build()
         .map_err(|error| format!("failed to build srt-rs listener config: {error}"))?;
     let mut owner = Owner::new_with_ceiling(INGRESS_TX_CAPACITY, SRT_OWNER_WIRE_CEILING);
-    // In this pinned srt-rs/Compio combination, transient managed-receive
-    // ENOBUFS ends the RX stream and faults the listener. Until that error is
-    // retryable, leave the substrate uninstalled so ManagedPreferred selects
-    // the documented raw-readiness fallback for ingress. Keep the observation
-    // for diagnostics; egress retains its independently qualified managed RX.
+    // Install the observation from this Owner's runtime before its first attach.
+    owner
+        .set_rx_substrate(substrate)
+        .map_err(|error| format!("failed to set SRT ingress RX substrate: {error}"))?;
     owner.set_rx_mode_policy(rx_policy);
     let resolver = ingress_resolver(config.policy_store, config.receiver_group);
     runtime
@@ -667,6 +666,9 @@ impl OwnerLoop {
                 .rx_ring_depth
                 .store(rx.depth as u64, Ordering::Relaxed);
             stats.rx_ring_dropped.store(rx.dropped, Ordering::Relaxed);
+            stats
+                .rx_buffer_exhaustions
+                .store(rx.buffer_exhaustions, Ordering::Relaxed);
             stats.rx_truncated.store(rx.truncated, Ordering::Relaxed);
         }
         if let Some(telemetry) = self.owner.listener_telemetry() {

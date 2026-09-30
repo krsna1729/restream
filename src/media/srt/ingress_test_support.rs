@@ -218,7 +218,7 @@ impl TestServer {
         format!(
             "srt_server_task_alive={} pipelines={pipelines:?} active_ingests={active:?} \
              ingressOwner{{faulted={} managedRx={} peers={} serviceVisits={} serviceActions={} txPackets={} \
-             txCompletedOk={} txInFlight={} rxPackets={} rxRingDropped={} rxTruncated={} \
+             txCompletedOk={} txInFlight={} rxPackets={} rxRingDropped={} rxBufferExhaustions={} rxTruncated={} \
              eventDepthHwm={} commandDepthHwm={} eventBridgeFullVisits={} staleCommands={} \
              overloadDisconnects={} policyRequests={} policyRejections={} credentialFailures={}}}",
             !self.task.is_finished(),
@@ -232,6 +232,7 @@ impl TestServer {
             snapshot.tx_in_flight,
             snapshot.rx_packets,
             snapshot.rx_ring_dropped,
+            snapshot.rx_buffer_exhaustions,
             snapshot.rx_truncated,
             snapshot.event_depth_hwm,
             snapshot.command_depth_hwm,

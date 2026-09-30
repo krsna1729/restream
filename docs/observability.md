@@ -69,10 +69,17 @@ recording settings in SQLite.
 low-cardinality by construction (no peer or StreamID labels). The sample shows a
 subset; the full set is service visits/actions/maintenance actions and budget
 exhaustion, TX capacity/in-flight/high-water/exhaustions/packets/completions/
-failures, RX packets/bytes/ring depth/ring drops/truncation, peers, admission
+failures, RX packets/bytes/ring depth/ring drops/buffer exhaustion/truncation, peers, admission
 policy telemetry, command and event bridge depth high-water, event-bridge-full
 visits, dropped telemetry samples, deferred read sends, stale commands,
 overload disconnects and send failures.
+
+`rxBufferExhaustions` counts transient managed provided-buffer pressure reports
+(`ENOBUFS` / `ResourceBusy`). It does not establish packet loss, increment
+`rxRingDropped`, or fault the Owner. `rxRingDropped` counts actual completion-ring
+discards; `rxTruncated` counts oversized datagrams discarded without parsing.
+These are local receive-path counters, not wire-loss or kernel socket-drop totals.
+The same fields are exposed for each SRT egress Owner under `egressFabricShards`.
 
 SRT ingest media runs to completion on the Owner thread, so the Owner also
 reports it: `mediaPayloads` (payloads demuxed and published), `mediaWorkUs`
@@ -497,8 +504,8 @@ File ingests run a file-specific set instead:
 | 8 | Active Outputs | Output state and bytes |
 | 9 | System Resources | CPU, RAM, disk |
 
-The diagnostic runner warns above 50% SRT queue occupancy, alerts above 75%,
-and reports any kernel drop count.
+The SRT Listener Owner check reports actual ring discards, truncation and Owner
+faults as issues. Buffer exhaustion is informational, not a packet-loss alarm.
 
 The active ingest selects the RTMP, SRT, or file check set. Returns `404`
 without an active ingest.

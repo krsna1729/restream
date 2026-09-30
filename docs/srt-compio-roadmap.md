@@ -3332,15 +3332,15 @@ Open, in order:
       (srt-rs `docs/results/readiness-recv-path-f9c676c.txt`); a real libsrt
       publisher delivered 3374 DATA payloads / 4.44 MB through the switched
       library `mio::Owner` listener. Restream is unaffected (compio ingress),
-      so the pin stays at `2416a4f`.
-    - **Correction (2026-09-28): Restream's SRT Owners do not use managed RX
-      on this host.** Kernel 6.8 rejects `IORING_REGISTER_PBUF_RING`
-      (`EINVAL`, known in srt-rs as "Noble 6.8"), so every Owner falls back
-      to `RawReadiness` (`managedRx: false` in every release A/B). PR #128
+      so the pin was advanced to `847c21f` (PR #130) after PR #129 landed.
+    - **Historical correction (2026-09-28, kernel 6.8.0-139)**: the local
+      provided-buffer-ring probe returned `EINVAL`, so Restream's SRT Owners
+      selected `RawReadiness` (`managedRx: false`) on that kernel. The A/B
+      results below therefore describe the raw-readiness path only. PR #128
       replaced its one-`recvfrom`-per-datagram loop in `service_rx_listener`
       with batched `recvmmsg` into a preallocated `RecvBatch`
       (wire-ceiling slots). Established DATA still copies in `feed_recv_buf`.
-      The release A/B showed no CPU change at 16/32 publishers: the socket
+      The raw-readiness release A/B showed no CPU change at 16/32 publishers: the
       queue was mostly one datagram deep per wake, so the 2–5% syscall
       estimate did not hold. At the Owner's ceiling (48 publishers × 8 Mbit/s,
       3 interleaved reps), ingest
@@ -3352,6 +3352,29 @@ Open, in order:
       including `libsrt_interop` 32/32 (the bonded-interop failure recorded on
       the branch head does not reproduce there); PR #128 also passed ASan,
       Miri, fuzz, coverage and both live libsrt interop jobs.
+    - **Kernel qualification (2026-09-30)**: the provided-buffer-ring probe
+      failed with `EINVAL` on Ubuntu kernels 6.8.0-139 and 6.8.0-142, and
+      passed on 6.11.0-29 and 7.0.0-34 under QEMU. The local host has rebooted
+      into 7.0.0-34-generic; `./scratch/pbufring` now prints
+      `register_buf_ring: OK`. The reproducer comment in
+      `srt-rs/scratch/pbufring.c` associates an Ubuntu Noble regression with
+      6.8.0-136/-137 and lists 6.8.0-134 as known-good, but the kernel-source
+      cause of the observed `EINVAL` was not established here. Do not infer a
+      general failure across 6.8/6.9 or a specific `page_address`/`vmap`
+      mechanism from these probes.
+      Restream ingress must install the capability observed on its own runtime
+      before attaching the listener; `ManagedPreferred` then selects
+      `ManagedMultishot` on a capable kernel and retains `RawReadiness` as the
+      fallback.
+    - **Managed-RX release A/B (2026-09-30; kernel 7.0.0-34)**: three
+      interleaved raw/managed pairs with the checked-in H.264/SRT 8M fixture,
+      no egress, and 15-second windows measured the `srt-in` thread group as
+      percent of one core. Medians: 3 feeds, raw 13.0% vs managed 13.8%
+      (+6.2%); 6 feeds, raw 21.5% vs managed 23.0% (+7.0%). Run ranges
+      overlap; no CPU gain was established at these loads. One exploratory
+      48-feed pair measured 64.8% raw vs 49.3% managed `srt-in` CPU, but
+      Restream-received input rates differed (7.81 vs 4.45 Mbit/s/feed), so
+      exclude that CPU contrast rather than claim a gain.
 15. **mimalloc decision**: `alloc-mimalloc` / `alloc-jemalloc` features and
     `#[global_allocator]` are on local branch `wip/alloc-ab` (462c411e).
     Needs the fan-out A/B, then adopt or drop.
